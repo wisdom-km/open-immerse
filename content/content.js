@@ -31,27 +31,37 @@ async function init() {
       sendResponse({ ok: true, running });
     } else if (message.type === "OI_SAVE_CURRENT_SELECTION") {
       saveCurrentSelection().then(() => sendResponse({ ok: true }));
+    } else if (message.type === "OI_FEATURES_CHANGED") {
+      applyFeatures().then(() => sendResponse({ ok: true }));
     }
     return true;
   });
 
-  const res = await send({ type: "OI_GET_SETTINGS" });
-  const settings = res.settings || {};
-  applyStyle(settings);
-  const rule = matchRule(location.hostname, settings.siteRules || []);
-  if (settings.enabled || rule?.auto) start();
-  if (settings.hoverEnabled || rule?.hover) enableHover();
+  await applyFeatures();
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "sync" || !changes.settings) return;
-    const next = changes.settings.newValue || {};
-    applyStyle(next);
-    if (next.hoverEnabled) enableHover();
-    else disableHover();
+    applyFeatures();
   });
 }
 
+async function applyFeatures() {
+  const res = await send({ type: "OI_GET_SETTINGS" });
+  const settings = res.settings || {};
+  applyStyle(settings);
+  const feats = settings.features || {};
+  const rule = matchRule(location.hostname, settings.siteRules || []);
+  const pageOn = feats.webpage !== false;
+  const hoverOn = Boolean(feats.hover || settings.hoverEnabled || rule?.hover);
+  if (pageOn && (settings.enabled || rule?.auto)) await start();
+  else if (!pageOn) restore();
+  if (hoverOn) enableHover();
+  else disableHover();
+}
+
 async function start() {
+  const settings = (await send({ type: "OI_GET_SETTINGS" })).settings || {};
+  if ((settings.features || {}).webpage === false) return;
   if (running) return;
   running = true;
   document.documentElement.classList.add("oi-active");
@@ -95,6 +105,7 @@ function debounceTranslate() {
 async function translateVisible() {
   const settingsRes = await send({ type: "OI_GET_SETTINGS" });
   const settings = settingsRes.settings;
+  if ((settings.features || {}).webpage === false) return;
   const nodes = collectNodes(settings);
   if (!nodes.length) return;
   const batchSize = Math.max(1, Number(settings.batchSize) || 8);
