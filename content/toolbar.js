@@ -4,6 +4,7 @@ async function initToolbar() {
   const { settings } = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
   if (settings.showFab === false) return;
   if (document.querySelector(".oi-fab")) return;
+
   const bar = document.createElement("div");
   bar.className = "oi-fab";
   bar.innerHTML = `
@@ -33,64 +34,31 @@ async function initToolbar() {
     menu.hidden = true;
     if (act === "toggle") {
       const on = !document.documentElement.classList.contains("oi-active");
-      chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: on } });
-      chrome.runtime.sendMessage({ type: on ? "OI_START" : "OI_STOP" });
-      window.postMessage({ type: on ? "OI_START" : "OI_STOP" }, "*");
-      document.dispatchEvent(new CustomEvent(on ? "oi-please-start" : "oi-please-stop"));
-      chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" }).then(() => {
-        chrome.tabs ? null : null;
-      });
-      await chrome.runtime.sendMessage({ type: on ? "OI_START" : "OI_STOP" }).catch(() => {});
-      if (on) await requestStart();
-      else await requestStop();
+      await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: on } });
+      window.dispatchEvent(new CustomEvent(on ? "oi-please-start" : "oi-please-stop"));
     }
-    if (act === "restore") await requestRestore();
+    if (act === "restore") {
+      await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: false } });
+      window.dispatchEvent(new CustomEvent("oi-please-restore"));
+    }
     if (act === "save") chrome.runtime.sendMessage({ type: "OI_SAVE_CURRENT_SELECTION" });
     if (act === "sub") window.dispatchEvent(new CustomEvent("oi-toggle-subtitles"));
     if (act === "learn") chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "learning" });
     if (act === "docs") chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "documents" });
     if (act === "autosite") {
-      const host = location.hostname.replace(/^www\./, "");
       await chrome.runtime.sendMessage({
         type: "OI_TOGGLE_SITE_RULE",
-        host,
+        host: location.hostname.replace(/^www\./, ""),
         rule: { auto: true }
       });
-      toastFab("已开启本站自动翻译");
+      window.dispatchEvent(new CustomEvent("oi-please-start"));
     }
   });
 }
 
 function syncToggle(on) {
   const btn = document.querySelector('.oi-fab [data-act="toggle"]');
-  if (btn) {
-    btn.textContent = on ? "停" : "译";
-    btn.classList.toggle("on", on);
-  }
-}
-
-function requestStart() {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: true } }, () => {
-      chrome.runtime.sendMessage({ type: "OI_START" }, resolve);
-    });
-  });
-}
-
-function requestStop() {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: false } }, () => {
-      chrome.runtime.sendMessage({ type: "OI_STOP" }, resolve);
-    });
-  });
-}
-
-function requestRestore() {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: "OI_RESTORE" }, resolve);
-  });
-}
-
-function toastFab(text) {
-  chrome.runtime.sendMessage({ type: "OI_TOAST", message: text });
+  if (!btn) return;
+  btn.textContent = on ? "停" : "译";
+  btn.classList.toggle("on", on);
 }
