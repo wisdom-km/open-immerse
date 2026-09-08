@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Open Immerse</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <div class="mark">OI</div>
+      <div>
+        <h1>Open Immerse</h1>
+        <p>开源沉浸式双语翻译</p>
+      </div>
+    </header>
+    <label class="switch-row">
+      <span>翻译当前页面</span>
+      <input id="enabled" type="checkbox" />
+    </label>
+    <label class="switch-row">
+      <span>悬停即译</span>
+      <input id="hoverEnabled" type="checkbox" />
+    </label>
+    <label>
+      翻译引擎
+      <select id="provider"></select>
+    </label>
+    <div class="row">
+      <label>
+        源语言
+        <select id="sourceLang"></select>
+      </label>
+      <label>
+        目标语言
+        <select id="targetLang"></select>
+      </label>
+    </div>
+    <div class="actions">
+      <button id="openOptions" type="button">配置 API Key</button>
+    </div>
+    <p class="hint">快捷键 Alt+T 开关页面翻译。选中文本可右键翻译。</p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
