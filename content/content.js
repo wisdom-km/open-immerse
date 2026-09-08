@@ -170,15 +170,20 @@ function isSideColumn(el) {
   const rect = el.getBoundingClientRect();
   const vw = Math.max(window.innerWidth || 0, 800);
   if (rect.width < 4) return false;
-  const leftBand = rect.right < vw * 0.24 && rect.width < vw * 0.32;
-  const rightBand = rect.left > vw * 0.76 && rect.width < vw * 0.32;
-  return leftBand || rightBand;
+  return (rect.right < vw * 0.24 && rect.width < vw * 0.32) || (rect.left > vw * 0.76 && rect.width < vw * 0.32);
 }
 
 function getText(el) {
   const clone = el.cloneNode(true);
   clone.querySelectorAll(".oi-translation, script, style, noscript").forEach((n) => n.remove());
   return (clone.innerText || clone.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function shouldInline(el) {
+  if (el.tagName === "A" || el.tagName === "BUTTON") return true;
+  if (el.closest("nav, aside, header, [role='navigation']")) return true;
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.width < 240 && isSideColumn(el);
 }
 
 function mountTranslation(el, text, settings) {
@@ -190,8 +195,9 @@ function mountTranslation(el, text, settings) {
     existing.textContent = text;
     return;
   }
-  const node = document.createElement("div");
-  node.className = "oi-translation";
+  const inline = shouldInline(el);
+  const node = document.createElement(inline ? "span" : "div");
+  node.className = inline ? "oi-translation oi-inline" : "oi-translation";
   node.lang = settings.targetLang || "zh-CN";
   node.textContent = text;
   node.title = "double click to save";
@@ -208,7 +214,7 @@ function mountTranslation(el, text, settings) {
       }
     }).then(() => toast("saved"));
   });
-  if (["LI", "TD", "TH", "DT", "DD", "A"].includes(el.tagName)) el.appendChild(node);
+  if (inline || ["LI", "TD", "TH", "DT", "DD"].includes(el.tagName)) el.appendChild(node);
   else el.insertAdjacentElement("afterend", node);
 }
 
