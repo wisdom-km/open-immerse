@@ -11,34 +11,31 @@
   writing-mode: horizontal-tb;
   text-orientation: mixed;
   word-break: normal;
+  padding-bottom: 0.08em;
+  border-bottom: 1px dashed color-mix(in srgb, currentColor 48%, transparent);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
 .oi-translation.oi-inline {
   display: inline;
   margin: 0 0 0 0.4em;
-  padding: 0;
+  padding: 0 0 0.06em;
   width: auto;
   max-width: none;
-  border: 0 !important;
   background: none !important;
   white-space: nowrap;
   vertical-align: baseline;
   line-height: inherit;
-}
-html[data-oi-style="under"] .oi-translation:not(.oi-inline),
-html[data-oi-style="dashed"] .oi-translation:not(.oi-inline) {
-  padding-bottom: 0.08em;
   border-bottom: 1px dashed color-mix(in srgb, currentColor 48%, transparent);
 }
-html[data-oi-style="line"] .oi-translation:not(.oi-inline) {
-  padding-bottom: 0.08em;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+html[data-oi-style="line"] .oi-translation {
+  border-bottom-style: solid;
+  border-bottom-color: color-mix(in srgb, currentColor 42%, transparent);
 }
-html[data-oi-style="dim"] .oi-translation:not(.oi-inline) {
+html[data-oi-style="dim"] .oi-translation {
   opacity: 0.82;
-  padding-bottom: 0.08em;
-  border-bottom: 1px dotted color-mix(in srgb, currentColor 36%, transparent);
+  border-bottom-style: dotted;
+  border-bottom-color: color-mix(in srgb, currentColor 36%, transparent);
 }
 html[data-oi-style="card"] .oi-translation:not(.oi-inline),
 html[data-oi-style="box"] .oi-translation:not(.oi-inline) {
