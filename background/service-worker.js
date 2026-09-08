@@ -1,29 +1,39 @@
 import { getProvider } from "../lib/providers.js";
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
+import { resolveFeatures } from "../lib/features.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.removeAll(() => {
+chrome.runtime.onInstalled.addListener(() => rebuildMenus());
+chrome.runtime.onStartup.addListener(() => rebuildMenus());
+
+async function rebuildMenus() {
+  const settings = await getSettings();
+  const features = resolveFeatures(settings);
+  await chrome.contextMenus.removeAll();
+  if (features.selection) {
     chrome.contextMenus.create({
       id: "oi-translate-selection",
       title: "翻译选中文本",
       contexts: ["selection"]
     });
+  }
+  if (features.learning) {
     chrome.contextMenus.create({
       id: "oi-save-selection",
       title: "收藏到学习中心",
       contexts: ["selection"]
     });
-  });
-});
+  }
+}
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const text = (info.selectionText || "").trim();
   if (!text || !tab?.id) return;
-  if (info.menuItemId === "oi-translate-selection") {
+  const features = resolveFeatures(await getSettings());
+  if (info.menuItemId === "oi-translate-selection" && features.selection) {
     try {
       const [translated] = await translateBatch([text]);
       await chrome.tabs.sendMessage(tab.id, { type: "OI_SHOW_SELECTION", original: text, translated });
@@ -31,7 +41,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       await chrome.tabs.sendMessage(tab.id, { type: "OI_ERROR", message: String(err.message || err) });
     }
   }
-  if (info.menuItemId === "oi-save-selection") {
+  if (info.menuItemId === "oi-save-selection" && features.learning) {
     try {
       const [translated] = await translateBatch([text]);
       await saveItem({
@@ -53,6 +63,7 @@ chrome.commands.onCommand.addListener(async (command) => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
   const settings = await getSettings();
+  if (resolveFeatures(settings).webpage === false) return;
   const enabled = !settings.enabled;
   await saveSettings({ enabled });
   await chrome.tabs.sendMessage(tab.id, { type: enabled ? "OI_START" : "OI_STOP" }).catch(() => {});
@@ -69,8 +80,11 @@ async function handleMessage(message, sender) {
   switch (message.type) {
     case "OI_GET_SETTINGS":
       return { ok: true, settings: await getSettings() };
-    case "OI_SAVE_SETTINGS":
-      return { ok: true, settings: await saveSettings(message.patch || {}) };
+    case "OI_SAVE_SETTINGS": {
+      const settings = await saveSettings(message.patch || {});
+      await rebuildMenus();
+      return { ok: true, settings };
+    }
     case "OI_TRANSLATE_BATCH":
       return { ok: true, translations: await translateBatch(message.texts || []) };
     case "OI_MATCH_RULE": {
@@ -78,8 +92,8 @@ async function handleMessage(message, sender) {
       return { ok: true, rule: matchSiteRule(message.host || sender.tab?.url, settings.siteRules) };
     }
     case "OI_SAVE_LEARNING": {
-      const item = await saveItem(message.item || {});
-      return { ok: true, item };
+      if (!resolveFeatures(await getSettings()).learning) return { ok: false, error: "learning off" };
+      return { ok: true, item: await saveItem(message.item || {}) };
     }
     case "OI_LIST_LEARNING": {
       const items = await listItems();
@@ -91,6 +105,9 @@ async function handleMessage(message, sender) {
     case "OI_REVIEW_LEARNING":
       return { ok: true, item: await reviewItem(message.id, message.grade) };
     case "OI_OPEN_PAGE": {
+      const features = resolveFeatures(await getSettings());
+      if (message.page === "documents" && !features.documents) return { ok: false, error: "documents off" };
+      if (message.page === "learning" && !features.learning) return { ok: false, error: "learning off" };
       const path = message.page === "documents" ? "documents/documents.html" : "learning/learning.html";
       await chrome.tabs.create({ url: chrome.runtime.getURL(path) });
       return { ok: true };
