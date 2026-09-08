@@ -18,6 +18,9 @@ async function init() {
   $("fontScale").value = settings.fontScale;
   $("skipCode").checked = settings.skipCode;
   $("hoverEnabled").checked = settings.hoverEnabled;
+  $("showFab").checked = settings.showFab !== false;
+  $("subtitleEnabled").checked = Boolean(settings.subtitleEnabled);
+  $("siteRules").value = (settings.siteRules || []).map((r) => r.host).join("\n");
   renderProviderFields(settings);
   $("save").addEventListener("click", () => persist());
 }
@@ -60,6 +63,10 @@ async function persist() {
     providers[id] = providers[id] || {};
     providers[id][input.dataset.key] = input.type === "checkbox" ? input.checked : input.value;
   }
+  const siteRules = $("siteRules").value.split(/\n+/).map((line) => line.trim()).filter(Boolean).map((host) => ({
+    host: host.replace(/^www\./, ""),
+    auto: true
+  }));
   await chrome.runtime.sendMessage({
     type: "OI_SAVE_SETTINGS",
     patch: {
@@ -71,6 +78,9 @@ async function persist() {
       fontScale: Number($("fontScale").value) || 0.95,
       skipCode: $("skipCode").checked,
       hoverEnabled: $("hoverEnabled").checked,
+      showFab: $("showFab").checked,
+      subtitleEnabled: $("subtitleEnabled").checked,
+      siteRules,
       providers
     }
   });
@@ -83,5 +93,5 @@ function fillSelect(select, items) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&", "<": "<", ">": ">", '"': """, "'": "&#39;" }[c]));
 }
