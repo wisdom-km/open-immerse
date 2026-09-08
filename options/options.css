@@ -16,7 +16,8 @@ body {
 }
 main { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
 h1 { margin: 0 0 8px; font-size: 32px; }
-.lead, .note { color: var(--muted); }
+.lead, .note, .hint { color: var(--muted); }
+.hint { margin: 0 0 14px; font-size: 13px; }
 section {
   margin-top: 28px; padding: 20px; background: var(--panel);
   border: 1px solid var(--line); border-radius: 16px;
@@ -29,8 +30,8 @@ input, select, textarea {
   border-radius: 10px; padding: 9px 10px; font: inherit;
 }
 textarea { min-height: 90px; resize: vertical; }
-.provider-card { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
-.provider-card h3 { margin: 0 0 10px; font-size: 16px; }
+.provider-card { margin-top: 4px; }
+.provider-card h3 { margin: 0 0 10px; font-size: 16px; color: var(--text); }
 .bar { margin-top: 22px; display: flex; align-items: center; gap: 12px; }
 button {
   border: 0; background: var(--accent); color: white; border-radius: 10px;
