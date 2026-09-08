@@ -1,5 +1,7 @@
 const BLOCK_SELECTOR = "p, h1, h2, h3, h4, h5, h6, li, blockquote, figcaption, td, th, dt, dd";
 const SKIP_SELECTOR = "script, style, noscript, textarea, pre, code, kbd, samp, svg, canvas, [contenteditable], .oi-translation, .oi-toast, .oi-selection-card, .oi-fab";
+const MAIN_SELECTOR = "main, article, [role='main'], [role='article']";
+const CHROME_SELECTOR = "nav, aside, header, footer, [role='navigation'], [role='complementary'], [role='banner'], [role='contentinfo'], [role='menu']";
 const MIN_LEN = 2;
 
 let running = false;
@@ -131,7 +133,7 @@ async function translateVisible() {
 }
 
 function collectNodes(settings) {
-  return [...document.body.querySelectorAll(BLOCK_SELECTOR)].filter((el) => {
+  const nodes = [...document.body.querySelectorAll(BLOCK_SELECTOR)].filter((el) => {
     if (el.closest(SKIP_SELECTOR)) return false;
     if (el.querySelector(".oi-translation")) return false;
     if (el.nextElementSibling?.classList?.contains("oi-translation")) return false;
@@ -142,6 +144,29 @@ function collectNodes(settings) {
     if (/^[\d\s.,:;!?()[\]{}\-_/\\]+$/.test(text)) return false;
     return isMostlyVisible(el);
   });
+  return nodes.sort((a, b) => {
+    const diff = contentRank(a) - contentRank(b);
+    if (diff) return diff;
+    const pos = a.compareDocumentPosition(b);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  });
+}
+
+function contentRank(el) {
+  if (el.closest(MAIN_SELECTOR) && !el.closest(CHROME_SELECTOR)) return 0;
+  if (isSideColumn(el) || el.closest(CHROME_SELECTOR)) return 2;
+  return 1;
+}
+
+function isSideColumn(el) {
+  const rect = el.getBoundingClientRect();
+  const vw = Math.max(window.innerWidth || 0, 800);
+  if (rect.width < 4) return false;
+  const leftBand = rect.right < vw * 0.24 && rect.width < vw * 0.32;
+  const rightBand = rect.left > vw * 0.76 && rect.width < vw * 0.32;
+  return leftBand || rightBand;
 }
 
 function getText(el) {
@@ -183,7 +208,7 @@ function mountTranslation(el, text, settings) {
 
 function isTinyChrome(el) {
   if (["NAV", "FOOTER", "HEADER"].includes(el.parentElement?.tagName)) return getText(el).length < 24;
-  if (el.tagName === "A" || el.closest("nav, [role='navigation']")) return getText(el).length < 40;
+  if (el.tagName === "A" || el.closest("nav, aside, [role='navigation']")) return getText(el).length < 48;
   return false;
 }
 
