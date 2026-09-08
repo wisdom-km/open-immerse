@@ -43,7 +43,7 @@ async function init() {
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "sync" || !changes.settings) return;
-    applyFeatures();
+    applyStyle((changes.settings.newValue || {}));
   });
 }
 
@@ -55,7 +55,8 @@ async function applyFeatures() {
   const rule = matchRule(location.hostname, settings.siteRules || []);
   const pageOn = feats.webpage !== false;
   const hoverOn = Boolean(feats.hover || settings.hoverEnabled || rule?.hover);
-  if (pageOn && (settings.enabled || rule?.auto)) await start();
+  const shouldAuto = Boolean(pageOn && (rule?.auto || settings.autoOnNewPages));
+  if (shouldAuto) await start();
   else if (!pageOn) restore();
   if (hoverOn) enableHover();
   else disableHover();
@@ -221,6 +222,7 @@ function isMostlyVisible(el) {
 
 function applyStyle(settings) {
   const root = document.documentElement;
+  if (!settings) return;
   root.style.setProperty("--oi-font-scale", settings.fontScale || 0.95);
   if (settings.color) root.style.setProperty("--oi-color", settings.color);
   else root.style.removeProperty("--oi-color");
