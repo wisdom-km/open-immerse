@@ -1,30 +1,50 @@
 import { getProvider } from "../lib/providers.js";
-import { getSettings, saveSettings } from "../lib/storage.js";
+import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
+import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "oi-translate-selection",
-    title: "翻译选中文本 / Translate selection",
-    contexts: ["selection"]
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "oi-translate-selection",
+      title: "翻译选中文本",
+      contexts: ["selection"]
+    });
+    chrome.contextMenus.create({
+      id: "oi-save-selection",
+      title: "收藏到学习中心",
+      contexts: ["selection"]
+    });
   });
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== "oi-translate-selection" || !tab?.id) return;
-  const text = info.selectionText || "";
-  if (!text.trim()) return;
-  try {
-    const [translated] = await translateBatch([text]);
-    await chrome.tabs.sendMessage(tab.id, {
-      type: "OI_SHOW_SELECTION",
-      original: text,
-      translated
-    });
-  } catch (err) {
-    await chrome.tabs.sendMessage(tab.id, { type: "OI_ERROR", message: String(err.message || err) });
+  const text = (info.selectionText || "").trim();
+  if (!text || !tab?.id) return;
+  if (info.menuItemId === "oi-translate-selection") {
+    try {
+      const [translated] = await translateBatch([text]);
+      await chrome.tabs.sendMessage(tab.id, { type: "OI_SHOW_SELECTION", original: text, translated });
+    } catch (err) {
+      await chrome.tabs.sendMessage(tab.id, { type: "OI_ERROR", message: String(err.message || err) });
+    }
+  }
+  if (info.menuItemId === "oi-save-selection") {
+    try {
+      const [translated] = await translateBatch([text]);
+      await saveItem({
+        original: text,
+        translation: translated,
+        url: info.pageUrl || tab.url,
+        title: tab.title,
+        context: text
+      });
+      await chrome.tabs.sendMessage(tab.id, { type: "OI_TOAST", message: "已收藏到学习中心" });
+    } catch (err) {
+      await chrome.tabs.sendMessage(tab.id, { type: "OI_ERROR", message: String(err.message || err) });
+    }
   }
 });
 
@@ -51,18 +71,38 @@ async function handleMessage(message, sender) {
       return { ok: true, settings: await getSettings() };
     case "OI_SAVE_SETTINGS":
       return { ok: true, settings: await saveSettings(message.patch || {}) };
-    case "OI_TRANSLATE_BATCH": {
-      const translations = await translateBatch(message.texts || []);
-      return { ok: true, translations };
+    case "OI_TRANSLATE_BATCH":
+      return { ok: true, translations: await translateBatch(message.texts || []) };
+    case "OI_MATCH_RULE": {
+      const settings = await getSettings();
+      return { ok: true, rule: matchSiteRule(message.host || sender.tab?.url, settings.siteRules) };
     }
-    case "OI_TOGGLE_TAB": {
-      const settings = await saveSettings({ enabled: Boolean(message.enabled) });
-      if (sender.tab?.id) {
-        await chrome.tabs
-          .sendMessage(sender.tab.id, { type: settings.enabled ? "OI_START" : "OI_STOP" })
-          .catch(() => {});
-      }
-      return { ok: true, settings };
+    case "OI_SAVE_LEARNING": {
+      const item = await saveItem(message.item || {});
+      return { ok: true, item };
+    }
+    case "OI_LIST_LEARNING": {
+      const items = await listItems();
+      return { ok: true, items, due: dueItems(items) };
+    }
+    case "OI_REMOVE_LEARNING":
+      await removeItem(message.id);
+      return { ok: true };
+    case "OI_REVIEW_LEARNING":
+      return { ok: true, item: await reviewItem(message.id, message.grade) };
+    case "OI_OPEN_PAGE": {
+      const path = message.page === "documents" ? "documents/documents.html" : "learning/learning.html";
+      await chrome.tabs.create({ url: chrome.runtime.getURL(path) });
+      return { ok: true };
+    }
+    case "OI_TOGGLE_SITE_RULE": {
+      const settings = await getSettings();
+      const host = String(message.host || "").replace(/^www\./, "");
+      const rules = [...(settings.siteRules || [])];
+      const idx = rules.findIndex((r) => r.host === host);
+      if (idx >= 0) rules[idx] = { ...rules[idx], ...message.rule, host };
+      else rules.push({ host, auto: true, hover: false, subtitle: false, ...message.rule });
+      return { ok: true, settings: await saveSettings({ siteRules: rules }) };
     }
     default:
       return { ok: false, error: "unknown message" };
@@ -75,27 +115,19 @@ async function translateBatch(texts) {
   const providerSettings = settings.providers?.[settings.provider] || {};
   const pending = [];
   const results = new Array(texts.length);
-
   texts.forEach((text, index) => {
     const key = cacheKey(settings.provider, settings.sourceLang, settings.targetLang, text);
-    if (cache.has(key)) {
-      results[index] = cache.get(key);
-    } else {
-      pending.push({ text, index, key });
-    }
+    if (cache.has(key)) results[index] = cache.get(key);
+    else pending.push({ text, index, key });
   });
-
   const size = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < pending.length; i += size) {
     const chunk = pending.slice(i, i + size);
-    const translated = await provider.translate(
-      chunk.map((c) => c.text),
-      {
-        sourceLang: settings.sourceLang,
-        targetLang: settings.targetLang,
-        settings: providerSettings
-      }
-    );
+    const translated = await provider.translate(chunk.map((c) => c.text), {
+      sourceLang: settings.sourceLang,
+      targetLang: settings.targetLang,
+      settings: providerSettings
+    });
     chunk.forEach((item, j) => {
       const value = translated[j] || "";
       results[item.index] = value;
@@ -111,8 +143,5 @@ function cacheKey(provider, from, to, text) {
 
 function remember(key, value) {
   cache.set(key, value);
-  if (cache.size > CACHE_LIMIT) {
-    const first = cache.keys().next().value;
-    cache.delete(first);
-  }
+  if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
 }
