@@ -1,7 +1,7 @@
 let subOn = false;
 let lastLine = "";
 let overlay;
-let observer = null;
+let captionObserver = null;
 
 window.addEventListener("oi-toggle-subtitles", () => {
   if (!allowedHere()) return;
@@ -55,15 +55,15 @@ function startSubtitles() {
   observeCaptions();
   ensureOverlay();
   overlay.querySelector(".oi-cap-hint").textContent = isYouTube()
-    ? "YouTube 字幕已开，请先打开视频自带字幕"
-    : "X 字幕已开，仅当视频已有字幕时叠加译文";
+    ? "YouTube captions on. Enable the video's own captions first."
+    : "X captions on. Overlay only when the video already has captions.";
 }
 
 function stopSubtitles() {
   subOn = false;
-  if (observer) {
-    observer.disconnect();
-    observer = null;
+  if (captionObserver) {
+    captionObserver.disconnect();
+    captionObserver = null;
   }
   if (document.body) delete document.body.dataset.oiCap;
   hideOverlay();
@@ -71,9 +71,9 @@ function stopSubtitles() {
 
 function observeCaptions() {
   const root = document.body;
-  if (!root || observer) return;
+  if (!root || captionObserver) return;
   root.dataset.oiCap = "1";
-  observer = new MutationObserver(() => {
+  captionObserver = new MutationObserver(() => {
     if (!subOn) return;
     const line = readCaption();
     if (line && line !== lastLine) {
@@ -81,7 +81,7 @@ function observeCaptions() {
       renderCaption(line);
     }
   });
-  observer.observe(root, { childList: true, subtree: true, characterData: true });
+  captionObserver.observe(root, { childList: true, subtree: true, characterData: true });
 }
 
 function readCaption() {
@@ -96,7 +96,7 @@ function readCaption() {
 async function renderCaption(original) {
   ensureOverlay();
   overlay.querySelector(".oi-cap-org").textContent = original;
-  overlay.querySelector(".oi-cap-dst").textContent = "翻译中…";
+  overlay.querySelector(".oi-cap-dst").textContent = "...";
   try {
     const res = await chrome.runtime.sendMessage({ type: "OI_TRANSLATE_BATCH", texts: [original] });
     overlay.querySelector(".oi-cap-dst").textContent = res.translations?.[0] || "";
@@ -109,7 +109,7 @@ function ensureOverlay() {
   if (overlay) return overlay;
   overlay = document.createElement("div");
   overlay.className = "oi-caption";
-  overlay.innerHTML = `<div class="oi-cap-hint"></div><div class="oi-cap-org"></div><div class="oi-cap-dst"></div>`;
+  overlay.innerHTML = '<div class="oi-cap-hint"></div><div class="oi-cap-org"></div><div class="oi-cap-dst"></div>';
   document.documentElement.appendChild(overlay);
   return overlay;
 }
