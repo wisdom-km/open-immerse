@@ -9,10 +9,14 @@
   <body>
     <main>
       <h1>Open Immerse</h1>
-      <p class="lead">开源沉浸式翻译 · 用你自己的 API Key 接入主流引擎。</p>
+      <p class="lead">模块可单独开关。只想网页翻译时，把 YouTube / X 关掉即可。</p>
       <p class="note"><a href="../learning/learning.html">学习中心</a> · <a href="../documents/documents.html">文档翻译</a></p>
       <section>
-        <h2>通用</h2>
+        <h2>功能模块</h2>
+        <div id="featureList"></div>
+      </section>
+      <section>
+        <h2>语言与通用</h2>
         <div class="grid">
           <label>默认引擎 <select id="provider"></select></label>
           <label>源语言 <select id="sourceLang"></select></label>
@@ -28,11 +32,7 @@
           <label>译文字号比例 <input id="fontScale" type="number" min="0.7" max="1.3" step="0.05" /></label>
         </div>
         <label class="check"><input id="skipCode" type="checkbox" /> 跳过代码块</label>
-        <label class="check"><input id="hoverEnabled" type="checkbox" /> 鼠标悬停翻译</label>
-        <label class="check"><input id="showFab" type="checkbox" /> 显示页面开关按钮</label>
-        <label class="check"><input id="subtitleEnabled" type="checkbox" /> 默认开启视频双语字幕</label>
-        <label>自动翻译站点（一行一个域名）<textarea id="siteRules" placeholder="nytimes.com
-github.com"></textarea></label>
+        <label>自动翻译站点（一行一个域名）<textarea id="siteRules" placeholder="nytimes.com"></textarea></label>
       </section>
       <section>
         <h2>翻译引擎与密钥</h2>
