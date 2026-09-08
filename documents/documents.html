@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>文档翻译 · Open Immerse</title>
+  <link rel="stylesheet" href="documents.css" />
+</head>
+<body>
+  <main>
+    <h1>文档翻译</h1>
+    <p class="lead">支持 TXT / Markdown / HTML 直读；PDF、ePub、DOCX 可粘贴正文后做双语对照、校订与导出。完整排版保留解析会继续加强。</p>
+    <div class="row">
+      <input id="file" type="file" accept=".txt,.md,.html,.htm,.pdf,.docx,.epub" />
+      <button id="run" type="button">开始翻译</button>
+      <button id="export" type="button">导出 HTML</button>
+    </div>
+    <textarea id="source" placeholder="粘贴文档正文，或选择文件。"></textarea>
+    <p id="status"></p>
+    <div id="out"></div>
+  </main>
+  <script type="module" src="documents.js"></script>
+</body>
+</html>

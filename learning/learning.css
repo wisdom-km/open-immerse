@@ -1,0 +1,15 @@
+body{margin:0;font:15px/1.55 system-ui,"PingFang SC",sans-serif;background:#0b0d12;color:#eef2f8}
+main{max-width:860px;margin:0 auto;padding:40px 20px 80px}
+h1{margin:0 0 8px}.lead{color:#9aa6b8}
+.tabs{display:flex;gap:8px;margin:18px 0}
+.tabs button,.grades button{border:0;border-radius:8px;padding:8px 12px;background:#2a3142;color:#fff;cursor:pointer}
+.tabs .on{background:#4d7cff}
+.card{padding:20px;border:1px solid #2a3142;border-radius:14px;background:#141821}
+.card .org{font-size:22px;margin-bottom:8px}
+.card .ctx,.card .dst{color:#9aa6b8}
+.card.empty{color:#9aa6b8}
+.grades{display:flex;gap:8px;margin-top:12px}
+ul{list-style:none;padding:0;margin:20px 0}
+li{padding:14px;border:1px solid #2a3142;border-radius:12px;margin-bottom:10px;background:#141821}
+li .meta{font-size:12px;color:#9aa6b8;margin-top:6px}
+li button{margin-top:8px;border:0;background:#3a3f4b;color:#fff;border-radius:6px;padding:4px 8px;cursor:pointer}

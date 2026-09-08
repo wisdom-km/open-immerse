@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>学习中心 · Open Immerse</title>
+  <link rel="stylesheet" href="learning.css" />
+</head>
+<body>
+  <main>
+    <h1>学习中心</h1>
+    <p class="lead">收藏单词、短语和句子，保留网页语境，支持隔离重现式复习。</p>
+    <div class="tabs">
+      <button data-tab="all" class="on">全部</button>
+      <button data-tab="review">今日待复习</button>
+    </div>
+    <section id="reviewBox" hidden>
+      <h2>复习</h2>
+      <div id="card" class="card empty">没有到期项目</div>
+      <div class="grades" id="grades" hidden>
+        <button data-g="1">忘了</button>
+        <button data-g="3">模糊</button>
+        <button data-g="5">记住</button>
+      </div>
+    </section>
+    <ul id="list"></ul>
+  </main>
+  <script type="module" src="learning.js"></script>
+</body>
+</html>
