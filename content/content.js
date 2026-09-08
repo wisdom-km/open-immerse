@@ -9,6 +9,10 @@ let hoverBound = false;
 init();
 
 async function init() {
+  window.addEventListener("oi-please-start", () => start());
+  window.addEventListener("oi-please-stop", () => stop());
+  window.addEventListener("oi-please-restore", () => restore());
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "OI_START") start().then(() => sendResponse({ ok: true }));
     else if (message.type === "OI_STOP") {
@@ -68,10 +72,8 @@ function stop() {
 
 function restore() {
   stop();
-  document.querySelectorAll(".oi-translation, .oi-pending").forEach((el) => {
-    el.classList.remove("oi-pending");
-    if (el.classList.contains("oi-translation")) el.remove();
-  });
+  document.querySelectorAll(".oi-translation").forEach((el) => el.remove());
+  document.querySelectorAll(".oi-pending").forEach((el) => el.classList.remove("oi-pending"));
 }
 
 function observe() {
