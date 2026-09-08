@@ -6,7 +6,7 @@
 
 仓库：https://github.com/wisdom-km/open-immerse
 
-## 功能（v0.1）
+## 功能（v0.1.1）
 
 - 网页双语对照：识别段落 / 标题 / 列表，译文插在原文下方
 - 鼠标悬停翻译
@@ -19,20 +19,23 @@
 
 ## 支持的引擎
 
-| 引擎 | 说明 |
-| --- | --- |
-| MyMemory | 免 Key 试用（额度有限） |
-| Microsoft Translator | Azure 翻译订阅 |
-| DeepL | Free / Pro |
-| Google Cloud Translation | 官方 v2 |
-| OpenAI 兼容 | OpenAI、DeepSeek、通义、Moonshot、Groq、SiliconFlow、OpenRouter、Ollama、LM Studio、xAI Grok… 只需改 Base URL |
-| Google Gemini | 官方 generateContent |
-| Anthropic Claude | Messages API |
-| Azure OpenAI | deployment + api-key |
-| 百度翻译 | APP ID + Secret |
-| 自定义 HTTP | URL / Header / Body 模板 / JSON Path |
+| 引擎 | 默认地址 | 默认模型 |
+| --- | --- | --- |
+| MyMemory | 免 Key 试用 | — |
+| Microsoft Translator | Azure Translator | — |
+| DeepL | api-free / api.deepl.com | — |
+| Google Cloud Translation | translation.googleapis.com | — |
+| OpenAI / 兼容通道 | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| **Kimi / 月之暗面** | `https://api.moonshot.cn/v1`（国际可改 `api.moonshot.ai`） | `kimi-k2.5` |
+| **MiniMax** | `https://api.minimax.cn/v1`（国际可改 `api.minimax.io`） | `MiniMax-M2.5` |
+| **xAI Grok** | `https://api.x.ai/v1` | `grok-4-fast` |
+| **OpenRouter** | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` |
+| Google Gemini | generativelanguage.googleapis.com | `gemini-2.0-flash` |
+| Anthropic Claude | api.anthropic.com | `claude-3-5-haiku-latest` |
+| Azure OpenAI | 你的 Azure 终端 | deployment 名 |
+| 自定义 HTTP | 任意 | JSON Path |
 
-「接入所有主流 API」靠两层实现：常用引擎写死适配器；其余全部走 OpenAI 兼容通道或自定义 HTTP 模板。
+Kimi / MiniMax / Grok / OpenRouter 都走官方 OpenAI Chat Completions 协议，下拉框里是独立引擎，不用自己猜 Base URL。
 
 ## 安装（开发者模式）
 
@@ -45,7 +48,40 @@
 4. 「加载已解压的扩展程序」，选中本仓库根目录
 5. 点工具栏图标 →「配置 API Key」填写引擎，再打开「翻译当前页面」
 
-Firefox / Edge 的 Chromium 内核同样可加载，后续再补 Firefox 专用 manifest。
+已经装过旧版的，`git pull` 后在扩展页点「重新加载」。
+
+## 配置示例
+
+### Kimi
+
+- 引擎：Kimi / 月之暗面
+- Key：[platform.kimi.com](https://platform.kimi.com) 或 [platform.kimi.ai](https://platform.kimi.ai)
+- 模型可改成 `kimi-k3`、`kimi-k2.5` 等
+
+### MiniMax
+
+- 引擎：MiniMax
+- Key：[platform.minimaxi.com](https://platform.minimaxi.com) / [platform.minimax.io](https://platform.minimax.io)
+- 模型可改成 `MiniMax-M3`、`MiniMax-M2.5-highspeed`
+
+### Grok
+
+- 引擎：xAI Grok
+- Key：[console.x.ai](https://console.x.ai)
+- 模型可改成 `grok-4-fast`、`grok-4.6`
+
+### OpenRouter
+
+- 引擎：OpenRouter
+- Key：[openrouter.ai/keys](https://openrouter.ai/keys)
+- 模型用 OpenRouter 的 `vendor/model` 格式，例如 `anthropic/claude-sonnet-4`、`google/gemini-2.0-flash-001`
+
+### DeepSeek / Ollama
+
+仍走「OpenAI / 兼容通道」：
+
+- DeepSeek Base URL：`https://api.deepseek.com/v1`，模型 `deepseek-chat`
+- Ollama Base URL：`http://127.0.0.1:11434/v1`
 
 ## 架构
 
@@ -60,29 +96,6 @@ content script  →  扫描 DOM、插入 .oi-translation
 - content script **不直接请求**外部 API，避免把 Key 暴露到页面世界。
 - 新增引擎只改 `lib/providers.js`。
 
-## 配置示例
-
-DeepSeek（走 OpenAI 兼容）：
-
-- 引擎：OpenAI 兼容
-- Base URL：`https://api.deepseek.com/v1`
-- Model：`deepseek-chat`
-- API Key：你的 DeepSeek Key
-
-Ollama 本地：
-
-- Base URL：`http://127.0.0.1:11434/v1`
-- Model：`qwen2.5`
-- API Key：可空
-
-自定义服务：
-
-```
-URL: https://api.example.com/translate
-Body: {"q":{{textsJson}},"target":"{{targetLang}}"}
-Path: data.translations
-```
-
 ## 路线图
 
 - [ ] 输入框翻译
@@ -92,8 +105,6 @@ Path: data.translations
 - [ ] Firefox / Safari
 - [ ] 术语表与提示词专家
 - [ ] Chrome Web Store 发布包
-
-完整商业产品的文件翻译、站点深度适配需要更长时间。本仓库先把**可运行、可扩展、可审计**的骨架放出来。
 
 ## 安全与合规
 
