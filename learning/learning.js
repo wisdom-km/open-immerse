@@ -1,7 +1,10 @@
+import { currentItems, toTxt, toMarkdown, toDocx, toPptx, downloadBlob } from "../lib/export.js";
+
 const listEl = document.getElementById("list");
 const cardEl = document.getElementById("card");
 const grades = document.getElementById("grades");
 const reviewBox = document.getElementById("reviewBox");
+const exportStatus = document.getElementById("exportStatus");
 let items = [];
 let due = [];
 let current = null;
@@ -18,6 +21,10 @@ async function init() {
       render();
     };
   });
+  document.querySelector(".export-bar").addEventListener("click", (ev) => {
+    const type = ev.target.closest("[data-export]")?.dataset.export;
+    if (type) exportList(type);
+  });
   grades.addEventListener("click", async (ev) => {
     const g = ev.target.dataset.g;
     if (!g || !current) return;
@@ -25,6 +32,30 @@ async function init() {
     await reload();
   });
   await reload();
+}
+
+async function exportList(type) {
+  const list = currentItems(tab, items, due);
+  if (!list.length) {
+    exportStatus.textContent = "当前列表是空的，没有可导出的内容。";
+    return;
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  const base = `open-immerse-learning-${tab}-${stamp}`;
+  try {
+    if (type === "txt") {
+      downloadBlob(`${base}.txt`, new Blob([toTxt(list)], { type: "text/plain;charset=utf-8" }));
+    } else if (type === "md") {
+      downloadBlob(`${base}.md`, new Blob([toMarkdown(list)], { type: "text/markdown;charset=utf-8" }));
+    } else if (type === "docx") {
+      downloadBlob(`${base}.docx`, new Blob([await toDocx(list)], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
+    } else if (type === "pptx") {
+      downloadBlob(`${base}.pptx`, new Blob([await toPptx(list)], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }));
+    }
+    exportStatus.textContent = `已导出 ${list.length} 条为 ${type.toUpperCase()}`;
+  } catch (err) {
+    exportStatus.textContent = `导出失败：${err.message || err}`;
+  }
 }
 
 async function reload() {
@@ -49,7 +80,7 @@ function render() {
       cardEl.querySelector(".ctx").textContent = current.context || current.url || "";
     }
   }
-  const shown = tab === "review" ? due : items;
+  const shown = currentItems(tab, items, due);
   listEl.innerHTML = shown.map((item) => `
     <li data-id="${item.id}">
       <strong>${escapeHtml(item.original)}</strong>
@@ -58,7 +89,7 @@ function render() {
       ${item.context ? `<div class="meta">语境：${escapeHtml(item.context)}</div>` : ""}
       <button data-del="${item.id}">删除</button>
     </li>
-  `).join("") || "<li class='meta'>还没有收藏。在网页里选中文本右键「收藏到学习中心」，或双击译文。</li>";
+  `).join("") || "<li class='meta'>还没有收藏。</li>";
   listEl.querySelectorAll("[data-del]").forEach((btn) => {
     btn.onclick = async () => {
       await chrome.runtime.sendMessage({ type: "OI_REMOVE_LEARNING", id: btn.dataset.del });
@@ -68,5 +99,5 @@ function render() {
 }
 
 function escapeHtml(s) {
-  return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&", "<": "<", ">": ">", '"': """, "'": "&#39;" }[c]));
 }
