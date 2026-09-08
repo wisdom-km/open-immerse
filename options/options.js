@@ -26,6 +26,7 @@ async function init() {
   el("targetLang").value = cachedSettings.targetLang || "zh-CN";
   el("batchSize").value = cachedSettings.batchSize || 8;
   el("translationStyle").value = cachedSettings.translationStyle || "under";
+  el("translateScope").value = cachedSettings.translateScope || "page";
   el("fontScale").value = cachedSettings.fontScale || 0.95;
   el("skipCode").checked = Boolean(cachedSettings.skipCode);
   el("autoOnNewPages").checked = Boolean(cachedSettings.autoOnNewPages);
@@ -121,6 +122,7 @@ async function persist() {
     targetLang: el("targetLang").value,
     batchSize: Number(el("batchSize").value) || 8,
     translationStyle: el("translationStyle").value,
+    translateScope: el("translateScope").value || "page",
     fontScale: Number(el("fontScale").value) || 0.95,
     skipCode: el("skipCode").checked,
     autoOnNewPages: el("autoOnNewPages").checked,
