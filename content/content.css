@@ -8,32 +8,47 @@
   white-space: pre-wrap;
   max-width: 100%;
   width: fit-content;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  word-break: normal;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
-html[data-oi-style="under"] .oi-translation,
-html[data-oi-style="dashed"] .oi-translation {
+.oi-translation.oi-inline {
+  display: inline;
+  margin: 0 0 0 0.4em;
+  padding: 0;
+  width: auto;
+  max-width: none;
+  border: 0 !important;
+  background: none !important;
+  white-space: nowrap;
+  vertical-align: baseline;
+  line-height: inherit;
+}
+html[data-oi-style="under"] .oi-translation:not(.oi-inline),
+html[data-oi-style="dashed"] .oi-translation:not(.oi-inline) {
   padding-bottom: 0.08em;
   border-bottom: 1px dashed color-mix(in srgb, currentColor 48%, transparent);
 }
-html[data-oi-style="line"] .oi-translation {
+html[data-oi-style="line"] .oi-translation:not(.oi-inline) {
   padding-bottom: 0.08em;
   border-bottom: 1px solid color-mix(in srgb, currentColor 42%, transparent);
 }
-html[data-oi-style="dim"] .oi-translation {
+html[data-oi-style="dim"] .oi-translation:not(.oi-inline) {
   opacity: 0.82;
   padding-bottom: 0.08em;
   border-bottom: 1px dotted color-mix(in srgb, currentColor 36%, transparent);
 }
-html[data-oi-style="card"] .oi-translation,
-html[data-oi-style="box"] .oi-translation {
+html[data-oi-style="card"] .oi-translation:not(.oi-inline),
+html[data-oi-style="box"] .oi-translation:not(.oi-inline) {
   width: auto;
   padding: 0.4em 0.65em;
   border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
   background: color-mix(in srgb, currentColor 6%, transparent);
   border-radius: 6px;
 }
-html[data-oi-style="card"] .oi-translation {
+html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
   border-left-width: 3px;
 }
 .oi-pending {
