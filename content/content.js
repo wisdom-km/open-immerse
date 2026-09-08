@@ -3,7 +3,7 @@ const SKIP_SELECTOR = "script, style, noscript, textarea, pre, code, kbd, samp, 
 const MIN_LEN = 2;
 
 let running = false;
-let observer = null;
+let pageObserver = null;
 let hoverBound = false;
 
 init();
@@ -25,7 +25,7 @@ async function init() {
       showSelectionCard(message.original, message.translated);
       sendResponse({ ok: true });
     } else if (message.type === "OI_ERROR" || message.type === "OI_TOAST") {
-      toast(message.message || "翻译失败");
+      toast(message.message || "translate failed");
       sendResponse({ ok: true });
     } else if (message.type === "OI_PING") {
       sendResponse({ ok: true, running });
@@ -67,16 +67,16 @@ async function start() {
   document.documentElement.classList.add("oi-active");
   window.dispatchEvent(new CustomEvent("oi-running", { detail: true }));
   await translateVisible();
-  observe();
+  observePage();
 }
 
 function stop() {
   running = false;
   document.documentElement.classList.remove("oi-active");
   window.dispatchEvent(new CustomEvent("oi-running", { detail: false }));
-  if (observer) {
-    observer.disconnect();
-    observer = null;
+  if (pageObserver) {
+    pageObserver.disconnect();
+    pageObserver = null;
   }
 }
 
@@ -86,14 +86,16 @@ function restore() {
   document.querySelectorAll(".oi-pending").forEach((el) => el.classList.remove("oi-pending"));
 }
 
-function observe() {
-  if (observer) observer.disconnect();
-  observer = new MutationObserver((mutations) => {
+function observePage() {
+  if (pageObserver) pageObserver.disconnect();
+  pageObserver = new MutationObserver((mutations) => {
     if (!running) return;
-    const added = mutations.some((m) => [...m.addedNodes].some((n) => n.nodeType === 1 && !n.classList?.contains("oi-translation") && !n.classList?.contains("oi-fab")));
+    const added = mutations.some((m) =>
+      [...m.addedNodes].some((n) => n.nodeType === 1 && !n.classList?.contains("oi-translation") && !n.classList?.contains("oi-fab"))
+    );
     if (added) debounceTranslate();
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+  pageObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 let timer = 0;
@@ -161,7 +163,7 @@ function mountTranslation(el, text, settings) {
   node.className = "oi-translation";
   node.lang = settings.targetLang || "zh-CN";
   node.textContent = text;
-  node.title = "双击收藏到学习中心";
+  node.title = "double click to save";
   node.addEventListener("dblclick", () => {
     send({
       type: "OI_SAVE_LEARNING",
@@ -173,7 +175,7 @@ function mountTranslation(el, text, settings) {
         title: document.title,
         type: "sentence"
       }
-    }).then(() => toast("已收藏该句"));
+    }).then(() => toast("saved"));
   });
   if (["LI", "TD", "TH", "DT", "DD"].includes(el.tagName)) el.appendChild(node);
   else el.insertAdjacentElement("afterend", node);
@@ -232,7 +234,7 @@ function showSelectionCard(original, translated) {
   document.querySelector(".oi-selection-card")?.remove();
   const card = document.createElement("div");
   card.className = "oi-selection-card";
-  card.innerHTML = `<div class="oi-sel-org"></div><div class="oi-sel-dst"></div><div class="oi-sel-actions"><button type="button" class="save">收藏</button><button type="button" class="close">关闭</button></div>`;
+  card.innerHTML = '<div class="oi-sel-org"></div><div class="oi-sel-dst"></div><div class="oi-sel-actions"><button type="button" class="save">Save</button><button type="button" class="close">Close</button></div>';
   card.querySelector(".oi-sel-org").textContent = original;
   card.querySelector(".oi-sel-dst").textContent = translated;
   card.querySelector(".close").onclick = () => card.remove();
@@ -241,7 +243,7 @@ function showSelectionCard(original, translated) {
       type: "OI_SAVE_LEARNING",
       item: { original, translation: translated, context: original, url: location.href, title: document.title }
     });
-    toast("已收藏");
+    toast("saved");
     card.remove();
   };
   document.body.appendChild(card);
@@ -250,7 +252,7 @@ function showSelectionCard(original, translated) {
 async function saveCurrentSelection() {
   const text = String(window.getSelection() || "").trim();
   if (!text) {
-    toast("请先选中文本");
+    toast("select text first");
     return;
   }
   const res = await send({ type: "OI_TRANSLATE_BATCH", texts: [text] });
@@ -259,7 +261,7 @@ async function saveCurrentSelection() {
     type: "OI_SAVE_LEARNING",
     item: { original: text, translation: translated, context: surroundingContext(), url: location.href, title: document.title }
   });
-  toast("已收藏到学习中心");
+  toast("saved");
 }
 
 function surroundingContext() {
@@ -269,10 +271,12 @@ function surroundingContext() {
 
 function matchRule(hostname, rules) {
   const host = String(hostname || "").replace(/^www\./, "");
-  return rules.find((rule) => {
-    const target = String(rule.host || "").replace(/^www\./, "").trim();
-    return target && (host === target || host.endsWith("." + target));
-  }) || null;
+  return (
+    rules.find((rule) => {
+      const target = String(rule.host || "").replace(/^www\./, "").trim();
+      return target && (host === target || host.endsWith("." + target));
+    }) || null
+  );
 }
 
 function toast(message) {
