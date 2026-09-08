@@ -1,52 +1,94 @@
 let subOn = false;
 let lastLine = "";
 let overlay;
+let observer = null;
 
 window.addEventListener("oi-toggle-subtitles", () => {
+  if (!allowedHere()) return;
   subOn = !subOn;
   if (subOn) startSubtitles();
-  else hideOverlay();
+  else stopSubtitles();
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === "OI_FEATURES_CHANGED") applyFeatureState();
 });
 
 initSubtitles();
 
 async function initSubtitles() {
-  const { settings } = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
-  const host = location.hostname;
-  const isVideoSite = /youtube\.com|youtu\.be|x\.com|twitter\.com/.test(host);
-  const rule = (settings.siteRules || []).find((r) => host.endsWith(r.host));
-  if (settings.subtitleEnabled || rule?.subtitle || isVideoSite) {
-    subOn = Boolean(settings.subtitleEnabled || rule?.subtitle);
-    if (subOn || isVideoSite) observeCaptions();
+  await applyFeatureState();
+}
+
+async function applyFeatureState() {
+  if (!allowedHere()) {
+    stopSubtitles();
+    return;
   }
+  const { settings } = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
+  const on = moduleOn(settings);
+  if (on) startSubtitles();
+  else stopSubtitles();
+}
+
+function moduleOn(settings) {
+  const f = settings.features || {};
+  if (isYouTube()) return f.youtube === true || settings.subtitleEnabled === true;
+  if (isX()) return f.x === true || settings.subtitleEnabled === true;
+  return false;
+}
+
+function allowedHere() {
+  return isYouTube() || isX();
+}
+
+function isYouTube() {
+  return /youtube\.com|youtu\.be/.test(location.hostname);
+}
+
+function isX() {
+  return /(^|\.)x\.com$|(^|\.)twitter\.com$/.test(location.hostname);
 }
 
 function startSubtitles() {
   subOn = true;
   observeCaptions();
   ensureOverlay();
-  overlay.querySelector(".oi-cap-hint").textContent = "字幕已开。YouTube / X 请先打开原始字幕。";
+  overlay.querySelector(".oi-cap-hint").textContent = isYouTube()
+    ? "YouTube 字幕已开，请先打开视频自带字幕"
+    : "X 字幕已开，仅当视频已有字幕时叠加译文";
+}
+
+function stopSubtitles() {
+  subOn = false;
+  if (observer) {
+    observer.disconnect();
+    observer = null;
+  }
+  if (document.body) delete document.body.dataset.oiCap;
+  hideOverlay();
 }
 
 function observeCaptions() {
   const root = document.body;
-  if (!root || root.dataset.oiCap === "1") return;
+  if (!root || observer) return;
   root.dataset.oiCap = "1";
-  const obs = new MutationObserver(() => {
-    if (!subOn && !/youtube|x\.com|twitter/.test(location.hostname)) return;
+  observer = new MutationObserver(() => {
+    if (!subOn) return;
     const line = readCaption();
     if (line && line !== lastLine) {
       lastLine = line;
       renderCaption(line);
     }
   });
-  obs.observe(root, { childList: true, subtree: true, characterData: true });
+  observer.observe(root, { childList: true, subtree: true, characterData: true });
 }
 
 function readCaption() {
-  const yt = [...document.querySelectorAll(".ytp-caption-segment")].map((n) => n.textContent).join(" ").trim();
-  if (yt) return yt;
-  const x = document.querySelector('[data-testid="videoPlayer"] [lang], [data-testid="videoComponent"] p, video + * .css-1jxf684');
+  if (isYouTube()) {
+    return [...document.querySelectorAll(".ytp-caption-segment")].map((n) => n.textContent).join(" ").trim();
+  }
+  const x = document.querySelector('[data-testid="videoPlayer"] [lang], [data-testid="videoComponent"] p');
   if (x && x.textContent && x.textContent.length < 180) return x.textContent.trim();
   return "";
 }
