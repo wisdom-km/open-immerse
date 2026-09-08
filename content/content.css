@@ -6,13 +6,35 @@
   color: var(--oi-color, color-mix(in srgb, currentColor 72%, transparent));
   font-weight: 400;
   white-space: pre-wrap;
+  max-width: 100%;
+  width: fit-content;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
-html[data-oi-style="dim"] .oi-translation { opacity: 0.82; }
-html[data-oi-style="card"] .oi-translation {
-  padding: 0.45em 0.7em;
-  border-left: 3px solid color-mix(in srgb, currentColor 35%, transparent);
+html[data-oi-style="under"] .oi-translation,
+html[data-oi-style="dashed"] .oi-translation {
+  padding-bottom: 0.08em;
+  border-bottom: 1px dashed color-mix(in srgb, currentColor 48%, transparent);
+}
+html[data-oi-style="line"] .oi-translation {
+  padding-bottom: 0.08em;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+}
+html[data-oi-style="dim"] .oi-translation {
+  opacity: 0.82;
+  padding-bottom: 0.08em;
+  border-bottom: 1px dotted color-mix(in srgb, currentColor 36%, transparent);
+}
+html[data-oi-style="card"] .oi-translation,
+html[data-oi-style="box"] .oi-translation {
+  width: auto;
+  padding: 0.4em 0.65em;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
   background: color-mix(in srgb, currentColor 6%, transparent);
   border-radius: 6px;
+}
+html[data-oi-style="card"] .oi-translation {
+  border-left-width: 3px;
 }
 .oi-pending {
   outline: 1px dashed color-mix(in srgb, currentColor 25%, transparent);
