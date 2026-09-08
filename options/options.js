@@ -46,7 +46,7 @@ function renderProviderFields(settings) {
       if (field.type === "textarea") input = document.createElement("textarea");
       else if (field.type === "select") {
         input = document.createElement("select");
-        input.innerHTML = (field.options || []).map((o) => `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join("");
+        input.innerHTML = (field.options || []).map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join("");
       } else {
         input = document.createElement("input");
         input.type = field.type || "text";
@@ -100,9 +100,14 @@ async function persist() {
 }
 
 function fillSelect(select, items) {
-  select.innerHTML = items.map((item) => `<option value="${item.value}">${escapeHtml(item.label)}</option>`).join("");
+  select.innerHTML = items.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join("");
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&", "<": "<", ">": ">", '"': """, "'": "&#39;" }[c]));
+  return String(s)
+    .replaceAll("&", "\u0026amp;")
+    .replaceAll("<", "\u0026lt;")
+    .replaceAll(">", "\u0026gt;")
+    .replaceAll('"', "\u0026quot;")
+    .replaceAll("'", "\u0026#39;");
 }
