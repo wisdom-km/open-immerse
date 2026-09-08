@@ -1,8 +1,9 @@
-import { PROVIDER_LIST } from "../lib/providers.js";
+import { PROVIDER_LIST, getProvider } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { FEATURES, resolveFeatures } from "../lib/features.js";
 
 const $ = (id) => document.getElementById(id);
+let cachedSettings = { providers: {} };
 
 init();
 
@@ -12,6 +13,7 @@ async function init() {
   fillSelect($("targetLang"), LANGUAGE_OPTIONS.filter((l) => l.code !== "auto").map((l) => ({ value: l.code, label: l.label })));
 
   const { settings } = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
+  cachedSettings = settings;
   const features = resolveFeatures(settings);
   $("provider").value = settings.provider;
   $("sourceLang").value = settings.sourceLang;
@@ -27,48 +29,63 @@ async function init() {
       ${escapeHtml(feat.label)} — ${escapeHtml(feat.hint)}
     </label>
   `).join("");
-  renderProviderFields(settings);
+  renderProviderFields();
+  $("provider").addEventListener("change", () => {
+    harvestVisibleProvider();
+    renderProviderFields();
+  });
   $("save").addEventListener("click", () => persist());
 }
 
-function renderProviderFields(settings) {
+function harvestVisibleProvider() {
+  const providers = { ...(cachedSettings.providers || {}) };
+  for (const input of document.querySelectorAll("[data-provider]")) {
+    const id = input.dataset.provider;
+    providers[id] = { ...(providers[id] || {}) };
+    providers[id][input.dataset.key] = input.type === "checkbox" ? input.checked : input.value;
+  }
+  cachedSettings.providers = providers;
+}
+
+function renderProviderFields() {
   const root = $("providerFields");
   root.innerHTML = "";
-  for (const provider of PROVIDER_LIST) {
-    const card = document.createElement("div");
-    card.className = "provider-card";
-    const cfg = settings.providers?.[provider.id] || {};
-    card.innerHTML = `<h3>${escapeHtml(provider.name)}</h3>`;
-    for (const field of provider.fields) {
-      const wrap = document.createElement("label");
-      wrap.textContent = field.label;
-      let input;
-      if (field.type === "textarea") input = document.createElement("textarea");
-      else if (field.type === "select") {
-        input = document.createElement("select");
-        input.innerHTML = (field.options || []).map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join("");
-      } else {
-        input = document.createElement("input");
-        input.type = field.type || "text";
-      }
-      input.dataset.provider = provider.id;
-      input.dataset.key = field.key;
-      if (field.placeholder) input.placeholder = field.placeholder;
-      input.value = cfg[field.key] ?? "";
-      wrap.appendChild(input);
-      card.appendChild(wrap);
-    }
-    root.appendChild(card);
+  const id = $("provider").value;
+  const provider = getProvider(id);
+  const cfg = cachedSettings.providers?.[provider.id] || {};
+  const card = document.createElement("div");
+  card.className = "provider-card";
+  card.innerHTML = `<h3>${escapeHtml(provider.name)}</h3>`;
+  if (!provider.fields.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "这家引擎不需要额外密钥。";
+    card.appendChild(empty);
   }
+  for (const field of provider.fields) {
+    const wrap = document.createElement("label");
+    wrap.textContent = field.label;
+    let input;
+    if (field.type === "textarea") input = document.createElement("textarea");
+    else if (field.type === "select") {
+      input = document.createElement("select");
+      input.innerHTML = (field.options || []).map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join("");
+    } else {
+      input = document.createElement("input");
+      input.type = field.type || "text";
+    }
+    input.dataset.provider = provider.id;
+    input.dataset.key = field.key;
+    if (field.placeholder) input.placeholder = field.placeholder;
+    input.value = cfg[field.key] ?? "";
+    wrap.appendChild(input);
+    card.appendChild(wrap);
+  }
+  root.appendChild(card);
 }
 
 async function persist() {
-  const providers = {};
-  for (const input of document.querySelectorAll("[data-provider]")) {
-    const id = input.dataset.provider;
-    providers[id] = providers[id] || {};
-    providers[id][input.dataset.key] = input.type === "checkbox" ? input.checked : input.value;
-  }
+  harvestVisibleProvider();
   const features = {};
   for (const input of document.querySelectorAll("[data-feat]")) {
     features[input.dataset.feat] = input.checked;
@@ -92,7 +109,7 @@ async function persist() {
       subtitleEnabled: Boolean(features.youtube || features.x),
       features,
       siteRules,
-      providers
+      providers: cachedSettings.providers
     }
   });
   $("status").textContent = "已保存";
