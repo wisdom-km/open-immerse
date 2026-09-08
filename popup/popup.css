@@ -10,26 +10,30 @@
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  width: 320px;
+  width: 360px;
   padding: 14px;
   font: 13px/1.45 "Segoe UI", "PingFang SC", system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
 }
-header { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
 .mark {
   width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
   font-weight: 800; background: linear-gradient(135deg, #4d7cff, #7a5cff);
 }
 h1 { margin: 0; font-size: 15px; }
-header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
-label { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; color: var(--muted); }
-.switch-row { flex-direction: row; align-items: center; justify-content: space-between; color: var(--text); }
+header p, h2 { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+h2 { margin: 14px 0 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+label { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; color: var(--muted); }
+.switch-row { flex-direction: row; align-items: center; justify-content: space-between; color: var(--text); margin: 6px 0; }
+.feat { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.feat .name { color: var(--text); }
+.feat .hint { color: var(--muted); font-size: 11px; margin-top: 2px; }
 select, button {
   width: 100%; border: 1px solid var(--line); background: var(--card); color: var(--text);
   border-radius: 8px; padding: 8px;
 }
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.actions { margin-top: 8px; }
+.actions { display: grid; gap: 8px; margin-top: 10px; }
 button { background: var(--accent); border-color: transparent; font-weight: 600; cursor: pointer; }
 .hint { color: var(--muted); font-size: 11px; margin: 10px 0 0; }

@@ -1,4 +1,6 @@
-import { PROVIDER_LIST, LANGUAGE_OPTIONS } from "../lib/providers.js";
+import { PROVIDER_LIST } from "../lib/providers.js";
+import { LANGUAGE_OPTIONS } from "../lib/languages.js";
+import { FEATURES, resolveFeatures } from "../lib/features.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -10,9 +12,8 @@ async function init() {
   fillSelect($("targetLang"), LANGUAGE_OPTIONS.filter((l) => l.code !== "auto").map((l) => ({ value: l.code, label: l.label })));
 
   const { settings } = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
+  const features = resolveFeatures(settings);
   $("enabled").checked = Boolean(settings.enabled);
-  $("hoverEnabled").checked = Boolean(settings.hoverEnabled);
-  $("showFab").checked = settings.showFab !== false;
   $("provider").value = settings.provider;
   $("sourceLang").value = settings.sourceLang;
   $("targetLang").value = settings.targetLang;
@@ -22,6 +23,17 @@ async function init() {
   const rule = (settings.siteRules || []).find((r) => host === r.host || host.endsWith("." + r.host));
   $("autoSite").checked = Boolean(rule?.auto);
 
+  const box = $("featureList");
+  box.innerHTML = FEATURES.map((feat) => `
+    <label class="feat">
+      <span>
+        <div class="name">${escapeHtml(feat.label)}</div>
+        <div class="hint">${escapeHtml(feat.hint)}</div>
+      </span>
+      <input type="checkbox" data-feat="${feat.id}" ${features[feat.id] ? "checked" : ""} />
+    </label>
+  `).join("");
+
   $("enabled").addEventListener("change", async () => {
     const enabled = $("enabled").checked;
     await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled } });
@@ -30,20 +42,30 @@ async function init() {
 
   $("autoSite").addEventListener("change", async () => {
     if (!host) return;
-    await chrome.runtime.sendMessage({
-      type: "OI_TOGGLE_SITE_RULE",
-      host,
-      rule: { auto: $("autoSite").checked }
-    });
+    await chrome.runtime.sendMessage({ type: "OI_TOGGLE_SITE_RULE", host, rule: { auto: $("autoSite").checked } });
   });
 
-  for (const id of ["hoverEnabled", "showFab", "provider", "sourceLang", "targetLang"]) {
+  box.addEventListener("change", async (ev) => {
+    const input = ev.target.closest("[data-feat]");
+    if (!input) return;
+    const next = { ...features, [input.dataset.feat]: input.checked };
+    await chrome.runtime.sendMessage({
+      type: "OI_SAVE_SETTINGS",
+      patch: {
+        features: next,
+        hoverEnabled: next.hover,
+        showFab: next.fab,
+        subtitleEnabled: next.youtube || next.x
+      }
+    });
+    if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "OI_FEATURES_CHANGED" }).catch(() => {});
+  });
+
+  for (const id of ["provider", "sourceLang", "targetLang"]) {
     $(id).addEventListener("change", () =>
       chrome.runtime.sendMessage({
         type: "OI_SAVE_SETTINGS",
         patch: {
-          hoverEnabled: $("hoverEnabled").checked,
-          showFab: $("showFab").checked,
           provider: $("provider").value,
           sourceLang: $("sourceLang").value,
           targetLang: $("targetLang").value
@@ -70,5 +92,5 @@ function fillSelect(select, items) {
 }
 
 function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&", "<": "<", ">": ">", '"': """, "'": "&#39;" }[c]));
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
