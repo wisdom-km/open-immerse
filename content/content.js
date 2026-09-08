@@ -1,4 +1,5 @@
 const BLOCK_SELECTOR = "p, h1, h2, h3, h4, h5, h6, li, blockquote, figcaption, td, th, dt, dd";
+const PAGE_EXTRA_SELECTOR = "nav a, aside a, header a, footer a, [role='navigation'] a, [role='menuitem']";
 const SKIP_SELECTOR = "script, style, noscript, textarea, pre, code, kbd, samp, svg, canvas, [contenteditable], .oi-translation, .oi-toast, .oi-selection-card, .oi-fab";
 const MAIN_SELECTOR = "main, article, [role='main'], [role='article']";
 const CHROME_SELECTOR = "nav, aside, header, footer, [role='navigation'], [role='complementary'], [role='banner'], [role='contentinfo'], [role='menu']";
@@ -43,7 +44,7 @@ async function init() {
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "sync" || !changes.settings) return;
-    applyStyle((changes.settings.newValue || {}));
+    applyStyle(changes.settings.newValue || {});
   });
 }
 
@@ -134,12 +135,16 @@ async function translateVisible() {
 }
 
 function collectNodes(settings) {
-  const nodes = [...document.body.querySelectorAll(BLOCK_SELECTOR)].filter((el) => {
+  const scope = settings.translateScope || "page";
+  const selector = scope === "page" ? BLOCK_SELECTOR + ", " + PAGE_EXTRA_SELECTOR : BLOCK_SELECTOR;
+  const nodes = [...document.body.querySelectorAll(selector)].filter((el) => {
     if (el.closest(SKIP_SELECTOR)) return false;
     if (el.querySelector(".oi-translation")) return false;
     if (el.nextElementSibling?.classList?.contains("oi-translation")) return false;
     if (settings.skipCode && el.closest("pre, code")) return false;
-    if (isTinyChrome(el)) return false;
+    if (el.tagName === "A" && el.closest("li, p, h1, h2, h3, h4, h5, h6")) return false;
+    if (scope === "article" && (el.closest(CHROME_SELECTOR) || isSideColumn(el))) return false;
+    if (scope !== "page" && isTinyChrome(el)) return false;
     const text = getText(el);
     if (text.length < MIN_LEN) return false;
     if (/^[\d\s.,:;!?()[\]{}\-_/\\]+$/.test(text)) return false;
@@ -203,7 +208,7 @@ function mountTranslation(el, text, settings) {
       }
     }).then(() => toast("saved"));
   });
-  if (["LI", "TD", "TH", "DT", "DD"].includes(el.tagName)) el.appendChild(node);
+  if (["LI", "TD", "TH", "DT", "DD", "A"].includes(el.tagName)) el.appendChild(node);
   else el.insertAdjacentElement("afterend", node);
 }
 
