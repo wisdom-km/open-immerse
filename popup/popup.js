@@ -17,6 +17,7 @@ async function init() {
   $("provider").value = settings.provider;
   $("sourceLang").value = settings.sourceLang;
   $("targetLang").value = settings.targetLang;
+  $("translateScope").value = settings.translateScope || "page";
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const host = hostOf(tab?.url);
@@ -24,15 +25,27 @@ async function init() {
   $("autoSite").checked = Boolean(rule?.auto);
 
   const box = $("featureList");
-  box.innerHTML = FEATURES.map((feat) => `
-    <label class="feat">
-      <span>
-        <div class="name">${escapeHtml(feat.label)}</div>
-        <div class="hint">${escapeHtml(feat.hint)}</div>
-      </span>
-      <input type="checkbox" data-feat="${feat.id}" ${features[feat.id] ? "checked" : ""} />
-    </label>
-  `).join("");
+  box.textContent = "";
+  FEATURES.forEach((feat) => {
+    const label = document.createElement("label");
+    label.className = "feat";
+    const span = document.createElement("span");
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = feat.label;
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.textContent = feat.hint;
+    span.appendChild(name);
+    span.appendChild(hint);
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.feat = feat.id;
+    input.checked = Boolean(features[feat.id]);
+    label.appendChild(span);
+    label.appendChild(input);
+    box.appendChild(label);
+  });
 
   $("enabled").addEventListener("change", async () => {
     const enabled = $("enabled").checked;
@@ -61,14 +74,15 @@ async function init() {
     if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "OI_FEATURES_CHANGED" }).catch(() => {});
   });
 
-  for (const id of ["provider", "sourceLang", "targetLang"]) {
+  for (const id of ["provider", "sourceLang", "targetLang", "translateScope"]) {
     $(id).addEventListener("change", () =>
       chrome.runtime.sendMessage({
         type: "OI_SAVE_SETTINGS",
         patch: {
           provider: $("provider").value,
           sourceLang: $("sourceLang").value,
-          targetLang: $("targetLang").value
+          targetLang: $("targetLang").value,
+          translateScope: $("translateScope").value
         }
       })
     );
@@ -88,9 +102,11 @@ function hostOf(url) {
 }
 
 function fillSelect(select, items) {
-  select.innerHTML = items.map((item) => `<option value="${item.value}">${escapeHtml(item.label)}</option>`).join("");
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  select.textContent = "";
+  items.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    select.appendChild(option);
+  });
 }
