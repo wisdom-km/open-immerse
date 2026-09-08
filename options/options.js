@@ -28,6 +28,7 @@ async function init() {
   el("translationStyle").value = cachedSettings.translationStyle || "under";
   el("fontScale").value = cachedSettings.fontScale || 0.95;
   el("skipCode").checked = Boolean(cachedSettings.skipCode);
+  el("autoOnNewPages").checked = Boolean(cachedSettings.autoOnNewPages);
   el("siteRules").value = (cachedSettings.siteRules || []).map((r) => r.host).join("\n");
   renderFeatures(features);
   renderProviderFields();
@@ -122,6 +123,7 @@ async function persist() {
     translationStyle: el("translationStyle").value,
     fontScale: Number(el("fontScale").value) || 0.95,
     skipCode: el("skipCode").checked,
+    autoOnNewPages: el("autoOnNewPages").checked,
     hoverEnabled: Boolean(features.hover),
     showFab: features.fab !== false,
     subtitleEnabled: Boolean(features.youtube || features.x),
