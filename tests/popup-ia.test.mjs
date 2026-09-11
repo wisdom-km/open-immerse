@@ -63,6 +63,22 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.match(featSrc, /x:\s*false/);
 });
 
+test("popup engine link uses short name + full title; lang-row stays 1fr 1fr", () => {
+  const js = readFileSync(join(root, "popup/popup.js"), "utf8");
+  const css = readFileSync(join(root, "popup/popup.css"), "utf8");
+  const html = readFileSync(join(root, "popup/popup.html"), "utf8");
+  assert.match(js, /function shortProviderName/);
+  assert.match(js, /openai:\s*"OpenAI"/);
+  assert.match(js, /custom:\s*"自定义"/);
+  assert.match(js, /引擎：\$\{shortName\}/);
+  assert.match(js, /link\.title = provider\.name/);
+  assert.match(js, /openOptionsPage/);
+  assert.match(html, /class="lang-row"/);
+  assert.match(html, /id="engineLink"/);
+  assert.match(css, /\.lang-row\s*\{[^}]*grid-template-columns:\s*1fr 1fr/s);
+  assert.match(css, /\.engine-link\s*\{[^}]*text-overflow:\s*ellipsis/s);
+});
+
 test("isProviderConfigured requires apiKey when the adapter marks it required", () => {
   const paid = getProvider("openai");
   assert.equal(paid.id, "openai");

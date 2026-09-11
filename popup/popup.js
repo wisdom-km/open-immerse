@@ -64,9 +64,8 @@ async function init() {
   $("openDocs").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "documents" }));
 }
 
-function renderEngine(settings) {
-  const provider = getProvider(settings.provider);
-  const shortName = {
+function shortProviderName(provider) {
+  const map = {
     openai: "OpenAI",
     openrouter: "OpenRouter",
     deepl: "DeepL",
@@ -79,8 +78,14 @@ function renderEngine(settings) {
     gemini: "Gemini",
     claude: "Claude",
     azure: "Azure",
-    custom: "Custom"
-  }[provider.id] || provider.name.split("/")[0].trim();
+    custom: "自定义"
+  };
+  return map[provider.id] || String(provider.name || "").split("/")[0].trim();
+}
+
+function renderEngine(settings) {
+  const provider = getProvider(settings.provider);
+  const shortName = shortProviderName(provider);
   const link = $("engineLink");
   link.textContent = `引擎：${shortName}`;
   link.title = provider.name;
