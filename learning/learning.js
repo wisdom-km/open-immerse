@@ -1,4 +1,4 @@
-import { currentItems, canExport, toTxt, toMarkdown, toDocx, toPptx, downloadBlob } from "../lib/export.js";
+import { currentItems, canExport, toTxt, toMarkdown, toDocx, toPdf, downloadBlob } from "../lib/export.js";
 import { escapeHtml } from "../lib/html.js";
 import { LEARNING_COPY, itemMeta, emptyAllHtml } from "../lib/learning-ui.js";
 
@@ -16,17 +16,13 @@ init();
 
 async function init() {
   document.querySelectorAll("[data-tab]").forEach((btn) => {
-    btn.onclick = () => {
-      tab = btn.dataset.tab;
-      document.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("on", b === btn));
-      reviewBox.hidden = tab !== "review";
-      exportStatus.textContent = "";
-      render();
-    };
+    btn.onclick = () => switchTab(btn.dataset.tab);
   });
-  document.querySelector(".export-bar").addEventListener("click", (ev) => {
+  document.querySelector(".export-menu").addEventListener("click", (ev) => {
     const type = ev.target.closest("[data-export]")?.dataset.export;
-    if (type) exportList(type);
+    if (!type) return;
+    ev.currentTarget.open = false;
+    exportList(type);
   });
   grades.addEventListener("click", async (ev) => {
     const g = ev.target.closest("[data-g]")?.dataset.g;
@@ -36,6 +32,14 @@ async function init() {
   });
   listEl.addEventListener("click", onListClick);
   await reload();
+}
+
+function switchTab(next) {
+  tab = next;
+  document.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+  reviewBox.hidden = tab !== "review";
+  exportStatus.textContent = "";
+  render();
 }
 
 async function onListClick(ev) {
@@ -81,10 +85,10 @@ async function exportList(type) {
       downloadBlob(`${base}.txt`, new Blob([toTxt(list)], { type: "text/plain;charset=utf-8" }));
     } else if (type === "md") {
       downloadBlob(`${base}.md`, new Blob([toMarkdown(list)], { type: "text/markdown;charset=utf-8" }));
+    } else if (type === "pdf") {
+      downloadBlob(`${base}.pdf`, new Blob([toPdf(list)], { type: "application/pdf" }));
     } else if (type === "docx") {
       downloadBlob(`${base}.docx`, new Blob([await toDocx(list)], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
-    } else if (type === "pptx") {
-      downloadBlob(`${base}.pptx`, new Blob([await toPptx(list)], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }));
     }
     exportStatus.textContent = `已导出 ${list.length} 条为 ${type.toUpperCase()}`;
   } catch (err) {
@@ -109,7 +113,15 @@ function renderReview() {
   grades.hidden = !current;
   if (!current) {
     cardEl.className = "card empty";
-    cardEl.textContent = LEARNING_COPY.emptyReview;
+    cardEl.replaceChildren();
+    const p = document.createElement("p");
+    p.textContent = LEARNING_COPY.emptyReview;
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "ghost-link";
+    link.textContent = LEARNING_COPY.viewAll;
+    link.addEventListener("click", () => switchTab("all"));
+    cardEl.append(p, link);
     return;
   }
   cardEl.className = "card";

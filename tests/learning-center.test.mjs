@@ -30,8 +30,9 @@ test("L1 copy: title 学习中心, tabs, txt+md export — no brand in header", 
   assert.equal(/沉浸译/.test(html), false);
   assert.match(html, /data-tab="all"[^>]*>全部</);
   assert.match(html, /data-tab="review"[^>]*>今日待复习</);
-  assert.match(html, /data-export="txt"/);
   assert.match(html, /data-export="md"/);
+  assert.match(html, /data-export="pdf"/);
+  assert.match(html, /data-export="docx"/);
 });
 
 test("L2 list meta uses type · source · next review", () => {
@@ -58,6 +59,7 @@ test("L2 delete copy is ghost then inline confirm", () => {
 
 test("L3 review empty copy and grades", () => {
   assert.equal(LEARNING_COPY.emptyReview, "今日没有到期。");
+  assert.equal(LEARNING_COPY.viewAll, "查看全部");
   assert.equal(LEARNING_COPY.forgot, "忘了");
   assert.equal(LEARNING_COPY.fuzzy, "模糊");
   assert.equal(LEARNING_COPY.remembered, "记住");
@@ -78,7 +80,7 @@ test("L4 empty-all copy is title plus 藏 hint", () => {
 });
 
 test("L5 export refuses empty lists and writes when non-empty", () => {
-  assert.equal(LEARNING_COPY.emptyExport, "当前列表是空的");
+  assert.equal(LEARNING_COPY.emptyExport, "当前列表是空的。");
   assert.equal(canExport([]), false);
   assert.equal(canExport(null), false);
   assert.equal(canExport([sample]), true);

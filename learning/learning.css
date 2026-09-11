@@ -1,5 +1,6 @@
 :root {
   --oi-bg: #0b0d12;
+  --oi-bg-elevated: #10131a;
   --oi-panel: #141821;
   --oi-card: #171a21;
   --oi-line: #2a3142;
@@ -8,15 +9,35 @@
   --oi-accent: #4d7cff;
 }
 body { margin: 0; font: 15px/1.55 system-ui, "PingFang SC", sans-serif; background: var(--oi-bg); color: var(--oi-text); }
-main { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
-h1 { margin: 0 0 8px; }
+main { max-width: 720px; margin: 0 auto; padding: 40px 20px 80px; }
+.shell { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; margin-bottom: 8px; }
+.title-row { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.mark {
+  width: 16px; height: 16px; flex: 0 0 16px;
+  display: flex; flex-direction: column; justify-content: center; gap: 3px;
+}
+.mark span { display: block; width: 16px; height: 3px; border-radius: 999px; background: var(--oi-accent); }
+h1 { margin: 0; font-size: 22px; }
+h2 { margin: 0 0 12px; font-size: 16px; }
 .lead, .hint, .meta, .card.empty, .card .dst, .card .ctx, li .dst { color: var(--oi-text-muted); }
-.tabs, .export-bar, .grades, .row-actions { display: flex; gap: 8px; margin: 18px 0; flex-wrap: wrap; align-items: center; }
-.row-actions { margin: 8px 0 0; }
-.tabs button, .grades button, .export-bar button { border: 0; border-radius: 8px; padding: 8px 12px; background: var(--oi-line); color: var(--oi-text); cursor: pointer; font: inherit; }
+.tabs, .grades, .row-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tabs.segmented { background: var(--oi-bg-elevated); border: 1px solid var(--oi-line); border-radius: 10px; padding: 3px; }
+.tabs button, .grades button, .export-panel button {
+  border: 0; border-radius: 8px; padding: 8px 12px; background: transparent; color: var(--oi-text); cursor: pointer; font: inherit;
+}
 .tabs .on { background: var(--oi-accent); }
-.export-bar span { color: var(--oi-text-muted); margin-right: 4px; }
-.export-bar button { background: var(--oi-accent); }
+.export-menu { position: relative; }
+.export-menu summary {
+  list-style: none; cursor: pointer; border: 1px solid var(--oi-line); border-radius: 8px;
+  padding: 6px 12px; color: var(--oi-text-muted); background: transparent;
+}
+.export-menu summary::-webkit-details-marker { display: none; }
+.export-panel {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 2;
+  display: grid; min-width: 140px; background: var(--oi-panel); border: 1px solid var(--oi-line); border-radius: 10px; padding: 6px;
+}
+.export-panel button { text-align: left; }
+.export-panel button:hover { background: var(--oi-card); }
 .card { padding: 20px; border: 1px solid var(--oi-line); border-radius: 14px; background: var(--oi-panel); }
 .card .org { font-size: 22px; margin-bottom: 8px; }
 .grades { margin-top: 12px; }
@@ -27,13 +48,14 @@ li .meta { font-size: 12px; margin-top: 6px; }
 li .org { display: block; }
 .empty-title { margin: 0 0 6px; color: var(--oi-text); }
 .empty-all .hint { margin: 0; font-size: 13px; }
+.row-actions { margin: 8px 0 0; }
 button.ghost, button.danger {
-  border: 1px solid var(--oi-line);
-  border-radius: 6px;
-  padding: 4px 8px;
-  background: transparent;
-  color: var(--oi-text-muted);
-  cursor: pointer;
-  font: inherit;
+  border: 1px solid var(--oi-line); border-radius: 6px; padding: 4px 8px;
+  background: transparent; color: var(--oi-text-muted); cursor: pointer; font: inherit;
 }
 button.danger { color: #e8a0a0; }
+.ghost-link {
+  border: 0; background: none; color: var(--oi-accent); padding: 0; margin-top: 8px;
+  cursor: pointer; font: inherit;
+}
+.card.empty p { margin: 0; }
