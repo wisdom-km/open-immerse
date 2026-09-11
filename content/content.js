@@ -1,27 +1,44 @@
 const BLOCK_SELECTOR = "p, h1, h2, h3, h4, h5, h6, li, blockquote, figcaption, td, th, dt, dd";
-const PAGE_EXTRA_SELECTOR = "nav a, aside a, header a, footer a, [role='navigation'] a, [role='menuitem']";
 const SKIP_SELECTOR = "script, style, noscript, textarea, pre, code, kbd, samp, svg, canvas, [contenteditable], .oi-translation, .oi-toast, .oi-selection-card, .oi-fab";
 const MAIN_SELECTOR = "main, article, [role='main'], [role='article']";
-const CHROME_SELECTOR = "nav, aside, header, footer, [role='navigation'], [role='complementary'], [role='banner'], [role='contentinfo'], [role='menu']";
+const CHROME_SELECTOR = "nav, aside, header, footer, [role='navigation'], [role='complementary'], [role='banner'], [role='contentinfo'], [role='menu'], [role='menubar'], [data-aside-rail], [data-aside-track], [class*='hero_blog_post_details'], [class*='blog_post_details'], [class*='marginalia']";
+const ALWAYS_CHROME_SELECTOR = "nav, aside, header, [role='navigation'], [role='complementary'], [role='banner'], [role='menu'], [role='menubar'], [data-aside-rail], [data-aside-track], [class*='hero_blog_post_details'], [class*='blog_post_details'], [class*='marginalia']";
+const HARD_SKIP_SELECTOR = [
+  "[data-aside-rail]",
+  "[data-aside-track]",
+  "[data-rail]",
+  "[class*='marginalia']",
+  "[class*='hero_blog_post_details']",
+  ".hero_blog_post_details",
+  ".hero_blog_post_details_list",
+  ".hero_blog_post_details_item",
+  ".hero_blog_post_details_content",
+  "[class*='blog_post_details']",
+  "[class*='details_list']",
+  "[class*='details_item']"
+].join(", ");
+const CHROME_META_RE = /^(category|product|date|author(?:\(s\))?|share|reading time|copy link|\d+\s*min\b)/i;
 const MIN_LEN = 2;
 
 let running = false;
+let epoch = 0;
 let pageObserver = null;
 let hoverBound = false;
+let timer = 0;
 
 init();
 
 async function init() {
   window.addEventListener("oi-please-start", () => start());
-  window.addEventListener("oi-please-stop", () => stop());
+  window.addEventListener("oi-please-stop", () => restore());
   window.addEventListener("oi-please-restore", () => restore());
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "OI_START") start().then(() => sendResponse({ ok: true }));
-    else if (message.type === "OI_STOP") {
-      stop();
+    else if (message.type === "OI_RESTORE") {
+      restore();
       sendResponse({ ok: true });
-    } else if (message.type === "OI_RESTORE") {
+    } else if (message.type === "OI_STOP") {
       restore();
       sendResponse({ ok: true });
     } else if (message.type === "OI_SHOW_SELECTION") {
@@ -64,14 +81,16 @@ async function applyFeatures() {
 }
 
 async function start() {
+  const ticket = epoch;
   const settings = (await send({ type: "OI_GET_SETTINGS" })).settings || {};
+  if (epoch !== ticket) return;
   if ((settings.features || {}).webpage === false) return;
   if (running) return;
   running = true;
   document.documentElement.classList.add("oi-active");
   window.dispatchEvent(new CustomEvent("oi-running", { detail: true }));
-  await translateVisible();
-  observePage();
+  await translateVisible(ticket);
+  if (running && epoch === ticket) observePage();
 }
 
 function stop() {
@@ -82,12 +101,23 @@ function stop() {
     pageObserver.disconnect();
     pageObserver = null;
   }
+  clearTimeout(timer);
+  timer = 0;
 }
 
 function restore() {
+  epoch += 1;
+  running = false;
   stop();
-  document.querySelectorAll(".oi-translation").forEach((el) => el.remove());
-  document.querySelectorAll(".oi-pending").forEach((el) => el.classList.remove("oi-pending"));
+  document.querySelectorAll(".oi-translation, .oi-selection-card").forEach((el) => el.remove());
+  document.querySelectorAll(".oi-pending, .oi-failed").forEach((el) => {
+    el.classList.remove("oi-pending", "oi-failed");
+  });
+  const fab = document.querySelector('.oi-fab [data-act="toggle"]');
+  if (fab) {
+    fab.textContent = "译";
+    fab.classList.remove("on");
+  }
 }
 
 function observePage() {
@@ -102,29 +132,34 @@ function observePage() {
   pageObserver.observe(document.body, { childList: true, subtree: true });
 }
 
-let timer = 0;
 function debounceTranslate() {
   clearTimeout(timer);
-  timer = setTimeout(() => translateVisible(), 400);
+  timer = setTimeout(() => translateVisible(epoch), 400);
 }
 
-async function translateVisible() {
+async function translateVisible(ticket = epoch) {
+  if (!running || ticket !== epoch) return;
   const settingsRes = await send({ type: "OI_GET_SETTINGS" });
+  if (!running || ticket !== epoch) return;
   const settings = settingsRes.settings;
   if ((settings.features || {}).webpage === false) return;
   const nodes = collectNodes(settings);
   if (!nodes.length) return;
   const batchSize = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < nodes.length; i += batchSize) {
-    if (!running) return;
+    if (!running || ticket !== epoch) return;
     const chunk = nodes.slice(i, i + batchSize);
     chunk.forEach((el) => el.classList.add("oi-pending"));
     try {
       const res = await send({ type: "OI_TRANSLATE_BATCH", texts: chunk.map(getText) });
+      if (!running || ticket !== epoch) {
+        chunk.forEach((el) => el.classList.remove("oi-pending"));
+        return;
+      }
       if (!res.ok) throw new Error(res.error || "translate failed");
       chunk.forEach((el, idx) => {
         el.classList.remove("oi-pending");
-        mountTranslation(el, res.translations[idx] || "", settings);
+        if (running && ticket === epoch) mountTranslation(el, res.translations[idx] || "", settings);
       });
     } catch (err) {
       chunk.forEach((el) => el.classList.remove("oi-pending"));
@@ -135,16 +170,17 @@ async function translateVisible() {
 }
 
 function collectNodes(settings) {
-  const scope = settings.translateScope || "page";
-  const selector = scope === "page" ? BLOCK_SELECTOR + ", " + PAGE_EXTRA_SELECTOR : BLOCK_SELECTOR;
-  const nodes = [...document.body.querySelectorAll(selector)].filter((el) => {
+  const scope = settings.translateScope || "article";
+  const nodes = [...document.body.querySelectorAll(BLOCK_SELECTOR)].filter((el) => {
     if (el.closest(SKIP_SELECTOR)) return false;
     if (el.querySelector(".oi-translation")) return false;
     if (el.nextElementSibling?.classList?.contains("oi-translation")) return false;
     if (settings.skipCode && el.closest("pre, code")) return false;
     if (el.tagName === "A" && el.closest("li, p, h1, h2, h3, h4, h5, h6")) return false;
-    if (scope === "article" && (el.closest(CHROME_SELECTOR) || isSideColumn(el))) return false;
-    if (scope !== "page" && isTinyChrome(el)) return false;
+    if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || el.closest(CHROME_SELECTOR)) return false;
+    if (isInMetaRail(el)) return false;
+    if (isSideColumn(el)) return false;
+    if (scope === "article" && isTinyChrome(el)) return false;
     const text = getText(el);
     if (text.length < MIN_LEN) return false;
     if (/^[\d\s.,:;!?()[\]{}\-_/\\]+$/.test(text)) return false;
@@ -161,8 +197,8 @@ function collectNodes(settings) {
 }
 
 function contentRank(el) {
-  if (el.closest(MAIN_SELECTOR) && !el.closest(CHROME_SELECTOR)) return 0;
-  if (isSideColumn(el) || el.closest(CHROME_SELECTOR)) return 2;
+  if (el.closest(MAIN_SELECTOR) && !el.closest(CHROME_SELECTOR) && !el.closest(HARD_SKIP_SELECTOR)) return 0;
+  if (isSideColumn(el) || el.closest(CHROME_SELECTOR) || el.closest(HARD_SKIP_SELECTOR)) return 2;
   return 1;
 }
 
@@ -170,7 +206,36 @@ function isSideColumn(el) {
   const rect = el.getBoundingClientRect();
   const vw = Math.max(window.innerWidth || 0, 800);
   if (rect.width < 4) return false;
-  return (rect.right < vw * 0.24 && rect.width < vw * 0.32) || (rect.left > vw * 0.76 && rect.width < vw * 0.32);
+  if (rect.right < vw * 0.28 && rect.width < vw * 0.38) return true;
+  if (rect.left > vw * 0.58 && rect.width < vw * 0.45) return true;
+  const main = el.closest(MAIN_SELECTOR);
+  if (main) {
+    const box = main.getBoundingClientRect();
+    if (box.width > 4 && rect.left > box.left + box.width * 0.58 && rect.width < box.width * 0.5) return true;
+  }
+  return false;
+}
+
+function isChromeMetaText(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value || value.length >= 80) return false;
+  return CHROME_META_RE.test(value);
+}
+
+function isInMetaRail(el) {
+  if (el.closest(HARD_SKIP_SELECTOR) || el.closest("aside, [role='complementary']")) return true;
+  let node = el;
+  for (let i = 0; i < 8 && node; i++) {
+    const cls = typeof node.className === "string" ? node.className : "";
+    if (/hero_blog_post_details|blog_post_details|details_list|details_item|marginalia|aside-rail|aside_rail/i.test(cls)) return true;
+    node = node.parentElement;
+  }
+  const cluster = el.closest("li, dt, dd, [class*='details'], [class*='marginalia']");
+  if (cluster) {
+    const t = getText(cluster);
+    if (t.length > 0 && t.length < 160 && CHROME_META_RE.test(t)) return true;
+  }
+  return isChromeMetaText(getText(el));
 }
 
 function getText(el) {
@@ -255,6 +320,7 @@ let hoverTimer = 0;
 function onHover(ev) {
   const el = ev.target.closest(BLOCK_SELECTOR);
   if (!el || el.closest(SKIP_SELECTOR)) return;
+  if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || isInMetaRail(el) || isSideColumn(el)) return;
   if (el.querySelector(".oi-translation") || el.nextElementSibling?.classList?.contains("oi-translation")) return;
   clearTimeout(hoverTimer);
   hoverTimer = setTimeout(async () => {

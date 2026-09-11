@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Open Immerse</title>
+    <title>沉浸译</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <header>
-      <div class="mark">OI</div>
+      <div class="mark" aria-hidden="true"><span></span><span></span></div>
       <div>
-        <h1>Open Immerse</h1>
-        <p>按需开关功能，不互相打扰</p>
+        <h1>沉浸译</h1>
+        <p>Open Immerse · 网页双语</p>
       </div>
     </header>
 
@@ -21,8 +21,8 @@
       <label class="switch-row"><span>本站自动翻译</span><input id="autoSite" type="checkbox" /></label>
       <label>翻译范围
         <select id="translateScope">
-          <option value="page">全页面（含侧栏/导航）</option>
-          <option value="article">仅正文</option>
+          <option value="article">仅正文（默认）</option>
+          <option value="page">更大范围（仍跳过顶栏导航）</option>
         </select>
       </label>
     </section>
@@ -30,6 +30,10 @@
     <section>
       <h2>功能开关</h2>
       <div id="featureList"></div>
+      <details class="later">
+        <summary>后续功能（默认关闭）</summary>
+        <div id="laterList"></div>
+      </details>
     </section>
 
     <section>
@@ -46,7 +50,7 @@
       <button id="openDocs" type="button">文档翻译</button>
       <button id="openOptions" type="button">更多设置</button>
     </div>
-    <p class="hint">关掉 YouTube / X 后，视频站不会跑字幕逻辑。只开「网页翻译」时就是纯网页双语。</p>
+    <p class="hint">关掉「翻译当前页面」、点 FAB「原」、或按 Alt+T 关闭，都会完整恢复原文。</p>
     <script type="module" src="popup.js"></script>
   </body>
 </html>

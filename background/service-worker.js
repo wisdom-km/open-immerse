@@ -6,26 +6,40 @@ import { resolveFeatures } from "../lib/features.js";
 const cache = new Map();
 const CACHE_LIMIT = 2000;
 
-chrome.runtime.onInstalled.addListener(() => rebuildMenus());
-chrome.runtime.onStartup.addListener(() => rebuildMenus());
+chrome.runtime.onInstalled.addListener(() => {
+  bootExtension();
+});
+chrome.runtime.onStartup.addListener(() => {
+  bootExtension();
+});
+
+function bootExtension() {
+  getSettings()
+    .then(() => rebuildMenus())
+    .catch((err) => console.error("Open Immerse: startup failed", err));
+}
 
 async function rebuildMenus() {
-  const settings = await getSettings();
-  const features = resolveFeatures(settings);
-  await chrome.contextMenus.removeAll();
-  if (features.selection) {
-    chrome.contextMenus.create({
-      id: "oi-translate-selection",
-      title: "翻译选中文本",
-      contexts: ["selection"]
-    });
-  }
-  if (features.learning) {
-    chrome.contextMenus.create({
-      id: "oi-save-selection",
-      title: "收藏到学习中心",
-      contexts: ["selection"]
-    });
+  try {
+    const settings = await getSettings();
+    const features = resolveFeatures(settings);
+    await chrome.contextMenus.removeAll();
+    if (features.selection) {
+      chrome.contextMenus.create({
+        id: "oi-translate-selection",
+        title: "翻译选中文本",
+        contexts: ["selection"]
+      });
+    }
+    if (features.learning) {
+      chrome.contextMenus.create({
+        id: "oi-save-selection",
+        title: "收藏到学习中心",
+        contexts: ["selection"]
+      });
+    }
+  } catch (err) {
+    console.error("Open Immerse: rebuildMenus failed", err);
   }
 }
 
@@ -66,7 +80,7 @@ chrome.commands.onCommand.addListener(async (command) => {
   if (resolveFeatures(settings).webpage === false) return;
   const enabled = !settings.enabled;
   await saveSettings({ enabled });
-  await chrome.tabs.sendMessage(tab.id, { type: enabled ? "OI_START" : "OI_STOP" }).catch(() => {});
+  await chrome.tabs.sendMessage(tab.id, { type: enabled ? "OI_START" : "OI_RESTORE" }).catch(() => {});
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

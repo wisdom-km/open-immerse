@@ -10,7 +10,6 @@
     const showPage = features.webpage !== false;
     const showLearn = features.learning !== false;
     const showDocs = features.documents !== false;
-    const showSub = (isYouTubePage() && features.youtube) || (isXPage() && features.x);
 
     const bar = document.createElement("div");
     bar.className = "oi-fab";
@@ -19,7 +18,6 @@
         ? '<button type="button" data-act="toggle" title="toggle">译</button><button type="button" data-act="restore" title="restore">原</button>'
         : "") +
       (showLearn ? '<button type="button" data-act="save" title="save">藏</button>' : "") +
-      (showSub ? '<button type="button" data-act="sub" title="subtitles">幕</button>' : "") +
       '<button type="button" data-act="more" title="more">...</button><div class="oi-fab-menu" hidden></div>';
 
     const menu = bar.querySelector(".oi-fab-menu");
@@ -42,14 +40,13 @@
       if (act === "toggle" && showPage) {
         const on = !document.documentElement.classList.contains("oi-active");
         await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: on } });
-        window.dispatchEvent(new CustomEvent(on ? "oi-please-start" : "oi-please-stop"));
+        window.dispatchEvent(new CustomEvent(on ? "oi-please-start" : "oi-please-restore"));
       }
       if (act === "restore" && showPage) {
         await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: false } });
         window.dispatchEvent(new CustomEvent("oi-please-restore"));
       }
       if (act === "save" && showLearn) chrome.runtime.sendMessage({ type: "OI_SAVE_CURRENT_SELECTION" });
-      if (act === "sub" && showSub) window.dispatchEvent(new CustomEvent("oi-toggle-subtitles"));
       if (act === "learn" && showLearn) chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "learning" });
       if (act === "docs" && showDocs) chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "documents" });
       if (act === "autosite" && showPage) {
@@ -76,13 +73,5 @@
     if (!btn) return;
     btn.textContent = on ? "停" : "译";
     btn.classList.toggle("on", on);
-  }
-
-  function isYouTubePage() {
-    return /youtube\.com|youtu\.be/.test(location.hostname);
-  }
-
-  function isXPage() {
-    return /(^|\.)x\.com$|(^|\.)twitter\.com$/.test(location.hostname);
   }
 })();

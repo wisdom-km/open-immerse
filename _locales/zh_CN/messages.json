@@ -1,5 +1,5 @@
 {
-  "extName": { "message": "Open Immerse" },
-  "extDesc": { "message": "开源沉浸式双语网页翻译，可接入 OpenAI / DeepL / Gemini / Claude / DeepSeek / 微软 / 谷歌 / 自定义 API。" },
-  "cmdToggle": { "message": "开关当前页面翻译" }
+  "extName": { "message": "沉浸译" },
+  "extDesc": { "message": "沉浸译 / Open Immerse：开源网页双语翻译，可接入 OpenAI / DeepL / Gemini / Claude / DeepSeek / 微软 / 谷歌 / 自定义 API。" },
+  "cmdToggle": { "message": "开关当前页面翻译（关闭即恢复原文）" }
 }
