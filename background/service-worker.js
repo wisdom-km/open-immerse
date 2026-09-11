@@ -7,29 +7,39 @@ const cache = new Map();
 const CACHE_LIMIT = 2000;
 
 chrome.runtime.onInstalled.addListener(() => {
-  getSettings().then(() => rebuildMenus());
+  bootExtension();
 });
 chrome.runtime.onStartup.addListener(() => {
-  getSettings().then(() => rebuildMenus());
+  bootExtension();
 });
 
+function bootExtension() {
+  getSettings()
+    .then(() => rebuildMenus())
+    .catch((err) => console.error("Open Immerse: startup failed", err));
+}
+
 async function rebuildMenus() {
-  const settings = await getSettings();
-  const features = resolveFeatures(settings);
-  await chrome.contextMenus.removeAll();
-  if (features.selection) {
-    chrome.contextMenus.create({
-      id: "oi-translate-selection",
-      title: "翻译选中文本",
-      contexts: ["selection"]
-    });
-  }
-  if (features.learning) {
-    chrome.contextMenus.create({
-      id: "oi-save-selection",
-      title: "收藏到学习中心",
-      contexts: ["selection"]
-    });
+  try {
+    const settings = await getSettings();
+    const features = resolveFeatures(settings);
+    await chrome.contextMenus.removeAll();
+    if (features.selection) {
+      chrome.contextMenus.create({
+        id: "oi-translate-selection",
+        title: "翻译选中文本",
+        contexts: ["selection"]
+      });
+    }
+    if (features.learning) {
+      chrome.contextMenus.create({
+        id: "oi-save-selection",
+        title: "收藏到学习中心",
+        contexts: ["selection"]
+      });
+    }
+  } catch (err) {
+    console.error("Open Immerse: rebuildMenus failed", err);
   }
 }
 
