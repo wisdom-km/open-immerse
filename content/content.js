@@ -262,7 +262,12 @@ function mountTranslation(el, text, settings) {
   }
   const inline = shouldInline(el);
   const node = document.createElement(inline ? "span" : "div");
-  node.className = inline ? "oi-translation oi-inline" : "oi-translation";
+  const heading = /^H[1-3]$/.test(el.tagName);
+  node.className = inline
+    ? "oi-translation oi-inline"
+    : heading
+      ? "oi-translation oi-after-heading"
+      : "oi-translation";
   node.lang = settings.targetLang || "zh-CN";
   node.textContent = text;
   node.title = "double click to save";
