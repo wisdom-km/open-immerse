@@ -20,14 +20,14 @@ const sample = {
   nextReview: Date.UTC(2026, 8, 11)
 };
 
-test("L1 copy: title, tabs, brand", () => {
+test("L1 copy: title 学习中心, tabs, txt+md export — no brand in header", () => {
   assert.equal(LEARNING_COPY.title, "学习中心");
-  assert.equal(LEARNING_COPY.brand, "沉浸译 / Open Immerse");
   assert.equal(LEARNING_COPY.tabAll, "全部");
   assert.equal(LEARNING_COPY.tabReview, "今日待复习");
   const html = readFileSync(join(root, "learning/learning.html"), "utf8");
-  assert.match(html, />学习中心</);
-  assert.match(html, /沉浸译 \/ Open Immerse/);
+  assert.match(html, /<title>学习中心<\/title>/);
+  assert.match(html, /<h1>学习中心<\/h1>/);
+  assert.equal(/沉浸译/.test(html), false);
   assert.match(html, /data-tab="all"[^>]*>全部</);
   assert.match(html, /data-tab="review"[^>]*>今日待复习</);
   assert.match(html, /data-export="txt"/);

@@ -3,15 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>学习中心 · 沉浸译</title>
+  <title>学习中心</title>
   <link rel="stylesheet" href="learning.css" />
 </head>
 <body>
   <main>
-    <p class="brand">沉浸译 / Open Immerse</p>
     <h1>学习中心</h1>
-    <p class="lead">收藏单词、短语和句子，支持今日复习与导出。</p>
-    <div class="tabs" role="tablist">
+    <p class="lead">收藏单词、短语和句子，可导出 Markdown、Word、PPT、TXT。</p>
+    <div class="tabs">
       <button type="button" data-tab="all" class="on">全部</button>
       <button type="button" data-tab="review">今日待复习</button>
     </div>
@@ -22,7 +21,7 @@
       <button type="button" data-export="docx">Word</button>
       <button type="button" data-export="pptx">PPT</button>
     </div>
-    <p id="exportStatus" class="status" role="status"></p>
+    <p id="exportStatus" class="lead" role="status"></p>
     <section id="reviewBox" hidden>
       <h2>复习</h2>
       <div id="card" class="card empty">今日没有到期。</div>
