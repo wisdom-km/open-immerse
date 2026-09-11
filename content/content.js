@@ -82,7 +82,7 @@ async function applyFeatures() {
 
 async function start() {
   const ticket = epoch;
-  const settings = (await send({ type: "OI_GET_SETTINGS" })).settings || {};
+  const settings = (await send({ type: "OI_GET_SETTINGS" }))?.settings || {};
   if (epoch !== ticket) return;
   if ((settings.features || {}).webpage === false) return;
   if (running) return;
@@ -333,7 +333,7 @@ function onHover(ev) {
     if (text.length < MIN_LEN) return;
     const res = await send({ type: "OI_TRANSLATE_BATCH", texts: [text] });
     if (res.ok) {
-      const settings = (await send({ type: "OI_GET_SETTINGS" })).settings;
+      const settings = (await send({ type: "OI_GET_SETTINGS" }))?.settings;
       mountTranslation(el, res.translations[0], settings);
     }
   }, 350);
@@ -400,6 +400,13 @@ function toast(message) {
   setTimeout(() => el.classList.remove("show"), 3200);
 }
 
-function send(payload) {
-  return chrome.runtime.sendMessage(payload);
+async function send(payload) {
+  try {
+    if (!chrome.runtime?.id) return null;
+    return await chrome.runtime.sendMessage(payload);
+  } catch (err) {
+    const msg = String(err && err.message || err);
+    if (/Extension context invalidated|message port closed/i.test(msg)) return null;
+    throw err;
+  }
 }
