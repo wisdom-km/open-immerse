@@ -1,14 +1,18 @@
 const BLOCK_SELECTOR = "p, h1, h2, h3, h4, h5, h6, li, blockquote, figcaption, td, th, dt, dd";
 const SKIP_SELECTOR = "script, style, noscript, textarea, pre, code, kbd, samp, svg, canvas, [contenteditable], .oi-translation, .oi-toast, .oi-selection-card, .oi-fab";
 const MAIN_SELECTOR = "main, article, [role='main'], [role='article']";
-const CHROME_SELECTOR = "nav, aside, header, footer, [role='navigation'], [role='complementary'], [role='banner'], [role='contentinfo'], [role='menu']";
-const ALWAYS_CHROME_SELECTOR = "nav, aside, header, [role='navigation'], [role='complementary'], [role='banner'], [role='menu'], [role='menubar']";
+const CHROME_SELECTOR = "nav, aside, header, footer, [role='navigation'], [role='complementary'], [role='banner'], [role='contentinfo'], [role='menu'], [role='menubar'], [data-aside-rail], [data-aside-track], [class*='hero_blog_post_details'], [class*='blog_post_details'], [class*='marginalia']";
+const ALWAYS_CHROME_SELECTOR = "nav, aside, header, [role='navigation'], [role='complementary'], [role='banner'], [role='menu'], [role='menubar'], [data-aside-rail], [data-aside-track], [class*='hero_blog_post_details'], [class*='blog_post_details'], [class*='marginalia']";
 const HARD_SKIP_SELECTOR = [
   "[data-aside-rail]",
   "[data-aside-track]",
   "[data-rail]",
   "[class*='marginalia']",
   "[class*='hero_blog_post_details']",
+  ".hero_blog_post_details",
+  ".hero_blog_post_details_list",
+  ".hero_blog_post_details_item",
+  ".hero_blog_post_details_content",
   "[class*='blog_post_details']",
   "[class*='details_list']",
   "[class*='details_item']"
@@ -173,11 +177,10 @@ function collectNodes(settings) {
     if (el.nextElementSibling?.classList?.contains("oi-translation")) return false;
     if (settings.skipCode && el.closest("pre, code")) return false;
     if (el.tagName === "A" && el.closest("li, p, h1, h2, h3, h4, h5, h6")) return false;
-    if (el.closest(HARD_SKIP_SELECTOR)) return false;
-    if (el.closest(ALWAYS_CHROME_SELECTOR)) return false;
+    if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || el.closest(CHROME_SELECTOR)) return false;
+    if (isInMetaRail(el)) return false;
     if (isSideColumn(el)) return false;
-    if (isChromeMetaText(getText(el))) return false;
-    if (scope === "article" && (el.closest(CHROME_SELECTOR) || isTinyChrome(el))) return false;
+    if (scope === "article" && isTinyChrome(el)) return false;
     const text = getText(el);
     if (text.length < MIN_LEN) return false;
     if (/^[\d\s.,:;!?()[\]{}\-_/\\]+$/.test(text)) return false;
@@ -203,13 +206,36 @@ function isSideColumn(el) {
   const rect = el.getBoundingClientRect();
   const vw = Math.max(window.innerWidth || 0, 800);
   if (rect.width < 4) return false;
-  return (rect.right < vw * 0.22 && rect.width < vw * 0.32) || (rect.left > vw * 0.68 && rect.width < vw * 0.4);
+  if (rect.right < vw * 0.28 && rect.width < vw * 0.38) return true;
+  if (rect.left > vw * 0.58 && rect.width < vw * 0.45) return true;
+  const main = el.closest(MAIN_SELECTOR);
+  if (main) {
+    const box = main.getBoundingClientRect();
+    if (box.width > 4 && rect.left > box.left + box.width * 0.58 && rect.width < box.width * 0.5) return true;
+  }
+  return false;
 }
 
 function isChromeMetaText(text) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
   if (!value || value.length >= 80) return false;
   return CHROME_META_RE.test(value);
+}
+
+function isInMetaRail(el) {
+  if (el.closest(HARD_SKIP_SELECTOR) || el.closest("aside, [role='complementary']")) return true;
+  let node = el;
+  for (let i = 0; i < 8 && node; i++) {
+    const cls = typeof node.className === "string" ? node.className : "";
+    if (/hero_blog_post_details|blog_post_details|details_list|details_item|marginalia|aside-rail|aside_rail/i.test(cls)) return true;
+    node = node.parentElement;
+  }
+  const cluster = el.closest("li, dt, dd, [class*='details'], [class*='marginalia']");
+  if (cluster) {
+    const t = getText(cluster);
+    if (t.length > 0 && t.length < 160 && CHROME_META_RE.test(t)) return true;
+  }
+  return isChromeMetaText(getText(el));
 }
 
 function getText(el) {
@@ -294,6 +320,7 @@ let hoverTimer = 0;
 function onHover(ev) {
   const el = ev.target.closest(BLOCK_SELECTOR);
   if (!el || el.closest(SKIP_SELECTOR)) return;
+  if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || isInMetaRail(el) || isSideColumn(el)) return;
   if (el.querySelector(".oi-translation") || el.nextElementSibling?.classList?.contains("oi-translation")) return;
   clearTimeout(hoverTimer);
   hoverTimer = setTimeout(async () => {

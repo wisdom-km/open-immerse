@@ -11,7 +11,7 @@ import {
   pickPreset
 } from "../lib/site-presets.js";
 import { BLOCK_SELECTOR, shouldCollectNode } from "../lib/page-scan.js";
-import { isAlwaysBanned } from "../lib/site-presets.js";
+import { isAlwaysBanned, isInMetaRail } from "../lib/site-presets.js";
 
 function fakeNode({ className = "", hits = [], text = "Hello world about AI tools", left = 120, width = 480 } = {}) {
   const node = {
@@ -43,10 +43,10 @@ function fakeNode({ className = "", hits = [], text = "Hello world about AI tool
   return node;
 }
 
-test("default translateScope is article and settingsVersion is 4", () => {
+test("default translateScope is article and settingsVersion is 5", () => {
   assert.equal(DEFAULT_SETTINGS.translateScope, "article");
   assert.equal(DEFAULT_SETTINGS.settingsVersion, SETTINGS_VERSION);
-  assert.equal(SETTINGS_VERSION, 4);
+  assert.equal(SETTINGS_VERSION, 5);
 });
 
 test("v1 features stay on; youtube/x stay off", () => {
@@ -69,20 +69,20 @@ test("migrateSettings forces article on old page-scope installs", () => {
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, true);
   assert.equal(settings.translateScope, "article");
-  assert.equal(settings.settingsVersion, 4);
+  assert.equal(settings.settingsVersion, 5);
 });
 
-test("migrateSettings forces article for testers stuck on v3 page scope", () => {
-  const stored = { settingsVersion: 3, translateScope: "page" };
+test("migrateSettings forces article for testers stuck on older page scope", () => {
+  const stored = { settingsVersion: 4, translateScope: "page" };
   const merged = { ...DEFAULT_SETTINGS, ...stored, translateScope: "page" };
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, true);
   assert.equal(settings.translateScope, "article");
-  assert.equal(settings.settingsVersion, 4);
+  assert.equal(settings.settingsVersion, 5);
 });
 
 test("migrateSettings leaves a current-version page scope alone", () => {
-  const stored = { settingsVersion: 4, translateScope: "page" };
+  const stored = { settingsVersion: 5, translateScope: "page" };
   const merged = { ...DEFAULT_SETTINGS, ...stored };
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, false);
@@ -115,7 +115,7 @@ test("scan uses block nodes only and never PAGE_EXTRA nav links", () => {
 test("hard-ban skips Claude rail and nav even for page scope", () => {
   const rail = fakeNode({ hits: ["hero_blog_post_details", "data-aside-rail"], text: "Category" });
   const nav = fakeNode({ hits: ["nav_desktop_layout", "role='navigation'"], text: "Product" });
-  const side = fakeNode({ text: "Enterprise AI", left: 920, width: 220 });
+  const side = fakeNode({ text: "Enterprise AI", left: 768, width: 220 });
   const body = fakeNode({ text: "Most AI tools and training are built for large companies." });
   assert.equal(isAlwaysBanned(rail, "claude.com"), true);
   assert.equal(isAlwaysBanned(nav, "claude.com"), true);
@@ -124,6 +124,25 @@ test("hard-ban skips Claude rail and nav even for page scope", () => {
   assert.equal(shouldCollectNode(nav, { translateScope: "page", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), false);
   assert.equal(shouldCollectNode(side, { translateScope: "page", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), false);
   assert.equal(shouldCollectNode(body, { translateScope: "article", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), true);
+});
+
+test("meta rail cluster skips values under Category/Author labels", () => {
+  const item = fakeNode({
+    className: "hero_blog_post_details_item",
+    hits: ["hero_blog_post_details_item"],
+    text: "Category Enterprise AI"
+  });
+  const value = fakeNode({ text: "Enterprise AI" });
+  value.parentElement = item;
+  value.closest = (sel) => (String(sel).includes("details") || String(sel).includes("li") ? item : null);
+  assert.equal(isInMetaRail(item), true);
+  assert.equal(isInMetaRail(value), true);
+  assert.equal(
+    shouldCollectNode(value, { translateScope: "page", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }),
+    false
+  );
+  assert.ok(HARD_SKIP_SELECTOR.includes(".hero_blog_post_details_item"));
+  assert.ok(HARD_SKIP_SELECTOR.includes(".hero_blog_post_details_list"));
 });
 
 test("isChromeMetaText covers Claude blog rail labels", () => {
