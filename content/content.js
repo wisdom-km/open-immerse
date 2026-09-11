@@ -148,13 +148,16 @@ async function translateVisible(ticket = epoch) {
   const limited = applyTranslateLimit(collected, settings.translateLimit);
   const nodes = limited.filter((el) => !hasTranslation(el));
   if (!nodes.length) return;
+  if (settings.translateLimit === "preview" || settings.translateLimit === 2 || settings.translateLimit === "2") {
+    toast("预览：仅标题+开头（省 token）");
+  }
   const batchSize = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < nodes.length; i += batchSize) {
     if (!running || ticket !== epoch) return;
     const chunk = nodes.slice(i, i + batchSize);
     chunk.forEach((el) => el.classList.add("oi-pending"));
     try {
-      const res = await send({ type: "OI_TRANSLATE_BATCH", texts: chunk.map(getText) });
+      const res = await send({ type: "OI_TRANSLATE_BATCH", texts: chunk.map((el) => previewSourceText(getText(el), settings.translateLimit)) });
       if (!running || ticket !== epoch) {
         chunk.forEach((el) => el.classList.remove("oi-pending"));
         return;
@@ -184,15 +187,31 @@ function applyTranslateLimit(nodes, limit) {
   if (!list.length || (all && !preview)) return list;
   if (preview) {
     const heading = list.find((el) => /^H[1-6]$/.test(el.tagName || ""));
-    const para = list.find((el) => el !== heading && /^(P|BLOCKQUOTE)$/.test(el.tagName || "")) || list.find((el) => el !== heading);
+    const rest = list.filter((el) => el !== heading);
+    const short = rest.filter((el) => {
+      const text = getText(el);
+      return text.length > 0 && text.length <= 220;
+    });
     const picked = [];
     if (heading) picked.push(heading);
-    if (para) picked.push(para);
+    for (const el of short.slice(0, 2)) picked.push(el);
+    if (picked.length <= 1) {
+      const para = rest.find((el) => /^(P|BLOCKQUOTE)$/.test(el.tagName || "")) || rest[0];
+      if (para) picked.push(para);
+    }
     return picked.length ? picked : list.slice(0, 2);
   }
   const n = Number(limit);
   if (Number.isFinite(n) && n > 0) return list.slice(0, Math.floor(n));
   return list;
+}
+
+function previewSourceText(text, limit) {
+  const preview = limit === "preview" || limit === 2 || limit === "2";
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!preview || t.length <= 220) return t;
+  const m = t.match(/^[\s\S]{1,180}?[.!?。！？]/);
+  return (m ? m[0] : t.slice(0, 160)).trim();
 }
 
 function collectNodes(settings, opts = {}) {
