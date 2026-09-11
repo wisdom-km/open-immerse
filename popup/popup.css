@@ -12,7 +12,7 @@
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  width: 340px;
+  width: 360px;
   padding: 16px;
   font: 14px/1.5 "Segoe UI", "PingFang SC", system-ui, sans-serif;
   background: var(--oi-bg-elevated);
@@ -40,13 +40,6 @@ select {
   width: 100%; border: 1px solid var(--oi-line); background: var(--oi-card); color: var(--oi-text);
   border-radius: 8px; padding: 9px 10px; font: inherit;
 }
-.status-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 8px;
-  align-items: center;
-}
-.status-row select { min-width: 0; }
 .ghost-link {
   display: inline; border: 0; background: none; color: var(--oi-text-muted);
   padding: 0; font: inherit; cursor: pointer; text-decoration: none;
@@ -61,4 +54,23 @@ select {
 .entries button {
   border: 0; background: none; color: var(--oi-accent); padding: 0;
   font: inherit; cursor: pointer;
+}
+
+.lang-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: stretch;
+}
+.lang-row select {
+  min-width: 0;
+  width: 100%;
+}
+.engine-link {
+  display: inline-block;
+  margin-top: 8px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
