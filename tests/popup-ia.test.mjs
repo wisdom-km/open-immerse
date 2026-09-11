@@ -67,9 +67,9 @@ test("popup engine link uses short name + full title; lang-row stays 1fr 1fr", (
   const js = readFileSync(join(root, "popup/popup.js"), "utf8");
   const css = readFileSync(join(root, "popup/popup.css"), "utf8");
   const html = readFileSync(join(root, "popup/popup.html"), "utf8");
-  assert.match(js, /function shortProviderName/);
+  assert.match(js, /function renderEngine/);
   assert.match(js, /openai:\s*"OpenAI"/);
-  assert.match(js, /custom:\s*"自定义"/);
+  assert.match(js, /custom:\s*"Custom"/);
   assert.match(js, /引擎：\$\{shortName\}/);
   assert.match(js, /link\.title = provider\.name/);
   assert.match(js, /openOptionsPage/);
