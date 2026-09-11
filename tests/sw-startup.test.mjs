@@ -55,6 +55,12 @@ test("SW imports resolve and do not pull page-scan or site-presets", () => {
   assert.equal(/^await /m.test(swSource), false);
 });
 
+test("SW cache version is any-index bishop guard and clears on load", () => {
+  assert.match(swSource, /CACHE_VER = "v3-bishop-guard-any-index"/);
+  assert.match(swSource, /const cache = new Map\(\);\nconst CACHE_LIMIT = 2000;\nconst CACHE_VER = "v3-bishop-guard-any-index";\ncache\.clear\(\);/);
+  assert.match(swSource, /onStartup\.addListener\(\(\) => \{\n  cache\.clear\(\);/);
+});
+
 test("SW lib graph evaluates under chrome stubs", async () => {
   stubChrome(async () => {});
   await import(`../lib/features.js?sw=${Date.now()}`);

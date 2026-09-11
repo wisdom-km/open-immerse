@@ -98,3 +98,12 @@ test("guard rewrites 小型企业主教 when source is Lesson 1", () => {
   assert.match(out, /小企业主/);
   assert.equal(out, "1000位小企业主给我们的AI经验");
 });
+
+test("guard keeps 主教 when the misaligned source is actually religious", () => {
+  const [out] = guardZhBusinessSense(
+    ["Lesson 1: the bishop spoke"],
+    ["1000位小型企业主教给我们的AI经验"],
+    "zh-CN"
+  );
+  assert.equal(out, "1000位小型企业主教给我们的AI经验");
+});
