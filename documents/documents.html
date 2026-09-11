@@ -3,25 +3,34 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>文档翻译 · Open Immerse</title>
+  <title>文档翻译</title>
   <link rel="stylesheet" href="../ui/tokens.css" />
   <link rel="stylesheet" href="documents.css" />
 </head>
 <body>
   <main>
-    <header class="brand">
-      <div class="mark" aria-hidden="true"><span></span><span></span></div>
-      <h1>文档翻译</h1>
+    <header class="shell">
+      <div class="title-row">
+        <div class="mark" aria-hidden="true"><span></span><span></span></div>
+        <h1>文档翻译</h1>
+      </div>
     </header>
-    <p class="lead">支持 TXT / Markdown / HTML 直读；PDF、ePub、DOCX 可粘贴正文后做双语对照、校订与导出。完整排版保留解析会继续加强。</p>
-    <div class="row">
-      <input id="file" type="file" accept=".txt,.md,.html,.htm,.pdf,.docx,.epub" />
-      <button id="run" type="button">开始翻译</button>
-      <button id="export" type="button">导出 HTML</button>
+    <p class="lead">TXT / Markdown / HTML 可直读。PDF / DOCX / EPUB 请粘贴正文。</p>
+    <div class="file-row">
+      <button id="pick" type="button" class="btn-secondary">选择文件</button>
+      <input id="file" class="file-input" type="file" accept=".txt,.md,.html,.htm,.pdf,.docx,.epub" hidden />
+      <p class="file-note">PDF / DOCX / EPUB 暂不解析排版，请粘贴正文</p>
     </div>
-    <textarea id="source" placeholder="粘贴文档正文，或选择文件。"></textarea>
-    <p id="status"></p>
-    <div id="out"></div>
+    <textarea id="source" placeholder="粘贴要翻译的正文，空行分段"></textarea>
+    <div class="row">
+      <button id="run" type="button" class="btn-primary">开始翻译</button>
+      <button id="export" type="button" class="btn-secondary" disabled>导出 HTML</button>
+      <button id="stop" type="button" class="btn-ghost" disabled>停止</button>
+    </div>
+    <p id="status" role="status"></p>
+    <div id="out">
+      <p class="empty-out">译文会出现在这里。</p>
+    </div>
   </main>
   <script type="module" src="documents.js"></script>
 </body>
