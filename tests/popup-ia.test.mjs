@@ -18,9 +18,9 @@ test("popup IA is page-only: Dual Line, 沉浸译, no feature toggles or youtube
   assert.match(html, /value="article">仅正文</);
   assert.match(html, /value="page">全页面</);
   assert.match(html, /本次翻译条数/);
-  assert.match(html, /value="preview">仅标题\+首段</);
+  assert.match(html, /value="preview">仅标题\+开头/);
   assert.match(html, /id="translateLimit"/);
-  assert.match(html, /class="status-row"/);
+  assert.match(html, /class="lang-row"/);
   assert.match(html, /id="engineLink"/);
   assert.match(html, /未配置引擎/);
   assert.match(html, /id="openLearning">学习中心</);
