@@ -58,5 +58,5 @@ test("FAB action labels are 翻译/原文/收藏 and stay flex-centered", () => 
   assert.match(js, /停止/);
   assert.match(fabBtn, /align-items:\s*center/);
   assert.match(fabBtn, /justify-content:\s*center/);
-  assert.match(fabBtn, /padding:\s*0\s+10px/);
+  assert.match(fabBtn, /padding:\s*0\s+12px/);
 });

@@ -43,10 +43,10 @@ function fakeNode({ className = "", hits = [], text = "Hello world about AI tool
   return node;
 }
 
-test("default translateScope is article and settingsVersion is 6", () => {
+test("default translateScope is article and settingsVersion is 7", () => {
   assert.equal(DEFAULT_SETTINGS.translateScope, "article");
   assert.equal(DEFAULT_SETTINGS.settingsVersion, SETTINGS_VERSION);
-  assert.equal(SETTINGS_VERSION, 6);
+  assert.equal(SETTINGS_VERSION, 7);
 });
 
 test("v1 features stay on; youtube/x stay off", () => {
@@ -69,7 +69,7 @@ test("migrateSettings forces article when stored scope is page even without vers
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, true);
   assert.equal(settings.translateScope, "article");
-  assert.equal(settings.settingsVersion, 6);
+  assert.equal(settings.settingsVersion, 7);
   assert.equal(settings.articleScopeMigrated, true);
 });
 
@@ -79,7 +79,7 @@ test("migrateSettings forces article on old page-scope installs", () => {
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, true);
   assert.equal(settings.translateScope, "article");
-  assert.equal(settings.settingsVersion, 6);
+  assert.equal(settings.settingsVersion, 7);
 });
 
 test("migrateSettings forces article for testers stuck on v5 page scope", () => {
@@ -88,12 +88,12 @@ test("migrateSettings forces article for testers stuck on v5 page scope", () => 
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, true);
   assert.equal(settings.translateScope, "article");
-  assert.equal(settings.settingsVersion, 6);
+  assert.equal(settings.settingsVersion, 7);
   assert.equal(settings.articleScopeMigrated, true);
 });
 
 test("migrateSettings leaves a later user-picked page scope alone", () => {
-  const stored = { settingsVersion: 6, translateScope: "page", articleScopeMigrated: true };
+  const stored = { settingsVersion: 7, translateScope: "page", articleScopeMigrated: true };
   const merged = { ...DEFAULT_SETTINGS, ...stored };
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, false);
