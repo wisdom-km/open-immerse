@@ -64,9 +64,11 @@ chrome.commands.onCommand.addListener(async (command) => {
   if (!tab?.id) return;
   const settings = await getSettings();
   if (resolveFeatures(settings).webpage === false) return;
-  const enabled = !settings.enabled;
+  const ping = await chrome.tabs.sendMessage(tab.id, { type: "OI_PING" }).catch(() => null);
+  const on = Boolean(ping?.running || ping?.hasTranslations || ping?.active);
+  const enabled = !on;
   await saveSettings({ enabled });
-  await chrome.tabs.sendMessage(tab.id, { type: enabled ? "OI_START" : "OI_STOP" }).catch(() => {});
+  await chrome.tabs.sendMessage(tab.id, { type: enabled ? "OI_START" : "OI_RESTORE" }).catch(() => {});
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

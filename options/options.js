@@ -1,6 +1,6 @@
 import { PROVIDER_LIST, getProvider } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
-import { FEATURES, resolveFeatures } from "../lib/features.js";
+import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 
 function el(id) {
   return document.getElementById(id);
@@ -26,12 +26,13 @@ async function init() {
   el("targetLang").value = cachedSettings.targetLang || "zh-CN";
   el("batchSize").value = cachedSettings.batchSize || 8;
   el("translationStyle").value = cachedSettings.translationStyle || "under";
-  el("translateScope").value = cachedSettings.translateScope || "page";
+  el("translateScope").value = cachedSettings.translateScope || "article";
   el("fontScale").value = cachedSettings.fontScale || 0.95;
   el("skipCode").checked = Boolean(cachedSettings.skipCode);
   el("autoOnNewPages").checked = Boolean(cachedSettings.autoOnNewPages);
   el("siteRules").value = (cachedSettings.siteRules || []).map((r) => r.host).join("\n");
-  renderFeatures(features);
+  renderFeatures(el("featureList"), v1Features(), features);
+  renderFeatures(el("laterList"), laterFeatures(), features);
   renderProviderFields();
   el("provider").addEventListener("change", () => {
     harvestVisibleProvider();
@@ -40,10 +41,10 @@ async function init() {
   el("save").addEventListener("click", () => persist());
 }
 
-function renderFeatures(features) {
-  const box = el("featureList");
+function renderFeatures(box, list, features) {
+  if (!box) return;
   box.textContent = "";
-  FEATURES.forEach((feat) => {
+  list.forEach((feat) => {
     const label = document.createElement("label");
     label.className = "check";
     const input = document.createElement("input");
@@ -122,7 +123,7 @@ async function persist() {
     targetLang: el("targetLang").value,
     batchSize: Number(el("batchSize").value) || 8,
     translationStyle: el("translationStyle").value,
-    translateScope: el("translateScope").value || "page",
+    translateScope: el("translateScope").value || "article",
     fontScale: Number(el("fontScale").value) || 0.95,
     skipCode: el("skipCode").checked,
     autoOnNewPages: el("autoOnNewPages").checked,

@@ -18,9 +18,15 @@ body {
 }
 header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
 .mark {
-  width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
-  font-weight: 800; background: linear-gradient(135deg, #4d7cff, #7a5cff);
+  width: 36px; height: 36px; border-radius: 10px;
+  display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 5px;
+  background: #111318;
 }
+.mark span {
+  display: block; width: 18px; height: 3px; border-radius: 999px; background: #4d7cff;
+}
+.later { margin-top: 8px; color: var(--muted); }
+.later summary { cursor: pointer; font-size: 12px; }
 h1 { margin: 0; font-size: 15px; }
 header p, h2 { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
 h2 { margin: 14px 0 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }

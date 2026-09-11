@@ -37,4 +37,6 @@ button {
   border: 0; background: var(--accent); color: white; border-radius: 10px;
   padding: 10px 16px; font-weight: 700; cursor: pointer;
 }
+.later { margin-top: 12px; color: var(--muted); }
+.later summary { cursor: pointer; }
 @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }

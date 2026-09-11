@@ -1,5 +1,5 @@
 {
   "extName": { "message": "Open Immerse" },
-  "extDesc": { "message": "Open-source immersive bilingual webpage translator. Plug in OpenAI, DeepL, Gemini, Claude, DeepSeek, Microsoft, Google, or any custom API." },
-  "cmdToggle": { "message": "Toggle page translation" }
+  "extDesc": { "message": "Open Immerse (沉浸译): open-source bilingual webpage translator. Plug in OpenAI, DeepL, Gemini, Claude, DeepSeek, Microsoft, Google, or any custom API." },
+  "cmdToggle": { "message": "Toggle page translation (off restores the original)" }
 }

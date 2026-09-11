@@ -3,17 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Open Immerse 设置</title>
+    <title>沉浸译 设置</title>
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
     <main>
-      <h1>Open Immerse</h1>
-      <p class="lead">模块可单独开关。只想网页翻译时，把 YouTube / X 关掉即可。</p>
+      <h1>沉浸译</h1>
+      <p class="lead">Open Immerse · 网页双语优先。YouTube / X 字幕在后续功能里，默认关闭。</p>
       <p class="note"><a href="../learning/learning.html">学习中心</a> · <a href="../documents/documents.html">文档翻译</a></p>
       <section>
         <h2>功能模块</h2>
         <div id="featureList"></div>
+        <details class="later">
+          <summary>后续功能（默认关闭）</summary>
+          <div id="laterList"></div>
+        </details>
       </section>
       <section>
         <h2>语言与通用</h2>
@@ -24,8 +28,8 @@
           <label>每批条数 <input id="batchSize" type="number" min="1" max="20" /></label>
           <label>翻译范围
             <select id="translateScope">
-              <option value="page">全页面（含侧栏/导航）</option>
-              <option value="article">仅正文</option>
+              <option value="article">仅正文（默认）</option>
+              <option value="page">更大范围（仍跳过顶栏导航）</option>
             </select>
           </label>
           <label>译文样式

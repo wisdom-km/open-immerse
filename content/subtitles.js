@@ -34,8 +34,8 @@
 
   function moduleOn(settings) {
     const f = settings.features || {};
-    if (isYouTubePage()) return f.youtube === true || settings.subtitleEnabled === true;
-    if (isXPage()) return f.x === true || settings.subtitleEnabled === true;
+    if (isYouTubePage()) return f.youtube === true;
+    if (isXPage()) return f.x === true;
     return false;
   }
 
