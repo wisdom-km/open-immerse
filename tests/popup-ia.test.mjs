@@ -44,6 +44,24 @@ test("popup CSS uses elevated dark tokens and 340px shell", () => {
   assert.equal(/\.mark span[^}]*--oi-accent/.test(tokens), false);
 });
 
+test("options save bar is a quiet sticky Loom bar", () => {
+  const html = readFileSync(join(root, "options/options.html"), "utf8");
+  const css = readFileSync(join(root, "options/options.css"), "utf8");
+  assert.match(html, />保存设置</);
+  assert.match(html, /class="actions-bar"/);
+  const bar = html.slice(html.indexOf("actions-bar"));
+  assert.match(bar, /id="exportSettings"/);
+  assert.match(bar, /id="importSettings"/);
+  assert.match(bar, /id="save"/);
+  assert.match(css, /padding:\s*8px 14px/);
+  assert.match(css, /min-height:\s*36px/);
+  assert.match(css, /\.btn-primary[^}]*font-weight:\s*600/);
+  assert.match(css, /\.btn-secondary[^}]*font-weight:\s*500/);
+  assert.match(css, /\.btn-secondary[^}]*background:\s*transparent/);
+  assert.match(css, /\.actions-bar[^}]*box-shadow:\s*none/);
+  assert.equal(/font-weight:\s*700/.test(css), false);
+});
+
 test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   const html = readFileSync(join(root, "options/options.html"), "utf8");
   const featSrc = readFileSync(join(root, "lib/features.js"), "utf8");

@@ -69,17 +69,19 @@
       <section>
         <h2>备份与恢复</h2>
         <p class="hint">导出含引擎密钥，文件请妥善保存。Chrome「移除」扩展会清空本地设置；重装后可在此导入恢复。日常更新请用「重新加载」，不要「移除」。</p>
-        <div class="bar">
+      </section>
+    </main>
+    <footer class="actions-bar" aria-label="保存设置">
+      <div class="actions-inner">
+        <div class="actions-tools">
           <button id="exportSettings" type="button" class="btn-secondary">导出设置</button>
           <button id="importSettings" type="button" class="btn-secondary">导入设置</button>
           <input id="importFile" type="file" accept="application/json,.json" hidden />
         </div>
-      </section>
-    </main>
-    <footer class="actions-bar" aria-label="保存">
-      <div class="actions-inner">
-        <span id="status" class="status" role="status"></span>
-        <button id="save" type="button" class="btn-primary">保存</button>
+        <div class="actions-save">
+          <span id="status" class="status" role="status"></span>
+          <button id="save" type="button" class="btn-primary">保存设置</button>
+        </div>
       </div>
     </footer>
     <script type="module" src="options.js"></script>
