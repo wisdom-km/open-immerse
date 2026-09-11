@@ -1,11 +1,11 @@
-import { getProvider } from "../lib/providers.js";
+import { getProvider, guardZhBusinessSense } from "../lib/providers.js";
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { resolveFeatures } from "../lib/features.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
-const CACHE_VER = "v2-bishop-guard";
+const CACHE_VER = "v3-bishop-guard-any-index";
 
 chrome.runtime.onInstalled.addListener(() => {
   cache.clear();
@@ -167,7 +167,7 @@ async function translateBatch(texts) {
       remember(item.key, value);
     });
   }
-  return results;
+  return guardZhBusinessSense(texts, results, settings.targetLang);
 }
 
 function cacheKey(provider, from, to, text) {

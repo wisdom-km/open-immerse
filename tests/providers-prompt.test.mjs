@@ -77,3 +77,13 @@ test("guard rewrites 小型企业主教", () => {
   assert.equal(out[0].includes("主教"), false);
   assert.match(out[0], /企业主/);
 });
+
+test("guard rewrites 小型企业主教 even when source index is misaligned", () => {
+  const out = guardZhBusinessSense(
+    ["Some other sentence without the phrase"],
+    ["1000家小型企业主教给我们的AI经验"],
+    "zh-CN"
+  );
+  assert.equal(out[0].includes("主教"), false);
+  assert.match(out[0], /企业主/);
+});
