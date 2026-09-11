@@ -18,6 +18,7 @@ main { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
 h1 { margin: 0 0 8px; font-size: 32px; }
 .lead, .note, .hint { color: var(--muted); }
 .hint { margin: 0 0 14px; font-size: 13px; }
+.grid .field-hint { grid-column: 1 / -1; margin: 0; }
 section {
   margin-top: 28px; padding: 20px; background: var(--panel);
   border: 1px solid var(--line); border-radius: 16px;

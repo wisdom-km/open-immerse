@@ -25,6 +25,9 @@ async function init() {
   el("sourceLang").value = cachedSettings.sourceLang || "auto";
   el("targetLang").value = cachedSettings.targetLang || "zh-CN";
   el("batchSize").value = cachedSettings.batchSize || 8;
+  el("translateLimit").value = cachedSettings.translateLimit === "preview" || cachedSettings.translateLimit === 2 || cachedSettings.translateLimit === "2"
+    ? "preview"
+    : "all";
   el("translationStyle").value = cachedSettings.translationStyle || "under";
   el("translateScope").value = cachedSettings.translateScope || "article";
   el("fontScale").value = cachedSettings.fontScale || 0.95;
@@ -165,6 +168,7 @@ async function persist() {
     sourceLang: el("sourceLang").value,
     targetLang: el("targetLang").value,
     batchSize: Number(el("batchSize").value) || 8,
+    translateLimit: el("translateLimit").value === "preview" ? "preview" : "all",
     translationStyle: el("translationStyle").value,
     translateScope: el("translateScope").value || "article",
     fontScale: Number(el("fontScale").value) || 0.95,

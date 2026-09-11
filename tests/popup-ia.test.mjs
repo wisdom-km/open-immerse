@@ -17,6 +17,9 @@ test("popup IA is page-only: Dual Line, 沉浸译, no feature toggles or youtube
   assert.match(html, />本站自动</);
   assert.match(html, /value="article">仅正文</);
   assert.match(html, /value="page">全页面</);
+  assert.match(html, /本次翻译条数/);
+  assert.match(html, /value="preview">仅标题\+首段</);
+  assert.match(html, /id="translateLimit"/);
   assert.match(html, /class="status-row"/);
   assert.match(html, /id="engineLink"/);
   assert.match(html, /未配置引擎/);
@@ -46,6 +49,9 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.match(html, /id="featureList"/);
   assert.match(html, /高级（YouTube \/ X，默认关闭）/);
   assert.match(html, /id="laterList"/);
+  assert.match(html, /id="translateLimit"/);
+  assert.match(html, /每批条数（分批，不是总数）/);
+  assert.match(html, /本次翻译条数/);
   for (const id of ["webpage", "hover", "selection", "learning", "documents", "fab"]) {
     assert.match(featSrc, new RegExp(`id: "${id}"[\\s\\S]*group: "v1"`));
   }

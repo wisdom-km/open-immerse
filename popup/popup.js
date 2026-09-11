@@ -13,6 +13,9 @@ async function init() {
   $("sourceLang").value = settings.sourceLang;
   $("targetLang").value = settings.targetLang;
   $("translateScope").value = settings.translateScope || "article";
+  $("translateLimit").value = settings.translateLimit === "preview" || settings.translateLimit === 2 || settings.translateLimit === "2"
+    ? "preview"
+    : "all";
   $("enabled").checked = Boolean(settings.enabled);
   renderEngine(settings);
 
@@ -37,14 +40,15 @@ async function init() {
     await chrome.runtime.sendMessage({ type: "OI_TOGGLE_SITE_RULE", host, rule: { auto: $("autoSite").checked } });
   });
 
-  for (const id of ["sourceLang", "targetLang", "translateScope"]) {
+  for (const id of ["sourceLang", "targetLang", "translateScope", "translateLimit"]) {
     $(id).addEventListener("change", () =>
       chrome.runtime.sendMessage({
         type: "OI_SAVE_SETTINGS",
         patch: {
           sourceLang: $("sourceLang").value,
           targetLang: $("targetLang").value,
-          translateScope: $("translateScope").value
+          translateScope: $("translateScope").value,
+          translateLimit: $("translateLimit").value === "preview" ? "preview" : "all"
         }
       })
     );

@@ -143,7 +143,10 @@ async function translateVisible(ticket = epoch) {
   if (!running || ticket !== epoch) return;
   const settings = settingsRes.settings;
   if ((settings.features || {}).webpage === false) return;
-  const nodes = collectNodes(settings);
+  // batchSize only chunks API requests. translateLimit caps total nodes.
+  const collected = collectNodes(settings, { includeTranslated: true });
+  const limited = applyTranslateLimit(collected, settings.translateLimit);
+  const nodes = limited.filter((el) => !hasTranslation(el));
   if (!nodes.length) return;
   const batchSize = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < nodes.length; i += batchSize) {
@@ -169,12 +172,35 @@ async function translateVisible(ticket = epoch) {
   }
 }
 
-function collectNodes(settings) {
+function hasTranslation(el) {
+  return Boolean(el.querySelector(".oi-translation") || el.nextElementSibling?.classList?.contains("oi-translation"));
+}
+
+/** Keep in sync with lib/translate-limit.js */
+function applyTranslateLimit(nodes, limit) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const preview = limit === "preview" || limit === 2 || limit === "2";
+  const all = limit == null || limit === "" || limit === "all" || limit === 0 || limit === "0";
+  if (!list.length || (all && !preview)) return list;
+  if (preview) {
+    const heading = list.find((el) => /^H[1-6]$/.test(el.tagName || ""));
+    const para = list.find((el) => el !== heading && /^(P|BLOCKQUOTE)$/.test(el.tagName || "")) || list.find((el) => el !== heading);
+    const picked = [];
+    if (heading) picked.push(heading);
+    if (para) picked.push(para);
+    return picked.length ? picked : list.slice(0, 2);
+  }
+  const n = Number(limit);
+  if (Number.isFinite(n) && n > 0) return list.slice(0, Math.floor(n));
+  return list;
+}
+
+function collectNodes(settings, opts = {}) {
   const scope = settings.translateScope || "article";
+  const includeTranslated = Boolean(opts.includeTranslated);
   const nodes = [...document.body.querySelectorAll(BLOCK_SELECTOR)].filter((el) => {
     if (el.closest(SKIP_SELECTOR)) return false;
-    if (el.querySelector(".oi-translation")) return false;
-    if (el.nextElementSibling?.classList?.contains("oi-translation")) return false;
+    if (!includeTranslated && hasTranslation(el)) return false;
     if (settings.skipCode && el.closest("pre, code")) return false;
     if (el.tagName === "A" && el.closest("li, p, h1, h2, h3, h4, h5, h6")) return false;
     if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || el.closest(CHROME_SELECTOR)) return false;
