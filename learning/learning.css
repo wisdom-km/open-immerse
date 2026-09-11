@@ -20,6 +20,7 @@ h1 { margin: 0 0 8px; }
 .card { padding: 20px; border: 1px solid var(--oi-line); border-radius: 14px; background: var(--oi-panel); }
 .card .org { font-size: 22px; margin-bottom: 8px; }
 .grades { margin-top: 12px; }
+[hidden] { display: none !important; }
 ul { list-style: none; padding: 0; margin: 20px 0; }
 li { padding: 14px; border: 1px solid var(--oi-line); border-radius: 12px; margin-bottom: 10px; background: var(--oi-card); }
 li .meta { font-size: 12px; margin-top: 6px; }

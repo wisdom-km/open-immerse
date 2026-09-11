@@ -105,6 +105,7 @@ test("learning CSS uses Loom oi tokens", () => {
   assert.match(css, /--oi-text:\s*#eef2f8/);
   assert.match(css, /--oi-text-muted:\s*#9aa6b8/);
   assert.match(css, /--oi-accent:\s*#4d7cff/);
+  assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
 });
 
 test("extension root has no underscore files except _locales", () => {
