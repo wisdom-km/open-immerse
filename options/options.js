@@ -183,7 +183,7 @@ async function persist() {
   };
 
   await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: patch });
-  el("status").textContent = "saved";
+  el("status").textContent = "已保存";
   setTimeout(() => {
     el("status").textContent = "";
   }, 1600);

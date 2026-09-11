@@ -10,25 +10,27 @@
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font: 15px/1.55 "Segoe UI", "PingFang SC", system-ui, sans-serif;
-  background: radial-gradient(900px 400px at 10% -10%, #1b2a55 0%, transparent 50%), var(--bg);
+  font: 15px/1.6 "Segoe UI", "PingFang SC", system-ui, sans-serif;
+  background: var(--bg);
   color: var(--text);
 }
-main { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
-h1 { margin: 0 0 8px; font-size: 32px; }
+main { max-width: 800px; margin: 0 auto; padding: 36px 24px 80px; }
+h1 { margin: 0 0 8px; font-size: 24px; font-weight: 650; letter-spacing: -0.02em; }
+h2 { margin: 0 0 12px; font-size: 15px; font-weight: 650; }
 .lead, .note, .hint { color: var(--muted); }
-.hint { margin: 0 0 14px; font-size: 13px; }
+.lead { margin: 0 0 8px; font-size: 15px; }
+.hint { margin: 0 0 14px; font-size: 13px; line-height: 1.55; }
 .grid .field-hint { grid-column: 1 / -1; margin: 0; }
 section {
-  margin-top: 28px; padding: 20px; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 16px;
+  margin-top: 24px; padding: 22px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 14px;
 }
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
-.check { flex-direction: row; align-items: center; gap: 8px; margin-top: 12px; color: var(--text); }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+label { display: flex; flex-direction: column; gap: 8px; color: #b7c0cf; }
+.check { flex-direction: row; align-items: center; gap: 8px; margin-top: 14px; color: var(--text); }
 input, select, textarea {
   border: 1px solid var(--line); background: #0f131c; color: var(--text);
-  border-radius: 10px; padding: 9px 10px; font: inherit;
+  border-radius: 10px; padding: 10px 12px; font: inherit;
 }
 textarea { min-height: 90px; resize: vertical; }
 .provider-card { margin-top: 4px; }
@@ -36,8 +38,11 @@ textarea { min-height: 90px; resize: vertical; }
 .bar { margin-top: 22px; display: flex; align-items: center; gap: 12px; }
 button {
   border: 0; background: var(--accent); color: white; border-radius: 10px;
-  padding: 10px 16px; font-weight: 700; cursor: pointer;
+  padding: 10px 16px; font: inherit; font-weight: 650; cursor: pointer;
 }
-.later { margin-top: 12px; color: var(--muted); }
+#importSettings {
+  background: transparent; border: 1px solid var(--line); color: var(--text);
+}
+.later { margin-top: 14px; color: var(--muted); }
 .later summary { cursor: pointer; }
 @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
