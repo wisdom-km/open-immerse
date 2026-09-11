@@ -29,17 +29,19 @@
 
     <section>
       <h2>语言</h2>
-      <div class="row">
-        <label>源语言<select id="sourceLang"></select></label>
-        <label>目标语言<select id="targetLang"></select></label>
+      <div class="status-row">
+        <select id="sourceLang" aria-label="源语言"></select>
+        <select id="targetLang" aria-label="目标语言"></select>
+        <a id="engineLink" class="ghost-link" href="#">引擎：—</a>
       </div>
-      <a id="engineLink" class="ghost-link" href="#">引擎：—</a>
       <p id="engineWarn" class="danger" hidden>未配置引擎 <button type="button" id="goSetup" class="ghost-link">去设置</button></p>
     </section>
 
     <nav class="entries">
       <button type="button" id="openLearning">学习中心</button>
+      <span aria-hidden="true">|</span>
       <button type="button" id="openDocs">文档</button>
+      <span aria-hidden="true">|</span>
       <button type="button" id="openOptions">设置</button>
     </nav>
     <script type="module" src="popup.js"></script>

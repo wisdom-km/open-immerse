@@ -33,7 +33,13 @@ select {
   width: 100%; border: 1px solid var(--oi-line); background: var(--oi-card); color: var(--oi-text);
   border-radius: 8px; padding: 8px;
 }
-.row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.status-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.status-row select { min-width: 0; }
 .ghost-link {
   display: inline; border: 0; background: none; color: var(--oi-text-muted);
   padding: 0; font: inherit; cursor: pointer; text-decoration: none;
@@ -41,9 +47,10 @@ select {
 .ghost-link:hover { color: var(--oi-accent); }
 .danger { color: #e8a0a0; font-size: 12px; margin: 8px 0 0; }
 .entries {
-  display: flex; gap: 12px; margin-top: 14px; padding-top: 10px;
+  display: flex; gap: 8px; align-items: center; margin-top: 14px; padding-top: 10px;
   border-top: 1px solid var(--oi-line);
 }
+.entries span { color: var(--oi-text-muted); }
 .entries button {
   border: 0; background: none; color: var(--oi-accent); padding: 0;
   font: inherit; cursor: pointer;
