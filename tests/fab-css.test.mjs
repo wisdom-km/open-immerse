@@ -14,9 +14,9 @@ test("FAB buttons match Loom inline-flex 36×36 centering", () => {
   assert.match(fabBtn, /display:\s*inline-flex/);
   assert.match(fabBtn, /align-items:\s*center/);
   assert.match(fabBtn, /justify-content:\s*center/);
-  assert.match(fabBtn, /width:\s*36px/);
   assert.match(fabBtn, /height:\s*36px/);
-  assert.match(fabBtn, /padding:\s*0/);
+  assert.match(fabBtn, /padding:\s*0 12px/);
+  assert.match(fabBtn, /\[data-act="more"\][\s\S]*width:\s*36px/);
   assert.match(fabBtn, /font-size:\s*13px/);
   assert.match(fabBtn, /font-weight:\s*600/);
   assert.match(fabBtn, /line-height:\s*1/);
@@ -24,6 +24,16 @@ test("FAB buttons match Loom inline-flex 36×36 centering", () => {
   assert.match(fabBtn, /Noto Sans SC/);
   assert.match(css, /\.oi-fab > button:hover/);
   assert.match(css, /\.oi-fab \{\s*[^}]*gap:\s*8px/);
+});
+
+test("FAB copy is two-char pills, not 译/原/藏", () => {
+  assert.match(js, />翻译</);
+  assert.match(js, />原文</);
+  assert.match(js, />收藏</);
+  assert.match(js, /停止/);
+  assert.equal(js.includes(">译<"), false);
+  assert.equal(js.includes(">原<"), false);
+  assert.equal(js.includes(">藏<"), false);
 });
 
 test("FAB bar uses 20px inset, card fill, and weak shadow-1", () => {
