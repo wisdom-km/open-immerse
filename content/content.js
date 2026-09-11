@@ -90,7 +90,11 @@ async function start() {
   document.documentElement.classList.add("oi-active");
   window.dispatchEvent(new CustomEvent("oi-running", { detail: true }));
   await translateVisible(ticket);
-  if (running && epoch === ticket) observePage();
+  if (running && epoch === ticket) {
+    const lim = (await send({ type: "OI_GET_SETTINGS" }))?.settings?.translateLimit;
+    const preview = lim === "preview" || lim === 2 || lim === "2" || lim === "lead";
+    if (!preview) observePage();
+  }
 }
 
 function stop() {
@@ -141,7 +145,8 @@ async function translateVisible(ticket = epoch) {
   if (!running || ticket !== epoch) return;
   const settingsRes = await send({ type: "OI_GET_SETTINGS" });
   if (!running || ticket !== epoch) return;
-  const settings = settingsRes.settings;
+  const settings = settingsRes?.settings;
+  if (!settings) return;
   if ((settings.features || {}).webpage === false) return;
   // batchSize only chunks API requests. translateLimit caps total nodes.
   const collected = collectNodes(settings, { includeTranslated: true });
@@ -149,7 +154,7 @@ async function translateVisible(ticket = epoch) {
   const nodes = limited.filter((el) => !hasTranslation(el));
   if (!nodes.length) return;
   if (settings.translateLimit === "preview" || settings.translateLimit === 2 || settings.translateLimit === "2") {
-    toast("预览：仅标题+开头（省 token）");
+    toast("预览模式：只翻标题 + 正文前三行");
   }
   const batchSize = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < nodes.length; i += batchSize) {
@@ -182,24 +187,21 @@ function hasTranslation(el) {
 /** Keep in sync with lib/translate-limit.js */
 function applyTranslateLimit(nodes, limit) {
   const list = Array.isArray(nodes) ? nodes : [];
-  const preview = limit === "preview" || limit === 2 || limit === "2";
+  const preview = limit === "preview" || limit === 2 || limit === "2" || limit === "lead";
   const all = limit == null || limit === "" || limit === "all" || limit === 0 || limit === "0";
   if (!list.length || (all && !preview)) return list;
   if (preview) {
-    const heading = list.find((el) => /^H[1-6]$/.test(el.tagName || ""));
+    const heading =
+      list.find((el) => el.tagName === "H1") ||
+      list.find((el) => /^H[1-6]$/.test(el.tagName || ""));
     const rest = list.filter((el) => el !== heading);
-    const short = rest.filter((el) => {
-      const text = getText(el);
-      return text.length > 0 && text.length <= 220;
-    });
+    const para =
+      rest.find((el) => /^(P|BLOCKQUOTE)$/.test(el.tagName || "")) ||
+      rest.find((el) => getText(el).length > 0);
     const picked = [];
     if (heading) picked.push(heading);
-    for (const el of short.slice(0, 2)) picked.push(el);
-    if (picked.length <= 1) {
-      const para = rest.find((el) => /^(P|BLOCKQUOTE)$/.test(el.tagName || "")) || rest[0];
-      if (para) picked.push(para);
-    }
-    return picked.length ? picked : list.slice(0, 2);
+    if (para) picked.push(para);
+    return picked.length ? picked : list.slice(0, 1);
   }
   const n = Number(limit);
   if (Number.isFinite(n) && n > 0) return list.slice(0, Math.floor(n));
@@ -207,11 +209,21 @@ function applyTranslateLimit(nodes, limit) {
 }
 
 function previewSourceText(text, limit) {
-  const preview = limit === "preview" || limit === 2 || limit === "2";
-  const t = String(text || "").replace(/\s+/g, " ").trim();
-  if (!preview || t.length <= 220) return t;
-  const m = t.match(/^[\s\S]{1,180}?[.!?。！？]/);
-  return (m ? m[0] : t.slice(0, 160)).trim();
+  const preview = limit === "preview" || limit === 2 || limit === "2" || limit === "lead";
+  const raw = String(text || "").replace(/\r/g, "");
+  if (!preview) return raw.replace(/\s+/g, " ").trim();
+  const lines = raw
+    .split(/\n+/)
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  let out = lines.slice(0, 3).join(" ");
+  if (!out) out = raw.replace(/\s+/g, " ").trim();
+  if (out.length > 220) {
+    const cut = out.slice(0, 220);
+    const m = cut.match(/^[\s\S]*?[.!?。！？]/);
+    out = (m ? m[0] : cut).trim();
+  }
+  return out;
 }
 
 function collectNodes(settings, opts = {}) {

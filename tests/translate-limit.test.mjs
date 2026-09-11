@@ -15,9 +15,9 @@ import {
 
 const node = (tagName) => ({ tagName });
 
-test("default translateLimit is unlimited all", () => {
-  assert.equal(DEFAULT_SETTINGS.translateLimit, "all");
-  assert.equal(normalizeTranslateLimit(DEFAULT_SETTINGS.translateLimit), TRANSLATE_LIMIT_ALL);
+test("default translateLimit is preview for token-saving QA", () => {
+  assert.equal(DEFAULT_SETTINGS.translateLimit, "preview");
+  assert.equal(normalizeTranslateLimit(DEFAULT_SETTINGS.translateLimit), TRANSLATE_LIMIT_PREVIEW);
 });
 
 test("normalizeTranslateLimit maps 0/all and preview/2", () => {

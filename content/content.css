@@ -1,9 +1,9 @@
 .oi-translation {
   display: block;
-  /* body: closer under source, less gap before next block */
-  margin: 0.12em 0 0.22em;
+  /* body: sit tight under source so bilingual reads as one unit */
+  margin: 0.08em 0 0.1em;
   font-size: calc(1em * var(--oi-font-scale, 0.95));
-  line-height: 1.55;
+  line-height: 1.5;
   color: var(--oi-color, color-mix(in srgb, currentColor 72%, transparent));
   font-weight: 400;
   white-space: pre-wrap;
@@ -20,8 +20,9 @@
 }
 /* titles: more air between heading and translation */
 .oi-translation.oi-after-heading {
-  margin: 0.4em 0 0.32em;
-  padding-top: 0.08em;
+  /* titles are large: use rem so gap tracks display size, not tiny em */
+  margin: 0.7rem 0 0.45rem;
+  padding-top: 0.2rem;
   line-height: 1.45;
 }
 .oi-translation.oi-inline {
