@@ -16,16 +16,25 @@ main { max-width: 720px; margin: 0 auto; padding: 40px 20px 80px; }
   width: 16px; height: 16px; flex: 0 0 16px;
   display: flex; flex-direction: column; justify-content: center; gap: 3px;
 }
-.mark span { display: block; width: 16px; height: 3px; border-radius: 999px; background: var(--oi-accent); }
+.mark span { display: block; width: 16px; height: 3px; border-radius: 999px; background: var(--oi-text); }
 h1 { margin: 0; font-size: 22px; }
 h2 { margin: 0 0 12px; font-size: 16px; }
 .lead, .hint, .meta, .card.empty, .card .dst, .card .ctx, li .dst { color: var(--oi-text-muted); }
 .tabs, .grades, .row-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .tabs.segmented { background: var(--oi-bg-elevated); border: 1px solid var(--oi-line); border-radius: 10px; padding: 3px; }
-.tabs button, .grades button, .export-panel button {
+.tabs button, .export-panel button {
   border: 0; border-radius: 8px; padding: 8px 12px; background: transparent; color: var(--oi-text); cursor: pointer; font: inherit;
 }
 .tabs .on { background: var(--oi-accent); }
+.grades button {
+  border-radius: 8px; padding: 8px 14px; cursor: pointer; font: inherit;
+}
+.grades .grade-sec {
+  border: 1px solid var(--oi-line); background: transparent; color: var(--oi-text);
+}
+.grades .grade-pri {
+  border: 1px solid var(--oi-accent); background: var(--oi-accent); color: var(--oi-text);
+}
 .export-menu { position: relative; }
 .export-menu summary {
   list-style: none; cursor: pointer; border: 1px solid var(--oi-line); border-radius: 8px;

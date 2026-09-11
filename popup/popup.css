@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
   --oi-bg: #0b0d12;
   --oi-bg-elevated: #10131a;
   --oi-panel: #141821;
@@ -23,12 +23,13 @@ header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
   width: 16px; height: 16px; flex: 0 0 16px;
   display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 3px;
 }
-.mark span { display: block; width: 16px; height: 3px; border-radius: 999px; background: var(--oi-accent); }
+.mark span { display: block; width: 16px; height: 3px; border-radius: 999px; background: var(--oi-text); }
 h1 { margin: 0; font-size: 15px; }
 header p, h2 { margin: 2px 0 0; color: var(--oi-text-muted); font-size: 12px; }
 h2 { margin: 14px 0 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
 label { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; color: var(--oi-text-muted); }
 .switch-row { flex-direction: row; align-items: center; justify-content: space-between; color: var(--oi-text); margin: 6px 0; }
+.switch-row.heavy span { font-weight: 600; }
 select {
   width: 100%; border: 1px solid var(--oi-line); background: var(--oi-card); color: var(--oi-text);
   border-radius: 8px; padding: 8px;

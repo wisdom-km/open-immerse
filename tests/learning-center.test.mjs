@@ -66,9 +66,10 @@ test("L3 review empty copy and grades", () => {
   assert.equal(LEARNING_COPY.remembered, "记住");
   const html = readFileSync(join(root, "learning/learning.html"), "utf8");
   assert.match(html, /今日没有到期。/);
-  assert.match(html, /data-g="1">忘了</);
-  assert.match(html, /data-g="3">模糊</);
-  assert.match(html, /data-g="5">记住</);
+  assert.match(html, /class="grade-sec"[^>]*data-g="1">忘了</);
+  assert.match(html, /class="grade-sec"[^>]*data-g="3">模糊</);
+  assert.match(html, /class="grade-pri"[^>]*data-g="5">记住</);
+  assert.equal(html.includes("<h2>复习</h2>"), false);
   assert.equal(html.includes("没有到期项目"), false);
 });
 
@@ -109,6 +110,10 @@ test("learning CSS uses Loom oi tokens", () => {
   assert.match(css, /--oi-text-muted:\s*#9aa6b8/);
   assert.match(css, /--oi-accent:\s*#4d7cff/);
   assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
+  assert.match(css, /\.mark span[^}]*background:\s*var\(--oi-text\)/);
+  assert.equal(/\.mark span[^}]*--oi-accent/.test(css), false);
+  assert.match(css, /\.grade-pri[^}]*background:\s*var\(--oi-accent\)/);
+  assert.match(css, /\.grade-sec[^}]*background:\s*transparent/);
 });
 
 test("extension root has no underscore files except _locales", () => {

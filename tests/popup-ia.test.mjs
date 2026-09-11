@@ -34,6 +34,10 @@ test("popup CSS uses elevated dark tokens and 340px shell", () => {
   assert.match(css, /--oi-bg:\s*#0b0d12/);
   assert.match(css, /width:\s*3(2\d|3\d|4\d|5\d|60)px/);
   assert.match(css, /height:\s*3px/);
+  assert.match(css, /color-scheme:\s*dark/);
+  assert.equal(/color-scheme:\s*light/.test(css), false);
+  assert.match(css, /\.mark span[^}]*background:\s*var\(--oi-text\)/);
+  assert.equal(/\.mark span[^}]*--oi-accent/.test(css), false);
 });
 
 test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
