@@ -22,6 +22,8 @@ test("FAB buttons match Loom inline-flex 36×36 centering", () => {
   assert.match(fabBtn, /line-height:\s*1/);
   assert.match(fabBtn, /PingFang SC/);
   assert.match(fabBtn, /Noto Sans SC/);
+  assert.match(css, /\.oi-fab > button:hover/);
+  assert.match(css, /\.oi-fab \{\s*[^}]*gap:\s*8px/);
 });
 
 test("FAB bar uses 20px inset, card fill, and weak shadow-1", () => {
@@ -37,4 +39,14 @@ test("FAB more label is Unicode ellipsis, toast shares slot above FAB", () => {
   assert.match(css, /\.oi-toast[\s\S]*bottom:\s*var\(--oi-fab-slot/);
   assert.match(css, /\.oi-selection-card[\s\S]*bottom:\s*var\(--oi-fab-slot/);
   assert.equal(/\.oi-toast[\s\S]*bottom:\s*88px/.test(css), false);
+});
+
+test("FAB action labels are 翻译/原文/收藏 and stay flex-centered", () => {
+  assert.match(js, />翻译</);
+  assert.match(js, />原文</);
+  assert.match(js, />收藏</);
+  assert.match(js, /停止/);
+  assert.match(fabBtn, /align-items:\s*center/);
+  assert.match(fabBtn, /justify-content:\s*center/);
+  assert.match(fabBtn, /padding:\s*0\s+10px/);
 });

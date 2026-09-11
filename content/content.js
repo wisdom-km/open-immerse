@@ -45,7 +45,7 @@ async function init() {
       showSelectionCard(message.original, message.translated);
       sendResponse({ ok: true });
     } else if (message.type === "OI_ERROR" || message.type === "OI_TOAST") {
-      toast(message.message || "translate failed");
+      toast(message.message || "翻译失败");
       sendResponse({ ok: true });
     } else if (message.type === "OI_PING") {
       sendResponse({ ok: true, running });
@@ -159,7 +159,7 @@ async function translateVisible(ticket = epoch) {
         chunk.forEach((el) => el.classList.remove("oi-pending"));
         return;
       }
-      if (!res.ok) throw new Error(res.error || "translate failed");
+      if (!res.ok) throw new Error(res.error || "翻译失败");
       chunk.forEach((el, idx) => {
         el.classList.remove("oi-pending");
         if (running && ticket === epoch) mountTranslation(el, res.translations[idx] || "", settings);
@@ -308,7 +308,7 @@ function mountTranslation(el, text, settings) {
         title: document.title,
         type: "sentence"
       }
-    }).then(() => toast("saved"));
+    }).then(() => toast("已收藏"));
   });
   if (inline || ["LI", "TD", "TH", "DT", "DD"].includes(el.tagName)) el.appendChild(node);
   else el.insertAdjacentElement("afterend", node);
@@ -369,7 +369,7 @@ function showSelectionCard(original, translated) {
   document.querySelector(".oi-selection-card")?.remove();
   const card = document.createElement("div");
   card.className = "oi-selection-card";
-  card.innerHTML = '<div class="oi-sel-org"></div><div class="oi-sel-dst"></div><div class="oi-sel-actions"><button type="button" class="save">Save</button><button type="button" class="close">Close</button></div>';
+  card.innerHTML = '<div class="oi-sel-org"></div><div class="oi-sel-dst"></div><div class="oi-sel-actions"><button type="button" class="save">收藏</button><button type="button" class="close">关闭</button></div>';
   card.querySelector(".oi-sel-org").textContent = original;
   card.querySelector(".oi-sel-dst").textContent = translated;
   card.querySelector(".close").onclick = () => card.remove();
@@ -378,7 +378,7 @@ function showSelectionCard(original, translated) {
       type: "OI_SAVE_LEARNING",
       item: { original, translation: translated, context: original, url: location.href, title: document.title }
     });
-    toast("saved");
+    toast("已收藏");
     card.remove();
   };
   document.body.appendChild(card);
@@ -387,7 +387,7 @@ function showSelectionCard(original, translated) {
 async function saveCurrentSelection() {
   const text = String(window.getSelection() || "").trim();
   if (!text) {
-    toast("select text first");
+    toast("请先选中文本");
     return;
   }
   const res = await send({ type: "OI_TRANSLATE_BATCH", texts: [text] });
@@ -396,7 +396,7 @@ async function saveCurrentSelection() {
     type: "OI_SAVE_LEARNING",
     item: { original: text, translation: translated, context: surroundingContext(), url: location.href, title: document.title }
   });
-  toast("saved");
+  toast("已收藏");
 }
 
 function surroundingContext() {

@@ -85,6 +85,7 @@
     const btn = document.querySelector('.oi-fab [data-act="toggle"]');
     if (!btn) return;
     btn.textContent = on ? "停止" : "翻译";
+    btn.title = on ? "停止" : "翻译";
     btn.classList.toggle("on", on);
   }
 })();
