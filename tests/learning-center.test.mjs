@@ -20,7 +20,7 @@ const sample = {
   nextReview: Date.UTC(2026, 8, 11)
 };
 
-test("L1 copy: title 学习中心, tabs, txt+md export — no brand in header", () => {
+test("L1 copy: title 学习中心, tabs, md/pdf/word export — no brand in header", () => {
   assert.equal(LEARNING_COPY.title, "学习中心");
   assert.equal(LEARNING_COPY.tabAll, "全部");
   assert.equal(LEARNING_COPY.tabReview, "今日待复习");
@@ -33,6 +33,7 @@ test("L1 copy: title 学习中心, tabs, txt+md export — no brand in header", 
   assert.match(html, /data-export="md"/);
   assert.match(html, /data-export="pdf"/);
   assert.match(html, /data-export="docx"/);
+  assert.equal(html.includes('data-export="txt"'), false);
 });
 
 test("L2 list meta uses type · source · next review", () => {

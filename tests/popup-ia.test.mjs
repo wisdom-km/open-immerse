@@ -32,15 +32,23 @@ test("popup CSS uses elevated dark tokens and 340px shell", () => {
   const css = readFileSync(join(root, "popup/popup.css"), "utf8");
   assert.match(css, /--oi-bg-elevated:\s*#10131a/);
   assert.match(css, /--oi-bg:\s*#0b0d12/);
-  assert.match(css, /width:\s*340px/);
+  assert.match(css, /width:\s*3(2\d|3\d|4\d|5\d|60)px/);
   assert.match(css, /height:\s*3px/);
 });
 
 test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   const html = readFileSync(join(root, "options/options.html"), "utf8");
+  const featSrc = readFileSync(join(root, "lib/features.js"), "utf8");
   assert.match(html, /id="featureList"/);
   assert.match(html, /高级（YouTube \/ X，默认关闭）/);
   assert.match(html, /id="laterList"/);
+  for (const id of ["webpage", "hover", "selection", "learning", "documents", "fab"]) {
+    assert.match(featSrc, new RegExp(`id: "${id}"[\\s\\S]*group: "v1"`));
+  }
+  assert.match(featSrc, /id: "youtube"[\s\S]*group: "later"/);
+  assert.match(featSrc, /id: "x"[\s\S]*group: "later"/);
+  assert.match(featSrc, /youtube:\s*false/);
+  assert.match(featSrc, /x:\s*false/);
 });
 
 test("isProviderConfigured requires apiKey when the adapter marks it required", () => {

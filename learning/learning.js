@@ -1,4 +1,4 @@
-import { currentItems, canExport, toTxt, toMarkdown, toDocx, toPdf, downloadBlob } from "../lib/export.js";
+import { currentItems, canExport, toMarkdown, toDocx, toPdf, downloadBlob } from "../lib/export.js";
 import { escapeHtml } from "../lib/html.js";
 import { LEARNING_COPY, itemMeta, emptyAllHtml } from "../lib/learning-ui.js";
 
@@ -81,9 +81,7 @@ async function exportList(type) {
   const stamp = new Date().toISOString().slice(0, 10);
   const base = `open-immerse-learning-${tab}-${stamp}`;
   try {
-    if (type === "txt") {
-      downloadBlob(`${base}.txt`, new Blob([toTxt(list)], { type: "text/plain;charset=utf-8" }));
-    } else if (type === "md") {
+    if (type === "md") {
       downloadBlob(`${base}.md`, new Blob([toMarkdown(list)], { type: "text/markdown;charset=utf-8" }));
     } else if (type === "pdf") {
       downloadBlob(`${base}.pdf`, new Blob([toPdf(list)], { type: "application/pdf" }));
