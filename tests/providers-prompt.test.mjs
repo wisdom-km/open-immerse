@@ -67,3 +67,13 @@ test("guardZhBusinessSense is a no-op for non-Chinese targets", () => {
   const [out] = guardZhBusinessSense(["small business owners"], ["bishops"], "en");
   assert.equal(out, "bishops");
 });
+
+test("guard rewrites 小型企业主教", () => {
+  const out = guardZhBusinessSense(
+    ["What 1,000 small business owners taught us about AI"],
+    ["1000位小型企业主教给我们的AI经验"],
+    "zh-CN"
+  );
+  assert.equal(out[0].includes("主教"), false);
+  assert.match(out[0], /企业主/);
+});

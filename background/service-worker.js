@@ -5,8 +5,10 @@ import { resolveFeatures } from "../lib/features.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
+const CACHE_VER = "v2-bishop-guard";
 
 chrome.runtime.onInstalled.addListener(() => {
+  cache.clear();
   bootExtension();
 });
 chrome.runtime.onStartup.addListener(() => {
@@ -169,7 +171,7 @@ async function translateBatch(texts) {
 }
 
 function cacheKey(provider, from, to, text) {
-  return `${provider}|${from}|${to}|${text}`;
+  return `${CACHE_VER}|${provider}|${from}|${to}|${text}`;
 }
 
 function remember(key, value) {
