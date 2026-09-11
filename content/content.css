@@ -123,6 +123,15 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
   background: #2a3142;
   color: #fff;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  font: 13px/1 system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  letter-spacing: 0;
+  text-align: center;
+  -webkit-font-smoothing: antialiased;
 }
 .oi-fab > button.on { background: #4d7cff; }
 .oi-fab-menu {
