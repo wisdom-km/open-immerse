@@ -28,10 +28,10 @@
     bar.className = "oi-fab";
     bar.innerHTML =
       (showPage
-        ? '<button type="button" data-act="toggle" title="toggle">译</button><button type="button" data-act="restore" title="restore">原</button>'
+        ? '<button type="button" data-act="toggle" title="翻译">翻译</button><button type="button" data-act="restore" title="原文">原文</button>'
         : "") +
-      (showLearn ? '<button type="button" data-act="save" title="save">藏</button>' : "") +
-      '<button type="button" data-act="more" title="more">⋯</button><div class="oi-fab-menu" hidden></div>';
+      (showLearn ? '<button type="button" data-act="save" title="收藏">收藏</button>' : "") +
+      '<button type="button" data-act="more" title="更多">⋯</button><div class="oi-fab-menu" hidden></div>';
 
     const menu = bar.querySelector(".oi-fab-menu");
     if (showLearn) addMenuBtn(menu, "learn", "学习中心");
@@ -84,7 +84,7 @@
   function syncToggle(on) {
     const btn = document.querySelector('.oi-fab [data-act="toggle"]');
     if (!btn) return;
-    btn.textContent = on ? "停" : "译";
+    btn.textContent = on ? "停止" : "翻译";
     btn.classList.toggle("on", on);
   }
 })();

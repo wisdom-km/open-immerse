@@ -120,26 +120,32 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
 }
 .oi-fab > button {
   box-sizing: border-box;
-  width: 36px;
+  min-width: 36px;
   height: 36px;
-  padding: 0;
+  padding: 0 10px;
   margin: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   font-size: 13px;
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0;
   text-align: center;
+  white-space: nowrap;
   -webkit-font-smoothing: antialiased;
   background: #2a3142;
   color: #fff;
   cursor: pointer;
   text-indent: 0;
+}
+.oi-fab > button[data-act="more"] {
+  min-width: 36px;
+  padding: 0;
+  width: 36px;
 }
 .oi-fab > button.on { background: #4d7cff; }
 .oi-fab-menu {
