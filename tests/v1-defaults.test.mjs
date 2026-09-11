@@ -43,10 +43,10 @@ function fakeNode({ className = "", hits = [], text = "Hello world about AI tool
   return node;
 }
 
-test("default translateScope is article and settingsVersion is 5", () => {
+test("default translateScope is article and settingsVersion is 6", () => {
   assert.equal(DEFAULT_SETTINGS.translateScope, "article");
   assert.equal(DEFAULT_SETTINGS.settingsVersion, SETTINGS_VERSION);
-  assert.equal(SETTINGS_VERSION, 5);
+  assert.equal(SETTINGS_VERSION, 6);
 });
 
 test("v1 features stay on; youtube/x stay off", () => {
@@ -63,26 +63,37 @@ test("subtitleEnabled does not flip youtube/x on", () => {
   assert.equal(features.x, false);
 });
 
+test("migrateSettings forces article when stored scope is page even without version", () => {
+  const stored = { translateScope: "page" };
+  const merged = { ...DEFAULT_SETTINGS, ...stored };
+  const { settings, changed } = migrateSettings(merged, stored);
+  assert.equal(changed, true);
+  assert.equal(settings.translateScope, "article");
+  assert.equal(settings.settingsVersion, 6);
+  assert.equal(settings.articleScopeMigrated, true);
+});
+
 test("migrateSettings forces article on old page-scope installs", () => {
   const stored = { settingsVersion: 1, translateScope: "page", features: { webpage: true } };
   const merged = { ...DEFAULT_SETTINGS, ...stored, translateScope: "page" };
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, true);
   assert.equal(settings.translateScope, "article");
-  assert.equal(settings.settingsVersion, 5);
+  assert.equal(settings.settingsVersion, 6);
 });
 
-test("migrateSettings forces article for testers stuck on older page scope", () => {
-  const stored = { settingsVersion: 4, translateScope: "page" };
+test("migrateSettings forces article for testers stuck on v5 page scope", () => {
+  const stored = { settingsVersion: 5, translateScope: "page" };
   const merged = { ...DEFAULT_SETTINGS, ...stored, translateScope: "page" };
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, true);
   assert.equal(settings.translateScope, "article");
-  assert.equal(settings.settingsVersion, 5);
+  assert.equal(settings.settingsVersion, 6);
+  assert.equal(settings.articleScopeMigrated, true);
 });
 
-test("migrateSettings leaves a current-version page scope alone", () => {
-  const stored = { settingsVersion: 5, translateScope: "page" };
+test("migrateSettings leaves a later user-picked page scope alone", () => {
+  const stored = { settingsVersion: 6, translateScope: "page", articleScopeMigrated: true };
   const merged = { ...DEFAULT_SETTINGS, ...stored };
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, false);

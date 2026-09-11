@@ -6,8 +6,12 @@ import { resolveFeatures } from "../lib/features.js";
 const cache = new Map();
 const CACHE_LIMIT = 2000;
 
-chrome.runtime.onInstalled.addListener(() => rebuildMenus());
-chrome.runtime.onStartup.addListener(() => rebuildMenus());
+chrome.runtime.onInstalled.addListener(() => {
+  getSettings().then(() => rebuildMenus());
+});
+chrome.runtime.onStartup.addListener(() => {
+  getSettings().then(() => rebuildMenus());
+});
 
 async function rebuildMenus() {
   const settings = await getSettings();
