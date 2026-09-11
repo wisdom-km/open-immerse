@@ -1,8 +1,21 @@
 (() => {
   initToolbar();
 
+  async function send(payload) {
+    try {
+      if (!chrome.runtime?.id) return null;
+      return await chrome.runtime.sendMessage(payload);
+    } catch (err) {
+      const msg = String(err && err.message || err);
+      if (/Extension context invalidated|message port closed/i.test(msg)) return null;
+      throw err;
+    }
+  }
+
   async function initToolbar() {
-    const { settings } = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
+    const res = await send({ type: "OI_GET_SETTINGS" });
+    if (!res) return;
+    const { settings } = res;
     const features = settings.features || {};
     if (features.fab === false || settings.showFab === false) return;
     if (document.querySelector(".oi-fab")) return;
@@ -39,18 +52,18 @@
       menu.hidden = true;
       if (act === "toggle" && showPage) {
         const on = !document.documentElement.classList.contains("oi-active");
-        await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: on } });
+        await send({ type: "OI_SAVE_SETTINGS", patch: { enabled: on } });
         window.dispatchEvent(new CustomEvent(on ? "oi-please-start" : "oi-please-restore"));
       }
       if (act === "restore" && showPage) {
-        await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: false } });
+        await send({ type: "OI_SAVE_SETTINGS", patch: { enabled: false } });
         window.dispatchEvent(new CustomEvent("oi-please-restore"));
       }
-      if (act === "save" && showLearn) chrome.runtime.sendMessage({ type: "OI_SAVE_CURRENT_SELECTION" });
-      if (act === "learn" && showLearn) chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "learning" });
-      if (act === "docs" && showDocs) chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "documents" });
+      if (act === "save" && showLearn) send({ type: "OI_SAVE_CURRENT_SELECTION" });
+      if (act === "learn" && showLearn) send({ type: "OI_OPEN_PAGE", page: "learning" });
+      if (act === "docs" && showDocs) send({ type: "OI_OPEN_PAGE", page: "documents" });
       if (act === "autosite" && showPage) {
-        await chrome.runtime.sendMessage({
+        await send({
           type: "OI_TOGGLE_SITE_RULE",
           host: location.hostname.replace(/^www\./, ""),
           rule: { auto: true }
