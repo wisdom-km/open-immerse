@@ -100,6 +100,20 @@ test("migrateSettings leaves a later user-picked page scope alone", () => {
   assert.equal(settings.translateScope, "page");
 });
 
+test("migrateSettings remaps preview alias to title_lead without resetting page scope", () => {
+  const stored = {
+    settingsVersion: 7,
+    translateScope: "page",
+    articleScopeMigrated: true,
+    translateLimit: "preview"
+  };
+  const merged = { ...DEFAULT_SETTINGS, ...stored };
+  const { settings, changed } = migrateSettings(merged, stored);
+  assert.equal(changed, true);
+  assert.equal(settings.translateLimit, "title_lead");
+  assert.equal(settings.translateScope, "page");
+});
+
 test("claude preset skips hero details and aside rail", () => {
   const preset = pickPreset("www.claude.com");
   assert.ok(preset);

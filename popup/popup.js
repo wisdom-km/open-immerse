@@ -1,5 +1,6 @@
 import { getProvider, isProviderConfigured } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
+import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -13,9 +14,7 @@ async function init() {
   $("sourceLang").value = settings.sourceLang;
   $("targetLang").value = settings.targetLang;
   $("translateScope").value = settings.translateScope || "article";
-  $("translateLimit").value = settings.translateLimit === "preview" || settings.translateLimit === 2 || settings.translateLimit === "2"
-    ? "preview"
-    : "all";
+  $("translateLimit").value = isTitleLeadLimit(settings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
   $("enabled").checked = Boolean(settings.enabled);
   renderEngine(settings);
 
@@ -48,7 +47,7 @@ async function init() {
           sourceLang: $("sourceLang").value,
           targetLang: $("targetLang").value,
           translateScope: $("translateScope").value,
-          translateLimit: $("translateLimit").value === "preview" ? "preview" : "all"
+          translateLimit: $("translateLimit").value === TRANSLATE_LIMIT_TITLE_LEAD ? TRANSLATE_LIMIT_TITLE_LEAD : "all"
         }
       })
     );

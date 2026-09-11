@@ -92,8 +92,7 @@ async function start() {
   await translateVisible(ticket);
   if (running && epoch === ticket) {
     const lim = (await send({ type: "OI_GET_SETTINGS" }))?.settings?.translateLimit;
-    const preview = lim === "preview" || lim === 2 || lim === "2" || lim === "lead";
-    if (!preview) observePage();
+    if (!isTitleLeadLimit(lim)) observePage();
   }
 }
 
@@ -153,8 +152,8 @@ async function translateVisible(ticket = epoch) {
   const limited = applyTranslateLimit(collected, settings.translateLimit);
   const nodes = limited.filter((el) => !hasTranslation(el));
   if (!nodes.length) return;
-  if (settings.translateLimit === "preview" || settings.translateLimit === 2 || settings.translateLimit === "2") {
-    toast("预览模式：只翻标题 + 正文前三行");
+  if (isTitleLeadLimit(settings.translateLimit)) {
+    toast("仅标题+开头：只翻标题和正文开头");
   }
   const batchSize = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < nodes.length; i += batchSize) {
@@ -185,12 +184,16 @@ function hasTranslation(el) {
 }
 
 /** Keep in sync with lib/translate-limit.js */
+function isTitleLeadLimit(value) {
+  return value === "title_lead" || value === "preview" || value === "lead" || value === 2 || value === "2";
+}
+
 function applyTranslateLimit(nodes, limit) {
   const list = Array.isArray(nodes) ? nodes : [];
-  const preview = limit === "preview" || limit === 2 || limit === "2" || limit === "lead";
+  const titleLead = isTitleLeadLimit(limit);
   const all = limit == null || limit === "" || limit === "all" || limit === 0 || limit === "0";
-  if (!list.length || (all && !preview)) return list;
-  if (preview) {
+  if (!list.length || (all && !titleLead)) return list;
+  if (titleLead) {
     const heading =
       list.find((el) => el.tagName === "H1") ||
       list.find((el) => /^H[1-6]$/.test(el.tagName || ""));
@@ -209,9 +212,9 @@ function applyTranslateLimit(nodes, limit) {
 }
 
 function previewSourceText(text, limit) {
-  const preview = limit === "preview" || limit === 2 || limit === "2" || limit === "lead";
+  const titleLead = isTitleLeadLimit(limit);
   const raw = String(text || "").replace(/\r/g, "");
-  if (!preview) return raw.replace(/\s+/g, " ").trim();
+  if (!titleLead) return raw.replace(/\s+/g, " ").trim();
   const lines = raw
     .split(/\n+/)
     .map((l) => l.replace(/\s+/g, " ").trim())
