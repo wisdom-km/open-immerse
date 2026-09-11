@@ -64,9 +64,7 @@ chrome.commands.onCommand.addListener(async (command) => {
   if (!tab?.id) return;
   const settings = await getSettings();
   if (resolveFeatures(settings).webpage === false) return;
-  const ping = await chrome.tabs.sendMessage(tab.id, { type: "OI_PING" }).catch(() => null);
-  const on = Boolean(ping?.running || ping?.hasTranslations || ping?.active);
-  const enabled = !on;
+  const enabled = !settings.enabled;
   await saveSettings({ enabled });
   await chrome.tabs.sendMessage(tab.id, { type: enabled ? "OI_START" : "OI_RESTORE" }).catch(() => {});
 });

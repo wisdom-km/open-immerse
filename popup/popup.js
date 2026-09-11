@@ -17,12 +17,13 @@ async function init() {
   $("sourceLang").value = settings.sourceLang;
   $("targetLang").value = settings.targetLang;
   $("translateScope").value = settings.translateScope || "article";
+  $("enabled").checked = Boolean(settings.enabled);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const ping = tab?.id
-    ? await chrome.tabs.sendMessage(tab.id, { type: "OI_PING" }).catch(() => null)
-    : null;
-  $("enabled").checked = Boolean(ping?.running || ping?.hasTranslations || ping?.active);
+  if (tab?.id) {
+    const ping = await chrome.tabs.sendMessage(tab.id, { type: "OI_PING" }).catch(() => null);
+    if (typeof ping?.running === "boolean") $("enabled").checked = ping.running;
+  }
 
   const host = hostOf(tab?.url);
   const rule = (settings.siteRules || []).find((r) => host === r.host || host.endsWith("." + r.host));

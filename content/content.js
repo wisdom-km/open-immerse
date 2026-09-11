@@ -1,19 +1,30 @@
+const BLOCK_SELECTOR = "p, h1, h2, h3, h4, h5, h6, li, blockquote, figcaption, td, th, dt, dd";
+const SKIP_SELECTOR = "script, style, noscript, textarea, pre, code, kbd, samp, svg, canvas, [contenteditable], .oi-translation, .oi-toast, .oi-selection-card, .oi-fab";
+const MAIN_SELECTOR = "main, article, [role='main'], [role='article']";
+const CHROME_SELECTOR = "nav, aside, header, footer, [role='navigation'], [role='complementary'], [role='banner'], [role='contentinfo'], [role='menu']";
+const ALWAYS_CHROME_SELECTOR = "nav, aside, header, [role='navigation'], [role='complementary'], [role='banner'], [role='menu'], [role='menubar']";
+const HARD_SKIP_SELECTOR = [
+  "[data-aside-rail]",
+  "[data-aside-track]",
+  "[data-rail]",
+  "[class*='marginalia']",
+  "[class*='hero_blog_post_details']",
+  "[class*='blog_post_details']",
+  "[class*='details_list']",
+  "[class*='details_item']"
+].join(", ");
+const CHROME_META_RE = /^(category|product|date|author(?:\(s\))?|share|reading time|copy link|\d+\s*min\b)/i;
+const MIN_LEN = 2;
+
 let running = false;
 let epoch = 0;
 let pageObserver = null;
 let hoverBound = false;
-let scanApi = null;
 let timer = 0;
 
-bindPageControls();
-const ready = boot();
-ready.then(() => applyFeatures()).catch(() => {});
+init();
 
-async function boot() {
-  scanApi = await import(chrome.runtime.getURL("lib/page-scan.js"));
-}
-
-function bindPageControls() {
+async function init() {
   window.addEventListener("oi-please-start", () => start());
   window.addEventListener("oi-please-stop", () => restore());
   window.addEventListener("oi-please-restore", () => restore());
@@ -30,12 +41,7 @@ function bindPageControls() {
       toast(message.message || "translate failed");
       sendResponse({ ok: true });
     } else if (message.type === "OI_PING") {
-      sendResponse({
-        ok: true,
-        running,
-        active: document.documentElement.classList.contains("oi-active"),
-        hasTranslations: hasTranslations()
-      });
+      sendResponse({ ok: true, running });
     } else if (message.type === "OI_SAVE_CURRENT_SELECTION") {
       saveCurrentSelection().then(() => sendResponse({ ok: true }));
     } else if (message.type === "OI_FEATURES_CHANGED") {
@@ -44,13 +50,7 @@ function bindPageControls() {
     return true;
   });
 
-  window.__oiPage = {
-    start,
-    stop: restore,
-    restore,
-    isRunning: () => running,
-    hasTranslations
-  };
+  await applyFeatures();
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "sync" || !changes.settings) return;
@@ -58,17 +58,7 @@ function bindPageControls() {
   });
 }
 
-function stillCurrent(ticket) {
-  return running && ticket === epoch;
-}
-
-function hasTranslations() {
-  return Boolean(document.querySelector(".oi-translation"));
-}
-
 async function applyFeatures() {
-  await ready;
-  if (!scanApi) return;
   const res = await send({ type: "OI_GET_SETTINGS" });
   const settings = res.settings || {};
   applyStyle(settings);
@@ -85,8 +75,6 @@ async function applyFeatures() {
 
 async function start() {
   const ticket = epoch;
-  await ready;
-  if (epoch !== ticket) return;
   const settings = (await send({ type: "OI_GET_SETTINGS" })).settings || {};
   if (epoch !== ticket) return;
   if ((settings.features || {}).webpage === false) return;
@@ -95,7 +83,7 @@ async function start() {
   document.documentElement.classList.add("oi-active");
   window.dispatchEvent(new CustomEvent("oi-running", { detail: true }));
   await translateVisible(ticket);
-  if (stillCurrent(ticket)) observePage(ticket);
+  if (running && epoch === ticket) observePage();
 }
 
 function stop() {
@@ -117,86 +105,122 @@ function restore() {
   document.querySelectorAll(".oi-pending, .oi-failed").forEach((el) => {
     el.classList.remove("oi-pending", "oi-failed");
   });
-  send({ type: "OI_SAVE_SETTINGS", patch: { enabled: false } }).catch(() => {});
 }
 
-function observePage(ticket) {
+function observePage() {
   if (pageObserver) pageObserver.disconnect();
   pageObserver = new MutationObserver((mutations) => {
-    if (!stillCurrent(ticket)) return;
+    if (!running) return;
     const added = mutations.some((m) =>
       [...m.addedNodes].some((n) => n.nodeType === 1 && !n.classList?.contains("oi-translation") && !n.classList?.contains("oi-fab"))
     );
-    if (added) debounceTranslate(ticket);
+    if (added) debounceTranslate();
   });
   pageObserver.observe(document.body, { childList: true, subtree: true });
 }
 
-function debounceTranslate(ticket) {
+function debounceTranslate() {
   clearTimeout(timer);
-  timer = setTimeout(() => {
-    if (stillCurrent(ticket)) translateVisible(ticket);
-  }, 400);
+  timer = setTimeout(() => translateVisible(epoch), 400);
 }
 
-async function translateVisible(ticket) {
-  if (!stillCurrent(ticket)) return;
+async function translateVisible(ticket = epoch) {
+  if (!running || ticket !== epoch) return;
   const settingsRes = await send({ type: "OI_GET_SETTINGS" });
-  if (!stillCurrent(ticket)) return;
+  if (!running || ticket !== epoch) return;
   const settings = settingsRes.settings;
   if ((settings.features || {}).webpage === false) return;
   const nodes = collectNodes(settings);
   if (!nodes.length) return;
   const batchSize = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < nodes.length; i += batchSize) {
-    if (!stillCurrent(ticket)) return;
+    if (!running || ticket !== epoch) return;
     const chunk = nodes.slice(i, i + batchSize);
     chunk.forEach((el) => el.classList.add("oi-pending"));
     try {
       const res = await send({ type: "OI_TRANSLATE_BATCH", texts: chunk.map(getText) });
-      if (!stillCurrent(ticket)) {
+      if (!running || ticket !== epoch) {
         chunk.forEach((el) => el.classList.remove("oi-pending"));
         return;
       }
       if (!res.ok) throw new Error(res.error || "translate failed");
       chunk.forEach((el, idx) => {
         el.classList.remove("oi-pending");
-        if (stillCurrent(ticket)) mountTranslation(el, res.translations[idx] || "", settings);
+        if (running && ticket === epoch) mountTranslation(el, res.translations[idx] || "", settings);
       });
     } catch (err) {
       chunk.forEach((el) => el.classList.remove("oi-pending"));
-      if (stillCurrent(ticket)) toast(String(err.message || err));
+      toast(String(err.message || err));
       break;
     }
   }
 }
 
 function collectNodes(settings) {
-  if (scanApi?.collectNodes) {
-    return scanApi.collectNodes(document, settings, {
-      hostname: location.hostname,
-      innerWidth: window.innerWidth
-    });
-  }
-  return [];
+  const scope = settings.translateScope || "article";
+  const nodes = [...document.body.querySelectorAll(BLOCK_SELECTOR)].filter((el) => {
+    if (el.closest(SKIP_SELECTOR)) return false;
+    if (el.querySelector(".oi-translation")) return false;
+    if (el.nextElementSibling?.classList?.contains("oi-translation")) return false;
+    if (settings.skipCode && el.closest("pre, code")) return false;
+    if (el.tagName === "A" && el.closest("li, p, h1, h2, h3, h4, h5, h6")) return false;
+    if (el.closest(HARD_SKIP_SELECTOR)) return false;
+    if (el.closest(ALWAYS_CHROME_SELECTOR)) return false;
+    if (isSideColumn(el)) return false;
+    if (isChromeMetaText(getText(el))) return false;
+    if (scope === "article" && (el.closest(CHROME_SELECTOR) || isTinyChrome(el))) return false;
+    const text = getText(el);
+    if (text.length < MIN_LEN) return false;
+    if (/^[\d\s.,:;!?()[\]{}\-_/\\]+$/.test(text)) return false;
+    return isMostlyVisible(el);
+  });
+  return nodes.sort((a, b) => {
+    const diff = contentRank(a) - contentRank(b);
+    if (diff) return diff;
+    const pos = a.compareDocumentPosition(b);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  });
+}
+
+function contentRank(el) {
+  if (el.closest(MAIN_SELECTOR) && !el.closest(CHROME_SELECTOR) && !el.closest(HARD_SKIP_SELECTOR)) return 0;
+  if (isSideColumn(el) || el.closest(CHROME_SELECTOR) || el.closest(HARD_SKIP_SELECTOR)) return 2;
+  return 1;
+}
+
+function isSideColumn(el) {
+  const rect = el.getBoundingClientRect();
+  const vw = Math.max(window.innerWidth || 0, 800);
+  if (rect.width < 4) return false;
+  return (rect.right < vw * 0.22 && rect.width < vw * 0.32) || (rect.left > vw * 0.68 && rect.width < vw * 0.4);
+}
+
+function isChromeMetaText(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value || value.length >= 80) return false;
+  return CHROME_META_RE.test(value);
 }
 
 function getText(el) {
-  if (scanApi?.getText) return scanApi.getText(el);
   const clone = el.cloneNode(true);
   clone.querySelectorAll(".oi-translation, script, style, noscript").forEach((n) => n.remove());
   return (clone.innerText || clone.textContent || "").replace(/\s+/g, " ").trim();
 }
 
 function shouldInline(el) {
-  if (scanApi?.shouldInline) return scanApi.shouldInline(el);
-  return el.tagName === "A" || el.tagName === "BUTTON";
+  if (el.tagName === "A" || el.tagName === "BUTTON") return true;
+  if (el.closest("nav, aside, header, [role='navigation']")) return true;
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.width < 240 && isSideColumn(el);
 }
 
 function mountTranslation(el, text, settings) {
-  if (!text || !el.isConnected) return;
-  const existing = el.querySelector(":scope > .oi-translation") ||
-    (el.nextElementSibling?.classList?.contains("oi-translation") ? el.nextElementSibling : null);
+  if (!text) return;
+  const existing = el.nextElementSibling?.classList?.contains("oi-translation")
+    ? el.nextElementSibling
+    : el.querySelector(":scope > .oi-translation");
   if (existing) {
     existing.textContent = text;
     return;
@@ -224,6 +248,19 @@ function mountTranslation(el, text, settings) {
   else el.insertAdjacentElement("afterend", node);
 }
 
+function isTinyChrome(el) {
+  if (["NAV", "FOOTER", "HEADER"].includes(el.parentElement?.tagName)) return getText(el).length < 24;
+  if (el.tagName === "A" || el.closest("nav, aside, [role='navigation']")) return getText(el).length < 48;
+  return false;
+}
+
+function isMostlyVisible(el) {
+  const rect = el.getBoundingClientRect();
+  if (rect.width < 4 || rect.height < 4) return false;
+  const style = getComputedStyle(el);
+  return !(style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0);
+}
+
 function applyStyle(settings) {
   const root = document.documentElement;
   if (!settings) return;
@@ -246,13 +283,13 @@ function disableHover() {
 
 let hoverTimer = 0;
 function onHover(ev) {
-  const el = ev.target.closest(scanApi?.BLOCK_SELECTOR || "p, h1, h2, h3, h4, h5, h6, li, blockquote");
-  if (!el || el.closest(scanApi?.SKIP_SELECTOR || ".oi-translation, .oi-fab")) return;
+  const el = ev.target.closest(BLOCK_SELECTOR);
+  if (!el || el.closest(SKIP_SELECTOR)) return;
   if (el.querySelector(".oi-translation") || el.nextElementSibling?.classList?.contains("oi-translation")) return;
   clearTimeout(hoverTimer);
   hoverTimer = setTimeout(async () => {
     const text = getText(el);
-    if (text.length < 2) return;
+    if (text.length < MIN_LEN) return;
     const res = await send({ type: "OI_TRANSLATE_BATCH", texts: [text] });
     if (res.ok) {
       const settings = (await send({ type: "OI_GET_SETTINGS" })).settings;

@@ -35,12 +35,6 @@
       "run_at": "document_idle"
     }
   ],
-  "web_accessible_resources": [
-    {
-      "resources": ["lib/page-scan.js", "lib/site-presets.js"],
-      "matches": ["<all_urls>"]
-    }
-  ],
   "permissions": [
     "storage",
     "activeTab",

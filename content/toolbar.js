@@ -26,7 +26,7 @@
     if (showPage) addMenuBtn(menu, "autosite", "本站自动翻译");
 
     document.documentElement.appendChild(bar);
-    syncToggle(isActive());
+    syncToggle(document.documentElement.classList.contains("oi-active"));
     window.addEventListener("oi-running", (ev) => syncToggle(Boolean(ev.detail)));
 
     bar.addEventListener("click", async (ev) => {
@@ -38,14 +38,13 @@
       }
       menu.hidden = true;
       if (act === "toggle" && showPage) {
-        const on = !isActive();
+        const on = !document.documentElement.classList.contains("oi-active");
         await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: on } });
-        if (on) pageApi().start();
-        else pageApi().restore();
+        window.dispatchEvent(new CustomEvent(on ? "oi-please-start" : "oi-please-restore"));
       }
       if (act === "restore" && showPage) {
         await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: false } });
-        pageApi().restore();
+        window.dispatchEvent(new CustomEvent("oi-please-restore"));
       }
       if (act === "save" && showLearn) chrome.runtime.sendMessage({ type: "OI_SAVE_CURRENT_SELECTION" });
       if (act === "learn" && showLearn) chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "learning" });
@@ -56,22 +55,9 @@
           host: location.hostname.replace(/^www\./, ""),
           rule: { auto: true }
         });
-        pageApi().start();
+        window.dispatchEvent(new CustomEvent("oi-please-start"));
       }
     });
-  }
-
-  function pageApi() {
-    return (
-      window.__oiPage || {
-        start() {
-          window.dispatchEvent(new CustomEvent("oi-please-start"));
-        },
-        restore() {
-          window.dispatchEvent(new CustomEvent("oi-please-restore"));
-        }
-      }
-    );
   }
 
   function addMenuBtn(menu, act, label) {
@@ -80,10 +66,6 @@
     btn.dataset.act = act;
     btn.textContent = label;
     menu.appendChild(btn);
-  }
-
-  function isActive() {
-    return document.documentElement.classList.contains("oi-active") || Boolean(document.querySelector(".oi-translation"));
   }
 
   function syncToggle(on) {
