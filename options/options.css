@@ -65,31 +65,24 @@ button {
   bottom: 0;
   z-index: 20;
   border-top: 1px solid var(--oi-line);
-  background: color-mix(in srgb, var(--oi-bg) 88%, transparent);
+  background: color-mix(in srgb, var(--oi-bg) 92%, transparent);
   backdrop-filter: blur(10px);
   box-shadow: none;
 }
 .actions-inner {
   max-width: 720px;
   margin: 0 auto;
-  padding: 10px 24px;
+  padding: 12px 20px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
-  flex-wrap: wrap;
-}
-.actions-tools,
-.actions-save {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 .status {
+  margin-right: auto;
   color: var(--oi-text-muted);
   font-size: 13px;
   min-height: 1.2em;
-  min-width: 3.5em;
 }
 .later { margin-top: 14px; color: var(--oi-text-muted); }
 .later summary { cursor: pointer; }

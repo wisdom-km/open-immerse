@@ -49,10 +49,10 @@ test("options save bar is a quiet sticky Loom bar", () => {
   const css = readFileSync(join(root, "options/options.css"), "utf8");
   assert.match(html, />保存设置</);
   assert.match(html, /class="actions-bar"/);
-  const bar = html.slice(html.indexOf("actions-bar"));
-  assert.match(bar, /id="exportSettings"/);
-  assert.match(bar, /id="importSettings"/);
-  assert.match(bar, /id="save"/);
+  assert.match(html, /class="bar"/);
+  assert.match(html, /id="exportSettings"[^>]*>导出设置/);
+  assert.match(html, /id="importSettings"[^>]*>导入设置/);
+  assert.match(html, /id="save"/);
   assert.match(css, /padding:\s*8px 14px/);
   assert.match(css, /min-height:\s*36px/);
   assert.match(css, /\.btn-primary[^}]*font-weight:\s*600/);
