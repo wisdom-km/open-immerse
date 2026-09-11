@@ -1,18 +1,192 @@
-body{margin:0;font:15px/1.55 system-ui,"PingFang SC",sans-serif;background:#0b0d12;color:#eef2f8}
-main{max-width:860px;margin:0 auto;padding:40px 20px 80px}
-h1{margin:0 0 8px}.lead{color:#9aa6b8}
-.tabs,.export-bar{display:flex;gap:8px;margin:18px 0;flex-wrap:wrap;align-items:center}
-.tabs button,.grades button,.export-bar button{border:0;border-radius:8px;padding:8px 12px;background:#2a3142;color:#fff;cursor:pointer}
-.tabs .on,.export-bar button{background:#3b4660}
-.tabs .on{background:#4d7cff}
-.export-bar span{color:#9aa6b8;margin-right:4px}
-.export-bar button{background:#4d7cff}
-.card{padding:20px;border:1px solid #2a3142;border-radius:14px;background:#141821}
-.card .org{font-size:22px;margin-bottom:8px}
-.card .ctx,.card .dst{color:#9aa6b8}
-.card.empty{color:#9aa6b8}
-.grades{display:flex;gap:8px;margin-top:12px}
-ul{list-style:none;padding:0;margin:20px 0}
-li{padding:14px;border:1px solid #2a3142;border-radius:12px;margin-bottom:10px;background:#141821}
-li .meta{font-size:12px;color:#9aa6b8;margin-top:6px}
-li button{margin-top:8px;border:0;background:#3a3f4b;color:#fff;border-radius:6px;padding:4px 8px;cursor:pointer}
+:root {
+  color-scheme: light dark;
+  --oi-bg: #0b0d12;
+  --oi-panel: #141821;
+  --oi-card: #171a21;
+  --oi-line: #2a3142;
+  --oi-text: #eef2f8;
+  --oi-text-muted: #9aa6b8;
+  --oi-accent: #4d7cff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 15px/1.55 "Segoe UI", "PingFang SC", system-ui, sans-serif;
+  background: radial-gradient(900px 400px at 10% -10%, #1b2a55 0%, transparent 50%), var(--oi-bg);
+  color: var(--oi-text);
+}
+
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+}
+
+.brand {
+  margin: 0 0 6px;
+  color: var(--oi-text-muted);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 32px;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.lead,
+.hint,
+.status,
+.meta,
+.card.empty,
+.card .dst,
+.card .ctx {
+  color: var(--oi-text-muted);
+}
+
+.status {
+  min-height: 1.4em;
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.tabs,
+.export-bar,
+.grades,
+.row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.tabs,
+.export-bar {
+  margin: 18px 0;
+}
+
+.tabs button,
+.grades button,
+.export-bar button {
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: var(--oi-line);
+  color: var(--oi-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.tabs .on {
+  background: var(--oi-accent);
+  font-weight: 700;
+}
+
+.export-bar span {
+  color: var(--oi-text-muted);
+  margin-right: 4px;
+}
+
+.export-bar button {
+  background: var(--oi-accent);
+  font-weight: 700;
+}
+
+.card {
+  padding: 20px;
+  border: 1px solid var(--oi-line);
+  border-radius: 16px;
+  background: var(--oi-panel);
+}
+
+.card .org {
+  font-size: 22px;
+  margin-bottom: 8px;
+}
+
+.grades {
+  margin-top: 12px;
+}
+
+.grades button[data-g="5"] {
+  background: var(--oi-accent);
+  font-weight: 700;
+}
+
+ul {
+  list-style: none;
+  padding: 0;
+  margin: 20px 0;
+}
+
+li.row,
+li.empty-all {
+  padding: 16px;
+  border: 1px solid var(--oi-line);
+  border-radius: 16px;
+  margin-bottom: 10px;
+  background: var(--oi-card);
+}
+
+li.row .org {
+  display: block;
+  font-size: 16px;
+}
+
+li.row .dst {
+  margin-top: 4px;
+  color: var(--oi-text-muted);
+}
+
+li .meta {
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+li.empty-all {
+  background: var(--oi-panel);
+}
+
+.empty-title {
+  margin: 0 0 6px;
+  color: var(--oi-text);
+}
+
+.empty-all .hint {
+  margin: 0;
+  font-size: 13px;
+}
+
+.row-actions {
+  margin-top: 12px;
+}
+
+button.ghost,
+button.danger {
+  border: 1px solid var(--oi-line);
+  border-radius: 8px;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--oi-text-muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+button.ghost:hover {
+  color: var(--oi-text);
+}
+
+button.danger {
+  color: #ff9b9b;
+}
+
+button.danger:hover {
+  border-color: #ff9b9b;
+}
