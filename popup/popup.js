@@ -67,7 +67,24 @@ async function init() {
 
 function renderEngine(settings) {
   const provider = getProvider(settings.provider);
-  $("engineLink").textContent = `引擎：${provider.name}`;
+  const shortName = {
+    openai: "OpenAI",
+    openrouter: "OpenRouter",
+    deepl: "DeepL",
+    microsoft: "Microsoft",
+    google: "Google",
+    mymemory: "MyMemory",
+    grok: "Grok",
+    kimi: "Kimi",
+    minimax: "MiniMax",
+    gemini: "Gemini",
+    claude: "Claude",
+    azure: "Azure",
+    custom: "Custom"
+  }[provider.id] || provider.name.split("/")[0].trim();
+  const link = $("engineLink");
+  link.textContent = `引擎：${shortName}`;
+  link.title = provider.name;
   const cfg = settings.providers?.[provider.id] || {};
   const ok = isProviderConfigured(provider, cfg);
   $("engineWarn").hidden = ok;
