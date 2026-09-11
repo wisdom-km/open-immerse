@@ -52,6 +52,16 @@
         <p class="hint">只显示当前默认引擎的配置。改上方下拉框即可换家；其他引擎已保存的 Key 不会丢。</p>
         <div id="providerFields"></div>
       </section>
+
+      <section>
+        <h2>备份与恢复</h2>
+        <p class="hint">导出含引擎密钥，文件请妥善保存。Chrome「移除」扩展会清空本地设置；重装后可在此导入恢复。日常更新请用「重新加载」，不要「移除」。</p>
+        <div class="bar">
+          <button id="exportSettings" type="button">导出设置</button>
+          <button id="importSettings" type="button">导入设置</button>
+          <input id="importFile" type="file" accept="application/json,.json" hidden />
+        </div>
+      </section>
       <div class="bar">
         <button id="save" type="button">保存设置</button>
         <span id="status"></span>
