@@ -62,8 +62,8 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
 }
 .oi-toast {
   position: fixed;
-  right: 16px;
-  bottom: 88px;
+  right: 20px;
+  bottom: var(--oi-fab-slot, 72px);
   z-index: 2147483646;
   max-width: 360px;
   padding: 10px 14px;
@@ -81,7 +81,7 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
 .oi-selection-card {
   position: fixed;
   right: 20px;
-  bottom: 92px;
+  bottom: var(--oi-fab-slot, 72px);
   z-index: 2147483646;
   width: min(420px, calc(100vw - 32px));
   padding: 14px;
@@ -103,41 +103,43 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
 }
 .oi-selection-card .close { background: #3a3f4b; }
 .oi-fab {
+  --oi-card: #171a21;
+  --oi-shadow-1: 0 4px 16px rgba(0, 0, 0, 0.18);
+  --oi-fab-slot: 72px;
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  right: 20px;
+  bottom: 20px;
   z-index: 2147483646;
   display: flex;
   gap: 6px;
   padding: 6px;
   border-radius: 999px;
-  background: #111318;
-  box-shadow: 0 12px 32px rgba(0,0,0,.35);
+  background: var(--oi-card);
+  box-shadow: var(--oi-shadow-1);
   font: 13px/1 system-ui, sans-serif;
 }
 .oi-fab > button {
-  box-sizing: border-box !important;
-  width: 36px !important;
-  height: 36px !important;
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin: 0;
   border: 0;
   border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  text-align: center;
+  -webkit-font-smoothing: antialiased;
   background: #2a3142;
   color: #fff;
   cursor: pointer;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  padding: 0 !important;
-  margin: 0;
-  font-size: 12px;
-  line-height: 1;
-  font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  letter-spacing: 0;
-  text-indent: 0 !important;
-  text-align: center !important;
-  -webkit-appearance: none;
-  appearance: none;
-  -webkit-font-smoothing: antialiased;
+  text-indent: 0;
 }
 .oi-fab > button.on { background: #4d7cff; }
 .oi-fab-menu {

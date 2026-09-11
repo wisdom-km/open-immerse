@@ -31,7 +31,7 @@
         ? '<button type="button" data-act="toggle" title="toggle">译</button><button type="button" data-act="restore" title="restore">原</button>'
         : "") +
       (showLearn ? '<button type="button" data-act="save" title="save">藏</button>' : "") +
-      '<button type="button" data-act="more" title="more">...</button><div class="oi-fab-menu" hidden></div>';
+      '<button type="button" data-act="more" title="more">⋯</button><div class="oi-fab-menu" hidden></div>';
 
     const menu = bar.querySelector(".oi-fab-menu");
     if (showLearn) addMenuBtn(menu, "learn", "学习中心");
