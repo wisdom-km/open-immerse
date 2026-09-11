@@ -10,7 +10,38 @@ import {
   isChromeMetaText,
   pickPreset
 } from "../lib/site-presets.js";
-import { BLOCK_SELECTOR } from "../lib/page-scan.js";
+import { BLOCK_SELECTOR, shouldCollectNode } from "../lib/page-scan.js";
+import { isAlwaysBanned } from "../lib/site-presets.js";
+
+function fakeNode({ className = "", hits = [], text = "Hello world about AI tools", left = 120, width = 480 } = {}) {
+  const node = {
+    tagName: "P",
+    className,
+    nextElementSibling: null,
+    matches(sel) {
+      return hits.some((hit) => sel.includes(hit));
+    },
+    closest(sel) {
+      return hits.some((hit) => sel.includes(hit)) ? node : null;
+    },
+    querySelector() {
+      return null;
+    },
+    getBoundingClientRect() {
+      return { width, height: 40, left, right: left + width, top: 180 };
+    },
+    cloneNode() {
+      return {
+        querySelectorAll() {
+          return { forEach() {} };
+        },
+        innerText: text,
+        textContent: text
+      };
+    }
+  };
+  return node;
+}
 
 test("default translateScope is article and settingsVersion is 3", () => {
   assert.equal(DEFAULT_SETTINGS.translateScope, "article");
@@ -70,6 +101,18 @@ test("scan uses block nodes only and never PAGE_EXTRA nav links", () => {
   assert.equal(BLOCK_SELECTOR.includes("header"), false);
   assert.ok(BLOCK_SELECTOR.includes("p"));
   assert.ok(BLOCK_SELECTOR.includes("h1"));
+});
+
+test("hard-ban skips Claude rail and nav even for page scope", () => {
+  const rail = fakeNode({ hits: ["hero_blog_post_details", "data-aside-rail"], text: "Category" });
+  const nav = fakeNode({ hits: ["nav_desktop_layout", "role='navigation'"], text: "Product" });
+  const body = fakeNode({ text: "Most AI tools and training are built for large companies." });
+  assert.equal(isAlwaysBanned(rail, "claude.com"), true);
+  assert.equal(isAlwaysBanned(nav, "claude.com"), true);
+  assert.equal(isAlwaysBanned(body, "claude.com"), false);
+  assert.equal(shouldCollectNode(rail, { translateScope: "page", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), false);
+  assert.equal(shouldCollectNode(nav, { translateScope: "page", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), false);
+  assert.equal(shouldCollectNode(body, { translateScope: "article", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), true);
 });
 
 test("isChromeMetaText covers Claude blog rail labels", () => {

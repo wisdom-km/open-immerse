@@ -45,7 +45,10 @@ async function init() {
   document.addEventListener("change", async (ev) => {
     const input = ev.target.closest("[data-feat]");
     if (!input) return;
-    const next = { ...features, [input.dataset.feat]: input.checked };
+    const next = { ...features };
+    document.querySelectorAll("[data-feat]").forEach((box) => {
+      next[box.dataset.feat] = box.checked;
+    });
     await chrome.runtime.sendMessage({
       type: "OI_SAVE_SETTINGS",
       patch: {
