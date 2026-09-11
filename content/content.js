@@ -31,7 +31,10 @@ async function init() {
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "OI_START") start().then(() => sendResponse({ ok: true }));
-    else if (message.type === "OI_STOP" || message.type === "OI_RESTORE") {
+    else if (message.type === "OI_RESTORE") {
+      restore();
+      sendResponse({ ok: true });
+    } else if (message.type === "OI_STOP") {
       restore();
       sendResponse({ ok: true });
     } else if (message.type === "OI_SHOW_SELECTION") {
@@ -100,11 +103,17 @@ function stop() {
 
 function restore() {
   epoch += 1;
+  running = false;
   stop();
   document.querySelectorAll(".oi-translation, .oi-selection-card").forEach((el) => el.remove());
   document.querySelectorAll(".oi-pending, .oi-failed").forEach((el) => {
     el.classList.remove("oi-pending", "oi-failed");
   });
+  const fab = document.querySelector('.oi-fab [data-act="toggle"]');
+  if (fab) {
+    fab.textContent = "译";
+    fab.classList.remove("on");
+  }
 }
 
 function observePage() {
