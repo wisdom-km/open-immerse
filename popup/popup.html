@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>沉浸译</title>
+    <link rel="stylesheet" href="../ui/tokens.css" />
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
@@ -11,46 +12,45 @@
       <div class="mark" aria-hidden="true"><span></span><span></span></div>
       <div>
         <h1>沉浸译</h1>
-        <p>Open Immerse · 网页双语</p>
+        <p>Open Immerse</p>
       </div>
     </header>
 
     <section>
       <h2>本页</h2>
-      <label class="switch-row"><span>翻译当前页面</span><input id="enabled" type="checkbox" /></label>
-      <label class="switch-row"><span>本站自动翻译</span><input id="autoSite" type="checkbox" /></label>
-      <label>翻译范围
+      <label class="switch-row heavy"><span>翻译此页</span><input id="enabled" type="checkbox" /></label>
+      <label class="switch-row"><span>本站自动</span><input id="autoSite" type="checkbox" /></label>
+      <label>范围
         <select id="translateScope">
-          <option value="article">仅正文（默认）</option>
-          <option value="page">更大范围（仍跳过顶栏导航）</option>
+          <option value="article">仅正文</option>
+          <option value="page">全页面</option>
+        </select>
+      </label>
+      <label>本次翻译
+        <select id="translateLimit">
+          <option value="all">全部</option>
+          <option value="title_lead">仅标题+开头</option>
         </select>
       </label>
     </section>
 
     <section>
-      <h2>功能开关</h2>
-      <div id="featureList"></div>
-      <details class="later">
-        <summary>后续功能（默认关闭）</summary>
-        <div id="laterList"></div>
-      </details>
-    </section>
-
-    <section>
-      <h2>语言 / 引擎</h2>
-      <label>翻译引擎<select id="provider"></select></label>
-      <div class="row">
-        <label>源语言<select id="sourceLang"></select></label>
-        <label>目标语言<select id="targetLang"></select></label>
+      <h2>语言</h2>
+      <div class="lang-row">
+        <select id="sourceLang" aria-label="源语言"></select>
+        <select id="targetLang" aria-label="目标语言"></select>
       </div>
+      <a id="engineLink" class="ghost-link engine-link" href="#">引擎：—</a>
+      <p id="engineWarn" class="danger" hidden>未配置引擎 <button type="button" id="goSetup" class="ghost-link">去设置</button></p>
     </section>
 
-    <div class="actions">
-      <button id="openLearning" type="button">学习中心</button>
-      <button id="openDocs" type="button">文档翻译</button>
-      <button id="openOptions" type="button">更多设置</button>
-    </div>
-    <p class="hint">关掉「翻译当前页面」、点 FAB「原」、或按 Alt+T 关闭，都会完整恢复原文。</p>
+    <nav class="entries">
+      <button type="button" id="openLearning">学习中心</button>
+      <span aria-hidden="true">|</span>
+      <button type="button" id="openDocs">文档</button>
+      <span aria-hidden="true">|</span>
+      <button type="button" id="openOptions">设置</button>
+    </nav>
     <script type="module" src="popup.js"></script>
   </body>
 </html>

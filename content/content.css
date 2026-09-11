@@ -1,8 +1,9 @@
 .oi-translation {
   display: block;
-  margin: 0.28em 0 0.55em;
+  /* body: sit tight under source so bilingual reads as one unit */
+  margin: 0.08em 0 0.1em;
   font-size: calc(1em * var(--oi-font-scale, 0.95));
-  line-height: 1.65;
+  line-height: 1.5;
   color: var(--oi-color, color-mix(in srgb, currentColor 72%, transparent));
   font-weight: 400;
   white-space: pre-wrap;
@@ -11,10 +12,18 @@
   writing-mode: horizontal-tb;
   text-orientation: mixed;
   word-break: normal;
-  padding-bottom: 0.08em;
+  padding-top: 0;
+  padding-bottom: 0.06em;
   border-bottom: 1px dashed color-mix(in srgb, currentColor 48%, transparent);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
+}
+/* titles: more air between heading and translation */
+.oi-translation.oi-after-heading {
+  /* titles are large: use rem so gap tracks display size, not tiny em */
+  margin: 0.7rem 0 0.45rem;
+  padding-top: 0.2rem;
+  line-height: 1.45;
 }
 .oi-translation.oi-inline {
   display: inline;
@@ -54,69 +63,100 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
 }
 .oi-toast {
   position: fixed;
-  right: 16px;
-  bottom: 88px;
+  right: 20px;
+  bottom: var(--oi-fab-slot, 72px);
   z-index: 2147483646;
   max-width: 360px;
-  padding: 10px 14px;
+  padding: 12px 16px;
   border-radius: 10px;
-  background: #1b1b1f;
-  color: #f5f5f7;
-  font: 13px/1.45 system-ui, sans-serif;
+  background: var(--oi-card);
+  color: var(--oi-text);
+  font: 14px/1.5 var(--oi-font);
   opacity: 0;
   transform: translateY(8px);
   pointer-events: none;
   transition: 0.2s ease;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--oi-shadow-1);
 }
 .oi-toast.show { opacity: 1; transform: none; }
 .oi-selection-card {
   position: fixed;
   right: 20px;
-  bottom: 92px;
+  bottom: var(--oi-fab-slot, 72px);
   z-index: 2147483646;
   width: min(420px, calc(100vw - 32px));
-  padding: 14px;
+  padding: 16px;
   border-radius: 14px;
-  background: #111214;
-  color: #f3f4f6;
-  font: 14px/1.55 system-ui, sans-serif;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  background: var(--oi-card);
+  color: var(--oi-text);
+  font: 14px/1.55 var(--oi-font);
+  box-shadow: var(--oi-shadow-1);
 }
 .oi-selection-card .oi-sel-org { opacity: 0.7; margin-bottom: 8px; }
-.oi-sel-actions { display: flex; gap: 8px; margin-top: 10px; }
+.oi-sel-actions { display: flex; gap: 8px; margin-top: 12px; }
 .oi-selection-card button {
   border: 0;
   border-radius: 8px;
-  padding: 6px 10px;
-  background: #2f6fed;
-  color: white;
-  cursor: pointer;
-}
-.oi-selection-card .close { background: #3a3f4b; }
-.oi-fab {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: 2147483646;
-  display: flex;
-  gap: 6px;
-  padding: 6px;
-  border-radius: 999px;
-  background: #111318;
-  box-shadow: 0 12px 32px rgba(0,0,0,.35);
-  font: 13px/1 system-ui, sans-serif;
-}
-.oi-fab > button {
-  width: 36px;
-  height: 36px;
-  border: 0;
-  border-radius: 50%;
-  background: #2a3142;
+  padding: 8px 12px;
+  background: var(--oi-accent);
   color: #fff;
   cursor: pointer;
+  font: inherit;
 }
-.oi-fab > button.on { background: #4d7cff; }
+.oi-selection-card .close { background: var(--oi-line); }
+.oi-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2147483646;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 999px;
+  background: var(--oi-card);
+  box-shadow: var(--oi-shadow-1);
+  font: 13px/1 var(--oi-font);
+}
+.oi-fab > button {
+  box-sizing: border-box;
+  min-width: 36px;
+  width: auto;
+  height: 36px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  text-align: center;
+  text-indent: 0;
+  white-space: nowrap;
+  -webkit-font-smoothing: antialiased;
+  background: var(--oi-line);
+  color: #fff;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: background 0.15s ease;
+}
+.oi-fab > button:hover { background: color-mix(in srgb, var(--oi-line) 70%, #fff); }
+.oi-fab > button:focus-visible {
+  outline: 2px solid var(--oi-accent);
+  outline-offset: 2px;
+}
+.oi-fab > button[data-act="more"] {
+  min-width: 36px;
+  padding: 0;
+  width: 36px;
+}
+.oi-fab > button.on { background: var(--oi-accent); }
+.oi-fab > button.on:hover { background: var(--oi-accent-hover); }
 .oi-fab-menu {
   position: absolute;
   right: 0;
@@ -126,17 +166,19 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
   min-width: 140px;
   padding: 8px;
   border-radius: 12px;
-  background: #171a21;
+  background: var(--oi-card);
 }
 .oi-fab-menu button {
   border: 0;
   border-radius: 8px;
   padding: 8px 10px;
-  background: #2a3142;
+  background: var(--oi-line);
   color: #fff;
   text-align: left;
   cursor: pointer;
+  font: 13px/1.4 var(--oi-font);
 }
+.oi-fab-menu button:hover { background: color-mix(in srgb, var(--oi-line) 70%, #fff); }
 .oi-caption {
   position: fixed;
   left: 50%;

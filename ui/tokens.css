@@ -1,0 +1,38 @@
+/* Loom UI redesign V2 — single --oi-* source. Do not redeclare hex in page CSS. */
+:root {
+  color-scheme: dark;
+  --oi-bg: #0b0d12;
+  --oi-bg-elevated: #10131a;
+  --oi-panel: #141821;
+  --oi-card: #171a21;
+  --oi-input: #0f131c;
+  --oi-line: #2a3142;
+  --oi-text: #eef2f8;
+  --oi-text-muted: #9aa6b8;
+  --oi-muted: var(--oi-text-muted);
+  --oi-accent: #4d7cff;
+  --oi-accent-hover: #5b88ff;
+  --oi-accent-subtle: color-mix(in srgb, var(--oi-accent) 14%, transparent);
+  --oi-danger: #e8a0a0;
+  --oi-shadow-1: 0 4px 16px rgba(0, 0, 0, 0.18);
+  --oi-fab-slot: 72px;
+  --oi-font: "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+.mark {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 3px;
+}
+.mark span {
+  display: block;
+  width: 16px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--oi-text);
+}

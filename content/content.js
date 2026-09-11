@@ -45,7 +45,7 @@ async function init() {
       showSelectionCard(message.original, message.translated);
       sendResponse({ ok: true });
     } else if (message.type === "OI_ERROR" || message.type === "OI_TOAST") {
-      toast(message.message || "translate failed");
+      toast(message.message || "翻译失败");
       sendResponse({ ok: true });
     } else if (message.type === "OI_PING") {
       sendResponse({ ok: true, running });
@@ -82,7 +82,7 @@ async function applyFeatures() {
 
 async function start() {
   const ticket = epoch;
-  const settings = (await send({ type: "OI_GET_SETTINGS" })).settings || {};
+  const settings = (await send({ type: "OI_GET_SETTINGS" }))?.settings || {};
   if (epoch !== ticket) return;
   if ((settings.features || {}).webpage === false) return;
   if (running) return;
@@ -90,7 +90,10 @@ async function start() {
   document.documentElement.classList.add("oi-active");
   window.dispatchEvent(new CustomEvent("oi-running", { detail: true }));
   await translateVisible(ticket);
-  if (running && epoch === ticket) observePage();
+  if (running && epoch === ticket) {
+    const lim = (await send({ type: "OI_GET_SETTINGS" }))?.settings?.translateLimit;
+    if (!isTitleLeadLimit(lim)) observePage();
+  }
 }
 
 function stop() {
@@ -141,22 +144,29 @@ async function translateVisible(ticket = epoch) {
   if (!running || ticket !== epoch) return;
   const settingsRes = await send({ type: "OI_GET_SETTINGS" });
   if (!running || ticket !== epoch) return;
-  const settings = settingsRes.settings;
+  const settings = settingsRes?.settings;
+  if (!settings) return;
   if ((settings.features || {}).webpage === false) return;
-  const nodes = collectNodes(settings);
+  // batchSize only chunks API requests. translateLimit caps total nodes.
+  const collected = collectNodes(settings, { includeTranslated: true });
+  const limited = applyTranslateLimit(collected, settings.translateLimit);
+  const nodes = limited.filter((el) => !hasTranslation(el));
   if (!nodes.length) return;
+  if (isTitleLeadLimit(settings.translateLimit)) {
+    toast("仅标题+开头：只翻标题和正文开头");
+  }
   const batchSize = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < nodes.length; i += batchSize) {
     if (!running || ticket !== epoch) return;
     const chunk = nodes.slice(i, i + batchSize);
     chunk.forEach((el) => el.classList.add("oi-pending"));
     try {
-      const res = await send({ type: "OI_TRANSLATE_BATCH", texts: chunk.map(getText) });
+      const res = await send({ type: "OI_TRANSLATE_BATCH", texts: chunk.map((el) => previewSourceText(getText(el), settings.translateLimit)) });
       if (!running || ticket !== epoch) {
         chunk.forEach((el) => el.classList.remove("oi-pending"));
         return;
       }
-      if (!res.ok) throw new Error(res.error || "translate failed");
+      if (!res.ok) throw new Error(res.error || "翻译失败");
       chunk.forEach((el, idx) => {
         el.classList.remove("oi-pending");
         if (running && ticket === epoch) mountTranslation(el, res.translations[idx] || "", settings);
@@ -169,12 +179,62 @@ async function translateVisible(ticket = epoch) {
   }
 }
 
-function collectNodes(settings) {
+function hasTranslation(el) {
+  return Boolean(el.querySelector(".oi-translation") || el.nextElementSibling?.classList?.contains("oi-translation"));
+}
+
+/** Keep in sync with lib/translate-limit.js */
+function isTitleLeadLimit(value) {
+  return value === "title_lead" || value === "preview" || value === "lead" || value === 2 || value === "2";
+}
+
+function applyTranslateLimit(nodes, limit) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const titleLead = isTitleLeadLimit(limit);
+  const all = limit == null || limit === "" || limit === "all" || limit === 0 || limit === "0";
+  if (!list.length || (all && !titleLead)) return list;
+  if (titleLead) {
+    const heading =
+      list.find((el) => el.tagName === "H1") ||
+      list.find((el) => /^H[1-6]$/.test(el.tagName || ""));
+    const rest = list.filter((el) => el !== heading);
+    const para =
+      rest.find((el) => /^(P|BLOCKQUOTE)$/.test(el.tagName || "")) ||
+      rest.find((el) => getText(el).length > 0);
+    const picked = [];
+    if (heading) picked.push(heading);
+    if (para) picked.push(para);
+    return picked.length ? picked : list.slice(0, 1);
+  }
+  const n = Number(limit);
+  if (Number.isFinite(n) && n > 0) return list.slice(0, Math.floor(n));
+  return list;
+}
+
+function previewSourceText(text, limit) {
+  const titleLead = isTitleLeadLimit(limit);
+  const raw = String(text || "").replace(/\r/g, "");
+  if (!titleLead) return raw.replace(/\s+/g, " ").trim();
+  const lines = raw
+    .split(/\n+/)
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  let out = lines.slice(0, 3).join(" ");
+  if (!out) out = raw.replace(/\s+/g, " ").trim();
+  if (out.length > 220) {
+    const cut = out.slice(0, 220);
+    const m = cut.match(/^[\s\S]*?[.!?。！？]/);
+    out = (m ? m[0] : cut).trim();
+  }
+  return out;
+}
+
+function collectNodes(settings, opts = {}) {
   const scope = settings.translateScope || "article";
+  const includeTranslated = Boolean(opts.includeTranslated);
   const nodes = [...document.body.querySelectorAll(BLOCK_SELECTOR)].filter((el) => {
     if (el.closest(SKIP_SELECTOR)) return false;
-    if (el.querySelector(".oi-translation")) return false;
-    if (el.nextElementSibling?.classList?.contains("oi-translation")) return false;
+    if (!includeTranslated && hasTranslation(el)) return false;
     if (settings.skipCode && el.closest("pre, code")) return false;
     if (el.tagName === "A" && el.closest("li, p, h1, h2, h3, h4, h5, h6")) return false;
     if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || el.closest(CHROME_SELECTOR)) return false;
@@ -262,7 +322,12 @@ function mountTranslation(el, text, settings) {
   }
   const inline = shouldInline(el);
   const node = document.createElement(inline ? "span" : "div");
-  node.className = inline ? "oi-translation oi-inline" : "oi-translation";
+  const heading = /^H[1-3]$/.test(el.tagName);
+  node.className = inline
+    ? "oi-translation oi-inline"
+    : heading
+      ? "oi-translation oi-after-heading"
+      : "oi-translation";
   node.lang = settings.targetLang || "zh-CN";
   node.textContent = text;
   node.title = "double click to save";
@@ -277,7 +342,7 @@ function mountTranslation(el, text, settings) {
         title: document.title,
         type: "sentence"
       }
-    }).then(() => toast("saved"));
+    }).then(() => toast("已收藏"));
   });
   if (inline || ["LI", "TD", "TH", "DT", "DD"].includes(el.tagName)) el.appendChild(node);
   else el.insertAdjacentElement("afterend", node);
@@ -328,7 +393,7 @@ function onHover(ev) {
     if (text.length < MIN_LEN) return;
     const res = await send({ type: "OI_TRANSLATE_BATCH", texts: [text] });
     if (res.ok) {
-      const settings = (await send({ type: "OI_GET_SETTINGS" })).settings;
+      const settings = (await send({ type: "OI_GET_SETTINGS" }))?.settings;
       mountTranslation(el, res.translations[0], settings);
     }
   }, 350);
@@ -338,7 +403,7 @@ function showSelectionCard(original, translated) {
   document.querySelector(".oi-selection-card")?.remove();
   const card = document.createElement("div");
   card.className = "oi-selection-card";
-  card.innerHTML = '<div class="oi-sel-org"></div><div class="oi-sel-dst"></div><div class="oi-sel-actions"><button type="button" class="save">Save</button><button type="button" class="close">Close</button></div>';
+  card.innerHTML = '<div class="oi-sel-org"></div><div class="oi-sel-dst"></div><div class="oi-sel-actions"><button type="button" class="save">收藏</button><button type="button" class="close">关闭</button></div>';
   card.querySelector(".oi-sel-org").textContent = original;
   card.querySelector(".oi-sel-dst").textContent = translated;
   card.querySelector(".close").onclick = () => card.remove();
@@ -347,7 +412,7 @@ function showSelectionCard(original, translated) {
       type: "OI_SAVE_LEARNING",
       item: { original, translation: translated, context: original, url: location.href, title: document.title }
     });
-    toast("saved");
+    toast("已收藏");
     card.remove();
   };
   document.body.appendChild(card);
@@ -356,7 +421,7 @@ function showSelectionCard(original, translated) {
 async function saveCurrentSelection() {
   const text = String(window.getSelection() || "").trim();
   if (!text) {
-    toast("select text first");
+    toast("请先选中文本");
     return;
   }
   const res = await send({ type: "OI_TRANSLATE_BATCH", texts: [text] });
@@ -365,7 +430,7 @@ async function saveCurrentSelection() {
     type: "OI_SAVE_LEARNING",
     item: { original: text, translation: translated, context: surroundingContext(), url: location.href, title: document.title }
   });
-  toast("saved");
+  toast("已收藏");
 }
 
 function surroundingContext() {
@@ -395,6 +460,13 @@ function toast(message) {
   setTimeout(() => el.classList.remove("show"), 3200);
 }
 
-function send(payload) {
-  return chrome.runtime.sendMessage(payload);
+async function send(payload) {
+  try {
+    if (!chrome.runtime?.id) return null;
+    return await chrome.runtime.sendMessage(payload);
+  } catch (err) {
+    const msg = String(err && err.message || err);
+    if (/Extension context invalidated|message port closed/i.test(msg)) return null;
+    throw err;
+  }
 }

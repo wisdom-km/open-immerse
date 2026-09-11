@@ -4,18 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>沉浸译 设置</title>
+    <link rel="stylesheet" href="../ui/tokens.css" />
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
     <main>
-      <h1>沉浸译</h1>
-      <p class="lead">Open Immerse · 网页双语优先。YouTube / X 字幕在后续功能里，默认关闭。</p>
+      <header class="brand">
+        <div class="mark" aria-hidden="true"><span></span><span></span></div>
+        <div>
+          <h1>沉浸译</h1>
+          <p class="lead">Open Immerse · 网页双语优先。YouTube / X 字幕在后续功能里，默认关闭。</p>
+        </div>
+      </header>
       <p class="note"><a href="../learning/learning.html">学习中心</a> · <a href="../documents/documents.html">文档翻译</a></p>
       <section>
         <h2>功能模块</h2>
         <div id="featureList"></div>
         <details class="later">
-          <summary>后续功能（默认关闭）</summary>
+          <summary>高级（YouTube / X，默认关闭）</summary>
           <div id="laterList"></div>
         </details>
       </section>
@@ -25,7 +31,14 @@
           <label>默认引擎 <select id="provider"></select></label>
           <label>源语言 <select id="sourceLang"></select></label>
           <label>目标语言 <select id="targetLang"></select></label>
-          <label>每批条数 <input id="batchSize" type="number" min="1" max="20" /></label>
+          <label>本次翻译
+            <select id="translateLimit">
+              <option value="all">全部</option>
+              <option value="title_lead">仅标题+开头</option>
+            </select>
+          </label>
+          <label>每批条数（分批，不是总数） <input id="batchSize" type="number" min="1" max="20" /></label>
+          <p class="hint field-hint">「每批条数」只决定一次请求翻几段；本页总共翻多少由「本次翻译」决定。选「仅标题+开头」只翻标题和正文开头，省 token。</p>
           <label>翻译范围
             <select id="translateScope">
               <option value="article">仅正文（默认）</option>
@@ -52,11 +65,23 @@
         <p class="hint">只显示当前默认引擎的配置。改上方下拉框即可换家；其他引擎已保存的 Key 不会丢。</p>
         <div id="providerFields"></div>
       </section>
-      <div class="bar">
-        <button id="save" type="button">保存设置</button>
-        <span id="status"></span>
-      </div>
+
+      <section>
+        <h2>备份与恢复</h2>
+        <p class="hint">导出含引擎密钥，文件请妥善保存。Chrome「移除」扩展会清空本地设置；重装后可在此导入恢复。日常更新请用「重新加载」，不要「移除」。</p>
+        <div class="bar">
+          <button id="exportSettings" type="button" class="btn-secondary">导出设置</button>
+          <button id="importSettings" type="button" class="btn-secondary">导入设置</button>
+          <input id="importFile" type="file" accept="application/json,.json" hidden />
+        </div>
+      </section>
     </main>
+    <footer class="actions-bar" aria-label="保存设置">
+      <div class="actions-inner">
+        <span id="status" class="status" role="status"></span>
+        <button id="save" type="button" class="btn-primary">保存设置</button>
+      </div>
+    </footer>
     <script type="module" src="options.js"></script>
   </body>
 </html>

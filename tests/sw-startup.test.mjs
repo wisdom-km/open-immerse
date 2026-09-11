@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const swSource = readFileSync(join(root, "background/service-worker.js"), "utf8");
+const swSource = readFileSync(join(root, "background/service-worker.js"), "utf8").replace(/\r\n/g, "\n");
 
 function stubChrome(setImpl) {
   globalThis.chrome = {
@@ -53,6 +53,12 @@ test("SW imports resolve and do not pull page-scan or site-presets", () => {
   assert.equal(swSource.includes("page-scan"), false);
   assert.equal(swSource.includes("site-presets"), false);
   assert.equal(/^await /m.test(swSource), false);
+});
+
+test("SW cache version is any-index bishop guard and clears on load", () => {
+  assert.match(swSource, /CACHE_VER = "v3-bishop-guard-any-index"/);
+  assert.match(swSource, /const cache = new Map\(\);\nconst CACHE_LIMIT = 2000;\nconst CACHE_VER = "v3-bishop-guard-any-index";\ncache\.clear\(\);/);
+  assert.match(swSource, /onStartup\.addListener\(\(\) => \{\n  cache\.clear\(\);/);
 });
 
 test("SW lib graph evaluates under chrome stubs", async () => {

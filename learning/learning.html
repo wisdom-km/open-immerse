@@ -3,32 +3,37 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>学习中心 · Open Immerse</title>
+  <title>学习中心</title>
+  <link rel="stylesheet" href="../ui/tokens.css" />
   <link rel="stylesheet" href="learning.css" />
 </head>
 <body>
   <main>
-    <h1>学习中心</h1>
-    <p class="lead">收藏单词、短语和句子，可导出 Markdown、Word、PPT、TXT。</p>
-    <div class="tabs">
-      <button data-tab="all" class="on">全部</button>
-      <button data-tab="review">今日待复习</button>
-    </div>
-    <div class="export-bar">
-      <span>导出当前列表</span>
-      <button type="button" data-export="md">Markdown</button>
-      <button type="button" data-export="docx">Word</button>
-      <button type="button" data-export="pptx">PPT</button>
-      <button type="button" data-export="txt">TXT</button>
-    </div>
-    <p id="exportStatus" class="lead"></p>
+    <header class="shell">
+      <div class="title-row">
+        <div class="mark" aria-hidden="true"><span></span><span></span></div>
+        <h1>学习中心</h1>
+      </div>
+      <div class="tabs segmented">
+        <button type="button" data-tab="all" class="on">全部</button>
+        <button type="button" data-tab="review">今日待复习</button>
+      </div>
+      <details class="export-menu">
+        <summary>导出</summary>
+        <div class="export-panel">
+          <button type="button" data-export="md">Markdown</button>
+          <button type="button" data-export="pdf">PDF</button>
+          <button type="button" data-export="docx">Word</button>
+        </div>
+      </details>
+    </header>
+    <p id="exportStatus" class="lead" role="status"></p>
     <section id="reviewBox" hidden>
-      <h2>复习</h2>
-      <div id="card" class="card empty">没有到期项目</div>
+      <div id="card" class="card empty">今日没有到期。</div>
       <div class="grades" id="grades" hidden>
-        <button data-g="1">忘了</button>
-        <button data-g="3">模糊</button>
-        <button data-g="5">记住</button>
+        <button type="button" class="grade-sec" data-g="1">忘了</button>
+        <button type="button" class="grade-sec" data-g="3">模糊</button>
+        <button type="button" class="grade-pri" data-g="5">记住</button>
       </div>
     </section>
     <ul id="list"></ul>

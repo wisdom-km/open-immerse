@@ -1,6 +1,7 @@
 import { PROVIDER_LIST, getProvider } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
+import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 
 function el(id) {
   return document.getElementById(id);
@@ -25,6 +26,7 @@ async function init() {
   el("sourceLang").value = cachedSettings.sourceLang || "auto";
   el("targetLang").value = cachedSettings.targetLang || "zh-CN";
   el("batchSize").value = cachedSettings.batchSize || 8;
+  el("translateLimit").value = isTitleLeadLimit(cachedSettings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
   el("translationStyle").value = cachedSettings.translationStyle || "under";
   el("translateScope").value = cachedSettings.translateScope || "article";
   el("fontScale").value = cachedSettings.fontScale || 0.95;
@@ -39,7 +41,50 @@ async function init() {
     renderProviderFields();
   });
   el("save").addEventListener("click", () => persist());
+  el("exportSettings").addEventListener("click", () => exportSettings());
+  el("importSettings").addEventListener("click", () => el("importFile").click());
+  el("importFile").addEventListener("change", (ev) => importSettingsFile(ev));
 }
+
+async function exportSettings() {
+  harvestVisibleProvider();
+  const res = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
+  const settings = res.settings || cachedSettings;
+  const payload = {
+    app: "open-immerse",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    settings
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  a.href = url;
+  a.download = `open-immerse-settings-${stamp}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  el("status").textContent = "已导出（含密钥，请妥善保存）";
+  setTimeout(() => { el("status").textContent = ""; }, 2400);
+}
+
+async function importSettingsFile(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  ev.target.value = "";
+  if (!file) return;
+  try {
+    const raw = JSON.parse(await file.text());
+    const settings = raw.settings || raw;
+    if (!settings || typeof settings !== "object") throw new Error("无效的备份文件");
+    const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: settings });
+    cachedSettings = res.settings || settings;
+    el("status").textContent = "已导入，正在刷新…";
+    setTimeout(() => location.reload(), 600);
+  } catch (err) {
+    el("status").textContent = "导入失败：" + String(err.message || err);
+  }
+}
+
 
 function renderFeatures(box, list, features) {
   if (!box) return;
@@ -122,6 +167,7 @@ async function persist() {
     sourceLang: el("sourceLang").value,
     targetLang: el("targetLang").value,
     batchSize: Number(el("batchSize").value) || 8,
+    translateLimit: el("translateLimit").value === TRANSLATE_LIMIT_TITLE_LEAD ? TRANSLATE_LIMIT_TITLE_LEAD : "all",
     translationStyle: el("translationStyle").value,
     translateScope: el("translateScope").value || "article",
     fontScale: Number(el("fontScale").value) || 0.95,
@@ -136,7 +182,7 @@ async function persist() {
   };
 
   await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: patch });
-  el("status").textContent = "saved";
+  el("status").textContent = "已保存";
   setTimeout(() => {
     el("status").textContent = "";
   }, 1600);

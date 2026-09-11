@@ -6,12 +6,14 @@ import { resolveFeatures } from "../lib/features.js";
 const cache = new Map();
 const CACHE_LIMIT = 2000;
 const CACHE_VER = "v3-bishop-guard-any-index";
+cache.clear();
 
 chrome.runtime.onInstalled.addListener(() => {
   cache.clear();
   bootExtension();
 });
 chrome.runtime.onStartup.addListener(() => {
+  cache.clear();
   bootExtension();
 });
 
