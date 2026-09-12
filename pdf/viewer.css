@@ -64,6 +64,18 @@ h1 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   min-height: 0;
+  --oi-split: 50%;
+}
+.split-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--oi-split);
+  width: 8px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+  z-index: 1;
+  touch-action: none;
 }
 .zoom-gutter {
   position: absolute;
@@ -286,11 +298,15 @@ button:disabled { opacity: 0.45; cursor: default; }
 
 @media (max-width: 899px) {
   .workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr !important;
     grid-template-rows: minmax(240px, 1fr) minmax(180px, 40vh);
+  }
+  .split-handle {
+    display: none;
   }
   .zoom-gutter {
     flex-direction: row;
+    left: 50% !important;
   }
   .pane-translate {
     border-left: 0;
