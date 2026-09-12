@@ -12,6 +12,9 @@ import {
   abortTranslateSession,
   applyDraftTranslations,
   blockLocation,
+  pdfToolbarActionState,
+  pdfTranslateBusy,
+  pdfTranslatePrimaryLabel,
   clampZoom,
   collectArticlePages,
   createPageCache,
@@ -455,7 +458,9 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
   assert.match(css, /\.scope-seg-btn:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-accent\)/s);
   assert.match(css, /\.scope-seg-btn:disabled\s*\{[^}]*opacity:\s*0\.45/s);
   assert.equal(css.includes(".scope-seg.btn-primary"), false);
-  assert.match(src, /setScopeEnabled\(Boolean\(pdfDoc\) && !session\.running\)/);
+  assert.match(src, /setScopeEnabled\(ui\.scopeEnabled\)/);
+  assert.match(src, /pdfToolbarActionState/);
+  assert.match(src, /pdfTranslateBusy/);
   assert.match(css, /\.pages\s*\{[^}]*flex-direction:\s*column/s);
   assert.match(css, /\.pdf-page\s*\{/);
   assert.match(src, /onPdfScroll/);
@@ -477,6 +482,74 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
   assert.equal(goPageSrc.includes("abortTranslateSession"), false);
   assert.match(src, /renderArticle\(\)/);
   assert.match(src, /collectArticlePages\(pageCache/);
+});
+
+test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", async () => {
+  assert.equal(pdfTranslatePrimaryLabel(true), "停止");
+  assert.equal(pdfTranslatePrimaryLabel(false), "翻译");
+  const busyUi = pdfToolbarActionState({ busy: true, hasDoc: true, canTranslate: true });
+  assert.equal(busyUi.primary, "stop");
+  assert.equal(busyUi.translateHidden, true);
+  assert.equal(busyUi.stopHidden, false);
+  assert.equal(busyUi.translateDisabled, true);
+  assert.equal(busyUi.stopDisabled, false);
+  assert.equal(busyUi.scopeEnabled, false);
+  const settledUi = pdfToolbarActionState({ busy: false, hasDoc: true, canTranslate: true });
+  assert.equal(settledUi.primary, "translate");
+  assert.equal(settledUi.translateHidden, false);
+  assert.equal(settledUi.stopHidden, true);
+  assert.equal(settledUi.translateDisabled, false);
+  assert.equal(settledUi.stopDisabled, true);
+  assert.equal(settledUi.scopeEnabled, true);
+  assert.equal(pdfToolbarActionState({ busy: false, hasDoc: false, canTranslate: false }).scopeEnabled, false);
+
+  const live = createTranslateSession();
+  live.running = true;
+  live.inflight = { requestId: "pdf-0" };
+  assert.equal(pdfTranslateBusy(live), true);
+  assert.equal(pdfTranslatePrimaryLabel(pdfTranslateBusy(live)), "停止");
+  abortTranslateSession(live);
+  assert.equal(live.aborted, true);
+  assert.equal(live.running, false);
+  assert.equal(live.inflight, null);
+  assert.equal(pdfTranslateBusy(live), false);
+  assert.equal(pdfTranslatePrimaryLabel(pdfTranslateBusy(live)), "翻译");
+
+  const hung = createTranslateSession();
+  hung.running = true;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const pending = translatePageBlocks(["A", "B"], {
+    session: hung,
+    batchSize: 1,
+    send: async (msg) => {
+      await gate;
+      return { ok: true, translations: msg.texts.map((text) => `译:${text}`) };
+    }
+  });
+  abortTranslateSession(hung);
+  assert.equal(hung.running, false);
+  assert.equal(pdfTranslatePrimaryLabel(pdfTranslateBusy(hung)), "翻译");
+  release();
+  const out = await pending;
+  assert.equal(out.aborted, true);
+  assert.equal(out.results[0].translation, "");
+  assert.equal(out.results[1].translation, "");
+
+  assert.match(src, /function stopTranslateWork/);
+  const stopFn = src.slice(src.indexOf("function stopTranslateWork"), src.indexOf("function setTranslateScope"));
+  assert.match(stopFn, /abortTranslateSession\(session\)/);
+  assert.match(stopFn, /updateTranslateControls/);
+  assert.match(stopFn, /PDF_COPY\.stopped/);
+  assert.match(stopFn, /renderArticle/);
+  assert.equal(stopFn.includes("restoreOriginal"), false);
+  assert.equal(stopFn.includes("clearPage"), false);
+  assert.match(src, /\$\("stopTranslate"\)\.addEventListener\("click", stopTranslateWork\)/);
+  const restoreSrc = src.slice(src.indexOf("/** 原文: current page only"), src.indexOf("async function openFile"));
+  assert.match(restoreSrc, /pageCache\.clearPage\(docId, pageNum\)/);
+  assert.equal(restoreSrc.includes("pageCache.clear()"), false);
 });
 
 test("translatePageBlocks sends OI_TRANSLATE_BATCH slices and honors stop", async () => {

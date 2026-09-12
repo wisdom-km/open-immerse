@@ -7,6 +7,8 @@ import {
   collectArticlePages,
   createPageCache,
   createTranslateSession,
+  pdfToolbarActionState,
+  pdfTranslateBusy,
   extractPageItems,
   neighborPages,
   nextZoom,
@@ -51,7 +53,7 @@ let translatingPage = 0;
 let pageViews = [];
 let scrollTick = 0;
 const pageCache = createPageCache();
-const session = createTranslateSession();
+let session = createTranslateSession();
 
 init();
 
@@ -79,10 +81,7 @@ function init() {
   $("zoomIn").addEventListener("click", () => setZoom(nextZoom(zoom, 1)));
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   $("translatePage").addEventListener("click", () => startTranslate());
-  $("stopTranslate").addEventListener("click", () => {
-    abortTranslateSession(session);
-    if (session.running) setStatus(PDF_COPY.stopped);
-  });
+  $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("restoreOriginal").addEventListener("click", restoreOriginal);
   $("pdfPane").addEventListener("scroll", onPdfScroll, { passive: true });
   $("pdfPane").addEventListener("wheel", onPdfWheel, { passive: true });
@@ -114,7 +113,7 @@ function listenProgress() {
 }
 
 function applyPageProgress(message) {
-  if (!session.running || !translatingPage) return;
+  if (!pdfTranslateBusy(session) || !translatingPage) return;
   const current = pageCache.get(docId, translatingPage) || pageResults;
   const next = applyDraftTranslations(session, message, current);
   if (next === current) return;
@@ -149,7 +148,7 @@ function appendReadoutNode(input) {
 }
 
 function syncReadoutEmpty(hasArticle) {
-  const copy = readoutPlaceholder({ running: session.running, hasArticle });
+  const copy = readoutPlaceholder({ running: pdfTranslateBusy(session), hasArticle });
   $("emptyRead").hidden = copy !== PDF_COPY.translateHint;
   $("pendingRead").hidden = copy !== PDF_COPY.translatingWait;
 }
@@ -202,8 +201,27 @@ function currentScope() {
 
 function onScopeClick(event) {
   const btn = event.target.closest(".scope-seg-btn");
-  if (!btn || btn.disabled || session.running) return;
+  if (!btn || btn.disabled || pdfTranslateBusy(session)) return;
   setTranslateScope(btn.dataset.scope);
+}
+
+function beginViewerSession() {
+  if (session.aborted) session = createTranslateSession();
+  session.running = true;
+  session.aborted = false;
+  return session;
+}
+
+function isCurrentWork(work, gen, translatingDoc) {
+  return work === session && gen === restoreGen && translatingDoc === docId;
+}
+
+function stopTranslateWork() {
+  abortTranslateSession(session);
+  translatingPage = 0;
+  setStatus(PDF_COPY.stopped);
+  renderArticle();
+  updateTranslateControls();
 }
 
 function setTranslateScope(value) {
@@ -231,7 +249,7 @@ async function resolveBatchSize() {
 }
 
 async function translateCurrentPage() {
-  if (!pdfDoc || session.running) return;
+  if (!pdfDoc || pdfTranslateBusy(session)) return;
   if (!pageOriginals.length) {
     setStatus(pageBlocksCopy(0, pageItems) || PDF_COPY.emptyPage);
     $("noTextLayerHint").hidden = pageItems > 0;
@@ -240,11 +258,11 @@ async function translateCurrentPage() {
   }
   const gen = restoreGen;
   const translatingDoc = docId;
-  translatingPage = pageNum;
-  session.running = true;
-  session.aborted = false;
+  const targetPage = pageNum;
+  translatingPage = targetPage;
+  const work = beginViewerSession();
   pageResults = emptyPageResults(pageOriginals);
-  pageCache.set(translatingDoc, translatingPage, pageResults);
+  pageCache.set(translatingDoc, targetPage, pageResults);
   updateTranslateControls();
   setStatus(PDF_COPY.translating);
   renderArticle();
@@ -252,7 +270,8 @@ async function translateCurrentPage() {
   try {
     batchSize = await resolveBatchSize();
   } catch (err) {
-    session.running = false;
+    if (!isCurrentWork(work, gen, translatingDoc)) return;
+    work.running = false;
     translatingPage = 0;
     if (String(err?.message || err) === "runtime unavailable") {
       setStatus(PDF_COPY.runtimeUnavailable, true);
@@ -261,27 +280,28 @@ async function translateCurrentPage() {
       return;
     }
   }
+  if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) {
+    if (isCurrentWork(work, gen, translatingDoc)) updateTranslateControls();
+    return;
+  }
   const { aborted, results } = await translatePageBlocks(pageOriginals, {
     send: runtimeSend,
-    session,
+    session: work,
     batchSize,
     onBatchStart({ index, total }) {
-      if (gen !== restoreGen) return;
+      if (!isCurrentWork(work, gen, translatingDoc)) return;
       setStatus(progressStatus(index + 1, total));
     },
     onBatchResult({ results: next, res }) {
-      if (translatingDoc !== docId || gen !== restoreGen) return;
-      pageCache.set(translatingDoc, translatingPage, next);
+      if (!isCurrentWork(work, gen, translatingDoc)) return;
+      pageCache.set(translatingDoc, targetPage, next);
       pageResults = next;
       renderArticle();
       if (res?.polishError) setStatus(PDF_COPY.polishFail, true);
     }
   });
-  if (translatingDoc !== docId || gen !== restoreGen) {
-    updateTranslateControls();
-    return;
-  }
-  pageCache.set(translatingDoc, translatingPage, results);
+  if (!isCurrentWork(work, gen, translatingDoc)) return;
+  pageCache.set(translatingDoc, targetPage, results);
   pageResults = results;
   renderArticle();
   if (aborted) setStatus(PDF_COPY.stopped);
@@ -292,12 +312,11 @@ async function translateCurrentPage() {
 }
 
 async function translateWholeDocument() {
-  if (!pdfDoc || session.running) return;
+  if (!pdfDoc || pdfTranslateBusy(session)) return;
   const gen = restoreGen;
   const translatingDoc = docId;
   const total = pdfDoc.numPages;
-  session.running = true;
-  session.aborted = false;
+  const work = beginViewerSession();
   updateTranslateControls();
   setStatus(progressDocumentStatus(1, total));
   renderArticle();
@@ -305,7 +324,8 @@ async function translateWholeDocument() {
   try {
     batchSize = await resolveBatchSize();
   } catch (err) {
-    session.running = false;
+    if (!isCurrentWork(work, gen, translatingDoc)) return;
+    work.running = false;
     translatingPage = 0;
     if (String(err?.message || err) === "runtime unavailable") {
       setStatus(PDF_COPY.runtimeUnavailable, true);
@@ -314,8 +334,12 @@ async function translateWholeDocument() {
       return;
     }
   }
+  if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) {
+    if (isCurrentWork(work, gen, translatingDoc)) updateTranslateControls();
+    return;
+  }
   const { aborted, pages } = await translateDocumentPages({
-    session,
+    session: work,
     cache: pageCache,
     docId: translatingDoc,
     numPages: total,
@@ -323,26 +347,23 @@ async function translateWholeDocument() {
     send: runtimeSend,
     getPageOriginals: (page) => originalsForPage(page, gen, translatingDoc),
     onPageStart({ page, total: pageTotal }) {
-      if (gen !== restoreGen || translatingDoc !== docId) return;
+      if (!isCurrentWork(work, gen, translatingDoc)) return;
       translatingPage = page;
       setStatus(progressDocumentStatus(page, pageTotal));
     },
     onPageResult({ page, results, res }) {
-      if (translatingDoc !== docId || gen !== restoreGen) return;
+      if (!isCurrentWork(work, gen, translatingDoc)) return;
       if (page === pageNum) pageResults = results;
       renderArticle();
       if (res?.polishError) setStatus(PDF_COPY.polishFail, true);
     },
     onPageDone({ page, results }) {
-      if (translatingDoc !== docId || gen !== restoreGen) return;
+      if (!isCurrentWork(work, gen, translatingDoc)) return;
       if (page === pageNum) pageResults = results;
       renderArticle();
     }
   });
-  if (translatingDoc !== docId || gen !== restoreGen) {
-    updateTranslateControls();
-    return;
-  }
+  if (!isCurrentWork(work, gen, translatingDoc)) return;
   renderArticle();
   const any = pages.some((entry) => pageHasTranslation(entry.results));
   if (aborted) setStatus(PDF_COPY.stopped);
@@ -617,7 +638,7 @@ async function loadCurrentPageText() {
     const cached = pageCache.get(docId, n);
     pageResults = cached || [];
     const copy = pageBlocksCopy(pageOriginals.length, pageItems) || textLayerCopy(pageItems);
-    if (!session.running) {
+    if (!pdfTranslateBusy(session)) {
       if (pageHasTranslation(cached)) setStatus(copy || PDF_COPY.done);
       else setStatus(copy);
     }
@@ -627,7 +648,7 @@ async function loadCurrentPageText() {
     pageItems = 0;
     pageOriginals = [];
     pageResults = [];
-    if (!session.running) setStatus(PDF_COPY.noTextLayer);
+    if (!pdfTranslateBusy(session)) setStatus(PDF_COPY.noTextLayer);
     $("noTextLayerHint").hidden = false;
   }
   updateTranslateControls();
@@ -663,12 +684,17 @@ function updateTranslateControls() {
   const scope = currentScope();
   const hasBlocks = pageOriginals.length > 0;
   const canTranslate = scope === "all" ? Boolean(pdfDoc) : hasBlocks;
-  $("translatePage").disabled = !pdfDoc || !canTranslate || session.running;
-  $("translatePage").hidden = session.running;
-  $("stopTranslate").hidden = !session.running;
-  $("stopTranslate").disabled = !session.running;
+  const ui = pdfToolbarActionState({
+    busy: pdfTranslateBusy(session),
+    hasDoc: Boolean(pdfDoc),
+    canTranslate
+  });
+  $("translatePage").disabled = ui.translateDisabled;
+  $("translatePage").hidden = ui.translateHidden;
+  $("stopTranslate").hidden = ui.stopHidden;
+  $("stopTranslate").disabled = ui.stopDisabled;
   $("restoreOriginal").disabled = !pageHasTranslation(pageCache.get(docId, pageNum));
-  setScopeEnabled(Boolean(pdfDoc) && !session.running);
+  setScopeEnabled(ui.scopeEnabled);
 }
 
 function setStatus(text, isError = false) {
