@@ -435,9 +435,14 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
   assert.equal(html.includes("scope-field"), false);
   assert.match(html, /id="prev"[^>]*>上一页</);
   assert.match(html, /id="next"[^>]*>下一页</);
-  assert.match(css, /\.scope-seg\s*\{[^}]*border-radius:\s*8px/s);
-  assert.match(css, /\.scope-seg-btn\.is-on\s*\{[^}]*font-weight:\s*600/s);
-  assert.match(css, /\.scope-seg-btn\.is-on\s*\{[^}]*--oi-accent\) 18%/s);
+  assert.match(css, /\.scope-seg\s*\{[^}]*display:\s*inline-flex[^}]*padding:\s*2px[^}]*border:\s*1px solid var\(--oi-line\)[^}]*border-radius:\s*8px[^}]*background:\s*var\(--oi-input, var\(--oi-bg\)\)/s);
+  assert.match(css, /\.scope-seg-btn\s*\{[^}]*min-height:\s*32px[^}]*padding:\s*0 12px[^}]*background:\s*transparent[^}]*color:\s*var\(--oi-text-muted\)[^}]*font:\s*500 13px\/1\.2 var\(--oi-font\)/s);
+  assert.match(css, /\.scope-seg-btn:hover\s*\{[^}]*color:\s*var\(--oi-text\)[^}]*color-mix\(in srgb, var\(--oi-line\) 35%/s);
+  assert.match(css, /\.scope-seg-btn\.is-on\s*\{[^}]*color-mix\(in srgb, var\(--oi-accent\) 18%[^}]*font-weight:\s*600/s);
+  assert.match(css, /\.scope-seg-btn:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-accent\)/s);
+  assert.match(css, /\.scope-seg-btn:disabled\s*\{[^}]*opacity:\s*0\.45/s);
+  assert.equal(css.includes(".scope-seg.btn-primary"), false);
+  assert.match(src, /setScopeEnabled\(Boolean\(pdfDoc\) && !session\.running\)/);
   assert.match(css, /\.pages\s*\{[^}]*flex-direction:\s*column/s);
   assert.match(css, /\.pdf-page\s*\{/);
   assert.match(src, /onPdfScroll/);
