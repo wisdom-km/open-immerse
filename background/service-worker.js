@@ -1,4 +1,4 @@
-import { getProvider, guardZhBusinessSense, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
+import { getProvider, guardZhTranslations, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { resolveFeatures } from "../lib/features.js";
@@ -183,7 +183,7 @@ async function translateBatch(texts) {
       remember(item.key, value);
     });
   }
-  return guardZhBusinessSense(texts, results, settings.targetLang);
+  return guardZhTranslations(texts, results, settings.targetLang);
 }
 
 function cacheKey(provider, from, to, text, settings) {

@@ -9,6 +9,8 @@ import {
   DEFAULT_LLM_PROMPT,
   resolveTranslatorPrompt,
   guardZhBusinessSense,
+  guardZhTitleCalques,
+  guardZhTranslations,
   providers
 } from "../lib/providers.js";
 
@@ -62,6 +64,9 @@ test("default Skill does not prescribe 让我们了解到 as the taught-us rende
   assert.match(DEFAULT_LLM_PROMPT, /faithful/i);
   assert.match(DEFAULT_LLM_PROMPT, /elegant|雅/);
   assert.match(DEFAULT_LLM_PROMPT, /verb-led/);
+  assert.match(DEFAULT_LLM_PROMPT, /FORBID|禁止/);
+  assert.match(DEFAULT_LLM_PROMPT, /让我们了解到/);
+  assert.match(DEFAULT_LLM_PROMPT, /哪些内容/);
 });
 
 test("resolveTranslatorPrompt fills targetLang and adds zh glossary for zh-CN", () => {
@@ -94,11 +99,12 @@ test("resolveTranslatorPrompt honors a custom prompt without rewriting it", () =
 test("guardZhBusinessSense fixes fused 小企业主教 on the Claude blog title", () => {
   const [out] = guardZhBusinessSense(
     [CLAUDE_TITLE],
-    ["1,000 位小企业主教我们了解人工智能"],
+    ["1,000 位小企业主教的人工智能课"],
     "zh-CN"
   );
   assert.equal(out.includes("主教"), false);
   assert.match(out, /小企业主/);
+  assert.equal(out, "1,000 位小企业主的人工智能课");
 });
 
 test("guardZhBusinessSense leaves 主教 when the source is actually religious", () => {
@@ -115,17 +121,18 @@ test("guardZhBusinessSense is a no-op for non-Chinese targets", () => {
 test("guard rewrites 小型企业主教", () => {
   const out = guardZhBusinessSense(
     ["What 1,000 small business owners taught us about AI"],
-    ["1000位小型企业主教给我们的AI经验"],
+    ["1000位小型企业主教的AI经验"],
     "zh-CN"
   );
   assert.equal(out[0].includes("主教"), false);
   assert.match(out[0], /企业主/);
+  assert.equal(out[0], "1000位小企业主的AI经验");
 });
 
 test("guard rewrites 小型企业主教 even when source index is misaligned", () => {
   const out = guardZhBusinessSense(
     ["Some other sentence without the phrase"],
-    ["1000家小型企业主教给我们的AI经验"],
+    ["1000家小型企业主教与AI"],
     "zh-CN"
   );
   assert.equal(out[0].includes("主教"), false);
@@ -135,12 +142,27 @@ test("guard rewrites 小型企业主教 even when source index is misaligned", (
 test("guard rewrites 小型企业主教 when source is Lesson 1", () => {
   const [out] = guardZhBusinessSense(
     ["Lesson 1"],
-    ["1000位小型企业主教给我们的AI经验"],
+    ["1000位小型企业主教"],
     "zh-CN"
   );
   assert.equal(out.includes("主教"), false);
   assert.match(out, /小企业主/);
-  assert.equal(out, "1000位小企业主给我们的AI经验");
+  assert.equal(out, "1000位小企业主");
+});
+
+test("guard keeps 教 when it starts 教会/教导/教给/教我们", () => {
+  const cases = [
+    "1000位小企业主教会我们的AI经验",
+    "1000位小企业主教导我们认识AI",
+    "1000位小企业主教给我们的AI经验",
+    "1000位小企业主教我们了解人工智能",
+    "1000位小企业主在 AI 上教会了我们什么"
+  ];
+  for (const title of cases) {
+    const [out] = guardZhBusinessSense([CLAUDE_TITLE], [title], "zh-CN");
+    assert.equal(out, title, title);
+    assert.doesNotMatch(out, /主会我们|主我们的/);
+  }
 });
 
 test("guard keeps 主教 when the misaligned source is actually religious", () => {
@@ -150,6 +172,51 @@ test("guard keeps 主教 when the misaligned source is actually religious", () =
     "zh-CN"
   );
   assert.equal(out, "1000位小型企业主教给我们的AI经验");
+});
+
+test("guardZhTitleCalques rewrites the live two-step calque title", () => {
+  const [out] = guardZhTitleCalques(
+    [CLAUDE_TITLE],
+    ["1000名小企业主让我们了解到了关于人工智能的哪些内容"],
+    "zh-CN"
+  );
+  assert.doesNotMatch(out, /让我们了解到/);
+  assert.doesNotMatch(out, /关于.+哪些内容/);
+  assert.match(out, /小企业主/);
+  assert.match(out, /1000|1,000/);
+  assert.doesNotMatch(out, /主教/);
+});
+
+test("guardZhTitleCalques leaves body sentences that use 让我们了解到", () => {
+  const body = "这项调查让我们了解到市场正在变化。";
+  const [out] = guardZhTitleCalques(
+    ["The survey let us understand that the market is changing."],
+    [body],
+    "zh-CN"
+  );
+  assert.equal(out, body);
+});
+
+test("guardZhTitleCalques is a no-op for non-Chinese targets", () => {
+  const [out] = guardZhTitleCalques(
+    [CLAUDE_TITLE],
+    ["1000名小企业主让我们了解到了关于人工智能的哪些内容"],
+    "en"
+  );
+  assert.equal(out, "1000名小企业主让我们了解到了关于人工智能的哪些内容");
+});
+
+test("guardZhTranslations still strips 主教 then title calques", () => {
+  const [out] = guardZhTranslations(
+    [CLAUDE_TITLE],
+    ["1000名小企业主教让我们了解到了关于人工智能的哪些内容"],
+    "zh-CN"
+  );
+  assert.doesNotMatch(out, /主教/);
+  assert.doesNotMatch(out, /让我们了解到/);
+  assert.doesNotMatch(out, /关于.+哪些内容/);
+  assert.match(out, /小企业主/);
+  assert.match(out, /1000/);
 });
 
 test("OpenAI-compat adapters send settings.model and the shared Skill prompt", async () => {
@@ -294,6 +361,8 @@ test("two-step refined path is two chat calls; public translate() returns final 
       assert.equal(first.system.includes(skill.slice(0, 40)), true);
       assert.match(second.system, /step 2 of 2/i);
       assert.match(second.system, /Do NOT invent/i);
+      assert.match(second.system, /让我们了解到/);
+      assert.match(second.system, /哪些内容/);
       assert.match(second.user, /<source>/);
       assert.match(second.user, /<draft>/);
       assert.match(second.user, /草稿你好/);
@@ -361,6 +430,35 @@ test("machine providers ignore two-step and stay single-shot", async () => {
     });
     assert.deepEqual(out, ["hola"]);
     assert.equal(calls.length, 1);
+  } finally {
+    restore();
+  }
+});
+
+test("LLM parse applies title-calque guard on the live failing zh title", async () => {
+  const restore = mockFetch(async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return {
+        choices: [{ message: { content: "1. 1000名小企业主让我们了解到了关于人工智能的哪些内容" } }]
+      };
+    }
+  }));
+  try {
+    const out = await providers.openai.translate([CLAUDE_TITLE], {
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      settings: {
+        apiKey: "sk-test",
+        baseUrl: "https://api.example.com/v1",
+        model: "user-picked-model"
+      }
+    });
+    assert.doesNotMatch(out[0], /让我们了解到/);
+    assert.doesNotMatch(out[0], /关于.+哪些内容/);
+    assert.match(out[0], /小企业主/);
+    assert.match(out[0], /1000/);
   } finally {
     restore();
   }
