@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDF 阅读</title>
+  <link rel="stylesheet" href="../ui/tokens.css" />
+  <link rel="stylesheet" href="viewer.css" />
+</head>
+<body>
+  <header class="toolbar">
+    <div class="title-row">
+      <div class="mark" aria-hidden="true"><span></span><span></span></div>
+      <h1>PDF 阅读</h1>
+    </div>
+    <div class="toolbar-actions">
+      <button type="button" id="pick" class="btn-secondary">打开 PDF</button>
+      <input id="file" class="file-input" type="file" accept="application/pdf,.pdf" hidden />
+      <button type="button" id="prev" class="btn-ghost" disabled>上一页</button>
+      <p id="pager" class="pager" aria-live="polite">0 / 0</p>
+      <button type="button" id="next" class="btn-ghost" disabled>下一页</button>
+      <button type="button" id="zoomOut" class="btn-ghost" disabled>缩小</button>
+      <p id="zoomLabel" class="zoom-label">100%</p>
+      <button type="button" id="zoomIn" class="btn-ghost" disabled>放大</button>
+    </div>
+  </header>
+  <p id="status" role="status">还没有打开 PDF。</p>
+  <div class="workspace">
+    <section class="pane-pdf" aria-label="PDF">
+      <canvas id="page" hidden></canvas>
+    </section>
+    <aside class="pane-translate" aria-label="译文">
+      <div id="blocks" class="translate-blocks" data-favorite-hook="per-block"></div>
+      <div id="emptyTranslate" class="empty-translate">
+        <p>点击翻译</p>
+        <button type="button" id="translatePage" class="btn-primary" disabled>翻译</button>
+        <p id="noTextLayerHint" class="m2-stub" hidden>扫描件翻译将在后续版本支持。</p>
+      </div>
+    </aside>
+  </div>
+  <script type="module" src="viewer.js"></script>
+</body>
+</html>

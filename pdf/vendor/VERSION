@@ -1,0 +1,5 @@
+pdfjs-dist 4.10.38
+legacy/build/pdf.min.mjs
+legacy/build/pdf.worker.min.mjs
+https://github.com/mozilla/pdf.js
+Apache-2.0

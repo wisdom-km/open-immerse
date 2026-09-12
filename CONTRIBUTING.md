@@ -12,7 +12,8 @@
 - `lib/providers.js`：所有翻译引擎。新增引擎时加一个 adapter，并在 `DEFAULT_SETTINGS.providers` 里补默认配置。LLM adapter 走 `resolveTranslatorPrompt` + `translateWithSkill`，模型从 `ctx.settings.model` 读，不要写死厂商。聊天补全类 adapter 必须走同一条两步路径。
 - `content/`：只负责 DOM 扫描与插入译文，不直接发外部请求。
 - `background/`：统一调度 API、缓存、右键菜单、快捷键。
-- `popup/` 与 `options/`：只读写 `chrome.storage.sync`。弹层「翻译当前页面」以当前页 `OI_PING`（`html.oi-active` / 是否已有译文）为准，不要用全局 `enabled` 当本页状态。
+- `popup/` 与 `options/`：只读写 `chrome.storage.sync`。弹层「翻译当前页面」以当前页 `OI_PING`（`html.oi-active` / 是否已有译文）为准，不要用全局 `enabled` 当本页状态。当前页像 PDF 时弹层展示「在沉浸译中打开」。
+- `pdf/`：扩展自有 pdf.js 阅读器（M1：打开本地/链接 PDF、翻页、缩放；整页翻译走 M2 的 `OI_TRANSLATE_BATCH`）。
 - `content/content.js`：DOM 扫描与插入译文。关掉翻译必须 `restore()`（`OI_STOP` 也走 restore）。不要用 `PAGE_EXTRA` 收导航链接；顶栏和右侧元信息即使 scope=page 也硬跳过。
 
 纯函数测试：
