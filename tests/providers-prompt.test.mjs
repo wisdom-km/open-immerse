@@ -56,7 +56,7 @@ test("resolveTranslatorPrompt fills targetLang and adds zh glossary for zh-CN", 
   assert.match(prompt, /Glossary hint \(zh\)/);
   assert.match(prompt, /never 主教/i);
   assert.match(prompt, /one per line/i);
-  assert.match(prompt, ZH_GLOSSARY_HINT);
+  assert.equal(prompt.includes(ZH_GLOSSARY_HINT), true);
   assert.match(prompt, /信 first|faithful/i);
 });
 
