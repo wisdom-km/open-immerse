@@ -13,7 +13,7 @@
 - `content/`：只负责 DOM 扫描与插入译文，不直接发外部请求。
 - `background/`：统一调度 API、缓存、右键菜单、快捷键。
 - `popup/` 与 `options/`：只读写 `chrome.storage.sync`。弹层「翻译当前页面」以当前页 `OI_PING`（`html.oi-active` / 是否已有译文）为准，不要用全局 `enabled` 当本页状态。当前页像 PDF 时弹层展示「在沉浸译中打开」。
-- `pdf/`：扩展自有 pdf.js 阅读器。打开本地/链接 PDF、翻页、缩放；当前页翻译走 `OI_TRANSLATE_BATCH`（与网页同一引擎 / `twoStepPolish`）。右侧按段渲染，收藏走 `OI_SAVE_LEARNING`，context 为 `PDF · {文件名} · p.{页码}`。已译页缓存在阅读器内；原文清空当前页译文。不做 OCR、整本一次译、也不注入 Chrome PDF Viewer。
+- `pdf/`：扩展自有 pdf.js 阅读器。打开本地/链接 PDF、翻页、缩放；当前页翻译走 `OI_TRANSLATE_BATCH`（与网页同一引擎 / `twoStepPolish`）。右侧按连续中文文章渲染（`article > h2 + p`），不按块收藏、默认不展示原文摘录。已译页缓存在阅读器内；原文清空当前页译文。不做 OCR、整本一次译、也不注入 Chrome PDF Viewer。
 - `content/content.js`：DOM 扫描与插入译文。关掉翻译必须 `restore()`（`OI_STOP` 也走 restore）。不要用 `PAGE_EXTRA` 收导航链接；顶栏和右侧元信息即使 scope=page 也硬跳过。
 
 纯函数测试：

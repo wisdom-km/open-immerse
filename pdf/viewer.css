@@ -82,23 +82,28 @@ h1 {
   background: var(--oi-bg-elevated);
   border-left: 1px solid var(--oi-line);
 }
-.translate-blocks {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.translate-article {
+  max-width: 42em;
 }
-.translate-block {
-  padding: 14px;
-  border: 1px solid var(--oi-line);
-  border-radius: 12px;
-  background: var(--oi-panel);
+.translate-article .article-heading {
+  margin: 0 0 0.65em;
+  font-size: 1.28em;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--oi-text);
 }
-.translate-block .org,
-.translate-block .dst {
-  margin: 0 0 10px;
+.translate-article .article-heading + .article-heading {
+  margin-top: 0.15em;
 }
-.translate-block .org { color: var(--oi-text-muted); }
-.translate-block .dst { color: var(--oi-text); }
+.translate-article .article-p + .article-heading {
+  margin-top: 1.4em;
+}
+.translate-article .article-p {
+  margin: 0 0 1em;
+  font-size: 16px;
+  line-height: 1.75;
+  color: var(--oi-text);
+}
 .empty-translate {
   display: flex;
   flex-direction: column;
