@@ -23,6 +23,8 @@
         <details class="later">
           <summary>高级（悬浮 / 划词 / 字幕等，后续完善）</summary>
           <div id="laterList"></div>
+          <label class="check"><input id="twoStepPolish" type="checkbox" /> 先信后润</label>
+          <p class="hint" id="twoStepPolishHint">第二步润色，更耗 token；默认关。仅 LLM 引擎生效。</p>
         </details>
       </section>
       <section>
@@ -58,8 +60,6 @@
         </div>
         <label class="check"><input id="skipCode" type="checkbox" /> 跳过代码块</label>
         <label class="check"><input id="autoOnNewPages" type="checkbox" /> 打开网页时自动翻译（默认关闭，需点右下角「译」）</label>
-        <label class="check"><input id="twoStepPolish" type="checkbox" /> 两步译（先信后润）</label>
-        <p class="hint" id="twoStepPolishHint">开：先忠实草稿再润色，中文更顺，约多一倍请求与费用。关（默认）：单次成稿。仅对 LLM 引擎生效；MyMemory 等免费通道忽略此开关。</p>
         <label>自动翻译站点（一行一个域名，仅这些站进页就翻）<textarea id="siteRules" placeholder="nytimes.com"></textarea></label>
       </section>
       <section>

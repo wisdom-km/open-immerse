@@ -70,10 +70,12 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.match(html, /高级（悬浮 \/ 划词 \/ 字幕等，后续完善）/);
   assert.match(html, /id="laterList"/);
   assert.match(html, /id="translateLimit"/);
-  assert.match(html, /id="autoOnNewPages"[\s\S]*id="twoStepPolish"[\s\S]*id="siteRules"/);
-  assert.match(html, /id="twoStepPolish"[^>]*> 两步译（先信后润）/);
-  assert.match(html, /id="twoStepPolishHint">开：先忠实草稿再润色，中文更顺，约多一倍请求与费用。关（默认）：单次成稿。仅对 LLM 引擎生效；MyMemory 等免费通道忽略此开关。/);
-  assert.doesNotMatch(html.match(/<details class="later">[\s\S]*?<\/details>/)[0], /twoStepPolish/);
+  assert.match(html, /id="laterList"[\s\S]*id="twoStepPolish"/);
+  assert.match(html, /id="twoStepPolish"[^>]*> 先信后润/);
+  assert.match(html, /id="twoStepPolishHint">第二步润色，更耗 token；默认关。仅 LLM 引擎生效。/);
+  assert.match(html.match(/<details class="later">[\s\S]*?<\/details>/)[0], /id="laterList"[\s\S]*id="twoStepPolish"[\s\S]*id="twoStepPolishHint"/);
+  assert.doesNotMatch(html, /id="autoOnNewPages"[\s\S]{0,80}id="twoStepPolish"/);
+  assert.doesNotMatch(html, /两步译（先信后润）/);
   assert.doesNotMatch(html, /id="translateQuality"/);
   assert.match(html, /每批条数（分批，不是总数）/);
   assert.match(html, /本次翻译/);
