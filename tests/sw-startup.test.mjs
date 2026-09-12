@@ -73,6 +73,8 @@ test("SW cache version includes title-calque bust and guards cache hits", () => 
   assert.match(swSource, /OI_TRANSLATE_PROGRESS/);
   assert.match(swSource, /phase: progress\.phase/);
   assert.match(swSource, /onProgress: \(progress\) => emitTranslateProgress\(sender, message\.requestId, progress\)/);
+  assert.match(swSource, /polishError: "润色失败"/);
+  assert.match(swSource, /err\?\.polishFailed/);
 });
 
 test("SW batch path cannot return or cache the exact Anvil title calque", async () => {
@@ -389,6 +391,79 @@ test("OI_TRANSLATE_BATCH forwards draft progress to documents via runtime", asyn
       phase: "draft",
       translations: ["草稿你好"]
     });
+    assert.equal(result.polishError, undefined);
+  } finally {
+    globalThis.fetch = prevFetch;
+  }
+});
+
+test("polish failure keeps draft, skips cache, and returns short polishError", async () => {
+  const sent = [];
+  stubChrome(async () => {});
+  chrome.storage.sync.get = async () => ({
+    settings: {
+      provider: "openai",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      twoStepPolish: true,
+      batchSize: 8,
+      settingsVersion: 7,
+      articleScopeMigrated: true,
+      providers: {
+        openai: { apiKey: "sk-test", baseUrl: "https://api.example.com/v1", model: "test-model", prompt: "" }
+      }
+    }
+  });
+  chrome.tabs.sendMessage = async (tabId, msg, opts) => {
+    sent.push({ via: "tabs", tabId, msg, opts });
+  };
+  let handler = null;
+  chrome.runtime.onMessage.addListener = (fn) => {
+    handler = fn;
+  };
+  let n = 0;
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    n += 1;
+    if (n === 1) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { choices: [{ message: { content: "1. 草稿你好" } }] };
+        }
+      };
+    }
+    return { ok: false, status: 500, async json() { return {}; } };
+  };
+  try {
+    const sw = await import(`../background/service-worker.js?polishfail=${Date.now()}`);
+    const progress = [];
+    const batchOpts = {
+      onProgress: (p) => {
+        progress.push([...p.translations]);
+        assert.equal(sw.translationCache.size, 0);
+      }
+    };
+    const out = await sw.translateBatch(["Hello"], batchOpts);
+    assert.deepEqual(progress, [["草稿你好"]]);
+    assert.deepEqual(out, ["草稿你好"]);
+    assert.equal(batchOpts.polishFailed, true);
+    assert.equal(sw.translationCache.size, 0);
+
+    n = 0;
+    const result = await new Promise((resolve) => {
+      handler(
+        { type: "OI_TRANSLATE_BATCH", texts: ["World"], requestId: "pf-1" },
+        { tab: { id: 3 }, frameId: 0, url: "https://example.com/post" },
+        resolve
+      );
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.translations, ["草稿你好"]);
+    assert.equal(result.polishError, "润色失败");
+    assert.equal(sent.at(-1).msg.phase, "draft");
+    assert.deepEqual(sent.at(-1).msg.translations, ["草稿你好"]);
   } finally {
     globalThis.fetch = prevFetch;
   }

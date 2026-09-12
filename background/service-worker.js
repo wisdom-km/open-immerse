@@ -103,13 +103,17 @@ async function handleMessage(message, sender) {
       await rebuildMenus();
       return { ok: true, settings };
     }
-    case "OI_TRANSLATE_BATCH":
+    case "OI_TRANSLATE_BATCH": {
+      const batchOpts = {
+        onProgress: (progress) => emitTranslateProgress(sender, message.requestId, progress)
+      };
+      const translations = await translateBatch(message.texts || [], batchOpts);
       return {
         ok: true,
-        translations: await translateBatch(message.texts || [], {
-          onProgress: (progress) => emitTranslateProgress(sender, message.requestId, progress)
-        })
+        translations,
+        ...(batchOpts.polishFailed ? { polishError: "润色失败" } : {})
       };
+    }
     case "OI_TEST_PROVIDER": {
       const providerConfig =
         message.providerConfig && typeof message.providerConfig === "object" ? message.providerConfig : {};
@@ -195,31 +199,48 @@ async function translateBatch(texts, options = {}) {
   const size = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < pending.length; i += size) {
     const chunk = pending.slice(i, i + size);
-    const translated = await provider.translate(chunk.map((c) => c.text), {
-      sourceLang: settings.sourceLang,
-      targetLang: settings.targetLang,
-      settings: providerSettings,
-      onProgress: async (progress) => {
-        if (progress?.phase !== "draft" || typeof options.onProgress !== "function") return;
-        const guarded = guardZhTranslations(
+    let translated;
+    try {
+      translated = await provider.translate(chunk.map((c) => c.text), {
+        sourceLang: settings.sourceLang,
+        targetLang: settings.targetLang,
+        settings: providerSettings,
+        onProgress: async (progress) => {
+          if (progress?.phase !== "draft" || typeof options.onProgress !== "function") return;
+          const guarded = guardZhTranslations(
+            chunk.map((c) => c.text),
+            progress.translations,
+            settings.targetLang
+          );
+          const draftResults = results.slice();
+          chunk.forEach((item, j) => {
+            draftResults[item.index] = guarded[j] || "";
+          });
+          try {
+            await options.onProgress({
+              phase: "draft",
+              translations: guardZhTranslations(texts, draftResults, settings.targetLang)
+            });
+          } catch {
+            /* progress is best-effort */
+          }
+        }
+      });
+    } catch (err) {
+      if (err?.polishFailed && Array.isArray(err.drafts)) {
+        const guardedDrafts = guardZhTranslations(
           chunk.map((c) => c.text),
-          progress.translations,
+          err.drafts,
           settings.targetLang
         );
-        const draftResults = results.slice();
         chunk.forEach((item, j) => {
-          draftResults[item.index] = guarded[j] || "";
+          results[item.index] = guardedDrafts[j] || "";
         });
-        try {
-          await options.onProgress({
-            phase: "draft",
-            translations: guardZhTranslations(texts, draftResults, settings.targetLang)
-          });
-        } catch {
-          /* progress is best-effort */
-        }
+        options.polishFailed = true;
+        continue;
       }
-    });
+      throw err;
+    }
     const guarded = guardZhTranslations(
       chunk.map((c) => c.text),
       translated,

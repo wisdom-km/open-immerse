@@ -161,14 +161,16 @@ runBtn.addEventListener("click", async () => {
     inflight = null;
     if (aborted) break;
     slice.forEach((org, idx) => {
-      const dst = res.translations?.[idx] || "";
-      const failed = isFailedTranslation(res, dst);
+      const existing = pairs[sliceStart + idx];
+      const dst = res.translations?.[idx] || existing?.dst || "";
+      const failed = !res.polishError && isFailedTranslation(res, dst);
       const pair = { org, dst: failed ? "" : dst, failed };
       const pairIndex = sliceStart + idx;
       if (pairIndex < pairs.length) pairs[pairIndex] = pair;
       else pairs.push(pair);
     });
     renderPairs();
+    if (res.polishError) setStatus(DOCUMENTS_COPY.polishFail, true);
   }
   setIdleControls();
   if (!aborted) setStatus(DOCUMENTS_COPY.done);
@@ -206,8 +208,9 @@ out.addEventListener("click", async (ev) => {
     res = { ok: false, translations: [] };
   }
   inflight = null;
-  const dst = res.translations?.[0] || "";
-  const failed = isFailedTranslation(res, dst);
+  const dst = res.translations?.[0] || pair.dst || "";
+  const failed = !res.polishError && isFailedTranslation(res, dst);
   pairs[index] = { org: pair.org, dst: failed ? "" : dst, failed };
   renderPairs();
+  if (res.polishError) setStatus(DOCUMENTS_COPY.polishFail, true);
 });

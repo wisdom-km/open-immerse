@@ -19,8 +19,9 @@ const HARD_SKIP_SELECTOR = [
 ].join(", ");
 const CHROME_META_RE = /^(category|product|date|author(?:\(s\))?|share|reading time|copy link|\d+\s*min\b)/i;
 const MIN_LEN = 2;
-const STATUS_TRANSLATING = "翻译中…";
-const STATUS_POLISHING = "润色中…";
+const STATUS_TRANSLATING = "翻译中";
+const STATUS_POLISHING = "润色中";
+const STATUS_POLISH_FAIL = "润色失败";
 
 let running = false;
 let epoch = 0;
@@ -186,15 +187,26 @@ async function translateVisible(ticket = epoch) {
         clearStatus();
         return;
       }
-      if (!res.ok) throw new Error(res.error || "翻译失败");
+      if (!res || !res.ok) {
+        const hasDraft = chunk.some((el) => hasTranslation(el));
+        if (hasDraft) {
+          chunk.forEach((el) => el.classList.remove("oi-pending"));
+          toast(STATUS_POLISH_FAIL);
+          continue;
+        }
+        throw new Error(res?.error || "翻译失败");
+      }
       chunk.forEach((el, idx) => {
         el.classList.remove("oi-pending");
         if (running && ticket === epoch) mountTranslation(el, res.translations[idx] || "", settings);
       });
+      if (res.polishError) toast(STATUS_POLISH_FAIL);
+      else clearStatus();
     } catch (err) {
       chunk.forEach((el) => el.classList.remove("oi-pending"));
-      toast(String(err.message || err));
-      break;
+      const hasDraft = chunk.some((el) => hasTranslation(el));
+      toast(hasDraft ? STATUS_POLISH_FAIL : String(err.message || err));
+      if (!hasDraft) break;
     } finally {
       if (inflight?.requestId === requestId) inflight = null;
     }
