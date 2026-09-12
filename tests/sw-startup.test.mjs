@@ -63,6 +63,11 @@ test("SW cache version includes title-calque bust and guards cache hits", () => 
   assert.match(swSource, /isTwoStepPolish/);
   assert.match(swSource, /function readCachedTranslation\(key, text, targetLang\) \{\n  const \[guarded\] = guardZhTranslations\(\[text\], \[cache\.get\(key\)\], targetLang\);/);
   assert.match(swSource, /if \(cache\.has\(key\)\) results\[index\] = readCachedTranslation\(key, text, settings\.targetLang\);/);
+  assert.match(
+    swSource,
+    /const guarded = guardZhTranslations\(\n      chunk\.map\(\(c\) => c\.text\),\n      translated,\n      settings\.targetLang\n    \);/
+  );
+  assert.match(swSource, /remember\(item\.key, value\);/);
   assert.match(swSource, /return guardZhTranslations\(texts, results, settings\.targetLang\);/);
 });
 

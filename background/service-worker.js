@@ -177,8 +177,13 @@ async function translateBatch(texts) {
       targetLang: settings.targetLang,
       settings: providerSettings
     });
+    const guarded = guardZhTranslations(
+      chunk.map((c) => c.text),
+      translated,
+      settings.targetLang
+    );
     chunk.forEach((item, j) => {
-      const value = translated[j] || "";
+      const value = guarded[j] || "";
       results[item.index] = value;
       remember(item.key, value);
     });
