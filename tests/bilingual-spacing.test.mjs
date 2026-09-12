@@ -15,6 +15,7 @@ const inlineBlock = css.slice(css.indexOf(".oi-translation.oi-inline"), css.inde
 test("body translations match Loom section 3 margin", () => {
   assert.match(bodyBlock, /吃掉宿主段后 margin，光学间距约 0\.4em/);
   assert.match(bodyBlock, /margin:\s*-0\.65em\s+0\s+0\.4em/);
+  assert.match(bodyBlock, /padding-top:\s*0\.15em/);
   assert.equal(/margin:\s*0\.08em/.test(bodyBlock), false);
   assert.equal(/margin:\s*-0\.65em\s+0\s+0\.1em/.test(bodyBlock), false);
 });
@@ -22,6 +23,7 @@ test("body translations match Loom section 3 margin", () => {
 test("heading translations use 0.45em padding-top to clear descenders", () => {
   assert.match(headingBlock, /padding-top:\s*0\.45em/);
   assert.match(headingBlock, /margin:\s*0\.7rem\s+0\s+0\.45rem/);
+  assert.equal(/padding-top:\s*0\.15em/.test(headingBlock), false);
   assert.equal(/padding-top:\s*0\.2rem/.test(headingBlock), false);
 });
 

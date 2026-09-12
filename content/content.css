@@ -12,7 +12,7 @@
   writing-mode: horizontal-tb;
   text-orientation: mixed;
   word-break: normal;
-  padding-top: 0;
+  padding-top: 0.15em;
   padding-bottom: 0.06em;
   border-bottom: 1px dashed color-mix(in srgb, currentColor 48%, transparent);
   box-decoration-break: clone;
