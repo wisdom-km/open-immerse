@@ -31,7 +31,8 @@ test("FAB V1 IA is 翻译/原文 plus fold glyph, no 收藏 or more menu", () =>
   assert.equal(toolbar.includes('data-act="save"'), false);
   assert.equal(toolbar.includes('data-act="more"'), false);
   assert.equal(toolbar.includes(">⋯<"), false);
-  assert.equal(toolbar.includes("oi-fab-menu"), false);
+  assert.doesNotMatch(toolbar, /class=["']oi-fab-menu["']/);
+  assert.match(toolbar, /querySelector\("\.oi-fab-menu"\)/);
   assert.equal(toolbar.includes("学习中心"), false);
   assert.equal(toolbar.includes("文档翻译"), false);
   assert.equal(toolbar.includes("本站自动翻译"), false);

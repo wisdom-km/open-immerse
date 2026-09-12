@@ -22,6 +22,33 @@
     },
     snapCorner(clientX, viewportWidth) {
       return clientX < viewportWidth / 2 ? "bottom-left" : "bottom-right";
+    },
+    isV1Shape(root) {
+      if (!root || typeof root.querySelector !== "function") return false;
+      if (!root.classList?.contains("oi-fab")) return false;
+      const has = (act) => Boolean(root.querySelector(`[data-act="${act}"]`));
+      if (!has("toggle") || !has("restore") || !has("fold")) return false;
+      if (has("save") || has("more")) return false;
+      if (root.querySelector(".oi-fab-menu")) return false;
+      return true;
+    },
+    collectFabs(host) {
+      if (!host || typeof host.querySelectorAll !== "function") return [];
+      return [...host.querySelectorAll(".oi-fab")];
+    },
+    unmountAll(host) {
+      const nodes = this.collectFabs(host);
+      for (const el of nodes) el.remove?.();
+      return nodes.length;
+    },
+    reconcile(host, { hidden = false } = {}) {
+      const nodes = this.collectFabs(host);
+      let stale = 0;
+      for (const el of nodes) {
+        if (!this.isV1Shape(el)) stale += 1;
+        el.remove?.();
+      }
+      return { action: hidden ? "hide" : "mount", removed: nodes.length, stale };
     }
   };
 
@@ -43,12 +70,16 @@
     if (!res) return;
     const { settings } = res;
     const features = settings.features || {};
-    if (features.fab === false || settings.showFab === false) return;
-    if (features.webpage === false) return;
-    if (document.querySelector(".oi-fab")) return;
+    const hidden =
+      features.fab === false || settings.showFab === false || features.webpage === false;
+    // Reload leaves the previous content-script .oi-fab in the page (often the
+    // pre-V1 翻译/原文/收藏/⋯ bar). Blind return would skip V1 and dead-bind.
+    const plan = FAB.reconcile(document, { hidden });
+    if (plan.action !== "mount") return;
 
     const bar = document.createElement("div");
     bar.className = "oi-fab";
+    bar.dataset.oiFab = "v1";
     bar.innerHTML =
       '<button type="button" data-act="toggle" title="翻译">翻译</button>' +
       '<button type="button" data-act="restore" title="原文">原文</button>' +
