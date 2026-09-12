@@ -34,7 +34,7 @@ Chrome 打开 `chrome://extensions` → 开发者模式 → 加载已解压的�
 
 Kimi、MiniMax、Grok、OpenRouter、OpenAI 兼容、DeepL、Gemini、Claude、Microsoft、Google Cloud、自定义 HTTP。
 
-大模型引擎默认单次翻译。设置 → 高级「先信后润」（`twoStepPolish`，默认关）开启后，先忠实直译再润成自然流畅的现代译文，约多一倍请求。这是普通语际转换（如英译中），不是文言文。自定义系统提示词时仍单次。
+大模型引擎默认单次翻译。设置「两步译（先信后润）」（`twoStepPolish`，默认关）开启后，先忠实直译再润成自然流畅的现代译文，约多一倍请求。这是普通语际转换（如英译中），不是文言文。自定义系统提示词时仍单次。
 
 ## 许可
 

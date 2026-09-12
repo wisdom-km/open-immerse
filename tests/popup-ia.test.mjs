@@ -29,6 +29,7 @@ test("popup IA is page-only: Dual Line, 沉浸译, no feature toggles or youtube
   assert.equal(html.includes("featureList"), false);
   assert.equal(/youtube|YouTube/i.test(html), false);
   assert.equal(html.includes("hamburger"), false);
+  assert.equal(html.includes("twoStepPolish"), false);
 });
 
 test("popup CSS uses elevated dark tokens and 340px shell", () => {
@@ -69,11 +70,11 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.match(html, /高级（悬浮 \/ 划词 \/ 字幕等，后续完善）/);
   assert.match(html, /id="laterList"/);
   assert.match(html, /id="translateLimit"/);
-  assert.match(html, /id="laterList"[\s\S]*id="twoStepPolish"/);
-  assert.match(html, /id="twoStepPolish"[^>]*> 先信后润/);
-  assert.match(html, /id="twoStepPolishHint">第二步润色，更耗 token；默认关。仅 LLM 引擎生效。/);
+  assert.match(html, /id="autoOnNewPages"[\s\S]*id="twoStepPolish"[\s\S]*id="siteRules"/);
+  assert.match(html, /id="twoStepPolish"[^>]*> 两步译（先信后润）/);
+  assert.match(html, /id="twoStepPolishHint">开：先忠实草稿再润色，中文更顺，约多一倍请求与费用。关（默认）：单次成稿。仅对 LLM 引擎生效；MyMemory 等免费通道忽略此开关。/);
+  assert.doesNotMatch(html.match(/<details class="later">[\s\S]*?<\/details>/)[0], /twoStepPolish/);
   assert.doesNotMatch(html, /id="translateQuality"/);
-  assert.doesNotMatch(html, /两步译（先信后润）/);
   assert.match(html, /每批条数（分批，不是总数）/);
   assert.match(html, /本次翻译/);
   assert.match(html, /value="title_lead">仅标题\+开头/);
