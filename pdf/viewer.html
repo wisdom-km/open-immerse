@@ -26,9 +26,6 @@
       <button type="button" id="prev" class="btn-ghost" disabled>上一页</button>
       <p id="pager" class="pager" aria-live="polite">0 / 0</p>
       <button type="button" id="next" class="btn-ghost" disabled>下一页</button>
-      <button type="button" id="zoomOut" class="btn-ghost" disabled>缩小</button>
-      <p id="zoomLabel" class="zoom-label">100%</p>
-      <button type="button" id="zoomIn" class="btn-ghost" disabled>放大</button>
     </div>
   </header>
   <p id="status" role="status">还没有打开 PDF。</p>
@@ -36,6 +33,13 @@
     <section class="pane-pdf" id="pdfPane" aria-label="PDF">
       <div id="pages" class="pages"></div>
     </section>
+    <div class="split-gutter">
+      <div class="zoom-stack" role="group" aria-label="缩放">
+        <button type="button" id="zoomOut" class="btn-ghost" disabled>缩小</button>
+        <p id="zoomLabel" class="zoom-label">100%</p>
+        <button type="button" id="zoomIn" class="btn-ghost" disabled>放大</button>
+      </div>
+    </div>
     <aside class="pane-translate" aria-label="译文">
       <div id="readout" class="readout"></div>
       <p id="emptyRead" class="empty-read">点击翻译</p>

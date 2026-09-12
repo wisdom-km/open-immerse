@@ -40,7 +40,7 @@ h1 {
   gap: 8px;
   align-items: center;
 }
-.pager, .zoom-label {
+.pager {
   margin: 0;
   min-width: 4.5em;
   text-align: center;
@@ -61,8 +61,46 @@ h1 {
 .workspace {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr auto 1fr;
   min-height: 0;
+}
+.split-gutter {
+  position: relative;
+  width: 1px;
+  align-self: stretch;
+  background: var(--oi-line);
+  z-index: 2;
+  pointer-events: none;
+}
+.zoom-stack {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  pointer-events: auto;
+  background: var(--oi-bg-elevated);
+  border: 1px solid var(--oi-line);
+  border-radius: 8px;
+  box-shadow: var(--oi-shadow-1);
+}
+.zoom-stack .btn-ghost {
+  min-height: 28px;
+  padding: 4px 6px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.zoom-stack .zoom-label {
+  margin: 0;
+  min-width: 3em;
+  text-align: center;
+  color: var(--oi-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .pane-pdf,
 .pane-translate {
@@ -96,7 +134,6 @@ h1 {
   padding: 20px 24px 32px;
   overflow: auto;
   background: var(--oi-bg-elevated);
-  border-left: 1px solid var(--oi-line);
 }
 .pane-translate .readout {
   max-width: 42rem;
@@ -229,10 +266,14 @@ button:disabled { opacity: 0.45; cursor: default; }
 @media (max-width: 899px) {
   .workspace {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(240px, 1fr) minmax(180px, 40vh);
+    grid-template-rows: minmax(240px, 1fr) auto minmax(180px, 40vh);
   }
-  .pane-translate {
-    border-left: 0;
-    border-top: 1px solid var(--oi-line);
+  .split-gutter {
+    width: auto;
+    height: 1px;
+  }
+  .zoom-stack {
+    flex-direction: row;
+    padding: 4px 6px;
   }
 }

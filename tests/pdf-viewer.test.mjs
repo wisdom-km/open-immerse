@@ -73,6 +73,15 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.match(html, /id="next"[^>]*>下一页</);
   assert.match(html, /id="zoomOut"/);
   assert.match(html, /id="zoomIn"/);
+  const toolbarHtml = html.slice(html.indexOf('class="toolbar"'), html.indexOf('class="workspace"'));
+  assert.equal(toolbarHtml.includes('id="zoomOut"'), false);
+  assert.equal(toolbarHtml.includes('id="zoomIn"'), false);
+  assert.equal(toolbarHtml.includes('id="zoomLabel"'), false);
+  assert.match(html, /class="split-gutter"/);
+  assert.match(html, /class="zoom-stack"[^>]*role="group"[^>]*aria-label="缩放"/);
+  const gutter = html.indexOf('class="split-gutter"');
+  assert.ok(html.indexOf('class="pane-pdf"') < gutter && gutter < html.indexOf('class="pane-translate"'));
+  assert.ok(gutter < html.indexOf('id="zoomOut"') && html.indexOf('id="zoomOut"') < html.indexOf('id="zoomLabel"') && html.indexOf('id="zoomLabel"') < html.indexOf('id="zoomIn"') && html.indexOf('id="zoomIn"') < html.indexOf('class="pane-translate"'));
   assert.match(src, /from "\.\/vendor\/pdf\.min\.mjs"/);
   assert.match(src, /GlobalWorkerOptions\.workerSrc/);
   assert.match(src, /pdf\/vendor\/pdf\.worker\.min\.mjs/);
@@ -86,8 +95,11 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
 
 test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.pdf-page canvas\[hidden\]\s*\{\s*display:\s*none/);
-  assert.match(css, /\.workspace\s*\{[^}]*grid-template-columns:\s*1fr 1fr/s);
+  assert.match(css, /\.workspace\s*\{[^}]*grid-template-columns:\s*1fr auto 1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)\s*\{[^}]*grid-template-columns:\s*1fr/s);
+  assert.match(css, /\.split-gutter\s*\{[^}]*width:\s*1px[^}]*pointer-events:\s*none/s);
+  assert.match(css, /\.zoom-stack\s*\{[^}]*flex-direction:\s*column[^}]*pointer-events:\s*auto[^}]*background:\s*var\(--oi-bg-elevated\)[^}]*border:\s*1px solid var\(--oi-line\)/s);
+  assert.match(css, /\.zoom-stack \.zoom-label\s*\{[^}]*font-variant-numeric:\s*tabular-nums/s);
   assert.match(html, /class="workspace"/);
   assert.match(html, /class="pane-pdf"/);
   assert.match(html, /id="pdfPane"/);
