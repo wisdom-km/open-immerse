@@ -256,7 +256,7 @@ test("segmentPageBlocks joins lines, dehyphenates, and keeps column order", () =
       pdfItem("these models to be superior in quality.", 360, 686, 180)
     ]
   });
-  assert.ok(paper.some((block) => /Attention Is All You Need/.test(block.text)));
+  assert.ok(paper.some((block) => /Attention Is All You Need/.test(block.text) && block.role === "heading"));
   assert.ok(paper.some((block) => /dominant sequence transduction/.test(block.text)));
   assert.ok(paper.some((block) => /Transformer/.test(block.text)));
   assert.ok(paper.some((block) => /machine translation tasks/.test(block.text)));
