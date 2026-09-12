@@ -19,12 +19,16 @@ const HARD_SKIP_SELECTOR = [
 ].join(", ");
 const CHROME_META_RE = /^(category|product|date|author(?:\(s\))?|share|reading time|copy link|\d+\s*min\b)/i;
 const MIN_LEN = 2;
+const STATUS_TRANSLATING = "翻译中…";
+const STATUS_POLISHING = "润色中…";
 
 let running = false;
 let epoch = 0;
 let pageObserver = null;
 let hoverBound = false;
 let timer = 0;
+let toastTimer = 0;
+let inflight = null;
 
 init();
 
@@ -46,6 +50,9 @@ async function init() {
       sendResponse({ ok: true });
     } else if (message.type === "OI_ERROR" || message.type === "OI_TOAST") {
       toast(message.message || "翻译失败");
+      sendResponse({ ok: true });
+    } else if (message.type === "OI_TRANSLATE_PROGRESS") {
+      applyTranslateProgress(message);
       sendResponse({ ok: true });
     } else if (message.type === "OI_PING") {
       sendResponse({ ok: true, running });
@@ -111,6 +118,8 @@ function stop() {
 function restore() {
   epoch += 1;
   running = false;
+  inflight = null;
+  clearStatus();
   stop();
   document.querySelectorAll(".oi-translation, .oi-selection-card").forEach((el) => el.remove());
   document.querySelectorAll(".oi-pending, .oi-failed").forEach((el) => {
@@ -157,13 +166,24 @@ async function translateVisible(ticket = epoch) {
   }
   const batchSize = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < nodes.length; i += batchSize) {
-    if (!running || ticket !== epoch) return;
+    if (!running || ticket !== epoch) {
+      clearStatus();
+      return;
+    }
     const chunk = nodes.slice(i, i + batchSize);
+    const requestId = `oi-${ticket}-${i}`;
+    inflight = { requestId, nodes: chunk, settings, ticket };
     chunk.forEach((el) => el.classList.add("oi-pending"));
+    showStatus(STATUS_TRANSLATING);
     try {
-      const res = await send({ type: "OI_TRANSLATE_BATCH", texts: chunk.map((el) => previewSourceText(getText(el), settings.translateLimit)) });
+      const res = await send({
+        type: "OI_TRANSLATE_BATCH",
+        requestId,
+        texts: chunk.map((el) => previewSourceText(getText(el), settings.translateLimit))
+      });
       if (!running || ticket !== epoch) {
         chunk.forEach((el) => el.classList.remove("oi-pending"));
+        clearStatus();
         return;
       }
       if (!res.ok) throw new Error(res.error || "翻译失败");
@@ -175,8 +195,25 @@ async function translateVisible(ticket = epoch) {
       chunk.forEach((el) => el.classList.remove("oi-pending"));
       toast(String(err.message || err));
       break;
+    } finally {
+      if (inflight?.requestId === requestId) inflight = null;
     }
   }
+  clearStatus();
+}
+
+function applyTranslateProgress(message) {
+  if (!inflight || message.phase !== "draft") return;
+  if (message.requestId && inflight.requestId && message.requestId !== inflight.requestId) return;
+  if (!running || inflight.ticket !== epoch) return;
+  const translations = message.translations || [];
+  inflight.nodes.forEach((el, idx) => {
+    const text = translations[idx] || "";
+    if (!text) return;
+    el.classList.remove("oi-pending");
+    mountTranslation(el, text, inflight.settings);
+  });
+  showStatus(STATUS_POLISHING);
 }
 
 function hasTranslation(el) {
@@ -336,7 +373,7 @@ function mountTranslation(el, text, settings) {
       type: "OI_SAVE_LEARNING",
       item: {
         original: getText(el),
-        translation: text,
+        translation: node.textContent,
         context: getText(el),
         url: location.href,
         title: document.title,
@@ -448,7 +485,21 @@ function matchRule(hostname, rules) {
   );
 }
 
-function toast(message) {
+function showStatus(message) {
+  toast(message, { persist: true });
+}
+
+function clearStatus() {
+  const el = document.querySelector(".oi-toast");
+  if (!el || !el.classList.contains("show")) return;
+  const text = el.textContent;
+  if (text !== STATUS_TRANSLATING && text !== STATUS_POLISHING) return;
+  clearTimeout(toastTimer);
+  toastTimer = 0;
+  el.classList.remove("show");
+}
+
+function toast(message, opts = {}) {
   let el = document.querySelector(".oi-toast");
   if (!el) {
     el = document.createElement("div");
@@ -457,7 +508,14 @@ function toast(message) {
   }
   el.textContent = message;
   el.classList.add("show");
-  setTimeout(() => el.classList.remove("show"), 3200);
+  clearTimeout(toastTimer);
+  toastTimer = 0;
+  if (!opts.persist) {
+    toastTimer = setTimeout(() => {
+      el.classList.remove("show");
+      toastTimer = 0;
+    }, 3200);
+  }
 }
 
 async function send(payload) {

@@ -112,3 +112,14 @@ test("documents.js keeps batch translate / HTML export and wires Stop", () => {
     "Second paragraph here."
   ]);
 });
+
+test("documents two-step applies draft progress then replaces in place", () => {
+  assert.equal(DOCUMENTS_COPY.translating, "翻译中…");
+  assert.equal(DOCUMENTS_COPY.polishing, "润色中…");
+  assert.match(src, /OI_TRANSLATE_PROGRESS/);
+  assert.match(src, /DOCUMENTS_COPY\.translating/);
+  assert.match(src, /DOCUMENTS_COPY\.polishing/);
+  assert.match(src, /applyDocumentProgress/);
+  assert.match(src, /message\.phase !== "draft"/);
+  assert.match(src, /if \(pairIndex < pairs\.length\) pairs\[pairIndex\] = pair;/);
+});
