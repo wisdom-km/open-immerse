@@ -101,7 +101,7 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.translate, "翻译");
   assert.equal(PDF_COPY.stop, "停止");
   assert.equal(PDF_COPY.restore, "原文");
-  assert.equal(PDF_COPY.favorite, "收藏本段");
+  assert.equal(PDF_COPY.favorite, "收藏");
   assert.equal(PDF_COPY.translating, "翻译中");
   assert.equal(PDF_COPY.polishing, "润色中");
   assert.equal(PDF_COPY.polishFail, "润色失败");
