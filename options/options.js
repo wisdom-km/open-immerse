@@ -3,6 +3,7 @@ import {
   PROVIDER_PROBE_TEXT,
   formatConnectionStatus,
   getProvider,
+  missingRequiredField,
   redactProviderText
 } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
@@ -153,10 +154,16 @@ async function testConnection() {
   const providerId = el("provider").value;
   const providerConfig = Object.assign({}, (cachedSettings.providers || {})[providerId] || {});
   const targetLang = el("targetLang").value || "zh-CN";
+  const missing = missingRequiredField(getProvider(providerId), providerConfig);
+  if (missing) {
+    setTestStatus(formatConnectionStatus({ ok: false, missingField: missing.label }), "err");
+    restoreTestButton();
+    return;
+  }
   const requestId = ++testRequestId;
   btn.disabled = true;
   btn.textContent = "测试中…";
-  setTestStatus("测试中…");
+  setTestStatus("正在探测…");
   try {
     const res = await chrome.runtime.sendMessage({
       type: "OI_TEST_PROVIDER",

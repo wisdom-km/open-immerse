@@ -211,27 +211,34 @@ test("options page wires 测试连接 as secondary and harvests unsaved form val
   assert.match(html, /id="testConnectionStatus"[^>]*class="provider-test-status"[^>]*role="status"/);
   assert.match(html, /id="save"[^>]*class="btn-primary">保存设置</);
   assert.equal(html.includes('id="testConnection"') && html.indexOf("provider-test-row") < html.indexOf("actions-bar"), true);
+  assert.match(css, /\.provider-test-row\s*\{[^}]*align-items:\s*flex-start/);
   assert.match(css, /\.provider-test-row\s*\{[^}]*gap:\s*12px/);
   assert.match(css, /\.provider-test-row\s*\{[^}]*margin-top:\s*12px/);
   assert.match(css, /\.provider-test-status\s*\{[^}]*flex:\s*1 1 180px/);
-  assert.match(css, /\.provider-test-status\s*\{[^}]*font-size:\s*12px/);
+  assert.match(css, /\.provider-test-status\s*\{[^}]*min-width:\s*0/);
+  assert.match(css, /\.provider-test-status\s*\{[^}]*font:\s*400 12px\/1.45 var\(--oi-font\)/);
+  assert.match(css, /#testConnection\.btn-secondary[^}]*font-weight:\s*500/);
   assert.match(css, /\.provider-test-status\.is-ok[^}]*var\(--oi-success/);
   assert.match(css, /\.provider-test-status\.is-err[^}]*var\(--oi-danger/);
   assert.equal(css.includes("actions-bar") && /actions-bar[\s\S]*testConnection/.test(html), false);
 
   assert.match(js, /harvestVisibleProvider\(\)/);
+  assert.match(js, /missingRequiredField/);
   assert.match(js, /type:\s*["']OI_TEST_PROVIDER["']/);
   assert.match(js, /providerConfig/);
   assert.match(js, /texts:\s*\[PROVIDER_PROBE_TEXT\]/);
   assert.match(js, /sourceLang:\s*["']en["']/);
   assert.match(js, /targetLang/);
   assert.match(js, /测试中…/);
+  assert.match(js, /正在探测…/);
   assert.match(js, /testRequestId/);
   assert.match(js, /btn\.disabled = true/);
   assert.match(js, /redactProviderText/);
   const testFn = js.slice(js.indexOf("async function testConnection"), js.indexOf("function renderProviderFields"));
   assert.match(testFn, /OI_TEST_PROVIDER/);
   assert.equal(testFn.includes("OI_SAVE_SETTINGS"), false);
+  assert.ok(testFn.indexOf("missingRequiredField") < testFn.indexOf("OI_TEST_PROVIDER"));
+  assert.ok(testFn.indexOf("return;") < testFn.indexOf("OI_TEST_PROVIDER"));
   assert.equal(js.includes("alert("), false);
 
   assert.match(sw, /case "OI_TEST_PROVIDER"/);
