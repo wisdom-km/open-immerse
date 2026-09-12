@@ -149,6 +149,9 @@ function bindSplitResize() {
 
 function startSplitDrag(event, workspace, handle) {
   if (event.button !== 0) return;
+  const rect = workspace.getBoundingClientRect();
+  const midBand = Math.abs(event.clientY - (rect.top + rect.height / 2)) <= 60;
+  if (midBand) return;
   event.preventDefault();
   handle.setPointerCapture(event.pointerId);
   const onMove = (moveEvent) => applySplit(workspace, moveEvent.clientX);
@@ -167,6 +170,8 @@ function applySplit(workspace, clientX) {
   const pct = Math.min(80, Math.max(20, ((clientX - rect.left) / rect.width) * 100));
   workspace.style.setProperty("--oi-split", `${pct}%`);
   workspace.style.gridTemplateColumns = `${pct}% ${100 - pct}%`;
+  const chip = document.querySelector(".zoom-gutter");
+  if (chip) chip.style.left = `${pct}%`;
 }
 
 function appendReadoutNode(input) {

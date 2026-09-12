@@ -79,10 +79,10 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.equal(toolbarHtml.includes('id="zoomLabel"'), false);
   assert.equal(toolbarHtml.includes("缩小"), false);
   assert.equal(toolbarHtml.includes("放大"), false);
-  assert.match(html, /<div class="zoom-gutter" role="group" aria-label="缩放">/);
-  assert.match(html, /id="zoomOut"[^>]*class="zoom-gutter-btn"[^>]*disabled>缩小</);
-  assert.match(html, /<p id="zoomLabel" class="zoom-gutter-label">100%<\/p>/);
-  assert.match(html, /id="zoomIn"[^>]*class="zoom-gutter-btn"[^>]*disabled>放大</);
+  assert.match(
+    html,
+    /<div class="zoom-gutter" role="group" aria-label="缩放">\s*<button type="button" id="zoomOut" class="zoom-gutter-btn" disabled>缩小<\/button>\s*<p id="zoomLabel" class="zoom-gutter-label">100%<\/p>\s*<button type="button" id="zoomIn" class="zoom-gutter-btn" disabled>放大<\/button>\s*<\/div>/
+  );
   const workspaceHtml = html.slice(html.indexOf('class="workspace"'), html.indexOf('viewer.js'));
   assert.ok(workspaceHtml.includes('id="zoomOut"') && workspaceHtml.includes('id="zoomLabel"') && workspaceHtml.includes('id="zoomIn"'));
   assert.equal(html.includes("split-gutter"), false);
@@ -105,7 +105,15 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.workspace\s*\{[^}]*position:\s*relative[^}]*grid-template-columns:\s*1fr 1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)\s*\{[^}]*grid-template-columns:\s*1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.zoom-gutter\s*\{[^}]*flex-direction:\s*row/);
-  assert.match(css, /\.zoom-gutter\s*\{[^}]*position:\s*absolute[^}]*top:\s*50%[^}]*left:\s*50%[^}]*transform:\s*translate\(-50%,\s*-50%\)[^}]*flex-direction:\s*column[^}]*backdrop-filter:\s*blur\(12px\)[^}]*-webkit-backdrop-filter:\s*blur\(12px\)/s);
+  const zoomGutterCss = css.slice(css.indexOf(".zoom-gutter {"), css.indexOf(".zoom-gutter-btn {"));
+  assert.match(zoomGutterCss, /position:\s*absolute/);
+  assert.match(zoomGutterCss, /top:\s*50%/);
+  assert.match(zoomGutterCss, /left:\s*50%/);
+  assert.match(zoomGutterCss, /transform:\s*translate\(-50%,\s*-50%\)/);
+  assert.match(zoomGutterCss, /flex-direction:\s*column/);
+  assert.match(zoomGutterCss, /backdrop-filter:\s*blur\(12px\)/);
+  assert.match(zoomGutterCss, /-webkit-backdrop-filter:\s*blur\(12px\)/);
+  assert.equal(zoomGutterCss.includes("var(--oi-split)"), false);
   assert.match(css, /\.zoom-gutter-btn\s*\{[^}]*min-height:\s*28px[^}]*height:\s*28px[^}]*font:\s*500 12px\/1 var\(--oi-font\)/s);
   assert.match(css, /\.zoom-gutter-label\s*\{[^}]*font:\s*500 12px\/1 var\(--oi-font\)[^}]*font-variant-numeric:\s*tabular-nums/s);
   assert.equal(css.includes(".split-gutter"), false);
@@ -119,6 +127,9 @@ test("split layout is left/right by default and stacks below 900px", () => {
   const splitSrc = src.slice(src.indexOf("function bindSplitResize"), src.indexOf("function startSplitDrag"));
   assert.match(splitSrc, /stopPropagation/);
   assert.equal(splitSrc.includes("setZoom"), false);
+  const dragSrc = src.slice(src.indexOf("function startSplitDrag"), src.indexOf("function applySplit"));
+  assert.match(dragSrc, /midBand/);
+  assert.match(dragSrc, /60/);
   assert.match(html, /class="workspace"/);
   assert.match(html, /class="pane-pdf"/);
   assert.match(html, /id="pdfPane"/);

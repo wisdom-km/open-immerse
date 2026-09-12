@@ -81,7 +81,6 @@ h1 {
   position: absolute;
   top: 50%;
   left: 50%;
-  left: var(--oi-split);
   transform: translate(-50%, -50%);
   z-index: 2;
   display: flex;
@@ -308,6 +307,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   }
   .zoom-gutter {
     flex-direction: row;
+    left: 50%;
   }
   .pane-translate {
     border-left: 0;
