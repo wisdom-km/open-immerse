@@ -6,11 +6,10 @@ import {
   STEP1_FAITHFUL_INSTRUCTION,
   STEP2_POLISH_INSTRUCTION,
   TRANSLATION_SKILL_CONTRACT,
-  TRANSLATE_QUALITY_REFINED,
-  TRANSLATE_QUALITY_STANDARD,
   ZH_GLOSSARY_HINT,
   buildLlmTurn,
-  isTwoStepTranslate,
+  hasCustomTranslatorPrompt,
+  isTwoStepPolish,
   numberedSegments
 } from "../lib/translate-skill.js";
 
@@ -54,13 +53,14 @@ test("two-step is ordinary language conversion, not classical literary style", (
   assert.doesNotMatch(TRANSLATION_SKILL_CONTRACT, /Li Jigang|五轮|SVG/i);
 });
 
-test("isTwoStepTranslate defaults off; refined or twoStepTranslate enables it", () => {
-  assert.equal(isTwoStepTranslate(), false);
-  assert.equal(isTwoStepTranslate({}), false);
-  assert.equal(isTwoStepTranslate({ translateQuality: TRANSLATE_QUALITY_STANDARD }), false);
-  assert.equal(isTwoStepTranslate({ twoStepTranslate: false }), false);
-  assert.equal(isTwoStepTranslate({ translateQuality: TRANSLATE_QUALITY_REFINED }), true);
-  assert.equal(isTwoStepTranslate({ twoStepTranslate: true }), true);
+test("isTwoStepPolish defaults off; custom prompt skips polish", () => {
+  assert.equal(isTwoStepPolish(), false);
+  assert.equal(isTwoStepPolish({}), false);
+  assert.equal(isTwoStepPolish({ twoStepPolish: false }), false);
+  assert.equal(isTwoStepPolish({ twoStepPolish: true }), true);
+  assert.equal(hasCustomTranslatorPrompt({ prompt: "  " }), false);
+  assert.equal(hasCustomTranslatorPrompt({ prompt: "Translate only." }), true);
+  assert.equal(isTwoStepPolish({ twoStepPolish: true, prompt: "Translate into zh-CN only." }), false);
 });
 
 test("step1 is 信 draft; step2 is 达雅 polish without inventing meaning", () => {
@@ -93,7 +93,7 @@ test("buildLlmTurn single-shot is numbered lines with the Skill as system", () =
   assert.equal(numberedSegments(["A", "B"]), "1. A\n2. B");
 });
 
-test("buildLlmTurn two-step wraps Skill and keeps custom prompt as the base", () => {
+test("buildLlmTurn two-step wraps the shared Skill for polish", () => {
   const skill = "Translate into zh-CN only.";
   const draft = buildLlmTurn({
     texts: ["Hello"],

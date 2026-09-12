@@ -1,4 +1,4 @@
-import { getProvider, guardZhBusinessSense, isTwoStepTranslate, testProviderConnection } from "../lib/providers.js";
+import { getProvider, guardZhBusinessSense, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { resolveFeatures } from "../lib/features.js";
@@ -158,11 +158,14 @@ async function handleMessage(message, sender) {
 async function translateBatch(texts) {
   const settings = await getSettings();
   const provider = getProvider(settings.provider);
-  const providerSettings = settings.providers?.[settings.provider] || {};
+  const providerSettings = {
+    ...(settings.providers?.[settings.provider] || {}),
+    twoStepPolish: settings.twoStepPolish === true
+  };
   const pending = [];
   const results = new Array(texts.length);
   texts.forEach((text, index) => {
-    const key = cacheKey(settings.provider, settings.sourceLang, settings.targetLang, text, settings);
+    const key = cacheKey(settings.provider, settings.sourceLang, settings.targetLang, text, providerSettings);
     if (cache.has(key)) results[index] = cache.get(key);
     else pending.push({ text, index, key });
   });
@@ -172,11 +175,7 @@ async function translateBatch(texts) {
     const translated = await provider.translate(chunk.map((c) => c.text), {
       sourceLang: settings.sourceLang,
       targetLang: settings.targetLang,
-      settings: {
-        ...providerSettings,
-        translateQuality: settings.translateQuality,
-        twoStepTranslate: settings.twoStepTranslate
-      }
+      settings: providerSettings
     });
     chunk.forEach((item, j) => {
       const value = translated[j] || "";
@@ -188,7 +187,7 @@ async function translateBatch(texts) {
 }
 
 function cacheKey(provider, from, to, text, settings) {
-  const quality = isTwoStepTranslate(settings) ? "refined" : "standard";
+  const quality = isTwoStepPolish(settings) ? "polish" : "single";
   return `${CACHE_VER}|${provider}|${from}|${to}|${quality}|${text}`;
 }
 

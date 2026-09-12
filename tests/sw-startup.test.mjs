@@ -59,9 +59,8 @@ test("SW cache version includes two-step quality and clears on load", () => {
   assert.match(swSource, /CACHE_VER = "v4-two-step-quality"/);
   assert.match(swSource, /const cache = new Map\(\);\nconst CACHE_LIMIT = 2000;\nconst CACHE_VER = "v4-two-step-quality";\ncache\.clear\(\);/);
   assert.match(swSource, /onStartup\.addListener\(\(\) => \{\n  cache\.clear\(\);/);
-  assert.match(swSource, /translateQuality: settings\.translateQuality/);
-  assert.match(swSource, /twoStepTranslate: settings\.twoStepTranslate/);
-  assert.match(swSource, /isTwoStepTranslate/);
+  assert.match(swSource, /twoStepPolish: settings\.twoStepPolish === true/);
+  assert.match(swSource, /isTwoStepPolish/);
 });
 
 test("SW lib graph evaluates under chrome stubs", async () => {

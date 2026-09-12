@@ -69,12 +69,11 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.match(html, /高级（悬浮 \/ 划词 \/ 字幕等，后续完善）/);
   assert.match(html, /id="laterList"/);
   assert.match(html, /id="translateLimit"/);
-  assert.match(html, /id="translateQuality"/);
-  assert.match(html, /value="standard">标准（单次，省 token）/);
-  assert.match(html, /value="refined">精修（两步：先信后达雅）/);
-  assert.match(html, /普通语际转换/);
-  assert.match(html, /不是文言文/);
-  assert.match(html, /诗经/);
+  assert.match(html, /id="laterList"[\s\S]*id="twoStepPolish"/);
+  assert.match(html, /id="twoStepPolish"[^>]*> 先信后润/);
+  assert.match(html, /id="twoStepPolishHint">第二步润色，更耗 token；默认关。仅 LLM 引擎生效。/);
+  assert.doesNotMatch(html, /id="translateQuality"/);
+  assert.doesNotMatch(html, /两步译（先信后润）/);
   assert.match(html, /每批条数（分批，不是总数）/);
   assert.match(html, /本次翻译/);
   assert.match(html, /value="title_lead">仅标题\+开头/);
@@ -87,9 +86,8 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.match(featSrc, /youtube:\s*false/);
   assert.match(featSrc, /x:\s*false/);
   const optJs = readFileSync(join(root, "options/options.js"), "utf8");
-  assert.match(optJs, /el\("translateQuality"\)\.value/);
-  assert.match(optJs, /translateQuality: el\("translateQuality"\)\.value === "refined" \? "refined" : "standard"/);
-  assert.match(optJs, /twoStepTranslate: el\("translateQuality"\)\.value === "refined"/);
+  assert.match(optJs, /el\("twoStepPolish"\)\.checked = cachedSettings\.twoStepPolish === true/);
+  assert.match(optJs, /twoStepPolish: el\("twoStepPolish"\)\.checked/);
 });
 
 test("popup engine link uses short name + full title; lang-row stays 1fr 1fr", () => {

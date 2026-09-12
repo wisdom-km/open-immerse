@@ -277,7 +277,7 @@ test("two-step refined path is two chat calls; public translate() returns final 
       model: "user-picked-model",
       endpoint: "https://azure.example",
       deployment: "dep-1",
-      translateQuality: "refined"
+      twoStepPolish: true
     }
   };
   const skill = resolveTranslatorPrompt(ctx);
@@ -306,17 +306,15 @@ test("two-step refined path is two chat calls; public translate() returns final 
   }
 });
 
-test("custom prompt is the Skill for both two-step turns", async () => {
+test("custom prompt skips polish even when twoStepPolish is true", async () => {
   const calls = [];
-  let n = 0;
   const restore = mockFetch(async (_url, init) => {
-    n += 1;
     calls.push(init);
     return {
       ok: true,
       status: 200,
       async json() {
-        return { choices: [{ message: { content: n === 1 ? "1. 草" : "1. 成" } }] };
+        return { choices: [{ message: { content: "1. 成" } }] };
       }
     };
   });
@@ -329,18 +327,15 @@ test("custom prompt is the Skill for both two-step turns", async () => {
         baseUrl: "https://api.example.com/v1",
         model: "still-user-model",
         prompt: "Translate into {{targetLang}} only.",
-        twoStepTranslate: true
+        twoStepPolish: true
       }
     });
     assert.deepEqual(out, ["成"]);
-    assert.equal(calls.length, 2);
-    const first = JSON.parse(calls[0].body);
-    const second = JSON.parse(calls[1].body);
-    assert.match(first.messages[0].content, /^Translate into zh-CN only\./);
-    assert.match(first.messages[0].content, /step 1 of 2/i);
-    assert.match(second.messages[0].content, /^Translate into zh-CN only\./);
-    assert.match(second.messages[0].content, /step 2 of 2/i);
-    assert.doesNotMatch(first.messages[0].content, /Glossary hint \(zh\)/);
+    assert.equal(calls.length, 1);
+    const body = JSON.parse(calls[0].body);
+    assert.equal(body.messages[0].content, "Translate into zh-CN only.");
+    assert.doesNotMatch(body.messages[0].content, /step 1 of 2|step 2 of 2/i);
+    assert.doesNotMatch(body.messages[0].content, /Glossary hint \(zh\)/);
   } finally {
     restore();
   }
@@ -362,7 +357,7 @@ test("machine providers ignore two-step and stay single-shot", async () => {
     const out = await providers.mymemory.translate(["Hello"], {
       sourceLang: "en",
       targetLang: "es",
-      settings: { translateQuality: "refined", twoStepTranslate: true }
+      settings: { twoStepPolish: true }
     });
     assert.deepEqual(out, ["hola"]);
     assert.equal(calls.length, 1);
@@ -371,7 +366,7 @@ test("machine providers ignore two-step and stay single-shot", async () => {
   }
 });
 
-test("default single-shot still one request when translateQuality is standard", async () => {
+test("default single-shot still one request when twoStepPolish is off", async () => {
   const calls = [];
   const restore = mockFetch(async (_url, init) => {
     calls.push(init);
@@ -391,7 +386,7 @@ test("default single-shot still one request when translateQuality is standard", 
         apiKey: "sk-test",
         baseUrl: "https://api.example.com/v1",
         model: "user-picked-model",
-        translateQuality: "standard"
+        twoStepPolish: false
       }
     });
     assert.deepEqual(out, ["你好"]);
