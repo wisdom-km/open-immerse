@@ -34,6 +34,7 @@ import {
   pageTranslationComplete,
   progressDocumentStatus,
   progressStatus,
+  readoutPlaceholder,
   readViewerSrc,
   readoutPageSelector,
   segmentPageBlocks,
@@ -98,6 +99,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /id="restoreOriginal"[^>]*class="btn-ghost"[^>]*disabled>原文</);
   assert.match(html, /id="readout"[^>]*class="readout"/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
+  assert.match(html, /<p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…<\/p>/);
   assert.match(src, /appendReadoutNode/);
   assert.match(src, /articleNodeSpec/);
   assert.match(libSrc, /oi-pdf-h1/);
@@ -105,6 +107,9 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(libSrc, /oi-pdf-p/);
   assert.equal(libSrc.includes("oi-pdf-h\""), false);
   assert.match(src, /emptyRead/);
+  assert.match(src, /pendingRead/);
+  assert.match(src, /readoutPlaceholder/);
+  assert.match(src, /syncReadoutEmpty/);
   assert.equal(src.includes("data-favorite-block"), false);
   assert.equal(src.includes("favoriteSegment"), false);
   assert.equal(src.includes("OI_SAVE_LEARNING"), false);
@@ -133,6 +138,10 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.noTextLayer, "本页没有文字层。");
   assert.equal(PDF_COPY.noTextLayerHint, "扫描件翻译将在后续版本支持。");
   assert.equal(PDF_COPY.translateHint, "点击翻译");
+  assert.equal(PDF_COPY.translatingWait, "正在翻译，请稍候…");
+  assert.equal(readoutPlaceholder({ running: true, hasArticle: false }), "正在翻译，请稍候…");
+  assert.equal(readoutPlaceholder({ running: true, hasArticle: true }), "");
+  assert.equal(readoutPlaceholder({ running: false, hasArticle: false }), "点击翻译");
   assert.equal(PDF_COPY.translate, "翻译");
   assert.equal(PDF_COPY.stop, "停止");
   assert.equal(PDF_COPY.restore, "原文");
@@ -360,13 +369,17 @@ test("page cache remembers a translated page and 原文 can drop it", () => {
   assert.equal(pageCacheKey(3, 2), "3::2");
   assert.equal(cache.has(1, 1), false);
   cache.set(1, 1, [{ original: "Hello", translation: "你好" }]);
+  cache.set(1, 2, [{ original: "Page 2", translation: "第 2 页" }]);
   assert.equal(cache.has(1, 1), true);
   assert.equal(cache.get(1, 1)[0].translation, "你好");
   cache.clearPage(1, 1);
   assert.equal(cache.get(1, 1), null);
-  cache.set(1, 2, [{ original: "Page 2", translation: "第 2 页" }]);
+  assert.equal(cache.get(1, 2)[0].translation, "第 2 页");
   cache.clear();
   assert.equal(cache.has(1, 2), false);
+  const restoreSrc = src.slice(src.indexOf("/** 原文: current page only"), src.indexOf("async function openFile"));
+  assert.match(restoreSrc, /pageCache\.clearPage\(docId, pageNum\)/);
+  assert.equal(restoreSrc.includes("pageCache.clear()"), false);
 });
 
 test("collectArticlePages keeps page order and skips untranslated pages", () => {

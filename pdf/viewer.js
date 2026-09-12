@@ -19,6 +19,7 @@ import {
   pageLabel,
   progressDocumentStatus,
   progressStatus,
+  readoutPlaceholder,
   readViewerSrc,
   readoutPageSelector,
   segmentPageBlocks,
@@ -143,8 +144,14 @@ function appendReadoutNode(input) {
   node.textContent = spec.text;
   if (input.page != null && input.page !== "") node.dataset.page = String(input.page);
   $("readout").append(node);
-  $("emptyRead").hidden = true;
+  syncReadoutEmpty(true);
   return node;
+}
+
+function syncReadoutEmpty(hasArticle) {
+  const copy = readoutPlaceholder({ running: session.running, hasArticle });
+  $("emptyRead").hidden = copy !== PDF_COPY.translateHint;
+  $("pendingRead").hidden = copy !== PDF_COPY.translatingWait;
 }
 
 function renderArticle() {
@@ -153,10 +160,10 @@ function renderArticle() {
   $("readout").replaceChildren();
   const pages = collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0);
   if (!pages.length) {
-    $("emptyRead").hidden = false;
+    syncReadoutEmpty(false);
     return;
   }
-  $("emptyRead").hidden = true;
+  syncReadoutEmpty(true);
   pages.forEach(({ page, blocks }) => {
     (blocks || []).forEach((item) => {
       if (!item?.original || !item.translation) return;
@@ -240,6 +247,7 @@ async function translateCurrentPage() {
   pageCache.set(translatingDoc, translatingPage, pageResults);
   updateTranslateControls();
   setStatus(PDF_COPY.translating);
+  renderArticle();
   let batchSize = 8;
   try {
     batchSize = await resolveBatchSize();
@@ -248,6 +256,7 @@ async function translateCurrentPage() {
     translatingPage = 0;
     if (String(err?.message || err) === "runtime unavailable") {
       setStatus(PDF_COPY.runtimeUnavailable, true);
+      renderArticle();
       updateTranslateControls();
       return;
     }
@@ -291,6 +300,7 @@ async function translateWholeDocument() {
   session.aborted = false;
   updateTranslateControls();
   setStatus(progressDocumentStatus(1, total));
+  renderArticle();
   let batchSize = 8;
   try {
     batchSize = await resolveBatchSize();
@@ -299,6 +309,7 @@ async function translateWholeDocument() {
     translatingPage = 0;
     if (String(err?.message || err) === "runtime unavailable") {
       setStatus(PDF_COPY.runtimeUnavailable, true);
+      renderArticle();
       updateTranslateControls();
       return;
     }
@@ -363,6 +374,7 @@ async function originalsForPage(n, gen, translatingDoc) {
   return blocks;
 }
 
+/** 原文: current page only (clearPage). Does not clear the whole document. */
 function restoreOriginal() {
   abortTranslateSession(session);
   restoreGen += 1;
