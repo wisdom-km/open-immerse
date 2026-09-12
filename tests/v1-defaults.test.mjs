@@ -48,6 +48,7 @@ test("default translateScope is article and settingsVersion is 7", () => {
   assert.equal(DEFAULT_SETTINGS.settingsVersion, SETTINGS_VERSION);
   assert.equal(SETTINGS_VERSION, 7);
   assert.equal(DEFAULT_SETTINGS.twoStepPolish, false);
+  assert.equal(DEFAULT_SETTINGS.deepThink, false);
 });
 
 test("v1 features stay on; youtube/x stay off", () => {

@@ -105,6 +105,8 @@ test("OpenAI-compatible probe uses unsaved Volcengine base, model, and key", asy
     assert.equal(calls[0].init.headers.Authorization, `Bearer ${SECRET}`);
     const body = JSON.parse(calls[0].init.body);
     assert.equal(body.model, "doubao-seed-1-6-250615");
+    assert.deepEqual(body.thinking, { type: "disabled" });
+    assert.equal(body.reasoning_effort, "minimal");
     assert.match(body.messages[1].content, new RegExp(PROVIDER_PROBE_TEXT));
     assert.equal(formatConnectionStatus(result).includes(SECRET), false);
   } finally {

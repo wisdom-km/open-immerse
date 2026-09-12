@@ -38,6 +38,8 @@ Kimi、MiniMax、Grok、OpenRouter、OpenAI 兼容、DeepL、Gemini、Claude、M
 
 大模型引擎默认单次翻译。设置 → 高级「先信后润」（`twoStepPolish`，默认关）开启后，先忠实直译再润成自然流畅的现代译文，更耗 token。这是普通语际转换（如英译中），不是文言文。自定义系统提示词时仍单次。
 
+DeepSeek / Ark Flash 默认会先推理。设置 → 高级「深度思考」（`deepThink`，默认关）关闭时，仅 Ark / DeepSeek 请求带 `thinking.type=disabled`。其他引擎不带该字段。网页、PDF、文档共用。
+
 ## 许可
 
 MIT。与官方沉浸式翻译无隶属关系。
