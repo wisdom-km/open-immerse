@@ -33,7 +33,10 @@ test("inline translations stay on the same line with a small left gap", () => {
 });
 
 test("card and box styles keep padding and a positive top gap", () => {
-  assert.match(css, /html\[data-oi-style="card"\][\s\S]*margin-top:\s*0\.35em/);
+  assert.match(
+    css,
+    /html\[data-oi-style="card"\] \.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\)[\s\S]*?margin-top:\s*0\.35em/
+  );
   assert.match(css, /html\[data-oi-style="card"\][\s\S]*padding:\s*0\.4em\s+0\.65em/);
   assert.match(css, /html\[data-oi-style="box"\][\s\S]*padding:\s*0\.4em\s+0\.65em/);
   assert.match(css, /html\[data-oi-style="card"\][\s\S]*border-left-width:\s*3px/);

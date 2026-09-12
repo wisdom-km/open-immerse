@@ -53,12 +53,15 @@ html[data-oi-style="dim"] .oi-translation {
 html[data-oi-style="card"] .oi-translation:not(.oi-inline),
 html[data-oi-style="box"] .oi-translation:not(.oi-inline) {
   width: auto;
-  /* framed styles keep their own padding; do not pull into the source */
-  margin-top: 0.35em;
   padding: 0.4em 0.65em;
   border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
   background: color-mix(in srgb, currentColor 6%, transparent);
   border-radius: 6px;
+}
+html[data-oi-style="card"] .oi-translation:not(.oi-inline):not(.oi-after-heading),
+html[data-oi-style="box"] .oi-translation:not(.oi-inline):not(.oi-after-heading) {
+  /* framed body: cancel the negative pull so the box does not overlap the source */
+  margin-top: 0.35em;
 }
 html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
   border-left-width: 3px;
