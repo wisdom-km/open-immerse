@@ -3,11 +3,13 @@ import {
   DEFAULT_ZOOM,
   PDF_COPY,
   favoriteSegment,
+  favoriteSegmentItem,
   nextZoom,
   pageIndex,
   pageLabel,
   readViewerSrc,
   textLayerCopy,
+  translationBlock,
   zoomLabel
 } from "../lib/pdf-viewer.js";
 
@@ -45,8 +47,8 @@ function init() {
   $("next").addEventListener("click", () => goPage(1));
   $("zoomOut").addEventListener("click", () => setZoom(nextZoom(zoom, -1)));
   $("zoomIn").addEventListener("click", () => setZoom(nextZoom(zoom, 1)));
-  $("favoriteSegment").addEventListener("click", onFavorite);
-  // M2: wire #translatePage to the shared batch translate message. Keep disabled in M1.
+  $("blocks").addEventListener("click", onBlockFavorite);
+  // M2: fill #blocks via translationBlock() and the shared batch translate message.
   document.addEventListener("keydown", onKey);
 
   const src = readViewerSrc(location.search);
@@ -70,14 +72,46 @@ function eventTargetIsField(target) {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
 }
 
-async function onFavorite() {
-  const result = await favoriteSegment({
-    original: "",
-    translation: "",
-    url: sourceUrl || location.href,
-    title: document.title
+async function onBlockFavorite(event) {
+  const button = event.target.closest("[data-favorite-block]");
+  if (!button) return;
+  const block = button.closest(".translate-block");
+  if (!block) return;
+  await favoriteSegment(
+    favoriteSegmentItem({
+      original: block.querySelector(".org")?.textContent || "",
+      translation: block.querySelector(".dst")?.textContent || "",
+      url: sourceUrl || location.href,
+      filename: block.dataset.filename || shortTitle(sourceUrl),
+      page: block.dataset.page
+    })
+  );
+}
+
+function appendTranslationBlock(input) {
+  const block = translationBlock({
+    ...input,
+    filename: input.filename || shortTitle(sourceUrl)
   });
-  if (!result?.ok) return;
+  const article = document.createElement("article");
+  article.className = "translate-block";
+  article.dataset.page = String(block.page);
+  article.dataset.filename = block.filename;
+  const org = document.createElement("p");
+  org.className = "org";
+  org.textContent = block.original;
+  const dst = document.createElement("p");
+  dst.className = "dst";
+  dst.textContent = block.translation;
+  const fav = document.createElement("button");
+  fav.type = "button";
+  fav.className = "btn-secondary";
+  fav.dataset.favoriteBlock = "1";
+  fav.textContent = PDF_COPY.favorite;
+  article.append(org, dst, fav);
+  $("blocks").append(article);
+  $("emptyTranslate").hidden = true;
+  return article;
 }
 
 async function openFile(file) {

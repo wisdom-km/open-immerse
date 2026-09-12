@@ -9,6 +9,7 @@ import {
   DEFAULT_ZOOM,
   PDF_COPY,
   ZOOM_MIN,
+  blockLocation,
   clampZoom,
   favoriteSegment,
   favoriteSegmentItem,
@@ -21,6 +22,7 @@ import {
   readViewerSrc,
   shouldOfferPdfOpen,
   textLayerCopy,
+  translationBlock,
   viewerSearch,
   zoomLabel
 } from "../lib/pdf-viewer.js";
@@ -64,7 +66,11 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /class="pane-translate"/);
   assert.match(html, /点击翻译/);
   assert.match(html, /id="translatePage"[^>]*disabled>翻译</);
-  assert.match(html, /id="favoriteSegment"[^>]*disabled[^>]*>收藏本段</);
+  assert.match(html, /id="blocks"[^>]*data-favorite-hook="per-block"/);
+  assert.match(html, /id="emptyTranslate"/);
+  assert.match(src, /appendTranslationBlock/);
+  assert.match(src, /data-favorite-block/);
+  assert.match(src, /favoriteSegmentItem/);
   assert.match(html, /本页没有文字层|扫描件翻译将在后续版本支持/);
 });
 
@@ -125,10 +131,15 @@ test("favoriteSegment is the M1 plumbing hook into OI_SAVE_LEARNING", async () =
     original: "Hello",
     translation: "你好",
     url: "https://x.com/a.pdf",
-    title: "A"
+    filename: "paper.pdf",
+    page: 2
   });
   assert.equal(item.original, "Hello");
   assert.equal(item.translation, "你好");
+  assert.equal(item.title, "paper.pdf p.2");
+  assert.equal(item.context, "paper.pdf p.2");
+  assert.equal(blockLocation({ filename: "a.pdf", page: 3 }), "a.pdf p.3");
+  assert.equal(translationBlock({ original: "Hi", page: 1 }).original, "Hi");
   const sent = [];
   const result = await favoriteSegment(item, async (msg) => {
     sent.push(msg);

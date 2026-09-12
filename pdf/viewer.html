@@ -30,10 +30,10 @@
       <canvas id="page" hidden></canvas>
     </section>
     <aside class="pane-translate" aria-label="译文">
-      <div class="empty-translate">
+      <div id="blocks" class="translate-blocks" data-favorite-hook="per-block"></div>
+      <div id="emptyTranslate" class="empty-translate">
         <p>点击翻译</p>
         <button type="button" id="translatePage" class="btn-primary" disabled>翻译</button>
-        <button type="button" id="favoriteSegment" class="btn-secondary" disabled title="翻译后可收藏本段">收藏本段</button>
         <p id="noTextLayerHint" class="m2-stub" hidden>扫描件翻译将在后续版本支持。</p>
       </div>
     </aside>
