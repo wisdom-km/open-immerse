@@ -165,6 +165,10 @@ html[data-oi-fab-corner="bottom-left"] .oi-selection-card {
   appearance: none;
   transition: background 0.15s ease;
 }
+.oi-fab > button[data-act="toggle"],
+.oi-fab > button[data-act="restore"] {
+  padding: 0 12px;
+}
 .oi-fab > button:hover { background: color-mix(in srgb, var(--oi-line) 70%, #fff); }
 .oi-fab > button:focus-visible {
   outline: 2px solid var(--oi-accent);

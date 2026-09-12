@@ -15,7 +15,8 @@ test("FAB buttons match Loom inline-flex 36×36 centering", () => {
   assert.match(fabBtn, /align-items:\s*center/);
   assert.match(fabBtn, /justify-content:\s*center/);
   assert.match(fabBtn, /height:\s*36px/);
-  assert.match(fabBtn, /padding:\s*0/);
+  assert.match(fabBtn, /\[data-act="toggle"\][\s\S]*\[data-act="restore"\][\s\S]*padding:\s*0 12px/);
+  assert.match(fabBtn, /\[data-act="fold"\][\s\S]*padding:\s*0/);
   assert.match(fabBtn, /\[data-act="fold"\][\s\S]*width:\s*36px/);
   assert.match(fabBtn, /font-size:\s*13px/);
   assert.match(fabBtn, /font-weight:\s*600/);
@@ -54,5 +55,5 @@ test("FAB action labels stay flex-centered", () => {
   assert.match(js, /停止/);
   assert.match(fabBtn, /align-items:\s*center/);
   assert.match(fabBtn, /justify-content:\s*center/);
-  assert.match(fabBtn, /padding:\s*0/);
+  assert.match(fabBtn, /\[data-act="toggle"\][\s\S]*padding:\s*0 12px/);
 });
