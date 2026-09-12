@@ -131,8 +131,17 @@ async function handleMessage(message, sender) {
       const features = resolveFeatures(await getSettings());
       if (message.page === "documents" && !features.documents) return { ok: false, error: "documents off" };
       if (message.page === "learning" && !features.learning) return { ok: false, error: "learning off" };
-      const path = message.page === "documents" ? "documents/documents.html" : "learning/learning.html";
-      await chrome.tabs.create({ url: chrome.runtime.getURL(path) });
+      const path =
+        message.page === "documents"
+          ? "documents/documents.html"
+          : message.page === "pdf"
+            ? "pdf/viewer.html"
+            : message.page === "learning"
+              ? "learning/learning.html"
+              : "";
+      if (!path) return { ok: false, error: "unknown page" };
+      const suffix = message.page === "pdf" && message.src ? `?src=${encodeURIComponent(message.src)}` : "";
+      await chrome.tabs.create({ url: chrome.runtime.getURL(path) + suffix });
       return { ok: true };
     }
     case "OI_TOGGLE_SITE_RULE": {

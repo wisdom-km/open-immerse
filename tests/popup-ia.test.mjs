@@ -25,6 +25,9 @@ test("popup IA is page-only: Dual Line, 沉浸译, no feature toggles or youtube
   assert.match(html, /未配置引擎/);
   assert.match(html, /id="openLearning">学习中心</);
   assert.match(html, /id="openDocs">文档</);
+  assert.match(html, /id="openPdfPage">PDF</);
+  assert.match(html, /id="openPdf"[^>]*>在沉浸译中打开</);
+  assert.match(html, /id="pdfEntry" hidden/);
   assert.match(html, /id="openOptions">设置</);
   assert.equal(html.includes("featureList"), false);
   assert.equal(/youtube|YouTube/i.test(html), false);

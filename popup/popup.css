@@ -32,6 +32,22 @@ select {
 }
 .ghost-link:hover { color: var(--oi-accent); }
 .danger { color: var(--oi-danger); font-size: 12px; margin: 8px 0 0; }
+#pdfEntry { margin: 8px 0 4px; }
+.btn-primary {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  min-height: 36px;
+  background: var(--oi-accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-primary:hover { background: var(--oi-accent-hover); }
+
 .entries {
   display: flex; gap: 8px; align-items: center; margin-top: 12px; padding-top: 10px;
   border-top: 1px solid var(--oi-line);

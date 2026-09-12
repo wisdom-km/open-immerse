@@ -1,6 +1,7 @@
 import { getProvider, isProviderConfigured } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
+import { shouldOfferPdfOpen } from "../lib/pdf-viewer.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -62,6 +63,13 @@ async function init() {
   $("openOptions").addEventListener("click", openOptions);
   $("openLearning").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "learning" }));
   $("openDocs").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "documents" }));
+  $("openPdfPage").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "pdf" }));
+
+  const pdfTab = shouldOfferPdfOpen(tab?.url);
+  $("pdfEntry").hidden = !pdfTab;
+  $("openPdf").addEventListener("click", () =>
+    chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "pdf", src: pdfTab ? tab.url : "" })
+  );
 }
 
 function renderEngine(settings) {

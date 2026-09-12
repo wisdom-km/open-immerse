@@ -6,7 +6,13 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const tokens = readFileSync(join(root, "ui/tokens.css"), "utf8");
-const pages = ["popup/popup.css", "options/options.css", "learning/learning.css", "documents/documents.css"];
+const pages = [
+  "popup/popup.css",
+  "options/options.css",
+  "learning/learning.css",
+  "documents/documents.css",
+  "pdf/viewer.css"
+];
 
 test("shared tokens define V2 brand colors and Dual Line mark", () => {
   assert.match(tokens, /--oi-bg:\s*#0b0d12/);

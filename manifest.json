@@ -51,5 +51,16 @@
       },
       "description": "__MSG_cmdToggle__"
     }
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "pdf/viewer.html",
+        "pdf/viewer.css",
+        "pdf/viewer.js",
+        "pdf/vendor/*"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
