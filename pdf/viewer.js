@@ -11,6 +11,7 @@ import {
   neighborPages,
   nextZoom,
   normalizePdfTranslateScope,
+  wheelPageDelta,
   pageBlocksCopy,
   pageFromViewport,
   pageHasTranslation,
@@ -75,7 +76,7 @@ function init() {
   $("next").addEventListener("click", () => goPage(1));
   $("zoomOut").addEventListener("click", () => setZoom(nextZoom(zoom, -1)));
   $("zoomIn").addEventListener("click", () => setZoom(nextZoom(zoom, 1)));
-  $("pdfTranslateScope").addEventListener("change", () => updateTranslateControls());
+  document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   $("translatePage").addEventListener("click", () => startTranslate());
   $("stopTranslate").addEventListener("click", () => {
     abortTranslateSession(session);
@@ -83,6 +84,7 @@ function init() {
   });
   $("restoreOriginal").addEventListener("click", restoreOriginal);
   $("pdfPane").addEventListener("scroll", onPdfScroll, { passive: true });
+  $("pdfPane").addEventListener("wheel", onPdfWheel, { passive: true });
   document.addEventListener("keydown", onKey);
   listenProgress();
 
@@ -187,11 +189,32 @@ function runtimeSend(message) {
 }
 
 function currentScope() {
-  return normalizePdfTranslateScope($("pdfTranslateScope").value);
+  const on = document.querySelector(".scope-seg-btn.is-on");
+  return normalizePdfTranslateScope(on?.dataset.scope);
+}
+
+function onScopeClick(event) {
+  const btn = event.target.closest(".scope-seg-btn");
+  if (!btn || btn.disabled || session.running) return;
+  setTranslateScope(btn.dataset.scope);
+}
+
+function setTranslateScope(value) {
+  const scope = normalizePdfTranslateScope(value);
+  document.querySelectorAll(".scope-seg-btn").forEach((btn) => {
+    btn.classList.toggle("is-on", btn.dataset.scope === scope);
+  });
+  updateTranslateControls();
+}
+
+function setScopeEnabled(enabled) {
+  document.querySelectorAll(".scope-seg-btn").forEach((btn) => {
+    btn.disabled = !enabled;
+  });
 }
 
 async function startTranslate() {
-  if (currentScope() === "document") await translateWholeDocument();
+  if (currentScope() === "all") await translateWholeDocument();
   else await translateCurrentPage();
 }
 
@@ -482,6 +505,16 @@ function onPdfScroll() {
   });
 }
 
+function onPdfWheel(event) {
+  if (!pdfDoc) return;
+  const pane = $("pdfPane");
+  const overflow = pane.scrollHeight - pane.clientHeight > 4;
+  const atTop = pane.scrollTop <= 0;
+  const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1;
+  const dir = wheelPageDelta({ deltaY: event.deltaY, atTop, atBottom, overflow });
+  if (dir) goPage(dir);
+}
+
 function syncVisiblePage() {
   if (!pdfDoc || !pageViews.length) return;
   const current = measureVisible();
@@ -599,7 +632,6 @@ function updatePager() {
 function setHasDoc(has) {
   $("zoomOut").disabled = !has;
   $("zoomIn").disabled = !has;
-  $("pdfTranslateScope").disabled = !has || session.running;
   if (!has) {
     $("pages").replaceChildren();
     pageViews = [];
@@ -618,11 +650,13 @@ function setHasDoc(has) {
 function updateTranslateControls() {
   const scope = currentScope();
   const hasBlocks = pageOriginals.length > 0;
-  const canTranslate = scope === "document" ? Boolean(pdfDoc) : hasBlocks;
+  const canTranslate = scope === "all" ? Boolean(pdfDoc) : hasBlocks;
   $("translatePage").disabled = !pdfDoc || !canTranslate || session.running;
+  $("translatePage").hidden = session.running;
+  $("stopTranslate").hidden = !session.running;
   $("stopTranslate").disabled = !session.running;
   $("restoreOriginal").disabled = !pageHasTranslation(pageCache.get(docId, pageNum));
-  $("pdfTranslateScope").disabled = !pdfDoc || session.running;
+  setScopeEnabled(Boolean(pdfDoc) && !session.running);
 }
 
 function setStatus(text, isError = false) {

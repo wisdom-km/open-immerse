@@ -42,6 +42,7 @@ import {
   shouldSyncReadout,
   textLayerCopy,
   translateDocumentPages,
+  wheelPageDelta,
   translatePageBlocks,
   translationBlock,
   articleNodeSpec,
@@ -93,8 +94,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /class="pane-translate"/);
   assert.match(html, /点击翻译/);
   assert.match(html, /id="translatePage"[^>]*disabled>翻译</);
-  assert.match(html, /id="stopTranslate"[^>]*disabled>停止</);
-  assert.match(html, /id="restoreOriginal"[^>]*disabled>原文</);
+  assert.match(html, /id="stopTranslate"[^>]*class="btn-primary"[^>]*hidden[^>]*disabled>停止</);
+  assert.match(html, /id="restoreOriginal"[^>]*class="btn-ghost"[^>]*disabled>原文</);
   assert.match(html, /id="readout"[^>]*class="readout"/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
   assert.match(src, /appendReadoutNode/);
@@ -152,7 +153,7 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(pageBlocksCopy(0, 4), PDF_COPY.emptyPage);
   assert.equal(pageBlocksCopy(2, 8), "");
   assert.equal(progressStatus(2, 9), "正在翻译第 2 / 9 段");
-  assert.equal(progressDocumentStatus(3, 12), "正在翻译第 3 / 12 页");
+  assert.equal(progressDocumentStatus(3, 12), "翻译中 · 3/12");
   assert.match(src, /PDF_COPY\.fetchFail/);
   assert.match(src, /textLayerCopy/);
   assert.match(src, /pageBlocksCopy/);
@@ -411,23 +412,46 @@ test("continuous scroll helpers pick the page in view and nearby canvases", () =
   assert.equal(readoutPageSelector(4), '[data-page="4"]');
   assert.equal(shouldSyncReadout(40, 40, 80), false);
   assert.equal(shouldSyncReadout(200, 40, 80), true);
-  assert.equal(normalizePdfTranslateScope("document"), "document");
+  assert.equal(normalizePdfTranslateScope("all"), "all");
+  assert.equal(normalizePdfTranslateScope("document"), "all");
   assert.equal(normalizePdfTranslateScope(""), "page");
+  assert.equal(wheelPageDelta({ deltaY: 40, atTop: true, atBottom: true, overflow: false }), 1);
+  assert.equal(wheelPageDelta({ deltaY: -40, atTop: true, atBottom: true, overflow: false }), -1);
+  assert.equal(wheelPageDelta({ deltaY: 40, atTop: false, atBottom: true, overflow: true }), 0);
 });
 
 test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page stack", () => {
-  assert.match(html, /id="pdfTranslateScope"/);
-  assert.match(html, /<option value="page" selected>当前页<\/option>/);
-  assert.match(html, /<option value="document">全文<\/option>/);
+  const pick = html.indexOf('id="pick"');
+  const scope = html.indexOf("scope-seg");
+  const translate = html.indexOf('id="translatePage"');
+  const stop = html.indexOf('id="stopTranslate"');
+  const restore = html.indexOf('id="restoreOriginal"');
+  const prev = html.indexOf('id="prev"');
+  assert.ok(pick > 0 && pick < scope && scope < translate && translate < stop && stop < restore && restore < prev);
+  assert.match(html, /class="scope-seg"[^>]*role="group"[^>]*aria-label="翻译范围"/);
+  assert.match(html, /class="scope-seg-btn is-on"[^>]*data-scope="page"[^>]*>当前页</);
+  assert.match(html, /class="scope-seg-btn"[^>]*data-scope="all"[^>]*>全文</);
+  assert.equal(html.includes("pdfTranslateScope"), false);
+  assert.equal(html.includes("scope-field"), false);
   assert.match(html, /id="prev"[^>]*>上一页</);
   assert.match(html, /id="next"[^>]*>下一页</);
+  assert.match(css, /\.scope-seg\s*\{[^}]*border-radius:\s*8px/s);
+  assert.match(css, /\.scope-seg-btn\.is-on\s*\{[^}]*font-weight:\s*600/s);
+  assert.match(css, /\.scope-seg-btn\.is-on\s*\{[^}]*--oi-accent\) 18%/s);
   assert.match(css, /\.pages\s*\{[^}]*flex-direction:\s*column/s);
   assert.match(css, /\.pdf-page\s*\{/);
   assert.match(src, /onPdfScroll/);
+  assert.match(src, /onPdfWheel/);
+  assert.match(src, /wheelPageDelta/);
+  assert.match(src, /onScopeClick/);
+  assert.match(src, /setTranslateScope/);
+  const scopeClickSrc = src.slice(src.indexOf("function onScopeClick"), src.indexOf("function setTranslateScope"));
+  assert.equal(scopeClickSrc.includes("startTranslate"), false);
   assert.match(src, /scrollIntoView/);
   assert.match(src, /syncReadoutToPage/);
   assert.match(src, /dataset\.page/);
   assert.match(src, /translateWholeDocument/);
+  assert.match(src, /currentScope\(\) === "all"/);
   assert.equal(src.includes('id="page"'), false);
   assert.equal(html.includes('id="page"'), false);
   const goPageSrc = src.slice(src.indexOf("async function goPage"), src.indexOf("async function setZoom"));

@@ -47,25 +47,6 @@ h1 {
   color: var(--oi-text-muted);
   font-variant-numeric: tabular-nums;
 }
-.scope-field {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  color: var(--oi-text-muted);
-  font-size: 13px;
-}
-.scope-field select {
-  border: 1px solid var(--oi-line);
-  background: var(--oi-card);
-  color: var(--oi-text);
-  border-radius: 8px;
-  padding: 6px 10px;
-  min-height: 36px;
-  font: inherit;
-}
-.scope-field select:disabled { opacity: 0.45; }
-
 #status {
   margin: 0;
   padding: 8px 16px;
@@ -200,6 +181,50 @@ button:disabled { opacity: 0.45; cursor: default; }
   color: var(--oi-text-muted);
   opacity: 1;
 }
+.scope-seg {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 2px;
+  gap: 0;
+  border: 1px solid var(--oi-line);
+  border-radius: 8px;
+  background: var(--oi-input, var(--oi-bg));
+}
+.scope-seg-btn {
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 0 12px;
+  margin: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--oi-text-muted);
+  font: 500 13px/1.2 var(--oi-font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.scope-seg-btn:hover {
+  color: var(--oi-text);
+  background: color-mix(in srgb, var(--oi-line) 35%, transparent);
+}
+.scope-seg-btn.is-on {
+  background: color-mix(in srgb, var(--oi-accent) 18%, transparent);
+  color: var(--oi-text);
+  font-weight: 600;
+}
+.scope-seg-btn:focus-visible {
+  outline: 2px solid var(--oi-accent);
+  outline-offset: 1px;
+}
+.scope-seg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.scope-seg-btn:disabled:hover {
+  color: var(--oi-text-muted);
+  background: transparent;
+}
+[hidden] { display: none !important; }
 
 @media (max-width: 899px) {
   .workspace {
