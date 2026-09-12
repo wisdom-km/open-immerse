@@ -87,8 +87,10 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
   assert.match(src, /appendReadoutNode/);
   assert.match(src, /articleNodeSpec/);
-  assert.match(libSrc, /oi-pdf-h/);
+  assert.match(libSrc, /oi-pdf-h1/);
+  assert.match(libSrc, /oi-pdf-h2/);
   assert.match(libSrc, /oi-pdf-p/);
+  assert.equal(libSrc.includes("oi-pdf-h\""), false);
   assert.match(src, /emptyRead/);
   assert.equal(src.includes("data-favorite-block"), false);
   assert.equal(src.includes("favoriteSegment"), false);
@@ -97,11 +99,14 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.equal(html.includes("收藏"), false);
   assert.equal(css.includes(".translate-block"), false);
   assert.equal(css.includes(".translate-article"), false);
+  assert.equal(css.includes(".oi-pdf-h {"), false);
   assert.match(css, /\.pane-translate\s*\{[^}]*padding:\s*20px 24px 32px/s);
   assert.match(css, /\.pane-translate \.readout\s*\{[^}]*max-width:\s*42rem/s);
-  assert.match(css, /\.oi-pdf-h\s*\{[^}]*font:\s*650 1\.15em\/1\.35 var\(--oi-font\)/s);
-  assert.match(css, /\.oi-pdf-h:first-child\s*\{\s*margin-top:\s*0/s);
-  assert.match(css, /\.oi-pdf-p\s*\{[^}]*font:\s*400 0\.98em\/1\.65 var\(--oi-font\)/s);
+  assert.match(css, /\.oi-pdf-h1\s*\{[^}]*font:\s*650 22px\/1\.3 var\(--oi-font\)/s);
+  assert.match(css, /\.oi-pdf-h2\s*\{[^}]*font:\s*650 18px\/1\.35 var\(--oi-font\)/s);
+  assert.match(css, /\.oi-pdf-h1:first-child,\s*\.oi-pdf-h2:first-child\s*\{\s*margin-top:\s*0/s);
+  assert.match(css, /\.oi-pdf-h1 \+ \.oi-pdf-h2\s*\{\s*margin-top:\s*16px/s);
+  assert.match(css, /\.oi-pdf-p\s*\{[^}]*font:\s*400 15px\/1\.7 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-p:last-child\s*\{\s*margin-bottom:\s*0/s);
   assert.match(css, /\.pane-translate \.empty-read\s*\{[^}]*color:\s*var\(--oi-text-muted\)/s);
   assert.match(html, /本页没有文字层|扫描件翻译将在后续版本支持/);
@@ -265,7 +270,7 @@ test("segmentPageBlocks joins lines, dehyphenates, and keeps column order", () =
       pdfItem("these models to be superior in quality.", 360, 686, 180)
     ]
   });
-  assert.ok(paper.some((block) => /Attention Is All You Need/.test(block.text) && block.role === "heading"));
+  assert.ok(paper.some((block) => /Attention Is All You Need/.test(block.text) && block.role === "title"));
   assert.ok(paper.some((block) => /dominant sequence transduction/.test(block.text)));
   assert.ok(paper.some((block) => /Transformer/.test(block.text)));
   assert.ok(paper.some((block) => /machine translation tasks/.test(block.text)));
@@ -286,16 +291,18 @@ test("segmentPageBlocks marks headings and keeps title with body as article part
   const title = paper.find((block) => /Attention Is All You Need/.test(block.text));
   const abstract = paper.find((block) => block.text === "Abstract");
   const body = paper.find((block) => /dominant sequence transduction/.test(block.text));
-  assert.equal(title.role, "heading");
+  assert.equal(title.role, "title");
   assert.equal(abstract.role, "heading");
   assert.equal(body.role, "paragraph");
   assert.match(body.text, /neural networks/);
   assert.equal(/Attention Is All You Need/.test(body.text), false);
-  assert.equal(articleNodeSpec({ translation: "注意力机制就够了", role: "heading" }).tag, "h2");
-  assert.equal(articleNodeSpec({ translation: "注意力机制就够了", role: "heading" }).className, "oi-pdf-h");
+  assert.equal(articleNodeSpec({ translation: "注意力机制就够了", role: "title" }).tag, "h1");
+  assert.equal(articleNodeSpec({ translation: "注意力机制就够了", role: "title" }).className, "oi-pdf-h1");
+  assert.equal(articleNodeSpec({ translation: "摘要", role: "heading" }).tag, "h2");
+  assert.equal(articleNodeSpec({ translation: "摘要", role: "heading" }).className, "oi-pdf-h2");
   assert.equal(articleNodeSpec({ translation: "我们提出一种新架构。", role: "paragraph" }).tag, "p");
   assert.equal(articleNodeSpec({ translation: "我们提出一种新架构。", role: "paragraph" }).className, "oi-pdf-p");
-  assert.deepEqual(translationBlock({ original: "Hi", page: 1, role: "heading" }).role, "heading");
+  assert.deepEqual(translationBlock({ original: "Hi", page: 1, role: "title" }).role, "title");
 
   const wrappedTitle = segmentPageBlocks({
     items: [
@@ -305,7 +312,7 @@ test("segmentPageBlocks marks headings and keeps title with body as article part
       pdfItem("two wrapped body lines without becoming a heading.", 72, 686, 220, 10)
     ]
   });
-  assert.equal(wrappedTitle[0].role, "heading");
+  assert.equal(wrappedTitle[0].role, "title");
   assert.equal(wrappedTitle[0].text, "Attention Is All You Need");
   assert.equal(wrappedTitle[1].role, "paragraph");
   assert.match(wrappedTitle[1].text, /first sentence of the abstract/);
@@ -366,14 +373,14 @@ test("translatePageBlocks sends OI_TRANSLATE_BATCH slices and honors stop", asyn
 
   const headed = await translatePageBlocks(
     [
-      { text: "Attention Is All You Need", role: "heading" },
+      { text: "Attention Is All You Need", role: "title" },
       { text: "The dominant sequence transduction models are based on attention.", role: "paragraph" }
     ],
     {
       send: async (msg) => ({ ok: true, translations: msg.texts.map((text) => `译:${text}`) })
     }
   );
-  assert.equal(headed.results[0].role, "heading");
+  assert.equal(headed.results[0].role, "title");
   assert.equal(headed.results[1].role, "paragraph");
   assert.equal(headed.results[0].translation, "译:Attention Is All You Need");
 
@@ -398,13 +405,14 @@ test("two-step draft progress replaces in place and keeps heading role", async (
   const draft = applyDraftTranslations(
     session,
     { phase: "draft", requestId: "pdf-0", translations: ["你好世界。"] },
-    [{ original: "Hello world.", translation: "", role: "heading" }]
+    [{ original: "Hello world.", translation: "", role: "title" }]
   );
   assert.equal(shouldApplyDraft(session, { phase: "draft", requestId: "pdf-0" }), true);
   assert.equal(shouldApplyDraft(session, { phase: "draft", requestId: "other" }), false);
   assert.equal(draft[0].translation, "你好世界。");
-  assert.equal(draft[0].role, "heading");
-  assert.equal(articleNodeSpec(draft[0]).tag, "h2");
+  assert.equal(draft[0].role, "title");
+  assert.equal(articleNodeSpec(draft[0]).tag, "h1");
+  assert.equal(articleNodeSpec({ translation: "摘要", role: "heading" }).tag, "h2");
   assert.match(src, /OI_TRANSLATE_PROGRESS/);
   assert.match(src, /applyDraftTranslations/);
   assert.match(src, /applyPageProgress/);
@@ -430,7 +438,7 @@ test("vendored pdf.js segments a multi-paragraph paper-style page", async () => 
     const blocks = segmentPageBlocks(content);
     assert.ok(blocks.some((block) => /Attention Is All You Need/.test(block.text)));
     assert.ok(blocks.some((block) => /sequence transduction/.test(block.text)));
-    assert.ok(blocks.some((block) => block.role === "heading"));
+    assert.ok(blocks.some((block) => block.role === "title" || block.role === "heading"));
     assert.ok(blocks.some((block) => block.role === "paragraph"));
     assert.ok(blocks.length >= 2);
   } finally {

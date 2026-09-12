@@ -151,7 +151,7 @@ async function translateCurrentPage() {
   pageResults = pageOriginals.map((block) => ({
     original: block.text || block.original || block,
     translation: "",
-    role: block.role === "heading" ? "heading" : "paragraph"
+    role: block.role === "title" ? "title" : block.role === "heading" ? "heading" : "paragraph"
   }));
   renderResults(pageResults);
   updateTranslateControls();
