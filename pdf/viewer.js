@@ -7,8 +7,6 @@ import {
   createPageCache,
   createTranslateSession,
   extractPageItems,
-  favoriteSegment,
-  favoriteSegmentItem,
   nextZoom,
   pageBlocksCopy,
   pageIndex,
@@ -18,7 +16,7 @@ import {
   segmentPageBlocks,
   textLayerCopy,
   translatePageBlocks,
-  translationBlock,
+  articleNodeSpec,
   zoomLabel
 } from "../lib/pdf-viewer.js";
 
@@ -70,7 +68,6 @@ function init() {
     if (session.running) setStatus(PDF_COPY.stopped);
   });
   $("restoreOriginal").addEventListener("click", restoreOriginal);
-  $("blocks").addEventListener("click", onBlockFavorite);
   document.addEventListener("keydown", onKey);
   listenProgress();
 
@@ -119,51 +116,14 @@ function eventTargetIsField(target) {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
 }
 
-async function onBlockFavorite(event) {
-  const button = event.target.closest("[data-favorite-block]");
-  if (!button) return;
-  const block = button.closest(".translate-block");
-  if (!block) return;
-  await favoriteSegment(
-    favoriteSegmentItem({
-      original: block.querySelector(".org")?.textContent || "",
-      translation: block.querySelector(".dst")?.textContent || "",
-      url: sourceUrl || location.href,
-      filename: block.dataset.filename || currentFilename(),
-      page: block.dataset.page
-    })
-  );
-}
-
-function appendTranslationBlock(input) {
-  const block = translationBlock({
-    ...input,
-    filename: input.filename || currentFilename()
-  });
-  const article = document.createElement("article");
-  article.className = "translate-block";
-  article.dataset.page = String(block.page);
-  article.dataset.filename = block.filename;
-  const org = document.createElement("p");
-  org.className = "org";
-  org.textContent = block.original;
-  const dst = document.createElement("p");
-  dst.className = "dst";
-  dst.textContent = block.translation;
-  const fav = document.createElement("button");
-  fav.type = "button";
-  fav.className = "btn-secondary";
-  fav.dataset.favoriteBlock = "1";
-  fav.textContent = PDF_COPY.favorite;
-  fav.disabled = !block.original;
-  article.append(org, dst, fav);
-  $("blocks").append(article);
-  $("emptyTranslate").hidden = true;
-  return article;
-}
-
-function currentFilename() {
-  return shortTitle(sourceUrl) || "document.pdf";
+function appendReadoutNode(input) {
+  const spec = articleNodeSpec(input);
+  const node = document.createElement(spec.tag);
+  node.className = spec.className;
+  node.textContent = spec.text;
+  $("readout").append(node);
+  $("emptyRead").hidden = true;
+  return node;
 }
 
 function runtimeSend(message) {
@@ -188,7 +148,11 @@ async function translateCurrentPage() {
   const translatingDoc = docId;
   session.running = true;
   session.aborted = false;
-  pageResults = pageOriginals.map((original) => ({ original, translation: "" }));
+  pageResults = pageOriginals.map((block) => ({
+    original: block.text || block.original || block,
+    translation: "",
+    role: block.role === "title" ? "title" : block.role === "heading" ? "heading" : "paragraph"
+  }));
   renderResults(pageResults);
   updateTranslateControls();
   setStatus(PDF_COPY.translating);
@@ -248,25 +212,25 @@ function restoreOriginal() {
   const copy = pageBlocksCopy(pageOriginals.length, pageItems);
   setStatus(copy);
   $("noTextLayerHint").hidden = pageItems > 0;
-  $("emptyTranslate").hidden = false;
+  $("emptyRead").hidden = false;
   updateTranslateControls();
 }
 
 function renderResults(results) {
-  $("blocks").replaceChildren();
+  $("readout").replaceChildren();
   const list = (results || []).filter((item) => item?.original);
   if (!list.length) {
-    $("emptyTranslate").hidden = false;
+    $("emptyRead").hidden = false;
     return;
   }
-  list.forEach((item) =>
-    appendTranslationBlock({
-      original: item.original,
+  $("emptyRead").hidden = true;
+  list.forEach((item) => {
+    if (!item.translation) return;
+    appendReadoutNode({
       translation: item.translation,
-      page: pageNum,
-      filename: currentFilename()
-    })
-  );
+      role: item.role
+    });
+  });
 }
 
 async function openFile(file) {
@@ -404,7 +368,7 @@ async function loadPageText(page, ticket) {
       renderResults([]);
       setStatus(copy);
       $("noTextLayerHint").hidden = pageItems > 0;
-      $("emptyTranslate").hidden = false;
+      $("emptyRead").hidden = false;
     }
   } catch {
     if (ticket !== viewEpoch) return;
@@ -414,7 +378,7 @@ async function loadPageText(page, ticket) {
     renderResults([]);
     setStatus(PDF_COPY.noTextLayer);
     $("noTextLayerHint").hidden = false;
-    $("emptyTranslate").hidden = false;
+    $("emptyRead").hidden = false;
   }
   updateTranslateControls();
 }

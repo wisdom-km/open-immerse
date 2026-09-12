@@ -78,36 +78,47 @@ h1 {
   background: var(--oi-bg);
 }
 .pane-translate {
-  padding: 24px;
+  padding: 20px 24px 32px;
+  overflow: auto;
   background: var(--oi-bg-elevated);
   border-left: 1px solid var(--oi-line);
 }
-.translate-blocks {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.pane-translate .readout {
+  max-width: 42rem;
+  margin: 0;
+  color: var(--oi-text);
 }
-.translate-block {
-  padding: 14px;
-  border: 1px solid var(--oi-line);
-  border-radius: 12px;
-  background: var(--oi-panel);
+.oi-pdf-h1 {
+  margin: 28px 0 10px;
+  font: 650 22px/1.3 var(--oi-font);
+  letter-spacing: -0.02em;
+  color: var(--oi-text);
 }
-.translate-block .org,
-.translate-block .dst {
-  margin: 0 0 10px;
+.oi-pdf-h2 {
+  margin: 22px 0 8px;
+  font: 650 18px/1.35 var(--oi-font);
+  letter-spacing: -0.01em;
+  color: var(--oi-text);
 }
-.translate-block .org { color: var(--oi-text-muted); }
-.translate-block .dst { color: var(--oi-text); }
-.empty-translate {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  align-items: flex-start;
+.oi-pdf-h1:first-child,
+.oi-pdf-h2:first-child { margin-top: 0; }
+.oi-pdf-h1 + .oi-pdf-h2 { margin-top: 16px; }
+.oi-pdf-p {
+  margin: 0 0 14px;
+  font: 400 15px/1.7 var(--oi-font);
+  color: var(--oi-text);
+}
+.oi-pdf-p:last-child { margin-bottom: 0; }
+.pane-translate .empty-read {
+  margin: 0;
+  font: 400 14px/1.5 var(--oi-font);
   color: var(--oi-text-muted);
 }
-.empty-translate p { margin: 0; }
-.m2-stub { font-size: 13px; }
+.m2-stub {
+  margin: 8px 0 0;
+  font: 400 14px/1.5 var(--oi-font);
+  color: var(--oi-text-muted);
+}
 
 #page {
   display: block;

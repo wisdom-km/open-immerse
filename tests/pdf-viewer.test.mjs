@@ -34,6 +34,7 @@ import {
   textLayerCopy,
   translatePageBlocks,
   translationBlock,
+  articleNodeSpec,
   viewerSearch,
   zoomLabel
 } from "../lib/pdf-viewer.js";
@@ -82,11 +83,32 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /id="translatePage"[^>]*disabled>翻译</);
   assert.match(html, /id="stopTranslate"[^>]*disabled>停止</);
   assert.match(html, /id="restoreOriginal"[^>]*disabled>原文</);
-  assert.match(html, /id="blocks"[^>]*data-favorite-hook="per-block"/);
-  assert.match(html, /id="emptyTranslate"/);
-  assert.match(src, /appendTranslationBlock/);
-  assert.match(src, /data-favorite-block/);
-  assert.match(src, /favoriteSegmentItem/);
+  assert.match(html, /id="readout"[^>]*class="readout"/);
+  assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
+  assert.match(src, /appendReadoutNode/);
+  assert.match(src, /articleNodeSpec/);
+  assert.match(libSrc, /oi-pdf-h1/);
+  assert.match(libSrc, /oi-pdf-h2/);
+  assert.match(libSrc, /oi-pdf-p/);
+  assert.equal(libSrc.includes("oi-pdf-h\""), false);
+  assert.match(src, /emptyRead/);
+  assert.equal(src.includes("data-favorite-block"), false);
+  assert.equal(src.includes("favoriteSegment"), false);
+  assert.equal(src.includes("OI_SAVE_LEARNING"), false);
+  assert.equal(html.includes("data-favorite-hook"), false);
+  assert.equal(html.includes("收藏"), false);
+  assert.equal(css.includes(".translate-block"), false);
+  assert.equal(css.includes(".translate-article"), false);
+  assert.equal(css.includes(".oi-pdf-h {"), false);
+  assert.match(css, /\.pane-translate\s*\{[^}]*padding:\s*20px 24px 32px/s);
+  assert.match(css, /\.pane-translate \.readout\s*\{[^}]*max-width:\s*42rem/s);
+  assert.match(css, /\.oi-pdf-h1\s*\{[^}]*font:\s*650 22px\/1\.3 var\(--oi-font\)/s);
+  assert.match(css, /\.oi-pdf-h2\s*\{[^}]*font:\s*650 18px\/1\.35 var\(--oi-font\)/s);
+  assert.match(css, /\.oi-pdf-h1:first-child,\s*\.oi-pdf-h2:first-child\s*\{\s*margin-top:\s*0/s);
+  assert.match(css, /\.oi-pdf-h1 \+ \.oi-pdf-h2\s*\{\s*margin-top:\s*16px/s);
+  assert.match(css, /\.oi-pdf-p\s*\{[^}]*font:\s*400 15px\/1\.7 var\(--oi-font\)/s);
+  assert.match(css, /\.oi-pdf-p:last-child\s*\{\s*margin-bottom:\s*0/s);
+  assert.match(css, /\.pane-translate \.empty-read\s*\{[^}]*color:\s*var\(--oi-text-muted\)/s);
   assert.match(html, /本页没有文字层|扫描件翻译将在后续版本支持/);
 });
 
@@ -101,7 +123,7 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.translate, "翻译");
   assert.equal(PDF_COPY.stop, "停止");
   assert.equal(PDF_COPY.restore, "原文");
-  assert.equal(PDF_COPY.favorite, "收藏");
+  assert.equal(PDF_COPY.favorite, undefined);
   assert.equal(PDF_COPY.translating, "翻译中");
   assert.equal(PDF_COPY.polishing, "润色中");
   assert.equal(PDF_COPY.polishFail, "润色失败");
@@ -183,7 +205,7 @@ test("favoriteSegment is the M1 plumbing hook into OI_SAVE_LEARNING", async () =
   assert.equal(sent[0].item.context, "PDF · paper.pdf · p.2");
   const empty = await favoriteSegment({ original: "" }, async () => ({ ok: true }));
   assert.equal(empty.ok, false);
-  assert.match(src, /favoriteSegment/);
+  assert.equal(src.includes("favoriteSegment"), false);
 });
 
 test("vendored pdf.js opens the two-page M1 fixture", async () => {
@@ -215,6 +237,10 @@ function pdfItem(str, x, y, width = 120, height = 10) {
   return { str, transform: [1, 0, 0, 1, x, y], width, height };
 }
 
+function blockTexts(blocks) {
+  return blocks.map((block) => block.text);
+}
+
 test("segmentPageBlocks joins lines, dehyphenates, and keeps column order", () => {
   const single = segmentPageBlocks({
     items: [
@@ -222,14 +248,15 @@ test("segmentPageBlocks joins lines, dehyphenates, and keeps column order", () =
       pdfItem("complex recurrent or convolutional neural networks.", 72, 686, 220)
     ]
   });
-  assert.deepEqual(single, [
+  assert.deepEqual(blockTexts(single), [
     "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks."
   ]);
+  assert.equal(single[0].role, "paragraph");
 
   const hyphen = segmentPageBlocks({
     items: [pdfItem("transfor-", 72, 640, 80), pdfItem("mation is all you need.", 72, 626, 160)]
   });
-  assert.deepEqual(hyphen, ["transformation is all you need."]);
+  assert.deepEqual(blockTexts(hyphen), ["transformation is all you need."]);
 
   const paper = segmentPageBlocks({
     items: [
@@ -243,13 +270,71 @@ test("segmentPageBlocks joins lines, dehyphenates, and keeps column order", () =
       pdfItem("these models to be superior in quality.", 360, 686, 180)
     ]
   });
-  assert.ok(paper.some((block) => /Attention Is All You Need/.test(block)));
-  assert.ok(paper.some((block) => /dominant sequence transduction/.test(block)));
-  assert.ok(paper.some((block) => /Transformer/.test(block)));
-  assert.ok(paper.some((block) => /machine translation tasks/.test(block)));
-  const leftIdx = paper.findIndex((block) => /Transformer/.test(block));
-  const rightIdx = paper.findIndex((block) => /machine translation/.test(block));
+  assert.ok(paper.some((block) => /Attention Is All You Need/.test(block.text) && block.role === "title"));
+  assert.ok(paper.some((block) => /dominant sequence transduction/.test(block.text)));
+  assert.ok(paper.some((block) => /Transformer/.test(block.text)));
+  assert.ok(paper.some((block) => /machine translation tasks/.test(block.text)));
+  const leftIdx = paper.findIndex((block) => /Transformer/.test(block.text));
+  const rightIdx = paper.findIndex((block) => /machine translation/.test(block.text));
   assert.ok(leftIdx >= 0 && rightIdx >= 0 && leftIdx < rightIdx);
+});
+
+test("segmentPageBlocks marks headings and keeps title with body as article parts", () => {
+  const paper = segmentPageBlocks({
+    items: [
+      pdfItem("Attention Is All You Need", 72, 760, 420, 18),
+      pdfItem("Abstract", 72, 730, 70, 12),
+      pdfItem("The dominant sequence transduction models are based on", 72, 700, 230),
+      pdfItem("complex recurrent or convolutional neural networks.", 72, 686, 210)
+    ]
+  });
+  const title = paper.find((block) => /Attention Is All You Need/.test(block.text));
+  const abstract = paper.find((block) => block.text === "Abstract");
+  const body = paper.find((block) => /dominant sequence transduction/.test(block.text));
+  assert.equal(title.role, "title");
+  assert.equal(abstract.role, "heading");
+  assert.equal(body.role, "paragraph");
+  assert.match(body.text, /neural networks/);
+  assert.equal(/Attention Is All You Need/.test(body.text), false);
+  assert.equal(articleNodeSpec({ translation: "注意力机制就够了", role: "title" }).tag, "h1");
+  assert.equal(articleNodeSpec({ translation: "注意力机制就够了", role: "title" }).className, "oi-pdf-h1");
+  assert.equal(articleNodeSpec({ translation: "摘要", role: "heading" }).tag, "h2");
+  assert.equal(articleNodeSpec({ translation: "摘要", role: "heading" }).className, "oi-pdf-h2");
+  assert.equal(articleNodeSpec({ translation: "我们提出一种新架构。", role: "paragraph" }).tag, "p");
+  assert.equal(articleNodeSpec({ translation: "我们提出一种新架构。", role: "paragraph" }).className, "oi-pdf-p");
+  assert.deepEqual(translationBlock({ original: "Hi", page: 1, role: "title" }).role, "title");
+
+  const wrappedTitle = segmentPageBlocks({
+    items: [
+      pdfItem("Attention Is All", 72, 760, 200, 18),
+      pdfItem("You Need", 72, 738, 90, 18),
+      pdfItem("The first sentence of the abstract continues across", 72, 700, 240, 10),
+      pdfItem("two wrapped body lines without becoming a heading.", 72, 686, 220, 10)
+    ]
+  });
+  assert.equal(wrappedTitle[0].role, "title");
+  assert.equal(wrappedTitle[0].text, "Attention Is All You Need");
+  assert.equal(wrappedTitle[1].role, "paragraph");
+  assert.match(wrappedTitle[1].text, /first sentence of the abstract/);
+  assert.match(wrappedTitle[1].text, /without becoming a heading/);
+
+  const shout = segmentPageBlocks({
+    items: [
+      { ...pdfItem("INTRODUCTION", 72, 720, 140, 11), fontName: "Helvetica-Bold" },
+      pdfItem("The rest of this section expands the method in several long sentences that stay body copy.", 72, 690, 280, 10)
+    ]
+  });
+  assert.equal(shout[0].role, "heading");
+  assert.equal(shout[0].text, "INTRODUCTION");
+  assert.equal(shout[1].role, "paragraph");
+
+  const bodyOnly = segmentPageBlocks({
+    items: [
+      pdfItem("These models to be superior in quality after a short clause.", 72, 700, 260, 10),
+      pdfItem("They continue in the next line without a title cue.", 72, 686, 220, 10)
+    ]
+  });
+  assert.ok(bodyOnly.every((block) => block.role === "paragraph"));
 });
 
 test("page cache remembers a translated page and 原文 can drop it", () => {
@@ -284,6 +369,20 @@ test("translatePageBlocks sends OI_TRANSLATE_BATCH slices and honors stop", asyn
   assert.deepEqual(sent[0].texts, ["One paragraph.", "Two paragraph."]);
   assert.equal(sent[0].requestId, "pdf-0");
   assert.equal(out.results[2].translation, "译:Three paragraph.");
+  assert.equal(out.results[0].role, "paragraph");
+
+  const headed = await translatePageBlocks(
+    [
+      { text: "Attention Is All You Need", role: "title" },
+      { text: "The dominant sequence transduction models are based on attention.", role: "paragraph" }
+    ],
+    {
+      send: async (msg) => ({ ok: true, translations: msg.texts.map((text) => `译:${text}`) })
+    }
+  );
+  assert.equal(headed.results[0].role, "title");
+  assert.equal(headed.results[1].role, "paragraph");
+  assert.equal(headed.results[0].translation, "译:Attention Is All You Need");
 
   const paused = createTranslateSession();
   const partial = await translatePageBlocks(["A", "B", "C"], {
@@ -300,24 +399,20 @@ test("translatePageBlocks sends OI_TRANSLATE_BATCH slices and honors stop", asyn
   assert.equal(partial.results[2].translation, "");
 });
 
-test("two-step draft progress replaces in place then final keeps 收藏 context", async () => {
+test("two-step draft progress replaces in place and keeps heading role", async () => {
   const session = createTranslateSession();
   session.inflight = { requestId: "pdf-0", slice: ["Hello world."], sliceStart: 0 };
   const draft = applyDraftTranslations(
     session,
     { phase: "draft", requestId: "pdf-0", translations: ["你好世界。"] },
-    [{ original: "Hello world.", translation: "" }]
+    [{ original: "Hello world.", translation: "", role: "title" }]
   );
   assert.equal(shouldApplyDraft(session, { phase: "draft", requestId: "pdf-0" }), true);
   assert.equal(shouldApplyDraft(session, { phase: "draft", requestId: "other" }), false);
   assert.equal(draft[0].translation, "你好世界。");
-  const item = favoriteSegmentItem({
-    original: draft[0].original,
-    translation: "注意力机制就够了。",
-    filename: "Attention_Is_All_You_Need.pdf",
-    page: 1
-  });
-  assert.equal(item.context, "PDF · Attention_Is_All_You_Need.pdf · p.1");
+  assert.equal(draft[0].role, "title");
+  assert.equal(articleNodeSpec(draft[0]).tag, "h1");
+  assert.equal(articleNodeSpec({ translation: "摘要", role: "heading" }).tag, "h2");
   assert.match(src, /OI_TRANSLATE_PROGRESS/);
   assert.match(src, /applyDraftTranslations/);
   assert.match(src, /applyPageProgress/);
@@ -341,8 +436,10 @@ test("vendored pdf.js segments a multi-paragraph paper-style page", async () => 
     const items = extractPageItems(content);
     assert.ok(items.length > 4);
     const blocks = segmentPageBlocks(content);
-    assert.ok(blocks.some((block) => /Attention Is All You Need/.test(block)));
-    assert.ok(blocks.some((block) => /sequence transduction/.test(block)));
+    assert.ok(blocks.some((block) => /Attention Is All You Need/.test(block.text)));
+    assert.ok(blocks.some((block) => /sequence transduction/.test(block.text)));
+    assert.ok(blocks.some((block) => block.role === "title" || block.role === "heading"));
+    assert.ok(blocks.some((block) => block.role === "paragraph"));
     assert.ok(blocks.length >= 2);
   } finally {
     await doc.destroy();
