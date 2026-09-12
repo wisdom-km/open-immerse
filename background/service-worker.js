@@ -1,11 +1,11 @@
-import { getProvider, guardZhBusinessSense, testProviderConnection } from "../lib/providers.js";
+import { getProvider, guardZhBusinessSense, isTwoStepTranslate, testProviderConnection } from "../lib/providers.js";
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { resolveFeatures } from "../lib/features.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
-const CACHE_VER = "v3-bishop-guard-any-index";
+const CACHE_VER = "v4-two-step-quality";
 cache.clear();
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -162,7 +162,7 @@ async function translateBatch(texts) {
   const pending = [];
   const results = new Array(texts.length);
   texts.forEach((text, index) => {
-    const key = cacheKey(settings.provider, settings.sourceLang, settings.targetLang, text);
+    const key = cacheKey(settings.provider, settings.sourceLang, settings.targetLang, text, settings);
     if (cache.has(key)) results[index] = cache.get(key);
     else pending.push({ text, index, key });
   });
@@ -172,7 +172,11 @@ async function translateBatch(texts) {
     const translated = await provider.translate(chunk.map((c) => c.text), {
       sourceLang: settings.sourceLang,
       targetLang: settings.targetLang,
-      settings: providerSettings
+      settings: {
+        ...providerSettings,
+        translateQuality: settings.translateQuality,
+        twoStepTranslate: settings.twoStepTranslate
+      }
     });
     chunk.forEach((item, j) => {
       const value = translated[j] || "";
@@ -183,8 +187,9 @@ async function translateBatch(texts) {
   return guardZhBusinessSense(texts, results, settings.targetLang);
 }
 
-function cacheKey(provider, from, to, text) {
-  return `${CACHE_VER}|${provider}|${from}|${to}|${text}`;
+function cacheKey(provider, from, to, text, settings) {
+  const quality = isTwoStepTranslate(settings) ? "refined" : "standard";
+  return `${CACHE_VER}|${provider}|${from}|${to}|${quality}|${text}`;
 }
 
 function remember(key, value) {

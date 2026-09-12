@@ -34,6 +34,8 @@ Chrome 打开 `chrome://extensions` → 开发者模式 → 加载已解压的�
 
 Kimi、MiniMax、Grok、OpenRouter、OpenAI 兼容、DeepL、Gemini、Claude、Microsoft、Google Cloud、自定义 HTTP。
 
+大模型引擎默认单次翻译（省 token）。设置里可将「翻译质量」改为「精修」：先忠实直译（信），再润成自然流畅的现代译文（达雅），不增删含义。这是普通语际转换（如英译中），不是文言文或多轮文学翻译。
+
 ## 许可
 
 MIT。与官方沉浸式翻译无隶属关系。

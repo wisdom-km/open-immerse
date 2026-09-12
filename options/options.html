@@ -37,8 +37,15 @@
               <option value="title_lead">仅标题+开头</option>
             </select>
           </label>
+          <label>翻译质量
+            <select id="translateQuality">
+              <option value="standard">标准（单次，省 token）</option>
+              <option value="refined">精修（两步：先信后达雅）</option>
+            </select>
+          </label>
           <label>每批条数（分批，不是总数） <input id="batchSize" type="number" min="1" max="20" /></label>
           <p class="hint field-hint">「每批条数」只决定一次请求翻几段；本页总共翻多少由「本次翻译」决定。选「仅标题+开头」只翻标题和正文开头，省 token。</p>
+          <p class="hint field-hint">「精修」仅对大模型引擎生效：先忠实直译（信），再润成自然流畅的现代译文（达雅），不增删含义。默认「标准」单次翻译以节省 token。这是普通语际转换（如英译中），不是文言文、《诗经》或多轮文学翻译。自定义系统提示词仍作为两步的 Skill 底稿。</p>
           <label>翻译范围
             <select id="translateScope">
               <option value="article">仅正文（默认）</option>
