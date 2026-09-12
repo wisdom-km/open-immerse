@@ -77,6 +77,54 @@ h1 {
   z-index: 1;
   touch-action: none;
 }
+.split-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--oi-line) 72%, transparent);
+  pointer-events: none;
+  transition: width 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+.split-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 18px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  background: color-mix(in srgb, var(--oi-text-muted) 48%, transparent);
+  box-shadow:
+    0 -54px 0 0 color-mix(in srgb, var(--oi-text-muted) 48%, transparent),
+    0 54px 0 0 color-mix(in srgb, var(--oi-text-muted) 48%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+.split-handle:hover::before {
+  width: 2px;
+  background: color-mix(in srgb, var(--oi-accent) 40%, var(--oi-line));
+}
+.split-handle:hover::after {
+  opacity: 1;
+}
+.split-handle:active::before {
+  width: 2px;
+  background: color-mix(in srgb, var(--oi-accent) 58%, var(--oi-line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--oi-accent) 16%, transparent);
+}
+.split-handle:active::after {
+  opacity: 1;
+  background: color-mix(in srgb, var(--oi-accent) 46%, var(--oi-text-muted));
+  box-shadow:
+    0 -54px 0 0 color-mix(in srgb, var(--oi-accent) 46%, var(--oi-text-muted)),
+    0 54px 0 0 color-mix(in srgb, var(--oi-accent) 46%, var(--oi-text-muted));
+}
 .zoom-gutter {
   position: absolute;
   top: 50%;
@@ -87,13 +135,18 @@ h1 {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 4px;
+  padding: 3px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--oi-card) 88%, transparent);
+  background: color-mix(in srgb, var(--oi-card) 52%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid color-mix(in srgb, var(--oi-line) 42%, transparent);
-  box-shadow: var(--oi-shadow-1);
+  border: 1px solid color-mix(in srgb, var(--oi-line) 24%, transparent);
+  box-shadow: none;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.zoom-gutter:hover {
+  background: color-mix(in srgb, var(--oi-card) 68%, transparent);
+  border-color: color-mix(in srgb, var(--oi-line) 38%, transparent);
 }
 .zoom-gutter-btn {
   box-sizing: border-box;
@@ -166,7 +219,7 @@ h1 {
   padding: 20px 24px 32px;
   overflow: auto;
   background: var(--oi-bg-elevated);
-  border-left: 1px solid var(--oi-line);
+  border-left: 0;
 }
 .pane-translate .readout {
   max-width: 42rem;
