@@ -101,15 +101,15 @@ test("toast slot is measured from FAB height", () => {
   assert.match(css, /html\[data-oi-fab-corner="bottom-left"\] \.oi-toast/);
 });
 
-test("context menus keep both short titles under the extension submenu", () => {
-  assert.match(sw, /title: "翻译选中"/);
+test("context menus register only 收藏; translate-selection stays off the menu", () => {
   assert.match(sw, /title: "收藏"/);
+  assert.match(sw, /id: "oi-save-selection"/);
+  assert.doesNotMatch(sw, /oi-translate-selection/);
+  assert.doesNotMatch(sw, /title: "翻译选中"/);
   assert.doesNotMatch(sw, /title: "翻译选中文本"/);
   assert.doesNotMatch(sw, /title: "收藏到学习中心"/);
-  assert.match(sw, /id: "oi-translate-selection"/);
-  assert.match(sw, /id: "oi-save-selection"/);
-  assert.match(sw, /if \(info\.menuItemId === "oi-translate-selection"\)/);
-  assert.doesNotMatch(sw, /oi-translate-selection" && features\.selection/);
+  assert.match(content, /OI_SHOW_SELECTION/);
+  assert.match(content, /showSelectionCard/);
 });
 
 test("favoriting stays off FAB: submenu + selection card + double-click still exist", () => {

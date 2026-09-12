@@ -26,7 +26,7 @@ Chrome 打开 `chrome://extensions` → 开发者模式 → 加载已解压的�
 1. 配置 API Key
 2. 打开外文网页，点右下角 **翻译**
 3. 点 **原文**、关掉弹层「翻译此页」、或按 **Alt+T** 关闭，都会清掉译文并回到「翻译」
-4. 选中文本 → 右键「翻译选中」或「收藏」，或双击译文
+4. 选中文本 → 右键「收藏」，或双击译文；划词卡片也可收藏
 
 建议回归页：https://claude.com/blog/what-1-000-small-business-owners-taught-us-about-ai
 
