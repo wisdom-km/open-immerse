@@ -8,8 +8,8 @@
 
 建议目录约定：
 
-- `lib/translate-skill.js`：全厂商共用的翻译 Skill（信达雅合同与默认系统提示词）。质量策略写在这里；`guardZhBusinessSense` 只是安全网。
-- `lib/providers.js`：所有翻译引擎。新增引擎时加一个 adapter，并在 `DEFAULT_SETTINGS.providers` 里补默认配置。LLM adapter 走 `resolveTranslatorPrompt`，模型从 `ctx.settings.model` 读，不要写死厂商。
+- `lib/translate-skill.js`：全厂商共用的翻译 Skill（信达雅合同与默认系统提示词）。质量策略写在这里；`guardZhBusinessSense` 只是安全网。可选两步由顶层 `twoStepPolish`（默认 false）控制：先信后达雅润色，是普通语际转换，不是文言文 / 《诗经》。自定义 `prompt` 非空则跳过第二步。网页与文档共用这一开关。
+- `lib/providers.js`：所有翻译引擎。新增引擎时加一个 adapter，并在 `DEFAULT_SETTINGS.providers` 里补默认配置。LLM adapter 走 `resolveTranslatorPrompt` + `translateWithSkill`，模型从 `ctx.settings.model` 读，不要写死厂商。聊天补全类 adapter 必须走同一条两步路径。
 - `content/`：只负责 DOM 扫描与插入译文，不直接发外部请求。
 - `background/`：统一调度 API、缓存、右键菜单、快捷键。
 - `popup/` 与 `options/`：只读写 `chrome.storage.sync`。弹层「翻译当前页面」以当前页 `OI_PING`（`html.oi-active` / 是否已有译文）为准，不要用全局 `enabled` 当本页状态。

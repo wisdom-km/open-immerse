@@ -1,11 +1,11 @@
-import { getProvider, guardZhBusinessSense, testProviderConnection } from "../lib/providers.js";
+import { getProvider, guardZhBusinessSense, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { resolveFeatures } from "../lib/features.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
-const CACHE_VER = "v3-bishop-guard-any-index";
+const CACHE_VER = "v4-two-step-quality";
 cache.clear();
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -158,11 +158,14 @@ async function handleMessage(message, sender) {
 async function translateBatch(texts) {
   const settings = await getSettings();
   const provider = getProvider(settings.provider);
-  const providerSettings = settings.providers?.[settings.provider] || {};
+  const providerSettings = {
+    ...(settings.providers?.[settings.provider] || {}),
+    twoStepPolish: settings.twoStepPolish === true
+  };
   const pending = [];
   const results = new Array(texts.length);
   texts.forEach((text, index) => {
-    const key = cacheKey(settings.provider, settings.sourceLang, settings.targetLang, text);
+    const key = cacheKey(settings.provider, settings.sourceLang, settings.targetLang, text, providerSettings);
     if (cache.has(key)) results[index] = cache.get(key);
     else pending.push({ text, index, key });
   });
@@ -183,8 +186,9 @@ async function translateBatch(texts) {
   return guardZhBusinessSense(texts, results, settings.targetLang);
 }
 
-function cacheKey(provider, from, to, text) {
-  return `${CACHE_VER}|${provider}|${from}|${to}|${text}`;
+function cacheKey(provider, from, to, text, settings) {
+  const quality = isTwoStepPolish(settings) ? "polish" : "single";
+  return `${CACHE_VER}|${provider}|${from}|${to}|${quality}|${text}`;
 }
 
 function remember(key, value) {

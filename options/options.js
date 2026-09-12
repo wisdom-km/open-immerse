@@ -36,6 +36,7 @@ async function init() {
   el("targetLang").value = cachedSettings.targetLang || "zh-CN";
   el("batchSize").value = cachedSettings.batchSize || 8;
   el("translateLimit").value = isTitleLeadLimit(cachedSettings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
+  el("twoStepPolish").checked = cachedSettings.twoStepPolish === true;
   el("translationStyle").value = cachedSettings.translationStyle || "under";
   el("translateScope").value = cachedSettings.translateScope || "article";
   el("fontScale").value = cachedSettings.fontScale || 0.95;
@@ -240,6 +241,7 @@ async function persist() {
     targetLang: el("targetLang").value,
     batchSize: Number(el("batchSize").value) || 8,
     translateLimit: el("translateLimit").value === TRANSLATE_LIMIT_TITLE_LEAD ? TRANSLATE_LIMIT_TITLE_LEAD : "all",
+    twoStepPolish: el("twoStepPolish").checked,
     translationStyle: el("translationStyle").value,
     translateScope: el("translateScope").value || "article",
     fontScale: Number(el("fontScale").value) || 0.95,

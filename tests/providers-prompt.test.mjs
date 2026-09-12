@@ -22,6 +22,21 @@ function mockFetch(impl) {
   };
 }
 
+function readLlmTurn(body) {
+  if (body.system) {
+    return { system: body.system, user: body.messages[0].content, temperature: body.temperature };
+  }
+  if (body.contents) {
+    const text = body.contents[0].parts[0].text;
+    return { system: text, user: text, temperature: body.generationConfig?.temperature };
+  }
+  return {
+    system: body.messages[0].content,
+    user: body.messages[1].content,
+    temperature: body.temperature
+  };
+}
+
 test("providers re-exports the shared Skill prompt unchanged", () => {
   assert.equal(DEFAULT_LLM_PROMPT, SKILL_PROMPT);
 });
@@ -229,6 +244,156 @@ test("Gemini, Claude, and Azure reuse the same Skill; custom prompt still wins",
     const customBody = JSON.parse(calls.at(-1).init.body);
     assert.equal(customBody.model, "still-user-model");
     assert.equal(customBody.messages[0].content, "Translate into zh-CN only.");
+  } finally {
+    restore();
+  }
+});
+
+test("two-step refined path is two chat calls; public translate() returns final lines only", async () => {
+  const calls = [];
+  let n = 0;
+  const restore = mockFetch(async (url, init) => {
+    n += 1;
+    calls.push({ url: String(url), init });
+    const content = n % 2 === 1 ? "1. 草稿你好" : "1. 你好呀";
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          choices: [{ message: { content } }],
+          candidates: [{ content: { parts: [{ text: content }] } }],
+          content: [{ text: content }]
+        };
+      }
+    };
+  });
+  const ctx = {
+    sourceLang: "en",
+    targetLang: "zh-CN",
+    settings: {
+      apiKey: "sk-test",
+      baseUrl: "https://api.example.com/v1",
+      model: "user-picked-model",
+      endpoint: "https://azure.example",
+      deployment: "dep-1",
+      twoStepPolish: true
+    }
+  };
+  const skill = resolveTranslatorPrompt(ctx);
+  try {
+    for (const id of ["openai", "kimi", "minimax", "grok", "openrouter", "gemini", "claude", "azure"]) {
+      calls.length = 0;
+      n = 0;
+      const out = await providers[id].translate(["Hello"], ctx);
+      assert.deepEqual(out, ["你好呀"]);
+      assert.equal(calls.length, 2, id);
+      const first = readLlmTurn(JSON.parse(calls[0].init.body));
+      const second = readLlmTurn(JSON.parse(calls[1].init.body));
+      assert.match(first.system, /step 1 of 2/i);
+      assert.equal(first.system.includes(skill.slice(0, 40)), true);
+      assert.match(second.system, /step 2 of 2/i);
+      assert.match(second.system, /Do NOT invent/i);
+      assert.match(second.user, /<source>/);
+      assert.match(second.user, /<draft>/);
+      assert.match(second.user, /草稿你好/);
+      assert.match(first.user, /1\. Hello/);
+      assert.equal(first.temperature, 0.2);
+      assert.equal(second.temperature, 0.2);
+    }
+  } finally {
+    restore();
+  }
+});
+
+test("custom prompt skips polish even when twoStepPolish is true", async () => {
+  const calls = [];
+  const restore = mockFetch(async (_url, init) => {
+    calls.push(init);
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { choices: [{ message: { content: "1. 成" } }] };
+      }
+    };
+  });
+  try {
+    const out = await providers.openai.translate(["Hello"], {
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      settings: {
+        apiKey: "sk-test",
+        baseUrl: "https://api.example.com/v1",
+        model: "still-user-model",
+        prompt: "Translate into {{targetLang}} only.",
+        twoStepPolish: true
+      }
+    });
+    assert.deepEqual(out, ["成"]);
+    assert.equal(calls.length, 1);
+    const body = JSON.parse(calls[0].body);
+    assert.equal(body.messages[0].content, "Translate into zh-CN only.");
+    assert.doesNotMatch(body.messages[0].content, /step 1 of 2|step 2 of 2/i);
+    assert.doesNotMatch(body.messages[0].content, /Glossary hint \(zh\)/);
+  } finally {
+    restore();
+  }
+});
+
+test("machine providers ignore two-step and stay single-shot", async () => {
+  const calls = [];
+  const restore = mockFetch(async (url) => {
+    calls.push(String(url));
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { responseData: { translatedText: "hola" } };
+      }
+    };
+  });
+  try {
+    const out = await providers.mymemory.translate(["Hello"], {
+      sourceLang: "en",
+      targetLang: "es",
+      settings: { twoStepPolish: true }
+    });
+    assert.deepEqual(out, ["hola"]);
+    assert.equal(calls.length, 1);
+  } finally {
+    restore();
+  }
+});
+
+test("default single-shot still one request when twoStepPolish is off", async () => {
+  const calls = [];
+  const restore = mockFetch(async (_url, init) => {
+    calls.push(init);
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { choices: [{ message: { content: "1. 你好" } }] };
+      }
+    };
+  });
+  try {
+    const out = await providers.openai.translate(["Hello"], {
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      settings: {
+        apiKey: "sk-test",
+        baseUrl: "https://api.example.com/v1",
+        model: "user-picked-model",
+        twoStepPolish: false
+      }
+    });
+    assert.deepEqual(out, ["你好"]);
+    assert.equal(calls.length, 1);
+    const body = JSON.parse(calls[0].body);
+    assert.doesNotMatch(body.messages[0].content, /step 1 of 2/i);
+    assert.equal(body.temperature, 0.2);
   } finally {
     restore();
   }
