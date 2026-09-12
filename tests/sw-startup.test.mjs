@@ -60,7 +60,10 @@ test("SW cache version includes title-calque bust and guards cache hits", () => 
   assert.match(swSource, /const cache = new Map\(\);\nconst CACHE_LIMIT = 2000;\nconst CACHE_VER = "v5-title-calque";\ncache\.clear\(\);/);
   assert.match(swSource, /onStartup\.addListener\(\(\) => \{\n  cache\.clear\(\);/);
   assert.match(swSource, /twoStepPolish: settings\.twoStepPolish === true/);
+  assert.match(swSource, /enableThinking: settings\.enableThinking === true/);
   assert.match(swSource, /isTwoStepPolish/);
+  assert.match(swSource, /isThinkingEnabled/);
+  assert.match(swSource, /const think = isThinkingEnabled\(settings\) \? "think" : "fast"/);
   assert.match(swSource, /function readCachedTranslation\(key, text, targetLang\) \{\n  const \[guarded\] = guardZhTranslations\(\[text\], \[cache\.get\(key\)\], targetLang\);/);
   assert.match(swSource, /if \(cache\.has\(key\)\) results\[index\] = readCachedTranslation\(key, text, settings\.targetLang\);/);
   assert.match(

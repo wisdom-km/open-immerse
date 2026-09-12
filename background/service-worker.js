@@ -1,4 +1,4 @@
-import { getProvider, guardZhTranslations, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
+import { getProvider, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { resolveFeatures } from "../lib/features.js";
@@ -181,7 +181,8 @@ async function translateBatch(texts, options = {}) {
   const provider = getProvider(settings.provider);
   const providerSettings = {
     ...(settings.providers?.[settings.provider] || {}),
-    twoStepPolish: settings.twoStepPolish === true
+    twoStepPolish: settings.twoStepPolish === true,
+    enableThinking: settings.enableThinking === true
   };
   const pending = [];
   const results = new Array(texts.length);
@@ -251,7 +252,8 @@ async function translateBatch(texts, options = {}) {
 
 function cacheKey(provider, from, to, text, settings) {
   const quality = isTwoStepPolish(settings) ? "polish" : "single";
-  return `${CACHE_VER}|${provider}|${from}|${to}|${quality}|${text}`;
+  const think = isThinkingEnabled(settings) ? "think" : "fast";
+  return `${CACHE_VER}|${provider}|${from}|${to}|${quality}|${think}|${text}`;
 }
 
 function readCachedTranslation(key, text, targetLang) {
