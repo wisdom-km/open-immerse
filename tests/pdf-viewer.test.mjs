@@ -125,6 +125,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(src, /startSplitDrag/);
   assert.match(src, /applySplit/);
   const splitSrc = src.slice(src.indexOf("function bindSplitResize"), src.indexOf("function startSplitDrag"));
+  assert.match(splitSrc, /mousedown/);
   assert.match(splitSrc, /stopPropagation/);
   assert.equal(splitSrc.includes("setZoom"), false);
   const dragSrc = src.slice(src.indexOf("function startSplitDrag"), src.indexOf("function applySplit"));

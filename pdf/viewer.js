@@ -143,6 +143,7 @@ function bindSplitResize() {
   const handle = document.querySelector(".split-handle");
   const chip = document.querySelector(".zoom-gutter");
   if (!workspace || !handle) return;
+  chip?.addEventListener("mousedown", (event) => event.stopPropagation());
   chip?.addEventListener("pointerdown", (event) => event.stopPropagation());
   handle.addEventListener("pointerdown", (event) => startSplitDrag(event, workspace, handle));
 }
