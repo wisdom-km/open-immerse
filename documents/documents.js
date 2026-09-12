@@ -12,6 +12,31 @@ const stopBtn = document.getElementById("stop");
 let pairs = [];
 let aborted = false;
 let running = false;
+let inflight = null;
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "OI_TRANSLATE_PROGRESS") {
+    applyDocumentProgress(message);
+    sendResponse({ ok: true });
+  }
+  return true;
+});
+
+function applyDocumentProgress(message) {
+  if (!inflight || message.phase !== "draft") return;
+  if (message.requestId && inflight.requestId && message.requestId !== inflight.requestId) return;
+  const translations = message.translations || [];
+  const { slice, sliceStart } = inflight;
+  slice.forEach((org, idx) => {
+    const pairIndex = sliceStart + idx;
+    const dst = translations[idx] || "";
+    const pair = { org, dst, failed: false };
+    if (pairIndex < pairs.length) pairs[pairIndex] = { ...pairs[pairIndex], ...pair };
+    else pairs.push(pair);
+  });
+  renderPairs();
+  setStatus(DOCUMENTS_COPY.polishing);
+}
 
 function setStatus(text, isError = false) {
   status.textContent = text;
@@ -118,24 +143,34 @@ runBtn.addEventListener("click", async () => {
   pairs = [];
   renderEmpty();
   setRunningControls();
+  setStatus(DOCUMENTS_COPY.translating);
   const size = 6;
   for (let i = 0; i < chunks.length; i += size) {
     if (aborted) break;
     setStatus(progressStatus(i + 1, chunks.length));
     const slice = chunks.slice(i, i + size);
+    const sliceStart = pairs.length;
+    const requestId = `doc-${Date.now()}-${i}`;
+    inflight = { requestId, slice, sliceStart };
     let res;
     try {
-      res = await chrome.runtime.sendMessage({ type: "OI_TRANSLATE_BATCH", texts: slice });
+      res = await chrome.runtime.sendMessage({ type: "OI_TRANSLATE_BATCH", texts: slice, requestId });
     } catch {
       res = { ok: false, translations: [] };
     }
+    inflight = null;
     if (aborted) break;
     slice.forEach((org, idx) => {
-      const dst = res.translations?.[idx] || "";
-      const failed = isFailedTranslation(res, dst);
-      pairs.push({ org, dst: failed ? "" : dst, failed });
+      const existing = pairs[sliceStart + idx];
+      const dst = res.translations?.[idx] || existing?.dst || "";
+      const failed = !res.polishError && isFailedTranslation(res, dst);
+      const pair = { org, dst: failed ? "" : dst, failed };
+      const pairIndex = sliceStart + idx;
+      if (pairIndex < pairs.length) pairs[pairIndex] = pair;
+      else pairs.push(pair);
     });
     renderPairs();
+    if (res.polishError) setStatus(DOCUMENTS_COPY.polishFail, true);
   }
   setIdleControls();
   if (!aborted) setStatus(DOCUMENTS_COPY.done);
@@ -163,14 +198,19 @@ out.addEventListener("click", async (ev) => {
   const pair = pairs[index];
   if (!pair) return;
   btn.disabled = true;
+  const requestId = `doc-retry-${index}-${Date.now()}`;
+  inflight = { requestId, slice: [pair.org], sliceStart: index };
+  setStatus(DOCUMENTS_COPY.translating);
   let res;
   try {
-    res = await chrome.runtime.sendMessage({ type: "OI_TRANSLATE_BATCH", texts: [pair.org] });
+    res = await chrome.runtime.sendMessage({ type: "OI_TRANSLATE_BATCH", texts: [pair.org], requestId });
   } catch {
     res = { ok: false, translations: [] };
   }
-  const dst = res.translations?.[0] || "";
-  const failed = isFailedTranslation(res, dst);
+  inflight = null;
+  const dst = res.translations?.[0] || pair.dst || "";
+  const failed = !res.polishError && isFailedTranslation(res, dst);
   pairs[index] = { org: pair.org, dst: failed ? "" : dst, failed };
   renderPairs();
+  if (res.polishError) setStatus(DOCUMENTS_COPY.polishFail, true);
 });

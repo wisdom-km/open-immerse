@@ -543,8 +543,117 @@ test("two-step polish parse strips Anvil 哪些关于…的内容 title", async 
   }
 });
 
+test("two-step emits guarded draft via onProgress then returns final", async () => {
+  const progress = [];
+  let n = 0;
+  const restore = mockFetch(async () => {
+    n += 1;
+    const content = n === 1 ? "1. 草稿你好" : "1. 你好呀";
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { choices: [{ message: { content } }] };
+      }
+    };
+  });
+  try {
+    const out = await providers.openai.translate(["Hello"], {
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      settings: {
+        apiKey: "sk-test",
+        baseUrl: "https://api.example.com/v1",
+        model: "user-picked-model",
+        twoStepPolish: true
+      },
+      onProgress: (p) => progress.push({ phase: p.phase, translations: [...p.translations] })
+    });
+    assert.deepEqual(progress, [{ phase: "draft", translations: ["草稿你好"] }]);
+    assert.deepEqual(out, ["你好呀"]);
+    assert.equal(n, 2);
+  } finally {
+    restore();
+  }
+});
+
+test("polish failure keeps guarded draft and marks polishFailed", async () => {
+  const progress = [];
+  let n = 0;
+  const restore = mockFetch(async () => {
+    n += 1;
+    if (n === 1) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { choices: [{ message: { content: "1. 草稿你好" } }] };
+        }
+      };
+    }
+    return { ok: false, status: 500, async json() { return {}; } };
+  });
+  try {
+    await assert.rejects(
+      () =>
+        getProvider("openai").translate(["Hello"], {
+          sourceLang: "en",
+          targetLang: "zh-CN",
+          settings: {
+            apiKey: "sk-test",
+            baseUrl: "https://api.example.com/v1",
+            model: "user-picked-model",
+            twoStepPolish: true
+          },
+          onProgress: (p) => progress.push({ phase: p.phase, translations: [...p.translations] })
+        }),
+      (err) => {
+        assert.equal(err.polishFailed, true);
+        assert.deepEqual(err.drafts, ["草稿你好"]);
+        return true;
+      }
+    );
+    assert.deepEqual(progress, [{ phase: "draft", translations: ["草稿你好"] }]);
+    assert.equal(n, 2);
+  } finally {
+    restore();
+  }
+});
+
+test("two-step onProgress drafts go through zh title-calque guard", async () => {
+  const ANVIL_FAIL = "一千名小企业主让我们了解到了哪些关于人工智能的内容";
+  const progress = [];
+  const restore = mockFetch(async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return { choices: [{ message: { content: `1. ${ANVIL_FAIL}` } }] };
+    }
+  }));
+  try {
+    const out = await providers.openai.translate([CLAUDE_TITLE], {
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      settings: {
+        apiKey: "sk-test",
+        baseUrl: "https://api.example.com/v1",
+        model: "user-picked-model",
+        twoStepPolish: true
+      },
+      onProgress: (p) => progress.push([...p.translations])
+    });
+    assert.equal(progress.length, 1);
+    assert.doesNotMatch(progress[0][0], /让我们了解到/);
+    assert.doesNotMatch(progress[0][0], /哪些关于.+的内容/);
+    assert.doesNotMatch(out[0], /让我们了解到/);
+  } finally {
+    restore();
+  }
+});
+
 test("default single-shot still one request when twoStepPolish is off", async () => {
   const calls = [];
+  const progress = [];
   const restore = mockFetch(async (_url, init) => {
     calls.push(init);
     return {
@@ -564,13 +673,15 @@ test("default single-shot still one request when twoStepPolish is off", async ()
         baseUrl: "https://api.example.com/v1",
         model: "user-picked-model",
         twoStepPolish: false
-      }
+      },
+      onProgress: (p) => progress.push(p)
     });
     assert.deepEqual(out, ["你好"]);
     assert.equal(calls.length, 1);
     const body = JSON.parse(calls[0].body);
     assert.doesNotMatch(body.messages[0].content, /step 1 of 2/i);
     assert.equal(body.temperature, 0.2);
+    assert.deepEqual(progress, []);
   } finally {
     restore();
   }

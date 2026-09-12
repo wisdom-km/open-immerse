@@ -103,8 +103,17 @@ async function handleMessage(message, sender) {
       await rebuildMenus();
       return { ok: true, settings };
     }
-    case "OI_TRANSLATE_BATCH":
-      return { ok: true, translations: await translateBatch(message.texts || []) };
+    case "OI_TRANSLATE_BATCH": {
+      const batchOpts = {
+        onProgress: (progress) => emitTranslateProgress(sender, message.requestId, progress)
+      };
+      const translations = await translateBatch(message.texts || [], batchOpts);
+      return {
+        ok: true,
+        translations,
+        ...(batchOpts.polishFailed ? { polishError: "润色失败" } : {})
+      };
+    }
     case "OI_TEST_PROVIDER": {
       const providerConfig =
         message.providerConfig && typeof message.providerConfig === "object" ? message.providerConfig : {};
@@ -155,7 +164,25 @@ async function handleMessage(message, sender) {
   }
 }
 
-async function translateBatch(texts) {
+function emitTranslateProgress(sender, requestId, progress) {
+  const payload = {
+    type: "OI_TRANSLATE_PROGRESS",
+    requestId: requestId || "",
+    phase: progress.phase,
+    translations: progress.translations || []
+  };
+  const tasks = [];
+  const isExtensionPage = String(sender?.url || "").startsWith("chrome-extension://");
+  if (isExtensionPage) {
+    tasks.push(chrome.runtime.sendMessage(payload).catch(() => {}));
+  } else if (sender?.tab?.id != null) {
+    const opts = sender.frameId != null ? { frameId: sender.frameId } : {};
+    tasks.push(chrome.tabs.sendMessage(sender.tab.id, payload, opts).catch(() => {}));
+  }
+  return Promise.all(tasks);
+}
+
+async function translateBatch(texts, options = {}) {
   const settings = await getSettings();
   const provider = getProvider(settings.provider);
   const providerSettings = {
@@ -172,11 +199,48 @@ async function translateBatch(texts) {
   const size = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < pending.length; i += size) {
     const chunk = pending.slice(i, i + size);
-    const translated = await provider.translate(chunk.map((c) => c.text), {
-      sourceLang: settings.sourceLang,
-      targetLang: settings.targetLang,
-      settings: providerSettings
-    });
+    let translated;
+    try {
+      translated = await provider.translate(chunk.map((c) => c.text), {
+        sourceLang: settings.sourceLang,
+        targetLang: settings.targetLang,
+        settings: providerSettings,
+        onProgress: async (progress) => {
+          if (progress?.phase !== "draft" || typeof options.onProgress !== "function") return;
+          const guarded = guardZhTranslations(
+            chunk.map((c) => c.text),
+            progress.translations,
+            settings.targetLang
+          );
+          const draftResults = results.slice();
+          chunk.forEach((item, j) => {
+            draftResults[item.index] = guarded[j] || "";
+          });
+          try {
+            await options.onProgress({
+              phase: "draft",
+              translations: guardZhTranslations(texts, draftResults, settings.targetLang)
+            });
+          } catch {
+            /* progress is best-effort */
+          }
+        }
+      });
+    } catch (err) {
+      if (err?.polishFailed && Array.isArray(err.drafts)) {
+        const guardedDrafts = guardZhTranslations(
+          chunk.map((c) => c.text),
+          err.drafts,
+          settings.targetLang
+        );
+        chunk.forEach((item, j) => {
+          results[item.index] = guardedDrafts[j] || "";
+        });
+        options.polishFailed = true;
+        continue;
+      }
+      throw err;
+    }
     const guarded = guardZhTranslations(
       chunk.map((c) => c.text),
       translated,
