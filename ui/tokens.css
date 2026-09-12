@@ -14,6 +14,7 @@
   --oi-accent-hover: #5b88ff;
   --oi-accent-subtle: color-mix(in srgb, var(--oi-accent) 14%, transparent);
   --oi-danger: #e8a0a0;
+  --oi-success: #8ecfad;
   --oi-focus: var(--oi-accent);
   --oi-shadow-1: 0 4px 16px rgba(0, 0, 0, 0.18);
   --oi-fab-slot: 72px;

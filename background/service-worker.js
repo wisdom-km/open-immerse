@@ -1,4 +1,4 @@
-import { getProvider, guardZhBusinessSense } from "../lib/providers.js";
+import { getProvider, guardZhBusinessSense, testProviderConnection } from "../lib/providers.js";
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { resolveFeatures } from "../lib/features.js";
@@ -105,6 +105,17 @@ async function handleMessage(message, sender) {
     }
     case "OI_TRANSLATE_BATCH":
       return { ok: true, translations: await translateBatch(message.texts || []) };
+    case "OI_TEST_PROVIDER": {
+      const providerConfig =
+        message.providerConfig && typeof message.providerConfig === "object" ? message.providerConfig : {};
+      return testProviderConnection({
+        providerId: message.provider,
+        providerConfig,
+        sourceLang: message.sourceLang || "en",
+        targetLang: message.targetLang || "zh-CN",
+        texts: message.texts
+      });
+    }
     case "OI_MATCH_RULE": {
       const settings = await getSettings();
       return { ok: true, rule: matchSiteRule(message.host || sender.tab?.url, settings.siteRules) };
