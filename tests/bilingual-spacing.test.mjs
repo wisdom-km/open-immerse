@@ -13,14 +13,16 @@ const headingBlock = css.slice(css.indexOf(".oi-translation.oi-after-heading"), 
 const inlineBlock = css.slice(css.indexOf(".oi-translation.oi-inline"), css.indexOf("html[data-oi-style=\"line\"]"));
 
 test("body translations pull up into the host margin box", () => {
-  assert.match(bodyBlock, /margin:\s*calc\(\s*-1\.5rem\s*\+\s*0\.3em\s*\)\s+0\s+0\.12em/);
+  assert.match(bodyBlock, /margin:\s*-0\.65em\s+0\s+0\.1em/);
   assert.equal(/margin:\s*0\.08em/.test(bodyBlock), false);
+  assert.equal(/margin:\s*calc\(/.test(bodyBlock), false);
 });
 
-test("heading translations keep rem-scale air under large serif titles", () => {
-  assert.match(headingBlock, /margin:\s*1\.2rem\s+0\s+0\.45rem/);
-  assert.match(headingBlock, /padding-top:\s*0\.22rem/);
-  assert.equal(/margin:\s*0\.7rem/.test(headingBlock), false);
+test("heading translations clear descenders with 0.45em padding-top", () => {
+  assert.match(headingBlock, /padding-top:\s*0\.45em/);
+  assert.match(headingBlock, /margin:\s*0\.7rem\s+0\s+0\.45rem/);
+  assert.equal(/padding-top:\s*0\.22rem/.test(headingBlock), false);
+  assert.equal(/padding-top:\s*0\.2rem/.test(headingBlock), false);
 });
 
 test("in-flow list/table translations do not inherit the negative pull", () => {

@@ -1,8 +1,7 @@
 .oi-translation {
   display: block;
-  /* afterend sits below the host margin box (article p often 1.5–2rem).
-     Pull back so body/lead reads as one unit (~0.2–0.4em under last line). */
-  margin: calc(-1.5rem + 0.3em) 0 0.12em;
+  /* afterend sits below the host margin box; eat p margin-bottom (~0.4em optical) */
+  margin: -0.65em 0 0.1em;
   font-size: calc(1em * var(--oi-font-scale, 0.95));
   line-height: 1.5;
   color: var(--oi-color, color-mix(in srgb, currentColor 72%, transparent));
@@ -19,10 +18,10 @@
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
-/* titles: rem-scale air under large serif H1 descenders (g/y/p) */
+/* titles: padding clears serif descenders (g/y/p); rem margin keeps air */
 .oi-translation.oi-after-heading {
-  margin: 1.2rem 0 0.45rem;
-  padding-top: 0.22rem;
+  margin: 0.7rem 0 0.45rem;
+  padding-top: 0.45em;
   line-height: 1.45;
 }
 /* in-flow mounts (li/td/…) already sit under the last line — do not pull up */
