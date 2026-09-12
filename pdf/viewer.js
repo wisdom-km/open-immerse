@@ -154,13 +154,17 @@ function startSplitDrag(event, workspace, handle) {
   if (midBand) return;
   event.preventDefault();
   handle.setPointerCapture(event.pointerId);
+  workspace.classList.add("is-splitting");
   const onMove = (moveEvent) => applySplit(workspace, moveEvent.clientX);
   const onUp = () => {
+    workspace.classList.remove("is-splitting");
     handle.removeEventListener("pointermove", onMove);
     handle.removeEventListener("pointerup", onUp);
+    handle.removeEventListener("pointercancel", onUp);
   };
   handle.addEventListener("pointermove", onMove);
   handle.addEventListener("pointerup", onUp);
+  handle.addEventListener("pointercancel", onUp);
   applySplit(workspace, event.clientX);
 }
 
