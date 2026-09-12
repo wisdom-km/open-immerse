@@ -33,6 +33,7 @@ test("popup IA is page-only: Dual Line, 沉浸译, no feature toggles or youtube
   assert.equal(/youtube|YouTube/i.test(html), false);
   assert.equal(html.includes("hamburger"), false);
   assert.equal(html.includes("twoStepPolish"), false);
+  assert.equal(html.includes("deepThink"), false);
   assert.equal(html.includes("enableThinking"), false);
 });
 
@@ -77,9 +78,9 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.match(html, /id="laterList"[\s\S]*id="twoStepPolish"/);
   assert.match(html, /id="twoStepPolish"[^>]*> 先信后润/);
   assert.match(html, /id="twoStepPolishHint">第二步润色，更耗 token；默认关。仅 LLM 引擎生效。/);
-  assert.match(html, /id="enableThinking"[^>]*> 启用模型思考/);
-  assert.match(html, /id="enableThinkingHint">DeepSeek \/ 火山方舟等默认会先思考，翻译更慢；关着更快。仅 OpenAI 兼容通道生效。/);
-  assert.match(html.match(/<details class="later">[\s\S]*?<\/details>/)[0], /id="laterList"[\s\S]*id="twoStepPolish"[\s\S]*id="twoStepPolishHint"[\s\S]*id="enableThinking"[\s\S]*id="enableThinkingHint"/);
+  assert.match(html, /id="deepThink"[^>]*>\s*深度思考/);
+  assert.match(html, /id="deepThinkHint">\s*关闭可加快 DeepSeek \/ Ark 翻译；默认关。/);
+  assert.match(html.match(/<details class="later">[\s\S]*?<\/details>/)[0], /id="laterList"[\s\S]*id="twoStepPolish"[\s\S]*id="twoStepPolishHint"[\s\S]*id="deepThink"[\s\S]*id="deepThinkHint"/);
   assert.doesNotMatch(html, /id="autoOnNewPages"[\s\S]{0,80}id="twoStepPolish"/);
   assert.doesNotMatch(html, /两步译（先信后润）/);
   assert.doesNotMatch(html, /id="translateQuality"/);
@@ -97,8 +98,8 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   const optJs = readFileSync(join(root, "options/options.js"), "utf8");
   assert.match(optJs, /el\("twoStepPolish"\)\.checked = cachedSettings\.twoStepPolish === true/);
   assert.match(optJs, /twoStepPolish: el\("twoStepPolish"\)\.checked/);
-  assert.match(optJs, /el\("enableThinking"\)\.checked = cachedSettings\.enableThinking === true/);
-  assert.match(optJs, /enableThinking: el\("enableThinking"\)\.checked/);
+  assert.match(optJs, /el\("deepThink"\)\.checked = cachedSettings\.deepThink === true/);
+  assert.match(optJs, /deepThink: el\("deepThink"\)\.checked/);
 });
 
 test("popup engine link uses short name + full title; lang-row stays 1fr 1fr", () => {

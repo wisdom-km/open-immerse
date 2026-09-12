@@ -4,10 +4,12 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { applyChatThinking, isThinkingEnabled, providers } from "../lib/providers.js";
+import { applyChatThinking, isThinkingEnabled, providers, shouldAttachThinking } from "../lib/providers.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const ARK_BASE = "https://ark.cn-beijing.volces.com/api/v3";
+const DEEPSEEK_BASE = "https://api.deepseek.com";
 
 function mockFetch(impl) {
   const prev = globalThis.fetch;
@@ -17,66 +19,53 @@ function mockFetch(impl) {
   };
 }
 
-test("enableThinking defaults off and only true is on", () => {
-  assert.equal(DEFAULT_SETTINGS.enableThinking, false);
+test("deepThink defaults off and only true is on", () => {
+  assert.equal(DEFAULT_SETTINGS.deepThink, false);
   assert.equal(isThinkingEnabled(undefined), false);
   assert.equal(isThinkingEnabled({}), false);
-  assert.equal(isThinkingEnabled({ enableThinking: false }), false);
-  assert.equal(isThinkingEnabled({ enableThinking: "true" }), false);
-  assert.equal(isThinkingEnabled({ enableThinking: true }), true);
+  assert.equal(isThinkingEnabled({ deepThink: false }), false);
+  assert.equal(isThinkingEnabled({ deepThink: "true" }), false);
+  assert.equal(isThinkingEnabled({ enableThinking: true }), false);
+  assert.equal(isThinkingEnabled({ deepThink: true }), true);
 });
 
-test("applyChatThinking disables thinking by default and enables when toggled", () => {
-  const off = applyChatThinking({ model: "deepseek-v4-flash" }, {});
-  assert.deepEqual(off.thinking, { type: "disabled" });
-  assert.equal(off.reasoning_effort, "minimal");
-  assert.equal(off.model, "deepseek-v4-flash");
-
-  const explicitOff = applyChatThinking({ reasoning_effort: "high" }, { enableThinking: false });
-  assert.deepEqual(explicitOff.thinking, { type: "disabled" });
-  assert.equal(explicitOff.reasoning_effort, "minimal");
-
-  const on = applyChatThinking({ reasoning_effort: "minimal" }, { enableThinking: true });
-  assert.deepEqual(on.thinking, { type: "enabled" });
-  assert.equal(on.reasoning_effort, undefined);
+test("shouldAttachThinking only for Ark / DeepSeek, never other engines", () => {
+  assert.equal(shouldAttachThinking({ baseUrl: ARK_BASE, model: "deepseek-v4-flash" }), true);
+  assert.equal(shouldAttachThinking({ baseUrl: DEEPSEEK_BASE, model: "deepseek-v4-flash" }), true);
+  assert.equal(shouldAttachThinking({ model: "deepseek-v4-flash" }, {}), true);
+  assert.equal(shouldAttachThinking({ baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" }), false);
+  assert.equal(shouldAttachThinking({ baseUrl: "https://api.openai.com/v1", model: "deepseek-v4-flash" }), false);
+  assert.equal(shouldAttachThinking({ baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2.5" }), false);
+  assert.equal(shouldAttachThinking({ baseUrl: "https://api.minimax.cn/v1", model: "MiniMax-M2.5" }), false);
+  assert.equal(shouldAttachThinking({ baseUrl: "https://api.x.ai/v1", model: "grok-4-fast" }), false);
+  assert.equal(shouldAttachThinking({ baseUrl: "https://openrouter.ai/api/v1", model: "deepseek/deepseek-v4-flash" }), false);
 });
 
-test("OpenAI-compat translate payload includes thinking disabled by default", async () => {
-  const calls = [];
-  const restore = mockFetch(async (_url, init) => {
-    calls.push(init);
-    return {
-      ok: true,
-      status: 200,
-      async json() {
-        return { choices: [{ message: { content: "1. 你好" } }] };
-      }
-    };
+test("applyChatThinking disables thinking for Ark/DeepSeek and omits elsewhere", () => {
+  const arkOff = applyChatThinking({ model: "deepseek-v4-flash" }, { baseUrl: ARK_BASE });
+  assert.deepEqual(arkOff.thinking, { type: "disabled" });
+  assert.equal(arkOff.reasoning_effort, "minimal");
+
+  const arkOn = applyChatThinking({ model: "deepseek-v4-flash", reasoning_effort: "minimal" }, {
+    baseUrl: ARK_BASE,
+    deepThink: true
   });
-  try {
-    for (const id of ["openai", "kimi", "minimax", "grok", "openrouter"]) {
-      calls.length = 0;
-      const out = await providers[id].translate(["Hello"], {
-        sourceLang: "en",
-        targetLang: "zh-CN",
-        settings: {
-          apiKey: "sk-test",
-          baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
-          model: "deepseek-v4-flash"
-        }
-      });
-      assert.equal(out[0], "你好", id);
-      const body = JSON.parse(calls[0].body);
-      assert.equal(body.stream, undefined, id);
-      assert.deepEqual(body.thinking, { type: "disabled" }, id);
-      assert.equal(body.reasoning_effort, "minimal", id);
-    }
-  } finally {
-    restore();
-  }
+  assert.deepEqual(arkOn.thinking, { type: "enabled" });
+  assert.equal(arkOn.reasoning_effort, undefined);
+
+  const openai = applyChatThinking({ model: "gpt-4o-mini" }, { baseUrl: "https://api.openai.com/v1" });
+  assert.equal(openai.thinking, undefined);
+  assert.equal(openai.reasoning_effort, undefined);
+
+  const leftover = applyChatThinking(
+    { model: "gpt-4o-mini", thinking: { type: "disabled" }, reasoning_effort: "minimal" },
+    { baseUrl: "https://api.openai.com/v1" }
+  );
+  assert.equal(leftover.thinking, undefined);
+  assert.equal(leftover.reasoning_effort, undefined);
 });
 
-test("OpenAI-compat translate payload enables thinking when toggle is on", async () => {
+test("Ark / DeepSeek translate payload includes thinking disabled by default", async () => {
   const calls = [];
   const restore = mockFetch(async (_url, init) => {
     calls.push(init);
@@ -94,9 +83,41 @@ test("OpenAI-compat translate payload enables thinking when toggle is on", async
       targetLang: "zh-CN",
       settings: {
         apiKey: "sk-test",
-        baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+        baseUrl: ARK_BASE,
+        model: "deepseek-v4-flash"
+      }
+    });
+    assert.equal(out[0], "你好");
+    const body = JSON.parse(calls[0].body);
+    assert.equal(body.stream, undefined);
+    assert.deepEqual(body.thinking, { type: "disabled" });
+    assert.equal(body.reasoning_effort, "minimal");
+  } finally {
+    restore();
+  }
+});
+
+test("Ark / DeepSeek translate payload enables thinking when deepThink is on", async () => {
+  const calls = [];
+  const restore = mockFetch(async (_url, init) => {
+    calls.push(init);
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { choices: [{ message: { content: "1. 你好" } }] };
+      }
+    };
+  });
+  try {
+    const out = await providers.openai.translate(["Hello"], {
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      settings: {
+        apiKey: "sk-test",
+        baseUrl: ARK_BASE,
         model: "deepseek-v4-flash",
-        enableThinking: true
+        deepThink: true
       }
     });
     assert.equal(out[0], "你好");
@@ -109,7 +130,7 @@ test("OpenAI-compat translate payload enables thinking when toggle is on", async
   }
 });
 
-test("Gemini and Claude stay non-stream and do not get thinking fields", async () => {
+test("other engines omit thinking fields even when deepThink is on", async () => {
   const calls = [];
   const restore = mockFetch(async (_url, init) => {
     calls.push(init);
@@ -118,40 +139,49 @@ test("Gemini and Claude stay non-stream and do not get thinking fields", async (
       status: 200,
       async json() {
         return {
+          choices: [{ message: { content: "1. 你好" } }],
           candidates: [{ content: { parts: [{ text: "1. 你好" }] } }],
           content: [{ text: "1. 你好" }]
         };
       }
     };
   });
+  const others = [
+    ["openai", { apiKey: "sk-test", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", deepThink: true }],
+    ["kimi", { apiKey: "sk-test", model: "kimi-k2.5", deepThink: true }],
+    ["minimax", { apiKey: "sk-test", model: "MiniMax-M2.5", deepThink: true }],
+    ["grok", { apiKey: "sk-test", model: "grok-4-fast", deepThink: true }],
+    ["openrouter", { apiKey: "sk-test", model: "deepseek/deepseek-v4-flash", deepThink: true }],
+    ["gemini", { apiKey: "sk-test", model: "gemini-2.0-flash", deepThink: true }],
+    ["claude", { apiKey: "sk-test", model: "claude-3-5-haiku-latest", deepThink: true }]
+  ];
   try {
-    const ctx = {
-      sourceLang: "en",
-      targetLang: "zh-CN",
-      settings: { apiKey: "sk-test", model: "gemini-2.0-flash", enableThinking: false }
-    };
-    await providers.gemini.translate(["Hello"], ctx);
-    const gemini = JSON.parse(calls[0].body);
-    assert.equal(gemini.thinking, undefined);
-    assert.equal(gemini.reasoning_effort, undefined);
-    assert.equal(gemini.stream, undefined);
-
-    await providers.claude.translate(["Hello"], ctx);
-    const claude = JSON.parse(calls[1].body);
-    assert.equal(claude.thinking, undefined);
-    assert.equal(claude.reasoning_effort, undefined);
-    assert.equal(claude.stream, undefined);
+    for (const [id, settings] of others) {
+      calls.length = 0;
+      const out = await providers[id].translate(["Hello"], {
+        sourceLang: "en",
+        targetLang: "zh-CN",
+        settings
+      });
+      assert.equal(out[0], "你好", id);
+      const body = JSON.parse(calls[0].body);
+      assert.equal(body.thinking, undefined, id);
+      assert.equal(body.reasoning_effort, undefined, id);
+      assert.equal(body.stream, undefined, id);
+    }
   } finally {
     restore();
   }
 });
 
-test("SW and options persist enableThinking on the shared translate path", () => {
+test("SW and options persist deepThink on the shared translate path", () => {
   const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
   const optJs = readFileSync(join(root, "options/options.js"), "utf8");
   const html = readFileSync(join(root, "options/options.html"), "utf8");
-  assert.match(sw, /enableThinking: settings\.enableThinking === true/);
-  assert.match(optJs, /enableThinking: el\("enableThinking"\)\.checked/);
-  assert.match(html, /id="enableThinking"/);
+  assert.match(sw, /deepThink: settings\.deepThink === true/);
+  assert.match(optJs, /deepThink: el\("deepThink"\)\.checked/);
+  assert.match(html, /id="deepThink"[^>]*>\s*深度思考/);
+  assert.match(html, /id="deepThinkHint">\s*关闭可加快 DeepSeek \/ Ark 翻译；默认关。/);
   assert.doesNotMatch(sw, /\/responses/);
+  assert.doesNotMatch(readFileSync(join(root, "lib/providers.js"), "utf8"), /stream:\s*true/);
 });

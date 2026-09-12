@@ -182,7 +182,7 @@ async function translateBatch(texts, options = {}) {
   const providerSettings = {
     ...(settings.providers?.[settings.provider] || {}),
     twoStepPolish: settings.twoStepPolish === true,
-    enableThinking: settings.enableThinking === true
+    deepThink: settings.deepThink === true
   };
   const pending = [];
   const results = new Array(texts.length);

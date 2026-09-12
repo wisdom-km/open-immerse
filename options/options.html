@@ -25,8 +25,13 @@
           <div id="laterList"></div>
           <label class="check"><input id="twoStepPolish" type="checkbox" /> 先信后润</label>
           <p class="hint" id="twoStepPolishHint">第二步润色，更耗 token；默认关。仅 LLM 引擎生效。</p>
-          <label class="check"><input id="enableThinking" type="checkbox" /> 启用模型思考</label>
-          <p class="hint" id="enableThinkingHint">DeepSeek / 火山方舟等默认会先思考，翻译更慢；关着更快。仅 OpenAI 兼容通道生效。</p>
+          <label class="check">
+            <input id="deepThink" type="checkbox" />
+            深度思考
+          </label>
+          <p class="hint" id="deepThinkHint">
+            关闭可加快 DeepSeek / Ark 翻译；默认关。
+          </p>
         </details>
       </section>
       <section>
