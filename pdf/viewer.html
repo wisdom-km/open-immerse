@@ -22,6 +22,13 @@
       <button type="button" id="zoomOut" class="btn-ghost" disabled>缩小</button>
       <p id="zoomLabel" class="zoom-label">100%</p>
       <button type="button" id="zoomIn" class="btn-ghost" disabled>放大</button>
+      <label class="scope-field" for="pdfTranslateScope">
+        <span>范围</span>
+        <select id="pdfTranslateScope" disabled>
+          <option value="page" selected>当前页</option>
+          <option value="document">全文</option>
+        </select>
+      </label>
       <button type="button" id="translatePage" class="btn-primary" disabled>翻译</button>
       <button type="button" id="stopTranslate" class="btn-ghost" disabled>停止</button>
       <button type="button" id="restoreOriginal" class="btn-secondary" disabled>原文</button>
@@ -29,8 +36,8 @@
   </header>
   <p id="status" role="status">还没有打开 PDF。</p>
   <div class="workspace">
-    <section class="pane-pdf" aria-label="PDF">
-      <canvas id="page" hidden></canvas>
+    <section class="pane-pdf" id="pdfPane" aria-label="PDF">
+      <div id="pages" class="pages"></div>
     </section>
     <aside class="pane-translate" aria-label="译文">
       <div id="readout" class="readout"></div>

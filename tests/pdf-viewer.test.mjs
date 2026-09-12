@@ -13,6 +13,7 @@ import {
   applyDraftTranslations,
   blockLocation,
   clampZoom,
+  collectArticlePages,
   createPageCache,
   createTranslateSession,
   extractPageItems,
@@ -20,18 +21,27 @@ import {
   favoriteSegmentItem,
   isPdfViewerPage,
   looksLikePdfUrl,
+  neighborPages,
   nextZoom,
+  normalizePdfTranslateScope,
   pageBlocksCopy,
   pageCacheKey,
+  pageFromViewport,
+  pageHasTranslation,
   pageIndex,
   pageLabel,
   pagePath,
+  pageTranslationComplete,
+  progressDocumentStatus,
   progressStatus,
   readViewerSrc,
+  readoutPageSelector,
   segmentPageBlocks,
   shouldApplyDraft,
   shouldOfferPdfOpen,
+  shouldSyncReadout,
   textLayerCopy,
+  translateDocumentPages,
   translatePageBlocks,
   translationBlock,
   articleNodeSpec,
@@ -73,11 +83,13 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
 });
 
 test("split layout is left/right by default and stacks below 900px", () => {
-  assert.match(css, /#page\[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(css, /\.pdf-page canvas\[hidden\]\s*\{\s*display:\s*none/);
   assert.match(css, /\.workspace\s*\{[^}]*grid-template-columns:\s*1fr 1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)\s*\{[^}]*grid-template-columns:\s*1fr/s);
   assert.match(html, /class="workspace"/);
   assert.match(html, /class="pane-pdf"/);
+  assert.match(html, /id="pdfPane"/);
+  assert.match(html, /id="pages"/);
   assert.match(html, /class="pane-translate"/);
   assert.match(html, /点击翻译/);
   assert.match(html, /id="translatePage"[^>]*disabled>翻译</);
@@ -129,6 +141,10 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.polishFail, "润色失败");
   assert.equal(PDF_COPY.emptyPage, "本页没有可翻译的文字。");
   assert.equal(PDF_COPY.done, "本页已翻译。");
+  assert.equal(PDF_COPY.doneDocument, "全文已翻译。");
+  assert.equal(PDF_COPY.scopeLabel, "范围");
+  assert.equal(PDF_COPY.scopePage, "当前页");
+  assert.equal(PDF_COPY.scopeDocument, "全文");
   assert.equal(PDF_COPY.stopped, "已停止。");
   assert.equal(textLayerCopy(0), PDF_COPY.noTextLayer);
   assert.equal(textLayerCopy(3), "");
@@ -136,6 +152,7 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(pageBlocksCopy(0, 4), PDF_COPY.emptyPage);
   assert.equal(pageBlocksCopy(2, 8), "");
   assert.equal(progressStatus(2, 9), "正在翻译第 2 / 9 段");
+  assert.equal(progressDocumentStatus(3, 12), "正在翻译第 3 / 12 页");
   assert.match(src, /PDF_COPY\.fetchFail/);
   assert.match(src, /textLayerCopy/);
   assert.match(src, /pageBlocksCopy/);
@@ -351,6 +368,75 @@ test("page cache remembers a translated page and 原文 can drop it", () => {
   assert.equal(cache.has(1, 2), false);
 });
 
+test("collectArticlePages keeps page order and skips untranslated pages", () => {
+  const cache = createPageCache();
+  cache.set(1, 1, [{ original: "A", translation: "甲", role: "paragraph" }]);
+  cache.set(1, 2, [{ original: "B", translation: "", role: "paragraph" }]);
+  cache.set(1, 3, [{ original: "C", translation: "丙", role: "heading" }]);
+  const pages = collectArticlePages(cache, 1, 3);
+  assert.deepEqual(pages.map((entry) => entry.page), [1, 3]);
+  assert.equal(pageHasTranslation(cache.get(1, 1)), true);
+  assert.equal(pageHasTranslation(cache.get(1, 2)), false);
+  assert.equal(pageTranslationComplete([{ original: "A", translation: "甲" }]), true);
+  assert.equal(pageTranslationComplete([{ original: "A", translation: "甲" }, { original: "B", translation: "" }]), false);
+  assert.equal(pageTranslationComplete([]), false);
+});
+
+test("continuous scroll helpers pick the page in view and nearby canvases", () => {
+  assert.equal(
+    pageFromViewport(
+      [
+        { page: 1, top: 0, bottom: 800 },
+        { page: 2, top: 816, bottom: 1616 }
+      ],
+      0,
+      600
+    ),
+    1
+  );
+  assert.equal(
+    pageFromViewport(
+      [
+        { page: 1, top: -700, bottom: 100 },
+        { page: 2, top: 116, bottom: 916 }
+      ],
+      0,
+      600
+    ),
+    2
+  );
+  assert.deepEqual(neighborPages(1, 5, 2), [1, 2, 3]);
+  assert.deepEqual(neighborPages(5, 5, 2), [3, 4, 5]);
+  assert.deepEqual(neighborPages(3, 5, 1), [2, 3, 4]);
+  assert.equal(readoutPageSelector(4), '[data-page="4"]');
+  assert.equal(shouldSyncReadout(40, 40, 80), false);
+  assert.equal(shouldSyncReadout(200, 40, 80), true);
+  assert.equal(normalizePdfTranslateScope("document"), "document");
+  assert.equal(normalizePdfTranslateScope(""), "page");
+});
+
+test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page stack", () => {
+  assert.match(html, /id="pdfTranslateScope"/);
+  assert.match(html, /<option value="page" selected>当前页<\/option>/);
+  assert.match(html, /<option value="document">全文<\/option>/);
+  assert.match(html, /id="prev"[^>]*>上一页</);
+  assert.match(html, /id="next"[^>]*>下一页</);
+  assert.match(css, /\.pages\s*\{[^}]*flex-direction:\s*column/s);
+  assert.match(css, /\.pdf-page\s*\{/);
+  assert.match(src, /onPdfScroll/);
+  assert.match(src, /scrollIntoView/);
+  assert.match(src, /syncReadoutToPage/);
+  assert.match(src, /dataset\.page/);
+  assert.match(src, /translateWholeDocument/);
+  assert.equal(src.includes('id="page"'), false);
+  assert.equal(html.includes('id="page"'), false);
+  const goPageSrc = src.slice(src.indexOf("async function goPage"), src.indexOf("async function setZoom"));
+  assert.match(goPageSrc, /scrollIntoView/);
+  assert.equal(goPageSrc.includes("abortTranslateSession"), false);
+  assert.match(src, /renderArticle\(\)/);
+  assert.match(src, /collectArticlePages\(pageCache/);
+});
+
 test("translatePageBlocks sends OI_TRANSLATE_BATCH slices and honors stop", async () => {
   const sent = [];
   const session = createTranslateSession();
@@ -399,6 +485,55 @@ test("translatePageBlocks sends OI_TRANSLATE_BATCH slices and honors stop", asyn
   assert.equal(partial.results[2].translation, "");
 });
 
+test("translateDocumentPages walks pages via OI_TRANSLATE_BATCH and honors stop", async () => {
+  const cache = createPageCache();
+  cache.set(9, 1, [{ original: "P1", translation: "一", role: "paragraph" }]);
+  const sent = [];
+  const session = createTranslateSession();
+  const out = await translateDocumentPages({
+    session,
+    cache,
+    docId: 9,
+    numPages: 3,
+    batchSize: 8,
+    requestIdFor: (page, index) => `pdf-${page}-${index}`,
+    getPageOriginals: async (page) => [`P${page}`],
+    send: async (msg) => {
+      sent.push(msg);
+      if (msg.texts[0] === "P2") abortTranslateSession(session);
+      return { ok: true, translations: msg.texts.map((text) => `译:${text}`) };
+    }
+  });
+  assert.equal(out.aborted, true);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].type, "OI_TRANSLATE_BATCH");
+  assert.deepEqual(sent[0].texts, ["P2"]);
+  assert.equal(sent[0].requestId, "pdf-2-0");
+  assert.equal(cache.get(9, 1)[0].translation, "一");
+  assert.equal(pageHasTranslation(cache.get(9, 2)), false);
+  assert.equal(cache.has(9, 3), false);
+
+  const full = createPageCache();
+  const all = [];
+  const done = await translateDocumentPages({
+    cache: full,
+    docId: 4,
+    numPages: 2,
+    batchSize: 8,
+    getPageOriginals: async (page) => [`Page ${page} one.`, `Page ${page} two.`],
+    send: async (msg) => {
+      all.push(msg.texts.slice());
+      return { ok: true, translations: msg.texts.map((text) => `译:${text}`) };
+    }
+  });
+  assert.equal(done.aborted, false);
+  assert.equal(all.length, 2);
+  assert.deepEqual(all[0], ["Page 1 one.", "Page 1 two."]);
+  assert.deepEqual(all[1], ["Page 2 one.", "Page 2 two."]);
+  assert.equal(all.some((texts) => texts.includes("Page 1 one.") && texts.includes("Page 2 one.")), false);
+  assert.equal(full.get(4, 2)[1].translation, "译:Page 2 two.");
+});
+
 test("two-step draft progress replaces in place and keeps heading role", async () => {
   const session = createTranslateSession();
   session.inflight = { requestId: "pdf-0", slice: ["Hello world."], sliceStart: 0 };
@@ -424,6 +559,9 @@ test("two-step draft progress replaces in place and keeps heading role", async (
   assert.match(src, /segmentPageBlocks/);
   assert.match(src, /getTextContent/);
   assert.match(src, /OI_GET_SETTINGS/);
+  assert.match(src, /translateDocumentPages/);
+  assert.match(src, /collectArticlePages/);
+  assert.match(src, /renderArticle/);
 });
 
 test("vendored pdf.js segments a multi-paragraph paper-style page", async () => {

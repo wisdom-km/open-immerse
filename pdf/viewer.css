@@ -47,6 +47,24 @@ h1 {
   color: var(--oi-text-muted);
   font-variant-numeric: tabular-nums;
 }
+.scope-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--oi-text-muted);
+  font-size: 13px;
+}
+.scope-field select {
+  border: 1px solid var(--oi-line);
+  background: var(--oi-card);
+  color: var(--oi-text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  min-height: 36px;
+  font: inherit;
+}
+.scope-field select:disabled { opacity: 0.45; }
 
 #status {
   margin: 0;
@@ -70,13 +88,29 @@ h1 {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .pane-pdf {
-  display: flex;
-  justify-content: center;
   padding: 16px;
   background: var(--oi-bg);
 }
+.pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.pdf-page {
+  max-width: 100%;
+  background: #fff;
+  box-shadow: var(--oi-shadow-1);
+}
+.pdf-page canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.pdf-page canvas[hidden] { display: none; }
 .pane-translate {
   padding: 20px 24px 32px;
   overflow: auto;
@@ -119,15 +153,6 @@ h1 {
   font: 400 14px/1.5 var(--oi-font);
   color: var(--oi-text-muted);
 }
-
-#page {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  background: #fff;
-  box-shadow: var(--oi-shadow-1);
-}
-#page[hidden] { display: none; }
 
 .file-input {
   position: absolute;
