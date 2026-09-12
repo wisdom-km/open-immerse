@@ -2,7 +2,9 @@
   const FAB = globalThis.OIFab || {
     CORNER_DEFAULT: "bottom-right",
     STORAGE_KEY: "oi-fab-corner",
+    POS_STORAGE_KEY: "oi-fab-pos",
     SLOT_INSET: 20,
+    SLOT_GAP: 12,
     SNAP_BOTTOM_PX: 20,
     DRAG_THRESHOLD_PX: 6,
     normalizeCorner(value) {
@@ -50,9 +52,64 @@
       const maxL = Math.max(inset, vw - w - inset);
       const maxT = Math.max(inset, vh - h - inset);
       return {
-        left: Math.min(Math.max(inset, Number(left) || inset), maxL),
-        top: Math.min(Math.max(inset, Number(top) || inset), maxT)
+        left: Math.round(Math.min(Math.max(inset, Number(left) || inset), maxL)),
+        top: Math.round(Math.min(Math.max(inset, Number(top) || inset), maxT))
       };
+    },
+    cornerToPos({
+      corner,
+      width,
+      height,
+      viewportWidth,
+      viewportHeight,
+      inset = 20
+    } = {}) {
+      const next = this.normalizeCorner(corner);
+      const w = Math.max(0, Number(width) || 0);
+      const h = Math.max(0, Number(height) || 0);
+      const vw = Math.max(0, Number(viewportWidth) || 0);
+      const vh = Math.max(0, Number(viewportHeight) || 0);
+      return this.clampDragPosition({
+        left: next === "bottom-left" ? inset : vw - w - inset,
+        top: vh - h - inset,
+        width: w,
+        height: h,
+        viewportWidth: vw,
+        viewportHeight: vh,
+        inset
+      });
+    },
+    normalizePos(value) {
+      if (!value || typeof value !== "object") return null;
+      const left = Number(value.left);
+      const top = Number(value.top);
+      if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+      return { left, top };
+    },
+    toastSlotFromBox({ top, height, viewportHeight, gap = 12 } = {}) {
+      const vh = Number(viewportHeight);
+      const t = Number(top);
+      if (!Number.isFinite(vh) || !Number.isFinite(t)) {
+        return Math.max(72, Math.round((Number(height) || 0) + 20 + 12));
+      }
+      return Math.max(20, Math.round(vh - t + (Number(gap) || 12)));
+    },
+    toastPlacementFromBox({ top, height, viewportHeight, gap = 12, inset = 20, minAbove = 64 } = {}) {
+      const t = Number(top) || 0;
+      const h = Number(height) || 0;
+      if (t - inset >= minAbove) {
+        return { slot: this.toastSlotFromBox({ top: t, height: h, viewportHeight, gap }), top: "auto" };
+      }
+      return { slot: "auto", top: `${Math.round(t + h + gap)}px` };
+    },
+    toastAlignFromBox({ left, width, viewportWidth, inset = 20 } = {}) {
+      const vw = Number(viewportWidth) || 0;
+      const w = Number(width) || 0;
+      const l = Number(left) || 0;
+      if (l + w / 2 < vw / 2) {
+        return { side: "left", left: `${Math.max(inset, Math.round(l))}px`, right: "auto" };
+      }
+      return { side: "right", left: "auto", right: `${Math.max(inset, Math.round(vw - (l + w)))}px` };
     },
     isV1Shape(root) {
       if (!root || typeof root.querySelector !== "function") return false;
@@ -118,6 +175,23 @@
 
     applyCorner(bar, readCorner(settings), { persist: false });
     document.documentElement.appendChild(bar);
+    const savedPos = readPos(settings);
+    if (savedPos) {
+      applyFreePos(bar, savedPos, { persist: false });
+    } else if (bar.offsetWidth) {
+      applyFreePos(
+        bar,
+        FAB.cornerToPos({
+          corner: readCorner(settings),
+          width: bar.offsetWidth,
+          height: bar.offsetHeight || 0,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          inset: FAB.SLOT_INSET
+        }),
+        { persist: true }
+      );
+    }
     syncToggle(document.documentElement.classList.contains("oi-active"));
     syncFold(bar);
     syncCollapseLock(bar);
@@ -127,6 +201,16 @@
     if (typeof ResizeObserver === "function") {
       new ResizeObserver(() => syncFabSlot(bar)).observe(bar);
     }
+    window.addEventListener("resize", () => {
+      if (bar.classList.contains("oi-fab-free")) {
+        applyFreePos(
+          bar,
+          { left: parseFloat(bar.style.left), top: parseFloat(bar.style.top) },
+          { persist: false }
+        );
+      }
+      syncFabSlot(bar);
+    });
 
     window.addEventListener("oi-running", (ev) => {
       const on = Boolean(ev.detail);
@@ -178,14 +262,65 @@
     const next = FAB.normalizeCorner(corner);
     bar.dataset.corner = next;
     document.documentElement.dataset.oiFabCorner = next;
+    bar.classList.remove("oi-fab-free");
+    bar.style.left = "";
+    bar.style.top = "";
+    bar.style.right = "";
+    bar.style.bottom = "";
     syncFold(bar);
     if (!persist) return;
     try {
       localStorage.setItem(FAB.STORAGE_KEY, next);
+      localStorage.removeItem(FAB.POS_STORAGE_KEY);
     } catch {
       /* private mode / quota */
     }
-    send({ type: "OI_SAVE_SETTINGS", patch: { fabCorner: next } });
+    send({ type: "OI_SAVE_SETTINGS", patch: { fabCorner: next, fabPos: null } });
+  }
+
+  function readPos(settings) {
+    const fromSettings = FAB.normalizePos(settings?.fabPos);
+    if (fromSettings) return fromSettings;
+    try {
+      const raw = localStorage.getItem(FAB.POS_STORAGE_KEY);
+      return FAB.normalizePos(raw ? JSON.parse(raw) : null);
+    } catch {
+      return null;
+    }
+  }
+
+  function persistPos(pos) {
+    const payload = { left: pos.left, top: pos.top };
+    try {
+      localStorage.setItem(FAB.POS_STORAGE_KEY, JSON.stringify(payload));
+      localStorage.removeItem(FAB.STORAGE_KEY);
+    } catch {
+      /* private mode / quota */
+    }
+    send({ type: "OI_SAVE_SETTINGS", patch: { fabPos: payload } });
+  }
+
+  function applyFreePos(bar, pos, { persist = true } = {}) {
+    const next = FAB.clampDragPosition({
+      left: pos?.left,
+      top: pos?.top,
+      width: bar.offsetWidth || 0,
+      height: bar.offsetHeight || 0,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      inset: FAB.SLOT_INSET
+    });
+    bar.classList.add("oi-fab-free");
+    bar.style.left = `${next.left}px`;
+    bar.style.top = `${next.top}px`;
+    bar.style.right = "auto";
+    bar.style.bottom = "auto";
+    const side = FAB.snapCorner(next.left + (bar.offsetWidth || 0) / 2, window.innerWidth);
+    bar.dataset.corner = side;
+    document.documentElement.dataset.oiFabCorner = side;
+    syncFold(bar);
+    if (persist) persistPos(next);
+    return next;
   }
 
   function bindFabDrag(bar) {
@@ -226,10 +361,9 @@
       window.removeEventListener("pointerup", finish, moveOpts);
       window.removeEventListener("pointercancel", finish, moveOpts);
       if (!wasDragging) return;
+      bar.classList.remove("oi-fab-dragging");
       const rect = bar.getBoundingClientRect();
-      const next = FAB.snapCorner(rect.left + rect.width / 2, window.innerWidth);
-      clearDragPosition(bar);
-      if (next !== bar.dataset.corner) applyCorner(bar, next);
+      applyFreePos(bar, { left: rect.left, top: rect.top });
       syncFabSlot(bar);
       bar.dataset.oiDragged = "1";
       setTimeout(() => {
@@ -268,14 +402,11 @@
     bar.style.top = `${pos.top}px`;
     bar.style.right = "auto";
     bar.style.bottom = "auto";
+    syncFabSlot(bar);
   }
 
   function clearDragPosition(bar) {
     bar.classList.remove("oi-fab-dragging");
-    bar.style.left = "";
-    bar.style.top = "";
-    bar.style.right = "";
-    bar.style.bottom = "";
   }
 
   function toggleFold(bar) {
@@ -324,8 +455,35 @@
   }
 
   function syncFabSlot(bar) {
-    const slot = FAB.slotPx(bar.offsetHeight || 52);
-    document.documentElement.style.setProperty("--oi-fab-slot", `${slot}px`);
+    const rect = bar.getBoundingClientRect();
+    const place = FAB.toastPlacementFromBox({
+      top: rect.top,
+      height: rect.height || 52,
+      viewportHeight: window.innerHeight,
+      gap: FAB.SLOT_GAP,
+      inset: FAB.SLOT_INSET
+    });
+    document.documentElement.style.setProperty(
+      "--oi-fab-slot",
+      place.slot === "auto" ? "auto" : `${place.slot}px`
+    );
+    document.documentElement.style.setProperty("--oi-fab-toast-top", place.top);
+    const align = FAB.toastAlignFromBox({
+      left: rect.left,
+      width: rect.width,
+      viewportWidth: window.innerWidth,
+      inset: FAB.SLOT_INSET
+    });
+    document.documentElement.style.setProperty("--oi-fab-toast-left", align.left);
+    document.documentElement.style.setProperty("--oi-fab-toast-right", align.right);
+    if (rect.width) {
+      const side = FAB.snapCorner(rect.left + rect.width / 2, window.innerWidth);
+      if (bar.dataset.corner !== side) {
+        bar.dataset.corner = side;
+        document.documentElement.dataset.oiFabCorner = side;
+        syncFold(bar);
+      }
+    }
   }
 
   function syncToggle(on) {

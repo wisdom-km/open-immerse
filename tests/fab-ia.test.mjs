@@ -61,21 +61,25 @@ test("collapse is locked while oi-active or persist toast", () => {
   assert.match(content, /oi-status/);
 });
 
-test("corner snap stays bottom-left / bottom-right only and persists", () => {
+test("default park is bottom-right; free pos persists instead of corner snap", () => {
   const FAB = loadFab();
   assert.equal(FAB.CORNER_DEFAULT, "bottom-right");
   assert.equal(FAB.STORAGE_KEY, "oi-fab-corner");
+  assert.equal(FAB.POS_STORAGE_KEY, "oi-fab-pos");
   assert.equal(FAB.normalizeCorner("bottom-left"), "bottom-left");
   assert.equal(FAB.normalizeCorner("bottom-right"), "bottom-right");
   assert.equal(FAB.normalizeCorner("top-left"), "bottom-right");
   assert.equal(FAB.snapCorner(10, 800), "bottom-left");
   assert.equal(FAB.snapCorner(700, 800), "bottom-right");
   assert.equal(DEFAULT_SETTINGS.fabCorner, "bottom-right");
-  assert.match(toolbar, /localStorage\.setItem\(FAB\.STORAGE_KEY/);
-  assert.match(toolbar, /fabCorner/);
+  assert.equal(DEFAULT_SETTINGS.fabPos, null);
+  assert.match(toolbar, /fabPos/);
+  assert.match(toolbar, /oi-fab-pos/);
+  assert.match(toolbar, /applyFreePos/);
   assert.match(toolbar, /bottom-left/);
   assert.match(toolbar, /bottom-right/);
   assert.match(css, /\[data-corner="bottom-left"\]/);
+  assert.match(css, /oi-fab-free/);
   assert.equal(toolbar.includes("position:absolute"), false);
 });
 
@@ -90,14 +94,17 @@ test("fold glyph is ‹ / ›, not a third business label", () => {
   assert.doesNotMatch(toolbar, />展开</);
 });
 
-test("toast slot is measured from FAB height", () => {
+test("toast slot is measured from the actual FAB box", () => {
   const FAB = loadFab();
   assert.equal(FAB.slotPx(52), 84);
   assert.equal(FAB.slotPx(0), 72);
+  assert.equal(FAB.toastSlotFromBox({ top: 516, height: 52, viewportHeight: 600 }), 96);
   assert.match(toolbar, /--oi-fab-slot/);
-  assert.match(toolbar, /slotPx/);
+  assert.match(toolbar, /toastPlacementFromBox/);
+  assert.match(toolbar, /toastAlignFromBox/);
   assert.match(css, /\.oi-toast[\s\S]*bottom:\s*var\(--oi-fab-slot/);
-  assert.match(css, /html\[data-oi-fab-corner="bottom-left"\] \.oi-toast/);
+  assert.match(css, /--oi-fab-toast-left/);
+  assert.match(css, /--oi-fab-toast-right/);
 });
 
 test("context menus register only 收藏; translate-selection stays off the menu", () => {
