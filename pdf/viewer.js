@@ -116,13 +116,13 @@ function eventTargetIsField(target) {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
 }
 
-function appendArticleNode(input) {
+function appendReadoutNode(input) {
   const spec = articleNodeSpec(input);
   const node = document.createElement(spec.tag);
-  node.className = spec.role === "heading" ? "article-heading" : "article-p";
+  node.className = spec.className;
   node.textContent = spec.text;
-  $("blocks").append(node);
-  $("emptyTranslate").hidden = true;
+  $("readout").append(node);
+  $("emptyRead").hidden = true;
   return node;
 }
 
@@ -212,21 +212,21 @@ function restoreOriginal() {
   const copy = pageBlocksCopy(pageOriginals.length, pageItems);
   setStatus(copy);
   $("noTextLayerHint").hidden = pageItems > 0;
-  $("emptyTranslate").hidden = false;
+  $("emptyRead").hidden = false;
   updateTranslateControls();
 }
 
 function renderResults(results) {
-  $("blocks").replaceChildren();
+  $("readout").replaceChildren();
   const list = (results || []).filter((item) => item?.original);
   if (!list.length) {
-    $("emptyTranslate").hidden = false;
+    $("emptyRead").hidden = false;
     return;
   }
-  $("emptyTranslate").hidden = true;
+  $("emptyRead").hidden = true;
   list.forEach((item) => {
     if (!item.translation) return;
-    appendArticleNode({
+    appendReadoutNode({
       translation: item.translation,
       role: item.role
     });
@@ -368,7 +368,7 @@ async function loadPageText(page, ticket) {
       renderResults([]);
       setStatus(copy);
       $("noTextLayerHint").hidden = pageItems > 0;
-      $("emptyTranslate").hidden = false;
+      $("emptyRead").hidden = false;
     }
   } catch {
     if (ticket !== viewEpoch) return;
@@ -378,7 +378,7 @@ async function loadPageText(page, ticket) {
     renderResults([]);
     setStatus(PDF_COPY.noTextLayer);
     $("noTextLayerHint").hidden = false;
-    $("emptyTranslate").hidden = false;
+    $("emptyRead").hidden = false;
   }
   updateTranslateControls();
 }

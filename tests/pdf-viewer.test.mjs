@@ -83,18 +83,27 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /id="translatePage"[^>]*disabled>翻译</);
   assert.match(html, /id="stopTranslate"[^>]*disabled>停止</);
   assert.match(html, /id="restoreOriginal"[^>]*disabled>原文</);
-  assert.match(html, /<article id="blocks" class="translate-article">/);
-  assert.match(html, /id="emptyTranslate"/);
-  assert.match(src, /appendArticleNode/);
+  assert.match(html, /id="readout"[^>]*class="readout"/);
+  assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
+  assert.match(src, /appendReadoutNode/);
   assert.match(src, /articleNodeSpec/);
+  assert.match(libSrc, /oi-pdf-h/);
+  assert.match(libSrc, /oi-pdf-p/);
+  assert.match(src, /emptyRead/);
   assert.equal(src.includes("data-favorite-block"), false);
   assert.equal(src.includes("favoriteSegment"), false);
   assert.equal(src.includes("OI_SAVE_LEARNING"), false);
   assert.equal(html.includes("data-favorite-hook"), false);
   assert.equal(html.includes("收藏"), false);
-  assert.match(css, /\.translate-article\s+\.article-p\s*\{[^}]*line-height:\s*1\.75/s);
-  assert.match(css, /\.translate-article\s+\.article-heading\s*\{[^}]*font-weight:\s*650/s);
   assert.equal(css.includes(".translate-block"), false);
+  assert.equal(css.includes(".translate-article"), false);
+  assert.match(css, /\.pane-translate\s*\{[^}]*padding:\s*20px 24px 32px/s);
+  assert.match(css, /\.pane-translate \.readout\s*\{[^}]*max-width:\s*42rem/s);
+  assert.match(css, /\.oi-pdf-h\s*\{[^}]*font:\s*650 1\.15em\/1\.35 var\(--oi-font\)/s);
+  assert.match(css, /\.oi-pdf-h:first-child\s*\{\s*margin-top:\s*0/s);
+  assert.match(css, /\.oi-pdf-p\s*\{[^}]*font:\s*400 0\.98em\/1\.65 var\(--oi-font\)/s);
+  assert.match(css, /\.oi-pdf-p:last-child\s*\{\s*margin-bottom:\s*0/s);
+  assert.match(css, /\.pane-translate \.empty-read\s*\{[^}]*color:\s*var\(--oi-text-muted\)/s);
   assert.match(html, /本页没有文字层|扫描件翻译将在后续版本支持/);
 });
 
@@ -283,7 +292,9 @@ test("segmentPageBlocks marks headings and keeps title with body as article part
   assert.match(body.text, /neural networks/);
   assert.equal(/Attention Is All You Need/.test(body.text), false);
   assert.equal(articleNodeSpec({ translation: "注意力机制就够了", role: "heading" }).tag, "h2");
+  assert.equal(articleNodeSpec({ translation: "注意力机制就够了", role: "heading" }).className, "oi-pdf-h");
   assert.equal(articleNodeSpec({ translation: "我们提出一种新架构。", role: "paragraph" }).tag, "p");
+  assert.equal(articleNodeSpec({ translation: "我们提出一种新架构。", role: "paragraph" }).className, "oi-pdf-p");
   assert.deepEqual(translationBlock({ original: "Hi", page: 1, role: "heading" }).role, "heading");
 
   const wrappedTitle = segmentPageBlocks({
@@ -299,6 +310,24 @@ test("segmentPageBlocks marks headings and keeps title with body as article part
   assert.equal(wrappedTitle[1].role, "paragraph");
   assert.match(wrappedTitle[1].text, /first sentence of the abstract/);
   assert.match(wrappedTitle[1].text, /without becoming a heading/);
+
+  const shout = segmentPageBlocks({
+    items: [
+      { ...pdfItem("INTRODUCTION", 72, 720, 140, 11), fontName: "Helvetica-Bold" },
+      pdfItem("The rest of this section expands the method in several long sentences that stay body copy.", 72, 690, 280, 10)
+    ]
+  });
+  assert.equal(shout[0].role, "heading");
+  assert.equal(shout[0].text, "INTRODUCTION");
+  assert.equal(shout[1].role, "paragraph");
+
+  const bodyOnly = segmentPageBlocks({
+    items: [
+      pdfItem("These models to be superior in quality after a short clause.", 72, 700, 260, 10),
+      pdfItem("They continue in the next line without a title cue.", 72, 686, 220, 10)
+    ]
+  });
+  assert.ok(bodyOnly.every((block) => block.role === "paragraph"));
 });
 
 test("page cache remembers a translated page and 原文 can drop it", () => {
