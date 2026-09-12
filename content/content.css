@@ -1,7 +1,7 @@
 .oi-translation {
   display: block;
-  /* body: sit tight under source so bilingual reads as one unit */
-  margin: 0.08em 0 0.1em;
+  /* 吃掉宿主段后 margin，光学间距约 0.4em */
+  margin: -0.65em 0 0.4em;
   font-size: calc(1em * var(--oi-font-scale, 0.95));
   line-height: 1.5;
   color: var(--oi-color, color-mix(in srgb, currentColor 72%, transparent));
@@ -12,17 +12,16 @@
   writing-mode: horizontal-tb;
   text-orientation: mixed;
   word-break: normal;
-  padding-top: 0;
+  padding-top: 0.15em;
   padding-bottom: 0.06em;
   border-bottom: 1px dashed color-mix(in srgb, currentColor 48%, transparent);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
-/* titles: more air between heading and translation */
 .oi-translation.oi-after-heading {
-  /* titles are large: use rem so gap tracks display size, not tiny em */
+  /* padding-top 0.45em primary to clear descenders */
   margin: 0.7rem 0 0.45rem;
-  padding-top: 0.2rem;
+  padding-top: 0.45em;
   line-height: 1.45;
 }
 .oi-translation.oi-inline {
