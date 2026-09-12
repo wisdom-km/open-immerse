@@ -5,7 +5,7 @@ import { resolveFeatures } from "../lib/features.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
-const CACHE_VER = "v4-two-step-quality";
+const CACHE_VER = "v5-title-calque";
 cache.clear();
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -166,7 +166,7 @@ async function translateBatch(texts) {
   const results = new Array(texts.length);
   texts.forEach((text, index) => {
     const key = cacheKey(settings.provider, settings.sourceLang, settings.targetLang, text, providerSettings);
-    if (cache.has(key)) results[index] = cache.get(key);
+    if (cache.has(key)) results[index] = readCachedTranslation(key, text, settings.targetLang);
     else pending.push({ text, index, key });
   });
   const size = Math.max(1, Number(settings.batchSize) || 8);
@@ -189,6 +189,12 @@ async function translateBatch(texts) {
 function cacheKey(provider, from, to, text, settings) {
   const quality = isTwoStepPolish(settings) ? "polish" : "single";
   return `${CACHE_VER}|${provider}|${from}|${to}|${quality}|${text}`;
+}
+
+function readCachedTranslation(key, text, targetLang) {
+  const [guarded] = guardZhTranslations([text], [cache.get(key)], targetLang);
+  if (guarded !== cache.get(key)) remember(key, guarded);
+  return guarded;
 }
 
 function remember(key, value) {

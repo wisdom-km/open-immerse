@@ -187,6 +187,18 @@ test("guardZhTitleCalques rewrites the live two-step calque title", () => {
   assert.doesNotMatch(out, /主教/);
 });
 
+test("guardZhTitleCalques rewrites Anvil 哪些关于…的内容 title calque", () => {
+  const ANVIL_FAIL = "一千名小企业主让我们了解到了哪些关于人工智能的内容";
+  const [out] = guardZhTitleCalques([CLAUDE_TITLE], [ANVIL_FAIL], "zh-CN");
+  assert.doesNotMatch(out, /让我们了解到/);
+  assert.doesNotMatch(out, /哪些关于.+的内容/);
+  assert.doesNotMatch(out, /关于.+哪些内容/);
+  assert.match(out, /小企业主/);
+  assert.match(out, /一千|1,000|1000/);
+  assert.doesNotMatch(out, /主教/);
+  assert.notEqual(out, ANVIL_FAIL);
+});
+
 test("guardZhTitleCalques leaves body sentences that use 让我们了解到", () => {
   const body = "这项调查让我们了解到市场正在变化。";
   const [out] = guardZhTitleCalques(
@@ -459,6 +471,35 @@ test("LLM parse applies title-calque guard on the live failing zh title", async 
     assert.doesNotMatch(out[0], /关于.+哪些内容/);
     assert.match(out[0], /小企业主/);
     assert.match(out[0], /1000/);
+  } finally {
+    restore();
+  }
+});
+
+test("two-step polish parse strips Anvil 哪些关于…的内容 title", async () => {
+  const ANVIL_FAIL = "一千名小企业主让我们了解到了哪些关于人工智能的内容";
+  const restore = mockFetch(async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return { choices: [{ message: { content: `1. ${ANVIL_FAIL}` } }] };
+    }
+  }));
+  try {
+    const out = await providers.openai.translate([CLAUDE_TITLE], {
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      settings: {
+        apiKey: "sk-test",
+        baseUrl: "https://api.example.com/v1",
+        model: "user-picked-model",
+        twoStepPolish: true
+      }
+    });
+    assert.doesNotMatch(out[0], /让我们了解到/);
+    assert.doesNotMatch(out[0], /哪些关于.+的内容/);
+    assert.match(out[0], /小企业主/);
+    assert.match(out[0], /一千|1,000|1000/);
   } finally {
     restore();
   }

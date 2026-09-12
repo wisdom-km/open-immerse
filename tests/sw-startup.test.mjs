@@ -55,12 +55,15 @@ test("SW imports resolve and do not pull page-scan or site-presets", () => {
   assert.equal(/^await /m.test(swSource), false);
 });
 
-test("SW cache version includes two-step quality and clears on load", () => {
-  assert.match(swSource, /CACHE_VER = "v4-two-step-quality"/);
-  assert.match(swSource, /const cache = new Map\(\);\nconst CACHE_LIMIT = 2000;\nconst CACHE_VER = "v4-two-step-quality";\ncache\.clear\(\);/);
+test("SW cache version includes title-calque bust and guards cache hits", () => {
+  assert.match(swSource, /CACHE_VER = "v5-title-calque"/);
+  assert.match(swSource, /const cache = new Map\(\);\nconst CACHE_LIMIT = 2000;\nconst CACHE_VER = "v5-title-calque";\ncache\.clear\(\);/);
   assert.match(swSource, /onStartup\.addListener\(\(\) => \{\n  cache\.clear\(\);/);
   assert.match(swSource, /twoStepPolish: settings\.twoStepPolish === true/);
   assert.match(swSource, /isTwoStepPolish/);
+  assert.match(swSource, /function readCachedTranslation\(key, text, targetLang\) \{\n  const \[guarded\] = guardZhTranslations\(\[text\], \[cache\.get\(key\)\], targetLang\);/);
+  assert.match(swSource, /if \(cache\.has\(key\)\) results\[index\] = readCachedTranslation\(key, text, settings\.targetLang\);/);
+  assert.match(swSource, /return guardZhTranslations\(texts, results, settings\.targetLang\);/);
 });
 
 test("SW lib graph evaluates under chrome stubs", async () => {

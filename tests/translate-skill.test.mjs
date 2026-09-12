@@ -44,11 +44,13 @@ test("default Skill and step2 hard-ban title calques 让我们了解到 / 关于
   assert.match(DEFAULT_LLM_PROMPT, /让我们了解到/);
   assert.match(DEFAULT_LLM_PROMPT, /让我们了解到的/);
   assert.match(DEFAULT_LLM_PROMPT, /哪些内容/);
+  assert.match(DEFAULT_LLM_PROMPT, /哪些关于/);
   assert.match(DEFAULT_LLM_PROMPT, /taught us about/);
   assert.match(STEP2_POLISH_INSTRUCTION, /FORBID|禁止/);
   assert.match(STEP2_POLISH_INSTRUCTION, /让我们了解到/);
   assert.match(STEP2_POLISH_INSTRUCTION, /让我们了解到的/);
   assert.match(STEP2_POLISH_INSTRUCTION, /哪些内容/);
+  assert.match(STEP2_POLISH_INSTRUCTION, /哪些关于/);
   assert.match(STEP2_POLISH_INSTRUCTION, /title/i);
   assert.doesNotMatch(DEFAULT_LLM_PROMPT + STEP2_POLISH_INSTRUCTION, /taught us[^\n]*→[^\n]*(告诉我们|让我们了解到)/);
 });
