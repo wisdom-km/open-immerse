@@ -239,8 +239,8 @@ test("segmentPageBlocks joins lines, dehyphenates, and keeps column order", () =
       pdfItem("complex recurrent or convolutional neural networks.", 72, 686, 210),
       pdfItem("We propose the Transformer, relying entirely on", 72, 650, 220),
       pdfItem("attention mechanisms.", 72, 636, 120),
-      pdfItem("Experiments on two machine translation tasks show", 330, 700, 230),
-      pdfItem("these models to be superior in quality.", 330, 686, 180)
+      pdfItem("Experiments on two machine translation tasks show", 360, 700, 230),
+      pdfItem("these models to be superior in quality.", 360, 686, 180)
     ]
   });
   assert.ok(paper.some((block) => /Attention Is All You Need/.test(block)));
@@ -356,8 +356,8 @@ function buildPaperPdf() {
     { text: "The dominant sequence transduction models are based on", x: 72, y: 680, size: 10 },
     { text: "complex recurrent or convolutional neural networks.", x: 72, y: 666, size: 10 },
     { text: "We propose a new simple network architecture.", x: 72, y: 640, size: 10 },
-    { text: "Experiments on two machine translation tasks show", x: 320, y: 680, size: 10 },
-    { text: "these models to be superior in quality.", x: 320, y: 666, size: 10 }
+    { text: "Experiments on two machine translation tasks show", x: 360, y: 680, size: 10 },
+    { text: "these models to be superior in quality.", x: 360, y: 666, size: 10 }
   ];
   const ops = ["BT"];
   lines.forEach((line) => {
