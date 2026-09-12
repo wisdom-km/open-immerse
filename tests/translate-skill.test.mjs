@@ -19,6 +19,7 @@ test("translation Skill contract documents 信达雅 and the safety-net boundary
   assert.match(TRANSLATION_SKILL_CONTRACT, /雅/);
   assert.match(TRANSLATION_SKILL_CONTRACT, /faithful/i);
   assert.match(TRANSLATION_SKILL_CONTRACT, /guardZhBusinessSense/);
+  assert.match(TRANSLATION_SKILL_CONTRACT, /guardZhTitleCalques/);
   assert.match(TRANSLATION_SKILL_CONTRACT, /safety net/i);
   assert.doesNotMatch(TRANSLATION_SKILL_CONTRACT, /volc|ark|doubao|openai|claude|gemini/i);
   assert.doesNotMatch(TRANSLATION_SKILL_CONTRACT, /让我们了解到/);
@@ -36,6 +37,20 @@ test("default Skill prompt is 信-first 达雅, not a stock taught-us gloss", ()
   assert.match(DEFAULT_LLM_PROMPT, /\{\{targetLang\}\}/);
   assert.doesNotMatch(DEFAULT_LLM_PROMPT, /taught us[^\n]*→[^\n]*(告诉我们|让我们了解到)/);
   assert.doesNotMatch(DEFAULT_LLM_PROMPT, /告诉我们 \/ 让我们了解到/);
+});
+
+test("default Skill and step2 hard-ban title calques 让我们了解到 / 关于…哪些内容", () => {
+  assert.match(DEFAULT_LLM_PROMPT, /FORBID|禁止/);
+  assert.match(DEFAULT_LLM_PROMPT, /让我们了解到/);
+  assert.match(DEFAULT_LLM_PROMPT, /让我们了解到的/);
+  assert.match(DEFAULT_LLM_PROMPT, /哪些内容/);
+  assert.match(DEFAULT_LLM_PROMPT, /taught us about/);
+  assert.match(STEP2_POLISH_INSTRUCTION, /FORBID|禁止/);
+  assert.match(STEP2_POLISH_INSTRUCTION, /让我们了解到/);
+  assert.match(STEP2_POLISH_INSTRUCTION, /让我们了解到的/);
+  assert.match(STEP2_POLISH_INSTRUCTION, /哪些内容/);
+  assert.match(STEP2_POLISH_INSTRUCTION, /title/i);
+  assert.doesNotMatch(DEFAULT_LLM_PROMPT + STEP2_POLISH_INSTRUCTION, /taught us[^\n]*→[^\n]*(告诉我们|让我们了解到)/);
 });
 
 test("ZH glossary hint stays optional and never 主教", () => {
@@ -78,6 +93,7 @@ test("step1 is 信 draft; step2 is 达雅 polish without inventing meaning", () 
   assert.match(STEP2_POLISH_INSTRUCTION, /NOT.*文言文/i);
   assert.match(STEP2_POLISH_INSTRUCTION, /NOT.*诗经/);
   assert.match(STEP2_POLISH_INSTRUCTION, /one per line/i);
+  assert.match(STEP2_POLISH_INSTRUCTION, /让我们了解到/);
   assert.doesNotMatch(STEP1_FAITHFUL_INSTRUCTION + STEP2_POLISH_INSTRUCTION, /Li Jigang|五轮|SVG card/i);
 });
 
@@ -116,6 +132,8 @@ test("buildLlmTurn two-step wraps the shared Skill for polish", () => {
   assert.match(polish.system, /Translate into zh-CN only/);
   assert.match(polish.system, /step 2 of 2/i);
   assert.match(polish.system, /Do NOT invent/i);
+  assert.match(polish.system, /让我们了解到/);
+  assert.match(polish.system, /哪些内容/);
   assert.match(polish.user, /<source>/);
   assert.match(polish.user, /1\. Hello/);
   assert.match(polish.user, /<draft>/);
