@@ -115,6 +115,7 @@ h1 {
   background: #fff;
   box-shadow: var(--oi-shadow-1);
 }
+#page[hidden] { display: none; }
 
 .file-input {
   position: absolute;
@@ -157,6 +158,11 @@ button {
 }
 .btn-ghost:hover { color: var(--oi-text); }
 button:disabled { opacity: 0.45; cursor: default; }
+.btn-primary:disabled {
+  background: var(--oi-line);
+  color: var(--oi-text-muted);
+  opacity: 1;
+}
 
 @media (max-width: 899px) {
   .workspace {

@@ -59,6 +59,7 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
 });
 
 test("split layout is left/right by default and stacks below 900px", () => {
+  assert.match(css, /#page\[hidden\]\s*\{\s*display:\s*none/);
   assert.match(css, /\.workspace\s*\{[^}]*grid-template-columns:\s*1fr 1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)\s*\{[^}]*grid-template-columns:\s*1fr/s);
   assert.match(html, /class="workspace"/);
