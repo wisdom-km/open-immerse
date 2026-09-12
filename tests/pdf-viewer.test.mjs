@@ -137,9 +137,11 @@ test("favoriteSegment is the M1 plumbing hook into OI_SAVE_LEARNING", async () =
   });
   assert.equal(item.original, "Hello");
   assert.equal(item.translation, "你好");
-  assert.equal(item.title, "paper.pdf p.2");
-  assert.equal(item.context, "paper.pdf p.2");
-  assert.equal(blockLocation({ filename: "a.pdf", page: 3 }), "a.pdf p.3");
+  assert.equal(item.title, "PDF · paper.pdf · p.2");
+  assert.equal(item.context, "PDF · paper.pdf · p.2");
+  assert.equal(blockLocation({ filename: "a.pdf", page: 3 }), "PDF · a.pdf · p.3");
+  assert.equal(blockLocation({ filename: "notes.pdf", page: 1 }), "PDF · notes.pdf · p.1");
+  assert.notEqual(item.context, "paper.pdf p.2");
   assert.equal(translationBlock({ original: "Hi", page: 1 }).original, "Hi");
   const sent = [];
   const result = await favoriteSegment(item, async (msg) => {
@@ -149,6 +151,7 @@ test("favoriteSegment is the M1 plumbing hook into OI_SAVE_LEARNING", async () =
   assert.equal(result.ok, true);
   assert.equal(sent[0].type, "OI_SAVE_LEARNING");
   assert.equal(sent[0].item.original, "Hello");
+  assert.equal(sent[0].item.context, "PDF · paper.pdf · p.2");
   const empty = await favoriteSegment({ original: "" }, async () => ({ ok: true }));
   assert.equal(empty.ok, false);
   assert.match(src, /favoriteSegment/);
