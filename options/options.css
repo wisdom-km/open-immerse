@@ -38,14 +38,16 @@ textarea { min-height: 90px; resize: vertical; }
 .provider-card h3 { margin: 0 0 10px; font-size: 15px; color: var(--oi-text); font-weight: 600; }
 .provider-test-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   margin-top: 12px;
   flex-wrap: wrap;
 }
+#testConnection.btn-secondary { font-weight: 500; }
 .provider-test-status {
   flex: 1 1 180px;
-  font-size: 12px;
+  min-width: 0;
+  font: 400 12px/1.45 var(--oi-font);
   color: var(--oi-text-muted);
   min-height: 1.2em;
 }

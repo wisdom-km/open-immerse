@@ -66,17 +66,18 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   const html = readFileSync(join(root, "options/options.html"), "utf8");
   const featSrc = readFileSync(join(root, "lib/features.js"), "utf8");
   assert.match(html, /id="featureList"/);
-  assert.match(html, /高级（YouTube \/ X，默认关闭）/);
+  assert.match(html, /高级（悬浮 \/ 划词 \/ 字幕等，后续完善）/);
   assert.match(html, /id="laterList"/);
   assert.match(html, /id="translateLimit"/);
   assert.match(html, /每批条数（分批，不是总数）/);
   assert.match(html, /本次翻译/);
   assert.match(html, /value="title_lead">仅标题\+开头/);
-  for (const id of ["webpage", "hover", "selection", "learning", "documents", "fab"]) {
+  for (const id of ["webpage", "learning", "documents", "fab"]) {
     assert.match(featSrc, new RegExp(`id: "${id}"[\\s\\S]*group: "v1"`));
   }
-  assert.match(featSrc, /id: "youtube"[\s\S]*group: "later"/);
-  assert.match(featSrc, /id: "x"[\s\S]*group: "later"/);
+  for (const id of ["hover", "selection", "youtube", "x"]) {
+    assert.match(featSrc, new RegExp(`id: "${id}"[\\s\\S]*group: "later"`));
+  }
   assert.match(featSrc, /youtube:\s*false/);
   assert.match(featSrc, /x:\s*false/);
 });
