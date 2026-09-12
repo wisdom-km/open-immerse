@@ -49,6 +49,13 @@ test("toast shares slot above FAB", () => {
   assert.equal(/\.oi-toast[\s\S]*bottom:\s*88px/.test(css), false);
 });
 
+test("FAB drag handle uses grab / grabbing cursors", () => {
+  assert.match(css, /\.oi-fab \{\s*[^}]*cursor:\s*grab/);
+  assert.match(css, /\[data-act="fold"\][\s\S]*cursor:\s*grab/);
+  assert.match(css, /\.oi-fab-dragging[\s\S]*cursor:\s*grabbing/);
+  assert.match(js, /oi-fab-dragging/);
+});
+
 test("FAB action labels stay flex-centered", () => {
   assert.match(js, />翻译</);
   assert.match(js, />原文</);

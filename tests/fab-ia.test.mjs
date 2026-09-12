@@ -61,7 +61,7 @@ test("collapse is locked while oi-active or persist toast", () => {
   assert.match(content, /oi-status/);
 });
 
-test("corner snap V1 is bottom-left / bottom-right only and persists", () => {
+test("corner snap stays bottom-left / bottom-right only and persists", () => {
   const FAB = loadFab();
   assert.equal(FAB.CORNER_DEFAULT, "bottom-right");
   assert.equal(FAB.STORAGE_KEY, "oi-fab-corner");
@@ -76,8 +76,6 @@ test("corner snap V1 is bottom-left / bottom-right only and persists", () => {
   assert.match(toolbar, /bottom-left/);
   assert.match(toolbar, /bottom-right/);
   assert.match(css, /\[data-corner="bottom-left"\]/);
-  assert.equal(toolbar.includes("style.left"), false);
-  assert.equal(toolbar.includes("style.top"), false);
   assert.equal(toolbar.includes("position:absolute"), false);
 });
 

@@ -2,7 +2,8 @@
   const FAB = globalThis.OIFab || {
     CORNER_DEFAULT: "bottom-right",
     STORAGE_KEY: "oi-fab-corner",
-    SNAP_PX: 48,
+    SLOT_INSET: 20,
+    DRAG_THRESHOLD_PX: 5,
     normalizeCorner(value) {
       return value === "bottom-left" ? "bottom-left" : "bottom-right";
     },
@@ -22,6 +23,33 @@
     },
     snapCorner(clientX, viewportWidth) {
       return clientX < viewportWidth / 2 ? "bottom-left" : "bottom-right";
+    },
+    exceedsDragThreshold(dx, dy, threshold = 5) {
+      return Math.hypot(dx || 0, dy || 0) >= threshold;
+    },
+    isDragHandle(act, { collapsed = false } = {}) {
+      if (collapsed) return true;
+      return act !== "toggle" && act !== "restore";
+    },
+    clampDragPosition({
+      left,
+      top,
+      width,
+      height,
+      viewportWidth,
+      viewportHeight,
+      inset = 20
+    } = {}) {
+      const w = Math.max(0, Number(width) || 0);
+      const h = Math.max(0, Number(height) || 0);
+      const vw = Math.max(0, Number(viewportWidth) || 0);
+      const vh = Math.max(0, Number(viewportHeight) || 0);
+      const maxL = Math.max(inset, vw - w - inset);
+      const maxT = Math.max(inset, vh - h - inset);
+      return {
+        left: Math.min(Math.max(inset, Number(left) || inset), maxL),
+        top: Math.min(Math.max(inset, Number(top) || inset), maxT)
+      };
     },
     isV1Shape(root) {
       if (!root || typeof root.querySelector !== "function") return false;
@@ -91,7 +119,7 @@
     syncFold(bar);
     syncCollapseLock(bar);
     syncFabSlot(bar);
-    bindCornerSnap(bar);
+    bindFabDrag(bar);
 
     if (typeof ResizeObserver === "function") {
       new ResizeObserver(() => syncFabSlot(bar)).observe(bar);
@@ -109,6 +137,12 @@
     });
 
     bar.addEventListener("click", async (ev) => {
+      if (bar.dataset.oiDragged === "1") {
+        delete bar.dataset.oiDragged;
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
       const act = ev.target.closest("[data-act]")?.dataset.act;
       if (!act) return;
       if (act === "fold") {
@@ -151,25 +185,93 @@
     send({ type: "OI_SAVE_SETTINGS", patch: { fabCorner: next } });
   }
 
-  function bindCornerSnap(bar) {
+  function bindFabDrag(bar) {
+    let pointerId = null;
     let startX = 0;
+    let startY = 0;
+    let grabX = 0;
+    let grabY = 0;
     let armed = false;
+    let dragging = false;
+    const moveOpts = { capture: true, passive: false };
+
+    const onMove = (ev) => {
+      if (!armed || ev.pointerId !== pointerId) return;
+      if (!dragging) {
+        if (!FAB.exceedsDragThreshold(ev.clientX - startX, ev.clientY - startY, FAB.DRAG_THRESHOLD_PX)) {
+          return;
+        }
+        dragging = true;
+        bar.classList.add("oi-fab-dragging");
+        try {
+          bar.setPointerCapture(ev.pointerId);
+        } catch {
+          /* capture is optional */
+        }
+      }
+      ev.preventDefault();
+      followPointer(bar, ev.clientX, ev.clientY, grabX, grabY);
+    };
+
+    const finish = (ev) => {
+      if (!armed || ev.pointerId !== pointerId) return;
+      const wasDragging = dragging;
+      armed = false;
+      dragging = false;
+      pointerId = null;
+      window.removeEventListener("pointermove", onMove, moveOpts);
+      window.removeEventListener("pointerup", finish, moveOpts);
+      window.removeEventListener("pointercancel", finish, moveOpts);
+      if (!wasDragging) return;
+      const rect = bar.getBoundingClientRect();
+      const next = FAB.snapCorner(rect.left + rect.width / 2, window.innerWidth);
+      clearDragPosition(bar);
+      if (next !== bar.dataset.corner) applyCorner(bar, next);
+      syncFabSlot(bar);
+      bar.dataset.oiDragged = "1";
+      setTimeout(() => {
+        delete bar.dataset.oiDragged;
+      }, 0);
+    };
+
     bar.addEventListener("pointerdown", (ev) => {
       if (ev.button !== 0) return;
-      startX = ev.clientX;
+      pointerId = ev.pointerId;
       armed = true;
+      dragging = false;
+      startX = ev.clientX;
+      startY = ev.clientY;
+      const rect = bar.getBoundingClientRect();
+      grabX = ev.clientX - rect.left;
+      grabY = ev.clientY - rect.top;
+      window.addEventListener("pointermove", onMove, moveOpts);
+      window.addEventListener("pointerup", finish, moveOpts);
+      window.addEventListener("pointercancel", finish, moveOpts);
     });
-    const finish = (ev) => {
-      if (!armed) return;
-      armed = false;
-      if (Math.abs(ev.clientX - startX) < FAB.SNAP_PX) return;
-      const next = FAB.snapCorner(ev.clientX, window.innerWidth);
-      if (next !== bar.dataset.corner) applyCorner(bar, next);
-    };
-    bar.addEventListener("pointerup", finish);
-    bar.addEventListener("pointercancel", () => {
-      armed = false;
+  }
+
+  function followPointer(bar, clientX, clientY, grabX, grabY) {
+    const pos = FAB.clampDragPosition({
+      left: clientX - grabX,
+      top: clientY - grabY,
+      width: bar.offsetWidth || 0,
+      height: bar.offsetHeight || 0,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      inset: FAB.SLOT_INSET
     });
+    bar.style.left = `${pos.left}px`;
+    bar.style.top = `${pos.top}px`;
+    bar.style.right = "auto";
+    bar.style.bottom = "auto";
+  }
+
+  function clearDragPosition(bar) {
+    bar.classList.remove("oi-fab-dragging");
+    bar.style.left = "";
+    bar.style.top = "";
+    bar.style.right = "";
+    bar.style.bottom = "";
   }
 
   function toggleFold(bar) {
@@ -201,7 +303,10 @@
     const locked = isLocked();
     bar.classList.toggle("oi-fab-locked", locked);
     const fold = bar.querySelector('[data-act="fold"]');
-    if (fold) fold.disabled = locked && !bar.classList.contains("oi-fab-collapsed");
+    if (fold) {
+      const block = locked && !bar.classList.contains("oi-fab-collapsed");
+      fold.toggleAttribute("aria-disabled", block);
+    }
   }
 
   function syncFold(bar) {
