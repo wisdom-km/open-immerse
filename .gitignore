@@ -8,3 +8,8 @@ dist/
 .env
 .env.*
 *.zip
+
+# Chrome rejects unpacked dirs starting with _ (except _locales)
+_qa-out/
+_qa-*/
+
