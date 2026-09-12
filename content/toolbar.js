@@ -3,7 +3,8 @@
     CORNER_DEFAULT: "bottom-right",
     STORAGE_KEY: "oi-fab-corner",
     SLOT_INSET: 20,
-    DRAG_THRESHOLD_PX: 5,
+    SNAP_BOTTOM_PX: 20,
+    DRAG_THRESHOLD_PX: 6,
     normalizeCorner(value) {
       return value === "bottom-left" ? "bottom-left" : "bottom-right";
     },
@@ -24,12 +25,14 @@
     snapCorner(clientX, viewportWidth) {
       return clientX < viewportWidth / 2 ? "bottom-left" : "bottom-right";
     },
-    exceedsDragThreshold(dx, dy, threshold = 5) {
+    exceedsDragThreshold(dx, dy, threshold = 6) {
       return Math.hypot(dx || 0, dy || 0) >= threshold;
     },
-    isDragHandle(act, { collapsed = false } = {}) {
-      if (collapsed) return true;
-      return act !== "toggle" && act !== "restore";
+    isAllowedCorner(value) {
+      return value === "bottom-left" || value === "bottom-right";
+    },
+    isDragHandle() {
+      return true;
     },
     clampDragPosition({
       left,
@@ -236,6 +239,7 @@
 
     bar.addEventListener("pointerdown", (ev) => {
       if (ev.button !== 0) return;
+      // §8: whole bar / collapsed chip; busy still allows drag.
       pointerId = ev.pointerId;
       armed = true;
       dragging = false;
