@@ -181,6 +181,27 @@ test("toolbar follows the pointer, parks in place, persists, and suppresses the 
   assert.doesNotMatch(finish, /snapCorner\(/);
 });
 
+test("FAB-ELEGANCE §8: free park, persist, migrate, toast after release, resize clamp", () => {
+  const FAB = loadFab();
+  assert.equal(FAB.SLOT_INSET, 20);
+  assert.equal(FAB.POS_STORAGE_KEY, "oi-fab-pos");
+  const finish = toolbar.slice(toolbar.indexOf("const finish ="), toolbar.indexOf("bar.addEventListener(\"pointerdown\""));
+  assert.match(finish, /applyFreePos\(bar, \{ left: rect\.left, top: rect\.top \}\)/);
+  assert.match(finish, /syncFabSlot\(bar\)/);
+  assert.doesNotMatch(finish, /snapCorner\(/);
+  assert.doesNotMatch(finish, /applyCorner\(/);
+  assert.match(toolbar, /persistPos/);
+  assert.match(toolbar, /fabPos: payload/);
+  assert.match(toolbar, /POS_STORAGE_KEY/);
+  assert.match(toolbar, /cornerToPos/);
+  assert.match(toolbar, /if \(savedPos\)/);
+  assert.match(toolbar, /addEventListener\("resize"/);
+  const resize = toolbar.slice(toolbar.indexOf("addEventListener(\"resize\""), toolbar.indexOf("oi-running"));
+  assert.match(resize, /applyFreePos/);
+  assert.match(resize, /clampDragPosition|oi-fab-free/);
+  assert.match(toolbar, /function persistPos[\s\S]*localStorage\.removeItem\(FAB\.STORAGE_KEY\)/);
+});
+
 test("drag CSS does not steal 翻译/原文 pointer cursor until grabbing", () => {
   const buttons = css.slice(css.indexOf(".oi-fab > button {"), css.indexOf(".oi-fab > button[data-act=\"toggle\"]"));
   assert.match(buttons, /cursor:\s*pointer/);
