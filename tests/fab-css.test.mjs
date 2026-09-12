@@ -16,7 +16,7 @@ test("FAB buttons match Loom inline-flex 36×36 centering", () => {
   assert.match(fabBtn, /justify-content:\s*center/);
   assert.match(fabBtn, /height:\s*36px/);
   assert.match(fabBtn, /padding:\s*0/);
-  assert.match(fabBtn, /\[data-act="more"\][\s\S]*width:\s*36px/);
+  assert.match(fabBtn, /\[data-act="fold"\][\s\S]*width:\s*36px/);
   assert.match(fabBtn, /font-size:\s*13px/);
   assert.match(fabBtn, /font-weight:\s*600/);
   assert.match(fabBtn, /line-height:\s*1/);
@@ -26,35 +26,31 @@ test("FAB buttons match Loom inline-flex 36×36 centering", () => {
   assert.match(css, /\.oi-fab \{\s*[^}]*gap:\s*8px/);
 });
 
-test("FAB copy is two-char pills, not 译/原/藏", () => {
+test("FAB copy is two-char pills 翻译/原文, not 译/原/藏", () => {
   assert.match(js, />翻译</);
   assert.match(js, />原文</);
-  assert.match(js, />收藏</);
   assert.match(js, /停止/);
   assert.equal(js.includes(">译<"), false);
   assert.equal(js.includes(">原<"), false);
   assert.equal(js.includes(">藏<"), false);
 });
 
-test("FAB bar uses 20px inset, card fill, and weak shadow-1", () => {
+test("FAB bar uses 20px inset, glass fill, and weak shadow-1", () => {
   assert.match(fabBar, /right:\s*20px/);
   assert.match(fabBar, /bottom:\s*20px/);
-  assert.match(fabBar, /background:\s*var\(--oi-card\)/);
+  assert.match(fabBar, /background:\s*color-mix\(in srgb,\s*var\(--oi-card\)\s*88%/);
   assert.match(fabBar, /box-shadow:\s*var\(--oi-shadow-1\)/);
 });
 
-test("FAB more label is Unicode ellipsis, toast shares slot above FAB", () => {
-  assert.match(js, />⋯</);
-  assert.equal(js.includes('title="more">...</button>'), false);
+test("toast shares slot above FAB", () => {
   assert.match(css, /\.oi-toast[\s\S]*bottom:\s*var\(--oi-fab-slot/);
   assert.match(css, /\.oi-selection-card[\s\S]*bottom:\s*var\(--oi-fab-slot/);
   assert.equal(/\.oi-toast[\s\S]*bottom:\s*88px/.test(css), false);
 });
 
-test("FAB action labels are 翻译/原文/收藏 and stay flex-centered", () => {
+test("FAB action labels stay flex-centered", () => {
   assert.match(js, />翻译</);
   assert.match(js, />原文</);
-  assert.match(js, />收藏</);
   assert.match(js, /停止/);
   assert.match(fabBtn, /align-items:\s*center/);
   assert.match(fabBtn, /justify-content:\s*center/);

@@ -28,17 +28,15 @@ async function rebuildMenus() {
     const settings = await getSettings();
     const features = resolveFeatures(settings);
     await chrome.contextMenus.removeAll();
-    if (features.selection) {
-      chrome.contextMenus.create({
-        id: "oi-translate-selection",
-        title: "翻译选中文本",
-        contexts: ["selection"]
-      });
-    }
+    chrome.contextMenus.create({
+      id: "oi-translate-selection",
+      title: "翻译选中",
+      contexts: ["selection"]
+    });
     if (features.learning) {
       chrome.contextMenus.create({
         id: "oi-save-selection",
-        title: "收藏到学习中心",
+        title: "收藏",
         contexts: ["selection"]
       });
     }
@@ -51,7 +49,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const text = (info.selectionText || "").trim();
   if (!text || !tab?.id) return;
   const features = resolveFeatures(await getSettings());
-  if (info.menuItemId === "oi-translate-selection" && features.selection) {
+  if (info.menuItemId === "oi-translate-selection") {
     try {
       const [translated] = await translateBatch([text]);
       await chrome.tabs.sendMessage(tab.id, { type: "OI_SHOW_SELECTION", original: text, translated });

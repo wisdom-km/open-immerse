@@ -32,7 +32,7 @@ test("content surfaces consume shared tokens instead of hardcodes", () => {
   const manifest = readFileSync(join(root, "manifest.json"), "utf8");
   assert.match(manifest, /ui\/tokens\.css/);
   assert.match(css, /\.oi-toast[\s\S]*background:\s*var\(--oi-card\)/);
-  assert.match(css, /\.oi-fab \{\s*[^}]*background:\s*var\(--oi-card\)/);
+  assert.match(css, /\.oi-fab \{\s*[^}]*background:\s*color-mix\(in srgb,\s*var\(--oi-card\)\s*88%/);
   assert.equal(/\.oi-toast[\s\S]*background:\s*#171a21/.test(css), false);
   assert.equal(/\.oi-fab > button\.on \{ background:\s*#4d7cff/.test(css), false);
 });
