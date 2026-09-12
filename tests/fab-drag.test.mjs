@@ -93,6 +93,26 @@ test("release keeps free left/top and does not snap to a corner", () => {
   const FAB = loadFab();
   assert.equal(FAB.SNAP_BOTTOM_PX, 20);
   assert.deepEqual([...FAB.ALLOWED_CORNERS], ["bottom-left", "bottom-right"]);
+  const fromRight = FAB.cornerToPos({
+    corner: "bottom-right",
+    width: 120,
+    height: 52,
+    viewportWidth: 800,
+    viewportHeight: 600,
+    inset: 20
+  });
+  assert.equal(fromRight.left, 660);
+  assert.equal(fromRight.top, 528);
+  const fromLeft = FAB.cornerToPos({
+    corner: "bottom-left",
+    width: 120,
+    height: 52,
+    viewportWidth: 800,
+    viewportHeight: 600,
+    inset: 20
+  });
+  assert.equal(fromLeft.left, 20);
+  assert.equal(fromLeft.top, 528);
   const parkedPos = FAB.normalizePos({ left: 120, top: 240 });
   assert.equal(parkedPos.left, 120);
   assert.equal(parkedPos.top, 240);
@@ -154,6 +174,7 @@ test("toolbar follows the pointer, parks in place, persists, and suppresses the 
   assert.match(toolbar, /POS_STORAGE_KEY/);
   assert.match(toolbar, /syncFabSlot/);
   assert.match(toolbar, /readPos\(settings\)/);
+  assert.match(toolbar, /cornerToPos/);
   assert.doesNotMatch(toolbar, /bindCornerSnap/);
   assert.doesNotMatch(toolbar, /SNAP_PX/);
   const finish = toolbar.slice(toolbar.indexOf("const finish ="), toolbar.indexOf("bar.addEventListener(\"pointerdown\""));

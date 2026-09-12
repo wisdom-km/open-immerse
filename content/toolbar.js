@@ -56,6 +56,29 @@
         top: Math.round(Math.min(Math.max(inset, Number(top) || inset), maxT))
       };
     },
+    cornerToPos({
+      corner,
+      width,
+      height,
+      viewportWidth,
+      viewportHeight,
+      inset = 20
+    } = {}) {
+      const next = this.normalizeCorner(corner);
+      const w = Math.max(0, Number(width) || 0);
+      const h = Math.max(0, Number(height) || 0);
+      const vw = Math.max(0, Number(viewportWidth) || 0);
+      const vh = Math.max(0, Number(viewportHeight) || 0);
+      return this.clampDragPosition({
+        left: next === "bottom-left" ? inset : vw - w - inset,
+        top: vh - h - inset,
+        width: w,
+        height: h,
+        viewportWidth: vw,
+        viewportHeight: vh,
+        inset
+      });
+    },
     normalizePos(value) {
       if (!value || typeof value !== "object") return null;
       const left = Number(value.left);
@@ -153,7 +176,22 @@
     applyCorner(bar, readCorner(settings), { persist: false });
     document.documentElement.appendChild(bar);
     const savedPos = readPos(settings);
-    if (savedPos) applyFreePos(bar, savedPos, { persist: false });
+    if (savedPos) {
+      applyFreePos(bar, savedPos, { persist: false });
+    } else if (bar.offsetWidth) {
+      applyFreePos(
+        bar,
+        FAB.cornerToPos({
+          corner: readCorner(settings),
+          width: bar.offsetWidth,
+          height: bar.offsetHeight || 0,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          inset: FAB.SLOT_INSET
+        }),
+        { persist: true }
+      );
+    }
     syncToggle(document.documentElement.classList.contains("oi-active"));
     syncFold(bar);
     syncCollapseLock(bar);
