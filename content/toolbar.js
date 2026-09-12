@@ -52,8 +52,8 @@
       const maxL = Math.max(inset, vw - w - inset);
       const maxT = Math.max(inset, vh - h - inset);
       return {
-        left: Math.min(Math.max(inset, Number(left) || inset), maxL),
-        top: Math.min(Math.max(inset, Number(top) || inset), maxT)
+        left: Math.round(Math.min(Math.max(inset, Number(left) || inset), maxL)),
+        top: Math.round(Math.min(Math.max(inset, Number(top) || inset), maxT))
       };
     },
     normalizePos(value) {
