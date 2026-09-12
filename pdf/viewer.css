@@ -47,7 +47,6 @@ h1 {
   color: var(--oi-text-muted);
   font-variant-numeric: tabular-nums;
 }
-
 #status {
   margin: 0;
   padding: 8px 16px;
@@ -70,13 +69,29 @@ h1 {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .pane-pdf {
-  display: flex;
-  justify-content: center;
   padding: 16px;
   background: var(--oi-bg);
 }
+.pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.pdf-page {
+  max-width: 100%;
+  background: #fff;
+  box-shadow: var(--oi-shadow-1);
+}
+.pdf-page canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.pdf-page canvas[hidden] { display: none; }
 .pane-translate {
   padding: 20px 24px 32px;
   overflow: auto;
@@ -119,15 +134,6 @@ h1 {
   font: 400 14px/1.5 var(--oi-font);
   color: var(--oi-text-muted);
 }
-
-#page {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  background: #fff;
-  box-shadow: var(--oi-shadow-1);
-}
-#page[hidden] { display: none; }
 
 .file-input {
   position: absolute;
@@ -175,6 +181,50 @@ button:disabled { opacity: 0.45; cursor: default; }
   color: var(--oi-text-muted);
   opacity: 1;
 }
+.scope-seg {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 2px;
+  gap: 0;
+  border: 1px solid var(--oi-line);
+  border-radius: 8px;
+  background: var(--oi-input, var(--oi-bg));
+}
+.scope-seg-btn {
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 0 12px;
+  margin: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--oi-text-muted);
+  font: 500 13px/1.2 var(--oi-font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.scope-seg-btn:hover {
+  color: var(--oi-text);
+  background: color-mix(in srgb, var(--oi-line) 35%, transparent);
+}
+.scope-seg-btn.is-on {
+  background: color-mix(in srgb, var(--oi-accent) 18%, transparent);
+  color: var(--oi-text);
+  font-weight: 600;
+}
+.scope-seg-btn:focus-visible {
+  outline: 2px solid var(--oi-accent);
+  outline-offset: 1px;
+}
+.scope-seg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.scope-seg-btn:disabled:hover {
+  color: var(--oi-text-muted);
+  background: transparent;
+}
+[hidden] { display: none !important; }
 
 @media (max-width: 899px) {
   .workspace {

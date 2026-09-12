@@ -13,6 +13,7 @@ import {
   applyDraftTranslations,
   blockLocation,
   clampZoom,
+  collectArticlePages,
   createPageCache,
   createTranslateSession,
   extractPageItems,
@@ -20,18 +21,29 @@ import {
   favoriteSegmentItem,
   isPdfViewerPage,
   looksLikePdfUrl,
+  neighborPages,
   nextZoom,
+  normalizePdfTranslateScope,
   pageBlocksCopy,
   pageCacheKey,
+  pageFromViewport,
+  pageHasTranslation,
   pageIndex,
   pageLabel,
   pagePath,
+  pageTranslationComplete,
+  progressDocumentStatus,
   progressStatus,
+  readoutPlaceholder,
   readViewerSrc,
+  readoutPageSelector,
   segmentPageBlocks,
   shouldApplyDraft,
   shouldOfferPdfOpen,
+  shouldSyncReadout,
   textLayerCopy,
+  translateDocumentPages,
+  wheelPageDelta,
   translatePageBlocks,
   translationBlock,
   articleNodeSpec,
@@ -73,18 +85,21 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
 });
 
 test("split layout is left/right by default and stacks below 900px", () => {
-  assert.match(css, /#page\[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(css, /\.pdf-page canvas\[hidden\]\s*\{\s*display:\s*none/);
   assert.match(css, /\.workspace\s*\{[^}]*grid-template-columns:\s*1fr 1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)\s*\{[^}]*grid-template-columns:\s*1fr/s);
   assert.match(html, /class="workspace"/);
   assert.match(html, /class="pane-pdf"/);
+  assert.match(html, /id="pdfPane"/);
+  assert.match(html, /id="pages"/);
   assert.match(html, /class="pane-translate"/);
   assert.match(html, /点击翻译/);
   assert.match(html, /id="translatePage"[^>]*disabled>翻译</);
-  assert.match(html, /id="stopTranslate"[^>]*disabled>停止</);
-  assert.match(html, /id="restoreOriginal"[^>]*disabled>原文</);
+  assert.match(html, /id="stopTranslate"[^>]*class="btn-primary"[^>]*hidden[^>]*disabled>停止</);
+  assert.match(html, /id="restoreOriginal"[^>]*class="btn-ghost"[^>]*disabled>原文</);
   assert.match(html, /id="readout"[^>]*class="readout"/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
+  assert.match(html, /<p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…<\/p>/);
   assert.match(src, /appendReadoutNode/);
   assert.match(src, /articleNodeSpec/);
   assert.match(libSrc, /oi-pdf-h1/);
@@ -92,6 +107,9 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(libSrc, /oi-pdf-p/);
   assert.equal(libSrc.includes("oi-pdf-h\""), false);
   assert.match(src, /emptyRead/);
+  assert.match(src, /pendingRead/);
+  assert.match(src, /readoutPlaceholder/);
+  assert.match(src, /syncReadoutEmpty/);
   assert.equal(src.includes("data-favorite-block"), false);
   assert.equal(src.includes("favoriteSegment"), false);
   assert.equal(src.includes("OI_SAVE_LEARNING"), false);
@@ -120,6 +138,10 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.noTextLayer, "本页没有文字层。");
   assert.equal(PDF_COPY.noTextLayerHint, "扫描件翻译将在后续版本支持。");
   assert.equal(PDF_COPY.translateHint, "点击翻译");
+  assert.equal(PDF_COPY.translatingWait, "正在翻译，请稍候…");
+  assert.equal(readoutPlaceholder({ running: true, hasArticle: false }), "正在翻译，请稍候…");
+  assert.equal(readoutPlaceholder({ running: true, hasArticle: true }), "");
+  assert.equal(readoutPlaceholder({ running: false, hasArticle: false }), "点击翻译");
   assert.equal(PDF_COPY.translate, "翻译");
   assert.equal(PDF_COPY.stop, "停止");
   assert.equal(PDF_COPY.restore, "原文");
@@ -129,6 +151,10 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.polishFail, "润色失败");
   assert.equal(PDF_COPY.emptyPage, "本页没有可翻译的文字。");
   assert.equal(PDF_COPY.done, "本页已翻译。");
+  assert.equal(PDF_COPY.doneDocument, "全文已翻译。");
+  assert.equal(PDF_COPY.scopeLabel, "范围");
+  assert.equal(PDF_COPY.scopePage, "当前页");
+  assert.equal(PDF_COPY.scopeDocument, "全文");
   assert.equal(PDF_COPY.stopped, "已停止。");
   assert.equal(textLayerCopy(0), PDF_COPY.noTextLayer);
   assert.equal(textLayerCopy(3), "");
@@ -136,6 +162,7 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(pageBlocksCopy(0, 4), PDF_COPY.emptyPage);
   assert.equal(pageBlocksCopy(2, 8), "");
   assert.equal(progressStatus(2, 9), "正在翻译第 2 / 9 段");
+  assert.equal(progressDocumentStatus(3, 12), "翻译中 · 3/12");
   assert.match(src, /PDF_COPY\.fetchFail/);
   assert.match(src, /textLayerCopy/);
   assert.match(src, /pageBlocksCopy/);
@@ -342,13 +369,114 @@ test("page cache remembers a translated page and 原文 can drop it", () => {
   assert.equal(pageCacheKey(3, 2), "3::2");
   assert.equal(cache.has(1, 1), false);
   cache.set(1, 1, [{ original: "Hello", translation: "你好" }]);
+  cache.set(1, 2, [{ original: "Page 2", translation: "第 2 页" }]);
   assert.equal(cache.has(1, 1), true);
   assert.equal(cache.get(1, 1)[0].translation, "你好");
   cache.clearPage(1, 1);
   assert.equal(cache.get(1, 1), null);
-  cache.set(1, 2, [{ original: "Page 2", translation: "第 2 页" }]);
+  assert.equal(cache.get(1, 2)[0].translation, "第 2 页");
   cache.clear();
   assert.equal(cache.has(1, 2), false);
+  const restoreSrc = src.slice(src.indexOf("/** 原文: current page only"), src.indexOf("async function openFile"));
+  assert.match(restoreSrc, /pageCache\.clearPage\(docId, pageNum\)/);
+  assert.equal(restoreSrc.includes("pageCache.clear()"), false);
+});
+
+test("collectArticlePages keeps page order and skips untranslated pages", () => {
+  const cache = createPageCache();
+  cache.set(1, 1, [{ original: "A", translation: "甲", role: "paragraph" }]);
+  cache.set(1, 2, [{ original: "B", translation: "", role: "paragraph" }]);
+  cache.set(1, 3, [{ original: "C", translation: "丙", role: "heading" }]);
+  const pages = collectArticlePages(cache, 1, 3);
+  assert.deepEqual(pages.map((entry) => entry.page), [1, 3]);
+  assert.equal(pageHasTranslation(cache.get(1, 1)), true);
+  assert.equal(pageHasTranslation(cache.get(1, 2)), false);
+  assert.equal(pageTranslationComplete([{ original: "A", translation: "甲" }]), true);
+  assert.equal(pageTranslationComplete([{ original: "A", translation: "甲" }, { original: "B", translation: "" }]), false);
+  assert.equal(pageTranslationComplete([]), false);
+});
+
+test("continuous scroll helpers pick the page in view and nearby canvases", () => {
+  assert.equal(
+    pageFromViewport(
+      [
+        { page: 1, top: 0, bottom: 800 },
+        { page: 2, top: 816, bottom: 1616 }
+      ],
+      0,
+      600
+    ),
+    1
+  );
+  assert.equal(
+    pageFromViewport(
+      [
+        { page: 1, top: -700, bottom: 100 },
+        { page: 2, top: 116, bottom: 916 }
+      ],
+      0,
+      600
+    ),
+    2
+  );
+  assert.deepEqual(neighborPages(1, 5, 2), [1, 2, 3]);
+  assert.deepEqual(neighborPages(5, 5, 2), [3, 4, 5]);
+  assert.deepEqual(neighborPages(3, 5, 1), [2, 3, 4]);
+  assert.equal(readoutPageSelector(4), '[data-page="4"]');
+  assert.equal(shouldSyncReadout(40, 40, 80), false);
+  assert.equal(shouldSyncReadout(200, 40, 80), true);
+  assert.equal(normalizePdfTranslateScope("all"), "all");
+  assert.equal(normalizePdfTranslateScope("document"), "all");
+  assert.equal(normalizePdfTranslateScope(""), "page");
+  assert.equal(wheelPageDelta({ deltaY: 40, atTop: true, atBottom: true, overflow: false }), 1);
+  assert.equal(wheelPageDelta({ deltaY: -40, atTop: true, atBottom: true, overflow: false }), -1);
+  assert.equal(wheelPageDelta({ deltaY: 40, atTop: false, atBottom: true, overflow: true }), 0);
+});
+
+test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page stack", () => {
+  const pick = html.indexOf('id="pick"');
+  const scope = html.indexOf("scope-seg");
+  const translate = html.indexOf('id="translatePage"');
+  const stop = html.indexOf('id="stopTranslate"');
+  const restore = html.indexOf('id="restoreOriginal"');
+  const prev = html.indexOf('id="prev"');
+  assert.ok(pick > 0 && pick < scope && scope < translate && translate < stop && stop < restore && restore < prev);
+  assert.match(html, /class="scope-seg"[^>]*role="group"[^>]*aria-label="翻译范围"/);
+  assert.match(html, /class="scope-seg-btn is-on"[^>]*data-scope="page"[^>]*>当前页</);
+  assert.match(html, /class="scope-seg-btn"[^>]*data-scope="all"[^>]*>全文</);
+  assert.equal(html.includes("pdfTranslateScope"), false);
+  assert.equal(html.includes("scope-field"), false);
+  assert.match(html, /id="prev"[^>]*>上一页</);
+  assert.match(html, /id="next"[^>]*>下一页</);
+  assert.match(css, /\.scope-seg\s*\{[^}]*display:\s*inline-flex[^}]*padding:\s*2px[^}]*border:\s*1px solid var\(--oi-line\)[^}]*border-radius:\s*8px[^}]*background:\s*var\(--oi-input, var\(--oi-bg\)\)/s);
+  assert.match(css, /\.scope-seg-btn\s*\{[^}]*min-height:\s*32px[^}]*padding:\s*0 12px[^}]*background:\s*transparent[^}]*color:\s*var\(--oi-text-muted\)[^}]*font:\s*500 13px\/1\.2 var\(--oi-font\)/s);
+  assert.match(css, /\.scope-seg-btn:hover\s*\{[^}]*color:\s*var\(--oi-text\)[^}]*color-mix\(in srgb, var\(--oi-line\) 35%/s);
+  assert.match(css, /\.scope-seg-btn\.is-on\s*\{[^}]*color-mix\(in srgb, var\(--oi-accent\) 18%[^}]*font-weight:\s*600/s);
+  assert.match(css, /\.scope-seg-btn:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-accent\)/s);
+  assert.match(css, /\.scope-seg-btn:disabled\s*\{[^}]*opacity:\s*0\.45/s);
+  assert.equal(css.includes(".scope-seg.btn-primary"), false);
+  assert.match(src, /setScopeEnabled\(Boolean\(pdfDoc\) && !session\.running\)/);
+  assert.match(css, /\.pages\s*\{[^}]*flex-direction:\s*column/s);
+  assert.match(css, /\.pdf-page\s*\{/);
+  assert.match(src, /onPdfScroll/);
+  assert.match(src, /onPdfWheel/);
+  assert.match(src, /wheelPageDelta/);
+  assert.match(src, /onScopeClick/);
+  assert.match(src, /setTranslateScope/);
+  const scopeClickSrc = src.slice(src.indexOf("function onScopeClick"), src.indexOf("function setTranslateScope"));
+  assert.equal(scopeClickSrc.includes("startTranslate"), false);
+  assert.match(src, /scrollIntoView/);
+  assert.match(src, /syncReadoutToPage/);
+  assert.match(src, /dataset\.page/);
+  assert.match(src, /translateWholeDocument/);
+  assert.match(src, /currentScope\(\) === "all"/);
+  assert.equal(src.includes('id="page"'), false);
+  assert.equal(html.includes('id="page"'), false);
+  const goPageSrc = src.slice(src.indexOf("async function goPage"), src.indexOf("async function setZoom"));
+  assert.match(goPageSrc, /scrollIntoView/);
+  assert.equal(goPageSrc.includes("abortTranslateSession"), false);
+  assert.match(src, /renderArticle\(\)/);
+  assert.match(src, /collectArticlePages\(pageCache/);
 });
 
 test("translatePageBlocks sends OI_TRANSLATE_BATCH slices and honors stop", async () => {
@@ -399,6 +527,55 @@ test("translatePageBlocks sends OI_TRANSLATE_BATCH slices and honors stop", asyn
   assert.equal(partial.results[2].translation, "");
 });
 
+test("translateDocumentPages walks pages via OI_TRANSLATE_BATCH and honors stop", async () => {
+  const cache = createPageCache();
+  cache.set(9, 1, [{ original: "P1", translation: "一", role: "paragraph" }]);
+  const sent = [];
+  const session = createTranslateSession();
+  const out = await translateDocumentPages({
+    session,
+    cache,
+    docId: 9,
+    numPages: 3,
+    batchSize: 8,
+    requestIdFor: (page, index) => `pdf-${page}-${index}`,
+    getPageOriginals: async (page) => [`P${page}`],
+    send: async (msg) => {
+      sent.push(msg);
+      if (msg.texts[0] === "P2") abortTranslateSession(session);
+      return { ok: true, translations: msg.texts.map((text) => `译:${text}`) };
+    }
+  });
+  assert.equal(out.aborted, true);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].type, "OI_TRANSLATE_BATCH");
+  assert.deepEqual(sent[0].texts, ["P2"]);
+  assert.equal(sent[0].requestId, "pdf-2-0");
+  assert.equal(cache.get(9, 1)[0].translation, "一");
+  assert.equal(pageHasTranslation(cache.get(9, 2)), false);
+  assert.equal(cache.has(9, 3), false);
+
+  const full = createPageCache();
+  const all = [];
+  const done = await translateDocumentPages({
+    cache: full,
+    docId: 4,
+    numPages: 2,
+    batchSize: 8,
+    getPageOriginals: async (page) => [`Page ${page} one.`, `Page ${page} two.`],
+    send: async (msg) => {
+      all.push(msg.texts.slice());
+      return { ok: true, translations: msg.texts.map((text) => `译:${text}`) };
+    }
+  });
+  assert.equal(done.aborted, false);
+  assert.equal(all.length, 2);
+  assert.deepEqual(all[0], ["Page 1 one.", "Page 1 two."]);
+  assert.deepEqual(all[1], ["Page 2 one.", "Page 2 two."]);
+  assert.equal(all.some((texts) => texts.includes("Page 1 one.") && texts.includes("Page 2 one.")), false);
+  assert.equal(full.get(4, 2)[1].translation, "译:Page 2 two.");
+});
+
 test("two-step draft progress replaces in place and keeps heading role", async () => {
   const session = createTranslateSession();
   session.inflight = { requestId: "pdf-0", slice: ["Hello world."], sliceStart: 0 };
@@ -424,6 +601,9 @@ test("two-step draft progress replaces in place and keeps heading role", async (
   assert.match(src, /segmentPageBlocks/);
   assert.match(src, /getTextContent/);
   assert.match(src, /OI_GET_SETTINGS/);
+  assert.match(src, /translateDocumentPages/);
+  assert.match(src, /collectArticlePages/);
+  assert.match(src, /renderArticle/);
 });
 
 test("vendored pdf.js segments a multi-paragraph paper-style page", async () => {

@@ -4,37 +4,52 @@ import {
   PDF_COPY,
   abortTranslateSession,
   applyDraftTranslations,
+  collectArticlePages,
   createPageCache,
   createTranslateSession,
   extractPageItems,
+  neighborPages,
   nextZoom,
+  normalizePdfTranslateScope,
+  wheelPageDelta,
   pageBlocksCopy,
+  pageFromViewport,
+  pageHasTranslation,
   pageIndex,
   pageLabel,
+  progressDocumentStatus,
   progressStatus,
+  readoutPlaceholder,
   readViewerSrc,
+  readoutPageSelector,
   segmentPageBlocks,
+  shouldSyncReadout,
   textLayerCopy,
+  translateDocumentPages,
   translatePageBlocks,
   articleNodeSpec,
   zoomLabel
 } from "../lib/pdf-viewer.js";
 
 const $ = (id) => document.getElementById(id);
+const RENDER_RADIUS = 2;
 
 GlobalWorkerOptions.workerSrc = workerSrc();
 
 let pdfDoc = null;
 let pageNum = 1;
 let zoom = DEFAULT_ZOOM;
-let renderTask = null;
 let sourceUrl = "";
 let docId = 0;
-let viewEpoch = 0;
 let restoreGen = 0;
+let textGen = 0;
+let renderGen = 0;
 let pageItems = 0;
 let pageOriginals = [];
 let pageResults = [];
+let translatingPage = 0;
+let pageViews = [];
+let scrollTick = 0;
 const pageCache = createPageCache();
 const session = createTranslateSession();
 
@@ -62,12 +77,15 @@ function init() {
   $("next").addEventListener("click", () => goPage(1));
   $("zoomOut").addEventListener("click", () => setZoom(nextZoom(zoom, -1)));
   $("zoomIn").addEventListener("click", () => setZoom(nextZoom(zoom, 1)));
-  $("translatePage").addEventListener("click", () => translateCurrentPage());
+  document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
+  $("translatePage").addEventListener("click", () => startTranslate());
   $("stopTranslate").addEventListener("click", () => {
     abortTranslateSession(session);
     if (session.running) setStatus(PDF_COPY.stopped);
   });
   $("restoreOriginal").addEventListener("click", restoreOriginal);
+  $("pdfPane").addEventListener("scroll", onPdfScroll, { passive: true });
+  $("pdfPane").addEventListener("wheel", onPdfWheel, { passive: true });
   document.addEventListener("keydown", onKey);
   listenProgress();
 
@@ -96,11 +114,14 @@ function listenProgress() {
 }
 
 function applyPageProgress(message) {
-  if (!session.running) return;
-  const next = applyDraftTranslations(session, message, pageResults);
-  if (next === pageResults) return;
+  if (!session.running || !translatingPage) return;
+  const current = pageCache.get(docId, translatingPage) || pageResults;
+  const next = applyDraftTranslations(session, message, current);
+  if (next === current) return;
   pageResults = next;
-  renderResults(pageResults);
+  pageCache.set(docId, translatingPage, next);
+  if (translatingPage === pageNum) pageResults = next;
+  renderArticle();
   setStatus(PDF_COPY.polishing);
 }
 
@@ -121,9 +142,49 @@ function appendReadoutNode(input) {
   const node = document.createElement(spec.tag);
   node.className = spec.className;
   node.textContent = spec.text;
+  if (input.page != null && input.page !== "") node.dataset.page = String(input.page);
   $("readout").append(node);
-  $("emptyRead").hidden = true;
+  syncReadoutEmpty(true);
   return node;
+}
+
+function syncReadoutEmpty(hasArticle) {
+  const copy = readoutPlaceholder({ running: session.running, hasArticle });
+  $("emptyRead").hidden = copy !== PDF_COPY.translateHint;
+  $("pendingRead").hidden = copy !== PDF_COPY.translatingWait;
+}
+
+function renderArticle() {
+  const pane = document.querySelector(".pane-translate");
+  const keep = pane ? pane.scrollTop : 0;
+  $("readout").replaceChildren();
+  const pages = collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0);
+  if (!pages.length) {
+    syncReadoutEmpty(false);
+    return;
+  }
+  syncReadoutEmpty(true);
+  pages.forEach(({ page, blocks }) => {
+    (blocks || []).forEach((item) => {
+      if (!item?.original || !item.translation) return;
+      appendReadoutNode({
+        translation: item.translation,
+        role: item.role,
+        page
+      });
+    });
+  });
+  if (pane) pane.scrollTop = keep;
+}
+
+function syncReadoutToPage(page) {
+  const pane = document.querySelector(".pane-translate");
+  const node = $("readout").querySelector(readoutPageSelector(page));
+  if (!pane || !node) return;
+  const paneRect = pane.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  if (!shouldSyncReadout(nodeRect.top, paneRect.top)) return;
+  node.scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
 function runtimeSend(message) {
@@ -134,6 +195,41 @@ function runtimeSend(message) {
   return send(message);
 }
 
+function currentScope() {
+  const on = document.querySelector(".scope-seg-btn.is-on");
+  return normalizePdfTranslateScope(on?.dataset.scope);
+}
+
+function onScopeClick(event) {
+  const btn = event.target.closest(".scope-seg-btn");
+  if (!btn || btn.disabled || session.running) return;
+  setTranslateScope(btn.dataset.scope);
+}
+
+function setTranslateScope(value) {
+  const scope = normalizePdfTranslateScope(value);
+  document.querySelectorAll(".scope-seg-btn").forEach((btn) => {
+    btn.classList.toggle("is-on", btn.dataset.scope === scope);
+  });
+  updateTranslateControls();
+}
+
+function setScopeEnabled(enabled) {
+  document.querySelectorAll(".scope-seg-btn").forEach((btn) => {
+    btn.disabled = !enabled;
+  });
+}
+
+async function startTranslate() {
+  if (currentScope() === "all") await translateWholeDocument();
+  else await translateCurrentPage();
+}
+
+async function resolveBatchSize() {
+  const settingsRes = await runtimeSend({ type: "OI_GET_SETTINGS" });
+  return Math.max(1, Number(settingsRes?.settings?.batchSize) || 8);
+}
+
 async function translateCurrentPage() {
   if (!pdfDoc || session.running) return;
   if (!pageOriginals.length) {
@@ -142,28 +238,25 @@ async function translateCurrentPage() {
     updateTranslateControls();
     return;
   }
-  const ticket = viewEpoch;
   const gen = restoreGen;
-  const translatingPage = pageNum;
   const translatingDoc = docId;
+  translatingPage = pageNum;
   session.running = true;
   session.aborted = false;
-  pageResults = pageOriginals.map((block) => ({
-    original: block.text || block.original || block,
-    translation: "",
-    role: block.role === "title" ? "title" : block.role === "heading" ? "heading" : "paragraph"
-  }));
-  renderResults(pageResults);
+  pageResults = emptyPageResults(pageOriginals);
+  pageCache.set(translatingDoc, translatingPage, pageResults);
   updateTranslateControls();
   setStatus(PDF_COPY.translating);
+  renderArticle();
   let batchSize = 8;
   try {
-    const settingsRes = await runtimeSend({ type: "OI_GET_SETTINGS" });
-    batchSize = Math.max(1, Number(settingsRes?.settings?.batchSize) || 8);
+    batchSize = await resolveBatchSize();
   } catch (err) {
     session.running = false;
+    translatingPage = 0;
     if (String(err?.message || err) === "runtime unavailable") {
       setStatus(PDF_COPY.runtimeUnavailable, true);
+      renderArticle();
       updateTranslateControls();
       return;
     }
@@ -173,16 +266,14 @@ async function translateCurrentPage() {
     session,
     batchSize,
     onBatchStart({ index, total }) {
-      if (ticket !== viewEpoch || gen !== restoreGen) return;
+      if (gen !== restoreGen) return;
       setStatus(progressStatus(index + 1, total));
     },
     onBatchResult({ results: next, res }) {
-      if (translatingDoc !== docId) return;
-      if (gen !== restoreGen) return;
+      if (translatingDoc !== docId || gen !== restoreGen) return;
       pageCache.set(translatingDoc, translatingPage, next);
-      if (ticket !== viewEpoch) return;
       pageResults = next;
-      renderResults(next);
+      renderArticle();
       if (res?.polishError) setStatus(PDF_COPY.polishFail, true);
     }
   });
@@ -191,46 +282,110 @@ async function translateCurrentPage() {
     return;
   }
   pageCache.set(translatingDoc, translatingPage, results);
-  if (ticket !== viewEpoch) {
-    updateTranslateControls();
-    return;
-  }
   pageResults = results;
-  renderResults(results);
+  renderArticle();
   if (aborted) setStatus(PDF_COPY.stopped);
   else if (!results.some((item) => item.translation)) setStatus(PDF_COPY.error, true);
   else setStatus(PDF_COPY.done);
+  translatingPage = 0;
   updateTranslateControls();
 }
 
+async function translateWholeDocument() {
+  if (!pdfDoc || session.running) return;
+  const gen = restoreGen;
+  const translatingDoc = docId;
+  const total = pdfDoc.numPages;
+  session.running = true;
+  session.aborted = false;
+  updateTranslateControls();
+  setStatus(progressDocumentStatus(1, total));
+  renderArticle();
+  let batchSize = 8;
+  try {
+    batchSize = await resolveBatchSize();
+  } catch (err) {
+    session.running = false;
+    translatingPage = 0;
+    if (String(err?.message || err) === "runtime unavailable") {
+      setStatus(PDF_COPY.runtimeUnavailable, true);
+      renderArticle();
+      updateTranslateControls();
+      return;
+    }
+  }
+  const { aborted, pages } = await translateDocumentPages({
+    session,
+    cache: pageCache,
+    docId: translatingDoc,
+    numPages: total,
+    batchSize,
+    send: runtimeSend,
+    getPageOriginals: (page) => originalsForPage(page, gen, translatingDoc),
+    onPageStart({ page, total: pageTotal }) {
+      if (gen !== restoreGen || translatingDoc !== docId) return;
+      translatingPage = page;
+      setStatus(progressDocumentStatus(page, pageTotal));
+    },
+    onPageResult({ page, results, res }) {
+      if (translatingDoc !== docId || gen !== restoreGen) return;
+      if (page === pageNum) pageResults = results;
+      renderArticle();
+      if (res?.polishError) setStatus(PDF_COPY.polishFail, true);
+    },
+    onPageDone({ page, results }) {
+      if (translatingDoc !== docId || gen !== restoreGen) return;
+      if (page === pageNum) pageResults = results;
+      renderArticle();
+    }
+  });
+  if (translatingDoc !== docId || gen !== restoreGen) {
+    updateTranslateControls();
+    return;
+  }
+  renderArticle();
+  const any = pages.some((entry) => pageHasTranslation(entry.results));
+  if (aborted) setStatus(PDF_COPY.stopped);
+  else if (!any) setStatus(PDF_COPY.error, true);
+  else setStatus(PDF_COPY.doneDocument);
+  translatingPage = 0;
+  updateTranslateControls();
+}
+
+function emptyPageResults(blocks) {
+  return (blocks || []).map((block) => ({
+    original: block.text || block.original || block,
+    translation: "",
+    role: block.role === "title" ? "title" : block.role === "heading" ? "heading" : "paragraph"
+  }));
+}
+
+async function originalsForPage(n, gen, translatingDoc) {
+  let blocks = n === pageNum && pageOriginals.length ? pageOriginals : null;
+  if (!blocks) {
+    const page = await pdfDoc.getPage(n);
+    if (gen !== restoreGen || translatingDoc !== docId) return [];
+    blocks = segmentPageBlocks(await page.getTextContent());
+  }
+  if (gen !== restoreGen || translatingDoc !== docId) return [];
+  const cached = pageCache.get(translatingDoc, n);
+  pageResults = pageHasTranslation(cached) ? cached : emptyPageResults(blocks);
+  if (!pageHasTranslation(cached)) pageCache.set(translatingDoc, n, pageResults);
+  return blocks;
+}
+
+/** 原文: current page only (clearPage). Does not clear the whole document. */
 function restoreOriginal() {
   abortTranslateSession(session);
   restoreGen += 1;
+  translatingPage = 0;
   pageResults = [];
   pageCache.clearPage(docId, pageNum);
-  renderResults([]);
+  renderArticle();
   const copy = pageBlocksCopy(pageOriginals.length, pageItems);
   setStatus(copy);
   $("noTextLayerHint").hidden = pageItems > 0;
-  $("emptyRead").hidden = false;
   updateTranslateControls();
-}
-
-function renderResults(results) {
-  $("readout").replaceChildren();
-  const list = (results || []).filter((item) => item?.original);
-  if (!list.length) {
-    $("emptyRead").hidden = false;
-    return;
-  }
-  $("emptyRead").hidden = true;
-  list.forEach((item) => {
-    if (!item.translation) return;
-    appendReadoutNode({
-      translation: item.translation,
-      role: item.role
-    });
-  });
 }
 
 async function openFile(file) {
@@ -273,16 +428,24 @@ async function adoptDoc(doc, title) {
   pageNum = 1;
   zoom = DEFAULT_ZOOM;
   docId += 1;
-  viewEpoch += 1;
   restoreGen += 1;
+  textGen += 1;
+  renderGen += 1;
+  translatingPage = 0;
   pageCache.clear();
   pageOriginals = [];
   pageResults = [];
   pageItems = 0;
-  renderResults([]);
+  pageViews = [];
+  $("pages").replaceChildren();
+  $("pdfPane").scrollTop = 0;
+  renderArticle();
   if (title) document.title = `${PDF_COPY.title} · ${shortTitle(title)}`;
   setHasDoc(true);
-  await renderPage();
+  await buildPages();
+  updatePager();
+  await scheduleVisibleRenders();
+  await loadCurrentPageText();
 }
 
 function shortTitle(value) {
@@ -294,119 +457,218 @@ function shortTitle(value) {
   }
 }
 
+async function buildPages() {
+  if (!pdfDoc) return;
+  const container = $("pages");
+  container.replaceChildren();
+  pageViews = [];
+  for (let n = 1; n <= pdfDoc.numPages; n++) {
+    const page = await pdfDoc.getPage(n);
+    const viewport = page.getViewport({ scale: zoom });
+    const wrap = document.createElement("div");
+    wrap.className = "pdf-page";
+    wrap.dataset.page = String(n);
+    wrap.style.width = `${Math.floor(viewport.width)}px`;
+    wrap.style.maxWidth = "100%";
+    wrap.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
+    const canvas = document.createElement("canvas");
+    canvas.hidden = true;
+    wrap.append(canvas);
+    container.append(wrap);
+    pageViews.push({
+      num: n,
+      wrap,
+      canvas,
+      renderedScale: 0,
+      renderTask: null
+    });
+  }
+}
+
+async function layoutPages() {
+  if (!pdfDoc) return;
+  for (const view of pageViews) {
+    const page = await pdfDoc.getPage(view.num);
+    const viewport = page.getViewport({ scale: zoom });
+    view.wrap.style.width = `${Math.floor(viewport.width)}px`;
+    view.wrap.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
+    if (view.renderedScale !== zoom) view.canvas.hidden = true;
+  }
+}
+
+function pageRects() {
+  return pageViews.map((view) => {
+    const rect = view.wrap.getBoundingClientRect();
+    return { page: view.num, top: rect.top, bottom: rect.bottom };
+  });
+}
+
+function measureVisible() {
+  const pane = $("pdfPane");
+  const paneRect = pane.getBoundingClientRect();
+  return pageFromViewport(pageRects(), paneRect.top, paneRect.bottom);
+}
+
+function onPdfScroll() {
+  if (scrollTick) return;
+  scrollTick = requestAnimationFrame(() => {
+    scrollTick = 0;
+    syncVisiblePage();
+  });
+}
+
+function onPdfWheel(event) {
+  if (!pdfDoc) return;
+  const pane = $("pdfPane");
+  const overflow = pane.scrollHeight - pane.clientHeight > 4;
+  const atTop = pane.scrollTop <= 0;
+  const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1;
+  const dir = wheelPageDelta({ deltaY: event.deltaY, atTop, atBottom, overflow });
+  if (dir) goPage(dir);
+}
+
+function syncVisiblePage() {
+  if (!pdfDoc || !pageViews.length) return;
+  const current = measureVisible();
+  if (current !== pageNum) {
+    pageNum = current;
+    updatePager();
+    loadCurrentPageText();
+    syncReadoutToPage(current);
+  }
+  scheduleVisibleRenders();
+}
+
 async function goPage(dir) {
   if (!pdfDoc) return;
   const next = pageIndex(pageNum, pdfDoc.numPages, dir);
   if (next === pageNum) return;
-  abortTranslateSession(session);
   pageNum = next;
-  await renderPage({ bumpEpoch: true });
+  const view = pageViews[next - 1];
+  view?.wrap.scrollIntoView({ block: "start", behavior: "smooth" });
+  updatePager();
+  loadCurrentPageText();
+  syncReadoutToPage(next);
+  await scheduleVisibleRenders();
 }
 
 async function setZoom(next) {
   if (!pdfDoc || next === zoom) return;
   zoom = next;
-  await renderPage({ bumpEpoch: false });
+  $("zoomLabel").textContent = zoomLabel(zoom);
+  await layoutPages();
+  await scheduleVisibleRenders();
 }
 
-async function renderPage({ bumpEpoch = false } = {}) {
+async function scheduleVisibleRenders() {
   if (!pdfDoc) return;
-  if (bumpEpoch) viewEpoch += 1;
-  const ticket = viewEpoch;
-  const page = await pdfDoc.getPage(pageNum);
-  if (ticket !== viewEpoch) return;
+  const gen = ++renderGen;
+  const want = neighborPages(pageNum, pdfDoc.numPages, RENDER_RADIUS);
+  for (const n of want) {
+    if (gen !== renderGen) return;
+    const view = pageViews[n - 1];
+    if (view) await renderView(view);
+  }
+}
+
+async function renderView(view) {
+  if (!pdfDoc || !view) return;
+  if (view.renderedScale === zoom && view.canvas.width) return;
+  const page = await pdfDoc.getPage(view.num);
   const viewport = page.getViewport({ scale: zoom });
-  const canvas = $("page");
+  const canvas = view.canvas;
   const context = canvas.getContext("2d", { alpha: false });
   const outputScale = window.devicePixelRatio || 1;
   canvas.width = Math.floor(viewport.width * outputScale);
   canvas.height = Math.floor(viewport.height * outputScale);
-  canvas.style.width = `${Math.floor(viewport.width)}px`;
-  canvas.style.height = `${Math.floor(viewport.height)}px`;
-  canvas.hidden = false;
-  if (renderTask) {
-    renderTask.cancel();
+  if (view.renderTask) {
+    view.renderTask.cancel();
     try {
-      await renderTask.promise;
+      await view.renderTask.promise;
     } catch {
       /* cancelled */
     }
   }
   const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
-  renderTask = page.render({ canvasContext: context, viewport, transform });
+  view.renderTask = page.render({ canvasContext: context, viewport, transform });
   try {
-    await renderTask.promise;
+    await view.renderTask.promise;
+    canvas.hidden = false;
+    view.renderedScale = zoom;
   } catch (err) {
     if (err?.name === "RenderingCancelledException") return;
     setStatus(PDF_COPY.error, true);
-    return;
   }
-  if (ticket !== viewEpoch) return;
-  $("pager").textContent = pageLabel(pageNum, pdfDoc.numPages);
-  $("zoomLabel").textContent = zoomLabel(zoom);
-  $("prev").disabled = pageNum <= 1;
-  $("next").disabled = pageNum >= pdfDoc.numPages;
-  await loadPageText(page, ticket);
 }
 
-async function loadPageText(page, ticket) {
+async function loadCurrentPageText() {
+  if (!pdfDoc) return;
+  const ticket = ++textGen;
+  const n = pageNum;
+  const translatingDoc = docId;
   try {
+    const page = await pdfDoc.getPage(n);
+    if (ticket !== textGen || translatingDoc !== docId) return;
     const content = await page.getTextContent();
-    if (ticket !== viewEpoch) return;
+    if (ticket !== textGen || translatingDoc !== docId) return;
     const items = extractPageItems(content);
     pageItems = items.length;
     pageOriginals = segmentPageBlocks(content);
+    const cached = pageCache.get(docId, n);
+    pageResults = cached || [];
     const copy = pageBlocksCopy(pageOriginals.length, pageItems) || textLayerCopy(pageItems);
-    const cached = pageCache.get(docId, pageNum);
-    if (cached?.length) {
-      pageResults = cached;
-      renderResults(cached);
-      setStatus(copy || PDF_COPY.done);
-      $("noTextLayerHint").hidden = true;
-    } else {
-      pageResults = [];
-      renderResults([]);
-      setStatus(copy);
-      $("noTextLayerHint").hidden = pageItems > 0;
-      $("emptyRead").hidden = false;
+    if (!session.running) {
+      if (pageHasTranslation(cached)) setStatus(copy || PDF_COPY.done);
+      else setStatus(copy);
     }
+    $("noTextLayerHint").hidden = pageItems > 0;
   } catch {
-    if (ticket !== viewEpoch) return;
+    if (ticket !== textGen || translatingDoc !== docId) return;
     pageItems = 0;
     pageOriginals = [];
     pageResults = [];
-    renderResults([]);
-    setStatus(PDF_COPY.noTextLayer);
+    if (!session.running) setStatus(PDF_COPY.noTextLayer);
     $("noTextLayerHint").hidden = false;
-    $("emptyRead").hidden = false;
   }
   updateTranslateControls();
 }
 
+function updatePager() {
+  const total = pdfDoc?.numPages || 0;
+  $("pager").textContent = pageLabel(pageNum, total);
+  $("zoomLabel").textContent = zoomLabel(zoom);
+  $("prev").disabled = !pdfDoc || pageNum <= 1;
+  $("next").disabled = !pdfDoc || pageNum >= total;
+}
+
 function setHasDoc(has) {
-  $("prev").disabled = !has;
-  $("next").disabled = !has;
   $("zoomOut").disabled = !has;
   $("zoomIn").disabled = !has;
   if (!has) {
-    $("page").hidden = true;
+    $("pages").replaceChildren();
+    pageViews = [];
     $("pager").textContent = pageLabel(0, 0);
     $("zoomLabel").textContent = zoomLabel(DEFAULT_ZOOM);
     $("noTextLayerHint").hidden = true;
     pageItems = 0;
     pageOriginals = [];
     pageResults = [];
-    renderResults([]);
+    renderArticle();
   }
+  updatePager();
   updateTranslateControls();
 }
 
 function updateTranslateControls() {
+  const scope = currentScope();
   const hasBlocks = pageOriginals.length > 0;
-  const hasResults = pageResults.some((item) => item?.original);
-  $("translatePage").disabled = !pdfDoc || !hasBlocks || session.running;
+  const canTranslate = scope === "all" ? Boolean(pdfDoc) : hasBlocks;
+  $("translatePage").disabled = !pdfDoc || !canTranslate || session.running;
+  $("translatePage").hidden = session.running;
+  $("stopTranslate").hidden = !session.running;
   $("stopTranslate").disabled = !session.running;
-  $("restoreOriginal").disabled = !hasResults && !pageCache.has(docId, pageNum);
+  $("restoreOriginal").disabled = !pageHasTranslation(pageCache.get(docId, pageNum));
+  setScopeEnabled(Boolean(pdfDoc) && !session.running);
 }
 
 function setStatus(text, isError = false) {
