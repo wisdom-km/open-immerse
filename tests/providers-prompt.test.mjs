@@ -99,11 +99,12 @@ test("resolveTranslatorPrompt honors a custom prompt without rewriting it", () =
 test("guardZhBusinessSense fixes fused 小企业主教 on the Claude blog title", () => {
   const [out] = guardZhBusinessSense(
     [CLAUDE_TITLE],
-    ["1,000 位小企业主教我们了解人工智能"],
+    ["1,000 位小企业主教的人工智能课"],
     "zh-CN"
   );
   assert.equal(out.includes("主教"), false);
   assert.match(out, /小企业主/);
+  assert.equal(out, "1,000 位小企业主的人工智能课");
 });
 
 test("guardZhBusinessSense leaves 主教 when the source is actually religious", () => {
@@ -120,17 +121,18 @@ test("guardZhBusinessSense is a no-op for non-Chinese targets", () => {
 test("guard rewrites 小型企业主教", () => {
   const out = guardZhBusinessSense(
     ["What 1,000 small business owners taught us about AI"],
-    ["1000位小型企业主教给我们的AI经验"],
+    ["1000位小型企业主教的AI经验"],
     "zh-CN"
   );
   assert.equal(out[0].includes("主教"), false);
   assert.match(out[0], /企业主/);
+  assert.equal(out[0], "1000位小企业主的AI经验");
 });
 
 test("guard rewrites 小型企业主教 even when source index is misaligned", () => {
   const out = guardZhBusinessSense(
     ["Some other sentence without the phrase"],
-    ["1000家小型企业主教给我们的AI经验"],
+    ["1000家小型企业主教与AI"],
     "zh-CN"
   );
   assert.equal(out[0].includes("主教"), false);
@@ -140,12 +142,27 @@ test("guard rewrites 小型企业主教 even when source index is misaligned", (
 test("guard rewrites 小型企业主教 when source is Lesson 1", () => {
   const [out] = guardZhBusinessSense(
     ["Lesson 1"],
-    ["1000位小型企业主教给我们的AI经验"],
+    ["1000位小型企业主教"],
     "zh-CN"
   );
   assert.equal(out.includes("主教"), false);
   assert.match(out, /小企业主/);
-  assert.equal(out, "1000位小企业主给我们的AI经验");
+  assert.equal(out, "1000位小企业主");
+});
+
+test("guard keeps 教 when it starts 教会/教导/教给/教我们", () => {
+  const cases = [
+    "1000位小企业主教会我们的AI经验",
+    "1000位小企业主教导我们认识AI",
+    "1000位小企业主教给我们的AI经验",
+    "1000位小企业主教我们了解人工智能",
+    "1000位小企业主在 AI 上教会了我们什么"
+  ];
+  for (const title of cases) {
+    const [out] = guardZhBusinessSense([CLAUDE_TITLE], [title], "zh-CN");
+    assert.equal(out, title, title);
+    assert.doesNotMatch(out, /主会我们|主我们的/);
+  }
 });
 
 test("guard keeps 主教 when the misaligned source is actually religious", () => {
