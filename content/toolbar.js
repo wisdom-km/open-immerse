@@ -16,6 +16,17 @@
     persistToastShowing(text) {
       return text === "翻译中" || text === "润色中";
     },
+    fabToggleState({ inflight = false, hasTranslations = false } = {}) {
+      if (inflight) return "translating";
+      if (hasTranslations) return "translated";
+      return "idle";
+    },
+    fabToggleLabel(state) {
+      return state === "translating" ? "停止" : "翻译";
+    },
+    fabToggleIntent(state) {
+      return state === "translating" ? "abort" : "translate";
+    },
     collapseLocked({ active, persistToast } = {}) {
       return Boolean(active || persistToast);
     },
@@ -237,9 +248,17 @@
         return;
       }
       if (act === "toggle") {
-        const on = !document.documentElement.classList.contains("oi-active");
-        await send({ type: "OI_SAVE_SETTINGS", patch: { enabled: on } });
-        window.dispatchEvent(new CustomEvent(on ? "oi-please-start" : "oi-please-restore"));
+        const btn = ev.target.closest("[data-act]");
+        const state = FAB.fabToggleState({
+          inflight:
+            btn?.textContent === "停止" || document.documentElement.classList.contains("oi-active")
+        });
+        if (FAB.fabToggleIntent(state) === "abort") {
+          window.dispatchEvent(new CustomEvent("oi-please-stop"));
+          return;
+        }
+        await send({ type: "OI_SAVE_SETTINGS", patch: { enabled: true } });
+        window.dispatchEvent(new CustomEvent("oi-please-start"));
       }
       if (act === "restore") {
         await send({ type: "OI_SAVE_SETTINGS", patch: { enabled: false } });
@@ -489,8 +508,9 @@
   function syncToggle(on) {
     const btn = document.querySelector('.oi-fab [data-act="toggle"]');
     if (!btn) return;
-    btn.textContent = on ? "停止" : "翻译";
-    btn.title = on ? "停止" : "翻译";
+    const label = FAB.fabToggleLabel(on ? "translating" : "idle");
+    btn.textContent = label;
+    btn.title = label;
     btn.classList.toggle("on", on);
   }
 })();

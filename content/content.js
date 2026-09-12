@@ -24,6 +24,8 @@ const STATUS_POLISHING = "润色中";
 const STATUS_POLISH_FAIL = "润色失败";
 
 let running = false;
+let session = false;
+let loopTicket = -1;
 let epoch = 0;
 let pageObserver = null;
 let hoverBound = false;
@@ -35,7 +37,7 @@ init();
 
 async function init() {
   window.addEventListener("oi-please-start", () => start());
-  window.addEventListener("oi-please-stop", () => restore());
+  window.addEventListener("oi-please-stop", () => abort());
   window.addEventListener("oi-please-restore", () => restore());
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -56,7 +58,7 @@ async function init() {
       applyTranslateProgress(message);
       sendResponse({ ok: true });
     } else if (message.type === "OI_PING") {
-      sendResponse({ ok: true, running });
+      sendResponse({ ok: true, running: session || running || hasPageTranslations() });
     } else if (message.type === "OI_SAVE_CURRENT_SELECTION") {
       saveCurrentSelection().then(() => sendResponse({ ok: true }));
     } else if (message.type === "OI_FEATURES_CHANGED") {
@@ -94,20 +96,28 @@ async function start() {
   if (epoch !== ticket) return;
   if ((settings.features || {}).webpage === false) return;
   if (running) return;
-  running = true;
-  document.documentElement.classList.add("oi-active");
-  window.dispatchEvent(new CustomEvent("oi-running", { detail: true }));
+  session = true;
+  markBusy(true);
   await translateVisible(ticket);
-  if (running && epoch === ticket) {
+  if (session) {
     const lim = (await send({ type: "OI_GET_SETTINGS" }))?.settings?.translateLimit;
     if (!isTitleLeadLimit(lim)) observePage();
   }
 }
 
-function stop() {
-  running = false;
-  document.documentElement.classList.remove("oi-active");
-  window.dispatchEvent(new CustomEvent("oi-running", { detail: false }));
+function markBusy(on) {
+  running = Boolean(on);
+  document.documentElement.classList.toggle("oi-active", running);
+  window.dispatchEvent(new CustomEvent("oi-running", { detail: running }));
+}
+
+function settleBusy() {
+  inflight = null;
+  markBusy(false);
+  clearStatus();
+}
+
+function stopObserver() {
   if (pageObserver) {
     pageObserver.disconnect();
     pageObserver = null;
@@ -116,12 +126,21 @@ function stop() {
   timer = 0;
 }
 
+function abort() {
+  epoch += 1;
+  inflight = null;
+  markBusy(false);
+  clearStatus();
+  document.querySelectorAll(".oi-pending").forEach((el) => el.classList.remove("oi-pending"));
+}
+
 function restore() {
   epoch += 1;
-  running = false;
+  session = false;
   inflight = null;
   clearStatus();
-  stop();
+  markBusy(false);
+  stopObserver();
   document.querySelectorAll(".oi-translation, .oi-selection-card").forEach((el) => el.remove());
   document.querySelectorAll(".oi-pending, .oi-failed").forEach((el) => {
     el.classList.remove("oi-pending", "oi-failed");
@@ -133,10 +152,14 @@ function restore() {
   }
 }
 
+function hasPageTranslations() {
+  return Boolean(document.querySelector(".oi-translation"));
+}
+
 function observePage() {
   if (pageObserver) pageObserver.disconnect();
   pageObserver = new MutationObserver((mutations) => {
-    if (!running) return;
+    if (!session) return;
     const added = mutations.some((m) =>
       [...m.addedNodes].some((n) => n.nodeType === 1 && !n.classList?.contains("oi-translation") && !n.classList?.contains("oi-fab"))
     );
@@ -151,67 +174,74 @@ function debounceTranslate() {
 }
 
 async function translateVisible(ticket = epoch) {
-  if (!running || ticket !== epoch) return;
-  const settingsRes = await send({ type: "OI_GET_SETTINGS" });
-  if (!running || ticket !== epoch) return;
-  const settings = settingsRes?.settings;
-  if (!settings) return;
-  if ((settings.features || {}).webpage === false) return;
-  // batchSize only chunks API requests. translateLimit caps total nodes.
-  const collected = collectNodes(settings, { includeTranslated: true });
-  const limited = applyTranslateLimit(collected, settings.translateLimit);
-  const nodes = limited.filter((el) => !hasTranslation(el));
-  if (!nodes.length) return;
-  if (isTitleLeadLimit(settings.translateLimit)) {
-    toast("仅标题+开头：只翻标题和正文开头");
-  }
-  const batchSize = Math.max(1, Number(settings.batchSize) || 8);
-  for (let i = 0; i < nodes.length; i += batchSize) {
-    if (!running || ticket !== epoch) {
-      clearStatus();
-      return;
+  if (!session || ticket !== epoch) return;
+  if (loopTicket === ticket) return;
+  loopTicket = ticket;
+  try {
+    const settingsRes = await send({ type: "OI_GET_SETTINGS" });
+    if (!session || ticket !== epoch) return;
+    const settings = settingsRes?.settings;
+    if (!settings) return;
+    if ((settings.features || {}).webpage === false) return;
+    // batchSize only chunks API requests. translateLimit caps total nodes.
+    const collected = collectNodes(settings, { includeTranslated: true });
+    const limited = applyTranslateLimit(collected, settings.translateLimit);
+    const nodes = limited.filter((el) => !hasTranslation(el));
+    if (!nodes.length) return;
+    if (!running) markBusy(true);
+    if (isTitleLeadLimit(settings.translateLimit)) {
+      toast("仅标题+开头：只翻标题和正文开头");
     }
-    const chunk = nodes.slice(i, i + batchSize);
-    const requestId = `oi-${ticket}-${i}`;
-    inflight = { requestId, nodes: chunk, settings, ticket };
-    chunk.forEach((el) => el.classList.add("oi-pending"));
-    showStatus(STATUS_TRANSLATING);
-    try {
-      const res = await send({
-        type: "OI_TRANSLATE_BATCH",
-        requestId,
-        texts: chunk.map((el) => previewSourceText(getText(el), settings.translateLimit))
-      });
+    const batchSize = Math.max(1, Number(settings.batchSize) || 8);
+    for (let i = 0; i < nodes.length; i += batchSize) {
       if (!running || ticket !== epoch) {
-        chunk.forEach((el) => el.classList.remove("oi-pending"));
         clearStatus();
         return;
       }
-      if (!res || !res.ok) {
-        const hasDraft = chunk.some((el) => hasTranslation(el));
-        if (hasDraft) {
+      const chunk = nodes.slice(i, i + batchSize);
+      const requestId = `oi-${ticket}-${i}`;
+      inflight = { requestId, nodes: chunk, settings, ticket };
+      chunk.forEach((el) => el.classList.add("oi-pending"));
+      showStatus(STATUS_TRANSLATING);
+      try {
+        const res = await send({
+          type: "OI_TRANSLATE_BATCH",
+          requestId,
+          texts: chunk.map((el) => previewSourceText(getText(el), settings.translateLimit))
+        });
+        if (!running || ticket !== epoch) {
           chunk.forEach((el) => el.classList.remove("oi-pending"));
-          toast(STATUS_POLISH_FAIL);
-          continue;
+          clearStatus();
+          return;
         }
-        throw new Error(res?.error || "翻译失败");
+        if (!res || !res.ok) {
+          const hasDraft = chunk.some((el) => hasTranslation(el));
+          if (hasDraft) {
+            chunk.forEach((el) => el.classList.remove("oi-pending"));
+            toast(STATUS_POLISH_FAIL);
+            continue;
+          }
+          throw new Error(res?.error || "翻译失败");
+        }
+        chunk.forEach((el, idx) => {
+          el.classList.remove("oi-pending");
+          if (running && ticket === epoch) mountTranslation(el, res.translations[idx] || "", settings);
+        });
+        if (res.polishError) toast(STATUS_POLISH_FAIL);
+        else clearStatus();
+      } catch (err) {
+        chunk.forEach((el) => el.classList.remove("oi-pending"));
+        const hasDraft = chunk.some((el) => hasTranslation(el));
+        toast(hasDraft ? STATUS_POLISH_FAIL : String(err.message || err));
+        if (!hasDraft) break;
+      } finally {
+        if (inflight?.requestId === requestId) inflight = null;
       }
-      chunk.forEach((el, idx) => {
-        el.classList.remove("oi-pending");
-        if (running && ticket === epoch) mountTranslation(el, res.translations[idx] || "", settings);
-      });
-      if (res.polishError) toast(STATUS_POLISH_FAIL);
-      else clearStatus();
-    } catch (err) {
-      chunk.forEach((el) => el.classList.remove("oi-pending"));
-      const hasDraft = chunk.some((el) => hasTranslation(el));
-      toast(hasDraft ? STATUS_POLISH_FAIL : String(err.message || err));
-      if (!hasDraft) break;
-    } finally {
-      if (inflight?.requestId === requestId) inflight = null;
     }
+  } finally {
+    if (loopTicket === ticket) loopTicket = -1;
+    if (ticket === epoch) settleBusy();
   }
-  clearStatus();
 }
 
 function applyTranslateProgress(message) {
