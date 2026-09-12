@@ -89,38 +89,56 @@ test("clampDragPosition stays inside viewport insets", () => {
   assert.equal(mid.top, 300);
 });
 
-test("snap on release is bottom-left / bottom-right only at bottom:20", () => {
+test("release keeps free left/top and does not snap to a corner", () => {
   const FAB = loadFab();
   assert.equal(FAB.SNAP_BOTTOM_PX, 20);
   assert.deepEqual([...FAB.ALLOWED_CORNERS], ["bottom-left", "bottom-right"]);
-  assert.equal(FAB.isAllowedCorner("bottom-left"), true);
-  assert.equal(FAB.isAllowedCorner("bottom-right"), true);
-  assert.equal(FAB.isAllowedCorner("top-left"), false);
-  assert.equal(FAB.isAllowedCorner("top-right"), false);
-  assert.equal(FAB.normalizeCorner("top-left"), "bottom-right");
-  assert.equal(FAB.normalizeCorner("top-right"), "bottom-right");
-  assert.equal(FAB.snapCorner(100, 800), "bottom-left");
-  assert.equal(FAB.snapCorner(399, 800), "bottom-left");
-  assert.equal(FAB.snapCorner(400, 800), "bottom-right");
-  assert.equal(FAB.snapCorner(700, 800), "bottom-right");
+  const parkedPos = FAB.normalizePos({ left: 120, top: 240 });
+  assert.equal(parkedPos.left, 120);
+  assert.equal(parkedPos.top, 240);
+  assert.equal(FAB.normalizePos({ left: "x", top: 1 }), null);
+  assert.equal(FAB.normalizePos(null), null);
+  const finish = toolbar.slice(toolbar.indexOf("const finish ="), toolbar.indexOf("bar.addEventListener(\"pointerdown\""));
+  assert.match(finish, /applyFreePos/);
+  assert.doesNotMatch(finish, /snapCorner/);
+  assert.doesNotMatch(finish, /applyCorner/);
+  assert.doesNotMatch(finish, /style\.left = ""/);
+  assert.doesNotMatch(toolbar, /bindCornerSnap/);
   const parked = css.slice(css.indexOf(".oi-fab {"), css.indexOf(".oi-fab[data-corner"));
   assert.match(parked, /bottom:\s*20px/);
+  assert.match(css, /oi-fab-free/);
   assert.doesNotMatch(css, /data-corner="top-/);
-  assert.doesNotMatch(css, /data-oi-fab-corner="top-/);
   assert.doesNotMatch(toolbar, /top-left|top-right/);
 });
 
-test("toast and selection card follow corner plus --oi-fab-slot", () => {
-  assert.match(toolbar, /dataset\.oiFabCorner/);
-  assert.match(toolbar, /syncFabSlot/);
+test("toast and selection card follow the actual FAB box", () => {
+  const FAB = loadFab();
+  assert.equal(FAB.toastSlotFromBox({ top: 500, height: 52, viewportHeight: 600, gap: 12 }), 112);
+  const above = FAB.toastPlacementFromBox({ top: 500, height: 52, viewportHeight: 600, gap: 12 });
+  assert.equal(above.slot, 112);
+  assert.equal(above.top, "auto");
+  const below = FAB.toastPlacementFromBox({ top: 20, height: 52, viewportHeight: 600, gap: 12 });
+  assert.equal(below.slot, "auto");
+  assert.equal(below.top, "84px");
+  const leftAlign = FAB.toastAlignFromBox({ left: 40, width: 120, viewportWidth: 800 });
+  assert.equal(leftAlign.side, "left");
+  assert.equal(leftAlign.left, "40px");
+  assert.equal(leftAlign.right, "auto");
+  const rightAlign = FAB.toastAlignFromBox({ left: 660, width: 120, viewportWidth: 800 });
+  assert.equal(rightAlign.side, "right");
+  assert.equal(rightAlign.left, "auto");
+  assert.equal(rightAlign.right, "20px");
+  assert.match(toolbar, /toastPlacementFromBox/);
+  assert.match(toolbar, /toastAlignFromBox/);
   assert.match(toolbar, /--oi-fab-slot/);
+  assert.match(toolbar, /--oi-fab-toast-left/);
   assert.match(css, /\.oi-toast[\s\S]*bottom:\s*var\(--oi-fab-slot/);
   assert.match(css, /\.oi-selection-card[\s\S]*bottom:\s*var\(--oi-fab-slot/);
-  assert.match(css, /html\[data-oi-fab-corner="bottom-left"\] \.oi-toast/);
-  assert.match(css, /html\[data-oi-fab-corner="bottom-left"\] \.oi-selection-card/);
+  assert.match(css, /--oi-fab-toast-left/);
+  assert.match(css, /--oi-fab-toast-right/);
 });
 
-test("toolbar follows the pointer then snaps and suppresses the click", () => {
+test("toolbar follows the pointer, parks in place, persists, and suppresses the click", () => {
   assert.match(toolbar, /bindFabDrag/);
   assert.match(toolbar, /exceedsDragThreshold/);
   assert.match(toolbar, /clampDragPosition/);
@@ -128,12 +146,18 @@ test("toolbar follows the pointer then snaps and suppresses the click", () => {
   assert.match(toolbar, /style\.left/);
   assert.match(toolbar, /style\.top/);
   assert.match(toolbar, /oi-fab-dragging/);
+  assert.match(toolbar, /oi-fab-free/);
   assert.match(toolbar, /dataset\.oiDragged/);
-  assert.match(toolbar, /snapCorner/);
+  assert.match(toolbar, /applyFreePos/);
+  assert.match(toolbar, /persistPos/);
+  assert.match(toolbar, /fabPos/);
+  assert.match(toolbar, /POS_STORAGE_KEY/);
   assert.match(toolbar, /syncFabSlot/);
-  assert.match(toolbar, /applyCorner/);
+  assert.match(toolbar, /readPos\(settings\)/);
   assert.doesNotMatch(toolbar, /bindCornerSnap/);
   assert.doesNotMatch(toolbar, /SNAP_PX/);
+  const finish = toolbar.slice(toolbar.indexOf("const finish ="), toolbar.indexOf("bar.addEventListener(\"pointerdown\""));
+  assert.doesNotMatch(finish, /snapCorner\(/);
 });
 
 test("drag CSS does not steal 翻译/原文 pointer cursor until grabbing", () => {

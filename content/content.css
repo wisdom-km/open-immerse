@@ -62,8 +62,9 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
 }
 .oi-toast {
   position: fixed;
-  right: 20px;
-  left: auto;
+  right: var(--oi-fab-toast-right, 20px);
+  left: var(--oi-fab-toast-left, auto);
+  top: var(--oi-fab-toast-top, auto);
   bottom: var(--oi-fab-slot, 72px);
   z-index: 2147483646;
   max-width: 360px;
@@ -81,8 +82,9 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
 .oi-toast.show { opacity: 1; transform: none; }
 .oi-selection-card {
   position: fixed;
-  right: 20px;
-  left: auto;
+  right: var(--oi-fab-toast-right, 20px);
+  left: var(--oi-fab-toast-left, auto);
+  top: var(--oi-fab-toast-top, auto);
   bottom: var(--oi-fab-slot, 72px);
   z-index: 2147483646;
   width: min(420px, calc(100vw - 32px));
@@ -107,8 +109,8 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
 .oi-selection-card .close { background: var(--oi-line); }
 html[data-oi-fab-corner="bottom-left"] .oi-toast,
 html[data-oi-fab-corner="bottom-left"] .oi-selection-card {
-  left: 20px;
-  right: auto;
+  left: var(--oi-fab-toast-left, 20px);
+  right: var(--oi-fab-toast-right, auto);
 }
 .oi-fab {
   position: fixed;
@@ -192,9 +194,12 @@ html[data-oi-fab-corner="bottom-left"] .oi-selection-card {
   opacity: 0.38;
   cursor: grab;
 }
+.oi-fab.oi-fab-free,
 .oi-fab.oi-fab-dragging {
   right: auto;
   bottom: auto;
+}
+.oi-fab.oi-fab-dragging {
   cursor: grabbing;
 }
 .oi-fab.oi-fab-dragging > button {

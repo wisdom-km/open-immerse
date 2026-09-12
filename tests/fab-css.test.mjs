@@ -46,6 +46,8 @@ test("FAB bar uses 20px inset, glass fill, and weak shadow-1", () => {
 test("toast shares slot above FAB", () => {
   assert.match(css, /\.oi-toast[\s\S]*bottom:\s*var\(--oi-fab-slot/);
   assert.match(css, /\.oi-selection-card[\s\S]*bottom:\s*var\(--oi-fab-slot/);
+  assert.match(css, /--oi-fab-toast-left/);
+  assert.match(css, /--oi-fab-toast-right/);
   assert.equal(/\.oi-toast[\s\S]*bottom:\s*88px/.test(css), false);
 });
 
