@@ -1,4 +1,10 @@
-import { PROVIDER_LIST, getProvider } from "../lib/providers.js";
+import {
+  PROVIDER_LIST,
+  PROVIDER_PROBE_TEXT,
+  formatConnectionStatus,
+  getProvider,
+  redactProviderText
+} from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
@@ -8,6 +14,8 @@ function el(id) {
 }
 
 let cachedSettings = { providers: {} };
+let testRequestId = 0;
+let testStatusTimer = 0;
 
 init();
 
@@ -39,7 +47,9 @@ async function init() {
   el("provider").addEventListener("change", () => {
     harvestVisibleProvider();
     renderProviderFields();
+    invalidateTest("clear");
   });
+  el("testConnection").addEventListener("click", () => testConnection());
   el("save").addEventListener("click", () => persist());
   el("exportSettings").addEventListener("click", () => exportSettings());
   el("importSettings").addEventListener("click", () => el("importFile").click());
@@ -110,6 +120,61 @@ function harvestVisibleProvider() {
     providers[id][input.dataset.key] = input.type === "checkbox" ? input.checked : input.value;
   });
   cachedSettings.providers = providers;
+}
+
+function restoreTestButton() {
+  const btn = el("testConnection");
+  if (!btn) return;
+  btn.disabled = false;
+  btn.textContent = "测试连接";
+}
+
+function invalidateTest(mode) {
+  testRequestId += 1;
+  restoreTestButton();
+  if (mode === "clear") setTestStatus("");
+}
+
+function setTestStatus(text, kind) {
+  const status = el("testConnectionStatus");
+  if (!status) return;
+  window.clearTimeout(testStatusTimer);
+  status.textContent = redactProviderText(text || "");
+  status.className = kind ? `provider-test-status is-${kind}` : "provider-test-status";
+  if (text && kind) {
+    testStatusTimer = window.setTimeout(() => setTestStatus(""), 8000);
+  }
+}
+
+async function testConnection() {
+  const btn = el("testConnection");
+  if (!btn || btn.disabled) return;
+  harvestVisibleProvider();
+  const providerId = el("provider").value;
+  const providerConfig = Object.assign({}, (cachedSettings.providers || {})[providerId] || {});
+  const targetLang = el("targetLang").value || "zh-CN";
+  const requestId = ++testRequestId;
+  btn.disabled = true;
+  btn.textContent = "测试中…";
+  setTestStatus("测试中…");
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "OI_TEST_PROVIDER",
+      provider: providerId,
+      providerConfig,
+      sourceLang: "en",
+      targetLang,
+      texts: [PROVIDER_PROBE_TEXT]
+    });
+    if (requestId !== testRequestId) return;
+    const kind = res && res.ok ? "ok" : "err";
+    setTestStatus(formatConnectionStatus(res || { ok: false, error: "无响应" }), kind);
+  } catch (err) {
+    if (requestId !== testRequestId) return;
+    setTestStatus(formatConnectionStatus({ ok: false, error: String(err.message || err) }), "err");
+  } finally {
+    if (requestId === testRequestId) restoreTestButton();
+  }
 }
 
 function renderProviderFields() {
