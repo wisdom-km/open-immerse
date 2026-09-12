@@ -77,6 +77,7 @@ function init() {
   $("next").addEventListener("click", () => goPage(1));
   $("zoomOut").addEventListener("click", () => setZoom(nextZoom(zoom, -1)));
   $("zoomIn").addEventListener("click", () => setZoom(nextZoom(zoom, 1)));
+  bindSplitResize();
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   $("translatePage").addEventListener("click", () => startTranslate());
   $("stopTranslate").addEventListener("click", () => {
@@ -135,6 +136,37 @@ function onKey(event) {
 
 function eventTargetIsField(target) {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+}
+
+function bindSplitResize() {
+  const workspace = document.querySelector(".workspace");
+  const handle = document.querySelector(".split-handle");
+  const chip = document.querySelector(".zoom-gutter");
+  if (!workspace || !handle) return;
+  chip?.addEventListener("pointerdown", (event) => event.stopPropagation());
+  handle.addEventListener("pointerdown", (event) => startSplitDrag(event, workspace, handle));
+}
+
+function startSplitDrag(event, workspace, handle) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  handle.setPointerCapture(event.pointerId);
+  const onMove = (moveEvent) => applySplit(workspace, moveEvent.clientX);
+  const onUp = () => {
+    handle.removeEventListener("pointermove", onMove);
+    handle.removeEventListener("pointerup", onUp);
+  };
+  handle.addEventListener("pointermove", onMove);
+  handle.addEventListener("pointerup", onUp);
+  applySplit(workspace, event.clientX);
+}
+
+function applySplit(workspace, clientX) {
+  const rect = workspace.getBoundingClientRect();
+  if (rect.width <= 0) return;
+  const pct = Math.min(80, Math.max(20, ((clientX - rect.left) / rect.width) * 100));
+  workspace.style.setProperty("--oi-split", `${pct}%`);
+  workspace.style.gridTemplateColumns = `${pct}% ${100 - pct}%`;
 }
 
 function appendReadoutNode(input) {

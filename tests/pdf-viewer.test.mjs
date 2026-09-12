@@ -87,6 +87,8 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.ok(workspaceHtml.includes('id="zoomOut"') && workspaceHtml.includes('id="zoomLabel"') && workspaceHtml.includes('id="zoomIn"'));
   assert.equal(html.includes("split-gutter"), false);
   assert.equal(html.includes("zoom-stack"), false);
+  assert.match(html, /class="split-handle"[^>]*role="separator"[^>]*aria-orientation="vertical"/);
+  assert.ok(workspaceHtml.indexOf("split-handle") < workspaceHtml.indexOf("zoom-gutter"));
   assert.match(src, /from "\.\/vendor\/pdf\.min\.mjs"/);
   assert.match(src, /GlobalWorkerOptions\.workerSrc/);
   assert.match(src, /pdf\/vendor\/pdf\.worker\.min\.mjs/);
@@ -108,6 +110,15 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.zoom-gutter-label\s*\{[^}]*font:\s*500 12px\/1 var\(--oi-font\)[^}]*font-variant-numeric:\s*tabular-nums/s);
   assert.equal(css.includes(".split-gutter"), false);
   assert.equal(css.includes(".zoom-stack"), false);
+  assert.match(css, /\.split-handle\s*\{[^}]*top:\s*0[^}]*bottom:\s*0[^}]*width:\s*8px[^}]*cursor:\s*col-resize[^}]*z-index:\s*1/s);
+  assert.match(css, /\.zoom-gutter\s*\{[^}]*z-index:\s*2/s);
+  assert.equal(/\.zoom-gutter\s*\{[^}]*cursor:\s*col-resize/s.test(css), false);
+  assert.match(src, /bindSplitResize/);
+  assert.match(src, /startSplitDrag/);
+  assert.match(src, /applySplit/);
+  const splitSrc = src.slice(src.indexOf("function bindSplitResize"), src.indexOf("function startSplitDrag"));
+  assert.match(splitSrc, /stopPropagation/);
+  assert.equal(splitSrc.includes("setZoom"), false);
   assert.match(html, /class="workspace"/);
   assert.match(html, /class="pane-pdf"/);
   assert.match(html, /id="pdfPane"/);
