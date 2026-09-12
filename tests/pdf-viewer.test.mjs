@@ -77,11 +77,16 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.equal(toolbarHtml.includes('id="zoomOut"'), false);
   assert.equal(toolbarHtml.includes('id="zoomIn"'), false);
   assert.equal(toolbarHtml.includes('id="zoomLabel"'), false);
-  assert.match(html, /class="split-gutter"/);
-  assert.match(html, /class="zoom-stack"[^>]*role="group"[^>]*aria-label="缩放"/);
-  const gutter = html.indexOf('class="split-gutter"');
-  assert.ok(html.indexOf('class="pane-pdf"') < gutter && gutter < html.indexOf('class="pane-translate"'));
-  assert.ok(gutter < html.indexOf('id="zoomOut"') && html.indexOf('id="zoomOut"') < html.indexOf('id="zoomLabel"') && html.indexOf('id="zoomLabel"') < html.indexOf('id="zoomIn"') && html.indexOf('id="zoomIn"') < html.indexOf('class="pane-translate"'));
+  assert.equal(toolbarHtml.includes("缩小"), false);
+  assert.equal(toolbarHtml.includes("放大"), false);
+  assert.match(html, /<div class="zoom-gutter" role="group" aria-label="缩放">/);
+  assert.match(html, /id="zoomOut"[^>]*class="zoom-gutter-btn"[^>]*disabled>缩小</);
+  assert.match(html, /<p id="zoomLabel" class="zoom-gutter-label">100%<\/p>/);
+  assert.match(html, /id="zoomIn"[^>]*class="zoom-gutter-btn"[^>]*disabled>放大</);
+  const workspaceHtml = html.slice(html.indexOf('class="workspace"'), html.indexOf('viewer.js'));
+  assert.ok(workspaceHtml.includes('id="zoomOut"') && workspaceHtml.includes('id="zoomLabel"') && workspaceHtml.includes('id="zoomIn"'));
+  assert.equal(html.includes("split-gutter"), false);
+  assert.equal(html.includes("zoom-stack"), false);
   assert.match(src, /from "\.\/vendor\/pdf\.min\.mjs"/);
   assert.match(src, /GlobalWorkerOptions\.workerSrc/);
   assert.match(src, /pdf\/vendor\/pdf\.worker\.min\.mjs/);
@@ -95,11 +100,14 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
 
 test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.pdf-page canvas\[hidden\]\s*\{\s*display:\s*none/);
-  assert.match(css, /\.workspace\s*\{[^}]*grid-template-columns:\s*1fr auto 1fr/s);
+  assert.match(css, /\.workspace\s*\{[^}]*position:\s*relative[^}]*grid-template-columns:\s*1fr 1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)\s*\{[^}]*grid-template-columns:\s*1fr/s);
-  assert.match(css, /\.split-gutter\s*\{[^}]*width:\s*1px[^}]*pointer-events:\s*none/s);
-  assert.match(css, /\.zoom-stack\s*\{[^}]*flex-direction:\s*column[^}]*pointer-events:\s*auto[^}]*background:\s*var\(--oi-bg-elevated\)[^}]*border:\s*1px solid var\(--oi-line\)/s);
-  assert.match(css, /\.zoom-stack \.zoom-label\s*\{[^}]*font-variant-numeric:\s*tabular-nums/s);
+  assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.zoom-gutter\s*\{[^}]*flex-direction:\s*row/);
+  assert.match(css, /\.zoom-gutter\s*\{[^}]*position:\s*absolute[^}]*top:\s*50%[^}]*left:\s*50%[^}]*transform:\s*translate\(-50%,\s*-50%\)[^}]*flex-direction:\s*column[^}]*backdrop-filter:\s*blur\(12px\)[^}]*-webkit-backdrop-filter:\s*blur\(12px\)/s);
+  assert.match(css, /\.zoom-gutter-btn\s*\{[^}]*min-height:\s*28px[^}]*height:\s*28px[^}]*font:\s*500 12px\/1 var\(--oi-font\)/s);
+  assert.match(css, /\.zoom-gutter-label\s*\{[^}]*font:\s*500 12px\/1 var\(--oi-font\)[^}]*font-variant-numeric:\s*tabular-nums/s);
+  assert.equal(css.includes(".split-gutter"), false);
+  assert.equal(css.includes(".zoom-stack"), false);
   assert.match(html, /class="workspace"/);
   assert.match(html, /class="pane-pdf"/);
   assert.match(html, /id="pdfPane"/);
