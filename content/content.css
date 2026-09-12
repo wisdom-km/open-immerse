@@ -127,7 +127,8 @@ html[data-oi-fab-corner="bottom-left"] .oi-selection-card {
   box-shadow: var(--oi-shadow-1);
   font: 13px/1 var(--oi-font);
   user-select: none;
-  touch-action: manipulation;
+  touch-action: none;
+  cursor: grab;
 }
 .oi-fab[data-corner="bottom-left"] {
   left: 20px;
@@ -182,13 +183,22 @@ html[data-oi-fab-corner="bottom-left"] .oi-selection-card {
   color: var(--oi-text);
   font-size: 18px;
   font-weight: 500;
+  cursor: grab;
 }
 .oi-fab > button[data-act="fold"]:hover {
   background: color-mix(in srgb, var(--oi-line) 55%, transparent);
 }
 .oi-fab.oi-fab-locked:not(.oi-fab-collapsed) > button[data-act="fold"] {
   opacity: 0.38;
-  cursor: default;
+  cursor: grab;
+}
+.oi-fab.oi-fab-dragging {
+  right: auto;
+  bottom: auto;
+  cursor: grabbing;
+}
+.oi-fab.oi-fab-dragging > button {
+  cursor: grabbing;
 }
 .oi-fab > button.on { background: var(--oi-accent); }
 .oi-fab > button.on:hover { background: var(--oi-accent-hover); }
