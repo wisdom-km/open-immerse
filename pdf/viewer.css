@@ -98,6 +98,7 @@ h1 {
   margin: 0 0 10px;
 }
 .translate-block .org { color: var(--oi-text-muted); }
+.translate-block .dst { color: var(--oi-text); }
 .empty-translate {
   display: flex;
   flex-direction: column;
