@@ -206,3 +206,5 @@ function remember(key, value) {
   cache.set(key, value);
   if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
 }
+
+export { translateBatch, CACHE_VER, cache as translationCache };
