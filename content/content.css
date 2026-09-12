@@ -63,6 +63,7 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
 .oi-toast {
   position: fixed;
   right: 20px;
+  left: auto;
   bottom: var(--oi-fab-slot, 72px);
   z-index: 2147483646;
   max-width: 360px;
@@ -81,6 +82,7 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
 .oi-selection-card {
   position: fixed;
   right: 20px;
+  left: auto;
   bottom: var(--oi-fab-slot, 72px);
   z-index: 2147483646;
   width: min(420px, calc(100vw - 32px));
@@ -103,18 +105,37 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
   font: inherit;
 }
 .oi-selection-card .close { background: var(--oi-line); }
+html[data-oi-fab-corner="bottom-left"] .oi-toast,
+html[data-oi-fab-corner="bottom-left"] .oi-selection-card {
+  left: 20px;
+  right: auto;
+}
 .oi-fab {
   position: fixed;
   right: 20px;
+  left: auto;
   bottom: 20px;
   z-index: 2147483646;
   display: flex;
   gap: 8px;
   padding: 8px;
   border-radius: 999px;
-  background: var(--oi-card);
+  background: color-mix(in srgb, var(--oi-card) 88%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid color-mix(in srgb, var(--oi-line) 42%, transparent);
   box-shadow: var(--oi-shadow-1);
   font: 13px/1 var(--oi-font);
+  user-select: none;
+  touch-action: manipulation;
+}
+.oi-fab[data-corner="bottom-left"] {
+  left: 20px;
+  right: auto;
+}
+.oi-fab.oi-fab-collapsed [data-act="toggle"],
+.oi-fab.oi-fab-collapsed [data-act="restore"] {
+  display: none;
 }
 .oi-fab > button {
   box-sizing: border-box;
@@ -144,40 +165,33 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
   appearance: none;
   transition: background 0.15s ease;
 }
+.oi-fab > button[data-act="toggle"],
+.oi-fab > button[data-act="restore"] {
+  padding: 0 12px;
+}
 .oi-fab > button:hover { background: color-mix(in srgb, var(--oi-line) 70%, #fff); }
 .oi-fab > button:focus-visible {
   outline: 2px solid var(--oi-accent);
   outline-offset: 2px;
 }
-.oi-fab > button[data-act="more"] {
+.oi-fab > button[data-act="fold"] {
   min-width: 36px;
-  padding: 0;
   width: 36px;
+  padding: 0;
+  background: transparent;
+  color: var(--oi-text);
+  font-size: 18px;
+  font-weight: 500;
+}
+.oi-fab > button[data-act="fold"]:hover {
+  background: color-mix(in srgb, var(--oi-line) 55%, transparent);
+}
+.oi-fab.oi-fab-locked:not(.oi-fab-collapsed) > button[data-act="fold"] {
+  opacity: 0.38;
+  cursor: default;
 }
 .oi-fab > button.on { background: var(--oi-accent); }
 .oi-fab > button.on:hover { background: var(--oi-accent-hover); }
-.oi-fab-menu {
-  position: absolute;
-  right: 0;
-  bottom: 50px;
-  display: grid;
-  gap: 6px;
-  min-width: 140px;
-  padding: 8px;
-  border-radius: 12px;
-  background: var(--oi-card);
-}
-.oi-fab-menu button {
-  border: 0;
-  border-radius: 8px;
-  padding: 8px 10px;
-  background: var(--oi-line);
-  color: #fff;
-  text-align: left;
-  cursor: pointer;
-  font: 13px/1.4 var(--oi-font);
-}
-.oi-fab-menu button:hover { background: color-mix(in srgb, var(--oi-line) 70%, #fff); }
 .oi-caption {
   position: fixed;
   left: 50%;

@@ -128,7 +128,7 @@ function restore() {
   });
   const fab = document.querySelector('.oi-fab [data-act="toggle"]');
   if (fab) {
-    fab.textContent = "译";
+    fab.textContent = "翻译";
     fab.classList.remove("on");
   }
 }
@@ -499,6 +499,7 @@ function matchRule(hostname, rules) {
 
 function showStatus(message) {
   toast(message, { persist: true });
+  window.dispatchEvent(new CustomEvent("oi-status", { detail: { persist: true, message } }));
 }
 
 function clearStatus() {
@@ -509,6 +510,7 @@ function clearStatus() {
   clearTimeout(toastTimer);
   toastTimer = 0;
   el.classList.remove("show");
+  window.dispatchEvent(new CustomEvent("oi-status", { detail: { persist: false } }));
 }
 
 function toast(message, opts = {}) {
