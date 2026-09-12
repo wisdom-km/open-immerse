@@ -26,9 +26,6 @@
       <button type="button" id="prev" class="btn-ghost" disabled>上一页</button>
       <p id="pager" class="pager" aria-live="polite">0 / 0</p>
       <button type="button" id="next" class="btn-ghost" disabled>下一页</button>
-      <button type="button" id="zoomOut" class="btn-ghost" disabled>缩小</button>
-      <p id="zoomLabel" class="zoom-label">100%</p>
-      <button type="button" id="zoomIn" class="btn-ghost" disabled>放大</button>
     </div>
   </header>
   <p id="status" role="status">还没有打开 PDF。</p>
@@ -42,6 +39,12 @@
       <p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…</p>
       <p id="noTextLayerHint" class="m2-stub" hidden>扫描件翻译将在后续版本支持。</p>
     </aside>
+    <div class="split-handle" role="separator" aria-orientation="vertical" aria-label="调整分栏"></div>
+    <div class="zoom-gutter" role="group" aria-label="缩放">
+      <button type="button" id="zoomOut" class="zoom-gutter-btn" disabled>缩小</button>
+      <p id="zoomLabel" class="zoom-gutter-label">100%</p>
+      <button type="button" id="zoomIn" class="zoom-gutter-btn" disabled>放大</button>
+    </div>
   </div>
   <script type="module" src="viewer.js"></script>
 </body>
