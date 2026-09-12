@@ -66,16 +66,46 @@ h1 {
   min-height: 0;
   --oi-split: 50%;
 }
+.workspace.is-splitting {
+  cursor: col-resize;
+  user-select: none;
+}
+.workspace.is-splitting .pane-pdf,
+.workspace.is-splitting .pane-translate {
+  pointer-events: none;
+}
 .split-handle {
   position: absolute;
   top: 0;
   bottom: 0;
   left: var(--oi-split);
-  width: 8px;
+  width: 12px;
   transform: translateX(-50%);
-  cursor: col-resize;
   z-index: 1;
+  cursor: col-resize;
   touch-action: none;
+  background: transparent;
+  border: 0;
+}
+.split-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background 120ms ease, width 120ms ease, opacity 120ms ease;
+  pointer-events: none;
+}
+.split-handle:hover::before,
+.split-handle:focus-visible::before {
+  background: color-mix(in srgb, var(--oi-accent) 55%, var(--oi-line));
+}
+.workspace.is-splitting .split-handle::before {
+  width: 2px;
+  background: var(--oi-accent);
 }
 .zoom-gutter {
   position: absolute;
@@ -87,13 +117,18 @@ h1 {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 4px;
+  padding: 3px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--oi-card) 88%, transparent);
+  background: color-mix(in srgb, var(--oi-card) 52%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid color-mix(in srgb, var(--oi-line) 42%, transparent);
-  box-shadow: var(--oi-shadow-1);
+  border: 1px solid color-mix(in srgb, var(--oi-line) 24%, transparent);
+  box-shadow: none;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.zoom-gutter:hover {
+  background: color-mix(in srgb, var(--oi-card) 68%, transparent);
+  border-color: color-mix(in srgb, var(--oi-line) 38%, transparent);
 }
 .zoom-gutter-btn {
   box-sizing: border-box;
