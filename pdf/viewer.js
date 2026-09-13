@@ -2,6 +2,7 @@ import { getDocument, GlobalWorkerOptions } from "./vendor/pdf.min.mjs";
 import {
   DEFAULT_ZOOM,
   PDF_COPY,
+  clampZoom,
   ZOOM_CHIP_DRAG_THRESHOLD_PX,
   ZOOM_CHIP_INSET,
   ZOOM_CHIP_STORAGE_KEY,
@@ -39,6 +40,7 @@ import {
   translateDocumentPages,
   translatePageBlocks,
   articleNodeSpec,
+  zoomButtonState,
   zoomChipDefaultPos,
   zoomChipRightGutter,
   zoomLabel
@@ -811,12 +813,17 @@ async function goPage(dir) {
 }
 
 async function setZoom(next) {
-  if (!pdfDoc || next === zoom) return;
-  zoom = next;
+  const scale = clampZoom(next);
+  if (!pdfDoc || scale === zoom) {
+    syncZoomButtons();
+    return;
+  }
+  zoom = scale;
   $("zoomLabel").textContent = zoomLabel(zoom);
   await layoutPages();
   await scheduleVisibleRenders();
   syncZoomChip();
+  syncZoomButtons();
 }
 
 async function scheduleVisibleRenders() {
@@ -898,11 +905,16 @@ function updatePager() {
   $("zoomLabel").textContent = zoomLabel(zoom);
   $("prev").disabled = !pdfDoc || pageNum <= 1;
   $("next").disabled = !pdfDoc || pageNum >= total;
+  syncZoomButtons();
+}
+
+function syncZoomButtons() {
+  const ui = zoomButtonState({ hasDoc: Boolean(pdfDoc), zoom });
+  $("zoomOut").disabled = ui.outDisabled;
+  $("zoomIn").disabled = ui.inDisabled;
 }
 
 function setHasDoc(has) {
-  $("zoomOut").disabled = !has;
-  $("zoomIn").disabled = !has;
   if (!has) {
     $("pages").replaceChildren();
     pageViews = [];

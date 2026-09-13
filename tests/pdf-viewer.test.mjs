@@ -65,6 +65,7 @@ import {
   measureScrollbarHeight,
   measureScrollbarWidth,
   normalizeZoomChipPos,
+  zoomButtonState,
   zoomChipDefaultPos,
   zoomChipRightGutter,
   zoomLabel
@@ -273,18 +274,31 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
 test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.equal(ZOOM_MIN, 0.5);
   assert.equal(ZOOM_MAX, 5);
+  assert.match(libSrc, /Product lock: hard cap at 500%/);
   assert.equal(clampZoom(0.1), 0.5);
   assert.equal(clampZoom(9), 5);
+  assert.equal(clampZoom(Infinity), DEFAULT_ZOOM);
   assert.equal(clampZoom("nope"), DEFAULT_ZOOM);
   assert.equal(nextZoom(0.5, -1), 0.5);
   assert.equal(nextZoom(1, 1), 1.25);
   assert.equal(nextZoom(2.25, 1), 2.5);
   assert.equal(nextZoom(4.75, 1), 5);
   assert.equal(nextZoom(5, 1), 5);
+  assert.equal(nextZoom(5, 4), 5);
+  const steps = [];
+  for (let scale = 2.25; scale < 5; scale = nextZoom(scale, 1)) steps.push(scale);
+  assert.deepEqual(steps, [2.25, 2.5, 2.75, 3, 3.25, 3.5, 3.75, 4, 4.25, 4.5, 4.75]);
+  assert.equal(nextZoom(steps.at(-1), 1), 5);
   assert.equal(zoomLabel(1), "100%");
   assert.equal(zoomLabel(2.25), "225%");
   assert.equal(zoomLabel(4), "400%");
   assert.equal(zoomLabel(5), "500%");
+  assert.equal(zoomLabel(9), "500%");
+  assert.equal(zoomButtonState({ hasDoc: true, zoom: 1 }).outDisabled, false);
+  assert.equal(zoomButtonState({ hasDoc: true, zoom: 1 }).inDisabled, false);
+  assert.equal(zoomButtonState({ hasDoc: true, zoom: 5 }).inDisabled, true);
+  assert.equal(zoomButtonState({ hasDoc: true, zoom: 0.5 }).outDisabled, true);
+  assert.equal(zoomButtonState({ hasDoc: false, zoom: 1 }).inDisabled, true);
   assert.equal(pageIndex(1, 4, -1), 1);
   assert.equal(pageIndex(4, 4, 1), 4);
   assert.equal(pageIndex(2, 4, 1), 3);
@@ -301,6 +315,9 @@ test("PDF page width follows zoom instead of capping at the pane", () => {
   assert.equal(canvasOutputScale(1000, 800, 2), 2);
   assert.equal(canvasOutputScale(9000, 800, 2), 8192 / 9000);
   assert.match(src, /\$\("zoomLabel"\)\.textContent = zoomLabel\(zoom\)/);
+  assert.match(src, /const scale = clampZoom\(next\)/);
+  assert.match(src, /function syncZoomButtons/);
+  assert.match(src, /zoomButtonState/);
 });
 
 test("zoom chip defaults clear the scrollbar and parks as a free-drag control", () => {
