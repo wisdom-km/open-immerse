@@ -62,11 +62,10 @@ test("readout export is markdown + PDF of Chinese blocks only", () => {
   assert.doesNotMatch(md, /Attention|Abstract/);
   const withMath = articleBlocksToMarkdown([
     { tag: "p", text: "注意力定义为" },
-    { tag: "p", text: "$$\n\\operatorname{Attention}(Q,K,V)=\\mathrm{softmax}(\\frac{QK^{T}}{\\sqrt{d_k}})V\n$$" }
+    { tag: "p", text: "$$Attention(Q, K, V) = softmax(QK^{T} / sqrt(d_{k})) V$$" }
   ]);
   assert.match(withMath, /注意力定义为/);
-  assert.match(withMath, /\$\$\n\\operatorname\{Attention\}/);
-  assert.match(withMath, /QK\^\{T\}/);
+  assert.match(withMath, /\$\$Attention\(Q, K, V\) = softmax\(QK\^\{T\} \/ sqrt\(d_\{k\}\)\) V\$\$/);
   const bytes = articleBlocksToPdf(nodes);
   assert.ok(bytes instanceof Uint8Array);
   const ascii = new TextDecoder("latin1").decode(bytes);

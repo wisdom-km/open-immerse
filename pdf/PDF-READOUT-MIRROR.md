@@ -26,7 +26,12 @@
 
 ## 4.2 公式
 
-A 从文字层回收 LaTeX（或 Unicode→LaTeX）写入 MirrorItem / 译文 / Markdown，KaTeX 渲染 `$...$` / `$$...$$` → B 无公式文本才页裁切 → C 占位「公式」；不做 OCR。导出 MD 必须可粘贴进支持 KaTeX/MathJax 的编辑器。
+- **A（默认）**：从 PDF 文字/符号 run 回收 LaTeX → `MirrorItem.latex` → bbox 内 **KaTeX**；保留可复制源 `data-latex`。`role=formula`，`kind=math`。
+- **B（仅兜底）**：无可靠 LaTeX 才页裁切，不是成功默认路径。
+- **C**：占位「公式」。
+- 不编造错误 TeX；宁可残缺 LaTeX 或走 B，也不幻觉公式。
+- 导出 MD：A 为 `$latex$` / `$$latex$$`；否则 Unicode / `[公式]`。
+- Attention 行间公式为样例。不 OCR。
 
 ## 4.3 图
 
@@ -60,7 +65,7 @@ M3a 文本 bbox → M3b 图 → M3c 公式 → M3d 同步+导出
 
 ## 8 类型
 
-`MirrorItem { id, page, role, bbox, sourceText, translation?, latex?, kind, imageUrl? }`
+`MirrorItem { id, page, role, bbox, sourceText, translation?, latex?, kind, imageUrl? }`（公式：`role=formula` `kind=math`）
 
 pdf.js `getTextContent` + viewport + page canvas crop（图；公式仅无 LaTeX 时）。
 

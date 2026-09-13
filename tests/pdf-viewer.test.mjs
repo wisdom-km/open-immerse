@@ -304,14 +304,20 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
         {
           tagName: "P",
           textContent: "rendered-math",
-          dataset: { latex: "\\operatorname{softmax}(QK^{T})", mathDisplay: "0" }
+          dataset: { latex: "softmax(QK^{T})", mathDisplay: "0", role: "formula", kind: "math" }
+        },
+        {
+          tagName: "P",
+          textContent: "公式",
+          dataset: { role: "formula", kind: "math", latex: "", sourceText: "" }
         }
       ];
     }
   }), [
     { tag: "h1", text: "注意力机制就够了" },
     { tag: "p", text: "我们提出一种新架构。" },
-    { tag: "p", text: "$\\operatorname{softmax}(QK^{T})$" }
+    { tag: "p", text: "$softmax(QK^{T})$" },
+    { tag: "p", text: "[公式]" }
   ]);
   assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: true, exporting: false }).mdDisabled, false);
   assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: false }).pdfDisabled, true);

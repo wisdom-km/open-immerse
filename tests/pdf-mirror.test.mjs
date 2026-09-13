@@ -21,6 +21,8 @@ import {
   shouldRenderFormulaCrop,
   readingOrderMirrorItems,
   recoverFormulaLatex,
+  formulaExportMarkdown,
+  isMathItem,
   wrapLatexMarkdown,
   looksLikeCaption,
   looksLikeFormulaItem,
@@ -219,20 +221,25 @@ test("formula-like items become LaTeX, not translation units or crop images", ()
   );
   const formula = layout.boxes.find((box) => /softmax/.test(box.text));
   assert.ok(formula);
-  assert.equal(formula.kind, "formula");
+  assert.equal(formula.kind, "math");
   assert.equal(formula.role, "formula");
+  assert.equal(isMathItem(formula), true);
   const plan = formulaRenderPlan(formula);
   assert.equal(plan.mode, "katex");
-  assert.match(plan.latex, /QK\^\{T\}/);
-  assert.match(plan.latex, /operatorname\{softmax\}/);
+  assert.equal(plan.latex, "softmax(QK^{T})");
   assert.equal(plan.display, false);
-  assert.equal(plan.text, `$${plan.latex}$`);
+  assert.equal(plan.text, "$softmax(QK^{T})$");
   assert.equal(shouldRenderFormulaCrop(formula), false);
-  assert.equal(shouldRenderFormulaCrop({ kind: "formula", text: "", render: { mode: "crop" } }), true);
-  assert.match(recoverFormulaLatex("softmax(QK^T)"), /QK\^\{T\}/);
-  assert.match(recoverFormulaLatex("E = mc²"), /mc\^\{2\}/);
+  assert.equal(shouldRenderFormulaCrop({ kind: "math", text: "", render: { mode: "crop" } }), true);
+  assert.equal(recoverFormulaLatex("softmax(QK^T)"), "softmax(QK^{T})");
+  assert.equal(recoverFormulaLatex("E = mc²"), "E = mc^{2}");
+  assert.equal(recoverFormulaLatex("softmax(QK^T)").includes("operatorname"), false);
   assert.equal(wrapLatexMarkdown("QK^{T}", false), "$QK^{T}$");
-  assert.equal(wrapLatexMarkdown("QK^{T}", true), "$$\nQK^{T}\n$$");
+  assert.equal(wrapLatexMarkdown("QK^{T}", true), "$$QK^{T}$$");
+  assert.equal(formulaExportMarkdown({ latex: "QK^{T}" }), "$QK^{T}$");
+  assert.equal(formulaExportMarkdown({ latex: "QK^{T}", display: true }), "$$QK^{T}$$");
+  assert.equal(formulaExportMarkdown({ sourceText: "QK^T" }), "QKᵀ");
+  assert.equal(formulaExportMarkdown({}), "[公式]");
   assert.match(unicodeMathify("softmax(QK^T)"), /ᵀ/);
   assert.equal(looksLikeCaption("Figure 1: The Transformer."), true);
   assert.equal(looksLikeCaption("The dominant sequence"), false);
@@ -241,14 +248,51 @@ test("formula-like items become LaTeX, not translation units or crop images", ()
     false
   );
   assert.equal(
-    layout.visuals.some((vis) => vis.kind === "formula"),
+    layout.visuals.some((vis) => isMathItem(vis)),
     false
   );
+  const item = toMirrorItem(formula, { page: 1, translation: plan.text });
+  assert.equal(item.role, "formula");
+  assert.equal(item.kind, "math");
+  assert.equal(item.latex, "softmax(QK^{T})");
   const flow = readingOrderMirrorItems(layout, [
     { translation: "注意力就是你所需要的一切", role: "title" },
     { translation: "Transformer 在每一层使用该注意力公式。", role: "paragraph" }
   ]);
-  assert.ok(flow.some((item) => item.role === "formula" && /QK\^\{T\}/.test(item.latex)));
+  assert.ok(flow.some((row) => row.role === "formula" && row.kind === "math" && row.latex === "softmax(QK^{T})"));
+});
+
+test("Attention interline formula stays between body lines as KaTeX LaTeX", () => {
+  const layout = buildMirrorLayout(
+    {
+      items: [
+        pdfItem("We propose the Transformer, based solely on attention.", 72, 680, 400, 10),
+        pdfItem("Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) V", 96, 650, 420, 12, { fontName: "CMMI10" }),
+        pdfItem("The encoder is composed of a stack of N = 6 identical layers.", 72, 620, 400, 10)
+      ]
+    },
+    { width: 612, height: 792 }
+  );
+  const formula = layout.boxes.find((box) => isMathItem(box));
+  const before = layout.boxes.find((box) => /We propose the Transformer/.test(box.text));
+  const after = layout.boxes.find((box) => /encoder is composed/.test(box.text));
+  assert.ok(formula && before && after);
+  assert.equal(formula.role, "formula");
+  assert.equal(formula.kind, "math");
+  assert.match(formula.latex, /Attention\(Q, K, V\) = softmax\(QK\^\{T\} \/ sqrt\(d_\{k\}\)\) V/);
+  assert.equal(formula.latex.includes("frac"), false);
+  assert.equal(formula.latex.includes("operatorname"), false);
+  assert.equal(shouldRenderFormulaCrop(formula), false);
+  assert.ok(formula.rect.top > before.rect.top);
+  assert.ok(after.rect.top > formula.rect.top);
+  const flow = readingOrderMirrorItems(layout, [
+    { translation: "我们提出仅基于注意力的 Transformer。", role: "paragraph" },
+    { translation: "编码器由 N = 6 层相同层堆叠而成。", role: "paragraph" }
+  ]);
+  const names = flow.map((row) => row.role);
+  assert.deepEqual(names, ["paragraph", "formula", "paragraph"]);
+  assert.equal(flow[1].kind, "math");
+  assert.match(flow[1].translation, /\$\$?Attention\(Q, K, V\) = softmax\(QK\^\{T\} \/ sqrt\(d_\{k\}\)\) V\$\$?/);
 });
 
 test("formula crop is only used when math text cannot be recovered", () => {
@@ -261,11 +305,13 @@ test("formula crop is only used when math text cannot be recovered", () => {
     },
     { width: 612, height: 792 }
   );
-  const formula = layout.boxes.find((box) => box.kind === "formula");
+  const formula = layout.boxes.find((box) => isMathItem(box));
   assert.ok(formula);
+  assert.equal(formula.kind, "math");
   assert.equal(formulaRenderPlan(formula).mode, "crop");
   assert.equal(shouldRenderFormulaCrop(formula), true);
-  assert.ok(layout.visuals.some((vis) => vis.kind === "formula"));
+  assert.ok(layout.visuals.some((vis) => isMathItem(vis)));
+  assert.equal(formulaExportMarkdown({ sourceText: "" }), "[公式]");
 });
 
 test("vendored KaTeX renders recovered LaTeX and is wired into the viewer", () => {
@@ -285,6 +331,7 @@ test("vendored KaTeX renders recovered LaTeX and is wired into the viewer", () =
   assert.match(src, /renderFormulaNode/);
   assert.match(src, /readingOrderMirrorItems/);
   assert.match(src, /dataset\.latex/);
+  assert.match(src, /kind: \"math\"/);
 });
 
 test("uncovered interior regions and image CTMs become figure boxes", () => {

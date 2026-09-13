@@ -62,6 +62,7 @@ import {
   buildMirrorLayout,
   cropCanvasToDataUrl,
   formulaRenderPlan,
+  isMathItem,
   shouldRenderFormulaCrop,
   readingOrderMirrorItems,
   imageRectsFromUnitCtms,
@@ -428,11 +429,15 @@ function appendReadoutNode(input, parent = $("readout")) {
   node.textContent = spec.text;
   node.dataset.role = spec.role;
   if (input.page != null && input.page !== "") node.dataset.page = String(input.page);
-  const latex = unwrapLatex(input.latex || (spec.role === "formula" ? input.translation || spec.text : ""));
-  if (latex && spec.role === "formula") {
+  if (spec.role === "formula") node.dataset.kind = input.kind || "math";
+  if (input.original) node.dataset.sourceText = String(input.original);
+  const latex = unwrapLatex(input.latex || "");
+  if (spec.role === "formula" && latex) {
     node.dataset.latex = latex;
     node.dataset.mathDisplay = input.display ? "1" : "0";
     renderFormulaNode(node, latex, input.display);
+  } else if (spec.role === "formula") {
+    node.textContent = input.translation || spec.text || PDF_MIRROR_COPY.formulaFallback;
   }
   if (input.rect && input.pageWidth && input.pageHeight) {
     const item = toMirrorItem(
@@ -548,11 +553,11 @@ function appendMirrorPage(page, blocks) {
   pageEl.dataset.page = String(page);
   pageEl.style.aspectRatio = `${layout.pageWidth} / ${layout.pageHeight}`;
   (layout.visuals || []).forEach((vis, index) => {
-    if (vis.kind === "formula" && !shouldRenderFormulaCrop(vis)) return;
+    if (isMathItem(vis) && !shouldRenderFormulaCrop(vis)) return;
     pageEl.append(appendMirrorVisual(page, vis, index, layout));
   });
   (layout.boxes || []).forEach((box) => {
-    if (box.kind !== "formula") return;
+    if (!isMathItem(box)) return;
     const plan = box.render || formulaRenderPlan(box);
     if (plan.mode !== "katex" || !plan.latex) return;
     appendReadoutNode(
@@ -560,7 +565,7 @@ function appendMirrorPage(page, blocks) {
         translation: plan.text,
         original: box.text,
         role: "formula",
-        kind: "formula",
+        kind: "math",
         latex: plan.latex,
         display: plan.display,
         page,
@@ -604,12 +609,13 @@ function layoutFromBlocks(blocks) {
 
 function appendMirrorVisual(page, vis, index, layout) {
   const ready = withVisualSrc(page, vis, layout);
-  const fallback = vis.kind === "formula" ? PDF_MIRROR_COPY.formulaFallback : PDF_MIRROR_COPY.figureFallback;
+  const math = isMathItem(vis);
+  const fallback = math ? PDF_MIRROR_COPY.formulaFallback : PDF_MIRROR_COPY.figureFallback;
   const node = ready.src ? document.createElement("img") : document.createElement("div");
   node.className = ready.src ? "mirror-visual mirror-item" : "mirror-visual mirror-item is-pending";
   node.dataset.visual = String(index);
-  node.dataset.role = vis.kind === "formula" ? "formula" : "figure";
-  node.dataset.kind = vis.kind || "figure";
+  node.dataset.role = math ? "formula" : "figure";
+  node.dataset.kind = math ? "math" : vis.kind || "figure";
   node.dataset.bbox = bboxAttr(vis.rect);
   node.dataset.page = String(page);
   Object.assign(node.style, percentRectToStyle(pageRectToPercent(vis.rect, layout.pageWidth, layout.pageHeight)));
