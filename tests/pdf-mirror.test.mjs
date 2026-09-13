@@ -17,6 +17,7 @@ import {
   imageRectsFromUnitCtms,
   inferPageSize,
   formulaRenderPlan,
+  shouldRenderFormulaCrop,
   looksLikeCaption,
   looksLikeFormulaItem,
   mergeMirrorTranslations,
@@ -178,6 +179,8 @@ test("scanned pages stay empty and do not invent a mirror", () => {
   assert.equal(empty.itemCount, 0);
   assert.equal(PDF_MIRROR_COPY.scanned, "本页没有文字层，无法镜像版式。");
   assert.equal(PDF_MIRROR_COPY.caption, "版式镜像");
+  assert.equal(PDF_MIRROR_COPY.viewMirror, "版式");
+  assert.equal(PDF_MIRROR_COPY.viewReadout, "通读");
   assert.equal(PDF_MIRROR_COPY.figureFallback, "图（见左侧）");
   assert.equal(PDF_MIRROR_COPY.formulaFallback, "公式");
 });
@@ -215,6 +218,8 @@ test("formula-like items are visuals, not translation units", () => {
   assert.equal(formula.kind, "formula");
   assert.equal(formula.role, "formula");
   assert.equal(formulaRenderPlan(formula).mode, "unicode");
+  assert.equal(shouldRenderFormulaCrop(formula), false);
+  assert.equal(shouldRenderFormulaCrop({ kind: "formula", text: "", render: { mode: "crop" } }), true);
   assert.match(unicodeMathify("softmax(QK^T)"), /ᵀ/);
   assert.equal(looksLikeCaption("Figure 1: The Transformer."), true);
   assert.equal(looksLikeCaption("The dominant sequence"), false);
@@ -288,17 +293,26 @@ test("translatePageBlocks keeps bbox fields for the mirror layer", async () => {
 test("viewer wires per-page mirror stacks without touching toolbar / zoom / split", () => {
   assert.match(src, /buildMirrorLayout/);
   assert.match(src, /appendMirrorPage/);
-  assert.match(src, /\$\("readout"\)\.classList\.add\("is-mirror", "mirror-pages"\)/);
+  assert.match(src, /applyViewMode/);
+  assert.match(src, /onViewSegClick/);
+  assert.match(src, /shouldRenderFormulaCrop/);
   assert.match(src, /cropCanvasToDataUrl/);
   assert.match(src, /walkImageCtms/);
   assert.match(src, /highlightSourcePage/);
   assert.match(src, /onTranslateScroll/);
   assert.match(src, /formulaRenderPlan/);
   assert.match(src, /mirror-item/);
-  assert.match(html, /class="readout mirror-pages"/);
+  assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"/);
+  assert.match(html, /id="readout"[^>]*class="readout"/);
+  assert.equal(html.includes('class="readout mirror-pages"'), false);
+  const workspaceHtml = html.slice(html.indexOf('class="pane-translate"'), html.indexOf("split-handle"));
+  assert.ok(workspaceHtml.indexOf('id="viewSeg"') < workspaceHtml.indexOf('id="mirrorPages"'));
+  assert.ok(workspaceHtml.indexOf('id="mirrorPages"') < workspaceHtml.indexOf('id="readout"'));
+  const toolbar = html.slice(html.indexOf('class="toolbar"'), html.indexOf('class="workspace"'));
+  assert.equal(toolbar.includes("通读"), false);
+  assert.equal(toolbar.includes("版式"), false);
+  assert.equal(toolbar.includes("版式镜像"), false);
   assert.match(src, /图（见左侧）|figureFallback/);
-  assert.match(src, /syncMirrorCaption/);
-  assert.match(src, /mirrorCaption/);
   assert.match(html, /id="translatePage"/);
   assert.match(html, /id="stopTranslate"/);
   assert.match(html, /id="exportMd"/);
@@ -307,8 +321,7 @@ test("viewer wires per-page mirror stacks without touching toolbar / zoom / spli
   assert.match(html, /class="split-handle"/);
   assert.match(css, /\.zoom-gutter\s*\{/);
   assert.match(css, /\.split-handle\s*\{/);
-  const toolbar = html.slice(html.indexOf('class="toolbar"'), html.indexOf('class="workspace"'));
-  assert.equal(toolbar.includes("版式镜像"), false);
+  assert.match(css, /\.view-seg\s*\{/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
 });
 

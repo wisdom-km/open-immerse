@@ -240,6 +240,39 @@ h1 {
   max-width: none;
   width: 100%;
 }
+.pane-translate .mirror-pages {
+  max-width: none;
+  width: 100%;
+  margin: 0;
+  color: var(--oi-text);
+}
+.view-seg {
+  display: inline-flex;
+  align-items: stretch;
+  margin: 0 0 10px;
+  padding: 2px;
+  gap: 0;
+  border: 1px solid var(--oi-line);
+  border-radius: 8px;
+  background: var(--oi-input, var(--oi-bg));
+}
+.view-seg-btn {
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 0 10px;
+  margin: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--oi-text-muted);
+  font: 500 12px/1.2 var(--oi-font);
+  cursor: pointer;
+}
+.view-seg-btn.is-on {
+  background: color-mix(in srgb, var(--oi-accent) 18%, transparent);
+  color: var(--oi-text);
+  font-weight: 600;
+}
 .mirror-caption {
   margin: 0 0 4px;
   font: 600 12px/1.4 var(--oi-font);
@@ -268,18 +301,24 @@ h1 {
 }
 .readout.is-mirror .oi-pdf-h1.mirror-box,
 .readout.is-mirror .oi-pdf-h2.mirror-box,
-.readout.is-mirror .oi-pdf-p.mirror-box {
+.readout.is-mirror .oi-pdf-p.mirror-box,
+.mirror-pages .oi-pdf-h1.mirror-box,
+.mirror-pages .oi-pdf-h2.mirror-box,
+.mirror-pages .oi-pdf-p.mirror-box {
   margin: 0;
 }
-.readout.is-mirror .oi-pdf-h1 {
+.readout.is-mirror .oi-pdf-h1,
+.mirror-pages .oi-pdf-h1 {
   font-size: clamp(14px, 3.8cqw, 22px);
   line-height: 1.2;
 }
-.readout.is-mirror .oi-pdf-h2 {
+.readout.is-mirror .oi-pdf-h2,
+.mirror-pages .oi-pdf-h2 {
   font-size: clamp(12px, 2.8cqw, 16px);
   line-height: 1.25;
 }
-.readout.is-mirror .oi-pdf-p {
+.readout.is-mirror .oi-pdf-p,
+.mirror-pages .oi-pdf-p {
   font-size: clamp(9px, 2.1cqw, 13px);
   line-height: 1.35;
 }
@@ -307,7 +346,8 @@ h1 {
   background: color-mix(in srgb, var(--oi-accent) 16%, transparent);
   pointer-events: none;
 }
-.readout.is-mirror .oi-pdf-p[data-role="formula"] {
+.readout.is-mirror .oi-pdf-p[data-role="formula"],
+.mirror-pages .oi-pdf-p[data-role="formula"] {
   font-family: ui-serif, "Times New Roman", serif;
   letter-spacing: 0.01em;
 }

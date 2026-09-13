@@ -99,6 +99,8 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.match(html, /id="zoomOut"/);
   assert.match(html, /id="zoomIn"/);
   const toolbarHtml = html.slice(html.indexOf('class="toolbar"'), html.indexOf('class="workspace"'));
+  assert.equal(toolbarHtml.includes("版式"), false);
+  assert.equal(toolbarHtml.includes("通读"), false);
   assert.equal(toolbarHtml.includes('id="zoomOut"'), false);
   assert.equal(toolbarHtml.includes('id="zoomIn"'), false);
   assert.equal(toolbarHtml.includes('id="zoomLabel"'), false);
@@ -207,9 +209,12 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /id="restoreOriginal"[^>]*class="btn-ghost"[^>]*disabled>原文</);
   assert.match(html, /id="exportMd"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 MD</);
   assert.match(html, /id="exportPdf"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 PDF</);
-  assert.match(html, /id="mirrorCaption"[^>]*class="mirror-caption"[^>]*hidden>版式镜像</);
+  assert.match(html, /id="viewSeg"[^>]*class="view-seg"/);
+  assert.match(html, /data-view="mirror"[^>]*>版式</);
+  assert.match(html, /data-view="readout"[^>]*>通读</);
+  assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"/);
   assert.match(html, /id="mirrorHint"[^>]*class="mirror-hint"/);
-  assert.match(html, /id="readout"[^>]*class="readout(?: mirror-pages)?"/);
+  assert.match(html, /id="readout"[^>]*class="readout"/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
   assert.match(html, /<p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…<\/p>/);
   assert.match(src, /appendReadoutNode/);
@@ -234,6 +239,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.pane-translate\s*\{[^}]*padding:\s*20px 24px 32px/s);
   assert.match(css, /\.pane-translate \.readout\s*\{[^}]*max-width:\s*42rem/s);
   assert.match(css, /\.pane-translate \.readout\.is-mirror\s*\{[^}]*max-width:\s*none/s);
+  assert.match(css, /\.view-seg\s*\{/);
+  assert.match(css, /\.pane-translate \.mirror-pages\s*\{[^}]*max-width:\s*none/s);
   assert.match(css, /\.mirror-page\s*\{[^}]*position:\s*relative/s);
   assert.match(css, /\.mirror-box\s*\{[^}]*position:\s*absolute/s);
   assert.match(css, /\.oi-pdf-h1\s*\{[^}]*font:\s*650 22px\/1\.3 var\(--oi-font\)/s);
@@ -255,6 +262,8 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.noTextLayer, "本页没有文字层。");
   assert.equal(PDF_COPY.noTextLayerHint, "本页没有文字层，无法镜像版式。扫描件翻译将在后续版本支持。");
   assert.equal(PDF_COPY.mirrorCaption, "版式镜像");
+  assert.equal(PDF_COPY.viewMirror, "版式");
+  assert.equal(PDF_COPY.viewReadout, "通读");
   assert.equal(PDF_COPY.mirrorHint, "按原页位置排列译文。公式与图为原页裁剪；导出 MD/PDF 仍为纯文本。");
   assert.equal(PDF_COPY.figureFallback, "图（见左侧）");
   assert.equal(PDF_COPY.formulaFallback, "公式");

@@ -41,9 +41,13 @@
       </div>
     </section>
     <aside class="pane-translate" aria-label="译文">
-      <p id="mirrorCaption" class="mirror-caption" hidden>版式镜像</p>
+      <div id="viewSeg" class="view-seg" hidden role="group" aria-label="译文视图">
+        <button type="button" class="view-seg-btn is-on" data-view="mirror">版式</button>
+        <button type="button" class="view-seg-btn" data-view="readout">通读</button>
+      </div>
       <p id="mirrorHint" class="mirror-hint" hidden>按原页位置排列译文。公式与图为原页裁剪；导出 MD/PDF 仍为纯文本。</p>
-      <div id="readout" class="readout mirror-pages"></div>
+      <div id="mirrorPages" class="mirror-pages" hidden></div>
+      <div id="readout" class="readout"></div>
       <p id="emptyRead" class="empty-read">点击翻译</p>
       <p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…</p>
       <p id="noTextLayerHint" class="m2-stub" hidden>本页没有文字层，无法镜像版式。扫描件翻译将在后续版本支持。</p>

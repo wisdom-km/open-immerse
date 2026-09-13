@@ -62,6 +62,7 @@ import {
   buildMirrorLayout,
   cropCanvasToDataUrl,
   formulaRenderPlan,
+  shouldRenderFormulaCrop,
   imageRectsFromUnitCtms,
   mergeMirrorTranslations,
   pageRectToPercent,
@@ -97,6 +98,7 @@ let zoomChipCustom = false;
 let exporting = false;
 let syncLock = false;
 let translateScrollTick = 0;
+let viewMode = "mirror";
 
 init();
 
@@ -125,6 +127,7 @@ function init() {
   bindSplitResize();
   initZoomChip();
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
+  document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
   document.querySelector(".pane-translate")?.addEventListener("scroll", onTranslateScroll, { passive: true });
   $("translatePage").addEventListener("click", () => startTranslate());
   $("stopTranslate").addEventListener("click", stopTranslateWork);
@@ -446,40 +449,55 @@ function syncReadoutEmpty(hasArticle) {
 function renderArticle() {
   const pane = document.querySelector(".pane-translate");
   const keep = pane ? pane.scrollTop : 0;
-  $("readout").replaceChildren();
-  $("readout").classList.remove("is-mirror", "mirror-pages");
+  const pagesRoot = $("mirrorPages");
+  const flowRoot = $("readout");
+  if (pagesRoot) pagesRoot.replaceChildren();
+  flowRoot.replaceChildren();
   const pages = collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0);
-  const showMirrorChrome = pages.some(({ page, blocks }) => canMirrorPage(page, blocks));
-  syncMirrorCaption(showMirrorChrome);
+  const showMirror = pages.some(({ page, blocks }) => canMirrorPage(page, blocks));
   if (!pages.length) {
     syncReadoutEmpty(false);
+    applyViewMode(false);
     updateTranslateControls();
     return;
   }
   syncReadoutEmpty(true);
-  if (showMirrorChrome) {
-    $("readout").classList.add("is-mirror", "mirror-pages");
-    pages.forEach(({ page, blocks }) => appendMirrorPage(page, blocks));
-  } else {
-    pages.forEach(({ page, blocks }) => {
-      (blocks || []).forEach((item) => {
-        if (!item?.original || !item.translation) return;
-        appendReadoutNode({
+  pages.forEach(({ page, blocks }) => {
+    if (showMirror) appendMirrorPage(page, blocks);
+    (blocks || []).forEach((item) => {
+      if (!item?.original || !item.translation) return;
+      appendReadoutNode(
+        {
           translation: item.translation,
           role: item.role,
           page
-        });
-      });
+        },
+        flowRoot
+      );
     });
-  }
+  });
+  applyViewMode(showMirror);
   if (pane) pane.scrollTop = keep;
   updateTranslateControls();
 }
 
-function syncMirrorCaption(show) {
-  const on = Boolean(show);
-  if ($("mirrorCaption")) $("mirrorCaption").hidden = !on;
-  if ($("mirrorHint")) $("mirrorHint").hidden = !on;
+function applyViewMode(canMirror) {
+  const mirrorOn = viewMode === "mirror" && Boolean(canMirror);
+  if ($("mirrorPages")) $("mirrorPages").hidden = !mirrorOn;
+  if ($("readout")) $("readout").hidden = mirrorOn;
+  if ($("viewSeg")) $("viewSeg").hidden = !canMirror;
+  if ($("mirrorHint")) $("mirrorHint").hidden = !mirrorOn;
+  document.querySelectorAll(".view-seg-btn").forEach((btn) => {
+    btn.classList.toggle("is-on", btn.dataset.view === viewMode);
+  });
+}
+
+function onViewSegClick(event) {
+  const btn = event.target.closest(".view-seg-btn");
+  if (!btn) return;
+  viewMode = btn.dataset.view === "readout" ? "readout" : "mirror";
+  const pages = collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0);
+  applyViewMode(pages.some(({ page, blocks }) => canMirrorPage(page, blocks)));
 }
 
 function canMirrorPage(page, blocks) {
@@ -496,6 +514,7 @@ function appendMirrorPage(page, blocks) {
   pageEl.dataset.page = String(page);
   pageEl.style.aspectRatio = `${layout.pageWidth} / ${layout.pageHeight}`;
   (layout.visuals || []).forEach((vis, index) => {
+    if (vis.kind === "formula" && !shouldRenderFormulaCrop(vis)) return;
     pageEl.append(appendMirrorVisual(page, vis, index, layout));
   });
   (layout.boxes || []).forEach((box) => {
@@ -530,7 +549,7 @@ function appendMirrorPage(page, blocks) {
       pageEl
     );
   });
-  $("readout").append(pageEl);
+  ($("mirrorPages") || $("readout")).append(pageEl);
 }
 
 function layoutFromBlocks(blocks) {
@@ -559,7 +578,7 @@ function appendMirrorVisual(page, vis, index, layout) {
   node.dataset.page = String(page);
   Object.assign(node.style, percentRectToStyle(pageRectToPercent(vis.rect, layout.pageWidth, layout.pageHeight)));
   if (node.tagName === "IMG") {
-    node.alt = fallback;
+    node.alt = vis.caption || fallback;
     node.draggable = false;
     node.src = ready.src;
   } else {
@@ -597,7 +616,7 @@ function withVisualSrc(page, vis, layout) {
 
 function refreshMirrorVisuals(page) {
   const layout = getPageLayout(page);
-  const root = $("readout")?.querySelector(`.mirror-page[data-page="${page}"]`);
+  const root = ($("mirrorPages") || $("readout"))?.querySelector(`.mirror-page[data-page="${page}"]`);
   if (!layout?.visuals?.length || !root) return;
   root.querySelectorAll(".mirror-visual").forEach((node) => {
     const index = Number(node.dataset.visual);
@@ -662,6 +681,7 @@ function onTranslateScroll() {
     translateScrollTick = 0;
     const pane = document.querySelector(".pane-translate");
     if (!pane) return;
+    if (viewMode !== "mirror") return;
     const rects = [...pane.querySelectorAll(".mirror-page")].map((el) => {
       const box = el.getBoundingClientRect();
       return { page: Number(el.dataset.page), top: box.top, bottom: box.bottom };
@@ -686,9 +706,10 @@ function onTranslateScroll() {
 function syncReadoutToPage(page) {
   if (syncLock) return;
   const pane = document.querySelector(".pane-translate");
+  const root = viewMode === "mirror" && $("mirrorPages") ? $("mirrorPages") : $("readout");
   const node =
-    $("readout").querySelector(`.mirror-page${readoutPageSelector(page)}`) ||
-    $("readout").querySelector(readoutPageSelector(page));
+    root.querySelector(`.mirror-page${readoutPageSelector(page)}`) ||
+    root.querySelector(readoutPageSelector(page));
   if (!pane || !node) return;
   const paneRect = pane.getBoundingClientRect();
   const nodeRect = node.getBoundingClientRect();
