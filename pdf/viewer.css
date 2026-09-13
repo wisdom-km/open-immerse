@@ -215,6 +215,7 @@ h1 {
   overflow: auto;
 }
 .pdf-page {
+  position: relative;
   background: #fff;
   box-shadow: var(--oi-shadow-1);
 }
@@ -299,6 +300,16 @@ h1 {
 .pdf-page.is-mirror-target {
   outline: 2px solid var(--oi-accent);
   outline-offset: 2px;
+}
+.mirror-source-mark {
+  position: absolute;
+  border: 2px solid var(--oi-accent);
+  background: color-mix(in srgb, var(--oi-accent) 16%, transparent);
+  pointer-events: none;
+}
+.readout.is-mirror .oi-pdf-p[data-role="formula"] {
+  font-family: ui-serif, "Times New Roman", serif;
+  letter-spacing: 0.01em;
 }
 .oi-pdf-h1 {
   margin: 28px 0 10px;

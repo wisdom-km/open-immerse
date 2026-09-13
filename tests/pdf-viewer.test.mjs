@@ -209,7 +209,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /id="exportPdf"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 PDF</);
   assert.match(html, /id="mirrorCaption"[^>]*class="mirror-caption"[^>]*hidden>版式镜像</);
   assert.match(html, /id="mirrorHint"[^>]*class="mirror-hint"/);
-  assert.match(html, /id="readout"[^>]*class="readout"/);
+  assert.match(html, /id="readout"[^>]*class="readout(?: mirror-pages)?"/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
   assert.match(html, /<p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…<\/p>/);
   assert.match(src, /appendReadoutNode/);
@@ -651,6 +651,8 @@ test("segmentPageBlocks marks headings and keeps title with body as article part
   assert.equal(articleNodeSpec({ translation: "摘要", role: "heading" }).className, "oi-pdf-h2");
   assert.equal(articleNodeSpec({ translation: "我们提出一种新架构。", role: "paragraph" }).tag, "p");
   assert.equal(articleNodeSpec({ translation: "我们提出一种新架构。", role: "paragraph" }).className, "oi-pdf-p");
+  assert.equal(articleNodeSpec({ translation: "阿希什·瓦萨瓦尼", role: "authors" }).role, "authors");
+  assert.equal(articleNodeSpec({ translation: "图 1：结构", role: "caption" }).role, "caption");
   assert.deepEqual(translationBlock({ original: "Hi", page: 1, role: "title" }).role, "title");
 
   const wrappedTitle = segmentPageBlocks({

@@ -16,8 +16,11 @@ import {
   findUncoveredRegions,
   imageRectsFromUnitCtms,
   inferPageSize,
+  formulaRenderPlan,
+  looksLikeCaption,
   looksLikeFormulaItem,
   mergeMirrorTranslations,
+  unicodeMathify,
   pageRectToPercent,
   pdfItemToPageRect,
   percentRectToStyle,
@@ -116,6 +119,8 @@ test("Attention-like page 1 keeps title / author grid / abstract as separate box
   assert.ok(ashish && noam && niki && jakob);
   assert.equal(/Noam Shazeer/.test(ashish.text), false);
   assert.equal(/Ashish Vaswani/.test(noam.text), false);
+  assert.equal(ashish.role, "authors");
+  assert.equal(noam.role, "authors");
   assert.match(ashish.text, /Google Brain/);
   assert.match(ashish.text, /avaswani@google.com/);
   assert.ok(noam.rect.left - (ashish.rect.left + ashish.rect.width) > 10);
@@ -208,6 +213,11 @@ test("formula-like items are visuals, not translation units", () => {
   const formula = layout.boxes.find((box) => /softmax/.test(box.text));
   assert.ok(formula);
   assert.equal(formula.kind, "formula");
+  assert.equal(formula.role, "formula");
+  assert.equal(formulaRenderPlan(formula).mode, "unicode");
+  assert.match(unicodeMathify("softmax(QK^T)"), /ᵀ/);
+  assert.equal(looksLikeCaption("Figure 1: The Transformer."), true);
+  assert.equal(looksLikeCaption("The dominant sequence"), false);
   assert.equal(
     translatableMirrorUnits(layout).some((unit) => /softmax/.test(unit.text)),
     false
@@ -244,6 +254,21 @@ test("uncovered interior regions and image CTMs become figure boxes", () => {
   const merged = appendOperatorImages([], images, 612, 792);
   assert.equal(merged.length, 1);
   assert.equal(merged[0].kind, "figure");
+
+  const withCap = buildMirrorLayout(
+    {
+      items: [
+        pdfItem("Attention Is All You Need", 72, 740, 400, 18),
+        pdfItem("Figure 1: The Transformer architecture.", 72, 380, 280, 10),
+        pdfItem("The rest of the paper discusses training details after the figure.", 72, 200, 400, 10)
+      ]
+    },
+    { width: 612, height: 792 }
+  );
+  const caption = withCap.boxes.find((box) => /Figure 1/.test(box.text));
+  assert.ok(caption);
+  assert.equal(caption.role, "caption");
+  assert.ok(withCap.visuals.some((vis) => vis.kind === "figure" && /Figure 1/.test(vis.caption || "")));
 });
 
 test("translatePageBlocks keeps bbox fields for the mirror layer", async () => {
@@ -267,7 +292,10 @@ test("viewer wires per-page mirror stacks without touching toolbar / zoom / spli
   assert.match(src, /cropCanvasToDataUrl/);
   assert.match(src, /walkImageCtms/);
   assert.match(src, /highlightSourcePage/);
+  assert.match(src, /onTranslateScroll/);
+  assert.match(src, /formulaRenderPlan/);
   assert.match(src, /mirror-item/);
+  assert.match(html, /class="readout mirror-pages"/);
   assert.match(src, /图（见左侧）|figureFallback/);
   assert.match(src, /syncMirrorCaption/);
   assert.match(src, /mirrorCaption/);
