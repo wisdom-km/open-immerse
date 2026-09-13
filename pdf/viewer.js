@@ -2,11 +2,21 @@ import { getDocument, GlobalWorkerOptions } from "./vendor/pdf.min.mjs";
 import {
   DEFAULT_ZOOM,
   PDF_COPY,
+  clampZoom,
+  ZOOM_CHIP_DRAG_THRESHOLD_PX,
+  ZOOM_CHIP_GUTTER_FALLBACK,
+  ZOOM_CHIP_INSET,
+  ZOOM_CHIP_STORAGE_KEY,
   abortTranslateSession,
   applyDraftTranslations,
+  canvasOutputScale,
+  clampZoomChipPos,
   collectArticlePages,
   createPageCache,
   createTranslateSession,
+  exceedsDragThreshold,
+  effectiveScrollbarWidth,
+  normalizeZoomChipPos,
   pdfToolbarActionState,
   pdfTranslateBusy,
   extractPageItems,
@@ -30,6 +40,9 @@ import {
   translateDocumentPages,
   translatePageBlocks,
   articleNodeSpec,
+  zoomButtonState,
+  zoomChipDefaultPos,
+  zoomChipRightClearance,
   zoomLabel
 } from "../lib/pdf-viewer.js";
 
@@ -54,6 +67,7 @@ let pageViews = [];
 let scrollTick = 0;
 const pageCache = createPageCache();
 let session = createTranslateSession();
+let zoomChipCustom = false;
 
 init();
 
@@ -80,6 +94,7 @@ function init() {
   $("zoomOut").addEventListener("click", () => setZoom(nextZoom(zoom, -1)));
   $("zoomIn").addEventListener("click", () => setZoom(nextZoom(zoom, 1)));
   bindSplitResize();
+  initZoomChip();
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   $("translatePage").addEventListener("click", () => startTranslate());
   $("stopTranslate").addEventListener("click", stopTranslateWork);
@@ -172,6 +187,188 @@ function applySplit(workspace, clientX) {
   const pct = Math.min(80, Math.max(20, ((clientX - rect.left) / rect.width) * 100));
   workspace.style.setProperty("--oi-split", `${pct}%`);
   workspace.style.gridTemplateColumns = `${pct}% ${100 - pct}%`;
+  syncZoomChip();
+}
+
+function initZoomChip() {
+  const chip = $("zoomChip");
+  const pane = $("pdfPane");
+  if (!chip || !pane) return;
+  bindZoomChipDrag(chip, pane);
+  chip.addEventListener(
+    "click",
+    (event) => {
+      if (chip.dataset.oiDragged !== "1") return;
+      delete chip.dataset.oiDragged;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    true
+  );
+  readZoomChipPos().then((saved) => {
+    zoomChipCustom = Boolean(saved);
+    placeZoomChip(saved, { persist: false });
+    requestAnimationFrame(() => placeZoomChip(zoomChipCustom ? currentZoomChipPos() || saved : null, { persist: false }));
+  });
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => syncZoomChip()).observe(pane);
+  }
+  window.addEventListener("resize", () => syncZoomChip());
+}
+
+function syncZoomChip() {
+  placeZoomChip(zoomChipCustom ? currentZoomChipPos() : null, { persist: false });
+}
+
+function currentZoomChipPos() {
+  const chip = $("zoomChip");
+  if (!chip) return null;
+  return normalizeZoomChipPos({
+    left: parseFloat(chip.style.left),
+    top: parseFloat(chip.style.top)
+  });
+}
+
+function placeZoomChip(pos, { persist = false } = {}) {
+  const chip = $("zoomChip");
+  const pane = $("pdfPane");
+  const pages = $("pages");
+  if (!chip || !pane) return null;
+  const gutter = Math.max(ZOOM_CHIP_GUTTER_FALLBACK, effectiveScrollbarWidth(pages));
+  const box = {
+    width: chip.offsetWidth || 0,
+    height: chip.offsetHeight || 0,
+    paneWidth: pane.clientWidth || 0,
+    paneHeight: pane.clientHeight || 0,
+    inset: ZOOM_CHIP_INSET,
+    rightInset: zoomChipRightClearance({ inset: ZOOM_CHIP_INSET, gutter })
+  };
+  const next = pos
+    ? clampZoomChipPos({ ...box, left: pos.left, top: pos.top })
+    : zoomChipDefaultPos({
+        paneWidth: box.paneWidth,
+        paneHeight: box.paneHeight,
+        chipWidth: box.width,
+        chipHeight: box.height,
+        gutter: ZOOM_CHIP_GUTTER_FALLBACK,
+        inset: ZOOM_CHIP_INSET
+      });
+  chip.classList.add("is-free");
+  chip.style.left = `${next.left}px`;
+  chip.style.top = `${next.top}px`;
+  chip.style.right = "auto";
+  chip.style.bottom = "auto";
+  if (persist) persistZoomChipPos(next);
+  return next;
+}
+
+async function readZoomChipPos() {
+  try {
+    const get = globalThis.chrome?.storage?.local?.get;
+    if (typeof get === "function") {
+      const bag = await get(ZOOM_CHIP_STORAGE_KEY);
+      const stored = normalizeZoomChipPos(bag?.[ZOOM_CHIP_STORAGE_KEY]);
+      if (stored) return stored;
+    }
+  } catch {
+    /* opened outside the extension */
+  }
+  try {
+    return normalizeZoomChipPos(JSON.parse(localStorage.getItem(ZOOM_CHIP_STORAGE_KEY)));
+  } catch {
+    return null;
+  }
+}
+
+function persistZoomChipPos(pos) {
+  const payload = normalizeZoomChipPos(pos);
+  if (!payload) return;
+  zoomChipCustom = true;
+  try {
+    localStorage.setItem(ZOOM_CHIP_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    /* private mode / quota */
+  }
+  try {
+    globalThis.chrome?.storage?.local?.set?.({ [ZOOM_CHIP_STORAGE_KEY]: payload });
+  } catch {
+    /* opened outside the extension */
+  }
+}
+
+function bindZoomChipDrag(chip, pane) {
+  let pointerId = null;
+  let startX = 0;
+  let startY = 0;
+  let grabX = 0;
+  let grabY = 0;
+  let armed = false;
+  let dragging = false;
+  const moveOpts = { capture: true, passive: false };
+
+  const onMove = (event) => {
+    if (!armed || event.pointerId !== pointerId) return;
+    if (!dragging) {
+      if (!exceedsDragThreshold(event.clientX - startX, event.clientY - startY, ZOOM_CHIP_DRAG_THRESHOLD_PX)) {
+        return;
+      }
+      dragging = true;
+      chip.classList.add("is-dragging");
+      try {
+        chip.setPointerCapture(event.pointerId);
+      } catch {
+        /* capture is optional */
+      }
+    }
+    event.preventDefault();
+    followZoomChip(chip, pane, event.clientX, event.clientY, grabX, grabY);
+  };
+
+  const finish = (event) => {
+    if (!armed || event.pointerId !== pointerId) return;
+    const wasDragging = dragging;
+    armed = false;
+    dragging = false;
+    pointerId = null;
+    window.removeEventListener("pointermove", onMove, moveOpts);
+    window.removeEventListener("pointerup", finish, moveOpts);
+    window.removeEventListener("pointercancel", finish, moveOpts);
+    if (!wasDragging) return;
+    chip.classList.remove("is-dragging");
+    const paneRect = pane.getBoundingClientRect();
+    const rect = chip.getBoundingClientRect();
+    placeZoomChip({ left: rect.left - paneRect.left, top: rect.top - paneRect.top }, { persist: true });
+    chip.dataset.oiDragged = "1";
+    setTimeout(() => {
+      delete chip.dataset.oiDragged;
+    }, 0);
+  };
+
+  chip.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    pointerId = event.pointerId;
+    armed = true;
+    dragging = false;
+    startX = event.clientX;
+    startY = event.clientY;
+    const rect = chip.getBoundingClientRect();
+    grabX = event.clientX - rect.left;
+    grabY = event.clientY - rect.top;
+    window.addEventListener("pointermove", onMove, moveOpts);
+    window.addEventListener("pointerup", finish, moveOpts);
+    window.addEventListener("pointercancel", finish, moveOpts);
+  });
+}
+
+function followZoomChip(chip, pane, clientX, clientY, grabX, grabY) {
+  const paneRect = pane.getBoundingClientRect();
+  placeZoomChip(
+    {
+      left: clientX - grabX - paneRect.left,
+      top: clientY - grabY - paneRect.top
+    },
+    { persist: false }
+  );
 }
 
 function appendReadoutNode(input) {
@@ -505,6 +702,7 @@ async function adoptDoc(doc, title) {
   updatePager();
   await scheduleVisibleRenders();
   await loadCurrentPageText();
+  syncZoomChip();
 }
 
 function shortTitle(value) {
@@ -528,7 +726,6 @@ async function buildPages() {
     wrap.className = "pdf-page";
     wrap.dataset.page = String(n);
     wrap.style.width = `${Math.floor(viewport.width)}px`;
-    wrap.style.maxWidth = "100%";
     wrap.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
     const canvas = document.createElement("canvas");
     canvas.hidden = true;
@@ -612,11 +809,17 @@ async function goPage(dir) {
 }
 
 async function setZoom(next) {
-  if (!pdfDoc || next === zoom) return;
-  zoom = next;
+  const scale = clampZoom(next);
+  if (!pdfDoc || scale === zoom) {
+    syncZoomButtons();
+    return;
+  }
+  zoom = scale;
   $("zoomLabel").textContent = zoomLabel(zoom);
   await layoutPages();
   await scheduleVisibleRenders();
+  syncZoomChip();
+  syncZoomButtons();
 }
 
 async function scheduleVisibleRenders() {
@@ -637,7 +840,7 @@ async function renderView(view) {
   const viewport = page.getViewport({ scale: zoom });
   const canvas = view.canvas;
   const context = canvas.getContext("2d", { alpha: false });
-  const outputScale = window.devicePixelRatio || 1;
+  const outputScale = canvasOutputScale(viewport.width, viewport.height, window.devicePixelRatio || 1);
   canvas.width = Math.floor(viewport.width * outputScale);
   canvas.height = Math.floor(viewport.height * outputScale);
   if (view.renderTask) {
@@ -698,11 +901,16 @@ function updatePager() {
   $("zoomLabel").textContent = zoomLabel(zoom);
   $("prev").disabled = !pdfDoc || pageNum <= 1;
   $("next").disabled = !pdfDoc || pageNum >= total;
+  syncZoomButtons();
+}
+
+function syncZoomButtons() {
+  const ui = zoomButtonState({ hasDoc: Boolean(pdfDoc), zoom });
+  $("zoomOut").disabled = ui.outDisabled;
+  $("zoomIn").disabled = ui.inDisabled;
 }
 
 function setHasDoc(has) {
-  $("zoomOut").disabled = !has;
-  $("zoomIn").disabled = !has;
   if (!has) {
     $("pages").replaceChildren();
     pageViews = [];
