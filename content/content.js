@@ -3,6 +3,9 @@ const SKIP_SELECTOR = "script, style, noscript, textarea, pre, code, kbd, samp, 
 const MAIN_SELECTOR = "main, article, [role='main'], [role='article']";
 const CHROME_SELECTOR = "nav, aside, header, footer, [role='navigation'], [role='complementary'], [role='banner'], [role='contentinfo'], [role='menu'], [role='menubar'], [data-aside-rail], [data-aside-track], [class*='hero_blog_post_details'], [class*='blog_post_details'], [class*='marginalia']";
 const ALWAYS_CHROME_SELECTOR = "nav, aside, header, [role='navigation'], [role='complementary'], [role='banner'], [role='menu'], [role='menubar'], [data-aside-rail], [data-aside-track], [class*='hero_blog_post_details'], [class*='blog_post_details'], [class*='marginalia']";
+/** Keep in sync with lib/site-presets.js PRIMARY_TITLE_SKIP_ANCESTOR / PAGE_TOP_NAV_SELECTOR */
+const PRIMARY_TITLE_SKIP_ANCESTOR = "nav, aside, footer, [role='navigation'], [role='complementary'], [role='contentinfo'], [role='menu'], [role='menubar']";
+const PAGE_TOP_NAV_SELECTOR = "header nav, [role='banner'] nav, header [role='navigation'], [role='banner'] [role='navigation'], [role='menu'], [role='menubar']";
 const HARD_SKIP_SELECTOR = [
   "[data-aside-rail]",
   "[data-aside-track]",
@@ -32,6 +35,7 @@ let hoverBound = false;
 let timer = 0;
 let toastTimer = 0;
 let inflight = null;
+let lastSettings = {};
 
 init();
 
@@ -316,13 +320,12 @@ function collectNodes(settings, opts = {}) {
     if (!includeTranslated && hasTranslation(el)) return false;
     if (settings.skipCode && el.closest("pre, code")) return false;
     if (el.tagName === "A" && el.closest("li, p, h1, h2, h3, h4, h5, h6")) return false;
-    if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || el.closest(CHROME_SELECTOR)) return false;
-    if (isInMetaRail(el)) return false;
-    if (isSideColumn(el)) return false;
-    if (scope === "article" && isTinyChrome(el)) return false;
+    const primaryTitle = isPrimaryTitle(el);
+    if (!primaryTitle && shouldSkipScopedChrome(el, scope)) return false;
     const text = getText(el);
     if (text.length < MIN_LEN) return false;
     if (/^[\d\s.,:;!?()[\]{}\-_/\\]+$/.test(text)) return false;
+    if (!primaryTitle && isChromeMetaText(text)) return false;
     return isMostlyVisible(el);
   });
   return nodes.sort((a, b) => {
@@ -335,7 +338,29 @@ function collectNodes(settings, opts = {}) {
   });
 }
 
+function isPrimaryTitleCandidate(el) {
+  if (!el || el.tagName !== "H1") return false;
+  return !el.closest(PRIMARY_TITLE_SKIP_ANCESTOR);
+}
+
+function isPrimaryTitle(el) {
+  if (!isPrimaryTitleCandidate(el)) return false;
+  const all = [...document.querySelectorAll("h1")].filter(isPrimaryTitleCandidate);
+  const inMain = all.find((node) => node.closest(MAIN_SELECTOR));
+  return (inMain || all[0]) === el;
+}
+
+function shouldSkipScopedChrome(el, scope) {
+  if (scope === "page") return Boolean(el.closest(PAGE_TOP_NAV_SELECTOR));
+  if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || el.closest(CHROME_SELECTOR)) return true;
+  if (isInMetaRail(el)) return true;
+  if (isSideColumn(el)) return true;
+  if (isTinyChrome(el)) return true;
+  return false;
+}
+
 function contentRank(el) {
+  if (isPrimaryTitle(el)) return 0;
   if (el.closest(MAIN_SELECTOR) && !el.closest(CHROME_SELECTOR) && !el.closest(HARD_SKIP_SELECTOR)) return 0;
   if (isSideColumn(el) || el.closest(CHROME_SELECTOR) || el.closest(HARD_SKIP_SELECTOR)) return 2;
   return 1;
@@ -443,6 +468,7 @@ function isMostlyVisible(el) {
 function applyStyle(settings) {
   const root = document.documentElement;
   if (!settings) return;
+  lastSettings = settings;
   root.style.setProperty("--oi-font-scale", settings.fontScale || 0.95);
   if (settings.color) root.style.setProperty("--oi-color", settings.color);
   else root.style.removeProperty("--oi-color");
@@ -464,7 +490,8 @@ let hoverTimer = 0;
 function onHover(ev) {
   const el = ev.target.closest(BLOCK_SELECTOR);
   if (!el || el.closest(SKIP_SELECTOR)) return;
-  if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || isInMetaRail(el) || isSideColumn(el)) return;
+  const scope = lastSettings.translateScope || "article";
+  if (!isPrimaryTitle(el) && shouldSkipScopedChrome(el, scope)) return;
   if (el.querySelector(".oi-translation") || el.nextElementSibling?.classList?.contains("oi-translation")) return;
   clearTimeout(hoverTimer);
   hoverTimer = setTimeout(async () => {
