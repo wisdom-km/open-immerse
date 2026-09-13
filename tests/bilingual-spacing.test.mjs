@@ -53,5 +53,6 @@ test("block translations drop fit-content and stay inside the source column", ()
   assert.match(bodyBlock, /overflow-wrap:\s*break-word/);
   assert.match(js, /layoutMountedTranslation/);
   assert.match(js, /OIBilingual\?\.layoutTranslation/);
+  assert.match(js, /bindHost/);
   assert.match(js, /dedupeTranslations/);
 });

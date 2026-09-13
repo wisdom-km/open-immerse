@@ -20,17 +20,34 @@ function parseExtra(value) {
   return m ? Number(m[1]) : 0;
 }
 
-function fakeBox({ className = "oi-translation", top, bottom, width = 320, fontSize = 16, tagName = "DIV" } = {}) {
+function fakeBox({
+  className = "oi-translation",
+  top,
+  bottom,
+  width = 320,
+  clientWidth,
+  fontSize = 16,
+  tagName = "DIV"
+} = {}) {
   const style = {
     fontSize: `${fontSize}px`,
     marginTop: "",
     paddingTop: "",
     maxWidth: "",
+    width: "",
+    minWidth: "",
     boxSizing: "",
+    flexGrow: "",
+    flexShrink: "",
+    flexBasis: "",
+    alignSelf: "",
+    justifySelf: "",
     props: {}
   };
   const el = {
     tagName,
+    clientWidth: clientWidth == null ? width : clientWidth,
+    firstElementChild: null,
     classList: {
       contains(name) {
         return className.split(/\s+/).includes(name);
@@ -51,6 +68,48 @@ function fakeBox({ className = "oi-translation", top, bottom, width = 320, fontS
       },
       set maxWidth(value) {
         style.maxWidth = value;
+      },
+      get width() {
+        return style.width;
+      },
+      set width(value) {
+        style.width = value;
+      },
+      get minWidth() {
+        return style.minWidth;
+      },
+      set minWidth(value) {
+        style.minWidth = value;
+      },
+      get flexGrow() {
+        return style.flexGrow;
+      },
+      set flexGrow(value) {
+        style.flexGrow = value;
+      },
+      get flexShrink() {
+        return style.flexShrink;
+      },
+      set flexShrink(value) {
+        style.flexShrink = value;
+      },
+      get flexBasis() {
+        return style.flexBasis;
+      },
+      set flexBasis(value) {
+        style.flexBasis = value;
+      },
+      get alignSelf() {
+        return style.alignSelf;
+      },
+      set alignSelf(value) {
+        style.alignSelf = value;
+      },
+      get justifySelf() {
+        return style.justifySelf;
+      },
+      set justifySelf(value) {
+        style.justifySelf = value;
       },
       get marginTop() {
         return style.marginTop;
@@ -127,10 +186,53 @@ test("width clamp uses the source content box and skips inline nodes", () => {
   assert.equal(OI.clampTranslationWidth(block, source), 360);
   assert.equal(block.style.boxSizing, "border-box");
   assert.equal(block.style.maxWidth, "360px");
+  assert.equal(block.style.width, "360px");
 
   const inline = fakeBox({ className: "oi-translation oi-inline", top: 90, bottom: 110, width: 900 });
   assert.equal(OI.clampTranslationWidth(inline, source), 0);
   assert.equal(inline.style.maxWidth, "");
+});
+
+test("card/grid H3 clamp uses shrink-wrapped host, not the flex row", () => {
+  const OI = loadBilingual();
+  const h3 = fakeBox({
+    className: "headline-4",
+    tagName: "H3",
+    top: 0,
+    bottom: 40,
+    width: 372,
+    clientWidth: 372
+  });
+  const translation = fakeBox({
+    className: "oi-translation oi-after-heading",
+    top: 48,
+    bottom: 88,
+    width: 478
+  });
+  assert.equal(OI.sourceContentWidth(h3), 372);
+  assert.equal(OI.clampTranslationWidth(translation, h3), 372);
+  assert.equal(translation.style.width, "372px");
+  assert.equal(translation.style.maxWidth, "372px");
+  assert.equal(translation.style.minWidth, "0");
+  assert.equal(translation.style.flexGrow, "0");
+  assert.equal(translation.style.flexBasis, "372px");
+  assert.equal(translation.style.alignSelf, "flex-start");
+  assert.equal(translation.style.justifySelf, "start");
+  OI.bindHost(translation, h3);
+  assert.equal(OI.hostForTranslation(translation), h3);
+});
+
+test("source content width prefers the smaller client box over a stretched border box", () => {
+  const OI = loadBilingual();
+  const stretched = fakeBox({
+    className: "headline-4",
+    tagName: "H3",
+    top: 0,
+    bottom: 40,
+    width: 478,
+    clientWidth: 372
+  });
+  assert.equal(OI.sourceContentWidth(stretched), 372);
 });
 
 test("dedupe keeps one .oi-translation per host", () => {

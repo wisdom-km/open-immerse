@@ -502,7 +502,9 @@ function mountTranslation(el, text, settings) {
 }
 
 function layoutMountedTranslation(source, node) {
-  const run = () => globalThis.OIBilingual?.layoutTranslation?.(node, source);
+  const bilingual = globalThis.OIBilingual;
+  bilingual?.bindHost?.(node, source);
+  const run = () => bilingual?.layoutTranslation?.(node, source);
   run();
   if (typeof requestAnimationFrame === "function") {
     requestAnimationFrame(() => requestAnimationFrame(run));
