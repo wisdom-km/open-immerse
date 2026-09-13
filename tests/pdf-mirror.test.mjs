@@ -423,6 +423,7 @@ test("viewer wires per-page mirror stacks without touching toolbar / zoom / spli
   assert.match(html, /id="exportMd"/);
   assert.match(html, /id="exportPdf"/);
   assert.match(html, /id="zoomChip"/);
+  assert.match(html, /id="mirrorZoomChip"/);
   assert.match(html, /class="split-handle"/);
   assert.match(css, /\.zoom-gutter\s*\{/);
   assert.match(css, /\.split-handle\s*\{/);

@@ -73,12 +73,14 @@ import {
   zoomChipDefaultRight,
   zoomChipRightClearance,
   zoomChipRightGutter,
-  zoomLabel
+  zoomLabel,
+  mirrorZoomWidth
 } from "../lib/pdf-viewer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const html = readFileSync(join(root, "pdf/viewer.html"), "utf8");
 const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
+const tokensCss = readFileSync(join(root, "ui/tokens.css"), "utf8");
 const src = readFileSync(join(root, "pdf/viewer.js"), "utf8");
 const libSrc = readFileSync(join(root, "lib/pdf-viewer.js"), "utf8");
 const popupHtml = readFileSync(join(root, "popup/popup.html"), "utf8");
@@ -116,7 +118,9 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.ok(workspaceHtml.includes('id="zoomOut"') && workspaceHtml.includes('id="zoomLabel"') && workspaceHtml.includes('id="zoomIn"'));
   assert.ok(panePdfHtml.includes('id="pages"') && panePdfHtml.includes('class="zoom-gutter"'));
   assert.ok(panePdfHtml.indexOf('id="pages"') < panePdfHtml.indexOf("zoom-gutter"));
-  assert.equal(afterPaneHtml.includes("zoom-gutter"), false);
+  assert.equal(panePdfHtml.includes("mirrorZoomChip"), false);
+  assert.ok(afterPaneHtml.includes('id="mirrorZoomChip"') && afterPaneHtml.includes("zoom-gutter-mirror"));
+  assert.equal(afterPaneHtml.includes('id="zoomChip"'), false);
   assert.ok(afterPaneHtml.includes("split-handle"));
   assert.equal(html.includes("split-gutter"), false);
   assert.equal(html.includes("zoom-stack"), false);
@@ -238,12 +242,15 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.equal(css.includes(".translate-block"), false);
   assert.equal(css.includes(".translate-article"), false);
   assert.equal(css.includes(".oi-pdf-h {"), false);
-  assert.match(css, /\.pane-translate\s*\{[^}]*padding:\s*20px 24px 32px/s);
+  assert.match(css, /\.pane-translate-scroll\s*\{[^}]*padding:\s*20px 24px 32px/s);
   assert.match(css, /\.pane-translate \.readout\s*\{[^}]*max-width:\s*42rem/s);
   assert.match(css, /\.pane-translate \.readout\.is-mirror\s*\{[^}]*max-width:\s*none/s);
   assert.match(css, /\.view-seg\s*\{/);
   assert.match(css, /\.pane-translate \.mirror-pages\s*\{[^}]*max-width:\s*none/s);
   assert.match(css, /\.mirror-page\s*\{[^}]*position:\s*relative/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*--oi-text:\s*var\(--oi-paper-ink\)/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*color:\s*var\(--oi-paper-ink\)/s);
+  assert.match(css, /\.mirror-page \.katex \*\s*\{[^}]*color:\s*var\(--oi-paper-ink\)/s);
   assert.match(css, /\.mirror-box\s*\{[^}]*position:\s*absolute/s);
   assert.match(css, /\.oi-pdf-h1\s*\{[^}]*font:\s*650 22px\/1\.3 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-h2\s*\{[^}]*font:\s*650 18px\/1\.35 var\(--oi-font\)/s);
@@ -357,6 +364,16 @@ test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.equal(nextZoom(steps.at(-1), 1), 5);
   assert.equal(zoomLabel(1), "100%");
   assert.equal(zoomLabel(2.25), "225%");
+  assert.equal(mirrorZoomWidth(1), "calc(100% * 1)");
+  assert.equal(mirrorZoomWidth(1.25), "calc(100% * 1.25)");
+  assert.equal(mirrorZoomWidth(9), "calc(100% * 5)");
+  assert.match(src, /function setMirrorZoom/);
+  assert.match(src, /function applyMirrorZoom/);
+  assert.match(src, /--oi-mirror-zoom/);
+  assert.match(src, /translateScrollRoot/);
+  assert.match(html, /id="translateScroll"[^>]*class="pane-translate-scroll"/);
+  assert.match(tokensCss, /--oi-paper-ink:\s*#1a1d24/);
+  assert.match(tokensCss, /--oi-paper:\s*#ffffff/);
   assert.equal(zoomLabel(4), "400%");
   assert.equal(zoomLabel(5), "500%");
   assert.equal(zoomLabel(9), "500%");
@@ -477,8 +494,10 @@ test("zoom chip defaults clear the scrollbar and parks as a free-drag control", 
 });
 
 test("PDF-ZOOM-FLOAT §6 acceptance locks", () => {
-  assert.match(html, /class="pane-pdf"[^>]*>[\s\S]*class="zoom-gutter"/);
-  assert.equal(html.slice(html.indexOf("class=\"pane-translate\""), html.indexOf("viewer.js")).includes("zoom-gutter"), false);
+  assert.match(html, /class="pane-pdf"[^>]*>[\s\S]*id="zoomChip"/);
+  assert.match(html, /id="mirrorZoomChip"[^>]*class="zoom-gutter zoom-gutter-mirror"/);
+  assert.match(html, /id="mirrorZoomOut"[^>]*>缩小</);
+  assert.match(html, /id="mirrorZoomIn"[^>]*>放大</);
   assert.match(html, /class="split-handle"/);
   assert.equal(zoomChipDefaultRight(14), 18);
   const parked = zoomChipDefaultPos({

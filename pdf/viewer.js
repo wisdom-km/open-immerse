@@ -103,6 +103,7 @@ let exporting = false;
 let syncLock = false;
 let translateScrollTick = 0;
 let viewMode = "mirror";
+let mirrorZoom = DEFAULT_ZOOM;
 
 init();
 
@@ -128,11 +129,14 @@ function init() {
   $("next").addEventListener("click", () => goPage(1));
   $("zoomOut").addEventListener("click", () => setZoom(nextZoom(zoom, -1)));
   $("zoomIn").addEventListener("click", () => setZoom(nextZoom(zoom, 1)));
+  $("mirrorZoomOut")?.addEventListener("click", () => setMirrorZoom(nextZoom(mirrorZoom, -1)));
+  $("mirrorZoomIn")?.addEventListener("click", () => setMirrorZoom(nextZoom(mirrorZoom, 1)));
   bindSplitResize();
   initZoomChip();
+  applyMirrorZoom();
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
-  document.querySelector(".pane-translate")?.addEventListener("scroll", onTranslateScroll, { passive: true });
+  translateScrollRoot()?.addEventListener("scroll", onTranslateScroll, { passive: true });
   $("translatePage").addEventListener("click", () => startTranslate());
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("restoreOriginal").addEventListener("click", restoreOriginal);
@@ -193,6 +197,10 @@ function eventTargetIsField(target) {
 
 function pdfScrollRoot() {
   return $("pages");
+}
+
+function translateScrollRoot() {
+  return $("translateScroll") || document.querySelector(".pane-translate");
 }
 
 function bindSplitResize() {
@@ -480,7 +488,7 @@ function syncReadoutEmpty(hasArticle) {
 }
 
 function renderArticle() {
-  const pane = document.querySelector(".pane-translate");
+  const pane = translateScrollRoot();
   const keep = pane ? pane.scrollTop : 0;
   const pagesRoot = $("mirrorPages");
   const flowRoot = $("readout");
@@ -721,7 +729,7 @@ function onTranslateScroll() {
   if (translateScrollTick) return;
   translateScrollTick = requestAnimationFrame(() => {
     translateScrollTick = 0;
-    const pane = document.querySelector(".pane-translate");
+    const pane = translateScrollRoot();
     if (!pane) return;
     if (viewMode !== "mirror") return;
     const rects = [...pane.querySelectorAll(".mirror-page")].map((el) => {
@@ -747,7 +755,7 @@ function onTranslateScroll() {
 
 function syncReadoutToPage(page) {
   if (syncLock) return;
-  const pane = document.querySelector(".pane-translate");
+  const pane = translateScrollRoot();
   const root = viewMode === "mirror" && $("mirrorPages") ? $("mirrorPages") : $("readout");
   const node =
     root.querySelector(`.mirror-page${readoutPageSelector(page)}`) ||
@@ -1178,6 +1186,31 @@ async function goPage(dir) {
   await scheduleVisibleRenders();
 }
 
+function setMirrorZoom(next) {
+  const scale = clampZoom(next);
+  if (scale === mirrorZoom) {
+    applyMirrorZoom();
+    return;
+  }
+  mirrorZoom = scale;
+  applyMirrorZoom();
+}
+
+function applyMirrorZoom() {
+  const pages = $("mirrorPages");
+  if (pages) pages.style.setProperty("--oi-mirror-zoom", String(mirrorZoom));
+  if ($("mirrorZoomLabel")) $("mirrorZoomLabel").textContent = zoomLabel(mirrorZoom);
+  syncMirrorZoomButtons();
+}
+
+function syncMirrorZoomButtons() {
+  const chip = $("mirrorZoomChip");
+  if (!chip) return;
+  const ui = zoomButtonState({ hasDoc: Boolean(pdfDoc), zoom: mirrorZoom });
+  $("mirrorZoomOut").disabled = ui.outDisabled;
+  $("mirrorZoomIn").disabled = ui.inDisabled;
+}
+
 async function setZoom(next) {
   const scale = clampZoom(next);
   if (!pdfDoc || scale === zoom) {
@@ -1312,6 +1345,7 @@ function updateTranslateControls() {
   $("restoreOriginal").disabled = !pageHasTranslation(pageCache.get(docId, pageNum));
   setScopeEnabled(ui.scopeEnabled);
   syncExportControls();
+  syncMirrorZoomButtons();
 }
 
 function setStatus(text, isError = false) {
