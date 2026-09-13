@@ -212,10 +212,21 @@ test("hard skips for code and extension UI remain in both scopes", () => {
 });
 
 test("options copy describes sidebar + header H1 without the old 顶栏-only line", () => {
-  assert.match(optionsHtml, /value="article">只译主栏正文，跳过侧栏与导航。</);
-  assert.match(optionsHtml, /value="page">含侧栏；主标题（含页头 H1）必译。顶栏导航链仍可跳过。</);
+  const optionsJs = readFileSync(join(root, "options/options.js"), "utf8");
+  const popupHtml = readFileSync(join(root, "popup/popup.html"), "utf8");
+  assert.match(optionsHtml, /value="article">仅正文</);
+  assert.match(optionsHtml, /value="page">全页面</);
+  assert.match(optionsHtml, /id="translateScopeHint" class="hint field-hint"/);
+  assert.match(optionsHtml, /只译主栏正文，跳过侧栏与导航。/);
+  assert.match(optionsJs, /含侧栏；主标题（含页头 H1）必译。顶栏导航链仍可跳过。/);
+  assert.match(optionsJs, /function syncTranslateScopeHint\(/);
+  assert.match(optionsJs, /translateScope"\)\.addEventListener\("change"/);
+  assert.doesNotMatch(optionsHtml, /value="article">只译主栏/);
+  assert.doesNotMatch(optionsHtml, /value="page">含侧栏/);
   assert.doesNotMatch(optionsHtml, /仍跳过顶栏导航/);
   assert.doesNotMatch(optionsHtml, /更大范围/);
+  assert.match(popupHtml, /value="article">仅正文</);
+  assert.match(popupHtml, /value="page">全页面</);
 });
 
 test("content.js gates chrome by scope and does not blanket-drop header", () => {
