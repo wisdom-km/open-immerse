@@ -235,6 +235,7 @@ h1 {
   border-left: 1px solid var(--oi-line);
 }
 .pane-translate-scroll {
+  --oi-mirror-zoom: 1;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -245,24 +246,20 @@ h1 {
   max-width: 42rem;
   margin: 0;
   color: var(--oi-text);
+  zoom: var(--oi-mirror-zoom, 1);
 }
 .pane-translate .readout.is-mirror {
   max-width: none;
   width: 100%;
 }
 .pane-translate .mirror-pages {
-  --oi-mirror-zoom: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   max-width: none;
   width: 100%;
   margin: 0;
-  color: var(--oi-paper-ink);
-}
-.zoom-gutter-mirror {
-  cursor: default;
-  touch-action: auto;
+  color: var(--oi-mirror-ink);
 }
 .view-seg {
   display: inline-flex;
@@ -306,9 +303,9 @@ h1 {
   width: calc(100% * var(--oi-mirror-zoom, 1));
   margin: 0 0 16px;
   background: var(--oi-paper);
-  color: var(--oi-paper-ink);
-  --oi-text: var(--oi-paper-ink);
-  --oi-text-muted: var(--oi-paper-muted);
+  color: var(--oi-mirror-ink);
+  --oi-text: var(--oi-mirror-ink);
+  --oi-text-muted: var(--oi-mirror-caption);
   box-shadow: var(--oi-shadow-1);
   overflow: hidden;
   container-type: inline-size;
@@ -319,10 +316,14 @@ h1 {
 .mirror-page .oi-pdf-h1,
 .mirror-page .oi-pdf-h2,
 .mirror-page .oi-pdf-p,
-.mirror-page .mirror-visual,
+.mirror-page .oi-pdf-p[data-role="authors"],
 .mirror-page .katex,
 .mirror-page .katex * {
-  color: var(--oi-paper-ink);
+  color: var(--oi-mirror-ink);
+}
+.mirror-page .oi-pdf-p[data-role="caption"],
+.mirror-page .mirror-caption {
+  color: var(--oi-mirror-caption);
 }
 .mirror-page:last-child { margin-bottom: 0; }
 .mirror-box {
@@ -365,9 +366,10 @@ h1 {
   font: 400 11px/1.3 var(--oi-font);
   color: var(--oi-text-muted);
 }
-.mirror-visual.is-pending {
-  background: color-mix(in srgb, var(--oi-paper-muted) 22%, var(--oi-paper));
-  color: var(--oi-paper-muted);
+.mirror-visual.is-pending,
+.mirror-page .mirror-visual:not(img) {
+  background: var(--oi-mirror-placeholder-bg);
+  color: var(--oi-mirror-placeholder);
 }
 .pdf-page.is-mirror-target {
   outline: 2px solid var(--oi-accent);

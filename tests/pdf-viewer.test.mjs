@@ -74,7 +74,9 @@ import {
   zoomChipRightClearance,
   zoomChipRightGutter,
   zoomLabel,
-  mirrorZoomWidth
+  mirrorZoomWidth,
+  MIRROR_ZOOM_STORAGE_KEY,
+  MIRROR_ZOOM_CHIP_POS_KEY
 } from "../lib/pdf-viewer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -119,7 +121,7 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.ok(panePdfHtml.includes('id="pages"') && panePdfHtml.includes('class="zoom-gutter"'));
   assert.ok(panePdfHtml.indexOf('id="pages"') < panePdfHtml.indexOf("zoom-gutter"));
   assert.equal(panePdfHtml.includes("mirrorZoomChip"), false);
-  assert.ok(afterPaneHtml.includes('id="mirrorZoomChip"') && afterPaneHtml.includes("zoom-gutter-mirror"));
+  assert.ok(afterPaneHtml.includes('id="mirrorZoomChip"') && afterPaneHtml.includes('class="zoom-gutter"'));
   assert.equal(afterPaneHtml.includes('id="zoomChip"'), false);
   assert.ok(afterPaneHtml.includes("split-handle"));
   assert.equal(html.includes("split-gutter"), false);
@@ -248,9 +250,12 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.view-seg\s*\{/);
   assert.match(css, /\.pane-translate \.mirror-pages\s*\{[^}]*max-width:\s*none/s);
   assert.match(css, /\.mirror-page\s*\{[^}]*position:\s*relative/s);
-  assert.match(css, /\.mirror-page\s*\{[^}]*--oi-text:\s*var\(--oi-paper-ink\)/s);
-  assert.match(css, /\.mirror-page\s*\{[^}]*color:\s*var\(--oi-paper-ink\)/s);
-  assert.match(css, /\.mirror-page \.katex \*\s*\{[^}]*color:\s*var\(--oi-paper-ink\)/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*--oi-text:\s*var\(--oi-mirror-ink\)/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*color:\s*var\(--oi-mirror-ink\)/s);
+  assert.match(css, /\.mirror-page \.katex \*\s*\{[^}]*color:\s*var\(--oi-mirror-ink\)/s);
+  assert.match(css, /\.mirror-page \.oi-pdf-p\[data-role="caption"\]/);
+  assert.match(css, /--oi-mirror-caption/);
+  assert.match(css, /\.pane-translate \.readout\s*\{[^}]*zoom:\s*var\(--oi-mirror-zoom/s);
   assert.match(css, /\.mirror-box\s*\{[^}]*position:\s*absolute/s);
   assert.match(css, /\.oi-pdf-h1\s*\{[^}]*font:\s*650 22px\/1\.3 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-h2\s*\{[^}]*font:\s*650 18px\/1\.35 var\(--oi-font\)/s);
@@ -372,8 +377,32 @@ test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.match(src, /--oi-mirror-zoom/);
   assert.match(src, /translateScrollRoot/);
   assert.match(html, /id="translateScroll"[^>]*class="pane-translate-scroll"/);
-  assert.match(tokensCss, /--oi-paper-ink:\s*#1a1d24/);
   assert.match(tokensCss, /--oi-paper:\s*#ffffff/);
+  assert.match(tokensCss, /--oi-mirror-ink:\s*#1a1a1a/);
+  assert.match(tokensCss, /--oi-mirror-caption:\s*#4a4a4a/);
+  assert.equal(ZOOM_CHIP_STORAGE_KEY, "pdfZoomChipPos");
+  assert.equal(MIRROR_ZOOM_STORAGE_KEY, "pdfMirrorZoom");
+  assert.equal(MIRROR_ZOOM_CHIP_POS_KEY, "pdfMirrorZoomChipPos");
+  assert.equal(MIRROR_ZOOM_STORAGE_KEY === ZOOM_CHIP_STORAGE_KEY, false);
+  assert.equal(MIRROR_ZOOM_CHIP_POS_KEY === ZOOM_CHIP_STORAGE_KEY, false);
+  assert.equal(ZOOM_CHIP_DRAG_THRESHOLD_PX, 6);
+  assert.match(src, /function initMirrorZoomChip/);
+  assert.match(src, /function bindMirrorZoomChipDrag/);
+  assert.match(src, /function placeMirrorZoomChip/);
+  assert.match(src, /function persistMirrorZoomChipPos/);
+  assert.match(src, /function persistMirrorZoom/);
+  assert.match(src, /MIRROR_ZOOM_STORAGE_KEY/);
+  assert.match(src, /MIRROR_ZOOM_CHIP_POS_KEY/);
+  assert.match(libSrc, /pdfMirrorZoom/);
+  assert.match(libSrc, /pdfMirrorZoomChipPos/);
+  assert.doesNotMatch(src, /snapCorner/);
+  const mirrorDrag = src.slice(src.indexOf("function bindMirrorZoomChipDrag"), src.indexOf("function followMirrorZoomChip"));
+  assert.match(mirrorDrag, /ZOOM_CHIP_DRAG_THRESHOLD_PX/);
+  assert.doesNotMatch(mirrorDrag, /snap/);
+  assert.doesNotMatch(mirrorDrag, /--oi-split/);
+  assert.match(src, /syncMirrorZoomChip/);
+  const applySplitSrc = src.slice(src.indexOf("function applySplit"), src.indexOf("function initZoomChip"));
+  assert.match(applySplitSrc, /syncMirrorZoomChip/);
   assert.equal(zoomLabel(4), "400%");
   assert.equal(zoomLabel(5), "500%");
   assert.equal(zoomLabel(9), "500%");
@@ -495,7 +524,7 @@ test("zoom chip defaults clear the scrollbar and parks as a free-drag control", 
 
 test("PDF-ZOOM-FLOAT §6 acceptance locks", () => {
   assert.match(html, /class="pane-pdf"[^>]*>[\s\S]*id="zoomChip"/);
-  assert.match(html, /id="mirrorZoomChip"[^>]*class="zoom-gutter zoom-gutter-mirror"/);
+  assert.match(html, /id="mirrorZoomChip"[^>]*class="zoom-gutter"/);
   assert.match(html, /id="mirrorZoomOut"[^>]*>缩小</);
   assert.match(html, /id="mirrorZoomIn"[^>]*>放大</);
   assert.match(html, /class="split-handle"/);
@@ -545,6 +574,52 @@ test("PDF-ZOOM-FLOAT §6 acceptance locks", () => {
     src.slice(src.indexOf("function bindZoomChipDrag"), src.indexOf("function followZoomChip")),
     /--oi-split/
   );
+});
+
+test("PDF-MIRROR-READABILITY-ZOOM contrast and independent right chip", () => {
+  const spec = readFileSync(join(root, "pdf/PDF-MIRROR-READABILITY-ZOOM.md"), "utf8");
+  assert.match(spec, /--oi-mirror-ink: #1a1a1a/);
+  assert.match(spec, /pdfMirrorZoom/);
+  assert.match(spec, /pdfMirrorZoomChipPos/);
+  assert.match(tokensCss, /--oi-mirror-ink:\s*#1a1a1a/);
+  assert.match(tokensCss, /--oi-mirror-caption:\s*#4a4a4a/);
+  assert.match(tokensCss, /--oi-mirror-placeholder:\s*#4a4a4a/);
+  assert.match(tokensCss, /--oi-mirror-placeholder-bg:/);
+  assert.match(css, /\.mirror-page\s*\{[^}]*background:\s*var\(--oi-paper\)/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*--oi-text:\s*var\(--oi-mirror-ink\)/s);
+  assert.match(css, /\.mirror-page \.oi-pdf-p\[data-role="authors"\]/);
+  assert.match(css, /\.mirror-page \.katex \*\s*\{[^}]*color:\s*var\(--oi-mirror-ink\)/s);
+  assert.match(css, /\.mirror-page \.oi-pdf-p\[data-role="caption"\][\s\S]*color:\s*var\(--oi-mirror-caption\)/);
+  assert.match(css, /\.mirror-page \.mirror-visual:not\(img\)[\s\S]*background:\s*var\(--oi-mirror-placeholder-bg\)/);
+  assert.match(css, /\.pane-translate \.readout\s*\{[^}]*zoom:\s*var\(--oi-mirror-zoom/s);
+  assert.match(css, /\.pane-translate\s*\{[^}]*position:\s*relative/s);
+  assert.equal(css.includes("zoom-gutter-mirror"), false);
+  assert.equal(html.includes("zoom-gutter-mirror"), false);
+  const afterPane = html.slice(html.indexOf('class="pane-translate"'), html.indexOf("viewer.js"));
+  const scrollIdx = afterPane.indexOf('id="translateScroll"');
+  const chipIdx = afterPane.indexOf('id="mirrorZoomChip"');
+  assert.ok(scrollIdx >= 0 && chipIdx > scrollIdx);
+  assert.match(afterPane, /id="mirrorZoomChip"[^>]*class="zoom-gutter"/);
+  assert.equal(afterPane.includes('id="zoomChip"'), false);
+  assert.equal(MIRROR_ZOOM_STORAGE_KEY, "pdfMirrorZoom");
+  assert.equal(MIRROR_ZOOM_CHIP_POS_KEY, "pdfMirrorZoomChipPos");
+  assert.equal(ZOOM_CHIP_STORAGE_KEY, "pdfZoomChipPos");
+  assert.notEqual(MIRROR_ZOOM_STORAGE_KEY, ZOOM_CHIP_STORAGE_KEY);
+  assert.notEqual(MIRROR_ZOOM_CHIP_POS_KEY, ZOOM_CHIP_STORAGE_KEY);
+  const applyMirror = src.slice(src.indexOf("function applyMirrorZoom"), src.indexOf("function syncMirrorZoomButtons"));
+  assert.match(applyMirror, /translateScroll/);
+  assert.match(applyMirror, /mirrorPages/);
+  assert.match(applyMirror, /readout/);
+  assert.match(applyMirror, /--oi-mirror-zoom/);
+  const setZoomFn = src.slice(src.indexOf("async function setZoom"), src.indexOf("async function scheduleVisibleRenders"));
+  assert.doesNotMatch(setZoomFn, /setMirrorZoom|mirrorZoom|pdfMirrorZoom/);
+  const onKey = src.slice(src.indexOf("function onKey"), src.indexOf("function eventTargetIsField"));
+  assert.match(onKey, /setZoom/);
+  assert.doesNotMatch(onKey, /setMirrorZoom/);
+  const syncPage = src.slice(src.indexOf("function onTranslateScroll"), src.indexOf("function runtimeSend"));
+  assert.match(syncPage, /getBoundingClientRect/);
+  assert.match(syncPage, /translateScrollRoot/);
+  assert.match(src, /let mirrorZoom = DEFAULT_ZOOM/);
 });
 
 test("looksLikePdfUrl and popup entry only for PDF tabs", () => {

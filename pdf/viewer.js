@@ -14,6 +14,8 @@ import {
   ZOOM_CHIP_GUTTER_FALLBACK,
   ZOOM_CHIP_INSET,
   ZOOM_CHIP_STORAGE_KEY,
+  MIRROR_ZOOM_STORAGE_KEY,
+  MIRROR_ZOOM_CHIP_POS_KEY,
   abortTranslateSession,
   applyDraftTranslations,
   canvasOutputScale,
@@ -99,6 +101,7 @@ const pageCache = createPageCache();
 const layoutCache = new Map();
 let session = createTranslateSession();
 let zoomChipCustom = false;
+let mirrorZoomChipCustom = false;
 let exporting = false;
 let syncLock = false;
 let translateScrollTick = 0;
@@ -133,7 +136,11 @@ function init() {
   $("mirrorZoomIn")?.addEventListener("click", () => setMirrorZoom(nextZoom(mirrorZoom, 1)));
   bindSplitResize();
   initZoomChip();
-  applyMirrorZoom();
+  initMirrorZoomChip();
+  readMirrorZoom().then((saved) => {
+    if (saved != null) mirrorZoom = saved;
+    applyMirrorZoom();
+  });
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
   translateScrollRoot()?.addEventListener("scroll", onTranslateScroll, { passive: true });
@@ -235,6 +242,7 @@ function applySplit(workspace, clientX) {
   workspace.style.setProperty("--oi-split", `${pct}%`);
   workspace.style.gridTemplateColumns = `${pct}% ${100 - pct}%`;
   syncZoomChip();
+  syncMirrorZoomChip();
 }
 
 function initZoomChip() {
@@ -416,6 +424,223 @@ function followZoomChip(chip, pane, clientX, clientY, grabX, grabY) {
     },
     { persist: false }
   );
+}
+
+function initMirrorZoomChip() {
+  const chip = $("mirrorZoomChip");
+  const pane = document.querySelector(".pane-translate");
+  if (!chip || !pane) return;
+  bindMirrorZoomChipDrag(chip, pane);
+  chip.addEventListener(
+    "click",
+    (event) => {
+      if (chip.dataset.oiDragged !== "1") return;
+      delete chip.dataset.oiDragged;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    true
+  );
+  readMirrorZoomChipPos().then((saved) => {
+    mirrorZoomChipCustom = Boolean(saved);
+    placeMirrorZoomChip(saved, { persist: false });
+    requestAnimationFrame(() =>
+      placeMirrorZoomChip(mirrorZoomChipCustom ? currentMirrorZoomChipPos() || saved : null, { persist: false })
+    );
+  });
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => syncMirrorZoomChip()).observe(pane);
+  }
+  window.addEventListener("resize", () => syncMirrorZoomChip());
+}
+
+function syncMirrorZoomChip() {
+  placeMirrorZoomChip(mirrorZoomChipCustom ? currentMirrorZoomChipPos() : null, { persist: false });
+}
+
+function currentMirrorZoomChipPos() {
+  const chip = $("mirrorZoomChip");
+  if (!chip) return null;
+  return normalizeZoomChipPos({
+    left: parseFloat(chip.style.left),
+    top: parseFloat(chip.style.top)
+  });
+}
+
+function placeMirrorZoomChip(pos, { persist = false } = {}) {
+  const chip = $("mirrorZoomChip");
+  const pane = document.querySelector(".pane-translate");
+  const scroll = translateScrollRoot();
+  if (!chip || !pane) return null;
+  const gutter = Math.max(ZOOM_CHIP_GUTTER_FALLBACK, effectiveScrollbarWidth(scroll));
+  const box = {
+    width: chip.offsetWidth || 0,
+    height: chip.offsetHeight || 0,
+    paneWidth: pane.clientWidth || 0,
+    paneHeight: pane.clientHeight || 0,
+    inset: ZOOM_CHIP_INSET,
+    rightInset: zoomChipRightClearance({ inset: ZOOM_CHIP_INSET, gutter })
+  };
+  const next = pos
+    ? clampZoomChipPos({ ...box, left: pos.left, top: pos.top })
+    : zoomChipDefaultPos({
+        paneWidth: box.paneWidth,
+        paneHeight: box.paneHeight,
+        chipWidth: box.width,
+        chipHeight: box.height,
+        gutter,
+        inset: ZOOM_CHIP_INSET
+      });
+  chip.classList.add("is-free");
+  chip.style.left = `${next.left}px`;
+  chip.style.top = `${next.top}px`;
+  chip.style.right = "auto";
+  chip.style.bottom = "auto";
+  if (persist) persistMirrorZoomChipPos(next);
+  return next;
+}
+
+async function readMirrorZoomChipPos() {
+  try {
+    const get = globalThis.chrome?.storage?.local?.get;
+    if (typeof get === "function") {
+      const bag = await get(MIRROR_ZOOM_CHIP_POS_KEY);
+      const stored = normalizeZoomChipPos(bag?.[MIRROR_ZOOM_CHIP_POS_KEY]);
+      if (stored) return stored;
+    }
+  } catch {
+    /* opened outside the extension */
+  }
+  try {
+    return normalizeZoomChipPos(JSON.parse(localStorage.getItem(MIRROR_ZOOM_CHIP_POS_KEY)));
+  } catch {
+    return null;
+  }
+}
+
+function persistMirrorZoomChipPos(pos) {
+  const payload = normalizeZoomChipPos(pos);
+  if (!payload) return;
+  mirrorZoomChipCustom = true;
+  try {
+    localStorage.setItem(MIRROR_ZOOM_CHIP_POS_KEY, JSON.stringify(payload));
+  } catch {
+    /* private mode / quota */
+  }
+  try {
+    globalThis.chrome?.storage?.local?.set?.({ [MIRROR_ZOOM_CHIP_POS_KEY]: payload });
+  } catch {
+    /* opened outside the extension */
+  }
+}
+
+function bindMirrorZoomChipDrag(chip, pane) {
+  let pointerId = null;
+  let startX = 0;
+  let startY = 0;
+  let grabX = 0;
+  let grabY = 0;
+  let armed = false;
+  let dragging = false;
+  const moveOpts = { capture: true, passive: false };
+
+  const onMove = (event) => {
+    if (!armed || event.pointerId !== pointerId) return;
+    if (!dragging) {
+      if (!exceedsDragThreshold(event.clientX - startX, event.clientY - startY, ZOOM_CHIP_DRAG_THRESHOLD_PX)) {
+        return;
+      }
+      dragging = true;
+      chip.classList.add("is-dragging");
+      try {
+        chip.setPointerCapture(event.pointerId);
+      } catch {
+        /* capture is optional */
+      }
+    }
+    event.preventDefault();
+    followMirrorZoomChip(chip, pane, event.clientX, event.clientY, grabX, grabY);
+  };
+
+  const finish = (event) => {
+    if (!armed || event.pointerId !== pointerId) return;
+    const wasDragging = dragging;
+    armed = false;
+    dragging = false;
+    pointerId = null;
+    window.removeEventListener("pointermove", onMove, moveOpts);
+    window.removeEventListener("pointerup", finish, moveOpts);
+    window.removeEventListener("pointercancel", finish, moveOpts);
+    if (!wasDragging) return;
+    chip.classList.remove("is-dragging");
+    const paneRect = pane.getBoundingClientRect();
+    const rect = chip.getBoundingClientRect();
+    placeMirrorZoomChip({ left: rect.left - paneRect.left, top: rect.top - paneRect.top }, { persist: true });
+    chip.dataset.oiDragged = "1";
+    setTimeout(() => {
+      delete chip.dataset.oiDragged;
+    }, 0);
+  };
+
+  chip.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    pointerId = event.pointerId;
+    armed = true;
+    dragging = false;
+    startX = event.clientX;
+    startY = event.clientY;
+    const rect = chip.getBoundingClientRect();
+    grabX = event.clientX - rect.left;
+    grabY = event.clientY - rect.top;
+    window.addEventListener("pointermove", onMove, moveOpts);
+    window.addEventListener("pointerup", finish, moveOpts);
+    window.addEventListener("pointercancel", finish, moveOpts);
+  });
+}
+
+function followMirrorZoomChip(chip, pane, clientX, clientY, grabX, grabY) {
+  const paneRect = pane.getBoundingClientRect();
+  placeMirrorZoomChip(
+    {
+      left: clientX - grabX - paneRect.left,
+      top: clientY - grabY - paneRect.top
+    },
+    { persist: false }
+  );
+}
+
+async function readMirrorZoom() {
+  try {
+    const get = globalThis.chrome?.storage?.local?.get;
+    if (typeof get === "function") {
+      const bag = await get(MIRROR_ZOOM_STORAGE_KEY);
+      const stored = clampZoom(bag?.[MIRROR_ZOOM_STORAGE_KEY]);
+      if (bag?.[MIRROR_ZOOM_STORAGE_KEY] != null && stored) return stored;
+    }
+  } catch {
+    /* opened outside the extension */
+  }
+  try {
+    const raw = localStorage.getItem(MIRROR_ZOOM_STORAGE_KEY);
+    if (raw == null || raw === "") return null;
+    return clampZoom(raw);
+  } catch {
+    return null;
+  }
+}
+
+function persistMirrorZoom(scale) {
+  const next = clampZoom(scale);
+  try {
+    localStorage.setItem(MIRROR_ZOOM_STORAGE_KEY, String(next));
+  } catch {
+    /* private mode / quota */
+  }
+  try {
+    globalThis.chrome?.storage?.local?.set?.({ [MIRROR_ZOOM_STORAGE_KEY]: next });
+  } catch {
+    /* opened outside the extension */
+  }
 }
 
 function layoutKey(page) {
@@ -1187,18 +1412,17 @@ async function goPage(dir) {
 }
 
 function setMirrorZoom(next) {
-  const scale = clampZoom(next);
-  if (scale === mirrorZoom) {
-    applyMirrorZoom();
-    return;
-  }
-  mirrorZoom = scale;
+  mirrorZoom = clampZoom(next);
+  persistMirrorZoom(mirrorZoom);
   applyMirrorZoom();
 }
 
 function applyMirrorZoom() {
-  const pages = $("mirrorPages");
-  if (pages) pages.style.setProperty("--oi-mirror-zoom", String(mirrorZoom));
+  const scale = String(mirrorZoom);
+  const root = $("translateScroll");
+  if (root) root.style.setProperty("--oi-mirror-zoom", scale);
+  if ($("mirrorPages")) $("mirrorPages").style.setProperty("--oi-mirror-zoom", scale);
+  if ($("readout")) $("readout").style.setProperty("--oi-mirror-zoom", scale);
   if ($("mirrorZoomLabel")) $("mirrorZoomLabel").textContent = zoomLabel(mirrorZoom);
   syncMirrorZoomButtons();
 }

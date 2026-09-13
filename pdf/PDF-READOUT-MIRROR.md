@@ -39,7 +39,7 @@
 
 ## 4.4 同步
 
-左右页级滚动同步。左栏 zoom chip 缩放 PDF；右栏同款芯片（固定右下）**独立**缩放镜像页（`--oi-mirror-zoom`）。镜像页白底必须用深色墨水（`--oi-paper-ink`），不得继承暗色 chrome 的浅色字。
+左右页级滚动同步。左栏 zoom chip 缩放 PDF；右栏同款 FLOAT 芯片**独立**缩放镜像页 / 通读（`--oi-mirror-zoom`，键 `pdfMirrorZoom` + `pdfMirrorZoomChipPos`）。镜像页白底必须用深色墨水（`--oi-mirror-ink: #1a1a1a`），不得继承暗色 chrome 的浅色 `--oi-text`。详见 `PDF-MIRROR-READABILITY-ZOOM.md`。
 
 ## 4.5 导出
 
