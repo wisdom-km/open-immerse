@@ -45,6 +45,7 @@ function fakeBox({
     marginTop: "",
     marginLeft: "",
     marginRight: "",
+    marginInlineStart: "",
     paddingTop: "",
     maxWidth: "",
     width: "",
@@ -178,6 +179,12 @@ function fakeBox({
       set marginRight(value) {
         style.marginRight = value;
       },
+      get marginInlineStart() {
+        return style.marginInlineStart;
+      },
+      set marginInlineStart(value) {
+        style.marginInlineStart = value;
+      },
       get paddingTop() {
         return style.paddingTop;
       },
@@ -202,7 +209,9 @@ function fakeBox({
             paddingRight: `${node?.__paddingRight ?? paddingRight}px`,
             borderLeftWidth: `${node?.__borderLeftWidth ?? borderLeftWidth}px`,
             borderRightWidth: "0px",
-            marginLeft: node?.style?.marginLeft || `${node?.__marginLeft ?? marginLeft}px`
+            marginLeft: node?.style?.marginLeft || `${node?.__marginLeft ?? marginLeft}px`,
+            marginInlineStart: node?.style?.marginInlineStart || `${node?.__marginInlineStart ?? marginLeft}px`,
+            textIndent: node?.__textIndent || "0px"
           };
         }
       }
@@ -462,7 +471,9 @@ function createFlexRowCard({ columnWidth = 872, h3Width = 372, translationWidth 
           paddingRight: `${node?.__paddingRight || 0}px`,
           borderLeftWidth: `${node?.__borderLeftWidth || 0}px`,
           borderRightWidth: "0px",
-          marginLeft: node?.style?.marginLeft || `${node?.__marginLeft || 0}px`
+          marginLeft: node?.style?.marginLeft || `${node?.__marginLeft || 0}px`,
+          marginInlineStart: node?.style?.marginInlineStart || `${node?.__marginInlineStart || 0}px`,
+          textIndent: node?.__textIndent || "0px"
         };
       }
     }
@@ -499,6 +510,7 @@ function createFlexRowCard({ columnWidth = 872, h3Width = 372, translationWidth 
       marginTop: "",
       marginLeft: "",
       marginRight: "",
+      marginInlineStart: "",
       paddingTop: "",
       props: {},
       setProperty(key, value) {
@@ -763,15 +775,25 @@ function createIndentedParagraph({
   return { article, wrapper, p, translation, sourceLeft, sourceWidth };
 }
 
-test("indented source p clamps to content box and keeps the same left edge", () => {
+function assertVisualLock(source, translation, { maxLeftDelta = 1 } = {}) {
+  const src = source.getBoundingClientRect();
+  const tr = translation.getBoundingClientRect();
+  assert.ok(tr.width <= src.width + 0.01, `width ${tr.width} > source ${src.width}`);
+  assert.ok(Math.abs(tr.left - src.left) <= maxLeftDelta, `left Δ ${tr.left - src.left}`);
+  assert.notEqual(translation.style.width, "100%");
+  assert.equal(translation.style.textIndent || "", "");
+  return { src, tr };
+}
+
+test("§C.3 indented p uses source visual box, not a wider ancestor", () => {
   const OI = loadBilingual();
   const { article, wrapper, p, translation, sourceLeft, sourceWidth } = createIndentedParagraph();
 
+  assert.equal(OI.sourceVisualBox(p).width, sourceWidth);
+  assert.equal(OI.sourceVisualBox(p).left, sourceLeft);
   assert.equal(OI.columnWidth(p), 800);
-  assert.ok(OI.columnWidth(p) > sourceWidth);
   assert.equal(OI.shouldUseColumnClamp(p), false);
   assert.equal(OI.resolveClampWidth(p), sourceWidth);
-  assert.ok(OI.resolveClampWidth(p) < OI.columnWidth(p));
   assert.ok(OI.resolveClampWidth(p) < article.clientWidth);
 
   const laid = OI.layoutTranslation(translation, p);
@@ -780,19 +802,89 @@ test("indented source p clamps to content box and keeps the same left edge", () 
   assert.equal(translation.style.maxWidth, "560px");
   assert.equal(translation.style.width, "560px");
   assert.equal(translation.style.marginLeft, "24px");
-  assert.equal(translation.style.alignSelf, "flex-start");
-
-  const src = p.getBoundingClientRect();
-  const tr = translation.getBoundingClientRect();
-  assert.ok(tr.width <= src.width);
-  assert.ok(tr.left >= src.left - 0.5);
+  assert.equal(translation.style.marginInlineStart, "24px");
+  const { src, tr } = assertVisualLock(p, translation);
   assert.equal(tr.left, sourceLeft);
   assert.ok(tr.left > wrapper.getBoundingClientRect().left);
   assert.ok(tr.right <= src.right + 0.5);
-  assert.ok(tr.left > article.getBoundingClientRect().left);
 });
 
-test("article-body heading uses source width, not the wider article column", () => {
+test("§C.3 nested column / parent padding: margin-left 0, left edges match", () => {
+  const OI = loadBilingual();
+  const { article, wrapper, p, translation } = createIndentedParagraph({
+    wrapperPadLeft: 96,
+    sourceWidth: 640,
+    sourceMarginLeft: 0
+  });
+  p.__marginLeft = 0;
+  const laid = OI.layoutTranslation(translation, p);
+  assert.equal(laid.width, 640);
+  assert.equal(laid.offset, 0);
+  assert.equal(translation.style.width, "640px");
+  assert.ok(!translation.style.marginLeft || translation.style.marginLeft === "0px");
+  assertVisualLock(p, translation);
+  assert.ok(laid.width < article.clientWidth);
+  assert.ok(laid.width <= wrapper.clientWidth);
+});
+
+test("§C.3 does not copy text-indent; still uses the source border-box", () => {
+  const OI = loadBilingual();
+  const { p, translation } = createIndentedParagraph({
+    wrapperPadLeft: 80,
+    sourceWidth: 600,
+    sourceMarginLeft: 0
+  });
+  p.__textIndent = "2em";
+  p.__marginLeft = 0;
+  const laid = OI.layoutTranslation(translation, p);
+  assert.equal(laid.width, 600);
+  assert.equal(laid.offset, 0);
+  assert.equal(translation.style.textIndent || "", "");
+  assertVisualLock(p, translation);
+});
+
+test("§C.3 marketing li stays the source width (not the article column)", () => {
+  const OI = loadBilingual();
+  const article = fakeBox({
+    className: "Post-module__article",
+    tagName: "ARTICLE",
+    top: 0,
+    bottom: 200,
+    width: 900,
+    left: 0,
+    display: "block"
+  });
+  const li = fakeBox({
+    className: "source",
+    tagName: "LI",
+    top: 0,
+    bottom: 60,
+    width: 640,
+    clientWidth: 640,
+    left: 48,
+    parent: article,
+    display: "block"
+  });
+  const translation = fakeBox({
+    className: "oi-translation",
+    top: 40,
+    bottom: 80,
+    width: 900,
+    left: 48,
+    parent: li,
+    display: "block"
+  });
+  li.firstElementChild = translation;
+  assert.equal(OI.shouldUseColumnClamp(li), false);
+  assert.equal(OI.resolveClampWidth(li), 640);
+  const laid = OI.layoutTranslation(translation, li);
+  assert.equal(laid.width, 640);
+  assert.equal(laid.offset, 0);
+  assert.equal(translation.style.width, "640px");
+  assert.ok(laid.width < 900);
+});
+
+test("article-body heading uses source visual width, not the wider article column", () => {
   const OI = loadBilingual();
   const article = fakeBox({
     className: "Post-module__article",
@@ -815,6 +907,8 @@ test("article-body heading uses source width, not the wider article column", () 
   assert.equal(OI.inCardGridContext(h3), false);
   assert.equal(OI.shouldUseColumnClamp(h3), false);
   assert.equal(OI.resolveClampWidth(h3), 680);
+  assert.equal(OI.sourceVisualBox(h3).left, 110);
   assert.equal(OI.sourceAlignOffset(h3), 110);
 });
+
 
