@@ -32,6 +32,11 @@
   <div class="workspace">
     <section class="pane-pdf" id="pdfPane" aria-label="PDF">
       <div id="pages" class="pages"></div>
+      <div class="zoom-gutter" role="group" aria-label="缩放">
+        <button type="button" id="zoomOut" class="zoom-gutter-btn" disabled>缩小</button>
+        <p id="zoomLabel" class="zoom-gutter-label">100%</p>
+        <button type="button" id="zoomIn" class="zoom-gutter-btn" disabled>放大</button>
+      </div>
     </section>
     <aside class="pane-translate" aria-label="译文">
       <div id="readout" class="readout"></div>
@@ -40,11 +45,6 @@
       <p id="noTextLayerHint" class="m2-stub" hidden>扫描件翻译将在后续版本支持。</p>
     </aside>
     <div class="split-handle" role="separator" aria-orientation="vertical" aria-label="调整分栏"></div>
-    <div class="zoom-gutter" role="group" aria-label="缩放">
-      <button type="button" id="zoomOut" class="zoom-gutter-btn" disabled>缩小</button>
-      <p id="zoomLabel" class="zoom-gutter-label">100%</p>
-      <button type="button" id="zoomIn" class="zoom-gutter-btn" disabled>放大</button>
-    </div>
   </div>
   <script type="module" src="viewer.js"></script>
 </body>
