@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PAGE_CHROME_SELECTOR, PAGE_TOP_NAV_SELECTOR, PRIMARY_TITLE_SKIP_ANCESTOR } from "../lib/site-presets.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { applyTranslateLimit } from "../lib/translate-limit.js";
-import { isPrimaryTitle, shouldCollectNode } from "../lib/page-scan.js";
+import { hasNestedCollectible, isPrimaryTitle, shouldCollectNode } from "../lib/page-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentSrc = readFileSync(join(root, "content/content.js"), "utf8");
@@ -239,6 +239,9 @@ test("content.js gates chrome by scope and does not blanket-drop header", () => 
   assert.doesNotMatch(contentSrc, /if \(el\.closest\(HARD_SKIP_SELECTOR\) \|\| el\.closest\(ALWAYS_CHROME_SELECTOR\) \|\| el\.closest\(CHROME_SELECTOR\)\) return false;/);
   assert.doesNotMatch(contentSrc, /closest\(['"]header['"]\)/);
   assert.match(contentSrc, /script, style, noscript/);
+  assert.match(contentSrc, /el\.querySelector\(BLOCK_SELECTOR\)/);
+  assert.equal(hasNestedCollectible({ querySelector: () => ({ tagName: "P" }) }), true);
+  assert.equal(hasNestedCollectible({ querySelector: () => null }), false);
   assert.ok(PRIMARY_TITLE_SKIP_ANCESTOR.includes("nav"));
   assert.ok(!PRIMARY_TITLE_SKIP_ANCESTOR.includes("header"));
   assert.ok(PAGE_TOP_NAV_SELECTOR.includes("header nav"));

@@ -1,5 +1,12 @@
 import { getDocument, GlobalWorkerOptions } from "./vendor/pdf.min.mjs";
 import {
+  articleBlocksToMarkdown,
+  articleBlocksToPdf,
+  canExportReadout,
+  downloadBlob,
+  translationExportFilename
+} from "../lib/export.js";
+import {
   DEFAULT_ZOOM,
   PDF_COPY,
   clampZoom,
@@ -12,11 +19,14 @@ import {
   canvasOutputScale,
   clampZoomChipPos,
   collectArticlePages,
+  collectReadoutExportNodes,
   createPageCache,
   createTranslateSession,
   exceedsDragThreshold,
   effectiveScrollbarWidth,
   normalizeZoomChipPos,
+  pdfExportControlState,
+  pdfSourceBasename,
   pdfToolbarActionState,
   pdfTranslateBusy,
   extractPageItems,
@@ -68,6 +78,7 @@ let scrollTick = 0;
 const pageCache = createPageCache();
 let session = createTranslateSession();
 let zoomChipCustom = false;
+let exporting = false;
 
 init();
 
@@ -99,6 +110,8 @@ function init() {
   $("translatePage").addEventListener("click", () => startTranslate());
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("restoreOriginal").addEventListener("click", restoreOriginal);
+  $("exportMd").addEventListener("click", () => exportReadout("md"));
+  $("exportPdf").addEventListener("click", () => exportReadout("pdf"));
   pdfScrollRoot().addEventListener("scroll", onPdfScroll, { passive: true });
   $("pdfPane").addEventListener("wheel", onPdfWheel, { passive: true });
   document.addEventListener("keydown", onKey);
@@ -395,6 +408,7 @@ function renderArticle() {
   const pages = collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0);
   if (!pages.length) {
     syncReadoutEmpty(false);
+    updateTranslateControls();
     return;
   }
   syncReadoutEmpty(true);
@@ -409,6 +423,48 @@ function renderArticle() {
     });
   });
   if (pane) pane.scrollTop = keep;
+  updateTranslateControls();
+}
+
+function currentReadoutNodes() {
+  return collectReadoutExportNodes($("readout"));
+}
+
+function syncExportControls() {
+  const ui = pdfExportControlState({
+    hasDoc: Boolean(pdfDoc),
+    hasReadout: canExportReadout(currentReadoutNodes()),
+    exporting
+  });
+  $("exportMd").disabled = ui.mdDisabled;
+  $("exportPdf").disabled = ui.pdfDisabled;
+}
+
+async function exportReadout(kind) {
+  const nodes = currentReadoutNodes();
+  if (!pdfDoc || !canExportReadout(nodes) || exporting) return;
+  exporting = true;
+  const prev = $("status").textContent;
+  const prevError = $("status").classList.contains("error");
+  setStatus(PDF_COPY.exporting);
+  updateTranslateControls();
+  try {
+    const filename = translationExportFilename(pdfSourceBasename(sourceUrl), kind === "pdf" ? "pdf" : "md");
+    if (kind === "pdf") {
+      downloadBlob(filename, new Blob([articleBlocksToPdf(nodes)], { type: "application/pdf" }));
+    } else {
+      downloadBlob(
+        filename,
+        new Blob([articleBlocksToMarkdown(nodes)], { type: "text/markdown;charset=utf-8" })
+      );
+    }
+    setStatus(prev, prevError);
+  } catch {
+    setStatus(PDF_COPY.exportFail, true);
+  } finally {
+    exporting = false;
+    updateTranslateControls();
+  }
 }
 
 function syncReadoutToPage(page) {
@@ -941,6 +997,7 @@ function updateTranslateControls() {
   $("stopTranslate").disabled = ui.stopDisabled;
   $("restoreOriginal").disabled = !pageHasTranslation(pageCache.get(docId, pageNum));
   setScopeEnabled(ui.scopeEnabled);
+  syncExportControls();
 }
 
 function setStatus(text, isError = false) {

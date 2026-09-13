@@ -138,7 +138,7 @@ test("learning / docs / auto-site stay in Popup and Options only", () => {
 
 test("content scripts load fab helpers before toolbar, and restore uses 翻译", () => {
   assert.match(manifest, /"lib\/fab\.js"/);
-  assert.match(manifest, /lib\/fab\.js", "content\/content\.js", "content\/toolbar\.js"/);
+  assert.match(manifest, /lib\/fab\.js", "lib\/bilingual-layout\.js", "content\/content\.js", "content\/toolbar\.js"/);
   assert.match(content, /fab\.textContent = "翻译"/);
   assert.equal(content.includes('fab.textContent = "译"'), false);
 });

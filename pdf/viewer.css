@@ -307,6 +307,11 @@ button {
   color: var(--oi-text-muted);
 }
 .btn-ghost:hover { color: var(--oi-text); }
+.btn-ghost.btn-export {
+  font-weight: 400;
+  color: color-mix(in srgb, var(--oi-text-muted) 82%, transparent);
+}
+.btn-ghost.btn-export:hover { color: var(--oi-text-muted); }
 button:disabled { opacity: 0.45; cursor: default; }
 .btn-primary:disabled {
   background: var(--oi-line);
