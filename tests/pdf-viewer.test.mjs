@@ -8,8 +8,17 @@ import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import {
   DEFAULT_ZOOM,
   PDF_COPY,
+  PDF_CANVAS_MAX_DIM,
+  ZOOM_CHIP_DRAG_THRESHOLD_PX,
+  ZOOM_CHIP_GUTTER_FALLBACK,
+  ZOOM_CHIP_INSET,
+  ZOOM_CHIP_STORAGE_KEY,
+  ZOOM_MAX,
   ZOOM_MIN,
   abortTranslateSession,
+  canvasOutputScale,
+  clampZoomChipPos,
+  exceedsDragThreshold,
   applyDraftTranslations,
   blockLocation,
   pdfToolbarActionState,
@@ -51,6 +60,10 @@ import {
   translationBlock,
   articleNodeSpec,
   viewerSearch,
+  measureScrollbarWidth,
+  normalizeZoomChipPos,
+  zoomChipDefaultPos,
+  zoomChipRightGutter,
   zoomLabel
 } from "../lib/pdf-viewer.js";
 
@@ -84,7 +97,7 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.equal(toolbarHtml.includes("放大"), false);
   assert.match(
     html,
-    /<div class="zoom-gutter" role="group" aria-label="缩放">\s*<button type="button" id="zoomOut" class="zoom-gutter-btn" disabled>缩小<\/button>\s*<p id="zoomLabel" class="zoom-gutter-label">100%<\/p>\s*<button type="button" id="zoomIn" class="zoom-gutter-btn" disabled>放大<\/button>\s*<\/div>/
+    /<div id="zoomChip" class="zoom-gutter" role="group" aria-label="缩放">\s*<button type="button" id="zoomOut" class="zoom-gutter-btn" disabled>缩小<\/button>\s*<p id="zoomLabel" class="zoom-gutter-label">100%<\/p>\s*<button type="button" id="zoomIn" class="zoom-gutter-btn" disabled>放大<\/button>\s*<\/div>/
   );
   const workspaceHtml = html.slice(html.indexOf('class="workspace"'), html.indexOf('viewer.js'));
   const panePdfHtml = html.slice(html.indexOf('class="pane-pdf"'), html.indexOf('class="pane-translate"'));
@@ -113,11 +126,13 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.workspace\s*\{[^}]*position:\s*relative[^}]*grid-template-columns:\s*1fr 1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)\s*\{[^}]*grid-template-columns:\s*1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.zoom-gutter\s*\{[^}]*flex-direction:\s*row/);
-  assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.zoom-gutter\s*\{[^}]*right:\s*12px/);
+  assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.zoom-gutter\s*\{[^}]*right:\s*calc\(var\(--oi-zoom-inset\) \+ var\(--oi-zoom-gutter\)\)/);
   const zoomGutterCss = css.slice(css.indexOf(".zoom-gutter {"), css.indexOf(".zoom-gutter-btn {"));
   assert.match(zoomGutterCss, /position:\s*absolute/);
-  assert.match(zoomGutterCss, /right:\s*12px/);
-  assert.match(zoomGutterCss, /bottom:\s*12px/);
+  assert.match(zoomGutterCss, /--oi-zoom-inset:\s*12px/);
+  assert.match(zoomGutterCss, /--oi-zoom-gutter:\s*16px/);
+  assert.match(zoomGutterCss, /right:\s*calc\(var\(--oi-zoom-inset\) \+ var\(--oi-zoom-gutter\)\)/);
+  assert.match(zoomGutterCss, /bottom:\s*var\(--oi-zoom-inset\)/);
   assert.match(zoomGutterCss, /left:\s*auto/);
   assert.match(zoomGutterCss, /top:\s*auto/);
   assert.match(zoomGutterCss, /transform:\s*none/);
@@ -127,6 +142,10 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(zoomGutterCss, /-webkit-backdrop-filter:\s*blur\(12px\)/);
   assert.match(zoomGutterCss, /color-mix\(in srgb, var\(--oi-card\) 52%/);
   assert.match(zoomGutterCss, /box-shadow:\s*none/);
+  assert.match(zoomGutterCss, /cursor:\s*grab/);
+  assert.match(zoomGutterCss, /touch-action:\s*none/);
+  assert.match(zoomGutterCss, /\.zoom-gutter\.is-free/);
+  assert.match(zoomGutterCss, /\.zoom-gutter\.is-dragging/);
   assert.equal(zoomGutterCss.includes("var(--oi-shadow-1)"), false);
   assert.equal(zoomGutterCss.includes("88%"), false);
   assert.equal(zoomGutterCss.includes("var(--oi-split)"), false);
@@ -162,9 +181,10 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(dragSrc, /classList\.add\("is-splitting"\)/);
   assert.match(dragSrc, /classList\.remove\("is-splitting"\)/);
   assert.match(dragSrc, /pointercancel/);
-  const applySrc = src.slice(src.indexOf("function applySplit"), src.indexOf("function appendReadoutNode"));
+  const applySrc = src.slice(src.indexOf("function applySplit"), src.indexOf("function initZoomChip"));
   assert.equal(applySrc.includes("zoom-gutter"), false);
   assert.equal(applySrc.includes("chip.style"), false);
+  assert.equal(applySrc.includes("setZoom"), false);
   assert.match(src, /pdfScrollRoot/);
   assert.match(html, /class="workspace"/);
   assert.match(html, /class="pane-pdf"/);
@@ -249,16 +269,100 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
 
 test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.equal(ZOOM_MIN, 0.5);
+  assert.equal(ZOOM_MAX, 5);
   assert.equal(clampZoom(0.1), 0.5);
-  assert.equal(clampZoom(9), 3);
+  assert.equal(clampZoom(9), 5);
   assert.equal(clampZoom("nope"), DEFAULT_ZOOM);
   assert.equal(nextZoom(0.5, -1), 0.5);
   assert.equal(nextZoom(1, 1), 1.25);
+  assert.equal(nextZoom(2.25, 1), 2.5);
+  assert.equal(nextZoom(4.75, 1), 5);
+  assert.equal(nextZoom(5, 1), 5);
   assert.equal(zoomLabel(1), "100%");
+  assert.equal(zoomLabel(2.25), "225%");
+  assert.equal(zoomLabel(4), "400%");
+  assert.equal(zoomLabel(5), "500%");
   assert.equal(pageIndex(1, 4, -1), 1);
   assert.equal(pageIndex(4, 4, 1), 4);
   assert.equal(pageIndex(2, 4, 1), 3);
   assert.equal(pageLabel(2, 9), "2 / 9");
+});
+
+test("PDF page width follows zoom instead of capping at the pane", () => {
+  const pdfPageCss = css.slice(css.indexOf(".pdf-page {"), css.indexOf(".pdf-page canvas"));
+  assert.equal(pdfPageCss.includes("max-width"), false);
+  assert.equal(src.includes('maxWidth = "100%"'), false);
+  assert.equal(src.includes("style.maxWidth"), false);
+  assert.match(src, /canvasOutputScale\(viewport\.width, viewport\.height/);
+  assert.equal(PDF_CANVAS_MAX_DIM, 8192);
+  assert.equal(canvasOutputScale(1000, 800, 2), 2);
+  assert.equal(canvasOutputScale(9000, 800, 2), 8192 / 9000);
+  assert.match(src, /\$\("zoomLabel"\)\.textContent = zoomLabel\(zoom\)/);
+});
+
+test("zoom chip defaults clear the scrollbar and parks as a free-drag control", () => {
+  assert.equal(ZOOM_CHIP_STORAGE_KEY, "oi-pdf-zoom-pos");
+  assert.equal(ZOOM_CHIP_INSET, 12);
+  assert.equal(ZOOM_CHIP_GUTTER_FALLBACK, 16);
+  assert.equal(ZOOM_CHIP_DRAG_THRESHOLD_PX, 6);
+  assert.equal(exceedsDragThreshold(0, 0), false);
+  assert.equal(exceedsDragThreshold(5, 0), false);
+  assert.equal(exceedsDragThreshold(6, 0), true);
+  assert.equal(measureScrollbarWidth({ offsetWidth: 400, clientWidth: 384 }), 16);
+  assert.equal(measureScrollbarWidth(null), 0);
+  assert.equal(zoomChipRightGutter({ paneRight: 800, pagesRight: 784, scrollbarWidth: 15 }), 31);
+  assert.equal(zoomChipRightGutter({ paneRight: 800, pagesRight: 0, scrollbarWidth: 0 }), 16);
+  const parked = zoomChipDefaultPos({
+    paneWidth: 800,
+    paneHeight: 600,
+    chipWidth: 140,
+    chipHeight: 36,
+    rightGutter: 31,
+    inset: 12
+  });
+  assert.equal(parked.left, 617);
+  assert.equal(parked.top, 552);
+  const lo = clampZoomChipPos({
+    left: -20,
+    top: -8,
+    width: 140,
+    height: 36,
+    paneWidth: 800,
+    paneHeight: 600,
+    inset: 12
+  });
+  assert.equal(lo.left, 12);
+  assert.equal(lo.top, 12);
+  const hi = clampZoomChipPos({
+    left: 790,
+    top: 590,
+    width: 140,
+    height: 36,
+    paneWidth: 800,
+    paneHeight: 600,
+    inset: 12
+  });
+  assert.equal(hi.left, 648);
+  assert.equal(hi.top, 552);
+  assert.deepEqual(normalizeZoomChipPos({ left: 120, top: 240 }), { left: 120, top: 240 });
+  assert.equal(normalizeZoomChipPos({ left: "x", top: 1 }), null);
+  assert.equal(html.includes('id="zoomChip"'), true);
+  assert.match(src, /function bindZoomChipDrag/);
+  assert.match(src, /function placeZoomChip/);
+  assert.match(src, /function persistZoomChipPos/);
+  assert.match(src, /ZOOM_CHIP_STORAGE_KEY/);
+  assert.match(src, /chrome\?\.storage\?\.local/);
+  assert.match(src, /exceedsDragThreshold/);
+  assert.match(src, /dataset\.oiDragged/);
+  assert.match(src, /is-dragging/);
+  assert.match(src, /is-free/);
+  assert.doesNotMatch(src, /snapCorner/);
+  const finish = src.slice(src.indexOf("const finish ="), src.indexOf("chip.addEventListener(\"pointerdown\""));
+  assert.match(finish, /placeZoomChip/);
+  assert.match(finish, /persist:\s*true/);
+  assert.doesNotMatch(finish, /snap/);
+  assert.match(css, /\.zoom-gutter-btn\s*\{[^}]*cursor:\s*pointer/s);
+  assert.match(css, /\.zoom-gutter\.is-dragging \.zoom-gutter-btn\s*\{[^}]*cursor:\s*grabbing/s);
 });
 
 test("looksLikePdfUrl and popup entry only for PDF tabs", () => {

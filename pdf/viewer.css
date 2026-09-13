@@ -108,9 +108,11 @@ h1 {
   background: var(--oi-accent);
 }
 .zoom-gutter {
+  --oi-zoom-inset: 12px;
+  --oi-zoom-gutter: 16px;
   position: absolute;
-  right: 12px;
-  bottom: 12px;
+  right: calc(var(--oi-zoom-inset) + var(--oi-zoom-gutter));
+  bottom: var(--oi-zoom-inset);
   left: auto;
   top: auto;
   transform: none;
@@ -127,11 +129,24 @@ h1 {
   border: 1px solid color-mix(in srgb, var(--oi-line) 24%, transparent);
   box-shadow: none;
   pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
   transition: background 0.16s ease, border-color 0.16s ease;
 }
 .zoom-gutter:hover {
   background: color-mix(in srgb, var(--oi-card) 68%, transparent);
   border-color: color-mix(in srgb, var(--oi-line) 38%, transparent);
+}
+.zoom-gutter.is-free {
+  right: auto;
+  bottom: auto;
+}
+.zoom-gutter.is-dragging {
+  cursor: grabbing;
+}
+.zoom-gutter.is-dragging .zoom-gutter-btn {
+  cursor: grabbing;
 }
 .zoom-gutter-btn {
   box-sizing: border-box;
@@ -201,7 +216,6 @@ h1 {
   overflow: auto;
 }
 .pdf-page {
-  max-width: 100%;
   background: #fff;
   box-shadow: var(--oi-shadow-1);
 }
@@ -355,8 +369,8 @@ button:disabled { opacity: 0.45; cursor: default; }
   }
   .zoom-gutter {
     flex-direction: row;
-    right: 12px;
-    bottom: 12px;
+    right: calc(var(--oi-zoom-inset) + var(--oi-zoom-gutter));
+    bottom: var(--oi-zoom-inset);
     left: auto;
     top: auto;
     transform: none;
