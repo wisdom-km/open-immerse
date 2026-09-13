@@ -809,7 +809,7 @@ test("§C.3 indented p uses source visual box, not a wider ancestor", () => {
   assert.ok(tr.right <= src.right + 0.5);
 });
 
-test("§C.3 nested column / parent padding: margin-left 0, left edges match", () => {
+test("§C.3 indented wrapper afterend uses source rect, not parent width:100%", () => {
   const OI = loadBilingual();
   const { article, wrapper, p, translation } = createIndentedParagraph({
     wrapperPadLeft: 96,
@@ -817,14 +817,29 @@ test("§C.3 nested column / parent padding: margin-left 0, left edges match", ()
     sourceMarginLeft: 0
   });
   p.__marginLeft = 0;
+  const sourceRect = p.getBoundingClientRect();
   const laid = OI.layoutTranslation(translation, p);
-  assert.equal(laid.width, 640);
+  assert.equal(laid.useColumn, false);
+  assert.equal(laid.width, sourceRect.width);
   assert.equal(laid.offset, 0);
-  assert.equal(translation.style.width, "640px");
+  assert.equal(translation.style.width, `${sourceRect.width}px`);
+  assert.equal(translation.style.maxWidth, `${sourceRect.width}px`);
+  assert.notEqual(translation.style.width, "100%");
+  assert.notEqual(translation.style.maxWidth, "100%");
   assert.ok(!translation.style.marginLeft || translation.style.marginLeft === "0px");
-  assertVisualLock(p, translation);
+  assert.ok(laid.width < OI.columnWidth(p) || OI.columnWidth(p) === 640);
   assert.ok(laid.width < article.clientWidth);
-  assert.ok(laid.width <= wrapper.clientWidth);
+  assertVisualLock(p, translation);
+  assert.ok(Math.abs(translation.getBoundingClientRect().left - sourceRect.left) <= 1);
+});
+
+test("§C.3 body paragraphs never take §C.1 column clamp", () => {
+  const OI = loadBilingual();
+  const { p } = createIndentedParagraph({ sourceWidth: 24, sourceMarginLeft: 0, wrapperPadLeft: 40 });
+  p.__marginLeft = 0;
+  assert.equal(OI.isHeadingTag(p), false);
+  assert.equal(OI.shouldUseColumnClamp(p), false);
+  assert.equal(OI.resolveClampWidth(p), 24);
 });
 
 test("§C.3 does not copy text-indent; still uses the source border-box", () => {
