@@ -207,10 +207,13 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /id="restoreOriginal"[^>]*class="btn-ghost"[^>]*disabled>原文</);
   assert.match(html, /id="exportMd"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 MD</);
   assert.match(html, /id="exportPdf"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 PDF</);
+  assert.match(html, /id="mirrorCaption"[^>]*class="mirror-caption"[^>]*hidden>版式镜像</);
+  assert.match(html, /id="mirrorHint"[^>]*class="mirror-hint"/);
   assert.match(html, /id="readout"[^>]*class="readout"/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
   assert.match(html, /<p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…<\/p>/);
   assert.match(src, /appendReadoutNode/);
+  assert.match(src, /appendMirrorPage/);
   assert.match(src, /articleNodeSpec/);
   assert.match(libSrc, /oi-pdf-h1/);
   assert.match(libSrc, /oi-pdf-h2/);
@@ -230,6 +233,9 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.equal(css.includes(".oi-pdf-h {"), false);
   assert.match(css, /\.pane-translate\s*\{[^}]*padding:\s*20px 24px 32px/s);
   assert.match(css, /\.pane-translate \.readout\s*\{[^}]*max-width:\s*42rem/s);
+  assert.match(css, /\.pane-translate \.readout\.is-mirror\s*\{[^}]*max-width:\s*none/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*position:\s*relative/s);
+  assert.match(css, /\.mirror-box\s*\{[^}]*position:\s*absolute/s);
   assert.match(css, /\.oi-pdf-h1\s*\{[^}]*font:\s*650 22px\/1\.3 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-h2\s*\{[^}]*font:\s*650 18px\/1\.35 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-h1:first-child,\s*\.oi-pdf-h2:first-child\s*\{\s*margin-top:\s*0/s);
@@ -237,7 +243,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.oi-pdf-p\s*\{[^}]*font:\s*400 15px\/1\.7 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-p:last-child\s*\{\s*margin-bottom:\s*0/s);
   assert.match(css, /\.pane-translate \.empty-read\s*\{[^}]*color:\s*var\(--oi-text-muted\)/s);
-  assert.match(html, /本页没有文字层|扫描件翻译将在后续版本支持/);
+  assert.match(html, /本页没有文字层，无法镜像版式/);
+  assert.match(html, /扫描件翻译将在后续版本支持/);
 });
 
 test("M2 copy covers empty / loading / error / no text layer / progress", () => {
@@ -246,7 +253,11 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.error, "无法打开这个 PDF。");
   assert.equal(PDF_COPY.fetchFail, "无法从此地址读取 PDF，请改用本地文件。");
   assert.equal(PDF_COPY.noTextLayer, "本页没有文字层。");
-  assert.equal(PDF_COPY.noTextLayerHint, "扫描件翻译将在后续版本支持。");
+  assert.equal(PDF_COPY.noTextLayerHint, "本页没有文字层，无法镜像版式。扫描件翻译将在后续版本支持。");
+  assert.equal(PDF_COPY.mirrorCaption, "版式镜像");
+  assert.equal(PDF_COPY.mirrorHint, "按原页位置排列译文。公式与图为原页裁剪；导出 MD/PDF 仍为纯文本。");
+  assert.equal(PDF_COPY.figureFallback, "图（见左侧）");
+  assert.equal(PDF_COPY.formulaFallback, "公式");
   assert.equal(PDF_COPY.translateHint, "点击翻译");
   assert.equal(PDF_COPY.translatingWait, "正在翻译，请稍候…");
   assert.equal(readoutPlaceholder({ running: true, hasArticle: false }), "正在翻译，请稍候…");
@@ -999,7 +1010,8 @@ test("two-step draft progress replaces in place and keeps heading role", async (
   assert.match(src, /restoreOriginal/);
   assert.match(src, /abortTranslateSession/);
   assert.match(src, /createPageCache/);
-  assert.match(src, /segmentPageBlocks/);
+  assert.match(src, /buildMirrorLayout/);
+  assert.match(src, /translatableMirrorUnits/);
   assert.match(src, /getTextContent/);
   assert.match(src, /OI_GET_SETTINGS/);
   assert.match(src, /translateDocumentPages/);
