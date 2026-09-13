@@ -28,9 +28,12 @@ import {
   looksLikeFormulaItem,
   mergeMirrorTranslations,
   unicodeMathify,
+  fitMirrorTextHeight,
+  isMirrorTextRole,
   pageRectToPercent,
   pdfItemToPageRect,
   percentRectToStyle,
+  percentRectToTextStyle,
   sortBoxesReadingOrder,
   toMirrorItem,
   translatableMirrorUnits,
@@ -58,6 +61,22 @@ test("coord helpers map PDF user space onto page percent CSS", () => {
   assert.equal(style.left, "10.123%");
   assert.equal(style.top, "4.5%");
   assert.equal(style.width, "80%");
+  assert.equal(style.height, "6%");
+  const textStyle = percentRectToTextStyle({ left: 10.1234, top: 4.5, width: 80, height: 6 });
+  assert.equal(textStyle.left, "10.123%");
+  assert.equal(textStyle.top, "4.5%");
+  assert.equal(textStyle.width, "80%");
+  assert.equal(textStyle.minHeight, "6%");
+  assert.equal(textStyle.height, "auto");
+  assert.equal(isMirrorTextRole("title"), true);
+  assert.equal(isMirrorTextRole("authors"), true);
+  assert.equal(isMirrorTextRole("heading"), true);
+  assert.equal(isMirrorTextRole("paragraph"), true);
+  assert.equal(isMirrorTextRole("caption"), true);
+  assert.equal(isMirrorTextRole("figure"), false);
+  assert.equal(fitMirrorTextHeight({ scrollHeight: 28, minHeight: 12, fontSize: 16, lineHeight: 1.3, pad: 3 }), 31);
+  assert.equal(fitMirrorTextHeight({ scrollHeight: 10, minHeight: 20, fontSize: 0, pad: 3 }), 23);
+  assert.ok(fitMirrorTextHeight({ scrollHeight: 10, minHeight: 10, fontSize: 14, lineHeight: 1.3, pad: 3 }) >= 10);
   assert.deepEqual(clampPercentRect({ left: -4, top: 120, width: 50, height: 10 }), {
     left: 0,
     top: 100,

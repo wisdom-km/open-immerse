@@ -24,6 +24,10 @@
 
 验收 Attention 首页标题/作者/摘要一眼同构
 
+### 4.1.1 CJK 不裁切
+
+文本镜像框禁止用死高 bbox + `overflow:hidden` 裁 CJK。`.mirror-box` 文本 `overflow: visible`；`.mirror-page` 优先 `overflow: visible`；图/公式裁切 `.mirror-visual` 可 hidden。标题 `line-height` ≥ 1.25（宜 1.3）；高度随 CJK 折行长高（`height:auto` / scrollHeight / `max(srcH, fs×lh)+pad`）。宁可略向下重叠，也不削字头字脚。禁止靠缩小字号躲裁切。详见 `PDF-MIRROR-CJK-CLIP.md`。
+
 ## 4.2 公式
 
 - **A（默认）**：从 PDF 文字/符号 run 回收 LaTeX → `MirrorItem.latex` → bbox 内 **KaTeX**；保留可复制源 `data-latex`。`role=formula`，`kind=math`。

@@ -622,6 +622,31 @@ test("PDF-MIRROR-READABILITY-ZOOM contrast and independent right chip", () => {
   assert.match(src, /let mirrorZoom = DEFAULT_ZOOM/);
 });
 
+test("PDF-MIRROR-CJK-CLIP text boxes do not clip CJK glyph ink", () => {
+  const spec = readFileSync(join(root, "pdf/PDF-MIRROR-CJK-CLIP.md"), "utf8");
+  const mirrorSpec = readFileSync(join(root, "pdf/PDF-READOUT-MIRROR.md"), "utf8");
+  assert.match(spec, /overflow: visible/);
+  assert.match(spec, /height: auto/);
+  assert.match(spec, /Do \*\*NOT\*\* shrink font/);
+  assert.match(mirrorSpec, /4\.1\.1 CJK 不裁切/);
+  assert.match(css, /\.mirror-page\s*\{[^}]*overflow:\s*visible/s);
+  assert.match(css, /\.mirror-box,[\s\S]*overflow:\s*visible/);
+  assert.match(css, /\.mirror-page \.mirror-visual\.mirror-item\s*\{[^}]*overflow:\s*hidden/s);
+  assert.match(css, /\.mirror-pages \.oi-pdf-h1\s*\{[^}]*line-height:\s*1\.3/s);
+  assert.match(css, /\.mirror-page \.oi-pdf-p\[data-role="authors"\]\s*\{[^}]*overflow:\s*visible/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*--oi-text:\s*var\(--oi-mirror-ink\)/s);
+  assert.doesNotMatch(css, /\.mirror-pages \.oi-pdf-h1\s*\{[^}]*font-size:\s*[0-9.]+px/s);
+  assert.match(src, /percentRectToTextStyle/);
+  assert.match(src, /fitMirrorTextHeight/);
+  assert.match(src, /queueFitMirrorTextBox/);
+  assert.match(readFileSync(join(root, "lib/pdf-mirror.js"), "utf8"), /height:\s*"auto"/);
+  const append = src.slice(src.indexOf("function appendReadoutNode"), src.indexOf("function renderFormulaNode"));
+  assert.match(append, /percentRectToTextStyle/);
+  assert.doesNotMatch(append, /fontSize\s*=/);
+  const applyMirror = src.slice(src.indexOf("function applyMirrorZoom"), src.indexOf("function syncMirrorZoomButtons"));
+  assert.match(applyMirror, /--oi-mirror-zoom/);
+});
+
 test("looksLikePdfUrl and popup entry only for PDF tabs", () => {
   assert.equal(looksLikePdfUrl("https://cdn.example.com/paper.pdf"), true);
   assert.equal(looksLikePdfUrl("https://cdn.example.com/paper.pdf?dl=1"), true);
