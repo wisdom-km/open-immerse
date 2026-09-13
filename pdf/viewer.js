@@ -43,7 +43,6 @@ import {
   zoomButtonState,
   zoomChipDefaultPos,
   zoomChipRightClearance,
-  zoomChipRightGutter,
   zoomLabel
 } from "../lib/pdf-viewer.js";
 
@@ -235,15 +234,7 @@ function placeZoomChip(pos, { persist = false } = {}) {
   const pane = $("pdfPane");
   const pages = $("pages");
   if (!chip || !pane) return null;
-  const gutter = Math.max(
-    ZOOM_CHIP_GUTTER_FALLBACK,
-    zoomChipRightGutter({
-      paneRight: pane.getBoundingClientRect().right,
-      pagesRight: pages?.getBoundingClientRect().right,
-      scrollbarWidth: effectiveScrollbarWidth(pages)
-    })
-  );
-  chip.style.setProperty("--oi-scrollbar-gutter", `${gutter}px`);
+  const gutter = Math.max(ZOOM_CHIP_GUTTER_FALLBACK, effectiveScrollbarWidth(pages));
   const box = {
     width: chip.offsetWidth || 0,
     height: chip.offsetHeight || 0,
@@ -259,7 +250,7 @@ function placeZoomChip(pos, { persist = false } = {}) {
         paneHeight: box.paneHeight,
         chipWidth: box.width,
         chipHeight: box.height,
-        gutter,
+        gutter: ZOOM_CHIP_GUTTER_FALLBACK,
         inset: ZOOM_CHIP_INSET
       });
   chip.classList.add("is-free");

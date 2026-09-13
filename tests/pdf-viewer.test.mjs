@@ -393,8 +393,10 @@ test("zoom chip defaults clear the scrollbar and parks as a free-drag control", 
   assert.match(src, /function persistZoomChipPos/);
   assert.match(src, /ZOOM_CHIP_STORAGE_KEY/);
   assert.match(libSrc, /pdfZoomChipPos/);
+  assert.match(src, /ZOOM_CHIP_GUTTER_FALLBACK/);
   assert.match(src, /effectiveScrollbarWidth/);
   assert.match(src, /chrome\?\.storage\?\.local/);
+  assert.doesNotMatch(src, /zoomChipRightGutter/);
   assert.match(src, /exceedsDragThreshold/);
   assert.match(src, /dataset\.oiDragged/);
   assert.match(src, /is-dragging/);
@@ -409,6 +411,58 @@ test("zoom chip defaults clear the scrollbar and parks as a free-drag control", 
   assert.doesNotMatch(finish, /snap/);
   assert.match(css, /\.zoom-gutter-btn\s*\{[^}]*cursor:\s*pointer/s);
   assert.match(css, /\.zoom-gutter\.is-dragging \.zoom-gutter-btn\s*\{[^}]*cursor:\s*grabbing/s);
+});
+
+test("PDF-ZOOM-FLOAT §6 acceptance locks", () => {
+  assert.match(html, /class="pane-pdf"[^>]*>[\s\S]*class="zoom-gutter"/);
+  assert.equal(html.slice(html.indexOf("class=\"pane-translate\""), html.indexOf("viewer.js")).includes("zoom-gutter"), false);
+  assert.match(html, /class="split-handle"/);
+  assert.equal(zoomChipDefaultRight(14), 18);
+  const parked = zoomChipDefaultPos({
+    paneWidth: 800,
+    paneHeight: 600,
+    chipWidth: 140,
+    chipHeight: 36,
+    gutter: 14
+  });
+  assert.equal(800 - (parked.left + 140), 18);
+  assert.equal(600 - (parked.top + 36), 12);
+  assert.ok(parked.left + 140 <= 800 - 6 - 8);
+  const dragged = clampZoomChipPos({
+    left: 220,
+    top: 180,
+    width: 140,
+    height: 36,
+    paneWidth: 800,
+    paneHeight: 600
+  });
+  assert.equal(dragged.left, 220);
+  assert.equal(dragged.top, 180);
+  assert.equal(ZOOM_CHIP_STORAGE_KEY, "pdfZoomChipPos");
+  assert.equal(ZOOM_CHIP_DRAG_THRESHOLD_PX, 6);
+  assert.equal(exceedsDragThreshold(5, 0), false);
+  assert.equal(exceedsDragThreshold(6, 0), true);
+  assert.equal(ZOOM_MIN, 0.5);
+  assert.equal(ZOOM_MAX, 5);
+  assert.equal(nextZoom(2.25, 1), 2.5);
+  assert.equal(nextZoom(5, 1), 5);
+  assert.equal(nextZoom(0.5, -1), 0.5);
+  assert.equal(zoomLabel(5), "500%");
+  assert.equal(zoomButtonState({ hasDoc: true, zoom: 5 }).inDisabled, true);
+  const slim = zoomChipDefaultPos({
+    paneWidth: 180,
+    paneHeight: 120,
+    chipWidth: 140,
+    chipHeight: 36,
+    gutter: 14
+  });
+  assert.ok(slim.left >= 8 && slim.top >= 8);
+  assert.ok(slim.left + 140 <= 180);
+  assert.match(src, /syncZoomChip/);
+  assert.doesNotMatch(
+    src.slice(src.indexOf("function bindZoomChipDrag"), src.indexOf("function followZoomChip")),
+    /--oi-split/
+  );
 });
 
 test("looksLikePdfUrl and popup entry only for PDF tabs", () => {
