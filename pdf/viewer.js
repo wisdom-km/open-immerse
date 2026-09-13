@@ -4,6 +4,7 @@ import {
   PDF_COPY,
   clampZoom,
   ZOOM_CHIP_DRAG_THRESHOLD_PX,
+  ZOOM_CHIP_GUTTER_FALLBACK,
   ZOOM_CHIP_INSET,
   ZOOM_CHIP_STORAGE_KEY,
   abortTranslateSession,
@@ -14,7 +15,6 @@ import {
   createPageCache,
   createTranslateSession,
   exceedsDragThreshold,
-  effectiveScrollbarHeight,
   effectiveScrollbarWidth,
   normalizeZoomChipPos,
   pdfToolbarActionState,
@@ -42,6 +42,7 @@ import {
   articleNodeSpec,
   zoomButtonState,
   zoomChipDefaultPos,
+  zoomChipRightClearance,
   zoomChipRightGutter,
   zoomLabel
 } from "../lib/pdf-viewer.js";
@@ -187,6 +188,7 @@ function applySplit(workspace, clientX) {
   const pct = Math.min(80, Math.max(20, ((clientX - rect.left) / rect.width) * 100));
   workspace.style.setProperty("--oi-split", `${pct}%`);
   workspace.style.gridTemplateColumns = `${pct}% ${100 - pct}%`;
+  syncZoomChip();
 }
 
 function initZoomChip() {
@@ -233,29 +235,32 @@ function placeZoomChip(pos, { persist = false } = {}) {
   const pane = $("pdfPane");
   const pages = $("pages");
   if (!chip || !pane) return null;
+  const gutter = Math.max(
+    ZOOM_CHIP_GUTTER_FALLBACK,
+    zoomChipRightGutter({
+      paneRight: pane.getBoundingClientRect().right,
+      pagesRight: pages?.getBoundingClientRect().right,
+      scrollbarWidth: effectiveScrollbarWidth(pages)
+    })
+  );
+  chip.style.setProperty("--oi-scrollbar-gutter", `${gutter}px`);
   const box = {
     width: chip.offsetWidth || 0,
     height: chip.offsetHeight || 0,
     paneWidth: pane.clientWidth || 0,
     paneHeight: pane.clientHeight || 0,
-    inset: ZOOM_CHIP_INSET
+    inset: ZOOM_CHIP_INSET,
+    rightInset: zoomChipRightClearance({ inset: ZOOM_CHIP_INSET, gutter })
   };
   const next = pos
     ? clampZoomChipPos({ ...box, left: pos.left, top: pos.top })
     : zoomChipDefaultPos({
-        ...box,
+        paneWidth: box.paneWidth,
+        paneHeight: box.paneHeight,
         chipWidth: box.width,
         chipHeight: box.height,
-        rightGutter: zoomChipRightGutter({
-          paneRight: pane.getBoundingClientRect().right,
-          pagesRight: pages?.getBoundingClientRect().right,
-          scrollbarWidth: effectiveScrollbarWidth(pages)
-        }),
-        bottomGutter: zoomChipRightGutter({
-          paneRight: pane.getBoundingClientRect().bottom,
-          pagesRight: pages?.getBoundingClientRect().bottom,
-          scrollbarWidth: effectiveScrollbarHeight(pages)
-        })
+        gutter,
+        inset: ZOOM_CHIP_INSET
       });
   chip.classList.add("is-free");
   chip.style.left = `${next.left}px`;

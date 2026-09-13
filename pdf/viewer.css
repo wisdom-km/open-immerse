@@ -108,11 +108,10 @@ h1 {
   background: var(--oi-accent);
 }
 .zoom-gutter {
-  --oi-zoom-inset: 12px;
-  --oi-zoom-gutter: 16px;
+  --oi-scrollbar-gutter: 14px;
   position: absolute;
-  right: calc(var(--oi-zoom-inset) + var(--oi-zoom-gutter));
-  bottom: var(--oi-zoom-inset);
+  right: max(12px, calc(var(--oi-scrollbar-gutter) + 4px));
+  bottom: 12px;
   left: auto;
   top: auto;
   transform: none;
@@ -369,8 +368,8 @@ button:disabled { opacity: 0.45; cursor: default; }
   }
   .zoom-gutter {
     flex-direction: row;
-    right: calc(var(--oi-zoom-inset) + var(--oi-zoom-gutter));
-    bottom: var(--oi-zoom-inset);
+    right: max(12px, calc(var(--oi-scrollbar-gutter) + 4px));
+    bottom: 12px;
     left: auto;
     top: auto;
     transform: none;
