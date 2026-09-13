@@ -152,6 +152,8 @@ function restore() {
   markBusy(false);
   stopObserver();
   document.querySelectorAll(".oi-translation, .oi-selection-card").forEach((el) => el.remove());
+  if (globalThis.OIBilingual?.unwrapBilingualStacks) globalThis.OIBilingual.unwrapBilingualStacks(document);
+  else document.querySelectorAll(".oi-bilingual-stack").forEach((el) => el.remove());
   document.querySelectorAll(".oi-pending, .oi-failed").forEach((el) => {
     el.classList.remove("oi-pending", "oi-failed");
   });
@@ -498,6 +500,7 @@ function mountTranslation(el, text, settings) {
   });
   if (inline || ["LI", "TD", "TH", "DT", "DD"].includes(el.tagName)) el.appendChild(node);
   else el.insertAdjacentElement("afterend", node);
+  globalThis.OIBilingual?.breakFlexRow?.(el, node);
   layoutMountedTranslation(el, node);
 }
 

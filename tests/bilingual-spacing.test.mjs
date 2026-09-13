@@ -49,9 +49,15 @@ test("block translations drop fit-content and stay inside the source column", ()
   assert.match(css, /\.oi-translation:not\(\.oi-inline\)\s*\{[^}]*box-sizing:\s*border-box/s);
   assert.match(css, /\.oi-translation:not\(\.oi-inline\)\s*\{[^}]*width:\s*100%/s);
   assert.match(css, /\.oi-translation:not\(\.oi-inline\)\s*\{[^}]*max-width:\s*100%/s);
+  assert.match(css, /\.oi-translation:not\(\.oi-inline\)\s*\{[^}]*flex-basis:\s*100%/s);
+  assert.match(css, /\.oi-translation:not\(\.oi-inline\)\s*\{[^}]*flex-grow:\s*1/s);
+  assert.match(css, /\.oi-translation:not\(\.oi-inline\)\s*\{[^}]*flex-shrink:\s*0/s);
+  assert.match(css, /\.oi-translation:not\(\.oi-inline\)\s*\{[^}]*align-self:\s*stretch/s);
+  assert.match(css, /\.oi-bilingual-stack\s*\{[^}]*flex-direction:\s*column/s);
   assert.equal(/width:\s*fit-content/.test(css), false);
   assert.match(bodyBlock, /overflow-wrap:\s*break-word/);
   assert.match(js, /layoutMountedTranslation/);
+  assert.match(js, /breakFlexRow/);
   assert.match(js, /OIBilingual\?\.layoutTranslation/);
   assert.match(js, /bindHost/);
   assert.match(js, /requestAnimationFrame/);

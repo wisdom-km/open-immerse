@@ -59,6 +59,7 @@ test("content abort keeps translations; restore still clears; busy settles after
   assert.match(content, /classList\.toggle\("oi-active", running\)/);
   const restore = content.slice(content.indexOf("function restore("), content.indexOf("function hasPageTranslations("));
   assert.match(restore, /\.oi-translation, \.oi-selection-card/);
+  assert.match(restore, /oi-bilingual-stack/);
   assert.match(restore, /session = false/);
   assert.match(content, /if \(!session\) return/);
 });

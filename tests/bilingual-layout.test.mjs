@@ -33,6 +33,10 @@ function fakeBox({
 } = {}) {
   const style = {
     fontSize: `${fontSize}px`,
+    display: "",
+    flexDirection: "",
+    flexWrap: "",
+    flex: "",
     marginTop: "",
     paddingTop: "",
     maxWidth: "",
@@ -66,6 +70,30 @@ function fakeBox({
     style: {
       setProperty(key, value) {
         style.props[key] = value;
+      },
+      get display() {
+        return style.display;
+      },
+      set display(value) {
+        style.display = value;
+      },
+      get flexDirection() {
+        return style.flexDirection;
+      },
+      set flexDirection(value) {
+        style.flexDirection = value;
+      },
+      get flexWrap() {
+        return style.flexWrap;
+      },
+      set flexWrap(value) {
+        style.flexWrap = value;
+      },
+      get flex() {
+        return style.flex;
+      },
+      set flex(value) {
+        style.flex = value;
       },
       get boxSizing() {
         return style.boxSizing;
@@ -145,7 +173,8 @@ function fakeBox({
         getComputedStyle(node) {
           return {
             fontSize: `${fontSize}px`,
-            display: node?.__display || display
+            display: node?.style?.display || node?.__display || display,
+            flexDirection: node?.style?.flexDirection || node?.__flexDirection || "row"
           };
         }
       }
@@ -206,13 +235,16 @@ test("width clamp uses the source content box and skips inline nodes", () => {
   assert.equal(block.style.boxSizing, "border-box");
   assert.equal(block.style.maxWidth, "360px");
   assert.equal(block.style.width, "360px");
+  assert.equal(block.style.display, "block");
+  assert.equal(block.style.flexBasis, "100%");
+  assert.notEqual(block.style.flexBasis, "360px");
 
   const inline = fakeBox({ className: "oi-translation oi-inline", top: 90, bottom: 110, width: 900 });
   assert.equal(OI.clampTranslationWidth(inline, source), 0);
   assert.equal(inline.style.maxWidth, "");
 });
 
-test("card/grid H3 clamp uses shrink-wrapped host, not the flex row", () => {
+test("block clamp never sets flex-basis to shrink-wrapped H3 px", () => {
   const OI = loadBilingual();
   const h3 = fakeBox({
     className: "headline-4",
@@ -230,13 +262,12 @@ test("card/grid H3 clamp uses shrink-wrapped host, not the flex row", () => {
   });
   assert.equal(OI.sourceContentWidth(h3), 372);
   assert.equal(OI.clampTranslationWidth(translation, h3), 372);
-  assert.equal(translation.style.width, "372px");
-  assert.equal(translation.style.maxWidth, "372px");
   assert.equal(translation.style.minWidth, "0");
-  assert.equal(translation.style.flexGrow, "0");
-  assert.equal(translation.style.flexBasis, "372px");
-  assert.equal(translation.style.alignSelf, "flex-start");
-  assert.equal(translation.style.justifySelf, "start");
+  assert.equal(translation.style.flexBasis, "100%");
+  assert.equal(translation.style.flexGrow, "1");
+  assert.equal(translation.style.flexShrink, "0");
+  assert.equal(translation.style.alignSelf, "stretch");
+  assert.notEqual(translation.style.flexBasis, "372px");
   OI.bindHost(translation, h3);
   assert.equal(OI.hostForTranslation(translation), h3);
 });
@@ -254,7 +285,7 @@ test("source content width prefers the smaller client box over a stretched borde
   assert.equal(OI.sourceContentWidth(stretched), 372);
 });
 
-test("§C.1 min(source, column) and shrink-wrap H3 uses card/grid column", () => {
+test("§C.1 clamp uses card/grid column, not shrink-wrapped H3", () => {
   const OI = loadBilingual();
   assert.equal(OI.SHRINK_WRAP_MIN_PX, 40);
   assert.equal(OI.SHRINK_WRAP_PARENT_RATIO, 0.5);
@@ -276,6 +307,7 @@ test("§C.1 min(source, column) and shrink-wrap H3 uses card/grid column", () =>
     parent: card,
     display: "flex"
   });
+  content.__flexDirection = "row";
   const h3 = fakeBox({
     className: "headline-4",
     tagName: "H3",
@@ -284,7 +316,7 @@ test("§C.1 min(source, column) and shrink-wrap H3 uses card/grid column", () =>
     width: 372,
     parent: content
   });
-  assert.equal(OI.resolveClampWidth(h3), 372);
+  assert.equal(OI.resolveClampWidth(h3), 400);
 
   const tiny = fakeBox({
     className: "headline-4",
@@ -385,4 +417,246 @@ test("page-scan skips nested block hosts so parent li does not duplicate childre
     shouldCollectNode(parent, { translateScope: "article" }, { hostname: "www.anthropic.com", innerWidth: 1280 }),
     false
   );
+});
+
+function createFlexRowCard({ columnWidth = 872, h3Width = 372, translationWidth = 1110 } = {}) {
+  const nodes = [];
+  const doc = {
+    defaultView: {
+      getComputedStyle(node) {
+        return {
+          fontSize: "16px",
+          display: node?.style?.display || node?.__display || "block",
+          flexDirection: node?.style?.flexDirection || node?.__flexDirection || "row"
+        };
+      }
+    }
+  };
+
+  function queryAll(root, predicate) {
+    const out = [];
+    const walk = (n) => {
+      if (!n) return;
+      if (predicate(n)) out.push(n);
+      (n.children || []).forEach(walk);
+    };
+    walk(root);
+    return out;
+  }
+
+  function createNode(opts) {
+    const children = [];
+    const style = {
+      display: "",
+      flexDirection: "",
+      flexWrap: "",
+      flex: "",
+      boxSizing: "",
+      minWidth: "",
+      width: "",
+      maxWidth: "",
+      overflowWrap: "",
+      flexGrow: "",
+      flexShrink: "",
+      flexBasis: "",
+      alignSelf: "",
+      justifySelf: "",
+      marginTop: "",
+      paddingTop: "",
+      props: {},
+      setProperty(key, value) {
+        style.props[key] = value;
+      }
+    };
+    const el = {
+      tagName: opts.tagName || "DIV",
+      className: opts.className || "",
+      __display: opts.display || "block",
+      __flexDirection: opts.flexDirection || "row",
+      clientWidth: opts.width || 0,
+      boxWidth: opts.width || 0,
+      parentElement: null,
+      offsetParent: null,
+      ownerDocument: doc,
+      children,
+      get firstChild() {
+        return children[0] || null;
+      },
+      get firstElementChild() {
+        return children[0] || null;
+      },
+      get nextElementSibling() {
+        const p = el.parentElement;
+        if (!p) return null;
+        const i = p.children.indexOf(el);
+        return i >= 0 ? p.children[i + 1] || null : null;
+      },
+      get previousElementSibling() {
+        const p = el.parentElement;
+        if (!p) return null;
+        const i = p.children.indexOf(el);
+        return i > 0 ? p.children[i - 1] : null;
+      },
+      classList: {
+        contains(name) {
+          return String(el.className).split(/\s+/).includes(name);
+        }
+      },
+      getAttribute(name) {
+        return name === "role" ? opts.role || null : "";
+      },
+      style,
+      getBoundingClientRect() {
+        return {
+          width: el.boxWidth,
+          height: 40,
+          top: 0,
+          bottom: 40,
+          left: 0,
+          right: el.boxWidth
+        };
+      },
+      appendChild(child) {
+        if (child.parentElement?.removeChild) child.parentElement.removeChild(child);
+        children.push(child);
+        child.parentElement = el;
+        return child;
+      },
+      insertBefore(child, ref) {
+        if (child.parentElement?.removeChild) child.parentElement.removeChild(child);
+        const i = children.indexOf(ref);
+        if (i === -1) children.push(child);
+        else children.splice(i, 0, child);
+        child.parentElement = el;
+        return child;
+      },
+      removeChild(child) {
+        const i = children.indexOf(child);
+        if (i !== -1) children.splice(i, 1);
+        child.parentElement = null;
+        return child;
+      },
+      remove() {
+        el.parentElement?.removeChild?.(el);
+      },
+      querySelectorAll(sel) {
+        if (sel === ".oi-bilingual-stack") {
+          return queryAll(el, (n) => String(n.className).split(/\s+/).includes("oi-bilingual-stack"));
+        }
+        if (sel === ".oi-translation") {
+          return queryAll(el, (n) => String(n.className).split(/\s+/).includes("oi-translation"));
+        }
+        return [];
+      }
+    };
+    nodes.push(el);
+    return el;
+  }
+
+  doc.createElement = (tag) =>
+    createNode({
+      tagName: String(tag || "DIV").toUpperCase(),
+      width: 0,
+      display: "block"
+    });
+  doc.querySelectorAll = (sel) => {
+    const matches = [];
+    nodes.forEach((n) => {
+      if (sel === ".oi-bilingual-stack" && String(n.className).split(/\s+/).includes("oi-bilingual-stack")) {
+        matches.push(n);
+      }
+    });
+    return matches;
+  };
+
+  const article = createNode({
+    tagName: "ARTICLE",
+    className: "ArticleList-module__article",
+    width: columnWidth,
+    display: "block"
+  });
+  const link = createNode({
+    tagName: "A",
+    className: "ArticleList-module__cardLink",
+    width: columnWidth,
+    display: "flex",
+    flexDirection: "row"
+  });
+  const content = createNode({
+    tagName: "DIV",
+    className: "ArticleList-module__content",
+    width: columnWidth,
+    display: "flex",
+    flexDirection: "row"
+  });
+  const h3 = createNode({
+    tagName: "H3",
+    className: "headline-4",
+    width: h3Width,
+    display: "block"
+  });
+  const date = createNode({
+    tagName: "DIV",
+    className: "ArticleList-module__date",
+    width: 96,
+    display: "block"
+  });
+  const translation = createNode({
+    tagName: "DIV",
+    className: "oi-translation oi-after-heading",
+    width: translationWidth,
+    display: "block"
+  });
+
+  article.appendChild(link);
+  link.appendChild(content);
+  content.appendChild(h3);
+  content.appendChild(date);
+  content.insertBefore(translation, date);
+  h3.offsetParent = article;
+  translation.offsetParent = article;
+  content.offsetParent = article;
+
+  return { article, link, content, h3, date, translation, doc };
+}
+
+test("§C.2 flex-row parent does not keep .oi-translation beside H3", () => {
+  const OI = loadBilingual();
+  const columnWidth = 872;
+  const { content, h3, date, translation, article } = createFlexRowCard({
+    columnWidth,
+    h3Width: 372,
+    translationWidth: 1110
+  });
+
+  assert.equal(OI.isHorizontalFlex(content), true);
+  assert.equal(OI.sharesFlexRow(h3, translation), true);
+  assert.equal(translation.previousElementSibling, h3);
+  assert.equal(h3.nextElementSibling, translation);
+
+  const laid = OI.layoutTranslation(translation, h3);
+  const stack = translation.parentElement;
+
+  assert.equal(stack.classList.contains("oi-bilingual-stack"), true);
+  assert.equal(h3.parentElement, stack);
+  assert.equal(translation.parentElement, stack);
+  assert.equal(stack.parentElement, content);
+  assert.equal(date.parentElement, content);
+  assert.equal(OI.sharesFlexRow(h3, translation), false);
+  assert.equal(laid.stacked, true);
+  assert.ok(laid.width <= columnWidth);
+  assert.equal(laid.width, columnWidth);
+  assert.equal(translation.style.display, "block");
+  assert.equal(translation.style.flexBasis, "100%");
+  assert.notEqual(translation.style.flexBasis, "372px");
+  assert.match(translation.style.maxWidth, /^872(\.0+)?px$/);
+  assert.match(translation.style.width, /^872(\.0+)?px$/);
+  assert.ok(Number.parseFloat(translation.style.width) <= columnWidth);
+  assert.ok(Number.parseFloat(translation.style.width) < 1110);
+  assert.equal(OI.hostForTranslation(translation), h3);
+
+  OI.unwrapBilingualStacks(article);
+  assert.equal(h3.parentElement, content);
+  assert.equal(date.parentElement, content);
+  assert.equal(article.querySelectorAll(".oi-bilingual-stack").length, 0);
 });
