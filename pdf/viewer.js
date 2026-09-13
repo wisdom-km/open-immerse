@@ -13,7 +13,8 @@ import {
   createPageCache,
   createTranslateSession,
   exceedsDragThreshold,
-  measureScrollbarWidth,
+  effectiveScrollbarHeight,
+  effectiveScrollbarWidth,
   normalizeZoomChipPos,
   pdfToolbarActionState,
   pdfTranslateBusy,
@@ -246,7 +247,12 @@ function placeZoomChip(pos, { persist = false } = {}) {
         rightGutter: zoomChipRightGutter({
           paneRight: pane.getBoundingClientRect().right,
           pagesRight: pages?.getBoundingClientRect().right,
-          scrollbarWidth: measureScrollbarWidth(pages)
+          scrollbarWidth: effectiveScrollbarWidth(pages)
+        }),
+        bottomGutter: zoomChipRightGutter({
+          paneRight: pane.getBoundingClientRect().bottom,
+          pagesRight: pages?.getBoundingClientRect().bottom,
+          scrollbarWidth: effectiveScrollbarHeight(pages)
         })
       });
   chip.classList.add("is-free");

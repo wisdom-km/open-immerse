@@ -60,6 +60,9 @@ import {
   translationBlock,
   articleNodeSpec,
   viewerSearch,
+  effectiveScrollbarHeight,
+  effectiveScrollbarWidth,
+  measureScrollbarHeight,
   measureScrollbarWidth,
   normalizeZoomChipPos,
   zoomChipDefaultPos,
@@ -309,7 +312,11 @@ test("zoom chip defaults clear the scrollbar and parks as a free-drag control", 
   assert.equal(exceedsDragThreshold(5, 0), false);
   assert.equal(exceedsDragThreshold(6, 0), true);
   assert.equal(measureScrollbarWidth({ offsetWidth: 400, clientWidth: 384 }), 16);
+  assert.equal(measureScrollbarHeight({ offsetHeight: 500, clientHeight: 485 }), 15);
   assert.equal(measureScrollbarWidth(null), 0);
+  assert.equal(effectiveScrollbarWidth({ offsetWidth: 400, clientWidth: 400, scrollHeight: 900, clientHeight: 400 }), 16);
+  assert.equal(effectiveScrollbarHeight({ offsetHeight: 400, clientHeight: 400, scrollWidth: 900, clientWidth: 400 }), 16);
+  assert.equal(effectiveScrollbarWidth({ offsetWidth: 400, clientWidth: 400, scrollHeight: 400, clientHeight: 400 }), 0);
   assert.equal(zoomChipRightGutter({ paneRight: 800, pagesRight: 784, scrollbarWidth: 15 }), 31);
   assert.equal(zoomChipRightGutter({ paneRight: 800, pagesRight: 0, scrollbarWidth: 0 }), 16);
   const parked = zoomChipDefaultPos({
@@ -318,10 +325,11 @@ test("zoom chip defaults clear the scrollbar and parks as a free-drag control", 
     chipWidth: 140,
     chipHeight: 36,
     rightGutter: 31,
+    bottomGutter: 15,
     inset: 12
   });
   assert.equal(parked.left, 617);
-  assert.equal(parked.top, 552);
+  assert.equal(parked.top, 537);
   const lo = clampZoomChipPos({
     left: -20,
     top: -8,
@@ -351,6 +359,9 @@ test("zoom chip defaults clear the scrollbar and parks as a free-drag control", 
   assert.match(src, /function placeZoomChip/);
   assert.match(src, /function persistZoomChipPos/);
   assert.match(src, /ZOOM_CHIP_STORAGE_KEY/);
+  assert.match(src, /effectiveScrollbarHeight/);
+  assert.match(src, /effectiveScrollbarWidth/);
+  assert.match(src, /bottomGutter/);
   assert.match(src, /chrome\?\.storage\?\.local/);
   assert.match(src, /exceedsDragThreshold/);
   assert.match(src, /dataset\.oiDragged/);
