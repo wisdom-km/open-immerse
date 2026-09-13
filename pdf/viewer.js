@@ -84,7 +84,7 @@ function init() {
   $("translatePage").addEventListener("click", () => startTranslate());
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("restoreOriginal").addEventListener("click", restoreOriginal);
-  $("pdfPane").addEventListener("scroll", onPdfScroll, { passive: true });
+  pdfScrollRoot().addEventListener("scroll", onPdfScroll, { passive: true });
   $("pdfPane").addEventListener("wheel", onPdfWheel, { passive: true });
   document.addEventListener("keydown", onKey);
   listenProgress();
@@ -137,21 +137,19 @@ function eventTargetIsField(target) {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
 }
 
+function pdfScrollRoot() {
+  return $("pages");
+}
+
 function bindSplitResize() {
   const workspace = document.querySelector(".workspace");
   const handle = document.querySelector(".split-handle");
-  const chip = document.querySelector(".zoom-gutter");
   if (!workspace || !handle) return;
-  chip?.addEventListener("mousedown", (event) => event.stopPropagation());
-  chip?.addEventListener("pointerdown", (event) => event.stopPropagation());
   handle.addEventListener("pointerdown", (event) => startSplitDrag(event, workspace, handle));
 }
 
 function startSplitDrag(event, workspace, handle) {
   if (event.button !== 0) return;
-  const rect = workspace.getBoundingClientRect();
-  const midBand = Math.abs(event.clientY - (rect.top + rect.height / 2)) <= 60;
-  if (midBand) return;
   event.preventDefault();
   handle.setPointerCapture(event.pointerId);
   workspace.classList.add("is-splitting");
@@ -174,8 +172,6 @@ function applySplit(workspace, clientX) {
   const pct = Math.min(80, Math.max(20, ((clientX - rect.left) / rect.width) * 100));
   workspace.style.setProperty("--oi-split", `${pct}%`);
   workspace.style.gridTemplateColumns = `${pct}% ${100 - pct}%`;
-  const chip = document.querySelector(".zoom-gutter");
-  if (chip) chip.style.left = `${pct}%`;
 }
 
 function appendReadoutNode(input) {
@@ -501,7 +497,7 @@ async function adoptDoc(doc, title) {
   pageItems = 0;
   pageViews = [];
   $("pages").replaceChildren();
-  $("pdfPane").scrollTop = 0;
+  pdfScrollRoot().scrollTop = 0;
   renderArticle();
   if (title) document.title = `${PDF_COPY.title} · ${shortTitle(title)}`;
   setHasDoc(true);
@@ -567,7 +563,7 @@ function pageRects() {
 }
 
 function measureVisible() {
-  const pane = $("pdfPane");
+  const pane = pdfScrollRoot();
   const paneRect = pane.getBoundingClientRect();
   return pageFromViewport(pageRects(), paneRect.top, paneRect.bottom);
 }
@@ -582,7 +578,7 @@ function onPdfScroll() {
 
 function onPdfWheel(event) {
   if (!pdfDoc) return;
-  const pane = $("pdfPane");
+  const pane = pdfScrollRoot();
   const overflow = pane.scrollHeight - pane.clientHeight > 4;
   const atTop = pane.scrollTop <= 0;
   const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1;
