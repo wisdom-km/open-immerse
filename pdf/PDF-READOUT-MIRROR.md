@@ -26,7 +26,7 @@
 
 ## 4.2 公式
 
-A KaTeX/Unicode → B 页裁切 → C 占位「公式」；不做 OCR
+A 从文字层回收 LaTeX（或 Unicode→LaTeX）写入 MirrorItem / 译文 / Markdown，KaTeX 渲染 `$...$` / `$$...$$` → B 无公式文本才页裁切 → C 占位「公式」；不做 OCR。导出 MD 必须可粘贴进支持 KaTeX/MathJax 的编辑器。
 
 ## 4.3 图
 
@@ -60,6 +60,8 @@ M3a 文本 bbox → M3b 图 → M3c 公式 → M3d 同步+导出
 
 ## 8 类型
 
-`MirrorItem { id, page, role, bbox, sourceText, translation?, kind, imageUrl? }`
+`MirrorItem { id, page, role, bbox, sourceText, translation?, latex?, kind, imageUrl? }`
 
-pdf.js `getTextContent` + viewport + page canvas crop。
+pdf.js `getTextContent` + viewport + page canvas crop（图；公式仅无 LaTeX 时）。
+
+KaTeX 0.18.7 vendored：`pdf/vendor/katex/`（`katex.min.js` + `katex.min.css` + woff2 fonts，约 542 KiB）。

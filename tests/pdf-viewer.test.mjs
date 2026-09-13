@@ -214,6 +214,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /data-view="readout"[^>]*>通读</);
   assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"/);
   assert.match(html, /id="mirrorHint"[^>]*class="mirror-hint"/);
+  assert.match(html, /vendor\/katex\/katex\.min\.css/);
+  assert.match(html, /vendor\/katex\/katex\.min\.js/);
   assert.match(html, /id="readout"[^>]*class="readout"/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
   assert.match(html, /<p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…<\/p>/);
@@ -264,7 +266,7 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.mirrorCaption, "版式镜像");
   assert.equal(PDF_COPY.viewMirror, "版式");
   assert.equal(PDF_COPY.viewReadout, "通读");
-  assert.equal(PDF_COPY.mirrorHint, "按原页位置排列译文。公式与图为原页裁剪；导出 MD/PDF 仍为纯文本。");
+  assert.equal(PDF_COPY.mirrorHint, "按原页位置排列译文。公式写入 LaTeX 并用 KaTeX 渲染；图为原页裁剪。导出 MD 含可粘贴 $...$ / $$...$$。");
   assert.equal(PDF_COPY.figureFallback, "图（见左侧）");
   assert.equal(PDF_COPY.formulaFallback, "公式");
   assert.equal(PDF_COPY.translateHint, "点击翻译");
@@ -298,12 +300,18 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
       return [
         { tagName: "H1", textContent: "注意力机制就够了" },
         { tagName: "P", textContent: "  " },
-        { tagName: "P", textContent: "我们提出一种新架构。" }
+        { tagName: "P", textContent: "我们提出一种新架构。" },
+        {
+          tagName: "P",
+          textContent: "rendered-math",
+          dataset: { latex: "\\operatorname{softmax}(QK^{T})", mathDisplay: "0" }
+        }
       ];
     }
   }), [
     { tag: "h1", text: "注意力机制就够了" },
-    { tag: "p", text: "我们提出一种新架构。" }
+    { tag: "p", text: "我们提出一种新架构。" },
+    { tag: "p", text: "$\\operatorname{softmax}(QK^{T})$" }
   ]);
   assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: true, exporting: false }).mdDisabled, false);
   assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: false }).pdfDisabled, true);

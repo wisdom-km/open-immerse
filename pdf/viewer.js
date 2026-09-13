@@ -63,12 +63,15 @@ import {
   cropCanvasToDataUrl,
   formulaRenderPlan,
   shouldRenderFormulaCrop,
+  readingOrderMirrorItems,
   imageRectsFromUnitCtms,
   mergeMirrorTranslations,
   pageRectToPercent,
   percentRectToStyle,
   toMirrorItem,
   translatableMirrorUnits,
+  unwrapLatex,
+  wrapLatexMarkdown,
   walkImageCtms
 } from "../lib/pdf-mirror.js";
 
@@ -423,14 +426,26 @@ function appendReadoutNode(input, parent = $("readout")) {
   const node = document.createElement(spec.tag);
   node.className = spec.className;
   node.textContent = spec.text;
+  node.dataset.role = spec.role;
   if (input.page != null && input.page !== "") node.dataset.page = String(input.page);
+  const latex = unwrapLatex(input.latex || (spec.role === "formula" ? input.translation || spec.text : ""));
+  if (latex && spec.role === "formula") {
+    node.dataset.latex = latex;
+    node.dataset.mathDisplay = input.display ? "1" : "0";
+    renderFormulaNode(node, latex, input.display);
+  }
   if (input.rect && input.pageWidth && input.pageHeight) {
     const item = toMirrorItem(
-      { text: input.original || spec.text, role: spec.role, kind: input.kind || spec.role || "text", rect: input.rect },
+      {
+        text: input.original || spec.text,
+        role: spec.role,
+        kind: input.kind || spec.role || "text",
+        rect: input.rect,
+        latex
+      },
       { page: input.page, translation: spec.text }
     );
     node.classList.add("mirror-box", "mirror-item");
-    node.dataset.role = item.role;
     node.dataset.bbox = bboxAttr(item.bbox);
     node.dataset.kind = item.kind;
     Object.assign(node.style, percentRectToStyle(pageRectToPercent(input.rect, input.pageWidth, input.pageHeight)));
@@ -438,6 +453,19 @@ function appendReadoutNode(input, parent = $("readout")) {
   parent.append(node);
   syncReadoutEmpty(true);
   return node;
+}
+
+function renderFormulaNode(node, latex, display) {
+  const katex = globalThis.katex;
+  if (!katex?.render || !latex) {
+    node.textContent = wrapLatexMarkdown(latex, display);
+    return;
+  }
+  try {
+    katex.render(latex, node, { throwOnError: false, displayMode: Boolean(display), output: "html" });
+  } catch {
+    node.textContent = wrapLatexMarkdown(latex, display);
+  }
 }
 
 function syncReadoutEmpty(hasArticle) {
@@ -464,12 +492,18 @@ function renderArticle() {
   syncReadoutEmpty(true);
   pages.forEach(({ page, blocks }) => {
     if (showMirror) appendMirrorPage(page, blocks);
-    (blocks || []).forEach((item) => {
-      if (!item?.original || !item.translation) return;
+    const layout = getPageLayout(page);
+    const flow = layout ? readingOrderMirrorItems(layout, blocks) : (blocks || []).filter((item) => item?.translation);
+    flow.forEach((item) => {
+      if (!item?.translation && !item?.latex) return;
       appendReadoutNode(
         {
           translation: item.translation,
+          original: item.original,
           role: item.role,
+          kind: item.kind,
+          latex: item.latex,
+          display: item.display,
           page
         },
         flowRoot
@@ -520,13 +554,15 @@ function appendMirrorPage(page, blocks) {
   (layout.boxes || []).forEach((box) => {
     if (box.kind !== "formula") return;
     const plan = box.render || formulaRenderPlan(box);
-    if (plan.mode !== "unicode" || !plan.text) return;
+    if (plan.mode !== "katex" || !plan.latex) return;
     appendReadoutNode(
       {
         translation: plan.text,
         original: box.text,
         role: "formula",
         kind: "formula",
+        latex: plan.latex,
+        display: plan.display,
         page,
         rect: box.rect,
         pageWidth: layout.pageWidth,

@@ -58,7 +58,9 @@
         "pdf/viewer.html",
         "pdf/viewer.css",
         "pdf/viewer.js",
-        "pdf/vendor/*"
+        "pdf/vendor/*",
+        "pdf/vendor/katex/*",
+        "pdf/vendor/katex/fonts/*"
       ],
       "matches": ["<all_urls>"]
     }

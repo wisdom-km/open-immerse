@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
@@ -18,6 +19,9 @@ import {
   inferPageSize,
   formulaRenderPlan,
   shouldRenderFormulaCrop,
+  readingOrderMirrorItems,
+  recoverFormulaLatex,
+  wrapLatexMarkdown,
   looksLikeCaption,
   looksLikeFormulaItem,
   mergeMirrorTranslations,
@@ -199,7 +203,7 @@ test("two-column boxes export left column then right", () => {
   );
 });
 
-test("formula-like items are visuals, not translation units", () => {
+test("formula-like items become LaTeX, not translation units or crop images", () => {
   assert.equal(looksLikeFormulaItem({ str: "E = mc^2", fontName: "CMMI10" }), true);
   assert.equal(looksLikeFormulaItem({ str: "Ashish Vaswani" }), false);
   assert.equal(looksLikeFormulaItem({ str: "avaswani@google.com" }), false);
@@ -217,9 +221,18 @@ test("formula-like items are visuals, not translation units", () => {
   assert.ok(formula);
   assert.equal(formula.kind, "formula");
   assert.equal(formula.role, "formula");
-  assert.equal(formulaRenderPlan(formula).mode, "unicode");
+  const plan = formulaRenderPlan(formula);
+  assert.equal(plan.mode, "katex");
+  assert.match(plan.latex, /QK\^\{T\}/);
+  assert.match(plan.latex, /operatorname\{softmax\}/);
+  assert.equal(plan.display, false);
+  assert.equal(plan.text, `$${plan.latex}$`);
   assert.equal(shouldRenderFormulaCrop(formula), false);
   assert.equal(shouldRenderFormulaCrop({ kind: "formula", text: "", render: { mode: "crop" } }), true);
+  assert.match(recoverFormulaLatex("softmax(QK^T)"), /QK\^\{T\}/);
+  assert.match(recoverFormulaLatex("E = mc²"), /mc\^\{2\}/);
+  assert.equal(wrapLatexMarkdown("QK^{T}", false), "$QK^{T}$");
+  assert.equal(wrapLatexMarkdown("QK^{T}", true), "$$\nQK^{T}\n$$");
   assert.match(unicodeMathify("softmax(QK^T)"), /ᵀ/);
   assert.equal(looksLikeCaption("Figure 1: The Transformer."), true);
   assert.equal(looksLikeCaption("The dominant sequence"), false);
@@ -227,7 +240,51 @@ test("formula-like items are visuals, not translation units", () => {
     translatableMirrorUnits(layout).some((unit) => /softmax/.test(unit.text)),
     false
   );
+  assert.equal(
+    layout.visuals.some((vis) => vis.kind === "formula"),
+    false
+  );
+  const flow = readingOrderMirrorItems(layout, [
+    { translation: "注意力就是你所需要的一切", role: "title" },
+    { translation: "Transformer 在每一层使用该注意力公式。", role: "paragraph" }
+  ]);
+  assert.ok(flow.some((item) => item.role === "formula" && /QK\^\{T\}/.test(item.latex)));
+});
+
+test("formula crop is only used when math text cannot be recovered", () => {
+  const layout = buildMirrorLayout(
+    {
+      items: [
+        pdfItem("Attention Is All You Need", 72, 740, 400, 18),
+        pdfItem("\u0001\u0002\u0003\u0004\u0005", 220, 640, 90, 11, { fontName: "CMMI10" })
+      ]
+    },
+    { width: 612, height: 792 }
+  );
+  const formula = layout.boxes.find((box) => box.kind === "formula");
+  assert.ok(formula);
+  assert.equal(formulaRenderPlan(formula).mode, "crop");
+  assert.equal(shouldRenderFormulaCrop(formula), true);
   assert.ok(layout.visuals.some((vis) => vis.kind === "formula"));
+});
+
+test("vendored KaTeX renders recovered LaTeX and is wired into the viewer", () => {
+  const katexDir = join(root, "pdf/vendor/katex");
+  assert.equal(existsSync(join(katexDir, "katex.min.js")), true);
+  assert.equal(existsSync(join(katexDir, "katex.min.css")), true);
+  assert.equal(existsSync(join(katexDir, "fonts/KaTeX_Main-Regular.woff2")), true);
+  const version = readFileSync(join(katexDir, "VERSION"), "utf8");
+  assert.match(version, /katex 0\.18\.7/);
+  assert.match(version, /total_kib\s+542/);
+  const katex = createRequire(import.meta.url)("../pdf/vendor/katex/katex.min.js");
+  const htmlMath = katex.renderToString(recoverFormulaLatex("softmax(QK^T)"), { throwOnError: false });
+  assert.match(htmlMath, /katex/);
+  assert.match(htmlMath, /softmax/);
+  assert.match(html, /vendor\/katex\/katex\.min\.css/);
+  assert.match(html, /vendor\/katex\/katex\.min\.js/);
+  assert.match(src, /renderFormulaNode/);
+  assert.match(src, /readingOrderMirrorItems/);
+  assert.match(src, /dataset\.latex/);
 });
 
 test("uncovered interior regions and image CTMs become figure boxes", () => {
@@ -301,6 +358,7 @@ test("viewer wires per-page mirror stacks without touching toolbar / zoom / spli
   assert.match(src, /highlightSourcePage/);
   assert.match(src, /onTranslateScroll/);
   assert.match(src, /formulaRenderPlan/);
+  assert.match(src, /renderFormulaNode/);
   assert.match(src, /mirror-item/);
   assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"/);
   assert.match(html, /id="readout"[^>]*class="readout"/);

@@ -347,9 +347,16 @@ h1 {
   pointer-events: none;
 }
 .readout.is-mirror .oi-pdf-p[data-role="formula"],
-.mirror-pages .oi-pdf-p[data-role="formula"] {
+.mirror-pages .oi-pdf-p[data-role="formula"],
+.readout .oi-pdf-p[data-role="formula"] {
   font-family: ui-serif, "Times New Roman", serif;
   letter-spacing: 0.01em;
+}
+.mirror-pages .oi-pdf-p[data-role="formula"] .katex {
+  font-size: clamp(10px, 2.4cqw, 15px);
+}
+.readout .oi-pdf-p[data-role="formula"] .katex {
+  font-size: 1.05em;
 }
 .oi-pdf-h1 {
   margin: 28px 0 10px;

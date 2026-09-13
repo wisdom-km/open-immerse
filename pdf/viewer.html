@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PDF 阅读</title>
   <link rel="stylesheet" href="../ui/tokens.css" />
+  <link rel="stylesheet" href="./vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="viewer.css" />
 </head>
 <body>
@@ -45,7 +46,7 @@
         <button type="button" class="view-seg-btn is-on" data-view="mirror">版式</button>
         <button type="button" class="view-seg-btn" data-view="readout">通读</button>
       </div>
-      <p id="mirrorHint" class="mirror-hint" hidden>按原页位置排列译文。公式与图为原页裁剪；导出 MD/PDF 仍为纯文本。</p>
+      <p id="mirrorHint" class="mirror-hint" hidden>按原页位置排列译文。公式写入 LaTeX 并用 KaTeX 渲染；图为原页裁剪。导出 MD 含可粘贴 $...$ / $$...$$。</p>
       <div id="mirrorPages" class="mirror-pages" hidden></div>
       <div id="readout" class="readout"></div>
       <p id="emptyRead" class="empty-read">点击翻译</p>
@@ -54,6 +55,7 @@
     </aside>
     <div class="split-handle" role="separator" aria-orientation="vertical" aria-label="调整分栏"></div>
   </div>
+  <script src="./vendor/katex/katex.min.js"></script>
   <script type="module" src="viewer.js"></script>
 </body>
 </html>
