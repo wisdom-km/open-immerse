@@ -1,5 +1,7 @@
 # 沉浸译 / Open Immerse
 
+**中文** · [English](README.en.md)
+
 开源 Chrome **网页双语翻译** 扩展（Manifest V3）。
 
 把外文网页、纯文本文档、带文字层的 PDF 译成对照阅读；密钥自己填，引擎自己换。仓库：https://github.com/wisdom-km/open-immerse
@@ -201,6 +203,8 @@ open-immerse/
 ├── ui/tokens.css
 ├── tests/*.test.mjs
 ├── _locales/zh_CN|en
+├── README.md                  # 中文
+├── README.en.md               # English
 └── CONTRIBUTING.md
 ```
 
