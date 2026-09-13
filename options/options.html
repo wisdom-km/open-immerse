@@ -50,10 +50,11 @@
           <p class="hint field-hint">「每批条数」只决定一次请求翻几段；本页总共翻多少由「本次翻译」决定。选「仅标题+开头」只翻标题和正文开头，省 token。</p>
           <label>翻译范围
             <select id="translateScope">
-              <option value="article">仅正文（默认）</option>
-              <option value="page">更大范围（仍跳过顶栏导航）</option>
+              <option value="article">仅正文</option>
+              <option value="page">全页面</option>
             </select>
           </label>
+          <p id="translateScopeHint" class="hint field-hint">只译主栏正文，跳过侧栏与导航。</p>
           <label>译文样式
             <select id="translationStyle">
               <option value="under">原文下方 + 虚线</option>

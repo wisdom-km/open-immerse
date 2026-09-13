@@ -14,6 +14,18 @@ function el(id) {
   return document.getElementById(id);
 }
 
+function syncTranslateScopeHint() {
+  const hint = el("translateScopeHint");
+  if (!hint) return;
+  const scope = el("translateScope")?.value || "article";
+  hint.textContent = TRANSLATE_SCOPE_HINTS[scope] || TRANSLATE_SCOPE_HINTS.article;
+}
+
+const TRANSLATE_SCOPE_HINTS = {
+  article: "只译主栏正文，跳过侧栏与导航。",
+  page: "含侧栏；主标题（含页头 H1）必译。顶栏导航链仍可跳过。"
+};
+
 let cachedSettings = { providers: {} };
 let testRequestId = 0;
 let testStatusTimer = 0;
@@ -40,6 +52,8 @@ async function init() {
   el("deepThink").checked = cachedSettings.deepThink === true;
   el("translationStyle").value = cachedSettings.translationStyle || "under";
   el("translateScope").value = cachedSettings.translateScope || "article";
+  syncTranslateScopeHint();
+  el("translateScope").addEventListener("change", () => syncTranslateScopeHint());
   el("fontScale").value = cachedSettings.fontScale || 0.95;
   el("skipCode").checked = Boolean(cachedSettings.skipCode);
   el("autoOnNewPages").checked = Boolean(cachedSettings.autoOnNewPages);

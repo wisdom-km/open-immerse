@@ -13,9 +13,9 @@ import {
 import { BLOCK_SELECTOR, shouldCollectNode } from "../lib/page-scan.js";
 import { isAlwaysBanned, isInMetaRail } from "../lib/site-presets.js";
 
-function fakeNode({ className = "", hits = [], text = "Hello world about AI tools", left = 120, width = 480 } = {}) {
+function fakeNode({ tagName = "P", className = "", hits = [], text = "Hello world about AI tools", left = 120, width = 480 } = {}) {
   const node = {
-    tagName: "P",
+    tagName,
     className,
     nextElementSibling: null,
     matches(sel) {
@@ -139,7 +139,7 @@ test("scan uses block nodes only and never PAGE_EXTRA nav links", () => {
   assert.ok(BLOCK_SELECTOR.includes("h1"));
 });
 
-test("hard-ban skips Claude rail and nav even for page scope", () => {
+test("article scope still hard-skips Claude rail, nav, and side column", () => {
   const rail = fakeNode({ hits: ["hero_blog_post_details", "data-aside-rail"], text: "Category" });
   const nav = fakeNode({ hits: ["nav_desktop_layout", "role='navigation'"], text: "Product" });
   const side = fakeNode({ text: "Enterprise AI", left: 768, width: 220 });
@@ -147,13 +147,13 @@ test("hard-ban skips Claude rail and nav even for page scope", () => {
   assert.equal(isAlwaysBanned(rail, "claude.com"), true);
   assert.equal(isAlwaysBanned(nav, "claude.com"), true);
   assert.equal(isAlwaysBanned(body, "claude.com"), false);
-  assert.equal(shouldCollectNode(rail, { translateScope: "page", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), false);
-  assert.equal(shouldCollectNode(nav, { translateScope: "page", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), false);
-  assert.equal(shouldCollectNode(side, { translateScope: "page", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), false);
+  assert.equal(shouldCollectNode(rail, { translateScope: "article", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), false);
+  assert.equal(shouldCollectNode(nav, { translateScope: "article", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), false);
+  assert.equal(shouldCollectNode(side, { translateScope: "article", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), false);
   assert.equal(shouldCollectNode(body, { translateScope: "article", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }), true);
 });
 
-test("meta rail cluster skips values under Category/Author labels", () => {
+test("article scope skips Claude meta-rail values under Category/Author labels", () => {
   const item = fakeNode({
     className: "hero_blog_post_details_item",
     hits: ["hero_blog_post_details_item"],
@@ -165,7 +165,7 @@ test("meta rail cluster skips values under Category/Author labels", () => {
   assert.equal(isInMetaRail(item), true);
   assert.equal(isInMetaRail(value), true);
   assert.equal(
-    shouldCollectNode(value, { translateScope: "page", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }),
+    shouldCollectNode(value, { translateScope: "article", skipCode: true }, { hostname: "claude.com", innerWidth: 1280 }),
     false
   );
   assert.ok(HARD_SKIP_SELECTOR.includes(".hero_blog_post_details_item"));
