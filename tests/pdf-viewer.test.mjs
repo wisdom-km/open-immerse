@@ -73,12 +73,16 @@ import {
   zoomChipDefaultRight,
   zoomChipRightClearance,
   zoomChipRightGutter,
-  zoomLabel
+  zoomLabel,
+  mirrorZoomWidth,
+  MIRROR_ZOOM_STORAGE_KEY,
+  MIRROR_ZOOM_CHIP_POS_KEY
 } from "../lib/pdf-viewer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const html = readFileSync(join(root, "pdf/viewer.html"), "utf8");
 const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
+const tokensCss = readFileSync(join(root, "ui/tokens.css"), "utf8");
 const src = readFileSync(join(root, "pdf/viewer.js"), "utf8");
 const libSrc = readFileSync(join(root, "lib/pdf-viewer.js"), "utf8");
 const popupHtml = readFileSync(join(root, "popup/popup.html"), "utf8");
@@ -99,6 +103,8 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.match(html, /id="zoomOut"/);
   assert.match(html, /id="zoomIn"/);
   const toolbarHtml = html.slice(html.indexOf('class="toolbar"'), html.indexOf('class="workspace"'));
+  assert.equal(toolbarHtml.includes("版式"), false);
+  assert.equal(toolbarHtml.includes("通读"), false);
   assert.equal(toolbarHtml.includes('id="zoomOut"'), false);
   assert.equal(toolbarHtml.includes('id="zoomIn"'), false);
   assert.equal(toolbarHtml.includes('id="zoomLabel"'), false);
@@ -114,7 +120,9 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.ok(workspaceHtml.includes('id="zoomOut"') && workspaceHtml.includes('id="zoomLabel"') && workspaceHtml.includes('id="zoomIn"'));
   assert.ok(panePdfHtml.includes('id="pages"') && panePdfHtml.includes('class="zoom-gutter"'));
   assert.ok(panePdfHtml.indexOf('id="pages"') < panePdfHtml.indexOf("zoom-gutter"));
-  assert.equal(afterPaneHtml.includes("zoom-gutter"), false);
+  assert.equal(panePdfHtml.includes("mirrorZoomChip"), false);
+  assert.ok(afterPaneHtml.includes('id="mirrorZoomChip"') && afterPaneHtml.includes('class="zoom-gutter"'));
+  assert.equal(afterPaneHtml.includes('id="zoomChip"'), false);
   assert.ok(afterPaneHtml.includes("split-handle"));
   assert.equal(html.includes("split-gutter"), false);
   assert.equal(html.includes("zoom-stack"), false);
@@ -207,10 +215,18 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /id="restoreOriginal"[^>]*class="btn-ghost"[^>]*disabled>原文</);
   assert.match(html, /id="exportMd"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 MD</);
   assert.match(html, /id="exportPdf"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 PDF</);
+  assert.match(html, /id="viewSeg"[^>]*class="view-seg"/);
+  assert.match(html, /data-view="mirror"[^>]*>版式</);
+  assert.match(html, /data-view="readout"[^>]*>通读</);
+  assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"/);
+  assert.match(html, /id="mirrorHint"[^>]*class="mirror-hint"/);
+  assert.match(html, /vendor\/katex\/katex\.min\.css/);
+  assert.match(html, /vendor\/katex\/katex\.min\.js/);
   assert.match(html, /id="readout"[^>]*class="readout"/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
   assert.match(html, /<p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…<\/p>/);
   assert.match(src, /appendReadoutNode/);
+  assert.match(src, /appendMirrorPage/);
   assert.match(src, /articleNodeSpec/);
   assert.match(libSrc, /oi-pdf-h1/);
   assert.match(libSrc, /oi-pdf-h2/);
@@ -228,8 +244,19 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.equal(css.includes(".translate-block"), false);
   assert.equal(css.includes(".translate-article"), false);
   assert.equal(css.includes(".oi-pdf-h {"), false);
-  assert.match(css, /\.pane-translate\s*\{[^}]*padding:\s*20px 24px 32px/s);
+  assert.match(css, /\.pane-translate-scroll\s*\{[^}]*padding:\s*20px 24px 32px/s);
   assert.match(css, /\.pane-translate \.readout\s*\{[^}]*max-width:\s*42rem/s);
+  assert.match(css, /\.pane-translate \.readout\.is-mirror\s*\{[^}]*max-width:\s*none/s);
+  assert.match(css, /\.view-seg\s*\{/);
+  assert.match(css, /\.pane-translate \.mirror-pages\s*\{[^}]*max-width:\s*none/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*position:\s*relative/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*--oi-text:\s*var\(--oi-mirror-ink\)/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*color:\s*var\(--oi-mirror-ink\)/s);
+  assert.match(css, /\.mirror-page \.katex \*\s*\{[^}]*color:\s*var\(--oi-mirror-ink\)/s);
+  assert.match(css, /\.mirror-page \.oi-pdf-p\[data-role="caption"\]/);
+  assert.match(css, /--oi-mirror-caption/);
+  assert.match(css, /\.pane-translate \.readout\s*\{[^}]*zoom:\s*var\(--oi-mirror-zoom/s);
+  assert.match(css, /\.mirror-box\s*\{[^}]*position:\s*absolute/s);
   assert.match(css, /\.oi-pdf-h1\s*\{[^}]*font:\s*650 22px\/1\.3 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-h2\s*\{[^}]*font:\s*650 18px\/1\.35 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-h1:first-child,\s*\.oi-pdf-h2:first-child\s*\{\s*margin-top:\s*0/s);
@@ -237,7 +264,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.oi-pdf-p\s*\{[^}]*font:\s*400 15px\/1\.7 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-p:last-child\s*\{\s*margin-bottom:\s*0/s);
   assert.match(css, /\.pane-translate \.empty-read\s*\{[^}]*color:\s*var\(--oi-text-muted\)/s);
-  assert.match(html, /本页没有文字层|扫描件翻译将在后续版本支持/);
+  assert.match(html, /本页没有文字层，无法镜像版式/);
+  assert.match(html, /扫描件翻译将在后续版本支持/);
 });
 
 test("M2 copy covers empty / loading / error / no text layer / progress", () => {
@@ -246,7 +274,13 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.error, "无法打开这个 PDF。");
   assert.equal(PDF_COPY.fetchFail, "无法从此地址读取 PDF，请改用本地文件。");
   assert.equal(PDF_COPY.noTextLayer, "本页没有文字层。");
-  assert.equal(PDF_COPY.noTextLayerHint, "扫描件翻译将在后续版本支持。");
+  assert.equal(PDF_COPY.noTextLayerHint, "本页没有文字层，无法镜像版式。扫描件翻译将在后续版本支持。");
+  assert.equal(PDF_COPY.mirrorCaption, "版式镜像");
+  assert.equal(PDF_COPY.viewMirror, "版式");
+  assert.equal(PDF_COPY.viewReadout, "通读");
+  assert.equal(PDF_COPY.mirrorHint, "按原页位置排列译文。公式写入 LaTeX 并用 KaTeX 渲染；图为原页裁剪。导出 MD 含可粘贴 $...$ / $$...$$。");
+  assert.equal(PDF_COPY.figureFallback, "图（见左侧）");
+  assert.equal(PDF_COPY.formulaFallback, "公式");
   assert.equal(PDF_COPY.translateHint, "点击翻译");
   assert.equal(PDF_COPY.translatingWait, "正在翻译，请稍候…");
   assert.equal(readoutPlaceholder({ running: true, hasArticle: false }), "正在翻译，请稍候…");
@@ -278,12 +312,24 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
       return [
         { tagName: "H1", textContent: "注意力机制就够了" },
         { tagName: "P", textContent: "  " },
-        { tagName: "P", textContent: "我们提出一种新架构。" }
+        { tagName: "P", textContent: "我们提出一种新架构。" },
+        {
+          tagName: "P",
+          textContent: "rendered-math",
+          dataset: { latex: "softmax(QK^{T})", mathDisplay: "0", role: "formula", kind: "math" }
+        },
+        {
+          tagName: "P",
+          textContent: "公式",
+          dataset: { role: "formula", kind: "math", latex: "", sourceText: "" }
+        }
       ];
     }
   }), [
     { tag: "h1", text: "注意力机制就够了" },
-    { tag: "p", text: "我们提出一种新架构。" }
+    { tag: "p", text: "我们提出一种新架构。" },
+    { tag: "p", text: "$softmax(QK^{T})$" },
+    { tag: "p", text: "[公式]" }
   ]);
   assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: true, exporting: false }).mdDisabled, false);
   assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: false }).pdfDisabled, true);
@@ -323,6 +369,40 @@ test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.equal(nextZoom(steps.at(-1), 1), 5);
   assert.equal(zoomLabel(1), "100%");
   assert.equal(zoomLabel(2.25), "225%");
+  assert.equal(mirrorZoomWidth(1), "calc(100% * 1)");
+  assert.equal(mirrorZoomWidth(1.25), "calc(100% * 1.25)");
+  assert.equal(mirrorZoomWidth(9), "calc(100% * 5)");
+  assert.match(src, /function setMirrorZoom/);
+  assert.match(src, /function applyMirrorZoom/);
+  assert.match(src, /--oi-mirror-zoom/);
+  assert.match(src, /translateScrollRoot/);
+  assert.match(html, /id="translateScroll"[^>]*class="pane-translate-scroll"/);
+  assert.match(tokensCss, /--oi-paper:\s*#ffffff/);
+  assert.match(tokensCss, /--oi-mirror-ink:\s*#1a1a1a/);
+  assert.match(tokensCss, /--oi-mirror-caption:\s*#4a4a4a/);
+  assert.equal(ZOOM_CHIP_STORAGE_KEY, "pdfZoomChipPos");
+  assert.equal(MIRROR_ZOOM_STORAGE_KEY, "pdfMirrorZoom");
+  assert.equal(MIRROR_ZOOM_CHIP_POS_KEY, "pdfMirrorZoomChipPos");
+  assert.equal(MIRROR_ZOOM_STORAGE_KEY === ZOOM_CHIP_STORAGE_KEY, false);
+  assert.equal(MIRROR_ZOOM_CHIP_POS_KEY === ZOOM_CHIP_STORAGE_KEY, false);
+  assert.equal(ZOOM_CHIP_DRAG_THRESHOLD_PX, 6);
+  assert.match(src, /function initMirrorZoomChip/);
+  assert.match(src, /function bindMirrorZoomChipDrag/);
+  assert.match(src, /function placeMirrorZoomChip/);
+  assert.match(src, /function persistMirrorZoomChipPos/);
+  assert.match(src, /function persistMirrorZoom/);
+  assert.match(src, /MIRROR_ZOOM_STORAGE_KEY/);
+  assert.match(src, /MIRROR_ZOOM_CHIP_POS_KEY/);
+  assert.match(libSrc, /pdfMirrorZoom/);
+  assert.match(libSrc, /pdfMirrorZoomChipPos/);
+  assert.doesNotMatch(src, /snapCorner/);
+  const mirrorDrag = src.slice(src.indexOf("function bindMirrorZoomChipDrag"), src.indexOf("function followMirrorZoomChip"));
+  assert.match(mirrorDrag, /ZOOM_CHIP_DRAG_THRESHOLD_PX/);
+  assert.doesNotMatch(mirrorDrag, /snap/);
+  assert.doesNotMatch(mirrorDrag, /--oi-split/);
+  assert.match(src, /syncMirrorZoomChip/);
+  const applySplitSrc = src.slice(src.indexOf("function applySplit"), src.indexOf("function initZoomChip"));
+  assert.match(applySplitSrc, /syncMirrorZoomChip/);
   assert.equal(zoomLabel(4), "400%");
   assert.equal(zoomLabel(5), "500%");
   assert.equal(zoomLabel(9), "500%");
@@ -443,8 +523,10 @@ test("zoom chip defaults clear the scrollbar and parks as a free-drag control", 
 });
 
 test("PDF-ZOOM-FLOAT §6 acceptance locks", () => {
-  assert.match(html, /class="pane-pdf"[^>]*>[\s\S]*class="zoom-gutter"/);
-  assert.equal(html.slice(html.indexOf("class=\"pane-translate\""), html.indexOf("viewer.js")).includes("zoom-gutter"), false);
+  assert.match(html, /class="pane-pdf"[^>]*>[\s\S]*id="zoomChip"/);
+  assert.match(html, /id="mirrorZoomChip"[^>]*class="zoom-gutter"/);
+  assert.match(html, /id="mirrorZoomOut"[^>]*>缩小</);
+  assert.match(html, /id="mirrorZoomIn"[^>]*>放大</);
   assert.match(html, /class="split-handle"/);
   assert.equal(zoomChipDefaultRight(14), 18);
   const parked = zoomChipDefaultPos({
@@ -492,6 +574,52 @@ test("PDF-ZOOM-FLOAT §6 acceptance locks", () => {
     src.slice(src.indexOf("function bindZoomChipDrag"), src.indexOf("function followZoomChip")),
     /--oi-split/
   );
+});
+
+test("PDF-MIRROR-READABILITY-ZOOM contrast and independent right chip", () => {
+  const spec = readFileSync(join(root, "pdf/PDF-MIRROR-READABILITY-ZOOM.md"), "utf8");
+  assert.match(spec, /--oi-mirror-ink: #1a1a1a/);
+  assert.match(spec, /pdfMirrorZoom/);
+  assert.match(spec, /pdfMirrorZoomChipPos/);
+  assert.match(tokensCss, /--oi-mirror-ink:\s*#1a1a1a/);
+  assert.match(tokensCss, /--oi-mirror-caption:\s*#4a4a4a/);
+  assert.match(tokensCss, /--oi-mirror-placeholder:\s*#4a4a4a/);
+  assert.match(tokensCss, /--oi-mirror-placeholder-bg:/);
+  assert.match(css, /\.mirror-page\s*\{[^}]*background:\s*var\(--oi-paper\)/s);
+  assert.match(css, /\.mirror-page\s*\{[^}]*--oi-text:\s*var\(--oi-mirror-ink\)/s);
+  assert.match(css, /\.mirror-page \.oi-pdf-p\[data-role="authors"\]/);
+  assert.match(css, /\.mirror-page \.katex \*\s*\{[^}]*color:\s*var\(--oi-mirror-ink\)/s);
+  assert.match(css, /\.mirror-page \.oi-pdf-p\[data-role="caption"\][\s\S]*color:\s*var\(--oi-mirror-caption\)/);
+  assert.match(css, /\.mirror-page \.mirror-visual:not\(img\)[\s\S]*background:\s*var\(--oi-mirror-placeholder-bg\)/);
+  assert.match(css, /\.pane-translate \.readout\s*\{[^}]*zoom:\s*var\(--oi-mirror-zoom/s);
+  assert.match(css, /\.pane-translate\s*\{[^}]*position:\s*relative/s);
+  assert.equal(css.includes("zoom-gutter-mirror"), false);
+  assert.equal(html.includes("zoom-gutter-mirror"), false);
+  const afterPane = html.slice(html.indexOf('class="pane-translate"'), html.indexOf("viewer.js"));
+  const scrollIdx = afterPane.indexOf('id="translateScroll"');
+  const chipIdx = afterPane.indexOf('id="mirrorZoomChip"');
+  assert.ok(scrollIdx >= 0 && chipIdx > scrollIdx);
+  assert.match(afterPane, /id="mirrorZoomChip"[^>]*class="zoom-gutter"/);
+  assert.equal(afterPane.includes('id="zoomChip"'), false);
+  assert.equal(MIRROR_ZOOM_STORAGE_KEY, "pdfMirrorZoom");
+  assert.equal(MIRROR_ZOOM_CHIP_POS_KEY, "pdfMirrorZoomChipPos");
+  assert.equal(ZOOM_CHIP_STORAGE_KEY, "pdfZoomChipPos");
+  assert.notEqual(MIRROR_ZOOM_STORAGE_KEY, ZOOM_CHIP_STORAGE_KEY);
+  assert.notEqual(MIRROR_ZOOM_CHIP_POS_KEY, ZOOM_CHIP_STORAGE_KEY);
+  const applyMirror = src.slice(src.indexOf("function applyMirrorZoom"), src.indexOf("function syncMirrorZoomButtons"));
+  assert.match(applyMirror, /translateScroll/);
+  assert.match(applyMirror, /mirrorPages/);
+  assert.match(applyMirror, /readout/);
+  assert.match(applyMirror, /--oi-mirror-zoom/);
+  const setZoomFn = src.slice(src.indexOf("async function setZoom"), src.indexOf("async function scheduleVisibleRenders"));
+  assert.doesNotMatch(setZoomFn, /setMirrorZoom|mirrorZoom|pdfMirrorZoom/);
+  const onKey = src.slice(src.indexOf("function onKey"), src.indexOf("function eventTargetIsField"));
+  assert.match(onKey, /setZoom/);
+  assert.doesNotMatch(onKey, /setMirrorZoom/);
+  const syncPage = src.slice(src.indexOf("function onTranslateScroll"), src.indexOf("function runtimeSend"));
+  assert.match(syncPage, /getBoundingClientRect/);
+  assert.match(syncPage, /translateScrollRoot/);
+  assert.match(src, /let mirrorZoom = DEFAULT_ZOOM/);
 });
 
 test("looksLikePdfUrl and popup entry only for PDF tabs", () => {
@@ -640,6 +768,8 @@ test("segmentPageBlocks marks headings and keeps title with body as article part
   assert.equal(articleNodeSpec({ translation: "摘要", role: "heading" }).className, "oi-pdf-h2");
   assert.equal(articleNodeSpec({ translation: "我们提出一种新架构。", role: "paragraph" }).tag, "p");
   assert.equal(articleNodeSpec({ translation: "我们提出一种新架构。", role: "paragraph" }).className, "oi-pdf-p");
+  assert.equal(articleNodeSpec({ translation: "阿希什·瓦萨瓦尼", role: "authors" }).role, "authors");
+  assert.equal(articleNodeSpec({ translation: "图 1：结构", role: "caption" }).role, "caption");
   assert.deepEqual(translationBlock({ original: "Hi", page: 1, role: "title" }).role, "title");
 
   const wrappedTitle = segmentPageBlocks({
@@ -999,7 +1129,8 @@ test("two-step draft progress replaces in place and keeps heading role", async (
   assert.match(src, /restoreOriginal/);
   assert.match(src, /abortTranslateSession/);
   assert.match(src, /createPageCache/);
-  assert.match(src, /segmentPageBlocks/);
+  assert.match(src, /buildMirrorLayout/);
+  assert.match(src, /translatableMirrorUnits/);
   assert.match(src, /getTextContent/);
   assert.match(src, /OI_GET_SETTINGS/);
   assert.match(src, /translateDocumentPages/);

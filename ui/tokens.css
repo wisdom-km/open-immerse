@@ -9,6 +9,13 @@
   --oi-line: #2a3142;
   --oi-text: #eef2f8;
   --oi-text-muted: #9aa6b8;
+  --oi-paper: #ffffff;
+  --oi-paper-ink: #1a1d24;
+  --oi-paper-muted: #4a5568;
+  --oi-mirror-ink: #1a1a1a;
+  --oi-mirror-caption: #4a4a4a;
+  --oi-mirror-placeholder: #4a4a4a;
+  --oi-mirror-placeholder-bg: #e5e5e5;
   --oi-muted: var(--oi-text-muted);
   --oi-accent: #4d7cff;
   --oi-accent-hover: #5b88ff;
