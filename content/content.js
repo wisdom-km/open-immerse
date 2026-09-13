@@ -3,9 +3,9 @@ const SKIP_SELECTOR = "script, style, noscript, textarea, pre, code, kbd, samp, 
 const MAIN_SELECTOR = "main, article, [role='main'], [role='article']";
 const CHROME_SELECTOR = "nav, aside, header, footer, [role='navigation'], [role='complementary'], [role='banner'], [role='contentinfo'], [role='menu'], [role='menubar'], [data-aside-rail], [data-aside-track], [class*='hero_blog_post_details'], [class*='blog_post_details'], [class*='marginalia']";
 const ALWAYS_CHROME_SELECTOR = "nav, aside, header, [role='navigation'], [role='complementary'], [role='banner'], [role='menu'], [role='menubar'], [data-aside-rail], [data-aside-track], [class*='hero_blog_post_details'], [class*='blog_post_details'], [class*='marginalia']";
-/** Keep in sync with lib/site-presets.js PRIMARY_TITLE_SKIP_ANCESTOR / PAGE_TOP_NAV_SELECTOR */
+/** Keep in sync with lib/site-presets.js PRIMARY_TITLE_SKIP_ANCESTOR / PAGE_CHROME_SELECTOR */
 const PRIMARY_TITLE_SKIP_ANCESTOR = "nav, aside, footer, [role='navigation'], [role='complementary'], [role='contentinfo'], [role='menu'], [role='menubar']";
-const PAGE_TOP_NAV_SELECTOR = "header nav, [role='banner'] nav, header [role='navigation'], [role='banner'] [role='navigation'], [role='menu'], [role='menubar']";
+const PAGE_CHROME_SELECTOR = "header nav, [role='banner'] nav, header [role='navigation'], [role='banner'] [role='navigation'], [role='menu'], [role='menubar'], footer, [role='contentinfo'], nav[aria-label*='breadcrumb'], nav[aria-label*='Breadcrumb'], [class*='breadcrumb'], [class*='cookie'], [class*='consent']";
 const HARD_SKIP_SELECTOR = [
   "[data-aside-rail]",
   "[data-aside-track]",
@@ -320,7 +320,7 @@ function collectNodes(settings, opts = {}) {
     if (!includeTranslated && hasTranslation(el)) return false;
     if (settings.skipCode && el.closest("pre, code")) return false;
     if (el.tagName === "A" && el.closest("li, p, h1, h2, h3, h4, h5, h6")) return false;
-    const primaryTitle = isPrimaryTitle(el);
+    const primaryTitle = isPrimaryTitle(el, scope);
     if (!primaryTitle && shouldSkipScopedChrome(el, scope)) return false;
     const text = getText(el);
     if (text.length < MIN_LEN) return false;
@@ -329,7 +329,7 @@ function collectNodes(settings, opts = {}) {
     return isMostlyVisible(el);
   });
   return nodes.sort((a, b) => {
-    const diff = contentRank(a) - contentRank(b);
+    const diff = contentRank(a, scope) - contentRank(b, scope);
     if (diff) return diff;
     const pos = a.compareDocumentPosition(b);
     if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
@@ -343,15 +343,53 @@ function isPrimaryTitleCandidate(el) {
   return !el.closest(PRIMARY_TITLE_SKIP_ANCESTOR);
 }
 
-function isPrimaryTitle(el) {
-  if (!isPrimaryTitleCandidate(el)) return false;
-  const all = [...document.querySelectorAll("h1")].filter(isPrimaryTitleCandidate);
+function looksLikeArticleTitle(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (value.length < 16) return false;
+  const words = value.split(" ").filter(Boolean);
+  return value.length >= 24 || words.length >= 4;
+}
+
+function pickPrimaryTitle(list) {
+  const all = (list || []).filter(isPrimaryTitleCandidate);
   const inMain = all.find((node) => node.closest(MAIN_SELECTOR));
-  return (inMain || all[0]) === el;
+  if (inMain) return inMain;
+  const substantial = all.filter((node) => looksLikeArticleTitle(getText(node)));
+  if (!substantial.length) return null;
+  const docTitle = String(document.title || "").toLowerCase();
+  const named = substantial.find((node) => {
+    const slice = getText(node).toLowerCase().slice(0, 40);
+    return docTitle && slice && docTitle.includes(slice);
+  });
+  if (named) return named;
+  return substantial.slice().sort((a, b) => {
+    const ra = a.getBoundingClientRect();
+    const rb = b.getBoundingClientRect();
+    return rb.width * rb.height - ra.width * ra.height;
+  })[0];
+}
+
+function isPrimaryTitle(el, scope) {
+  if (!isPrimaryTitleCandidate(el)) return false;
+  if (scope !== "page") return Boolean(el.closest(MAIN_SELECTOR));
+  return pickPrimaryTitle([...document.querySelectorAll("h1")]) === el;
+}
+
+function isPureNavBar(el) {
+  const nav = el.closest("nav, [role='navigation']");
+  if (!nav) return false;
+  if (nav.closest("aside, [role='complementary']")) return false;
+  if (isSideColumn(el) || isSideColumn(nav)) return false;
+  return true;
 }
 
 function shouldSkipScopedChrome(el, scope) {
-  if (scope === "page") return Boolean(el.closest(PAGE_TOP_NAV_SELECTOR));
+  if (scope === "page") {
+    if (el.closest(PAGE_CHROME_SELECTOR)) return true;
+    if (isTinyChrome(el)) return true;
+    if (isPureNavBar(el)) return true;
+    return false;
+  }
   if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || el.closest(CHROME_SELECTOR)) return true;
   if (isInMetaRail(el)) return true;
   if (isSideColumn(el)) return true;
@@ -359,8 +397,8 @@ function shouldSkipScopedChrome(el, scope) {
   return false;
 }
 
-function contentRank(el) {
-  if (isPrimaryTitle(el)) return 0;
+function contentRank(el, scope) {
+  if (isPrimaryTitle(el, scope)) return 0;
   if (el.closest(MAIN_SELECTOR) && !el.closest(CHROME_SELECTOR) && !el.closest(HARD_SKIP_SELECTOR)) return 0;
   if (isSideColumn(el) || el.closest(CHROME_SELECTOR) || el.closest(HARD_SKIP_SELECTOR)) return 2;
   return 1;
@@ -453,8 +491,12 @@ function mountTranslation(el, text, settings) {
 }
 
 function isTinyChrome(el) {
-  if (["NAV", "FOOTER", "HEADER"].includes(el.parentElement?.tagName)) return getText(el).length < 24;
-  if (el.tagName === "A" || el.closest("nav, aside, [role='navigation']")) return getText(el).length < 48;
+  const text = getText(el);
+  if (["NAV", "FOOTER", "HEADER"].includes(el.parentElement?.tagName)) return text.length < 24;
+  if (el.tagName === "A" || el.closest("nav, aside, [role='navigation']")) {
+    if (looksLikeArticleTitle(text)) return false;
+    return text.length < 48;
+  }
   return false;
 }
 
@@ -491,7 +533,7 @@ function onHover(ev) {
   const el = ev.target.closest(BLOCK_SELECTOR);
   if (!el || el.closest(SKIP_SELECTOR)) return;
   const scope = lastSettings.translateScope || "article";
-  if (!isPrimaryTitle(el) && shouldSkipScopedChrome(el, scope)) return;
+  if (!isPrimaryTitle(el, scope) && shouldSkipScopedChrome(el, scope)) return;
   if (el.querySelector(".oi-translation") || el.nextElementSibling?.classList?.contains("oi-translation")) return;
   clearTimeout(hoverTimer);
   hoverTimer = setTimeout(async () => {
