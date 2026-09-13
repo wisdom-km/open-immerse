@@ -44,3 +44,14 @@ test("content.js still marks H1–H3 as oi-after-heading afterend", () => {
   assert.match(js, /oi-translation oi-after-heading/);
   assert.match(js, /insertAdjacentElement\("afterend"/);
 });
+
+test("block translations drop fit-content and stay inside the source column", () => {
+  assert.match(css, /\.oi-translation:not\(\.oi-inline\)\s*\{[^}]*box-sizing:\s*border-box/s);
+  assert.match(css, /\.oi-translation:not\(\.oi-inline\)\s*\{[^}]*width:\s*100%/s);
+  assert.match(css, /\.oi-translation:not\(\.oi-inline\)\s*\{[^}]*max-width:\s*100%/s);
+  assert.equal(/width:\s*fit-content/.test(css), false);
+  assert.match(bodyBlock, /overflow-wrap:\s*break-word/);
+  assert.match(js, /layoutMountedTranslation/);
+  assert.match(js, /OIBilingual\?\.layoutTranslation/);
+  assert.match(js, /dedupeTranslations/);
+});

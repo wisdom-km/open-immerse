@@ -26,6 +26,7 @@ import {
   pdfTranslatePrimaryLabel,
   clampZoom,
   collectArticlePages,
+  collectReadoutExportNodes,
   createPageCache,
   createTranslateSession,
   extractPageItems,
@@ -40,6 +41,8 @@ import {
   pageCacheKey,
   pageFromViewport,
   pageHasTranslation,
+  pdfExportControlState,
+  pdfSourceBasename,
   pageIndex,
   pageLabel,
   pagePath,
@@ -202,6 +205,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /id="translatePage"[^>]*disabled>翻译</);
   assert.match(html, /id="stopTranslate"[^>]*class="btn-primary"[^>]*hidden[^>]*disabled>停止</);
   assert.match(html, /id="restoreOriginal"[^>]*class="btn-ghost"[^>]*disabled>原文</);
+  assert.match(html, /id="exportMd"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 MD</);
+  assert.match(html, /id="exportPdf"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 PDF</);
   assert.match(html, /id="readout"[^>]*class="readout"/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
   assert.match(html, /<p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…<\/p>/);
@@ -261,6 +266,30 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.scopePage, "当前页");
   assert.equal(PDF_COPY.scopeDocument, "全文");
   assert.equal(PDF_COPY.stopped, "已停止。");
+  assert.equal(PDF_COPY.exportMd, "导出 MD");
+  assert.equal(PDF_COPY.exportPdf, "导出 PDF");
+  assert.equal(PDF_COPY.exporting, "正在导出…");
+  assert.equal(PDF_COPY.exportFail, "导出失败");
+  assert.equal(pdfSourceBasename("paper.pdf"), "paper");
+  assert.equal(pdfSourceBasename("https://cdn.example.com/docs/Attention.pdf?dl=1"), "Attention");
+  assert.equal(pdfSourceBasename(""), "PDF");
+  assert.deepEqual(collectReadoutExportNodes({
+    querySelectorAll() {
+      return [
+        { tagName: "H1", textContent: "注意力机制就够了" },
+        { tagName: "P", textContent: "  " },
+        { tagName: "P", textContent: "我们提出一种新架构。" }
+      ];
+    }
+  }), [
+    { tag: "h1", text: "注意力机制就够了" },
+    { tag: "p", text: "我们提出一种新架构。" }
+  ]);
+  assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: true, exporting: false }).mdDisabled, false);
+  assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: false }).pdfDisabled, true);
+  assert.equal(pdfExportControlState({ hasDoc: false, hasReadout: true }).mdDisabled, true);
+  assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: true, exporting: true }).mdDisabled, true);
+  assert.match(css, /\.btn-ghost\.btn-export\s*\{[^}]*font-weight:\s*400/s);
   assert.equal(textLayerCopy(0), PDF_COPY.noTextLayer);
   assert.equal(textLayerCopy(3), "");
   assert.equal(pageBlocksCopy(0, 0), PDF_COPY.noTextLayer);
@@ -721,8 +750,19 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
   const translate = html.indexOf('id="translatePage"');
   const stop = html.indexOf('id="stopTranslate"');
   const restore = html.indexOf('id="restoreOriginal"');
+  const exportMd = html.indexOf('id="exportMd"');
+  const exportPdf = html.indexOf('id="exportPdf"');
   const prev = html.indexOf('id="prev"');
-  assert.ok(pick > 0 && pick < scope && scope < translate && translate < stop && stop < restore && restore < prev);
+  assert.ok(
+    pick > 0 &&
+      pick < scope &&
+      scope < translate &&
+      translate < stop &&
+      stop < restore &&
+      restore < exportMd &&
+      exportMd < exportPdf &&
+      exportPdf < prev
+  );
   assert.match(html, /class="scope-seg"[^>]*role="group"[^>]*aria-label="翻译范围"/);
   assert.match(html, /class="scope-seg-btn is-on"[^>]*data-scope="page"[^>]*>当前页</);
   assert.match(html, /class="scope-seg-btn"[^>]*data-scope="all"[^>]*>全文</);
@@ -826,6 +866,15 @@ test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", asy
   assert.equal(stopFn.includes("restoreOriginal"), false);
   assert.equal(stopFn.includes("clearPage"), false);
   assert.match(src, /\$\("stopTranslate"\)\.addEventListener\("click", stopTranslateWork\)/);
+  assert.match(src, /\$\("exportMd"\)\.addEventListener\("click", \(\) => exportReadout\("md"\)\)/);
+  assert.match(src, /\$\("exportPdf"\)\.addEventListener\("click", \(\) => exportReadout\("pdf"\)\)/);
+  assert.match(src, /function exportReadout/);
+  assert.match(src, /downloadBlob/);
+  assert.match(src, /articleBlocksToMarkdown/);
+  assert.match(src, /articleBlocksToPdf/);
+  assert.match(src, /PDF_COPY\.exporting/);
+  assert.match(src, /syncExportControls/);
+  assert.doesNotMatch(src, /window\.print/);
   const restoreSrc = src.slice(src.indexOf("/** 原文: current page only"), src.indexOf("async function openFile"));
   assert.match(restoreSrc, /pageCache\.clearPage\(docId, pageNum\)/);
   assert.equal(restoreSrc.includes("pageCache.clear()"), false);

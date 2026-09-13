@@ -36,6 +36,7 @@ let timer = 0;
 let toastTimer = 0;
 let inflight = null;
 let lastSettings = {};
+let layoutTick = 0;
 
 init();
 
@@ -76,6 +77,11 @@ async function init() {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "sync" || !changes.settings) return;
     applyStyle(changes.settings.newValue || {});
+  });
+
+  window.addEventListener("resize", () => {
+    clearTimeout(layoutTick);
+    layoutTick = setTimeout(relayoutPageTranslations, 120);
   });
 }
 
@@ -318,6 +324,7 @@ function collectNodes(settings, opts = {}) {
   const nodes = [...document.body.querySelectorAll(BLOCK_SELECTOR)].filter((el) => {
     if (el.closest(SKIP_SELECTOR)) return false;
     if (!includeTranslated && hasTranslation(el)) return false;
+    if (el.querySelector(BLOCK_SELECTOR)) return false;
     if (settings.skipCode && el.closest("pre, code")) return false;
     if (el.tagName === "A" && el.closest("li, p, h1, h2, h3, h4, h5, h6")) return false;
     const primaryTitle = isPrimaryTitle(el, scope);
@@ -455,11 +462,14 @@ function shouldInline(el) {
 
 function mountTranslation(el, text, settings) {
   if (!text) return;
-  const existing = el.nextElementSibling?.classList?.contains("oi-translation")
-    ? el.nextElementSibling
-    : el.querySelector(":scope > .oi-translation");
+  const bilingual = globalThis.OIBilingual;
+  const existing = bilingual?.dedupeTranslations?.(el)
+    || (el.nextElementSibling?.classList?.contains("oi-translation")
+      ? el.nextElementSibling
+      : el.querySelector(":scope > .oi-translation"));
   if (existing) {
     existing.textContent = text;
+    layoutMountedTranslation(el, existing);
     return;
   }
   const inline = shouldInline(el);
@@ -488,6 +498,26 @@ function mountTranslation(el, text, settings) {
   });
   if (inline || ["LI", "TD", "TH", "DT", "DD"].includes(el.tagName)) el.appendChild(node);
   else el.insertAdjacentElement("afterend", node);
+  layoutMountedTranslation(el, node);
+}
+
+function layoutMountedTranslation(source, node) {
+  const run = () => globalThis.OIBilingual?.layoutTranslation?.(node, source);
+  run();
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => requestAnimationFrame(run));
+  }
+}
+
+function hostForPageTranslation(node) {
+  return globalThis.OIBilingual?.hostForTranslation?.(node) || node?.previousElementSibling || node?.parentElement;
+}
+
+function relayoutPageTranslations() {
+  document.querySelectorAll(".oi-translation:not(.oi-inline)").forEach((node) => {
+    const source = hostForPageTranslation(node);
+    if (source) globalThis.OIBilingual?.layoutTranslation?.(node, source);
+  });
 }
 
 function isTinyChrome(el) {
