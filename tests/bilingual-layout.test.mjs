@@ -29,7 +29,12 @@ function fakeBox({
   fontSize = 16,
   tagName = "DIV",
   parent = null,
-  display = "block"
+  display = "block",
+  left = 0,
+  paddingLeft = 0,
+  paddingRight = 0,
+  borderLeftWidth = 0,
+  marginLeft = 0
 } = {}) {
   const style = {
     fontSize: `${fontSize}px`,
@@ -38,6 +43,8 @@ function fakeBox({
     flexWrap: "",
     flex: "",
     marginTop: "",
+    marginLeft: "",
+    marginRight: "",
     paddingTop: "",
     maxWidth: "",
     width: "",
@@ -55,6 +62,10 @@ function fakeBox({
     tagName,
     className,
     __display: display,
+    __paddingLeft: paddingLeft,
+    __paddingRight: paddingRight,
+    __borderLeftWidth: borderLeftWidth,
+    __marginLeft: marginLeft,
     clientWidth: clientWidth == null ? width : clientWidth,
     parentElement: parent,
     offsetParent: parent,
@@ -155,6 +166,18 @@ function fakeBox({
       set marginTop(value) {
         style.marginTop = value;
       },
+      get marginLeft() {
+        return style.marginLeft;
+      },
+      set marginLeft(value) {
+        style.marginLeft = value;
+      },
+      get marginRight() {
+        return style.marginRight;
+      },
+      set marginRight(value) {
+        style.marginRight = value;
+      },
       get paddingTop() {
         return style.paddingTop;
       },
@@ -174,20 +197,27 @@ function fakeBox({
           return {
             fontSize: `${fontSize}px`,
             display: node?.style?.display || node?.__display || display,
-            flexDirection: node?.style?.flexDirection || node?.__flexDirection || "row"
+            flexDirection: node?.style?.flexDirection || node?.__flexDirection || "row",
+            paddingLeft: `${node?.__paddingLeft ?? paddingLeft}px`,
+            paddingRight: `${node?.__paddingRight ?? paddingRight}px`,
+            borderLeftWidth: `${node?.__borderLeftWidth ?? borderLeftWidth}px`,
+            borderRightWidth: "0px",
+            marginLeft: node?.style?.marginLeft || `${node?.__marginLeft ?? marginLeft}px`
           };
         }
       }
     },
     getBoundingClientRect() {
       const shift = parseExtra(style.marginTop) || parseExtra(style.paddingTop);
+      const indent = parseFloat(style.marginLeft) || 0;
+      const used = parseFloat(style.width) || width;
       return {
         top: top + shift,
         bottom: bottom + shift,
-        width,
+        width: used,
         height: bottom - top,
-        left: 0,
-        right: width
+        left: left + indent,
+        right: left + indent + used
       };
     }
   };
@@ -427,7 +457,12 @@ function createFlexRowCard({ columnWidth = 872, h3Width = 372, translationWidth 
         return {
           fontSize: "16px",
           display: node?.style?.display || node?.__display || "block",
-          flexDirection: node?.style?.flexDirection || node?.__flexDirection || "row"
+          flexDirection: node?.style?.flexDirection || node?.__flexDirection || "row",
+          paddingLeft: `${node?.__paddingLeft || 0}px`,
+          paddingRight: `${node?.__paddingRight || 0}px`,
+          borderLeftWidth: `${node?.__borderLeftWidth || 0}px`,
+          borderRightWidth: "0px",
+          marginLeft: node?.style?.marginLeft || `${node?.__marginLeft || 0}px`
         };
       }
     }
@@ -462,6 +497,8 @@ function createFlexRowCard({ columnWidth = 872, h3Width = 372, translationWidth 
       alignSelf: "",
       justifySelf: "",
       marginTop: "",
+      marginLeft: "",
+      marginRight: "",
       paddingTop: "",
       props: {},
       setProperty(key, value) {
@@ -473,6 +510,11 @@ function createFlexRowCard({ columnWidth = 872, h3Width = 372, translationWidth 
       className: opts.className || "",
       __display: opts.display || "block",
       __flexDirection: opts.flexDirection || "row",
+      __paddingLeft: opts.paddingLeft || 0,
+      __paddingRight: opts.paddingRight || 0,
+      __borderLeftWidth: opts.borderLeftWidth || 0,
+      __marginLeft: opts.marginLeft || 0,
+      __left: opts.left || 0,
       clientWidth: opts.width || 0,
       boxWidth: opts.width || 0,
       parentElement: null,
@@ -507,13 +549,16 @@ function createFlexRowCard({ columnWidth = 872, h3Width = 372, translationWidth 
       },
       style,
       getBoundingClientRect() {
+        const indent = parseFloat(style.marginLeft) || 0;
+        const used = parseFloat(style.width) || el.boxWidth;
+        const left = (el.__left || 0) + indent;
         return {
-          width: el.boxWidth,
+          width: used,
           height: 40,
           top: 0,
           bottom: 40,
-          left: 0,
-          right: el.boxWidth
+          left,
+          right: left + used
         };
       },
       appendChild(child) {
@@ -660,3 +705,116 @@ test("§C.2 flex-row parent does not keep .oi-translation beside H3", () => {
   assert.equal(date.parentElement, content);
   assert.equal(article.querySelectorAll(".oi-bilingual-stack").length, 0);
 });
+
+function createIndentedParagraph({
+  articleWidth = 900,
+  wrapperWidth = 800,
+  wrapperPadLeft = 40,
+  sourceWidth = 560,
+  sourceMarginLeft = 24
+} = {}) {
+  const sourceLeft = wrapperPadLeft + sourceMarginLeft;
+  const article = fakeBox({
+    className: "Post-module__article",
+    tagName: "ARTICLE",
+    top: 0,
+    bottom: 400,
+    width: articleWidth,
+    left: 0,
+    display: "block"
+  });
+  const wrapper = fakeBox({
+    className: "PostContent",
+    tagName: "DIV",
+    top: 0,
+    bottom: 400,
+    width: wrapperWidth,
+    left: 0,
+    parent: article,
+    display: "block",
+    paddingLeft: wrapperPadLeft
+  });
+  const p = fakeBox({
+    className: "source",
+    tagName: "P",
+    top: 0,
+    bottom: 80,
+    width: sourceWidth,
+    clientWidth: sourceWidth,
+    left: sourceLeft,
+    parent: wrapper,
+    display: "block",
+    marginLeft: sourceMarginLeft
+  });
+  const translation = fakeBox({
+    className: "oi-translation",
+    top: 90,
+    bottom: 170,
+    width: articleWidth,
+    left: wrapperPadLeft,
+    parent: wrapper,
+    display: "block"
+  });
+  p.nextElementSibling = translation;
+  translation.previousElementSibling = p;
+  p.offsetParent = article;
+  translation.offsetParent = article;
+  wrapper.offsetParent = article;
+  return { article, wrapper, p, translation, sourceLeft, sourceWidth };
+}
+
+test("indented source p clamps to content box and keeps the same left edge", () => {
+  const OI = loadBilingual();
+  const { article, wrapper, p, translation, sourceLeft, sourceWidth } = createIndentedParagraph();
+
+  assert.equal(OI.columnWidth(p), 800);
+  assert.ok(OI.columnWidth(p) > sourceWidth);
+  assert.equal(OI.shouldUseColumnClamp(p), false);
+  assert.equal(OI.resolveClampWidth(p), sourceWidth);
+  assert.ok(OI.resolveClampWidth(p) < OI.columnWidth(p));
+  assert.ok(OI.resolveClampWidth(p) < article.clientWidth);
+
+  const laid = OI.layoutTranslation(translation, p);
+  assert.equal(laid.width, sourceWidth);
+  assert.equal(laid.offset, 24);
+  assert.equal(translation.style.maxWidth, "560px");
+  assert.equal(translation.style.width, "560px");
+  assert.equal(translation.style.marginLeft, "24px");
+  assert.equal(translation.style.alignSelf, "flex-start");
+
+  const src = p.getBoundingClientRect();
+  const tr = translation.getBoundingClientRect();
+  assert.ok(tr.width <= src.width);
+  assert.ok(tr.left >= src.left - 0.5);
+  assert.equal(tr.left, sourceLeft);
+  assert.ok(tr.left > wrapper.getBoundingClientRect().left);
+  assert.ok(tr.right <= src.right + 0.5);
+  assert.ok(tr.left > article.getBoundingClientRect().left);
+});
+
+test("article-body heading uses source width, not the wider article column", () => {
+  const OI = loadBilingual();
+  const article = fakeBox({
+    className: "Post-module__article",
+    tagName: "ARTICLE",
+    top: 0,
+    bottom: 200,
+    width: 900,
+    display: "block"
+  });
+  const h3 = fakeBox({
+    className: "headline-3",
+    tagName: "H3",
+    top: 0,
+    bottom: 40,
+    width: 680,
+    parent: article,
+    display: "block",
+    left: 110
+  });
+  assert.equal(OI.inCardGridContext(h3), false);
+  assert.equal(OI.shouldUseColumnClamp(h3), false);
+  assert.equal(OI.resolveClampWidth(h3), 680);
+  assert.equal(OI.sourceAlignOffset(h3), 110);
+});
+
