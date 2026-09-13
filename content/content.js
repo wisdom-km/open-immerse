@@ -507,7 +507,10 @@ function layoutMountedTranslation(source, node) {
   const run = () => bilingual?.layoutTranslation?.(node, source);
   run();
   if (typeof requestAnimationFrame === "function") {
-    requestAnimationFrame(() => requestAnimationFrame(run));
+    requestAnimationFrame(() => {
+      run();
+      requestAnimationFrame(run);
+    });
   }
 }
 

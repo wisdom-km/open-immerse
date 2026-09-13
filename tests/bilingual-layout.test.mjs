@@ -27,7 +27,9 @@ function fakeBox({
   width = 320,
   clientWidth,
   fontSize = 16,
-  tagName = "DIV"
+  tagName = "DIV",
+  parent = null,
+  display = "block"
 } = {}) {
   const style = {
     fontSize: `${fontSize}px`,
@@ -37,6 +39,7 @@ function fakeBox({
     width: "",
     minWidth: "",
     boxSizing: "",
+    overflowWrap: "",
     flexGrow: "",
     flexShrink: "",
     flexBasis: "",
@@ -46,8 +49,15 @@ function fakeBox({
   };
   const el = {
     tagName,
+    className,
+    __display: display,
     clientWidth: clientWidth == null ? width : clientWidth,
+    parentElement: parent,
+    offsetParent: parent,
     firstElementChild: null,
+    getAttribute(name) {
+      return name === "role" ? null : "";
+    },
     classList: {
       contains(name) {
         return className.split(/\s+/).includes(name);
@@ -122,12 +132,21 @@ function fakeBox({
       },
       set paddingTop(value) {
         style.paddingTop = value;
+      },
+      get overflowWrap() {
+        return style.overflowWrap;
+      },
+      set overflowWrap(value) {
+        style.overflowWrap = value;
       }
     },
     ownerDocument: {
       defaultView: {
-        getComputedStyle() {
-          return { fontSize: `${fontSize}px` };
+        getComputedStyle(node) {
+          return {
+            fontSize: `${fontSize}px`,
+            display: node?.__display || display
+          };
         }
       }
     },
@@ -233,6 +252,92 @@ test("source content width prefers the smaller client box over a stretched borde
     clientWidth: 372
   });
   assert.equal(OI.sourceContentWidth(stretched), 372);
+});
+
+test("§C.1 min(source, column) and shrink-wrap H3 uses card/grid column", () => {
+  const OI = loadBilingual();
+  assert.equal(OI.SHRINK_WRAP_MIN_PX, 40);
+  assert.equal(OI.SHRINK_WRAP_PARENT_RATIO, 0.5);
+
+  const card = fakeBox({
+    className: "ArticleList-module__article",
+    tagName: "ARTICLE",
+    top: 0,
+    bottom: 80,
+    width: 400,
+    display: "block"
+  });
+  const content = fakeBox({
+    className: "ArticleList-module__content",
+    tagName: "DIV",
+    top: 0,
+    bottom: 80,
+    width: 400,
+    parent: card,
+    display: "flex"
+  });
+  const h3 = fakeBox({
+    className: "headline-4",
+    tagName: "H3",
+    top: 0,
+    bottom: 40,
+    width: 372,
+    parent: content
+  });
+  assert.equal(OI.resolveClampWidth(h3), 372);
+
+  const tiny = fakeBox({
+    className: "headline-4",
+    tagName: "H3",
+    top: 0,
+    bottom: 40,
+    width: 80,
+    parent: content
+  });
+  assert.equal(OI.resolveClampWidth(tiny), 400);
+
+  const collapsed = fakeBox({
+    className: "headline-4",
+    tagName: "H3",
+    top: 0,
+    bottom: 20,
+    width: 12,
+    parent: content
+  });
+  assert.equal(OI.resolveClampWidth(collapsed), 400);
+
+  const grid = fakeBox({
+    className: "grid",
+    tagName: "DIV",
+    top: 0,
+    bottom: 200,
+    width: 900,
+    display: "grid"
+  });
+  const cell = fakeBox({
+    className: "card",
+    tagName: "DIV",
+    top: 0,
+    bottom: 200,
+    width: 360,
+    parent: grid,
+    display: "block"
+  });
+  const gridH3 = fakeBox({
+    className: "headline-4",
+    tagName: "H3",
+    top: 0,
+    bottom: 40,
+    width: 120,
+    parent: cell
+  });
+  assert.equal(OI.resolveClampWidth(gridH3), 360);
+
+  const trans = fakeBox({ className: "oi-translation oi-after-heading", top: 48, bottom: 88, width: 900 });
+  assert.equal(OI.clampTranslationWidth(trans, tiny), 400);
+  assert.equal(trans.style.overflowWrap, "break-word");
+  assert.equal(trans.style.boxSizing, "border-box");
+  assert.equal(trans.style.maxWidth, "400px");
 });
 
 test("dedupe keeps one .oi-translation per host", () => {
