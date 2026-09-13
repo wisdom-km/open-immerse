@@ -307,7 +307,7 @@ h1 {
   --oi-text: var(--oi-mirror-ink);
   --oi-text-muted: var(--oi-mirror-caption);
   box-shadow: var(--oi-shadow-1);
-  overflow: hidden;
+  overflow: visible;
   container-type: inline-size;
 }
 .mirror-page,
@@ -326,11 +326,13 @@ h1 {
   color: var(--oi-mirror-caption);
 }
 .mirror-page:last-child { margin-bottom: 0; }
-.mirror-box {
+.mirror-box,
+.mirror-page .mirror-item.mirror-box {
   position: absolute;
   margin: 0;
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
+  overflow-y: visible;
 }
 .readout.is-mirror .oi-pdf-h1.mirror-box,
 .readout.is-mirror .oi-pdf-h2.mirror-box,
@@ -343,17 +345,27 @@ h1 {
 .readout.is-mirror .oi-pdf-h1,
 .mirror-pages .oi-pdf-h1 {
   font-size: clamp(14px, 3.8cqw, 22px);
-  line-height: 1.2;
+  line-height: 1.3;
 }
 .readout.is-mirror .oi-pdf-h2,
 .mirror-pages .oi-pdf-h2 {
   font-size: clamp(12px, 2.8cqw, 16px);
-  line-height: 1.25;
+  line-height: 1.3;
 }
 .readout.is-mirror .oi-pdf-p,
 .mirror-pages .oi-pdf-p {
   font-size: clamp(9px, 2.1cqw, 13px);
+  line-height: 1.45;
+}
+.mirror-page .oi-pdf-p[data-role="authors"] {
   line-height: 1.35;
+  overflow: visible;
+  overflow-y: visible;
+}
+.mirror-visual,
+.mirror-page .mirror-visual,
+.mirror-page .mirror-visual.mirror-item {
+  overflow: hidden;
 }
 .mirror-visual {
   position: absolute;

@@ -69,8 +69,11 @@ import {
   readingOrderMirrorItems,
   imageRectsFromUnitCtms,
   mergeMirrorTranslations,
+  fitMirrorTextHeight,
+  isMirrorTextRole,
   pageRectToPercent,
   percentRectToStyle,
+  percentRectToTextStyle,
   toMirrorItem,
   translatableMirrorUnits,
   unwrapLatex,
@@ -686,11 +689,32 @@ function appendReadoutNode(input, parent = $("readout")) {
     node.classList.add("mirror-box", "mirror-item");
     node.dataset.bbox = bboxAttr(item.bbox);
     node.dataset.kind = item.kind;
-    Object.assign(node.style, percentRectToStyle(pageRectToPercent(input.rect, input.pageWidth, input.pageHeight)));
+    const pct = pageRectToPercent(input.rect, input.pageWidth, input.pageHeight);
+    const textBox = isMirrorTextRole(spec.role) || spec.role === "formula";
+    Object.assign(node.style, textBox ? percentRectToTextStyle(pct) : percentRectToStyle(pct));
+    if (textBox) queueFitMirrorTextBox(node);
   }
   parent.append(node);
   syncReadoutEmpty(true);
   return node;
+}
+
+function queueFitMirrorTextBox(node) {
+  const fit = () => fitMirrorTextBox(node);
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(fit);
+  else fit();
+}
+
+function fitMirrorTextBox(node) {
+  if (!node) return;
+  const next = fitMirrorTextHeight({
+    scrollHeight: node.scrollHeight,
+    minHeight: node.offsetHeight,
+    fontSize: Number.parseFloat(globalThis.getComputedStyle?.(node)?.fontSize || "") || 0,
+    lineHeight: 1.3,
+    pad: 3
+  });
+  if (next > node.offsetHeight) node.style.height = `${next}px`;
 }
 
 function renderFormulaNode(node, latex, display) {
