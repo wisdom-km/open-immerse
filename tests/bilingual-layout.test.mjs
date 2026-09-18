@@ -486,6 +486,7 @@ test("BILINGUAL-SPACING §8 / GAP §2.1 Persistence gloss matches body translati
   assert.equal(OI.elementFontSize(heading), applied);
   assert.ok(applied < sourceFs * 0.7);
   assert.match(heading.style.getPropertyValue("--oi-body-font-size"), /16/);
+  assert.match(heading.style.getPropertyValue("--oi-body-gloss-size"), /15\.2/);
 
   const laid = OI.layoutTranslation(heading, source);
   assert.equal(OI.withinHeadingBodyFontBand(laid.fontSize, bodyTransFs), true);
