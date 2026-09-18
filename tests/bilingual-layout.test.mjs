@@ -471,6 +471,45 @@ test("keyed side-rail gloss is not stolen by the previous row", () => {
   assert.equal(typeof extra, "number");
 });
 
+test("recycled row unbinds previous gloss even when WeakMap still points at the host", () => {
+  const OI = loadBilingual();
+  const withKey = (el, name, value) => {
+    el.attrs = el.attrs || {};
+    el.setAttribute = (n, v) => {
+      el.attrs[n] = String(v);
+    };
+    el.getAttribute = (n) => el.attrs[n] || null;
+    el.setAttribute(name, value);
+    return el;
+  };
+  const row = withKey(
+    fakeBox({ tagName: "LI", className: "", top: 0, bottom: 24, width: 180 }),
+    "data-oi-rail-id",
+    "oi-rail-1"
+  );
+  row.setAttribute("data-oi-src-hash", "old-getting-started");
+  const stale = withKey(
+    fakeBox({ className: "oi-translation oi-side-rail", top: 26, bottom: 48, width: 180 }),
+    "data-oi-for",
+    "oi-rail-1"
+  );
+  stale.setAttribute("data-oi-src-hash", "old-getting-started");
+  stale.textContent = "入门";
+  stale.remove = () => {
+    stale.removed = true;
+    stale.parentElement = null;
+  };
+  row.nextElementSibling = stale;
+  row.querySelectorAll = () => [stale];
+  OI.bindHost(stale, row);
+  row.setAttribute("data-oi-src-hash", "new-design-principles");
+  assert.equal(OI.translationBelongsTo(stale, row), false);
+  const removed = OI.detachStaleGloss(row, "new-design-principles");
+  assert.equal(removed[0], stale);
+  assert.equal(stale.removed, true);
+  assert.equal(OI.bindHost(stale, row), null);
+});
+
 test("page-scan skips nested block hosts so parent li does not duplicate children", () => {
   const child = { tagName: "P" };
   const parent = {

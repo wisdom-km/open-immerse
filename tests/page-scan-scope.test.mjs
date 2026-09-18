@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PAGE_CHROME_SELECTOR, PAGE_TOP_NAV_SELECTOR, PRIMARY_TITLE_SKIP_ANCESTOR } from "../lib/site-presets.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { applyTranslateLimit } from "../lib/translate-limit.js";
-import { ensureRailId, getText, hasNestedCollectible, inSideRail, isPrimaryTitle, mountPairedGloss, pairGlossBySource, pickSideRailMountHost, placeTranslationNode, planTranslationMount, shouldCollectNode, shouldInline, shouldSkipScopedChrome, translationClassName } from "../lib/page-scan.js";
+import { detachStaleRailGloss, ensureRailId, getText, hasNestedCollectible, inSideRail, isPrimaryTitle, mountPairedGloss, pairGlossBySource, pickSideRailMountHost, placeTranslationNode, planTranslationMount, shouldCollectNode, shouldInline, shouldSkipScopedChrome, sourceTextHash, translationClassName } from "../lib/page-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentSrc = readFileSync(join(root, "content/content.js"), "utf8");
@@ -323,9 +323,26 @@ function sidebarFixture(tagName, text, hits, box = {}) {
   const own = [];
   source.parentElement = parent;
   source.children = own;
+  source.__label = text;
+  source.cloneNode = () => ({
+    querySelectorAll() {
+      return { forEach() {} };
+    },
+    get innerText() {
+      return source.__label;
+    },
+    get textContent() {
+      return source.__label;
+    }
+  });
   source.appendChild = (child) => {
     own.push(child);
     child.parentElement = source;
+    child.remove = () => {
+      const i = own.indexOf(child);
+      if (i >= 0) own.splice(i, 1);
+      child.parentElement = null;
+    };
     return child;
   };
   Object.defineProperty(source, "lastElementChild", {
@@ -333,7 +350,15 @@ function sidebarFixture(tagName, text, hits, box = {}) {
       return own[own.length - 1] || null;
     }
   });
-  source.querySelector = () => null;
+  const matchTranslation = (sel) => String(sel).includes("oi-translation");
+  source.querySelector = (sel) => {
+    if (!matchTranslation(sel)) return null;
+    return own.find((n) => n.classList?.contains("oi-translation")) || null;
+  };
+  source.querySelectorAll = (sel) => {
+    if (!matchTranslation(sel)) return [];
+    return own.filter((n) => n.classList?.contains("oi-translation"));
+  };
   source.insertAdjacentElement = (where, child) => {
     if (where !== "afterend") return child;
     const i = kids.indexOf(source);
@@ -367,6 +392,7 @@ function mountedNode(className, text = "") {
     setAttribute(name, value) {
       attrs[name] = String(value);
       if (name === "data-oi-for") dataset.oiFor = String(value);
+      if (name === "data-oi-src-hash") dataset.oiSrcHash = String(value);
     },
     getAttribute(name) {
       return attrs[name] || "";
@@ -490,6 +516,7 @@ test("side-rail skip-middle keeps gloss on the same source, no neighbor fill", (
   assert.equal(mounted.length, 2);
   assert.equal(mounted[0].node.textContent, "入门");
   assert.equal(mounted[0].node.getAttribute("data-oi-for"), pairs[0].key);
+  assert.equal(mounted[0].node.getAttribute("data-oi-src-hash"), sourceTextHash("Getting started"));
   assert.equal(mounted[1].node.textContent, "为 iOS 设计");
   assert.equal(sources[0].lastElementChild, mounted[0].node);
   assert.equal(sources[2].lastElementChild, mounted[1].node);
@@ -497,6 +524,41 @@ test("side-rail skip-middle keeps gloss on the same source, no neighbor fill", (
   assert.match(mounted[0].plan.className, /oi-side-rail/);
   assert.equal(mounted[0].plan.className.includes("oi-inline"), false);
   assert.equal(ensureRailId(sources[0]), pairs[0].key);
+});
+
+test("recycled virtual-list row drops the previous item gloss", () => {
+  const { source } = sidebarFixture("LI", "Getting started", ["aside"]);
+  const first = mountPairedGloss([source], ["入门"], undefined, articleCtx, {
+    mode: "block",
+    createNode(plan, pair) {
+      return mountedNode(plan.className, pair.text);
+    }
+  });
+  assert.equal(getText(source), "Getting started");
+  assert.equal(first[0].node.textContent, "入门");
+  assert.equal(source.lastElementChild.textContent, "入门");
+  assert.equal(first[0].node.getAttribute("data-oi-src-hash"), sourceTextHash("Getting started"));
+  assert.equal(shouldCollectNode(source, pageSettings, articleCtx), false);
+  assert.equal(shouldCollectNode(source, articleSettings, articleCtx), false);
+
+  source.__label = "Design principles";
+  assert.equal(getText(source), "Design principles");
+  assert.equal(shouldCollectNode(source, pageSettings, articleCtx), true, "stale gloss detached on collect");
+  assert.equal(source.lastElementChild, null, "recycled row must not keep 入门");
+  assert.equal(shouldCollectNode(source, articleSettings, articleCtx), false, "article still SKIP");
+  assert.deepEqual(detachStaleRailGloss(source), []);
+
+  const second = mountPairedGloss([source], ["设计原则"], undefined, articleCtx, {
+    mode: "block",
+    createNode(plan, pair) {
+      return mountedNode(plan.className, pair.text);
+    }
+  });
+  assert.equal(second[0].node.textContent, "设计原则");
+  assert.notEqual(second[0].node.textContent, "入门");
+  assert.equal(source.lastElementChild.textContent, "设计原则");
+  assert.equal(second[0].node.getAttribute("data-oi-src-hash"), sourceTextHash("Design principles"));
+  assert.notEqual(second[0].node.getAttribute("data-oi-src-hash"), first[0].node.getAttribute("data-oi-src-hash"));
 });
 
 test("Apple Getting started gloss is not 设计原则", () => {
@@ -607,6 +669,8 @@ test("content.js gates chrome by scope and does not blanket-drop header", () => 
   assert.match(contentSrc, /function mountPairedTranslations\(/);
   assert.match(contentSrc, /data-oi-for/);
   assert.match(contentSrc, /data-oi-rail-id/);
+  assert.match(contentSrc, /data-oi-src-hash/);
+  assert.match(contentSrc, /function detachStaleRailGloss\(/);
   assert.match(contentSrc, /new Map\(/);
   assert.match(contentSrc, /mountPairedTranslations\(chunk, res\.translations/);
   assert.match(contentSrc, /opts\.mode === "block"/);

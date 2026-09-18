@@ -289,7 +289,45 @@ function railAttr(el, name) {
   if (fromGet) return String(fromGet);
   if (name === "data-oi-rail-id") return String(el.dataset?.oiRailId || "");
   if (name === "data-oi-for") return String(el.dataset?.oiFor || "");
+  if (name === "data-oi-src-hash") return String(el.dataset?.oiSrcHash || "");
   return "";
+}
+
+function sourceTextHash(text) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function collectMountedGloss(source) {
+  const out = [];
+  if (!source) return out;
+  const push = (node) => {
+    if (node?.classList?.contains("oi-translation") && !out.includes(node)) out.push(node);
+  };
+  push(source.nextElementSibling);
+  source.querySelectorAll?.(".oi-translation").forEach(push);
+  return out;
+}
+
+/** Recycled virtual-list rows keep the same DOM; drop gloss that no longer matches the label. */
+function detachStaleRailGloss(source) {
+  if (!source) return [];
+  const liveHash = sourceTextHash(getText(source));
+  const removed = [];
+  collectMountedGloss(source).forEach((node) => {
+    if (railAttr(node, "data-oi-src-hash") === liveHash) return;
+    node.remove?.();
+    removed.push(node);
+  });
+  if (source.dataset) source.dataset.oiSrcHash = liveHash;
+  else source.setAttribute?.("data-oi-src-hash", liveHash);
+  globalThis.OIBilingual?.detachStaleGloss?.(source, liveHash);
+  return removed;
 }
 
 function ensureRailId(el) {
@@ -316,36 +354,36 @@ function pairGlossBySource(sources, translations, keep) {
     if (!el) return;
     const text = texts[i] == null ? "" : String(texts[i]);
     const id = ensureRailId(el);
+    const srcHash = sourceTextHash(getText(el));
+    if (el.dataset) el.dataset.oiSrcHash = srcHash;
+    else el.setAttribute?.("data-oi-src-hash", srcHash);
     bySource.set(el, text);
     if (id) byId.set(id, text);
   });
   const targets = Array.isArray(keep) ? keep : list;
   return targets.map((el) => {
     const id = railAttr(el, "data-oi-rail-id");
+    const srcHash = railAttr(el, "data-oi-src-hash") || sourceTextHash(getText(el));
     let text = "";
     if (bySource.has(el)) text = bySource.get(el);
     else if (id && byId.has(id)) text = byId.get(id);
-    return { source: el, text, key: id };
+    return { source: el, text, key: id, srcHash };
   });
 }
 
 function glossForSource(el) {
   if (!el) return null;
+  detachStaleRailGloss(el);
+  const hash = sourceTextHash(getText(el));
   const id = railAttr(el, "data-oi-rail-id");
   const bilingual = globalThis.OIBilingual;
   const keyed = bilingual?.collectHostTranslations?.(el)?.[0];
-  if (keyed) return keyed;
-  const nodes = [...(el.querySelectorAll?.(".oi-translation") || [])];
-  if (id) {
-    const match = nodes.find((node) => railAttr(node, "data-oi-for") === id);
-    if (match) return match;
-  }
-  const next = el.nextElementSibling;
-  if (next?.classList?.contains("oi-translation")) {
-    const forId = railAttr(next, "data-oi-for");
-    if (!forId || !id || forId === id) return next;
-  }
-  return el.querySelector?.(":scope > .oi-translation") || nodes[0] || null;
+  if (keyed && railAttr(keyed, "data-oi-src-hash") === hash) return keyed;
+  return collectMountedGloss(el).find((node) => {
+    if (railAttr(node, "data-oi-src-hash") !== hash) return false;
+    const forId = railAttr(node, "data-oi-for");
+    return !forId || !id || forId === id;
+  }) || null;
 }
 
 function mountPairedTranslations(chunk, translations, settings, ticket) {
@@ -409,6 +447,7 @@ function collectNodes(settings, opts = {}) {
   const includeTranslated = Boolean(opts.includeTranslated);
   const nodes = [...document.body.querySelectorAll(BLOCK_SELECTOR)].filter((el) => {
     if (el.closest(SKIP_SELECTOR)) return false;
+    detachStaleRailGloss(el);
     if (!includeTranslated && hasTranslation(el)) return false;
     if (el.querySelector(BLOCK_SELECTOR)) return false;
     if (settings.skipCode && el.closest("pre, code")) return false;
@@ -577,6 +616,10 @@ function mountTranslation(el, text, settings, opts = {}) {
   if (!text) return;
   const bilingual = globalThis.OIBilingual;
   const railId = ensureRailId(el);
+  const srcHash = sourceTextHash(getText(el));
+  if (el.dataset) el.dataset.oiSrcHash = srcHash;
+  else el.setAttribute?.("data-oi-src-hash", srcHash);
+  detachStaleRailGloss(el);
   const mountEl = opts.mode === "block" || inSideRail(el) ? pickSideRailMountHost(el) : el;
   const existing = glossForSource(el)
     || bilingual?.dedupeTranslations?.(el)
@@ -584,6 +627,7 @@ function mountTranslation(el, text, settings, opts = {}) {
   if (existing) {
     existing.textContent = text;
     if (railId) existing.setAttribute("data-oi-for", railId);
+    existing.setAttribute("data-oi-src-hash", srcHash);
     existing.classList.remove("oi-inline");
     if (opts.mode === "block" || inSideRail(el)) {
       existing.classList.add("oi-translation");
@@ -603,6 +647,7 @@ function mountTranslation(el, text, settings, opts = {}) {
       : "oi-translation";
   if (forceBlock) node.classList.add("oi-side-rail");
   if (railId) node.setAttribute("data-oi-for", railId);
+  node.setAttribute("data-oi-src-hash", srcHash);
   node.lang = settings.targetLang || "zh-CN";
   node.textContent = text;
   node.title = "double click to save";
