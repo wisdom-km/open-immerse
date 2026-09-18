@@ -59,10 +59,14 @@
   max-width: 100%;
   box-sizing: border-box;
 }
+/* 仅正文块译：滑块改 --oi-body-gloss-gap。默认 0.35em 对齐今日 −0.65em 拉近。标题/侧栏不走这里。 */
+.oi-translation:not(.oi-inline):not(.oi-after-heading):not(.oi-side-rail) {
+  margin-top: calc(-0.65em + (var(--oi-body-gloss-gap, 0.35em) - 0.35em));
+}
 .oi-translation.oi-after-heading {
-  /* 0.7rem 只是旧初值，不锁死；em 跟字号，mount 后按 §7 0.25–0.45em 光学带再收 */
-  margin: 0.15em 0 0.35em;
-  padding-top: 0.35em;
+  /* 0.7rem 只是旧初值，不锁死；默认再收，mount 后按 §7 0.12–0.28em 光学带夹紧，保留降部空隙 */
+  margin: 0.05em 0 0.22em;
+  padding-top: 0.14em;
   line-height: 1.45;
 }
 /* BODY-HEADING-GLOSS-SIZE / BILINGUAL-SPACING §8：脱离 H1–H3 级联，与段译同值。侧栏不动。 */

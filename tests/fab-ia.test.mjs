@@ -61,6 +61,24 @@ test("collapse is locked while oi-active or persist toast", () => {
   assert.match(content, /oi-status/);
 });
 
+test("FAB stays visible by default and is not display:none", () => {
+  const FAB = loadFab();
+  assert.equal(DEFAULT_SETTINGS.showFab, true);
+  assert.equal(DEFAULT_SETTINGS.fabCorner, "bottom-right");
+  assert.equal(FAB.shouldHideFab({}), false);
+  assert.equal(FAB.shouldHideFab(DEFAULT_SETTINGS), false);
+  assert.equal(FAB.shouldHideFab({ features: { fab: true, webpage: true } }), false);
+  assert.equal(FAB.shouldHideFab({ showFab: false }), true);
+  assert.equal(FAB.shouldHideFab({ features: { fab: false } }), true);
+  assert.match(toolbar, /if \(!chrome\.runtime\?\.id\) return/);
+  assert.match(toolbar, /res\?\.settings \|\| \{\}/);
+  assert.match(toolbar, /FAB\.shouldHideFab\(settings\)/);
+  assert.doesNotMatch(toolbar, /if \(!res\) return/);
+  const fabBlock = css.slice(css.indexOf(".oi-fab {"), css.indexOf(".oi-fab[data-corner"));
+  assert.doesNotMatch(fabBlock, /display:\s*none/);
+  assert.match(fabBlock, /position:\s*fixed/);
+});
+
 test("default park is bottom-right; free pos persists instead of corner snap", () => {
   const FAB = loadFab();
   assert.equal(FAB.CORNER_DEFAULT, "bottom-right");

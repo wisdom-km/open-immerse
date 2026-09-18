@@ -85,6 +85,13 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.doesNotMatch(html, /两步译（先信后润）/);
   assert.doesNotMatch(html, /id="translateQuality"/);
   assert.match(html, /每批条数（分批，不是总数）/);
+  assert.match(html, /id="bodyGlossGap"/);
+  assert.match(html, /正文译文间距 Body translation gap/);
+  assert.match(html, /id="bodyGlossGapValue"/);
+  assert.match(html, /min="0.10"/);
+  assert.match(html, /max="0.70"/);
+  assert.match(html, /step="0.05"/);
+  assert.match(html, /不影响标题/);
   assert.match(html, /本次翻译/);
   assert.match(html, /value="title_lead">仅标题\+开头/);
   for (const id of ["webpage", "learning", "documents", "fab"]) {
@@ -100,6 +107,9 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.match(optJs, /twoStepPolish: el\("twoStepPolish"\)\.checked/);
   assert.match(optJs, /el\("deepThink"\)\.checked = cachedSettings\.deepThink === true/);
   assert.match(optJs, /deepThink: el\("deepThink"\)\.checked/);
+  assert.match(optJs, /normalizeBodyGlossGap/);
+  assert.match(optJs, /el\("bodyGlossGap"\)\.value = String\(normalizeBodyGlossGap/);
+  assert.match(optJs, /bodyGlossGap: normalizeBodyGlossGap\(el\("bodyGlossGap"\)\.value\)/);
 });
 
 test("popup engine link uses short name + full title; lang-row stays 1fr 1fr", () => {

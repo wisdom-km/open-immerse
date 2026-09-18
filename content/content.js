@@ -621,12 +621,15 @@ function applyStyle(settings) {
   if (!settings) return;
   lastSettings = settings;
   root.style.setProperty("--oi-font-scale", settings.fontScale || 0.95);
+  const bodyGap = globalThis.OIBilingual?.normalizeBodyGlossGap?.(settings.bodyGlossGap);
+  root.style.setProperty("--oi-body-gloss-gap", `${Number.isFinite(bodyGap) ? bodyGap : 0.35}em`);
   const bodyFs = readArticleBodyFontSize();
   root.style.setProperty("--oi-body-font-size", `${bodyFs}px`);
   root.style.setProperty("--oi-body-gloss-size", `calc(${bodyFs}px * var(--oi-font-scale, 0.95))`);
   if (settings.color) root.style.setProperty("--oi-color", settings.color);
   else root.style.removeProperty("--oi-color");
   root.dataset.oiStyle = settings.translationStyle || "under";
+  if (document.querySelector?.(".oi-translation")) relayoutPageTranslations();
 }
 
 function enableHover() {
