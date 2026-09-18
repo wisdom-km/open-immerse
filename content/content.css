@@ -60,9 +60,9 @@
   box-sizing: border-box;
 }
 .oi-translation.oi-after-heading {
-  /* padding-top 0.45em primary to clear descenders */
-  margin: 0.7rem 0 0.45rem;
-  padding-top: 0.45em;
+  /* 略吃宿主标题后 margin；padding-top 清 descender，光学间距约 0.35em */
+  margin: -0.45em 0 0.4em;
+  padding-top: 0.32em;
   line-height: 1.45;
 }
 .oi-translation.oi-inline {
