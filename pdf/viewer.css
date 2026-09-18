@@ -362,6 +362,14 @@ h1 {
   overflow: visible;
   overflow-y: visible;
 }
+.mirror-page .mirror-box[data-dir="vertical"],
+.mirror-page .oi-pdf-p[data-role="margin"] {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  overflow: visible;
+  line-height: 1.2;
+  font-size: clamp(8px, 1.8cqw, 11px);
+}
 .mirror-visual,
 .mirror-page .mirror-visual,
 .mirror-page .mirror-visual.mirror-item {

@@ -28,8 +28,14 @@ import {
   looksLikeFormulaItem,
   mergeMirrorTranslations,
   unicodeMathify,
+  boxesHaveInkOverlap,
   fitMirrorTextHeight,
+  isMarginMirrorBox,
   isMirrorTextRole,
+  itemTransformMeta,
+  looksLikeSectionHeading,
+  relayoutMirrorPageBoxes,
+  resolveVerticalMirrorCollisions,
   pageRectToPercent,
   pdfItemToPageRect,
   percentRectToStyle,
@@ -399,6 +405,108 @@ test("uncovered interior regions and image CTMs become figure boxes", () => {
   assert.ok(withCap.visuals.some((vis) => vis.kind === "figure" && /Figure 1/.test(vis.caption || "")));
 });
 
+test("rotated pdf.js runs become tall margin strips, not wide horizontal bleed", () => {
+  const meta = itemTransformMeta({
+    str: "arXiv:1706.03762v7 [cs.CL] 2 Aug 2023",
+    width: 341.08,
+    height: 20,
+    transform: [0, 20, -20, 0, 32, 237]
+  });
+  assert.equal(meta.vertical, true);
+  assert.ok(meta.width < 30);
+  assert.ok(meta.height > 300);
+  assert.ok(meta.x < 40);
+  const layout = buildMirrorLayout(
+    {
+      items: [
+        pdfItem("Attention Is All You Need", 211, 630, 188, 17),
+        {
+          str: "arXiv:1706.03762v7 [cs.CL] 2 Aug 2023",
+          width: 341.08,
+          height: 20,
+          transform: [0, 20, -20, 0, 32, 237]
+        },
+        pdfItem("Abstract", 284, 409, 44, 12, { fontName: "Helvetica-Bold" }),
+        pdfItem("The dominant sequence transduction models are based on complex recurrent networks.", 144, 381, 326, 10),
+        pdfItem("We show that the Transformer generalizes well to other tasks.", 144, 239, 324, 10)
+      ]
+    },
+    { width: 612, height: 792 }
+  );
+  const margin = layout.boxes.find((box) => /arXiv:1706/.test(box.text));
+  const abstractHead = layout.boxes.find((box) => box.text === "Abstract");
+  const abstractBody = layout.boxes.find((box) => /dominant sequence transduction/.test(box.text));
+  assert.ok(margin);
+  assert.equal(margin.role, "margin");
+  assert.equal(margin.dir, "vertical");
+  assert.ok(margin.rect.width < 40);
+  assert.ok(margin.rect.height > 300);
+  assert.ok(margin.rect.left < 40);
+  assert.equal(/best models|Transformer generalizes/.test(margin.text), false);
+  assert.ok(abstractHead);
+  assert.equal(abstractHead.role, "heading");
+  assert.ok(abstractBody);
+  assert.equal(isMarginMirrorBox(margin, 612, 792), true);
+  const bleed = boxesHaveInkOverlap(layout.boxes);
+  assert.equal(
+    bleed.some((hit) => /arXiv/.test(hit.a.text + hit.b.text) && /dominant|Abstract/.test(hit.a.text + hit.b.text)),
+    false
+  );
+  const flow = readingOrderMirrorItems(
+    layout,
+    layout.translatable.map((unit) => ({ translation: unit.text, role: unit.role }))
+  );
+  const names = flow.map((row) => row.role);
+  assert.ok(names.indexOf("title") < names.indexOf("heading"));
+  assert.ok(names.indexOf("heading") < names.indexOf("paragraph"));
+  assert.equal(flow[flow.length - 1].role, "margin");
+});
+
+test("author-row emails stay in separate grid cells", () => {
+  const items = [
+    pdfItem("Ashish Vaswani", 133, 549, 67, 10),
+    pdfItem("Noam Shazeer", 239, 549, 62, 10),
+    pdfItem("Niki Parmar", 339, 549, 58, 10),
+    pdfItem("Jakob Uszkoreit", 424, 549, 73, 10),
+    pdfItem("avaswani@google.com", 117, 527, 99, 10),
+    pdfItem("noam@google.com", 231, 527, 78, 10),
+    pdfItem("nikip@google.com", 324, 527, 84, 10),
+    pdfItem("usz@google.com", 422, 527, 73, 10)
+  ];
+  const layout = buildMirrorLayout({ items }, { width: 612, height: 792 });
+  const mails = layout.boxes.filter((box) => /@/.test(box.text));
+  assert.ok(mails.length >= 4);
+  assert.equal(mails.some((box) => /avaswani@google.com.*noam@google.com/.test(box.text)), false);
+  const ashishMail = mails.find((box) => /avaswani@google.com/.test(box.text));
+  const noamMail = mails.find((box) => /noam@google.com/.test(box.text));
+  assert.ok(ashishMail && noamMail);
+  assert.ok(noamMail.rect.left - (ashishMail.rect.left + ashishMail.rect.width) > 8);
+  assert.ok(Math.abs(ashishMail.rect.top - noamMail.rect.top) < 8);
+  assert.equal(looksLikeSectionHeading("Abstract"), true);
+  assert.equal(looksLikeSectionHeading("Ashish Vaswani"), false);
+});
+
+test("CJK-grown boxes push later siblings instead of stacking ink", () => {
+  const grown = [
+    { role: "title", text: "注意力即一切所需", left: 72, top: 40, width: 460, height: 36, originTop: 40 },
+    { role: "authors", text: "Alice", left: 80, top: 68, width: 90, height: 28, originTop: 68 },
+    { role: "authors", text: "Bob", left: 220, top: 68, width: 90, height: 28, originTop: 68 },
+    { role: "heading", text: "摘要", left: 260, top: 92, width: 60, height: 16, originTop: 92 },
+    { role: "paragraph", text: "正文", left: 80, top: 108, width: 400, height: 40, originTop: 108 }
+  ];
+  const pushed = resolveVerticalMirrorCollisions(grown, { gap: 4 });
+  const title = pushed.find((box) => box.role === "title");
+  const alice = pushed.find((box) => box.text === "Alice");
+  const bob = pushed.find((box) => box.text === "Bob");
+  const heading = pushed.find((box) => box.role === "heading");
+  assert.ok(alice.top >= title.top + title.height + 3);
+  assert.ok(Math.abs(alice.top - bob.top) < 1);
+  assert.ok(heading.top >= alice.top + alice.height + 3);
+  const page = relayoutMirrorPageBoxes(grown, { pageWidth: 612, pageHeight: 200, gap: 4 });
+  assert.equal(boxesHaveInkOverlap(page.boxes).length, 0);
+  assert.ok(page.pageHeight >= 200);
+});
+
 test("translatePageBlocks keeps bbox fields for the mirror layer", async () => {
   const rect = { left: 96, top: 34, width: 420, height: 20 };
   const out = await translatePageBlocks(
@@ -448,6 +556,62 @@ test("viewer wires per-page mirror stacks without touching toolbar / zoom / spli
   assert.match(css, /\.split-handle\s*\{/);
   assert.match(css, /\.view-seg\s*\{/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
+});
+
+test("Attention fixture mirrors all pages without overlap or column bleed", async () => {
+  const fixture = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
+  assert.equal(existsSync(fixture), true);
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const data = new Uint8Array(readFileSync(fixture));
+  const doc = await getDocument({ data, verbosity: 0, isOffscreenCanvasSupported: false }).promise;
+  try {
+    assert.equal(doc.numPages, 15);
+    const pageSummaries = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const viewport = page.getViewport({ scale: 1 });
+      const layout = buildMirrorLayout(await page.getTextContent(), {
+        width: viewport.width,
+        height: viewport.height
+      });
+      assert.equal(layout.kind, "mirror");
+      const overlaps = boxesHaveInkOverlap(layout.boxes, 40);
+      assert.equal(overlaps.length, 0, `page ${n} overlaps: ${JSON.stringify(overlaps.map((hit) => [hit.a.text.slice(0, 40), hit.b.text.slice(0, 40)]))}`);
+      pageSummaries.push({ n, boxes: layout.boxes, layout });
+    }
+    const page1 = pageSummaries[0].layout;
+    const title = page1.boxes.find((box) => /Attention Is All You Need/.test(box.text));
+    const abstractHead = page1.boxes.find((box) => box.text === "Abstract");
+    const abstractBody = page1.boxes.find((box) => /dominant sequence transduction/.test(box.text));
+    const margin = page1.boxes.find((box) => /arXiv:1706/.test(box.text));
+    const ashish = page1.boxes.find((box) => /Ashish Vaswani/.test(box.text));
+    const noam = page1.boxes.find((box) => /Noam Shazeer/.test(box.text));
+    assert.ok(title && abstractHead && abstractBody && margin && ashish && noam);
+    assert.equal(title.role, "title");
+    assert.equal(abstractHead.role, "heading");
+    assert.equal(margin.role, "margin");
+    assert.ok(margin.rect.width < 36);
+    assert.ok(margin.rect.left < 40);
+    assert.equal(/dominant sequence|Abstract/.test(margin.text), false);
+    assert.equal(/Ashish Vaswani/.test(noam.text), false);
+    assert.ok(noam.rect.left - (ashish.rect.left + ashish.rect.width) > 8);
+    const mails = page1.boxes.filter((box) => /@/.test(box.text));
+    assert.ok(mails.length >= 4);
+    assert.equal(mails.some((box) => (box.text.match(/@/g) || []).length > 1), false);
+    const flow = readingOrderMirrorItems(
+      page1,
+      page1.translatable.map((unit) => ({ translation: unit.text, role: unit.role }))
+    );
+    const roles = flow.map((row) => row.role);
+    assert.ok(roles.indexOf("title") < roles.indexOf("heading"));
+    assert.ok(roles.lastIndexOf("heading") < roles.findIndex((role, i) => role === "paragraph" && /dominant/.test(flow[i].original || flow[i].translation || "")));
+    assert.equal(flow[flow.length - 1].role, "margin");
+    assert.match(readFileSync(join(root, "pdf/PDF-MIRROR-LAYOUT-FIDELITY.md"), "utf8"), /禁止叠墨/);
+    assert.match(readFileSync(join(root, "pdf/viewer.js"), "utf8"), /relayoutMirrorPageBoxes/);
+    assert.match(readFileSync(join(root, "pdf/viewer.css"), "utf8"), /writing-mode:\s*vertical-rl/);
+  } finally {
+    await doc.destroy();
+  }
 });
 
 test("vendored pdf.js yields positioned title + body boxes", async () => {

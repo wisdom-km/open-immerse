@@ -22,7 +22,7 @@
 
 坐标系 PDF 页归一化→CSS%；原子=合并 text run 块；精度中心偏差≤页宽 3% 或 12px；双栏阅读序；缩放等比重算；数据 `{page,role,bbox,sourceText,translation?,imageRef?}`
 
-验收 Attention 首页标题/作者/摘要一眼同构
+验收 Attention **全文**标题/作者/摘要/双栏/公式/图一眼同构。右栏必须跟踪左栏几何：无叠墨、无栏间串位（竖排 arXiv / 页边不得横切入摘要）。详见 `PDF-MIRROR-LAYOUT-FIDELITY.md`。
 
 ### 4.1.1 CJK 不裁切
 

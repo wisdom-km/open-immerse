@@ -11,7 +11,7 @@ Hard gate. Companion to `PDF-READOUT-MIRROR.md` §4.1.1.
    - **A** scrollHeight rewrite
    - **B** `max(srcH, fs×lh)` + 2–4px pad
    - **C** top/left/width only + `height: auto` (min-height may keep source bbox)
-5. Vertical looseness preferred over glyph clip; slight downward overlap OK.
+5. Vertical looseness preferred over glyph clip. After a box grows, later siblings on the same X band must be pushed (`relayoutMirrorPageBoxes`) so stacked ink is not OK. Same-row author cells (no X overlap) stay put. Do not shrink font to dodge clip.
 6. Do **NOT** shrink font to dodge clip.
 
 ## Acceptance (Attention homepage)
