@@ -4,11 +4,11 @@
 
 Open-source Chrome **bilingual webpage translation** extension (Manifest V3).
 
-Translate foreign-language pages, plain-text documents, and text-layer PDFs into a side-by-side reading view. You bring the API keys; you pick the engine.
+Translate foreign-language webpages and plain-text documents into a side-by-side reading view. You bring the API keys; you pick the engine.
 
 Repo: https://github.com/wisdom-km/open-immerse
 
-Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. The PDF viewer can open files and send pages for translation; the right pane is a Markdown reading-flow, not a bbox mirror. YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
+Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. **PDF reading is a lab feature: off by default.** It only appears after you opt in under **Settings → Advanced**. When enabled, the path is text-layer extract → Markdown reading-flow → translate (not a bbox mirror). YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
 
 Not affiliated with the commercial “Immersive Translate” product.
 
@@ -23,11 +23,42 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Per-page quota | `all` or `title + lead` (H1 + first body block; the lead is capped at about 3 lines / 220 characters). **Batch size** only controls how many segments go in one API request, not how many segments the page may translate. |
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
-| PDF reader | Experimental. In-extension pdf.js for local files or URLs. Left pane: continuous original pages. Right pane: extract title + body in **reading order** and render a **Markdown reading-flow** — **not** a bbox layout mirror (two-column papers: left then right; headers/footers/page numbers filtered). Formulas try to recover copyable LaTeX + KaTeX; figures may be skipped or shown as placeholders. No text layer → empty right pane. Open from the popup footer **PDF**. Webpage bilingual remains the regression target. |
+| Faithful-then-polish | **On by default** (main Options page, not Advanced). LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only; a custom system prompt skips the second pass. |
+| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). When enabled: text-layer extract → Markdown reading-flow → translate. Content can misalign; **formulas may be dropped or garbled**; **English formulas/math may be wrongly translated into Chinese**. No OCR; no text layer → empty right pane. Future (not shipped): **OCR and/or multimodal vision** → faithful PDF→Markdown (**preserve formulas/LaTeX; do not translate math in that step**) → then translate Markdown with **formula/symbol/code protection**. One-shot multimodal image→translated Chinese MD is **not** enough alone. **Webpage bilingual remains the primary product.** |
 | Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
 
 Suggested regression page (article-scope scan and title handling were tuned on posts like this):  
 https://claude.com/blog/what-1-000-small-business-owners-taught-us-about-ai
+
+---
+
+## Screenshots
+
+**What it does (bilingual page)**
+
+![Bilingual webpage and FAB](docs/screenshots/01-bilingual-page.png)
+
+Chinese gloss under the original paragraphs; glass FAB at the bottom right.
+
+![FAB capsule](docs/screenshots/02-fab.png)
+
+**How to use (popup / FAB)**
+
+![Toolbar popup](docs/screenshots/05-popup.png)
+
+Page toggle, scope, and languages. **No PDF in the footer by default**; the PDF link in this shot is **after enabling lab PDF**.
+
+**How to configure (engine + spacing)**
+
+![Options: default engine and test connection](docs/screenshots/03-options-engine.png)
+
+![Options: body–gloss spacing](docs/screenshots/04-options-spacing.png)
+
+**PDF lab (optional)**
+
+![PDF Markdown reading-flow](docs/screenshots/06-pdf-readout.png)
+
+Lab feature. Enable it under **Settings → Advanced**. Off by default.
 
 ---
 
@@ -78,7 +109,7 @@ Open a foreign-language page and click **翻译** on the FAB.
 | Uncheck “翻译此页” in the popup | Same as Original (clears translations) |
 | `Alt+T` | Start; press again to restore original |
 
-The popup can also change page scope, per-page quota, source/target language, and per-site auto-translate. If the current tab is a PDF, the primary popup button becomes **在沉浸译中打开** (Open in Open Immerse).
+The popup can also change page scope, per-page quota, source/target language, and per-site auto-translate. PDF entries are hidden by default. Only after you enable **PDF 阅读（实验室）** under **Settings → Advanced** does the popup footer show **PDF**, and a PDF tab show **在沉浸译中打开** (Open in Open Immerse).
 
 Translation style (dashed / solid / boxed / dim dashed / left-bar card under the source) and font scale live in Settings.
 
@@ -86,6 +117,8 @@ Spacing (Settings → 语言与通用, number inputs; **body paragraphs only —
 
 - **正文译文间距** (`bodyGlossGap`): gap between each source block and its gloss underneath; typically ~0.10–0.70 (em-ish)
 - **译文段间距** (`bodyGlossStackGap`): extra space between consecutive body gloss blocks; range **0–2.5**. Values 0 / 1 / 2 are visibly different
+
+On the main Options page, **先信后润** (`twoStepPolish`, **on by default**): LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only.
 
 ### 3. Save and review
 
@@ -99,11 +132,13 @@ Items live in `chrome.storage.local` (`oiLearning`), separate from synced settin
 
 Popup → **文档**, or the link at the top of Settings. Paste or load TXT / MD / HTML, translate by segment, edit the target on the right, export `open-immerse-bilingual.html`.
 
-No layout-preserving Office or scanned files here. Use the PDF viewer or convert to plain text first.
+No layout-preserving Office or scanned files here. Convert to plain text first. Scans wait on the lab OCR path, or convert to Markdown yourself.
 
-### 5. PDF
+### 5. PDF (lab, off by default)
 
-Popup footer **PDF**, or **在沉浸译中打开** when the current tab is already a PDF.
+**Not a default entry.** Enable **PDF 阅读（实验室）** under **Settings → Advanced** before the popup footer **PDF** button or a PDF tab’s **在沉浸译中打开** appear.
+
+Current path when enabled: text-layer extract → Markdown reading-flow → translate.
 
 - Left pane: pdf.js continuous scroll; zoom applies only to the original page
 - Top bar: Open PDF → `当前页 | 全文` (current page / full document; switching does **not** start a job) → Translate / Stop → Original → export MD / PDF
@@ -113,7 +148,10 @@ Popup footer **PDF**, or **在沉浸译中打开** when the current tab is alrea
 - Separate right-pane zoom chip (0.5–5, step 0.25); not in the top bar
 - Drag the split to resize columns
 - MD export uses `$...$` / `$$...$$` when LaTeX was recovered; otherwise Unicode or `[公式]`
-- **No OCR**, and the extension does not inject into Chrome’s built-in PDF viewer. No text layer → empty right pane. This path is still experimental; regress against webpage bilingual
+- **Known limits:** content can misalign; **formulas may be dropped or garbled**; **English formulas/math may be wrongly translated into Chinese**
+- **No OCR**, and the extension does not inject into Chrome’s built-in PDF viewer. No text layer → empty right pane
+- **Future (not shipped):** **OCR and/or multimodal vision** → faithful PDF→Markdown (**preserve formulas/LaTeX; do not translate math in that step**) → then translate Markdown with **formula/symbol/code protection**. One-shot multimodal image→translated Chinese MD is **not** enough alone. The current text-layer lab path can still drop or wrongly translate English formulas
+- Webpage bilingual remains the primary product and the regression target
 
 ---
 
@@ -145,8 +183,7 @@ Language list comes from `lib/languages.js` (auto-detect, Simplified/Traditional
 
 Every LLM adapter shares one Skill: `lib/translate-skill.js`.
 
-- Default is a **single** pass (saves tokens)
-- Settings → Advanced **先信后润** (`twoStepPolish`, off by default): faithful draft first. The page inserts the draft and toasts “润色中”, then replaces it with the polished text. If polish fails, the draft stays and a short “润色失败” toast appears
+- Settings page **先信后润** (`twoStepPolish`, **on by default**): faithful draft first. The page inserts the draft and toasts “润色中”, then replaces it with the polished text. Better quality, more tokens. You can turn it off. LLM engines only. If polish fails, the draft stays and a short “润色失败” toast appears
 - This is ordinary language conversion (e.g. English → modern Chinese). **Not classical Chinese**
 - A non-empty custom system prompt skips the second pass
 - Chinese targets get a glossary hint, then two safety nets after parse: `guardZhBusinessSense` (so “business owners” does not fuse into 主教 / “bishop”) and `guardZhTitleCalques` (strips hollow title wrappers)
@@ -197,7 +234,7 @@ open-immerse/
 ├── lib/
 │   ├── providers.js           # all engine adapters
 │   ├── translate-skill.js     # shared Skill / two-step prompts
-│   ├── storage.js             # defaults + migration (settingsVersion = 7)
+│   ├── storage.js             # defaults + migration (settingsVersion = 8)
 │   ├── page-scan.js           # node collection (keep in sync with content.js)
 │   ├── site-presets.js        # site presets (claude.com today)
 │   ├── bilingual-layout.js
@@ -209,6 +246,7 @@ open-immerse/
 │   ├── export.js              # MD / simple PDF / docx
 │   ├── translate-limit.js     # title + lead quota
 │   └── features.js
+├── docs/screenshots/          # README screenshots
 ├── ui/tokens.css
 ├── tests/*.test.mjs
 ├── _locales/zh_CN|en
@@ -265,7 +303,7 @@ Not built, not guaranteed, or still experimental:
 
 | Item | Notes |
 | --- | --- |
-| **PDF reading-flow (experimental)** | Right pane is a reading-order Markdown document (title + body), not a bbox mirror. No OCR; no text layer → empty right pane. Webpage bilingual remains the regression target |
+| **PDF reader (lab, default off)** | `features.pdf` defaults to `false`. When on: text layer → Markdown reading-flow → translate. Content can misalign; formulas may drop/garble or be wrongly translated into Chinese. No OCR; no text layer → empty right pane. Later: **OCR and/or multimodal vision** → formula-preserving PDF→Markdown → then translate with formula/symbol/code protection. One-shot image→Chinese MD is not enough. Webpage bilingual remains the primary product |
 | Sidebar en/zh pairing | Shelved; product focus is body/main-text bilingual |
 | Chrome Web Store | Unpacked load only |
 | OCR | Scanned PDFs with no text layer leave the right pane empty |

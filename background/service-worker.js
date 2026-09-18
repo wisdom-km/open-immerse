@@ -1,7 +1,7 @@
 import { getProvider, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
-import { resolveFeatures } from "../lib/features.js";
+import { featureOn, resolveFeatures } from "../lib/features.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
@@ -128,9 +128,11 @@ async function handleMessage(message, sender) {
     case "OI_REVIEW_LEARNING":
       return { ok: true, item: await reviewItem(message.id, message.grade) };
     case "OI_OPEN_PAGE": {
-      const features = resolveFeatures(await getSettings());
+      const settings = await getSettings();
+      const features = resolveFeatures(settings);
       if (message.page === "documents" && !features.documents) return { ok: false, error: "documents off" };
       if (message.page === "learning" && !features.learning) return { ok: false, error: "learning off" };
+      if (message.page === "pdf" && !featureOn(settings, "pdf")) return { ok: false, error: "pdf off" };
       const path =
         message.page === "documents"
           ? "documents/documents.html"

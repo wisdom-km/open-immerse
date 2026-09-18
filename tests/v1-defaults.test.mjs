@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_FEATURES, resolveFeatures } from "../lib/features.js";
+import { DEFAULT_FEATURES, featureOn, laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import {
   BODY_GLOSS_GAP_DEFAULT,
   BODY_GLOSS_GAP_MAX,
@@ -55,11 +55,11 @@ function fakeNode({ tagName = "P", className = "", hits = [], text = "Hello worl
   return node;
 }
 
-test("default translateScope is article and settingsVersion is 7", () => {
+test("default translateScope is article and settingsVersion is 8", () => {
   assert.equal(DEFAULT_SETTINGS.translateScope, "article");
   assert.equal(DEFAULT_SETTINGS.settingsVersion, SETTINGS_VERSION);
-  assert.equal(SETTINGS_VERSION, 7);
-  assert.equal(DEFAULT_SETTINGS.twoStepPolish, false);
+  assert.equal(SETTINGS_VERSION, 8);
+  assert.equal(DEFAULT_SETTINGS.twoStepPolish, true);
   assert.equal(DEFAULT_SETTINGS.deepThink, false);
   assert.equal(DEFAULT_SETTINGS.bodyGlossGap, BODY_GLOSS_GAP_DEFAULT);
   assert.equal(DEFAULT_SETTINGS.bodyGlossGap, 0.35);
@@ -82,6 +82,22 @@ test("v1 features stay on; youtube/x stay off", () => {
   assert.equal(DEFAULT_FEATURES.x, false);
 });
 
+test("pdf lab feature is off by default; missing keys stay off", () => {
+  assert.equal(DEFAULT_FEATURES.pdf, false);
+  assert.equal(resolveFeatures({}).pdf, false);
+  assert.equal(resolveFeatures({ features: {} }).pdf, false);
+  assert.equal(resolveFeatures({ features: { webpage: true } }).pdf, false);
+  assert.equal(featureOn({}, "pdf"), false);
+  assert.equal(laterFeatures().some((feat) => feat.id === "pdf"), true);
+  assert.equal(v1Features().some((feat) => feat.id === "pdf"), false);
+  assert.match(laterFeatures().find((feat) => feat.id === "pdf").label, /实验室/);
+  const stored = { settingsVersion: 7, features: { webpage: true, learning: true } };
+  const merged = { ...DEFAULT_SETTINGS, ...stored, features: { ...DEFAULT_FEATURES, ...stored.features } };
+  assert.equal(merged.features.pdf, false);
+  const { settings } = migrateSettings(merged, stored);
+  assert.equal(settings.features.pdf, false);
+});
+
 test("subtitleEnabled does not flip youtube/x on", () => {
   const features = resolveFeatures({ subtitleEnabled: true, features: { youtube: false, x: false } });
   assert.equal(features.youtube, false);
@@ -94,7 +110,7 @@ test("migrateSettings forces article when stored scope is page even without vers
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, true);
   assert.equal(settings.translateScope, "article");
-  assert.equal(settings.settingsVersion, 7);
+  assert.equal(settings.settingsVersion, 8);
   assert.equal(settings.articleScopeMigrated, true);
 });
 
@@ -104,7 +120,7 @@ test("migrateSettings forces article on old page-scope installs", () => {
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, true);
   assert.equal(settings.translateScope, "article");
-  assert.equal(settings.settingsVersion, 7);
+  assert.equal(settings.settingsVersion, 8);
 });
 
 test("migrateSettings forces article for testers stuck on v5 page scope", () => {
@@ -113,16 +129,43 @@ test("migrateSettings forces article for testers stuck on v5 page scope", () => 
   const { settings, changed } = migrateSettings(merged, stored);
   assert.equal(changed, true);
   assert.equal(settings.translateScope, "article");
-  assert.equal(settings.settingsVersion, 7);
+  assert.equal(settings.settingsVersion, 8);
   assert.equal(settings.articleScopeMigrated, true);
 });
 
-test("migrateSettings leaves a later user-picked page scope alone", () => {
+test("migrateSettings v8 turns on twoStepPolish when missing but keeps page scope", () => {
   const stored = { settingsVersion: 7, translateScope: "page", articleScopeMigrated: true };
   const merged = { ...DEFAULT_SETTINGS, ...stored };
   const { settings, changed } = migrateSettings(merged, stored);
-  assert.equal(changed, false);
+  assert.equal(changed, true);
   assert.equal(settings.translateScope, "page");
+  assert.equal(settings.settingsVersion, 8);
+  assert.equal(settings.twoStepPolish, true);
+  assert.equal(settings.articleScopeMigrated, true);
+});
+
+test("migrateSettings v8 keeps explicit twoStepPolish false", () => {
+  const stored = {
+    settingsVersion: 7,
+    twoStepPolish: false,
+    articleScopeMigrated: true,
+    translateScope: "article"
+  };
+  const merged = { ...DEFAULT_SETTINGS, ...stored };
+  const { settings, changed } = migrateSettings(merged, stored);
+  assert.equal(changed, true);
+  assert.equal(settings.twoStepPolish, false);
+  assert.equal(settings.settingsVersion, 8);
+  assert.equal(settings.translateScope, "article");
+});
+
+test("migrateSettings v8 keeps explicit twoStepPolish true", () => {
+  const stored = { settingsVersion: 7, twoStepPolish: true, articleScopeMigrated: true };
+  const merged = { ...DEFAULT_SETTINGS, ...stored };
+  const { settings, changed } = migrateSettings(merged, stored);
+  assert.equal(changed, true);
+  assert.equal(settings.twoStepPolish, true);
+  assert.equal(settings.settingsVersion, 8);
 });
 
 test("migrateSettings remaps preview alias to title_lead without resetting page scope", () => {
@@ -137,6 +180,8 @@ test("migrateSettings remaps preview alias to title_lead without resetting page 
   assert.equal(changed, true);
   assert.equal(settings.translateLimit, "title_lead");
   assert.equal(settings.translateScope, "page");
+  assert.equal(settings.settingsVersion, 8);
+  assert.equal(settings.twoStepPolish, true);
 });
 
 test("claude preset skips hero details and aside rail", () => {
