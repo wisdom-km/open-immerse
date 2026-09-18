@@ -21,11 +21,42 @@
 | 本次翻译额度 | `全部` 或 `仅标题+开头`（H1 + 第一段正文，开头段最多约 3 行 / 220 字）。「每批条数」只决定一次请求翻几段，不是本页总数。 |
 | 学习中心 | 收藏单词 / 短语 / 句子；全部 / 今日待复习（简化 SM-2）；导出 Markdown / PDF / Word。 |
 | 文档翻译 | TXT / MD / HTML 直读分段双语，译文可改，失败可重试，导出 HTML。 |
-| PDF 阅读（实验室） | **默认关闭**（设置 → 高级，opt-in）。开启后：文字层提取 → Markdown 通读 → 翻译。内容可能错位；**公式可能丢失或乱码**；**英文公式/数学可能被误译成中文**。无 OCR；无文字层则右栏空白。后期计划：接入 **OCR API** → PDF 转 Markdown → 再翻译（更适合扫描件和公式论文）。**网页双语仍是主产品。** |
+| 先信后润 | **默认开**（设置页主界面，不在高级里）。LLM 先忠实直译，再润色一稿；质量更好、更耗 token。可关。仅 LLM 引擎生效；自定义系统提示词则跳过第二步。 |
+| PDF 阅读（实验室） | **默认关闭**（设置 → 高级，opt-in）。开启后：文字层提取 → Markdown 通读 → 翻译。内容可能错位；**公式可能丢失或乱码**；**英文公式/数学可能被误译成中文**。无 OCR；无文字层则右栏空白。后期（未交付）：**OCR 和/或多模态视觉** → 忠实 PDF→Markdown（**保留公式/LaTeX，该步不译数学**）→ 再翻译 Markdown 并**保护公式、符号与代码**。单次多模态「图→中文 MD」不够。**网页双语仍是主产品。** |
 | 快捷键 | `Alt+T`：开译 / 恢复原文（关即清译文）。 |
 
 建议回归页（主栏扫描、标题口径都按这类博客调过）：  
 https://claude.com/blog/what-1-000-small-business-owners-taught-us-about-ai
+
+---
+
+## 界面预览
+
+**功能（双语页）**
+
+![网页双语与右下角 FAB](docs/screenshots/01-bilingual-page.png)
+
+原文下方中文译文，右下角玻璃胶囊。
+
+![FAB 胶囊](docs/screenshots/02-fab.png)
+
+**如何使用（弹层 / FAB）**
+
+![扩展弹层](docs/screenshots/05-popup.png)
+
+本页开关、范围与语言。**默认底部没有 PDF**；上图底部 PDF 链是**开启实验室 PDF 后**。
+
+**如何配置（引擎 + 间距）**
+
+![设置：默认引擎与测试连接](docs/screenshots/03-options-engine.png)
+
+![设置：正文译文间距](docs/screenshots/04-options-spacing.png)
+
+**PDF 实验室（可选）**
+
+![PDF Markdown 通读](docs/screenshots/06-pdf-readout.png)
+
+实验室功能，需在 **设置 → 高级** 开启。默认关闭。
 
 ---
 
@@ -83,6 +114,8 @@ git clone https://github.com/wisdom-km/open-immerse.git
 - **正文译文间距**（`bodyGlossGap`）：每个原文块与其下方译文的空隙，约 0.10–0.70（em 量级）
 - **译文段间距**（`bodyGlossStackGap`）：相邻两段正文译文之间的额外空隙，范围 **0–2.5**；设成 0 / 1 / 2 时肉眼可辨
 
+设置页主界面 **先信后润**（`twoStepPolish`，**默认开**）：LLM 先忠实直译，再润色一稿；质量更好、更耗 token。可关。仅 LLM 引擎生效。
+
 ### 3. 收藏与复习
 
 - 选中文本 → 右键 **收藏**（会先译再入库）
@@ -113,7 +146,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 - 导出 MD 含 `$...$` / `$$...$$`（能回收到 LaTeX 时）；否则 Unicode 或 `[公式]`
 - **已知限制**：通读内容可能错位；**公式可能丢失或乱码**；**英文公式/数学可能被误译成中文**
 - **不做 OCR**，也不注入 Chrome 自带 PDF Viewer。没有文字层则右栏空白
-- **后期方向（尚未交付）**：接入 **OCR API** → 把 PDF 转成 Markdown → 再翻译这份 Markdown（更适合扫描件和公式论文）
+- **后期方向（尚未交付）**：**OCR 和/或多模态视觉** → 忠实 PDF→Markdown（**这一步保留公式/LaTeX，不翻译数学**）→ 再翻译 Markdown，并**保护公式、符号与代码**。单次多模态「图→中文 MD」不够。当前文字层实验室路径仍可能丢掉或误译英文公式
 - 网页双语仍是主产品与回归标准
 
 ---
@@ -146,8 +179,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 
 所有 LLM adapter 走同一套 Skill：`lib/translate-skill.js`。
 
-- 默认 **单次** 翻译，省 token
-- 设置 → 高级 **先信后润**（`twoStepPolish`，默认关）：先忠实直译，页面先插入草稿并 toast「润色中」，再换成终稿。润色失败保留草稿，短 toast「润色失败」
+- 设置页主界面 **先信后润**（`twoStepPolish`，**默认开**）：先忠实直译，页面先插入草稿并 toast「润色中」，再换成终稿。质量更好、更耗 token。可关。仅 LLM 引擎生效。润色失败保留草稿，短 toast「润色失败」
 - 这是普通语际转换（如英 → 现代汉语），**不是文言文**
 - 引擎里填了自定义系统提示词 → 仍单次，跳过第二步
 - 中文目标会追加 glossary hint，并在解析后跑两道安全网：`guardZhBusinessSense`（避免 “business owners” 融成「主教」）、`guardZhTitleCalques`（去掉标题空套话）
@@ -198,7 +230,7 @@ open-immerse/
 ├── lib/
 │   ├── providers.js           # 全部引擎 adapter
 │   ├── translate-skill.js     # 共用 Skill / 两步提示词
-│   ├── storage.js             # 默认设置与迁移（settingsVersion = 7）
+│   ├── storage.js             # 默认设置与迁移（settingsVersion = 8）
 │   ├── page-scan.js           # 节点收集（与 content.js 保持一致）
 │   ├── site-presets.js        # 站点预设（目前 claude.com）
 │   ├── bilingual-layout.js    # 双语排版
@@ -210,6 +242,7 @@ open-immerse/
 │   ├── export.js              # MD / 简易 PDF / docx
 │   ├── translate-limit.js     # 标题+开头额度
 │   └── features.js            # 功能开关
+├── docs/screenshots/          # README 界面预览
 ├── ui/tokens.css
 ├── tests/*.test.mjs
 ├── _locales/zh_CN|en
@@ -266,7 +299,7 @@ node --test tests/*.test.mjs
 
 | 项 | 说明 |
 | --- | --- |
-| **PDF 阅读（实验室，默认关）** | `features.pdf` 默认 `false`。开启后：文字层 → Markdown 通读 → 翻译。内容可能错位；公式可能丢失/乱码或被误译成中文。无 OCR；无文字层则右栏空白。后期：OCR API → PDF→Markdown → 再翻译。网页双语仍是主产品 |
+| **PDF 阅读（实验室，默认关）** | `features.pdf` 默认 `false`。开启后：文字层 → Markdown 通读 → 翻译。内容可能错位；公式可能丢失/乱码或被误译成中文。无 OCR；无文字层则右栏空白。后期：**OCR 和/或多模态视觉** → 保公式 PDF→Markdown → 再翻译并保护公式/符号/代码。单次图→中文 MD 不够。网页双语仍是主产品 |
 | 侧栏英/中配对 | 搁置；产品焦点是正文双语 |
 | Chrome 网上应用店 | 目前只支持加载已解压目录 |
 | OCR | 扫描版 PDF 无文字层则右侧空白 |

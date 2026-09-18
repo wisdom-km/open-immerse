@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import {
   DEFAULT_LLM_PROMPT,
   STEP1_FAITHFUL_INSTRUCTION,
@@ -70,11 +71,13 @@ test("two-step is ordinary language conversion, not classical literary style", (
   assert.doesNotMatch(TRANSLATION_SKILL_CONTRACT, /Li Jigang|五轮|SVG/i);
 });
 
-test("isTwoStepPolish defaults off; custom prompt skips polish", () => {
+test("isTwoStepPolish follows the settings flag; custom prompt skips polish", () => {
   assert.equal(isTwoStepPolish(), false);
   assert.equal(isTwoStepPolish({}), false);
   assert.equal(isTwoStepPolish({ twoStepPolish: false }), false);
   assert.equal(isTwoStepPolish({ twoStepPolish: true }), true);
+  assert.equal(isTwoStepPolish(DEFAULT_SETTINGS), true);
+  assert.equal(DEFAULT_SETTINGS.twoStepPolish, true);
   assert.equal(hasCustomTranslatorPrompt({ prompt: "  " }), false);
   assert.equal(hasCustomTranslatorPrompt({ prompt: "Translate only." }), true);
   assert.equal(isTwoStepPolish({ twoStepPolish: true, prompt: "Translate into zh-CN only." }), false);
