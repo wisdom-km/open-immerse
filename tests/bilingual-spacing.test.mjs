@@ -35,6 +35,7 @@ test("inline translations stay on the same line with a small left gap", () => {
 test("side-rail translations keep body underline but not the body pull-up margin", () => {
   assert.match(css, /\.oi-translation\.oi-side-rail\s*\{[^}]*display:\s*block/s);
   assert.match(css, /\.oi-translation\.oi-side-rail\s*\{[^}]*width:\s*100%/s);
+  assert.match(css, /\.oi-translation\.oi-side-rail\s*\{[^}]*min-width:\s*100%/s);
   assert.match(css, /\.oi-translation\.oi-side-rail\s*\{[^}]*flex-basis:\s*100%/s);
   assert.match(css, /\.oi-translation\.oi-side-rail\s*\{[^}]*margin:\s*0\.15em\s+0\s+0\.2em/s);
   assert.equal(/\.oi-translation\.oi-side-rail\s*\{[^}]*oi-inline/s.test(css), false);

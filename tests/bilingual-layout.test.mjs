@@ -783,9 +783,11 @@ test("side-rail flex-row item translation uses full host width not shrink wrap",
   assert.equal(source.style.flexWrap, "wrap");
   assert.equal(translation.style.width, "100%");
   assert.equal(translation.style.maxWidth, "100%");
+  assert.equal(translation.style.minWidth, "100%");
   assert.equal(translation.style.flexBasis, "100%");
   assert.notEqual(translation.style.width, "54px");
   assert.notEqual(translation.style.maxWidth, "54px");
+  assert.ok(laid.width >= 220 || translation.style.width === "100%");
   assert.equal(laid.useColumn, true);
   assert.equal(translation.classList.contains("oi-inline"), false);
 });
@@ -830,7 +832,51 @@ test("side-rail card host unlocks fixed height so the next card is pushed down",
   assert.equal(button.style.height, "auto");
   OI.applyLayout(translation, title);
   assert.equal(translation.style.width, "100%");
+  assert.equal(translation.style.minWidth, "100%");
   assert.equal(translation.classList.contains("oi-inline"), false);
+});
+
+test("Apple-like sidebar rows do not share a y-band after next-row clearance", () => {
+  const OI = loadBilingual();
+  const kids = [];
+  const ul = { tagName: "UL", children: kids };
+  function attach(el) {
+    kids.push(el);
+    el.parentElement = ul;
+    Object.defineProperty(el, "nextElementSibling", {
+      configurable: true,
+      get() {
+        const i = kids.indexOf(el);
+        return i >= 0 ? kids[i + 1] || null : null;
+      }
+    });
+    return el;
+  }
+  const row = fakeBox({ tagName: "LI", className: "nav-item", top: 100, bottom: 124, width: 180, left: 16, height: 24 });
+  const next = fakeBox({ tagName: "LI", className: "nav-item", top: 124, bottom: 148, width: 180, left: 16, height: 24 });
+  attach(row);
+  attach(next);
+  const translation = fakeBox({
+    className: "oi-translation oi-side-rail",
+    top: 118,
+    bottom: 148,
+    width: 54,
+    left: 16,
+    height: 30,
+    parent: row
+  });
+  const nextBase = { top: 124, bottom: 148, left: 16, right: 196, width: 180, height: 24 };
+  next.getBoundingClientRect = () => {
+    const extra = parseFloat(row.style.marginBottom) || 0;
+    return { ...nextBase, top: nextBase.top + extra, bottom: nextBase.bottom + extra };
+  };
+  assert.equal(OI.nextSideRailRow(row), next);
+  assert.equal(OI.sharesYBand(translation, next), true);
+  const extra = OI.clearNextRowOverlap(translation, row);
+  assert.ok(extra >= 26);
+  assert.equal(OI.sharesYBand(translation, next), false);
+  const gap = next.getBoundingClientRect().top - translation.getBoundingClientRect().bottom;
+  assert.ok(gap >= 2);
 });
 
 function createIndentedParagraph({
