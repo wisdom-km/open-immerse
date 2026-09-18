@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PAGE_CHROME_SELECTOR, PAGE_TOP_NAV_SELECTOR, PRIMARY_TITLE_SKIP_ANCESTOR } from "../lib/site-presets.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { applyTranslateLimit } from "../lib/translate-limit.js";
-import { hasNestedCollectible, inSideRail, isPrimaryTitle, pickSideRailMountHost, placeTranslationNode, planTranslationMount, shouldCollectNode, shouldInline, shouldSkipScopedChrome, translationClassName } from "../lib/page-scan.js";
+import { detachStaleRailGloss, ensureRailId, getText, hasNestedCollectible, inSideRail, isPrimaryTitle, mountPairedGloss, pairGlossBySource, pickSideRailMountHost, placeTranslationNode, planTranslationMount, rebindLiveSourceHash, shouldCollectNode, shouldInline, shouldSkipScopedChrome, sourceTextHash, stampRailMountKeys, translationClassName } from "../lib/page-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentSrc = readFileSync(join(root, "content/content.js"), "utf8");
@@ -22,9 +22,12 @@ function fakeNode({
   width = 480,
   height = 40
 } = {}) {
+  const attrs = {};
+  const dataset = {};
   const node = {
     tagName,
     className,
+    dataset,
     nextElementSibling: null,
     matches(sel) {
       return hits.some((hit) => sel.includes(hit));
@@ -34,6 +37,17 @@ function fakeNode({
     },
     querySelector() {
       return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+    setAttribute(name, value) {
+      attrs[name] = String(value);
+      if (name === "data-oi-rail-id") dataset.oiRailId = String(value);
+      if (name === "data-oi-for") dataset.oiFor = String(value);
+    },
+    getAttribute(name) {
+      return attrs[name] || null;
     },
     getBoundingClientRect() {
       return { width, height, left, right: left + width, top: 180 };
@@ -309,9 +323,26 @@ function sidebarFixture(tagName, text, hits, box = {}) {
   const own = [];
   source.parentElement = parent;
   source.children = own;
+  source.__label = text;
+  source.cloneNode = () => ({
+    querySelectorAll() {
+      return { forEach() {} };
+    },
+    get innerText() {
+      return source.__label;
+    },
+    get textContent() {
+      return source.__label;
+    }
+  });
   source.appendChild = (child) => {
     own.push(child);
     child.parentElement = source;
+    child.remove = () => {
+      const i = own.indexOf(child);
+      if (i >= 0) own.splice(i, 1);
+      child.parentElement = null;
+    };
     return child;
   };
   Object.defineProperty(source, "lastElementChild", {
@@ -319,7 +350,15 @@ function sidebarFixture(tagName, text, hits, box = {}) {
       return own[own.length - 1] || null;
     }
   });
-  source.querySelector = () => null;
+  const matchTranslation = (sel) => String(sel).includes("oi-translation");
+  source.querySelector = (sel) => {
+    if (!matchTranslation(sel)) return null;
+    return own.find((n) => n.classList?.contains("oi-translation")) || null;
+  };
+  source.querySelectorAll = (sel) => {
+    if (!matchTranslation(sel)) return [];
+    return own.filter((n) => n.classList?.contains("oi-translation"));
+  };
   source.insertAdjacentElement = (where, child) => {
     if (where !== "afterend") return child;
     const i = kids.indexOf(source);
@@ -338,15 +377,28 @@ function sidebarFixture(tagName, text, hits, box = {}) {
   return { parent, source };
 }
 
-function mountedNode(className) {
-  return {
+function mountedNode(className, text = "") {
+  const attrs = {};
+  const dataset = {};
+  const node = {
     className,
+    textContent: text,
+    dataset,
     classList: {
       contains(name) {
-        return String(className).split(/\s+/).includes(name);
+        return String(node.className).split(/\s+/).includes(name);
       }
+    },
+    setAttribute(name, value) {
+      attrs[name] = String(value);
+      if (name === "data-oi-for") dataset.oiFor = String(value);
+      if (name === "data-oi-src-hash") dataset.oiSrcHash = String(value);
+    },
+    getAttribute(name) {
+      return attrs[name] || "";
     }
   };
+  return node;
 }
 
 test("side-rail fixture stacks translation below source without oi-inline", () => {
@@ -422,6 +474,162 @@ test("side-rail card title is not oi-inline", () => {
   assert.match(plan.className, /oi-side-rail/);
   assert.equal(plan.className.includes("oi-inline"), false);
   assert.equal(plan.placement, "append");
+});
+
+test("side-rail skip-middle keeps gloss on the same source, no neighbor fill", () => {
+  const specs = [
+    { text: "Getting started", zh: "入门" },
+    { text: "Design principles", zh: "设计原则" },
+    { text: "Designing for iOS", zh: "为 iOS 设计" }
+  ];
+  const items = specs.map((spec) => {
+    const { source } = sidebarFixture("LI", spec.text, ["aside"]);
+    return { source, ...spec };
+  });
+  const sources = items.map((item) => item.source);
+  const translations = items.map((item) => item.zh);
+  const keep = [sources[0], sources[2]];
+
+  const zipped = keep.map((el, i) => ({ el, text: translations[i] }));
+  assert.equal(zipped[1].text, "设计原则", "bare index zip after skip is the bug");
+
+  const pairs = pairGlossBySource(sources, translations, keep);
+  assert.equal(pairs.length, 2);
+  assert.equal(getText(pairs[0].source), "Getting started");
+  assert.equal(pairs[0].text, "入门");
+  assert.notEqual(pairs[0].text, "设计原则");
+  assert.equal(getText(pairs[1].source), "Designing for iOS");
+  assert.equal(pairs[1].text, "为 iOS 设计");
+  assert.notEqual(pairs[1].text, "设计原则");
+  assert.equal(pairGlossBySource(sources, translations, [sources[1]])[0].text, "设计原则");
+
+  const missing = pairGlossBySource(sources, ["入门", "", "为 iOS 设计"], keep);
+  assert.equal(missing[0].text, "入门");
+  assert.equal(missing[1].text, "为 iOS 设计");
+
+  const mounted = mountPairedGloss(sources, translations, keep, articleCtx, {
+    mode: "block",
+    createNode(plan, pair) {
+      return mountedNode(plan.className, pair.text);
+    }
+  });
+  assert.equal(mounted.length, 2);
+  assert.equal(mounted[0].node.textContent, "入门");
+  assert.equal(mounted[0].node.getAttribute("data-oi-for"), pairs[0].key);
+  assert.equal(mounted[0].node.getAttribute("data-oi-src-hash"), sourceTextHash("Getting started"));
+  assert.equal(mounted[1].node.textContent, "为 iOS 设计");
+  assert.equal(sources[0].lastElementChild, mounted[0].node);
+  assert.equal(sources[2].lastElementChild, mounted[1].node);
+  assert.equal(sources[1].lastElementChild, null);
+  assert.match(mounted[0].plan.className, /oi-side-rail/);
+  assert.equal(mounted[0].plan.className.includes("oi-inline"), false);
+  assert.equal(ensureRailId(sources[0]), pairs[0].key);
+});
+
+test("recycle-scroller same LI remounts Getting started→Design principles→Technologies", () => {
+  const { source } = sidebarFixture("LI", "Getting started", ["aside"]);
+  const steps = [
+    { en: "Getting started", zh: "入门", not: "设计原则" },
+    { en: "Design principles", zh: "设计原则", not: "技术" },
+    { en: "Technologies", zh: "技术", not: "设计原则" }
+  ];
+  let previous = null;
+  for (const step of steps) {
+    source.__label = step.en;
+    assert.equal(getText(source), step.en);
+    if (previous) {
+      assert.equal(shouldCollectNode(source, pageSettings, articleCtx), true, step.en + " stale stripped");
+      assert.equal(source.lastElementChild, null, step.en + " no leftover " + previous.zh);
+    }
+    const mounted = mountPairedGloss([source], [step.zh], undefined, articleCtx, {
+      mode: "block",
+      createNode(plan, pair) {
+        return mountedNode(plan.className, pair.text);
+      }
+    });
+    assert.equal(mounted.length, 1);
+    assert.equal(mounted[0].node.textContent, step.zh);
+    assert.notEqual(mounted[0].node.textContent, step.not);
+    assert.equal(source.lastElementChild.textContent, step.zh);
+    assert.equal(source.children.filter((n) => n.classList?.contains("oi-translation")).length, 1);
+    assert.equal(mounted[0].node.getAttribute("data-oi-src-hash"), sourceTextHash(step.en));
+    assert.equal(shouldCollectNode(source, pageSettings, articleCtx), false);
+    assert.equal(shouldCollectNode(source, articleSettings, articleCtx), false, step.en + " article SKIP");
+    previous = step;
+  }
+  assert.notEqual(source.lastElementChild.textContent, "设计原则");
+  assert.notEqual(source.lastElementChild.textContent, "入门");
+});
+
+test("title-container mount host shares rail-id + hash; recycle clears both keys", () => {
+  const { source } = sidebarFixture("LI", "Design principles", ["aside"]);
+  const title = fakeNode({
+    tagName: "DIV",
+    className: "title-container",
+    hits: ["aside"],
+    text: "Design principles"
+  });
+  const prevQS = source.querySelector;
+  source.querySelector = (sel) => {
+    if (String(sel).includes("title-container")) return title;
+    return prevQS.call(source, sel);
+  };
+  assert.equal(pickSideRailMountHost(source), title);
+  const hash = rebindLiveSourceHash(source);
+  assert.equal(hash, sourceTextHash("Design principles"));
+  assert.equal(title.getAttribute("data-oi-src-hash") || title.dataset.oiSrcHash, hash);
+  assert.equal(source.getAttribute("data-oi-src-hash") || source.dataset.oiSrcHash, hash);
+  const mounted = mountPairedGloss([source], ["设计原则"], undefined, articleCtx, {
+    mode: "block",
+    createNode(plan, pair) {
+      return mountedNode(plan.className, pair.text);
+    }
+  });
+  assert.equal(mounted[0].node.textContent, "设计原则");
+  assert.notEqual(mounted[0].node.textContent, "技术");
+  assert.equal(mounted[0].plan.host, title);
+  const keys = stampRailMountKeys(source, mounted[0].node);
+  assert.equal(title.getAttribute("data-oi-rail-id") || title.dataset.oiRailId, keys.id);
+  assert.equal(mounted[0].node.getAttribute("data-oi-for"), keys.id);
+  const leftover = mountedNode("oi-translation oi-side-rail", "技术");
+  leftover.setAttribute("data-oi-for", "oi-rail-other");
+  leftover.setAttribute("data-oi-src-hash", sourceTextHash("Technologies"));
+  leftover.remove = () => {
+    leftover.removed = true;
+    leftover.parentElement = null;
+  };
+  title.appendChild?.(leftover);
+  if (!title.children) title.children = [leftover];
+  else if (Array.isArray(title.children) && !title.children.includes(leftover)) title.children.push(leftover);
+  leftover.parentElement = title;
+  source.__label = "Technologies";
+  const stripped = detachStaleRailGloss(source);
+  assert.ok(stripped.length >= 1, "stale hash or foreign rail-id must clear the row");
+  const remounted = mountPairedGloss([source], ["技术"], undefined, articleCtx, {
+    mode: "block",
+    createNode(plan, pair) {
+      return mountedNode(plan.className, pair.text);
+    }
+  });
+  assert.equal(remounted[0].node.textContent, "技术");
+  assert.notEqual(remounted[0].node.textContent, "设计原则");
+});
+
+test("Apple Getting started gloss is not 设计原则", () => {
+  const gettingStarted = sidebarFixture("LI", "Getting started", ["aside"]).source;
+  const designPrinciples = sidebarFixture("LI", "Design principles", ["aside"]).source;
+  const designingForIos = sidebarFixture("LI", "Designing for iOS", ["aside"]).source;
+  const sources = [gettingStarted, designPrinciples, designingForIos];
+  const translations = ["入门", "设计原则", "为 iOS 设计"];
+  const pairs = pairGlossBySource(sources, translations);
+  assert.equal(pairs[0].text, "入门");
+  assert.notEqual(pairs[0].text, "设计原则");
+  assert.equal(pairs[1].text, "设计原则");
+  assert.notEqual(pairs[1].text, "为 iOS 设计");
+  for (const source of sources) {
+    assert.equal(shouldCollectNode(source, pageSettings, articleCtx), true, getText(source) + " page KEEP");
+    assert.equal(shouldCollectNode(source, articleSettings, articleCtx), false, getText(source) + " article SKIP");
+  }
 });
 
 test("side-rail mounts stay block with underline class, not oi-inline", () => {
@@ -511,8 +719,22 @@ test("content.js gates chrome by scope and does not blanket-drop header", () => 
   assert.match(contentSrc, /if \(inSideRail\(el\)\) return false;/);
   assert.match(contentSrc, /function shouldInline\([\s\S]*?if \(inSideRail\(el\)\) return false;/);
   assert.match(contentSrc, /function mountTranslation\(el, text, settings, opts = \{\}\)/);
+  assert.match(contentSrc, /function pairGlossBySource\(/);
+  assert.match(contentSrc, /function mountPairedTranslations\(/);
+  assert.match(contentSrc, /data-oi-for/);
+  assert.match(contentSrc, /data-oi-rail-id/);
+  assert.match(contentSrc, /data-oi-src-hash/);
+  assert.match(contentSrc, /function detachStaleRailGloss\(/);
+  assert.match(contentSrc, /function rebindLiveSourceHash\(/);
+  assert.match(contentSrc, /function stampRailMountKeys\(/);
+  assert.match(contentSrc, /function glossIsStale\(/);
+  assert.match(contentSrc, /function revalidateSideRailGlosses\(/);
+  assert.match(contentSrc, /characterData: true/);
+  assert.match(contentSrc, /title-container/);
+  assert.match(contentSrc, /new Map\(/);
+  assert.match(contentSrc, /mountPairedTranslations\(chunk, res\.translations/);
   assert.match(contentSrc, /opts\.mode === "block"/);
-  assert.match(contentSrc, /inSideRail\(el\) \? \{ mode: "block" \}/);
+  assert.match(contentSrc, /inSideRail\(source\) \? \{ mode: "block" \}/);
   assert.doesNotMatch(contentSrc, /closest\("nav, aside, header, \[role='navigation'\]"\)/);
   assert.match(contentSrc, /function schedulePageHydrationRescan\(/);
   assert.match(contentSrc, /PAGE_SCOPE_RESCAN_MS/);

@@ -12,6 +12,7 @@ import {
   guardZhTitleCalques,
   guardZhTranslations,
   getProvider,
+  parseNumbered,
   providers,
   tightenZhTitleCalques
 } from "../lib/providers.js";
@@ -49,6 +50,18 @@ test("default LLM prompt keeps numbered one-per-line output", () => {
   assert.match(DEFAULT_LLM_PROMPT, /one per line/i);
   assert.match(DEFAULT_LLM_PROMPT, /same numbers/i);
   assert.match(DEFAULT_LLM_PROMPT, /\{\{targetLang\}\}/);
+});
+
+test("parseNumbered keeps skip-middle slots empty instead of shifting gloss", () => {
+  assert.deepEqual(parseNumbered("1. 入门\n3. 为 iOS 设计", 3), ["入门", "", "为 iOS 设计"]);
+  assert.deepEqual(parseNumbered("2. 设计原则\n3. 为 iOS 设计", 3), ["", "设计原则", "为 iOS 设计"]);
+  assert.notEqual(parseNumbered("2. 设计原则\n3. 为 iOS 设计", 3)[0], "设计原则");
+  assert.deepEqual(parseNumbered("1. 入门\n2. 设计原则\n3. 为 iOS 设计", 3), [
+    "入门",
+    "设计原则",
+    "为 iOS 设计"
+  ]);
+  assert.deepEqual(parseNumbered("入门\n设计原则\n为 iOS 设计", 3), ["入门", "设计原则", "为 iOS 设计"]);
 });
 
 test("default LLM prompt hardens zh-CN business-owner sense", () => {

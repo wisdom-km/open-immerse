@@ -180,9 +180,26 @@ function observePage() {
     const added = mutations.some((m) =>
       [...m.addedNodes].some((n) => n.nodeType === 1 && !n.classList?.contains("oi-translation") && !n.classList?.contains("oi-fab"))
     );
-    if (added) debounceTranslate();
+    const relabeled = mutations.some((m) => m.type === "characterData" || (m.type === "childList" && m.target && !m.target.classList?.contains("oi-translation")));
+    if (added || relabeled) {
+      revalidateSideRailGlosses();
+      debounceTranslate();
+    }
   });
-  pageObserver.observe(document.body, { childList: true, subtree: true });
+  pageObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+  if (!window.__oiRailScrollBound) {
+    window.__oiRailScrollBound = true;
+    window.addEventListener(
+      "scroll",
+      (ev) => {
+        const cls = String(ev.target?.className || "");
+        if (!/vue-recycle-scroller|recycle-scroller/.test(cls)) return;
+        revalidateSideRailGlosses();
+        debounceTranslate();
+      },
+      true
+    );
+  }
 }
 
 /** Late side-rail TOC (e.g. OpenAI blog) often hydrates after the first scan. */
@@ -250,12 +267,7 @@ async function translateVisible(ticket = epoch) {
           }
           throw new Error(res?.error || "翻译失败");
         }
-        chunk.forEach((el, idx) => {
-          el.classList.remove("oi-pending");
-          if (running && ticket === epoch) {
-            mountTranslation(el, res.translations[idx] || "", settings, inSideRail(el) ? { mode: "block" } : {});
-          }
-        });
+        mountPairedTranslations(chunk, res.translations, settings, ticket);
         if (res.polishError) toast(STATUS_POLISH_FAIL);
         else clearStatus();
       } catch (err) {
@@ -278,17 +290,186 @@ function applyTranslateProgress(message) {
   if (message.requestId && inflight.requestId && message.requestId !== inflight.requestId) return;
   if (!running || inflight.ticket !== epoch) return;
   const translations = message.translations || [];
-  inflight.nodes.forEach((el, idx) => {
-    const text = translations[idx] || "";
-    if (!text) return;
-    el.classList.remove("oi-pending");
-    mountTranslation(el, text, inflight.settings, inSideRail(el) ? { mode: "block" } : {});
-  });
+  mountPairedTranslations(inflight.nodes, translations, inflight.settings, inflight.ticket);
   showStatus(STATUS_POLISHING);
 }
 
 function hasTranslation(el) {
-  return Boolean(el.querySelector(".oi-translation") || el.nextElementSibling?.classList?.contains("oi-translation"));
+  return Boolean(glossForSource(el));
+}
+
+let railSeq = 0;
+
+function railAttr(el, name) {
+  if (!el) return "";
+  const fromGet = el.getAttribute?.(name);
+  if (fromGet) return String(fromGet);
+  if (name === "data-oi-rail-id") return String(el.dataset?.oiRailId || "");
+  if (name === "data-oi-for") return String(el.dataset?.oiFor || "");
+  if (name === "data-oi-src-hash") return String(el.dataset?.oiSrcHash || "");
+  return "";
+}
+
+function sourceTextHash(text) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function collectMountedGloss(source) {
+  const out = [];
+  if (!source) return out;
+  const push = (node) => {
+    if (node?.classList?.contains("oi-translation") && !out.includes(node)) out.push(node);
+  };
+  const scan = (root) => {
+    if (!root) return;
+    push(root.nextElementSibling);
+    root.querySelectorAll?.(".oi-translation").forEach(push);
+  };
+  scan(source);
+  const host = pickSideRailMountHost(source);
+  if (host && host !== source) scan(host);
+  const view = source.closest?.(".vue-recycle-scroller__item-view");
+  if (view && view !== source && view !== host) scan(view);
+  return out;
+}
+
+function stampRailMountKeys(source, translation) {
+  const host = pickSideRailMountHost(source);
+  const id = ensureRailId(source);
+  const liveHash = sourceTextHash(getText(source));
+  const mark = (el) => {
+    if (!el) return;
+    if (el.dataset) {
+      el.dataset.oiRailId = id;
+      el.dataset.oiSrcHash = liveHash;
+    } else {
+      el.setAttribute?.("data-oi-rail-id", id);
+      el.setAttribute?.("data-oi-src-hash", liveHash);
+    }
+  };
+  mark(source);
+  mark(host);
+  mark(translation?.parentElement);
+  if (translation) {
+    translation.setAttribute?.("data-oi-for", id);
+    translation.setAttribute?.("data-oi-src-hash", liveHash);
+  }
+  return { host, id, liveHash };
+}
+
+function rebindLiveSourceHash(source, translation) {
+  return stampRailMountKeys(source, translation).liveHash;
+}
+
+function glossIsStale(node, liveHash, railId) {
+  const nodeHash = railAttr(node, "data-oi-src-hash");
+  const forId = railAttr(node, "data-oi-for");
+  if (nodeHash !== liveHash) return true;
+  if (railId && forId && forId !== railId) return true;
+  return false;
+}
+
+/** Recycled virtual-list rows keep the same DOM; drop leftover gloss by hash or rail-id. */
+function detachStaleRailGloss(source) {
+  if (!source) return [];
+  const host = pickSideRailMountHost(source);
+  const liveHash = sourceTextHash(getText(source));
+  const railId = railAttr(source, "data-oi-rail-id") || railAttr(host, "data-oi-rail-id");
+  const nodes = collectMountedGloss(source);
+  const view = source.closest?.(".vue-recycle-scroller__item-view") || host || source;
+  if (railId) {
+    view.querySelectorAll?.(".oi-translation").forEach((node) => {
+      if (railAttr(node, "data-oi-for") === railId && !nodes.includes(node)) nodes.push(node);
+    });
+  }
+  const stale = nodes.some((node) => glossIsStale(node, liveHash, railId));
+  const removed = [];
+  if (stale) {
+    nodes.forEach((node) => {
+      node.remove?.();
+      removed.push(node);
+    });
+  }
+  stampRailMountKeys(source);
+  globalThis.OIBilingual?.detachStaleGloss?.(source, liveHash);
+  return removed;
+}
+
+function revalidateSideRailGlosses() {
+  document.querySelectorAll(".oi-translation.oi-side-rail").forEach((node) => {
+    const source = hostForPageTranslation(node) || node.parentElement;
+    if (source) detachStaleRailGloss(source);
+  });
+}
+
+function ensureRailId(el) {
+  if (!el) return "";
+  const existing = railAttr(el, "data-oi-rail-id");
+  if (existing) return existing;
+  railSeq += 1;
+  const id = `oi-rail-${railSeq}`;
+  if (el.dataset) el.dataset.oiRailId = id;
+  else el.setAttribute?.("data-oi-rail-id", id);
+  return id;
+}
+
+/**
+ * translations[i] is owned by sources[i] only. Filter/skip must look up
+ * the source Map — never re-zip the leftover rows by a new index.
+ */
+function pairGlossBySource(sources, translations, keep) {
+  const list = Array.isArray(sources) ? sources : [];
+  const texts = Array.isArray(translations) ? translations : [];
+  const bySource = new Map();
+  const byHash = new Map();
+  list.forEach((el, i) => {
+    if (!el) return;
+    const text = texts[i] == null ? "" : String(texts[i]);
+    ensureRailId(el);
+    const srcHash = rebindLiveSourceHash(el);
+    bySource.set(el, text);
+    if (srcHash) byHash.set(srcHash, text);
+  });
+  const targets = Array.isArray(keep) ? keep : list;
+  return targets.map((el) => {
+    const id = railAttr(el, "data-oi-rail-id");
+    const srcHash = rebindLiveSourceHash(el);
+    let text = "";
+    if (bySource.has(el)) text = bySource.get(el);
+    else if (srcHash && byHash.has(srcHash)) text = byHash.get(srcHash);
+    return { source: el, text, key: id, srcHash };
+  });
+}
+
+function glossForSource(el) {
+  if (!el) return null;
+  detachStaleRailGloss(el);
+  const hash = sourceTextHash(getText(el));
+  const id = railAttr(el, "data-oi-rail-id");
+  const bilingual = globalThis.OIBilingual;
+  const keyed = bilingual?.collectHostTranslations?.(el)?.[0];
+  if (keyed && railAttr(keyed, "data-oi-src-hash") === hash) return keyed;
+  return collectMountedGloss(el).find((node) => {
+    if (railAttr(node, "data-oi-src-hash") !== hash) return false;
+    const forId = railAttr(node, "data-oi-for");
+    return !forId || !id || forId === id;
+  }) || null;
+}
+
+function mountPairedTranslations(chunk, translations, settings, ticket) {
+  pairGlossBySource(chunk, translations).forEach(({ source, text }) => {
+    source.classList.remove("oi-pending");
+    if (!text) return;
+    if (running && ticket === epoch) {
+      mountTranslation(source, text, settings, inSideRail(source) ? { mode: "block" } : {});
+    }
+  });
 }
 
 /** Keep in sync with lib/translate-limit.js */
@@ -342,6 +523,7 @@ function collectNodes(settings, opts = {}) {
   const includeTranslated = Boolean(opts.includeTranslated);
   const nodes = [...document.body.querySelectorAll(BLOCK_SELECTOR)].filter((el) => {
     if (el.closest(SKIP_SELECTOR)) return false;
+    detachStaleRailGloss(el);
     if (!includeTranslated && hasTranslation(el)) return false;
     if (el.querySelector(BLOCK_SELECTOR)) return false;
     if (settings.skipCode && el.closest("pre, code")) return false;
@@ -410,6 +592,8 @@ function isPureNavBar(el) {
 
 const SIDE_RAIL_SELECTOR = "aside, [role='complementary'], [data-docs-sidebar], [data-left-nav], [data-left-nav-container], [data-content-page-toc-rail], [data-docs-toc-rail]";
 const SIDE_RAIL_LABEL_SELECTOR = ":scope > a, :scope > button, :scope > [role='link'], :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > p";
+const SIDE_RAIL_TITLE_SELECTOR =
+  "[class*='title-container'], [class*='nav-title'], [class*='nav-link-text'], [class*='label-container'], [class*='sidebar-label']";
 
 function inSideRail(el) {
   if (!el) return false;
@@ -426,8 +610,16 @@ function inSideRail(el) {
   return false;
 }
 
+function looksLikeSideRailTitleHost(el) {
+  const cls = typeof el?.className === "string" ? el.className : String(el?.className?.baseVal || "");
+  return /title-container|nav-title|nav-link-text|label-container|sidebar-label/i.test(cls);
+}
+
 function pickSideRailMountHost(el) {
   if (!el) return el;
+  if (looksLikeSideRailTitleHost(el)) return el;
+  const named = el.querySelector(SIDE_RAIL_TITLE_SELECTOR) || el.closest(SIDE_RAIL_TITLE_SELECTOR);
+  if (named && !named.classList.contains("oi-translation")) return named;
   if (["LI", "DT", "DD"].includes(el.tagName)) {
     const label = el.querySelector(SIDE_RAIL_LABEL_SELECTOR);
     if (label && !label.classList.contains("oi-translation")) return label;
@@ -509,15 +701,16 @@ function shouldInline(el) {
 function mountTranslation(el, text, settings, opts = {}) {
   if (!text) return;
   const bilingual = globalThis.OIBilingual;
+  const railId = ensureRailId(el);
+  detachStaleRailGloss(el);
+  const srcHash = rebindLiveSourceHash(el);
   const mountEl = opts.mode === "block" || inSideRail(el) ? pickSideRailMountHost(el) : el;
-  const existing = bilingual?.dedupeTranslations?.(el)
-    || bilingual?.dedupeTranslations?.(mountEl)
-    || (el.nextElementSibling?.classList?.contains("oi-translation")
-      ? el.nextElementSibling
-      : el.querySelector(":scope > .oi-translation"))
-    || mountEl.querySelector?.(":scope > .oi-translation");
+  const existing = glossForSource(el)
+    || bilingual?.dedupeTranslations?.(el)
+    || bilingual?.dedupeTranslations?.(mountEl);
   if (existing) {
     existing.textContent = text;
+    stampRailMountKeys(el, existing);
     existing.classList.remove("oi-inline");
     if (opts.mode === "block" || inSideRail(el)) {
       existing.classList.add("oi-translation");
@@ -536,6 +729,7 @@ function mountTranslation(el, text, settings, opts = {}) {
       ? "oi-translation oi-after-heading"
       : "oi-translation";
   if (forceBlock) node.classList.add("oi-side-rail");
+  stampRailMountKeys(el, node);
   node.lang = settings.targetLang || "zh-CN";
   node.textContent = text;
   node.title = "double click to save";
@@ -558,12 +752,16 @@ function mountTranslation(el, text, settings, opts = {}) {
   else mountEl.insertAdjacentElement("afterend", node);
   globalThis.OIBilingual?.breakFlexRow?.(el, node);
   layoutMountedTranslation(el, node);
+  stampRailMountKeys(el, node);
 }
 
 function layoutMountedTranslation(source, node) {
   const bilingual = globalThis.OIBilingual;
   bilingual?.bindHost?.(node, source);
-  const run = () => bilingual?.layoutTranslation?.(node, source);
+  const run = () => {
+    bilingual?.layoutTranslation?.(node, source);
+    stampRailMountKeys(source, node);
+  };
   run();
   if (typeof requestAnimationFrame === "function") {
     requestAnimationFrame(() => {
@@ -578,6 +776,7 @@ function hostForPageTranslation(node) {
 }
 
 function relayoutPageTranslations() {
+  revalidateSideRailGlosses();
   document.querySelectorAll(".oi-translation:not(.oi-inline)").forEach((node) => {
     const source = hostForPageTranslation(node);
     if (source) globalThis.OIBilingual?.layoutTranslation?.(node, source);

@@ -22,8 +22,10 @@ test("webpage FAB path injects draft on OI_TRANSLATE_PROGRESS then replaces", ()
     src,
     /function applyTranslateProgress\(message\) \{\n  if \(!inflight \|\| message\.phase !== "draft"\) return;/
   );
-  assert.match(src, /mountTranslation\(el, text, inflight\.settings/);
-  assert.match(src, /mountTranslation\(el, res\.translations\[idx\] \|\| "", settings/);
+  assert.match(src, /mountPairedTranslations\(inflight\.nodes, translations, inflight\.settings/);
+  assert.match(src, /mountPairedTranslations\(chunk, res\.translations, settings/);
+  assert.match(src, /function pairGlossBySource\(/);
+  assert.doesNotMatch(src, /mountTranslation\(el, res\.translations\[idx\]/);
   assert.match(src, /clearStatus\(\)/);
   assert.match(src, /if \(res\.polishError\) toast\(STATUS_POLISH_FAIL\)/);
   assert.match(src, /hasDraft \? STATUS_POLISH_FAIL/);
