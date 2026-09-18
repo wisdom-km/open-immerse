@@ -65,7 +65,7 @@
   padding-top: 0.35em;
   line-height: 1.45;
 }
-/* BILINGUAL-SPACING §8 / BODY-HEADING-GLOSS-SIZE：跟正文译文，禁止吃 H1–H3 的 1em。侧栏不动。 */
+/* BILINGUAL-SPACING §8 / BODY-BILINGUAL-GAP §2.1 / BODY-HEADING-GLOSS-SIZE：跟正文译文，禁止吃 H1–H3 的 1em。侧栏不动。 */
 .oi-translation.oi-after-heading:not(.oi-side-rail) {
   font-size: calc(var(--oi-body-font-size, 1rem) * var(--oi-font-scale, 0.95));
   font-weight: 400;

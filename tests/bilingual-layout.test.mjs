@@ -436,7 +436,7 @@ function linkFlow(nodes) {
   return nodes;
 }
 
-test("BILINGUAL-SPACING §8 Persistence gloss matches body translation ±5%, not H2 1em", () => {
+test("BILINGUAL-SPACING §8 / GAP §2.1 Persistence gloss matches body translation ±5%, not H2 1em", () => {
   const OI = loadBilingual();
   const sourceFs = 32;
   const bodyFs = 16;
