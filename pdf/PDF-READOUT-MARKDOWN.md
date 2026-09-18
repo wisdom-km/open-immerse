@@ -9,8 +9,9 @@
 （`PDF-MIRROR-CJK-CLIP` / KaTeX 镜像合同一并停作产品目标；公式若出现在通读流中，按下方 §3 处理。）
 
 **fixture：** Attention Is All You Need / arXiv 1706.03762  
-**入口：** 本 PR **不**藏弹层 PDF（ENTRY-SECONDARY 已在本轨取消）。  
-**排版数字：** 右栏通读继续跟 `.oi-pdf-h1` / `h2` / `p`。
+**排版数字：** 右栏通读可继续跟 `.oi-pdf-h1` / `h2` / `p`。
+
+> 实现注：本 PR 右栏对齐本文。弹层 PDF 入口 **不**在本单藏入二级（ENTRY-SECONDARY 已在本轨取消）。
 
 ---
 
@@ -79,12 +80,21 @@
 ### 回归
 
 - [ ] 网页翻译 / Options 间距 **不**被本单改坏  
-- [ ] 本 PR 不藏弹层 PDF 入口  
 
 ---
 
 ## 5. 工程提示
 
-1. 停用 mirror layout 管线；右栏只跑 extract→translate→readout mount。  
-2. 抽取走 continuous readout / 段合并，勿再跑 bbox relayout 作为主路径。  
+1. 停用或 feature-flag 关掉 mirror layout 管线；右栏只跑 extract→translate→readout mount。  
+2. 抽取可参考既有 continuous readout / 段合并，勿再跑 `relayoutMirrorPageBoxes` 作为主路径。  
 3. 测试以 Attention MD 快照或右栏文本顺序断言，而非 bbox 相交。
+
+---
+
+## 6. 与旧文关系
+
+| 文 | 状态 |
+| --- | --- |
+| `PDF-READOUT-MARKDOWN.md`（本文） | **权威 · 右栏产品** |
+| `PDF-MD-READOUT.md` | 本仓实现锁（入口不藏） |
+| `PDF-READOUT-MIRROR.md` / `PDF-MIRROR-LAYOUT-FIDELITY.md` / 镜像 CJK·KaTeX 产品目标 | **作废** |
