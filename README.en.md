@@ -8,7 +8,7 @@ Translate foreign-language pages, plain-text documents, and text-layer PDFs into
 
 Repo: https://github.com/wisdom-km/open-immerse
 
-Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. The PDF viewer can open files and send pages for translation, but **layout mirroring and the PDF translate path still have unfixed bugs — do not treat PDF as a stable feature**. YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
+Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. The PDF viewer can open files and send pages for translation; the right pane is a Markdown reading-flow, not a bbox mirror. YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
 
 Not affiliated with the commercial “Immersive Translate” product.
 
@@ -23,7 +23,7 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Per-page quota | `all` or `title + lead` (H1 + first body block; the lead is capped at about 3 lines / 220 characters). **Batch size** only controls how many segments go in one API request, not how many segments the page may translate. |
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
-| PDF reader | In-extension pdf.js for local files or URLs. Left pane: continuous original pages. Right pane: default **layout mirror** from page bboxes (title / authors / abstract / paragraphs / captions stay put). Formulas try to recover copyable LaTeX + KaTeX; figures are crops from the source page. Secondary “read-through” mode is a continuous Chinese column. No text layer → no invented mirror. **The translate + mirror path still has unfixed bugs; 0.3 does not count this as usable.** |
+| PDF reader | In-extension pdf.js for local files or URLs. Left pane: continuous original pages. Right pane: extract title + body in **reading order**, translate, and render a **Markdown reading-flow** (two-column papers: left then right; headers/footers/page numbers filtered). Formulas try to recover copyable LaTeX + KaTeX; figures may be skipped or shown as placeholders — not page crops. No text layer → no invented prose. Open from the popup footer **PDF**. |
 | Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
 
 Suggested regression page (article-scope scan and title handling were tuned on posts like this):  
@@ -104,12 +104,11 @@ Popup footer **PDF**, or **在沉浸译中打开** when the current tab is alrea
 - Top bar: Open PDF → `当前页 | 全文` (current page / full document; switching does **not** start a job) → Translate / Stop → Original → export MD / PDF
 - Full document walks pages with `OI_TRANSLATE_BATCH`. Progress is `翻译中 · k/n`. Jobs can be stopped. After stop or completion the primary button returns to **翻译**; Chinese already produced stays
 - **Original clears the current page only**, not other translated pages
-- Right pane defaults to the layout mirror; ghost **版式 | 通读** switches to continuous Chinese
+- Right pane defaults to a Markdown reading-flow (translated title + body, not a bbox mirror)
 - Separate right-pane zoom chip (0.5–5, step 0.25); not in the top bar
 - Drag the split to resize columns
 - MD export uses `$...$` / `$$...$$` when LaTeX was recovered; otherwise Unicode or `[公式]`
-- **No OCR**, and the extension does not inject into Chrome’s built-in PDF viewer. No text layer → nothing to mirror
-- **Unfixed:** PDF translation (page batches, right-pane mirror / read-through, formula recovery) still has bugs. Opening a file and clicking Translate does not mean this path is stable. Regress against webpage bilingual. Do not treat PDF as an acceptance target.
+- **No OCR**, and the extension does not inject into Chrome’s built-in PDF viewer. No text layer → nothing to extract
 
 ---
 
@@ -197,7 +196,8 @@ open-immerse/
 │   ├── page-scan.js           # node collection (keep in sync with content.js)
 │   ├── site-presets.js        # site presets (claude.com today)
 │   ├── bilingual-layout.js
-│   ├── pdf-mirror.js
+│   ├── pdf-readout.js         # PDF right-pane Markdown reading-flow
+│   ├── pdf-mirror.js          # leftover bbox mirror (not the default pane)
 │   ├── pdf-viewer.js
 │   ├── pdf-latex.js           # recover LaTeX from the text layer
 │   ├── learning.js
@@ -220,7 +220,7 @@ page / PDF / document
         → service worker: cache hit or providers[id].translate()
             → (optional) OI_TRANSLATE_PROGRESS phase=draft
         ← translations[]
-    → insert .oi-translation or mirror blocks
+    → insert .oi-translation or PDF readout blocks
 ```
 
 Content scripts do **not** `fetch` translation APIs. Adding an engine means `lib/providers.js` plus `DEFAULT_SETTINGS.providers`.
@@ -260,7 +260,7 @@ Not built, not guaranteed, or not fixed yet:
 
 | Item | Notes |
 | --- | --- |
-| **PDF translation (unfixed)** | Viewer shell exists. Page-batch translate / layout mirror / read-through / formula LaTeX recovery **still have bugs**. 0.3 does not list this as a stable feature. Do not advertise it until those issues are closed |
+| **PDF reading-flow (experimental)** | Right pane is now a reading-order Markdown document, not a bbox mirror. Scanned pages with no text layer stay empty. Webpage bilingual remains the regression target |
 | Chrome Web Store | Unpacked load only |
 | OCR | Scanned PDFs with no text layer leave the right pane empty |
 | DOCX / complex layouts | Documents page accepts plain-text-like files only |

@@ -6,7 +6,7 @@
 
 把外文网页、纯文本文档、带文字层的 PDF 译成对照阅读；密钥自己填，引擎自己换。仓库：https://github.com/wisdom-km/open-immerse
 
-当前版本 **0.3.0**。V1 先做好网页双语。学习中心与文档翻译可用。PDF 阅读器能打开、能按页送译，但**翻译与版式镜像仍有未修好的 bug，不能当稳定功能用**。YouTube / X 字幕、悬浮翻译、划词卡片代码还在，**默认关闭，不出现在主界面**。
+当前版本 **0.3.0**。V1 先做好网页双语。学习中心与文档翻译可用。PDF 阅读器能打开、能按页送译；右栏是阅读顺序的 Markdown 通读，不是 bbox 镜像。YouTube / X 字幕、悬浮翻译、划词卡片代码还在，**默认关闭，不出现在主界面**。
 
 与官方「沉浸式翻译」无隶属关系。
 
@@ -21,7 +21,7 @@
 | 本次翻译额度 | `全部` 或 `仅标题+开头`（H1 + 第一段正文，开头段最多约 3 行 / 220 字）。「每批条数」只决定一次请求翻几段，不是本页总数。 |
 | 学习中心 | 收藏单词 / 短语 / 句子；全部 / 今日待复习（简化 SM-2）；导出 Markdown / PDF / Word。 |
 | 文档翻译 | TXT / MD / HTML 直读分段双语，译文可改，失败可重试，导出 HTML。 |
-| PDF 阅读 | 扩展内 pdf.js 打开本地或链接 PDF。左栏连续滚动原页；右栏默认按 bbox **版式镜像**（标题 / 作者 / 摘要 / 段落 / 题注就位）。公式尽量回收可复制 LaTeX + KaTeX；图为原页裁剪。可切次级「通读」。无文字层不编造镜像。**翻译链路与镜像仍有未修好的 bug，0.3 不视为可用。** |
+| PDF 阅读 | 扩展内 pdf.js 打开本地或链接 PDF。左栏连续滚动原页；右栏默认按阅读顺序抽出标题 + 正文，译成 **Markdown 通读**（双栏先左后右，滤页眉页脚页码）。公式尽量回收可复制 LaTeX + KaTeX；图可略或占位，不裁切原页当主路径。无文字层不编造正文。弹层底部 **PDF** 进入。 |
 | 快捷键 | `Alt+T`：开译 / 恢复原文（关即清译文）。 |
 
 建议回归页（主栏扫描、标题口径都按这类博客调过）：  
@@ -100,12 +100,11 @@ git clone https://github.com/wisdom-km/open-immerse.git
 - 顶栏：打开 PDF → `当前页 | 全文`（切换不自动开译）→ 翻译 / 停止 → 原文 → 导出 MD / PDF
 - 全文按页 `OI_TRANSLATE_BATCH`，进度「翻译中 · k/n」，可停；停或译完主按钮立刻回「翻译」，已译中文保留
 - **原文只清当前页**，不清其它已译页
-- 右栏默认镜像；Ghost「版式 | 通读」切连续中文
+- 右栏默认 Markdown 通读（阅读顺序的译文文档，不是 bbox 镜像）
 - 右栏另有独立缩放芯片（0.5–5，步长 0.25），不进顶栏
 - 中缝可拖，改左右栏宽度
 - 导出 MD 含 `$...$` / `$$...$$`（能回收到 LaTeX 时）；否则 Unicode 或 `[公式]`
-- **不做 OCR**，也不注入 Chrome 自带 PDF Viewer。没有文字层就没有可镜像的文本
-- **已知未修好**：PDF 翻译（含按页送译、右侧镜像 / 通读、公式回收）仍有 bug，正在修。能打开文件、能点「翻译」，不代表这一路已经稳定。回归请以网页双语为准，不要把 PDF 当验收标准
+- **不做 OCR**，也不注入 Chrome 自带 PDF Viewer。没有文字层就没有可提取的阅读文本
 
 ---
 
@@ -193,7 +192,8 @@ open-immerse/
 │   ├── page-scan.js           # 节点收集（与 content.js 保持一致）
 │   ├── site-presets.js        # 站点预设（目前 claude.com）
 │   ├── bilingual-layout.js    # 双语排版
-│   ├── pdf-mirror.js          # PDF 版式镜像
+│   ├── pdf-readout.js         # PDF 右栏 Markdown 通读
+│   ├── pdf-mirror.js          # 旧 bbox 镜像（不再作为右栏默认）
 │   ├── pdf-viewer.js          # 阅读器逻辑（供 viewer 与测试）
 │   ├── pdf-latex.js           # 文字层回收 LaTeX
 │   ├── learning.js            # 收藏与间隔复习
@@ -216,7 +216,7 @@ open-immerse/
         → service worker：缓存命中或 providers[id].translate()
             → （可选）OI_TRANSLATE_PROGRESS phase=draft
         ← translations[]
-    → 插入 .oi-translation 或镜像块
+    → 插入 .oi-translation 或 PDF 通读块
 ```
 
 内容脚本 **不** `fetch` 翻译 API。新增引擎只改 `lib/providers.js` 与 `DEFAULT_SETTINGS.providers`。
@@ -256,7 +256,7 @@ node --test tests/*.test.mjs
 
 | 项 | 说明 |
 | --- | --- |
-| **PDF 翻译（未修好）** | 阅读器骨架在，按页送译 / 版式镜像 / 通读 / 公式 LaTeX 回收 **仍有 bug，尚未改完**。0.3 不把它算进稳定功能；相关 issue 未清之前不要当可用特性对外介绍 |
+| **PDF 通读（实验）** | 右栏已改为阅读顺序 Markdown 通读，不再走 bbox 镜像。扫描件无文字层仍空白；回归仍以网页双语为准 |
 | Chrome 网上应用店 | 目前只支持加载已解压目录 |
 | OCR | 扫描版 PDF 无文字层则右侧空白 |
 | DOCX / 复杂排版文档 | 文档页只吃纯文本类文件 |

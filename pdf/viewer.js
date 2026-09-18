@@ -50,7 +50,7 @@ import {
   translateDocumentPages,
   translatePageBlocks,
   articleNodeSpec,
-  normalizeBlockRole,
+  extractPageItems,
   pageCacheKey,
   zoomButtonState,
   zoomChipDefaultPos,
@@ -58,28 +58,12 @@ import {
   zoomLabel
 } from "../lib/pdf-viewer.js";
 import {
-  PDF_MIRROR_COPY,
-  appendOperatorImages,
-  bboxAttr,
-  buildMirrorLayout,
-  cropCanvasToDataUrl,
-  formulaRenderPlan,
-  isMathItem,
-  shouldRenderFormulaCrop,
-  readingOrderMirrorItems,
-  imageRectsFromUnitCtms,
-  mergeMirrorTranslations,
-  fitMirrorTextHeight,
-  isMirrorTextRole,
-  pageRectToPercent,
-  percentRectToStyle,
-  percentRectToTextStyle,
-  toMirrorItem,
-  translatableMirrorUnits,
-  unwrapLatex,
-  wrapLatexMarkdown,
-  walkImageCtms
-} from "../lib/pdf-mirror.js";
+  extractReadoutBlocks,
+  mergeReadoutTranslations,
+  readoutFlowForPage,
+  translatableReadoutUnits
+} from "../lib/pdf-readout.js";
+import { unwrapLatex, wrapLatexMarkdown } from "../lib/pdf-latex.js";
 
 const $ = (id) => document.getElementById(id);
 const RENDER_RADIUS = 2;
@@ -108,7 +92,7 @@ let mirrorZoomChipCustom = false;
 let exporting = false;
 let syncLock = false;
 let translateScrollTick = 0;
-let viewMode = "mirror";
+let viewMode = "readout";
 let mirrorZoom = DEFAULT_ZOOM;
 
 init();
@@ -158,6 +142,7 @@ function init() {
   listenProgress();
 
   const src = readViewerSrc(location.search);
+  applyViewMode();
   if (src) {
     sourceUrl = src;
     openFromSrc(src);
@@ -673,48 +658,11 @@ function appendReadoutNode(input, parent = $("readout")) {
     node.dataset.mathDisplay = input.display ? "1" : "0";
     renderFormulaNode(node, latex, input.display);
   } else if (spec.role === "formula") {
-    node.textContent = input.translation || spec.text || PDF_MIRROR_COPY.formulaFallback;
-  }
-  if (input.rect && input.pageWidth && input.pageHeight) {
-    const item = toMirrorItem(
-      {
-        text: input.original || spec.text,
-        role: spec.role,
-        kind: input.kind || spec.role || "text",
-        rect: input.rect,
-        latex
-      },
-      { page: input.page, translation: spec.text }
-    );
-    node.classList.add("mirror-box", "mirror-item");
-    node.dataset.bbox = bboxAttr(item.bbox);
-    node.dataset.kind = item.kind;
-    const pct = pageRectToPercent(input.rect, input.pageWidth, input.pageHeight);
-    const textBox = isMirrorTextRole(spec.role) || spec.role === "formula";
-    Object.assign(node.style, textBox ? percentRectToTextStyle(pct) : percentRectToStyle(pct));
-    if (textBox) queueFitMirrorTextBox(node);
+    node.textContent = input.translation || spec.text || PDF_COPY.formulaFallback;
   }
   parent.append(node);
   syncReadoutEmpty(true);
   return node;
-}
-
-function queueFitMirrorTextBox(node) {
-  const fit = () => fitMirrorTextBox(node);
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(fit);
-  else fit();
-}
-
-function fitMirrorTextBox(node) {
-  if (!node) return;
-  const next = fitMirrorTextHeight({
-    scrollHeight: node.scrollHeight,
-    minHeight: node.offsetHeight,
-    fontSize: Number.parseFloat(globalThis.getComputedStyle?.(node)?.fontSize || "") || 0,
-    lineHeight: 1.3,
-    pad: 3
-  });
-  if (next > node.offsetHeight) node.style.height = `${next}px`;
 }
 
 function renderFormulaNode(node, latex, display) {
@@ -739,23 +687,19 @@ function syncReadoutEmpty(hasArticle) {
 function renderArticle() {
   const pane = translateScrollRoot();
   const keep = pane ? pane.scrollTop : 0;
-  const pagesRoot = $("mirrorPages");
   const flowRoot = $("readout");
-  if (pagesRoot) pagesRoot.replaceChildren();
+  if ($("mirrorPages")) $("mirrorPages").replaceChildren();
   flowRoot.replaceChildren();
   const pages = collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0);
-  const showMirror = pages.some(({ page, blocks }) => canMirrorPage(page, blocks));
+  applyViewMode();
   if (!pages.length) {
     syncReadoutEmpty(false);
-    applyViewMode(false);
     updateTranslateControls();
     return;
   }
   syncReadoutEmpty(true);
   pages.forEach(({ page, blocks }) => {
-    if (showMirror) appendMirrorPage(page, blocks);
-    const layout = getPageLayout(page);
-    const flow = layout ? readingOrderMirrorItems(layout, blocks) : (blocks || []).filter((item) => item?.translation);
+    const flow = readoutFlowForPage(getPageLayout(page), blocks);
     flow.forEach((item) => {
       if (!item?.translation && !item?.latex) return;
       appendReadoutNode(
@@ -772,164 +716,22 @@ function renderArticle() {
       );
     });
   });
-  applyViewMode(showMirror);
   if (pane) pane.scrollTop = keep;
   updateTranslateControls();
 }
 
-function applyViewMode(canMirror) {
-  const mirrorOn = viewMode === "mirror" && Boolean(canMirror);
-  if ($("mirrorPages")) $("mirrorPages").hidden = !mirrorOn;
-  if ($("readout")) $("readout").hidden = mirrorOn;
-  if ($("viewSeg")) $("viewSeg").hidden = !canMirror;
-  if ($("mirrorHint")) $("mirrorHint").hidden = !mirrorOn;
-  document.querySelectorAll(".view-seg-btn").forEach((btn) => {
-    btn.classList.toggle("is-on", btn.dataset.view === viewMode);
-  });
+function applyViewMode() {
+  viewMode = "readout";
+  if ($("mirrorPages")) $("mirrorPages").hidden = true;
+  if ($("readout")) $("readout").hidden = false;
+  if ($("viewSeg")) $("viewSeg").hidden = true;
+  if ($("mirrorHint")) $("mirrorHint").hidden = true;
 }
 
 function onViewSegClick(event) {
   const btn = event.target.closest(".view-seg-btn");
   if (!btn) return;
-  viewMode = btn.dataset.view === "readout" ? "readout" : "mirror";
-  const pages = collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0);
-  applyViewMode(pages.some(({ page, blocks }) => canMirrorPage(page, blocks)));
-}
-
-function canMirrorPage(page, blocks) {
-  const layout = getPageLayout(page);
-  if (layout?.kind === "mirror") return true;
-  return (blocks || []).some((item) => item?.rect);
-}
-
-function appendMirrorPage(page, blocks) {
-  const layout = getPageLayout(page) || layoutFromBlocks(blocks);
-  if (!layout || layout.kind === "empty") return;
-  const pageEl = document.createElement("section");
-  pageEl.className = "mirror-page";
-  pageEl.dataset.page = String(page);
-  pageEl.style.aspectRatio = `${layout.pageWidth} / ${layout.pageHeight}`;
-  (layout.visuals || []).forEach((vis, index) => {
-    if (isMathItem(vis) && !shouldRenderFormulaCrop(vis)) return;
-    pageEl.append(appendMirrorVisual(page, vis, index, layout));
-  });
-  (layout.boxes || []).forEach((box) => {
-    if (!isMathItem(box)) return;
-    const plan = box.render || formulaRenderPlan(box);
-    if (plan.mode !== "katex" || !plan.latex) return;
-    appendReadoutNode(
-      {
-        translation: plan.text,
-        original: box.text,
-        role: "formula",
-        kind: "math",
-        latex: plan.latex,
-        display: plan.display,
-        page,
-        rect: box.rect,
-        pageWidth: layout.pageWidth,
-        pageHeight: layout.pageHeight
-      },
-      pageEl
-    );
-  });
-  mergeMirrorTranslations(layout, blocks).forEach((item) => {
-    if (!item.translation) return;
-    appendReadoutNode(
-      {
-        translation: item.translation,
-        role: item.role,
-        page,
-        rect: item.rect,
-        pageWidth: layout.pageWidth,
-        pageHeight: layout.pageHeight
-      },
-      pageEl
-    );
-  });
-  ($("mirrorPages") || $("readout")).append(pageEl);
-}
-
-function layoutFromBlocks(blocks) {
-  const list = (blocks || []).filter((item) => item?.rect);
-  if (!list.length) return null;
-  const pageWidth = Number(list[0].pageWidth) || 612;
-  const pageHeight = Number(list[0].pageHeight) || 792;
-  const boxes = list.map((item) => ({
-    text: item.original || item.text,
-    role: item.role || "paragraph",
-    kind: item.kind || "text",
-    rect: item.rect
-  }));
-  return { kind: "mirror", pageWidth, pageHeight, boxes, visuals: [], translatable: boxes };
-}
-
-function appendMirrorVisual(page, vis, index, layout) {
-  const ready = withVisualSrc(page, vis, layout);
-  const math = isMathItem(vis);
-  const fallback = math ? PDF_MIRROR_COPY.formulaFallback : PDF_MIRROR_COPY.figureFallback;
-  const node = ready.src ? document.createElement("img") : document.createElement("div");
-  node.className = ready.src ? "mirror-visual mirror-item" : "mirror-visual mirror-item is-pending";
-  node.dataset.visual = String(index);
-  node.dataset.role = math ? "formula" : "figure";
-  node.dataset.kind = math ? "math" : vis.kind || "figure";
-  node.dataset.bbox = bboxAttr(vis.rect);
-  node.dataset.page = String(page);
-  Object.assign(node.style, percentRectToStyle(pageRectToPercent(vis.rect, layout.pageWidth, layout.pageHeight)));
-  if (node.tagName === "IMG") {
-    node.alt = vis.caption || fallback;
-    node.draggable = false;
-    node.src = ready.src;
-  } else {
-    node.textContent = fallback;
-  }
-  node.addEventListener("click", () => highlightSourcePage(page, vis.rect, layout));
-  return node;
-}
-
-function highlightSourcePage(page, rect, layout) {
-  document.querySelectorAll(".mirror-source-mark").forEach((el) => el.remove());
-  const view = pageViews[page - 1];
-  if (!view?.wrap) return;
-  view.wrap.scrollIntoView({ block: "start", behavior: "smooth" });
-  view.wrap.classList.add("is-mirror-target");
-  if (rect && layout) {
-    const mark = document.createElement("div");
-    mark.className = "mirror-source-mark";
-    Object.assign(mark.style, percentRectToStyle(pageRectToPercent(rect, layout.pageWidth, layout.pageHeight)));
-    view.wrap.append(mark);
-  }
-  window.setTimeout(() => {
-    view.wrap.classList.remove("is-mirror-target");
-    view.wrap.querySelectorAll(".mirror-source-mark").forEach((el) => el.remove());
-  }, 900);
-}
-
-function withVisualSrc(page, vis, layout) {
-  if (vis?.src) return vis;
-  const canvas = pageViews[page - 1]?.canvas;
-  if (!canvas?.width) return vis || {};
-  const src = cropCanvasToDataUrl(canvas, pageRectToPercent(vis.rect, layout.pageWidth, layout.pageHeight));
-  return src ? { ...vis, src } : vis;
-}
-
-function refreshMirrorVisuals(page) {
-  const layout = getPageLayout(page);
-  const root = ($("mirrorPages") || $("readout"))?.querySelector(`.mirror-page[data-page="${page}"]`);
-  if (!layout?.visuals?.length || !root) return;
-  root.querySelectorAll(".mirror-visual").forEach((node) => {
-    const index = Number(node.dataset.visual);
-    const vis = layout.visuals[index];
-    if (!vis) return;
-    const ready = withVisualSrc(page, vis, layout);
-    if (!ready.src) return;
-    if (node.tagName === "IMG") {
-      node.src = ready.src;
-      node.classList.remove("is-pending");
-      return;
-    }
-    node.replaceWith(appendMirrorVisual(page, { ...vis, src: ready.src }, index, layout));
-  });
+  applyViewMode();
 }
 
 function currentReadoutNodes() {
@@ -980,8 +782,7 @@ function onTranslateScroll() {
     translateScrollTick = 0;
     const pane = translateScrollRoot();
     if (!pane) return;
-    if (viewMode !== "mirror") return;
-    const rects = [...pane.querySelectorAll(".mirror-page")].map((el) => {
+    const rects = [...pane.querySelectorAll("[data-page]")].map((el) => {
       const box = el.getBoundingClientRect();
       return { page: Number(el.dataset.page), top: box.top, bottom: box.bottom };
     });
@@ -1005,10 +806,8 @@ function onTranslateScroll() {
 function syncReadoutToPage(page) {
   if (syncLock) return;
   const pane = translateScrollRoot();
-  const root = viewMode === "mirror" && $("mirrorPages") ? $("mirrorPages") : $("readout");
-  const node =
-    root.querySelector(`.mirror-page${readoutPageSelector(page)}`) ||
-    root.querySelector(readoutPageSelector(page));
+  const root = $("readout");
+  const node = root?.querySelector(readoutPageSelector(page));
   if (!pane || !node) return;
   const paneRect = pane.getBoundingClientRect();
   const nodeRect = node.getBoundingClientRect();
@@ -1095,7 +894,8 @@ async function translateCurrentPage() {
   const targetPage = pageNum;
   translatingPage = targetPage;
   const work = beginViewerSession();
-  pageResults = emptyPageResults(pageOriginals);
+  const sourceBlocks = getPageLayout(targetPage)?.blocks || pageOriginals;
+  pageResults = emptyPageResults(sourceBlocks);
   pageCache.set(translatingDoc, targetPage, pageResults);
   updateTranslateControls();
   setStatus(PDF_COPY.translating);
@@ -1128,15 +928,17 @@ async function translateCurrentPage() {
     },
     onBatchResult({ results: next, res }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
-      pageCache.set(translatingDoc, targetPage, next);
-      pageResults = next;
+      const merged = mergeReadoutTranslations(sourceBlocks, next);
+      pageCache.set(translatingDoc, targetPage, merged);
+      pageResults = merged;
       renderArticle();
       if (res?.polishError) setStatus(PDF_COPY.polishFail, true);
     }
   });
   if (!isCurrentWork(work, gen, translatingDoc)) return;
-  pageCache.set(translatingDoc, targetPage, results);
-  pageResults = results;
+  const merged = mergeReadoutTranslations(sourceBlocks, results);
+  pageCache.set(translatingDoc, targetPage, merged);
+  pageResults = merged;
   renderArticle();
   if (aborted) setStatus(PDF_COPY.stopped);
   else if (!results.some((item) => item.translation)) setStatus(PDF_COPY.error, true);
@@ -1187,13 +989,17 @@ async function translateWholeDocument() {
     },
     onPageResult({ page, results, res }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
-      if (page === pageNum) pageResults = results;
+      const merged = mergeReadoutTranslations(getPageLayout(page)?.blocks || results, results);
+      pageCache.set(translatingDoc, page, merged);
+      if (page === pageNum) pageResults = merged;
       renderArticle();
       if (res?.polishError) setStatus(PDF_COPY.polishFail, true);
     },
     onPageDone({ page, results }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
-      if (page === pageNum) pageResults = results;
+      const merged = mergeReadoutTranslations(getPageLayout(page)?.blocks || results, results);
+      pageCache.set(translatingDoc, page, merged);
+      if (page === pageNum) pageResults = merged;
       renderArticle();
     }
   });
@@ -1208,50 +1014,36 @@ async function translateWholeDocument() {
 }
 
 function emptyPageResults(blocks) {
-  return (blocks || []).map((block) => ({
-    original: block.text || block.original || block,
-    translation: "",
-    role: normalizeBlockRole(block.role),
-    kind: block.kind || "text",
-    rect: block.rect || null,
-    pageWidth: block.pageWidth,
-    pageHeight: block.pageHeight
-  }));
+  return mergeReadoutTranslations(blocks || [], []);
 }
 
-async function ingestPageLayout(n, isStale) {
+async function ingestReadoutLayout(n, isStale) {
   const page = await pdfDoc.getPage(n);
   if (isStale()) return null;
   const viewport = page.getViewport({ scale: 1 });
   const content = await page.getTextContent();
   if (isStale()) return null;
-  const layout = buildMirrorLayout(content, { width: viewport.width, height: viewport.height });
-  try {
-    const opList = await page.getOperatorList();
-    if (!isStale()) {
-      const paints = walkImageCtms(opList.fnArray, opList.argsArray);
-      const imageRects = imageRectsFromUnitCtms(paints, viewport.height);
-      layout.visuals = appendOperatorImages(layout.visuals, imageRects, viewport.width, viewport.height);
-    }
-  } catch {
-    /* operator list is optional for the first mirror shell */
-  }
-  if (isStale()) return null;
+  const items = extractPageItems(content);
+  const blocks = extractReadoutBlocks(content, { width: viewport.width, height: viewport.height });
+  const layout = {
+    kind: "readout",
+    blocks,
+    itemCount: items.length,
+    pageWidth: viewport.width,
+    pageHeight: viewport.height
+  };
   setPageLayout(n, layout);
   return layout;
 }
 
 async function originalsForPage(n, gen, translatingDoc) {
   const isStale = () => gen !== restoreGen || translatingDoc !== docId;
-  let blocks = n === pageNum && pageOriginals.length ? pageOriginals : null;
-  if (!blocks) {
-    const layout = getPageLayout(n) || (await ingestPageLayout(n, isStale));
-    if (!layout || isStale()) return [];
-    blocks = translatableMirrorUnits(layout);
-  }
-  if (isStale()) return [];
+  const layout = getPageLayout(n) || (await ingestReadoutLayout(n, isStale));
+  if (!layout || isStale()) return [];
+  const blocks = translatableReadoutUnits(layout.blocks);
+  if (n === pageNum) pageOriginals = blocks;
   const cached = pageCache.get(translatingDoc, n);
-  pageResults = pageHasTranslation(cached) ? cached : emptyPageResults(blocks);
+  pageResults = pageHasTranslation(cached) ? cached : emptyPageResults(layout.blocks);
   if (!pageHasTranslation(cached)) pageCache.set(translatingDoc, n, pageResults);
   return blocks;
 }
@@ -1508,7 +1300,6 @@ async function renderView(view) {
     await view.renderTask.promise;
     canvas.hidden = false;
     view.renderedScale = zoom;
-    refreshMirrorVisuals(view.num);
   } catch (err) {
     if (err?.name === "RenderingCancelledException") return;
     setStatus(PDF_COPY.error, true);
@@ -1522,10 +1313,10 @@ async function loadCurrentPageText() {
   const translatingDoc = docId;
   const isStale = () => ticket !== textGen || translatingDoc !== docId;
   try {
-    const layout = await ingestPageLayout(n, isStale);
+    const layout = await ingestReadoutLayout(n, isStale);
     if (!layout || isStale()) return;
-    pageItems = Number(layout.itemCount) || (layout.kind === "empty" ? 0 : layout.boxes.length);
-    pageOriginals = translatableMirrorUnits(layout);
+    pageItems = Number(layout.itemCount) || 0;
+    pageOriginals = translatableReadoutUnits(layout.blocks);
     const cached = pageCache.get(docId, n);
     pageResults = cached || [];
     const copy = pageBlocksCopy(pageOriginals.length, pageItems) || textLayerCopy(pageItems);
