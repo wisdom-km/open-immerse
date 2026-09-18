@@ -624,7 +624,7 @@ function applyStyle(settings) {
   const bodyGap = globalThis.OIBilingual?.normalizeBodyGlossGap?.(settings.bodyGlossGap);
   root.style.setProperty("--oi-body-gloss-gap", `${Number.isFinite(bodyGap) ? bodyGap : 0.35}em`);
   const stackGap = globalThis.OIBilingual?.normalizeBodyGlossStackGap?.(settings.bodyGlossStackGap);
-  root.style.setProperty("--oi-body-gloss-stack-gap", `${Number.isFinite(stackGap) ? stackGap : 0.25}em`);
+  root.style.setProperty("--oi-body-gloss-stack-gap", `${Number.isFinite(stackGap) ? stackGap : 0.25}`);
   const bodyFs = readArticleBodyFontSize();
   root.style.setProperty("--oi-body-font-size", `${bodyFs}px`);
   root.style.setProperty("--oi-body-gloss-size", `calc(${bodyFs}px * var(--oi-font-scale, 0.95))`);

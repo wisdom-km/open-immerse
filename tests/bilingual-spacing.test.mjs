@@ -27,10 +27,14 @@ test("body translations match Loom section 3 margin", () => {
     /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*padding-top:\s*max\(0\.05em,\s*calc\(var\(--oi-body-gloss-gap,\s*0\.35em\) \* 0\.4\)\)/s
   );
   assert.match(bodyBlock, /BODY-GLOSS-GAP-CONTROL/);
-  assert.match(bodyBlock, /BODY-GLOSS-STACK-GAP/);
+  assert.match(bodyBlock, /BODY-GLOSS-STACK-GAP-VISIBLE/);
   assert.match(
     bodyBlock,
-    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*margin-bottom:\s*var\(--oi-body-gloss-stack-gap,\s*0\.25em\)/s
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*margin-bottom:\s*calc\(var\(--oi-body-gloss-stack-gap,\s*0\.25\) \* 1em\)/s
+  );
+  assert.match(
+    bodyBlock,
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*display:\s*inline-block/s
   );
   assert.equal(/margin:\s*0\.08em/.test(bodyBlock), false);
   assert.equal(/margin:\s*-0\.65em\s+0\s+0\.1em/.test(bodyBlock), false);
