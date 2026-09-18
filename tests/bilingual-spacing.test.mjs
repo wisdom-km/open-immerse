@@ -27,6 +27,11 @@ test("body translations match Loom section 3 margin", () => {
     /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*padding-top:\s*max\(0\.05em,\s*calc\(var\(--oi-body-gloss-gap,\s*0\.35em\) \* 0\.4\)\)/s
   );
   assert.match(bodyBlock, /BODY-GLOSS-GAP-CONTROL/);
+  assert.match(bodyBlock, /BODY-GLOSS-STACK-GAP/);
+  assert.match(
+    bodyBlock,
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*margin-bottom:\s*var\(--oi-body-gloss-stack-gap,\s*0\.25em\)/s
+  );
   assert.equal(/margin:\s*0\.08em/.test(bodyBlock), false);
   assert.equal(/margin:\s*-0\.65em\s+0\s+0\.1em/.test(bodyBlock), false);
 });
@@ -37,6 +42,7 @@ test("heading translations start from a small em margin, not a locked 0.7rem", (
   assert.match(headingBlock, /margin:\s*0\.05em\s+0\s+0\.22em/);
   assert.match(headingBlock, /padding-top:\s*0\.14em/);
   assert.equal(/--oi-body-gloss-gap/.test(headingBlock), false);
+  assert.equal(/--oi-body-gloss-stack-gap/.test(headingBlock), false);
   assert.equal(/margin:\s*0\.7rem/.test(headingBlock), false);
   assert.equal(/margin:\s*-0\.45em/.test(headingBlock), false);
 });
@@ -105,8 +111,11 @@ test("layoutTranslation measures heading gaps in source em and clamps > 0.32em",
   assert.match(layout, /HEADING_HARD_MAX_EM:\s*0\.32/);
   assert.match(layout, /HEADING_HARD_MAX_PX:\s*10/);
   assert.match(layout, /BODY_GLOSS_GAP_DEFAULT_EM:\s*0\.35/);
+  assert.match(layout, /BODY_GLOSS_STACK_GAP_DEFAULT_EM:\s*0\.25/);
   assert.match(layout, /--oi-body-gloss-gap/);
+  assert.match(layout, /--oi-body-gloss-stack-gap/);
   assert.match(layout, /normalizeBodyGlossGap/);
+  assert.match(layout, /normalizeBodyGlossStackGap/);
   assert.match(layout, /bodyMarginCalc/);
   assert.match(layout, /clampOversizedGap/);
   assert.match(layout, /applyGapPull/);
@@ -119,7 +128,9 @@ test("layoutTranslation measures heading gaps in source em and clamps > 0.32em",
   assert.equal(/0\.7rem/.test(layout), false);
   assert.match(js, /requestAnimationFrame/);
   assert.match(js, /--oi-body-gloss-gap/);
+  assert.match(js, /--oi-body-gloss-stack-gap/);
   assert.match(js, /normalizeBodyGlossGap/);
+  assert.match(js, /normalizeBodyGlossStackGap/);
   assert.doesNotMatch(css, /openai\.com|apple\.com|developer\.mozilla|react\.dev|anthropic\.com/i);
 });
 

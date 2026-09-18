@@ -60,8 +60,10 @@
   box-sizing: border-box;
 }
 /* BODY-GLOSS-GAP-CONTROL：仅段落块译。变量由 html 写入，勿在本选择器上再锁死 0.35em。 */
+/* BODY-GLOSS-STACK-GAP：段译之后到下一块译文/下一原文组，不影响标题。 */
 .oi-translation:not(.oi-inline):not(.oi-after-heading):not(.oi-side-rail) {
   margin-top: calc(-0.65em + (var(--oi-body-gloss-gap, 0.35em) - 0.35em));
+  margin-bottom: var(--oi-body-gloss-stack-gap, 0.25em);
   padding-top: max(0.05em, calc(var(--oi-body-gloss-gap, 0.35em) * 0.4));
 }
 .oi-translation.oi-after-heading {

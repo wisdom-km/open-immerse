@@ -9,8 +9,12 @@ import {
   BODY_GLOSS_GAP_DEFAULT,
   BODY_GLOSS_GAP_MAX,
   BODY_GLOSS_GAP_MIN,
+  BODY_GLOSS_STACK_GAP_DEFAULT,
+  BODY_GLOSS_STACK_GAP_MAX,
+  BODY_GLOSS_STACK_GAP_MIN,
   DEFAULT_SETTINGS,
-  normalizeBodyGlossGap
+  normalizeBodyGlossGap,
+  normalizeBodyGlossStackGap
 } from "../lib/storage.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,24 +30,44 @@ function loadBilingual() {
   return ctx.globalThis.OIBilingual;
 }
 
-test("BODY-GLOSS-GAP-CONTROL Options slider + storage hard gates", () => {
+test("BODY-GLOSS-GAP-CONTROL Options number inputs + storage hard gates", () => {
   assert.equal(DEFAULT_SETTINGS.bodyGlossGap, 0.35);
   assert.equal(BODY_GLOSS_GAP_DEFAULT, 0.35);
   assert.equal(BODY_GLOSS_GAP_MIN, 0.1);
   assert.equal(BODY_GLOSS_GAP_MAX, 0.7);
   assert.equal(normalizeBodyGlossGap(undefined), 0.35);
   assert.equal(normalizeBodyGlossGap("nope"), 0.35);
-  assert.match(optionsHtml, /正文译文间距/);
-  assert.match(optionsHtml, /id="bodyGlossGap"[^>]*type="range"/);
+  assert.equal(DEFAULT_SETTINGS.bodyGlossStackGap, 0.25);
+  assert.equal(BODY_GLOSS_STACK_GAP_DEFAULT, 0.25);
+  assert.equal(BODY_GLOSS_STACK_GAP_MIN, 0);
+  assert.equal(BODY_GLOSS_STACK_GAP_MAX, 1.2);
+  assert.equal(normalizeBodyGlossStackGap(undefined), 0.25);
+  assert.equal(normalizeBodyGlossStackGap("nope"), 0.25);
+  assert.equal(normalizeBodyGlossStackGap(0), 0);
+  assert.equal(normalizeBodyGlossStackGap(-1), 0);
+  assert.equal(normalizeBodyGlossStackGap(2), 1.2);
+  assert.match(optionsHtml, /正文译文间距 Body gloss gap/);
+  assert.match(optionsHtml, /译文与译文间距 Between translations/);
+  assert.match(optionsHtml, /id="bodyGlossGap"[^>]*type="number"/);
   assert.match(optionsHtml, /id="bodyGlossGap"[^>]*min="0.10"/);
   assert.match(optionsHtml, /id="bodyGlossGap"[^>]*max="0.70"/);
   assert.match(optionsHtml, /id="bodyGlossGap"[^>]*step="0.05"/);
-  assert.match(optionsHtml, /只调整段落原文与译文的上下空隙，不影响标题译文/);
-  assert.match(optionsHtml, /id="fontScale"[\s\S]*id="bodyGlossGap"/);
+  assert.match(optionsHtml, /id="bodyGlossStackGap"[^>]*type="number"/);
+  assert.match(optionsHtml, /id="bodyGlossStackGap"[^>]*min="0"/);
+  assert.match(optionsHtml, /id="bodyGlossStackGap"[^>]*max="1.20"/);
+  assert.match(optionsHtml, /id="bodyGlossStackGap"[^>]*step="0.05"/);
+  assert.doesNotMatch(optionsHtml, /type="range"/);
+  assert.doesNotMatch(optionsHtml, /id="bodyGlossGapValue"/);
+  assert.match(optionsHtml, /0\.10–0\.70，默认 0\.35/);
+  assert.match(optionsHtml, /0–1\.20，默认 0\.25/);
+  assert.match(optionsHtml, /id="fontScale"[\s\S]*id="bodyGlossGap"[\s\S]*id="bodyGlossStackGap"/);
   const later = optionsHtml.match(/<details class="later">[\s\S]*?<\/details>/)?.[0] || "";
   assert.doesNotMatch(later, /id="bodyGlossGap"/);
+  assert.doesNotMatch(later, /id="bodyGlossStackGap"/);
   assert.match(optionsJs, /bodyGlossGap: normalizeBodyGlossGap/);
+  assert.match(optionsJs, /bodyGlossStackGap: normalizeBodyGlossStackGap/);
   assert.match(js, /root\.style\.setProperty\("--oi-body-gloss-gap"/);
+  assert.match(js, /root\.style\.setProperty\("--oi-body-gloss-stack-gap"/);
 });
 
 test("BODY-GLOSS-GAP-CONTROL CSS applies only to main-column paragraphs", () => {
@@ -52,14 +76,19 @@ test("BODY-GLOSS-GAP-CONTROL CSS applies only to main-column paragraphs", () => 
       /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]+\}/s
     )?.[0] || "";
   assert.match(bodyOnly, /--oi-body-gloss-gap/);
+  assert.match(bodyOnly, /--oi-body-gloss-stack-gap/);
   assert.match(bodyOnly, /margin-top:\s*calc\(-0\.65em \+ \(var\(--oi-body-gloss-gap,\s*0\.35em\) - 0\.35em\)\)/);
+  assert.match(bodyOnly, /margin-bottom:\s*var\(--oi-body-gloss-stack-gap,\s*0\.25em\)/);
   const heading = css.slice(
     css.indexOf(".oi-translation.oi-after-heading {"),
     css.indexOf(".oi-translation.oi-inline")
   );
   const rail = css.match(/\.oi-translation\.oi-side-rail\s*\{[^}]+\}/s)?.[0] || "";
   assert.equal(/--oi-body-gloss-gap/.test(heading), false);
+  assert.equal(/--oi-body-gloss-stack-gap/.test(heading), false);
   assert.equal(/--oi-body-gloss-gap/.test(rail), false);
+  assert.equal(/--oi-body-gloss-stack-gap/.test(rail), false);
+  assert.match(heading, /margin:\s*0\.05em\s+0\s+0\.22em/);
   assert.match(rail, /margin:\s*0\.15em\s+0\s+0\.2em/);
 });
 
@@ -75,7 +104,7 @@ test("BILINGUAL-SPACING §7 heading band is 0.12–0.28em and fails > 0.32em", (
   assert.equal(OI.needsGapClamp(OI.headingTargetPx(32), OI.headingTightenPx(32)), false);
 });
 
-test("§8 heading gloss size stays body-token, orthogonal to the gap slider", () => {
+test("§8 heading gloss size stays body-token, orthogonal to the gap inputs", () => {
   assert.match(css, /BODY-HEADING-GLOSS-SIZE \/ BILINGUAL-SPACING §8/);
   assert.match(
     css,

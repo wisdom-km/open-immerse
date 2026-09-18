@@ -86,12 +86,19 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.doesNotMatch(html, /id="translateQuality"/);
   assert.match(html, /每批条数（分批，不是总数）/);
   assert.match(html, /id="bodyGlossGap"/);
-  assert.match(html, /正文译文间距/);
-  assert.match(html, /id="bodyGlossGapValue"/);
+  assert.match(html, /正文译文间距 Body gloss gap/);
+  assert.match(html, /id="bodyGlossStackGap"/);
+  assert.match(html, /译文与译文间距 Between translations/);
+  assert.match(html, /id="bodyGlossGap"[^>]*type="number"/);
+  assert.match(html, /id="bodyGlossStackGap"[^>]*type="number"/);
+  assert.doesNotMatch(html, /type="range"/);
+  assert.doesNotMatch(html, /id="bodyGlossGapValue"/);
   assert.match(html, /min="0.10"/);
   assert.match(html, /max="0.70"/);
+  assert.match(html, /max="1.20"/);
   assert.match(html, /step="0.05"/);
-  assert.match(html, /只调整段落原文与译文的上下空隙，不影响标题译文/);
+  assert.match(html, /0\.10–0\.70，默认 0\.35/);
+  assert.match(html, /0–1\.20，默认 0\.25/);
   assert.match(html, /本次翻译/);
   assert.match(html, /value="title_lead">仅标题\+开头/);
   for (const id of ["webpage", "learning", "documents", "fab"]) {
@@ -108,8 +115,12 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.match(optJs, /el\("deepThink"\)\.checked = cachedSettings\.deepThink === true/);
   assert.match(optJs, /deepThink: el\("deepThink"\)\.checked/);
   assert.match(optJs, /normalizeBodyGlossGap/);
+  assert.match(optJs, /normalizeBodyGlossStackGap/);
   assert.match(optJs, /el\("bodyGlossGap"\)\.value = String\(normalizeBodyGlossGap/);
+  assert.match(optJs, /el\("bodyGlossStackGap"\)\.value = String\(normalizeBodyGlossStackGap/);
   assert.match(optJs, /bodyGlossGap: normalizeBodyGlossGap\(el\("bodyGlossGap"\)\.value\)/);
+  assert.match(optJs, /bodyGlossStackGap: normalizeBodyGlossStackGap\(el\("bodyGlossStackGap"\)\.value\)/);
+  assert.doesNotMatch(optJs, /syncBodyGlossGapLabel/);
 });
 
 test("popup engine link uses short name + full title; lang-row stays 1fr 1fr", () => {

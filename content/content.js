@@ -623,6 +623,8 @@ function applyStyle(settings) {
   root.style.setProperty("--oi-font-scale", settings.fontScale || 0.95);
   const bodyGap = globalThis.OIBilingual?.normalizeBodyGlossGap?.(settings.bodyGlossGap);
   root.style.setProperty("--oi-body-gloss-gap", `${Number.isFinite(bodyGap) ? bodyGap : 0.35}em`);
+  const stackGap = globalThis.OIBilingual?.normalizeBodyGlossStackGap?.(settings.bodyGlossStackGap);
+  root.style.setProperty("--oi-body-gloss-stack-gap", `${Number.isFinite(stackGap) ? stackGap : 0.25}em`);
   const bodyFs = readArticleBodyFontSize();
   root.style.setProperty("--oi-body-font-size", `${bodyFs}px`);
   root.style.setProperty("--oi-body-gloss-size", `calc(${bodyFs}px * var(--oi-font-scale, 0.95))`);

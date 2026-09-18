@@ -9,7 +9,7 @@ import {
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
-import { BODY_GLOSS_GAP_DEFAULT, normalizeBodyGlossGap } from "../lib/storage.js";
+import { normalizeBodyGlossGap, normalizeBodyGlossStackGap } from "../lib/storage.js";
 
 function el(id) {
   return document.getElementById(id);
@@ -57,8 +57,7 @@ async function init() {
   el("translateScope").addEventListener("change", () => syncTranslateScopeHint());
   el("fontScale").value = cachedSettings.fontScale || 0.95;
   el("bodyGlossGap").value = String(normalizeBodyGlossGap(cachedSettings.bodyGlossGap));
-  syncBodyGlossGapLabel();
-  el("bodyGlossGap").addEventListener("input", () => syncBodyGlossGapLabel());
+  el("bodyGlossStackGap").value = String(normalizeBodyGlossStackGap(cachedSettings.bodyGlossStackGap));
   el("skipCode").checked = Boolean(cachedSettings.skipCode);
   el("autoOnNewPages").checked = Boolean(cachedSettings.autoOnNewPages);
   el("siteRules").value = (cachedSettings.siteRules || []).map((r) => r.host).join("\n");
@@ -266,6 +265,7 @@ async function persist() {
     translateScope: el("translateScope").value || "article",
     fontScale: Number(el("fontScale").value) || 0.95,
     bodyGlossGap: normalizeBodyGlossGap(el("bodyGlossGap").value),
+    bodyGlossStackGap: normalizeBodyGlossStackGap(el("bodyGlossStackGap").value),
     skipCode: el("skipCode").checked,
     autoOnNewPages: el("autoOnNewPages").checked,
     hoverEnabled: Boolean(features.hover),
@@ -281,13 +281,6 @@ async function persist() {
   setTimeout(() => {
     el("status").textContent = "";
   }, 1600);
-}
-
-function syncBodyGlossGapLabel() {
-  const out = el("bodyGlossGapValue");
-  if (!out) return;
-  const n = normalizeBodyGlossGap(el("bodyGlossGap")?.value);
-  out.textContent = n.toFixed(2) + "em" + (n === BODY_GLOSS_GAP_DEFAULT ? "（默认）" : "");
 }
 
 function fillSelect(select, items) {
