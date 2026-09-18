@@ -281,7 +281,7 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.match(PDF_COPY.mirrorHint, /阅读顺序/);
   assert.match(PDF_COPY.readoutHint, /Markdown/);
   assert.equal(PDF_COPY.figureFallback, "图（见左侧）");
-  assert.equal(PDF_COPY.formulaFallback, "公式");
+  assert.equal(PDF_COPY.formulaFallback, "（公式见左栏）");
   assert.equal(PDF_COPY.translateHint, "点击翻译");
   assert.equal(PDF_COPY.translatingWait, "正在翻译，请稍候…");
   assert.equal(readoutPlaceholder({ running: true, hasArticle: false }), "正在翻译，请稍候…");

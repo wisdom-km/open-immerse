@@ -16,6 +16,8 @@ import {
 import {
   collapseAuthorBlocks,
   extractReadoutBlocks,
+  isArxivMarginItem,
+  isArxivStampText,
   isPageChromeItem,
   isPageChromeText,
   looksLikeAuthorLine,
@@ -43,8 +45,10 @@ function pdfItem(str, x, y, width = 120, height = 10, extra = {}) {
 }
 
 function attentionItems() {
+  const arxivSpine = [..."arXiv:1706.03762"].map((ch, index) => pdfItem(ch, 10, 720 - index * 12, 8, 9));
   return [
     pdfItem("Provided proper attribution is provided, this paper", 72, 770, 400, 8),
+    ...arxivSpine,
     pdfItem("Attention Is All You Need", 96, 730, 420, 20),
     pdfItem("Ashish Vaswani", 72, 690, 90, 10),
     pdfItem("Noam Shazeer", 198, 690, 86, 10),
@@ -79,7 +83,8 @@ test("PDF-MD-READOUT spec locks reading-flow, not bbox mirror", () => {
   assert.match(spec, /Attention Is All You Need/);
   assert.match(spec, /不\*\*做 ENTRY-SECONDARY hide|不要藏掉该入口/);
   assert.equal(existsSync(join(root, "pdf/PDF-MD-READOUT.md")), true);
-  assert.equal(existsSync(join(root, "pdf/PDF-READOUT-MARKDOWN.md")), false);
+  assert.equal(existsSync(join(root, "pdf/PDF-READOUT-MARKDOWN.md")), true);
+  assert.match(readFileSync(join(root, "pdf/PDF-READOUT-MARKDOWN.md"), "utf8"), /边栏 arXiv 竖条/);
   assert.equal(DEFAULT_PDF_VIEW, "readout");
   assert.match(src, /let viewMode = "readout"/);
   assert.match(src, /extractReadoutBlocks/);
@@ -101,6 +106,9 @@ test("chrome filter drops page numbers, arXiv footers, and permission headers", 
   assert.equal(isPageChromeText("12"), true);
   assert.equal(isPageChromeText("— 3 —"), true);
   assert.equal(isPageChromeText("arXiv:1706.03762v7 [cs.CL] 2 Aug 2023"), true);
+  assert.equal(isArxivStampText("a r X i v : 1 7 0 6 . 0 3 7 6 2"), true);
+  assert.equal(isArxivMarginItem({ str: "a", x: 8, y: 400, height: 8 }, { width: 612, height: 792 }), true);
+  assert.equal(isArxivMarginItem({ str: "The", x: 72, y: 500, height: 10 }, { width: 612, height: 792 }), false);
   assert.equal(isPageChromeText("Provided proper attribution is provided, this paper"), true);
   assert.equal(isPageChromeText("Attention Is All You Need"), false);
   assert.equal(isPageChromeText("The dominant sequence transduction models are based on"), false);
@@ -128,6 +136,7 @@ test("Attention-like page becomes title + byline + abstract flow, not author gri
   assert.equal(blocks.filter((block) => block.role === "authors").length, 1);
   assert.ok(!blocks.some((block) => /provided proper attribution/i.test(block.text)));
   assert.ok(!blocks.some((block) => /arXiv:1706/.test(block.text)));
+  assert.ok(!blocks.some((block) => /arxiv/i.test(block.text)));
   assert.ok(!blocks.some((block) => block.text === "1"));
   assert.equal(abstract.role, "heading");
   assert.ok(leftBody);

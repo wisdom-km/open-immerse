@@ -1,6 +1,6 @@
 # PDF 右栏 · Markdown 通读（PDF-MD-READOUT）
 
-拍板：右栏是阅读顺序的译文文档，不是像素 / bbox 镜像。样例：Attention Is All You Need / arXiv 1706.03762。
+拍板：右栏是阅读顺序的译文文档，不是像素 / bbox 镜像。样例：Attention Is All You Need / arXiv 1706.03762。产品细则见同目录 `PDF-READOUT-MARKDOWN.md`（抽取 / 验收 §3–§4）。边栏 arXiv 竖条不进正文。
 
 几何镜像（`PDF-READOUT-MIRROR`、PR#40 未合并路径）废弃，不要复活作者格重叠或 arXiv 贯穿摘要。
 
