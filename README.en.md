@@ -19,11 +19,11 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Module | Status |
 | --- | --- |
 | Page FAB | Glass capsule, bottom-right: Translate / Stop, Original, ‹ collapse. Draggable; position is saved. **Stop** appears only while a job (including polish) is running. Stop aborts inflight requests and **keeps inserted translations**. **Original** is what clears them. |
-| Webpage | Default scope is **article body** (`main` / `article` column — no sidebar or nav). Switch to **full page** if needed (includes short sidebar/TOC labels). The primary H1 is translated when possible. Top nav chains, breadcrumbs, cookie bars, and footer link piles are still skipped. |
+| Webpage | Default scope is **article body** (`main` / `article` column — no sidebar or nav). Switch to **full page** if needed (includes short sidebar/TOC labels). The primary H1 is translated when possible: source above, gloss below; heading gloss font-size tracks the body translation (not the oversized H1); the optical gap between heading source and gloss is tightened in article scope. Top nav chains, breadcrumbs, cookie bars, and footer link piles are still skipped. |
 | Per-page quota | `all` or `title + lead` (H1 + first body block; the lead is capped at about 3 lines / 220 characters). **Batch size** only controls how many segments go in one API request, not how many segments the page may translate. |
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
-| PDF reader | In-extension pdf.js for local files or URLs. Left pane: continuous original pages. Right pane: extract title + body in **reading order**, translate, and render a **Markdown reading-flow** (two-column papers: left then right; headers/footers/page numbers filtered). Formulas try to recover copyable LaTeX + KaTeX; figures may be skipped or shown as placeholders — not page crops. No text layer → no invented prose. Open from the popup footer **PDF**. |
+| PDF reader | Experimental. In-extension pdf.js for local files or URLs. Left pane: continuous original pages. Right pane: extract title + body in **reading order** and render a **Markdown reading-flow** — **not** a bbox layout mirror (two-column papers: left then right; headers/footers/page numbers filtered). Formulas try to recover copyable LaTeX + KaTeX; figures may be skipped or shown as placeholders. No text layer → empty right pane. Open from the popup footer **PDF**. Webpage bilingual remains the regression target. |
 | Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
 
 Suggested regression page (article-scope scan and title handling were tuned on posts like this):  
@@ -82,6 +82,11 @@ The popup can also change page scope, per-page quota, source/target language, an
 
 Translation style (dashed / solid / boxed / dim dashed / left-bar card under the source) and font scale live in Settings.
 
+Spacing (Settings → 语言与通用, number inputs; **body paragraphs only — not headings or sidebars**):
+
+- **正文译文间距** (`bodyGlossGap`): gap between each source block and its gloss underneath; typically ~0.10–0.70 (em-ish)
+- **译文段间距** (`bodyGlossStackGap`): extra space between consecutive body gloss blocks; range **0–2.5**. Values 0 / 1 / 2 are visibly different
+
 ### 3. Save and review
 
 - Select text → right-click **收藏** (Save). The selection is translated, then stored.
@@ -104,11 +109,11 @@ Popup footer **PDF**, or **在沉浸译中打开** when the current tab is alrea
 - Top bar: Open PDF → `当前页 | 全文` (current page / full document; switching does **not** start a job) → Translate / Stop → Original → export MD / PDF
 - Full document walks pages with `OI_TRANSLATE_BATCH`. Progress is `翻译中 · k/n`. Jobs can be stopped. After stop or completion the primary button returns to **翻译**; Chinese already produced stays
 - **Original clears the current page only**, not other translated pages
-- Right pane defaults to a Markdown reading-flow (translated title + body, not a bbox mirror)
+- Right pane is a **Markdown reading-flow**: extract title + body in reading order, translate, scroll as a document — **not** a bbox layout mirror
 - Separate right-pane zoom chip (0.5–5, step 0.25); not in the top bar
 - Drag the split to resize columns
 - MD export uses `$...$` / `$$...$$` when LaTeX was recovered; otherwise Unicode or `[公式]`
-- **No OCR**, and the extension does not inject into Chrome’s built-in PDF viewer. No text layer → nothing to extract
+- **No OCR**, and the extension does not inject into Chrome’s built-in PDF viewer. No text layer → empty right pane. This path is still experimental; regress against webpage bilingual
 
 ---
 
@@ -196,8 +201,8 @@ open-immerse/
 │   ├── page-scan.js           # node collection (keep in sync with content.js)
 │   ├── site-presets.js        # site presets (claude.com today)
 │   ├── bilingual-layout.js
-│   ├── pdf-readout.js         # PDF right-pane Markdown reading-flow
-│   ├── pdf-mirror.js          # leftover bbox mirror (not the default pane)
+│   ├── pdf-readout.js         # PDF right-pane Markdown reading-flow (product path)
+│   ├── pdf-mirror.js          # extract helpers; bbox mirror is not the product path
 │   ├── pdf-viewer.js
 │   ├── pdf-latex.js           # recover LaTeX from the text layer
 │   ├── learning.js
@@ -256,11 +261,12 @@ Conventions: [CONTRIBUTING.md](CONTRIBUTING.md) (Chinese). Short version:
 
 Ready for daily use: webpage article bilingual, per-site auto rules, learning review, plain-text documents.
 
-Not built, not guaranteed, or not fixed yet:
+Not built, not guaranteed, or still experimental:
 
 | Item | Notes |
 | --- | --- |
-| **PDF reading-flow (experimental)** | Right pane is now a reading-order Markdown document, not a bbox mirror. Scanned pages with no text layer stay empty. Webpage bilingual remains the regression target |
+| **PDF reading-flow (experimental)** | Right pane is a reading-order Markdown document (title + body), not a bbox mirror. No OCR; no text layer → empty right pane. Webpage bilingual remains the regression target |
+| Sidebar en/zh pairing | Shelved; product focus is body/main-text bilingual |
 | Chrome Web Store | Unpacked load only |
 | OCR | Scanned PDFs with no text layer leave the right pane empty |
 | DOCX / complex layouts | Documents page accepts plain-text-like files only |
