@@ -71,6 +71,7 @@ function fakeBox({
     tagName,
     className,
     __display: display,
+    __fontSize: fontSize,
     __paddingLeft: paddingLeft,
     __paddingRight: paddingRight,
     __borderLeftWidth: borderLeftWidth,
@@ -95,6 +96,9 @@ function fakeBox({
     style: {
       setProperty(key, value) {
         style.props[key] = value;
+      },
+      getPropertyValue(key) {
+        return style.props[key] || "";
       },
       get display() {
         return style.display;
@@ -215,7 +219,7 @@ function fakeBox({
       defaultView: {
         getComputedStyle(node) {
           return {
-            fontSize: `${fontSize}px`,
+            fontSize: `${node?.__fontSize ?? fontSize}px`,
             display: node?.style?.display || node?.__display || display,
             flexDirection: node?.style?.flexDirection || node?.__flexDirection || "row",
             paddingLeft: `${node?.__paddingLeft ?? paddingLeft}px`,
@@ -275,38 +279,54 @@ test("overlap helper steps 2–4px until gap ≥ 2px and caps extra at ~1.2em", 
   });
   const headingExtra = OI.clearTranslationOverlap(heading, source);
   assert.ok(headingExtra > 0);
-  assert.match(heading.style.paddingTop, /calc\(0\.32em \+ /);
+  assert.match(heading.style.paddingTop, /calc\(0\.35em \+ /);
   assert.equal(heading.style.marginTop, "");
 });
 
-test("optical gap helpers clamp heading space to ~0.35em and skip body/side-rail", () => {
+test("optical gap helpers follow BODY-BILINGUAL-GAP source-em bands", () => {
   const OI = loadBilingual();
-  assert.equal(OI.HEADING_MARGIN_TOP_EM, -0.45);
-  assert.equal(OI.HEADING_PAD_TOP_EM, 0.32);
+  assert.equal(OI.HEADING_MARGIN_TOP_EM, 0.15);
+  assert.equal(OI.HEADING_PAD_TOP_EM, 0.35);
+  assert.equal(OI.HEADING_PAD_MIN_EM, 0.2);
+  assert.equal(OI.HEADING_TARGET_MIN_EM, 0.35);
+  assert.equal(OI.HEADING_TARGET_MAX_EM, 0.55);
+  assert.equal(OI.HEADING_HARD_MAX_EM, 0.7);
+  assert.equal(OI.HEADING_HARD_MAX_PX, 14);
   assert.equal(OI.BODY_MARGIN_TOP_EM, -0.65);
-  assert.equal(OI.opticalGapMaxPx(16), 8);
-  assert.equal(OI.opticalGapMaxPx(32), 12);
-  assert.ok(OI.opticalGapTargetPx(16) >= 2);
-  assert.ok(OI.opticalGapTargetPx(16) <= 8);
-  assert.equal(OI.needsGapClamp(20, 12), true);
-  assert.equal(OI.needsGapClamp(8, 12), false);
-  assert.equal(OI.needsGapClamp(-2, 12), false);
-  assert.equal(OI.nextGapPull(0, 3, 12), 3);
-  assert.equal(OI.gapClampCapPx(16), 48);
+  assert.equal(OI.GAP_CLAMP_STEP_PX, 2);
+  assert.equal(OI.headingGapLimitPx(16), 11.2);
+  assert.equal(OI.headingGapLimitPx(32), 14);
+  assert.equal(OI.headingTightenPx(16), 8.8);
+  assert.equal(OI.headingTightenPx(32), 14);
+  assert.equal(OI.headingTargetPx(16), 7.2);
+  assert.equal(OI.headingTargetPx(32), 14);
+  assert.equal(OI.headingMinGapPx(32), 6.4);
+  assert.equal(OI.opticalGapEm(22.4, 32), 0.7);
+  assert.equal(OI.needsGapClamp(20, 14), true);
+  assert.equal(OI.needsGapClamp(8, 14), false);
+  assert.equal(OI.nextGapPull(0, 2, 12), 2);
+  assert.equal(OI.bodyPullCapPx(16), 2.4);
 
   const headingSource = fakeBox({ className: "source", tagName: "H2", top: 0, bottom: 40 });
   const heading = fakeBox({ className: "oi-translation oi-after-heading", top: 80, bottom: 120 });
   const body = fakeBox({ className: "oi-translation", top: 80, bottom: 120 });
   const rail = fakeBox({ className: "oi-translation oi-side-rail", top: 80, bottom: 120 });
+  assert.equal(OI.shouldClampAsHeading(heading, headingSource), true);
   assert.equal(OI.shouldClampOpticalGap(heading, headingSource), true);
-  assert.equal(OI.shouldClampOpticalGap(body, headingSource), true);
-  assert.equal(OI.shouldClampOpticalGap(body, fakeBox({ className: "source", tagName: "P", top: 0, bottom: 40 })), false);
+  assert.equal(OI.shouldClampOpticalGap(body, fakeBox({ className: "source", tagName: "P", top: 0, bottom: 40 })), true);
   assert.equal(OI.shouldClampOpticalGap(rail, headingSource), false);
 });
 
-test("heading gap clamp pulls oversized OpenAI-like space down to the optical target", () => {
+test("heading gap clamp pulls oversized OpenAI-like space into the 0.35–0.55em band", () => {
   const OI = loadBilingual();
-  const source = fakeBox({ className: "headline-3", tagName: "H2", top: 0, bottom: 100, width: 640 });
+  const source = fakeBox({
+    className: "headline-3",
+    tagName: "H2",
+    top: 0,
+    bottom: 100,
+    width: 640,
+    fontSize: 16
+  });
   const heading = fakeBox({
     className: "oi-translation oi-after-heading",
     top: 132,
@@ -316,11 +336,42 @@ test("heading gap clamp pulls oversized OpenAI-like space down to the optical ta
   });
   const laid = OI.layoutTranslation(heading, source);
   assert.ok(laid.pull > 0);
-  assert.match(heading.style.marginTop, /calc\(-0\.45em - /);
+  assert.match(heading.style.marginTop, /calc\(0\.15em - /);
   const gap = OI.verticalGap(source.getBoundingClientRect(), heading.getBoundingClientRect());
-  assert.ok(gap >= OI.OVERLAP_GAP_MIN);
-  assert.ok(gap <= OI.opticalGapMaxPx(16));
-  assert.ok(Math.abs(gap - OI.opticalGapTargetPx(16)) <= OI.GAP_CLAMP_STEP_PX);
+  assert.ok(gap >= OI.headingMinGapPx(16));
+  assert.ok(gap <= OI.headingGapLimitPx(16));
+  assert.ok(OI.opticalGapEm(gap, 16) <= OI.HEADING_HARD_MAX_EM);
+  assert.ok(Math.abs(gap - OI.headingTargetPx(16)) <= OI.GAP_CLAMP_STEP_PX);
+});
+
+test("large H1 Persistence-like gap must tighten to ≤ 0.7em of source", () => {
+  const OI = loadBilingual();
+  const sourceFs = 32;
+  const source = fakeBox({
+    className: "headline-1",
+    tagName: "H1",
+    top: 0,
+    bottom: 80,
+    width: 720,
+    fontSize: sourceFs
+  });
+  const heading = fakeBox({
+    className: "oi-translation oi-after-heading",
+    top: 112,
+    bottom: 150,
+    width: 720,
+    fontSize: 16
+  });
+  const before = OI.verticalGap(source.getBoundingClientRect(), heading.getBoundingClientRect());
+  assert.ok(OI.opticalGapEm(before, sourceFs) > OI.HEADING_HARD_MAX_EM);
+  const laid = OI.layoutTranslation(heading, source);
+  const gap = OI.verticalGap(source.getBoundingClientRect(), heading.getBoundingClientRect());
+  assert.ok(laid.pull > 0);
+  assert.ok(gap <= sourceFs * OI.HEADING_HARD_MAX_EM);
+  assert.ok(gap <= OI.HEADING_HARD_MAX_PX);
+  assert.ok(gap >= OI.headingMinGapPx(sourceFs));
+  assert.ok(OI.opticalGapEm(gap, sourceFs) <= OI.HEADING_TARGET_MAX_EM + 0.02);
+  assert.ok(OI.opticalGapEm(gap, sourceFs) >= OI.HEADING_TARGET_MIN_EM - 0.02);
 });
 
 test("heading overlap bump still wins when the translation sits on the source", () => {
@@ -336,26 +387,43 @@ test("heading overlap bump still wins when the translation sits on the source", 
   const laid = OI.layoutTranslation(heading, source);
   assert.ok(laid.extra > 0);
   assert.equal(laid.pull, 0);
-  assert.match(heading.style.paddingTop, /calc\(0\.32em \+ /);
+  assert.match(heading.style.paddingTop, /calc\(0\.35em \+ /);
   const gap = OI.verticalGap(source.getBoundingClientRect(), heading.getBoundingClientRect());
-  assert.ok(gap >= OI.OVERLAP_GAP_MIN);
+  assert.ok(gap >= OI.headingMinGapPx(16));
 });
 
-test("body paragraph spacing is not clamped by the heading optical pull", () => {
+test("in-band body paragraphs keep the −0.65em BILINGUAL-SPACING pull", () => {
   const OI = loadBilingual();
-  const source = fakeBox({ className: "source", tagName: "P", top: 0, bottom: 80, width: 560 });
+  const source = fakeBox({ className: "source", tagName: "P", top: 0, bottom: 80, width: 560, fontSize: 16 });
   const body = fakeBox({
     className: "oi-translation",
-    top: 100,
-    bottom: 140,
+    top: 86.4,
+    bottom: 126,
     width: 560,
     fontSize: 16
   });
   const laid = OI.layoutTranslation(body, source);
   assert.equal(laid.pull, 0);
   assert.equal(body.style.marginTop.includes(" - "), false);
+  assert.match(body.style.marginTop, /calc\(-0\.65em \+ /);
   const gap = OI.verticalGap(source.getBoundingClientRect(), body.getBoundingClientRect());
-  assert.equal(gap, 20);
+  assert.ok(Math.abs(gap - 6.4) < 0.05);
+  assert.ok(OI.opticalGapEm(gap, 16) <= OI.BODY_TARGET_MAX_EM);
+});
+
+test("side-rail translations skip body optical gap clamp", () => {
+  const OI = loadBilingual();
+  const source = fakeBox({ className: "nav-label", tagName: "A", top: 0, bottom: 24, width: 180 });
+  const rail = fakeBox({
+    className: "oi-translation oi-side-rail",
+    top: 48,
+    bottom: 72,
+    width: 180,
+    parent: source
+  });
+  assert.equal(OI.shouldClampOpticalGap(rail, source), false);
+  assert.equal(OI.clampOversizedGap(rail, source), 0);
+  assert.equal(rail.style.marginTop, "");
 });
 
 test("width clamp uses the source content box and skips inline nodes", () => {

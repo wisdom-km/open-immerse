@@ -21,13 +21,13 @@ test("body translations match Loom section 3 margin", () => {
   assert.equal(/margin:\s*-0\.65em\s+0\s+0\.1em/.test(bodyBlock), false);
 });
 
-test("heading translations hug source like body, with extra padding for descenders", () => {
-  assert.match(headingBlock, /光学间距约 0\.35em/);
-  assert.match(headingBlock, /margin:\s*-0\.45em\s+0\s+0\.4em/);
-  assert.match(headingBlock, /padding-top:\s*0\.32em/);
+test("heading translations start from a small em margin, not a locked 0.7rem", () => {
+  assert.match(headingBlock, /0\.7rem 只是旧初值，不锁死/);
+  assert.match(headingBlock, /0\.35–0\.55em/);
+  assert.match(headingBlock, /margin:\s*0\.15em\s+0\s+0\.35em/);
+  assert.match(headingBlock, /padding-top:\s*0\.35em/);
   assert.equal(/margin:\s*0\.7rem/.test(headingBlock), false);
-  assert.equal(/padding-top:\s*0\.45em/.test(headingBlock), false);
-  assert.equal(/padding-top:\s*0\.15em/.test(headingBlock), false);
+  assert.equal(/margin:\s*-0\.45em/.test(headingBlock), false);
 });
 
 test("inline translations stay on the same line with a small left gap", () => {
@@ -59,18 +59,23 @@ test("card and box styles keep existing padding and frame", () => {
   assert.equal(/:not\(\.oi-after-heading\)/.test(css), false);
 });
 
-test("layoutTranslation measures heading gaps and clamps oversized optical space", () => {
-  assert.match(layout, /HEADING_MARGIN_TOP_EM:\s*-0\.45/);
-  assert.match(layout, /HEADING_PAD_TOP_EM:\s*0\.32/);
-  assert.match(layout, /OPTICAL_GAP_MAX_EM:\s*0\.5/);
-  assert.match(layout, /OPTICAL_GAP_TARGET_EM:\s*0\.35/);
+test("layoutTranslation measures heading gaps in source em and clamps > 0.7em", () => {
+  assert.match(layout, /HEADING_MARGIN_TOP_EM:\s*0\.15/);
+  assert.match(layout, /HEADING_PAD_TOP_EM:\s*0\.35/);
+  assert.match(layout, /HEADING_TARGET_MIN_EM:\s*0\.35/);
+  assert.match(layout, /HEADING_TARGET_MAX_EM:\s*0\.55/);
+  assert.match(layout, /HEADING_HARD_MAX_EM:\s*0\.7/);
+  assert.match(layout, /HEADING_HARD_MAX_PX:\s*14/);
   assert.match(layout, /clampOversizedGap/);
   assert.match(layout, /applyGapPull/);
   assert.match(layout, /shouldClampOpticalGap/);
+  assert.match(layout, /elementFontSize/);
+  assert.match(layout, /headingGapLimitPx/);
   assert.match(layout, /layoutTranslation[\s\S]*clampOversizedGap/);
   assert.match(layout, /calc\(\$\{OIBilingual\.HEADING_PAD_TOP_EM\}em \+ /);
   assert.match(layout, /calc\(\$\{base\}em - \$\{pull\}px\)/);
   assert.equal(/0\.7rem/.test(layout), false);
+  assert.match(js, /requestAnimationFrame/);
 });
 
 test("content.js still marks H1–H3 as oi-after-heading afterend", () => {
