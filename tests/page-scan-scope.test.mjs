@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PAGE_CHROME_SELECTOR, PAGE_TOP_NAV_SELECTOR, PRIMARY_TITLE_SKIP_ANCESTOR } from "../lib/site-presets.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { applyTranslateLimit } from "../lib/translate-limit.js";
-import { detachStaleRailGloss, ensureRailId, getText, hasNestedCollectible, inSideRail, isPrimaryTitle, mountPairedGloss, pairGlossBySource, pickSideRailMountHost, placeTranslationNode, planTranslationMount, rebindLiveSourceHash, shouldCollectNode, shouldInline, shouldSkipScopedChrome, sourceTextHash, translationClassName } from "../lib/page-scan.js";
+import { detachStaleRailGloss, ensureRailId, getText, hasNestedCollectible, inSideRail, isPrimaryTitle, mountPairedGloss, pairGlossBySource, pickSideRailMountHost, placeTranslationNode, planTranslationMount, rebindLiveSourceHash, shouldCollectNode, shouldInline, shouldSkipScopedChrome, sourceTextHash, stampRailMountKeys, translationClassName } from "../lib/page-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentSrc = readFileSync(join(root, "content/content.js"), "utf8");
@@ -561,7 +561,7 @@ test("recycle-scroller same LI remounts Getting started→Design principles→Te
   assert.notEqual(source.lastElementChild.textContent, "入门");
 });
 
-test("title-container mount host gets the live label hash", () => {
+test("title-container mount host shares rail-id + hash; recycle clears both keys", () => {
   const { source } = sidebarFixture("LI", "Design principles", ["aside"]);
   const title = fakeNode({
     tagName: "DIV",
@@ -588,6 +588,31 @@ test("title-container mount host gets the live label hash", () => {
   assert.equal(mounted[0].node.textContent, "设计原则");
   assert.notEqual(mounted[0].node.textContent, "技术");
   assert.equal(mounted[0].plan.host, title);
+  const keys = stampRailMountKeys(source, mounted[0].node);
+  assert.equal(title.getAttribute("data-oi-rail-id") || title.dataset.oiRailId, keys.id);
+  assert.equal(mounted[0].node.getAttribute("data-oi-for"), keys.id);
+  const leftover = mountedNode("oi-translation oi-side-rail", "技术");
+  leftover.setAttribute("data-oi-for", "oi-rail-other");
+  leftover.setAttribute("data-oi-src-hash", sourceTextHash("Technologies"));
+  leftover.remove = () => {
+    leftover.removed = true;
+    leftover.parentElement = null;
+  };
+  title.appendChild?.(leftover);
+  if (!title.children) title.children = [leftover];
+  else if (Array.isArray(title.children) && !title.children.includes(leftover)) title.children.push(leftover);
+  leftover.parentElement = title;
+  source.__label = "Technologies";
+  const stripped = detachStaleRailGloss(source);
+  assert.ok(stripped.length >= 1, "stale hash or foreign rail-id must clear the row");
+  const remounted = mountPairedGloss([source], ["技术"], undefined, articleCtx, {
+    mode: "block",
+    createNode(plan, pair) {
+      return mountedNode(plan.className, pair.text);
+    }
+  });
+  assert.equal(remounted[0].node.textContent, "技术");
+  assert.notEqual(remounted[0].node.textContent, "设计原则");
 });
 
 test("Apple Getting started gloss is not 设计原则", () => {
@@ -701,6 +726,8 @@ test("content.js gates chrome by scope and does not blanket-drop header", () => 
   assert.match(contentSrc, /data-oi-src-hash/);
   assert.match(contentSrc, /function detachStaleRailGloss\(/);
   assert.match(contentSrc, /function rebindLiveSourceHash\(/);
+  assert.match(contentSrc, /function stampRailMountKeys\(/);
+  assert.match(contentSrc, /function glossIsStale\(/);
   assert.match(contentSrc, /function revalidateSideRailGlosses\(/);
   assert.match(contentSrc, /characterData: true/);
   assert.match(contentSrc, /title-container/);
