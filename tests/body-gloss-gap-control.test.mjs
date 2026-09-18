@@ -46,8 +46,9 @@ test("BODY-GLOSS-GAP-CONTROL Options number inputs + storage hard gates", () => 
   assert.equal(normalizeBodyGlossStackGap(0), 0);
   assert.equal(normalizeBodyGlossStackGap(-1), 0);
   assert.equal(normalizeBodyGlossStackGap(2), 1.2);
-  assert.match(optionsHtml, /正文译文间距 Body gloss gap/);
-  assert.match(optionsHtml, /译文与译文间距 Between translations/);
+  assert.match(optionsHtml, /正文译文间距/);
+  assert.match(optionsHtml, /译文段间距/);
+  assert.doesNotMatch(optionsHtml, /Body gloss gap|Between translations/);
   assert.match(optionsHtml, /id="bodyGlossGap"[^>]*type="number"/);
   assert.match(optionsHtml, /id="bodyGlossGap"[^>]*min="0.10"/);
   assert.match(optionsHtml, /id="bodyGlossGap"[^>]*max="0.70"/);
@@ -58,8 +59,8 @@ test("BODY-GLOSS-GAP-CONTROL Options number inputs + storage hard gates", () => 
   assert.match(optionsHtml, /id="bodyGlossStackGap"[^>]*step="0.05"/);
   assert.doesNotMatch(optionsHtml, /type="range"/);
   assert.doesNotMatch(optionsHtml, /id="bodyGlossGapValue"/);
-  assert.match(optionsHtml, /0\.10–0\.70，默认 0\.35/);
-  assert.match(optionsHtml, /0–1\.20，默认 0\.25/);
+  assert.match(optionsHtml, /原文与其下段落译文的空隙（em）。不影响标题译文。/);
+  assert.match(optionsHtml, /相邻两段正文译文之间的空隙（em）。不含标题译文、侧栏。/);
   assert.match(optionsHtml, /id="fontScale"[\s\S]*id="bodyGlossGap"[\s\S]*id="bodyGlossStackGap"/);
   const later = optionsHtml.match(/<details class="later">[\s\S]*?<\/details>/)?.[0] || "";
   assert.doesNotMatch(later, /id="bodyGlossGap"/);

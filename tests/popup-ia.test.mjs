@@ -86,9 +86,9 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.doesNotMatch(html, /id="translateQuality"/);
   assert.match(html, /每批条数（分批，不是总数）/);
   assert.match(html, /id="bodyGlossGap"/);
-  assert.match(html, /正文译文间距 Body gloss gap/);
+  assert.match(html, /正文译文间距/);
   assert.match(html, /id="bodyGlossStackGap"/);
-  assert.match(html, /译文与译文间距 Between translations/);
+  assert.match(html, /译文段间距/);
   assert.match(html, /id="bodyGlossGap"[^>]*type="number"/);
   assert.match(html, /id="bodyGlossStackGap"[^>]*type="number"/);
   assert.doesNotMatch(html, /type="range"/);
@@ -97,8 +97,8 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.match(html, /max="0.70"/);
   assert.match(html, /max="1.20"/);
   assert.match(html, /step="0.05"/);
-  assert.match(html, /0\.10–0\.70，默认 0\.35/);
-  assert.match(html, /0–1\.20，默认 0\.25/);
+  assert.match(html, /原文与其下段落译文的空隙（em）。不影响标题译文。/);
+  assert.match(html, /相邻两段正文译文之间的空隙（em）。不含标题译文、侧栏。/);
   assert.match(html, /本次翻译/);
   assert.match(html, /value="title_lead">仅标题\+开头/);
   for (const id of ["webpage", "learning", "documents", "fab"]) {
