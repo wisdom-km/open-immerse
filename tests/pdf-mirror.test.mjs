@@ -30,10 +30,14 @@ import {
   unicodeMathify,
   fitMirrorTextHeight,
   isMirrorTextRole,
+  looksLikeArxivMeta,
+  mergeStackedAuthorCells,
   pageRectToPercent,
   pdfItemToPageRect,
   percentRectToStyle,
   percentRectToTextStyle,
+  relayoutMirrorPageBoxes,
+  resolveVerticalMirrorCollisions,
   sortBoxesReadingOrder,
   toMirrorItem,
   translatableMirrorUnits,
@@ -193,6 +197,70 @@ test("Attention-like page 1 keeps title / author grid / abstract as separate box
   assert.equal(item.kind, "text");
   assert.equal(item.page, 1);
   assert.ok(item.bbox.width > 300);
+});
+
+test("CJK-grown boxes collide vertically and keep author rows / abstract / footer readable", () => {
+  const grown = [
+    { id: "title", role: "title", text: "注意力即一切所需", left: 96, top: 34, width: 420, height: 40 },
+    { id: "ashish", role: "authors", text: "阿希什·瓦萨瓦尼\nGoogle Brain\navaswani@google.com", left: 72, top: 78, width: 100, height: 52, originTop: 78 },
+    { id: "noam", role: "authors", text: "诺姆·沙泽尔\nGoogle Brain\nnoam@google.com", left: 198, top: 78, width: 100, height: 52, originTop: 78 },
+    { id: "llion", role: "authors", text: "利翁·琼斯\nGoogle Research\nllion@google.com", left: 72, top: 92, width: 100, height: 52, originTop: 92 },
+    { id: "aidan", role: "authors", text: "艾丹·戈麦斯\nUniversity of Toronto\naidan@cs.toronto.edu", left: 198, top: 92, width: 110, height: 52, originTop: 92 },
+    { id: "arxiv", role: "paragraph", text: "arXiv:1706.03762v7 [cs.CL] 2 Aug 2023", left: 8, top: 200, width: 16, height: 380 },
+    { id: "abstract", role: "paragraph", text: "主流序列转换模型基于复杂的循环神经网络或卷积神经网络。", left: 20, top: 220, width: 520, height: 90 },
+    { id: "note", role: "paragraph", text: "*同等贡献。Jakob 提出用注意力替代 RNN，并启动了评估这一想法的工作。", left: 72, top: 700, width: 460, height: 64 },
+    { id: "note2", role: "paragraph", text: "*同等贡献。Jakob 提出用注意力替代 RNN，并启动了评估这一想法的工作。", left: 72, top: 702, width: 460, height: 64 }
+  ];
+  assert.equal(looksLikeArxivMeta(grown[5].text), true);
+  const out = relayoutMirrorPageBoxes(grown, { pageWidth: 612, pageHeight: 792, gap: 4 });
+  const byId = Object.fromEntries(out.boxes.map((box) => [box.id, box]));
+  assert.ok(byId.title);
+  assert.ok(byId.ashish.top + byId.ashish.height + 3 <= byId.llion.top);
+  assert.ok(byId.noam.top + byId.noam.height + 3 <= byId.aidan.top);
+  assert.ok(Math.abs(byId.ashish.top - byId.noam.top) < 2);
+  assert.ok(Math.abs(byId.llion.top - byId.aidan.top) < 2);
+  assert.ok(byId.abstract.left >= byId.arxiv.left + byId.arxiv.width + 4);
+  assert.equal(out.boxes.filter((box) => /同等贡献/.test(box.text)).length, 1);
+  assert.equal(out.dropped.length, 1);
+  assert.ok(out.pageHeight >= 792);
+
+  const pushed = resolveVerticalMirrorCollisions(
+    [
+      { left: 72, top: 40, width: 200, height: 40 },
+      { left: 72, top: 60, width: 200, height: 20 }
+    ],
+    { gap: 4 }
+  );
+  assert.ok(pushed[0].top + pushed[0].height + 3 <= pushed[1].top);
+  const sameRow = resolveVerticalMirrorCollisions(
+    [
+      { left: 72, top: 80, width: 90, height: 40 },
+      { left: 198, top: 80, width: 90, height: 40 }
+    ],
+    { gap: 4 }
+  );
+  assert.equal(sameRow[0].top, 80);
+  assert.equal(sameRow[1].top, 80);
+});
+
+test("wide email / affiliation still merge into one author cell, not the next row", () => {
+  const items = [
+    pdfItem("Ashish Vaswani", 72, 690, 90, 10),
+    pdfItem("Google Brain", 72, 676, 72, 9),
+    pdfItem("avaswani@google.com", 72, 662, 170, 8),
+    pdfItem("Llion Jones", 72, 640, 70, 10),
+    pdfItem("Google Research", 72, 626, 88, 9),
+    pdfItem("llion@google.com", 72, 612, 90, 8)
+  ];
+  const layout = buildMirrorLayout({ items }, { width: 612, height: 792 });
+  const ashish = layout.boxes.find((box) => /Ashish Vaswani/.test(box.text));
+  const llion = layout.boxes.find((box) => /Llion Jones/.test(box.text));
+  assert.ok(ashish && llion);
+  assert.match(ashish.text, /avaswani@google.com/);
+  assert.equal(/Llion Jones/.test(ashish.text), false);
+  assert.equal(ashish.role, "authors");
+  const merged = mergeStackedAuthorCells(layout.boxes, 612);
+  assert.equal(merged.filter((box) => box.role === "authors").length, 2);
 });
 
 test("scanned pages stay empty and do not invent a mirror", () => {

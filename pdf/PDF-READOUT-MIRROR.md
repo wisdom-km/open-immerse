@@ -26,7 +26,7 @@
 
 ### 4.1.1 CJK 不裁切
 
-文本镜像框禁止用死高 bbox + `overflow:hidden` 裁 CJK。`.mirror-box` 文本 `overflow: visible`；`.mirror-page` 优先 `overflow: visible`；图/公式裁切 `.mirror-visual` 可 hidden。标题 `line-height` ≥ 1.25（宜 1.3）；高度随 CJK 折行长高（`height:auto` / scrollHeight / `max(srcH, fs×lh)+pad`）。宁可略向下重叠，也不削字头字脚。禁止靠缩小字号躲裁切。详见 `PDF-MIRROR-CJK-CLIP.md`。
+文本镜像框禁止用死高 bbox + `overflow:hidden` 裁 CJK。`.mirror-box` 文本 `overflow: visible`；`.mirror-page` 优先 `overflow: visible`；图/公式裁切 `.mirror-visual` 可 hidden。标题 `line-height` ≥ 1.25（宜 1.3）；高度随 CJK 折行长高（`height:auto` / scrollHeight / `max(srcH, fs×lh)+pad`）。长高后做同页垂直碰撞推开，禁止叠墨；作者栅分行、摘要与左侧 arXiv 条水平分开、页脚贡献说明只渲染一层。禁止靠缩小字号躲裁切。详见 `PDF-MIRROR-CJK-CLIP.md`。
 
 ## 4.2 公式
 
