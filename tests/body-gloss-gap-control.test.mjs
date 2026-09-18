@@ -40,12 +40,14 @@ test("BODY-GLOSS-GAP-CONTROL Options number inputs + storage hard gates", () => 
   assert.equal(DEFAULT_SETTINGS.bodyGlossStackGap, 0.25);
   assert.equal(BODY_GLOSS_STACK_GAP_DEFAULT, 0.25);
   assert.equal(BODY_GLOSS_STACK_GAP_MIN, 0);
-  assert.equal(BODY_GLOSS_STACK_GAP_MAX, 1.2);
+  assert.equal(BODY_GLOSS_STACK_GAP_MAX, 2.5);
   assert.equal(normalizeBodyGlossStackGap(undefined), 0.25);
   assert.equal(normalizeBodyGlossStackGap("nope"), 0.25);
   assert.equal(normalizeBodyGlossStackGap(0), 0);
   assert.equal(normalizeBodyGlossStackGap(-1), 0);
-  assert.equal(normalizeBodyGlossStackGap(2), 1.2);
+  assert.equal(normalizeBodyGlossStackGap(2), 2);
+  assert.equal(normalizeBodyGlossStackGap(2.5), 2.5);
+  assert.equal(normalizeBodyGlossStackGap(3), 2.5);
   assert.match(optionsHtml, /正文译文间距/);
   assert.match(optionsHtml, /译文段间距/);
   assert.doesNotMatch(optionsHtml, /Body gloss gap|Between translations/);
@@ -55,12 +57,12 @@ test("BODY-GLOSS-GAP-CONTROL Options number inputs + storage hard gates", () => 
   assert.match(optionsHtml, /id="bodyGlossGap"[^>]*step="0.05"/);
   assert.match(optionsHtml, /id="bodyGlossStackGap"[^>]*type="number"/);
   assert.match(optionsHtml, /id="bodyGlossStackGap"[^>]*min="0"/);
-  assert.match(optionsHtml, /id="bodyGlossStackGap"[^>]*max="1.20"/);
+  assert.match(optionsHtml, /id="bodyGlossStackGap"[^>]*max="2.5"/);
   assert.match(optionsHtml, /id="bodyGlossStackGap"[^>]*step="0.05"/);
   assert.doesNotMatch(optionsHtml, /type="range"/);
   assert.doesNotMatch(optionsHtml, /id="bodyGlossGapValue"/);
   assert.match(optionsHtml, /原文与其下段落译文的空隙（em）。不影响标题译文。/);
-  assert.match(optionsHtml, /相邻两段正文译文之间的空隙（em）。不含标题译文、侧栏。/);
+  assert.match(optionsHtml, /相邻两段正文译文之间的空隙（em，0–2\.5，默认 0\.25）。不含标题译文、侧栏。/);
   assert.match(optionsHtml, /id="fontScale"[\s\S]*id="bodyGlossGap"[\s\S]*id="bodyGlossStackGap"/);
   const later = optionsHtml.match(/<details class="later">[\s\S]*?<\/details>/)?.[0] || "";
   assert.doesNotMatch(later, /id="bodyGlossGap"/);
@@ -79,7 +81,12 @@ test("BODY-GLOSS-GAP-CONTROL CSS applies only to main-column paragraphs", () => 
   assert.match(bodyOnly, /--oi-body-gloss-gap/);
   assert.match(bodyOnly, /--oi-body-gloss-stack-gap/);
   assert.match(bodyOnly, /margin-top:\s*calc\(-0\.65em \+ \(var\(--oi-body-gloss-gap,\s*0\.35em\) - 0\.35em\)\)/);
-  assert.match(bodyOnly, /margin-bottom:\s*var\(--oi-body-gloss-stack-gap,\s*0\.25em\)/);
+  assert.match(bodyOnly, /margin-bottom:\s*calc\(var\(--oi-body-gloss-stack-gap,\s*0\.25\) \* 1em\)/);
+  assert.match(bodyOnly, /display:\s*flow-root/);
+  assert.match(
+    css,
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\) \+ :is\(p, blockquote, figure\)\s*\{[^}]*margin-top:\s*0/s
+  );
   const heading = css.slice(
     css.indexOf(".oi-translation.oi-after-heading {"),
     css.indexOf(".oi-translation.oi-inline")
