@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PAGE_CHROME_SELECTOR, PAGE_TOP_NAV_SELECTOR, PRIMARY_TITLE_SKIP_ANCESTOR } from "../lib/site-presets.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { applyTranslateLimit } from "../lib/translate-limit.js";
-import { hasNestedCollectible, inSideRail, isPrimaryTitle, placeTranslationNode, planTranslationMount, shouldCollectNode, shouldInline, shouldSkipScopedChrome, translationClassName } from "../lib/page-scan.js";
+import { hasNestedCollectible, inSideRail, isPrimaryTitle, pickSideRailMountHost, placeTranslationNode, planTranslationMount, shouldCollectNode, shouldInline, shouldSkipScopedChrome, translationClassName } from "../lib/page-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentSrc = readFileSync(join(root, "content/content.js"), "utf8");
@@ -314,6 +314,12 @@ function sidebarFixture(tagName, text, hits, box = {}) {
     child.parentElement = source;
     return child;
   };
+  Object.defineProperty(source, "lastElementChild", {
+    get() {
+      return own[own.length - 1] || null;
+    }
+  });
+  source.querySelector = () => null;
   source.insertAdjacentElement = (where, child) => {
     if (where !== "afterend") return child;
     const i = kids.indexOf(source);
@@ -360,13 +366,62 @@ test("side-rail fixture stacks translation below source without oi-inline", () =
     assert.equal(plan.className.includes("oi-inline"), false, spec.text + " forbids oi-inline");
     assert.equal(plan.inline, false);
     assert.equal(plan.forceBlock, true);
-    assert.equal(plan.placement, "afterend", spec.text + " below source");
+    assert.equal(plan.placement, "append", spec.text + " inside host");
+    assert.match(plan.className, /oi-side-rail/);
     const node = mountedNode(plan.className);
     placeTranslationNode(source, node, plan);
-    assert.equal(source.nextElementSibling, node, spec.text + " sibling below");
+    assert.equal(source.lastElementChild, node, spec.text + " last child below source");
     assert.equal(node.classList.contains("oi-translation"), true);
     assert.equal(node.classList.contains("oi-inline"), false);
+    assert.equal(node.classList.contains("oi-side-rail"), true);
   }
+});
+
+test("side-rail flex-row item wraps translation to full width below source", () => {
+  const { source } = sidebarFixture("LI", "Getting started", ["aside"]);
+  const link = fakeNode({ tagName: "A", hits: ["aside"], text: "Getting started", left: 16, width: 160, height: 20 });
+  const kids = [];
+  source.querySelector = (sel) => (String(sel).includes("a") ? link : null);
+  source.appendChild(link);
+  link.appendChild = (child) => {
+    kids.push(child);
+    child.parentElement = link;
+    return child;
+  };
+  Object.defineProperty(link, "lastElementChild", {
+    get() {
+      return kids[kids.length - 1] || null;
+    }
+  });
+  assert.equal(pickSideRailMountHost(source), link);
+  const plan = planTranslationMount(source, articleCtx, { mode: "block" });
+  assert.equal(plan.host, link);
+  assert.equal(plan.placement, "append");
+  assert.equal(plan.className.includes("oi-inline"), false);
+  const node = mountedNode(plan.className);
+  placeTranslationNode(source, node, plan);
+  assert.equal(link.lastElementChild, node);
+  assert.equal(source.nextElementSibling, null);
+});
+
+test("side-rail card title is not oi-inline", () => {
+  const card = fakeNode({
+    tagName: "P",
+    hits: ["data-docs-sidebar"],
+    text: "Latest Version",
+    left: 48,
+    width: 140,
+    height: 20
+  });
+  assert.equal(inSideRail(card, articleCtx), true);
+  assert.equal(shouldInline(card, articleCtx), false);
+  assert.equal(shouldCollectNode(card, pageSettings, articleCtx), true);
+  assert.equal(shouldCollectNode(card, articleSettings, articleCtx), false);
+  const plan = planTranslationMount(card, articleCtx, { mode: "block" });
+  assert.match(plan.className, /oi-translation/);
+  assert.match(plan.className, /oi-side-rail/);
+  assert.equal(plan.className.includes("oi-inline"), false);
+  assert.equal(plan.placement, "append");
 });
 
 test("side-rail mounts stay block with underline class, not oi-inline", () => {
@@ -386,8 +441,8 @@ test("side-rail mounts stay block with underline class, not oi-inline", () => {
     assert.match(cls, /^oi-translation/);
     assert.equal(shouldCollectNode(node, pageSettings, articleCtx), true, node.cloneNode().innerText + " still KEEP");
   }
-  assert.equal(translationClassName(labels[1], articleCtx), "oi-translation oi-after-heading");
-  assert.equal(translationClassName(labels[0], articleCtx), "oi-translation");
+  assert.equal(translationClassName(labels[1], articleCtx), "oi-translation oi-after-heading oi-side-rail");
+  assert.equal(translationClassName(labels[0], articleCtx), "oi-translation oi-side-rail");
 });
 
 test("top-bar chrome may still mount inline", () => {
@@ -446,6 +501,9 @@ test("content.js gates chrome by scope and does not blanket-drop header", () => 
   assert.match(contentSrc, /function isPrimaryTitle\(/);
   assert.match(contentSrc, /function shouldSkipScopedChrome\(/);
   assert.match(contentSrc, /function inSideRail\(/);
+  assert.match(contentSrc, /function pickSideRailMountHost\(/);
+  assert.match(contentSrc, /oi-side-rail/);
+  assert.match(contentSrc, /data-docs-sidebar/);
   assert.match(contentSrc, /PAGE_CHROME_SELECTOR/);
   assert.match(contentSrc, /scope !== "page"/);
   assert.match(contentSrc, /looksLikeArticleTitle/);

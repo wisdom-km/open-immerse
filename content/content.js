@@ -408,10 +408,31 @@ function isPureNavBar(el) {
   return true;
 }
 
+const SIDE_RAIL_SELECTOR = "aside, [role='complementary'], [data-docs-sidebar], [data-left-nav], [data-left-nav-container], [data-content-page-toc-rail], [data-docs-toc-rail]";
+const SIDE_RAIL_LABEL_SELECTOR = ":scope > a, :scope > button, :scope > [role='link'], :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > p";
+
 function inSideRail(el) {
   if (!el) return false;
-  if (el.closest("aside, [role='complementary']")) return true;
-  return isSideColumn(el);
+  if (el.closest(SIDE_RAIL_SELECTOR)) return true;
+  if (isSideColumn(el)) return true;
+  let node = el.parentElement;
+  for (let i = 0; i < 6 && node; i++) {
+    const tag = String(node.tagName || "").toUpperCase();
+    if (["MAIN", "BODY", "HTML"].includes(tag)) break;
+    if (node.closest(SIDE_RAIL_SELECTOR)) return true;
+    if (isSideColumn(node)) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+function pickSideRailMountHost(el) {
+  if (!el) return el;
+  if (["LI", "DT", "DD"].includes(el.tagName)) {
+    const label = el.querySelector(SIDE_RAIL_LABEL_SELECTOR);
+    if (label && !label.classList.contains("oi-translation")) return label;
+  }
+  return el;
 }
 
 function shouldSkipScopedChrome(el, scope) {
@@ -488,14 +509,20 @@ function shouldInline(el) {
 function mountTranslation(el, text, settings, opts = {}) {
   if (!text) return;
   const bilingual = globalThis.OIBilingual;
+  const mountEl = opts.mode === "block" || inSideRail(el) ? pickSideRailMountHost(el) : el;
   const existing = bilingual?.dedupeTranslations?.(el)
+    || bilingual?.dedupeTranslations?.(mountEl)
     || (el.nextElementSibling?.classList?.contains("oi-translation")
       ? el.nextElementSibling
-      : el.querySelector(":scope > .oi-translation"));
+      : el.querySelector(":scope > .oi-translation"))
+    || mountEl.querySelector?.(":scope > .oi-translation");
   if (existing) {
     existing.textContent = text;
     existing.classList.remove("oi-inline");
-    if (opts.mode === "block" || inSideRail(el)) existing.classList.add("oi-translation");
+    if (opts.mode === "block" || inSideRail(el)) {
+      existing.classList.add("oi-translation");
+      existing.classList.add("oi-side-rail");
+    }
     layoutMountedTranslation(el, existing);
     return;
   }
@@ -508,6 +535,7 @@ function mountTranslation(el, text, settings, opts = {}) {
     : heading
       ? "oi-translation oi-after-heading"
       : "oi-translation";
+  if (forceBlock) node.classList.add("oi-side-rail");
   node.lang = settings.targetLang || "zh-CN";
   node.textContent = text;
   node.title = "double click to save";
@@ -526,8 +554,8 @@ function mountTranslation(el, text, settings, opts = {}) {
   });
   const tableCell = ["TD", "TH"].includes(el.tagName);
   const listLike = ["LI", "TD", "TH", "DT", "DD"].includes(el.tagName);
-  if (inline || tableCell || (!forceBlock && listLike)) el.appendChild(node);
-  else el.insertAdjacentElement("afterend", node);
+  if (inline || tableCell || forceBlock || (!forceBlock && listLike)) mountEl.appendChild(node);
+  else mountEl.insertAdjacentElement("afterend", node);
   globalThis.OIBilingual?.breakFlexRow?.(el, node);
   layoutMountedTranslation(el, node);
 }

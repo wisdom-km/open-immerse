@@ -748,6 +748,91 @@ test("breakFlexRow stacks a translation appended inside a row-flex sidebar host"
   assert.equal(translation.classList.contains("oi-inline"), false);
 });
 
+test("side-rail flex-row item translation uses full host width not shrink wrap", () => {
+  const OI = loadBilingual();
+  const view = {
+    getComputedStyle(node) {
+      return {
+        display: node?.__display || "flex",
+        flexDirection: node?.__flexDirection || "row",
+        fontSize: "16px",
+        height: node?.__height || "auto",
+        marginLeft: "0px",
+        marginInlineStart: "0px",
+        paddingLeft: "0px",
+        borderLeftWidth: "0px"
+      };
+    }
+  };
+  const source = fakeBox({ tagName: "LI", display: "flex", width: 54, clientWidth: 54 });
+  source.__display = "flex";
+  source.__flexDirection = "row";
+  source.ownerDocument = { defaultView: view };
+  const parent = fakeBox({ tagName: "UL", display: "block", width: 220, clientWidth: 220 });
+  parent.ownerDocument = { defaultView: view };
+  source.parentElement = parent;
+  const translation = fakeBox({
+    className: "oi-translation oi-side-rail",
+    display: "block",
+    width: 54,
+    parent: source
+  });
+  translation.ownerDocument = { defaultView: view };
+  OI.breakFlexRow(source, translation);
+  const laid = OI.applyLayout(translation, source);
+  assert.equal(source.style.flexWrap, "wrap");
+  assert.equal(translation.style.width, "100%");
+  assert.equal(translation.style.maxWidth, "100%");
+  assert.equal(translation.style.flexBasis, "100%");
+  assert.notEqual(translation.style.width, "54px");
+  assert.notEqual(translation.style.maxWidth, "54px");
+  assert.equal(laid.useColumn, true);
+  assert.equal(translation.classList.contains("oi-inline"), false);
+});
+
+test("side-rail card host unlocks fixed height so the next card is pushed down", () => {
+  const OI = loadBilingual();
+  const view = {
+    getComputedStyle(node) {
+      return {
+        display: node?.__display || "block",
+        flexDirection: node?.__flexDirection || "row",
+        fontSize: "16px",
+        height: node?.tagName === "BUTTON" ? "60px" : "auto"
+      };
+    }
+  };
+  const button = fakeBox({
+    tagName: "BUTTON",
+    className: "h-[60px] w-full",
+    display: "block",
+    width: 284
+  });
+  button.__display = "block";
+  button.ownerDocument = { defaultView: view };
+  const title = fakeBox({
+    tagName: "P",
+    className: "",
+    display: "block",
+    width: 140,
+    parent: button
+  });
+  title.ownerDocument = { defaultView: view };
+  const translation = fakeBox({
+    className: "oi-translation oi-side-rail",
+    display: "block",
+    width: 140,
+    parent: title
+  });
+  translation.ownerDocument = { defaultView: view };
+  const unlocked = OI.unlockSideRailHost(title);
+  assert.equal(unlocked, button);
+  assert.equal(button.style.height, "auto");
+  OI.applyLayout(translation, title);
+  assert.equal(translation.style.width, "100%");
+  assert.equal(translation.classList.contains("oi-inline"), false);
+});
+
 function createIndentedParagraph({
   articleWidth = 900,
   wrapperWidth = 800,
