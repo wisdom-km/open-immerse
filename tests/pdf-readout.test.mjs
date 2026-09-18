@@ -75,16 +75,24 @@ function attentionItems() {
 }
 
 test("PDF-MD-READOUT spec locks reading-flow, not bbox mirror", () => {
+  const draft = readFileSync(join(root, "pdf/PDF-READOUT-MARKDOWN.md"), "utf8");
   assert.match(spec, /PDF-MD-READOUT/);
-  assert.match(spec, /阅读顺序/);
+  assert.match(spec, /本单权威规格/);
+  assert.match(spec, /阅读序/);
   assert.match(spec, /Markdown/);
-  assert.match(spec, /不要复活/);
-  assert.match(spec, /position:absolute/);
-  assert.match(spec, /Attention Is All You Need/);
-  assert.match(spec, /不\*\*做 ENTRY-SECONDARY hide|不要藏掉该入口/);
+  assert.match(spec, /\.readout/);
+  assert.match(spec, /#40 closed/);
+  assert.match(spec, /bbox/);
+  assert.match(spec, /Attention_Is_All_You_Need|Attention Is All You Need/);
+  assert.match(spec, /PDF-ENTRY-SECONDARY.*本轨作废|本轨不做[\s\S]*PDF-ENTRY-SECONDARY/);
+  assert.match(spec, /勿回归[\s\S]*网页 content\/Options|网页 content\/Options/);
+  assert.match(spec, /PDF-READOUT-MARKDOWN\.md[\s\S]*以 \*\*本文\*\* 为准/);
   assert.equal(existsSync(join(root, "pdf/PDF-MD-READOUT.md")), true);
   assert.equal(existsSync(join(root, "pdf/PDF-READOUT-MARKDOWN.md")), true);
-  assert.match(readFileSync(join(root, "pdf/PDF-READOUT-MARKDOWN.md"), "utf8"), /边栏 arXiv 竖条/);
+  assert.match(draft, /草稿|指针/);
+  assert.match(draft, /不是本单权威/);
+  assert.match(draft, /PDF-MD-READOUT\.md/);
+  assert.doesNotMatch(draft, /权威 · 右栏产品/);
   assert.equal(DEFAULT_PDF_VIEW, "readout");
   assert.match(src, /let viewMode = "readout"/);
   assert.match(src, /extractReadoutBlocks/);
