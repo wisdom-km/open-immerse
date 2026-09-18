@@ -1,76 +1,127 @@
 # PDF 右栏 · 版式全镜像（PDF-READOUT-MIRROR）
 
-拍板：全镜像 V3，不要仅语义通读。样例：Attention Is All You Need / arXiv 1706.03762。
+**来源：** Wisdom 截图（Attention 类论文）— 右栏跟原文版式；公式与图原生显示。
+**拍板：** 目标锁定 **全镜像 V3**，**不要**只做语义通读增强。
+**样例 PDF（锁一本）：** *Attention Is All You Need*（`tests/fixtures/Attention_Is_All_You_Need.pdf` / arXiv 1706.03762）。
+**失败对照：** 右栏乱码叠墨（作者互盖、arXiv 横切入摘要、栏序打乱）不得复现。
+**保真硬门槛：** `PDF-MIRROR-LAYOUT-FIDELITY.md`。
+**可读性 + 右栏缩放：** `PDF-MIRROR-READABILITY-ZOOM.md`。
+**CJK：** `PDF-MIRROR-CJK-CLIP.md`（不裁切 **且** 不压字；仅解裁切未解叠字 → 拒收）。
 
-## 1 决策
+---
 
-- 按页镜像；块级归一化 bbox（近似）
-- 公式：文本/LaTeX 渲染；否则页裁切切片+alt
-- 图：内嵌裁切+题注；点击可同步左栏
-- 默认镜像替换通读；通读可次级
-- 导出读阅读序内容非像素排版
+## 1. 决策摘要
 
-否决：仅通读无坐标；公式只「见左侧」无切片；扫描件假装镜像
+| 项 | 锁定（V3） |
+| --- | --- |
+| 对齐粒度 | **按页镜像**：右栏每页一块译页画布，块级按 PDF **归一化 bbox** 摆放（近似坐标） |
+| 公式 | **优先 LaTeX + KaTeX**；裁切图仅兜底；再失败才「公式」 |
+| 图 | **内嵌裁切图** + 题注译文；点击可同步左栏 |
+| 与通读 | **替换**右栏主体验为镜像页流；通读可留次级 |
+| 导出 | MD 公式以 `$...$` / `$$...$$` 写入**阅读序**；PDF 导出可读序中文，不要求像素同版 |
 
-## 2 IA
+否决：仅通读无坐标；公式默认只裁切且无 LaTeX/KaTeX；扫描件假装镜像。
 
-`.pane-translate > .mirror-pages > .mirror-page[data-page] > .mirror-item[data-role][data-bbox]`
+---
 
-可选 `.readout` 次级。当前页译填当前 mirror-page；全文按页追加。
+## 2. 信息架构
 
-## 4.1 BBox
+```
+.pane-translate
+  .mirror-pages
+    .mirror-page[data-page="n"]
+      .mirror-item[data-role][data-bbox]
+  （可选）通读模式 .readout
+```
 
-坐标系 PDF 页归一化→CSS%；原子=合并 text run 块；精度中心偏差≤页宽 3% 或 12px；双栏阅读序；缩放等比重算；数据 `{page,role,bbox,sourceText,translation?,imageRef?}`
+左栏仍 pdf.js continuous；右栏按页堆叠镜像页（全文模式多页依次挂）。
 
-验收 Attention **全文**标题/作者/摘要/双栏/公式/图一眼同构。右栏必须跟踪左栏几何：无叠墨、无栏间串位（竖排 arXiv / 页边不得横切入摘要）。详见 `PDF-MIRROR-LAYOUT-FIDELITY.md`。
+---
 
-### 4.1.1 CJK 不裁切
+## 4. 全镜像 V3 · 可实现验收
 
-文本镜像框禁止用死高 bbox + `overflow:hidden` 裁 CJK。`.mirror-box` 文本 `overflow: visible`；`.mirror-page` 优先 `overflow: visible`；图/公式裁切 `.mirror-visual` 可 hidden。标题 `line-height` ≥ 1.25（宜 1.3）；高度随 CJK 折行长高（`height:auto` / scrollHeight / `max(srcH, fs×lh)+pad`）。宁可略向下重叠，也不削字头字脚。禁止靠缩小字号躲裁切。详见 `PDF-MIRROR-CJK-CLIP.md`。
+### 4.1 BBox 粒度
 
-## 4.2 公式
+| | 要求 |
+| --- | --- |
+| 坐标系 | PDF 页归一化 → CSS%（`left/top/width/height`） |
+| 原子单元 | text run 合并后的块：标题、作者格、段落、公式、图、题注、页边各一块 |
+| 精度 | 块中心偏差 ≤ 页宽 3% 或 ≤ 12 CSS px；**可读（不裁∩不叠）> 贴死英源盒** |
+| 双栏 | 检测双栏后阅读序（左列上→下，再右列）；各块仍用自身 bbox |
+| 竖排页边 | transform 近 90° 必须落成瘦高竖条，不得把沿字向 `width` 当成横宽切进摘要 |
+| 缩放 | 左栏 zoom 只缩放 PDF；右栏独立 `--oi-mirror-zoom` |
+| 数据 | `{ page, role, bbox, sourceText, translation?, latex?, imageRef? }` |
 
-- **A（默认）**：从 PDF 文字/符号 run 回收 LaTeX → `MirrorItem.latex` → bbox 内 **KaTeX**；保留可复制源 `data-latex`。`role=formula`，`kind=math`。
-- **B（仅兜底）**：无可靠 LaTeX 才页裁切，不是成功默认路径。
-- **C**：占位「公式」。
-- 不编造错误 TeX；宁可残缺 LaTeX 或走 B，也不幻觉公式。
-- 导出 MD：A 为 `$latex$` / `$$latex$$`；否则 Unicode / `[公式]`。
-- Attention 行间公式为样例。不 OCR。
+**验收 4.1：** Attention **全文**（15 页）标题 / 作者栅 / 摘要 / 双栏 / 公式 / 图一眼同构，无叠墨、无串栏。
 
-## 4.3 图
+#### 4.1.1 CJK 不裁切 **且** 不压字（硬门槛）
 
-裁切+题注；失败灰底+「图（见左侧）」
+| | 锁定 |
+| --- | --- |
+| 不裁切 | 译文可增高 bbox；文本块禁止 `overflow:hidden` 裁字形 |
+| 不压字 | 增高后须 **下推** 后续块；相邻文本墨迹矩形 **不得相交**（作者格、摘要↔边栏 meta、脚注） |
+| 图 / crop | 仍可 `overflow:hidden` |
+| 优先级 | **可读（不裁∩不叠）> 贴死英源盒** |
 
-## 4.4 同步
+禁止靠缩小字号躲裁切。仅解裁切、未解叠字 → 产品拒收。
 
-左右页级滚动同步。左栏 zoom chip 缩放 PDF；右栏同款 FLOAT 芯片**独立**缩放镜像页 / 通读（`--oi-mirror-zoom`，键 `pdfMirrorZoom` + `pdfMirrorZoomChipPos`）。镜像页白底必须用深色墨水（`--oi-mirror-ink: #1a1a1a`），不得继承暗色 chrome 的浅色 `--oi-text`。详见 `PDF-MIRROR-READABILITY-ZOOM.md`。
+### 4.2 公式（LaTeX 优先）
 
-## 4.5 导出
+- **A（默认）**：文字层回收 LaTeX → `latex` / `data-latex` → bbox 内 KaTeX。`role=formula` `kind=math`
+- **B（仅兜底）**：无可靠 LaTeX 才页裁切
+- **C**：占位「公式」
+- 不编造错误 TeX。导出 MD：`$latex$` / `$$latex$$`，否则 Unicode / `[公式]`
 
-默认镜像；导出 MD/PDF 阅读序；「原文」清当前页译文
+### 4.3 图
 
-## 4.6
+裁切 + 题注；失败灰底 +「图（见左侧）」；点击同步左栏。
 
-只建已译页；>200 items 合并行；无文本层提示
+### 4.4 滚动同步
 
-## 5 文案
+左右页级滚动同步。右栏 FLOAT zoom chip 独立。镜像白纸 + `--oi-mirror-ink: #1a1a1a`。
 
-公式 / 图（见左侧）/ 版式|通读
+### 4.5 导出
 
-## 6 总验收
+默认镜像；导出 MD/PDF **阅读序**（含作者、题注、可粘贴 LaTeX），不做像素排版。「原文」清当前页。
 
-Attention：4.1–4.5 + 无文本层 + 不回归译停导出缩放
+### 4.6
 
-## 7 里程碑
+只建已译页；>200 items 可合并行；无文本层提示，不编造 bbox。
 
-M3a 文本 bbox → M3b 图 → M3c 公式 → M3d 同步+导出
+---
 
-本 PR 优先 M3a 可演示（作者栏位置像）。
+## 5. 文案
 
-## 8 类型
+公式 / 图（见左侧）/ 版式 | 通读
 
-`MirrorItem { id, page, role, bbox, sourceText, translation?, latex?, kind, imageUrl? }`（公式：`role=formula` `kind=math`）
+---
 
-pdf.js `getTextContent` + viewport + page canvas crop（图；公式仅无 LaTeX 时）。
+## 6. 总验收清单（合前 · Attention 全文）
 
-KaTeX 0.18.7 vendored：`pdf/vendor/katex/`（`katex.min.js` + `katex.min.css` + woff2 fonts，约 542 KiB）。
+- [ ] 全文每页空间关系接近左栏（§4.1）
+- [ ] 标题/作者不裁切，作者/摘要/脚注/页边 **无叠字**（§4.1.1）
+- [ ] 公式页 KaTeX 优先；可复制 LaTeX；裁切仅兜底（§4.2）
+- [ ] 图页：裁切图 + 题注（§4.3）
+- [ ] 左右页级滚动同步（§4.4）
+- [ ] 导出 MD/PDF 基于阅读序（§4.5）
+- [ ] 无文本层不崩溃
+- [ ] 不回归：顶栏译/停/范围/导出/缩放 chip
+- [ ] 不重开网页 / #36
+
+---
+
+## 7. 里程碑
+
+M3a 文本 bbox → M3b 图 → M3c 公式 LaTeX/KaTeX → M3d 同步+导出
+
+M3c 已在树内（KaTeX 0.18.7 vendored）。本 PR 补 M3a 保真：旋转页边 AABB、作者栅切格、CJK 长高后下推。
+
+---
+
+## 8. 类型
+
+`MirrorItem { id, page, role, bbox, sourceText, translation?, latex?, kind, imageUrl? }`
+
+`role` 含 `title | authors | heading | paragraph | caption | formula | figure | margin`。
+
+pdf.js `getTextContent` + viewport + operator 裁切。KaTeX 0.18.7：`pdf/vendor/katex/`（约 542 KiB）。

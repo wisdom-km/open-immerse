@@ -593,6 +593,7 @@ test("Attention fixture mirrors all pages without overlap or column bleed", asyn
     assert.ok(margin.rect.width < 36);
     assert.ok(margin.rect.left < 40);
     assert.equal(/dominant sequence|Abstract/.test(margin.text), false);
+    assert.equal(page1.boxes.some((box) => /arXiv:1706/.test(box.text) && /dominant sequence|best models/.test(box.text)), false);
     assert.equal(/Ashish Vaswani/.test(noam.text), false);
     assert.ok(noam.rect.left - (ashish.rect.left + ashish.rect.width) > 8);
     const mails = page1.boxes.filter((box) => /@/.test(box.text));
@@ -607,6 +608,9 @@ test("Attention fixture mirrors all pages without overlap or column bleed", asyn
     assert.ok(roles.lastIndexOf("heading") < roles.findIndex((role, i) => role === "paragraph" && /dominant/.test(flow[i].original || flow[i].translation || "")));
     assert.equal(flow[flow.length - 1].role, "margin");
     assert.match(readFileSync(join(root, "pdf/PDF-MIRROR-LAYOUT-FIDELITY.md"), "utf8"), /禁止叠墨/);
+    assert.match(readFileSync(join(root, "pdf/PDF-MIRROR-LAYOUT-FIDELITY.md"), "utf8"), /attention-right-garbled/);
+    assert.match(readFileSync(join(root, "pdf/PDF-READOUT-MIRROR.md"), "utf8"), /不裁切 \*\*且\*\* 不压字/);
+    assert.match(readFileSync(join(root, "pdf/PDF-MIRROR-CJK-CLIP.md"), "utf8"), /No clip ∩ no overlap/);
     assert.match(readFileSync(join(root, "pdf/viewer.js"), "utf8"), /relayoutMirrorPageBoxes/);
     assert.match(readFileSync(join(root, "pdf/viewer.css"), "utf8"), /writing-mode:\s*vertical-rl/);
   } finally {

@@ -3,7 +3,7 @@
 Hard gate. Companion to `PDF-READOUT-MIRROR.md` §4.1.
 
 样例：Attention Is All You Need / arXiv 1706.03762（`tests/fixtures/Attention_Is_All_You_Need.pdf`）。
-失败对照：右栏乱码叠墨（作者互盖、arXiv 横切入摘要、栏序打乱）。
+失败对照：`attention-right-garbled.png`（作者互盖、arXiv 横切入摘要、栏序打乱）— 不得复现。
 
 ## Locked rules
 

@@ -11,14 +11,15 @@ Hard gate. Companion to `PDF-READOUT-MIRROR.md` §4.1.1.
    - **A** scrollHeight rewrite
    - **B** `max(srcH, fs×lh)` + 2–4px pad
    - **C** top/left/width only + `height: auto` (min-height may keep source bbox)
-5. Vertical looseness preferred over glyph clip. After a box grows, later siblings on the same X band must be pushed (`relayoutMirrorPageBoxes`) so stacked ink is not OK. Same-row author cells (no X overlap) stay put. Do not shrink font to dodge clip.
+5. **No clip ∩ no overlap.** Growing a box must push later siblings on the same X band (`relayoutMirrorPageBoxes`). Adjacent text ink rects must not intersect (author cells, abstract ↔ margin meta, footnotes). Same-row author cells (no X overlap) stay put. A clip-only fix that leaves stacked ink is a reject.
 6. Do **NOT** shrink font to dodge clip.
 
-## Acceptance (Attention homepage)
+## Acceptance (Attention full paper)
 
 - Title translation (e.g. 「注意力即一切所需」) top+bottom fully visible — no flat-head / flat-foot crop
-- Author name / affiliation lines fully readable
+- Author name / affiliation / email cells readable and not stacked
+- Abstract not covered by the arXiv / margin strip
 - Dark theme: white paper + `--oi-mirror-ink: #1a1a1a` still no crop
 - Image / formula crops still clip in box
-- No regression: KaTeX, right zoom chip, page scroll sync
+- No regression: KaTeX, right zoom chip, page scroll sync, reading-order export
 - `node --test` pass
