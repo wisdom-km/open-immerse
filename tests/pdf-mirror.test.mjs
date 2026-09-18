@@ -32,6 +32,7 @@ import {
   fitMirrorTextHeight,
   isMarginMirrorBox,
   isMirrorTextRole,
+  looksLikeArxivMeta,
   itemTransformMeta,
   looksLikeSectionHeading,
   relayoutMirrorPageBoxes,
@@ -446,6 +447,7 @@ test("rotated pdf.js runs become tall margin strips, not wide horizontal bleed",
   assert.ok(abstractHead);
   assert.equal(abstractHead.role, "heading");
   assert.ok(abstractBody);
+  assert.equal(looksLikeArxivMeta(margin.text), true);
   assert.equal(isMarginMirrorBox(margin, 612, 792), true);
   const bleed = boxesHaveInkOverlap(layout.boxes);
   assert.equal(
@@ -592,8 +594,10 @@ test("Attention fixture mirrors all pages without overlap or column bleed", asyn
     assert.equal(margin.role, "margin");
     assert.ok(margin.rect.width < 36);
     assert.ok(margin.rect.left < 40);
+    assert.equal(looksLikeArxivMeta(margin.text), true);
     assert.equal(/dominant sequence|Abstract/.test(margin.text), false);
     assert.equal(page1.boxes.some((box) => /arXiv:1706/.test(box.text) && /dominant sequence|best models/.test(box.text)), false);
+    assert.ok(margin.rect.left + margin.rect.width <= abstractBody.rect.left + 1);
     assert.equal(/Ashish Vaswani/.test(noam.text), false);
     assert.ok(noam.rect.left - (ashish.rect.left + ashish.rect.width) > 8);
     const mails = page1.boxes.filter((box) => /@/.test(box.text));
@@ -607,8 +611,18 @@ test("Attention fixture mirrors all pages without overlap or column bleed", asyn
     assert.ok(roles.indexOf("title") < roles.indexOf("heading"));
     assert.ok(roles.lastIndexOf("heading") < roles.findIndex((role, i) => role === "paragraph" && /dominant/.test(flow[i].original || flow[i].translation || "")));
     assert.equal(flow[flow.length - 1].role, "margin");
-    assert.match(readFileSync(join(root, "pdf/PDF-MIRROR-LAYOUT-FIDELITY.md"), "utf8"), /禁止叠墨/);
-    assert.match(readFileSync(join(root, "pdf/PDF-MIRROR-LAYOUT-FIDELITY.md"), "utf8"), /attention-right-garbled/);
+    const samplePages = [2, 3, 4].map((n) => pageSummaries[n - 1]);
+    assert.equal(samplePages.length, 3);
+    assert.ok(samplePages.every((entry) => entry.layout.boxes.length > 0));
+    assert.ok(pageSummaries.some((entry) => entry.layout.boxes.some((box) => box.role === "formula" || box.kind === "math")));
+    const fidelity = readFileSync(join(root, "pdf/PDF-MIRROR-LAYOUT-FIDELITY.md"), "utf8");
+    assert.match(fidelity, /叠字叠层/);
+    assert.match(fidelity, /串栏/);
+    assert.match(fidelity, /整篇 PDF/);
+    assert.match(fidelity, /looksLikeArxivMeta/);
+    assert.match(fidelity, /attention-right-garbled/);
+    assert.equal(existsSync(join(root, "oi-qa/pdf-b-fail/attention-right-garbled.png")), true);
+    assert.equal(existsSync(join(root, "oi-qa/fixtures/pdf/Attention_Is_All_You_Need.pdf")), true);
     assert.match(readFileSync(join(root, "pdf/PDF-READOUT-MIRROR.md"), "utf8"), /不裁切 \*\*且\*\* 不压字/);
     assert.match(readFileSync(join(root, "pdf/PDF-MIRROR-CJK-CLIP.md"), "utf8"), /No clip ∩ no overlap/);
     assert.match(readFileSync(join(root, "pdf/viewer.js"), "utf8"), /relayoutMirrorPageBoxes/);
