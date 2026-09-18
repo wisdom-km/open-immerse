@@ -180,9 +180,26 @@ function observePage() {
     const added = mutations.some((m) =>
       [...m.addedNodes].some((n) => n.nodeType === 1 && !n.classList?.contains("oi-translation") && !n.classList?.contains("oi-fab"))
     );
-    if (added) debounceTranslate();
+    const relabeled = mutations.some((m) => m.type === "characterData" || (m.type === "childList" && m.target && !m.target.classList?.contains("oi-translation")));
+    if (added || relabeled) {
+      revalidateSideRailGlosses();
+      debounceTranslate();
+    }
   });
-  pageObserver.observe(document.body, { childList: true, subtree: true });
+  pageObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+  if (!window.__oiRailScrollBound) {
+    window.__oiRailScrollBound = true;
+    window.addEventListener(
+      "scroll",
+      (ev) => {
+        const cls = String(ev.target?.className || "");
+        if (!/vue-recycle-scroller|recycle-scroller/.test(cls)) return;
+        revalidateSideRailGlosses();
+        debounceTranslate();
+      },
+      true
+    );
+  }
 }
 
 /** Late side-rail TOC (e.g. OpenAI blog) often hydrates after the first scan. */
@@ -309,25 +326,54 @@ function collectMountedGloss(source) {
   const push = (node) => {
     if (node?.classList?.contains("oi-translation") && !out.includes(node)) out.push(node);
   };
-  push(source.nextElementSibling);
-  source.querySelectorAll?.(".oi-translation").forEach(push);
+  const scan = (root) => {
+    if (!root) return;
+    push(root.nextElementSibling);
+    root.querySelectorAll?.(".oi-translation").forEach(push);
+  };
+  scan(source);
+  const host = pickSideRailMountHost(source);
+  if (host && host !== source) scan(host);
+  const view = source.closest?.(".vue-recycle-scroller__item-view");
+  if (view && view !== source && view !== host) scan(view);
   return out;
 }
 
-/** Recycled virtual-list rows keep the same DOM; drop gloss that no longer matches the label. */
+function rebindLiveSourceHash(source) {
+  const liveHash = sourceTextHash(getText(source));
+  if (source.dataset) source.dataset.oiSrcHash = liveHash;
+  else source.setAttribute?.("data-oi-src-hash", liveHash);
+  const host = pickSideRailMountHost(source);
+  if (host && host !== source) {
+    if (host.dataset) host.dataset.oiSrcHash = liveHash;
+    else host.setAttribute?.("data-oi-src-hash", liveHash);
+  }
+  return liveHash;
+}
+
+/** Recycled virtual-list rows keep the same DOM; drop every leftover gloss on that row. */
 function detachStaleRailGloss(source) {
   if (!source) return [];
   const liveHash = sourceTextHash(getText(source));
+  const nodes = collectMountedGloss(source);
+  const stale = nodes.some((node) => railAttr(node, "data-oi-src-hash") !== liveHash);
   const removed = [];
-  collectMountedGloss(source).forEach((node) => {
-    if (railAttr(node, "data-oi-src-hash") === liveHash) return;
-    node.remove?.();
-    removed.push(node);
-  });
-  if (source.dataset) source.dataset.oiSrcHash = liveHash;
-  else source.setAttribute?.("data-oi-src-hash", liveHash);
+  if (stale) {
+    nodes.forEach((node) => {
+      node.remove?.();
+      removed.push(node);
+    });
+  }
+  rebindLiveSourceHash(source);
   globalThis.OIBilingual?.detachStaleGloss?.(source, liveHash);
   return removed;
+}
+
+function revalidateSideRailGlosses() {
+  document.querySelectorAll(".oi-translation.oi-side-rail").forEach((node) => {
+    const source = hostForPageTranslation(node) || node.parentElement;
+    if (source) detachStaleRailGloss(source);
+  });
 }
 
 function ensureRailId(el) {
@@ -349,24 +395,22 @@ function pairGlossBySource(sources, translations, keep) {
   const list = Array.isArray(sources) ? sources : [];
   const texts = Array.isArray(translations) ? translations : [];
   const bySource = new Map();
-  const byId = new Map();
+  const byHash = new Map();
   list.forEach((el, i) => {
     if (!el) return;
     const text = texts[i] == null ? "" : String(texts[i]);
-    const id = ensureRailId(el);
-    const srcHash = sourceTextHash(getText(el));
-    if (el.dataset) el.dataset.oiSrcHash = srcHash;
-    else el.setAttribute?.("data-oi-src-hash", srcHash);
+    ensureRailId(el);
+    const srcHash = rebindLiveSourceHash(el);
     bySource.set(el, text);
-    if (id) byId.set(id, text);
+    if (srcHash) byHash.set(srcHash, text);
   });
   const targets = Array.isArray(keep) ? keep : list;
   return targets.map((el) => {
     const id = railAttr(el, "data-oi-rail-id");
-    const srcHash = railAttr(el, "data-oi-src-hash") || sourceTextHash(getText(el));
+    const srcHash = rebindLiveSourceHash(el);
     let text = "";
     if (bySource.has(el)) text = bySource.get(el);
-    else if (id && byId.has(id)) text = byId.get(id);
+    else if (srcHash && byHash.has(srcHash)) text = byHash.get(srcHash);
     return { source: el, text, key: id, srcHash };
   });
 }
@@ -516,6 +560,8 @@ function isPureNavBar(el) {
 
 const SIDE_RAIL_SELECTOR = "aside, [role='complementary'], [data-docs-sidebar], [data-left-nav], [data-left-nav-container], [data-content-page-toc-rail], [data-docs-toc-rail]";
 const SIDE_RAIL_LABEL_SELECTOR = ":scope > a, :scope > button, :scope > [role='link'], :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > p";
+const SIDE_RAIL_TITLE_SELECTOR =
+  "[class*='title-container'], [class*='nav-title'], [class*='nav-link-text'], [class*='label-container'], [class*='sidebar-label']";
 
 function inSideRail(el) {
   if (!el) return false;
@@ -534,6 +580,8 @@ function inSideRail(el) {
 
 function pickSideRailMountHost(el) {
   if (!el) return el;
+  const named = el.querySelector(SIDE_RAIL_TITLE_SELECTOR);
+  if (named && !named.classList.contains("oi-translation")) return named;
   if (["LI", "DT", "DD"].includes(el.tagName)) {
     const label = el.querySelector(SIDE_RAIL_LABEL_SELECTOR);
     if (label && !label.classList.contains("oi-translation")) return label;
@@ -616,10 +664,8 @@ function mountTranslation(el, text, settings, opts = {}) {
   if (!text) return;
   const bilingual = globalThis.OIBilingual;
   const railId = ensureRailId(el);
-  const srcHash = sourceTextHash(getText(el));
-  if (el.dataset) el.dataset.oiSrcHash = srcHash;
-  else el.setAttribute?.("data-oi-src-hash", srcHash);
   detachStaleRailGloss(el);
+  const srcHash = rebindLiveSourceHash(el);
   const mountEl = opts.mode === "block" || inSideRail(el) ? pickSideRailMountHost(el) : el;
   const existing = glossForSource(el)
     || bilingual?.dedupeTranslations?.(el)
@@ -628,6 +674,7 @@ function mountTranslation(el, text, settings, opts = {}) {
     existing.textContent = text;
     if (railId) existing.setAttribute("data-oi-for", railId);
     existing.setAttribute("data-oi-src-hash", srcHash);
+    rebindLiveSourceHash(el);
     existing.classList.remove("oi-inline");
     if (opts.mode === "block" || inSideRail(el)) {
       existing.classList.add("oi-translation");
@@ -648,6 +695,7 @@ function mountTranslation(el, text, settings, opts = {}) {
   if (forceBlock) node.classList.add("oi-side-rail");
   if (railId) node.setAttribute("data-oi-for", railId);
   node.setAttribute("data-oi-src-hash", srcHash);
+  rebindLiveSourceHash(el);
   node.lang = settings.targetLang || "zh-CN";
   node.textContent = text;
   node.title = "double click to save";
@@ -690,6 +738,7 @@ function hostForPageTranslation(node) {
 }
 
 function relayoutPageTranslations() {
+  revalidateSideRailGlosses();
   document.querySelectorAll(".oi-translation:not(.oi-inline)").forEach((node) => {
     const source = hostForPageTranslation(node);
     if (source) globalThis.OIBilingual?.layoutTranslation?.(node, source);

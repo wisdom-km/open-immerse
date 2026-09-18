@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PAGE_CHROME_SELECTOR, PAGE_TOP_NAV_SELECTOR, PRIMARY_TITLE_SKIP_ANCESTOR } from "../lib/site-presets.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { applyTranslateLimit } from "../lib/translate-limit.js";
-import { detachStaleRailGloss, ensureRailId, getText, hasNestedCollectible, inSideRail, isPrimaryTitle, mountPairedGloss, pairGlossBySource, pickSideRailMountHost, placeTranslationNode, planTranslationMount, shouldCollectNode, shouldInline, shouldSkipScopedChrome, sourceTextHash, translationClassName } from "../lib/page-scan.js";
+import { detachStaleRailGloss, ensureRailId, getText, hasNestedCollectible, inSideRail, isPrimaryTitle, mountPairedGloss, pairGlossBySource, pickSideRailMountHost, placeTranslationNode, planTranslationMount, rebindLiveSourceHash, shouldCollectNode, shouldInline, shouldSkipScopedChrome, sourceTextHash, translationClassName } from "../lib/page-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentSrc = readFileSync(join(root, "content/content.js"), "utf8");
@@ -526,39 +526,68 @@ test("side-rail skip-middle keeps gloss on the same source, no neighbor fill", (
   assert.equal(ensureRailId(sources[0]), pairs[0].key);
 });
 
-test("recycled virtual-list row drops the previous item gloss", () => {
+test("recycle-scroller same LI remounts Getting started→Design principles→Technologies", () => {
   const { source } = sidebarFixture("LI", "Getting started", ["aside"]);
-  const first = mountPairedGloss([source], ["入门"], undefined, articleCtx, {
+  const steps = [
+    { en: "Getting started", zh: "入门", not: "设计原则" },
+    { en: "Design principles", zh: "设计原则", not: "技术" },
+    { en: "Technologies", zh: "技术", not: "设计原则" }
+  ];
+  let previous = null;
+  for (const step of steps) {
+    source.__label = step.en;
+    assert.equal(getText(source), step.en);
+    if (previous) {
+      assert.equal(shouldCollectNode(source, pageSettings, articleCtx), true, step.en + " stale stripped");
+      assert.equal(source.lastElementChild, null, step.en + " no leftover " + previous.zh);
+    }
+    const mounted = mountPairedGloss([source], [step.zh], undefined, articleCtx, {
+      mode: "block",
+      createNode(plan, pair) {
+        return mountedNode(plan.className, pair.text);
+      }
+    });
+    assert.equal(mounted.length, 1);
+    assert.equal(mounted[0].node.textContent, step.zh);
+    assert.notEqual(mounted[0].node.textContent, step.not);
+    assert.equal(source.lastElementChild.textContent, step.zh);
+    assert.equal(source.children.filter((n) => n.classList?.contains("oi-translation")).length, 1);
+    assert.equal(mounted[0].node.getAttribute("data-oi-src-hash"), sourceTextHash(step.en));
+    assert.equal(shouldCollectNode(source, pageSettings, articleCtx), false);
+    assert.equal(shouldCollectNode(source, articleSettings, articleCtx), false, step.en + " article SKIP");
+    previous = step;
+  }
+  assert.notEqual(source.lastElementChild.textContent, "设计原则");
+  assert.notEqual(source.lastElementChild.textContent, "入门");
+});
+
+test("title-container mount host gets the live label hash", () => {
+  const { source } = sidebarFixture("LI", "Design principles", ["aside"]);
+  const title = fakeNode({
+    tagName: "DIV",
+    className: "title-container",
+    hits: ["aside"],
+    text: "Design principles"
+  });
+  const prevQS = source.querySelector;
+  source.querySelector = (sel) => {
+    if (String(sel).includes("title-container")) return title;
+    return prevQS.call(source, sel);
+  };
+  assert.equal(pickSideRailMountHost(source), title);
+  const hash = rebindLiveSourceHash(source);
+  assert.equal(hash, sourceTextHash("Design principles"));
+  assert.equal(title.getAttribute("data-oi-src-hash") || title.dataset.oiSrcHash, hash);
+  assert.equal(source.getAttribute("data-oi-src-hash") || source.dataset.oiSrcHash, hash);
+  const mounted = mountPairedGloss([source], ["设计原则"], undefined, articleCtx, {
     mode: "block",
     createNode(plan, pair) {
       return mountedNode(plan.className, pair.text);
     }
   });
-  assert.equal(getText(source), "Getting started");
-  assert.equal(first[0].node.textContent, "入门");
-  assert.equal(source.lastElementChild.textContent, "入门");
-  assert.equal(first[0].node.getAttribute("data-oi-src-hash"), sourceTextHash("Getting started"));
-  assert.equal(shouldCollectNode(source, pageSettings, articleCtx), false);
-  assert.equal(shouldCollectNode(source, articleSettings, articleCtx), false);
-
-  source.__label = "Design principles";
-  assert.equal(getText(source), "Design principles");
-  assert.equal(shouldCollectNode(source, pageSettings, articleCtx), true, "stale gloss detached on collect");
-  assert.equal(source.lastElementChild, null, "recycled row must not keep 入门");
-  assert.equal(shouldCollectNode(source, articleSettings, articleCtx), false, "article still SKIP");
-  assert.deepEqual(detachStaleRailGloss(source), []);
-
-  const second = mountPairedGloss([source], ["设计原则"], undefined, articleCtx, {
-    mode: "block",
-    createNode(plan, pair) {
-      return mountedNode(plan.className, pair.text);
-    }
-  });
-  assert.equal(second[0].node.textContent, "设计原则");
-  assert.notEqual(second[0].node.textContent, "入门");
-  assert.equal(source.lastElementChild.textContent, "设计原则");
-  assert.equal(second[0].node.getAttribute("data-oi-src-hash"), sourceTextHash("Design principles"));
-  assert.notEqual(second[0].node.getAttribute("data-oi-src-hash"), first[0].node.getAttribute("data-oi-src-hash"));
+  assert.equal(mounted[0].node.textContent, "设计原则");
+  assert.notEqual(mounted[0].node.textContent, "技术");
+  assert.equal(mounted[0].plan.host, title);
 });
 
 test("Apple Getting started gloss is not 设计原则", () => {
@@ -671,6 +700,10 @@ test("content.js gates chrome by scope and does not blanket-drop header", () => 
   assert.match(contentSrc, /data-oi-rail-id/);
   assert.match(contentSrc, /data-oi-src-hash/);
   assert.match(contentSrc, /function detachStaleRailGloss\(/);
+  assert.match(contentSrc, /function rebindLiveSourceHash\(/);
+  assert.match(contentSrc, /function revalidateSideRailGlosses\(/);
+  assert.match(contentSrc, /characterData: true/);
+  assert.match(contentSrc, /title-container/);
   assert.match(contentSrc, /new Map\(/);
   assert.match(contentSrc, /mountPairedTranslations\(chunk, res\.translations/);
   assert.match(contentSrc, /opts\.mode === "block"/);
