@@ -11,14 +11,19 @@ Hard gate. Companion to `PDF-READOUT-MIRROR.md` §4.1.1.
    - **A** scrollHeight rewrite
    - **B** `max(srcH, fs×lh)` + 2–4px pad
    - **C** top/left/width only + `height: auto` (min-height may keep source bbox)
-5. Vertical looseness preferred over glyph clip; slight downward overlap OK.
+5. Vertical looseness preferred over glyph clip. After text height fit, **run vertical collision on the same page**: sort by `top`; if A overlaps B in X and A.bottom > B.top, push B (and later overlapping boxes) down by the overlap + a small gap. Overlapping ink is **not** OK.
 6. Do **NOT** shrink font to dodge clip.
+7. Author grid: merge name / affiliation / email in a column, then push rows so cells do not stack after CJK growth.
+8. Abstract must keep horizontal separation from the left arXiv metadata strip — no id/date ink over the paragraph.
+9. Footer contribution notes render **once** (dedupe ghost / double DOM). If they grow, push — do not multi-layer.
 
 ## Acceptance (Attention homepage)
 
 - Title translation (e.g. 「注意力即一切所需」) top+bottom fully visible — no flat-head / flat-foot crop
-- Author name / affiliation lines fully readable
+- Authors readable: no name / email / affiliation stacking
+- Abstract not covered by arXiv meta
+- Footer contribution single-layer readable
 - Dark theme: white paper + `--oi-mirror-ink: #1a1a1a` still no crop
 - Image / formula crops still clip in box
-- No regression: KaTeX, right zoom chip, page scroll sync
+- No regression: KaTeX, right zoom chip, page scroll sync, contrast
 - `node --test` pass

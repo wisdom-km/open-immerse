@@ -74,6 +74,7 @@ import {
   pageRectToPercent,
   percentRectToStyle,
   percentRectToTextStyle,
+  relayoutMirrorPageBoxes,
   toMirrorItem,
   translatableMirrorUnits,
   unwrapLatex,
@@ -700,7 +701,11 @@ function appendReadoutNode(input, parent = $("readout")) {
 }
 
 function queueFitMirrorTextBox(node) {
-  const fit = () => fitMirrorTextBox(node);
+  const fit = () => {
+    fitMirrorTextBox(node);
+    const page = node.closest?.(".mirror-page");
+    if (page) queueRelayoutMirrorPage(page);
+  };
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(fit);
   else fit();
 }
@@ -715,6 +720,75 @@ function fitMirrorTextBox(node) {
     pad: 3
   });
   if (next > node.offsetHeight) node.style.height = `${next}px`;
+}
+
+function queueRelayoutMirrorPage(pageEl) {
+  if (!pageEl || pageEl._oiRelayoutQueued) return;
+  pageEl._oiRelayoutQueued = true;
+  const run = () => {
+    pageEl._oiRelayoutQueued = false;
+    pageEl.querySelectorAll(".mirror-box").forEach((node) => fitMirrorTextBox(node));
+    relayoutMirrorPage(pageEl);
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(run));
+  else run();
+}
+
+function measureMirrorPageBoxes(pageEl) {
+  return [...pageEl.querySelectorAll(".mirror-item, .mirror-box")].map((node, index) => ({
+    node,
+    index,
+    role: node.dataset.role || "",
+    kind: node.dataset.kind || "",
+    text: node.textContent || "",
+    left: node.offsetLeft,
+    top: node.offsetTop,
+    width: Math.max(node.offsetWidth || 0, node.scrollWidth || 0),
+    height: Math.max(node.offsetHeight || 0, node.scrollHeight || 0),
+    originTop: node.offsetTop
+  }));
+}
+
+function applyMirrorPageRelayout(pageEl, result, measuredWidth, measuredHeight) {
+  const pw = Math.max(1, Number(result.pageWidth) || measuredWidth || 1);
+  const ph = Math.max(1, Number(result.pageHeight) || measuredHeight || 1);
+  const kept = new Set(result.boxes.map((box) => box.node).filter(Boolean));
+  for (const box of result.dropped || []) {
+    if (box.node && !kept.has(box.node) && box.node.dataset.kind !== "figure") {
+      box.node.remove();
+    }
+  }
+  for (const box of result.boxes) {
+    const node = box.node;
+    if (!node) continue;
+    node.style.left = `${(box.left / pw) * 100}%`;
+    node.style.top = `${(box.top / ph) * 100}%`;
+    node.style.width = `${(box.width / pw) * 100}%`;
+    const textBox = isMirrorTextRole(box.role) || box.role === "formula";
+    if (textBox) {
+      node.style.minHeight = `${(box.height / ph) * 100}%`;
+      node.style.height = "auto";
+    } else {
+      node.style.height = `${(box.height / ph) * 100}%`;
+    }
+  }
+  if (ph > measuredHeight + 1) {
+    pageEl.style.aspectRatio = `${pw} / ${ph}`;
+  }
+}
+
+function relayoutMirrorPage(pageEl) {
+  if (!pageEl) return;
+  const measuredWidth = Math.max(1, pageEl.clientWidth || pageEl.offsetWidth || 1);
+  const measuredHeight = Math.max(1, pageEl.clientHeight || pageEl.offsetHeight || 1);
+  const boxes = measureMirrorPageBoxes(pageEl);
+  if (!boxes.length) return;
+  const result = relayoutMirrorPageBoxes(boxes, {
+    pageWidth: measuredWidth,
+    pageHeight: measuredHeight,
+    gap: 4
+  });
+  applyMirrorPageRelayout(pageEl, result, measuredWidth, measuredHeight);
 }
 
 function renderFormulaNode(node, latex, display) {
@@ -848,6 +922,7 @@ function appendMirrorPage(page, blocks) {
     );
   });
   ($("mirrorPages") || $("readout")).append(pageEl);
+  queueRelayoutMirrorPage(pageEl);
 }
 
 function layoutFromBlocks(blocks) {

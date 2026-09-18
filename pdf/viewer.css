@@ -333,6 +333,8 @@ h1 {
   padding: 0;
   overflow: visible;
   overflow-y: visible;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .readout.is-mirror .oi-pdf-h1.mirror-box,
 .readout.is-mirror .oi-pdf-h2.mirror-box,
@@ -361,6 +363,7 @@ h1 {
   line-height: 1.35;
   overflow: visible;
   overflow-y: visible;
+  white-space: pre-wrap;
 }
 .mirror-visual,
 .mirror-page .mirror-visual,
