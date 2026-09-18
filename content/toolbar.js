@@ -162,15 +162,22 @@
       if (!chrome.runtime?.id) return null;
       return await chrome.runtime.sendMessage(payload);
     } catch (err) {
+      // SW not ready / receiving end missing must not skip FAB mount.
       const msg = String(err && err.message || err);
-      if (/Extension context invalidated|message port closed/i.test(msg)) return null;
-      throw err;
+      if (/Extension context invalidated/i.test(msg)) return null;
+      console.warn("Open Immerse: toolbar message failed", msg);
+      return null;
     }
   }
 
   async function initToolbar() {
-    const res = await send({ type: "OI_GET_SETTINGS" });
     if (!chrome.runtime?.id) return;
+    let res = null;
+    try {
+      res = await send({ type: "OI_GET_SETTINGS" });
+    } catch {
+      res = null;
+    }
     const settings = res?.settings || {};
     const hidden = FAB.shouldHideFab(settings);
     // Reload leaves the previous content-script .oi-fab in the page (often the

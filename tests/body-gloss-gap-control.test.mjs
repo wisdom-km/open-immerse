@@ -85,4 +85,7 @@ test("§8 heading gloss size stays body-token, orthogonal to the gap slider", ()
   assert.match(layoutSrc, /applyHeadingBodyFontSize/);
   const OI = loadBilingual();
   assert.equal(OI.shouldMatchBodyFont({ classList: { contains: (n) => n === "oi-after-heading" } }, { tagName: "H2" }), true);
+  assert.doesNotMatch(css, /openai\.com|apple\.com|developer\.apple|developer\.mozilla|react\.dev|anthropic\.com/i);
+  assert.doesNotMatch(js, /openai\.com|apple\.com|developer\.mozilla|anthropic\.com/i);
+  assert.doesNotMatch(layoutSrc, /openai\.com|apple\.com|developer\.mozilla|anthropic\.com/i);
 });

@@ -670,12 +670,46 @@ test("body gloss gap setting changes clamp target without touching headings", ()
   assert.equal(heading.style.marginTop.includes("--oi-body-gloss-gap"), false);
 });
 
+test("bodyGlossGap applies to article paragraphs on OpenAI / Apple HIG / Anthropic-like hosts", () => {
+  const OI = loadBilingual();
+  const articles = [
+    { name: "OpenAI Persistence para", className: "u-rich-text-blog", fontSize: 16 },
+    { name: "Apple HIG body", className: "typography-body", fontSize: 17 },
+    { name: "Anthropic engineering lead", className: "post-content", fontSize: 18 }
+  ];
+  for (const article of articles) {
+    const source = fakeBox({
+      className: article.className,
+      tagName: "P",
+      top: 0,
+      bottom: 80,
+      width: 680,
+      fontSize: article.fontSize
+    });
+    const body = fakeBox({
+      className: "oi-translation",
+      top: 80 + article.fontSize * 0.7,
+      bottom: 140,
+      width: 680,
+      fontSize: article.fontSize
+    });
+    body.ownerDocument.documentElement.style.setProperty("--oi-body-gloss-gap", "0.70em");
+    assert.equal(OI.isBodyTranslation(body), true, article.name);
+    assert.equal(OI.shouldClampOpticalGap(body), true, article.name);
+    assert.equal(OI.readBodyGlossGapEm(body), 0.7, article.name);
+    const laid = OI.layoutTranslation(body, source);
+    assert.match(body.style.marginTop, /--oi-body-gloss-gap/, article.name);
+    assert.equal(laid.pull >= 0, true, article.name);
+  }
+});
+
 test("heading 0.12–0.28em clamp is site-agnostic (OpenAI / Apple HIG / MDN-like sizes)", () => {
   const OI = loadBilingual();
   const samples = [
     { name: "OpenAI Better skills H2", sourceFs: 32, startTop: 112 },
     { name: "Apple HIG title", sourceFs: 40, startTop: 120 },
-    { name: "MDN / docs H2", sourceFs: 24, startTop: 104 }
+    { name: "MDN / docs H2", sourceFs: 24, startTop: 104 },
+    { name: "Anthropic engineering H2", sourceFs: 28, startTop: 108 }
   ];
   for (const sample of samples) {
     const source = fakeBox({

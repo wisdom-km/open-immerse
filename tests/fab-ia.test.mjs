@@ -65,6 +65,7 @@ test("FAB stays visible by default and is not display:none", () => {
   const FAB = loadFab();
   assert.equal(DEFAULT_SETTINGS.showFab, true);
   assert.equal(DEFAULT_SETTINGS.fabCorner, "bottom-right");
+  assert.equal(DEFAULT_SETTINGS.fabPos, null);
   assert.equal(FAB.shouldHideFab({}), false);
   assert.equal(FAB.shouldHideFab(DEFAULT_SETTINGS), false);
   assert.equal(FAB.shouldHideFab({ features: { fab: true, webpage: true } }), false);
@@ -74,9 +75,17 @@ test("FAB stays visible by default and is not display:none", () => {
   assert.match(toolbar, /res\?\.settings \|\| \{\}/);
   assert.match(toolbar, /FAB\.shouldHideFab\(settings\)/);
   assert.doesNotMatch(toolbar, /if \(!res\) return/);
+  assert.match(toolbar, /SW not ready|toolbar message failed/);
+  assert.match(toolbar, /return null;/);
+  assert.doesNotMatch(toolbar, /throw err;/);
+  assert.match(toolbar, /bindFabDrag/);
+  assert.match(toolbar, /applyFreePos/);
   const fabBlock = css.slice(css.indexOf(".oi-fab {"), css.indexOf(".oi-fab[data-corner"));
   assert.doesNotMatch(fabBlock, /display:\s*none/);
   assert.match(fabBlock, /position:\s*fixed/);
+  assert.match(fabBlock, /right:\s*20px/);
+  assert.match(fabBlock, /bottom:\s*20px/);
+  assert.match(fabBlock, /display:\s*flex/);
 });
 
 test("default park is bottom-right; free pos persists instead of corner snap", () => {
