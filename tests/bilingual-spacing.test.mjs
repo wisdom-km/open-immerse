@@ -30,16 +30,23 @@ test("heading translations start from a small em margin, not a locked 0.7rem", (
   assert.equal(/margin:\s*-0\.45em/.test(headingBlock), false);
 });
 
-test("heading translations use body font-size instead of heading em", () => {
+test("BILINGUAL-SPACING §8 heading gloss escapes H1–H3 1em and stays weight 400", () => {
   assert.match(bodyBlock, /font-size:\s*calc\(1em \* var\(--oi-font-scale,\s*0\.95\)\)/);
+  assert.match(bodyBlock, /font-weight:\s*400/);
+  const headingFont = css.match(/\.oi-translation\.oi-after-heading:not\(\.oi-side-rail\)\s*\{[^}]+\}/s)?.[0] || "";
   assert.match(
-    css,
-    /\.oi-translation\.oi-after-heading:not\(\.oi-side-rail\)\s*\{[^}]*font-size:\s*calc\(var\(--oi-body-font-size,\s*1rem\)\s*\*\s*var\(--oi-font-scale,\s*0\.95\)\)/s
+    headingFont,
+    /font-size:\s*calc\(var\(--oi-body-font-size,\s*1rem\)\s*\*\s*var\(--oi-font-scale,\s*0\.95\)\)/
   );
-  assert.match(headingBlock, /不吃标题容器的 em/);
+  assert.match(headingFont, /font-weight:\s*400/);
+  assert.equal(/font-size:[^;]*1em/.test(headingFont), false);
+  assert.match(headingBlock, /BILINGUAL-SPACING §8/);
+  assert.match(headingBlock, /BODY-HEADING-GLOSS-SIZE/);
   assert.equal(/\.oi-translation\.oi-side-rail\s*\{[^}]*font-size:/s.test(css), false);
   assert.match(js, /--oi-body-font-size/);
   assert.match(js, /readArticleBodyFontSize/);
+  assert.match(layout, /HEADING_BODY_FONT_SLACK:\s*0\.05/);
+  assert.match(layout, /withinHeadingBodyFontBand/);
   assert.match(layout, /applyHeadingBodyFontSize/);
   assert.match(layout, /resolveBodyTranslationFontSize/);
   assert.match(layout, /shouldMatchBodyFont/);

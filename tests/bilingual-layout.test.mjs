@@ -296,6 +296,12 @@ test("overlap helper steps 2–4px until gap ≥ 2px and caps extra at ~1.2em", 
 
 test("optical gap helpers follow BODY-BILINGUAL-GAP source-em bands", () => {
   const OI = loadBilingual();
+  assert.equal(OI.HEADING_BODY_FONT_SLACK, 0.05);
+  assert.equal(OI.withinHeadingBodyFontBand(15.2, 15.2), true);
+  assert.equal(OI.withinHeadingBodyFontBand(15.2 * 1.05, 15.2), true);
+  assert.equal(OI.withinHeadingBodyFontBand(15.2 * 0.95, 15.2), true);
+  assert.equal(OI.withinHeadingBodyFontBand(15.2 * 1.06, 15.2), false);
+  assert.equal(OI.withinHeadingBodyFontBand(30.4, 15.2), false);
   assert.equal(OI.HEADING_MARGIN_TOP_EM, 0.15);
   assert.equal(OI.HEADING_PAD_TOP_EM, 0.35);
   assert.equal(OI.HEADING_PAD_MIN_EM, 0.2);
@@ -430,7 +436,7 @@ function linkFlow(nodes) {
   return nodes;
 }
 
-test("heading translation font-size matches nearby body translation, not the heading", () => {
+test("BILINGUAL-SPACING §8 Persistence gloss matches body translation ±5%, not H2 1em", () => {
   const OI = loadBilingual();
   const sourceFs = 32;
   const bodyFs = 16;
@@ -470,18 +476,20 @@ test("heading translation font-size matches nearby body translation, not the hea
   assert.equal(OI.shouldMatchBodyFont(heading, source), true);
   assert.equal(OI.isBodyTranslation(body), true);
   assert.equal(OI.nearbyBodySample(heading, source), body);
+  assert.equal(OI.withinHeadingBodyFontBand(30.4, sourceFs * 0.95), true);
+  assert.equal(OI.withinHeadingBodyFontBand(30.4, bodyTransFs), false);
 
   const applied = OI.applyHeadingBodyFontSize(heading, source);
-  assert.ok(applied <= bodyTransFs * 1.05);
-  assert.ok(Math.abs(applied / bodyTransFs - 1) < 0.08);
+  assert.equal(OI.withinHeadingBodyFontBand(applied, bodyTransFs), true);
+  assert.equal(OI.withinHeadingBodyFontBand(applied, sourceFs), false);
   assert.equal(OI.elementFontSize(source), sourceFs);
   assert.equal(OI.elementFontSize(heading), applied);
-  assert.ok(OI.elementFontSize(heading) < sourceFs * 0.7);
+  assert.ok(applied < sourceFs * 0.7);
   assert.match(heading.style.getPropertyValue("--oi-body-font-size"), /16/);
 
   const laid = OI.layoutTranslation(heading, source);
-  assert.ok(Math.abs(laid.fontSize / bodyTransFs - 1) < 0.08);
-  assert.ok(laid.fontSize <= bodyTransFs * 1.05);
+  assert.equal(OI.withinHeadingBodyFontBand(laid.fontSize, bodyTransFs), true);
+  assert.ok(laid.fontSize < sourceFs * 0.7);
 });
 
 test("heading font-size can fall back to nearby paragraph × scale", () => {
@@ -511,8 +519,10 @@ test("heading font-size can fall back to nearby paragraph × scale", () => {
   });
   linkFlow([source, heading, para]);
   const applied = OI.applyHeadingBodyFontSize(heading, source);
-  assert.equal(applied, OI.scaledBodyFontSize(18, 0.95));
-  assert.ok(Math.abs(applied / (18 * 0.95) - 1) < 0.02);
+  const expected = OI.scaledBodyFontSize(18, 0.95);
+  assert.equal(applied, expected);
+  assert.equal(OI.withinHeadingBodyFontBand(applied, expected), true);
+  assert.equal(OI.withinHeadingBodyFontBand(applied, 28), false);
   assert.ok(applied <= 18);
   assert.equal(OI.elementFontSize(source), 28);
 });
@@ -554,8 +564,8 @@ test("body-sized heading translation still clamps Persistence-like gap to 0.25�
   const before = OI.verticalGap(source.getBoundingClientRect(), heading.getBoundingClientRect());
   assert.ok(OI.opticalGapEm(before, sourceFs) > OI.HEADING_HARD_MAX_EM);
   const laid = OI.layoutTranslation(heading, source);
-  assert.ok(Math.abs(laid.fontSize / 15.2 - 1) < 0.08);
-  assert.ok(laid.fontSize <= 15.2 * 1.05);
+  assert.equal(OI.withinHeadingBodyFontBand(laid.fontSize, 15.2), true);
+  assert.ok(laid.fontSize < sourceFs * 0.7);
   assert.equal(OI.elementFontSize(source), sourceFs);
   const gap = OI.verticalGap(source.getBoundingClientRect(), heading.getBoundingClientRect());
   assert.ok(laid.pull > 0);
