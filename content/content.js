@@ -252,7 +252,9 @@ async function translateVisible(ticket = epoch) {
         }
         chunk.forEach((el, idx) => {
           el.classList.remove("oi-pending");
-          if (running && ticket === epoch) mountTranslation(el, res.translations[idx] || "", settings);
+          if (running && ticket === epoch) {
+            mountTranslation(el, res.translations[idx] || "", settings, inSideRail(el) ? { mode: "block" } : {});
+          }
         });
         if (res.polishError) toast(STATUS_POLISH_FAIL);
         else clearStatus();
@@ -280,7 +282,7 @@ function applyTranslateProgress(message) {
     const text = translations[idx] || "";
     if (!text) return;
     el.classList.remove("oi-pending");
-    mountTranslation(el, text, inflight.settings);
+    mountTranslation(el, text, inflight.settings, inSideRail(el) ? { mode: "block" } : {});
   });
   showStatus(STATUS_POLISHING);
 }
@@ -483,7 +485,7 @@ function shouldInline(el) {
   return false;
 }
 
-function mountTranslation(el, text, settings) {
+function mountTranslation(el, text, settings, opts = {}) {
   if (!text) return;
   const bilingual = globalThis.OIBilingual;
   const existing = bilingual?.dedupeTranslations?.(el)
@@ -492,10 +494,13 @@ function mountTranslation(el, text, settings) {
       : el.querySelector(":scope > .oi-translation"));
   if (existing) {
     existing.textContent = text;
+    existing.classList.remove("oi-inline");
+    if (opts.mode === "block" || inSideRail(el)) existing.classList.add("oi-translation");
     layoutMountedTranslation(el, existing);
     return;
   }
-  const inline = shouldInline(el);
+  const forceBlock = opts.mode === "block" || inSideRail(el);
+  const inline = forceBlock ? false : shouldInline(el);
   const node = document.createElement(inline ? "span" : "div");
   const heading = /^H[1-3]$/.test(el.tagName);
   node.className = inline
@@ -519,7 +524,9 @@ function mountTranslation(el, text, settings) {
       }
     }).then(() => toast("已收藏"));
   });
-  if (inline || ["LI", "TD", "TH", "DT", "DD"].includes(el.tagName)) el.appendChild(node);
+  const tableCell = ["TD", "TH"].includes(el.tagName);
+  const listLike = ["LI", "TD", "TH", "DT", "DD"].includes(el.tagName);
+  if (inline || tableCell || (!forceBlock && listLike)) el.appendChild(node);
   else el.insertAdjacentElement("afterend", node);
   globalThis.OIBilingual?.breakFlexRow?.(el, node);
   layoutMountedTranslation(el, node);
@@ -601,7 +608,7 @@ function onHover(ev) {
     const res = await send({ type: "OI_TRANSLATE_BATCH", texts: [text] });
     if (res.ok) {
       const settings = (await send({ type: "OI_GET_SETTINGS" }))?.settings;
-      mountTranslation(el, res.translations[0], settings);
+      mountTranslation(el, res.translations[0], settings, inSideRail(el) ? { mode: "block" } : {});
     }
   }, 350);
 }

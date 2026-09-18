@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PAGE_CHROME_SELECTOR, PAGE_TOP_NAV_SELECTOR, PRIMARY_TITLE_SKIP_ANCESTOR } from "../lib/site-presets.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { applyTranslateLimit } from "../lib/translate-limit.js";
-import { hasNestedCollectible, inSideRail, isPrimaryTitle, shouldCollectNode, shouldInline, shouldSkipScopedChrome, translationClassName } from "../lib/page-scan.js";
+import { hasNestedCollectible, inSideRail, isPrimaryTitle, placeTranslationNode, planTranslationMount, shouldCollectNode, shouldInline, shouldSkipScopedChrome, translationClassName } from "../lib/page-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentSrc = readFileSync(join(root, "content/content.js"), "utf8");
@@ -280,6 +280,95 @@ test("page scope still skips short top-bar chrome", () => {
   assert.equal(shouldCollectNode(docs, pageSettings, articleCtx), false);
 });
 
+function sidebarFixture(tagName, text, hits, box = {}) {
+  const kids = [];
+  const parent = {
+    children: kids,
+    tagName: "ASIDE",
+    appendChild(child) {
+      kids.push(child);
+      child.parentElement = parent;
+      return child;
+    },
+    insertBefore(child, ref) {
+      const i = kids.indexOf(ref);
+      if (i === -1) kids.push(child);
+      else kids.splice(i, 0, child);
+      child.parentElement = parent;
+      return child;
+    }
+  };
+  const source = fakeNode({
+    tagName,
+    hits,
+    text,
+    left: box.left ?? 16,
+    width: box.width ?? 180,
+    height: box.height ?? 24
+  });
+  const own = [];
+  source.parentElement = parent;
+  source.children = own;
+  source.appendChild = (child) => {
+    own.push(child);
+    child.parentElement = source;
+    return child;
+  };
+  source.insertAdjacentElement = (where, child) => {
+    if (where !== "afterend") return child;
+    const i = kids.indexOf(source);
+    if (i === -1) kids.push(child);
+    else kids.splice(i + 1, 0, child);
+    child.parentElement = parent;
+    return child;
+  };
+  Object.defineProperty(source, "nextElementSibling", {
+    get() {
+      const i = kids.indexOf(source);
+      return i >= 0 ? kids[i + 1] || null : null;
+    }
+  });
+  parent.appendChild(source);
+  return { parent, source };
+}
+
+function mountedNode(className) {
+  return {
+    className,
+    classList: {
+      contains(name) {
+        return String(className).split(/\s+/).includes(name);
+      }
+    }
+  };
+}
+
+test("side-rail fixture stacks translation below source without oi-inline", () => {
+  const cases = [
+    { tagName: "H3", text: "Recent", hits: ["aside"] },
+    { tagName: "LI", text: "Getting started", hits: ["aside"] },
+    { tagName: "LI", text: "API Reference", hits: ["aside"] },
+    { tagName: "A", text: "Topics", hits: ["aside"] }
+  ];
+  for (const spec of cases) {
+    const { source } = sidebarFixture(spec.tagName, spec.text, spec.hits);
+    assert.equal(inSideRail(source, articleCtx), true, spec.text + " rail");
+    assert.equal(shouldCollectNode(source, pageSettings, articleCtx), true, spec.text + " page KEEP");
+    assert.equal(shouldCollectNode(source, articleSettings, articleCtx), false, spec.text + " article SKIP");
+    const plan = planTranslationMount(source, articleCtx, { mode: "block" });
+    assert.match(plan.className, /oi-translation/, spec.text + " class");
+    assert.equal(plan.className.includes("oi-inline"), false, spec.text + " forbids oi-inline");
+    assert.equal(plan.inline, false);
+    assert.equal(plan.forceBlock, true);
+    assert.equal(plan.placement, "afterend", spec.text + " below source");
+    const node = mountedNode(plan.className);
+    placeTranslationNode(source, node, plan);
+    assert.equal(source.nextElementSibling, node, spec.text + " sibling below");
+    assert.equal(node.classList.contains("oi-translation"), true);
+    assert.equal(node.classList.contains("oi-inline"), false);
+  }
+});
+
 test("side-rail mounts stay block with underline class, not oi-inline", () => {
   const labels = [
     fakeNode({ tagName: "LI", hits: ["aside"], text: "Getting started", left: 16, width: 180 }),
@@ -363,6 +452,9 @@ test("content.js gates chrome by scope and does not blanket-drop header", () => 
   assert.match(contentSrc, /isTinyChrome/);
   assert.match(contentSrc, /if \(inSideRail\(el\)\) return false;/);
   assert.match(contentSrc, /function shouldInline\([\s\S]*?if \(inSideRail\(el\)\) return false;/);
+  assert.match(contentSrc, /function mountTranslation\(el, text, settings, opts = \{\}\)/);
+  assert.match(contentSrc, /opts\.mode === "block"/);
+  assert.match(contentSrc, /inSideRail\(el\) \? \{ mode: "block" \}/);
   assert.doesNotMatch(contentSrc, /closest\("nav, aside, header, \[role='navigation'\]"\)/);
   assert.match(contentSrc, /function schedulePageHydrationRescan\(/);
   assert.match(contentSrc, /PAGE_SCOPE_RESCAN_MS/);
