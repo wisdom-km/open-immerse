@@ -19,7 +19,7 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Module | Status |
 | --- | --- |
 | Page FAB | Glass capsule, bottom-right: Translate / Stop, Original, ‹ collapse. Draggable; position is saved. **Stop** appears only while a job (including polish) is running. Stop aborts inflight requests and **keeps inserted translations**. **Original** is what clears them. |
-| Webpage | Default scope is **article body** (`main` / `article` column — no sidebar or nav). Switch to **full page** if needed. The primary H1 is translated when possible. Top nav chains, breadcrumbs, cookie bars, and footer link piles are still skipped. |
+| Webpage | Default scope is **article body** (`main` / `article` column — no sidebar or nav). Switch to **full page** if needed (includes short sidebar/TOC labels). The primary H1 is translated when possible. Top nav chains, breadcrumbs, cookie bars, and footer link piles are still skipped. |
 | Per-page quota | `all` or `title + lead` (H1 + first body block; the lead is capped at about 3 lines / 220 characters). **Batch size** only controls how many segments go in one API request, not how many segments the page may translate. |
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
@@ -240,7 +240,7 @@ Conventions: [CONTRIBUTING.md](CONTRIBUTING.md) (Chinese). Short version:
 - `content/` owns the DOM. Network and cache stay in `background/`
 - Popup “翻译此页” follows this tab’s `OI_PING` (existing translations / `html.oi-active`). Do not use the global `enabled` flag as page state
 - Do not mix PDF scope (current page / full document) with webpage scan rules
-- Webpage scan: `article` takes the main column only; `page` also takes readable sidebar blocks and uses a heuristic for an article H1 in the header. Do not ban every `closest('header')`
+- Webpage scan: `article` takes the main column only; `page` also takes readable sidebar blocks and short TOC/nav labels, and uses a heuristic for an article H1 in the header. Do not ban every `closest('header')`
 
 ### Add an engine
 

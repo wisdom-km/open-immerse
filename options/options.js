@@ -23,7 +23,7 @@ function syncTranslateScopeHint() {
 
 const TRANSLATE_SCOPE_HINTS = {
   article: "只译主栏正文，跳过侧栏与导航。",
-  page: "含侧栏；主标题（含页头 H1）必译。顶栏导航链仍可跳过。"
+  page: "含侧栏短目录；主标题（含页头 H1）必译。顶栏导航链仍可跳过。"
 };
 
 let cachedSettings = { providers: {} };

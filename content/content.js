@@ -111,7 +111,10 @@ async function start() {
   await translateVisible(ticket);
   if (session) {
     const lim = (await send({ type: "OI_GET_SETTINGS" }))?.settings?.translateLimit;
-    if (!isTitleLeadLimit(lim)) observePage();
+    if (!isTitleLeadLimit(lim)) {
+      observePage();
+      if ((settings.translateScope || "article") === "page") schedulePageHydrationRescan(ticket);
+    }
   }
 }
 
@@ -168,6 +171,8 @@ function hasPageTranslations() {
   return Boolean(document.querySelector(".oi-translation"));
 }
 
+const PAGE_SCOPE_RESCAN_MS = [900, 2200];
+
 function observePage() {
   if (pageObserver) pageObserver.disconnect();
   pageObserver = new MutationObserver((mutations) => {
@@ -178,6 +183,16 @@ function observePage() {
     if (added) debounceTranslate();
   });
   pageObserver.observe(document.body, { childList: true, subtree: true });
+}
+
+/** Late side-rail TOC (e.g. OpenAI blog) often hydrates after the first scan. */
+function schedulePageHydrationRescan(ticket) {
+  PAGE_SCOPE_RESCAN_MS.forEach((ms) => {
+    setTimeout(() => {
+      if (!session || ticket !== epoch) return;
+      debounceTranslate();
+    }, ms);
+  });
 }
 
 function debounceTranslate() {
@@ -237,7 +252,9 @@ async function translateVisible(ticket = epoch) {
         }
         chunk.forEach((el, idx) => {
           el.classList.remove("oi-pending");
-          if (running && ticket === epoch) mountTranslation(el, res.translations[idx] || "", settings);
+          if (running && ticket === epoch) {
+            mountTranslation(el, res.translations[idx] || "", settings, inSideRail(el) ? { mode: "block" } : {});
+          }
         });
         if (res.polishError) toast(STATUS_POLISH_FAIL);
         else clearStatus();
@@ -265,7 +282,7 @@ function applyTranslateProgress(message) {
     const text = translations[idx] || "";
     if (!text) return;
     el.classList.remove("oi-pending");
-    mountTranslation(el, text, inflight.settings);
+    mountTranslation(el, text, inflight.settings, inSideRail(el) ? { mode: "block" } : {});
   });
   showStatus(STATUS_POLISHING);
 }
@@ -387,16 +404,43 @@ function isPrimaryTitle(el, scope) {
 function isPureNavBar(el) {
   const nav = el.closest("nav, [role='navigation']");
   if (!nav) return false;
-  if (nav.closest("aside, [role='complementary']")) return false;
-  if (isSideColumn(el) || isSideColumn(nav)) return false;
+  if (inSideRail(el) || inSideRail(nav)) return false;
   return true;
+}
+
+const SIDE_RAIL_SELECTOR = "aside, [role='complementary'], [data-docs-sidebar], [data-left-nav], [data-left-nav-container], [data-content-page-toc-rail], [data-docs-toc-rail]";
+const SIDE_RAIL_LABEL_SELECTOR = ":scope > a, :scope > button, :scope > [role='link'], :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > p";
+
+function inSideRail(el) {
+  if (!el) return false;
+  if (el.closest(SIDE_RAIL_SELECTOR)) return true;
+  if (isSideColumn(el)) return true;
+  let node = el.parentElement;
+  for (let i = 0; i < 6 && node; i++) {
+    const tag = String(node.tagName || "").toUpperCase();
+    if (["MAIN", "BODY", "HTML"].includes(tag)) break;
+    if (node.closest(SIDE_RAIL_SELECTOR)) return true;
+    if (isSideColumn(node)) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+function pickSideRailMountHost(el) {
+  if (!el) return el;
+  if (["LI", "DT", "DD"].includes(el.tagName)) {
+    const label = el.querySelector(SIDE_RAIL_LABEL_SELECTOR);
+    if (label && !label.classList.contains("oi-translation")) return label;
+  }
+  return el;
 }
 
 function shouldSkipScopedChrome(el, scope) {
   if (scope === "page") {
     if (el.closest(PAGE_CHROME_SELECTOR)) return true;
+    if (isPureNavBar(el) && !inSideRail(el)) return true;
+    if (inSideRail(el)) return false;
     if (isTinyChrome(el)) return true;
-    if (isPureNavBar(el)) return true;
     return false;
   }
   if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || el.closest(CHROME_SELECTOR)) return true;
@@ -456,25 +500,34 @@ function getText(el) {
 }
 
 function shouldInline(el) {
+  if (inSideRail(el)) return false;
   if (el.tagName === "A" || el.tagName === "BUTTON") return true;
-  if (el.closest("nav, aside, header, [role='navigation']")) return true;
-  const rect = el.getBoundingClientRect();
-  return rect.width > 0 && rect.width < 240 && isSideColumn(el);
+  if (el.closest("nav, header, [role='navigation']")) return true;
+  return false;
 }
 
-function mountTranslation(el, text, settings) {
+function mountTranslation(el, text, settings, opts = {}) {
   if (!text) return;
   const bilingual = globalThis.OIBilingual;
+  const mountEl = opts.mode === "block" || inSideRail(el) ? pickSideRailMountHost(el) : el;
   const existing = bilingual?.dedupeTranslations?.(el)
+    || bilingual?.dedupeTranslations?.(mountEl)
     || (el.nextElementSibling?.classList?.contains("oi-translation")
       ? el.nextElementSibling
-      : el.querySelector(":scope > .oi-translation"));
+      : el.querySelector(":scope > .oi-translation"))
+    || mountEl.querySelector?.(":scope > .oi-translation");
   if (existing) {
     existing.textContent = text;
+    existing.classList.remove("oi-inline");
+    if (opts.mode === "block" || inSideRail(el)) {
+      existing.classList.add("oi-translation");
+      existing.classList.add("oi-side-rail");
+    }
     layoutMountedTranslation(el, existing);
     return;
   }
-  const inline = shouldInline(el);
+  const forceBlock = opts.mode === "block" || inSideRail(el);
+  const inline = forceBlock ? false : shouldInline(el);
   const node = document.createElement(inline ? "span" : "div");
   const heading = /^H[1-3]$/.test(el.tagName);
   node.className = inline
@@ -482,6 +535,7 @@ function mountTranslation(el, text, settings) {
     : heading
       ? "oi-translation oi-after-heading"
       : "oi-translation";
+  if (forceBlock) node.classList.add("oi-side-rail");
   node.lang = settings.targetLang || "zh-CN";
   node.textContent = text;
   node.title = "double click to save";
@@ -498,8 +552,10 @@ function mountTranslation(el, text, settings) {
       }
     }).then(() => toast("已收藏"));
   });
-  if (inline || ["LI", "TD", "TH", "DT", "DD"].includes(el.tagName)) el.appendChild(node);
-  else el.insertAdjacentElement("afterend", node);
+  const tableCell = ["TD", "TH"].includes(el.tagName);
+  const listLike = ["LI", "TD", "TH", "DT", "DD"].includes(el.tagName);
+  if (inline || tableCell || forceBlock || (!forceBlock && listLike)) mountEl.appendChild(node);
+  else mountEl.insertAdjacentElement("afterend", node);
   globalThis.OIBilingual?.breakFlexRow?.(el, node);
   layoutMountedTranslation(el, node);
 }
@@ -580,7 +636,7 @@ function onHover(ev) {
     const res = await send({ type: "OI_TRANSLATE_BATCH", texts: [text] });
     if (res.ok) {
       const settings = (await send({ type: "OI_GET_SETTINGS" }))?.settings;
-      mountTranslation(el, res.translations[0], settings);
+      mountTranslation(el, res.translations[0], settings, inSideRail(el) ? { mode: "block" } : {});
     }
   }, 350);
 }

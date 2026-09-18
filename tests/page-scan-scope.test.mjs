@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PAGE_CHROME_SELECTOR, PAGE_TOP_NAV_SELECTOR, PRIMARY_TITLE_SKIP_ANCESTOR } from "../lib/site-presets.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { applyTranslateLimit } from "../lib/translate-limit.js";
-import { hasNestedCollectible, isPrimaryTitle, shouldCollectNode } from "../lib/page-scan.js";
+import { hasNestedCollectible, inSideRail, isPrimaryTitle, pickSideRailMountHost, placeTranslationNode, planTranslationMount, shouldCollectNode, shouldInline, shouldSkipScopedChrome, translationClassName } from "../lib/page-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentSrc = readFileSync(join(root, "content/content.js"), "utf8");
@@ -158,7 +158,7 @@ test("title_lead can still pick the page-scope header H1", () => {
   assert.deepEqual(applyTranslateLimit([side, title, lead], "title_lead"), [title, lead]);
 });
 
-test("page scope still skips nav bars, menus, breadcrumbs, footer piles, cookies, short links", () => {
+test("page scope still skips nav bars, menus, breadcrumbs, footer piles, cookies", () => {
   const topNav = fakeNode({
     tagName: "LI",
     hits: ["header nav", "role='navigation'"],
@@ -185,19 +185,287 @@ test("page scope still skips nav bars, menus, breadcrumbs, footer piles, cookies
     hits: ["cookie", "consent"],
     text: "We use cookies to improve your browsing experience"
   });
-  const shortLink = fakeNode({
-    tagName: "LI",
-    hits: ["aside"],
-    text: "All posts",
-    left: 16,
-    width: 160
-  });
   assert.equal(shouldCollectNode(topNav, pageSettings, articleCtx), false);
   assert.equal(shouldCollectNode(menu, pageSettings, articleCtx), false);
   assert.equal(shouldCollectNode(crumb, pageSettings, articleCtx), false);
   assert.equal(shouldCollectNode(footer, pageSettings, articleCtx), false);
   assert.equal(shouldCollectNode(cookie, pageSettings, articleCtx), false);
-  assert.equal(shouldCollectNode(shortLink, pageSettings, articleCtx), false);
+});
+
+test("page scope keeps short side-rail labels that article scope still skips", () => {
+  const labels = [
+    { text: "Getting started", hits: ["aside", "role='complementary'"], left: 16, width: 180 },
+    { text: "Topics", hits: ["aside"], left: 16, width: 160 },
+    { text: "Recent", hits: ["aside"], left: 16, width: 160 },
+    { text: "General", hits: ["aside"], left: 16, width: 170 },
+    { text: "Better skills", hits: ["aside", "role='complementary'"], left: 980, width: 200 }
+  ];
+  for (const spec of labels) {
+    const node = fakeNode({
+      tagName: "LI",
+      hits: spec.hits,
+      text: spec.text,
+      left: spec.left,
+      width: spec.width
+    });
+    assert.equal(inSideRail(node, articleCtx), true, spec.text + " inSideRail");
+    assert.equal(shouldSkipScopedChrome(node, "page", articleCtx), false, spec.text + " page keep");
+    assert.equal(shouldCollectNode(node, pageSettings, articleCtx), true, spec.text + " page collect");
+    assert.equal(shouldSkipScopedChrome(node, "article", articleCtx), true, spec.text + " article skip");
+    assert.equal(shouldCollectNode(node, articleSettings, articleCtx), false, spec.text + " article collect");
+  }
+});
+
+test("page scope keeps short labels inside a left-rail nav (OpenAI Recent/Topics)", () => {
+  const rail = {
+    tagName: "NAV",
+    closest() {
+      return null;
+    },
+    getBoundingClientRect() {
+      return { width: 218, height: 640, left: 12, right: 230, top: 80 };
+    }
+  };
+  const closest = (sel) => {
+    const s = String(sel);
+    if (s === "nav, aside, [role='navigation']" || s === "nav, [role='navigation']") return rail;
+    return null;
+  };
+  const recent = fakeNode({ tagName: "H3", text: "Recent", left: 12, width: 200, height: 24 });
+  const topics = fakeNode({ tagName: "H3", text: "Topics", left: 12, width: 200, height: 24 });
+  const allPosts = fakeNode({ tagName: "LI", text: "All posts", left: 12, width: 200, height: 28 });
+  for (const node of [recent, topics, allPosts]) node.closest = closest;
+  for (const node of [recent, topics, allPosts]) {
+    assert.equal(inSideRail(node, articleCtx), true, node.cloneNode().innerText + " rail");
+    assert.equal(shouldSkipScopedChrome(node, "page", articleCtx), false, node.cloneNode().innerText + " page keep");
+    assert.equal(shouldCollectNode(node, pageSettings, articleCtx), true, node.cloneNode().innerText + " page collect");
+    assert.equal(shouldSkipScopedChrome(node, "article", articleCtx), true, node.cloneNode().innerText + " article skip");
+    assert.equal(shouldCollectNode(node, articleSettings, articleCtx), false, node.cloneNode().innerText + " article collect");
+  }
+});
+
+test("page scope keeps short geometric side-column labels without aside", () => {
+  const toc = fakeNode({
+    tagName: "LI",
+    text: "Designing for iOS",
+    left: 12,
+    width: 176
+  });
+  toc.parentElement = { tagName: "NAV" };
+  assert.equal(inSideRail(toc, articleCtx), true);
+  assert.equal(shouldSkipScopedChrome(toc, "page", articleCtx), false);
+  assert.equal(shouldCollectNode(toc, pageSettings, articleCtx), true);
+  assert.equal(shouldSkipScopedChrome(toc, "article", articleCtx), true);
+  assert.equal(shouldCollectNode(toc, articleSettings, articleCtx), false);
+});
+
+test("page scope still skips short top-bar chrome", () => {
+  const design = fakeNode({
+    tagName: "LI",
+    hits: ["header nav", "role='navigation'"],
+    text: "Design",
+    left: 320,
+    width: 72
+  });
+  const docs = fakeNode({
+    tagName: "LI",
+    hits: ["header nav", "role='banner' nav"],
+    text: "Getting started",
+    left: 420,
+    width: 110
+  });
+  assert.equal(shouldSkipScopedChrome(design, "page", articleCtx), true);
+  assert.equal(shouldCollectNode(design, pageSettings, articleCtx), false);
+  assert.equal(shouldSkipScopedChrome(docs, "page", articleCtx), true);
+  assert.equal(shouldCollectNode(docs, pageSettings, articleCtx), false);
+});
+
+function sidebarFixture(tagName, text, hits, box = {}) {
+  const kids = [];
+  const parent = {
+    children: kids,
+    tagName: "ASIDE",
+    appendChild(child) {
+      kids.push(child);
+      child.parentElement = parent;
+      return child;
+    },
+    insertBefore(child, ref) {
+      const i = kids.indexOf(ref);
+      if (i === -1) kids.push(child);
+      else kids.splice(i, 0, child);
+      child.parentElement = parent;
+      return child;
+    }
+  };
+  const source = fakeNode({
+    tagName,
+    hits,
+    text,
+    left: box.left ?? 16,
+    width: box.width ?? 180,
+    height: box.height ?? 24
+  });
+  const own = [];
+  source.parentElement = parent;
+  source.children = own;
+  source.appendChild = (child) => {
+    own.push(child);
+    child.parentElement = source;
+    return child;
+  };
+  Object.defineProperty(source, "lastElementChild", {
+    get() {
+      return own[own.length - 1] || null;
+    }
+  });
+  source.querySelector = () => null;
+  source.insertAdjacentElement = (where, child) => {
+    if (where !== "afterend") return child;
+    const i = kids.indexOf(source);
+    if (i === -1) kids.push(child);
+    else kids.splice(i + 1, 0, child);
+    child.parentElement = parent;
+    return child;
+  };
+  Object.defineProperty(source, "nextElementSibling", {
+    get() {
+      const i = kids.indexOf(source);
+      return i >= 0 ? kids[i + 1] || null : null;
+    }
+  });
+  parent.appendChild(source);
+  return { parent, source };
+}
+
+function mountedNode(className) {
+  return {
+    className,
+    classList: {
+      contains(name) {
+        return String(className).split(/\s+/).includes(name);
+      }
+    }
+  };
+}
+
+test("side-rail fixture stacks translation below source without oi-inline", () => {
+  const cases = [
+    { tagName: "H3", text: "Recent", hits: ["aside"] },
+    { tagName: "LI", text: "Getting started", hits: ["aside"] },
+    { tagName: "LI", text: "API Reference", hits: ["aside"] },
+    { tagName: "A", text: "Topics", hits: ["aside"] }
+  ];
+  for (const spec of cases) {
+    const { source } = sidebarFixture(spec.tagName, spec.text, spec.hits);
+    assert.equal(inSideRail(source, articleCtx), true, spec.text + " rail");
+    assert.equal(shouldCollectNode(source, pageSettings, articleCtx), true, spec.text + " page KEEP");
+    assert.equal(shouldCollectNode(source, articleSettings, articleCtx), false, spec.text + " article SKIP");
+    const plan = planTranslationMount(source, articleCtx, { mode: "block" });
+    assert.match(plan.className, /oi-translation/, spec.text + " class");
+    assert.equal(plan.className.includes("oi-inline"), false, spec.text + " forbids oi-inline");
+    assert.equal(plan.inline, false);
+    assert.equal(plan.forceBlock, true);
+    assert.equal(plan.placement, "append", spec.text + " inside host");
+    assert.match(plan.className, /oi-side-rail/);
+    const node = mountedNode(plan.className);
+    placeTranslationNode(source, node, plan);
+    assert.equal(source.lastElementChild, node, spec.text + " last child below source");
+    assert.equal(node.classList.contains("oi-translation"), true);
+    assert.equal(node.classList.contains("oi-inline"), false);
+    assert.equal(node.classList.contains("oi-side-rail"), true);
+  }
+});
+
+test("side-rail flex-row item wraps translation to full width below source", () => {
+  const { source } = sidebarFixture("LI", "Getting started", ["aside"]);
+  const link = fakeNode({ tagName: "A", hits: ["aside"], text: "Getting started", left: 16, width: 160, height: 20 });
+  const kids = [];
+  source.querySelector = (sel) => (String(sel).includes("a") ? link : null);
+  source.appendChild(link);
+  link.appendChild = (child) => {
+    kids.push(child);
+    child.parentElement = link;
+    return child;
+  };
+  Object.defineProperty(link, "lastElementChild", {
+    get() {
+      return kids[kids.length - 1] || null;
+    }
+  });
+  assert.equal(pickSideRailMountHost(source), link);
+  const plan = planTranslationMount(source, articleCtx, { mode: "block" });
+  assert.equal(plan.host, link);
+  assert.equal(plan.placement, "append");
+  assert.equal(plan.className.includes("oi-inline"), false);
+  const node = mountedNode(plan.className);
+  placeTranslationNode(source, node, plan);
+  assert.equal(link.lastElementChild, node);
+  assert.equal(source.nextElementSibling, null);
+});
+
+test("side-rail card title is not oi-inline", () => {
+  const card = fakeNode({
+    tagName: "P",
+    hits: ["data-docs-sidebar"],
+    text: "Latest Version",
+    left: 48,
+    width: 140,
+    height: 20
+  });
+  assert.equal(inSideRail(card, articleCtx), true);
+  assert.equal(shouldInline(card, articleCtx), false);
+  assert.equal(shouldCollectNode(card, pageSettings, articleCtx), true);
+  assert.equal(shouldCollectNode(card, articleSettings, articleCtx), false);
+  const plan = planTranslationMount(card, articleCtx, { mode: "block" });
+  assert.match(plan.className, /oi-translation/);
+  assert.match(plan.className, /oi-side-rail/);
+  assert.equal(plan.className.includes("oi-inline"), false);
+  assert.equal(plan.placement, "append");
+});
+
+test("side-rail mounts stay block with underline class, not oi-inline", () => {
+  const labels = [
+    fakeNode({ tagName: "LI", hits: ["aside"], text: "Getting started", left: 16, width: 180 }),
+    fakeNode({ tagName: "H3", hits: ["aside"], text: "Recent", left: 16, width: 160, height: 24 }),
+    fakeNode({ tagName: "LI", hits: ["aside"], text: "Latest Version", left: 16, width: 200 }),
+    fakeNode({ tagName: "A", hits: ["aside"], text: "Guides", left: 16, width: 160, height: 24 })
+  ];
+  const toc = fakeNode({ tagName: "LI", text: "Designing for iOS", left: 12, width: 176 });
+  labels.push(toc);
+  for (const node of labels) {
+    assert.equal(inSideRail(node, articleCtx), true, node.cloneNode().innerText + " rail");
+    assert.equal(shouldInline(node, articleCtx), false, node.cloneNode().innerText + " not inline");
+    const cls = translationClassName(node, articleCtx);
+    assert.equal(cls.includes("oi-inline"), false, node.cloneNode().innerText + " class " + cls);
+    assert.match(cls, /^oi-translation/);
+    assert.equal(shouldCollectNode(node, pageSettings, articleCtx), true, node.cloneNode().innerText + " still KEEP");
+  }
+  assert.equal(translationClassName(labels[1], articleCtx), "oi-translation oi-after-heading oi-side-rail");
+  assert.equal(translationClassName(labels[0], articleCtx), "oi-translation oi-side-rail");
+});
+
+test("top-bar chrome may still mount inline", () => {
+  const design = fakeNode({
+    tagName: "LI",
+    hits: ["header nav", "role='navigation'"],
+    text: "Design",
+    left: 320,
+    width: 72
+  });
+  const topLink = fakeNode({
+    tagName: "A",
+    hits: ["header nav", "role='navigation'"],
+    text: "Docs",
+    left: 400,
+    width: 64,
+    height: 24
+  });
+  assert.equal(inSideRail(design, articleCtx), false);
+  assert.equal(shouldInline(design, articleCtx), true);
+  assert.equal(translationClassName(design, articleCtx), "oi-translation oi-inline");
+  assert.equal(shouldInline(topLink, articleCtx), true);
+  assert.equal(translationClassName(topLink, articleCtx), "oi-translation oi-inline");
 });
 
 test("hard skips for code and extension UI remain in both scopes", () => {
@@ -218,7 +486,7 @@ test("options copy describes sidebar + header H1 without the old 顶栏-only lin
   assert.match(optionsHtml, /value="page">全页面</);
   assert.match(optionsHtml, /id="translateScopeHint" class="hint field-hint"/);
   assert.match(optionsHtml, /只译主栏正文，跳过侧栏与导航。/);
-  assert.match(optionsJs, /含侧栏；主标题（含页头 H1）必译。顶栏导航链仍可跳过。/);
+  assert.match(optionsJs, /含侧栏短目录；主标题（含页头 H1）必译。顶栏导航链仍可跳过。/);
   assert.match(optionsJs, /function syncTranslateScopeHint\(/);
   assert.match(optionsJs, /translateScope"\)\.addEventListener\("change"/);
   assert.doesNotMatch(optionsHtml, /value="article">只译主栏/);
@@ -232,10 +500,22 @@ test("options copy describes sidebar + header H1 without the old 顶栏-only lin
 test("content.js gates chrome by scope and does not blanket-drop header", () => {
   assert.match(contentSrc, /function isPrimaryTitle\(/);
   assert.match(contentSrc, /function shouldSkipScopedChrome\(/);
+  assert.match(contentSrc, /function inSideRail\(/);
+  assert.match(contentSrc, /function pickSideRailMountHost\(/);
+  assert.match(contentSrc, /oi-side-rail/);
+  assert.match(contentSrc, /data-docs-sidebar/);
   assert.match(contentSrc, /PAGE_CHROME_SELECTOR/);
   assert.match(contentSrc, /scope !== "page"/);
   assert.match(contentSrc, /looksLikeArticleTitle/);
   assert.match(contentSrc, /isTinyChrome/);
+  assert.match(contentSrc, /if \(inSideRail\(el\)\) return false;/);
+  assert.match(contentSrc, /function shouldInline\([\s\S]*?if \(inSideRail\(el\)\) return false;/);
+  assert.match(contentSrc, /function mountTranslation\(el, text, settings, opts = \{\}\)/);
+  assert.match(contentSrc, /opts\.mode === "block"/);
+  assert.match(contentSrc, /inSideRail\(el\) \? \{ mode: "block" \}/);
+  assert.doesNotMatch(contentSrc, /closest\("nav, aside, header, \[role='navigation'\]"\)/);
+  assert.match(contentSrc, /function schedulePageHydrationRescan\(/);
+  assert.match(contentSrc, /PAGE_SCOPE_RESCAN_MS/);
   assert.doesNotMatch(contentSrc, /if \(el\.closest\(HARD_SKIP_SELECTOR\) \|\| el\.closest\(ALWAYS_CHROME_SELECTOR\) \|\| el\.closest\(CHROME_SELECTOR\)\) return false;/);
   assert.doesNotMatch(contentSrc, /closest\(['"]header['"]\)/);
   assert.match(contentSrc, /script, style, noscript/);
