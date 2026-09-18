@@ -65,6 +65,10 @@
   padding-top: 0.35em;
   line-height: 1.45;
 }
+/* 正文标题译文跟段落译文，不吃标题容器的 em。侧栏 .oi-side-rail 仍用 1em。 */
+.oi-translation.oi-after-heading:not(.oi-side-rail) {
+  font-size: calc(var(--oi-body-font-size, 1rem) * var(--oi-font-scale, 0.95));
+}
 .oi-translation.oi-inline {
   display: inline;
   margin: 0 0 0 0.4em;

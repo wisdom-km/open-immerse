@@ -30,6 +30,22 @@ test("heading translations start from a small em margin, not a locked 0.7rem", (
   assert.equal(/margin:\s*-0\.45em/.test(headingBlock), false);
 });
 
+test("heading translations use body font-size instead of heading em", () => {
+  assert.match(bodyBlock, /font-size:\s*calc\(1em \* var\(--oi-font-scale,\s*0\.95\)\)/);
+  assert.match(
+    css,
+    /\.oi-translation\.oi-after-heading:not\(\.oi-side-rail\)\s*\{[^}]*font-size:\s*calc\(var\(--oi-body-font-size,\s*1rem\)\s*\*\s*var\(--oi-font-scale,\s*0\.95\)\)/s
+  );
+  assert.match(headingBlock, /不吃标题容器的 em/);
+  assert.equal(/\.oi-translation\.oi-side-rail\s*\{[^}]*font-size:/s.test(css), false);
+  assert.match(js, /--oi-body-font-size/);
+  assert.match(js, /readArticleBodyFontSize/);
+  assert.match(layout, /applyHeadingBodyFontSize/);
+  assert.match(layout, /resolveBodyTranslationFontSize/);
+  assert.match(layout, /shouldMatchBodyFont/);
+  assert.match(layout, /layoutTranslation[\s\S]*applyHeadingBodyFontSize/);
+});
+
 test("inline translations stay on the same line with a small left gap", () => {
   assert.match(inlineBlock, /display:\s*inline/);
   assert.match(inlineBlock, /margin:\s*0\s+0\s+0\s+0\.4em/);
