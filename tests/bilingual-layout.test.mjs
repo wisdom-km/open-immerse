@@ -240,7 +240,7 @@ function fakeBox({
             fontSize: computedFont,
             getPropertyValue(name) {
               if (name === "font-size") return computedFont;
-              if (name === "--oi-body-gloss-gap") {
+              if (name === "--oi-body-gloss-gap" || name === "--oi-body-gloss-stack-gap") {
                 return node?.style?.getPropertyValue?.(name)
                   || node?.ownerDocument?.documentElement?.style?.getPropertyValue?.(name)
                   || "";
@@ -621,6 +621,12 @@ test("body gloss gap setting changes clamp target without touching headings", ()
   assert.equal(OI.normalizeBodyGlossGap(0.7), 0.7);
   assert.equal(OI.normalizeBodyGlossGap(2), 0.7);
   assert.equal(OI.normalizeBodyGlossGap(-1), 0.1);
+  assert.equal(OI.normalizeBodyGlossStackGap(undefined), 0.25);
+  assert.equal(OI.normalizeBodyGlossStackGap("0.25em"), 0.25);
+  assert.equal(OI.normalizeBodyGlossStackGap(0), 0);
+  assert.equal(OI.normalizeBodyGlossStackGap(1.2), 1.2);
+  assert.equal(OI.normalizeBodyGlossStackGap(3), 1.2);
+  assert.equal(OI.normalizeBodyGlossStackGap(-2), 0);
   assert.equal(OI.bodyMarginTopEm(), -0.65);
 
   const source = fakeBox({ className: "source", tagName: "P", top: 0, bottom: 80, width: 560, fontSize: 16 });
@@ -668,6 +674,9 @@ test("body gloss gap setting changes clamp target without touching headings", ()
   assert.ok(headingLaid.pull > 0);
   assert.ok(OI.opticalGapEm(headingGap, 32) <= OI.HEADING_TARGET_MAX_EM + 0.02);
   assert.equal(heading.style.marginTop.includes("--oi-body-gloss-gap"), false);
+  heading.ownerDocument.documentElement.style.setProperty("--oi-body-gloss-stack-gap", "1.20em");
+  assert.equal(OI.readBodyGlossStackGapEm(heading), 1.2);
+  assert.equal(heading.style.marginTop.includes("--oi-body-gloss-stack-gap"), false);
 });
 
 test("bodyGlossGap applies to article paragraphs on OpenAI / Apple HIG / Anthropic-like hosts", () => {

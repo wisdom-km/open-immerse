@@ -6,10 +6,14 @@ import {
   BODY_GLOSS_GAP_DEFAULT,
   BODY_GLOSS_GAP_MAX,
   BODY_GLOSS_GAP_MIN,
+  BODY_GLOSS_STACK_GAP_DEFAULT,
+  BODY_GLOSS_STACK_GAP_MAX,
+  BODY_GLOSS_STACK_GAP_MIN,
   DEFAULT_SETTINGS,
   SETTINGS_VERSION,
   migrateSettings,
-  normalizeBodyGlossGap
+  normalizeBodyGlossGap,
+  normalizeBodyGlossStackGap
 } from "../lib/storage.js";
 import {
   CHROME_CLASS_RE,
@@ -59,10 +63,15 @@ test("default translateScope is article and settingsVersion is 7", () => {
   assert.equal(DEFAULT_SETTINGS.deepThink, false);
   assert.equal(DEFAULT_SETTINGS.bodyGlossGap, BODY_GLOSS_GAP_DEFAULT);
   assert.equal(DEFAULT_SETTINGS.bodyGlossGap, 0.35);
+  assert.equal(DEFAULT_SETTINGS.bodyGlossStackGap, BODY_GLOSS_STACK_GAP_DEFAULT);
+  assert.equal(DEFAULT_SETTINGS.bodyGlossStackGap, 0.25);
   assert.equal(DEFAULT_SETTINGS.showFab, true);
   assert.equal(normalizeBodyGlossGap(undefined), 0.35);
   assert.equal(normalizeBodyGlossGap(0.1), BODY_GLOSS_GAP_MIN);
   assert.equal(normalizeBodyGlossGap(9), BODY_GLOSS_GAP_MAX);
+  assert.equal(normalizeBodyGlossStackGap(undefined), 0.25);
+  assert.equal(normalizeBodyGlossStackGap(0), BODY_GLOSS_STACK_GAP_MIN);
+  assert.equal(normalizeBodyGlossStackGap(9), BODY_GLOSS_STACK_GAP_MAX);
 });
 
 test("v1 features stay on; youtube/x stay off", () => {
