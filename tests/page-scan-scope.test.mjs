@@ -216,6 +216,34 @@ test("page scope keeps short side-rail labels that article scope still skips", (
   }
 });
 
+test("page scope keeps short labels inside a left-rail nav (OpenAI Recent/Topics)", () => {
+  const rail = {
+    tagName: "NAV",
+    closest() {
+      return null;
+    },
+    getBoundingClientRect() {
+      return { width: 218, height: 640, left: 12, right: 230, top: 80 };
+    }
+  };
+  const closest = (sel) => {
+    const s = String(sel);
+    if (s === "nav, aside, [role='navigation']" || s === "nav, [role='navigation']") return rail;
+    return null;
+  };
+  const recent = fakeNode({ tagName: "H3", text: "Recent", left: 12, width: 200, height: 24 });
+  const topics = fakeNode({ tagName: "H3", text: "Topics", left: 12, width: 200, height: 24 });
+  const allPosts = fakeNode({ tagName: "LI", text: "All posts", left: 12, width: 200, height: 28 });
+  for (const node of [recent, topics, allPosts]) node.closest = closest;
+  for (const node of [recent, topics, allPosts]) {
+    assert.equal(inSideRail(node, articleCtx), true, node.cloneNode().innerText + " rail");
+    assert.equal(shouldSkipScopedChrome(node, "page", articleCtx), false, node.cloneNode().innerText + " page keep");
+    assert.equal(shouldCollectNode(node, pageSettings, articleCtx), true, node.cloneNode().innerText + " page collect");
+    assert.equal(shouldSkipScopedChrome(node, "article", articleCtx), true, node.cloneNode().innerText + " article skip");
+    assert.equal(shouldCollectNode(node, articleSettings, articleCtx), false, node.cloneNode().innerText + " article collect");
+  }
+});
+
 test("page scope keeps short geometric side-column labels without aside", () => {
   const toc = fakeNode({
     tagName: "LI",
