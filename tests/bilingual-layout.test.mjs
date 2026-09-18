@@ -76,7 +76,12 @@ function fakeBox({
     },
     classList: {
       contains(name) {
-        return className.split(/\s+/).includes(name);
+        return String(el.className).split(/\s+/).includes(name);
+      },
+      add(name) {
+        const parts = String(el.className).split(/\s+/).filter(Boolean);
+        if (!parts.includes(name)) parts.push(name);
+        el.className = parts.join(" ");
       }
     },
     style: {
@@ -781,13 +786,12 @@ test("side-rail flex-row item translation uses full host width not shrink wrap",
   OI.breakFlexRow(source, translation);
   const laid = OI.applyLayout(translation, source);
   assert.equal(source.style.flexWrap, "wrap");
-  assert.equal(translation.style.width, "100%");
-  assert.equal(translation.style.maxWidth, "100%");
-  assert.equal(translation.style.minWidth, "100%");
+  assert.equal(source.style.flexDirection, "column");
+  assert.equal(translation.style.width, "220px");
+  assert.equal(translation.style.minWidth, "220px");
   assert.equal(translation.style.flexBasis, "100%");
   assert.notEqual(translation.style.width, "54px");
-  assert.notEqual(translation.style.maxWidth, "54px");
-  assert.ok(laid.width >= 220 || translation.style.width === "100%");
+  assert.equal(laid.width, 220);
   assert.equal(laid.useColumn, true);
   assert.equal(translation.classList.contains("oi-inline"), false);
 });
@@ -831,8 +835,8 @@ test("side-rail card host unlocks fixed height so the next card is pushed down",
   assert.equal(unlocked, button);
   assert.equal(button.style.height, "auto");
   OI.applyLayout(translation, title);
-  assert.equal(translation.style.width, "100%");
-  assert.equal(translation.style.minWidth, "100%");
+  assert.equal(translation.style.width, "284px");
+  assert.equal(translation.style.minWidth, "284px");
   assert.equal(translation.classList.contains("oi-inline"), false);
 });
 
@@ -877,6 +881,97 @@ test("Apple-like sidebar rows do not share a y-band after next-row clearance", (
   assert.equal(OI.sharesYBand(translation, next), false);
   const gap = next.getBoundingClientRect().top - translation.getBoundingClientRect().bottom;
   assert.ok(gap >= 2);
+});
+
+test("side-rail translation width matches label column not shrink-wrapped text", () => {
+  const OI = loadBilingual();
+  const view = {
+    getComputedStyle(node) {
+      return {
+        display: node?.__display || "block",
+        flexDirection: "row",
+        fontSize: "16px"
+      };
+    }
+  };
+  const column = fakeBox({
+    tagName: "DIV",
+    className: "title-container",
+    display: "block",
+    width: 180,
+    clientWidth: 180
+  });
+  column.ownerDocument = { defaultView: view };
+  const source = fakeBox({
+    tagName: "A",
+    className: "",
+    display: "block",
+    width: 120,
+    clientWidth: 120,
+    parent: column
+  });
+  source.ownerDocument = { defaultView: view };
+  const translation = fakeBox({
+    className: "oi-translation oi-side-rail",
+    display: "block",
+    width: 101,
+    parent: source
+  });
+  translation.ownerDocument = { defaultView: view };
+  const laid = OI.applyLayout(translation, source);
+  assert.equal(laid.width, 180);
+  assert.equal(translation.style.width, "180px");
+  assert.equal(translation.style.minWidth, "180px");
+  assert.notEqual(translation.style.width, "101px");
+  assert.notEqual(translation.style.width, "120px");
+});
+
+test("flex-row nowrap side-rail host stacks so translation does not cover source", () => {
+  const OI = loadBilingual();
+  const view = {
+    getComputedStyle(node) {
+      return {
+        display: node?.style?.display || node?.__display || "flex",
+        flexDirection: node?.style?.flexDirection || node?.__flexDirection || "row",
+        flexWrap: node?.style?.flexWrap || "nowrap",
+        fontSize: "16px"
+      };
+    }
+  };
+  const link = fakeBox({
+    tagName: "A",
+    className: "flex flex-row flex-nowrap",
+    display: "flex",
+    width: 218,
+    clientWidth: 218
+  });
+  link.__display = "flex";
+  link.__flexDirection = "row";
+  link.ownerDocument = { defaultView: view };
+  const source = fakeBox({
+    tagName: "SPAN",
+    className: "",
+    display: "inline",
+    width: 90,
+    parent: link
+  });
+  source.ownerDocument = { defaultView: view };
+  const translation = fakeBox({
+    className: "oi-translation oi-side-rail",
+    display: "block",
+    width: 90,
+    parent: link
+  });
+  translation.ownerDocument = { defaultView: view };
+  assert.equal(OI.isHorizontalFlex(link), true);
+  assert.equal(OI.sharesFlexRow(source, translation), true);
+  OI.applyLayout(translation, source);
+  assert.equal(link.style.flexWrap, "wrap");
+  assert.equal(link.style.flexDirection, "column");
+  assert.equal(link.classList.contains("oi-side-rail-host"), true);
+  assert.equal(OI.sharesFlexRow(source, translation), false);
+  assert.equal(translation.style.width, "218px");
+  assert.equal(translation.classList.contains("oi-inline"), false);
 });
 
 function createIndentedParagraph({

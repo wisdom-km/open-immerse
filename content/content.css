@@ -33,6 +33,11 @@
   align-self: stretch;
   overflow-wrap: break-word;
 }
+.oi-side-rail-host {
+  flex-wrap: wrap !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+}
 .oi-translation.oi-side-rail {
   display: block;
   margin: 0.15em 0 0.2em;
