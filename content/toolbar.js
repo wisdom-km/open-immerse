@@ -16,6 +16,10 @@
     persistToastShowing(text) {
       return text === "翻译中" || text === "润色中";
     },
+    shouldHideFab(settings = {}) {
+      const features = settings.features || {};
+      return features.fab === false || settings.showFab === false || features.webpage === false;
+    },
     fabToggleState({ inflight = false, hasTranslations = false } = {}) {
       if (inflight) return "translating";
       if (hasTranslations) return "translated";
@@ -158,19 +162,24 @@
       if (!chrome.runtime?.id) return null;
       return await chrome.runtime.sendMessage(payload);
     } catch (err) {
+      // SW not ready / receiving end missing must not skip FAB mount.
       const msg = String(err && err.message || err);
-      if (/Extension context invalidated|message port closed/i.test(msg)) return null;
-      throw err;
+      if (/Extension context invalidated/i.test(msg)) return null;
+      console.warn("Open Immerse: toolbar message failed", msg);
+      return null;
     }
   }
 
   async function initToolbar() {
-    const res = await send({ type: "OI_GET_SETTINGS" });
-    if (!res) return;
-    const { settings } = res;
-    const features = settings.features || {};
-    const hidden =
-      features.fab === false || settings.showFab === false || features.webpage === false;
+    if (!chrome.runtime?.id) return;
+    let res = null;
+    try {
+      res = await send({ type: "OI_GET_SETTINGS" });
+    } catch {
+      res = null;
+    }
+    const settings = res?.settings || {};
+    const hidden = FAB.shouldHideFab(settings);
     // Reload leaves the previous content-script .oi-fab in the page (often the
     // pre-V1 翻译/原文/收藏/⋯ bar). Blind return would skip V1 and dead-bind.
     const plan = FAB.reconcile(document, { hidden });

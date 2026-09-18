@@ -17,15 +17,26 @@ test("body translations match Loom section 3 margin", () => {
   assert.match(bodyBlock, /吃掉宿主段后 margin，光学间距约 0\.4em/);
   assert.match(bodyBlock, /margin:\s*-0\.65em\s+0\s+0\.4em/);
   assert.match(bodyBlock, /padding-top:\s*0\.15em/);
+  assert.match(bodyBlock, /--oi-body-gloss-gap/);
+  assert.match(
+    bodyBlock,
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*margin-top:\s*calc\(-0\.65em \+ \(var\(--oi-body-gloss-gap,\s*0\.35em\) - 0\.35em\)\)/s
+  );
+  assert.match(
+    bodyBlock,
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*padding-top:\s*max\(0\.05em,\s*calc\(var\(--oi-body-gloss-gap,\s*0\.35em\) \* 0\.4\)\)/s
+  );
+  assert.match(bodyBlock, /BODY-GLOSS-GAP-CONTROL/);
   assert.equal(/margin:\s*0\.08em/.test(bodyBlock), false);
   assert.equal(/margin:\s*-0\.65em\s+0\s+0\.1em/.test(bodyBlock), false);
 });
 
 test("heading translations start from a small em margin, not a locked 0.7rem", () => {
   assert.match(headingBlock, /0\.7rem 只是旧初值，不锁死/);
-  assert.match(headingBlock, /0\.25–0\.45em/);
-  assert.match(headingBlock, /margin:\s*0\.15em\s+0\s+0\.35em/);
-  assert.match(headingBlock, /padding-top:\s*0\.35em/);
+  assert.match(headingBlock, /0\.12–0\.28em/);
+  assert.match(headingBlock, /margin:\s*0\.05em\s+0\s+0\.22em/);
+  assert.match(headingBlock, /padding-top:\s*0\.14em/);
+  assert.equal(/--oi-body-gloss-gap/.test(headingBlock), false);
   assert.equal(/margin:\s*0\.7rem/.test(headingBlock), false);
   assert.equal(/margin:\s*-0\.45em/.test(headingBlock), false);
 });
@@ -81,16 +92,22 @@ test("card and box styles keep existing padding and frame", () => {
   assert.match(css, /html\[data-oi-style="card"\][\s\S]*padding:\s*0\.4em\s+0\.65em/);
   assert.match(css, /html\[data-oi-style="box"\][\s\S]*padding:\s*0\.4em\s+0\.65em/);
   assert.match(css, /html\[data-oi-style="card"\][\s\S]*border-left-width:\s*3px/);
-  assert.equal(/:not\(\.oi-after-heading\)/.test(css), false);
+  assert.match(css, /html\[data-oi-style="card"\]\s+\.oi-translation:not\(\.oi-inline\)/);
+  assert.match(css, /html\[data-oi-style="box"\]\s+\.oi-translation:not\(\.oi-inline\)/);
+  assert.equal(/html\[data-oi-style="card"\][^{]*:not\(\.oi-after-heading\)/.test(css), false);
 });
 
-test("layoutTranslation measures heading gaps in source em and clamps > 0.55em", () => {
-  assert.match(layout, /HEADING_MARGIN_TOP_EM:\s*0\.15/);
-  assert.match(layout, /HEADING_PAD_TOP_EM:\s*0\.35/);
-  assert.match(layout, /HEADING_TARGET_MIN_EM:\s*0\.25/);
-  assert.match(layout, /HEADING_TARGET_MAX_EM:\s*0\.45/);
-  assert.match(layout, /HEADING_HARD_MAX_EM:\s*0\.55/);
-  assert.match(layout, /HEADING_HARD_MAX_PX:\s*14/);
+test("layoutTranslation measures heading gaps in source em and clamps > 0.32em", () => {
+  assert.match(layout, /HEADING_MARGIN_TOP_EM:\s*0\.05/);
+  assert.match(layout, /HEADING_PAD_TOP_EM:\s*0\.14/);
+  assert.match(layout, /HEADING_TARGET_MIN_EM:\s*0\.12/);
+  assert.match(layout, /HEADING_TARGET_MAX_EM:\s*0\.28/);
+  assert.match(layout, /HEADING_HARD_MAX_EM:\s*0\.32/);
+  assert.match(layout, /HEADING_HARD_MAX_PX:\s*10/);
+  assert.match(layout, /BODY_GLOSS_GAP_DEFAULT_EM:\s*0\.35/);
+  assert.match(layout, /--oi-body-gloss-gap/);
+  assert.match(layout, /normalizeBodyGlossGap/);
+  assert.match(layout, /bodyMarginCalc/);
   assert.match(layout, /clampOversizedGap/);
   assert.match(layout, /applyGapPull/);
   assert.match(layout, /shouldClampOpticalGap/);
@@ -98,9 +115,12 @@ test("layoutTranslation measures heading gaps in source em and clamps > 0.55em",
   assert.match(layout, /headingGapLimitPx/);
   assert.match(layout, /layoutTranslation[\s\S]*clampOversizedGap/);
   assert.match(layout, /calc\(\$\{OIBilingual\.HEADING_PAD_TOP_EM\}em \+ /);
-  assert.match(layout, /calc\(\$\{base\}em - \$\{pull\}px\)/);
+  assert.match(layout, /calc\(\$\{OIBilingual\.HEADING_MARGIN_TOP_EM\}em - \$\{pull\}px\)/);
   assert.equal(/0\.7rem/.test(layout), false);
   assert.match(js, /requestAnimationFrame/);
+  assert.match(js, /--oi-body-gloss-gap/);
+  assert.match(js, /normalizeBodyGlossGap/);
+  assert.doesNotMatch(css, /openai\.com|apple\.com|developer\.mozilla|react\.dev|anthropic\.com/i);
 });
 
 test("content.js still marks H1–H3 as oi-after-heading afterend", () => {

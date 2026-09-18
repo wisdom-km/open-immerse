@@ -2,7 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_FEATURES, resolveFeatures } from "../lib/features.js";
-import { DEFAULT_SETTINGS, SETTINGS_VERSION, migrateSettings } from "../lib/storage.js";
+import {
+  BODY_GLOSS_GAP_DEFAULT,
+  BODY_GLOSS_GAP_MAX,
+  BODY_GLOSS_GAP_MIN,
+  DEFAULT_SETTINGS,
+  SETTINGS_VERSION,
+  migrateSettings,
+  normalizeBodyGlossGap
+} from "../lib/storage.js";
 import {
   CHROME_CLASS_RE,
   HARD_SKIP_SELECTOR,
@@ -49,6 +57,12 @@ test("default translateScope is article and settingsVersion is 7", () => {
   assert.equal(SETTINGS_VERSION, 7);
   assert.equal(DEFAULT_SETTINGS.twoStepPolish, false);
   assert.equal(DEFAULT_SETTINGS.deepThink, false);
+  assert.equal(DEFAULT_SETTINGS.bodyGlossGap, BODY_GLOSS_GAP_DEFAULT);
+  assert.equal(DEFAULT_SETTINGS.bodyGlossGap, 0.35);
+  assert.equal(DEFAULT_SETTINGS.showFab, true);
+  assert.equal(normalizeBodyGlossGap(undefined), 0.35);
+  assert.equal(normalizeBodyGlossGap(0.1), BODY_GLOSS_GAP_MIN);
+  assert.equal(normalizeBodyGlossGap(9), BODY_GLOSS_GAP_MAX);
 });
 
 test("v1 features stay on; youtube/x stay off", () => {
