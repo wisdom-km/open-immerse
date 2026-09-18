@@ -111,7 +111,10 @@ async function start() {
   await translateVisible(ticket);
   if (session) {
     const lim = (await send({ type: "OI_GET_SETTINGS" }))?.settings?.translateLimit;
-    if (!isTitleLeadLimit(lim)) observePage();
+    if (!isTitleLeadLimit(lim)) {
+      observePage();
+      if ((settings.translateScope || "article") === "page") schedulePageHydrationRescan(ticket);
+    }
   }
 }
 
@@ -168,6 +171,8 @@ function hasPageTranslations() {
   return Boolean(document.querySelector(".oi-translation"));
 }
 
+const PAGE_SCOPE_RESCAN_MS = [900, 2200];
+
 function observePage() {
   if (pageObserver) pageObserver.disconnect();
   pageObserver = new MutationObserver((mutations) => {
@@ -178,6 +183,16 @@ function observePage() {
     if (added) debounceTranslate();
   });
   pageObserver.observe(document.body, { childList: true, subtree: true });
+}
+
+/** Late side-rail TOC (e.g. OpenAI blog) often hydrates after the first scan. */
+function schedulePageHydrationRescan(ticket) {
+  PAGE_SCOPE_RESCAN_MS.forEach((ms) => {
+    setTimeout(() => {
+      if (!session || ticket !== epoch) return;
+      debounceTranslate();
+    }, ms);
+  });
 }
 
 function debounceTranslate() {
@@ -387,16 +402,22 @@ function isPrimaryTitle(el, scope) {
 function isPureNavBar(el) {
   const nav = el.closest("nav, [role='navigation']");
   if (!nav) return false;
-  if (nav.closest("aside, [role='complementary']")) return false;
-  if (isSideColumn(el) || isSideColumn(nav)) return false;
+  if (inSideRail(el) || inSideRail(nav)) return false;
   return true;
+}
+
+function inSideRail(el) {
+  if (!el) return false;
+  if (el.closest("aside, [role='complementary']")) return true;
+  return isSideColumn(el);
 }
 
 function shouldSkipScopedChrome(el, scope) {
   if (scope === "page") {
     if (el.closest(PAGE_CHROME_SELECTOR)) return true;
+    if (isPureNavBar(el) && !inSideRail(el)) return true;
+    if (inSideRail(el)) return false;
     if (isTinyChrome(el)) return true;
-    if (isPureNavBar(el)) return true;
     return false;
   }
   if (el.closest(HARD_SKIP_SELECTOR) || el.closest(ALWAYS_CHROME_SELECTOR) || el.closest(CHROME_SELECTOR)) return true;

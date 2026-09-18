@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PAGE_CHROME_SELECTOR, PAGE_TOP_NAV_SELECTOR, PRIMARY_TITLE_SKIP_ANCESTOR } from "../lib/site-presets.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { applyTranslateLimit } from "../lib/translate-limit.js";
-import { hasNestedCollectible, isPrimaryTitle, shouldCollectNode } from "../lib/page-scan.js";
+import { hasNestedCollectible, inSideRail, isPrimaryTitle, shouldCollectNode, shouldSkipScopedChrome } from "../lib/page-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentSrc = readFileSync(join(root, "content/content.js"), "utf8");
@@ -158,7 +158,7 @@ test("title_lead can still pick the page-scope header H1", () => {
   assert.deepEqual(applyTranslateLimit([side, title, lead], "title_lead"), [title, lead]);
 });
 
-test("page scope still skips nav bars, menus, breadcrumbs, footer piles, cookies, short links", () => {
+test("page scope still skips nav bars, menus, breadcrumbs, footer piles, cookies", () => {
   const topNav = fakeNode({
     tagName: "LI",
     hits: ["header nav", "role='navigation'"],
@@ -185,19 +185,71 @@ test("page scope still skips nav bars, menus, breadcrumbs, footer piles, cookies
     hits: ["cookie", "consent"],
     text: "We use cookies to improve your browsing experience"
   });
-  const shortLink = fakeNode({
-    tagName: "LI",
-    hits: ["aside"],
-    text: "All posts",
-    left: 16,
-    width: 160
-  });
   assert.equal(shouldCollectNode(topNav, pageSettings, articleCtx), false);
   assert.equal(shouldCollectNode(menu, pageSettings, articleCtx), false);
   assert.equal(shouldCollectNode(crumb, pageSettings, articleCtx), false);
   assert.equal(shouldCollectNode(footer, pageSettings, articleCtx), false);
   assert.equal(shouldCollectNode(cookie, pageSettings, articleCtx), false);
-  assert.equal(shouldCollectNode(shortLink, pageSettings, articleCtx), false);
+});
+
+test("page scope keeps short side-rail labels that article scope still skips", () => {
+  const labels = [
+    { text: "Getting started", hits: ["aside", "role='complementary'"], left: 16, width: 180 },
+    { text: "Topics", hits: ["aside"], left: 16, width: 160 },
+    { text: "Recent", hits: ["aside"], left: 16, width: 160 },
+    { text: "General", hits: ["aside"], left: 16, width: 170 },
+    { text: "Better skills", hits: ["aside", "role='complementary'"], left: 980, width: 200 }
+  ];
+  for (const spec of labels) {
+    const node = fakeNode({
+      tagName: "LI",
+      hits: spec.hits,
+      text: spec.text,
+      left: spec.left,
+      width: spec.width
+    });
+    assert.equal(inSideRail(node, articleCtx), true, spec.text + " inSideRail");
+    assert.equal(shouldSkipScopedChrome(node, "page", articleCtx), false, spec.text + " page keep");
+    assert.equal(shouldCollectNode(node, pageSettings, articleCtx), true, spec.text + " page collect");
+    assert.equal(shouldSkipScopedChrome(node, "article", articleCtx), true, spec.text + " article skip");
+    assert.equal(shouldCollectNode(node, articleSettings, articleCtx), false, spec.text + " article collect");
+  }
+});
+
+test("page scope keeps short geometric side-column labels without aside", () => {
+  const toc = fakeNode({
+    tagName: "LI",
+    text: "Designing for iOS",
+    left: 12,
+    width: 176
+  });
+  toc.parentElement = { tagName: "NAV" };
+  assert.equal(inSideRail(toc, articleCtx), true);
+  assert.equal(shouldSkipScopedChrome(toc, "page", articleCtx), false);
+  assert.equal(shouldCollectNode(toc, pageSettings, articleCtx), true);
+  assert.equal(shouldSkipScopedChrome(toc, "article", articleCtx), true);
+  assert.equal(shouldCollectNode(toc, articleSettings, articleCtx), false);
+});
+
+test("page scope still skips short top-bar chrome", () => {
+  const design = fakeNode({
+    tagName: "LI",
+    hits: ["header nav", "role='navigation'"],
+    text: "Design",
+    left: 320,
+    width: 72
+  });
+  const docs = fakeNode({
+    tagName: "LI",
+    hits: ["header nav", "role='banner' nav"],
+    text: "Getting started",
+    left: 420,
+    width: 110
+  });
+  assert.equal(shouldSkipScopedChrome(design, "page", articleCtx), true);
+  assert.equal(shouldCollectNode(design, pageSettings, articleCtx), false);
+  assert.equal(shouldSkipScopedChrome(docs, "page", articleCtx), true);
+  assert.equal(shouldCollectNode(docs, pageSettings, articleCtx), false);
 });
 
 test("hard skips for code and extension UI remain in both scopes", () => {
@@ -218,7 +270,7 @@ test("options copy describes sidebar + header H1 without the old 顶栏-only lin
   assert.match(optionsHtml, /value="page">全页面</);
   assert.match(optionsHtml, /id="translateScopeHint" class="hint field-hint"/);
   assert.match(optionsHtml, /只译主栏正文，跳过侧栏与导航。/);
-  assert.match(optionsJs, /含侧栏；主标题（含页头 H1）必译。顶栏导航链仍可跳过。/);
+  assert.match(optionsJs, /含侧栏短目录；主标题（含页头 H1）必译。顶栏导航链仍可跳过。/);
   assert.match(optionsJs, /function syncTranslateScopeHint\(/);
   assert.match(optionsJs, /translateScope"\)\.addEventListener\("change"/);
   assert.doesNotMatch(optionsHtml, /value="article">只译主栏/);
@@ -232,10 +284,14 @@ test("options copy describes sidebar + header H1 without the old 顶栏-only lin
 test("content.js gates chrome by scope and does not blanket-drop header", () => {
   assert.match(contentSrc, /function isPrimaryTitle\(/);
   assert.match(contentSrc, /function shouldSkipScopedChrome\(/);
+  assert.match(contentSrc, /function inSideRail\(/);
   assert.match(contentSrc, /PAGE_CHROME_SELECTOR/);
   assert.match(contentSrc, /scope !== "page"/);
   assert.match(contentSrc, /looksLikeArticleTitle/);
   assert.match(contentSrc, /isTinyChrome/);
+  assert.match(contentSrc, /if \(inSideRail\(el\)\) return false;/);
+  assert.match(contentSrc, /function schedulePageHydrationRescan\(/);
+  assert.match(contentSrc, /PAGE_SCOPE_RESCAN_MS/);
   assert.doesNotMatch(contentSrc, /if \(el\.closest\(HARD_SKIP_SELECTOR\) \|\| el\.closest\(ALWAYS_CHROME_SELECTOR\) \|\| el\.closest\(CHROME_SELECTOR\)\) return false;/);
   assert.doesNotMatch(contentSrc, /closest\(['"]header['"]\)/);
   assert.match(contentSrc, /script, style, noscript/);
