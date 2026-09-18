@@ -649,6 +649,8 @@ test("PDF-MIRROR-CJK-CLIP text boxes do not clip CJK glyph ink", () => {
   assert.match(fidelity, /looksLikeArxivMeta/);
   assert.match(mirrorSpec, /不裁切 \*\*且\*\* 不压字/);
   assert.match(spec, /No clip ∩ no overlap/);
+  assert.match(spec, /§3\.2 碰撞下推/);
+  assert.match(fidelity, /CJK-CLIP §3\.2/);
   assert.match(readFileSync(join(root, "lib/pdf-mirror.js"), "utf8"), /height:\s*"auto"/);
   const append = src.slice(src.indexOf("function appendReadoutNode"), src.indexOf("function renderFormulaNode"));
   assert.match(append, /percentRectToTextStyle/);

@@ -2,8 +2,8 @@
 
 **来源：** Wisdom via Jone copy / Forge（网页 A 已合 main；PDF B 跟进）
 **叠在：** [`PDF-READOUT-MIRROR.md`](./PDF-READOUT-MIRROR.md) V3 + [`PDF-MIRROR-CJK-CLIP.md`](./PDF-MIRROR-CJK-CLIP.md)
-**fixture：** `tests/fixtures/Attention_Is_All_You_Need.pdf`（副本 `oi-qa/fixtures/pdf/Attention_Is_All_You_Need.pdf`）
-**拒收证图：** `oi-qa/pdf-b-fail/attention-right-garbled.png`（右栏叠字 + arXiv 串进摘要）
+**fixture：** `/workspace/oi-qa/fixtures/pdf/Attention_Is_All_You_Need.pdf`（测试同文件：`tests/fixtures/Attention_Is_All_You_Need.pdf`）
+**拒收证图：** `/workspace/oi-qa/pdf-b-fail/attention-right-garbled.png`（右栏叠字 + arXiv 串进摘要）
 
 ---
 
@@ -33,7 +33,7 @@
 | 摘要/正文 | 落在主栏 content box；**不得**与左页边栏 meta（arXiv 竖排等）墨迹相交 |
 | 边栏 meta | 识别为 margin（`looksLikeArxivMeta` 等）→ 留在页边条，或 SKIP 不译进主栏；**禁止**横插摘要首行 |
 | 双栏正文 | 阅读序左列→右列；块仍贴自身 bbox，禁止拉成单栏乱序 |
-| 增高 | 中文换行可向下扩；扩后必须碰撞下推（CJK-CLIP），禁止 visible 溢出盖下一层 |
+| 增高 | 中文换行可向下扩；扩后必须碰撞下推（CJK-CLIP §3.2），禁止 visible 溢出盖下一层 |
 
 ---
 

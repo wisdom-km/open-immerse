@@ -14,6 +14,10 @@ Hard gate. Companion to `PDF-READOUT-MIRROR.md` §4.1.1.
 5. **No clip ∩ no overlap.** Growing a box must push later siblings on the same X band (`relayoutMirrorPageBoxes`). Adjacent text ink rects must not intersect (author cells, abstract ↔ margin meta, footnotes). Same-row author cells (no X overlap) stay put. A clip-only fix that leaves stacked ink is a reject.
 6. Do **NOT** shrink font to dodge clip.
 
+### §3.2 碰撞下推
+
+CJK 长高后，对同一 `.mirror-page` 跑 `relayoutMirrorPageBoxes`：同 X 带后行下推；作者同行（无 X 重叠）不互推；`reserveMarginMeta` 保证 arXiv / 页边与摘要墨迹不相交。禁止 `overflow:visible` 盖住下一层。
+
 ## Acceptance (Attention full paper)
 
 - Title translation (e.g. 「注意力即一切所需」) top+bottom fully visible — no flat-head / flat-foot crop
