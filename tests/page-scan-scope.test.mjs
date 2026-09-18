@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PAGE_CHROME_SELECTOR, PAGE_TOP_NAV_SELECTOR, PRIMARY_TITLE_SKIP_ANCESTOR } from "../lib/site-presets.js";
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { applyTranslateLimit } from "../lib/translate-limit.js";
-import { hasNestedCollectible, inSideRail, isPrimaryTitle, shouldCollectNode, shouldSkipScopedChrome } from "../lib/page-scan.js";
+import { hasNestedCollectible, inSideRail, isPrimaryTitle, shouldCollectNode, shouldInline, shouldSkipScopedChrome, translationClassName } from "../lib/page-scan.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contentSrc = readFileSync(join(root, "content/content.js"), "utf8");
@@ -280,6 +280,50 @@ test("page scope still skips short top-bar chrome", () => {
   assert.equal(shouldCollectNode(docs, pageSettings, articleCtx), false);
 });
 
+test("side-rail mounts stay block with underline class, not oi-inline", () => {
+  const labels = [
+    fakeNode({ tagName: "LI", hits: ["aside"], text: "Getting started", left: 16, width: 180 }),
+    fakeNode({ tagName: "H3", hits: ["aside"], text: "Recent", left: 16, width: 160, height: 24 }),
+    fakeNode({ tagName: "LI", hits: ["aside"], text: "Latest Version", left: 16, width: 200 }),
+    fakeNode({ tagName: "A", hits: ["aside"], text: "Guides", left: 16, width: 160, height: 24 })
+  ];
+  const toc = fakeNode({ tagName: "LI", text: "Designing for iOS", left: 12, width: 176 });
+  labels.push(toc);
+  for (const node of labels) {
+    assert.equal(inSideRail(node, articleCtx), true, node.cloneNode().innerText + " rail");
+    assert.equal(shouldInline(node, articleCtx), false, node.cloneNode().innerText + " not inline");
+    const cls = translationClassName(node, articleCtx);
+    assert.equal(cls.includes("oi-inline"), false, node.cloneNode().innerText + " class " + cls);
+    assert.match(cls, /^oi-translation/);
+    assert.equal(shouldCollectNode(node, pageSettings, articleCtx), true, node.cloneNode().innerText + " still KEEP");
+  }
+  assert.equal(translationClassName(labels[1], articleCtx), "oi-translation oi-after-heading");
+  assert.equal(translationClassName(labels[0], articleCtx), "oi-translation");
+});
+
+test("top-bar chrome may still mount inline", () => {
+  const design = fakeNode({
+    tagName: "LI",
+    hits: ["header nav", "role='navigation'"],
+    text: "Design",
+    left: 320,
+    width: 72
+  });
+  const topLink = fakeNode({
+    tagName: "A",
+    hits: ["header nav", "role='navigation'"],
+    text: "Docs",
+    left: 400,
+    width: 64,
+    height: 24
+  });
+  assert.equal(inSideRail(design, articleCtx), false);
+  assert.equal(shouldInline(design, articleCtx), true);
+  assert.equal(translationClassName(design, articleCtx), "oi-translation oi-inline");
+  assert.equal(shouldInline(topLink, articleCtx), true);
+  assert.equal(translationClassName(topLink, articleCtx), "oi-translation oi-inline");
+});
+
 test("hard skips for code and extension UI remain in both scopes", () => {
   const code = fakeNode({ hits: ["code", "pre"], text: "const foo = 1;" });
   const oi = fakeNode({ hits: [".oi-translation", ".oi-fab"], text: "已翻译的句子足够长" });
@@ -318,6 +362,8 @@ test("content.js gates chrome by scope and does not blanket-drop header", () => 
   assert.match(contentSrc, /looksLikeArticleTitle/);
   assert.match(contentSrc, /isTinyChrome/);
   assert.match(contentSrc, /if \(inSideRail\(el\)\) return false;/);
+  assert.match(contentSrc, /function shouldInline\([\s\S]*?if \(inSideRail\(el\)\) return false;/);
+  assert.doesNotMatch(contentSrc, /closest\("nav, aside, header, \[role='navigation'\]"\)/);
   assert.match(contentSrc, /function schedulePageHydrationRescan\(/);
   assert.match(contentSrc, /PAGE_SCOPE_RESCAN_MS/);
   assert.doesNotMatch(contentSrc, /if \(el\.closest\(HARD_SKIP_SELECTOR\) \|\| el\.closest\(ALWAYS_CHROME_SELECTOR\) \|\| el\.closest\(CHROME_SELECTOR\)\) return false;/);

@@ -477,10 +477,10 @@ function getText(el) {
 }
 
 function shouldInline(el) {
+  if (inSideRail(el)) return false;
   if (el.tagName === "A" || el.tagName === "BUTTON") return true;
-  if (el.closest("nav, aside, header, [role='navigation']")) return true;
-  const rect = el.getBoundingClientRect();
-  return rect.width > 0 && rect.width < 240 && isSideColumn(el);
+  if (el.closest("nav, header, [role='navigation']")) return true;
+  return false;
 }
 
 function mountTranslation(el, text, settings) {

@@ -718,6 +718,36 @@ test("§C.2 flex-row parent does not keep .oi-translation beside H3", () => {
   assert.equal(article.querySelectorAll(".oi-bilingual-stack").length, 0);
 });
 
+test("breakFlexRow stacks a translation appended inside a row-flex sidebar host", () => {
+  const OI = loadBilingual();
+  const view = {
+    getComputedStyle(node) {
+      return {
+        display: node?.__display || "flex",
+        flexDirection: node?.__flexDirection || "row",
+        fontSize: "16px"
+      };
+    }
+  };
+  const source = fakeBox({ tagName: "LI", display: "flex", width: 200 });
+  source.__display = "flex";
+  source.__flexDirection = "row";
+  source.ownerDocument = { defaultView: view };
+  const translation = fakeBox({
+    className: "oi-translation",
+    display: "block",
+    width: 200,
+    parent: source
+  });
+  translation.ownerDocument = { defaultView: view };
+  const result = OI.breakFlexRow(source, translation);
+  assert.equal(result, source);
+  assert.equal(source.style.flexWrap, "wrap");
+  assert.equal(translation.style.display, "block");
+  assert.equal(translation.style.flexBasis, "100%");
+  assert.equal(translation.classList.contains("oi-inline"), false);
+});
+
 function createIndentedParagraph({
   articleWidth = 900,
   wrapperWidth = 800,

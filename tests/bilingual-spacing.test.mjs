@@ -32,6 +32,12 @@ test("inline translations stay on the same line with a small left gap", () => {
   assert.match(inlineBlock, /margin:\s*0\s+0\s+0\s+0\.4em/);
 });
 
+test("block body translations keep the default under border-bottom", () => {
+  assert.match(bodyBlock, /border-bottom:\s*1px\s+dashed/);
+  assert.match(css, /html\[data-oi-style="line"\]\s+\.oi-translation\s*\{[^}]*border-bottom-style:\s*solid/s);
+  assert.match(css, /html\[data-oi-style="dim"\]\s+\.oi-translation\s*\{[^}]*border-bottom-style:\s*dotted/s);
+});
+
 test("card and box styles keep existing padding and frame", () => {
   assert.match(css, /html\[data-oi-style="card"\][\s\S]*padding:\s*0\.4em\s+0\.65em/);
   assert.match(css, /html\[data-oi-style="box"\][\s\S]*padding:\s*0\.4em\s+0\.65em/);
