@@ -250,12 +250,7 @@ async function translateVisible(ticket = epoch) {
           }
           throw new Error(res?.error || "翻译失败");
         }
-        chunk.forEach((el, idx) => {
-          el.classList.remove("oi-pending");
-          if (running && ticket === epoch) {
-            mountTranslation(el, res.translations[idx] || "", settings, inSideRail(el) ? { mode: "block" } : {});
-          }
-        });
+        mountPairedTranslations(chunk, res.translations, settings, ticket);
         if (res.polishError) toast(STATUS_POLISH_FAIL);
         else clearStatus();
       } catch (err) {
@@ -278,17 +273,89 @@ function applyTranslateProgress(message) {
   if (message.requestId && inflight.requestId && message.requestId !== inflight.requestId) return;
   if (!running || inflight.ticket !== epoch) return;
   const translations = message.translations || [];
-  inflight.nodes.forEach((el, idx) => {
-    const text = translations[idx] || "";
-    if (!text) return;
-    el.classList.remove("oi-pending");
-    mountTranslation(el, text, inflight.settings, inSideRail(el) ? { mode: "block" } : {});
-  });
+  mountPairedTranslations(inflight.nodes, translations, inflight.settings, inflight.ticket);
   showStatus(STATUS_POLISHING);
 }
 
 function hasTranslation(el) {
-  return Boolean(el.querySelector(".oi-translation") || el.nextElementSibling?.classList?.contains("oi-translation"));
+  return Boolean(glossForSource(el));
+}
+
+let railSeq = 0;
+
+function railAttr(el, name) {
+  if (!el) return "";
+  const fromGet = el.getAttribute?.(name);
+  if (fromGet) return String(fromGet);
+  if (name === "data-oi-rail-id") return String(el.dataset?.oiRailId || "");
+  if (name === "data-oi-for") return String(el.dataset?.oiFor || "");
+  return "";
+}
+
+function ensureRailId(el) {
+  if (!el) return "";
+  const existing = railAttr(el, "data-oi-rail-id");
+  if (existing) return existing;
+  railSeq += 1;
+  const id = `oi-rail-${railSeq}`;
+  if (el.dataset) el.dataset.oiRailId = id;
+  else el.setAttribute?.("data-oi-rail-id", id);
+  return id;
+}
+
+/**
+ * translations[i] is owned by sources[i] only. Filter/skip must look up
+ * the source Map — never re-zip the leftover rows by a new index.
+ */
+function pairGlossBySource(sources, translations, keep) {
+  const list = Array.isArray(sources) ? sources : [];
+  const texts = Array.isArray(translations) ? translations : [];
+  const bySource = new Map();
+  const byId = new Map();
+  list.forEach((el, i) => {
+    if (!el) return;
+    const text = texts[i] == null ? "" : String(texts[i]);
+    const id = ensureRailId(el);
+    bySource.set(el, text);
+    if (id) byId.set(id, text);
+  });
+  const targets = Array.isArray(keep) ? keep : list;
+  return targets.map((el) => {
+    const id = railAttr(el, "data-oi-rail-id");
+    let text = "";
+    if (bySource.has(el)) text = bySource.get(el);
+    else if (id && byId.has(id)) text = byId.get(id);
+    return { source: el, text, key: id };
+  });
+}
+
+function glossForSource(el) {
+  if (!el) return null;
+  const id = railAttr(el, "data-oi-rail-id");
+  const bilingual = globalThis.OIBilingual;
+  const keyed = bilingual?.collectHostTranslations?.(el)?.[0];
+  if (keyed) return keyed;
+  const nodes = [...(el.querySelectorAll?.(".oi-translation") || [])];
+  if (id) {
+    const match = nodes.find((node) => railAttr(node, "data-oi-for") === id);
+    if (match) return match;
+  }
+  const next = el.nextElementSibling;
+  if (next?.classList?.contains("oi-translation")) {
+    const forId = railAttr(next, "data-oi-for");
+    if (!forId || !id || forId === id) return next;
+  }
+  return el.querySelector?.(":scope > .oi-translation") || nodes[0] || null;
+}
+
+function mountPairedTranslations(chunk, translations, settings, ticket) {
+  pairGlossBySource(chunk, translations).forEach(({ source, text }) => {
+    source.classList.remove("oi-pending");
+    if (!text) return;
+    if (running && ticket === epoch) {
+      mountTranslation(source, text, settings, inSideRail(source) ? { mode: "block" } : {});
+    }
+  });
 }
 
 /** Keep in sync with lib/translate-limit.js */
@@ -509,15 +576,14 @@ function shouldInline(el) {
 function mountTranslation(el, text, settings, opts = {}) {
   if (!text) return;
   const bilingual = globalThis.OIBilingual;
+  const railId = ensureRailId(el);
   const mountEl = opts.mode === "block" || inSideRail(el) ? pickSideRailMountHost(el) : el;
-  const existing = bilingual?.dedupeTranslations?.(el)
-    || bilingual?.dedupeTranslations?.(mountEl)
-    || (el.nextElementSibling?.classList?.contains("oi-translation")
-      ? el.nextElementSibling
-      : el.querySelector(":scope > .oi-translation"))
-    || mountEl.querySelector?.(":scope > .oi-translation");
+  const existing = glossForSource(el)
+    || bilingual?.dedupeTranslations?.(el)
+    || bilingual?.dedupeTranslations?.(mountEl);
   if (existing) {
     existing.textContent = text;
+    if (railId) existing.setAttribute("data-oi-for", railId);
     existing.classList.remove("oi-inline");
     if (opts.mode === "block" || inSideRail(el)) {
       existing.classList.add("oi-translation");
@@ -536,6 +602,7 @@ function mountTranslation(el, text, settings, opts = {}) {
       ? "oi-translation oi-after-heading"
       : "oi-translation";
   if (forceBlock) node.classList.add("oi-side-rail");
+  if (railId) node.setAttribute("data-oi-for", railId);
   node.lang = settings.targetLang || "zh-CN";
   node.textContent = text;
   node.title = "double click to save";

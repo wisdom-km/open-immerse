@@ -431,6 +431,46 @@ test("dedupe keeps one .oi-translation per host", () => {
   assert.deepEqual(removed, ["second"]);
 });
 
+test("keyed side-rail gloss is not stolen by the previous row", () => {
+  const OI = loadBilingual();
+  const withKey = (el, name, value) => {
+    el.attrs = el.attrs || {};
+    el.setAttribute = (n, v) => {
+      el.attrs[n] = String(v);
+    };
+    el.getAttribute = (n) => el.attrs[n] || null;
+    el.setAttribute(name, value);
+    return el;
+  };
+  const gettingStarted = withKey(
+    fakeBox({ tagName: "LI", className: "", top: 0, bottom: 24, width: 180 }),
+    "data-oi-rail-id",
+    "oi-rail-1"
+  );
+  const design = withKey(
+    fakeBox({ tagName: "LI", className: "", top: 40, bottom: 64, width: 180 }),
+    "data-oi-rail-id",
+    "oi-rail-2"
+  );
+  const t2 = withKey(
+    fakeBox({ className: "oi-translation oi-side-rail", top: 26, bottom: 48, width: 180 }),
+    "data-oi-for",
+    "oi-rail-2"
+  );
+  t2.textContent = "设计原则";
+  gettingStarted.nextElementSibling = t2;
+  OI.bindHost(t2, design);
+  assert.equal(OI.translationBelongsTo(t2, gettingStarted), false);
+  assert.equal(OI.collectHostTranslations(gettingStarted).length, 0);
+  assert.equal(OI.dedupeTranslations(gettingStarted), null);
+  assert.equal(OI.hostForTranslation(t2), design);
+  assert.equal(OI.bindHost(t2, gettingStarted), design);
+  const extra = OI.clearNextRowOverlap(t2, design);
+  assert.equal(t2.parentElement, null);
+  assert.equal(OI.hostForTranslation(t2), design);
+  assert.equal(typeof extra, "number");
+});
+
 test("page-scan skips nested block hosts so parent li does not duplicate children", () => {
   const child = { tagName: "P" };
   const parent = {
