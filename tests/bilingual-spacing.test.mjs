@@ -34,7 +34,11 @@ test("body translations match Loom section 3 margin", () => {
   );
   assert.match(
     bodyBlock,
-    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*display:\s*inline-block/s
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*display:\s*flow-root/s
+  );
+  assert.match(
+    bodyBlock,
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\) \+ :is\(p, blockquote, figure\)\s*\{[^}]*margin-top:\s*0/s
   );
   assert.equal(/margin:\s*0\.08em/.test(bodyBlock), false);
   assert.equal(/margin:\s*-0\.65em\s+0\s+0\.1em/.test(bodyBlock), false);

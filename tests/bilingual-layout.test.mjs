@@ -773,7 +773,7 @@ test("width clamp uses the source content box and skips inline nodes", () => {
   assert.equal(block.style.boxSizing, "border-box");
   assert.equal(block.style.maxWidth, "360px");
   assert.equal(block.style.width, "360px");
-  assert.equal(block.style.display, "inline-block");
+  assert.equal(block.style.display, "flow-root");
   assert.equal(block.style.flexBasis, "100%");
   assert.notEqual(block.style.flexBasis, "360px");
 
@@ -1242,7 +1242,7 @@ test("breakFlexRow stacks a translation appended inside a row-flex sidebar host"
   const result = OI.breakFlexRow(source, translation);
   assert.equal(result, source);
   assert.equal(source.style.flexWrap, "wrap");
-  assert.equal(translation.style.display, "inline-block");
+  assert.equal(translation.style.display, "flow-root");
   assert.equal(translation.style.flexBasis, "100%");
   assert.equal(translation.classList.contains("oi-inline"), false);
 });

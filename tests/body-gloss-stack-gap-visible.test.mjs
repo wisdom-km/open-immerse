@@ -81,8 +81,12 @@ test("BODY-GLOSS-STACK-GAP-VISIBLE range 0–2.5 keeps 2 legal", () => {
 test("BODY-GLOSS-STACK-GAP-VISIBLE CSS is body-only calc(var * 1em) + isolation", () => {
   assert.match(css, /BODY-GLOSS-STACK-GAP-VISIBLE/);
   assert.match(bodyOnly, /margin-bottom:\s*calc\(var\(--oi-body-gloss-stack-gap,\s*0\.25\) \* 1em\)/);
-  assert.match(bodyOnly, /display:\s*inline-block/);
-  assert.match(bodyOnly, /vertical-align:\s*top/);
+  assert.match(bodyOnly, /display:\s*flow-root/);
+  assert.doesNotMatch(bodyOnly, /inline-block/);
+  assert.match(
+    css,
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\) \+ :is\(p, blockquote, figure\)\s*\{[^}]*margin-top:\s*0/s
+  );
   assert.equal(/--oi-body-gloss-stack-gap/.test(heading), false);
   assert.equal(/--oi-body-gloss-stack-gap/.test(rail), false);
   assert.match(heading, /margin:\s*0\.05em\s+0\s+0\.22em/);
@@ -103,7 +107,7 @@ test("BODY-GLOSS-STACK-GAP-VISIBLE Anvil note + 0.25/1/2 ratios", () => {
   // Do not max() with the next source margin-top, and do not include the
   // intervening English paragraph height. Screenshots: /workspace/oi-qa/gloss-stack-gap/{0.25,1,2}.png
   assert.match(layoutSrc, /BODY-GLOSS-STACK-GAP-VISIBLE/);
-  assert.match(layoutSrc, /Anvil: g = isolated body gloss margin-bottom px/);
+  assert.match(layoutSrc, /Anvil: g = 译1底 → 下一段源顶 \(empty band\) = isolated margin-bottom px/);
   assert.match(layoutSrc, /g\(1\)\/g\(0\.25\) ∈ \[3,5\], g\(2\)\/g\(1\) ∈ \[1\.5,2\.5\]/);
 
   const OI = loadBilingual();
@@ -118,6 +122,10 @@ test("BODY-GLOSS-STACK-GAP-VISIBLE Anvil note + 0.25/1/2 ratios", () => {
   const r2 = g2 / g1;
   assert.ok(r1 >= 3 && r1 <= 5, `g(1)/g(0.25)=${r1}`);
   assert.ok(r2 >= 1.5 && r2 <= 2.5, `g(2)/g(1)=${r2}`);
+  // Next source top is zeroed, so 译1底→源2顶 equals the isolated stack gap.
+  assert.equal(OI.opticalGlossToNextSourcePx(100, 100 + g025), g025);
+  assert.equal(OI.opticalGlossToNextSourcePx(100, 100 + g1), g1);
+  assert.equal(OI.opticalGlossToNextSourcePx(100, 100 + g2), g2);
 
   const hostTop = 1.5;
   assert.equal(OI.collapsedBodyGlossStackGapEm(0.25, hostTop), hostTop);
@@ -135,7 +143,7 @@ test("BODY-GLOSS-STACK-GAP-VISIBLE isolation is body-only", () => {
   const railEl = { classList: { contains: (n) => n === "oi-translation" || n === "oi-side-rail" } };
   const inline = { classList: { contains: (n) => n === "oi-translation" || n === "oi-inline" } };
   assert.equal(OI.isBodyTranslation(body), true);
-  assert.equal(OI.bodyStackGapDisplay(body), "inline-block");
+  assert.equal(OI.bodyStackGapDisplay(body), "flow-root");
   assert.equal(OI.bodyStackGapDisplay(headingEl), "block");
   assert.equal(OI.bodyStackGapDisplay(railEl), "block");
   assert.equal(OI.bodyStackGapDisplay(inline), "block");

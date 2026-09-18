@@ -82,7 +82,11 @@ test("BODY-GLOSS-GAP-CONTROL CSS applies only to main-column paragraphs", () => 
   assert.match(bodyOnly, /--oi-body-gloss-stack-gap/);
   assert.match(bodyOnly, /margin-top:\s*calc\(-0\.65em \+ \(var\(--oi-body-gloss-gap,\s*0\.35em\) - 0\.35em\)\)/);
   assert.match(bodyOnly, /margin-bottom:\s*calc\(var\(--oi-body-gloss-stack-gap,\s*0\.25\) \* 1em\)/);
-  assert.match(bodyOnly, /display:\s*inline-block/);
+  assert.match(bodyOnly, /display:\s*flow-root/);
+  assert.match(
+    css,
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\) \+ :is\(p, blockquote, figure\)\s*\{[^}]*margin-top:\s*0/s
+  );
   const heading = css.slice(
     css.indexOf(".oi-translation.oi-after-heading {"),
     css.indexOf(".oi-translation.oi-inline")

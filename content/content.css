@@ -61,15 +61,18 @@
 }
 /* BODY-GLOSS-GAP-CONTROL / OPTIONS-BODY-GLOSS-GAP-INPUTS：仅段落块译。 */
 /* BODY-GLOSS-STACK-GAP-VISIBLE：译↔译 margin-bottom = calc(var * 1em)。
-   inline-block 隔离，避免与下一段源 margin 折叠成 0。标题不读。 */
+   flow-root 隔离（避免 inline-block 空白行盒）；下一段源顶距清零，
+   光学空隙 = 档位本身，不被 1.5em 宿主段距盖住。标题不读。 */
 .oi-translation:not(.oi-inline):not(.oi-after-heading):not(.oi-side-rail) {
-  display: inline-block;
-  vertical-align: top;
+  display: flow-root;
   width: 100%;
   max-width: 100%;
   margin-top: calc(-0.65em + (var(--oi-body-gloss-gap, 0.35em) - 0.35em));
   margin-bottom: calc(var(--oi-body-gloss-stack-gap, 0.25) * 1em);
   padding-top: max(0.05em, calc(var(--oi-body-gloss-gap, 0.35em) * 0.4));
+}
+.oi-translation:not(.oi-inline):not(.oi-after-heading):not(.oi-side-rail) + :is(p, blockquote, figure) {
+  margin-top: 0;
 }
 .oi-translation.oi-after-heading {
   /* 0.7rem 只是旧初值，不锁死；默认再收，mount 后按 §7 0.12–0.28em 光学带夹紧，保留降部空隙 */
