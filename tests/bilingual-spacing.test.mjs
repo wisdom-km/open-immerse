@@ -22,6 +22,11 @@ test("body translations match Loom section 3 margin", () => {
     bodyBlock,
     /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*margin-top:\s*calc\(-0\.65em \+ \(var\(--oi-body-gloss-gap,\s*0\.35em\) - 0\.35em\)\)/s
   );
+  assert.match(
+    bodyBlock,
+    /\.oi-translation:not\(\.oi-inline\):not\(\.oi-after-heading\):not\(\.oi-side-rail\)\s*\{[^}]*padding-top:\s*max\(0\.05em,\s*calc\(var\(--oi-body-gloss-gap,\s*0\.35em\) \* 0\.4\)\)/s
+  );
+  assert.match(bodyBlock, /BODY-GLOSS-GAP-CONTROL/);
   assert.equal(/margin:\s*0\.08em/.test(bodyBlock), false);
   assert.equal(/margin:\s*-0\.65em\s+0\s+0\.1em/.test(bodyBlock), false);
 });

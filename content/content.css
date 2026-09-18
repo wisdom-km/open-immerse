@@ -59,9 +59,10 @@
   max-width: 100%;
   box-sizing: border-box;
 }
-/* 仅正文块译：滑块改 --oi-body-gloss-gap。默认 0.35em 对齐今日 −0.65em 拉近。标题/侧栏不走这里。 */
+/* BODY-GLOSS-GAP-CONTROL：仅段落块译。变量由 html 写入，勿在本选择器上再锁死 0.35em。 */
 .oi-translation:not(.oi-inline):not(.oi-after-heading):not(.oi-side-rail) {
   margin-top: calc(-0.65em + (var(--oi-body-gloss-gap, 0.35em) - 0.35em));
+  padding-top: max(0.05em, calc(var(--oi-body-gloss-gap, 0.35em) * 0.4));
 }
 .oi-translation.oi-after-heading {
   /* 0.7rem 只是旧初值，不锁死；默认再收，mount 后按 §7 0.12–0.28em 光学带夹紧，保留降部空隙 */

@@ -86,12 +86,12 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   assert.doesNotMatch(html, /id="translateQuality"/);
   assert.match(html, /每批条数（分批，不是总数）/);
   assert.match(html, /id="bodyGlossGap"/);
-  assert.match(html, /正文译文间距 Body translation gap/);
+  assert.match(html, /正文译文间距/);
   assert.match(html, /id="bodyGlossGapValue"/);
   assert.match(html, /min="0.10"/);
   assert.match(html, /max="0.70"/);
   assert.match(html, /step="0.05"/);
-  assert.match(html, /不影响标题/);
+  assert.match(html, /只调整段落原文与译文的上下空隙，不影响标题译文/);
   assert.match(html, /本次翻译/);
   assert.match(html, /value="title_lead">仅标题\+开头/);
   for (const id of ["webpage", "learning", "documents", "fab"]) {
