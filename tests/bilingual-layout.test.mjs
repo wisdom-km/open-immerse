@@ -288,20 +288,20 @@ test("optical gap helpers follow BODY-BILINGUAL-GAP source-em bands", () => {
   assert.equal(OI.HEADING_MARGIN_TOP_EM, 0.15);
   assert.equal(OI.HEADING_PAD_TOP_EM, 0.35);
   assert.equal(OI.HEADING_PAD_MIN_EM, 0.2);
-  assert.equal(OI.HEADING_TARGET_MIN_EM, 0.35);
-  assert.equal(OI.HEADING_TARGET_MAX_EM, 0.55);
-  assert.equal(OI.HEADING_HARD_MAX_EM, 0.7);
+  assert.equal(OI.HEADING_TARGET_MIN_EM, 0.25);
+  assert.equal(OI.HEADING_TARGET_MAX_EM, 0.45);
+  assert.equal(OI.HEADING_HARD_MAX_EM, 0.55);
   assert.equal(OI.HEADING_HARD_MAX_PX, 14);
   assert.equal(OI.BODY_MARGIN_TOP_EM, -0.65);
   assert.equal(OI.GAP_CLAMP_STEP_PX, 2);
-  assert.equal(OI.headingGapLimitPx(16), 11.2);
+  assert.equal(OI.headingGapLimitPx(16), 8.8);
   assert.equal(OI.headingGapLimitPx(32), 14);
-  assert.equal(OI.headingTightenPx(16), 8.8);
+  assert.equal(OI.headingTightenPx(16), 7.2);
   assert.equal(OI.headingTightenPx(32), 14);
-  assert.equal(OI.headingTargetPx(16), 7.2);
-  assert.equal(OI.headingTargetPx(32), 14);
+  assert.equal(OI.headingTargetPx(16), 5.6);
+  assert.equal(OI.headingTargetPx(32), 11.2);
   assert.equal(OI.headingMinGapPx(32), 6.4);
-  assert.equal(OI.opticalGapEm(22.4, 32), 0.7);
+  assert.equal(OI.opticalGapEm(17.6, 32), 0.55);
   assert.equal(OI.needsGapClamp(20, 14), true);
   assert.equal(OI.needsGapClamp(8, 14), false);
   assert.equal(OI.nextGapPull(0, 2, 12), 2);
@@ -317,7 +317,7 @@ test("optical gap helpers follow BODY-BILINGUAL-GAP source-em bands", () => {
   assert.equal(OI.shouldClampOpticalGap(rail, headingSource), false);
 });
 
-test("heading gap clamp pulls oversized OpenAI-like space into the 0.35–0.55em band", () => {
+test("heading gap clamp pulls oversized OpenAI-like space into the 0.25–0.45em band", () => {
   const OI = loadBilingual();
   const source = fakeBox({
     className: "headline-3",
@@ -344,7 +344,7 @@ test("heading gap clamp pulls oversized OpenAI-like space into the 0.35–0.55em
   assert.ok(Math.abs(gap - OI.headingTargetPx(16)) <= OI.GAP_CLAMP_STEP_PX);
 });
 
-test("large H1 Persistence-like gap must tighten to ≤ 0.7em of source", () => {
+test("large H1 Persistence-like gap must tighten to ≤ 0.55em of source", () => {
   const OI = loadBilingual();
   const sourceFs = 32;
   const source = fakeBox({

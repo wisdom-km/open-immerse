@@ -60,7 +60,7 @@
   box-sizing: border-box;
 }
 .oi-translation.oi-after-heading {
-  /* 0.7rem 只是旧初值，不锁死；em 跟字号，mount 后按 0.35–0.55em 光学带再收 */
+  /* 0.7rem 只是旧初值，不锁死；em 跟字号，mount 后按 §7 0.25–0.45em 光学带再收 */
   margin: 0.15em 0 0.35em;
   padding-top: 0.35em;
   line-height: 1.45;

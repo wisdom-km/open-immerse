@@ -23,7 +23,7 @@ test("body translations match Loom section 3 margin", () => {
 
 test("heading translations start from a small em margin, not a locked 0.7rem", () => {
   assert.match(headingBlock, /0\.7rem 只是旧初值，不锁死/);
-  assert.match(headingBlock, /0\.35–0\.55em/);
+  assert.match(headingBlock, /0\.25–0\.45em/);
   assert.match(headingBlock, /margin:\s*0\.15em\s+0\s+0\.35em/);
   assert.match(headingBlock, /padding-top:\s*0\.35em/);
   assert.equal(/margin:\s*0\.7rem/.test(headingBlock), false);
@@ -59,12 +59,12 @@ test("card and box styles keep existing padding and frame", () => {
   assert.equal(/:not\(\.oi-after-heading\)/.test(css), false);
 });
 
-test("layoutTranslation measures heading gaps in source em and clamps > 0.7em", () => {
+test("layoutTranslation measures heading gaps in source em and clamps > 0.55em", () => {
   assert.match(layout, /HEADING_MARGIN_TOP_EM:\s*0\.15/);
   assert.match(layout, /HEADING_PAD_TOP_EM:\s*0\.35/);
-  assert.match(layout, /HEADING_TARGET_MIN_EM:\s*0\.35/);
-  assert.match(layout, /HEADING_TARGET_MAX_EM:\s*0\.55/);
-  assert.match(layout, /HEADING_HARD_MAX_EM:\s*0\.7/);
+  assert.match(layout, /HEADING_TARGET_MIN_EM:\s*0\.25/);
+  assert.match(layout, /HEADING_TARGET_MAX_EM:\s*0\.45/);
+  assert.match(layout, /HEADING_HARD_MAX_EM:\s*0\.55/);
   assert.match(layout, /HEADING_HARD_MAX_PX:\s*14/);
   assert.match(layout, /clampOversizedGap/);
   assert.match(layout, /applyGapPull/);
