@@ -348,9 +348,10 @@ test("vendored KaTeX renders recovered LaTeX and is wired into the viewer", () =
   assert.match(html, /vendor\/katex\/katex\.min\.css/);
   assert.match(html, /vendor\/katex\/katex\.min\.js/);
   assert.match(src, /renderFormulaNode/);
-  assert.match(src, /readingOrderMirrorItems/);
+  assert.match(src, /extractReadoutBlocks/);
+  assert.match(src, /readoutFlowForPage/);
   assert.match(src, /dataset\.latex/);
-  assert.match(src, /kind: \"math\"/);
+  assert.match(src, /dataset\.kind/);
 });
 
 test("uncovered interior regions and image CTMs become figure boxes", () => {
@@ -413,21 +414,18 @@ test("translatePageBlocks keeps bbox fields for the mirror layer", async () => {
   assert.equal(out.results[0].role, "title");
 });
 
-test("viewer wires per-page mirror stacks without touching toolbar / zoom / split", () => {
-  assert.match(src, /buildMirrorLayout/);
-  assert.match(src, /appendMirrorPage/);
+test("viewer defaults to Markdown readout and does not wire bbox mirror pages", () => {
+  assert.match(src, /extractReadoutBlocks/);
+  assert.match(src, /readoutFlowForPage/);
   assert.match(src, /applyViewMode/);
-  assert.match(src, /onViewSegClick/);
-  assert.match(src, /shouldRenderFormulaCrop/);
-  assert.match(src, /cropCanvasToDataUrl/);
-  assert.match(src, /walkImageCtms/);
-  assert.match(src, /highlightSourcePage/);
+  assert.doesNotMatch(src, /buildMirrorLayout/);
+  assert.doesNotMatch(src, /appendMirrorPage/);
+  assert.doesNotMatch(src, /cropCanvasToDataUrl/);
+  assert.doesNotMatch(src, /walkImageCtms/);
   assert.match(src, /onTranslateScroll/);
-  assert.match(src, /formulaRenderPlan/);
   assert.match(src, /renderFormulaNode/);
-  assert.match(src, /mirror-item/);
-  assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"/);
-  assert.match(html, /id="readout"[^>]*class="readout"/);
+  assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"[^>]*hidden/);
+  assert.match(html, /id="readout"[^>]*class="readout md-readout"/);
   assert.equal(html.includes('class="readout mirror-pages"'), false);
   const workspaceHtml = html.slice(html.indexOf('class="pane-translate"'), html.indexOf("split-handle"));
   assert.ok(workspaceHtml.indexOf('id="viewSeg"') < workspaceHtml.indexOf('id="mirrorPages"'));
@@ -436,7 +434,6 @@ test("viewer wires per-page mirror stacks without touching toolbar / zoom / spli
   assert.equal(toolbar.includes("通读"), false);
   assert.equal(toolbar.includes("版式"), false);
   assert.equal(toolbar.includes("版式镜像"), false);
-  assert.match(src, /图（见左侧）|figureFallback/);
   assert.match(html, /id="translatePage"/);
   assert.match(html, /id="stopTranslate"/);
   assert.match(html, /id="exportMd"/);

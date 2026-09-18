@@ -248,6 +248,33 @@ h1 {
   color: var(--oi-text);
   zoom: var(--oi-mirror-zoom, 1);
 }
+.pane-translate .readout.md-readout > * {
+  position: static;
+  left: auto;
+  top: auto;
+  width: auto;
+  height: auto;
+}
+.pane-translate .readout .oi-pdf-p[data-role="authors"] {
+  font: 400 14px/1.55 var(--oi-font);
+  color: var(--oi-text-muted);
+  margin: 0 0 18px;
+}
+.pane-translate .readout .oi-pdf-p[data-role="caption"],
+.pane-translate .readout .oi-pdf-p[data-role="figure"] {
+  font: 400 13px/1.55 var(--oi-font);
+  color: var(--oi-text-muted);
+  font-style: italic;
+}
+.pane-translate .readout .oi-pdf-p[data-role="figure"] {
+  text-align: center;
+  padding: 12px 0;
+}
+.pane-translate .readout .oi-pdf-p[data-role="formula"] {
+  text-align: center;
+  margin: 16px 0;
+  overflow: visible;
+}
 .pane-translate .readout.is-mirror {
   max-width: none;
   width: 100%;

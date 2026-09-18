@@ -44,15 +44,15 @@
     <aside class="pane-translate" aria-label="译文">
       <div id="translateScroll" class="pane-translate-scroll">
         <div id="viewSeg" class="view-seg" hidden role="group" aria-label="译文视图">
-          <button type="button" class="view-seg-btn is-on" data-view="mirror">版式</button>
-          <button type="button" class="view-seg-btn" data-view="readout">通读</button>
+          <button type="button" class="view-seg-btn" data-view="mirror">版式</button>
+          <button type="button" class="view-seg-btn is-on" data-view="readout">通读</button>
         </div>
-        <p id="mirrorHint" class="mirror-hint" hidden>按原页位置排列译文。公式写入 LaTeX 并用 KaTeX 渲染；图为原页裁剪。导出 MD 含可粘贴 $...$ / $$...$$。</p>
+        <p id="mirrorHint" class="mirror-hint" hidden>按阅读顺序提取标题与正文，译成 Markdown 通读。公式尽量用 LaTeX；图可略。</p>
         <div id="mirrorPages" class="mirror-pages" hidden></div>
-        <div id="readout" class="readout"></div>
+        <article id="readout" class="readout md-readout"></article>
         <p id="emptyRead" class="empty-read">点击翻译</p>
         <p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…</p>
-        <p id="noTextLayerHint" class="m2-stub" hidden>本页没有文字层，无法镜像版式。扫描件翻译将在后续版本支持。</p>
+        <p id="noTextLayerHint" class="m2-stub" hidden>本页没有文字层，无法提取阅读文本。扫描件翻译将在后续版本支持。</p>
       </div>
       <div id="mirrorZoomChip" class="zoom-gutter" role="group" aria-label="译文缩放">
         <button type="button" id="mirrorZoomOut" class="zoom-gutter-btn" disabled>缩小</button>
