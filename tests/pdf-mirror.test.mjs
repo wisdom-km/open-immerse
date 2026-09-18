@@ -33,6 +33,9 @@ import {
   isMarginMirrorBox,
   isMirrorTextRole,
   looksLikeArxivMeta,
+  looksLikeFigureTickLabel,
+  partitionFigureTickBoxes,
+  coverFigureTickBands,
   itemTransformMeta,
   looksLikeSectionHeading,
   relayoutMirrorPageBoxes,
@@ -55,6 +58,10 @@ const src = readFileSync(join(root, "pdf/viewer.js"), "utf8");
 
 function pdfItem(str, x, y, width = 120, height = 10, extra = {}) {
   return { str, transform: [1, 0, 0, 1, x, y], width, height, ...extra };
+}
+
+function rotatedTick(str, originX, originY, advance, em = 9.3) {
+  return { str, width: advance, height: em, transform: [0, em, -em, 0, originX, originY] };
 }
 
 test("coord helpers map PDF user space onto page percent CSS", () => {
@@ -406,6 +413,72 @@ test("uncovered interior regions and image CTMs become figure boxes", () => {
   assert.ok(withCap.visuals.some((vis) => vis.kind === "figure" && /Figure 1/.test(vis.caption || "")));
 });
 
+test("dense figure tick tokens stay in the crop, not translated narrow columns", () => {
+  const tokens = ["The", "Law", "will", "never", "be", "perfect", "application", "<EOS>", "<pad>", "just", "this", "what"];
+  const items = [
+    pdfItem("Input-Input Layer 5", 108, 680, 170, 16),
+    ...tokens.map((str, i) => rotatedTick(str, 130 + i * 14, 560, 8 + str.length * 3.2)),
+    ...tokens.map((str, i) => rotatedTick(str, 130 + i * 14, 420, 8 + str.length * 3.2)),
+    pdfItem("Figure 4: Two attention heads in layer 5.", 108, 280, 396, 10)
+  ];
+  const layout = buildMirrorLayout({ items }, { width: 612, height: 792 });
+  const tickHits = layout.boxes.filter((box) => /^(The|Law|application|<EOS>|<pad>)$/.test(box.text));
+  assert.equal(tickHits.length, 0);
+  assert.equal(layout.translatable.some((box) => /<EOS>|application/.test(box.text)), false);
+  const title = layout.boxes.find((box) => /Input-Input Layer 5/.test(box.text));
+  const caption = layout.boxes.find((box) => /Figure 4/.test(box.text));
+  assert.ok(title);
+  assert.ok(caption);
+  const figures = layout.visuals.filter((vis) => vis.kind === "figure");
+  assert.ok(figures.length >= 1);
+  const cover = figures.some((vis) => vis.rect.top < 250 && vis.rect.top + vis.rect.height > 220 && vis.rect.width > 120);
+  assert.equal(cover, true);
+  const arxivLayout = buildMirrorLayout(
+    {
+      items: [
+        pdfItem("Attention Is All You Need", 211, 630, 188, 17),
+        {
+          str: "arXiv:1706.03762v7 [cs.CL] 2 Aug 2023",
+          width: 341.08,
+          height: 20,
+          transform: [0, 20, -20, 0, 32, 237]
+        },
+        pdfItem("Abstract", 284, 409, 44, 12, { fontName: "Helvetica-Bold" })
+      ]
+    },
+    { width: 612, height: 792 }
+  );
+  const margin = arxivLayout.boxes.find((box) => /arXiv:1706/.test(box.text));
+  assert.ok(margin);
+  assert.equal(margin.role, "margin");
+  assert.equal(looksLikeFigureTickLabel(margin, 612, 792), false);
+  const lonely = partitionFigureTickBoxes(
+    [{ text: "Loss", dir: "vertical", vertical: true, role: "margin", rect: { left: 90, top: 200, width: 9, height: 28 } }],
+    612,
+    792
+  );
+  assert.equal(lonely.ticks.length, 0);
+  assert.equal(lonely.boxes.length, 1);
+  const fakeTicks = tokens.map((text, i) => ({
+    text,
+    dir: "vertical",
+    vertical: true,
+    role: "margin",
+    rect: { left: 120 + i * 14, top: 200, width: 9.3, height: 20 }
+  }));
+  const split = partitionFigureTickBoxes(fakeTicks, 612, 792);
+  assert.equal(split.ticks.length, tokens.length);
+  assert.equal(split.boxes.length, 0);
+  const covered = coverFigureTickBands(
+    [{ kind: "figure", rect: { left: 120, top: 230, width: 380, height: 90 } }],
+    fakeTicks,
+    612,
+    792
+  );
+  assert.ok(covered[0].rect.top <= 204);
+  assert.ok(covered[0].rect.top + covered[0].rect.height >= 220);
+});
+
 test("rotated pdf.js runs become tall margin strips, not wide horizontal bleed", () => {
   const meta = itemTransformMeta({
     str: "arXiv:1706.03762v7 [cs.CL] 2 Aug 2023",
@@ -615,11 +688,21 @@ test("Attention fixture mirrors all pages without overlap or column bleed", asyn
     assert.equal(samplePages.length, 3);
     assert.ok(samplePages.every((entry) => entry.layout.boxes.length > 0));
     assert.ok(pageSummaries.some((entry) => entry.layout.boxes.some((box) => box.role === "formula" || box.kind === "math")));
+    for (const n of [13, 14, 15]) {
+      const late = pageSummaries[n - 1].layout;
+      const tickOverlay = late.boxes.filter((box) => looksLikeFigureTickLabel(box, late.pageWidth, late.pageHeight));
+      assert.equal(tickOverlay.length, 0, `page ${n} still overlays figure ticks`);
+      assert.equal(late.translatable.some((box) => /<EOS>|<pad>|application/.test(box.text)), false);
+      assert.ok(late.visuals.some((vis) => vis.kind === "figure" && vis.rect.width > 200 && vis.rect.height > 80));
+      const zhCrush = late.boxes.filter((box) => box.dir === "vertical" && box.rect.width < 24 && box.rect.height < 80);
+      assert.equal(zhCrush.length, 0, `page ${n} kept narrow vertical tick columns`);
+    }
     const fidelity = readFileSync(join(root, "pdf/PDF-MIRROR-LAYOUT-FIDELITY.md"), "utf8");
     assert.match(fidelity, /叠字叠层/);
     assert.match(fidelity, /串栏/);
     assert.match(fidelity, /整篇 PDF/);
     assert.match(fidelity, /looksLikeArxivMeta/);
+    assert.match(fidelity, /looksLikeFigureTickLabel/);
     assert.match(fidelity, /attention-right-garbled/);
     assert.equal(existsSync(join(root, "oi-qa/pdf-b-fail/attention-right-garbled.png")), true);
     assert.equal(existsSync(join(root, "oi-qa/fixtures/pdf/Attention_Is_All_You_Need.pdf")), true);

@@ -23,6 +23,7 @@ CJK 长高后，对同一 `.mirror-page` 跑 `relayoutMirrorPageBoxes`：同 X �
 - Title translation (e.g. 「注意力即一切所需」) top+bottom fully visible — no flat-head / flat-foot crop
 - Author name / affiliation / email cells readable and not stacked
 - Abstract not covered by the arXiv / margin strip
+- Attention-figure token rows stay readable (crop original ticks; do not force CJK into ~1em source columns)
 - Dark theme: white paper + `--oi-mirror-ink: #1a1a1a` still no crop
 - Image / formula crops still clip in box
 - No regression: KaTeX, right zoom chip, page scroll sync, reading-order export

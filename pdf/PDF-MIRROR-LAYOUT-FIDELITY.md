@@ -32,6 +32,7 @@
 | 作者格 | 多列网格：**每格** 姓名/机构/邮箱分行可读；格间墨迹 **不相交**；禁止整表叠成一团 |
 | 摘要/正文 | 落在主栏 content box；**不得**与左页边栏 meta（arXiv 竖排等）墨迹相交 |
 | 边栏 meta | 识别为 margin（`looksLikeArxivMeta` 等）→ 留在页边条，或 SKIP 不译进主栏；**禁止**横插摘要首行 |
+| 图内刻度 | 密排旋转 token（注意力头坐标，`looksLikeFigureTickLabel`）**不**译进源字窄框；留给图裁切，避免 CJK/EN 压字 |
 | 双栏正文 | 阅读序左列→右列；块仍贴自身 bbox，禁止拉成单栏乱序 |
 | 增高 | 中文换行可向下扩；扩后必须碰撞下推（CJK-CLIP §3.2），禁止 visible 溢出盖下一层 |
 
@@ -51,6 +52,7 @@
 ### 3.2 全文（非仅 p.1）
 
 - [ ] 抽检 ≥3 个内文页（含公式页、双栏或图页若有）：无大面积叠字/串栏
+- [ ] 末页注意力图 token 行（约 p.14–15）：刻度可读、互不重叠；禁止把译文塞进 ~1em 竖条
 - [ ] 滚到末页再回首页：布局不崩、不重复叠层
 - [ ] 左↔右页级滚动同步仍可用
 
@@ -65,7 +67,7 @@
 
 ## 4. 工程提示
 
-1. 边栏 meta 与主栏分轨：`reserveMarginMeta` / 阅读序在译前就固定 role。
+1. 边栏 meta 与主栏分轨：`reserveMarginMeta` / 阅读序在译前就固定 role。密排图刻度走 `partitionFigureTickBoxes`，不要当 vertical-rl 页边。
 2. 作者列优先 **列内流式合并** 再绝对定位，避免多绝对矮盒共 top。
 3. 每页 `relayoutMirrorPageBoxes` 后断言：同页文本 ink 两两不相交；meta∩abstract = ∅。
 4. QA：新截右栏首页对比 `pdf-b-fail/attention-right-garbled.png`；全文再存 `oi-qa/pdf-mirror-fidelity/`。
