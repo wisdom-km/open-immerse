@@ -601,11 +601,29 @@ function isMostlyVisible(el) {
   return !(style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0);
 }
 
+function readArticleBodyFontSize() {
+  const scope = document.querySelector(MAIN_SELECTOR) || document.body;
+  if (!scope) return 16;
+  const paras = scope.querySelectorAll("p");
+  for (const el of paras) {
+    if (el.closest(`${CHROME_SELECTOR}, .oi-translation`)) continue;
+    const text = String(el.textContent || "").replace(/\s+/g, " ").trim();
+    if (text.length < 40) continue;
+    const fs = parseFloat(getComputedStyle(el).fontSize);
+    if (Number.isFinite(fs) && fs > 0) return fs;
+  }
+  const fs = parseFloat(getComputedStyle(scope).fontSize);
+  return Number.isFinite(fs) && fs > 0 ? fs : 16;
+}
+
 function applyStyle(settings) {
   const root = document.documentElement;
   if (!settings) return;
   lastSettings = settings;
   root.style.setProperty("--oi-font-scale", settings.fontScale || 0.95);
+  const bodyFs = readArticleBodyFontSize();
+  root.style.setProperty("--oi-body-font-size", `${bodyFs}px`);
+  root.style.setProperty("--oi-body-gloss-size", `calc(${bodyFs}px * var(--oi-font-scale, 0.95))`);
   if (settings.color) root.style.setProperty("--oi-color", settings.color);
   else root.style.removeProperty("--oi-color");
   root.dataset.oiStyle = settings.translationStyle || "under";

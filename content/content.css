@@ -65,6 +65,11 @@
   padding-top: 0.35em;
   line-height: 1.45;
 }
+/* BODY-HEADING-GLOSS-SIZE / BILINGUAL-SPACING §8：脱离 H1–H3 级联，与段译同值。侧栏不动。 */
+.oi-translation.oi-after-heading:not(.oi-side-rail) {
+  font-size: var(--oi-body-gloss-size, calc(1rem * var(--oi-font-scale, 0.95)));
+  font-weight: 400;
+}
 .oi-translation.oi-inline {
   display: inline;
   margin: 0 0 0 0.4em;

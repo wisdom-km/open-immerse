@@ -30,6 +30,31 @@ test("heading translations start from a small em margin, not a locked 0.7rem", (
   assert.equal(/margin:\s*-0\.45em/.test(headingBlock), false);
 });
 
+test("BODY-HEADING-GLOSS-SIZE / §8 heading gloss uses rem token, not heading 1em", () => {
+  assert.match(bodyBlock, /font-size:\s*calc\(1em \* var\(--oi-font-scale,\s*0\.95\)\)/);
+  assert.match(bodyBlock, /font-weight:\s*400/);
+  const headingFont = css.match(/\.oi-translation\.oi-after-heading:not\(\.oi-side-rail\)\s*\{[^}]+\}/s)?.[0] || "";
+  assert.match(
+    headingFont,
+    /font-size:\s*var\(--oi-body-gloss-size,\s*calc\(1rem \* var\(--oi-font-scale,\s*0\.95\)\)\)/
+  );
+  assert.match(headingFont, /font-weight:\s*400/);
+  assert.equal(/font-size:[^;]*1em/.test(headingFont), false);
+  assert.match(headingBlock, /BODY-HEADING-GLOSS-SIZE/);
+  assert.match(headingBlock, /BILINGUAL-SPACING §8/);
+  assert.equal(/\.oi-translation\.oi-side-rail\s*\{[^}]*font-size:/s.test(css), false);
+  assert.match(js, /--oi-body-font-size/);
+  assert.match(js, /--oi-body-gloss-size/);
+  assert.match(js, /readArticleBodyFontSize/);
+  assert.match(layout, /HEADING_BODY_FONT_SLACK:\s*0\.05/);
+  assert.match(layout, /withinHeadingBodyFontBand/);
+  assert.match(layout, /--oi-body-gloss-size/);
+  assert.match(layout, /applyHeadingBodyFontSize/);
+  assert.match(layout, /resolveBodyTranslationFontSize/);
+  assert.match(layout, /shouldMatchBodyFont/);
+  assert.match(layout, /layoutTranslation[\s\S]*applyHeadingBodyFontSize/);
+});
+
 test("inline translations stay on the same line with a small left gap", () => {
   assert.match(inlineBlock, /display:\s*inline/);
   assert.match(inlineBlock, /margin:\s*0\s+0\s+0\s+0\.4em/);

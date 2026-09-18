@@ -213,13 +213,24 @@ function fakeBox({
       },
       set overflowWrap(value) {
         style.overflowWrap = value;
+      },
+      get fontSize() {
+        return style.fontSize;
+      },
+      set fontSize(value) {
+        style.fontSize = value;
       }
     },
     ownerDocument: {
       defaultView: {
         getComputedStyle(node) {
+          const computedFont = node?.style?.fontSize || `${node?.__fontSize ?? fontSize}px`;
           return {
-            fontSize: `${node?.__fontSize ?? fontSize}px`,
+            fontSize: computedFont,
+            getPropertyValue(name) {
+              if (name === "font-size") return computedFont;
+              return node?.style?.getPropertyValue?.(name) || "";
+            },
             display: node?.style?.display || node?.__display || display,
             flexDirection: node?.style?.flexDirection || node?.__flexDirection || "row",
             paddingLeft: `${node?.__paddingLeft ?? paddingLeft}px`,
@@ -285,6 +296,12 @@ test("overlap helper steps 2–4px until gap ≥ 2px and caps extra at ~1.2em", 
 
 test("optical gap helpers follow BODY-BILINGUAL-GAP source-em bands", () => {
   const OI = loadBilingual();
+  assert.equal(OI.HEADING_BODY_FONT_SLACK, 0.05);
+  assert.equal(OI.withinHeadingBodyFontBand(15.2, 15.2), true);
+  assert.equal(OI.withinHeadingBodyFontBand(15.2 * 1.05, 15.2), true);
+  assert.equal(OI.withinHeadingBodyFontBand(15.2 * 0.95, 15.2), true);
+  assert.equal(OI.withinHeadingBodyFontBand(15.2 * 1.06, 15.2), false);
+  assert.equal(OI.withinHeadingBodyFontBand(30.4, 15.2), false);
   assert.equal(OI.HEADING_MARGIN_TOP_EM, 0.15);
   assert.equal(OI.HEADING_PAD_TOP_EM, 0.35);
   assert.equal(OI.HEADING_PAD_MIN_EM, 0.2);
@@ -409,6 +426,171 @@ test("in-band body paragraphs keep the −0.65em BILINGUAL-SPACING pull", () => 
   const gap = OI.verticalGap(source.getBoundingClientRect(), body.getBoundingClientRect());
   assert.ok(Math.abs(gap - 6.4) < 0.05);
   assert.ok(OI.opticalGapEm(gap, 16) <= OI.BODY_TARGET_MAX_EM);
+});
+
+function linkFlow(nodes) {
+  for (let i = 0; i < nodes.length; i++) {
+    nodes[i].nextElementSibling = nodes[i + 1] || null;
+    nodes[i].previousElementSibling = nodes[i - 1] || null;
+  }
+  return nodes;
+}
+
+test("BILINGUAL-SPACING §8 / GAP §2.1 Persistence gloss matches body translation ±5%, not H2 1em", () => {
+  const OI = loadBilingual();
+  const sourceFs = 32;
+  const bodyFs = 16;
+  const bodyTransFs = 15.2;
+  const source = fakeBox({
+    className: "headline-1",
+    tagName: "H2",
+    top: 0,
+    bottom: 40,
+    width: 640,
+    fontSize: sourceFs
+  });
+  const heading = fakeBox({
+    className: "oi-translation oi-after-heading",
+    top: 48,
+    bottom: 88,
+    width: 640,
+    fontSize: 30.4
+  });
+  const para = fakeBox({
+    className: "body",
+    tagName: "P",
+    top: 100,
+    bottom: 160,
+    width: 640,
+    fontSize: bodyFs
+  });
+  const body = fakeBox({
+    className: "oi-translation",
+    top: 166,
+    bottom: 210,
+    width: 640,
+    fontSize: bodyTransFs
+  });
+  linkFlow([source, heading, para, body]);
+
+  assert.equal(OI.shouldMatchBodyFont(heading, source), true);
+  assert.equal(OI.isBodyTranslation(body), true);
+  assert.equal(OI.nearbyBodySample(heading, source), body);
+  assert.equal(OI.withinHeadingBodyFontBand(30.4, sourceFs * 0.95), true);
+  assert.equal(OI.withinHeadingBodyFontBand(30.4, bodyTransFs), false);
+
+  const applied = OI.applyHeadingBodyFontSize(heading, source);
+  assert.equal(OI.withinHeadingBodyFontBand(applied, bodyTransFs), true);
+  assert.equal(OI.withinHeadingBodyFontBand(applied, sourceFs), false);
+  assert.equal(OI.elementFontSize(source), sourceFs);
+  assert.equal(OI.elementFontSize(heading), applied);
+  assert.ok(applied < sourceFs * 0.7);
+  assert.match(heading.style.getPropertyValue("--oi-body-font-size"), /16/);
+  assert.match(heading.style.getPropertyValue("--oi-body-gloss-size"), /15\.2/);
+
+  const laid = OI.layoutTranslation(heading, source);
+  assert.equal(OI.withinHeadingBodyFontBand(laid.fontSize, bodyTransFs), true);
+  assert.ok(laid.fontSize < sourceFs * 0.7);
+});
+
+test("heading font-size can fall back to nearby paragraph × scale", () => {
+  const OI = loadBilingual();
+  const source = fakeBox({
+    className: "headline-3",
+    tagName: "H3",
+    top: 0,
+    bottom: 36,
+    width: 560,
+    fontSize: 28
+  });
+  const heading = fakeBox({
+    className: "oi-translation oi-after-heading",
+    top: 44,
+    bottom: 80,
+    width: 560,
+    fontSize: 26.6
+  });
+  const para = fakeBox({
+    className: "body",
+    tagName: "P",
+    top: 96,
+    bottom: 140,
+    width: 560,
+    fontSize: 18
+  });
+  linkFlow([source, heading, para]);
+  const applied = OI.applyHeadingBodyFontSize(heading, source);
+  const expected = OI.scaledBodyFontSize(18, 0.95);
+  assert.equal(applied, expected);
+  assert.equal(OI.withinHeadingBodyFontBand(applied, expected), true);
+  assert.equal(OI.withinHeadingBodyFontBand(applied, 28), false);
+  assert.ok(applied <= 18);
+  assert.equal(OI.elementFontSize(source), 28);
+});
+
+test("body-sized heading translation still clamps Persistence-like gap to 0.25–0.45em", () => {
+  const OI = loadBilingual();
+  const sourceFs = 32;
+  const source = fakeBox({
+    className: "headline-1",
+    tagName: "H2",
+    top: 0,
+    bottom: 80,
+    width: 720,
+    fontSize: sourceFs
+  });
+  const heading = fakeBox({
+    className: "oi-translation oi-after-heading",
+    top: 112,
+    bottom: 150,
+    width: 720,
+    fontSize: 30.4
+  });
+  const para = fakeBox({
+    className: "body",
+    tagName: "P",
+    top: 160,
+    bottom: 200,
+    width: 720,
+    fontSize: 16
+  });
+  const body = fakeBox({
+    className: "oi-translation",
+    top: 206,
+    bottom: 250,
+    width: 720,
+    fontSize: 15.2
+  });
+  linkFlow([source, heading, para, body]);
+  const before = OI.verticalGap(source.getBoundingClientRect(), heading.getBoundingClientRect());
+  assert.ok(OI.opticalGapEm(before, sourceFs) > OI.HEADING_HARD_MAX_EM);
+  const laid = OI.layoutTranslation(heading, source);
+  assert.equal(OI.withinHeadingBodyFontBand(laid.fontSize, 15.2), true);
+  assert.ok(laid.fontSize < sourceFs * 0.7);
+  assert.equal(OI.elementFontSize(source), sourceFs);
+  const gap = OI.verticalGap(source.getBoundingClientRect(), heading.getBoundingClientRect());
+  assert.ok(laid.pull > 0);
+  assert.ok(gap <= sourceFs * OI.HEADING_HARD_MAX_EM);
+  assert.ok(gap <= OI.HEADING_HARD_MAX_PX);
+  assert.ok(OI.opticalGapEm(gap, sourceFs) <= OI.HEADING_TARGET_MAX_EM + 0.02);
+  assert.ok(OI.opticalGapEm(gap, sourceFs) >= OI.HEADING_TARGET_MIN_EM - 0.02);
+});
+
+test("side-rail heading translations keep inherited size and skip body matching", () => {
+  const OI = loadBilingual();
+  const source = fakeBox({ className: "nav-label", tagName: "H3", top: 0, bottom: 24, width: 180, fontSize: 14 });
+  const rail = fakeBox({
+    className: "oi-translation oi-after-heading oi-side-rail",
+    top: 28,
+    bottom: 52,
+    width: 180,
+    fontSize: 13.3,
+    parent: source
+  });
+  assert.equal(OI.shouldMatchBodyFont(rail, source), false);
+  assert.equal(OI.applyHeadingBodyFontSize(rail, source), 0);
+  assert.equal(rail.style.fontSize, "13.3px");
+  assert.equal(OI.elementFontSize(rail), 13.3);
 });
 
 test("side-rail translations skip body optical gap clamp", () => {
