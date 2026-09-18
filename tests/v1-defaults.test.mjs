@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_FEATURES, resolveFeatures } from "../lib/features.js";
+import { DEFAULT_FEATURES, featureOn, laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import {
   BODY_GLOSS_GAP_DEFAULT,
   BODY_GLOSS_GAP_MAX,
@@ -80,6 +80,22 @@ test("v1 features stay on; youtube/x stay off", () => {
   assert.equal(DEFAULT_FEATURES.documents, true);
   assert.equal(DEFAULT_FEATURES.youtube, false);
   assert.equal(DEFAULT_FEATURES.x, false);
+});
+
+test("pdf lab feature is off by default; missing keys stay off", () => {
+  assert.equal(DEFAULT_FEATURES.pdf, false);
+  assert.equal(resolveFeatures({}).pdf, false);
+  assert.equal(resolveFeatures({ features: {} }).pdf, false);
+  assert.equal(resolveFeatures({ features: { webpage: true } }).pdf, false);
+  assert.equal(featureOn({}, "pdf"), false);
+  assert.equal(laterFeatures().some((feat) => feat.id === "pdf"), true);
+  assert.equal(v1Features().some((feat) => feat.id === "pdf"), false);
+  assert.match(laterFeatures().find((feat) => feat.id === "pdf").label, /实验室/);
+  const stored = { settingsVersion: 7, features: { webpage: true, learning: true } };
+  const merged = { ...DEFAULT_SETTINGS, ...stored, features: { ...DEFAULT_FEATURES, ...stored.features } };
+  assert.equal(merged.features.pdf, false);
+  const { settings } = migrateSettings(merged, stored);
+  assert.equal(settings.features.pdf, false);
 });
 
 test("subtitleEnabled does not flip youtube/x on", () => {

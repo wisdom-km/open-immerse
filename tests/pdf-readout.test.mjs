@@ -211,11 +211,20 @@ test("viewer default right pane is Markdown readout without bbox wiring", () => 
   assert.match(contrib, /右侧默认\*\*Markdown 通读\*\*|右侧默认 Markdown 通读|阅读顺序/);
   assert.match(readme, /Markdown 通读|阅读顺序/);
   assert.doesNotMatch(readme, /右栏默认按 bbox \*\*版式镜像\*\*/);
+  assert.match(readme, /实验室功能：默认关闭|PDF 阅读（实验室）/);
+  assert.match(readme, /设置 → 高级/);
+  assert.match(readme, /OCR API/);
+  assert.match(readme, /英文公式\/数学可能被误译成中文|公式可能丢失或乱码/);
   assert.match(readmeEn, /Markdown reading-flow|reading order/i);
-  assert.match(popupHtml, /id="openPdfPage">PDF</);
+  assert.match(readmeEn, /off by default/i);
+  assert.match(readmeEn, /Settings → Advanced/);
+  assert.match(readmeEn, /OCR API/);
+  assert.match(readmeEn, /wrongly translated into Chinese/i);
+  assert.match(popupHtml, /id="openPdfPage"[^>]*>PDF</);
+  assert.match(popupHtml, /id="openPdfPage"[^>]*\bhidden\b/);
   assert.match(popupJs, /page: "pdf"/);
-  assert.doesNotMatch(popupJs, /openPdfPage.*hidden|hidden.*openPdfPage/);
-  assert.doesNotMatch(popupHtml, /id="openPdfPage"[^>]*hidden/);
+  assert.match(popupJs, /featureOn\(settings,\s*"pdf"\)/);
+  assert.match(popupJs, /\$\("openPdfPage"\)\.hidden = !pdfOn/);
 });
 
 test("vendored pdf.js Attention-style page yields readable MD, not bbox boxes", async () => {

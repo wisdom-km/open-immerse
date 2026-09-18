@@ -4,11 +4,11 @@
 
 Open-source Chrome **bilingual webpage translation** extension (Manifest V3).
 
-Translate foreign-language pages, plain-text documents, and text-layer PDFs into a side-by-side reading view. You bring the API keys; you pick the engine.
+Translate foreign-language webpages and plain-text documents into a side-by-side reading view. You bring the API keys; you pick the engine.
 
 Repo: https://github.com/wisdom-km/open-immerse
 
-Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. The PDF viewer can open files and send pages for translation; the right pane is a Markdown reading-flow, not a bbox mirror. YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
+Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. **PDF reading is a lab feature: off by default.** It only appears after you opt in under **Settings → Advanced**. When enabled, the path is text-layer extract → Markdown reading-flow → translate (not a bbox mirror). YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
 
 Not affiliated with the commercial “Immersive Translate” product.
 
@@ -23,7 +23,7 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Per-page quota | `all` or `title + lead` (H1 + first body block; the lead is capped at about 3 lines / 220 characters). **Batch size** only controls how many segments go in one API request, not how many segments the page may translate. |
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
-| PDF reader | Experimental. In-extension pdf.js for local files or URLs. Left pane: continuous original pages. Right pane: extract title + body in **reading order** and render a **Markdown reading-flow** — **not** a bbox layout mirror (two-column papers: left then right; headers/footers/page numbers filtered). Formulas try to recover copyable LaTeX + KaTeX; figures may be skipped or shown as placeholders. No text layer → empty right pane. Open from the popup footer **PDF**. Webpage bilingual remains the regression target. |
+| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). When enabled: text-layer extract → Markdown reading-flow → translate. Content can misalign; **formulas may be dropped or garbled**; **English formulas/math may be wrongly translated into Chinese**. No OCR; no text layer → empty right pane. Future (not shipped): an **OCR API** → PDF→Markdown → then translate that Markdown (better for scans and formula-heavy papers). **Webpage bilingual remains the primary product.** |
 | Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
 
 Suggested regression page (article-scope scan and title handling were tuned on posts like this):  
@@ -78,7 +78,7 @@ Open a foreign-language page and click **翻译** on the FAB.
 | Uncheck “翻译此页” in the popup | Same as Original (clears translations) |
 | `Alt+T` | Start; press again to restore original |
 
-The popup can also change page scope, per-page quota, source/target language, and per-site auto-translate. If the current tab is a PDF, the primary popup button becomes **在沉浸译中打开** (Open in Open Immerse).
+The popup can also change page scope, per-page quota, source/target language, and per-site auto-translate. PDF entries are hidden by default. Only after you enable **PDF 阅读（实验室）** under **Settings → Advanced** does the popup footer show **PDF**, and a PDF tab show **在沉浸译中打开** (Open in Open Immerse).
 
 Translation style (dashed / solid / boxed / dim dashed / left-bar card under the source) and font scale live in Settings.
 
@@ -99,11 +99,13 @@ Items live in `chrome.storage.local` (`oiLearning`), separate from synced settin
 
 Popup → **文档**, or the link at the top of Settings. Paste or load TXT / MD / HTML, translate by segment, edit the target on the right, export `open-immerse-bilingual.html`.
 
-No layout-preserving Office or scanned files here. Use the PDF viewer or convert to plain text first.
+No layout-preserving Office or scanned files here. Convert to plain text first. Scans wait on the lab OCR path, or convert to Markdown yourself.
 
-### 5. PDF
+### 5. PDF (lab, off by default)
 
-Popup footer **PDF**, or **在沉浸译中打开** when the current tab is already a PDF.
+**Not a default entry.** Enable **PDF 阅读（实验室）** under **Settings → Advanced** before the popup footer **PDF** button or a PDF tab’s **在沉浸译中打开** appear.
+
+Current path when enabled: text-layer extract → Markdown reading-flow → translate.
 
 - Left pane: pdf.js continuous scroll; zoom applies only to the original page
 - Top bar: Open PDF → `当前页 | 全文` (current page / full document; switching does **not** start a job) → Translate / Stop → Original → export MD / PDF
@@ -113,7 +115,10 @@ Popup footer **PDF**, or **在沉浸译中打开** when the current tab is alrea
 - Separate right-pane zoom chip (0.5–5, step 0.25); not in the top bar
 - Drag the split to resize columns
 - MD export uses `$...$` / `$$...$$` when LaTeX was recovered; otherwise Unicode or `[公式]`
-- **No OCR**, and the extension does not inject into Chrome’s built-in PDF viewer. No text layer → empty right pane. This path is still experimental; regress against webpage bilingual
+- **Known limits:** content can misalign; **formulas may be dropped or garbled**; **English formulas/math may be wrongly translated into Chinese**
+- **No OCR**, and the extension does not inject into Chrome’s built-in PDF viewer. No text layer → empty right pane
+- **Future (not shipped):** integrate an **OCR API** → turn the PDF into Markdown → then translate that Markdown (better for scans and formula-heavy papers)
+- Webpage bilingual remains the primary product and the regression target
 
 ---
 
@@ -265,7 +270,7 @@ Not built, not guaranteed, or still experimental:
 
 | Item | Notes |
 | --- | --- |
-| **PDF reading-flow (experimental)** | Right pane is a reading-order Markdown document (title + body), not a bbox mirror. No OCR; no text layer → empty right pane. Webpage bilingual remains the regression target |
+| **PDF reader (lab, default off)** | `features.pdf` defaults to `false`. When on: text layer → Markdown reading-flow → translate. Content can misalign; formulas may drop/garble or be wrongly translated into Chinese. No OCR; no text layer → empty right pane. Later: OCR API → PDF→Markdown → translate. Webpage bilingual remains the primary product |
 | Sidebar en/zh pairing | Shelved; product focus is body/main-text bilingual |
 | Chrome Web Store | Unpacked load only |
 | OCR | Scanned PDFs with no text layer leave the right pane empty |

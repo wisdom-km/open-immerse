@@ -661,10 +661,12 @@ test("looksLikePdfUrl and popup entry only for PDF tabs", () => {
   assert.equal(viewerSearch("https://x.com/a.pdf"), "?src=https%3A%2F%2Fx.com%2Fa.pdf");
   assert.match(popupHtml, /id="pdfEntry" hidden/);
   assert.match(popupHtml, /id="openPdf"[^>]*>在沉浸译中打开</);
-  assert.match(popupHtml, /id="openPdfPage">PDF</);
+  assert.match(popupHtml, /id="openPdfPage"[^>]*>PDF</);
+  assert.match(popupHtml, /id="openPdfPage"[^>]*\bhidden\b/);
   assert.match(popupJs, /shouldOfferPdfOpen/);
+  assert.match(popupJs, /featureOn\(settings,\s*"pdf"\)/);
   assert.match(popupJs, /page: "pdf"/);
-  assert.match(popupJs, /src: pdfTab \? tab\.url/);
+  assert.match(popupJs, /\$\("pdfEntry"\)\.hidden = !\(pdfOn && pdfTab\)/);
   assert.match(popupCss, /\.btn-primary[^}]*background:\s*var\(--oi-accent\)/);
 });
 
@@ -720,6 +722,8 @@ test("manifest exposes viewer assets and SW opens viewer with src", () => {
   assert.equal(pagePath("pdf"), "pdf/viewer.html");
   assert.match(sw, /pdf\/viewer\.html/);
   assert.match(sw, /message\.page === "pdf"/);
+  assert.match(sw, /featureOn\(settings, "pdf"\)/);
+  assert.match(sw, /error: "pdf off"/);
   assert.match(sw, /encodeURIComponent\(message\.src\)/);
 });
 

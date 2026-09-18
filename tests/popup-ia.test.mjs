@@ -25,7 +25,9 @@ test("popup IA is page-only: Dual Line, 沉浸译, no feature toggles or youtube
   assert.match(html, /未配置引擎/);
   assert.match(html, /id="openLearning">学习中心</);
   assert.match(html, /id="openDocs">文档</);
-  assert.match(html, /id="openPdfPage">PDF</);
+  assert.match(html, /id="openPdfPage"[^>]*>PDF</);
+  assert.match(html, /id="openPdfPage"[^>]*\bhidden\b/);
+  assert.match(html, /id="openPdfSep"[^>]*\bhidden\b/);
   assert.match(html, /id="openPdf"[^>]*>在沉浸译中打开</);
   assert.match(html, /id="pdfEntry" hidden/);
   assert.match(html, /id="openOptions">设置</);
@@ -72,7 +74,7 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   const html = readFileSync(join(root, "options/options.html"), "utf8");
   const featSrc = readFileSync(join(root, "lib/features.js"), "utf8");
   assert.match(html, /id="featureList"/);
-  assert.match(html, /高级（悬浮 \/ 划词 \/ 字幕等，后续完善）/);
+  assert.match(html, /高级（悬浮 \/ 划词 \/ 字幕 \/ 实验室）/);
   assert.match(html, /id="laterList"/);
   assert.match(html, /id="translateLimit"/);
   assert.match(html, /id="laterList"[\s\S]*id="twoStepPolish"/);
@@ -104,11 +106,14 @@ test("options keep v1 module gates; youtube\/x only in Advanced fold", () => {
   for (const id of ["webpage", "learning", "documents", "fab"]) {
     assert.match(featSrc, new RegExp(`id: "${id}"[\\s\\S]*group: "v1"`));
   }
-  for (const id of ["hover", "selection", "youtube", "x"]) {
+  for (const id of ["hover", "selection", "youtube", "x", "pdf"]) {
     assert.match(featSrc, new RegExp(`id: "${id}"[\\s\\S]*group: "later"`));
   }
   assert.match(featSrc, /youtube:\s*false/);
   assert.match(featSrc, /x:\s*false/);
+  assert.match(featSrc, /pdf:\s*false/);
+  assert.match(featSrc, /PDF 阅读（实验室）/);
+  assert.doesNotMatch(html, /pdf\/viewer\.html/);
   const optJs = readFileSync(join(root, "options/options.js"), "utf8");
   assert.match(optJs, /el\("twoStepPolish"\)\.checked = cachedSettings\.twoStepPolish === true/);
   assert.match(optJs, /twoStepPolish: el\("twoStepPolish"\)\.checked/);
@@ -137,6 +142,19 @@ test("popup engine link uses short name + full title; lang-row stays 1fr 1fr", (
   assert.match(html, /id="engineLink"/);
   assert.match(css, /\.lang-row\s*\{[^}]*grid-template-columns:\s*1fr 1fr/s);
   assert.match(css, /\.engine-link\s*\{[^}]*text-overflow:\s*ellipsis/s);
+});
+
+test("popup PDF entries stay hidden unless features.pdf is on", () => {
+  const js = readFileSync(join(root, "popup/popup.js"), "utf8");
+  const html = readFileSync(join(root, "popup/popup.html"), "utf8");
+  assert.match(js, /import \{ featureOn \} from "\.\.\/lib\/features\.js"/);
+  assert.match(js, /featureOn\(settings,\s*"pdf"\)/);
+  assert.match(js, /\$\("openPdfPage"\)\.hidden = !pdfOn/);
+  assert.match(js, /\$\("openPdfSep"\)\.hidden = !pdfOn/);
+  assert.match(js, /\$\("pdfEntry"\)\.hidden = !\(pdfOn && pdfTab\)/);
+  assert.match(js, /if \(!featureOn\(settings, "pdf"\)\) return/);
+  assert.match(html, /id="openPdfPage" hidden/);
+  assert.match(html, /id="pdfEntry" hidden/);
 });
 
 test("isProviderConfigured requires apiKey when the adapter marks it required", () => {
