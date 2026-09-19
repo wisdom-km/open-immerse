@@ -206,7 +206,7 @@ test("options page wires 测试连接 as secondary and harvests unsaved form val
   const js = readFileSync(join(root, "options/options.js"), "utf8");
   const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
 
-  assert.match(html, /翻译引擎与密钥/);
+  assert.match(html, /<h2>引擎<\/h2>/);
   assert.match(html, /id="providerFields"/);
   assert.match(html, /class="provider-test-row"/);
   assert.match(html, /id="testConnection"[^>]*class="btn-secondary">测试连接</);

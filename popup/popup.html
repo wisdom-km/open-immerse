@@ -17,12 +17,12 @@
     </header>
 
     <section id="pdfEntry" hidden>
-      <button type="button" id="openPdf" class="btn-primary">在沉浸译中打开</button>
+      <button type="button" id="openPdf" class="btn-primary">在沉浸译中打开（实验室）</button>
     </section>
 
-    <section>
-      <h2>本页</h2>
-      <label class="switch-row heavy"><span>翻译此页</span><input id="enabled" type="checkbox" /></label>
+    <section class="intent-card">
+      <button type="button" id="translatePage" class="btn-primary" data-busy="0">翻译此页</button>
+      <button type="button" id="restorePage" class="btn-secondary">恢复原文</button>
       <label class="switch-row"><span>本站自动</span><input id="autoSite" type="checkbox" /></label>
       <label>范围
         <select id="translateScope">
@@ -30,32 +30,33 @@
           <option value="page">全页面</option>
         </select>
       </label>
-      <label>本次翻译
-        <select id="translateLimit">
-          <option value="all">全部</option>
-          <option value="title_lead">仅标题+开头</option>
-        </select>
+      <label>语言
+        <div class="lang-row">
+          <select id="sourceLang" aria-label="源语言"></select>
+          <select id="targetLang" aria-label="目标语言"></select>
+        </div>
       </label>
-    </section>
-
-    <section>
-      <h2>语言</h2>
-      <div class="lang-row">
-        <select id="sourceLang" aria-label="源语言"></select>
-        <select id="targetLang" aria-label="目标语言"></select>
-      </div>
       <a id="engineLink" class="ghost-link engine-link" href="#">引擎：—</a>
       <p id="engineWarn" class="danger" hidden>未配置引擎 <button type="button" id="goSetup" class="ghost-link">去设置</button></p>
+      <details class="more">
+        <summary>更多</summary>
+        <label>本次额度
+          <select id="translateLimit">
+            <option value="all">全部</option>
+            <option value="title_lead">仅标题+开头</option>
+          </select>
+        </label>
+      </details>
     </section>
 
     <nav class="entries">
-      <button type="button" id="openLearning">学习中心</button>
-      <span aria-hidden="true">|</span>
-      <button type="button" id="openDocs">文档</button>
-      <span id="openPdfSep" hidden aria-hidden="true">|</span>
-      <button type="button" id="openPdfPage" hidden>PDF</button>
-      <span aria-hidden="true">|</span>
       <button type="button" id="openOptions">设置</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" id="openLearning">学习</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" id="openDocs">文档</button>
+      <span id="openPdfSep" hidden aria-hidden="true">·</span>
+      <button type="button" id="openPdfPage" hidden>PDF</button>
     </nav>
     <script type="module" src="popup.js"></script>
   </body>

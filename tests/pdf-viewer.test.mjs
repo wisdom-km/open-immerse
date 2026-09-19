@@ -660,7 +660,7 @@ test("looksLikePdfUrl and popup entry only for PDF tabs", () => {
   assert.equal(readViewerSrc("?src=https%3A%2F%2Fx.com%2Fa.pdf"), "https://x.com/a.pdf");
   assert.equal(viewerSearch("https://x.com/a.pdf"), "?src=https%3A%2F%2Fx.com%2Fa.pdf");
   assert.match(popupHtml, /id="pdfEntry" hidden/);
-  assert.match(popupHtml, /id="openPdf"[^>]*>在沉浸译中打开</);
+  assert.match(popupHtml, /id="openPdf"[^>]*>在沉浸译中打开（实验室）</);
   assert.match(popupHtml, /id="openPdfPage"[^>]*>PDF</);
   assert.match(popupHtml, /id="openPdfPage"[^>]*\bhidden\b/);
   assert.match(popupJs, /shouldOfferPdfOpen/);

@@ -51,10 +51,10 @@ async function init() {
   el("translateLimit").value = isTitleLeadLimit(cachedSettings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
   el("twoStepPolish").checked = cachedSettings.twoStepPolish === true;
   el("deepThink").checked = cachedSettings.deepThink === true;
-  el("translationStyle").value = cachedSettings.translationStyle || "under";
   el("translateScope").value = cachedSettings.translateScope || "article";
   syncTranslateScopeHint();
   el("translateScope").addEventListener("change", () => syncTranslateScopeHint());
+  bindPanelNav();
   el("fontScale").value = cachedSettings.fontScale || 0.95;
   el("bodyGlossGap").value = String(normalizeBodyGlossGap(cachedSettings.bodyGlossGap));
   el("bodyGlossStackGap").value = String(normalizeBodyGlossStackGap(cachedSettings.bodyGlossStackGap));
@@ -261,7 +261,7 @@ async function persist() {
     translateLimit: el("translateLimit").value === TRANSLATE_LIMIT_TITLE_LEAD ? TRANSLATE_LIMIT_TITLE_LEAD : "all",
     twoStepPolish: el("twoStepPolish").checked,
     deepThink: el("deepThink").checked,
-    translationStyle: el("translationStyle").value,
+    translationStyle: cachedSettings.translationStyle || "under",
     translateScope: el("translateScope").value || "article",
     fontScale: Number(el("fontScale").value) || 0.95,
     bodyGlossGap: normalizeBodyGlossGap(el("bodyGlossGap").value),
@@ -291,4 +291,27 @@ function fillSelect(select, items) {
     option.textContent = item.label;
     select.appendChild(option);
   });
+}
+
+function bindPanelNav() {
+  const tabs = [...document.querySelectorAll("[data-nav]")];
+  const show = (id) => {
+    const next = ["engine", "reading", "features", "advanced"].includes(id) ? id : "engine";
+    document.querySelectorAll("[data-panel]").forEach((panel) => {
+      const on = panel.dataset.panel === next;
+      panel.classList.toggle("is-on", on);
+      panel.hidden = !on;
+    });
+    tabs.forEach((tab) => {
+      tab.setAttribute("aria-selected", tab.dataset.nav === next ? "true" : "false");
+    });
+    if (location.hash.replace("#", "") !== next) {
+      history.replaceState(null, "", `#${next}`);
+    }
+  };
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => show(tab.dataset.nav));
+  });
+  window.addEventListener("hashchange", () => show(location.hash.replace("#", "")));
+  show(location.hash.replace("#", "") || "engine");
 }

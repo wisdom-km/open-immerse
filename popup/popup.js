@@ -5,6 +5,8 @@ import { featureOn } from "../lib/features.js";
 import { shouldOfferPdfOpen } from "../lib/pdf-viewer.js";
 
 const $ = (id) => document.getElementById(id);
+const PRIMARY_IDLE = "翻译此页";
+const PRIMARY_STOP = "停止";
 
 init();
 
@@ -17,23 +19,30 @@ async function init() {
   $("targetLang").value = settings.targetLang;
   $("translateScope").value = settings.translateScope || "article";
   $("translateLimit").value = isTitleLeadLimit(settings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
-  $("enabled").checked = Boolean(settings.enabled);
   renderEngine(settings);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id) {
-    const ping = await chrome.tabs.sendMessage(tab.id, { type: "OI_PING" }).catch(() => null);
-    if (typeof ping?.running === "boolean") $("enabled").checked = ping.running;
-  }
+  await syncPrimary(tab);
 
   const host = hostOf(tab?.url);
   const rule = (settings.siteRules || []).find((r) => host === r.host || host.endsWith("." + r.host));
   $("autoSite").checked = Boolean(rule?.auto);
 
-  $("enabled").addEventListener("change", async () => {
-    const enabled = $("enabled").checked;
-    await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled } });
-    if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: enabled ? "OI_START" : "OI_RESTORE" }).catch(() => {});
+  $("translatePage").addEventListener("click", async () => {
+    if ($("translatePage").dataset.busy === "1") {
+      if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "OI_STOP" }).catch(() => {});
+      setPrimaryBusy(false);
+      return;
+    }
+    await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: true } });
+    if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "OI_START" }).catch(() => {});
+    setPrimaryBusy(true);
+  });
+
+  $("restorePage").addEventListener("click", async () => {
+    await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: false } });
+    if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "OI_RESTORE" }).catch(() => {});
+    setPrimaryBusy(false);
   });
 
   $("autoSite").addEventListener("change", async () => {
@@ -79,6 +88,24 @@ async function init() {
     if (!featureOn(settings, "pdf") || !pdfTab) return;
     chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "pdf", src: tab.url });
   });
+
+  if (tab?.id) setInterval(() => syncPrimary(tab), 400);
+}
+
+function setPrimaryBusy(busy) {
+  const btn = $("translatePage");
+  btn.dataset.busy = busy ? "1" : "0";
+  btn.textContent = busy ? PRIMARY_STOP : PRIMARY_IDLE;
+  btn.classList.toggle("is-stop", busy);
+}
+
+async function syncPrimary(tab) {
+  if (!tab?.id) {
+    setPrimaryBusy(false);
+    return;
+  }
+  const ping = await chrome.tabs.sendMessage(tab.id, { type: "OI_PING" }).catch(() => null);
+  setPrimaryBusy(Boolean(ping?.inflight));
 }
 
 function renderEngine(settings) {

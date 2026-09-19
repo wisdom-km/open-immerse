@@ -51,7 +51,7 @@ async function init() {
       restore();
       sendResponse({ ok: true });
     } else if (message.type === "OI_STOP") {
-      restore();
+      abort();
       sendResponse({ ok: true });
     } else if (message.type === "OI_SHOW_SELECTION") {
       showSelectionCard(message.original, message.translated);
@@ -63,7 +63,12 @@ async function init() {
       applyTranslateProgress(message);
       sendResponse({ ok: true });
     } else if (message.type === "OI_PING") {
-      sendResponse({ ok: true, running: session || running || hasPageTranslations() });
+      sendResponse({
+        ok: true,
+        running: session || running || hasPageTranslations(),
+        inflight: running,
+        hasTranslations: hasPageTranslations()
+      });
     } else if (message.type === "OI_SAVE_CURRENT_SELECTION") {
       saveCurrentSelection().then(() => sendResponse({ ok: true }));
     } else if (message.type === "OI_FEATURES_CHANGED") {

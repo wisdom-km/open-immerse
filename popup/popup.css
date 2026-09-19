@@ -12,16 +12,8 @@ body {
 header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
 h1 { margin: 0; font-size: 15px; font-weight: 650; }
 header p { margin: 2px 0 0; color: var(--oi-text-muted); font-size: 12px; line-height: 1.35; }
-h2 {
-  margin: 12px 0 6px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--oi-text-muted);
-}
 label { display: flex; flex-direction: column; gap: 5px; margin: 8px 0; color: var(--oi-text-muted); }
-.switch-row { flex-direction: row; align-items: center; justify-content: space-between; color: var(--oi-text); margin: 6px 0; }
-.switch-row.heavy span { font-weight: 600; }
+.switch-row { flex-direction: row; align-items: center; justify-content: space-between; color: var(--oi-text); margin: 10px 0 6px; }
 select {
   width: 100%; border: 1px solid var(--oi-line); background: var(--oi-card); color: var(--oi-text);
   border-radius: 8px; padding: 7px 8px; font: inherit;
@@ -33,6 +25,7 @@ select {
 .ghost-link:hover { color: var(--oi-accent); }
 .danger { color: var(--oi-danger); font-size: 12px; margin: 8px 0 0; }
 #pdfEntry { margin: 8px 0 4px; }
+.intent-card { margin: 4px 0 0; }
 .btn-primary {
   display: block;
   width: 100%;
@@ -47,6 +40,27 @@ select {
   cursor: pointer;
 }
 .btn-primary:hover { background: var(--oi-accent-hover); }
+.btn-primary.is-stop { background: var(--oi-card); color: var(--oi-text); border: 1px solid var(--oi-line); }
+.btn-primary.is-stop:hover { background: var(--oi-panel); }
+.btn-secondary {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid var(--oi-line);
+  border-radius: 8px;
+  padding: 8px 14px;
+  min-height: 36px;
+  background: transparent;
+  color: var(--oi-text-muted);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-secondary:hover { background: var(--oi-accent-subtle); border-color: color-mix(in srgb, var(--oi-accent) 35%, var(--oi-line)); }
+
+.more { margin: 10px 0 0; color: var(--oi-text-muted); }
+.more summary { cursor: pointer; font-size: 12px; }
+.more[open] summary { margin-bottom: 4px; }
 
 .entries {
   display: flex; gap: 8px; align-items: center; margin-top: 12px; padding-top: 10px;
