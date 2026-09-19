@@ -58,6 +58,31 @@ test("popup CSS uses elevated dark tokens and 340px shell", () => {
   assert.equal(/\.mark span[^}]*--oi-accent/.test(tokens), false);
 });
 
+test("options learning/docs are muted brand-links under title, not accent note", () => {
+  const html = readFileSync(join(root, "options/options.html"), "utf8");
+  const css = readFileSync(join(root, "options/options.css"), "utf8");
+  const aside = html.match(/<aside class="options-nav"[\s\S]*?<\/aside>/)[0];
+  assert.match(aside, /class="brand"[\s\S]*class="brand-links"[\s\S]*class="nav-tabs"/);
+  assert.match(aside, /class="brand-links"/);
+  assert.match(aside, /href="\.\.\/learning\/learning\.html">学习中心</);
+  assert.match(aside, /href="\.\.\/documents\/documents\.html">文档翻译</);
+  assert.match(aside, /class="brand-links-sep"[^>]*aria-hidden="true"/);
+  assert.doesNotMatch(aside, /class="note"/);
+  assert.match(aside, /data-nav="engine"[^>]*>引擎</);
+  assert.match(aside, /data-nav="reading"[^>]*>阅读</);
+  assert.match(aside, /data-nav="features"[^>]*>功能</);
+  assert.match(aside, /data-nav="advanced"[^>]*>高级</);
+  assert.match(css, /\.brand-links\s*\{[^}]*margin:\s*6px 0 0/s);
+  assert.match(css, /\.brand-links\s*\{[^}]*font-size:\s*12px/s);
+  assert.match(css, /\.brand-links\s*\{[^}]*color:\s*var\(--oi-text-muted\)/s);
+  assert.match(css, /\.brand-links a\s*\{[^}]*color:\s*inherit/s);
+  assert.match(css, /\.brand-links a\s*\{[^}]*text-decoration:\s*none/s);
+  assert.match(css, /\.brand-links a:hover\s*\{[^}]*color:\s*var\(--oi-accent\)/s);
+  assert.doesNotMatch(css, /\.note a\s*\{[^}]*--oi-accent/);
+  assert.match(css, /\.nav-tabs\s*\{[^}]*margin-top:\s*22px/s);
+  assert.match(css, /\.nav-tabs\s*\{[^}]*border-top:\s*0/s);
+});
+
 test("options save bar is a quiet sticky Loom bar", () => {
   const html = readFileSync(join(root, "options/options.html"), "utf8");
   const css = readFileSync(join(root, "options/options.css"), "utf8");
