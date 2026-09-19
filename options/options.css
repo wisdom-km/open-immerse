@@ -30,7 +30,8 @@ h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; color: var(--oi-text);
 .grid .field-hint { grid-column: 1 / -1; margin: 0; }
 section {
   margin-top: 0; padding: 22px; background: var(--oi-panel);
-  border: 1px solid var(--oi-line); border-radius: 12px;
+  border: 1px solid var(--oi-line); border-radius: var(--oi-radius-panel);
+  box-shadow: var(--oi-shadow-1);
 }
 .nav-tabs {
   display: flex;
@@ -43,7 +44,7 @@ section {
   background: transparent;
   border: 0;
   color: var(--oi-text-muted);
-  border-radius: 8px;
+  border-radius: var(--oi-radius-control);
   padding: 8px 12px;
   min-height: 36px;
   font: inherit;
@@ -61,7 +62,7 @@ label { display: flex; flex-direction: column; gap: 8px; color: var(--oi-text-mu
 .check { flex-direction: row; align-items: center; gap: 8px; margin-top: 14px; color: var(--oi-text); }
 input, select, textarea {
   border: 1px solid var(--oi-line); background: var(--oi-input); color: var(--oi-text);
-  border-radius: 8px; padding: 10px 12px; font: inherit;
+  border-radius: var(--oi-radius-control); padding: 10px 12px; font: inherit;
 }
 input:focus, select:focus, textarea:focus {
   outline: none;
@@ -91,7 +92,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .bar { margin-top: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 button {
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--oi-radius-control);
   padding: 8px 14px;
   min-height: 36px;
   font: inherit;
@@ -107,7 +108,7 @@ button {
 .btn-primary:hover { background: var(--oi-accent-hover); }
 .btn-secondary {
   background: transparent;
-  border: 1px solid var(--oi-line);
+  border: 1px solid var(--oi-line-strong);
   color: var(--oi-text-muted);
   font-weight: 500;
 }

@@ -103,13 +103,13 @@ test("currentItems splits 全部 vs 今日待复习", () => {
 test("learning CSS uses Loom oi tokens", () => {
   const css = readFileSync(join(root, "learning/learning.css"), "utf8");
   const tokens = readFileSync(join(root, "ui/tokens.css"), "utf8");
-  assert.match(tokens, /--oi-bg:\s*#0b0d12/);
-  assert.match(tokens, /--oi-panel:\s*#141821/);
-  assert.match(tokens, /--oi-card:\s*#171a21/);
-  assert.match(tokens, /--oi-line:\s*#2a3142/);
-  assert.match(tokens, /--oi-text:\s*#eef2f8/);
-  assert.match(tokens, /--oi-text-muted:\s*#9aa6b8/);
-  assert.match(tokens, /--oi-accent:\s*#4d7cff/);
+  assert.match(tokens, /--oi-bg:\s*#12151c/);
+  assert.match(tokens, /--oi-panel:\s*#1e2430/);
+  assert.match(tokens, /--oi-card:\s*#232a38/);
+  assert.match(tokens, /--oi-line:\s*rgba\(255,\s*255,\s*255,\s*0\.10\)/);
+  assert.match(tokens, /--oi-text:\s*#f2f4f8/);
+  assert.match(tokens, /--oi-text-muted:\s*#9aa3b5/);
+  assert.match(tokens, /--oi-accent:\s*#6b8cff/);
   assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
   assert.match(tokens, /\.mark span[^}]*background:\s*var\(--oi-text\)/);
   assert.equal(/\.mark span[^}]*--oi-accent/.test(tokens), false);

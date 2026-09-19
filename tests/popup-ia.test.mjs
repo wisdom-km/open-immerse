@@ -48,8 +48,8 @@ test("popup IA is page-only: Dual Line, 沉浸译, no feature toggles or youtube
 test("popup CSS uses elevated dark tokens and 340px shell", () => {
   const css = readFileSync(join(root, "popup/popup.css"), "utf8");
   const tokens = readFileSync(join(root, "ui/tokens.css"), "utf8");
-  assert.match(tokens, /--oi-bg-elevated:\s*#10131a/);
-  assert.match(tokens, /--oi-bg:\s*#0b0d12/);
+  assert.match(tokens, /--oi-bg-elevated:\s*#181c26/);
+  assert.match(tokens, /--oi-bg:\s*#12151c/);
   assert.match(css, /width:\s*3(2\d|3\d|4\d|5\d|60)px/);
   assert.match(tokens, /height:\s*3px/);
   assert.match(tokens, /color-scheme:\s*dark/);

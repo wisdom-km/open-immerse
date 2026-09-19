@@ -1,6 +1,9 @@
 @import "../ui/tokens.css";
 
 * { box-sizing: border-box; }
+html {
+  background: var(--oi-bg-elevated);
+}
 body {
   margin: 0;
   width: 340px;
@@ -8,6 +11,9 @@ body {
   font: 13px/1.45 var(--oi-font);
   background: var(--oi-bg-elevated);
   color: var(--oi-text);
+  box-shadow: var(--oi-shadow-1);
+  outline: 1px solid var(--oi-line);
+  outline-offset: -1px;
 }
 header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
 h1 { margin: 0; font-size: 15px; font-weight: 650; }
@@ -15,8 +21,8 @@ header p { margin: 2px 0 0; color: var(--oi-text-muted); font-size: 12px; line-h
 label { display: flex; flex-direction: column; gap: 5px; margin: 8px 0; color: var(--oi-text-muted); }
 .switch-row { flex-direction: row; align-items: center; justify-content: space-between; color: var(--oi-text); margin: 10px 0 6px; }
 select {
-  width: 100%; border: 1px solid var(--oi-line); background: var(--oi-card); color: var(--oi-text);
-  border-radius: 8px; padding: 7px 8px; font: inherit;
+  width: 100%; border: 1px solid var(--oi-line); background: var(--oi-input); color: var(--oi-text);
+  border-radius: var(--oi-radius-control); padding: 7px 8px; font: inherit;
 }
 .ghost-link {
   display: inline; border: 0; background: none; color: var(--oi-text-muted);
@@ -30,7 +36,7 @@ select {
   display: block;
   width: 100%;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--oi-radius-control);
   padding: 8px 14px;
   min-height: 36px;
   background: var(--oi-accent);
@@ -46,8 +52,8 @@ select {
   display: block;
   width: 100%;
   margin-top: 8px;
-  border: 1px solid var(--oi-line);
-  border-radius: 8px;
+  border: 1px solid var(--oi-line-strong);
+  border-radius: var(--oi-radius-control);
   padding: 8px 14px;
   min-height: 36px;
   background: transparent;
