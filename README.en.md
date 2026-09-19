@@ -23,7 +23,7 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Per-page quota | `all` or `title + lead` (H1 + first body block; the lead is capped at about 3 lines / 220 characters). **Batch size** only controls how many segments go in one API request, not how many segments the page may translate. |
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
-| Faithful-then-polish | **On by default** (main Options page, not Advanced). LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only; a custom system prompt skips the second pass. |
+| Faithful-then-polish | **On by default** (**Settings → 功能**, not Advanced). LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only; a custom system prompt skips the second pass. |
 | PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). When enabled: text-layer extract → Markdown reading-flow → translate. Content can misalign; **formulas may be dropped or garbled**; **English formulas/math may be wrongly translated into Chinese**. No OCR; no text layer → empty right pane. Future (not shipped): **OCR and/or multimodal vision** → faithful PDF→Markdown (**preserve formulas/LaTeX; do not translate math in that step**) → then translate Markdown with **formula/symbol/code protection**. One-shot multimodal image→translated Chinese MD is **not** enough alone. **Webpage bilingual remains the primary product.** |
 | Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
 
@@ -34,7 +34,9 @@ https://claude.com/blog/what-1-000-small-business-owners-taught-us-about-ai
 
 ## Screenshots
 
-**What it does (bilingual page)**
+Popup and Settings use **Soft Graphite** chrome: stacked graphite layers, quieter cards, accent `#6b8cff`.
+
+**Webpage bilingual + FAB**
 
 ![Bilingual webpage and FAB](docs/screenshots/01-bilingual-page.png)
 
@@ -42,19 +44,33 @@ Chinese gloss under the original paragraphs; glass FAB at the bottom right.
 
 ![FAB capsule](docs/screenshots/02-fab.png)
 
-**How to use (popup / FAB)**
+Translate / Original / collapse. Draggable; position is saved.
+
+**Popup**
 
 ![Toolbar popup](docs/screenshots/05-popup.png)
 
-Page primary **翻译此页** (becomes **停止** while a job runs), **恢复原文**, scope, and languages. Quota lives under **更多**. **No PDF in the footer by default**; if this shot still shows the old toggle, trust this IA — the PDF link appears only **after enabling lab PDF**.
+Intent card: primary **翻译此页** (becomes **停止** while a job runs), **恢复原文**, per-site auto, scope, and languages. Quota lives under **更多**. **No progress bar.** Footer is **设置 · 学习 · 文档**. No PDF in the footer by default; the PDF link appears only **after enabling lab PDF**. A PDF tab shows **在沉浸译中打开（实验室）** only when the lab is on.
 
-**How to configure (Engine / Reading / Features / Advanced)**
+**Settings four groups: 引擎 / 阅读 / 功能 / 高级**
+
+Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs.
 
 ![Options: default engine and test connection](docs/screenshots/03-options-engine.png)
 
-![Options: body–gloss spacing](docs/screenshots/04-options-spacing.png)
+**引擎**: current engine key, Base URL, model, and test connection (API fields redacted in the shot).
 
-Settings has four groups: **引擎** (keys + test connection), **阅读** (type scale and body spacing), **功能** (webpage / FAB / learning / documents / 先信后润), **高级** (PDF lab and later toggles). If screenshots still show a single long form, the four destinations are the source of truth.
+![Options: reading](docs/screenshots/04-options-reading.png)
+
+**阅读**: font scale plus the two body gaps only. No translation-style dropdown or preview table.
+
+![Options: left rail](docs/screenshots/07-options-nav.png)
+
+Left rail: muted 学习中心 · 文档翻译 + 引擎 / 阅读 / 功能 / 高级.
+
+![Options: Advanced](docs/screenshots/08-options-advanced.png)
+
+**高级**: hover / selection / captions and **PDF 阅读（实验室）** are off by default. **先信后润** lives under **功能** (on by default), not here.
 
 **PDF lab (optional)**
 
@@ -113,14 +129,14 @@ Open a foreign-language page and click **翻译** on the FAB.
 
 The popup can also change page scope, source/target language, and per-site auto-translate; per-page quota is under **更多**. Footer links are **设置 · 学习 · 文档**. PDF entries are hidden by default. Only after you enable **PDF 阅读（实验室）** under **Settings → Advanced** does the popup footer show **PDF**, and a PDF tab show **在沉浸译中打开（实验室）** (Open in Open Immerse).
 
-Font scale and body spacing live under **Settings → 阅读**. There is no translation-style dropdown or preview table.
+Font scale and body spacing live under **Settings → 阅读**. That group is font scale plus two gaps only — no translation-style dropdown or preview table.
 
 Spacing (Settings → 阅读, number inputs; **body paragraphs only — not headings or sidebars**):
 
 - **正文译文间距** (`bodyGlossGap`): gap between each source block and its gloss underneath; typically ~0.10–0.70 (em-ish)
 - **译文段间距** (`bodyGlossStackGap`): extra space between consecutive body gloss blocks; range **0–2.5**. Values 0 / 1 / 2 are visibly different
 
-On the main Options page, **先信后润** (`twoStepPolish`, **on by default**): LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only.
+Under **Settings → 功能**, **先信后润** (`twoStepPolish`, **on by default**): LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only.
 
 ### 3. Save and review
 
@@ -132,7 +148,7 @@ Items live in `chrome.storage.local` (`oiLearning`), separate from synced settin
 
 ### 4. Documents
 
-Popup → **文档**, or the link at the top of Settings. Paste or load TXT / MD / HTML, translate by segment, edit the target on the right, export `open-immerse-bilingual.html`.
+Popup → **文档**, or **文档翻译** under the title in the Settings left rail. Paste or load TXT / MD / HTML, translate by segment, edit the target on the right, export `open-immerse-bilingual.html`.
 
 No layout-preserving Office or scanned files here. Convert to plain text first. Scans wait on the lab OCR path, or convert to Markdown yourself.
 
@@ -185,7 +201,7 @@ Language list comes from `lib/languages.js` (auto-detect, Simplified/Traditional
 
 Every LLM adapter shares one Skill: `lib/translate-skill.js`.
 
-- Settings page **先信后润** (`twoStepPolish`, **on by default**): faithful draft first. The page inserts the draft and toasts “润色中”, then replaces it with the polished text. Better quality, more tokens. You can turn it off. LLM engines only. If polish fails, the draft stays and a short “润色失败” toast appears
+- **Settings → 功能** **先信后润** (`twoStepPolish`, **on by default**): faithful draft first. The page inserts the draft and toasts “润色中”, then replaces it with the polished text. Better quality, more tokens. You can turn it off. LLM engines only. If polish fails, the draft stays and a short “润色失败” toast appears
 - This is ordinary language conversion (e.g. English → modern Chinese). **Not classical Chinese**
 - A non-empty custom system prompt skips the second pass
 - Chinese targets get a glossary hint, then two safety nets after parse: `guardZhBusinessSense` (so “business owners” does not fuse into 主教 / “bishop”) and `guardZhTitleCalques` (strips hollow title wrappers)
