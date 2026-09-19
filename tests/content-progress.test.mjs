@@ -32,4 +32,5 @@ test("webpage FAB path injects draft on OI_TRANSLATE_PROGRESS then replaces", ()
   assert.match(src, /translation: node\.textContent/);
   assert.doesNotMatch(src, /oi-dim|oi-overlay|page-dim/);
   assert.equal(src.includes("document.documentElement.style.opacity"), false);
+  assert.doesNotMatch(src, /oi-progress|progress-bar|进度/);
 });

@@ -64,9 +64,14 @@ test("BODY-GLOSS-GAP-CONTROL Options number inputs + storage hard gates", () => 
   assert.match(optionsHtml, /原文与其下段落译文的空隙（em）。不影响标题译文。/);
   assert.match(optionsHtml, /相邻两段正文译文之间的空隙（em，0–2\.5，默认 0\.25）。不含标题译文、侧栏。/);
   assert.match(optionsHtml, /id="fontScale"[\s\S]*id="bodyGlossGap"[\s\S]*id="bodyGlossStackGap"/);
-  const later = optionsHtml.match(/<details class="later">[\s\S]*?<\/details>/)?.[0] || "";
+  const later = optionsHtml.match(/id="panel-advanced"[\s\S]*?<\/section>/)?.[0] || "";
+  const reading = optionsHtml.match(/id="panel-reading"[\s\S]*?<\/section>/)?.[0] || "";
+  assert.match(reading, /id="bodyGlossGap"/);
+  assert.match(reading, /id="bodyGlossStackGap"/);
+  assert.match(reading, /id="fontScale"/);
   assert.doesNotMatch(later, /id="bodyGlossGap"/);
   assert.doesNotMatch(later, /id="bodyGlossStackGap"/);
+  assert.doesNotMatch(optionsHtml, /id="translationStyle"/);
   assert.match(optionsJs, /bodyGlossGap: normalizeBodyGlossGap/);
   assert.match(optionsJs, /bodyGlossStackGap: normalizeBodyGlossStackGap/);
   assert.match(js, /root\.style\.setProperty\("--oi-body-gloss-gap"/);

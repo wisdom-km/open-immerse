@@ -43,6 +43,15 @@ test("toolbar left button uses scheme B copy and never restore on 停止", () =>
   assert.equal(click.includes("enabled: on"), false);
 });
 
+test("OI_STOP aborts inflight; OI_PING reports inflight separately from running", () => {
+  assert.match(content, /message\.type === "OI_STOP"/);
+  const stop = content.slice(content.indexOf('message.type === "OI_STOP"'), content.indexOf('message.type === "OI_SHOW_SELECTION"'));
+  assert.match(stop, /abort\(\)/);
+  assert.equal(stop.includes("restore("), false);
+  assert.match(content, /inflight:\s*running/);
+  assert.match(content, /hasTranslations:\s*hasPageTranslations\(\)/);
+});
+
 test("content abort keeps translations; restore still clears; busy settles after batch", () => {
   assert.match(content, /addEventListener\("oi-please-stop", \(\) => abort\(\)\)/);
   assert.doesNotMatch(content, /oi-please-stop", \(\) => restore\(\)/);

@@ -46,13 +46,15 @@ Chinese gloss under the original paragraphs; glass FAB at the bottom right.
 
 ![Toolbar popup](docs/screenshots/05-popup.png)
 
-Page toggle, scope, and languages. **No PDF in the footer by default**; the PDF link in this shot is **after enabling lab PDF**.
+Page primary **翻译此页** (becomes **停止** while a job runs), **恢复原文**, scope, and languages. Quota lives under **更多**. **No PDF in the footer by default**; if this shot still shows the old toggle, trust this IA — the PDF link appears only **after enabling lab PDF**.
 
-**How to configure (engine + spacing)**
+**How to configure (Engine / Reading / Features / Advanced)**
 
 ![Options: default engine and test connection](docs/screenshots/03-options-engine.png)
 
 ![Options: body–gloss spacing](docs/screenshots/04-options-spacing.png)
+
+Settings has four groups: **引擎** (keys + test connection), **阅读** (type scale and body spacing), **功能** (webpage / FAB / learning / documents / 先信后润), **高级** (PDF lab and later toggles). If screenshots still show a single long form, the four destinations are the source of truth.
 
 **PDF lab (optional)**
 
@@ -105,15 +107,15 @@ Open a foreign-language page and click **翻译** on the FAB.
 | --- | --- |
 | 翻译 (Translate) | Scan nodes for the current scope and quota; send batches to the background |
 | 停止 (Stop) | Abort unfinished requests; keep translations already inserted |
-| 原文 (Original) | Remove every `.oi-translation` on the page; FAB returns to Translate |
-| Uncheck “翻译此页” in the popup | Same as Original (clears translations) |
+| 原文 (Original) / popup **恢复原文** | Remove every `.oi-translation` on the page; FAB returns to Translate |
+| Popup **翻译此页** | Start; becomes **停止** while translating (abort only — keeps glosses) |
 | `Alt+T` | Start; press again to restore original |
 
-The popup can also change page scope, per-page quota, source/target language, and per-site auto-translate. PDF entries are hidden by default. Only after you enable **PDF 阅读（实验室）** under **Settings → Advanced** does the popup footer show **PDF**, and a PDF tab show **在沉浸译中打开** (Open in Open Immerse).
+The popup can also change page scope, source/target language, and per-site auto-translate; per-page quota is under **更多**. Footer links are **设置 · 学习 · 文档**. PDF entries are hidden by default. Only after you enable **PDF 阅读（实验室）** under **Settings → Advanced** does the popup footer show **PDF**, and a PDF tab show **在沉浸译中打开（实验室）** (Open in Open Immerse).
 
-Translation style (dashed / solid / boxed / dim dashed / left-bar card under the source) and font scale live in Settings.
+Font scale and body spacing live under **Settings → 阅读**. There is no translation-style dropdown or preview table.
 
-Spacing (Settings → 语言与通用, number inputs; **body paragraphs only — not headings or sidebars**):
+Spacing (Settings → 阅读, number inputs; **body paragraphs only — not headings or sidebars**):
 
 - **正文译文间距** (`bodyGlossGap`): gap between each source block and its gloss underneath; typically ~0.10–0.70 (em-ish)
 - **译文段间距** (`bodyGlossStackGap`): extra space between consecutive body gloss blocks; range **0–2.5**. Values 0 / 1 / 2 are visibly different
@@ -136,7 +138,7 @@ No layout-preserving Office or scanned files here. Convert to plain text first. 
 
 ### 5. PDF (lab, off by default)
 
-**Not a default entry.** Enable **PDF 阅读（实验室）** under **Settings → Advanced** before the popup footer **PDF** button or a PDF tab’s **在沉浸译中打开** appear.
+**Not a default entry.** Enable **PDF 阅读（实验室）** under **Settings → Advanced** before the popup footer **PDF** button or a PDF tab’s **在沉浸译中打开（实验室）** appear.
 
 Current path when enabled: text-layer extract → Markdown reading-flow → translate.
 
@@ -281,7 +283,7 @@ Conventions: [CONTRIBUTING.md](CONTRIBUTING.md) (Chinese). Short version:
 
 - One intent per PR. Do not commit keys, `.env`, or zip artifacts
 - `content/` owns the DOM. Network and cache stay in `background/`
-- Popup “翻译此页” follows this tab’s `OI_PING` (existing translations / `html.oi-active`). Do not use the global `enabled` flag as page state
+- Popup “翻译此页” follows this tab’s `OI_PING.inflight` (`html.oi-active`). Do not use the global `enabled` flag as page state. Stop uses `OI_STOP`/`abort()`; “恢复原文” uses `OI_RESTORE`
 - Do not mix PDF scope (current page / full document) with webpage scan rules
 - Webpage scan: `article` takes the main column only; `page` also takes readable sidebar blocks and short TOC/nav labels, and uses a heuristic for an article H1 in the header. Do not ban every `closest('header')`
 

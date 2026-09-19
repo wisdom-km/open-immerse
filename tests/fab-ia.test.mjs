@@ -153,14 +153,22 @@ test("favoriting stays off FAB: submenu + selection card + double-click still ex
 });
 
 test("learning / docs / auto-site stay in Popup and Options only", () => {
-  assert.match(popup, /id="openLearning">学习中心</);
+  assert.match(popup, /id="openLearning">学习</);
   assert.match(popup, /id="openDocs">文档</);
+  assert.match(popup, /id="openOptions">设置</);
   assert.match(popup, />本站自动</);
   assert.match(options, /自动翻译站点/);
   assert.match(options, /学习中心/);
   assert.match(options, /文档翻译/);
   assert.equal(toolbar.includes("OI_OPEN_PAGE"), false);
   assert.equal(toolbar.includes("OI_TOGGLE_SITE_RULE"), false);
+});
+
+test("FAB and page chrome have no translation progress bar or percent", () => {
+  assert.doesNotMatch(toolbar, /oi-progress|progress-bar|进度/);
+  assert.doesNotMatch(css, /oi-progress|progress-bar|进度/);
+  assert.doesNotMatch(content, /oi-progress|progress-bar|进度/);
+  assert.match(content, /const STATUS_TRANSLATING = "翻译中"/);
 });
 
 test("content scripts load fab helpers before toolbar, and restore uses 翻译", () => {
