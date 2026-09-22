@@ -255,6 +255,11 @@ h1 {
   width: auto;
   height: auto;
 }
+.pane-translate .readout.md-readout img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
   font: 400 14px/1.55 var(--oi-font);
   color: var(--oi-text-muted);

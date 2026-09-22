@@ -98,6 +98,22 @@
           <p class="hint" id="deepThinkHint">
             关闭可加快 DeepSeek / Ark 翻译；默认关。
           </p>
+          <div id="pdfLayoutBox" hidden>
+            <h3>PDF 划区</h3>
+            <label>模式
+              <select id="pdfLayoutMode">
+                <option value="">未设置（先试本机）</option>
+                <option value="local-ocr">本机智谱 GLM-OCR（测试）</option>
+                <option value="cloud-ocr">OCR API（上线）</option>
+                <option value="text-layer">文字层兜底</option>
+              </select>
+            </label>
+            <label>本机基址<input id="pdfLocalBaseUrl" type="text" spellcheck="false" /></label>
+            <p class="hint">本机基址填划区接口，默认 http://127.0.0.1:8765。7860 是 GLM-OCR 的网页，不是这个接口。模型认字在 5002。</p>
+            <label>云端基址<input id="pdfCloudBaseUrl" type="text" spellcheck="false" /></label>
+            <label>云端密钥<input id="pdfCloudApiKey" type="password" spellcheck="false" autocomplete="off" /></label>
+            <p class="hint">云端模式会上传每一页的渲染图</p>
+          </div>
         </section>
       </main>
     </div>

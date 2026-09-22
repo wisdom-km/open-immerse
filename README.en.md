@@ -8,7 +8,7 @@ Translate foreign-language webpages and plain-text documents into a side-by-side
 
 Repo: https://github.com/wisdom-km/open-immerse
 
-Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. **PDF reading is a lab feature: off by default.** It only appears after you opt in under **Settings → Advanced**. When enabled, the path is text-layer extract → Markdown reading-flow → translate (not a bbox mirror). YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
+Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. **PDF reading is a lab feature: off by default.** It only appears after you opt in under **Settings → Advanced**. The target is text-layer body text plus content-accurate original-page display (crops by default). Formula images do not come from LaTeX rendering. Translations are not pasted into the left pane. YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
 
 Not affiliated with the commercial “Immersive Translate” product.
 
@@ -24,7 +24,7 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
 | Faithful-then-polish | **On by default** (**Settings → 功能**, not Advanced). LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only; a custom system prompt skips the second pass. |
-| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). When enabled: text-layer extract → Markdown reading-flow → translate. Content can misalign; **formulas may be dropped or garbled**; **English formulas/math may be wrongly translated into Chinese**. No OCR; no text layer → empty right pane. Future (not shipped): **OCR and/or multimodal vision** → faithful PDF→Markdown (**preserve formulas/LaTeX; do not translate math in that step**) → then translate Markdown with **formula/symbol/code protection**. One-shot multimodal image→translated Chinese MD is **not** enough alone. **Webpage bilingual remains the primary product.** |
+| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). Target: text-layer body text plus content-accurate original-page display (crops by default). Formula images do not come from LaTeX rendering. Formulas, figures, and tables match the opened PDF. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the LLM API already configured in the extension. **Webpage bilingual remains the primary product.** |
 | Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
 
 Suggested regression page (article-scope scan and title handling were tuned on posts like this):  
@@ -156,19 +156,20 @@ No layout-preserving Office or scanned files here. Convert to plain text first. 
 
 **Not a default entry.** Enable **PDF 阅读（实验室）** under **Settings → Advanced** before the popup footer **PDF** button or a PDF tab’s **在沉浸译中打开（实验室）** appear.
 
-Current path when enabled: text-layer extract → Markdown reading-flow → translate.
+Target: text-layer body text plus content-accurate original-page display (crops by default). The right pane stays a **Markdown reading-flow** in reading order. Formula images do not come from LaTeX rendering. The spec is `pdf/PDF-MD-READOUT.md`. The reader runtime switches by the phases in `pdf/high-precision/EXECUTION.md`.
 
 - Left pane: pdf.js continuous scroll; zoom applies only to the original page
 - Top bar: Open PDF → `当前页 | 全文` (current page / full document; switching does **not** start a job) → Translate / Stop → Original → export MD / PDF
 - Full document walks pages with `OI_TRANSLATE_BATCH`. Progress is `翻译中 · k/n`. Jobs can be stopped. After stop or completion the primary button returns to **翻译**; Chinese already produced stays
 - **Original clears the current page only**, not other translated pages
-- Right pane is a **Markdown reading-flow**: extract title + body in reading order, translate, scroll as a document — **not** a bbox layout mirror
+- Right pane is a **Markdown reading-flow**: extract title + body in reading order, translate, scroll as a document. Translations appear only in the right pane — they are **not** pasted into the left pane
 - Separate right-pane zoom chip (0.5–5, step 0.25); not in the top bar
 - Drag the split to resize columns
-- MD export uses `$...$` / `$$...$$` when LaTeX was recovered; otherwise Unicode or `[公式]`
-- **Known limits:** content can misalign; **formulas may be dropped or garbled**; **English formulas/math may be wrongly translated into Chinese**
-- **No OCR**, and the extension does not inject into Chrome’s built-in PDF viewer. No text layer → empty right pane
-- **Future (not shipped):** **OCR and/or multimodal vision** → faithful PDF→Markdown (**preserve formulas/LaTeX; do not translate math in that step**) → then translate Markdown with **formula/symbol/code protection**. One-shot multimodal image→translated Chinese MD is **not** enough alone. The current text-layer lab path can still drop or wrongly translate English formulas
+- Content accuracy comes first; layout comes second and should be as good as possible without changing content. Translations match the extracted source. Formulas, figures, and tables match the opened PDF. The default is an original-page crop (pageRaster). Any other method must pass the same check
+- Body text of a text-layer PDF uses the original text-layer sentences. Clicking the right pane highlights the matching region in the left pane
+- OCR confusions of `i` and `n` are not shown and are not sent to translation
+- Test-time region detection uses a local Zhipu GLM-OCR. Production uses an OCR API plus the LLM API already configured in the extension
+- The extension does not inject into Chrome’s built-in PDF viewer. When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong; formulas, figures, and tables stay original-page crops
 - Webpage bilingual remains the primary product and the regression target
 
 ---
@@ -321,10 +322,10 @@ Not built, not guaranteed, or still experimental:
 
 | Item | Notes |
 | --- | --- |
-| **PDF reader (lab, default off)** | `features.pdf` defaults to `false`. When on: text layer → Markdown reading-flow → translate. Content can misalign; formulas may drop/garble or be wrongly translated into Chinese. No OCR; no text layer → empty right pane. Later: **OCR and/or multimodal vision** → formula-preserving PDF→Markdown → then translate with formula/symbol/code protection. One-shot image→Chinese MD is not enough. Webpage bilingual remains the primary product |
+| **PDF reader (lab, default off)** | `features.pdf` defaults to `false`. Target: text-layer body text plus content-accurate original-page display (crops by default). Formula images do not come from LaTeX rendering. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the configured LLM API. Webpage bilingual remains the primary product |
 | Sidebar en/zh pairing | Shelved; product focus is body/main-text bilingual |
 | Chrome Web Store | Unpacked load only |
-| OCR | Scanned PDFs with no text layer leave the right pane empty |
+| OCR | When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong. Formulas, figures, and tables stay original-page crops. An `i` read as `n`, or an `n` read as `i`, is not shown |
 | DOCX / complex layouts | Documents page accepts plain-text-like files only |
 | Hover / selection / captions | `features.js` `group: "later"`, off by default |
 | Dedicated Ollama row | Use the OpenAI-compatible channel |

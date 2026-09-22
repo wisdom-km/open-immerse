@@ -20,7 +20,7 @@ test("webpage FAB path injects draft on OI_TRANSLATE_PROGRESS then replaces", ()
   assert.match(src, /type: "OI_TRANSLATE_BATCH"/);
   assert.match(
     src,
-    /function applyTranslateProgress\(message\) \{\n  if \(!inflight \|\| message\.phase !== "draft"\) return;/
+    /function applyTranslateProgress\(message\) \{\r?\n  if \(!inflight \|\| message\.phase !== "draft"\) return;/
   );
   assert.match(src, /mountTranslation\(el, text, inflight\.settings/);
   assert.match(src, /mountTranslation\(el, res\.translations\[idx\] \|\| "", settings/);

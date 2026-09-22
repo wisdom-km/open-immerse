@@ -63,6 +63,9 @@ async function init() {
   el("siteRules").value = (cachedSettings.siteRules || []).map((r) => r.host).join("\n");
   renderFeatures(el("featureList"), v1Features(), features);
   renderFeatures(el("laterList"), laterFeatures(), features);
+  fillPdfLayout(cachedSettings.pdfLayout);
+  syncPdfLayoutBox();
+  el("laterList")?.addEventListener("change", syncPdfLayoutBox);
   renderProviderFields();
   el("provider").addEventListener("change", () => {
     harvestVisibleProvider();
@@ -115,6 +118,30 @@ async function importSettingsFile(ev) {
   }
 }
 
+
+function fillPdfLayout(value) {
+  const layout = value && typeof value === "object" ? value : {};
+  if (el("pdfLayoutMode")) el("pdfLayoutMode").value = layout.mode || "";
+  if (el("pdfLocalBaseUrl")) el("pdfLocalBaseUrl").value = layout.localBaseUrl || "http://127.0.0.1:8765";
+  if (el("pdfCloudBaseUrl")) el("pdfCloudBaseUrl").value = layout.cloudBaseUrl || "https://open.bigmodel.cn/api/paas/v4/layout_parsing";
+  if (el("pdfCloudApiKey")) el("pdfCloudApiKey").value = layout.cloudApiKey || "";
+}
+
+function readPdfLayout() {
+  return {
+    mode: el("pdfLayoutMode")?.value || "",
+    localBaseUrl: el("pdfLocalBaseUrl")?.value || "http://127.0.0.1:8765",
+    cloudBaseUrl: el("pdfCloudBaseUrl")?.value || "https://open.bigmodel.cn/api/paas/v4/layout_parsing",
+    cloudModel: "glm-ocr",
+    cloudApiKey: el("pdfCloudApiKey")?.value || ""
+  };
+}
+
+function syncPdfLayoutBox() {
+  const box = el("pdfLayoutBox");
+  if (!box) return;
+  box.hidden = !document.querySelector('[data-feat="pdf"]')?.checked;
+}
 
 function renderFeatures(box, list, features) {
   if (!box) return;
@@ -273,7 +300,8 @@ async function persist() {
     subtitleEnabled: Boolean(features.youtube || features.x),
     features: features,
     siteRules: siteRules,
-    providers: cachedSettings.providers
+    providers: cachedSettings.providers,
+    pdfLayout: readPdfLayout()
   };
 
   await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: patch });

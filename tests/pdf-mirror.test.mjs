@@ -423,7 +423,8 @@ test("viewer defaults to Markdown readout and does not wire bbox mirror pages", 
   assert.doesNotMatch(src, /cropCanvasToDataUrl/);
   assert.doesNotMatch(src, /walkImageCtms/);
   assert.match(src, /onTranslateScroll/);
-  assert.match(src, /renderFormulaNode/);
+  assert.match(src, /textLayerToBlocks/);
+  assert.match(src, /cropBlockImage/);
   assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"[^>]*hidden/);
   assert.match(html, /id="readout"[^>]*class="readout md-readout"/);
   assert.equal(html.includes('class="readout mirror-pages"'), false);

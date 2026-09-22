@@ -1,0 +1,28 @@
+{
+  "vendor": "glm-ocr",
+  "page": 1,
+  "pixelWidth": 1224,
+  "pixelHeight": 1584,
+  "layoutDetails": [
+    {
+      "label": "text",
+      "bbox_2d": [0.1, 0.16, 0.9, 0.28],
+      "content": "vendor sentence that must be ignored"
+    },
+    {
+      "label": "formula",
+      "bbox_2d": [0.18, 0.42, 0.82, 0.5],
+      "content": "n"
+    },
+    {
+      "label": "image",
+      "bbox_2d": [0.12, 0.52, 0.88, 0.72]
+    },
+    {
+      "label": "table",
+      "bbox_2d": [0.1, 0.76, 0.9, 0.92],
+      "content": "<table><td>n</td></table>",
+      "html": "<table><td>n</td></table>"
+    }
+  ]
+}

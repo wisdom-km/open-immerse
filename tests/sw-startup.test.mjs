@@ -59,7 +59,8 @@ test("SW cache version includes title-calque bust and guards cache hits", () => 
   assert.match(swSource, /CACHE_VER = "v5-title-calque"/);
   assert.match(swSource, /const cache = new Map\(\);\nconst CACHE_LIMIT = 2000;\nconst CACHE_VER = "v5-title-calque";\ncache\.clear\(\);/);
   assert.match(swSource, /onStartup\.addListener\(\(\) => \{\n  cache\.clear\(\);/);
-  assert.match(swSource, /twoStepPolish: settings\.twoStepPolish === true/);
+  assert.match(swSource, /twoStepPolish: resolveBatchPolish\(options, settings\)/);
+  assert.match(swSource, /return settings\?\.twoStepPolish === true/);
   assert.match(swSource, /deepThink: settings\.deepThink === true/);
   assert.match(swSource, /isTwoStepPolish/);
   assert.match(swSource, /isThinkingEnabled/);
@@ -72,7 +73,7 @@ test("SW cache version includes title-calque bust and guards cache hits", () => 
   );
   assert.match(swSource, /remember\(item\.key, value\);/);
   assert.match(swSource, /return guardZhTranslations\(texts, results, settings\.targetLang\);/);
-  assert.match(swSource, /export \{ translateBatch, CACHE_VER, cache as translationCache \};/);
+  assert.match(swSource, /export \{ translateBatch, resolveBatchPolish, CACHE_VER, cache as translationCache \};/);
   assert.match(swSource, /OI_TRANSLATE_PROGRESS/);
   assert.match(swSource, /phase: progress\.phase/);
   assert.match(swSource, /onProgress: \(progress\) => emitTranslateProgress\(sender, message\.requestId, progress\)/);

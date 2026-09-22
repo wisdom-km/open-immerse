@@ -329,8 +329,8 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   }), [
     { tag: "h1", text: "注意力机制就够了" },
     { tag: "p", text: "我们提出一种新架构。" },
-    { tag: "p", text: "$softmax(QK^{T})$" },
-    { tag: "p", text: "[公式]" }
+    { tag: "p", text: "见图" },
+    { tag: "p", text: "见图" }
   ]);
   assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: true, exporting: false }).mdDisabled, false);
   assert.equal(pdfExportControlState({ hasDoc: true, hasReadout: false }).pdfDisabled, true);

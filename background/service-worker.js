@@ -90,7 +90,9 @@ async function handleMessage(message, sender) {
     }
     case "OI_TRANSLATE_BATCH": {
       const batchOpts = {
-        onProgress: (progress) => emitTranslateProgress(sender, message.requestId, progress)
+        onProgress: (progress) => emitTranslateProgress(sender, message.requestId, progress),
+        polish: message.polish,
+        promptAddendum: message.promptAddendum
       };
       const translations = await translateBatch(message.texts || [], batchOpts);
       return {
@@ -178,13 +180,19 @@ function emitTranslateProgress(sender, requestId, progress) {
   return Promise.all(tasks);
 }
 
+function resolveBatchPolish(message = {}, settings = {}) {
+  if (message?.polish === false) return false;
+  return settings?.twoStepPolish === true;
+}
+
 async function translateBatch(texts, options = {}) {
   const settings = await getSettings();
   const provider = getProvider(settings.provider);
   const providerSettings = {
     ...(settings.providers?.[settings.provider] || {}),
-    twoStepPolish: settings.twoStepPolish === true,
-    deepThink: settings.deepThink === true
+    twoStepPolish: resolveBatchPolish(options, settings),
+    deepThink: settings.deepThink === true,
+    promptAddendum: String(options.promptAddendum || "")
   };
   const pending = [];
   const results = new Array(texts.length);
@@ -255,7 +263,9 @@ async function translateBatch(texts, options = {}) {
 function cacheKey(provider, from, to, text, settings) {
   const quality = isTwoStepPolish(settings) ? "polish" : "single";
   const think = isThinkingEnabled(settings) ? "think" : "fast";
-  return `${CACHE_VER}|${provider}|${from}|${to}|${quality}|${think}|${text}`;
+  const polish = settings?.twoStepPolish === true ? "polish-on" : "polish-off";
+  const addendum = String(settings?.promptAddendum || "");
+  return `${CACHE_VER}|${provider}|${from}|${to}|${quality}|${think}|${polish}|${addendum}|${text}`;
 }
 
 function readCachedTranslation(key, text, targetLang) {
@@ -269,4 +279,4 @@ function remember(key, value) {
   if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
 }
 
-export { translateBatch, CACHE_VER, cache as translationCache };
+export { translateBatch, resolveBatchPolish, CACHE_VER, cache as translationCache };

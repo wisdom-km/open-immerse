@@ -1,0 +1,41 @@
+{
+  "protocol": "blocks-1",
+  "page": 3,
+  "pixelWidth": 1224,
+  "pixelHeight": 1584,
+  "textSource": "text-layer",
+  "blocks": [
+    {
+      "id": "p3-b1",
+      "label": "text",
+      "bbox": [0.12, 0.16, 0.88, 0.28],
+      "text": "The attention function can be described as mapping a query and a set of key-value pairs to an output."
+    },
+    {
+      "id": "p3-b2",
+      "label": "formula",
+      "bbox": [0.18, 0.42, 0.82, 0.5]
+    },
+    {
+      "id": "p3-b3",
+      "label": "formula",
+      "bbox": [0.42, 0.31, 0.58, 0.36],
+      "inlineOf": "p3-b1"
+    },
+    {
+      "id": "p3-b4",
+      "label": "figure",
+      "bbox": [0.11764705882352941, 0.3939393939393939, 0.28104575163398693, 0.494949494949495]
+    },
+    {
+      "id": "p3-b5",
+      "label": "formula",
+      "bbox": [0.2, 0.55, 0.8, 0.62],
+      "latex": "E = mc^2",
+      "content": "n",
+      "html": "<math>n</math>",
+      "md": "$n$",
+      "text": "n"
+    }
+  ]
+}

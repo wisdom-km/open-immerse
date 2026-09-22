@@ -13,6 +13,7 @@ import {
   pageTranslationComplete,
   segmentPageBlocks
 } from "../lib/pdf-viewer.js";
+import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import {
   collapseAuthorBlocks,
   extractReadoutBlocks,
@@ -42,6 +43,17 @@ const readmeEn = readFileSync(join(root, "README.en.md"), "utf8");
 
 function pdfItem(str, x, y, width = 120, height = 10, extra = {}) {
   return { str, transform: [1, 0, 0, 1, x, y], width, height, ...extra };
+}
+
+function unitViewport(width, height) {
+  return {
+    width,
+    height,
+    convertToViewportRectangle(rect) {
+      const [x1, y1, x2, y2] = rect;
+      return [x1, height - y2, x2, height - y1];
+    }
+  };
 }
 
 function attentionItems() {
@@ -87,6 +99,20 @@ test("PDF-MD-READOUT spec locks reading-flow, not bbox mirror", () => {
   assert.match(spec, /PDF-ENTRY-SECONDARY.*本轨作废|本轨不做[\s\S]*PDF-ENTRY-SECONDARY/);
   assert.match(spec, /勿回归[\s\S]*网页 content\/Options|网页 content\/Options/);
   assert.match(spec, /PDF-READOUT-MARKDOWN\.md[\s\S]*以 \*\*本文\*\* 为准/);
+  assert.match(spec, /右栏使用原页裁图/);
+  assert.match(spec, /pageRaster/);
+  assert.match(spec, /内容精准第一/);
+  assert.match(spec, /排版第二/);
+  assert.match(spec, /译文跟抽出的原文一致/);
+  assert.match(spec, /同一套内容/);
+  assert.match(spec, /同一条验收/);
+  assert.match(spec, /不上屏/);
+  assert.match(spec, /文字层原句/);
+  assert.match(spec, /译文只出现在右栏/);
+  assert.match(spec, /高亮对齐/);
+  assert.match(spec, /智谱 GLM-OCR/);
+  assert.match(spec, /OCR API/);
+  assert.match(spec, /Issue #40 保持关闭/);
   assert.equal(existsSync(join(root, "pdf/PDF-MD-READOUT.md")), true);
   assert.equal(existsSync(join(root, "pdf/PDF-READOUT-MARKDOWN.md")), true);
   assert.match(draft, /草稿|指针/);
@@ -169,28 +195,24 @@ test("Attention-like page becomes title + byline + abstract flow, not author gri
   assert.doesNotMatch(md, /provided proper attribution/i);
 });
 
-test("formulas stay in reading order as LaTeX, not a crop-first path", () => {
-  const blocks = extractReadoutBlocks(
-    [
+test("formulas stay in reading order as page crops, not LaTeX", () => {
+  const page = textLayerToBlocks({
+    items: [
       pdfItem("The attention function can be described as", 72, 680, 360, 10),
       pdfItem("Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) V", 96, 650, 420, 12, { fontName: "CMMI10" }),
       pdfItem("where the queries come from the previous layer.", 72, 620, 360, 10)
     ],
-    { width: 612, height: 792 }
-  );
-  const formula = blocks.find((block) => block.role === "formula");
+    viewport: unitViewport(612, 792),
+    page: 1
+  });
+  const formula = page.blocks.find((block) => block.label === "formula" || block.role === "formula");
   assert.ok(formula);
-  assert.equal(formula.kind, "math");
-  assert.match(formula.latex || "", /softmax/);
-  const units = translatableReadoutUnits(blocks);
-  assert.equal(units.some((unit) => unit.role === "formula"), false);
-  const merged = mergeReadoutTranslations(blocks, [
-    { translation: "注意力函数可以写成", role: "paragraph" },
-    { translation: "其中查询来自上一层。", role: "paragraph" }
-  ]);
-  assert.equal(merged[1].role, "formula");
-  assert.match(merged[1].translation, /\$/);
-  assert.equal(pageHasTranslation(merged), true);
+  assert.equal(Object.hasOwn(formula, "latex"), false);
+  assert.equal(Object.hasOwn(formula, "text"), false);
+  assert.ok(Array.isArray(formula.bbox) && formula.bbox.length === 4);
+  const units = page.blocks.filter((block) => block.text && block.label !== "formula" && block.label !== "figure");
+  assert.equal(units.some((unit) => /softmax/.test(unit.text || "")), false);
+  assert.equal(pageHasTranslation([{ role: "paragraph", translation: "注意力函数可以写成" }]), true);
   assert.equal(pageHasTranslation([{ role: "formula", translation: "$$x$$" }]), false);
   assert.equal(pageTranslationComplete([{ role: "formula", translation: "$$x$$" }, { role: "paragraph", translation: "" }]), false);
   assert.equal(looksLikeFormulaText("Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) V", "CMMI10"), true);
@@ -209,13 +231,15 @@ test("viewer default right pane is Markdown readout without bbox wiring", () => 
   assert.match(src, /applyViewMode\(\)/);
   assert.match(src, /viewMode = "readout"/);
   assert.match(contrib, /右侧默认\*\*Markdown 通读\*\*|右侧默认 Markdown 通读|阅读顺序/);
+  assert.match(contrib, /原页裁图/);
+  assert.match(contrib, /画面不来自 LaTeX 渲染/);
   assert.match(readme, /Markdown 通读|阅读顺序/);
   assert.doesNotMatch(readme, /右栏默认按 bbox \*\*版式镜像\*\*/);
   assert.match(readme, /实验室功能：默认关闭|PDF 阅读（实验室）/);
   assert.match(readme, /设置 → 高级/);
-  assert.match(readme, /OCR 和\/或多模态视觉|OCR API/);
-  assert.match(readme, /保留公式\/LaTeX|不翻译数学/);
-  assert.match(readme, /保护公式、符号与代码|公式、符号与代码/);
+  assert.match(readme, /OCR API/);
+  assert.match(readme, /原页内容精准展示（默认裁图）/);
+  assert.match(readme, /公式画面不来自 LaTeX 渲染/);
   assert.match(readme, /docs\/screenshots\/01-bilingual-page\.png/);
   assert.match(readme, /docs\/screenshots\/06-pdf-readout\.png/);
   assert.match(readme, /开启实验室 PDF 后/);
@@ -223,15 +247,16 @@ test("viewer default right pane is Markdown readout without bbox wiring", () => 
   assert.equal(existsSync(join(root, "docs/screenshots/03-options-engine.png")), true);
   assert.equal(existsSync(join(root, "docs/screenshots/05-popup.png")), true);
   assert.equal(existsSync(join(root, "docs/screenshots/06-pdf-readout.png")), true);
-  assert.match(readme, /英文公式\/数学可能被误译成中文|公式可能丢失或乱码/);
+  assert.match(readme, /文字层原句/);
+  assert.match(readme, /译文只在右栏|译文只出现在右栏/);
   assert.match(readmeEn, /Markdown reading-flow|reading order/i);
   assert.match(readmeEn, /off by default/i);
   assert.match(readmeEn, /Settings → Advanced/);
-  assert.match(readmeEn, /OCR and\/or multimodal vision/i);
-  assert.match(readmeEn, /preserve formulas\/LaTeX/i);
-  assert.match(readmeEn, /formula\/symbol\/code protection/i);
+  assert.match(readmeEn, /OCR API/i);
+  assert.match(readmeEn, /content-accurate original-page display \(crops by default\)/i);
+  assert.match(readmeEn, /formula images do not come from LaTeX/i);
   assert.match(readmeEn, /after enabling lab PDF/i);
-  assert.match(readmeEn, /wrongly translated into Chinese/i);
+  assert.match(readmeEn, /text-layer body/i);
   assert.match(popupHtml, /id="openPdfPage"[^>]*>PDF</);
   assert.match(popupHtml, /id="openPdfPage"[^>]*\bhidden\b/);
   assert.match(popupJs, /page: "pdf"/);
