@@ -148,8 +148,8 @@ test("local and cloud envelopes share vendorLayoutToBlocks", () => {
   assert.equal(cloud.blocks.find((block) => block.label === "figure")?.label, "figure");
 });
 
-test("empty mode tries local-ocr, and cloud with no key does not fetch", async () => {
-  assert.equal(resolveLayoutMode(null, ""), "local-ocr");
+test("empty mode stays on the text layer, and cloud with no key does not fetch", async () => {
+  assert.equal(resolveLayoutMode(null, ""), "text-layer");
   assert.equal(resolveLayoutMode({ mode: "text-layer" }, ""), "text-layer");
   assert.equal(resolveLayoutMode({ mode: "cloud-ocr" }, "text-layer"), "text-layer");
   assert.equal(shouldFetchCloud({ cloudApiKey: "" }), false);

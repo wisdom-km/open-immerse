@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PDF_MIRROR_OPS } from "../lib/pdf-mirror.js";
-import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { FORMULA_CROP_PAD, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { segmentPageBlocks } from "../lib/pdf-viewer.js";
 
 function pdfItem(str, x, y, width = 120, height = 10, extra = {}) {
@@ -67,7 +67,7 @@ test("a fraction beside softmax is cropped with the full display equation", () =
       pdfItem("Q, K, V", 266, 311, 31),
       pdfItem(") = softmax(", 299, 311, 55),
       pdfItem("QK", 355, 318, 16),
-      pdfItem("T", 372, 322, 5),
+      pdfItem("T", 372, 322, 5, 7),
       pdfItem("√", 358, 311, 8),
       pdfItem("d", 366, 304, 5),
       pdfItem("k", 371, 302, 4, 7),
@@ -79,9 +79,13 @@ test("a fraction beside softmax is cropped with the full display equation", () =
   });
   const formulas = page.blocks.filter((block) => block.label === "formula");
   assert.equal(formulas.length, 1);
-  assert.ok(formulas[0].bbox[0] <= 220 / 612);
-  assert.ok(formulas[0].bbox[2] >= 505 / 612);
-  assert.ok(formulas[0].bbox[1] < (792 - 322) / 792);
+  assert.ok(formulas[0].bbox[0] <= 220 / 612 - FORMULA_CROP_PAD.displayX);
+  assert.ok(formulas[0].bbox[2] >= 505 / 612 + FORMULA_CROP_PAD.displayX);
+  const glyphTop = (792 - 329) / 792;
+  assert.ok(formulas[0].bbox[1] <= glyphTop - FORMULA_CROP_PAD.displayY);
+  assert.equal(Object.hasOwn(formulas[0], "text"), false);
+  assert.equal(Object.hasOwn(formulas[0], "latex"), false);
+  assert.equal(Object.hasOwn(formulas[0], "content"), false);
   assert.equal(page.blocks.some((block) => /softmax/.test(block.text || "")), false);
 });
 
@@ -223,6 +227,69 @@ test("an untrusted text layer keeps the image crop and drops invented prose", ()
   const figure = page.blocks.find((block) => block.label === "figure");
   assert.ok(figure);
   assert.equal(Object.hasOwn(figure, "text"), false);
+});
+
+test("a scripted membership line is cropped instead of spelling formula letters", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("Where the projections are parameter matrices", 107.5, 578.7, 176.2, 10),
+      pdfItem("W", 285.9, 578.7, 9.4, 10),
+      pdfItem("i", 295.3, 575.9, 2.8, 7),
+      pdfItem("Q", 296.7, 583.5, 6.3, 7),
+      pdfItem("∈", 306.2, 578.7, 6.6, 10),
+      pdfItem("R", 315.6, 578.7, 7.2, 10),
+      pdfItem("d", 322.8, 582.3, 4.2, 7),
+      pdfItem("model", 327, 581.3, 12.4, 5),
+      pdfItem("×", 339.9, 582.3, 6.2, 7),
+      pdfItem("d", 346.2, 582.3, 4.2, 7),
+      pdfItem("k", 350.3, 581.3, 3.8, 5),
+      pdfItem("and", 108, 566.5, 14.4, 10),
+      pdfItem("W", 124.9, 566.5, 9.4, 10),
+      pdfItem("O", 135.7, 570.1, 6.1, 7),
+      pdfItem("∈", 145.2, 566.5, 6.6, 10),
+      pdfItem("R", 154.6, 566.5, 7.2, 10),
+      pdfItem(".", 163, 566.5, 2.5, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 5
+  });
+  const sentence = page.blocks.find((block) => /Where the projections/.test(block.text || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /parameter matrices ⟦f\d+⟧ and ⟦f\d+⟧\./);
+  assert.doesNotMatch(sentence.text, /W_iQ|dmodel|Rdmodel/);
+  assert.equal(sentence.placeholders.length, 2);
+  const crops = sentence.placeholders.map((entry) => page.blocks.find((block) => block.id === entry.blockId));
+  assert.equal(crops.every((block) => block?.label === "formula" && !Object.hasOwn(block, "text")), true);
+  const superscriptTop = (792 - (583.5 + 7)) / 792;
+  assert.ok(crops[0].bbox[1] <= superscriptTop - FORMULA_CROP_PAD.inlineY + 0.002);
+  assert.ok(crops[0].bbox[0] <= 285.9 / 612);
+  assert.ok(crops[0].bbox[2] >= (350.3 + 3.8) / 612);
+});
+
+test("reference entries keep column order and stay out of translation", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("References", 108, 400, 70, 12, { fontName: "Helvetica-Bold" }),
+      pdfItem("[16]", 108, 339.5, 18, 10),
+      pdfItem("Kaiser and Bengio. Can active memory replace attention? In", 129.6, 339.5, 280, 10),
+      pdfItem("Advances in Neural", 426.9, 339.5, 70, 10),
+      pdfItem("Information Processing Systems, (NIPS)", 129.4, 328.6, 160, 10),
+      pdfItem(", 2016.", 290, 328.6, 36, 10),
+      pdfItem("[17]", 108, 308.8, 18, 10),
+      pdfItem("Kaiser and Sutskever. Neural GPUs learn algorithms. In", 129.6, 308.8, 260, 10),
+      pdfItem("International Conference", 404.2, 308.8, 90, 10),
+      pdfItem("on Learning Representations (ICLR), 2016.", 129.6, 297.9, 180, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 11
+  });
+  const refs = page.blocks.filter((block) => /^\[\d+\]/.test(block.text || ""));
+  assert.deepEqual(refs.map((block) => block.text.slice(0, 4)), ["[16]", "[17]"]);
+  assert.match(refs[0].text, /In Advances in Neural Information Processing Systems, \(NIPS\), 2016\./);
+  assert.doesNotMatch(refs[0].text, /Information Processing Systems, \(NIPS\)Kaiser/);
+  assert.match(refs[1].text, /In International Conference on Learning Representations/);
+  assert.equal(refs.every((block) => block.skipTranslate === true), true);
+  assert.equal(page.blocks.some((block) => /softmax|W_iQ/.test(block.text || "")), false);
 });
 
 test("paragraphs keep sourceItems without dropping text or role", () => {

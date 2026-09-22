@@ -193,9 +193,7 @@ const supplements = [
   }]
 ];
 
-const uncertainSourcePrefixes = new Map([
-  [5, ["Where the projections"]]
-]);
+const uncertainSourcePrefixes = new Map();
 
 function citations(text) {
   return [...String(text || "").matchAll(/\[\s*\d+(?:\s*,\s*\d+)*\s*\]/g)]
@@ -271,10 +269,8 @@ async function main() {
     page: layout.page,
     pairs: layout.blocks.filter(isTranslatableBlock).map((block) => {
       const hit = mapped.get(block.sourceId);
-      const uncertain = layout.page === 11 || layout.page === 12 ||
-        (layout.page === 10 && /^\[\d+\]/.test(block.sourceText || block.text)) ||
-        (uncertainSourcePrefixes.get(layout.page) || []).some((prefix) =>
-          String(block.sourceText || block.text).startsWith(prefix));
+      const uncertain = (uncertainSourcePrefixes.get(layout.page) || []).some((prefix) =>
+        String(block.sourceText || block.text).startsWith(prefix));
       return { id: block.id, sourceId: block.sourceId, text: block.text,
         sourceText: block.sourceText || block.text,
         translation: hit?.translation || "",

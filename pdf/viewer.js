@@ -770,8 +770,7 @@ function appendCropOrNotice(node, block) {
 
 function fillBlockText(node, block, layout) {
   if (block.translationStatus === "source-uncertain" && !block.translation) {
-    node.textContent = "（本块原文顺序或译文对应关系尚不能可靠确认，请查看左栏原页）";
-    return;
+    node.append(document.createTextNode("（旧译文未沿用。以下为文字层原文） "));
   }
   if (block.translationStatus === "pending" && !block.translation) {
     node.append(document.createTextNode("（译文待核对，以下为原文） "));
@@ -1886,7 +1885,9 @@ async function loadCurrentPageText() {
     if (libraryDoc?.pages?.length) mode = "text-layer";
   }
   const wantsVendor = mode === "local-ocr" || mode === "cloud-ocr";
-  const ensuring = runtimeSend({ type: "OI_ENSURE_GLMOCR" }).catch(() => null);
+  const ensuring = mode === "local-ocr"
+    ? runtimeSend({ type: "OI_ENSURE_GLMOCR" }).catch(() => null)
+    : Promise.resolve(null);
   try {
     if (wantsVendor) {
       const quick = await ingestTextLayerLayout(n, isStale);
