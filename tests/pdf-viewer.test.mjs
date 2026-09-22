@@ -1060,7 +1060,8 @@ test("translatePageBlocks sends OI_TRANSLATE_BATCH slices and honors stop", asyn
 
   const headed = await translatePageBlocks(
     [
-      { text: "Attention Is All You Need", role: "title" },
+      { id: "p1-b1", sourceId: "p1-s1", sourceText: "Attention Is All You Need",
+        text: "Attention Is All You Need", role: "title" },
       { text: "The dominant sequence transduction models are based on attention.", role: "paragraph" }
     ],
     {
@@ -1068,6 +1069,8 @@ test("translatePageBlocks sends OI_TRANSLATE_BATCH slices and honors stop", asyn
     }
   );
   assert.equal(headed.results[0].role, "title");
+  assert.equal(headed.results[0].sourceId, "p1-s1");
+  assert.equal(headed.results[0].sourceText, "Attention Is All You Need");
   assert.equal(headed.results[1].role, "paragraph");
   assert.equal(headed.results[0].translation, "译:Attention Is All You Need");
 

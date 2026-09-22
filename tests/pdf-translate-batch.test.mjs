@@ -9,6 +9,7 @@ import {
   PDF_PROMPT_ADDENDUM,
   applyBlockTranslations,
   blockRenderPieces,
+  blockTranslationIntegrity,
   translatableBlocks
 } from "../lib/pdf-blocks.js";
 
@@ -88,21 +89,32 @@ test("formula and author blocks stay out of the translation batch", () => {
   assert.match(batch[0].text, /⟦f1⟧/);
 });
 
-test("a dropped placeholder is appended without changing the formula pixels", () => {
+test("a dropped placeholder falls back to the source sentence at its original position", () => {
   const formula = { id: "f", label: "formula", imageUrl: "data:image/png;base64,same" };
   const block = {
     id: "t",
     label: "text",
-    text: "see ⟦f1⟧",
+    text: "see ⟦f1⟧ here",
     translation: "见图",
     placeholders: [{ token: "⟦f1⟧", blockId: "f" }]
   };
   const pieces = blockRenderPieces(block, [block, formula]);
+  assert.equal(blockTranslationIntegrity(block).reason, "formula-placeholder-mismatch");
   assert.equal(pieces.filter((piece) => piece.type === "image").length, 1);
-  assert.equal(pieces.at(-1).src, "data:image/png;base64,same");
+  assert.deepEqual(pieces.map((piece) => piece.type), ["text", "image", "text"]);
+  assert.equal(pieces[0].text, "see ");
+  assert.equal(pieces[1].src, "data:image/png;base64,same");
+  assert.equal(pieces[2].text, " here");
   const filled = applyBlockTranslations([block, formula], [{ id: "t", translation: "见图" }]);
   assert.equal(filled[1].imageUrl, "data:image/png;base64,same");
   assert.equal(filled[0].translation, "见图");
+});
+
+test("a translation with missing citation numbers falls back to the source", () => {
+  const block = { text: "memory [13] and recurrent [7]", sourceText: "memory [13] and recurrent [7]",
+    translation: "记忆 [ ] 和循环 [7]" };
+  assert.equal(blockTranslationIntegrity(block).reason, "citation-mismatch");
+  assert.equal(blockRenderPieces(block)[0].text, block.text);
 });
 
 test("webpage and document batches do not send a PDF addendum", () => {

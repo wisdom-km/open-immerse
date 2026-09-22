@@ -127,6 +127,14 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 | `captionFor` | 题注指向它说明的 `figure` 或 `table` |
 | `textSource` | `"text-layer"` 或 `"ocr"`。写在页上，不写在块上 |
 
+### 逐页来源和本地库
+
+当前数字 PDF 路径给每个块增加 `sourceId`，它由同一 PDF 页的文字层项索引生成；块的阅读序 `id` 可以随分段调整，不能单独作为旧译文配对依据。正文块还保留 `sourceText`，行内公式所在位置用 `⟦fN⟧` 关联原页裁图。`sourceAudit.items` 对每个文字层片段记录正文、视觉对象或明确排除原因；`missing` 和 `duplicates` 必须为空。
+
+本地库按 PDF 文件 SHA-256 查找。`GET /v1/library/document?hash=...` 读取逐页记录；`POST /v1/library/page` 保存页、`pairs`、版面和首次打开的原 PDF。SQLite 是索引，仓外 `files/{hash}/page-NNN.json` 保存逐页数据，`source.pdf` 与 `readout.md` 分别是原件和旧格式兼容文件。阅读器优先用逐页 `pairs`，只在没有逐页记录时回退旧整篇 `readout.md`；已入库文档不自动重新翻译。
+
+每个 `pair` 至少包含源块 `sourceId`、送译文本 `text`、文字层原句 `sourceText`、`translation` 和状态。恢复时同时核对文件哈希、`sourceId` 与 `sourceText`；原句变化或公式占位符、引用编号不一致时，不展示不可信译文。批量翻译完成后，本地库写入按顺序执行，避免后到的早期批次覆盖同一页的完整记录。当前 Attention 的一次性迁移和剩余例外见 `STATUS.md`。
+
 视觉块是 `formula`、`figure`、`table`。进入右栏之前，适配器从这三类对象上删除 `latex`、`content`、`html`、`md`、`text`。校验函数发现这些键，删键并继续，不把它们渲染出来。
 
 `header` 和 `footer` 在准备右栏数据时整块丢掉，规则复用 `isPageChromeItem` / `isPageChromeText`。适配器可以原样返回它们。
@@ -213,7 +221,7 @@ export function textLayerTrust(items) {
 | `text-layer` | 中心点落在块 bbox 内的文字项，按阅读序拼句。交集为空则 `text` 为 `""`，留空，不用 OCR 字母填 | 仍从 pageRaster 裁 |
 | `ocr` | 使用信封里该文字块的 `content`，并在右栏显示误差提示 | 仍从 pageRaster 裁 |
 
-可信文字层上，厂商返回的句子只用来对框，不替换 `text`。无文字层和乱码都走 `ocr` 这一行，提示文案用同一句。
+可信文字层上，厂商返回的句子只用来对框，不替换 `text`。文字项的中心若落在公式、图、表的框里，就不进入正文 `text`，因此 `softmax`、括号、等号即使是普通字体，只要在公式框内也不送去翻译。划区若把一整条公式标成正文，而这块里没有普通句子，这块改成公式裁图，函数名不送去翻译。无文字层和乱码都走 `ocr` 这一行，提示文案用同一句。
 
 阶段 2 的文字层引擎在可信页上自己产出框和句子，此时还没有厂商 JSON。
 
@@ -222,14 +230,15 @@ export function textLayerTrust(items) {
 在**行**上判断，行来自现有分栏之后的 item 聚类。`looksLikeFormulaItem` 决定每个文字项是公式项还是散文项。
 
 - 一行只有公式项：一个 `formula` 块，bbox 为这些项的并集，每边外扩 0.004（归一化，并夹在 0–1）。没有 `text`，没有 `inlineOf`。
-- 一行同时有散文项和公式项：一个 `text`（或标题/题注）块。公式项的连续段换成 `⟦fN⟧`，并各生成一个带 `inlineOf` 的 `formula` 块。散文项按现有空格规则拼进句子。
+- 一行同时有散文项和公式项，且散文里有普通句子（4 个字母以上的单词，或连续汉字）：一个 `text`（或标题/题注）块。公式项的连续段换成 `⟦fN⟧`，并各生成一个带 `inlineOf` 的 `formula` 块。散文项按现有空格规则拼进句子。
+- 一行同时有散文项和公式项，但散文只剩 `softmax`、`Attention`、`LayerNorm`、`sqrt` 这类函数名和括号：整行一个 `formula` 块，bbox 覆盖整行。这些函数名不进翻译。
 - 一行只有散文项：进入现有段落合并。纯公式行会截断段落，规则与今天 `linesToParagraphs` 遇到 formula 行就 flush 相同。
 
 占位符形式固定为 `⟦f` + 十进制数字 + `⟧`。正则：`/⟦f(\d+)⟧/g`。
 
 右栏画带占位符的句子时，按 token 切开，token 处插入对应公式的 `img`，其余是译文文本节点。独占公式是单独一块，块内只有 `img`。
 
-检测把握不够（一行被标成公式，但其中有 4 个以上字母的普通单词，且不在 `softmax`、`LayerNorm`、`Attention`、`exp`、`log`、`sin`、`cos`、`tan`、`max`、`min` 里）：整行改为一个不带 `text` 的 `formula` 块。这一行没有译文，画面仍是原页。
+拿不准时整行裁图，不把公式字母交给翻译。函数名名单是 `softmax`、`LayerNorm`、`Attention`、`MultiHead`、`Concat`、`sqrt`、`exp`、`log`、`sin`、`cos`、`tan`、`max`、`min`。名单外的普通单词说明这是句子，行内公式仍用 `⟦fN⟧`。
 
 图的框：优先 `walkImageCtms` + `imageRectsFromUnitCtms`，滤掉宽或高小于页边 4% 的装饰图（`appendOperatorImages` 已有这个下限）。没有图像对象时，右栏在题注处保留现有「［图］」占位，不要编造 bbox。文字层引擎不产出 `table`。表要等划区信封给出 `label: "table"`。
 
@@ -374,7 +383,7 @@ Faithfulness to the source outranks smoother wording.
 - `polish` 缺省时，网页批次仍读 `settings.twoStepPolish`。
 - `features.pdf` 默认 false。
 
-目视（打开实验室 PDF，用本地的 Attention 论文即可，文件不入库）：
+目视只看扩展阅读器网页：左栏原文、右栏译文并排。不要用导出的 Markdown 或 PDF 判断公式是否对上。当前这一条还没有通过，记录在 `STATUS.md`。
 
 - 右栏公式与左栏同一内容；缩小左栏后公式仍然清楚。
 - 架构图内英文没有被换成中文。

@@ -9,6 +9,9 @@ dist/
 .env.*
 *.zip
 
+# Local regression PDF; only the small boundary annotations are versioned.
+tests/fixtures/Attention_Is_All_You_Need.pdf
+
 # Chrome rejects unpacked dirs starting with _ (except _locales)
 _qa-out/
 _qa-*/

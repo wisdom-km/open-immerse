@@ -19,7 +19,7 @@ function unitViewport(width, height) {
   };
 }
 
-test("a prose line plus one CMMI item keeps the sentence and an inline crop", () => {
+test("a tiny math-font glyph stays in the trusted text instead of making a fragment crop", () => {
   const page = textLayerToBlocks({
     items: [
       pdfItem("The value is ", 72, 700, 70, 10),
@@ -29,15 +29,100 @@ test("a prose line plus one CMMI item keeps the sentence and an inline crop", ()
     viewport: unitViewport(612, 792),
     page: 1
   });
-  const sentence = page.blocks.find((block) => block.label === "text" && /⟦f1⟧/.test(block.text || ""));
+  const sentence = page.blocks.find((block) => block.label === "text" && /The value is n here\./.test(block.text || ""));
   assert.ok(sentence);
-  const formula = page.blocks.find((block) => block.inlineOf === sentence.id);
-  assert.ok(formula);
-  assert.equal(formula.label, "formula");
-  assert.equal(Object.hasOwn(formula, "text"), false);
-  assert.equal(Object.hasOwn(formula, "latex"), false);
-  assert.equal(sentence.placeholders[0].token, "⟦f1⟧");
-  assert.equal(sentence.placeholders[0].blockId, formula.id);
+  assert.equal(page.blocks.some((block) => block.label === "formula"), false);
+});
+
+test("body citations and a base with subscript stay in one source sentence", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("Recurrent networks [", 72, 603.5, 90),
+      pdfItem("13", 162, 603.5, 10),
+      pdfItem("] and gated recurrent [", 172, 603.5, 110),
+      pdfItem("7", 282, 603.5, 5),
+      pdfItem("] produce states ", 287, 603.5, 76),
+      pdfItem("h", 363, 603.5, 6),
+      pdfItem("t", 369, 602, 3, 7),
+      pdfItem(" from ", 373, 603.5, 24),
+      pdfItem("h", 397, 603.5, 6),
+      pdfItem("t", 403, 602, 3, 7),
+      pdfItem("−", 406, 602, 6, 7),
+      pdfItem("1", 412, 602, 4, 7),
+      pdfItem(".", 416, 603.5, 3)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 2
+  });
+  const text = page.blocks.filter((block) => block.label === "text").map((block) => block.text).join(" ");
+  assert.match(text, /\[13\].*\[7\]/);
+  assert.match(text, /h_t.*h_\{t−1\}/);
+  assert.equal(page.blocks.some((block) => block.label === "formula"), false);
+});
+
+test("a fraction beside softmax is cropped with the full display equation", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("Attention(", 220, 311, 46),
+      pdfItem("Q, K, V", 266, 311, 31),
+      pdfItem(") = softmax(", 299, 311, 55),
+      pdfItem("QK", 355, 318, 16),
+      pdfItem("T", 372, 322, 5),
+      pdfItem("√", 358, 311, 8),
+      pdfItem("d", 366, 304, 5),
+      pdfItem("k", 371, 302, 4, 7),
+      pdfItem(")V", 380, 311, 10),
+      pdfItem("(1)", 493, 311, 12)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 4
+  });
+  const formulas = page.blocks.filter((block) => block.label === "formula");
+  assert.equal(formulas.length, 1);
+  assert.ok(formulas[0].bbox[0] <= 220 / 612);
+  assert.ok(formulas[0].bbox[2] >= 505 / 612);
+  assert.ok(formulas[0].bbox[1] < (792 - 322) / 792);
+  assert.equal(page.blocks.some((block) => /softmax/.test(block.text || "")), false);
+});
+
+test("indented positional encoding equation stays one source crop", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("PE", 234, 456, 14),
+      pdfItem("(", 248, 456, 4),
+      pdfItem("pos, 2i", 252, 456, 34, 10, { fontName: "CMMI10" }),
+      pdfItem(") = sin(", 286, 456, 36),
+      pdfItem("pos", 322, 456, 17, 10, { fontName: "CMMI10" }),
+      pdfItem("/10000", 339, 456, 35),
+      pdfItem("2i/dmodel", 374, 456, 42, 10, { fontName: "CMMI10" }),
+      pdfItem(")", 416, 456, 4),
+      pdfItem("(4)", 492, 456, 13)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 6
+  });
+  const formulas = page.blocks.filter((block) => block.label === "formula");
+  assert.equal(formulas.length, 1);
+  assert.ok(formulas[0].bbox[0] <= 234 / 612);
+  assert.ok(formulas[0].bbox[2] >= 505 / 612);
+  assert.equal(page.blocks.some((block) => /sin|dmodel/.test(block.text || "")), false);
+});
+
+test("a display line of softmax plus math letters is one crop", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("softmax", 72, 500, 52, 10),
+      pdfItem("(", 126, 500, 6, 10),
+      pdfItem("Q", 134, 500, 10, 10, { fontName: "CMMI10" }),
+      pdfItem(")", 146, 500, 6, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 1
+  });
+  const formula = page.blocks.filter((block) => block.label === "formula");
+  assert.equal(formula.length, 1);
+  assert.equal(formula[0].inlineOf, undefined);
+  assert.equal(page.blocks.some((block) => /softmax/.test(block.text || "")), false);
 });
 
 test("a pure formula line is one formula block without text", () => {

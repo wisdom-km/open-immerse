@@ -1,0 +1,31 @@
+{
+  "pdf": "Attention_Is_All_You_Need.pdf",
+  "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+  "coordinateSystem": "normalized top-left [x0,y0,x1,y1]",
+  "blocks": [
+    { "name": "abstract", "page": 1, "label": "text", "sourceIncludes": "The dominant sequence transduction models are based", "bbox": [0.23457, 0.51894, 0.76763, 0.72436] },
+    { "name": "introduction-citations", "page": 2, "label": "text", "sourceIncludes": "long short-term memory [13] and gated recurrent [7]", "bbox": [0.17647, 0.12208, 0.82380, 0.18975] },
+    { "name": "hidden-states", "page": 2, "label": "text", "sourceIncludes": "hidden states h_t, as a function of the previous hidden state h_{t−1}", "bbox": [0.17647, 0.19786, 0.82410, 0.30686] },
+    { "name": "model-architecture-paragraph", "page": 2, "label": "text", "sourceIncludes": "encoder-decoder structure [5, 2, 35]", "bbox": [0.17647, 0.84142, 0.82638, 0.90909] },
+    { "name": "model-architecture-x-sequence", "page": 2, "label": "formula", "inlineSourceIncludes": "(x_1, ..., x_n)", "bbox": [0.64433, 0.84919, 0.73180, 0.87566] },
+    { "name": "model-architecture-z-sequence", "page": 2, "label": "formula", "inlineSourceIncludes": "z = (z_1, ..., z_n)", "bbox": [0.37579, 0.86296, 0.49709, 0.88943] },
+    { "name": "model-architecture-y-sequence", "page": 2, "label": "formula", "inlineSourceIncludes": "(y_1, ..., y_m)", "bbox": [0.23551, 0.87674, 0.32383, 0.90320] },
+    { "name": "figure-1", "page": 3, "label": "figure", "bbox": [0.31617, 0.08591, 0.68382, 0.50300] },
+    { "name": "encoder-paragraph", "page": 3, "label": "text", "sourceIncludes": "Encoder: The encoder is composed of a stack of N = 6", "bbox": [0.17588, 0.63214, 0.82624, 0.72925] },
+    { "name": "encoder-N", "page": 3, "label": "formula", "inlineSourceIncludes": "N = 6", "bbox": [0.51985, 0.62614, 0.58076, 0.65072] },
+    { "name": "encoder-d-model", "page": 3, "label": "formula", "inlineSourceIncludes": "d_{model} = 512", "bbox": [0.41553, 0.70878, 0.51143, 0.73525] },
+    { "name": "decoder-N", "page": 3, "label": "formula", "inlineSourceIncludes": "N = 6", "bbox": [0.52635, 0.73798, 0.58306, 0.76256] },
+    { "name": "figure-2", "page": 4, "label": "figure", "bbox": [0.23648, 0.08186, 0.76809, 0.34249] },
+    { "name": "attention-display-equation", "page": 4, "label": "formula", "bbox": [0.35543, 0.58116, 0.82862, 0.62232] },
+    { "name": "scaling-factor-fraction", "page": 4, "label": "formula", "inlineSourceIncludes": "1/√d_k", "bbox": [0.19017, 0.64803, 0.22581, 0.68044] },
+    { "name": "scaling-consequence-fraction", "page": 4, "label": "formula", "inlineSourceIncludes": "1/√d_k", "bbox": [0.71415, 0.75423, 0.74979, 0.78663] },
+    { "name": "footnote-summation", "page": 4, "label": "formula", "inlineSourceIncludes": "q · k =", "bbox": [0.53389, 0.88328, 0.65513, 0.91855] },
+    { "name": "table-1", "page": 6, "label": "table", "bbox": [0.18551, 0.13623, 0.81449, 0.23706] },
+    { "name": "table-2", "page": 8, "label": "table", "bbox": [0.20532, 0.11621, 0.79467, 0.30868] },
+    { "name": "table-3", "page": 9, "label": "table", "bbox": [0.17231, 0.15497, 0.83950, 0.48868] },
+    { "name": "table-4", "page": 10, "label": "table", "bbox": [0.22878, 0.11621, 0.77122, 0.30231] },
+    { "name": "figure-3", "page": 13, "label": "figure", "bbox": [0.17047, 0.07091, 0.86040, 0.36756] },
+    { "name": "appendix-figure-4", "page": 14, "label": "figure", "bbox": [0.17047, 0.11515, 0.86507, 0.73265] },
+    { "name": "appendix-figure-5", "page": 15, "label": "figure", "bbox": [0.16845, 0.13312, 0.85759, 0.75091] }
+  ]
+}

@@ -2,7 +2,7 @@
 
 沉浸译实验室 PDF 的实现入口。需求正本是同目录的 `REQUIREMENTS.md`。`ARCHITECTURE.md` 写编码细节，`EXECUTION.md` 写阶段步骤。后两份与需求正本冲突时，先改后两份向需求正本对齐，再写代码。
 
-目标规格是 `pdf/PDF-MD-READOUT.md`：右栏使用原页裁图，公式画面不来自 LaTeX 渲染。`pdf/viewer.js` 在切换默认路径的阶段完成前仍走遗留渲染。不要提前改它的运行路径。
+目标规格是 `pdf/PDF-MD-READOUT.md`：右栏使用原页裁图，公式画面不来自 LaTeX 渲染。当前默认设置仍可走遗留通读路径；已保存逐页配对的 PDF 优先用文字层块和本地库译文，旧整篇 `readout.md` 只作兼容回退。最新实现和未完成验收见 `STATUS.md`，迁移前的故障证据见 `CONTENT-AUDIT-2026-09-23.md`。
 
 ## 一次只做一个阶段
 
@@ -34,6 +34,8 @@ node --test tests/*.test.mjs
 | `REQUIREMENTS.md` | 核对产品要求时。需求只改这一份，不要写进另外两份 |
 | `ARCHITECTURE.md` | 每次开工。协议、坐标、裁图、翻译、适配器都在这里 |
 | `EXECUTION.md` | 只读当前阶段。后一阶段当成还不存在 |
+| `STATUS.md` | 当前进度、本机运行状态、未解决问题与网页验收边界 |
+| `CONTENT-AUDIT-2026-09-23.md` | Attention 迁移前故障证据及迁移后的剩余问题 |
 
 ## 仓库事实
 
@@ -41,7 +43,7 @@ node --test tests/*.test.mjs
 - 实验室开关：`lib/features.js` 的 `features.pdf` 默认 `false`。入口在设置 → 高级。
 - 阅读器：`pdf/viewer.html`、`pdf/viewer.js`。左栏 `#pages` 里的 pdf.js canvas。右栏 `#readout`。
 - 翻译：阅读器发 `OI_TRANSLATE_BATCH`，`background/service-worker.js` 的 `translateBatch`。密钥在 `chrome.storage.sync`。
-- 划区 sidecar 放在扩展仓外面，建议 `D:\pdf-layout-sidecar`。权重、PyTorch、vLLM 不进本仓库。
+- 划区 sidecar 放在扩展仓外面，目录 `D:\pdf-layout-sidecar`。它听 `127.0.0.1:8765`。`7860` 是 GLM-OCR 网页，不是这个接口。认字模型在 `127.0.0.1:5002`。版面模型在 `D:\pdf-layout-models`，仓库名 `PaddlePaddle/PP-DocLayoutV3_safetensors`。`id2label` 在模型加载后从权重配置读取，不写进扩展仓。权重、PyTorch、vLLM 不进本仓库。
 - `tests/fixtures/Attention_Is_All_You_Need.pdf` 若在本地，不要 `git add`。手标样例只用小 JSON。
 
 ## 已经写好、直接调用的函数

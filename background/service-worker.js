@@ -79,8 +79,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+const GLMOCR_HOST = "com.open_immerse.glmocr";
+
+function ensureLocalGlmOcr() {
+  return new Promise((resolve) => {
+    let port;
+    try {
+      port = chrome.runtime.connectNative(GLMOCR_HOST);
+    } catch (err) {
+      resolve({ ok: false, error: String(err?.message || err) });
+      return;
+    }
+    let settled = false;
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { port.disconnect(); } catch { /* already closed */ }
+      resolve(payload);
+    };
+    const timer = setTimeout(() => finish({ ok: false, error: "timeout" }), 8000);
+    port.onMessage.addListener((message) => finish(message || { ok: true }));
+    port.onDisconnect.addListener(() => {
+      const reason = chrome.runtime.lastError?.message;
+      finish({ ok: false, error: reason || "disconnected" });
+    });
+    port.postMessage({ action: "ensure" });
+  });
+}
+
 async function handleMessage(message, sender) {
   switch (message.type) {
+    case "OI_ENSURE_GLMOCR":
+      return ensureLocalGlmOcr();
     case "OI_GET_SETTINGS":
       return { ok: true, settings: await getSettings() };
     case "OI_SAVE_SETTINGS": {

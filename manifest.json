@@ -40,7 +40,8 @@
     "activeTab",
     "scripting",
     "contextMenus",
-    "alarms"
+    "alarms",
+    "nativeMessaging"
   ],
   "host_permissions": ["<all_urls>"],
   "commands": {

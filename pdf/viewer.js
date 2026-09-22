@@ -73,6 +73,7 @@ import {
   applyBlockTranslations,
   blockReadoutPlan,
   blockRenderPieces,
+  blockTranslationIntegrity,
   cropBlockImage,
   isVisualBlock,
   preparePageBlocks,
@@ -83,6 +84,7 @@ import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import {
   LAYOUT_EMPTY_KEY_STATUS,
   LAYOUT_FALLBACK_STATUS,
+  LAYOUT_STARTING_STATUS,
   cacheableLayout,
   fetchCloudEnvelope,
   fetchLocalEnvelope,
@@ -92,6 +94,7 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { applySavedPairs, createLibraryWriteQueue, fetchLibraryDocument, pairsFromResults, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 
 const $ = (id) => document.getElementById(id);
 const RENDER_RADIUS = 2;
@@ -113,6 +116,10 @@ let translatingPage = 0;
 let pageViews = [];
 let scrollTick = 0;
 const pageCache = createPageCache();
+let libraryArticle = null;
+let libraryDoc = null;
+const librarySourceSent = new Set();
+const enqueueLibraryWrite = createLibraryWriteQueue();
 const layoutCache = new Map();
 let session = createTranslateSession();
 let zoomChipCustom = false;
@@ -748,16 +755,33 @@ function loadSamplePage() {
 }
 
 function cropImage(block) {
+  if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(block?.imageUrl || "")) return null;
   const img = document.createElement("img");
   img.alt = visualAlt(block.label);
-  img.src = block.imageUrl || "";
+  img.src = block.imageUrl;
   return img;
 }
 
+function appendCropOrNotice(node, block) {
+  const img = cropImage(block);
+  if (img) node.append(img);
+  else node.textContent = `（${visualAlt(block.label)}裁图失败，请查看左栏原页）`;
+}
+
 function fillBlockText(node, block, layout) {
+  if (block.translationStatus === "source-uncertain" && !block.translation) {
+    node.textContent = "（本块原文顺序或译文对应关系尚不能可靠确认，请查看左栏原页）";
+    return;
+  }
+  if (block.translationStatus === "pending" && !block.translation) {
+    node.append(document.createTextNode("（译文待核对，以下为原文） "));
+  }
+  if (block.translation && !blockTranslationIntegrity(block).valid) {
+    node.append(document.createTextNode("（译文中的公式或引用与原文不符，以下为原文） "));
+  }
   const pieces = blockRenderPieces(block, layout.blocks || []);
   if (!pieces.length) {
-    node.textContent = String(block.translation || block.text || "");
+    node.append(document.createTextNode(String(block.translation || block.text || "")));
     return;
   }
   pieces.forEach((piece) => {
@@ -766,7 +790,9 @@ function fillBlockText(node, block, layout) {
       return;
     }
     const formula = (layout.blocks || []).find((item) => item.id === piece.blockId);
-    node.append(cropImage({ ...(formula || {}), imageUrl: piece.src || formula?.imageUrl || "", label: "formula" }));
+    const img = cropImage({ ...(formula || {}), imageUrl: piece.src || formula?.imageUrl || "", label: "formula" });
+    if (img) node.append(img);
+    else node.append(document.createTextNode("（公式裁图失败，请查看左栏原页）"));
   });
 }
 
@@ -774,7 +800,9 @@ function unitsForLayout(layout) {
   if (layout?.kind === "blocks") {
     return translatableBlocks(layout.blocks).map((block) => ({
       id: block.id,
+      sourceId: block.sourceId,
       text: block.text,
+      sourceText: block.sourceText || block.text,
       original: block.text,
       role: block.label,
       label: block.label
@@ -815,8 +843,9 @@ function appendFixtureReadout(parent, layout) {
     const node = document.createElement(plan.tag);
     node.className = plan.className;
     if (plan.role) node.dataset.role = plan.role;
-    if (plan.image) node.append(cropImage(block));
+    if (plan.image) appendCropOrNotice(node, block);
     else fillBlockText(node, block, layout);
+    if (block.translationStatus) node.dataset.translationStatus = block.translationStatus;
     node.dataset.page = String(page);
     node.dataset.blockId = String(block.id || "");
     node.dataset.label = String(block.label || "");
@@ -854,21 +883,65 @@ function syncReadoutEmpty(hasArticle) {
   $("pendingRead").hidden = copy !== PDF_COPY.translatingWait;
 }
 
+function renderStoredArticle(blocks) {
+  const flowRoot = $("readout");
+  flowRoot.replaceChildren();
+  const source = getPageLayout(1)?.blocks || [];
+  const bylines = source.filter((block) => block.presentation === "byline");
+  const abstractAt = (blocks || []).findIndex((block) => block.tag === "h2" && /^(abstract|摘要)$/i.test(block.text || ""));
+  let start = 0;
+  if (bylines.length && abstractAt > 1) {
+    const title = document.createElement("h1");
+    title.className = "oi-pdf-h1";
+    title.textContent = blocks[0]?.text || "";
+    title.dataset.page = "1";
+    title.dataset.blockId = source.find((block) => block.label === "title")?.id || "";
+    flowRoot.append(title);
+    for (const block of bylines) {
+      const node = document.createElement("p");
+      node.className = "oi-pdf-p";
+      node.dataset.role = "authors";
+      node.dataset.page = "1";
+      node.dataset.blockId = block.id;
+      node.textContent = block.text;
+      flowRoot.append(node);
+    }
+    start = abstractAt;
+  }
+  for (const block of (blocks || []).slice(start)) {
+    if (block.tag === "img") {
+      const img = document.createElement("img");
+      img.alt = block.alt || "公式";
+      img.src = block.src;
+      flowRoot.append(img);
+      continue;
+    }
+    const node = document.createElement(block.tag || "p");
+    node.textContent = block.text || "";
+    flowRoot.append(node);
+  }
+}
+
 function renderArticle() {
   const pane = translateScrollRoot();
   const keep = pane ? pane.scrollTop : 0;
   const flowRoot = $("readout");
   if ($("mirrorPages")) $("mirrorPages").replaceChildren();
+  if (libraryArticle?.length) {
+    renderStoredArticle(libraryArticle);
+    applyViewMode();
+    syncReadoutEmpty(true);
+    if (pane) pane.scrollTop = keep;
+    return;
+  }
   flowRoot.replaceChildren();
   const pages = collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0);
   applyViewMode();
   const blockPages = [];
-  if (pdfEngineMode() !== "legacy") {
-    const total = pdfDoc?.numPages || 0;
-    for (let n = 1; n <= total; n += 1) {
-      const layout = getPageLayout(n);
-      if (showsBlockReadout(layout)) blockPages.push(layout);
-    }
+  const total = pdfDoc?.numPages || 0;
+  for (let n = 1; n <= total; n += 1) {
+    const layout = getPageLayout(n);
+    if (showsBlockReadout(layout)) blockPages.push(layout);
   }
   if (!pages.length && !blockPages.length) {
     syncReadoutEmpty(false);
@@ -1063,8 +1136,89 @@ async function resolveBatchSize() {
   return Math.max(1, Number(settingsRes?.settings?.batchSize) || 8);
 }
 
+function rememberTranslation(page, results) {
+  const pairs = pairsFromResults(results);
+  if (!pairs.length) return Promise.resolve();
+  // Capture this document before queuing: the user may open another PDF while
+  // earlier pages are still being saved.
+  const bytes = pdfBytes;
+  const title = document.title;
+  const pageCount = pdfDoc?.numPages || 0;
+  const layout = cacheableLayout(getPageLayout(page));
+  return enqueueLibraryWrite(async () => {
+    const hash = await pdfByteHash(bytes);
+    if (!hash || hash === "nohash") return;
+    let sourceBase64 = "";
+    if (!librarySourceSent.has(hash) && bytes?.length) {
+      let binary = "";
+      for (let offset = 0; offset < bytes.length; offset += 32768) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+      }
+      sourceBase64 = btoa(binary);
+    }
+    await saveLibraryPage({ hash, title, pageCount, page, pairs, layout, sourceBase64 });
+    librarySourceSent.add(hash);
+  });
+}
+
+async function savedTranslationFor(page) {
+  const hash = await pdfByteHash();
+  if (!hash || hash === "nohash") return null;
+  if (!libraryDoc || libraryDoc.hash !== hash) {
+    libraryDoc = await fetchLibraryDocument(hash);
+    if (libraryDoc) libraryDoc.hash = hash;
+    if (libraryDoc?.sourcePath) librarySourceSent.add(hash);
+  }
+  if (!libraryDoc) return null;
+  const selected = selectSavedTranslation(libraryDoc, page);
+  if (libraryDoc.pages?.length) {
+    libraryArticle = null;
+    return selected;
+  }
+  if (selected?.readout) {
+    libraryArticle = storedReadoutBlocks(libraryDoc.readout);
+    return selected;
+  }
+  return selected;
+}
+
+function savedPageStatus(saved, restored = []) {
+  return (saved?.pairs || []).some((pair) => pair.status === "pending" || pair.status === "source-uncertain" ||
+    !blockTranslationIntegrity(pair).valid) || restored.some((row) => row.translationStatus === "source-uncertain") ||
+    saved?.migrated
+    ? "本页旧译文有待核对的段落；原文已保留。"
+    : PDF_COPY.done;
+}
+
 async function translateCurrentPage() {
   if (!pdfDoc || pdfTranslateBusy(session)) return;
+  try {
+    const saved = await savedTranslationFor(pageNum);
+    if (saved?.readout) {
+      setStatus(PDF_COPY.doneDocument);
+      renderArticle();
+      return;
+    }
+    if (saved?.pairs?.length) {
+      const merged = applySavedPairs(pageOriginals, saved.pairs);
+      pageCache.set(docId, pageNum, merged);
+      pageResults = merged;
+      renderArticle();
+      setStatus(savedPageStatus(saved, merged));
+      return;
+    }
+    if (saved?.migrated || libraryDoc?.pages?.length) {
+      setStatus(savedPageStatus(saved));
+      return;
+    }
+  } catch {
+    setStatus("本地库不可用，无法确认是否已翻译。", true);
+    return;
+  }
+  if (libraryArticle || pageHasTranslation(pageCache.get(docId, pageNum))) {
+    setStatus(libraryArticle ? PDF_COPY.doneDocument : PDF_COPY.done);
+    return;
+  }
   if (!pageOriginals.length) {
     setStatus(pageBlocksCopy(0, pageItems) || PDF_COPY.emptyPage);
     syncNoTextLayerHint(pageItems <= 0);
@@ -1076,8 +1230,8 @@ async function translateCurrentPage() {
   const targetPage = pageNum;
   translatingPage = targetPage;
   const work = beginViewerSession();
-  const sourceBlocks = getPageLayout(targetPage)?.blocks || pageOriginals;
-  pageResults = emptyPageResults(sourceBlocks);
+  const sourceLayout = getPageLayout(targetPage);
+  pageResults = emptyPageResults(sourceLayout);
   pageCache.set(translatingDoc, targetPage, pageResults);
   updateTranslateControls();
   setStatus(PDF_COPY.translating);
@@ -1110,7 +1264,7 @@ async function translateCurrentPage() {
     },
     onBatchResult({ results: next, res }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
-      const merged = mergeReadoutTranslations(sourceBlocks, next);
+      const merged = pageResultsFromTranslation(sourceLayout, next);
       pageCache.set(translatingDoc, targetPage, merged);
       pageResults = merged;
       renderArticle();
@@ -1118,7 +1272,7 @@ async function translateCurrentPage() {
     }
   });
   if (!isCurrentWork(work, gen, translatingDoc)) return;
-  const merged = mergeReadoutTranslations(sourceBlocks, results);
+  const merged = pageResultsFromTranslation(sourceLayout, results);
   pageCache.set(translatingDoc, targetPage, merged);
   pageResults = merged;
   renderArticle();
@@ -1126,11 +1280,38 @@ async function translateCurrentPage() {
   else if (!results.some((item) => item.translation)) setStatus(PDF_COPY.error, true);
   else setStatus(PDF_COPY.done);
   translatingPage = 0;
+  if (!aborted) {
+    try {
+      await rememberTranslation(targetPage, merged);
+    } catch {
+      setStatus("译文已生成，但写入本地库失败。", true);
+    }
+  }
   updateTranslateControls();
 }
 
 async function translateWholeDocument() {
   if (!pdfDoc || pdfTranslateBusy(session)) return;
+  try {
+    const saved = await savedTranslationFor(pageNum);
+    if (saved?.readout) {
+      setStatus(PDF_COPY.doneDocument);
+      renderArticle();
+      return;
+    }
+    if (libraryDoc?.pages?.length) {
+      setStatus("本地库已有逐页记录；待核对段落不会自动重新翻译。");
+      renderArticle();
+      return;
+    }
+  } catch {
+    setStatus("本地库不可用，无法确认是否已翻译。", true);
+    return;
+  }
+  if (libraryArticle) {
+    setStatus(PDF_COPY.doneDocument);
+    return;
+  }
   const gen = restoreGen;
   const translatingDoc = docId;
   const total = pdfDoc.numPages;
@@ -1156,6 +1337,7 @@ async function translateWholeDocument() {
     if (isCurrentWork(work, gen, translatingDoc)) updateTranslateControls();
     return;
   }
+  const saveTasks = [];
   const { aborted, pages } = await translateDocumentPages({
     session: work,
     cache: pageCache,
@@ -1172,7 +1354,7 @@ async function translateWholeDocument() {
     onPageResult({ page, results, res }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       const layout = getPageLayout(page);
-      const merged = layout?.kind === "blocks" ? results : mergeReadoutTranslations(layout?.blocks || results, results);
+      const merged = pageResultsFromTranslation(layout, results);
       pageCache.set(translatingDoc, page, merged);
       if (page === pageNum) pageResults = merged;
       renderArticle();
@@ -1185,6 +1367,7 @@ async function translateWholeDocument() {
       pageCache.set(translatingDoc, page, merged);
       if (page === pageNum) pageResults = merged;
       renderArticle();
+      saveTasks.push(rememberTranslation(page, merged).then(() => null, (error) => error));
     }
   });
   if (!isCurrentWork(work, gen, translatingDoc)) return;
@@ -1193,12 +1376,20 @@ async function translateWholeDocument() {
   if (aborted) setStatus(PDF_COPY.stopped);
   else if (!any) setStatus(PDF_COPY.error, true);
   else setStatus(PDF_COPY.doneDocument);
+  const saveErrors = await Promise.all(saveTasks);
+  if (!aborted && saveErrors.some(Boolean)) setStatus("译文已生成，但部分页面写入本地库失败。", true);
   translatingPage = 0;
   updateTranslateControls();
 }
 
-function emptyPageResults(blocks) {
-  return mergeReadoutTranslations(blocks || [], []);
+function pageResultsFromTranslation(layout, results) {
+  return layout?.kind === "blocks" ? results : mergeReadoutTranslations(layout?.blocks || [], results);
+}
+
+function emptyPageResults(layout) {
+  return layout?.kind === "blocks"
+    ? unitsForLayout(layout).map((unit) => ({ ...unit, translation: "" }))
+    : mergeReadoutTranslations(layout?.blocks || [], []);
 }
 
 async function ingestPageLayout(n, isStale) {
@@ -1215,8 +1406,7 @@ async function ingestPageLayout(n, isStale) {
   return ingestTextLayerLayout(n, isStale);
 }
 
-async function pdfByteHash() {
-  const bytes = pdfBytes;
+async function pdfByteHash(bytes = pdfBytes) {
   if (!bytes?.byteLength || !globalThis.crypto?.subtle) return "nohash";
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((part) => part.toString(16).padStart(2, "0")).join("");
@@ -1272,7 +1462,14 @@ async function ingestVendorLayout(n, mode, isStale) {
             pixelWidth: raster.pixelWidth,
             pixelHeight: raster.pixelHeight
           });
-      mapped = vendorLayoutToBlocks(envelope, { items: content.items, viewport, page: n });
+      let images = null;
+      try {
+        const ops = await page.getOperatorList();
+        images = { fnArray: ops.fnArray, argsArray: ops.argsArray };
+      } catch {
+        images = null;
+      }
+      mapped = vendorLayoutToBlocks(envelope, { items: content.items, viewport, images, page: n });
       await writeStoredLayout(key, mapped);
     } catch (err) {
       if (!isStale() && err?.code !== "empty-key") layoutNotice = LAYOUT_FALLBACK_STATUS;
@@ -1389,7 +1586,7 @@ async function originalsForPage(n, gen, translatingDoc) {
   const blocks = unitsForLayout(layout);
   if (n === pageNum) pageOriginals = blocks;
   const cached = pageCache.get(translatingDoc, n);
-  pageResults = pageHasTranslation(cached) ? cached : emptyPageResults(layout.blocks);
+  pageResults = pageHasTranslation(cached) ? cached : emptyPageResults(layout);
   if (!pageHasTranslation(cached)) pageCache.set(translatingDoc, n, pageResults);
   return blocks;
 }
@@ -1421,8 +1618,9 @@ async function openFile(file) {
 async function openFromSrc(src) {
   setStatus(PDF_COPY.loading);
   try {
-    const loading = getDocument({ url: src, verbosity: 0 });
-    await adoptDoc(await loading.promise, src);
+    const res = await fetch(src);
+    if (!res.ok) throw new Error("fetch");
+    await openPdfData(new Uint8Array(await res.arrayBuffer()), src);
   } catch {
     setStatus(PDF_COPY.fetchFail, true);
     setHasDoc(false);
@@ -1454,6 +1652,8 @@ async function adoptDoc(doc, title) {
   renderGen += 1;
   translatingPage = 0;
   pageCache.clear();
+  libraryArticle = null;
+  libraryDoc = null;
   layoutCache.clear();
   pageOriginals = [];
   pageResults = [];
@@ -1461,12 +1661,14 @@ async function adoptDoc(doc, title) {
   pageViews = [];
   $("pages").replaceChildren();
   pdfScrollRoot().scrollTop = 0;
+  translateScrollRoot().scrollTop = 0;
   renderArticle();
   if (title) document.title = `${PDF_COPY.title} · ${shortTitle(title)}`;
   setHasDoc(true);
   await buildPages();
   updatePager();
   await scheduleVisibleRenders();
+  setStatus("原页已打开，正在读取文字层…");
   await loadCurrentPageText();
   syncZoomChip();
 }
@@ -1653,27 +1855,89 @@ async function renderView(view) {
   }
 }
 
+function showOpenedLayout(layout, isStale) {
+  if (!layout || isStale()) return false;
+  pageItems = Number(layout.itemCount) || 0;
+  pageOriginals = unitsForLayout(layout);
+  const cached = pageCache.get(docId, pageNum);
+  pageResults = cached || [];
+  const copy = pageBlocksCopy(pageOriginals.length, pageItems) || textLayerCopy(pageItems);
+  if (!pdfTranslateBusy(session)) {
+    if (layoutNotice) setStatus(layoutNotice);
+    else if (pageHasTranslation(cached)) setStatus(copy || PDF_COPY.done);
+    else setStatus(copy);
+  }
+  syncNoTextLayerHint(pageItems <= 0);
+  if (layout.kind === "blocks") renderArticle();
+  return true;
+}
+
 async function loadCurrentPageText() {
   if (!pdfDoc) return;
   const ticket = ++textGen;
   const n = pageNum;
   const translatingDoc = docId;
   const isStale = () => ticket !== textGen || translatingDoc !== docId;
+  let mode = pdfEngineMode();
+  let preloadedSaved = null;
+  if (mode === "legacy") {
+    preloadedSaved = await savedTranslationFor(n).catch(() => null);
+    if (isStale()) return;
+    if (libraryDoc?.pages?.length) mode = "text-layer";
+  }
+  const wantsVendor = mode === "local-ocr" || mode === "cloud-ocr";
+  const ensuring = runtimeSend({ type: "OI_ENSURE_GLMOCR" }).catch(() => null);
   try {
-    const layout = await ingestPageLayout(n, isStale);
-    if (!layout || isStale()) return;
-    pageItems = Number(layout.itemCount) || 0;
-    pageOriginals = unitsForLayout(layout);
-    const cached = pageCache.get(docId, n);
-    pageResults = cached || [];
-    const copy = pageBlocksCopy(pageOriginals.length, pageItems) || textLayerCopy(pageItems);
-    if (!pdfTranslateBusy(session)) {
-      if (layoutNotice) setStatus(layoutNotice);
-      else if (pageHasTranslation(cached)) setStatus(copy || PDF_COPY.done);
-      else setStatus(copy);
+    if (wantsVendor) {
+      const quick = await ingestTextLayerLayout(n, isStale);
+      if (!showOpenedLayout(quick, isStale)) return;
+      await ensuring;
+      const saved = preloadedSaved || await savedTranslationFor(n).catch(() => null);
+      if (saved?.readout && !isStale()) {
+        setStatus(PDF_COPY.doneDocument);
+        renderArticle();
+        updateTranslateControls();
+        return;
+      }
+      if (saved?.pairs && !isStale()) {
+        const merged = applySavedPairs(unitsForLayout(quick), saved.pairs);
+        pageResults = merged;
+        pageCache.set(docId, n, merged);
+        if (!pdfTranslateBusy(session)) setStatus(savedPageStatus(saved, merged));
+        renderArticle();
+        syncReadoutToPage(n);
+        updateTranslateControls();
+        return;
+      }
+      if (!pdfTranslateBusy(session) && !layoutNotice) setStatus(LAYOUT_STARTING_STATUS);
+      updateTranslateControls();
+      const laid = await ingestVendorLayout(n, mode, isStale);
+      if (!laid || isStale()) {
+        if (!isStale() && layoutNotice && !pdfTranslateBusy(session)) setStatus(layoutNotice);
+        return;
+      }
+      layoutNotice = "";
+      showOpenedLayout(laid, isStale);
+      updateTranslateControls();
+      return;
     }
-    syncNoTextLayerHint(pageItems <= 0);
-    if (pdfEngineMode() !== "legacy") renderArticle();
+    const layout = mode === "text-layer" && pdfEngineMode() === "legacy"
+      ? await ingestTextLayerLayout(n, isStale)
+      : await ingestPageLayout(n, isStale);
+    if (!showOpenedLayout(layout, isStale)) return;
+    await ensuring;
+    const saved = preloadedSaved || await savedTranslationFor(n).catch(() => null);
+    if (saved?.readout && !isStale()) {
+      setStatus(PDF_COPY.doneDocument);
+      renderArticle();
+    } else if (saved?.pairs && !isStale()) {
+      const merged = applySavedPairs(unitsForLayout(layout), saved.pairs);
+      pageResults = merged;
+      pageCache.set(docId, n, merged);
+      setStatus(savedPageStatus(saved, merged));
+      renderArticle();
+      syncReadoutToPage(n);
+    }
   } catch {
     if (isStale()) return;
     pageItems = 0;

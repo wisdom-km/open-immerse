@@ -68,6 +68,51 @@ test("trusted text uses items inside the bbox and ignores vendor content", () =>
   assert.equal(text.content, undefined);
 });
 
+test("a layout text box that is only softmax and math becomes one formula crop", () => {
+  const page = vendorLayoutToBlocks({
+    vendor: "glm-ocr",
+    page: 1,
+    layoutDetails: [
+      { label: "text", bbox_2d: [0.15, 0.4, 0.85, 0.52], content: "softmax(Q)" }
+    ]
+  }, {
+    viewport: viewport(),
+    page: 1,
+    items: [
+      { str: "softmax", x: 120, y: 430, width: 52, height: 12 },
+      { str: "Q", x: 180, y: 430, width: 12, height: 12, fontName: "CMMI10" }
+    ]
+  });
+  assert.equal(page.blocks.some((block) => /softmax/.test(block.text || "")), false);
+  const formula = page.blocks.find((block) => block.label === "formula");
+  assert.ok(formula);
+  assert.equal(formula.content, undefined);
+});
+
+test("text inside a formula box is not sent as a sentence", () => {
+  const page = vendorLayoutToBlocks({
+    vendor: "glm-ocr",
+    page: 1,
+    layoutDetails: [
+      { label: "text", bbox_2d: [0.1, 0.2, 0.9, 0.6], content: "vendor" },
+      { label: "formula", bbox_2d: [0.2, 0.42, 0.8, 0.55], content: "n" }
+    ]
+  }, {
+    viewport: viewport(),
+    page: 1,
+    items: [
+      { str: "The sentence stays.", x: 80, y: 560, width: 140, height: 12 },
+      { str: "softmax", x: 180, y: 420, width: 50, height: 12 }
+    ]
+  });
+  const text = page.blocks.find((block) => block.label === "text" || block.label === "title");
+  assert.ok(text);
+  assert.match(text.text, /The sentence stays/);
+  assert.equal(/softmax/.test(text.text), false);
+  const formula = page.blocks.find((block) => block.label === "formula");
+  assert.equal(formula.content, undefined);
+});
+
 test("garbled items take vendorText and formula letters stay off the block", () => {
   const clean = "Attention";
   const garbled = `${clean}${"\uFFFD".repeat(clean.length)}`;
@@ -153,6 +198,8 @@ test("viewer falls back to the text layer and crops both modes with one function
   assert.equal(LAYOUT_FALLBACK_STATUS, "划区服务不可用，已使用文字层");
   assert.equal(LAYOUT_EMPTY_KEY_STATUS, "云端密钥为空，已使用文字层");
   assert.match(viewerSrc, /cropBlockImage/);
+  assert.match(viewerSrc, /OI_ENSURE_GLMOCR/);
+  assert.match(viewerSrc, /LAYOUT_STARTING_STATUS/);
   assert.match(viewerSrc, /showsBlockReadout/);
   assert.match(viewerSrc, /OCR_PAGE_HINT/);
   assert.match(viewerSrc, /pdfEngineMode\(\) !== "legacy"/);
