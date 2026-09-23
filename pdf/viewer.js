@@ -72,6 +72,7 @@ import {
   PROTOCOL,
   applyBlockTranslations,
   blockReadoutPlan,
+  displayCropColumnFraction,
   blockRenderPieces,
   blockTranslationIntegrity,
   cropBlockImage,
@@ -81,6 +82,7 @@ import {
   visualAlt
 } from "../lib/pdf-blocks.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
+import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
   LAYOUT_EMPTY_KEY_STATUS,
   LAYOUT_FALLBACK_STATUS,
@@ -754,6 +756,14 @@ function loadSamplePage() {
   return samplePagePromise;
 }
 
+function imageForVisualBlock(raster, block) {
+  if (block?.label === "formula" && block.glyphRedraw) {
+    const drawn = redrawFormulaGlyphs(raster?.canvas, block.glyphBoxes, block.bbox);
+    if (drawn) return drawn;
+  }
+  return cropBlockImage(raster?.canvas, block?.bbox);
+}
+
 function cropImage(block) {
   if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(block?.imageUrl || "")) return null;
   const img = document.createElement("img");
@@ -762,10 +772,29 @@ function cropImage(block) {
   return img;
 }
 
-function appendCropOrNotice(node, block) {
+function appendCropOrNotice(node, block, imageClass) {
   const img = cropImage(block);
-  if (img) node.append(img);
-  else node.textContent = `（${visualAlt(block.label)}裁图失败，请查看左栏原页）`;
+  if (img) {
+    img.className = imageClass || "oi-pdf-math-crop";
+    const columnFraction = displayCropColumnFraction(block);
+    if (columnFraction) img.style.width = `${(columnFraction * 100).toFixed(2)}%`;
+    node.append(img);
+    return;
+  }
+  const notice = block.label === "formula"
+    ? PDF_COPY.formulaFallback
+    : `（${visualAlt(block.label)}裁图失败，请查看左栏原页）`;
+  node.append(document.createTextNode(notice));
+}
+
+function captionNode(block, page, layout) {
+  const node = document.createElement("figcaption");
+  node.className = "oi-pdf-caption";
+  node.dataset.page = String(page);
+  node.dataset.blockId = String(block.id || "");
+  node.dataset.label = "caption";
+  fillBlockText(node, block, layout);
+  return node;
 }
 
 function fillBlockText(node, block, layout) {
@@ -790,8 +819,18 @@ function fillBlockText(node, block, layout) {
     }
     const formula = (layout.blocks || []).find((item) => item.id === piece.blockId);
     const img = cropImage({ ...(formula || {}), imageUrl: piece.src || formula?.imageUrl || "", label: "formula" });
-    if (img) node.append(img);
-    else node.append(document.createTextNode("（公式裁图失败，请查看左栏原页）"));
+    const span = document.createElement("span");
+    span.className = "oi-pdf-inline-math";
+    if (formula?.id) {
+      span.dataset.blockId = String(formula.id);
+      span.dataset.label = "formula";
+      if (node.dataset.page) span.dataset.page = node.dataset.page;
+    }
+    if (img) {
+      img.className = "oi-pdf-math-crop";
+      span.append(img);
+    } else span.textContent = PDF_COPY.formulaFallback;
+    node.append(span);
   });
 }
 
@@ -828,8 +867,28 @@ function appendFixtureReadout(parent, layout) {
     note.textContent = OCR_PAGE_HINT;
     parent.append(note);
   }
+  const used = new Set();
   for (const block of blocks) {
-    if (block.inlineOf) continue;
+    if (block.inlineOf || used.has(block.id)) continue;
+    const paired = block.label === "caption" ? blocks.find((item) => item.id === block.captionFor) : null;
+    const visual = (block.label === "figure" || block.label === "table") ? block : paired;
+    if (visual && (block.label === "figure" || block.label === "table" || block.label === "caption")) {
+      const caption = blocks.find((item) => item.captionFor === visual.id);
+      used.add(visual.id);
+      if (caption) used.add(caption.id);
+      const plan = blockReadoutPlan(visual);
+      const node = document.createElement(plan.tag);
+      node.className = plan.className;
+      node.dataset.page = String(page);
+      node.dataset.blockId = String(visual.id || "");
+      node.dataset.label = String(visual.label || "");
+      const capNode = caption ? captionNode(caption, page, layout) : null;
+      if (capNode && caption && blocks.indexOf(caption) < blocks.indexOf(visual)) node.append(capNode);
+      appendCropOrNotice(node, visual, plan.imageClass);
+      if (capNode && caption && blocks.indexOf(caption) > blocks.indexOf(visual)) node.append(capNode);
+      parent.append(node);
+      continue;
+    }
     if (block.label === "caption" && !hasFigure) {
       const slot = document.createElement("p");
       slot.className = "oi-pdf-p";
@@ -842,7 +901,7 @@ function appendFixtureReadout(parent, layout) {
     const node = document.createElement(plan.tag);
     node.className = plan.className;
     if (plan.role) node.dataset.role = plan.role;
-    if (plan.image) appendCropOrNotice(node, block);
+    if (plan.image) appendCropOrNotice(node, block, plan.imageClass);
     else fillBlockText(node, block, layout);
     if (block.translationStatus) node.dataset.translationStatus = block.translationStatus;
     node.dataset.page = String(page);
@@ -1478,7 +1537,7 @@ async function ingestVendorLayout(n, mode, isStale) {
   if (isStale()) return null;
   const blocks = (mapped.blocks || []).map((block) => {
     if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
-    return { ...block, imageUrl: cropBlockImage(raster.canvas, block.bbox) };
+    return { ...block, imageUrl: imageForVisualBlock(raster, block) };
   });
   const layout = {
     ...mapped,
@@ -1509,7 +1568,7 @@ async function ingestTextLayerLayout(n, isStale) {
   if (isStale()) return null;
   const blocks = (built.blocks || []).map((block) => {
     if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
-    return { ...block, imageUrl: cropBlockImage(raster.canvas, block.bbox) };
+    return { ...block, imageUrl: imageForVisualBlock(raster, block) };
   });
   const layout = {
     ...built,
@@ -1543,7 +1602,7 @@ async function ingestFixtureLayout(n, isStale) {
   if (isStale()) return null;
   const blocks = sample.blocks.map((block) => {
     if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
-    return { ...block, imageUrl: cropBlockImage(raster.canvas, block.bbox) };
+    return { ...block, imageUrl: imageForVisualBlock(raster, block) };
   });
   const layout = {
     kind: "blocks",

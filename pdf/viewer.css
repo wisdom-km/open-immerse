@@ -260,6 +260,54 @@ h1 {
   max-width: 100%;
   height: auto;
 }
+.oi-pdf-display-math {
+  display: block;
+  margin: 10px 0 14px;
+  padding: 0;
+  text-align: center;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+.oi-pdf-p:has(+ .oi-pdf-display-math),
+.oi-pdf-p:has(+ .oi-pdf-figure),
+.oi-pdf-figure:has(+ .oi-pdf-display-math),
+.oi-pdf-display-math:has(+ .oi-pdf-figure) {
+  margin-bottom: 0;
+}
+.oi-pdf-figure + .oi-pdf-display-math,
+.oi-pdf-display-math + .oi-pdf-figure {
+  margin-top: 14px;
+}
+.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+}
+.oi-pdf-inline-math {
+  display: inline-block;
+  vertical-align: baseline;
+  margin: 0 1px;
+  padding: 0;
+  line-height: 1;
+  max-height: 1.35em;
+}
+.pane-translate .readout.md-readout .oi-pdf-inline-math .oi-pdf-math-crop {
+  display: block;
+  height: 1.1em;
+  width: auto;
+  max-width: min(100%, 12em);
+  object-fit: contain;
+  object-position: left center;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  background: transparent;
+}
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
   font: 400 14px/1.55 var(--oi-font);
   color: var(--oi-text-muted);
@@ -275,10 +323,31 @@ h1 {
   text-align: center;
   padding: 12px 0;
 }
-.pane-translate .readout .oi-pdf-p[data-role="formula"] {
+.oi-pdf-figure {
+  display: block;
+  margin: 16px 0 12px;
+  padding: 0;
   text-align: center;
-  margin: 16px 0;
-  overflow: visible;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+.pane-translate .readout.md-readout .oi-pdf-figure .oi-pdf-asset-crop {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+}
+.oi-pdf-caption {
+  margin: 6px 0 0;
+  font: 400 13px/1.45 var(--oi-font);
+  color: var(--oi-text-muted);
+}
+.oi-pdf-figure > .oi-pdf-caption:first-child {
+  margin: 0 0 6px;
 }
 .pane-translate .readout.is-mirror {
   max-width: none;
@@ -453,7 +522,7 @@ h1 {
 .oi-pdf-h2:first-child { margin-top: 0; }
 .oi-pdf-h1 + .oi-pdf-h2 { margin-top: 16px; }
 .oi-pdf-p {
-  margin: 0 0 14px;
+  margin: 0 0 0.7em;
   font: 400 15px/1.7 var(--oi-font);
   color: var(--oi-text);
 }

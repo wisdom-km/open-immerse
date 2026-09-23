@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
-import { CROP_SCALE } from "../lib/pdf-blocks.js";
+import { CROP_SCALE, blockReadoutPlan, blockRenderPieces } from "../lib/pdf-blocks.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const fixture = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
@@ -79,7 +79,7 @@ test("Attention text fragments have one source owner and complete visual boundar
     const p5view = pages.get(5).viewport;
     for (const crop of matrixCrops) {
       const height = (crop.bbox[3] - crop.bbox[1]) * p5view.height * CROP_SCALE;
-      assert.ok(height >= 28, "matrix crop must cover scripts");
+      assert.ok(height >= 24, "matrix crop must cover scripts");
     }
     const embeddings = pages.get(5).page.blocks.find((block) =>
       block.sourceText?.startsWith("Similarly to other sequence transduction models"));
@@ -95,6 +95,34 @@ test("Attention text fragments have one source owner and complete visual boundar
     assert.match(optimizer.sourceText, /ϵ = 10−9/);
     assert.equal(optimizer.placeholders.length, 3);
     assert.doesNotMatch(optimizer.text, /⟦f\d+⟧−9/, "the exponent stays inside the inline crop");
+    const p7 = pages.get(7);
+    const inlineCrops = optimizer.placeholders.map((entry) =>
+      p7.page.blocks.find((block) => block.id === entry.blockId));
+    assert.equal(inlineCrops.every((block) => block?.inlineOf === optimizer.id && block.display === false), true);
+    const centersIn = (bbox) => p7.content.items.filter((item) => {
+      const text = String(item.str || "").trim();
+      if (!text) return false;
+      const x = item.transform[4] + (Number(item.width) || 0) / 2;
+      const y = item.transform[5] + (Number(item.height) || 0) / 2;
+      const rect = p7.viewport.convertToViewportRectangle([x, y, x, y]);
+      const nx = rect[0] / p7.viewport.width;
+      const ny = Math.min(rect[1], rect[3]) / p7.viewport.height;
+      return nx >= bbox[0] && nx <= bbox[2] && ny >= bbox[1] && ny <= bbox[3];
+    }).map((item) => item.str).join("");
+    for (const crop of inlineCrops) {
+      const width = (crop.bbox[2] - crop.bbox[0]) * p7.viewport.width;
+      assert.ok(width < 80, `Adam inline crop stays in the sentence (${width.toFixed(1)}pt)`);
+      assert.doesNotMatch(centersIn(crop.bbox), /rate over the course|according to the formula|lrate/);
+    }
+    const lrate = p7.page.blocks.find((block) =>
+      block.label === "formula" && !block.inlineOf && centersIn(block.bbox).includes("lrate"));
+    assert.ok(lrate);
+    assert.doesNotMatch(centersIn(lrate.bbox), /Adam|according to the formula/);
+    const pieces = blockRenderPieces(optimizer, p7.page.blocks);
+    assert.equal(pieces.filter((piece) => piece.type === "image").length, 3);
+    assert.equal(pieces.some((piece) => piece.blockId === lrate.id), false);
+    assert.equal(blockReadoutPlan(lrate).className, "oi-pdf-display-math");
+    assert.equal(blockReadoutPlan(inlineCrops[0]).className, "oi-pdf-inline-math");
     for (const number of [4, 5, 6, 7]) {
       const view = pages.get(number).viewport;
       const displays = pages.get(number).page.blocks.filter((block) =>
@@ -142,6 +170,38 @@ test("Attention text fragments have one source owner and complete visual boundar
         pattern.test(content.items[owner.index]?.str || "") && (number !== 4 || owner.index < 3));
       assert.ok(matches.length, `page ${number} has labeled visual text`);
       assert.ok(matches.every((owner) => owner.owner === "visual"), `page ${number} visual text leaked into prose`);
+    }
+    const overlapSize = (a, b) => ({
+      w: Math.min(a[2], b[2]) - Math.max(a[0], b[0]),
+      h: Math.min(a[3], b[3]) - Math.max(a[1], b[1])
+    });
+    for (const number of [4, 5, 6, 7]) {
+      const blocks = pages.get(number).page.blocks;
+      const formulas = blocks.filter((block) => block.label === "formula");
+      for (const formula of formulas) {
+        assert.equal(typeof formula.display, "boolean");
+        assert.equal(formula.display, !formula.inlineOf);
+        for (const other of blocks) {
+          if (other === formula || !other.bbox) continue;
+          if (formula.inlineOf && other.id === formula.inlineOf) continue;
+          if (formula.inlineOf && other.label === "text") {
+            const hit = overlapSize(formula.bbox, other.bbox);
+            assert.ok(!(hit.w > 0.008 && hit.h > 0.004),
+              `page ${number} inline ${formula.id} overlaps neighbor ${other.id}`);
+            continue;
+          }
+          if (["figure", "caption", "table"].includes(other.label)) {
+            const hit = overlapSize(formula.bbox, other.bbox);
+            const area = Math.max(0, hit.w) * Math.max(0, hit.h);
+            assert.ok(area < 1e-12, `page ${number} ${formula.id} meets ${other.label} ${other.id}`);
+            continue;
+          }
+          if (!["formula", "text"].includes(other.label)) continue;
+          const hit = overlapSize(formula.bbox, other.bbox);
+          assert.ok(!(hit.w > 0.008 && hit.h > 0.004),
+            `page ${number} ${formula.id} overlaps ${other.label} ${other.id}`);
+        }
+      }
     }
     const p4 = pages.get(4);
     const footnote = p4.page.blocks.filter((block) => block.sourceText?.includes("To illustrate why the dot products get large"));

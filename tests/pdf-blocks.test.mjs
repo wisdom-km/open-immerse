@@ -11,6 +11,7 @@ import {
   PROTOCOL,
   bboxToPercentRect,
   blockReadoutPlan,
+  displayCropColumnFraction,
   cropBlockImage,
   normalizeIncomingBlock,
   placeholderTokens,
@@ -139,8 +140,23 @@ test("tiny crops and OCR formula letters never become the image", () => {
 test("visual readout plan is an image and prose stays text", () => {
   const image = blockReadoutPlan({ label: "formula", imageUrl: "data:image/png;base64,aa" });
   assert.equal(image.image, true);
+  assert.equal(image.tag, "figure");
+  assert.equal(image.className, "oi-pdf-display-math");
+  assert.equal(image.imageClass, "oi-pdf-math-crop");
   assert.equal(image.alt, "公式");
   assert.equal(image.src, "data:image/png;base64,aa");
+  const inline = blockReadoutPlan({ label: "formula", display: false, inlineOf: "p1", imageUrl: "data:image/png;base64,aa" });
+  assert.equal(inline.tag, "span");
+  assert.equal(inline.className, "oi-pdf-inline-math");
+  const figure = blockReadoutPlan({ label: "figure", imageUrl: "data:image/png;base64,bb" });
+  assert.equal(figure.tag, "figure");
+  assert.equal(figure.className, "oi-pdf-figure");
+  assert.equal(figure.imageClass, "oi-pdf-asset-crop");
+  const caption = blockReadoutPlan({ label: "caption", text: "Figure 1: The Transformer." });
+  assert.equal(caption.tag, "figcaption");
+  assert.equal(caption.className, "oi-pdf-caption");
+  assert.equal(displayCropColumnFraction({ label: "formula", display: true, bbox: [0.25, 0.4, 0.75, 0.46] }), 0.5);
+  assert.equal(displayCropColumnFraction({ label: "formula", inlineOf: "p1", display: false, bbox: [0.25, 0.4, 0.75, 0.46] }), null);
   const prose = blockReadoutPlan({ label: "text", text: "Keep the sentence.", presentation: "byline" });
   assert.equal(prose.text, "Keep the sentence.");
   assert.equal(prose.role, "authors");
