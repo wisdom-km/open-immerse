@@ -7,6 +7,10 @@ import {
   PDF_STRUCTURE_ID,
   PDF_STRUCTURE_SYSTEM,
   applyStructureTranslations,
+  missingTitleAuthors,
+  pageTextForStructure,
+  resolveTitleStructure,
+  structureAuthorsLookTruncated,
   structureTranslateSlots,
   structureUserPrompt,
   validatePdfStructure
@@ -298,4 +302,138 @@ test("Attention fixture keeps eight authors, drops one stray symbol, and leaves 
   assert.match(css, /\.oi-pdf-footnotes/);
   assert.match(css, /repeat\(auto-fit, minmax\(140px, 1fr\)\)/);
   assert.doesNotMatch(css, /repeat\(4,\s*1fr\)/);
+});
+
+function modelPack(authors) {
+  return {
+    ok: true,
+    raw: JSON.stringify({
+      version: 1,
+      title: "Attention Is All You Need",
+      authors,
+      abstract: { heading: "Abstract", body: "The dominant sequence transduction models." }
+    })
+  };
+}
+
+const firstRow = [
+  { name: "Ashish Vaswani*", affiliation: "Google Brain", email: "avaswani@google.com" },
+  { name: "Noam Shazeer*", affiliation: "Google Brain", email: "noam@google.com" },
+  { name: "Niki Parmar*", affiliation: "Google Research", email: "nikip@google.com" },
+  { name: "Jakob Uszkoreit*", affiliation: "Google Research", email: "usz@google.com" }
+];
+
+function columnBlocks() {
+  return [
+    { label: "title", text: "Attention Is All You Need" },
+    {
+      text: "Ashish Vaswani*",
+      presentation: "byline",
+      authorCell: {
+        name: "Ashish Vaswani*",
+        affiliation: "Llion Jones* Google Research",
+        email: "avaswani@google.com llion@google.com"
+      }
+    },
+    {
+      text: "Noam Shazeer*",
+      presentation: "byline",
+      authorCell: {
+        name: "Noam Shazeer*",
+        affiliation: "Aidan N. Gomez*† University of Toronto Illia Polosukhin*‡",
+        email: "noam@google.com aidan@cs.toronto.edu illia.polosukhin@gmail.com"
+      }
+    },
+    {
+      text: "Niki Parmar*",
+      presentation: "byline",
+      authorCell: {
+        name: "Niki Parmar*",
+        affiliation: "Łukasz Kaiser* Google Brain",
+        email: "nikip@google.com lukaszkaiser@google.com"
+      }
+    },
+    {
+      text: "Jakob Uszkoreit*",
+      presentation: "byline",
+      authorCell: {
+        name: "Jakob Uszkoreit*",
+        affiliation: "Google Research",
+        email: "usz@google.com"
+      }
+    },
+    { label: "heading", text: "Abstract" },
+    { label: "text", text: "The dominant sequence transduction models are based on complex recurrent networks." }
+  ];
+}
+
+test("a clean first-row pack is not final when later-row names are still in the title text", async () => {
+  const schemaSrc = readFileSync(join(root, "lib/pdf-structure-schema.js"), "utf8");
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  assert.equal(schemaSrc.includes("Polosukhin"), false);
+  assert.equal(schemaSrc.includes("Uszkoreit"), false);
+  assert.match(PDF_STRUCTURE_SYSTEM, /Do not stop after the first row/);
+  assert.match(PDF_STRUCTURE_SYSTEM, /Never fold a later row/);
+  assert.match(structureUserPrompt("Attention", 1), /Do not stop after the first row/);
+  assert.match(viewer, /resolveTitleStructure/);
+
+  const pageText = pageTextForStructure(columnBlocks());
+  for (const surname of SURNAMES) assert.equal(pageText.includes(surname), true, surname);
+  const missing = missingTitleAuthors(firstRow, pageText);
+  assert.equal(structureAuthorsLookTruncated(firstRow, pageText), true);
+  for (const surname of ["Jones", "Gomez", "Kaiser", "Polosukhin"]) {
+    assert.equal(missing.some((name) => name.includes(surname)), true, surname);
+  }
+  assert.equal(missing.some((name) => /Google|University|Abstract|Attention/.test(name)), false);
+  assert.equal(structureAuthorsLookTruncated(attentionAuthors(), pageText), false);
+  assert.equal(missingTitleAuthors(attentionAuthors(), pageText).length, 0);
+
+  const flat = [
+    "Attention Is All You Need",
+    "Ashish Vaswani* Noam Shazeer* Niki Parmar* Jakob Uszkoreit* Llion Jones* Aidan N. Gomez*† Łukasz Kaiser* Illia Polosukhin*‡",
+    "Google Brain University of Toronto",
+    "Abstract",
+    "The dominant sequence transduction models are based on complex recurrent networks."
+  ].join("\n");
+  assert.equal(missingTitleAuthors(firstRow, flat).length >= 4, true);
+  assert.equal(missingTitleAuthors(attentionAuthors(), flat).length, 0);
+
+  let calls = 0;
+  const recovered = await resolveTitleStructure(pageText, 1, async ({ user }) => {
+    calls += 1;
+    if (calls === 1) return modelPack(firstRow);
+    assert.match(user, /Do not stop after the first row/);
+    assert.match(user, /Llion Jones/);
+    assert.match(user, /Polosukhin/);
+    return modelPack(attentionAuthors());
+  });
+  assert.equal(calls, 2);
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.structure.authors.length, 8);
+  const { create } = createDocument();
+  const host = create("div");
+  renderPdfStructure(recovered.structure, host);
+  const cells = host.children[1].children;
+  assert.equal(cells.length, 8);
+  const names = cells.map((cell) => cell.children[0].textContent);
+  for (const surname of SURNAMES) assert.equal(names.some((name) => name.includes(surname)), true, surname);
+
+  calls = 0;
+  const stuck = await resolveTitleStructure(pageText, 1, async () => {
+    calls += 1;
+    return modelPack(firstRow);
+  });
+  assert.equal(calls, 2);
+  assert.equal(stuck.ok, false);
+  assert.equal(stuck.reason, "authors-truncated");
+  assert.equal(stuck.structure, undefined);
+
+  calls = 0;
+  const once = await resolveTitleStructure(pageText, 1, async () => {
+    calls += 1;
+    return modelPack(attentionAuthors());
+  });
+  assert.equal(calls, 1);
+  assert.equal(once.ok, true);
+  assert.equal(once.structure.authors.length, 8);
 });

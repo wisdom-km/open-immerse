@@ -114,14 +114,12 @@ import {
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { applySavedPairs, createLibraryWriteQueue, fetchLibraryDocument, libraryProbeFailure, pairsFromResults, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import {
-  PDF_STRUCTURE_SYSTEM,
   applyStructureTranslations,
   isTitlePageCandidate,
   pageTextForStructure,
-  parsePdfStructureJson,
+  resolveTitleStructure,
   structureTranslateSlots,
-  structureTranslationRows,
-  structureUserPrompt
+  structureTranslationRows
 } from "../lib/pdf-structure-schema.js";
 import {
   blocksOutsideStructure,
@@ -1533,13 +1531,12 @@ async function ensureTitleStructure(page, layout) {
   };
   titleStructure = pending;
   try {
-    const res = await withTimeout(runtimeSend({
+    const parsed = await resolveTitleStructure(text, page, (payload) => withTimeout(runtimeSend({
       type: "OI_PDF_STRUCTURE",
-      system: PDF_STRUCTURE_SYSTEM,
-      user: structureUserPrompt(text, page)
-    }), STRUCTURE_TIMEOUT_MS);
+      system: payload.system,
+      user: payload.user
+    }), STRUCTURE_TIMEOUT_MS));
     if (stamp !== docId) return null;
-    const parsed = parsePdfStructureJson(res?.ok ? res.raw : "");
     if (parsed.ok) {
       pending.status = "ok";
       pending.source = parsed.structure;
