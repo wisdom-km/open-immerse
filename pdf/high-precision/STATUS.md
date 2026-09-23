@@ -2,6 +2,34 @@
 
 记录到 2026-09-23。需求仍以 `REQUIREMENTS.md` 为准。这里记录当前实现、运行状态、修复前的网页问题与尚未完成的验收。
 
+## 2026-09-23 右栏公式显示比例（pdf-formula-display-scale）
+
+#62 放宽裁框白边之后，右栏独占公式相对中文正文和左栏原式仍然偏小。原因在显示侧，不在 pad 或 DPI。`displayCropColumnFraction` 是公式占整页的宽度，阅读器把它写成裁图的 `width: N%`，父级却已经是扣过左右 `PDF_PAPER_PAD_X`（0.085）的正文列，比例被用了两次。行内裁图把整张图的盒高钉在 `1.1em`，`object-fit: contain` 让墨迹在盒里再缩一截。本轮不改裁框 pad、墨迹收边、`CROP_SCALE`、KaTeX、Soft Graphite、镜像、滚轮、作者格或参考文献软状态。
+
+独占公式的列宽是 `pageFraction / (1 - 2 × 0.085)`。纸比左页窄时再乘左页 CSS 宽 / 纸宽（`--oi-pdf-left-w` / `--oi-pdf-paper-w`），最后夹在列宽 100% 以内。宽优先：不再把整页比例套在已缩进的正文列上，列宽应明显大于合前约 48%。右栏同式的 CSS 高因此贴近左栏（约 0.9–1.1）。高的硬门是墨迹 / 正文 **≥ 1.6×**（可读带 1.6～2.0×）。修宽后自然到约 3×，只要 ≤ 5× 就算通过，不把旧的 2.5～3.5× 当失败。补偿后若仍低于 1.6×，才用 `min-height: 2em` 兜底（盒高 2em，扣纸白后墨迹约 ≥ 1.6×），不先把宽度拉满整列。
+
+| | 之前 | 之后 |
+| --- | --- | --- |
+| 独占宽度 | `width = pageFraction × 100%`（相对已缩进的正文列） | `min(100%, max(pageFraction / 0.83 × 左页/纸宽, 够 2em 的宽))` |
+| 独占盒高下限 | 无 | `min-height: 2em`（只在修宽后仍 < 1.6× 时垫高；`font-size: 15px`） |
+| 行内裁图高 | `1.1em` | `1.22em` |
+| 行内容器 | `max-height: 1.35em` | `max-height: 1.45em` |
+| object-fit | `contain` | `contain` |
+
+下文「公式裁框略松」的 pad 表不变：独占 0.0045 / 0.0030，行内 0.0020 / 0.0016，下标再加 0.0012 / 0.0016，夹在 0.0060 / 0.0050 以内。
+
+期望 Anvil（这里不记通过），按规格 §6。高硬门是 ≥ 1.6×，不是 2.5～3.5×。
+
+| Gate | 期望 |
+| --- | --- |
+| D0 | 不再把整页 fraction 套到正文列；宽明显大于合前约 48% 列宽 |
+| D1 / D2 | `imgCss.h / bodyFs` ≥ 1.6（可读带 1.6～2.0，或修宽后自然更高且 ≤ 5×）；居中、无 card |
+| I1 | 行内约 1.22em，盒高 ≤ ~1.45em，仍在句中 |
+| S1 | 公式在纸壳上，无浮起芯片或阴影 |
+| R1 | KaTeX 为 0；softmax 不含 Fig.2；Soft Graphite、#54、#59 不回退 |
+
+无 Attention PDF 时 `node --test tests/*.test.mjs`：394 通过、0 失败、1 跳过。跳过的仍是仓库里没有该 PDF 时的大样本测试。
+
 ## 2026-09-23 公式裁框略松（pdf-formula-crop-relax）
 
 #60 的字形边和纸白收边过紧，本机上公式裁图相对原式偏小。本轮只把 pad 和墨迹白边放回中间带。不改 Soft Graphite、镜像、滚轮、参考文献软状态文案、KaTeX、pageRaster 倍率、第 5 页矩阵句译文，也不改右栏公式节奏。Anvil 的 R1–R5 仍要在本机 Chrome 看 Attention，这里不记通过。
@@ -62,7 +90,7 @@ Anvil 仍要在本机 Chrome 看 Attention 第 5 页左右栏。下面的 M1–M
 
 ## 2026-09-23 公式呈现（本轮）
 
-内容仍以打开的 PDF 笔画为准。本轮只改呈现：行内公式嵌进句子，独占公式按论文居中，裁框按字形并集收紧，不再用固定整行外扩去吃相邻行或图注。计划见 `FORMULA-ELEGANCE.md`。通读结构仍以 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md) 为准（与 `open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md` 同一份）。节奏数字以 [`FORMULA-RIGHT-PANE.md`](./FORMULA-RIGHT-PANE.md) §2–§5 为准：独占公式 `10px / 14px`，行内墨迹约 `1.1em`，图到题注 `6px`、题注到正文 `12px`。主展示是原页裁图，不用 KaTeX。第 5 页矩阵句的中文译文不在本轮，见文首「矩阵句译文」。
+内容仍以打开的 PDF 笔画为准。本轮只改呈现：行内公式嵌进句子，独占公式按论文居中，裁框按字形并集收紧，不再用固定整行外扩去吃相邻行或图注。计划见 `FORMULA-ELEGANCE.md`。通读结构仍以 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md) 为准（与 `open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md` 同一份）。节奏数字以 [`FORMULA-RIGHT-PANE.md`](./FORMULA-RIGHT-PANE.md) §2–§5 为准：独占公式 `10px / 14px`，行内裁图现行 `1.22em`（盒高 ≤ `1.45em`；显示宽度补偿见文首），图到题注 `6px`、题注到正文 `12px`。主展示是原页裁图，不用 KaTeX。第 5 页矩阵句的中文译文不在本轮，见文首「矩阵句译文」。
 
 ## 2026-09-23 文字层主路径（上一轮）
 
