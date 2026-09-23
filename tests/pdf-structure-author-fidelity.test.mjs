@@ -71,6 +71,12 @@ function findAll(node, pred, out = []) {
   return out;
 }
 
+function authorGridCells(authors) {
+  const rows = (authors?.children || []).filter((node) => node.className === "oi-pdf-author-row");
+  if (!rows.length) return authors?.children || [];
+  return rows.flatMap((row) => row.children || []);
+}
+
 function attentionAuthors() {
   return [
     { name: "Ashish Vaswani*", affiliation: "Google Brain", email: "avaswani@google.com" },
@@ -275,7 +281,7 @@ test("Attention fixture keeps eight authors, drops one stray symbol, and leaves 
   const host = create("div");
   renderPdfStructure(parsed.structure, host);
   const authors = findAll(host, (node) => node.className === "oi-pdf-authors")[0];
-  const cells = authors.children;
+  const cells = authorGridCells(authors);
   assert.equal(cells.length, 8);
   assert.equal(cells.every((cell) => cell.className === "oi-pdf-author-cell"), true);
   const names = cells.map((cell) => cell.children[0].textContent);
@@ -420,7 +426,7 @@ test("a clean first-row pack is not final when later-row names are still in the 
   const { create } = createDocument();
   const host = create("div");
   renderPdfStructure(recovered.structure, host);
-  const cells = host.children[1].children;
+  const cells = authorGridCells(host.children[1]);
   assert.equal(cells.length, 8);
   const names = cells.map((cell) => cell.children[0].textContent);
   for (const surname of SURNAMES) assert.equal(names.some((name) => name.includes(surname)), true, surname);
