@@ -61,6 +61,7 @@ import {
 import {
   PANE_SYNC_BEHAVIOR,
   alignScrollTop,
+  createScrollSyncGate,
   createSyncOwner,
   createWheelFlipGuard,
   planPaneFollow,
@@ -139,6 +140,8 @@ let softPageFollow = false;
 let followGeneration = 0;
 const syncOwner = createSyncOwner();
 const wheelFlip = createWheelFlipGuard();
+const pdfSyncGate = createScrollSyncGate();
+const readoutSyncGate = createScrollSyncGate();
 let translateScrollTick = 0;
 let viewMode = "readout";
 let mirrorZoom = DEFAULT_ZOOM;
@@ -1149,38 +1152,44 @@ function onTranslateScroll() {
   takeDriver("readout");
   if (translateScrollTick) return;
   const generation = followGeneration;
+  readoutSyncGate.begin();
   translateScrollTick = requestAnimationFrame(() => {
     translateScrollTick = 0;
-    if (generation !== followGeneration || syncOwner.owner !== "readout") return;
-    const pane = translateScrollRoot();
-    if (!pane) return;
-    const rects = [...pane.querySelectorAll("[data-page]")].map((el) => {
-      const box = el.getBoundingClientRect();
-      return { page: Number(el.dataset.page), top: box.top, bottom: box.bottom };
-    });
-    if (!rects.length) return;
-    const paneRect = pane.getBoundingClientRect();
-    const next = pageFromViewport(rects, paneRect.top, paneRect.bottom);
-    if (next === pageNum) return;
-    const fromPage = pageNum;
-    const plan = planPaneFollow({
-      softPageFollow,
-      owner: syncOwner.owner,
-      driver: "readout",
-      fromPage,
-      toPage: next
-    });
-    if (!plan.align || plan.behavior !== PANE_SYNC_BEHAVIOR) return;
-    pageNum = next;
-    updatePager();
-    loadCurrentPageText();
-    syncPdfToPage(next);
-    scheduleVisibleRenders();
+    try {
+      if (generation !== followGeneration || syncOwner.owner !== "readout") return;
+      const pane = translateScrollRoot();
+      if (!pane) return;
+      const rects = [...pane.querySelectorAll("[data-page]")].map((el) => {
+        const box = el.getBoundingClientRect();
+        return { page: Number(el.dataset.page), top: box.top, bottom: box.bottom };
+      });
+      if (!rects.length) return;
+      const paneRect = pane.getBoundingClientRect();
+      const next = pageFromViewport(rects, paneRect.top, paneRect.bottom);
+      if (next === pageNum) return;
+      const fromPage = pageNum;
+      const plan = planPaneFollow({
+        softPageFollow,
+        owner: syncOwner.owner,
+        driver: "readout",
+        fromPage,
+        toPage: next
+      });
+      if (!plan.align || plan.behavior !== PANE_SYNC_BEHAVIOR) return;
+      pageNum = next;
+      updatePager();
+      loadCurrentPageText();
+      syncPdfToPage(next);
+      scheduleVisibleRenders();
+    } finally {
+      if (readoutSyncGate.finish() === "release") releaseScrollDriver("readout");
+    }
   });
 }
 
 function onReadoutScrollEnd() {
-  if (syncOwner.owner === "readout") syncOwner.release("readout");
+  if (readoutSyncGate.noteEnd() === "defer") return;
+  releaseScrollDriver("readout");
 }
 
 function onReadoutWheel() {
@@ -1868,21 +1877,35 @@ function measureVisible() {
   return pageFromViewport(pageRects(), paneRect.top, paneRect.bottom);
 }
 
+function releaseScrollDriver(side) {
+  if (side === "pdf") {
+    if (syncOwner.owner === "pdf" || syncOwner.owner === "click") syncOwner.release(syncOwner.owner);
+    return;
+  }
+  if (syncOwner.owner === side) syncOwner.release(side);
+}
+
 function onPdfScroll() {
   if (!pdfDoc) return;
   if (syncOwner.ignores("pdf")) return;
   takeDriver("pdf");
   if (scrollTick) return;
   const generation = followGeneration;
+  pdfSyncGate.begin();
   scrollTick = requestAnimationFrame(() => {
     scrollTick = 0;
-    if (generation !== followGeneration || syncOwner.owner !== "pdf") return;
-    syncVisiblePage();
+    try {
+      if (generation !== followGeneration || syncOwner.owner !== "pdf") return;
+      syncVisiblePage();
+    } finally {
+      if (pdfSyncGate.finish() === "release") releaseScrollDriver("pdf");
+    }
   });
 }
 
 function onPdfScrollEnd() {
-  if (syncOwner.owner === "pdf" || syncOwner.owner === "click") syncOwner.release(syncOwner.owner);
+  if (pdfSyncGate.noteEnd() === "defer") return;
+  releaseScrollDriver("pdf");
 }
 
 function onPdfWheel(event) {

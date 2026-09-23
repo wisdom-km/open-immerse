@@ -11,6 +11,7 @@ import {
   SYNC_OWNER_IDLE_MS,
   alignScrollTop,
   clampSyncIdle,
+  createScrollSyncGate,
   createSyncOwner,
   createWheelFlipGuard,
   normalizePdfScroll,
@@ -176,6 +177,86 @@ test("page follow stays off by default and, when on, aligns only the driver's ne
   assert.equal(alignScrollTop(pane, null), null);
 });
 
+test("same-frame scrollend still lets soft-follow align once", () => {
+  const gate = createScrollSyncGate();
+  let owner = "pdf";
+  gate.begin();
+  assert.equal(gate.noteEnd(), "defer");
+  assert.equal(owner, "pdf");
+
+  let followed = 0;
+  try {
+    const plan = planPaneFollow({
+      softPageFollow: true,
+      owner,
+      driver: "pdf",
+      fromPage: 1,
+      toPage: 2
+    });
+    assert.equal(plan.behavior, "auto");
+    if (plan.align && owner === "pdf") followed += 1;
+    assert.equal(
+      planPaneFollow({
+        softPageFollow: true,
+        owner,
+        driver: "pdf",
+        fromPage: 2,
+        toPage: 2
+      }).align,
+      false
+    );
+    assert.equal(
+      planPaneFollow({
+        softPageFollow: false,
+        owner,
+        driver: "pdf",
+        fromPage: 1,
+        toPage: 4
+      }).align,
+      false
+    );
+  } finally {
+    if (gate.finish() === "release") owner = null;
+  }
+  assert.equal(followed, 1);
+  assert.equal(owner, null);
+
+  const right = createScrollSyncGate();
+  let rightOwner = "readout";
+  right.begin();
+  assert.equal(right.noteEnd(), "defer");
+  const rightPlan = planPaneFollow({
+    softPageFollow: true,
+    owner: rightOwner,
+    driver: "readout",
+    fromPage: 1,
+    toPage: 8
+  });
+  assert.equal(rightPlan.align, true);
+  assert.equal(rightPlan.behavior, "auto");
+  if (right.finish() === "release") rightOwner = null;
+  assert.equal(rightOwner, null);
+
+  const switched = createScrollSyncGate();
+  let active = "pdf";
+  let generation = 1;
+  switched.begin();
+  const scheduled = generation;
+  switched.noteEnd();
+  generation += 1;
+  active = "readout";
+  let crossed = 0;
+  try {
+    if (scheduled === generation && active === "pdf") crossed += 1;
+  } finally {
+    if (switched.finish() === "release" && active === "pdf") active = null;
+  }
+  assert.equal(crossed, 0);
+  assert.equal(active, "readout");
+
+  assert.equal(createScrollSyncGate().noteEnd(), "release");
+});
+
 test("viewer sync path has no smooth fight and no fixed 360ms lock", () => {
   assert.doesNotMatch(viewerSrc, /syncLock/);
   assert.doesNotMatch(viewerSrc, /behavior:\s*["']smooth["']/);
@@ -183,6 +264,10 @@ test("viewer sync path has no smooth fight and no fixed 360ms lock", () => {
   assert.match(viewerSrc, /planPaneFollow/);
   assert.match(viewerSrc, /PANE_SYNC_BEHAVIOR/);
   assert.match(viewerSrc, /scrollend/);
+  assert.match(viewerSrc, /createScrollSyncGate/);
+  assert.match(viewerSrc, /noteEnd\(\) === "defer"/);
+  assert.match(viewerSrc, /pdfSyncGate\.begin\(\)/);
+  assert.match(viewerSrc, /readoutSyncGate\.begin\(\)/);
   assert.match(viewerSrc, /takeDriver/);
   assert.match(viewerSrc, /followGeneration/);
   assert.match(viewerSrc, /wheelFlip\.latched/);
