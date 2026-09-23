@@ -1031,19 +1031,14 @@ function leftPageBox(page) {
   return null;
 }
 
-function letterFallbackBox() {
-  const scale = Number(zoom) || 1;
-  return { width: 612 * scale, height: 792 * scale };
-}
-
 function applyPaperMetrics() {
   const stack = paperStackEl();
   const scroll = translateScrollRoot();
   if (!stack || !scroll) return;
   const avail = paperAvailWidth(scroll.clientWidth, PDF_PAPER_GUTTER_X);
   stack.querySelectorAll(".readout-paper").forEach((paper) => {
-    const page = Number(paper.dataset.page);
-    const left = leftPageBox(page) || leftPageBox(pageNum) || letterFallbackBox();
+    const left = leftPageBox(paper.dataset.page);
+    if (!left) return;
     const size = readoutPaperSize({
       leftWidth: left.width,
       leftHeight: left.height,

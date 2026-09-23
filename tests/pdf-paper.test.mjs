@@ -30,10 +30,16 @@ test("paper width tracks the left page and clamps to the right pane", () => {
   const zoomed = readoutPaperSize({ leftWidth: 765, leftHeight: 990, availWidth: 900 });
   assert.equal(zoomed.width, 765);
   assert.equal(zoomed.heightBase, 990);
-  const unread = readoutPaperSize({ availWidth: 400 });
-  assert.equal(unread.width, 400);
-  assert.ok(Math.abs(unread.heightBase - 400 / (612 / 792)) < 0.001);
-  assert.deepEqual(readoutPaperSize({}), { width: 0, heightBase: 0, aspect: 612 / 792 });
+  const a4 = readoutPaperSize({ leftWidth: 595.28, leftHeight: 841.89, availWidth: 900 });
+  assert.equal(a4.width, 595.28);
+  assert.ok(Math.abs(a4.aspect - (595.28 / 841.89)) < 1e-9);
+  assert.ok(Math.abs(a4.heightBase - 841.89) < 0.001);
+  const landscape = readoutPaperSize({ leftWidth: 792, leftHeight: 612, availWidth: 700 });
+  assert.equal(landscape.width, 700);
+  assert.ok(Math.abs(landscape.heightBase - (700 * 612) / 792) < 0.001);
+  assert.notEqual(landscape.aspect, letter.aspect);
+  assert.deepEqual(readoutPaperSize({ availWidth: 400 }), { width: 0, heightBase: 0, aspect: 0 });
+  assert.deepEqual(readoutPaperSize({}), { width: 0, heightBase: 0, aspect: 0 });
   assert.equal(paperCssPx(612), "612px");
   assert.equal(paperCssPx(792.126), "792.13px");
   assert.equal(paperCssPx(0), "0px");
@@ -77,7 +83,20 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
   assert.match(css, /calc\(var\(--oi-pdf-paper-w\) \* 0\.085\)/);
   assert.match(css, /calc\(var\(--oi-pdf-paper-h-base\) \* 0\.08\)/);
   assert.match(css, /\.readout-paper \.readout\s*\{[^}]*max-width:\s*none/s);
+  assert.match(css, /\.readout-type\s*\{[^}]*column-count:\s*1/s);
+  assert.doesNotMatch(css, /\.readout \.oi-pdf-p\[data-role="authors"\]\s*\{[^}]*grid-template-columns/);
+  assert.doesNotMatch(css, /\.readout-type\s*\{[^}]*column-count:\s*[2-9]/);
+  assert.match(css, /\.oi-pdf-display-math\s*\{[^}]*text-align:\s*center/s);
+  assert.match(css, /\.readout-paper \.oi-pdf-display-math,\s*\.readout-paper \.oi-pdf-figure\s*\{[^}]*position:\s*static/s);
+  assert.match(css, /\.readout-paper \.oi-pdf-display-math,\s*\.readout-paper \.oi-pdf-figure\s*\{[^}]*max-width:\s*100%/s);
+  assert.match(css, /\.oi-pdf-display-math \.oi-pdf-math-crop\s*\{[^}]*max-width:\s*100%/s);
   assert.doesNotMatch(css, /max-width:\s*42rem/);
+  assert.doesNotMatch(src, /letterFallback|612 \* scale|PDF_PAPER_FALLBACK_ASPECT/);
+  assert.match(src, /#pages \.pdf-page\[data-page=/);
+  assert.doesNotMatch(
+    src.slice(src.indexOf("function ensurePaper"), src.indexOf("function renderStoredArticle")),
+    /position:\s*["']absolute["']|dataset\.bbox/
+  );
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*overflow:\s*auto/s);
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*scroll-behavior:\s*auto/s);
   assert.doesNotMatch(src, /behavior:\s*["']smooth["']/);
