@@ -93,6 +93,16 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
   assert.doesNotMatch(css, /max-width:\s*42rem/);
   assert.doesNotMatch(src, /letterFallback|612 \* scale|PDF_PAPER_FALLBACK_ASPECT/);
   assert.match(src, /#pages \.pdf-page\[data-page=/);
+  const pageBox = src.slice(src.indexOf("function leftPageBox"), src.indexOf("function applyPaperMetrics"));
+  assert.match(pageBox, /style\.width/);
+  assert.match(pageBox, /aspectRatio/);
+  assert.ok(pageBox.indexOf("style.width") < pageBox.indexOf("offsetWidth"));
+  assert.doesNotMatch(pageBox, /canvas/);
+  assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"[^>]*hidden/);
+  assert.doesNotMatch(src, /\$\("mirrorPages"\)\.hidden = false/);
+  assert.doesNotMatch(src, /appendMirrorPage|buildMirrorLayout/);
+  assert.doesNotMatch(css, /--oi-paper:\s*#/);
+  assert.doesNotMatch(css, /\.readout-paper\s*\{[^}]*[^-]height:\s*var\(--oi-pdf-paper-h-base\)/);
   assert.doesNotMatch(
     src.slice(src.indexOf("function ensurePaper"), src.indexOf("function renderStoredArticle")),
     /position:\s*["']absolute["']|dataset\.bbox/

@@ -1017,16 +1017,17 @@ function scopeShowsPage(page) {
   return pagesInTranslateScope([{ page }], currentScope(), pageNum).length > 0;
 }
 
+/** CSS box of `#pages .pdf-page` (viewport = MediaBox/CropBox × left zoom). Not canvas bitmap pixels. */
 function leftPageBox(page) {
   const el = document.querySelector(`#pages .pdf-page[data-page="${page}"]`);
   if (!el) return null;
-  if (el.offsetWidth > 0 && el.offsetHeight > 0) {
-    return { width: el.offsetWidth, height: el.offsetHeight };
-  }
   const styled = parseFloat(el.style.width);
   const parts = String(el.style.aspectRatio || "").split("/").map((part) => parseFloat(part.trim()));
   if (styled > 0 && parts[0] > 0 && parts[1] > 0) {
     return { width: styled, height: styled * (parts[1] / parts[0]) };
+  }
+  if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+    return { width: el.offsetWidth, height: el.offsetHeight };
   }
   return null;
 }
