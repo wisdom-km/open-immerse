@@ -395,10 +395,16 @@ h1 {
   padding: 0;
   line-height: 1;
 }
+.pane-translate .readout.md-readout .oi-pdf-inline-math:has(.oi-pdf-math-crop) {
+  /* After ink is in the 1.25–1.35 band, the line top sits in 1.8–2.1em. */
+  height: var(--oi-pdf-inline-line-em, 1.85em);
+  overflow: visible;
+}
 .pane-translate .readout.md-readout .oi-pdf-inline-math .oi-pdf-math-crop {
   display: block;
-  /* Ink target 1.10× body. Nominal share 16/(16+2×4) → box 1.65em. */
-  height: var(--oi-pdf-inline-crop-em, 1.65em);
+  /* Ink target 1.30× body. Nominal share 16/(16+2×4) → box 1.95em (allowed ~1.9–2.2). */
+  height: var(--oi-pdf-inline-crop-em, 1.95em);
+  margin-top: calc(var(--oi-pdf-inline-line-em, 1.85em) - var(--oi-pdf-inline-crop-em, 1.95em));
   width: auto;
   max-width: min(100%, 12em);
   object-fit: contain;

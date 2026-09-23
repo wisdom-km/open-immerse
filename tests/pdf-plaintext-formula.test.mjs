@@ -9,7 +9,15 @@ import { formatPlaintextRelation, plaintextRelationParts, plaintextRelationsIn }
 import {
   FORMULA_INK_PAD_PX,
   inlineCropBoxEm,
+  inlineLineTopEm,
+  INLINE_INK_FLOOR,
+  INLINE_INK_STRONG_HI,
+  INLINE_INK_STRONG_LO,
   INLINE_INK_TARGET,
+  INLINE_LINE_BOX_HI,
+  INLINE_LINE_BOX_LO,
+  INLINE_LINE_TOP_HI,
+  INLINE_LINE_TOP_LO,
   isPlaintextFormulaSpan,
   measureFormulaCrop,
   nominalInlineInkShare,
@@ -167,18 +175,34 @@ test("MultiHead, positional encoding, and equation 3 stay formula-display", () =
 test("inline box height is ink divided by pad share, not a taller fixed em", () => {
   const share = nominalInlineInkShare();
   assert.equal(FORMULA_INK_PAD_PX.inline, 4);
+  assert.equal(INLINE_INK_FLOOR, 1);
+  assert.equal(INLINE_INK_STRONG_LO, 1.25);
+  assert.equal(INLINE_INK_STRONG_HI, 1.35);
+  assert.equal(INLINE_INK_TARGET, 1.3);
+  assert.equal(INLINE_LINE_BOX_LO, 1.9);
+  assert.equal(INLINE_LINE_BOX_HI, 2.2);
+  assert.equal(INLINE_LINE_TOP_LO, 1.8);
+  assert.equal(INLINE_LINE_TOP_HI, 2.1);
+  assert.equal(DISPLAY_INK_PREFER, 1.4);
   assert.ok(Math.abs(share - 16 / (16 + 8)) < 1e-12);
   const box = inlineCropBoxEm(share);
+  const line = inlineLineTopEm(share);
   const ink = box * share;
-  assert.ok(ink >= 1.05 && ink <= 1.15, `ink ${ink}`);
+  assert.ok(ink >= 1.25 && ink <= 1.35, `ink ${ink}`);
+  assert.ok(ink >= INLINE_INK_FLOOR);
   assert.ok(Math.abs(ink - INLINE_INK_TARGET) < 1e-9);
-  assert.ok(box >= 1.55 && box <= 1.8, `box ${box}`);
+  assert.ok(box >= 1.9 && box <= 2.2, `box ${box}`);
+  assert.ok(line >= 1.8 && line <= 2.1, `line ${line}`);
+  assert.ok(line < box, "line top pulls in after the ink is in band");
   assert.ok(1.22 * share < 1, "the old 1.22em box leaves ink under the body");
   assert.notEqual(box, 1.22);
+  assert.notEqual(box, 1.65);
   const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   assert.match(css, new RegExp(`--oi-pdf-inline-crop-em, ${box}em`));
+  assert.match(css, new RegExp(`--oi-pdf-inline-line-em, ${line}em`));
   assert.match(viewer, /inlineCropBoxEm\(formula\?\.inkShare\)/);
+  assert.match(viewer, /inlineLineTopEm\(formula\?\.inkShare\)/);
   assert.match(viewer, /displayInkMinEm\(block\.inkShare\)/);
   assert.equal(displayInkMinEm(undefined), DISPLAY_CROP_MIN_HEIGHT_EM);
   const short = displayInkMinEm(0.5);
@@ -186,6 +210,11 @@ test("inline box height is ink divided by pad share, not a taller fixed em", () 
   assert.ok(short > DISPLAY_CROP_MIN_HEIGHT_EM);
   assert.match(displayCropWidthCss(0.48, 0.04, short), new RegExp(`${short}em`));
   assert.match(displayCropWidthCss(0.48, 0.04), /2em \* var\(--oi-pdf-paper-w, 0px\)/);
+  const tall = inlineCropBoxEm(0.5);
+  const tallLine = inlineLineTopEm(0.5);
+  assert.ok(Math.abs(tall * 0.5 - INLINE_INK_TARGET) < 1e-9);
+  assert.ok(tallLine <= INLINE_LINE_TOP_HI + 1e-9);
+  assert.ok(tallLine < tall);
 
   const width = 80;
   const height = 40;
@@ -203,8 +232,11 @@ test("inline box height is ink divided by pad share, not a taller fixed em", () 
   const measured = measureFormulaCrop([0, 0, 1, 1], { data, width, height }, { inline: true });
   assert.ok(measured.inkShare > 0 && measured.inkShare < 1);
   const measuredBox = inlineCropBoxEm(measured.inkShare);
-  assert.ok(measuredBox * measured.inkShare >= 1.05 - 1e-9);
-  assert.ok(measuredBox * measured.inkShare <= 1.15 + 1e-9);
+  const measuredLine = inlineLineTopEm(measured.inkShare);
+  assert.ok(measuredBox * measured.inkShare >= 1.25 - 1e-9);
+  assert.ok(measuredBox * measured.inkShare <= 1.35 + 1e-9);
+  assert.ok(measuredLine <= measuredBox);
+  assert.ok(measuredBox * measured.inkShare >= INLINE_INK_FLOOR);
 });
 
 test("retired simple placeholders remap to Unicode instead of dumping English", () => {
