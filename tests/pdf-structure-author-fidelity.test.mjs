@@ -450,3 +450,69 @@ test("a clean first-row pack is not final when later-row names are still in the 
   assert.equal(once.ok, true);
   assert.equal(once.structure.authors.length, 8);
 });
+
+function dirtyFourPack() {
+  return modelPack([
+    { name: "Ashish Vaswani", affiliation: "Google Brain Llion Jones", email: "avaswani@google.com" },
+    { name: "Noam Shazeer", affiliation: "Google Brain Aidan N. Gomez", email: "noam@google.com" },
+    { name: "Niki Parmar", affiliation: "Google Research", email: "nikip@google.com" },
+    { name: "Jakob Uszkoreit", affiliation: "Google Research", email: "usz@google.com" }
+  ]);
+}
+
+test("a dirty four-author merge is not a successful pack and one retry can recover eight", async () => {
+  const parsed = validatePdfStructure(JSON.parse(dirtyFourPack().raw));
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.reason, "authors-dirty");
+  assert.equal(parsed.structure, undefined);
+
+  const absorbed = validatePdfStructure({
+    version: 1,
+    title: "Attention Is All You Need",
+    authors: [{
+      name: "Ashish Vaswani",
+      affiliation: "Google Brain Llion Jones Aidan N. Gomez",
+      email: "avaswani@google.com"
+    }],
+    abstract: { heading: "Abstract", body: "The dominant sequence transduction models." }
+  });
+  assert.equal(absorbed.ok, false);
+  assert.equal(absorbed.reason, "authors-dirty");
+
+  const clean = validatePdfStructure({
+    version: 1,
+    title: "Attention Is All You Need",
+    authors: attentionAuthors(),
+    abstract: { heading: "Abstract", body: "The dominant sequence transduction models." }
+  });
+  assert.equal(clean.ok, true);
+  assert.equal(clean.structure.authors.length, 8);
+
+  const pageText = pageTextForStructure(columnBlocks());
+  let calls = 0;
+  const recovered = await resolveTitleStructure(pageText, 1, async ({ user }) => {
+    calls += 1;
+    if (calls === 1) return dirtyFourPack();
+    assert.match(user, /Do not stop after the first row/);
+    assert.match(user, /Llion Jones/);
+    return modelPack(attentionAuthors());
+  });
+  assert.equal(calls, 2);
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.structure.authors.length, 8);
+  const { create } = createDocument();
+  const host = create("div");
+  renderPdfStructure(recovered.structure, host);
+  assert.equal(authorGridCells(host.children[1]).length, 8);
+  assert.equal(host.children[1].attrs["data-wrap"], "4|3|1");
+
+  calls = 0;
+  const stuck = await resolveTitleStructure(pageText, 1, async () => {
+    calls += 1;
+    return dirtyFourPack();
+  });
+  assert.equal(calls, 2);
+  assert.equal(stuck.ok, false);
+  assert.equal(stuck.reason, "authors-dirty");
+  assert.equal(stuck.structure, undefined);
+});

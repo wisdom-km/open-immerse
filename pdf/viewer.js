@@ -122,6 +122,7 @@ import {
   isTitlePageCandidate,
   pageTextForStructure,
   resolveTitleStructure,
+  structureAuthorsLookTruncated,
   structureTranslateSlots,
   structureTranslationRows
 } from "../lib/pdf-structure-schema.js";
@@ -1620,9 +1621,13 @@ function noteLibraryUnavailable() {
   setStatus(failure.warning, false, true);
 }
 
-async function ensureTitleStructure(page, layout) {
-  if (titleStructure && titleStructure.docId === docId) return titleStructure;
+async function ensureTitleStructure(page, layout, options = {}) {
   const text = pageTextForStructure(layout?.blocks || []);
+  if (titleStructure && titleStructure.docId === docId && !options.force) {
+    const authors = titleStructure.source?.authors || titleStructure.structure?.authors || [];
+    const stale = titleStructure.status === "ok" && structureAuthorsLookTruncated(authors, text);
+    if (!stale) return titleStructure;
+  }
   if (!isTitlePageCandidate(page, text)) return null;
   const stamp = docId;
   const pending = {
@@ -2061,12 +2066,13 @@ async function forceRetranslateCurrentPage() {
       return;
     }
     if (left()) return;
-    await ensureTitleStructure(targetPage, sourceLayout);
+    await ensureTitleStructure(targetPage, sourceLayout, { force: true });
     if (left()) return;
+    const pageUnits = liveOriginals(sourceLayout, unitsForForceRetranslate(sourceLayout));
     armTitleRetranslate(translatingDoc, targetPage);
     await translateTitleStructure(work, gen, translatingDoc, batchSize);
     if (left()) return;
-    const translated = await translatePageBlocks(units, {
+    const translated = await translatePageBlocks(pageUnits, {
       send: runtimeSend,
       session: work,
       batchSize,
