@@ -2,6 +2,26 @@
 
 记录到 2026-09-23。需求仍以 `REQUIREMENTS.md` 为准。这里记录当前实现、运行状态、修复前的网页问题与尚未完成的验收。
 
+## 2026-09-23 公式裁框收紧（pdf-formula-crop-tighten）
+
+主展示仍是打开的 PDF 的 pageRaster 裁图。本轮只收紧裁框，并修正「句内短式被升成居中大图」。不改右栏节奏 CSS，不把字形重绘改成主路径，不改 Soft Graphite、镜像、滚轮、作者 schema、打开 PDF 或参考文献软状态文案。Anvil 的 F1–F5 仍要在本机 Chrome 看 Attention，这里不记通过。
+
+裁框从字形并集外加一圈窄边，再按内容停住（邻行、图、题注）。数字在 `lib/pdf-text-layer.js` 的 `FORMULA_CROP_PAD`：
+
+| | 横向 | 纵向 |
+| --- | --- | --- |
+| 独占 | 0.0024 | 0.0014 |
+| 行内 | 0.0010 | 0.0008 |
+| 下标 / 括号 / 根号再加 | 0.0012 | 0.0016 |
+
+加完之后夹在 `FORMULA_PAD_LIMIT`（横 0.0049、纵 0.0038）以内。在 612×792、裁图倍率 2 下，这个上限大约是 6 CSS px。
+
+裁图时再按纸白收一圈：通道都 ≥ 246 视为纸白。墨迹外保留的白边，独占 4 像素，带上下标或括号时 5 像素；行内 2 像素，带保护时 3 像素。收紧不得越过上面的内容停靠框，所以 softmax 裁图不会把 Fig.2 或题注裁进来。没有像素或认不出墨迹时保持原框。过小的裁图（宽 < 24 或高 < 12 像素）仍不返回 data URL。
+
+句内、与段落左缘对齐、又没有公式编号的短式留在句子里。带 `(n)` 的居中公式仍是独占。含 `model`、`warmup` 这类罗马字母片段、但没有 the/for/this 这类功能词的缩进公式行，仍是独占。
+
+无 Attention PDF 时 `node --test tests/*.test.mjs`：389 通过、0 失败、1 跳过。仓库不收录该 PDF；本机临时放上后，同一边界测试通过。这不能代替 Anvil 的左右栏截图。
+
 ## 2026-09-23 公式呈现（本轮）
 
 内容仍以打开的 PDF 笔画为准。本轮只改呈现：行内公式嵌进句子，独占公式按论文居中，裁框按字形并集收紧，不再用固定整行外扩去吃相邻行或图注。计划见 `FORMULA-ELEGANCE.md`。通读结构仍以 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md) 为准（与 `open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md` 同一份）。节奏数字以 [`FORMULA-RIGHT-PANE.md`](./FORMULA-RIGHT-PANE.md) §2–§5 为准：独占公式 `10px / 14px`，行内墨迹约 `1.1em`，图到题注 `6px`、题注到正文 `12px`。主展示是原页裁图，不用 KaTeX。第 5 页矩阵句的中文译文不在本轮。
@@ -14,7 +34,7 @@
 
 - 同一基线上的上下标留在该行；换行不再按 x 把两行揉成一串。参考文献按 `[n]` 拆条，右栏碎片跟在同一行的左栏后面。第 10–12 页现在是 `[1]`–`[40]` 的递增条目，`skipTranslate`，不送去翻译。第 1 条保留 `arXiv preprint arXiv:1607.06450`。第 16 条读作 “In Advances in Neural Information Processing Systems, (NIPS), 2016.”。页眉那行 `arXiv:1706.03762v7` 戳记仍然剔除。
 - 第 5 页矩阵参数不再拼成 `W_iQ`、`Rdmodel`。正文是文字层原句 `Where the projections are parameter matrices ⟦f1⟧ and ⟦f2⟧.`，两段数学各自是原页裁图（第一行三个 `W_i ∈ R^{…}`，第二行 `W^O ∈ R^{…}`）。
-- 独占公式裁框在字形并集外再留一圈：横向约 0.008、纵向约 0.01（页高比例）。Attention 第 4 页 softmax、第 5 页 MultiHead / FFN、第 6 页两条 PE、第 7 页学习率都是整行裁图。过小的裁图（宽 < 24 或高 < 12 像素）不返回 data URL；失败时右栏写文字提示，不用阅读器地址当 `img src`。
+- 独占公式裁框在字形并集外留一圈窄边，现行比例见上文「公式裁框收紧」（不再使用横 0.008、纵 0.01 的整行外扩）。Attention 第 4 页 softmax、第 5 页 MultiHead / FFN、第 6 页两条 PE、第 7 页学习率都是整行裁图。过小的裁图（宽 < 24 或高 < 12 像素）不返回 data URL；失败时右栏写文字提示，不用阅读器地址当 `img src`。
 
 旧库里若仍按旧 `sourceId` 记着这一段的 `source-uncertain`，右栏不再整块换成“请看左栏”，而是注明旧译文未沿用，并显示当前文字层原句和裁图。本轮没有调用翻译接口，矩阵句没有新的中文译文。
 

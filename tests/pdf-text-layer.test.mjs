@@ -1,13 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { PDF_MIRROR_OPS } from "../lib/pdf-mirror.js";
 import {
   FORMULA_CROP_PAD,
+  FORMULA_INK_PAD_PX,
+  FORMULA_PAD_LIMIT,
+  FORMULA_PAPER_MIN,
   contentAwareFormulaBbox,
   formulaGlyphsRedrawSafe,
-  textLayerToBlocks
+  textLayerToBlocks,
+  trimFormulaBboxToInk
 } from "../lib/pdf-text-layer.js";
 import { segmentPageBlocks } from "../lib/pdf-viewer.js";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function pdfItem(str, x, y, width = 120, height = 10, extra = {}) {
   return { str, transform: [1, 0, 0, 1, x, y], width, height, ...extra };
@@ -92,6 +101,7 @@ test("a fraction beside softmax is cropped with the full display equation", () =
   assert.equal(Object.hasOwn(formulas[0], "latex"), false);
   assert.equal(Object.hasOwn(formulas[0], "content"), false);
   assert.equal(formulas[0].display, true);
+  assert.equal(formulas[0].formulaInkProtect, true);
   assert.equal(page.blocks.some((block) => /softmax/.test(block.text || "")), false);
 });
 
@@ -419,6 +429,173 @@ test("formula redraw is limited to formula fonts without extending operators", (
   assert.equal(formulaGlyphsRedrawSafe([{ str: "√", fontName: "CMSY10" }]), false);
   assert.equal(formulaGlyphsRedrawSafe([{ str: "softmax(", fontName: "CMR10" }]), false);
   assert.equal(formulaGlyphsRedrawSafe([{ str: "n", fontName: "Times" }]), false);
+});
+
+test("an indented sentence that contains an equals sign stays inline", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("The width of each layer is ", 160, 520, 140, 10),
+      pdfItem("d", 302, 520, 8, 10, { fontName: "CMMI10" }),
+      pdfItem("model", 310, 517, 24, 7),
+      pdfItem("=", 338, 520, 8, 10),
+      pdfItem("512", 348, 520, 18, 10),
+      pdfItem(" for this encoder.", 368, 520, 90, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 3
+  });
+  assert.equal(page.blocks.some((block) => block.label === "formula" && block.display === true), false);
+  const sentence = page.blocks.find((block) => /width of each layer/.test(block.text || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /⟦f\d+⟧/);
+  assert.match(sentence.text, /for this encoder/);
+  const inline = page.blocks.filter((block) => block.label === "formula");
+  assert.equal(inline.length, 1);
+  assert.equal(inline[0].display, false);
+  assert.equal(inline[0].inlineOf, sentence.id);
+});
+
+test("a short equation wrapped at the paragraph indent stays inline", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("The dimensionality of the inner layer is fixed at", 150, 500, 250, 10),
+      pdfItem("d_{ff}", 150, 486, 28, 10, { fontName: "CMMI10" }),
+      pdfItem("= 2048.", 182, 486, 48, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 5
+  });
+  assert.equal(page.blocks.some((block) => block.label === "formula" && block.display === true), false);
+  const sentence = page.blocks.find((block) => /dimensionality of the inner layer/.test(block.text || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /⟦f\d+⟧/);
+  const inline = page.blocks.filter((block) => block.label === "formula");
+  assert.ok(inline.length >= 1);
+  assert.equal(inline.every((block) => block.display === false && block.inlineOf === sentence.id), true);
+});
+
+test("an indented numbered equation with a roman identifier stays display", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("We varied the learning rate according to the formula.", 108, 200, 280, 10),
+      pdfItem("lrate", 180, 165, 28, 10, { fontName: "CMMI10" }),
+      pdfItem("=", 212, 165, 8, 10),
+      pdfItem("d", 224, 165, 8, 10, { fontName: "CMMI10" }),
+      pdfItem("model", 232, 160, 24, 7),
+      pdfItem("min(step", 260, 165, 40, 10),
+      pdfItem("num", 302, 165, 18, 10),
+      pdfItem(")", 360, 165, 6, 10),
+      pdfItem("(3)", 493, 165, 16, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 7
+  });
+  const display = page.blocks.filter((block) => block.label === "formula" && block.display === true);
+  assert.equal(display.length, 1);
+  assert.equal(display[0].inlineOf, undefined);
+  assert.equal(page.blocks.some((block) => /lrate|model|step/.test(block.text || "")), false);
+  assert.ok(page.blocks.some((block) => /learning rate according/.test(block.text || "")));
+});
+
+test("a centered numbered equation after a sentence stays display", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("The learning rate follows the formula.", 72, 520, 220, 10),
+      pdfItem("lrate", 230, 490, 30, 10, { fontName: "CMMI10" }),
+      pdfItem("=", 264, 490, 10, 10),
+      pdfItem("min", 278, 490, 18, 10),
+      pdfItem("(5)", 500, 490, 18, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 7
+  });
+  const display = page.blocks.filter((block) => block.label === "formula" && block.display === true);
+  assert.equal(display.length, 1);
+  assert.equal(display[0].inlineOf, undefined);
+  assert.ok(page.blocks.some((block) => /learning rate follows/.test(block.text || "")));
+  assert.equal(page.blocks.some((block) => /lrate|min/.test(block.text || "")), false);
+});
+
+function paperRaster(width, height, paint) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  data.fill(255);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const pixel = paint(x, y);
+      if (!pixel) continue;
+      const index = (y * width + x) * 4;
+      data[index] = pixel[0];
+      data[index + 1] = pixel[1];
+      data[index + 2] = pixel[2];
+      data[index + 3] = pixel.length > 3 ? pixel[3] : 255;
+    }
+  }
+  return { data, width, height };
+}
+
+test("formula pads stay under about 6 CSS px and inline is tighter than display", () => {
+  const cssX = FORMULA_PAD_LIMIT.x * 612 * 2;
+  const cssY = FORMULA_PAD_LIMIT.y * 792 * 2;
+  assert.ok(cssX <= 6.05 && cssY <= 6.05, `pad limit ${cssX.toFixed(2)} x ${cssY.toFixed(2)}`);
+  assert.ok(FORMULA_CROP_PAD.inlineX < FORMULA_CROP_PAD.displayX);
+  assert.ok(FORMULA_CROP_PAD.inlineY < FORMULA_CROP_PAD.displayY);
+  assert.ok(FORMULA_CROP_PAD.displayX + FORMULA_CROP_PAD.scriptX <= FORMULA_PAD_LIMIT.x + 1e-9);
+  assert.ok(FORMULA_CROP_PAD.displayY + FORMULA_CROP_PAD.scriptY <= FORMULA_PAD_LIMIT.y + 1e-9);
+  assert.ok(FORMULA_INK_PAD_PX.inline < FORMULA_INK_PAD_PX.display);
+  assert.ok(FORMULA_INK_PAD_PX.inlineProtect <= FORMULA_INK_PAD_PX.displayProtect);
+  assert.ok(FORMULA_INK_PAD_PX.displayProtect <= 6);
+  assert.ok(FORMULA_PAPER_MIN >= 240 && FORMULA_PAPER_MIN <= 252);
+});
+
+test("ink trim drops paper-white margin and keeps a gray subscript", () => {
+  const width = 200;
+  const height = 100;
+  const bbox = [0.1, 0.2, 0.9, 0.8];
+  const image = paperRaster(width, height, (x, y) => {
+    if (y === 10) return [0, 0, 0, 255];
+    if (x >= 40 && x <= 70 && y >= 35 && y <= 50) return [0, 0, 0, 255];
+    if (x === 72 && y === 48) return [180, 180, 180, 255];
+    if (x === 30 && y === 40) return [0, 0, 0, 0];
+    return null;
+  });
+  const display = trimFormulaBboxToInk(bbox, image, { inline: false });
+  const inline = trimFormulaBboxToInk(bbox, image, { inline: true });
+  const protect = trimFormulaBboxToInk(bbox, image, { inline: false, protect: true });
+  assert.deepEqual(display.map((value) => Number(value.toFixed(4))), [0.18, 0.31, 0.385, 0.55]);
+  assert.deepEqual(inline.map((value) => Number(value.toFixed(4))), [0.19, 0.33, 0.375, 0.53]);
+  assert.ok(protect[0] < display[0] && protect[2] > display[2]);
+  assert.ok(display[1] > 0.2, "caption row above the box stays out");
+  assert.ok(display[0] >= bbox[0] && display[2] <= bbox[2]);
+  assert.ok(display[1] >= bbox[1] && display[3] <= bbox[3]);
+  assert.ok(inline[2] - inline[0] < display[2] - display[0]);
+});
+
+test("ink trim fails closed when the raster has no ink", () => {
+  const bbox = [0.2, 0.3, 0.6, 0.5];
+  const blank = paperRaster(40, 40, () => null);
+  assert.deepEqual(trimFormulaBboxToInk(bbox, blank), bbox);
+  assert.deepEqual(trimFormulaBboxToInk(bbox, null), bbox);
+  assert.equal(trimFormulaBboxToInk(null, blank), null);
+});
+
+test("ink trim keeps a readable crop when the ink itself is tiny", () => {
+  const image = paperRaster(80, 40, (x, y) => (x === 40 && y === 20 ? [0, 0, 0, 255] : null));
+  const box = trimFormulaBboxToInk([0, 0, 1, 1], image, { inline: false });
+  const width = Math.round((box[2] - box[0]) * 80);
+  const height = Math.round((box[3] - box[1]) * 40);
+  assert.ok(width >= 24 && height >= 12, `${width}x${height}`);
+  assert.ok(box[0] >= 0 && box[2] <= 1 && box[1] >= 0 && box[3] <= 1);
+});
+
+test("viewer trims formula ink and still falls back to the page raster crop", () => {
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const fn = viewer.slice(viewer.indexOf("function imageForVisualBlock"));
+  const drawnAt = fn.indexOf("if (drawn) return drawn");
+  const trimAt = fn.indexOf("formulaInkBbox");
+  const cropAt = fn.indexOf("return cropBlockImage");
+  assert.ok(drawnAt >= 0 && trimAt > drawnAt && cropAt > trimAt);
+  assert.match(viewer, /trimFormulaBboxToInk/);
+  assert.equal((viewer.match(/renderFormulaNode\s*\(/g) || []).length, 1);
 });
 
 test("paragraphs keep sourceItems without dropping text or role", () => {
