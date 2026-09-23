@@ -163,11 +163,37 @@ test("author blocks are not translated", () => {
     viewport: unitViewport(612, 792),
     page: 1
   });
-  const authors = page.blocks.find((block) => block.presentation === "byline");
-  assert.ok(authors);
-  assert.equal(authors.skipTranslate, true);
-  assert.match(authors.text, /Vaswani/);
-  assert.equal(authors.label, "text");
+  const authors = page.blocks.filter((block) => block.presentation === "byline");
+  assert.equal(authors.length, 2);
+  assert.equal(authors[0].skipTranslate, true);
+  assert.equal(authors[0].text, "Ashish Vaswani");
+  assert.equal(authors[0].authorCell.affiliation, "Google Brain");
+  assert.equal(authors[0].authorCell.email, "avaswani@google.com");
+  assert.equal(authors[1].authorCell.name, "Noam Shazeer");
+  assert.equal(authors[1].authorCell.affiliation, undefined);
+  assert.equal(authors.every((block) => block.label === "text"), true);
+  assert.equal(authors.some((block) => block.flatAuthor), false);
+});
+
+test("a single full-width author band stays one flat byline", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("Attention Is All You Need", 96, 730, 420, 20),
+      pdfItem("Ashish Vaswani Noam Shazeer", 72, 690, 400, 10),
+      pdfItem("Google Brain Google Research", 72, 676, 400, 9),
+      pdfItem("avaswani@google.com noam@google.com", 72, 662, 400, 8),
+      pdfItem("Abstract", 72, 548, 70, 12, { fontName: "Helvetica-Bold" }),
+      pdfItem("The dominant sequence transduction models are based on complex recurrent networks.", 72, 528, 420, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 1
+  });
+  const authors = page.blocks.filter((block) => block.presentation === "byline");
+  assert.equal(authors.length, 1);
+  assert.equal(authors[0].flatAuthor, true);
+  assert.equal(authors[0].authorCell, undefined);
+  assert.match(authors[0].text, /Ashish Vaswani/);
+  assert.match(authors[0].text, /Noam Shazeer/);
 });
 
 test("arXiv footer stays out of the text-layer page", () => {

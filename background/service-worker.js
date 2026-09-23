@@ -1,4 +1,4 @@
-import { getProvider, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
+import { completePdfStructure, getProvider, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { featureOn, resolveFeatures } from "../lib/features.js";
@@ -119,6 +119,11 @@ async function handleMessage(message, sender) {
       await rebuildMenus();
       return { ok: true, settings };
     }
+    case "OI_PDF_STRUCTURE":
+      return completePdfStructure(await getSettings(), {
+        system: message.system,
+        user: message.user
+      });
     case "OI_TRANSLATE_BATCH": {
       const batchOpts = {
         onProgress: (progress) => emitTranslateProgress(sender, message.requestId, progress),
