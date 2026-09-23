@@ -332,6 +332,15 @@ h1 {
   color: var(--oi-paper-muted);
   word-break: break-word;
 }
+.readout-paper .oi-pdf-footnotes {
+  margin: 0 0 16px;
+  text-align: center;
+}
+.readout-paper .oi-pdf-footnote {
+  margin: 0;
+  font: 400 11px/1.4 var(--oi-font);
+  color: var(--oi-paper-muted);
+}
 .readout-paper .oi-pdf-p[data-role="authors"] {
   text-align: center;
 }
