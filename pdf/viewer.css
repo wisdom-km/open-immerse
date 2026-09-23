@@ -57,6 +57,7 @@ h1 {
   border-bottom: 1px solid var(--oi-line);
 }
 #status.error { color: var(--oi-danger); }
+#status.warn { color: var(--oi-text-muted); font-weight: 600; }
 
 .workspace {
   position: relative;
@@ -295,6 +296,43 @@ h1 {
   overflow: visible;
 }
 .readout-paper .oi-pdf-h1 {
+  text-align: center;
+}
+.readout-paper .oi-pdf-abstract-heading,
+.readout-paper .oi-pdf-h2[data-role="abstract_heading"] {
+  text-align: center;
+}
+.readout-paper .oi-pdf-p[data-role="abstract_body"] {
+  text-align: left;
+}
+.readout-paper .oi-pdf-authors[data-role="authors"] {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px 12px;
+  justify-items: center;
+  text-align: center;
+  width: 100%;
+  margin: 0 0 16px;
+}
+.readout-paper .oi-pdf-author-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+.readout-paper .oi-pdf-author-name {
+  font: 600 13px/1.35 var(--oi-font);
+  color: var(--oi-paper-ink);
+}
+.readout-paper .oi-pdf-author-aff,
+.readout-paper .oi-pdf-author-email {
+  font: 400 11.5px/1.4 var(--oi-font);
+  color: var(--oi-paper-muted);
+  word-break: break-word;
+}
+.readout-paper .oi-pdf-p[data-role="authors"] {
   text-align: center;
 }
 .pane-translate .readout.md-readout > * {
