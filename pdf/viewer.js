@@ -31,6 +31,8 @@ import {
   pdfSourceBasename,
   pdfToolbarActionState,
   pdfTranslateBusy,
+  blocksForForceRetranslate,
+  forceRetranslateOutcome,
   neighborPages,
   nextZoom,
   normalizePdfTranslateScope,
@@ -114,7 +116,7 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { inlineCropBoxEm, inlineLineTopEm, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import {
   applyStructureTranslations,
   isTitlePageCandidate,
@@ -147,6 +149,7 @@ let pageItems = 0;
 let pageOriginals = [];
 let pageResults = [];
 let translatingPage = 0;
+let forceReadoutHold = false;
 let pageViews = [];
 let scrollTick = 0;
 const pageCache = createPageCache();
@@ -210,6 +213,7 @@ function init() {
   bindPaneScroll();
   bindPdfScrollSettings();
   $("translatePage").addEventListener("click", () => startTranslate());
+  $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("restoreOriginal").addEventListener("click", restoreOriginal);
   $("exportMd").addEventListener("click", () => exportReadout("md"));
@@ -243,6 +247,7 @@ function listenProgress() {
 }
 
 function applyPageProgress(message) {
+  if (forceReadoutHold) return;
   if (!pdfTranslateBusy(session) || !translatingPage) return;
   const current = pageCache.get(docId, translatingPage) || pageResults;
   const next = applyDraftTranslations(session, message, current);
@@ -1929,6 +1934,190 @@ async function translateWholeDocument() {
   updateTranslateControls();
 }
 
+function snapshotForceReadout(doc, page) {
+  const record = titleStructure;
+  return {
+    pageResults,
+    hadCache: pageCache.has(doc, page),
+    cached: pageCache.get(doc, page),
+    title: record
+      ? {
+        docId: record.docId,
+        page: record.page,
+        status: record.status,
+        structure: record.structure,
+        source: record.source,
+        slotsDone: record.slotsDone,
+        translated: record.translated
+      }
+      : null
+  };
+}
+
+function restoreForceReadout(prior, doc, page) {
+  pageResults = prior.pageResults;
+  if (prior.hadCache) pageCache.set(doc, page, prior.cached);
+  else pageCache.clearPage(doc, page);
+  if (!prior.title) titleStructure = null;
+  else if (titleStructure) {
+    titleStructure.docId = prior.title.docId;
+    titleStructure.page = prior.title.page;
+    titleStructure.status = prior.title.status;
+    titleStructure.structure = prior.title.structure;
+    titleStructure.source = prior.title.source;
+    titleStructure.slotsDone = prior.title.slotsDone;
+    titleStructure.translated = prior.title.translated;
+  }
+  renderArticle();
+}
+
+function unitsForForceRetranslate(layout) {
+  if (layout?.kind === "blocks") {
+    return unitsForLayout({ ...layout, blocks: blocksForForceRetranslate(layout.blocks) });
+  }
+  return (unitsForLayout(layout) || []).filter((unit) => unit?.skipTranslate !== true);
+}
+
+function structureRetranslateMissed(translatingDoc, targetPage) {
+  const record = titleStructure;
+  if (!record || record.status !== "ok" || record.docId !== translatingDoc || record.page !== targetPage) return false;
+  const slots = structureTranslateSlots(record.source || record.structure);
+  if (!slots.length) return false;
+  return !structureLanded(targetPage);
+}
+
+function armTitleRetranslate(translatingDoc, targetPage) {
+  const record = titleStructure;
+  if (!record || record.docId !== translatingDoc || record.page !== targetPage) return;
+  if (record.status !== "ok") return;
+  record.slotsDone = false;
+  record.translated = false;
+}
+
+function failForceRetranslate(work, prior, doc, page) {
+  if (work === session) work.running = false;
+  translatingPage = 0;
+  forceReadoutHold = false;
+  restoreForceReadout(prior, doc, page);
+  setStatus(PDF_COPY.retranslateFailed, true);
+  updateTranslateControls();
+}
+
+function abortForceRetranslate(work, prior, doc, page) {
+  if (work === session) work.running = false;
+  translatingPage = 0;
+  forceReadoutHold = false;
+  restoreForceReadout(prior, doc, page);
+  setStatus(PDF_COPY.stopped);
+  updateTranslateControls();
+}
+
+async function forceRetranslateCurrentPage() {
+  if (!pdfDoc || pdfTranslateBusy(session)) return;
+  const sourceLayout = getPageLayout(pageNum);
+  const units = liveOriginals(sourceLayout, unitsForForceRetranslate(sourceLayout));
+  const titleCandidate = isTitlePageCandidate(pageNum, pageTextForStructure(sourceLayout?.blocks));
+  if (isSkipOnlyPage(sourceLayout?.blocks)) {
+    setStatus(PAGE_STATUS_BIBLIOGRAPHY);
+    updateTranslateControls();
+    return;
+  }
+  if (!units.length && !titleCandidate) {
+    setStatus(pageBlocksCopy(0, pageItems) || PDF_COPY.emptyPage);
+    syncNoTextLayerHint(pageItems <= 0);
+    updateTranslateControls();
+    return;
+  }
+  const gen = restoreGen;
+  const translatingDoc = docId;
+  const targetPage = pageNum;
+  const prior = snapshotForceReadout(translatingDoc, targetPage);
+  const work = beginViewerSession();
+  translatingPage = targetPage;
+  forceReadoutHold = true;
+  updateTranslateControls();
+  setStatus(PDF_COPY.retranslateRunning);
+  const left = () => {
+    if (isCurrentWork(work, gen, translatingDoc)) {
+      if (!work.aborted) return false;
+      abortForceRetranslate(work, prior, translatingDoc, targetPage);
+      return true;
+    }
+    forceReadoutHold = false;
+    if (work === session) work.running = false;
+    return true;
+  };
+  try {
+    let batchSize = 8;
+    try {
+      batchSize = await resolveBatchSize();
+    } catch {
+      if (!isCurrentWork(work, gen, translatingDoc)) {
+        forceReadoutHold = false;
+        if (work === session) work.running = false;
+        return;
+      }
+      failForceRetranslate(work, prior, translatingDoc, targetPage);
+      return;
+    }
+    if (left()) return;
+    await ensureTitleStructure(targetPage, sourceLayout);
+    if (left()) return;
+    armTitleRetranslate(translatingDoc, targetPage);
+    await translateTitleStructure(work, gen, translatingDoc, batchSize);
+    if (left()) return;
+    const translated = await translatePageBlocks(units, {
+      send: runtimeSend,
+      session: work,
+      batchSize,
+      onBatchStart() {
+        if (!isCurrentWork(work, gen, translatingDoc) || work.aborted) return;
+        setStatus(PDF_COPY.retranslateRunning);
+      }
+    });
+    if (!isCurrentWork(work, gen, translatingDoc)) return;
+    let outcome = forceRetranslateOutcome({
+      aborted: Boolean(translated.aborted || work.aborted),
+      results: translated.results,
+      structureLanded: structureLanded(targetPage)
+    });
+    if (outcome === "success" && structureRetranslateMissed(translatingDoc, targetPage)) outcome = "failed";
+    if (outcome === "aborted") {
+      abortForceRetranslate(work, prior, translatingDoc, targetPage);
+      return;
+    }
+    if (outcome !== "success") {
+      failForceRetranslate(work, prior, translatingDoc, targetPage);
+      return;
+    }
+    const merged = pageResultsFromTranslation(sourceLayout, translated.results);
+    work.running = true;
+    translatingPage = targetPage;
+    updateTranslateControls();
+    try {
+      const pairs = pairsFromResults(merged);
+      await rememberTranslation(targetPage, merged);
+      if (!pairs.length) throw new Error("empty retranslation");
+      replaceLibraryPagePairs(libraryDoc, targetPage, pairs);
+      pageCache.set(translatingDoc, targetPage, merged);
+      pageResults = merged;
+      renderArticle();
+      if (!work.aborted && isCurrentWork(work, gen, translatingDoc)) setStatus(PDF_COPY.retranslateDone);
+    } catch {
+      restoreForceReadout(prior, translatingDoc, targetPage);
+      setStatus(PDF_COPY.retranslateFailed, true);
+    }
+    work.running = false;
+    translatingPage = 0;
+    updateTranslateControls();
+  } catch {
+    if (isCurrentWork(work, gen, translatingDoc)) failForceRetranslate(work, prior, translatingDoc, targetPage);
+    else if (work === session) work.running = false;
+  } finally {
+    forceReadoutHold = false;
+  }
+}
+
 function withStructureRows(layout, merged) {
   const record = titleStructure;
   if (!record?.translated || record.docId !== docId || record.page !== layout?.page) return merged;
@@ -2624,10 +2813,12 @@ function updateTranslateControls() {
   const ui = pdfToolbarActionState({
     busy: pdfTranslateBusy(session),
     hasDoc: Boolean(pdfDoc),
-    canTranslate
+    canTranslate,
+    canRetranslate: pageOriginals.length > 0
   });
   $("translatePage").disabled = ui.translateDisabled;
   $("translatePage").hidden = ui.translateHidden;
+  $("retranslatePage").disabled = ui.retranslateDisabled;
   $("stopTranslate").hidden = ui.stopHidden;
   $("stopTranslate").disabled = ui.stopDisabled;
   $("restoreOriginal").disabled = !pageHasTranslation(pageCache.get(docId, pageNum));
