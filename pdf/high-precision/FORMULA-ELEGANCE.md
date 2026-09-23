@@ -34,7 +34,7 @@
 DOM 仍按 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md)。间距以 [`FORMULA-RIGHT-PANE.md`](./FORMULA-RIGHT-PANE.md) 为准。正文段距约 `0.7em`；紧挨公式或图时，段落下边距与块上边距取较大的一个，不叠成两层。
 
 - 独占公式：`margin: 10px 0 14px`，水平居中。宽度是页宽占比除掉正文列左右边（`pageFraction / 0.83`），纸比左页窄时再向左页对齐，夹在列宽内。高硬门 ≥ 1.6× 正文；仍矮才 `min-height: 2em`。无描边、无阴影。白边目标约 6 CSS px 以内。
-- 行内公式：`max-height: 1.45em`，裁图高 `1.22em`（15px 正文上墨迹约 18–19px），左右 `margin: 0 1px`，最宽 `12em`。裁切失败时在段内写「（公式见左栏）」。
+- 行内公式：盒高按墨迹 / inkShare（名义 `1.65em`，目标墨迹 1.05–1.15× 正文），不再用 `1.22em` 盒和 `1.45em` 硬顶。左右 `margin: 0 1px`，最宽 `12em`。裁切失败时在段内写「（公式见左栏）」。
 - 图 / 表：`figure.oi-pdf-figure`（下边距 12px）+ `img.oi-pdf-asset-crop`，题注 `figcaption.oi-pdf-caption` 上边距 6px（13px、`var(--oi-text-muted)`）。公式框与图、表、题注不相交。只使用已有 Soft Graphite token，不改 `ui/tokens.css`。
 
 ## 本轮不改

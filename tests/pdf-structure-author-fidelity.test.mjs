@@ -282,11 +282,13 @@ test("Attention fixture keeps eight authors, drops one stray symbol, and leaves 
   assert.equal(names[7], "Illia Polosukhin*‡");
   const footnotes = findAll(host, (node) => node.className === "oi-pdf-footnotes")[0];
   assert.equal(host.children[1], authors);
-  assert.equal(host.children[2], footnotes);
+  assert.equal(host.children[2].attrs["data-role"], "abstract_heading");
+  assert.equal(host.children[3].attrs["data-role"], "abstract_body");
+  assert.equal(host.children[4], footnotes);
   assert.equal(footnotes.children.map((node) => node.textContent).join(" "), "* Equal contribution. † Work performed while at Google Brain. ‡ Google Research.");
   assert.equal(findAll(authors, (node) => node.className === "oi-pdf-footnote").length, 0);
   assert.equal(cells.some((cell) => cell.children.some((child) => child.textContent === "*")), false);
-  assert.equal(host.children[3].attrs["data-role"], "abstract_heading");
+  assert.notEqual(host.children[2], footnotes);
 
   const raw = create("div");
   renderPdfStructure({

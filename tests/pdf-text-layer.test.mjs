@@ -648,7 +648,8 @@ test("viewer trims formula ink and still falls back to the page raster crop", ()
   const trimAt = fn.indexOf("formulaInkBbox");
   const cropAt = fn.indexOf("return cropBlockImage");
   assert.ok(drawnAt >= 0 && trimAt > drawnAt && cropAt > trimAt);
-  assert.match(viewer, /trimFormulaBboxToInk/);
+  assert.match(viewer, /measureFormulaCrop/);
+  assert.match(viewer, /block\.inkShare = measured\.inkShare/);
   assert.equal((viewer.match(/renderFormulaNode\s*\(/g) || []).length, 1);
 });
 

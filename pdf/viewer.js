@@ -88,9 +88,9 @@ import {
   PROTOCOL,
   applyBlockTranslations,
   blockReadoutPlan,
-  DISPLAY_CROP_MIN_HEIGHT_EM,
   displayCropColumnFraction,
   displayCropWidthCss,
+  displayInkMinEm,
   blockRenderPieces,
   cropBlockImage,
   isTranslatableBlock,
@@ -113,7 +113,7 @@ import {
   resolveLayoutMode,
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
-import { textLayerToBlocks, trimFormulaBboxToInk } from "../lib/pdf-text-layer.js";
+import { inlineCropBoxEm, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import {
   applyStructureTranslations,
@@ -855,10 +855,12 @@ function formulaInkBbox(canvas, block) {
   try {
     const image = formulaPagePixels(canvas);
     if (!image) return bbox;
-    return trimFormulaBboxToInk(bbox, image, {
+    const measured = measureFormulaCrop(bbox, image, {
       inline: block.display === false || Boolean(block.inlineOf),
       protect: block.formulaInkProtect === true
-    }) || bbox;
+    });
+    if (measured?.inkShare) block.inkShare = measured.inkShare;
+    return measured?.bbox || bbox;
   } catch {
     return bbox;
   }
@@ -895,8 +897,9 @@ function appendCropOrNotice(node, block, imageClass) {
     const pageFraction = displayCropColumnFraction(block);
     if (pageFraction) {
       const bboxH = Number(block.bbox[3]) - Number(block.bbox[1]);
-      img.style.width = displayCropWidthCss(pageFraction, bboxH);
-      img.style.minHeight = `${DISPLAY_CROP_MIN_HEIGHT_EM}em`;
+      const minEm = displayInkMinEm(block.inkShare);
+      img.style.width = displayCropWidthCss(pageFraction, bboxH, minEm);
+      img.style.minHeight = `${minEm}em`;
     }
     node.append(img);
     return;
@@ -934,6 +937,7 @@ function fillBlockText(node, block, layout) {
     const img = cropImage({ ...(formula || {}), imageUrl: piece.src || formula?.imageUrl || "", label: "formula" });
     const span = document.createElement("span");
     span.className = "oi-pdf-inline-math";
+    span.style.setProperty("--oi-pdf-inline-crop-em", `${inlineCropBoxEm(formula?.inkShare)}em`);
     if (formula?.id) {
       span.dataset.blockId = String(formula.id);
       span.dataset.label = "formula";
