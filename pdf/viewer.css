@@ -237,18 +237,57 @@ h1 {
 }
 .pane-translate-scroll {
   --oi-mirror-zoom: 1;
+  --oi-pdf-paper-gutter-x: 16px;
+  --oi-pdf-paper-gap-y: 16px;
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 20px 24px 32px;
+  padding: 16px 0 24px;
   overscroll-behavior: contain;
   scroll-behavior: auto;
+  background: var(--oi-bg-elevated);
 }
-.pane-translate .readout {
-  max-width: 42rem;
-  margin: 0;
-  color: var(--oi-text);
+.paper-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--oi-pdf-paper-gap-y);
+  width: 100%;
+  min-height: 0;
   zoom: var(--oi-mirror-zoom, 1);
+}
+.paper-stack:not(:empty) {
+  min-height: 100%;
+}
+.readout-paper {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: var(--oi-pdf-paper-w);
+  min-height: var(--oi-pdf-paper-h-base);
+  background: var(--oi-paper);
+  color: var(--oi-paper-ink);
+  --oi-text: var(--oi-paper-ink);
+  --oi-text-muted: var(--oi-paper-muted);
+  box-shadow: var(--oi-shadow-1);
+  border-radius: 0;
+  overflow: visible;
+}
+.readout-type {
+  box-sizing: border-box;
+  flex: 1 0 auto;
+  padding: calc(var(--oi-pdf-paper-h-base) * 0.075)
+           calc(var(--oi-pdf-paper-w) * 0.085)
+           calc(var(--oi-pdf-paper-h-base) * 0.08);
+}
+.readout-paper .readout {
+  max-width: none;
+  margin: 0;
+  zoom: 1;
+  overflow: visible;
+}
+.readout-paper .oi-pdf-h1 {
+  text-align: center;
 }
 .pane-translate .readout.md-readout > * {
   position: static;
@@ -311,14 +350,17 @@ h1 {
   background: transparent;
 }
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px 12px;
   font: 400 14px/1.55 var(--oi-font);
-  color: var(--oi-text-muted);
+  color: var(--oi-paper-muted);
   margin: 0 0 18px;
 }
 .pane-translate .readout .oi-pdf-p[data-role="caption"],
 .pane-translate .readout .oi-pdf-p[data-role="figure"] {
   font: 400 13px/1.55 var(--oi-font);
-  color: var(--oi-text-muted);
+  color: var(--oi-paper-muted);
   font-style: italic;
 }
 .pane-translate .readout .oi-pdf-p[data-role="figure"] {
@@ -346,7 +388,7 @@ h1 {
 .oi-pdf-caption {
   margin: 6px 0 0;
   font: 400 13px/1.45 var(--oi-font);
-  color: var(--oi-text-muted);
+  color: var(--oi-paper-muted);
 }
 .oi-pdf-figure > .oi-pdf-caption:first-child {
   margin: 0 0 6px;
@@ -530,7 +572,7 @@ h1 {
 }
 .oi-pdf-p:last-child { margin-bottom: 0; }
 .pane-translate .empty-read {
-  margin: 0;
+  margin: 0 16px;
   font: 400 14px/1.5 var(--oi-font);
   color: var(--oi-text-muted);
 }

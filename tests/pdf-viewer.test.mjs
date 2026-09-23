@@ -232,7 +232,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /id="mirrorHint"[^>]*class="mirror-hint"/);
   assert.match(html, /vendor\/katex\/katex\.min\.css/);
   assert.match(html, /vendor\/katex\/katex\.min\.js/);
-  assert.match(html, /id="readout"[^>]*class="readout md-readout"/);
+  assert.match(html, /id="paperStack"[^>]*class="paper-stack"/);
+  assert.equal(html.includes('class="readout-paper"'), false);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
   assert.match(html, /<p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…<\/p>/);
   assert.match(src, /appendReadoutNode/);
@@ -254,8 +255,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.equal(css.includes(".translate-block"), false);
   assert.equal(css.includes(".translate-article"), false);
   assert.equal(css.includes(".oi-pdf-h {"), false);
-  assert.match(css, /\.pane-translate-scroll\s*\{[^}]*padding:\s*20px 24px 32px/s);
-  assert.match(css, /\.pane-translate \.readout\s*\{[^}]*max-width:\s*42rem/s);
+  assert.match(css, /\.pane-translate-scroll\s*\{[^}]*padding:\s*16px 0 24px/s);
+  assert.doesNotMatch(css, /max-width:\s*42rem/);
   assert.match(css, /\.pane-translate \.readout\.is-mirror\s*\{[^}]*max-width:\s*none/s);
   assert.match(css, /\.view-seg\s*\{/);
   assert.match(css, /\.pane-translate \.mirror-pages\s*\{[^}]*max-width:\s*none/s);
@@ -265,7 +266,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.mirror-page \.katex \*\s*\{[^}]*color:\s*var\(--oi-mirror-ink\)/s);
   assert.match(css, /\.mirror-page \.oi-pdf-p\[data-role="caption"\]/);
   assert.match(css, /--oi-mirror-caption/);
-  assert.match(css, /\.pane-translate \.readout\s*\{[^}]*zoom:\s*var\(--oi-mirror-zoom/s);
+  assert.match(css, /\.paper-stack\s*\{[^}]*zoom:\s*var\(--oi-mirror-zoom/s);
+  assert.match(css, /\.readout-paper \.readout\s*\{[^}]*zoom:\s*1/s);
   assert.match(css, /\.mirror-box\s*\{[^}]*position:\s*absolute/s);
   assert.match(css, /\.oi-pdf-h1\s*\{[^}]*font:\s*650 22px\/1\.3 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-h2\s*\{[^}]*font:\s*650 18px\/1\.35 var\(--oi-font\)/s);
@@ -602,7 +604,8 @@ test("PDF-MIRROR-READABILITY-ZOOM contrast and independent right chip", () => {
   assert.match(css, /\.mirror-page \.katex \*\s*\{[^}]*color:\s*var\(--oi-mirror-ink\)/s);
   assert.match(css, /\.mirror-page \.oi-pdf-p\[data-role="caption"\][\s\S]*color:\s*var\(--oi-mirror-caption\)/);
   assert.match(css, /\.mirror-page \.mirror-visual:not\(img\)[\s\S]*background:\s*var\(--oi-mirror-placeholder-bg\)/);
-  assert.match(css, /\.pane-translate \.readout\s*\{[^}]*zoom:\s*var\(--oi-mirror-zoom/s);
+  assert.match(css, /\.paper-stack\s*\{[^}]*zoom:\s*var\(--oi-mirror-zoom/s);
+  assert.match(css, /\.readout-paper \.readout\s*\{[^}]*zoom:\s*1/s);
   assert.match(css, /\.pane-translate\s*\{[^}]*position:\s*relative/s);
   assert.equal(css.includes("zoom-gutter-mirror"), false);
   assert.equal(html.includes("zoom-gutter-mirror"), false);

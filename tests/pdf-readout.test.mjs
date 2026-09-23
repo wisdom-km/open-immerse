@@ -127,7 +127,8 @@ test("PDF-MD-READOUT spec locks reading-flow, not bbox mirror", () => {
   assert.doesNotMatch(src, /appendMirrorPage/);
   assert.doesNotMatch(src, /percentRectToTextStyle/);
   assert.doesNotMatch(src, /function appendMirrorPage/);
-  assert.match(html, /id="readout"[^>]*class="readout md-readout"/);
+  assert.match(html, /id="paperStack"[^>]*class="paper-stack"/);
+  assert.match(src, /className = "readout md-readout"/);
   assert.match(html, /id="viewSeg"[^>]*hidden/);
   assert.match(html, /id="mirrorPages"[^>]*hidden/);
   assert.match(css, /\.pane-translate \.readout\.md-readout > \*\s*\{[^}]*position:\s*static/s);
