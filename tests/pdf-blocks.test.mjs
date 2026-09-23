@@ -193,10 +193,11 @@ test("display width compensates for the padded content column", () => {
     compensated
   );
   assert.equal(displayContentColumnFraction(0.9, { leftWidth: 1030, paperWidth: paperW }), 1);
-  assert.equal(DISPLAY_INK_FLOOR, 1.8);
-  assert.equal(DISPLAY_CROP_MIN_HEIGHT_EM, 2.25);
+  assert.equal(DISPLAY_INK_FLOOR, 1.6);
+  assert.equal(DISPLAY_CROP_MIN_HEIGHT_EM, 2);
   assert.ok(DISPLAY_CROP_MIN_HEIGHT_EM * 0.8 >= DISPLAY_INK_FLOOR);
   assert.ok(DISPLAY_CROP_MIN_HEIGHT_EM <= 5);
+  assert.ok(compensated / pageFraction > 1.15);
 
   const paperH = paperW * (792 / 612);
   const columnW = paperW * share;
@@ -207,15 +208,17 @@ test("display width compensates for the padded content column", () => {
   assert.ok(beforeH > 25 && beforeH < 26);
   assert.ok(Math.abs(afterH - bboxH * paperH) < 1e-6);
   assert.ok(afterH / 15 > beforeH / 15);
-  assert.ok(afterH / 15 < DISPLAY_CROP_MIN_HEIGHT_EM);
+  assert.ok(afterH / 15 >= DISPLAY_INK_FLOOR);
+  assert.ok(afterH / 15 <= 5);
 
   const css = displayCropWidthCss(pageFraction, bboxH);
   assert.match(css, /^min\(100%, max\(calc\(var\(--oi-pdf-left-w, var\(--oi-pdf-paper-w, 1px\)\)/);
   assert.match(css, /57\.8313%/);
-  assert.match(css, /2\.25em \* var\(--oi-pdf-paper-w, 0px\) \* 0\.48/);
+  assert.match(css, /2em \* var\(--oi-pdf-paper-w, 0px\) \* 0\.48/);
+  assert.doesNotMatch(css, /2\.25em/);
   assert.match(css, /--oi-pdf-paper-h-base/);
   assert.equal(displayCropWidthCss(0, bboxH), "");
-  assert.doesNotMatch(displayCropWidthCss(pageFraction, 0), /2\.25em/);
+  assert.doesNotMatch(displayCropWidthCss(pageFraction, 0), /2em \* var\(--oi-pdf-paper-w/);
 });
 
 test("fixture viewer crops through cropBlockImage and leaves the legacy formula call", () => {

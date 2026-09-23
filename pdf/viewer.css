@@ -380,7 +380,7 @@ h1 {
   display: inline-block;
   max-width: 100%;
   height: auto;
-  min-height: 2.25em;
+  min-height: 2em;
   object-fit: contain;
   vertical-align: middle;
   border: none;
