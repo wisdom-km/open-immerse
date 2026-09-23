@@ -1,6 +1,7 @@
 /** One-time, hash-locked migration of the Attention legacy readout into page pairs.
  *  Run without flags for an audit; --apply writes via the already-running library API.
- *  The legacy readout is never modified and uncertain pairs remain explicitly pending.
+ *  The legacy readout is never modified. The page-5 matrix sentence is supplemented
+ *  when the text layer has two formula placeholders. Other uncertain pairs stay pending.
  */
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -8,7 +9,7 @@ import { join } from "node:path";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { isTranslatableBlock } from "../lib/pdf-blocks.js";
-import { storedReadoutBlocks } from "../lib/pdf-library.js";
+import { composeMatrixProjectionTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 
 const HASH = "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697";
 const LIBRARY_ROOT = "D:\\open-immerse-pdf-library";
@@ -117,6 +118,11 @@ const supplements = [
     if (!heads) throw Error("attention-head placeholder missing");
     return `本文使用 ${heads} 个并行注意力层，即注意力头。每个头使用 d_k = d_v = d_{model}/h = 64。由于每个头的维度降低，总计算成本与使用完整维度的单头注意力相近。`;
   }],
+  [5, "Where the projections are parameter matrices", (block) => {
+    const translation = composeMatrixProjectionTranslation(block.text);
+    if (!translation) throw Error("matrix projection placeholders missing");
+    return translation;
+  }],
   [5, "3.3 Position-wise", () => "3.3 逐位置前馈网络"],
   [5, "While the linear transformations", (block) => {
     const [dimension] = block.placeholders.map((entry) => entry.token);
@@ -193,6 +199,7 @@ const supplements = [
   }]
 ];
 
+// The page-5 matrix sentence is supplemented above. Do not list that prefix here.
 const uncertainSourcePrefixes = new Map();
 
 function citations(text) {

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
-import { CROP_SCALE, blockReadoutPlan, blockRenderPieces } from "../lib/pdf-blocks.js";
+import { CROP_SCALE, blockReadoutPlan, blockRenderPieces, isTranslatableBlock } from "../lib/pdf-blocks.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const fixture = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
@@ -72,7 +72,9 @@ test("Attention text fragments have one source owner and complete visual boundar
       block.text?.startsWith("Where the projections are parameter matrices"));
     assert.match(matrix.text, /parameter matrices ⟦f\d+⟧ and ⟦f\d+⟧\./);
     assert.doesNotMatch(matrix.text, /W_iQ|dmodel|Rdmodel/);
-    assert.ok(matrix.placeholders.length >= 2);
+    assert.equal(matrix.placeholders.length, 2);
+    assert.equal(matrix.skipTranslate, undefined);
+    assert.equal(isTranslatableBlock(matrix), true);
     const matrixCrops = matrix.placeholders.map((entry) =>
       pages.get(5).page.blocks.find((block) => block.id === entry.blockId));
     assert.equal(matrixCrops.every((block) => block?.label === "formula" && !("text" in block)), true);
