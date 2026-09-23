@@ -2,6 +2,26 @@
 
 记录到 2026-09-23。需求仍以 `REQUIREMENTS.md` 为准。这里记录当前实现、运行状态、修复前的网页问题与尚未完成的验收。
 
+## 2026-09-23 公式裁框略松（pdf-formula-crop-relax）
+
+#60 的字形边和纸白收边过紧，本机上公式裁图相对原式偏小。本轮只把 pad 和墨迹白边放回中间带。不改 Soft Graphite、镜像、滚轮、参考文献软状态文案、KaTeX、pageRaster 倍率、第 5 页矩阵句译文，也不改右栏公式节奏。Anvil 的 R1–R5 仍要在本机 Chrome 看 Attention，这里不记通过。
+
+裁框仍从字形并集外加一圈窄边，再按内容停住（邻行、图、题注）。`contentAwareFormulaBbox` 的停靠不变，softmax 裁图仍不含 Fig.2 或题注。数字在 `lib/pdf-text-layer.js` 的 `FORMULA_CROP_PAD`：
+
+| | 横向 | 纵向 |
+| --- | --- | --- |
+| 独占 | 0.0045 | 0.0030 |
+| 行内 | 0.0020 | 0.0016 |
+| 下标 / 括号 / 根号再加 | 0.0012 | 0.0016 |
+
+加完之后夹在 `FORMULA_PAD_LIMIT`（横 0.0060、纵 0.0050）以内。在 612×792、裁图倍率 2 下，横向上限约 7.3 CSS px，纵向上限约 7.9 CSS px，仍小于约 8。
+
+纸白阈值 `FORMULA_PAPER_MIN` 仍是 246。墨迹外保留的白边，独占 6 像素，带上下标或括号时 7 像素；行内 4 像素，带保护时 5 像素。收紧不得越过上面的内容停靠框。没有像素或认不出墨迹时保持原框。过小的裁图（宽 < 24 或高 < 12 像素）仍不返回 data URL。
+
+期望 Anvil：墨外白边约 3–5 CSS px；不切上下标或括号笔画；softmax 不含 Fig.2；KaTeX 仍为 0；Soft Graphite 与参考文献软状态不回退。
+
+无 Attention PDF 时 `node --test tests/*.test.mjs`：393 通过、0 失败、1 跳过。跳过的仍是仓库里没有该 PDF 时的大样本测试。
+
 ## 2026-09-23 第 5 页矩阵句译文（pdf-page5-matrix-translate）
 
 裁图仍是这句里的两张 pageRaster。不把 KaTeX 当主展示，也不改 `FORMULA_CROP_PAD` 或墨迹收边。文字层这句是 `Where the projections are parameter matrices ⟦f1⟧ and ⟦f2⟧.`。本轮要做的是：它不再长期停在历史 `source-uncertain` 或空 `pending` 上。
@@ -24,7 +44,7 @@ Anvil 仍要在本机 Chrome 看 Attention 第 5 页左右栏。下面的 M1–M
 
 主展示仍是打开的 PDF 的 pageRaster 裁图。本轮只收紧裁框，并修正「句内短式被升成居中大图」。不改右栏节奏 CSS，不把字形重绘改成主路径，不改 Soft Graphite、镜像、滚轮、作者 schema、打开 PDF 或参考文献软状态文案。Anvil 的 F1–F5 仍要在本机 Chrome 看 Attention，这里不记通过。
 
-裁框从字形并集外加一圈窄边，再按内容停住（邻行、图、题注）。数字在 `lib/pdf-text-layer.js` 的 `FORMULA_CROP_PAD`：
+下面这张表是收紧当时的数字。现行旋钮见文首「公式裁框略松」。裁框从字形并集外加一圈窄边，再按内容停住（邻行、图、题注）。当时 `lib/pdf-text-layer.js` 的 `FORMULA_CROP_PAD`：
 
 | | 横向 | 纵向 |
 | --- | --- | --- |
@@ -52,7 +72,7 @@ Anvil 仍要在本机 Chrome 看 Attention 第 5 页左右栏。下面的 M1–M
 
 - 同一基线上的上下标留在该行；换行不再按 x 把两行揉成一串。参考文献按 `[n]` 拆条，右栏碎片跟在同一行的左栏后面。第 10–12 页现在是 `[1]`–`[40]` 的递增条目，`skipTranslate`，不送去翻译。第 1 条保留 `arXiv preprint arXiv:1607.06450`。第 16 条读作 “In Advances in Neural Information Processing Systems, (NIPS), 2016.”。页眉那行 `arXiv:1706.03762v7` 戳记仍然剔除。
 - 第 5 页矩阵参数不再拼成 `W_iQ`、`Rdmodel`。正文是文字层原句 `Where the projections are parameter matrices ⟦f1⟧ and ⟦f2⟧.`，两段数学各自是原页裁图（第一行三个 `W_i ∈ R^{…}`，第二行 `W^O ∈ R^{…}`）。
-- 独占公式裁框在字形并集外留一圈窄边，现行比例见上文「公式裁框收紧」（不再使用横 0.008、纵 0.01 的整行外扩）。Attention 第 4 页 softmax、第 5 页 MultiHead / FFN、第 6 页两条 PE、第 7 页学习率都是整行裁图。过小的裁图（宽 < 24 或高 < 12 像素）不返回 data URL；失败时右栏写文字提示，不用阅读器地址当 `img src`。
+- 独占公式裁框在字形并集外留一圈窄边，现行比例见文首「公式裁框略松」。Attention 第 4 页 softmax、第 5 页 MultiHead / FFN、第 6 页两条 PE、第 7 页学习率都是整行裁图。过小的裁图（宽 < 24 或高 < 12 像素）不返回 data URL；失败时右栏写文字提示，不用阅读器地址当 `img src`。
 
 旧库里若仍按旧 `sourceId` 记着这一段的 `source-uncertain`，右栏不再整块换成“请看左栏”，而是注明旧译文未沿用，并显示当前文字层原句和裁图。本轮没有调用翻译接口，矩阵句没有新的中文译文；中文见文首「矩阵句译文」。
 
