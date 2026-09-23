@@ -209,6 +209,7 @@ h1 {
   align-items: center;
   gap: 16px;
   overscroll-behavior: contain;
+  scroll-behavior: auto;
 }
 #pages {
   flex: 1;
@@ -241,6 +242,7 @@ h1 {
   overflow: auto;
   padding: 20px 24px 32px;
   overscroll-behavior: contain;
+  scroll-behavior: auto;
 }
 .pane-translate .readout {
   max-width: 42rem;

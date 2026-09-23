@@ -86,18 +86,14 @@
           <label class="check"><input id="skipCode" type="checkbox" /> 跳过代码块</label>
           <label class="check"><input id="autoOnNewPages" type="checkbox" /> 打开网页时自动翻译（默认关闭，需点右下角「翻译」）</label>
           <label>自动翻译站点（一行一个域名，仅这些站进页就翻）<textarea id="siteRules" placeholder="nytimes.com"></textarea></label>
-        </section>
-
-        <section id="panel-advanced" data-panel="advanced" role="tabpanel" hidden>
-          <h2>高级</h2>
-          <div id="laterList"></div>
-          <label class="check">
-            <input id="deepThink" type="checkbox" />
-            深度思考
-          </label>
-          <p class="hint" id="deepThinkHint">
-            关闭可加快 DeepSeek / Ark 翻译；默认关。
-          </p>
+          <div id="pdfReadingBox" class="pdf-reading-box" hidden>
+            <h3>PDF 阅读</h3>
+            <label class="check">
+              <input id="pdfSoftPageFollow" type="checkbox" />
+              左右栏换页跟随
+            </label>
+            <p class="hint">默认关闭。开启后，滚动换页时另一侧对齐到同一页；跟手瞬时对齐，不会拖尾。</p>
+          </div>
           <div id="pdfLayoutBox" hidden>
             <h3>PDF 划区</h3>
             <label>模式
@@ -114,6 +110,18 @@
             <label>云端密钥<input id="pdfCloudApiKey" type="password" spellcheck="false" autocomplete="off" /></label>
             <p class="hint">云端模式会上传每一页的渲染图</p>
           </div>
+        </section>
+
+        <section id="panel-advanced" data-panel="advanced" role="tabpanel" hidden>
+          <h2>高级</h2>
+          <div id="laterList"></div>
+          <label class="check">
+            <input id="deepThink" type="checkbox" />
+            深度思考
+          </label>
+          <p class="hint" id="deepThinkHint">
+            关闭可加快 DeepSeek / Ark 翻译；默认关。
+          </p>
         </section>
       </main>
     </div>
