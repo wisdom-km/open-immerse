@@ -2,9 +2,9 @@
 
 记录到 2026-09-23。需求仍以 `REQUIREMENTS.md` 为准。这里记录当前实现、运行状态、修复前的网页问题与尚未完成的验收。
 
-## 2026-09-23 作者姓名不翻译（pdf-author-names-no-translate）
+## 2026-09-23 作者区不翻译（pdf-author-names-no-translate）
 
-题头结构 `structureTranslateSlots` 不再把 `authors[i].name` 送进翻译批次。回填即使带上姓名槽，也写不回 `name`。机构 `affiliation` 仍可译；邮箱和脚注符仍留在源包上。文字层作者行原来的 `skipTranslate` 不变。通读路径的作者行不再进入批次，合并时姓名保持原文，后面的标题和正文仍按原顺序对上。
+作者区整块保原文。`authors[i]` 的 name、affiliation、email、markers 都不进 `structureTranslateSlots`，回填也不写回这些字段。title、abstract、rest 仍译；`rest[{role:other}]` 仍可译。文字层作者行原来的 `skipTranslate` 不变。通读路径的作者行不进批次，合并时保原文。
 
 ## 2026-09-23 公式强可读（pdf-formula-strong-read）
 
