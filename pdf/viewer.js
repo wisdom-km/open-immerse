@@ -112,7 +112,7 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { textLayerToBlocks, trimFormulaBboxToInk } from "../lib/pdf-text-layer.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import {
   applyStructureTranslations,
   isTitlePageCandidate,
@@ -1517,6 +1517,41 @@ function rememberSkipHole(page, blocks) {
   rememberTranslation(page, []).catch(() => {});
 }
 
+function persistPagePairs(saved) {
+  const page = Number(saved?.page);
+  if (!page || !saved?.pairs?.length) return Promise.resolve();
+  const rawLayout = getPageLayout(page);
+  const layout = rawLayout ? cacheableLayout(rawLayout) : null;
+  const bytes = pdfBytes;
+  const title = document.title;
+  const pageCount = pdfDoc?.numPages || 0;
+  return enqueueLibraryWrite(async () => {
+    const hash = await pdfByteHash(bytes);
+    if (!hash || hash === "nohash") return;
+    await saveLibraryPage({
+      hash,
+      title,
+      pageCount,
+      page,
+      pairs: saved.pairs,
+      ...(layout ? { layout } : {}),
+      ...(saved.skipped ? { skipped: true } : {})
+    });
+  });
+}
+
+/** Drop a historical source-uncertain hold on the page-5 matrix sentence and store its Chinese. */
+function bindSavedPairs(saved, units) {
+  if (!saved?.pairs?.length || !units?.length) return saved;
+  const repaired = repairMatrixProjectionPairs(saved.pairs, units);
+  if (!repaired.changed) return saved;
+  saved.pairs = repaired.pairs;
+  const stored = libraryDoc?.pages?.find((item) => item !== saved && item.page === saved.page);
+  if (stored) stored.pairs = repaired.pairs;
+  persistPagePairs(saved).catch(() => {});
+  return saved;
+}
+
 async function savedTranslationFor(page) {
   const hash = await pdfByteHash();
   if (!hash || hash === "nohash") return null;
@@ -1659,11 +1694,12 @@ async function translateCurrentPage() {
     }
     const openedBlocks = getPageLayout(pageNum)?.blocks ?? null;
     if (saved?.pairs?.length) {
-      const merged = applySavedPairs(pageOriginals, saved.pairs);
+      const prepared = bindSavedPairs(saved, pageOriginals);
+      const merged = applySavedPairs(pageOriginals, prepared.pairs);
       pageCache.set(docId, pageNum, merged);
       pageResults = merged;
       renderArticle();
-      setStatus(savedPageStatus(saved, merged, openedBlocks));
+      setStatus(savedPageStatus(prepared, merged, openedBlocks));
       return;
     }
     if (saved?.migrated || saved?.skipped || libraryDoc?.pages?.length) {
@@ -2479,11 +2515,12 @@ async function loadCurrentPageText() {
         return;
       }
       if (saved?.pairs && !isStale()) {
-        const merged = applySavedPairs(unitsForLayout(quick), saved.pairs);
+        const prepared = bindSavedPairs(saved, unitsForLayout(quick));
+        const merged = applySavedPairs(unitsForLayout(quick), prepared.pairs);
         pageResults = merged;
         pageCache.set(docId, n, merged);
         if (!pdfTranslateBusy(session)) {
-          setStatus(savedPageStatus(saved, merged, quick.blocks || []));
+          setStatus(savedPageStatus(prepared, merged, quick.blocks || []));
           rememberSkipHole(n, quick.blocks);
         }
         renderArticle();
@@ -2513,10 +2550,11 @@ async function loadCurrentPageText() {
       renderArticle();
     } else if (saved?.pairs && !isStale()) {
       const blocks = layout.blocks || [];
-      const merged = applySavedPairs(unitsForLayout(layout), saved.pairs);
+      const prepared = bindSavedPairs(saved, unitsForLayout(layout));
+      const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs);
       pageResults = merged;
       pageCache.set(docId, n, merged);
-      setStatus(savedPageStatus(saved, merged, blocks));
+      setStatus(savedPageStatus(prepared, merged, blocks));
       rememberSkipHole(n, blocks);
       renderArticle();
     }

@@ -14,6 +14,7 @@ import {
   textLayerToBlocks,
   trimFormulaBboxToInk
 } from "../lib/pdf-text-layer.js";
+import { isTranslatableBlock } from "../lib/pdf-blocks.js";
 import { segmentPageBlocks } from "../lib/pdf-viewer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -300,6 +301,8 @@ test("a scripted membership line is cropped instead of spelling formula letters"
   assert.match(sentence.text, /parameter matrices ⟦f\d+⟧ and ⟦f\d+⟧\./);
   assert.doesNotMatch(sentence.text, /W_iQ|dmodel|Rdmodel/);
   assert.equal(sentence.placeholders.length, 2);
+  assert.equal(sentence.skipTranslate, undefined);
+  assert.equal(isTranslatableBlock(sentence), true);
   const crops = sentence.placeholders.map((entry) => page.blocks.find((block) => block.id === entry.blockId));
   assert.equal(crops.every((block) => block?.label === "formula" && !Object.hasOwn(block, "text")), true);
   const superscriptTop = (792 - (583.5 + 7)) / 792;
