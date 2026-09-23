@@ -16,7 +16,7 @@
     </div>
     <div class="toolbar-actions">
       <button type="button" id="pick" class="btn-secondary">打开 PDF</button>
-      <input id="file" class="file-input" type="file" accept="application/pdf,.pdf" hidden />
+      <input id="file" class="file-input" type="file" accept="application/pdf,.pdf" tabindex="-1" aria-hidden="true" />
       <div class="scope-seg" role="group" aria-label="翻译范围">
         <button type="button" class="scope-seg-btn is-on" data-scope="page" disabled>当前页</button>
         <button type="button" class="scope-seg-btn" data-scope="all" disabled>全文</button>
