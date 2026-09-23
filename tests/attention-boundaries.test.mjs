@@ -143,6 +143,32 @@ test("Attention text fragments have one source owner and complete visual boundar
       assert.ok(matches.length, `page ${number} has labeled visual text`);
       assert.ok(matches.every((owner) => owner.owner === "visual"), `page ${number} visual text leaked into prose`);
     }
+    const overlapSize = (a, b) => ({
+      w: Math.min(a[2], b[2]) - Math.max(a[0], b[0]),
+      h: Math.min(a[3], b[3]) - Math.max(a[1], b[1])
+    });
+    for (const number of [4, 5, 6, 7]) {
+      const blocks = pages.get(number).page.blocks;
+      const formulas = blocks.filter((block) => block.label === "formula");
+      for (const formula of formulas) {
+        assert.equal(typeof formula.display, "boolean");
+        assert.equal(formula.display, !formula.inlineOf);
+        for (const other of blocks) {
+          if (other === formula || !other.bbox) continue;
+          if (formula.inlineOf && other.id === formula.inlineOf) continue;
+          if (formula.inlineOf && other.label === "text") {
+            const hit = overlapSize(formula.bbox, other.bbox);
+            assert.ok(!(hit.w > 0.008 && hit.h > 0.004),
+              `page ${number} inline ${formula.id} overlaps neighbor ${other.id}`);
+            continue;
+          }
+          if (!["figure", "caption", "table", "formula", "text"].includes(other.label)) continue;
+          const hit = overlapSize(formula.bbox, other.bbox);
+          assert.ok(!(hit.w > 0.008 && hit.h > 0.004),
+            `page ${number} ${formula.id} overlaps ${other.label} ${other.id}`);
+        }
+      }
+    }
     const p4 = pages.get(4);
     const footnote = p4.page.blocks.filter((block) => block.sourceText?.includes("To illustrate why the dot products get large"));
     assert.equal(footnote.length, 1, "page 4 footnote appears once");

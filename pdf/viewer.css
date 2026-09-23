@@ -260,6 +260,18 @@ h1 {
   max-width: 100%;
   height: auto;
 }
+.pane-translate .readout.md-readout img.oi-formula-inline {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 1.9em;
+  margin: 0 0.12em;
+  vertical-align: -0.42em;
+  border: 0;
+  box-shadow: none;
+  background: #fff;
+}
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
   font: 400 14px/1.55 var(--oi-font);
   color: var(--oi-text-muted);
@@ -277,8 +289,26 @@ h1 {
 }
 .pane-translate .readout .oi-pdf-p[data-role="formula"] {
   text-align: center;
-  margin: 16px 0;
+  margin: 0.28em 0 0.42em;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
   overflow: visible;
+}
+.oi-pdf-p + .oi-pdf-p[data-role="formula"] {
+  margin-top: 0;
+}
+.pane-translate .readout.md-readout .oi-pdf-p[data-role="formula"] img {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 3em;
+  vertical-align: middle;
+  border: 0;
+  box-shadow: none;
+  background: #fff;
 }
 .pane-translate .readout.is-mirror {
   max-width: none;
@@ -453,7 +483,7 @@ h1 {
 .oi-pdf-h2:first-child { margin-top: 0; }
 .oi-pdf-h1 + .oi-pdf-h2 { margin-top: 16px; }
 .oi-pdf-p {
-  margin: 0 0 14px;
+  margin: 0 0 0.7em;
   font: 400 15px/1.7 var(--oi-font);
   color: var(--oi-text);
 }

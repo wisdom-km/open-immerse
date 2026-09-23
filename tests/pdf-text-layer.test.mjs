@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PDF_MIRROR_OPS } from "../lib/pdf-mirror.js";
-import { FORMULA_CROP_PAD, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import {
+  FORMULA_CROP_PAD,
+  contentAwareFormulaBbox,
+  formulaGlyphsRedrawSafe,
+  textLayerToBlocks
+} from "../lib/pdf-text-layer.js";
 import { segmentPageBlocks } from "../lib/pdf-viewer.js";
 
 function pdfItem(str, x, y, width = 120, height = 10, extra = {}) {
@@ -86,6 +91,7 @@ test("a fraction beside softmax is cropped with the full display equation", () =
   assert.equal(Object.hasOwn(formulas[0], "text"), false);
   assert.equal(Object.hasOwn(formulas[0], "latex"), false);
   assert.equal(Object.hasOwn(formulas[0], "content"), false);
+  assert.equal(formulas[0].display, true);
   assert.equal(page.blocks.some((block) => /softmax/.test(block.text || "")), false);
 });
 
@@ -264,6 +270,14 @@ test("a scripted membership line is cropped instead of spelling formula letters"
   assert.ok(crops[0].bbox[1] <= superscriptTop - FORMULA_CROP_PAD.inlineY + 0.002);
   assert.ok(crops[0].bbox[0] <= 285.9 / 612);
   assert.ok(crops[0].bbox[2] >= (350.3 + 3.8) / 612);
+  assert.equal(crops.every((block) => block.display === false && block.inlineOf === sentence.id), true);
+  const proseTop = (792 - (578.7 + 10)) / 792;
+  const proseBottom = (792 - 578.7) / 792;
+  const proseBox = [107.5 / 612, proseTop, (107.5 + 176.2) / 612, proseBottom];
+  const hitW = Math.min(crops[1].bbox[2], proseBox[2]) - Math.max(crops[1].bbox[0], proseBox[0]);
+  const hitH = Math.min(crops[1].bbox[3], proseBox[3]) - Math.max(crops[1].bbox[1], proseBox[1]);
+  assert.ok(!(hitW > 0.01 && hitH > 0.003), `second crop swallowed the line above (${hitW}, ${hitH})`);
+  assert.ok(crops[1].bbox[0] > 110 / 612, "the second crop must not swallow the line above");
 });
 
 test("reference entries keep column order and stay out of translation", () => {
@@ -290,6 +304,86 @@ test("reference entries keep column order and stay out of translation", () => {
   assert.match(refs[1].text, /In International Conference on Learning Representations/);
   assert.equal(refs.every((block) => block.skipTranslate === true), true);
   assert.equal(page.blocks.some((block) => /softmax|W_iQ/.test(block.text || "")), false);
+});
+
+test("content-aware pad stops at a figure and the next line", () => {
+  const glyph = [0.35, 0.58, 0.8, 0.61];
+  const figure = [0.2, 0.08, 0.78, 0.575];
+  const nextLine = [0.17, 0.612, 0.84, 0.635];
+  const prose = [0.17, 0.585, 0.34, 0.608];
+  const box = contentAwareFormulaBbox(glyph, { x: 0.02, y: 0.02 }, [figure, nextLine, prose]);
+  assert.ok(box[1] >= figure[3], "crop top stays below the figure");
+  assert.ok(box[3] <= nextLine[1], "crop bottom stays above the next line");
+  assert.ok(box[0] >= prose[2], "crop left stays clear of same-line prose");
+  assert.ok(box[0] <= glyph[0] && box[2] >= glyph[2] && box[1] <= glyph[1] && box[3] >= glyph[3]);
+});
+
+test("a display formula does not swallow the figure caption above it", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("Figure 2: (left) Scaled Dot-Product Attention.", 72, 440, 320, 9),
+      pdfItem("Attention(", 220, 420, 52, 10),
+      pdfItem("Q, K, V", 274, 420, 36, 10, { fontName: "CMMI10" }),
+      pdfItem(") = softmax(", 312, 420, 64, 10),
+      pdfItem("QK", 378, 424, 14, 8, { fontName: "CMMI10" }),
+      pdfItem("T", 392, 430, 6, 7),
+      pdfItem("(1)", 500, 420, 16, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    images: {
+      fnArray: [
+        PDF_MIRROR_OPS.save,
+        PDF_MIRROR_OPS.transform,
+        PDF_MIRROR_OPS.paintImageXObject,
+        PDF_MIRROR_OPS.restore
+      ],
+      argsArray: [[], [220, 0, 0, 80, 140, 460], ["img_p4"], []]
+    },
+    page: 4
+  });
+  const figure = page.blocks.find((block) => block.label === "figure");
+  const formula = page.blocks.find((block) => block.label === "formula" && block.display === true);
+  const caption = page.blocks.find((block) => block.label === "caption");
+  assert.ok(figure);
+  assert.ok(formula);
+  assert.ok(caption);
+  assert.match(caption.text, /Figure 2:/);
+  const overlap = (a, b) => Math.min(a[3], b[3]) > Math.max(a[1], b[1]) && Math.min(a[2], b[2]) > Math.max(a[0], b[0]);
+  assert.equal(overlap(formula.bbox, figure.bbox), false);
+  assert.equal(overlap(formula.bbox, caption.bbox), false);
+  assert.equal(Object.hasOwn(formula, "text"), false);
+  assert.equal(Object.hasOwn(formula, "latex"), false);
+});
+
+test("a wrapped left-margin equation stays inline in the sentence", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("The dimensionality of input and output is ", 72, 500, 210, 10),
+      pdfItem("d_{model}", 284, 500, 48, 10, { fontName: "CMMI10" }),
+      pdfItem(" = 512, and the inner-layer has dimensionality", 334, 500, 180, 10),
+      pdfItem("d_{ff}", 72, 486, 24, 10, { fontName: "CMMI10" }),
+      pdfItem("= 2048.", 100, 486, 48, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 5
+  });
+  assert.equal(page.blocks.some((block) => block.label === "formula" && block.display === true), false);
+  const sentence = page.blocks.find((block) => /dimensionality of input/.test(block.text || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /⟦f\d+⟧/);
+  const inline = page.blocks.filter((block) => block.label === "formula");
+  assert.ok(inline.length >= 1);
+  assert.equal(inline.every((block) => block.display === false && block.inlineOf === sentence.id), true);
+});
+
+test("formula redraw is limited to formula fonts without extending operators", () => {
+  assert.equal(formulaGlyphsRedrawSafe([
+    { str: "W", fontName: "CMMI10" },
+    { str: "i", fontName: "CMMI7" }
+  ]), true);
+  assert.equal(formulaGlyphsRedrawSafe([{ str: "√", fontName: "CMSY10" }]), false);
+  assert.equal(formulaGlyphsRedrawSafe([{ str: "softmax(", fontName: "CMR10" }]), false);
+  assert.equal(formulaGlyphsRedrawSafe([{ str: "n", fontName: "Times" }]), false);
 });
 
 test("paragraphs keep sourceItems without dropping text or role", () => {

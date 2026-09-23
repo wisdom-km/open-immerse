@@ -81,6 +81,7 @@ import {
   visualAlt
 } from "../lib/pdf-blocks.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
+import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
   LAYOUT_EMPTY_KEY_STATUS,
   LAYOUT_FALLBACK_STATUS,
@@ -754,6 +755,14 @@ function loadSamplePage() {
   return samplePagePromise;
 }
 
+function imageForVisualBlock(raster, block) {
+  if (block?.label === "formula" && block.glyphRedraw) {
+    const drawn = redrawFormulaGlyphs(raster?.canvas, block.glyphBoxes, block.bbox);
+    if (drawn) return drawn;
+  }
+  return cropBlockImage(raster?.canvas, block?.bbox);
+}
+
 function cropImage(block) {
   if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(block?.imageUrl || "")) return null;
   const img = document.createElement("img");
@@ -790,7 +799,10 @@ function fillBlockText(node, block, layout) {
     }
     const formula = (layout.blocks || []).find((item) => item.id === piece.blockId);
     const img = cropImage({ ...(formula || {}), imageUrl: piece.src || formula?.imageUrl || "", label: "formula" });
-    if (img) node.append(img);
+    if (img) {
+      img.className = "oi-formula-inline";
+      node.append(img);
+    }
     else node.append(document.createTextNode("（公式裁图失败，请查看左栏原页）"));
   });
 }
@@ -842,6 +854,7 @@ function appendFixtureReadout(parent, layout) {
     const node = document.createElement(plan.tag);
     node.className = plan.className;
     if (plan.role) node.dataset.role = plan.role;
+    if (plan.mathDisplay) node.dataset.mathDisplay = plan.mathDisplay;
     if (plan.image) appendCropOrNotice(node, block);
     else fillBlockText(node, block, layout);
     if (block.translationStatus) node.dataset.translationStatus = block.translationStatus;
@@ -1478,7 +1491,7 @@ async function ingestVendorLayout(n, mode, isStale) {
   if (isStale()) return null;
   const blocks = (mapped.blocks || []).map((block) => {
     if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
-    return { ...block, imageUrl: cropBlockImage(raster.canvas, block.bbox) };
+    return { ...block, imageUrl: imageForVisualBlock(raster, block) };
   });
   const layout = {
     ...mapped,
@@ -1509,7 +1522,7 @@ async function ingestTextLayerLayout(n, isStale) {
   if (isStale()) return null;
   const blocks = (built.blocks || []).map((block) => {
     if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
-    return { ...block, imageUrl: cropBlockImage(raster.canvas, block.bbox) };
+    return { ...block, imageUrl: imageForVisualBlock(raster, block) };
   });
   const layout = {
     ...built,
@@ -1543,7 +1556,7 @@ async function ingestFixtureLayout(n, isStale) {
   if (isStale()) return null;
   const blocks = sample.blocks.map((block) => {
     if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
-    return { ...block, imageUrl: cropBlockImage(raster.canvas, block.bbox) };
+    return { ...block, imageUrl: imageForVisualBlock(raster, block) };
   });
   const layout = {
     kind: "blocks",

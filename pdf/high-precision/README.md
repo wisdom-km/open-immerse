@@ -35,6 +35,7 @@ node --test tests/*.test.mjs
 | `ARCHITECTURE.md` | 每次开工。协议、坐标、裁图、翻译、适配器都在这里 |
 | `EXECUTION.md` | 只读当前阶段。后一阶段当成还不存在 |
 | `STATUS.md` | 当前进度、本机运行状态、未解决问题与网页验收边界 |
+| `FORMULA-ELEGANCE.md` | 行内/独占公式、字形并集裁框、右栏节奏 |
 | `CONTENT-AUDIT-2026-09-23.md` | Attention 迁移前故障证据及迁移后的剩余问题 |
 
 ## 仓库事实
