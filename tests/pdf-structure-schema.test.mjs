@@ -95,14 +95,13 @@ test("translation refills strings and leaves email and shape alone", () => {
   const pack = validatePdfStructure(attention).structure;
   const slots = structureTranslateSlots(pack);
   assert.deepEqual(slots.map((slot) => slot.path[slot.path.length - 1]), [
-    "title", "name", "affiliation", "name", "affiliation", "heading", "body", "text", "text", "text"
+    "title", "affiliation", "affiliation", "heading", "body", "text", "text", "text"
   ]);
+  assert.equal(slots.some((slot) => slot.path.at(-1) === "name"), false);
   assert.equal(slots.some((slot) => slot.path.at(-1) === "email"), false);
   const translated = applyStructureTranslations(pack, slots, [
     "注意力就是你所需要的一切",
-    "阿希什·瓦萨瓦尼",
     "谷歌大脑",
-    "诺姆·沙泽尔",
     "谷歌大脑",
     "摘要",
     "主流序列转换模型基于复杂的循环网络。",
@@ -112,8 +111,17 @@ test("translation refills strings and leaves email and shape alone", () => {
   ]);
   assert.equal(translated.version, 1);
   assert.equal(translated.authors.length, pack.authors.length);
+  assert.equal(translated.authors[0].name, "Ashish Vaswani");
+  assert.equal(translated.authors[1].name, "Noam Shazeer");
+  assert.equal(translated.authors[0].affiliation, "谷歌大脑");
   assert.equal(translated.authors[0].email, "avaswani@google.com");
   assert.equal(translated.authors[1].email, "noam@google.com");
+  const forced = applyStructureTranslations(pack, [
+    { path: ["authors", 0, "name"], text: pack.authors[0].name },
+    { path: ["authors", 0, "affiliation"], text: pack.authors[0].affiliation }
+  ], ["阿希什·瓦萨瓦尼", "谷歌大脑"]);
+  assert.equal(forced.authors[0].name, "Ashish Vaswani");
+  assert.equal(forced.authors[0].affiliation, "谷歌大脑");
   assert.equal(translated.abstract.heading, "摘要");
   assert.equal(translated.rest[0].role, "heading");
   assert.equal(translated.rest.length, pack.rest.length);

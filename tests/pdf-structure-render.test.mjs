@@ -147,6 +147,7 @@ test("translated refill keeps the same tree shape and does not retarget email", 
   const root = create("div");
   renderPdfStructure(translated, root);
   assert.equal(findAll(root, (node) => node.attrs["data-role"] === "abstract_heading")[0].textContent, "摘要");
+  assert.equal(root.children[1].children[0].children[0].textContent, "Ashish Vaswani");
   assert.equal(root.children[1].children[0].children[2].textContent, "avaswani@google.com");
   assert.equal(root.children[1].children.length, pack.authors.length);
   assert.equal(root.dataset.fallback, undefined);

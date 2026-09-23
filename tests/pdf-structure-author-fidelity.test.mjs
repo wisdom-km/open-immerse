@@ -206,6 +206,7 @@ test("legacy footnotes become rest role other and markers stay off the translate
   ])).ok, false);
 
   const slots = structureTranslateSlots(parsed.structure);
+  assert.equal(slots.some((slot) => slot.path.at(-1) === "name"), false);
   assert.equal(slots.some((slot) => slot.path.at(-1) === "email"), false);
   assert.equal(slots.some((slot) => slot.path.at(-1) === "markers"), false);
   assert.deepEqual(
@@ -217,6 +218,7 @@ test("legacy footnotes become rest role other and markers stay off the translate
     ]
   );
   const translated = applyStructureTranslations(parsed.structure, slots, slots.map((slot, index) => `译${index}`));
+  assert.equal(translated.authors[0].name, parsed.structure.authors[0].name);
   assert.equal(translated.authors[0].markers, "*†");
   assert.equal(translated.authors[0].email, "noam@google.com");
   assert.equal(translated.rest[0].role, "other");
