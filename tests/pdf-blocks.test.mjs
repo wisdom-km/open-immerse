@@ -11,7 +11,12 @@ import {
   PROTOCOL,
   bboxToPercentRect,
   blockReadoutPlan,
+  DISPLAY_CROP_MIN_HEIGHT_EM,
+  DISPLAY_INK_FLOOR,
+  contentColumnShare,
+  displayContentColumnFraction,
   displayCropColumnFraction,
+  displayCropWidthCss,
   cropBlockImage,
   normalizeIncomingBlock,
   placeholderTokens,
@@ -161,6 +166,56 @@ test("visual readout plan is an image and prose stays text", () => {
   assert.equal(prose.text, "Keep the sentence.");
   assert.equal(prose.role, "authors");
   assert.equal(prose.image, undefined);
+});
+
+test("display width compensates for the padded content column", () => {
+  const share = contentColumnShare();
+  assert.equal(share, 0.83);
+  const pageFraction = displayCropColumnFraction({
+    label: "formula",
+    display: true,
+    bbox: [0.26, 0.4, 0.74, 0.44]
+  });
+  assert.equal(pageFraction, 0.48);
+  const compensated = displayContentColumnFraction(pageFraction);
+  assert.ok(Math.abs(compensated - pageFraction / share) < 1e-12);
+  assert.ok(compensated > pageFraction);
+  assert.ok(compensated < 1);
+  assert.equal(displayContentColumnFraction(0.9), 1);
+  assert.equal(displayContentColumnFraction(0), null);
+  assert.equal(displayContentColumnFraction(null), null);
+  const paperW = 591;
+  const leftWider = displayContentColumnFraction(pageFraction, { leftWidth: 800, paperWidth: paperW });
+  assert.ok(leftWider > compensated);
+  assert.ok(leftWider < 1);
+  assert.equal(
+    displayContentColumnFraction(pageFraction, { leftWidth: 400, paperWidth: paperW }),
+    compensated
+  );
+  assert.equal(displayContentColumnFraction(0.9, { leftWidth: 1030, paperWidth: paperW }), 1);
+  assert.equal(DISPLAY_INK_FLOOR, 1.8);
+  assert.equal(DISPLAY_CROP_MIN_HEIGHT_EM, 2.25);
+  assert.ok(DISPLAY_CROP_MIN_HEIGHT_EM * 0.8 >= DISPLAY_INK_FLOOR);
+  assert.ok(DISPLAY_CROP_MIN_HEIGHT_EM <= 5);
+
+  const paperH = paperW * (792 / 612);
+  const columnW = paperW * share;
+  const bboxH = 0.04;
+  const beforeH = pageFraction * columnW * (bboxH / pageFraction) * (paperH / paperW);
+  const afterH = compensated * columnW * (bboxH / pageFraction) * (paperH / paperW);
+  assert.ok(Math.abs(beforeH - afterH * share) < 1e-6);
+  assert.ok(beforeH > 25 && beforeH < 26);
+  assert.ok(Math.abs(afterH - bboxH * paperH) < 1e-6);
+  assert.ok(afterH / 15 > beforeH / 15);
+  assert.ok(afterH / 15 < DISPLAY_CROP_MIN_HEIGHT_EM);
+
+  const css = displayCropWidthCss(pageFraction, bboxH);
+  assert.match(css, /^min\(100%, max\(calc\(var\(--oi-pdf-left-w, var\(--oi-pdf-paper-w, 1px\)\)/);
+  assert.match(css, /57\.8313%/);
+  assert.match(css, /2\.25em \* var\(--oi-pdf-paper-w, 0px\) \* 0\.48/);
+  assert.match(css, /--oi-pdf-paper-h-base/);
+  assert.equal(displayCropWidthCss(0, bboxH), "");
+  assert.doesNotMatch(displayCropWidthCss(pageFraction, 0), /2\.25em/);
 });
 
 test("fixture viewer crops through cropBlockImage and leaves the legacy formula call", () => {

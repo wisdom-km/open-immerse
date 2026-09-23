@@ -36,6 +36,7 @@
 | --- | --- |
 | 容器 | 块级 `figure` / 等价；**仅**独占行公式（无 `inlineOf`） |
 | 水平 | `text-align: center`；裁图 `max-width: 100%`；过宽等比缩小，墨迹高 ≥ **14px** |
+| 宽度 | 页宽占比不要直接写成正文列的 `%`。正文列已经扣过左右 `0.085`，宽度用 `pageFraction / (1 − 2×0.085)`，纸比左页窄时再乘左页宽 / 纸宽，最后夹在列宽内。墨迹高 / 正文 ≥ **1.8×**（目标 **2.5～3.5×**，单行软顶 ≤ **5×**）。补偿后仍矮则 `min-height: 2.25em`，不先把图拉满整列 |
 | 上下空隙 | `margin-block: 10px 14px`（@ 正文 15px ≈ **0.67em / 0.93em**）——对标 Attention 左栏：公式上下约 **半行～一行** 呼吸，**小于** 段间距 14px 的 dual 叠加 |
 | 与邻段 | 段 `margin-bottom` 与公式 `margin-top` **取大不叠盲加** |
 | 裁框 | 只盖公式墨迹（含 softmax / 括号 / 等号 / 上下标）；**禁止**并入下方/旁侧 `figure`、`table`、题注 |
@@ -51,10 +52,13 @@ CSS 贴片：
   background: transparent;
   border: none;
   box-shadow: none;
+  font-size: 15px;
 }
 .oi-pdf-display-math img {
   max-width: 100%;
   height: auto;
+  min-height: 2.25em;
+  object-fit: contain;
   vertical-align: middle;
   border: none;
   box-shadow: none;
@@ -70,7 +74,7 @@ CSS 贴片：
 | --- | --- |
 | 容器 | `span` + `inline-block`；挂在宿主 `p` 内；**必须**有 `inlineOf` |
 | 基线 | `vertical-align: baseline`（光学可 `-0.12em～0`） |
-| 高度 | 墨迹 **1.0～1.2 ×** 正文字号（15px → **15～18px**）；盒高 ≤ **1.35em** |
+| 高度 | 墨迹 **1.20～1.25 ×** 正文字号（15px → **18～19px**）；盒高 ≤ **1.45em** |
 | 禁止 | `display:block` / 独立 `figure` / 整行 `img`；外包 padding≥6px 的白底「小卡片」 |
 | 裁框 | 紧贴公式字形；**禁止**带上邻词、上一行 descender、下一行 ascender（反例 `oi-qa/pdf-lab-attention/p07-lr-formula.png`） |
 
@@ -81,11 +85,11 @@ CSS 贴片：
   margin: 0 1px;
   padding: 0;
   line-height: 1;
-  max-height: 1.35em;
+  max-height: 1.45em;
 }
 .oi-pdf-inline-math img {
   display: block;
-  height: 1.1em;
+  height: 1.22em;
   width: auto;
   max-width: min(100%, 12em);
   object-fit: contain;
@@ -134,7 +138,7 @@ CSS 贴片：
 | | 目标 |
 | --- | --- |
 | 独立公式视觉高 | 约为左栏该式渲染高的 **0.9～1.1×**（通读列内）；勿放大成「海报块」 |
-| 行内公式 | 与正文小写高度同级；勿高于中文行盒 |
+| 行内公式 | 墨迹约 **1.20～1.25×** 正文；盒高 ≤ **1.45em**；仍嵌在句中 |
 | 通读列 | 保持 `PDF-RIGHT-PANE`：正文 **15px / 1.7**；公式块间距见 §2–§3，**不要**再给公式加 panel padding |
 | 白边 | 裁切近白边 ≤ **6 CSS px**；略松保笔画，不松到邻行（精准优先） |
 | 深色底 | 允许纸白底随原件；**禁止**再包一层 elevated/card；描边最多 `1px var(--oi-line)` |

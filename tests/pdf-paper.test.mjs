@@ -64,6 +64,7 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
   assert.match(src, /type\.append\(readout\)/);
   assert.match(src, /--oi-pdf-paper-w/);
   assert.match(src, /--oi-pdf-paper-h-base/);
+  assert.match(src, /--oi-pdf-left-w/);
   assert.match(src, /ResizeObserver/);
   assert.match(src, /applyPaperMetrics\(\)/);
   const setZoom = src.slice(src.indexOf("async function setZoom"), src.indexOf("async function scheduleVisibleRenders"));

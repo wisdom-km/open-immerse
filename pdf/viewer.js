@@ -88,7 +88,9 @@ import {
   PROTOCOL,
   applyBlockTranslations,
   blockReadoutPlan,
+  DISPLAY_CROP_MIN_HEIGHT_EM,
   displayCropColumnFraction,
+  displayCropWidthCss,
   blockRenderPieces,
   cropBlockImage,
   isTranslatableBlock,
@@ -890,8 +892,12 @@ function appendCropOrNotice(node, block, imageClass) {
   const img = cropImage(block);
   if (img) {
     img.className = imageClass || "oi-pdf-math-crop";
-    const columnFraction = displayCropColumnFraction(block);
-    if (columnFraction) img.style.width = `${(columnFraction * 100).toFixed(2)}%`;
+    const pageFraction = displayCropColumnFraction(block);
+    if (pageFraction) {
+      const bboxH = Number(block.bbox[3]) - Number(block.bbox[1]);
+      img.style.width = displayCropWidthCss(pageFraction, bboxH);
+      img.style.minHeight = `${DISPLAY_CROP_MIN_HEIGHT_EM}em`;
+    }
     node.append(img);
     return;
   }
@@ -1127,6 +1133,7 @@ function applyPaperMetrics() {
     if (!(size.width > 0)) return;
     paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
     paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
+    paper.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
   });
 }
 
