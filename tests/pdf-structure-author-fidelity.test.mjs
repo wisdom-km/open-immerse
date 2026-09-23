@@ -7,6 +7,9 @@ import {
   PDF_STRUCTURE_ID,
   PDF_STRUCTURE_SYSTEM,
   applyStructureTranslations,
+  authorBylineGridOk,
+  authorNameFromLine,
+  harvestTitleStructure,
   missingTitleAuthors,
   pageTextForStructure,
   resolveTitleStructure,
@@ -69,6 +72,12 @@ function findAll(node, pred, out = []) {
   if (pred(node)) out.push(node);
   for (const child of node.children || []) findAll(child, pred, out);
   return out;
+}
+
+function authorGridCells(authors) {
+  const rows = (authors?.children || []).filter((node) => node.className === "oi-pdf-author-row");
+  if (!rows.length) return authors?.children || [];
+  return rows.flatMap((row) => row.children || []);
 }
 
 function attentionAuthors() {
@@ -275,7 +284,7 @@ test("Attention fixture keeps eight authors, drops one stray symbol, and leaves 
   const host = create("div");
   renderPdfStructure(parsed.structure, host);
   const authors = findAll(host, (node) => node.className === "oi-pdf-authors")[0];
-  const cells = authors.children;
+  const cells = authorGridCells(authors);
   assert.equal(cells.length, 8);
   assert.equal(cells.every((cell) => cell.className === "oi-pdf-author-cell"), true);
   const names = cells.map((cell) => cell.children[0].textContent);
@@ -420,7 +429,7 @@ test("a clean first-row pack is not final when later-row names are still in the 
   const { create } = createDocument();
   const host = create("div");
   renderPdfStructure(recovered.structure, host);
-  const cells = host.children[1].children;
+  const cells = authorGridCells(host.children[1]);
   assert.equal(cells.length, 8);
   const names = cells.map((cell) => cell.children[0].textContent);
   for (const surname of SURNAMES) assert.equal(names.some((name) => name.includes(surname)), true, surname);
@@ -443,4 +452,99 @@ test("a clean first-row pack is not final when later-row names are still in the 
   assert.equal(calls, 1);
   assert.equal(once.ok, true);
   assert.equal(once.structure.authors.length, 8);
+});
+
+function dirtyFourPack() {
+  return modelPack([
+    { name: "Ashish Vaswani", affiliation: "Google Brain Llion Jones", email: "avaswani@google.com" },
+    { name: "Noam Shazeer", affiliation: "Google Brain Aidan N. Gomez", email: "noam@google.com" },
+    { name: "Niki Parmar", affiliation: "Google Research", email: "nikip@google.com" },
+    { name: "Jakob Uszkoreit", affiliation: "Google Research", email: "usz@google.com" }
+  ]);
+}
+
+test("a dirty four-author merge is not a successful pack and one retry can recover eight", async () => {
+  const parsed = validatePdfStructure(JSON.parse(dirtyFourPack().raw));
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.reason, "authors-dirty");
+  assert.equal(parsed.structure, undefined);
+
+  const absorbed = validatePdfStructure({
+    version: 1,
+    title: "Attention Is All You Need",
+    authors: [{
+      name: "Ashish Vaswani",
+      affiliation: "Google Brain Llion Jones Aidan N. Gomez",
+      email: "avaswani@google.com"
+    }],
+    abstract: { heading: "Abstract", body: "The dominant sequence transduction models." }
+  });
+  assert.equal(absorbed.ok, false);
+  assert.equal(absorbed.reason, "authors-dirty");
+
+  const clean = validatePdfStructure({
+    version: 1,
+    title: "Attention Is All You Need",
+    authors: attentionAuthors(),
+    abstract: { heading: "Abstract", body: "The dominant sequence transduction models." }
+  });
+  assert.equal(clean.ok, true);
+  assert.equal(clean.structure.authors.length, 8);
+
+  const pageText = pageTextForStructure(columnBlocks());
+  let calls = 0;
+  const recovered = await resolveTitleStructure(pageText, 1, async ({ user }) => {
+    calls += 1;
+    if (calls === 1) return dirtyFourPack();
+    assert.match(user, /Do not stop after the first row/);
+    assert.match(user, /Llion Jones/);
+    return modelPack(attentionAuthors());
+  });
+  assert.equal(calls, 2);
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.structure.authors.length, 8);
+  const { create } = createDocument();
+  const host = create("div");
+  renderPdfStructure(recovered.structure, host);
+  assert.equal(authorGridCells(host.children[1]).length, 8);
+  assert.equal(host.children[1].attrs["data-wrap"], "4|3|1");
+
+  calls = 0;
+  const stuck = await resolveTitleStructure(pageText, 1, async () => {
+    calls += 1;
+    return dirtyFourPack();
+  });
+  assert.equal(calls, 2);
+  assert.equal(stuck.ok, false);
+  assert.equal(stuck.reason, "authors-dirty");
+  assert.equal(stuck.structure, undefined);
+
+  const cleanLines = ["Attention Is All You Need"];
+  for (const author of attentionAuthors()) {
+    cleanLines.push(author.name);
+    if (author.affiliation) cleanLines.push(author.affiliation);
+    if (author.email) cleanLines.push(author.email);
+  }
+  cleanLines.push("Abstract", "The dominant sequence transduction models.");
+  const cleanText = cleanLines.join("\n");
+  const harvested = harvestTitleStructure(cleanText, 1);
+  assert.equal(harvested.ok, true);
+  assert.equal(harvested.structure.authors.length, 8);
+  assert.equal(authorNameFromLine("Google Brain Llion Jones"), "");
+  assert.equal(authorBylineGridOk(attentionAuthors(), cleanText), true);
+  assert.equal(authorBylineGridOk(JSON.parse(dirtyFourPack().raw).authors, cleanText), false);
+
+  calls = 0;
+  const fromLines = await resolveTitleStructure(cleanText, 1, async () => {
+    calls += 1;
+    return dirtyFourPack();
+  });
+  assert.equal(calls, 2);
+  assert.equal(fromLines.ok, true);
+  assert.equal(fromLines.structure.authors.length, 8);
+  const again = createDocument();
+  const grid = again.create("div");
+  renderPdfStructure(fromLines.structure, grid);
+  assert.equal(authorGridCells(grid.children[1]).length, 8);
+  assert.equal(grid.children[1].attrs["data-wrap"], "4|3|1");
 });

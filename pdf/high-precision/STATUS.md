@@ -2,6 +2,18 @@
 
 记录到 2026-09-23。需求仍以 `REQUIREMENTS.md` 为准。这里记录当前实现、运行状态、修复前的网页问题与尚未完成的验收。
 
+## 2026-09-24 右栏作者区按行收人
+
+文字层不再把作者区收成第一行的 4 列。后面每一行姓名各自成格，单位和邮箱只贴当前这一行。Attention 形状的 8 人因此进 [7,9]，4|3|1 才会折行。STRUCTURE 两次仍脏或仍缺人时，若作者区文本本身能收出干净的 7–9 人，用这份抽取，不把失败包渲染成成功。回退时脏的或明显缺人的 byline 格子改成一段文字，不再画成 4 格。这里不记 L1 通过。
+
+## 2026-09-24 右栏作者包（dirty-4 不再当成功）
+
+Attention 第 1 页若只抽出 4 个合并格（别人的姓名或邮箱写进 affiliation），整包是 `authors-dirty`，不渲染成成功。干净但页文本仍缺至少两人时，仍走一次完整性重抽；第二次仍缺人或仍脏则丢弃。`重译本页` 强制再抽一次 STRUCTURE，不复用内存里的旧 4 人格。抽出的人数进入 [7,9] 后，4|3|1 行折不变。这里不记 L1 通过。
+
+## 2026-09-24 右栏版面对齐（right-pane-layout-parity）
+
+Attention 第 1 页右栏作者区跟左栏行折对齐。人数仍在 [7,9]；8 人排成 **4|3|1**（7 人 4|3，9 人 4|3|2）。少于 7 人仍走 #58 的 `auto-fit` + `minmax(140px, 1fr)`，不改成 `repeat(4, 1fr)`。版心放不下四条 140px 轨道，硬用这个下限会把首行收成 3 列；满员行改成内容宽、居中、不换行，行内最多 4 格，邮箱不再为了撑满等分列折成两行。每格仍是 name → affiliation → email 短栈。题下距、作者区段距、作者到「摘要」的距收到已有的 8px / 2px；题上下用 `medium double` 细线，不是左栏像素描摹。DOM 序仍是 title → authors → abstract → footnotes → rest。未改左栏、Soft Graphite、#40 / #54 / #59、作者不译、公式墨迹。Anvil 的 L1–L5 仍要在本机左右栏看，这里不记通过。
+
 ## 2026-09-23 作者区不翻译（pdf-author-names-no-translate）
 
 作者区整块保原文。`authors[i]` 的 name、affiliation、email、markers 都不进 `structureTranslateSlots`，回填也不写回这些字段。title、abstract、rest 仍译；`rest[{role:other}]` 仍可译。文字层作者行原来的 `skipTranslate` 不变。通读路径的作者行不进批次，合并时保原文。

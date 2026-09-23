@@ -119,9 +119,11 @@ import { inlineCropBoxEm, inlineLineTopEm, measureFormulaCrop, textLayerToBlocks
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import {
   applyStructureTranslations,
+  authorBylineGridOk,
   isTitlePageCandidate,
   pageTextForStructure,
   resolveTitleStructure,
+  structureAuthorsLookTruncated,
   structureTranslateSlots,
   structureTranslationRows
 } from "../lib/pdf-structure-schema.js";
@@ -1011,14 +1013,19 @@ function appendFixtureReadout(parent, layout, options = {}) {
         run.push(item);
         used.add(item.id);
       }
-      if (run.length && run.every((item) => item.authorCell?.name)) {
-        renderAuthorGrid(parent, run.map((item) => item.authorCell));
+      const cells = run.map((item) => item.authorCell).filter((cell) => cell?.name);
+      if (cells.length === run.length && authorBylineGridOk(cells, pageTextForStructure(blocks))) {
+        renderAuthorGrid(parent, cells);
       } else {
         const node = document.createElement("p");
         node.className = "oi-pdf-p";
         node.dataset.role = "authors";
         node.dataset.page = String(page);
-        node.textContent = run.map((item) => item.text || "").filter(Boolean).join(" ");
+        node.textContent = run.map((item) => {
+          const cell = item.authorCell;
+          if (!cell?.name) return item.text || "";
+          return [cell.name, cell.affiliation, cell.email].filter(Boolean).join(" ");
+        }).filter(Boolean).join(" ");
         parent.append(node);
       }
       continue;
@@ -1620,9 +1627,13 @@ function noteLibraryUnavailable() {
   setStatus(failure.warning, false, true);
 }
 
-async function ensureTitleStructure(page, layout) {
-  if (titleStructure && titleStructure.docId === docId) return titleStructure;
+async function ensureTitleStructure(page, layout, options = {}) {
   const text = pageTextForStructure(layout?.blocks || []);
+  if (titleStructure && titleStructure.docId === docId && !options.force) {
+    const authors = titleStructure.source?.authors || titleStructure.structure?.authors || [];
+    const stale = titleStructure.status === "ok" && structureAuthorsLookTruncated(authors, text);
+    if (!stale) return titleStructure;
+  }
   if (!isTitlePageCandidate(page, text)) return null;
   const stamp = docId;
   const pending = {
@@ -2061,12 +2072,13 @@ async function forceRetranslateCurrentPage() {
       return;
     }
     if (left()) return;
-    await ensureTitleStructure(targetPage, sourceLayout);
+    await ensureTitleStructure(targetPage, sourceLayout, { force: true });
     if (left()) return;
+    const pageUnits = liveOriginals(sourceLayout, unitsForForceRetranslate(sourceLayout));
     armTitleRetranslate(translatingDoc, targetPage);
     await translateTitleStructure(work, gen, translatingDoc, batchSize);
     if (left()) return;
-    const translated = await translatePageBlocks(units, {
+    const translated = await translatePageBlocks(pageUnits, {
       send: runtimeSend,
       session: work,
       batchSize,
