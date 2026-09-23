@@ -678,6 +678,13 @@ button {
   color: var(--oi-text-muted);
 }
 .btn-secondary:hover { background: var(--oi-accent-subtle); }
+#retranslatePage.btn-secondary {
+  background: transparent;
+  border: 1px solid var(--oi-line);
+  color: var(--oi-text-muted);
+  font-weight: 500;
+}
+#retranslatePage.btn-secondary:hover { background: var(--oi-accent-subtle); }
 .btn-ghost {
   background: transparent;
   border: 0;
