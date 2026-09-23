@@ -366,6 +366,43 @@ test("a hairline font-box overlap does not pad into the next line", () => {
   assert.ok(box[0] <= glyph[0] && box[2] >= glyph[2] && box[1] <= glyph[1]);
 });
 
+test("relaxed softmax pad still stops before Fig.2", () => {
+  const glyph = [0.36, 0.60, 0.82, 0.645];
+  const figure = [0.18, 0.08, 0.80, 0.597];
+  const caption = [0.18, 0.568, 0.70, 0.594];
+  const nextLine = [0.16, 0.652, 0.86, 0.678];
+  const pad = {
+    x: Math.min(FORMULA_PAD_LIMIT.x, FORMULA_CROP_PAD.displayX + FORMULA_CROP_PAD.scriptX),
+    y: Math.min(FORMULA_PAD_LIMIT.y, FORMULA_CROP_PAD.displayY + FORMULA_CROP_PAD.scriptY)
+  };
+  assert.ok(glyph[1] - pad.y < figure[3], "unstopped pad would enter Fig.2");
+  const box = contentAwareFormulaBbox(glyph, pad, [figure, caption, nextLine]);
+  const overlaps = (a, b) => Math.min(a[3], b[3]) > Math.max(a[1], b[1]) &&
+    Math.min(a[2], b[2]) > Math.max(a[0], b[0]);
+  assert.equal(overlaps(box, figure), false);
+  assert.equal(overlaps(box, caption), false);
+  assert.ok(box[3] <= nextLine[1] + 1e-9);
+  assert.ok(box[0] <= glyph[0] && box[2] >= glyph[2] && box[1] <= glyph[1] && box[3] >= glyph[3]);
+
+  const width = 1000;
+  const height = 1000;
+  const image = paperRaster(width, height, (x, y) => {
+    const nx = x / width;
+    const ny = y / height;
+    if (ny < figure[3] && ny >= figure[1] && nx >= figure[0] && nx < figure[2]) return [0, 0, 0, 255];
+    if (nx >= 0.40 && nx <= 0.78 && ny >= 0.61 && ny <= 0.63) return [0, 0, 0, 255];
+    return null;
+  });
+  const trimmed = trimFormulaBboxToInk(box, image, { inline: false, protect: true });
+  assert.equal(overlaps(trimmed, figure), false);
+  assert.equal(overlaps(trimmed, caption), false);
+  assert.ok(trimmed[1] >= box[1] - 1e-9 && trimmed[3] <= box[3] + 1e-9);
+  assert.ok(trimmed[0] >= box[0] - 1e-9 && trimmed[2] <= box[2] + 1e-9);
+  const inkTop = 610;
+  const trimmedTop = Math.round(trimmed[1] * height);
+  assert.equal(inkTop - trimmedTop, FORMULA_INK_PAD_PX.displayProtect);
+});
+
 test("a display formula does not swallow the figure caption above it", () => {
   const page = textLayerToBlocks({
     items: [
@@ -536,18 +573,32 @@ function paperRaster(width, height, paint) {
   return { data, width, height };
 }
 
-test("formula pads stay under about 6 CSS px and inline is tighter than display", () => {
+test("relaxed formula pads sit in the crop-relax band and stay under about 8 CSS px", () => {
+  assert.equal(FORMULA_CROP_PAD.displayX, 0.0045);
+  assert.equal(FORMULA_CROP_PAD.displayY, 0.0030);
+  assert.equal(FORMULA_CROP_PAD.inlineX, 0.0020);
+  assert.equal(FORMULA_CROP_PAD.inlineY, 0.0016);
+  assert.equal(FORMULA_CROP_PAD.scriptX, 0.0012);
+  assert.equal(FORMULA_CROP_PAD.scriptY, 0.0016);
+  assert.equal(FORMULA_PAD_LIMIT.x, 0.0060);
+  assert.equal(FORMULA_PAD_LIMIT.y, 0.0050);
+  assert.equal(FORMULA_INK_PAD_PX.display, 6);
+  assert.equal(FORMULA_INK_PAD_PX.displayProtect, 7);
+  assert.equal(FORMULA_INK_PAD_PX.inline, 4);
+  assert.equal(FORMULA_INK_PAD_PX.inlineProtect, 5);
+  assert.equal(FORMULA_PAPER_MIN, 246);
   const cssX = FORMULA_PAD_LIMIT.x * 612 * 2;
   const cssY = FORMULA_PAD_LIMIT.y * 792 * 2;
-  assert.ok(cssX <= 6.05 && cssY <= 6.05, `pad limit ${cssX.toFixed(2)} x ${cssY.toFixed(2)}`);
+  assert.ok(cssX > 6 && cssX < 8, `pad limit x ${cssX.toFixed(2)}`);
+  assert.ok(cssY > 6 && cssY < 8, `pad limit y ${cssY.toFixed(2)}`);
+  assert.ok(FORMULA_CROP_PAD.displayX < 0.008 && FORMULA_CROP_PAD.displayY < 0.01);
   assert.ok(FORMULA_CROP_PAD.inlineX < FORMULA_CROP_PAD.displayX);
   assert.ok(FORMULA_CROP_PAD.inlineY < FORMULA_CROP_PAD.displayY);
   assert.ok(FORMULA_CROP_PAD.displayX + FORMULA_CROP_PAD.scriptX <= FORMULA_PAD_LIMIT.x + 1e-9);
   assert.ok(FORMULA_CROP_PAD.displayY + FORMULA_CROP_PAD.scriptY <= FORMULA_PAD_LIMIT.y + 1e-9);
   assert.ok(FORMULA_INK_PAD_PX.inline < FORMULA_INK_PAD_PX.display);
   assert.ok(FORMULA_INK_PAD_PX.inlineProtect <= FORMULA_INK_PAD_PX.displayProtect);
-  assert.ok(FORMULA_INK_PAD_PX.displayProtect <= 6);
-  assert.ok(FORMULA_PAPER_MIN >= 240 && FORMULA_PAPER_MIN <= 252);
+  assert.ok(FORMULA_INK_PAD_PX.displayProtect < 8);
 });
 
 test("ink trim drops paper-white margin and keeps a gray subscript", () => {
@@ -564,8 +615,8 @@ test("ink trim drops paper-white margin and keeps a gray subscript", () => {
   const display = trimFormulaBboxToInk(bbox, image, { inline: false });
   const inline = trimFormulaBboxToInk(bbox, image, { inline: true });
   const protect = trimFormulaBboxToInk(bbox, image, { inline: false, protect: true });
-  assert.deepEqual(display.map((value) => Number(value.toFixed(4))), [0.18, 0.31, 0.385, 0.55]);
-  assert.deepEqual(inline.map((value) => Number(value.toFixed(4))), [0.19, 0.33, 0.375, 0.53]);
+  assert.deepEqual(display.map((value) => Number(value.toFixed(4))), [0.17, 0.29, 0.395, 0.57]);
+  assert.deepEqual(inline.map((value) => Number(value.toFixed(4))), [0.18, 0.31, 0.385, 0.55]);
   assert.ok(protect[0] < display[0] && protect[2] > display[2]);
   assert.ok(display[1] > 0.2, "caption row above the box stays out");
   assert.ok(display[0] >= bbox[0] && display[2] <= bbox[2]);
