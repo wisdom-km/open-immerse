@@ -111,7 +111,7 @@ import {
   resolveLayoutMode,
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
-import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { textLayerToBlocks, trimFormulaBboxToInk } from "../lib/pdf-text-layer.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import {
   applyStructureTranslations,
@@ -833,12 +833,49 @@ function loadSamplePage() {
   return samplePagePromise;
 }
 
+const formulaRasterPixels = new WeakMap();
+
+function formulaPagePixels(canvas) {
+  if (!canvas || typeof canvas.getContext !== "function") return null;
+  const cached = formulaRasterPixels.get(canvas);
+  if (cached) return cached;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || typeof ctx.getImageData !== "function") return null;
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  formulaRasterPixels.set(canvas, image);
+  return image;
+}
+
+/** Ink trim for formula crops only. Never grows past the content-aware bbox. */
+function formulaInkBbox(canvas, block) {
+  const bbox = block?.bbox;
+  if (!Array.isArray(bbox)) return bbox;
+  try {
+    const image = formulaPagePixels(canvas);
+    if (!image) return bbox;
+    return trimFormulaBboxToInk(bbox, image, {
+      inline: block.display === false || Boolean(block.inlineOf),
+      protect: block.formulaInkProtect === true
+    }) || bbox;
+  } catch {
+    return bbox;
+  }
+}
+
 function imageForVisualBlock(raster, block) {
   if (block?.label === "formula" && block.glyphRedraw) {
     const drawn = redrawFormulaGlyphs(raster?.canvas, block.glyphBoxes, block.bbox);
     if (drawn) return drawn;
   }
+  if (block?.label === "formula") block.bbox = formulaInkBbox(raster?.canvas, block);
   return cropBlockImage(raster?.canvas, block?.bbox);
+}
+
+function withRasterCrop(raster, block) {
+  if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
+  const next = { ...block };
+  next.imageUrl = imageForVisualBlock(raster, next);
+  return next;
 }
 
 function cropImage(block) {
@@ -1947,10 +1984,7 @@ async function ingestVendorLayout(n, mode, isStale) {
     }
   }
   if (isStale()) return null;
-  const blocks = (mapped.blocks || []).map((block) => {
-    if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
-    return { ...block, imageUrl: imageForVisualBlock(raster, block) };
-  });
+  const blocks = (mapped.blocks || []).map((block) => withRasterCrop(raster, block));
   const layout = {
     ...mapped,
     kind: "blocks",
@@ -1978,10 +2012,7 @@ async function ingestTextLayerLayout(n, isStale) {
   const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
-  const blocks = (built.blocks || []).map((block) => {
-    if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
-    return { ...block, imageUrl: imageForVisualBlock(raster, block) };
-  });
+  const blocks = (built.blocks || []).map((block) => withRasterCrop(raster, block));
   const layout = {
     ...built,
     kind: "blocks",
@@ -2012,10 +2043,7 @@ async function ingestFixtureLayout(n, isStale) {
   if (isStale()) return null;
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
-  const blocks = sample.blocks.map((block) => {
-    if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
-    return { ...block, imageUrl: imageForVisualBlock(raster, block) };
-  });
+  const blocks = sample.blocks.map((block) => withRasterCrop(raster, block));
   const layout = {
     kind: "blocks",
     protocol: sample.protocol || PROTOCOL,
