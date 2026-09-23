@@ -1,7 +1,7 @@
 # PDF 右栏 · 公式 / 图 / 表 排版（PDF-MD-FORMULA-LAYOUT）
 
 **任务来源：** 2026-09-23 Wisdom via Jone copy → Loom 出规格 → Forge → Cloud。  
-**挂接：** [`PDF-MD-READOUT.md`](./PDF-MD-READOUT.md)（通读产品权威）；通读皮肤数字仍见 [`PDF-RIGHT-PANE.md`](./PDF-RIGHT-PANE.md)。  
+**挂接：** [`PDF-MD-READOUT.md`](./PDF-MD-READOUT.md)（通读产品权威）；通读皮肤数字仍见 [`PDF-RIGHT-PANE.md`](./PDF-RIGHT-PANE.md)。节奏数字（空隙、行内高度、密度）若与 `pdf/high-precision/FORMULA-RIGHT-PANE.md` 冲突，以那份 §2–§5 为准。  
 **fixture：** `/workspace/oi-qa/fixtures/pdf/Attention_Is_All_You_Need.pdf`  
 **反例证图：** `oi-qa/pdf-lab-attention/p07-lr-formula.png`（行内整行糊裁 + 白底大块砸版）。
 

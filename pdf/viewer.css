@@ -262,7 +262,7 @@ h1 {
 }
 .oi-pdf-display-math {
   display: block;
-  margin: 12px 0 16px;
+  margin: 10px 0 14px;
   padding: 0;
   text-align: center;
   background: transparent;
@@ -270,18 +270,23 @@ h1 {
   box-shadow: none;
 }
 .oi-pdf-p:has(+ .oi-pdf-display-math),
-.oi-pdf-p:has(+ .oi-pdf-figure) {
+.oi-pdf-p:has(+ .oi-pdf-figure),
+.oi-pdf-figure:has(+ .oi-pdf-display-math),
+.oi-pdf-display-math:has(+ .oi-pdf-figure) {
   margin-bottom: 0;
 }
-.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop,
-.pane-translate .readout.md-readout .oi-pdf-display-math .katex-display {
+.oi-pdf-figure + .oi-pdf-display-math,
+.oi-pdf-display-math + .oi-pdf-figure {
+  margin-top: 14px;
+}
+.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop {
   display: inline-block;
   max-width: 100%;
   height: auto;
   vertical-align: middle;
-  border-radius: 2px;
-  border: 1px solid var(--oi-line);
+  border: none;
   box-shadow: none;
+  border-radius: 0;
 }
 .oi-pdf-inline-math {
   display: inline-block;
@@ -293,15 +298,15 @@ h1 {
 }
 .pane-translate .readout.md-readout .oi-pdf-inline-math .oi-pdf-math-crop {
   display: block;
-  height: 1.15em;
+  height: 1.1em;
   width: auto;
-  max-width: 100%;
+  max-width: min(100%, 12em);
   object-fit: contain;
   object-position: left center;
   border: none;
   box-shadow: none;
-  border-radius: 1px;
-  background: #fff;
+  border-radius: 0;
+  background: transparent;
 }
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
   font: 400 14px/1.55 var(--oi-font);
@@ -332,9 +337,9 @@ h1 {
   max-width: 100%;
   height: auto;
   margin: 0 auto;
-  border-radius: 2px;
-  border: 1px solid var(--oi-line);
+  border: none;
   box-shadow: none;
+  border-radius: 0;
 }
 .oi-pdf-caption {
   margin: 6px 0 0;

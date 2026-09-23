@@ -190,7 +190,13 @@ test("Attention text fragments have one source owner and complete visual boundar
               `page ${number} inline ${formula.id} overlaps neighbor ${other.id}`);
             continue;
           }
-          if (!["figure", "caption", "table", "formula", "text"].includes(other.label)) continue;
+          if (["figure", "caption", "table"].includes(other.label)) {
+            const hit = overlapSize(formula.bbox, other.bbox);
+            const area = Math.max(0, hit.w) * Math.max(0, hit.h);
+            assert.ok(area < 1e-12, `page ${number} ${formula.id} meets ${other.label} ${other.id}`);
+            continue;
+          }
+          if (!["formula", "text"].includes(other.label)) continue;
           const hit = overlapSize(formula.bbox, other.bbox);
           assert.ok(!(hit.w > 0.008 && hit.h > 0.004),
             `page ${number} ${formula.id} overlaps ${other.label} ${other.id}`);

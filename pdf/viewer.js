@@ -72,6 +72,7 @@ import {
   PROTOCOL,
   applyBlockTranslations,
   blockReadoutPlan,
+  displayCropColumnFraction,
   blockRenderPieces,
   blockTranslationIntegrity,
   cropBlockImage,
@@ -775,6 +776,8 @@ function appendCropOrNotice(node, block, imageClass) {
   const img = cropImage(block);
   if (img) {
     img.className = imageClass || "oi-pdf-math-crop";
+    const columnFraction = displayCropColumnFraction(block);
+    if (columnFraction) img.style.width = `${(columnFraction * 100).toFixed(2)}%`;
     node.append(img);
     return;
   }

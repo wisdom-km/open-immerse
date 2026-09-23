@@ -31,11 +31,11 @@
 
 ## 右栏节奏
 
-DOM 与间距以 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md) 为准。正文段距约 `0.7em`；紧挨公式或图的段落下边距不与块上边距再叠一层。
+DOM 仍按 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md)。间距以 [`FORMULA-RIGHT-PANE.md`](./FORMULA-RIGHT-PANE.md) 为准。正文段距约 `0.7em`；紧挨公式或图时，段落下边距与块上边距取较大的一个，不叠成两层。
 
-- 独占公式：`margin: 12px 0 16px`，图 `max-width: 100%`、`height: auto`，水平居中。白边目标约 6 CSS px 以内，不为了留白去盖邻行。
-- 行内公式：`max-height: 1.35em`，裁图高 `1.15em`（15px 正文上大约 15–19px 墨迹），左右 `margin: 0 1px`。裁切失败时在段内写「（公式见左栏）」。
-- 图 / 表：`figure.oi-pdf-figure` + `img.oi-pdf-asset-crop`，题注 `figcaption.oi-pdf-caption`（13px、`var(--oi-text-muted)`）。只使用已有 Soft Graphite token，不改 `ui/tokens.css`。
+- 独占公式：`margin: 10px 0 14px`，水平居中，宽度按它在页面上的占比，贴近左栏同一公式。无描边、无阴影。白边目标约 6 CSS px 以内。
+- 行内公式：`max-height: 1.35em`，裁图高 `1.1em`（15px 正文上大约 15–18px），左右 `margin: 0 1px`，最宽 `12em`。裁切失败时在段内写「（公式见左栏）」。
+- 图 / 表：`figure.oi-pdf-figure`（下边距 12px）+ `img.oi-pdf-asset-crop`，题注 `figcaption.oi-pdf-caption` 上边距 6px（13px、`var(--oi-text-muted)`）。公式框与图、表、题注不相交。只使用已有 Soft Graphite token，不改 `ui/tokens.css`。
 
 ## 本轮不改
 
