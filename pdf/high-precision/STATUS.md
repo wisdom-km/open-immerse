@@ -2,6 +2,15 @@
 
 记录到 2026-09-23。需求仍以 `REQUIREMENTS.md` 为准。这里记录当前实现、运行状态、修复前的网页问题与尚未完成的验收。
 
+## 2026-09-23 右栏可读性（pdf-rightpane-footnote-simple-scale）
+
+#63 之后补三件事，不改 Soft Graphite、#40、#54、#59、KaTeX 主路径、`CROP_SCALE`、#62 的 pad 表，也不新加 schema `role:"footnote"`。
+
+- 脚注（`rest[role=other]`，含 `* Equal contribution`）画在摘要正文之后、其余 rest 之前。
+- 简单关系 `N=6`、`h=8`、`P_drop=0.1`、`ε_ls=0.1` 写入句中 Unicode，不发 ⟦fN⟧，不进 pageRaster。`d_model`、`1/√d_k`、∑、矩阵、PE、MultiHead / Eq.3 仍是裁图；后三类保持 `formula-display`。
+- 行内盒高按墨迹反推：`height = targetInk / inkShare`。名义 share = 16/(16+2×4) = 2/3，目标墨迹 1.10× 正文，盒 **1.65em**（约 1.55–1.8em）。旧 `1.22em` / `1.45em` 顶会把白边算进盒里，墨迹掉到约 0.6–0.9×。有像素时用实测 `inkShare`。独占公式仍列宽优先；默认盒下限仍是 `2em`。短裁图若这张的墨迹会低于 1.2×，只抬这一张的 floor。
+- 库里旧译文若只多出已退役简单式的 ⟦fN⟧，读入时把这些占位换成源句里的 Unicode，中文留下。`blockSoftLead` 三句不改。真正对不上的公式或引用仍走原来的核对路径，不把永久英文回落写成目标。
+
 ## 2026-09-23 右栏公式显示比例（pdf-formula-display-scale）
 
 #62 放宽裁框白边之后，右栏独占公式相对中文正文和左栏原式仍然偏小。原因在显示侧，不在 pad 或 DPI。`displayCropColumnFraction` 是公式占整页的宽度，阅读器把它写成裁图的 `width: N%`，父级却已经是扣过左右 `PDF_PAPER_PAD_X`（0.085）的正文列，比例被用了两次。行内裁图把整张图的盒高钉在 `1.1em`，`object-fit: contain` 让墨迹在盒里再缩一截。本轮不改裁框 pad、墨迹收边、`CROP_SCALE`、KaTeX、Soft Graphite、镜像、滚轮、作者格或参考文献软状态。

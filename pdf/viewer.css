@@ -394,11 +394,11 @@ h1 {
   margin: 0 1px;
   padding: 0;
   line-height: 1;
-  max-height: 1.45em;
 }
 .pane-translate .readout.md-readout .oi-pdf-inline-math .oi-pdf-math-crop {
   display: block;
-  height: 1.22em;
+  /* Ink target 1.10× body. Nominal share 16/(16+2×4) → box 1.65em. */
+  height: var(--oi-pdf-inline-crop-em, 1.65em);
   width: auto;
   max-width: min(100%, 12em);
   object-fit: contain;

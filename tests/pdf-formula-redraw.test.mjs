@@ -55,8 +55,9 @@ test("viewer keeps the page raster crop when glyph redraw is unavailable", () =>
   assert.match(blocks, /oi-pdf-asset-crop/);
   const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
   assert.match(css, /\.oi-pdf-inline-math\s*\{[^}]*display:\s*inline-block/s);
-  assert.match(css, /\.oi-pdf-inline-math\s*\{[^}]*max-height:\s*1\.45em/s);
-  assert.match(css, /\.oi-pdf-inline-math \.oi-pdf-math-crop\s*\{[^}]*height:\s*1\.22em/s);
+  assert.doesNotMatch(css, /\.oi-pdf-inline-math\s*\{[^}]*max-height:\s*1\.45em/s);
+  assert.match(css, /\.oi-pdf-inline-math \.oi-pdf-math-crop\s*\{[^}]*height:\s*var\(--oi-pdf-inline-crop-em,\s*1\.65em\)/s);
+  assert.doesNotMatch(css, /height:\s*1\.22em/);
   assert.match(css, /\.oi-pdf-inline-math \.oi-pdf-math-crop\s*\{[^}]*object-fit:\s*contain/s);
   assert.match(css, /\.oi-pdf-inline-math \.oi-pdf-math-crop\s*\{[^}]*max-width:\s*min\(100%, 12em\)/s);
   assert.match(css, /\.oi-pdf-inline-math \.oi-pdf-math-crop\s*\{[^}]*box-shadow:\s*none/s);
