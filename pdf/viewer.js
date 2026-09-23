@@ -119,6 +119,7 @@ import { inlineCropBoxEm, inlineLineTopEm, measureFormulaCrop, textLayerToBlocks
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import {
   applyStructureTranslations,
+  authorBylineGridOk,
   isTitlePageCandidate,
   pageTextForStructure,
   resolveTitleStructure,
@@ -1012,14 +1013,19 @@ function appendFixtureReadout(parent, layout, options = {}) {
         run.push(item);
         used.add(item.id);
       }
-      if (run.length && run.every((item) => item.authorCell?.name)) {
-        renderAuthorGrid(parent, run.map((item) => item.authorCell));
+      const cells = run.map((item) => item.authorCell).filter((cell) => cell?.name);
+      if (cells.length === run.length && authorBylineGridOk(cells, pageTextForStructure(blocks))) {
+        renderAuthorGrid(parent, cells);
       } else {
         const node = document.createElement("p");
         node.className = "oi-pdf-p";
         node.dataset.role = "authors";
         node.dataset.page = String(page);
-        node.textContent = run.map((item) => item.text || "").filter(Boolean).join(" ");
+        node.textContent = run.map((item) => {
+          const cell = item.authorCell;
+          if (!cell?.name) return item.text || "";
+          return [cell.name, cell.affiliation, cell.email].filter(Boolean).join(" ");
+        }).filter(Boolean).join(" ");
         parent.append(node);
       }
       continue;

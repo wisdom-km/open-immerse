@@ -114,6 +114,10 @@ test("重译本页 bypasses library early-returns; 翻译 still short-circuits",
   assert.ok(refresh > 0 && reread > refresh && blocksCall > reread);
   assert.match(viewer, /options\.force/);
   assert.match(viewer, /structureAuthorsLookTruncated/);
+  assert.match(viewer, /authorBylineGridOk\(/);
+  const readout = viewer.slice(viewer.indexOf("function appendFixtureReadout"), viewer.indexOf("function onReadoutBlockClick"));
+  const gridAt = readout.indexOf("renderAuthorGrid");
+  assert.ok(gridAt > readout.indexOf("authorBylineGridOk"));
   assert.match(force, /PDF_COPY\.retranslateRunning/);
   assert.match(force, /PDF_COPY\.retranslateDone/);
   assert.match(force, /PDF_COPY\.retranslateFailed/);

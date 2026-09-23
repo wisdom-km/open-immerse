@@ -15,6 +15,7 @@ import {
   trimFormulaBboxToInk
 } from "../lib/pdf-text-layer.js";
 import { isTranslatableBlock } from "../lib/pdf-blocks.js";
+import { renderAuthorGrid } from "../lib/pdf-structure-render.js";
 import { segmentPageBlocks } from "../lib/pdf-viewer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -185,6 +186,119 @@ test("author blocks are not translated", () => {
   assert.equal(authors.every((block) => block.label === "text"), true);
   assert.equal(authors.some((block) => block.flatAuthor), false);
 });
+
+test("a multi-row author block is one cell per person, not the first row's columns", () => {
+  const layerSrc = readFileSync(join(root, "lib/pdf-text-layer.js"), "utf8");
+  assert.equal(layerSrc.includes("Polosukhin"), false);
+  assert.equal(layerSrc.includes("Uszkoreit"), false);
+  const aligned = textLayerToBlocks({
+    items: [
+      pdfItem("Attention Is All You Need", 96, 730, 420, 20),
+      pdfItem("Ashish Vaswani", 72, 690, 90, 10),
+      pdfItem("Noam Shazeer", 198, 690, 86, 10),
+      pdfItem("Niki Parmar", 324, 690, 78, 10),
+      pdfItem("Jakob Uszkoreit", 450, 690, 96, 10),
+      pdfItem("Google Brain", 72, 676, 72, 9),
+      pdfItem("Google Brain", 198, 676, 72, 9),
+      pdfItem("Google Research", 324, 676, 88, 9),
+      pdfItem("Google Research", 450, 676, 88, 9),
+      pdfItem("avaswani@google.com", 72, 662, 100, 8),
+      pdfItem("noam@google.com", 198, 662, 90, 8),
+      pdfItem("nikip@google.com", 324, 662, 90, 8),
+      pdfItem("usz@google.com", 450, 662, 80, 8),
+      pdfItem("Llion Jones", 72, 640, 70, 10),
+      pdfItem("Aidan N. Gomez", 198, 640, 90, 10),
+      pdfItem("Lukasz Kaiser", 324, 640, 80, 10),
+      pdfItem("Google Research", 72, 626, 88, 9),
+      pdfItem("University of Toronto", 198, 626, 110, 9),
+      pdfItem("Google Brain", 324, 626, 72, 9),
+      pdfItem("llion@google.com", 72, 612, 90, 8),
+      pdfItem("aidan@cs.toronto.edu", 198, 612, 110, 8),
+      pdfItem("lukaszkaiser@google.com", 324, 612, 120, 8),
+      pdfItem("Illia Polosukhin", 72, 590, 90, 10),
+      pdfItem("illia.polosukhin@gmail.com", 72, 576, 140, 8),
+      pdfItem("Abstract", 72, 548, 70, 12, { fontName: "Helvetica-Bold" }),
+      pdfItem("The dominant sequence transduction models are based on complex recurrent networks.", 72, 528, 420, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 1
+  });
+  assert.equal(authorNames(aligned).length, 8);
+  assert.deepEqual(authorNames(aligned), [
+    "Ashish Vaswani",
+    "Noam Shazeer",
+    "Niki Parmar",
+    "Jakob Uszkoreit",
+    "Llion Jones",
+    "Aidan N. Gomez",
+    "Lukasz Kaiser",
+    "Illia Polosukhin"
+  ]);
+  const ashish = aligned.blocks.find((block) => block.authorCell?.name === "Ashish Vaswani");
+  assert.equal(ashish.authorCell.affiliation, "Google Brain");
+  assert.equal(ashish.authorCell.email, "avaswani@google.com");
+  assert.equal(/Llion|Jones/.test(ashish.authorCell.affiliation), false);
+  const aidan = aligned.blocks.find((block) => block.authorCell?.name === "Aidan N. Gomez");
+  assert.equal(aidan.authorCell.affiliation, "University of Toronto");
+  assert.equal(aidan.authorCell.email, "aidan@cs.toronto.edu");
+
+  const offset = textLayerToBlocks({
+    items: [
+      pdfItem("Attention Is All You Need", 96, 730, 420, 20),
+      pdfItem("Ashish Vaswani", 72, 690, 90, 10),
+      pdfItem("Noam Shazeer", 198, 690, 86, 10),
+      pdfItem("Niki Parmar", 324, 690, 78, 10),
+      pdfItem("Jakob Uszkoreit", 450, 690, 96, 10),
+      pdfItem("Google Brain", 72, 676, 72, 9),
+      pdfItem("Google Brain", 198, 676, 72, 9),
+      pdfItem("Google Research", 324, 676, 88, 9),
+      pdfItem("Google Research", 450, 676, 88, 9),
+      pdfItem("avaswani@google.com", 72, 662, 100, 8),
+      pdfItem("noam@google.com", 198, 662, 90, 8),
+      pdfItem("nikip@google.com", 324, 662, 90, 8),
+      pdfItem("usz@google.com", 450, 662, 80, 8),
+      pdfItem("Llion Jones", 130, 640, 70, 10),
+      pdfItem("Aidan N. Gomez", 250, 640, 100, 10),
+      pdfItem("Lukasz Kaiser", 400, 640, 90, 10),
+      pdfItem("Illia Polosukhin", 270, 590, 100, 10),
+      pdfItem("Abstract", 72, 548, 70, 12, { fontName: "Helvetica-Bold" }),
+      pdfItem("The dominant sequence transduction models are based on complex recurrent networks.", 72, 528, 420, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 1
+  });
+  assert.deepEqual(authorNames(offset), [
+    "Ashish Vaswani",
+    "Noam Shazeer",
+    "Niki Parmar",
+    "Jakob Uszkoreit",
+    "Llion Jones",
+    "Aidan N. Gomez",
+    "Lukasz Kaiser",
+    "Illia Polosukhin"
+  ]);
+  const niki = offset.blocks.find((block) => block.authorCell?.name === "Niki Parmar");
+  assert.equal(/Kaiser|Polosukhin|Llion|Aidan/.test(`${niki.authorCell.affiliation || ""} ${niki.authorCell.email || ""}`), false);
+
+  const host = { children: [], append(...kids) { host.children.push(...kids); }, ownerDocument: null };
+  function create(tag) {
+    const node = {
+      tag, className: "", textContent: "", children: [], attrs: {},
+      setAttribute(name, value) { node.attrs[name] = String(value); },
+      append(...kids) { node.children.push(...kids); }
+    };
+    node.ownerDocument = { createElement: create };
+    return node;
+  }
+  host.ownerDocument = { createElement: create };
+  renderAuthorGrid(host, aligned.blocks.filter((block) => block.authorCell).map((block) => block.authorCell));
+  assert.equal(host.children[0].attrs["data-wrap"], "4|3|1");
+  assert.equal(host.children[0].children.map((row) => row.children.length).join("|"), "4|3|1");
+});
+
+function authorNames(page) {
+  return page.blocks.filter((block) => block.authorCell?.name).map((block) => block.authorCell.name);
+}
 
 test("a single full-width author band stays one flat byline", () => {
   const page = textLayerToBlocks({
