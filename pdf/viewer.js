@@ -68,6 +68,13 @@ import {
   readSoftPageFollow
 } from "../lib/pdf-scroll.js";
 import {
+  PDF_PAPER_GUTTER_X,
+  pagesInTranslateScope,
+  paperAvailWidth,
+  paperCssPx,
+  readoutPaperSize
+} from "../lib/pdf-paper.js";
+import {
   PDF_READOUT_COPY,
   extractReadoutBlocks,
   mergeReadoutTranslations,
@@ -181,7 +188,8 @@ function init() {
   });
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
-  $("readout")?.addEventListener("click", onReadoutBlockClick);
+  $("paperStack")?.addEventListener("click", onReadoutBlockClick);
+  bindPaperMetrics();
   bindPaneScroll();
   bindPdfScrollSettings();
   $("translatePage").addEventListener("click", () => startTranslate());
@@ -321,6 +329,7 @@ function applySplit(workspace, clientX) {
   workspace.style.gridTemplateColumns = `${pct}% ${100 - pct}%`;
   syncZoomChip();
   syncMirrorZoomChip();
+  applyPaperMetrics();
 }
 
 function initZoomChip() {
@@ -733,7 +742,8 @@ function setPageLayout(page, layout) {
   layoutCache.set(layoutKey(page), layout);
 }
 
-function appendReadoutNode(input, parent = $("readout")) {
+function appendReadoutNode(input, parent) {
+  if (!parent) return null;
   const spec = articleNodeSpec(input);
   const node = document.createElement(spec.tag);
   node.className = spec.className;
@@ -999,8 +1009,83 @@ function syncReadoutEmpty(hasArticle) {
   $("pendingRead").hidden = copy !== PDF_COPY.translatingWait;
 }
 
+function paperStackEl() {
+  return $("paperStack");
+}
+
+function scopeShowsPage(page) {
+  return pagesInTranslateScope([{ page }], currentScope(), pageNum).length > 0;
+}
+
+/** CSS box of `#pages .pdf-page` (viewport = MediaBox/CropBox × left zoom). Not canvas bitmap pixels. */
+function leftPageBox(page) {
+  const el = document.querySelector(`#pages .pdf-page[data-page="${page}"]`);
+  if (!el) return null;
+  const styled = parseFloat(el.style.width);
+  const parts = String(el.style.aspectRatio || "").split("/").map((part) => parseFloat(part.trim()));
+  if (styled > 0 && parts[0] > 0 && parts[1] > 0) {
+    return { width: styled, height: styled * (parts[1] / parts[0]) };
+  }
+  if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+    return { width: el.offsetWidth, height: el.offsetHeight };
+  }
+  return null;
+}
+
+function applyPaperMetrics() {
+  const stack = paperStackEl();
+  const scroll = translateScrollRoot();
+  if (!stack || !scroll) return;
+  const avail = paperAvailWidth(scroll.clientWidth, PDF_PAPER_GUTTER_X);
+  stack.querySelectorAll(".readout-paper").forEach((paper) => {
+    const left = leftPageBox(paper.dataset.page);
+    if (!left) return;
+    const size = readoutPaperSize({
+      leftWidth: left.width,
+      leftHeight: left.height,
+      availWidth: avail
+    });
+    if (!(size.width > 0)) return;
+    paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
+    paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
+  });
+}
+
+function bindPaperMetrics() {
+  const watch = () => applyPaperMetrics();
+  if (typeof ResizeObserver === "function") {
+    const observer = new ResizeObserver(watch);
+    const scroll = translateScrollRoot();
+    const pages = $("pages");
+    if (scroll) observer.observe(scroll);
+    if (pages) observer.observe(pages);
+  }
+  window.addEventListener("resize", watch);
+}
+
+function ensurePaper(page) {
+  const stack = paperStackEl();
+  if (!stack || page == null || page === "") return null;
+  const key = String(page);
+  let paper = stack.querySelector(`.readout-paper[data-page="${key}"]`);
+  if (!paper) {
+    paper = document.createElement("article");
+    paper.className = "readout-paper";
+    paper.dataset.page = key;
+    const type = document.createElement("div");
+    type.className = "readout-type";
+    const readout = document.createElement("div");
+    readout.className = "readout md-readout";
+    type.append(readout);
+    paper.append(type);
+    stack.append(paper);
+  }
+  return paper.querySelector(".readout");
+}
+
 function renderStoredArticle(blocks) {
-  const flowRoot = $("readout");
+  const flowRoot = ensurePaper(1);
+  if (!flowRoot) return;
   flowRoot.replaceChildren();
   const source = getPageLayout(1)?.blocks || [];
   const bylines = source.filter((block) => block.presentation === "byline");
@@ -1041,38 +1126,48 @@ function renderStoredArticle(blocks) {
 function renderArticle() {
   const pane = translateScrollRoot();
   const keep = pane ? pane.scrollTop : 0;
-  const flowRoot = $("readout");
+  const stack = paperStackEl();
   if ($("mirrorPages")) $("mirrorPages").replaceChildren();
-  if (libraryArticle?.length) {
+  if (stack) stack.replaceChildren();
+  if (libraryArticle?.length && scopeShowsPage(1)) {
     renderStoredArticle(libraryArticle);
     applyViewMode();
     syncReadoutEmpty(true);
+    applyPaperMetrics();
     if (pane) pane.scrollTop = keep;
     return;
   }
-  flowRoot.replaceChildren();
-  const pages = collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0);
+  const pages = pagesInTranslateScope(
+    collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0),
+    currentScope(),
+    pageNum
+  );
   applyViewMode();
   const blockPages = [];
   const total = pdfDoc?.numPages || 0;
   for (let n = 1; n <= total; n += 1) {
     const layout = getPageLayout(n);
-    if (showsBlockReadout(layout)) blockPages.push(layout);
+    if (showsBlockReadout(layout) && scopeShowsPage(n)) blockPages.push(layout);
   }
   if (!pages.length && !blockPages.length) {
     syncReadoutEmpty(false);
     updateTranslateControls();
     return;
   }
-  syncReadoutEmpty(true);
   if (blockPages.length) {
-    blockPages.forEach((layout) => appendFixtureReadout(flowRoot, layoutForReadout(layout)));
+    blockPages.forEach((layout) => {
+      const flow = ensurePaper(layout.page);
+      if (flow) appendFixtureReadout(flow, layoutForReadout(layout));
+    });
   }
   pages.forEach(({ page, blocks }) => {
     if (blockPages.some((layout) => layout.page === page)) return;
-    const flow = readoutFlowForPage(getPageLayout(page), blocks);
+    const flow = readoutFlowForPage(getPageLayout(page), blocks)
+      .filter((item) => item?.translation || item?.latex);
+    if (!flow.length) return;
+    const flowRoot = ensurePaper(page);
+    if (!flowRoot) return;
     flow.forEach((item) => {
-      if (!item?.translation && !item?.latex) return;
       appendReadoutNode(
         {
           translation: item.translation,
@@ -1087,6 +1182,16 @@ function renderArticle() {
       );
     });
   });
+  stack?.querySelectorAll(".readout-paper").forEach((paper) => {
+    if (!paper.querySelector(".readout")?.childNodes.length) paper.remove();
+  });
+  if (!stack?.querySelector(".readout-paper")) {
+    syncReadoutEmpty(false);
+    updateTranslateControls();
+    return;
+  }
+  syncReadoutEmpty(true);
+  applyPaperMetrics();
   if (pane) pane.scrollTop = keep;
   updateTranslateControls();
 }
@@ -1094,7 +1199,6 @@ function renderArticle() {
 function applyViewMode() {
   viewMode = "readout";
   if ($("mirrorPages")) $("mirrorPages").hidden = true;
-  if ($("readout")) $("readout").hidden = false;
   if ($("viewSeg")) $("viewSeg").hidden = true;
   if ($("mirrorHint")) $("mirrorHint").hidden = true;
 }
@@ -1106,7 +1210,7 @@ function onViewSegClick(event) {
 }
 
 function currentReadoutNodes() {
-  return collectReadoutExportNodes($("readout"));
+  return collectReadoutExportNodes(paperStackEl());
 }
 
 function syncExportControls() {
@@ -1159,7 +1263,7 @@ function onTranslateScroll() {
       if (generation !== followGeneration || syncOwner.owner !== "readout") return;
       const pane = translateScrollRoot();
       if (!pane) return;
-      const rects = [...pane.querySelectorAll("[data-page]")].map((el) => {
+      const rects = [...pane.querySelectorAll(".readout-paper[data-page]")].map((el) => {
         const box = el.getBoundingClientRect();
         return { page: Number(el.dataset.page), top: box.top, bottom: box.bottom };
       });
@@ -1214,7 +1318,7 @@ function syncPdfToPage(page) {
 
 function syncReadoutToPage(page) {
   const pane = translateScrollRoot();
-  const node = $("readout")?.querySelector(readoutPageSelector(page));
+  const node = paperStackEl()?.querySelector(`.readout-paper${readoutPageSelector(page)}`);
   return writeAnchorScroll(pane, node);
 }
 
@@ -1261,6 +1365,9 @@ function setTranslateScope(value) {
   document.querySelectorAll(".scope-seg-btn").forEach((btn) => {
     btn.classList.toggle("is-on", btn.dataset.scope === scope);
   });
+  renderArticle();
+  const pane = translateScrollRoot();
+  if (pane) pane.scrollTop = 0;
   updateTranslateControls();
 }
 
@@ -1851,6 +1958,7 @@ async function buildPages() {
       renderTask: null
     });
   }
+  applyPaperMetrics();
 }
 
 async function layoutPages() {
@@ -1944,6 +2052,11 @@ function syncVisiblePage() {
     pageNum = current;
     updatePager();
     loadCurrentPageText();
+    if (currentScope() !== "all") {
+      renderArticle();
+      const readout = translateScrollRoot();
+      if (readout) readout.scrollTop = 0;
+    }
     if (plan.align && plan.behavior === PANE_SYNC_BEHAVIOR) syncReadoutToPage(current);
   }
   scheduleVisibleRenders();
@@ -1960,6 +2073,11 @@ async function goPage(dir) {
   view?.wrap.scrollIntoView({ block: "start", behavior: PANE_SYNC_BEHAVIOR });
   updatePager();
   loadCurrentPageText();
+  if (currentScope() !== "all") {
+    renderArticle();
+    const readout = translateScrollRoot();
+    if (readout) readout.scrollTop = 0;
+  }
   const plan = planPaneFollow({
     softPageFollow,
     owner: syncOwner.owner,
@@ -1982,7 +2100,13 @@ function applyMirrorZoom() {
   const root = $("translateScroll");
   if (root) root.style.setProperty("--oi-mirror-zoom", scale);
   if ($("mirrorPages")) $("mirrorPages").style.setProperty("--oi-mirror-zoom", scale);
-  if ($("readout")) $("readout").style.setProperty("--oi-mirror-zoom", scale);
+  const stack = paperStackEl();
+  if (stack) {
+    stack.style.setProperty("--oi-mirror-zoom", scale);
+    stack.querySelectorAll(".readout").forEach((readout) => {
+      readout.style.setProperty("--oi-mirror-zoom", "1");
+    });
+  }
   if ($("mirrorZoomLabel")) $("mirrorZoomLabel").textContent = zoomLabel(mirrorZoom);
   syncMirrorZoomButtons();
 }
@@ -2004,6 +2128,7 @@ async function setZoom(next) {
   zoom = scale;
   $("zoomLabel").textContent = zoomLabel(zoom);
   await layoutPages();
+  applyPaperMetrics();
   await scheduleVisibleRenders();
   syncZoomChip();
   syncZoomButtons();

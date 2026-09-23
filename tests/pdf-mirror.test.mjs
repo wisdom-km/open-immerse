@@ -426,11 +426,11 @@ test("viewer defaults to Markdown readout and does not wire bbox mirror pages", 
   assert.match(src, /textLayerToBlocks/);
   assert.match(src, /cropBlockImage/);
   assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"[^>]*hidden/);
-  assert.match(html, /id="readout"[^>]*class="readout md-readout"/);
+  assert.match(html, /id="paperStack"[^>]*class="paper-stack"/);
   assert.equal(html.includes('class="readout mirror-pages"'), false);
   const workspaceHtml = html.slice(html.indexOf('class="pane-translate"'), html.indexOf("split-handle"));
   assert.ok(workspaceHtml.indexOf('id="viewSeg"') < workspaceHtml.indexOf('id="mirrorPages"'));
-  assert.ok(workspaceHtml.indexOf('id="mirrorPages"') < workspaceHtml.indexOf('id="readout"'));
+  assert.ok(workspaceHtml.indexOf('id="mirrorPages"') < workspaceHtml.indexOf('id="paperStack"'));
   const toolbar = html.slice(html.indexOf('class="toolbar"'), html.indexOf('class="workspace"'));
   assert.equal(toolbar.includes("通读"), false);
   assert.equal(toolbar.includes("版式"), false);
