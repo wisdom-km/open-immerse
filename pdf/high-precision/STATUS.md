@@ -4,7 +4,7 @@
 
 ## 2026-09-23 公式呈现（本轮）
 
-内容仍以打开的 PDF 笔画为准。本轮只改呈现：行内公式嵌进句子，独占公式按论文居中，裁框按字形并集收紧，不再用固定整行外扩去吃相邻行或图注。计划、行内/独占分界和右栏节奏见 `FORMULA-ELEGANCE.md`。右栏公式、图、表的 DOM 与间距以 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md) 为准（挂在 `PDF-MD-READOUT.md`）：默认原页裁图，可靠 LaTeX 才可选 KaTeX，不确定就不编 TeX。第 5 页矩阵句的中文译文不在本轮。
+内容仍以打开的 PDF 笔画为准。本轮只改呈现：行内公式嵌进句子，独占公式按论文居中，裁框按字形并集收紧，不再用固定整行外扩去吃相邻行或图注。计划、行内/独占分界和右栏节奏见 `FORMULA-ELEGANCE.md`。右栏公式、图、表的 DOM 与间距以 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md) 为准，与 `open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md` 是同一份，并由同目录的 `PDF-MD-READOUT.md` 挂接。默认原页裁图，可靠 LaTeX 才可选 KaTeX，不确定就不编 TeX。第 5 页矩阵句的中文译文不在本轮。
 
 ## 2026-09-23 文字层主路径（上一轮）
 

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
-import { CROP_SCALE } from "../lib/pdf-blocks.js";
+import { CROP_SCALE, blockReadoutPlan, blockRenderPieces } from "../lib/pdf-blocks.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const fixture = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
@@ -95,6 +95,34 @@ test("Attention text fragments have one source owner and complete visual boundar
     assert.match(optimizer.sourceText, /ϵ = 10−9/);
     assert.equal(optimizer.placeholders.length, 3);
     assert.doesNotMatch(optimizer.text, /⟦f\d+⟧−9/, "the exponent stays inside the inline crop");
+    const p7 = pages.get(7);
+    const inlineCrops = optimizer.placeholders.map((entry) =>
+      p7.page.blocks.find((block) => block.id === entry.blockId));
+    assert.equal(inlineCrops.every((block) => block?.inlineOf === optimizer.id && block.display === false), true);
+    const centersIn = (bbox) => p7.content.items.filter((item) => {
+      const text = String(item.str || "").trim();
+      if (!text) return false;
+      const x = item.transform[4] + (Number(item.width) || 0) / 2;
+      const y = item.transform[5] + (Number(item.height) || 0) / 2;
+      const rect = p7.viewport.convertToViewportRectangle([x, y, x, y]);
+      const nx = rect[0] / p7.viewport.width;
+      const ny = Math.min(rect[1], rect[3]) / p7.viewport.height;
+      return nx >= bbox[0] && nx <= bbox[2] && ny >= bbox[1] && ny <= bbox[3];
+    }).map((item) => item.str).join("");
+    for (const crop of inlineCrops) {
+      const width = (crop.bbox[2] - crop.bbox[0]) * p7.viewport.width;
+      assert.ok(width < 80, `Adam inline crop stays in the sentence (${width.toFixed(1)}pt)`);
+      assert.doesNotMatch(centersIn(crop.bbox), /rate over the course|according to the formula|lrate/);
+    }
+    const lrate = p7.page.blocks.find((block) =>
+      block.label === "formula" && !block.inlineOf && centersIn(block.bbox).includes("lrate"));
+    assert.ok(lrate);
+    assert.doesNotMatch(centersIn(lrate.bbox), /Adam|according to the formula/);
+    const pieces = blockRenderPieces(optimizer, p7.page.blocks);
+    assert.equal(pieces.filter((piece) => piece.type === "image").length, 3);
+    assert.equal(pieces.some((piece) => piece.blockId === lrate.id), false);
+    assert.equal(blockReadoutPlan(lrate).className, "oi-pdf-display-math");
+    assert.equal(blockReadoutPlan(inlineCrops[0]).className, "oi-pdf-inline-math");
     for (const number of [4, 5, 6, 7]) {
       const view = pages.get(number).viewport;
       const displays = pages.get(number).page.blocks.filter((block) =>

@@ -318,6 +318,15 @@ test("content-aware pad stops at a figure and the next line", () => {
   assert.ok(box[0] <= glyph[0] && box[2] >= glyph[2] && box[1] <= glyph[1] && box[3] >= glyph[3]);
 });
 
+test("a hairline font-box overlap does not pad into the next line", () => {
+  const glyph = [0.4, 0.7, 0.48, 0.742];
+  const next = [0.16, 0.74, 0.55, 0.756];
+  const box = contentAwareFormulaBbox(glyph, { x: 0.02, y: 0.02 }, [next]);
+  assert.ok(box[3] <= glyph[3] + 1e-6);
+  assert.ok(box[3] < (next[1] + next[3]) / 2);
+  assert.ok(box[0] <= glyph[0] && box[2] >= glyph[2] && box[1] <= glyph[1]);
+});
+
 test("a display formula does not swallow the figure caption above it", () => {
   const page = textLayerToBlocks({
     items: [
