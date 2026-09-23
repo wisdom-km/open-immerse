@@ -20,6 +20,8 @@
 
 期望 Anvil（这里不记通过）：D1/D2 墨迹高 / 右栏 bodyFs ≥ 1.8，目标落在 2.5–3.5；I1 行内裁图约 1.22em，盒高不超过约 1.45em；公式仍在纸壳上，没有浮起芯片或阴影；KaTeX 为 0，softmax 不含 Fig.2；Soft Graphite、#54、#59 不回退。
 
+无 Attention PDF 时 `node --test tests/*.test.mjs`：394 通过、0 失败、1 跳过。跳过的仍是仓库里没有该 PDF 时的大样本测试。
+
 ## 2026-09-23 公式裁框略松（pdf-formula-crop-relax）
 
 #60 的字形边和纸白收边过紧，本机上公式裁图相对原式偏小。本轮只把 pad 和墨迹白边放回中间带。不改 Soft Graphite、镜像、滚轮、参考文献软状态文案、KaTeX、pageRaster 倍率、第 5 页矩阵句译文，也不改右栏公式节奏。Anvil 的 R1–R5 仍要在本机 Chrome 看 Attention，这里不记通过。
