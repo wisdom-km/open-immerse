@@ -43,14 +43,24 @@ test("redraw copies formula glyphs and falls back when drawing throws", () => {
 
 test("viewer keeps the page raster crop when glyph redraw is unavailable", () => {
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const blocks = readFileSync(join(root, "lib/pdf-blocks.js"), "utf8");
   assert.match(viewer, /redrawFormulaGlyphs/);
   assert.match(viewer, /if \(drawn\) return drawn/);
   assert.match(viewer, /return cropBlockImage/);
-  assert.match(viewer, /oi-formula-inline/);
+  assert.match(viewer, /oi-pdf-inline-math/);
+  assert.match(viewer, /oi-pdf-math-crop/);
+  assert.match(viewer, /oi-pdf-caption/);
+  assert.match(blocks, /oi-pdf-display-math/);
+  assert.match(blocks, /oi-pdf-figure/);
+  assert.match(blocks, /oi-pdf-asset-crop/);
   const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
-  assert.match(css, /img\.oi-formula-inline\s*\{[^}]*display:\s*inline-block/s);
-  assert.match(css, /img\.oi-formula-inline\s*\{[^}]*box-shadow:\s*none/s);
-  assert.match(css, /\[data-role="formula"\]\s*\{[^}]*box-shadow:\s*none/s);
-  assert.match(css, /\[data-role="formula"\] img\s*\{[^}]*max-height:\s*3em/s);
-  assert.doesNotMatch(css, /\[data-role="formula"\]\s*\{[^}]*margin:\s*16px 0/s);
+  assert.match(css, /\.oi-pdf-inline-math\s*\{[^}]*display:\s*inline-block/s);
+  assert.match(css, /\.oi-pdf-inline-math\s*\{[^}]*max-height:\s*1\.35em/s);
+  assert.match(css, /\.oi-pdf-inline-math \.oi-pdf-math-crop\s*\{[^}]*height:\s*1\.15em/s);
+  assert.match(css, /\.oi-pdf-inline-math \.oi-pdf-math-crop\s*\{[^}]*box-shadow:\s*none/s);
+  assert.match(css, /\.oi-pdf-display-math\s*\{[^}]*margin:\s*12px 0 16px/s);
+  assert.match(css, /\.oi-pdf-display-math\s*\{[^}]*box-shadow:\s*none/s);
+  assert.match(css, /\.oi-pdf-figure\s*\{[^}]*box-shadow:\s*none/s);
+  assert.doesNotMatch(css, /\.oi-pdf-display-math\s*\{[^}]*box-shadow:\s*var\(--oi-shadow/s);
+  assert.doesNotMatch(css, /oi-formula-inline/);
 });

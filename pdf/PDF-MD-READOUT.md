@@ -9,7 +9,7 @@
 | --- | --- |
 | 左栏 | **现有** pdf.js PDF 渲染（不改网页）。译文不进入左栏 |
 | 右栏 | **`.readout` Markdown 通读**（连续滚动）。右栏使用原页裁图：译文段落，加上公式、图、表的原页画面 |
-| 公式 / 图 / 表 | 跟打开的 PDF 同一套内容。默认用 pageRaster 裁图。其他手段须过同一条验收 |
+| 公式 / 图 / 表 | 跟打开的 PDF 同一套内容。默认用 pageRaster 裁图。其他手段须过同一条验收。右栏块级/行内排版以 [`PDF-MD-FORMULA-LAYOUT.md`](./PDF-MD-FORMULA-LAYOUT.md) 为准 |
 | 停 | 把译文贴进左栏原文框（**#40 closed**）。Issue #40 保持关闭。禁止再开 bbox 镜像 |
 | 网页 | **仍主路径**；本单 **勿回归** 网页 content/Options |
 | 藏入口 | **本轨不做**（`PDF-ENTRY-SECONDARY` 本轨作废） |

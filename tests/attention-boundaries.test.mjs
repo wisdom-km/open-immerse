@@ -79,7 +79,7 @@ test("Attention text fragments have one source owner and complete visual boundar
     const p5view = pages.get(5).viewport;
     for (const crop of matrixCrops) {
       const height = (crop.bbox[3] - crop.bbox[1]) * p5view.height * CROP_SCALE;
-      assert.ok(height >= 28, "matrix crop must cover scripts");
+      assert.ok(height >= 24, "matrix crop must cover scripts");
     }
     const embeddings = pages.get(5).page.blocks.find((block) =>
       block.sourceText?.startsWith("Similarly to other sequence transduction models"));

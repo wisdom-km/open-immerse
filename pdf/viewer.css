@@ -260,16 +260,47 @@ h1 {
   max-width: 100%;
   height: auto;
 }
-.pane-translate .readout.md-readout img.oi-formula-inline {
-  display: inline-block;
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 1.9em;
-  margin: 0 0.12em;
-  vertical-align: -0.42em;
-  border: 0;
+.oi-pdf-display-math {
+  display: block;
+  margin: 12px 0 16px;
+  padding: 0;
+  text-align: center;
+  background: transparent;
+  border: none;
   box-shadow: none;
+}
+.oi-pdf-p:has(+ .oi-pdf-display-math),
+.oi-pdf-p:has(+ .oi-pdf-figure) {
+  margin-bottom: 0;
+}
+.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop,
+.pane-translate .readout.md-readout .oi-pdf-display-math .katex-display {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+  border-radius: 2px;
+  border: 1px solid var(--oi-line);
+  box-shadow: none;
+}
+.oi-pdf-inline-math {
+  display: inline-block;
+  vertical-align: baseline;
+  margin: 0 1px;
+  padding: 0;
+  line-height: 1;
+  max-height: 1.35em;
+}
+.pane-translate .readout.md-readout .oi-pdf-inline-math .oi-pdf-math-crop {
+  display: block;
+  height: 1.15em;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: left center;
+  border: none;
+  box-shadow: none;
+  border-radius: 1px;
   background: #fff;
 }
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
@@ -287,28 +318,31 @@ h1 {
   text-align: center;
   padding: 12px 0;
 }
-.pane-translate .readout .oi-pdf-p[data-role="formula"] {
-  text-align: center;
-  margin: 0.28em 0 0.42em;
+.oi-pdf-figure {
+  display: block;
+  margin: 16px 0 12px;
   padding: 0;
+  text-align: center;
+  border: none;
+  box-shadow: none;
   background: transparent;
-  border: 0;
-  box-shadow: none;
-  overflow: visible;
 }
-.oi-pdf-p + .oi-pdf-p[data-role="formula"] {
-  margin-top: 0;
-}
-.pane-translate .readout.md-readout .oi-pdf-p[data-role="formula"] img {
-  display: inline-block;
-  width: auto;
-  height: auto;
+.pane-translate .readout.md-readout .oi-pdf-figure .oi-pdf-asset-crop {
+  display: block;
   max-width: 100%;
-  max-height: 3em;
-  vertical-align: middle;
-  border: 0;
+  height: auto;
+  margin: 0 auto;
+  border-radius: 2px;
+  border: 1px solid var(--oi-line);
   box-shadow: none;
-  background: #fff;
+}
+.oi-pdf-caption {
+  margin: 6px 0 0;
+  font: 400 13px/1.45 var(--oi-font);
+  color: var(--oi-text-muted);
+}
+.oi-pdf-figure > .oi-pdf-caption:first-child {
+  margin: 0 0 6px;
 }
 .pane-translate .readout.is-mirror {
   max-width: none;

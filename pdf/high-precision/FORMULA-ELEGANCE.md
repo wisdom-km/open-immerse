@@ -8,8 +8,8 @@
 
 | 种类 | 怎么认 | 右栏 |
 | --- | --- | --- |
-| 独占 | 居中或缩进的整行公式，或带 `(n)` 的公式行。块上 `display: true`，没有 `inlineOf` | 单独一块，居中，无边框、无阴影 |
-| 行内 | 句子里的关系式。块上 `display: false`，`inlineOf` 指向宿主句 | 裁图用 `img.oi-formula-inline` 嵌在基线附近，不单独成卡片 |
+| 独占 | 居中或缩进的整行公式，或带 `(n)` 的公式行。块上 `display: true`，没有 `inlineOf` | `figure.oi-pdf-display-math`，内嵌 `img.oi-pdf-math-crop`，居中，无卡片、无阴影、无厚框 |
+| 行内 | 句子里的关系式。块上 `display: false`，`inlineOf` 指向宿主句 | 同一段里的 `span.oi-pdf-inline-math` > `img.oi-pdf-math-crop`，基线对齐，禁止整行糊裁 |
 
 左缘、又短、又没有公式编号的折行（例如句末换行后的 `d_ff = 2048`）继续留在这一句里，不升成居中大图。页面上单独出现、前面没有正文的公式行仍是独占。
 
@@ -31,7 +31,11 @@
 
 ## 右栏节奏
 
-正文段距收紧到约 `0.7em`。独占公式上下距约 `0.28em` / `0.42em`，图片最高约 `3em`，白底、无阴影。行内公式最高约 `1.9em`，`inline-block`，不再被 `img { display: block }` 撑成整行卡片。
+DOM 与间距以 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md) 为准。正文段距约 `0.7em`；紧挨公式或图的段落下边距不与块上边距再叠一层。
+
+- 独占公式：`margin: 12px 0 16px`，图 `max-width: 100%`、`height: auto`，水平居中。白边目标约 6 CSS px 以内，不为了留白去盖邻行。
+- 行内公式：`max-height: 1.35em`，裁图高 `1.15em`（15px 正文上大约 15–19px 墨迹），左右 `margin: 0 1px`。裁切失败时在段内写「（公式见左栏）」。
+- 图 / 表：`figure.oi-pdf-figure` + `img.oi-pdf-asset-crop`，题注 `figcaption.oi-pdf-caption`（13px、`var(--oi-text-muted)`）。只使用已有 Soft Graphite token，不改 `ui/tokens.css`。
 
 ## 本轮不改
 

@@ -771,10 +771,27 @@ function cropImage(block) {
   return img;
 }
 
-function appendCropOrNotice(node, block) {
+function appendCropOrNotice(node, block, imageClass) {
   const img = cropImage(block);
-  if (img) node.append(img);
-  else node.textContent = `（${visualAlt(block.label)}裁图失败，请查看左栏原页）`;
+  if (img) {
+    img.className = imageClass || "oi-pdf-math-crop";
+    node.append(img);
+    return;
+  }
+  const notice = block.label === "formula"
+    ? PDF_COPY.formulaFallback
+    : `（${visualAlt(block.label)}裁图失败，请查看左栏原页）`;
+  node.append(document.createTextNode(notice));
+}
+
+function captionNode(block, page, layout) {
+  const node = document.createElement("figcaption");
+  node.className = "oi-pdf-caption";
+  node.dataset.page = String(page);
+  node.dataset.blockId = String(block.id || "");
+  node.dataset.label = "caption";
+  fillBlockText(node, block, layout);
+  return node;
 }
 
 function fillBlockText(node, block, layout) {
@@ -799,11 +816,18 @@ function fillBlockText(node, block, layout) {
     }
     const formula = (layout.blocks || []).find((item) => item.id === piece.blockId);
     const img = cropImage({ ...(formula || {}), imageUrl: piece.src || formula?.imageUrl || "", label: "formula" });
-    if (img) {
-      img.className = "oi-formula-inline";
-      node.append(img);
+    const span = document.createElement("span");
+    span.className = "oi-pdf-inline-math";
+    if (formula?.id) {
+      span.dataset.blockId = String(formula.id);
+      span.dataset.label = "formula";
+      if (node.dataset.page) span.dataset.page = node.dataset.page;
     }
-    else node.append(document.createTextNode("（公式裁图失败，请查看左栏原页）"));
+    if (img) {
+      img.className = "oi-pdf-math-crop";
+      span.append(img);
+    } else span.textContent = PDF_COPY.formulaFallback;
+    node.append(span);
   });
 }
 
@@ -840,8 +864,28 @@ function appendFixtureReadout(parent, layout) {
     note.textContent = OCR_PAGE_HINT;
     parent.append(note);
   }
+  const used = new Set();
   for (const block of blocks) {
-    if (block.inlineOf) continue;
+    if (block.inlineOf || used.has(block.id)) continue;
+    const paired = block.label === "caption" ? blocks.find((item) => item.id === block.captionFor) : null;
+    const visual = (block.label === "figure" || block.label === "table") ? block : paired;
+    if (visual && (block.label === "figure" || block.label === "table" || block.label === "caption")) {
+      const caption = blocks.find((item) => item.captionFor === visual.id);
+      used.add(visual.id);
+      if (caption) used.add(caption.id);
+      const plan = blockReadoutPlan(visual);
+      const node = document.createElement(plan.tag);
+      node.className = plan.className;
+      node.dataset.page = String(page);
+      node.dataset.blockId = String(visual.id || "");
+      node.dataset.label = String(visual.label || "");
+      const capNode = caption ? captionNode(caption, page, layout) : null;
+      if (capNode && caption && blocks.indexOf(caption) < blocks.indexOf(visual)) node.append(capNode);
+      appendCropOrNotice(node, visual, plan.imageClass);
+      if (capNode && caption && blocks.indexOf(caption) > blocks.indexOf(visual)) node.append(capNode);
+      parent.append(node);
+      continue;
+    }
     if (block.label === "caption" && !hasFigure) {
       const slot = document.createElement("p");
       slot.className = "oi-pdf-p";
@@ -854,8 +898,7 @@ function appendFixtureReadout(parent, layout) {
     const node = document.createElement(plan.tag);
     node.className = plan.className;
     if (plan.role) node.dataset.role = plan.role;
-    if (plan.mathDisplay) node.dataset.mathDisplay = plan.mathDisplay;
-    if (plan.image) appendCropOrNotice(node, block);
+    if (plan.image) appendCropOrNotice(node, block, plan.imageClass);
     else fillBlockText(node, block, layout);
     if (block.translationStatus) node.dataset.translationStatus = block.translationStatus;
     node.dataset.page = String(page);
