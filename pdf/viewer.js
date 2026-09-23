@@ -59,6 +59,14 @@ import {
   zoomLabel
 } from "../lib/pdf-viewer.js";
 import {
+  PANE_SYNC_BEHAVIOR,
+  alignScrollTop,
+  createSyncOwner,
+  createWheelFlipGuard,
+  planPaneFollow,
+  readSoftPageFollow
+} from "../lib/pdf-scroll.js";
+import {
   PDF_READOUT_COPY,
   extractReadoutBlocks,
   mergeReadoutTranslations,
@@ -127,7 +135,10 @@ let session = createTranslateSession();
 let zoomChipCustom = false;
 let mirrorZoomChipCustom = false;
 let exporting = false;
-let syncLock = false;
+let softPageFollow = false;
+let followGeneration = 0;
+const syncOwner = createSyncOwner();
+const wheelFlip = createWheelFlipGuard();
 let translateScrollTick = 0;
 let viewMode = "readout";
 let mirrorZoom = DEFAULT_ZOOM;
@@ -168,14 +179,13 @@ function init() {
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
   $("readout")?.addEventListener("click", onReadoutBlockClick);
-  translateScrollRoot()?.addEventListener("scroll", onTranslateScroll, { passive: true });
+  bindPaneScroll();
+  bindPdfScrollSettings();
   $("translatePage").addEventListener("click", () => startTranslate());
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("restoreOriginal").addEventListener("click", restoreOriginal);
   $("exportMd").addEventListener("click", () => exportReadout("md"));
   $("exportPdf").addEventListener("click", () => exportReadout("pdf"));
-  pdfScrollRoot().addEventListener("scroll", onPdfScroll, { passive: true });
-  $("pdfPane").addEventListener("wheel", onPdfWheel, { passive: true });
   document.addEventListener("keydown", onKey);
   listenProgress();
 
@@ -226,6 +236,45 @@ function onKey(event) {
 
 function eventTargetIsField(target) {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+}
+
+function bindPaneScroll() {
+  const pdf = pdfScrollRoot();
+  const readout = translateScrollRoot();
+  pdf.addEventListener("scroll", onPdfScroll, { passive: true });
+  pdf.addEventListener("scrollend", onPdfScrollEnd, { passive: true });
+  pdf.addEventListener("pointerdown", () => takeDriver("pdf"), { passive: true });
+  $("pdfPane").addEventListener("wheel", onPdfWheel, { passive: true });
+  readout?.addEventListener("scroll", onTranslateScroll, { passive: true });
+  readout?.addEventListener("scrollend", onReadoutScrollEnd, { passive: true });
+  readout?.addEventListener("wheel", onReadoutWheel, { passive: true });
+  readout?.addEventListener("pointerdown", () => takeDriver("readout"), { passive: true });
+}
+
+function takeDriver(side) {
+  if (syncOwner.owner !== side) followGeneration += 1;
+  syncOwner.claim(side);
+}
+
+function bindPdfScrollSettings() {
+  loadPdfScrollPrefs();
+  try {
+    chrome.storage?.onChanged?.addListener((changes, area) => {
+      if (area !== "sync" || !changes?.settings) return;
+      softPageFollow = readSoftPageFollow(changes.settings.newValue);
+    });
+  } catch {
+    /* opened outside the extension */
+  }
+}
+
+async function loadPdfScrollPrefs() {
+  try {
+    const res = await runtimeSend({ type: "OI_GET_SETTINGS" });
+    softPageFollow = readSoftPageFollow(res?.settings);
+  } catch {
+    softPageFollow = false;
+  }
 }
 
 function pdfScrollRoot() {
@@ -916,7 +965,13 @@ function onReadoutBlockClick(event) {
   if (!node?.dataset?.blockId) return;
   const page = Number(node.dataset.page);
   const wrap = document.querySelector(`#pages .pdf-page[data-page="${page}"]`);
-  if (wrap) wrap.scrollIntoView({ block: "start" });
+  takeDriver("click");
+  if (pdfDoc && Number.isFinite(page) && page >= 1 && page !== pageNum) {
+    pageNum = page;
+    updatePager();
+    loadCurrentPageText();
+  }
+  if (wrap) wrap.scrollIntoView({ block: "start", behavior: PANE_SYNC_BEHAVIOR });
   const layout = getPageLayout(page);
   const block = (layout?.blocks || []).find((item) => item.id === node.dataset.blockId);
   paintSourceMark(wrap, block?.bbox);
@@ -1089,10 +1144,14 @@ async function exportReadout(kind) {
 }
 
 function onTranslateScroll() {
-  if (syncLock || !pdfDoc) return;
+  if (!pdfDoc) return;
+  if (syncOwner.ignores("readout")) return;
+  takeDriver("readout");
   if (translateScrollTick) return;
+  const generation = followGeneration;
   translateScrollTick = requestAnimationFrame(() => {
     translateScrollTick = 0;
+    if (generation !== followGeneration || syncOwner.owner !== "readout") return;
     const pane = translateScrollRoot();
     if (!pane) return;
     const rects = [...pane.querySelectorAll("[data-page]")].map((el) => {
@@ -1103,33 +1162,51 @@ function onTranslateScroll() {
     const paneRect = pane.getBoundingClientRect();
     const next = pageFromViewport(rects, paneRect.top, paneRect.bottom);
     if (next === pageNum) return;
+    const fromPage = pageNum;
+    const plan = planPaneFollow({
+      softPageFollow,
+      owner: syncOwner.owner,
+      driver: "readout",
+      fromPage,
+      toPage: next
+    });
+    if (!plan.align || plan.behavior !== PANE_SYNC_BEHAVIOR) return;
     pageNum = next;
     updatePager();
     loadCurrentPageText();
-    const view = pageViews[next - 1];
-    syncLock = true;
-    view?.wrap.scrollIntoView({ block: "start", behavior: "smooth" });
+    syncPdfToPage(next);
     scheduleVisibleRenders();
-    window.setTimeout(() => {
-      syncLock = false;
-    }, 360);
   });
 }
 
-function syncReadoutToPage(page) {
-  if (syncLock) return;
-  const pane = translateScrollRoot();
-  const root = $("readout");
-  const node = root?.querySelector(readoutPageSelector(page));
-  if (!pane || !node) return;
+function onReadoutScrollEnd() {
+  if (syncOwner.owner === "readout") syncOwner.release("readout");
+}
+
+function onReadoutWheel() {
+  takeDriver("readout");
+}
+
+function writeAnchorScroll(pane, node) {
+  if (!pane || !node) return false;
   const paneRect = pane.getBoundingClientRect();
   const nodeRect = node.getBoundingClientRect();
-  if (!shouldSyncReadout(nodeRect.top, paneRect.top)) return;
-  syncLock = true;
-  node.scrollIntoView({ block: "start", behavior: "smooth" });
-  window.setTimeout(() => {
-    syncLock = false;
-  }, 360);
+  if (!shouldSyncReadout(nodeRect.top, paneRect.top)) return false;
+  const top = alignScrollTop(pane, node);
+  if (!Number.isFinite(top)) return false;
+  pane.scrollTop = top;
+  return true;
+}
+
+function syncPdfToPage(page) {
+  const view = pageViews[page - 1];
+  return writeAnchorScroll(pdfScrollRoot(), view?.wrap || null);
+}
+
+function syncReadoutToPage(page) {
+  const pane = translateScrollRoot();
+  const node = $("readout")?.querySelector(readoutPageSelector(page));
+  return writeAnchorScroll(pane, node);
 }
 
 function runtimeSend(message) {
@@ -1792,31 +1869,59 @@ function measureVisible() {
 }
 
 function onPdfScroll() {
+  if (!pdfDoc) return;
+  if (syncOwner.ignores("pdf")) return;
+  takeDriver("pdf");
   if (scrollTick) return;
+  const generation = followGeneration;
   scrollTick = requestAnimationFrame(() => {
     scrollTick = 0;
+    if (generation !== followGeneration || syncOwner.owner !== "pdf") return;
     syncVisiblePage();
   });
 }
 
+function onPdfScrollEnd() {
+  if (syncOwner.owner === "pdf" || syncOwner.owner === "click") syncOwner.release(syncOwner.owner);
+}
+
 function onPdfWheel(event) {
   if (!pdfDoc) return;
+  takeDriver("pdf");
+  wheelFlip.beginGesture();
   const pane = pdfScrollRoot();
   const overflow = pane.scrollHeight - pane.clientHeight > 4;
   const atTop = pane.scrollTop <= 0;
   const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1;
-  const dir = wheelPageDelta({ deltaY: event.deltaY, atTop, atBottom, overflow });
-  if (dir) goPage(dir);
+  const dir = wheelPageDelta({
+    deltaY: event.deltaY,
+    deltaX: event.deltaX,
+    atTop,
+    atBottom,
+    overflow,
+    gestureLatched: wheelFlip.latched
+  });
+  if (!dir) return;
+  wheelFlip.consume();
+  goPage(dir);
 }
 
 function syncVisiblePage() {
   if (!pdfDoc || !pageViews.length) return;
   const current = measureVisible();
   if (current !== pageNum) {
+    const fromPage = pageNum;
+    const plan = planPaneFollow({
+      softPageFollow,
+      owner: syncOwner.owner,
+      driver: "pdf",
+      fromPage,
+      toPage: current
+    });
     pageNum = current;
     updatePager();
     loadCurrentPageText();
-    syncReadoutToPage(current);
+    if (plan.align && plan.behavior === PANE_SYNC_BEHAVIOR) syncReadoutToPage(current);
   }
   scheduleVisibleRenders();
 }
@@ -1825,12 +1930,21 @@ async function goPage(dir) {
   if (!pdfDoc) return;
   const next = pageIndex(pageNum, pdfDoc.numPages, dir);
   if (next === pageNum) return;
+  const fromPage = pageNum;
+  takeDriver("pdf");
   pageNum = next;
   const view = pageViews[next - 1];
-  view?.wrap.scrollIntoView({ block: "start", behavior: "smooth" });
+  view?.wrap.scrollIntoView({ block: "start", behavior: PANE_SYNC_BEHAVIOR });
   updatePager();
   loadCurrentPageText();
-  syncReadoutToPage(next);
+  const plan = planPaneFollow({
+    softPageFollow,
+    owner: syncOwner.owner,
+    driver: "pdf",
+    fromPage,
+    toPage: next
+  });
+  if (plan.align && plan.behavior === PANE_SYNC_BEHAVIOR) syncReadoutToPage(next);
   await scheduleVisibleRenders();
 }
 
@@ -1965,7 +2079,6 @@ async function loadCurrentPageText() {
         pageCache.set(docId, n, merged);
         if (!pdfTranslateBusy(session)) setStatus(savedPageStatus(saved, merged));
         renderArticle();
-        syncReadoutToPage(n);
         updateTranslateControls();
         return;
       }
@@ -1996,7 +2109,6 @@ async function loadCurrentPageText() {
       pageCache.set(docId, n, merged);
       setStatus(savedPageStatus(saved, merged));
       renderArticle();
-      syncReadoutToPage(n);
     }
   } catch {
     if (isStale()) return;
