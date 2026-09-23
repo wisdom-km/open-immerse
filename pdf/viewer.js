@@ -113,7 +113,7 @@ import {
   resolveLayoutMode,
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
-import { inlineCropBoxEm, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { inlineCropBoxEm, inlineLineTopEm, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import {
   applyStructureTranslations,
@@ -938,6 +938,7 @@ function fillBlockText(node, block, layout) {
     const span = document.createElement("span");
     span.className = "oi-pdf-inline-math";
     span.style.setProperty("--oi-pdf-inline-crop-em", `${inlineCropBoxEm(formula?.inkShare)}em`);
+    span.style.setProperty("--oi-pdf-inline-line-em", `${inlineLineTopEm(formula?.inkShare)}em`);
     if (formula?.id) {
       span.dataset.blockId = String(formula.id);
       span.dataset.label = "formula";

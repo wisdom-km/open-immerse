@@ -110,7 +110,7 @@
 | --- | --- |
 | 显示 | `inline-block`（或等价行内）；**禁止**把行内公式做成块级 `figure` / 整行 `img` |
 | 基线 | `vertical-align: baseline`；数学字形可光学微调 `-0.12em ~ 0`，禁止顶对齐大块 |
-| 高度 | 量测墨迹 **1.05～1.15 ×** 正文字号（硬门 ≥ **1.0×**）。盒高 = 目标墨迹 / inkShare（名义 **1.65em**）。旧盒 `1.22em`、行顶 `1.45em` 已撤：白边在盒内，不能只把 1.22 改成另一个数 |
+| 高度 | 量测墨迹 **1.25～1.35 ×** 正文字号（硬门 ≥ **1.0×**）。盒高 = 目标墨迹 / inkShare（名义 **1.95em**，允许 ~1.9～2.2em；墨迹进带后行顶 ~1.8～2.1em）。旧盒 `1.22em`、行顶 `1.45em` 已撤：白边在盒内，不能只把 1.22 改成另一个数 |
 | 缩放 | 裁切原图若过高 → **先紧裁再等比缩小** 落入上列；不得用放大白边撑开行距 |
 | 水平 | 左右内边距 ≤ **2px**（CSS）；与邻字间距跟正文，勿额外 `margin-inline: 8px+` |
 | 禁止 | 裁进邻词（反例里的 `n`）、上一行 descender、下一行 ascender；禁止「半句上、大白块、半句下」三截版 |
@@ -125,7 +125,7 @@
 }
 .oi-pdf-inline-math .oi-pdf-math-crop {
   display: block;
-  height: var(--oi-pdf-inline-crop-em, 1.65em); /* 墨迹目标 / inkShare */
+  height: var(--oi-pdf-inline-crop-em, 1.95em); /* 墨迹目标 / inkShare */
   width: auto;
   max-width: 100%;
   object-fit: contain;

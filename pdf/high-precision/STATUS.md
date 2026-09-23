@@ -2,6 +2,10 @@
 
 记录到 2026-09-23。需求仍以 `REQUIREMENTS.md` 为准。这里记录当前实现、运行状态、修复前的网页问题与尚未完成的验收。
 
+## 2026-09-23 公式强可读（pdf-formula-strong-read）
+
+#64 硬门不改（墨迹 / 正文 ≥ 1.0×）。行内目标带从 1.05～1.15 抬到 **1.25～1.35**（目标取带心 1.30）。名义 share 仍是 16/(16+2×4)，盒 **1.95em**（允许 ~1.9～2.2em）；墨迹进带后行顶收到 **1.85em**（~1.8～2.1em），不把白边裁进墨迹。独占公式仍列宽优先；短裁图的 floor 从 1.2× 抬到 **1.4×**。不动 `CROP_SCALE`、`transform: scale`、#62 pad、KaTeX、Soft Graphite、#40、#54、#59、脚注顺序、简单式 Unicode、作者四列。`footnote_sum` 仍 EXEMPT。
+
 ## 2026-09-23 右栏可读性（pdf-rightpane-footnote-simple-scale）
 
 #63 之后补三件事，不改 Soft Graphite、#40、#54、#59、KaTeX 主路径、`CROP_SCALE`、#62 的 pad 表，也不新加 schema `role:"footnote"`。
