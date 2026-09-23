@@ -91,6 +91,16 @@ const popupCss = readFileSync(join(root, "popup/popup.css"), "utf8");
 const manifest = readFileSync(join(root, "manifest.json"), "utf8");
 const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
 
+test("open PDF button uses a visually hidden file input Chromium can activate", () => {
+  const fileTag = html.match(/<input\b[^>]*\bid="file"[^>]*>/)?.[0] ?? "";
+  assert.match(fileTag, /\bclass="file-input"/);
+  assert.equal(/(?:^|\s)hidden(?:\s|=|>|\/|$)/.test(fileTag), false);
+  assert.match(html, /id="pick"[^>]*>打开 PDF</);
+  const fileInputCss = css.match(/\.file-input\s*\{[^}]*\}/s)?.[0] ?? "";
+  assert.match(fileInputCss, /clip:\s*rect\(0 0 0 0\)/);
+  assert.equal(/display:\s*none/.test(fileInputCss), false);
+});
+
 test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", () => {
   assert.match(html, /<title>PDF 阅读<\/title>/);
   assert.match(html, /<h1>PDF 阅读<\/h1>/);
