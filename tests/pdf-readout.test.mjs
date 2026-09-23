@@ -179,10 +179,11 @@ test("Attention-like page becomes title + byline + abstract flow, not author gri
   assert.ok(blocks.indexOf(leftBody) < blocks.indexOf(rightBody));
   assert.ok(!blocks.some((block) => block.rect && block.role === "authors"));
 
+  const units = translatableReadoutUnits(blocks);
+  assert.equal(units.some((unit) => unit.role === "authors"), false);
   const md = readoutBlocksToMarkdown(
     mergeReadoutTranslations(blocks, [
       { translation: "注意力就是你所需要的一切", role: "title" },
-      { translation: "阿希什·瓦萨瓦尼 · 诺姆·沙泽尔", role: "authors" },
       { translation: "摘要", role: "heading" },
       { translation: "主流序列转导模型基于循环或卷积网络。", role: "paragraph" },
       { translation: "我们提出完全依赖注意力的 Transformer。", role: "paragraph" },
@@ -190,7 +191,9 @@ test("Attention-like page becomes title + byline + abstract flow, not author gri
     ])
   );
   assert.match(md, /^# 注意力就是你所需要的一切/m);
-  assert.match(md, /阿希什·瓦萨瓦尼/);
+  assert.match(md, /Ashish Vaswani/);
+  assert.match(md, /Noam Shazeer/);
+  assert.doesNotMatch(md, /阿希什/);
   assert.match(md, /^## 摘要/m);
   assert.doesNotMatch(md, /arXiv/);
   assert.doesNotMatch(md, /provided proper attribution/i);
