@@ -68,6 +68,19 @@ test("Attention text fragments have one source owner and complete visual boundar
     assert.match(encoder[0].sourceText, /d_\{model\} = 512/);
     assert.match(encoder[0].sourceText, /position-wise/);
     assert.equal(encoder[0].placeholders.length, 2);
+    const matrix = pages.get(5).page.blocks.find((block) =>
+      block.text?.startsWith("Where the projections are parameter matrices"));
+    assert.match(matrix.text, /parameter matrices ⟦f\d+⟧ and ⟦f\d+⟧\./);
+    assert.doesNotMatch(matrix.text, /W_iQ|dmodel|Rdmodel/);
+    assert.ok(matrix.placeholders.length >= 2);
+    const matrixCrops = matrix.placeholders.map((entry) =>
+      pages.get(5).page.blocks.find((block) => block.id === entry.blockId));
+    assert.equal(matrixCrops.every((block) => block?.label === "formula" && !("text" in block)), true);
+    const p5view = pages.get(5).viewport;
+    for (const crop of matrixCrops) {
+      const height = (crop.bbox[3] - crop.bbox[1]) * p5view.height * CROP_SCALE;
+      assert.ok(height >= 28, "matrix crop must cover scripts");
+    }
     const embeddings = pages.get(5).page.blocks.find((block) =>
       block.sourceText?.startsWith("Similarly to other sequence transduction models"));
     assert.match(embeddings.sourceText, /multiply those weights by √d_\{model\}/);
@@ -82,6 +95,32 @@ test("Attention text fragments have one source owner and complete visual boundar
     assert.match(optimizer.sourceText, /ϵ = 10−9/);
     assert.equal(optimizer.placeholders.length, 3);
     assert.doesNotMatch(optimizer.text, /⟦f\d+⟧−9/, "the exponent stays inside the inline crop");
+    for (const number of [4, 5, 6, 7]) {
+      const view = pages.get(number).viewport;
+      const displays = pages.get(number).page.blocks.filter((block) =>
+        block.label === "formula" && !block.inlineOf);
+      assert.ok(displays.length >= 1, `page ${number} has a display formula`);
+      for (const block of displays) {
+        const width = (block.bbox[2] - block.bbox[0]) * view.width * CROP_SCALE;
+        const height = (block.bbox[3] - block.bbox[1]) * view.height * CROP_SCALE;
+        assert.ok(width >= 100 && height >= 30, `page ${number} display crop ${width}x${height}`);
+        assert.equal("text" in block || "latex" in block || "content" in block, false);
+      }
+    }
+    for (const number of [10, 11, 12]) {
+      const refs = pages.get(number).page.blocks.filter((block) => /^\[\d+\]/.test(block.text || ""));
+      const nums = refs.map((block) => Number(block.text.match(/^\[(\d+)\]/)[1]));
+      assert.ok(nums.length >= 4, `page ${number} reference entries`);
+      for (let index = 1; index < nums.length; index += 1) {
+        assert.ok(nums[index] > nums[index - 1], `page ${number} reference order ${nums.join(",")}`);
+      }
+      assert.equal(refs.every((block) => block.skipTranslate === true), true);
+      assert.equal(refs.some((block) => /Exploringthe|Conferenceon|NeuralInformation/.test(block.text || "")), false);
+    }
+    const firstRef = pages.get(10).page.blocks.find((block) => block.text?.startsWith("[1]"));
+    assert.match(firstRef.text, /arXiv preprint arXiv:1607\.06450/);
+    const sixteen = pages.get(11).page.blocks.find((block) => block.text?.startsWith("[16]"));
+    assert.match(sixteen.text, /In Advances in Neural Information Processing Systems, \(NIPS\), 2016\./);
     for (const [number, tableNumber] of [[6, 1], [8, 2], [9, 3], [10, 4]]) {
       const blocks = pages.get(number).page.blocks;
       const caption = blocks.find((block) => block.label === "caption" &&

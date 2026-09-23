@@ -11,6 +11,7 @@ import {
   PROTOCOL,
   bboxToPercentRect,
   blockReadoutPlan,
+  cropBlockImage,
   normalizeIncomingBlock,
   placeholderTokens,
   preparePageBlocks,
@@ -119,6 +120,20 @@ test("placeholder regex finds ⟦fN⟧ tokens", () => {
     { token: "⟦f1⟧", n: 1 },
     { token: "⟦f2⟧", n: 2 }
   ]);
+});
+
+test("tiny crops and OCR formula letters never become the image", () => {
+  const tiny = cropBlockImage({ width: 80, height: 40 }, [0, 0, 0.2, 0.2]);
+  assert.equal(tiny, "");
+  const cleaned = normalizeIncomingBlock({ label: "formula", text: "n", latex: "n", content: "n", html: "n" });
+  assert.equal(Object.hasOwn(cleaned, "text"), false);
+  assert.equal(Object.hasOwn(cleaned, "latex"), false);
+  assert.equal(Object.hasOwn(cleaned, "content"), false);
+  const plan = blockReadoutPlan({ label: "formula", text: "n", latex: "n", imageUrl: "" });
+  assert.equal(plan.alt, "公式");
+  assert.equal(plan.src, "");
+  assert.equal(plan.text, undefined);
+  assert.doesNotMatch(String(plan.src), /viewer\.html|chrome-extension:/);
 });
 
 test("visual readout plan is an image and prose stays text", () => {

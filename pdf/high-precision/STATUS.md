@@ -2,6 +2,52 @@
 
 记录到 2026-09-23。需求仍以 `REQUIREMENTS.md` 为准。这里记录当前实现、运行状态、修复前的网页问题与尚未完成的验收。
 
+## 2026-09-23 文字层主路径（本轮）
+
+数字论文默认走文字层和几何启发式，不依赖本机智谱 GLM-OCR，也不依赖 GPU sidecar。`pdfLayout.mode` 为空时 `resolveLayoutMode` 返回 `text-layer`。`local-ocr` 与 `cloud-ocr` 适配器仍在，只有显式选中 `local-ocr` 才会拉起本机划区。公式、图、表的画面仍是当前 PDF 的 pageRaster 裁图。视觉块上的 `latex` / `content` / `text` 会丢掉，右栏不把 OCR 字母当公式。
+
+本轮对 Attention 文字层做了三件事：
+
+- 同一基线上的上下标留在该行；换行不再按 x 把两行揉成一串。参考文献按 `[n]` 拆条，右栏碎片跟在同一行的左栏后面。第 10–12 页现在是 `[1]`–`[40]` 的递增条目，`skipTranslate`，不送去翻译。第 1 条保留 `arXiv preprint arXiv:1607.06450`。第 16 条读作 “In Advances in Neural Information Processing Systems, (NIPS), 2016.”。页眉那行 `arXiv:1706.03762v7` 戳记仍然剔除。
+- 第 5 页矩阵参数不再拼成 `W_iQ`、`Rdmodel`。正文是文字层原句 `Where the projections are parameter matrices ⟦f1⟧ and ⟦f2⟧.`，两段数学各自是原页裁图（第一行三个 `W_i ∈ R^{…}`，第二行 `W^O ∈ R^{…}`）。
+- 独占公式裁框在字形并集外再留一圈：横向约 0.008、纵向约 0.01（页高比例）。Attention 第 4 页 softmax、第 5 页 MultiHead / FFN、第 6 页两条 PE、第 7 页学习率都是整行裁图。过小的裁图（宽 < 24 或高 < 12 像素）不返回 data URL；失败时右栏写文字提示，不用阅读器地址当 `img src`。
+
+旧库里若仍按旧 `sourceId` 记着这一段的 `source-uncertain`，右栏不再整块换成“请看左栏”，而是注明旧译文未沿用，并显示当前文字层原句和裁图。本轮没有调用翻译接口，矩阵句没有新的中文译文。
+
+`node --test tests/*.test.mjs`：336 通过、0 失败、1 跳过。跳过的是仓库里没有 Attention PDF 时的大样本测试。本机放上该 PDF 后，同一测试通过，且没有把它加入 Git。`features.pdf` 仍默认关闭。网页双语和 Options 间距没有改；Options 里 PDF 模式的空值文案改成「未设置（文字层）」，与默认路径一致。
+
+**网页视觉验收仍未完成。** 本环境不能打开 `chrome-extension://…/pdf/viewer.html`。下面的清单留给 Anvil 在本机 Chrome 里核对。代码测试不能代替左右栏截图。
+
+### Anvil 人工核对（Attention，左右栏）
+
+阅读器：`chrome-extension://aeokbdehdhpdoibdjdgffhaieibomlcn/pdf/viewer.html`。扩展从本仓库加载，改完后在 `chrome://extensions` 重新加载，不要移除。确认设置里 PDF 划区模式为空或「文字层」，不要先开本机 GLM-OCR。
+
+| 页 | 看什么 |
+| --- | --- |
+| 1 | 摘要是文字层正文；作者按行分开；没有把公式画成 KaTeX |
+| 2 | `[13]`、`[7]`、`[5, 2, 35]` 还在句中；`h_t`、`h_{t−1}` 没有变成十几像素的碎图 |
+| 3 | Encoder 全段在；`N = 6`、`d_model = 512` 的裁图盖住底数、等号和数字；图 1 是整张原页图 |
+| 4 | 图 2 含左右子图和图内英文，英文没有送去翻译；softmax 裁图盖住 `softmax`、括号、等号、上标 `T` 和下标 `d_k`，左右留有空白 |
+| 5 | MultiHead 与 FFN 各是整行裁图；矩阵句是上面的占位符加两张裁图，右栏不出现 `W_iQ` 或 `dmodel` |
+| 6 | 表 1 是整表裁图；两条位置编码盖住 `sin`/`cos` 和分母 |
+| 7 | 学习率公式整行在；`10^{-9}` 的指数在裁图里，不挂在句末 |
+| 8–9 | 表 2、表 3 整表，表内数字不进译文 |
+| 10–12 | 参考文献按编号递增，一条一块；`[1]` 含 arXiv 号；`[16]`、`[29]` 的右栏碎片接在对应半句后面；这些条显示英文原文 |
+| 全篇 | 没有裸 base64、没有 `chrome-extension://` 图片、没有宽或高只有十几像素的公式图；点右栏块，左栏滚到同一页并高亮同一框 |
+
+若本地库里这份 PDF 已有逐页译文：第 1–4、6、8 页旧译文仍应按源块对上。第 5 页矩阵句和第 10–12 页参考文献的旧译文不要自动冒充已核对；矩阵句应看到文字层原句和裁图。网络里不应为了划区去请求 `127.0.0.1:8765/v1/layout`。
+
+### 仍未完成
+
+| 位置 | 现状 | 还要做什么 |
+| --- | --- | --- |
+| Chrome 左右栏 | 只做了文字层、裁框和单元测试 | 按上表在指定 Chrome 里看截图；点选高亮和滚动要人工确认 |
+| 第 5 页矩阵句译文 | 原文和裁图已可显示；没有新译文 | 人工看过裁图后再决定是否把这一句送去翻译 |
+| 参考文献 | 英文条目顺序已校正，且不自动翻译 | 不需要逐条中文。若以后要译文，按现在的条目边界另做 |
+| 行末连字符 | 如第 5 页 `transfor-mation` 仍保留断行连字符 | 不改主张。若阅读时觉得碍眼，再单独决定是否接合 |
+| 旧库 73 条复用译文 | 只做过结构核对 | 仍要人工抽查数字、单位、引文 |
+| 云端 OCR | 适配器保留，本轮不靠它过 Attention | 有密钥时再单测：公式图仍来自 pageRaster |
+
 ## 2026-09-23 逐页库迁移后的状态
 
 用户已授权迁移 Attention 旧库，并且只补译确认缺失的段落。代码直接在 `D:\open-immerse` 修改；Attention 测试 PDF 不加入 Git。库内原 `readout.md` 保留，`library.sqlite` 已保存迁移前备份 `library.sqlite.before-attention-migration-2026-09-23`。一次性脚本 `scripts/migrate-attention-library.mjs` 先核对 `source.pdf` 的 SHA-256，再通过现有 8765 库接口写入 15 个逐页 JSON 与索引。
