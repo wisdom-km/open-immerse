@@ -400,13 +400,68 @@ h1 {
 .oi-pdf-display-math + .oi-pdf-figure {
   margin-top: 14px;
 }
-.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop {
-  display: inline-block;
+.oi-pdf-math-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35em;
   max-width: 100%;
+  background: transparent;
+  box-shadow: none;
+}
+.oi-pdf-math-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  scrollbar-width: none;
+  background: transparent;
+  box-shadow: none;
+}
+.oi-pdf-math-scroll::-webkit-scrollbar {
+  display: none;
+  height: 0;
+}
+.oi-pdf-math-scroll:focus-visible {
+  outline: 1px solid var(--oi-paper-muted);
+  outline-offset: 2px;
+}
+.oi-pdf-math-scroll.is-overflowing {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+}
+.oi-pdf-math-clip {
+  overflow: hidden;
+  width: calc(var(--oi-formula-w, 100%) * var(--oi-eq-keep, 1));
+  max-width: none;
+  background: transparent;
+}
+.oi-pdf-eq-num {
+  flex: 0 0 auto;
+  align-self: center;
+  font: 400 15px/1 var(--oi-font);
+  color: var(--oi-paper-ink);
+  background: transparent;
+  box-shadow: none;
+}
+.oi-pdf-display-math .oi-pdf-math-crop {
+  display: block;
   height: auto;
-  min-height: 2em;
+  border: none;
+  box-shadow: none;
   object-fit: contain;
-  vertical-align: middle;
+  background: transparent;
+}
+.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop,
+.pane-translate .readout.md-readout .oi-pdf-math-scroll .oi-pdf-math-crop {
+  display: block;
+  width: var(--oi-formula-w, max-content);
+  height: auto;
+  max-width: none;
+  min-height: 0;
+  object-fit: contain;
+  vertical-align: baseline;
   border: none;
   box-shadow: none;
   border-radius: 0;
@@ -415,13 +470,36 @@ h1 {
 .oi-pdf-inline-math {
   display: inline-block;
   vertical-align: baseline;
-  margin: 0 1px;
+  margin: 0 0.2em;
   padding: 0;
   line-height: 1;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  background: transparent;
+  box-shadow: none;
+}
+.oi-pdf-inline-math::-webkit-scrollbar {
+  display: none;
+  height: 0;
+}
+.oi-pdf-inline-math.is-promoted {
+  display: block;
+  margin: 10px 0 14px;
+  white-space: normal;
+  overflow: visible;
+  vertical-align: baseline;
 }
 .pane-translate .readout.md-readout .oi-pdf-inline-math:has(.oi-pdf-math-crop) {
   /* After ink is in the 1.25–1.35 band, the line top sits in 1.8–2.1em. */
   height: var(--oi-pdf-inline-line-em, 1.85em);
+  overflow-x: auto;
+  overflow-y: visible;
+}
+.pane-translate .readout.md-readout .oi-pdf-inline-math.is-promoted:has(.oi-pdf-math-crop) {
+  height: auto;
   overflow: visible;
 }
 .pane-translate .readout.md-readout .oi-pdf-inline-math .oi-pdf-math-crop {
@@ -430,13 +508,19 @@ h1 {
   height: var(--oi-pdf-inline-crop-em, 1.95em);
   margin-top: calc(var(--oi-pdf-inline-line-em, 1.85em) - var(--oi-pdf-inline-crop-em, 1.95em));
   width: auto;
-  max-width: min(100%, 12em);
+  max-width: none;
   object-fit: contain;
   object-position: left center;
   border: none;
   box-shadow: none;
   border-radius: 0;
   background: transparent;
+}
+.pane-translate .readout.md-readout .oi-pdf-inline-math.is-promoted .oi-pdf-math-crop {
+  height: auto;
+  width: var(--oi-formula-w, max-content);
+  margin-top: 0;
+  max-width: none;
 }
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
   font: 400 14px/1.55 var(--oi-font);

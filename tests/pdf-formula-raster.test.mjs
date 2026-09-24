@@ -160,7 +160,7 @@ test("missing display size and a bad devicePixelRatio stay on the page raster", 
   assert.equal(odd.devicePixelRatio, 1);
 });
 
-test("inline CSS box follows the em height and the 12em cap", () => {
+test("inline CSS box keeps the em height and does not squash a wide crop", () => {
   const wide = [0.1, 0.5, 0.7, 0.52];
   const size = formulaDisplayCssSize({
     block: { label: "formula", display: false, inlineOf: "p1", bbox: wide, inkShare: 16 / 24 },
@@ -172,7 +172,9 @@ test("inline CSS box follows the em height and the 12em cap", () => {
     mirrorZoom: 1
   });
   assert.equal(size.inline, true);
-  assert.ok(Math.abs(size.cssWidth - 12 * 15) < 1e-6);
+  const aspect = (0.6 * pageWidth) / (0.02 * pageHeight);
+  assert.ok(size.cssWidth > 12 * 15);
+  assert.ok(Math.abs(size.cssWidth / size.cssHeight - aspect) < 1e-6);
   const zoomed = formulaDisplayCssSize({
     block: { label: "formula", display: false, inlineOf: "p1", bbox: wide },
     pageWidth,
@@ -320,8 +322,8 @@ test("viewer sharpens formula crops with a viewport offset and leaves the page r
   assert.match(viewerSrc, /rasterWidth: raster\?\.pixelWidth/);
   assert.match(viewerSrc, /offsetX: -originX \* full\.width/);
   assert.match(viewerSrc, /offsetY: -originY \* full\.height/);
-  assert.match(viewerSrc, /displayCropWidthCss\(pageFraction/);
-  assert.match(viewerSrc, /inlineCropBoxEm\(formula\?\.inkShare\)/);
+  assert.match(viewerSrc, /displayFormulaWidthCss\(pageFraction/);
+  assert.match(viewerSrc, /inlinePaintBox\(formula\?\.inkShare/);
   assert.doesNotMatch(viewerSrc, /cropCanvasToDataUrl/);
   const imageFn = viewerSrc.slice(viewerSrc.indexOf("function imageForVisualBlock"));
   const drawnAt = imageFn.indexOf("if (drawn) return drawn");

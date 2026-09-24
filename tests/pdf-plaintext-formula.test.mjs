@@ -201,9 +201,8 @@ test("inline box height is ink divided by pad share, not a taller fixed em", () 
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   assert.match(css, new RegExp(`--oi-pdf-inline-crop-em, ${box}em`));
   assert.match(css, new RegExp(`--oi-pdf-inline-line-em, ${line}em`));
-  assert.match(viewer, /inlineCropBoxEm\(formula\?\.inkShare\)/);
-  assert.match(viewer, /inlineLineTopEm\(formula\?\.inkShare\)/);
-  assert.match(viewer, /displayInkMinEm\(block\.inkShare\)/);
+  assert.match(viewer, /inlinePaintBox\(formula\?\.inkShare, formula\?\.scriptShare\)/);
+  assert.match(viewer, /displayFormulaMinEm\(block\?\.inkShare, block\?\.scriptShare\)/);
   assert.equal(displayInkMinEm(undefined), DISPLAY_CROP_MIN_HEIGHT_EM);
   const short = displayInkMinEm(0.5);
   assert.ok(short * 0.5 >= DISPLAY_INK_PREFER - 1e-9);

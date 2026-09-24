@@ -90,7 +90,8 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
   assert.match(css, /\.oi-pdf-display-math\s*\{[^}]*text-align:\s*center/s);
   assert.match(css, /\.readout-paper \.oi-pdf-display-math,\s*\.readout-paper \.oi-pdf-figure\s*\{[^}]*position:\s*static/s);
   assert.match(css, /\.readout-paper \.oi-pdf-display-math,\s*\.readout-paper \.oi-pdf-figure\s*\{[^}]*max-width:\s*100%/s);
-  assert.match(css, /\.oi-pdf-display-math \.oi-pdf-math-crop\s*\{[^}]*max-width:\s*100%/s);
+  assert.match(css, /\.oi-pdf-math-scroll\s*\{[^}]*max-width:\s*100%/s);
+  assert.match(css, /\.oi-pdf-math-scroll \.oi-pdf-math-crop\s*\{[^}]*max-width:\s*none/s);
   assert.doesNotMatch(css, /max-width:\s*42rem/);
   assert.doesNotMatch(src, /letterFallback|612 \* scale|PDF_PAPER_FALLBACK_ASPECT/);
   assert.match(src, /#pages \.pdf-page\[data-page=/);
