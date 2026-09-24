@@ -229,15 +229,17 @@ test("a matrix translation that drops placeholders is not stored as reviewed", (
     ]
   };
   assert.equal(blockTranslationIntegrity(bad).reason, "formula-placeholder-mismatch");
-  assert.match(blockSoftLead(bad), /公式或引用与原文不符/);
+  assert.match(blockSoftLead(bad), /公式槽待对齐/);
+  assert.doesNotMatch(blockSoftLead(bad), /以下为原文/);
   const fallen = blockRenderPieces(bad, [
     bad,
     { id: "f1", label: "formula" },
     { id: "f2", label: "formula" }
   ]);
-  assert.equal(fallen.filter((piece) => piece.type === "image").length, 2);
-  assert.match(fallen[0].text, /^Where the projections/);
-  assert.doesNotMatch(fallen.map((piece) => piece.text || "").join(""), /其中这些投影是参数矩阵。/);
+  const fallenText = fallen.map((piece) => piece.text || "").join("");
+  assert.match(fallenText, /其中这些投影是参数矩阵/);
+  assert.doesNotMatch(fallenText, /Where the projections/);
+  assert.equal(fallen.some((piece) => piece.type === "image"), false);
   const pairs = [{
     sourceId: "p5-s95wn2f",
     text,
