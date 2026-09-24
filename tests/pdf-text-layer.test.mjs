@@ -806,7 +806,7 @@ test("viewer trims formula ink and still falls back to the page raster crop", ()
   const fn = viewer.slice(viewer.indexOf("function imageForVisualBlock"));
   const drawnAt = fn.indexOf("if (drawn) return drawn");
   const trimAt = fn.indexOf("formulaInkBbox");
-  const cropAt = fn.indexOf("return cropBlockImage");
+  const cropAt = fn.indexOf("return cropFormulaImage");
   assert.ok(drawnAt >= 0 && trimAt > drawnAt && cropAt > trimAt);
   assert.match(viewer, /measureFormulaCrop/);
   assert.match(viewer, /block\.inkShare = measured\.inkShare/);

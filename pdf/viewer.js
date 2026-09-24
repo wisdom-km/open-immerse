@@ -95,6 +95,7 @@ import {
   displayCropColumnFraction,
   displayFormulaWidthCss,
   blockRenderPieces,
+  cropBlockCanvas,
   cropBlockImage,
   isTranslatableBlock,
   isVisualBlock,
@@ -116,7 +117,7 @@ import {
   resolveLayoutMode,
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
-import { measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { INLINE_BODY_HARD_MAX, displayFormulaMinEm, matchedDisplayCssSize } from "../lib/pdf-formula-size.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
@@ -878,7 +879,9 @@ function formulaInkBbox(canvas, block) {
     if (!image) return bbox;
     const measured = measureFormulaCrop(bbox, image, {
       inline: block.display === false || Boolean(block.inlineOf),
-      protect: block.formulaInkProtect === true
+      protect: block.formulaInkProtect === true,
+      maskBoxes: block.maskBoxes,
+      glyphBoxes: block.glyphBoxes
     });
     if (measured?.inkShare) block.inkShare = measured.inkShare;
     return measured?.bbox || bbox;
@@ -893,7 +896,35 @@ function imageForVisualBlock(raster, block) {
     if (drawn) return drawn;
   }
   if (block?.label === "formula") block.bbox = formulaInkBbox(raster?.canvas, block);
-  return cropBlockImage(raster?.canvas, block?.bbox);
+  return cropFormulaImage(raster?.canvas, block);
+}
+
+function cropFormulaImage(canvas, block) {
+  if (block?.label !== "formula" || !block.maskBoxes?.length) return cropBlockImage(canvas, block?.bbox);
+  const out = cropBlockCanvas(canvas, block?.bbox);
+  if (!out) return "";
+  paintFormulaMask(out, block.bbox, block);
+  try {
+    const url = out.toDataURL("image/png");
+    out.width = 0;
+    out.height = 0;
+    return /^data:image\/png;base64,/.test(url) ? url : "";
+  } catch {
+    return "";
+  }
+}
+
+function paintFormulaMask(canvas, crop, block) {
+  if (!canvas || block?.label !== "formula" || !block.maskBoxes?.length) return false;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || typeof ctx.getImageData !== "function") return false;
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  blankFormulaMask(image, {
+    maskBoxes: boxesInCrop(block.maskBoxes, crop),
+    glyphBoxes: boxesInCrop(block.glyphBoxes, crop)
+  });
+  ctx.putImageData(image, 0, 0);
+  return true;
 }
 
 const formulaRasterCache = createFormulaRasterCache();
@@ -981,6 +1012,7 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     const context = canvas.getContext("2d", { alpha: false });
     if (!context) return "";
     await page.render({ canvasContext: context, viewport }).promise;
+    paintFormulaMask(canvas, block.bbox, block);
     const url = canvas.toDataURL("image/png");
     canvas.width = 0;
     canvas.height = 0;

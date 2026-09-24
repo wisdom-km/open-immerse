@@ -335,7 +335,7 @@ test("viewer sharpens formula crops with a viewport offset and leaves the page r
   const imageFn = viewerSrc.slice(viewerSrc.indexOf("function imageForVisualBlock"));
   const drawnAt = imageFn.indexOf("if (drawn) return drawn");
   const trimAt = imageFn.indexOf("formulaInkBbox");
-  const cropAt = imageFn.indexOf("return cropBlockImage");
+  const cropAt = imageFn.indexOf("return cropFormulaImage");
   assert.ok(drawnAt >= 0 && trimAt > drawnAt && cropAt > trimAt);
 });
 
