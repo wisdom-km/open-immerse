@@ -116,6 +116,12 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { inlineCropBoxEm, inlineLineTopEm, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import {
+  createFormulaRasterCache,
+  formulaDisplayCssSize,
+  formulaRasterCacheKey,
+  formulaRasterPlan
+} from "../lib/pdf-formula-raster.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import {
   applyStructureTranslations,
@@ -882,11 +888,112 @@ function imageForVisualBlock(raster, block) {
   return cropBlockImage(raster?.canvas, block?.bbox);
 }
 
-function withRasterCrop(raster, block) {
+const formulaRasterCache = createFormulaRasterCache();
+
+function formulaPaneMetrics(pageNumber, unitViewport) {
+  const left = leftPageBox(pageNumber);
+  const unitW = Number(unitViewport?.width) || 0;
+  const unitH = Number(unitViewport?.height) || 0;
+  const zoomedW = Math.floor(unitW * (Number(zoom) || 1));
+  const zoomedH = unitW > 0 ? zoomedW * (unitH / unitW) : 0;
+  const leftWidth = left?.width || zoomedW;
+  const leftHeight = left?.height || zoomedH;
+  const scroll = translateScrollRoot();
+  const avail = paperAvailWidth(scroll?.clientWidth || 0);
+  const paper = readoutPaperSize({ leftWidth, leftHeight, availWidth: avail });
+  return {
+    pageWidth: unitW,
+    pageHeight: unitH,
+    leftWidth,
+    paperWidth: paper.width > 0 ? paper.width : leftWidth,
+    paperHeight: paper.heightBase > 0 ? paper.heightBase : leftHeight,
+    mirrorZoom: Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1,
+    devicePixelRatio: Math.max(1, Number(window.devicePixelRatio) || 1)
+  };
+}
+
+/**
+ * Redraw one formula bbox when the CROP_SCALE crop is softer than the CSS box.
+ * The page raster and its ink box stay as they are; a miss keeps that crop.
+ */
+async function renderSharpFormulaCrop(page, raster, block, pageNumber) {
+  if (!page || block?.label !== "formula" || !Array.isArray(block.bbox) || !block.imageUrl) return "";
+  let unit = null;
+  try {
+    unit = page.getViewport({ scale: 1 });
+  } catch {
+    return "";
+  }
+  const metrics = formulaPaneMetrics(pageNumber, unit);
+  const css = formulaDisplayCssSize({ ...metrics, block });
+  if (!css) return "";
+  const plan = formulaRasterPlan({
+    bbox: block.bbox,
+    pageWidth: metrics.pageWidth,
+    pageHeight: metrics.pageHeight,
+    rasterWidth: raster?.pixelWidth,
+    rasterHeight: raster?.pixelHeight,
+    cssWidth: css.cssWidth,
+    cssHeight: css.cssHeight,
+    devicePixelRatio: metrics.devicePixelRatio
+  });
+  if (plan.reusePageRaster) return "";
+  const key = formulaRasterCacheKey({
+    docId,
+    page: pageNumber,
+    bbox: block.bbox,
+    scale: plan.scale,
+    devicePixelRatio: metrics.devicePixelRatio
+  });
+  const cached = formulaRasterCache.get(key);
+  if (cached) return cached;
+  try {
+    if (plan.pixelWidth < 1 || plan.pixelHeight < 1 || !(plan.multiplier > 0)) return "";
+    const full = page.getViewport({ scale: plan.scale });
+    const rasterW = Number(raster?.pixelWidth) || 0;
+    const rasterH = Number(raster?.pixelHeight) || 0;
+    const originX = rasterW > 0 ? (plan.offsetX / plan.multiplier) / rasterW : 0;
+    const originY = rasterH > 0 ? (plan.offsetY / plan.multiplier) / rasterH : 0;
+    const viewport = page.getViewport({
+      scale: plan.scale,
+      offsetX: -originX * full.width,
+      offsetY: -originY * full.height
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = plan.pixelWidth;
+    canvas.height = plan.pixelHeight;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) return "";
+    await page.render({ canvasContext: context, viewport }).promise;
+    const url = canvas.toDataURL("image/png");
+    canvas.width = 0;
+    canvas.height = 0;
+    if (!/^data:image\/png;base64,/.test(url)) return "";
+    formulaRasterCache.set(key, url);
+    return url;
+  } catch {
+    return "";
+  }
+}
+
+async function withRasterCrop(raster, page, block, pageNumber) {
   if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
   const next = { ...block };
   next.imageUrl = imageForVisualBlock(raster, next);
+  if (next.label === "formula" && next.imageUrl) {
+    const sharp = await renderSharpFormulaCrop(page, raster, next, pageNumber);
+    if (sharp) next.imageUrl = sharp;
+  }
   return next;
+}
+
+async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale) {
+  const cropped = [];
+  for (const block of blocks || []) {
+    if (isStale()) return null;
+    cropped.push(await withRasterCrop(raster, page, block, pageNumber));
+  }
+  return cropped;
 }
 
 function cropImage(block) {
@@ -2233,7 +2340,8 @@ async function ingestVendorLayout(n, mode, isStale) {
     }
   }
   if (isStale()) return null;
-  const blocks = (mapped.blocks || []).map((block) => withRasterCrop(raster, block));
+  const blocks = await cropLayoutBlocks(raster, page, mapped.blocks, n, isStale);
+  if (!blocks || isStale()) return null;
   const layout = {
     ...mapped,
     kind: "blocks",
@@ -2261,7 +2369,8 @@ async function ingestTextLayerLayout(n, isStale) {
   const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
-  const blocks = (built.blocks || []).map((block) => withRasterCrop(raster, block));
+  const blocks = await cropLayoutBlocks(raster, page, built.blocks, n, isStale);
+  if (!blocks || isStale()) return null;
   const layout = {
     ...built,
     kind: "blocks",
@@ -2292,7 +2401,8 @@ async function ingestFixtureLayout(n, isStale) {
   if (isStale()) return null;
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
-  const blocks = sample.blocks.map((block) => withRasterCrop(raster, block));
+  const blocks = await cropLayoutBlocks(raster, page, sample.blocks, n, isStale);
+  if (!blocks || isStale()) return null;
   const layout = {
     kind: "blocks",
     protocol: sample.protocol || PROTOCOL,
@@ -2410,6 +2520,7 @@ async function adoptDoc(doc, title) {
   libraryDoc = null;
   titleStructure = null;
   layoutCache.clear();
+  formulaRasterCache.clear();
   pageOriginals = [];
   pageResults = [];
   pageItems = 0;
@@ -2812,6 +2923,7 @@ function setHasDoc(has) {
     pageOriginals = [];
     pageResults = [];
     layoutCache.clear();
+    formulaRasterCache.clear();
     renderArticle();
   }
   updatePager();
