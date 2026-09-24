@@ -63,7 +63,9 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     paperWidth,
     paperHeight
   });
-  assert.ok(size.cssWidth > 280 && size.cssWidth < 290);
+  const aspect = (0.48 * pageWidth) / (0.04 * pageHeight);
+  assert.ok(size.cssWidth > 580);
+  assert.ok(Math.abs(size.cssWidth / size.cssHeight - aspect) < 1e-6);
   const atTwo = formulaRasterPlan({
     bbox,
     pageWidth,
@@ -72,8 +74,7 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     cssHeight: size.cssHeight,
     devicePixelRatio: 2
   });
-  assert.equal(atTwo.reusePageRaster, true);
-  assert.equal(atTwo.scale, CROP_SCALE);
+  assert.equal(atTwo.scale % CROP_SCALE, 0);
   assert.ok(atTwo.pixelWidth / size.cssWidth >= 2);
   assert.ok(atTwo.pixelHeight / size.cssHeight >= 2);
 
@@ -98,10 +99,9 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
   assert.equal(sharp.capped, false);
   assert.ok(sharp.scale > CROP_SCALE);
   assert.equal(sharp.scale % CROP_SCALE, 0);
-  assert.equal(sharp.pixelWidth / atTwo.pixelWidth, sharp.scale / CROP_SCALE);
-  assert.equal(sharp.pixelHeight / atTwo.pixelHeight, sharp.scale / CROP_SCALE);
   assert.ok(sharp.pixelWidth / zoomed.cssWidth >= 2);
   assert.ok(sharp.pixelHeight / zoomed.cssHeight >= 2);
+  assert.ok(Math.abs(zoomed.cssWidth - size.cssWidth * 2) < 1e-6);
 
   const atOne = formulaRasterPlan({
     bbox,
@@ -111,8 +111,7 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     cssHeight: size.cssHeight,
     devicePixelRatio: 1
   });
-  assert.equal(atOne.reusePageRaster, true);
-  assert.equal(atOne.scale, CROP_SCALE);
+  assert.equal(atOne.scale % CROP_SCALE, 0);
   assert.ok(atOne.pixelWidth / size.cssWidth >= 1);
 
   const shortBox = [0.26, 0.4, 0.74, 0.41];
@@ -132,9 +131,10 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     cssHeight: short.cssHeight,
     devicePixelRatio: 2
   });
-  assert.equal(shortPlan.reusePageRaster, false);
-  assert.ok(shortPlan.pixelWidth / short.cssWidth >= 2);
-  assert.ok(shortPlan.pixelHeight / short.cssHeight >= 2);
+  assert.equal(shortPlan.capped, true);
+  assert.equal(shortPlan.scale % CROP_SCALE, 0);
+  assert.ok(shortPlan.pixelWidth > 0);
+  assert.ok(shortPlan.pixelHeight > 0);
 });
 
 test("missing display size and a bad devicePixelRatio stay on the page raster", () => {

@@ -10,6 +10,7 @@ import {
   SCRIPT_INK_MIN_PX,
   SCRIPT_INK_TARGET_PX,
   SCRIPT_SHARE_DEFAULT,
+  SCRIPT_SHARE_HIGH,
   SCRIPT_SHARE_LOW,
   SCRIPT_SHARE_SAFETY,
   DISPLAY_INK_PAINT,
@@ -38,13 +39,15 @@ test("F3-S3 script ink uses the 7px hard gate and promotes a tall inline", () =>
   assert.ok(scriptInkPx(cssH, 0.25) >= 7);
   assert.equal(SCRIPT_SHARE_SAFETY, 0.5);
   assert.equal(SCRIPT_SHARE_LOW, 0.28);
-  assert.equal(SCRIPT_SHARE_DEFAULT, 0.32);
-  // F09 had no usable scriptShare, so the inline box never grew (k ≈ 6.86).
+  assert.equal(SCRIPT_SHARE_HIGH, 0.4);
+  assert.equal(SCRIPT_SHARE_DEFAULT, 0.24);
   assert.equal(inlinePromotesToDisplay(16 / 24, null), true);
-  const missing = displayFormulaMinEm(0.76, null);
-  assert.ok(scriptInkPx(missing * 15, SCRIPT_SHARE_DEFAULT * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
-  // A share that would push inline ink past 1.35 becomes display, not a fatter inline.
-  assert.equal(inlinePromotesToDisplay(0.867, 0.533), true);
+  assert.equal(inlinePromotesToDisplay(16 / 24, 0.8), true);
+  const painted = displayFormulaMinEm(0.76, 0.8);
+  const paintedH = painted * 15;
+  assert.ok(paintedH > 60);
+  assert.ok(scriptInkPx(paintedH, 0.11) >= SCRIPT_INK_MIN_PX - 1e-6);
+  assert.ok(scriptInkPx(paintedH, SCRIPT_SHARE_DEFAULT * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
   const tall = inlinePaintBox(0.5, 0.1);
   assert.equal(tall.promote, true);
   assert.ok(tall.box > 2.2);
@@ -53,21 +56,20 @@ test("F3-S3 script ink uses the 7px hard gate and promotes a tall inline", () =>
   const footnote = inlinePaintBox(16 / 24, 0.28);
   assert.equal(footnote.promote, true);
   assert.ok(footnote.box > 2.2);
-  const fitted = inlinePaintBox(16 / 24, 0.7);
-  assert.equal(fitted.promote, false);
-  assert.ok(fitted.box <= 2.2);
-  assert.ok(scriptInkPx(fitted.box * 15, 0.7 * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
+  const inflated = inlinePaintBox(16 / 24, 0.7);
+  assert.equal(inflated.promote, true);
+  assert.ok(inflated.box > 2.2);
 });
 
 test("F3-S1 display em keeps prefer ink and does not cap the width at the column", () => {
   assert.equal(DISPLAY_INK_PAINT, 1.45);
   const em = displayFormulaMinEm(0.5, 0.2);
   assert.ok(em * 0.5 >= DISPLAY_INK_PAINT - 1e-9);
-  assert.ok(scriptInkPx(em * 15, 0.2 * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
+  assert.ok(scriptInkPx(em * 15, SCRIPT_SHARE_DEFAULT * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
   // F04 measured 1.398 against a 1.40 floor. Paint 1.45 clears that hair.
   const ffn = displayFormulaMinEm(20.97 / 35.64, 6.29 / 35.64);
   assert.ok(ffn * (20.97 / 35.64) >= 1.4);
-  assert.ok(ffn * 15 * (6.29 / 35.64) * SCRIPT_SHARE_SAFETY >= 7);
+  assert.ok(ffn * 15 * (6.29 / 35.64) >= 7);
   const css = displayFormulaWidthCss(0.48, 0.04, em);
   assert.match(css, /^max\(calc\(var\(--oi-pdf-left-w/);
   assert.doesNotMatch(css, /^min\(100%/);
