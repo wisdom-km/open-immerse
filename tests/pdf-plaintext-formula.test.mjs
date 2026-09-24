@@ -201,7 +201,9 @@ test("inline box height is ink divided by pad share, not a taller fixed em", () 
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   assert.match(css, new RegExp(`--oi-pdf-inline-crop-em, ${box}em`));
   assert.match(css, new RegExp(`--oi-pdf-inline-line-em, ${line}em`));
-  assert.match(viewer, /inlinePaintBox\(formula\?\.inkShare, formula\?\.scriptShare\)/);
+  assert.match(viewer, /matchedFormulaStyle\(formula, layout\?\.page \?\? node\.dataset\.page\)/);
+  assert.match(viewer, /INLINE_BODY_HARD_MAX/);
+  assert.doesNotMatch(viewer, /classList\.add\("is-promoted"\)/);
   assert.match(viewer, /displayFormulaMinEm\(block\?\.inkShare, block\?\.scriptShare\)/);
   assert.equal(displayInkMinEm(undefined), DISPLAY_CROP_MIN_HEIGHT_EM);
   const short = displayInkMinEm(0.5);
@@ -292,6 +294,50 @@ test("retired simple placeholders remap to Unicode instead of dumping English", 
   assert.match(fallenText, /其中这些投影是参数矩阵/);
   assert.doesNotMatch(fallenText, /Where the projections/);
   assert.equal(fallen.some((piece) => piece.type === "image"), false);
+});
+
+test("a stale ⟦fN⟧ in a stored translation is replaced and never shown bare", () => {
+  const renumbered = {
+    text: "previous hidden state ⟦f3⟧ and position t",
+    sourceText: "previous hidden state h_{t−1} and position t",
+    translation: "先前隐藏状态⟦f1⟧和位置t",
+    placeholders: [{ token: "⟦f3⟧", blockId: "f" }]
+  };
+  const imaged = blockRenderPieces(renumbered, [
+    renumbered,
+    { id: "f", label: "formula", imageUrl: "data:image/png;base64,crop" }
+  ]);
+  const imagedText = imaged.map((piece) => piece.text || "").join("");
+  assert.doesNotMatch(imagedText, /⟦f\d+⟧/);
+  assert.match(imagedText, /先前隐藏状态/);
+  assert.doesNotMatch(imagedText, /previous hidden state/);
+  assert.equal(imaged.filter((piece) => piece.type === "image").length, 1);
+  assert.equal(imaged.find((piece) => piece.type === "image").blockId, "f");
+
+  const unicode = {
+    text: "scale factor 1/√d_k in the softmax",
+    sourceText: "scale factor 1/√d_k in the softmax",
+    translation: "softmax 中的比例因子⟦f9⟧",
+    placeholders: []
+  };
+  const spelled = blockRenderPieces(unicode, [unicode]);
+  const spelledText = spelled.map((piece) => piece.text || "").join("");
+  assert.doesNotMatch(spelledText, /⟦f/);
+  assert.match(spelledText, /softmax 中的比例因子/);
+  assert.doesNotMatch(spelledText, /scale factor/);
+  assert.equal(spelled.some((piece) => piece.type === "image"), false);
+
+  const sourced = {
+    text: "the scale ⟦f2⟧ inside",
+    sourceText: "the scale 1/√d_k inside",
+    translation: "其中的比例⟦f9⟧",
+    placeholders: [{ token: "⟦f2⟧", blockId: "missing" }]
+  };
+  const replaced = blockRenderPieces(sourced, [sourced]);
+  const replacedText = replaced.map((piece) => piece.text || "").join("");
+  assert.doesNotMatch(replacedText, /⟦f/);
+  assert.match(replacedText, /1\/√d_k/);
+  assert.doesNotMatch(replacedText, /the scale/);
 });
 
 test("live extra ⟦f1⟧ remaps onto Unicode h_{t−1} and keeps the Chinese sentence", () => {

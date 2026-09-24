@@ -67,7 +67,9 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     paperHeight
   });
   const aspect = (0.48 * pageWidth) / (0.04 * pageHeight);
-  assert.ok(size.cssWidth > 580);
+  assert.ok(Math.abs(size.cssHeight - 0.04 * paperHeight) < 1e-6);
+  assert.ok(Math.abs(size.cssWidth - 0.48 * paperWidth) < 1e-6);
+  assert.ok(size.cssHeight < 15 * 2.5);
   assert.ok(Math.abs(size.cssWidth / size.cssHeight - aspect) < 1e-6);
   const atTwo = formulaRasterPlan({
     bbox,
@@ -134,7 +136,8 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     cssHeight: short.cssHeight,
     devicePixelRatio: 2
   });
-  assert.equal(shortPlan.capped, true);
+  assert.ok(Math.abs(short.cssHeight - 0.01 * paperHeight) < 1e-6);
+  assert.equal(shortPlan.capped, false);
   assert.equal(shortPlan.scale % CROP_SCALE, 0);
   assert.ok(shortPlan.pixelWidth > 0);
   assert.ok(shortPlan.pixelHeight > 0);
@@ -326,7 +329,8 @@ test("viewer sharpens formula crops with a viewport offset and leaves the page r
   assert.match(viewerSrc, /offsetX: -originX \* full\.width/);
   assert.match(viewerSrc, /offsetY: -originY \* full\.height/);
   assert.match(viewerSrc, /displayFormulaWidthCss\(pageFraction/);
-  assert.match(viewerSrc, /inlinePaintBox\(formula\?\.inkShare/);
+  assert.match(viewerSrc, /matchedFormulaStyle\(formula, layout\?\.page \?\? node\.dataset\.page\)/);
+  assert.doesNotMatch(viewerSrc, /classList\.add\("is-promoted"\)/);
   assert.doesNotMatch(viewerSrc, /cropCanvasToDataUrl/);
   const imageFn = viewerSrc.slice(viewerSrc.indexOf("function imageForVisualBlock"));
   const drawnAt = imageFn.indexOf("if (drawn) return drawn");

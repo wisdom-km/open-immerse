@@ -74,7 +74,7 @@ test("viewer keeps the page raster crop when glyph redraw is unavailable", () =>
   assert.match(css, /\.oi-pdf-display-math \.oi-pdf-math-crop\s*\{[^}]*height:\s*auto/s);
   assert.match(css, /\.oi-pdf-display-math \.oi-pdf-math-crop\s*\{[^}]*object-fit:\s*contain/s);
   assert.match(css, /\.oi-pdf-display-math \.oi-pdf-math-crop\s*\{[^}]*box-shadow:\s*none/s);
-  assert.match(css, /\.oi-pdf-display-math\s*\{[^}]*font-size:\s*15px/s);
+  assert.match(css, /\.oi-pdf-display-math\s*\{[^}]*font-size:\s*var\(--oi-pdf-body-fs,\s*15px\)/s);
   assert.match(css, /\.oi-pdf-figure\s*\{[^}]*margin:\s*16px 0 12px/s);
   assert.match(css, /\.oi-pdf-figure\s*\{[^}]*box-shadow:\s*none/s);
   assert.match(css, /\.oi-pdf-caption\s*\{[^}]*margin:\s*6px 0 0/s);

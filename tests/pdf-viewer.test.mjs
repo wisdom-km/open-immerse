@@ -273,7 +273,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.oi-pdf-h2\s*\{[^}]*font:\s*650 18px\/1\.35 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-h1:first-child,\s*\.oi-pdf-h2:first-child\s*\{\s*margin-top:\s*0/s);
   assert.match(css, /\.oi-pdf-h1 \+ \.oi-pdf-h2\s*\{\s*margin-top:\s*16px/s);
-  assert.match(css, /\.oi-pdf-p\s*\{[^}]*font:\s*400 15px\/1\.7 var\(--oi-font\)/s);
+  assert.match(css, /\.oi-pdf-p\s*\{[^}]*font:\s*400 var\(--oi-pdf-body-fs,\s*15px\)\/1\.7 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-p:last-child\s*\{\s*margin-bottom:\s*0/s);
   assert.match(css, /\.pane-translate \.empty-read\s*\{[^}]*color:\s*var\(--oi-text-muted\)/s);
   assert.match(html, /本页没有文字层，无法提取阅读文本/);

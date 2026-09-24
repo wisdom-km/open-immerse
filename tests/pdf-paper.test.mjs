@@ -80,6 +80,7 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
   assert.match(css, /\.paper-stack\s*\{[^}]*align-items:\s*center/s);
   assert.match(css, /\.paper-stack\s*\{[^}]*gap:\s*var\(--oi-pdf-paper-gap-y\)/s);
   assert.match(css, /\.paper-stack\s*\{[^}]*zoom:\s*var\(--oi-mirror-zoom/s);
+  assert.match(css, /\.paper-stack\s*\{[^}]*width:\s*calc\(100% \* var\(--oi-mirror-zoom,\s*1\)\)/s);
   assert.match(css, /\.readout-type\s*\{[^}]*calc\(var\(--oi-pdf-paper-h-base\) \* 0\.075\)/);
   assert.match(css, /calc\(var\(--oi-pdf-paper-w\) \* 0\.085\)/);
   assert.match(css, /calc\(var\(--oi-pdf-paper-h-base\) \* 0\.08\)/);
