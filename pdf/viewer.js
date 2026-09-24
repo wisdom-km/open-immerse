@@ -76,6 +76,7 @@ import {
   paperCssPx,
   readoutPaperSize
 } from "../lib/pdf-paper.js";
+import { describeBodyFont, mapBodyFontPx } from "../lib/pdf-body-font.js";
 import {
   PDF_READOUT_COPY,
   extractReadoutBlocks,
@@ -115,7 +116,7 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
-import { inlinePaintBox, displayFormulaMinEm } from "../lib/pdf-formula-size.js";
+import { inlinePaintBox, displayFormulaMinEm, matchedDisplayCssSize } from "../lib/pdf-formula-size.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   assetLayoutCapPx,
@@ -1042,7 +1043,7 @@ function formulaPageFraction(block) {
   return Math.min(1, fraction);
 }
 
-function mountDisplayMath(node, block, img) {
+function mountDisplayMath(node, block, img, page) {
   const row = document.createElement("div");
   row.className = "oi-pdf-math-row";
   const scroll = document.createElement("div");
@@ -1050,11 +1051,18 @@ function mountDisplayMath(node, block, img) {
   scroll.tabIndex = 0;
   const clip = document.createElement("div");
   clip.className = "oi-pdf-math-clip";
-  const pageFraction = formulaPageFraction(block);
-  const bboxH = Array.isArray(block?.bbox) ? Number(block.bbox[3]) - Number(block.bbox[1]) : 0;
-  const minEm = displayFormulaMinEm(block?.inkShare, block?.scriptShare);
-  const width = pageFraction ? displayFormulaWidthCss(pageFraction, bboxH, minEm) : "";
-  if (width) row.style.setProperty("--oi-formula-w", width);
+  const matched = matchedFormulaStyle(block, page);
+  if (matched) {
+    row.classList.add("is-matched");
+    row.style.setProperty("--oi-formula-h", matched.height);
+    row.style.setProperty("--oi-formula-ar", matched.aspect);
+  } else {
+    const pageFraction = formulaPageFraction(block);
+    const bboxH = Array.isArray(block?.bbox) ? Number(block.bbox[3]) - Number(block.bbox[1]) : 0;
+    const minEm = displayFormulaMinEm(block?.inkShare, block?.scriptShare);
+    const width = pageFraction ? displayFormulaWidthCss(pageFraction, bboxH, minEm) : "";
+    if (width) row.style.setProperty("--oi-formula-w", width);
+  }
   const keep = Number(block?.eqKeep);
   if (keep > 0 && keep < 1) row.style.setProperty("--oi-eq-keep", String(keep));
   clip.append(img);
@@ -1072,12 +1080,12 @@ function mountDisplayMath(node, block, img) {
   });
 }
 
-function appendCropOrNotice(node, block, imageClass) {
+function appendCropOrNotice(node, block, imageClass, page) {
   const img = cropImage(block);
   if (img) {
     img.className = imageClass || "oi-pdf-math-crop";
     if (block.label === "formula") {
-      mountDisplayMath(node, block, img);
+      mountDisplayMath(node, block, img, page ?? node.dataset.page);
       return;
     }
     if ((block.label === "figure" || block.label === "table") && block.surface === "redraw" && block.assetCapPx > 0) {
@@ -1132,7 +1140,7 @@ function fillBlockText(node, block, layout) {
       }
       if (img) {
         img.className = "oi-pdf-math-crop";
-        mountDisplayMath(span, formula || {}, img);
+        mountDisplayMath(span, formula || {}, img, node.dataset.page);
       } else span.textContent = PDF_COPY.formulaFallback;
       node.append(span);
       return;
@@ -1238,7 +1246,7 @@ function appendFixtureReadout(parent, layout, options = {}) {
       node.dataset.label = String(visual.label || "");
       const capNode = caption ? captionNode(caption, page, layout) : null;
       if (capNode && caption && blocks.indexOf(caption) < blocks.indexOf(visual)) node.append(capNode);
-      appendCropOrNotice(node, visual, plan.imageClass);
+      appendCropOrNotice(node, visual, plan.imageClass, page);
       if (capNode && caption && blocks.indexOf(caption) > blocks.indexOf(visual)) node.append(capNode);
       parent.append(node);
       continue;
@@ -1255,7 +1263,7 @@ function appendFixtureReadout(parent, layout, options = {}) {
     const node = document.createElement(plan.tag);
     node.className = plan.className;
     if (plan.role) node.dataset.role = plan.role;
-    if (plan.image) appendCropOrNotice(node, block, plan.imageClass);
+    if (plan.image) appendCropOrNotice(node, block, plan.imageClass, page);
     else fillBlockText(node, block, layout);
     if (block.translationStatus) node.dataset.translationStatus = block.translationStatus;
     node.dataset.page = String(page);
@@ -1328,6 +1336,76 @@ function leftPageBox(page) {
   return null;
 }
 
+function stampBodyFont(layout, items, viewport) {
+  if (!layout) return layout;
+  const described = describeBodyFont(items, {
+    pageWidth: viewport?.width,
+    pageHeight: viewport?.height
+  });
+  layout.pageWidth = described.pageWidth || layout.pageWidth || null;
+  layout.pageHeight = described.pageHeight || layout.pageHeight || null;
+  layout.bodyItemHeight = described.bodyItemHeight;
+  layout.bodyFontTrusted = described.trusted;
+  return layout;
+}
+
+function paperHeightFor(pageNumber) {
+  const layout = getPageLayout(pageNumber);
+  const left = leftPageBox(pageNumber);
+  const pageW = Number(layout?.pageWidth) || 0;
+  const pageH = Number(layout?.pageHeight) || 0;
+  const leftW = left?.width || (pageW > 0 ? pageW * (Number(zoom) || 1) : 0);
+  const leftH = left?.height || (pageW > 0 && pageH > 0 && leftW > 0 ? leftW * (pageH / pageW) : 0);
+  const scroll = translateScrollRoot();
+  const avail = paperAvailWidth(scroll?.clientWidth || 0, PDF_PAPER_GUTTER_X);
+  const paper = readoutPaperSize({ leftWidth: leftW, leftHeight: leftH, availWidth: avail });
+  return paper.heightBase > 0 ? paper.heightBase : leftH;
+}
+
+function matchedFormulaStyle(block, page) {
+  const layout = getPageLayout(page);
+  const paperHeight = paperHeightFor(page);
+  const matched = matchedDisplayCssSize({
+    bbox: block?.bbox,
+    pageWidth: layout?.pageWidth,
+    pageHeight: layout?.pageHeight,
+    paperHeight
+  });
+  if (!matched) return null;
+  return {
+    height: paperCssPx(matched.cssHeight),
+    aspect: String(Math.round(matched.aspect * 10000) / 10000)
+  };
+}
+
+function applyBodyFont(paper, paperWidth) {
+  const layout = getPageLayout(paper.dataset.page);
+  const mapped = mapBodyFontPx({
+    bodyHeight: layout?.bodyItemHeight,
+    pageWidth: layout?.pageWidth,
+    paperWidth,
+    trusted: layout?.bodyFontTrusted === true
+  });
+  if (mapped.source === "text-layer") paper.style.setProperty("--oi-pdf-body-fs", paperCssPx(mapped.px));
+  else paper.style.removeProperty("--oi-pdf-body-fs");
+}
+
+function refreshMatchedFormulas(paper, paperHeight) {
+  const layout = getPageLayout(paper.dataset.page);
+  paper.querySelectorAll(".oi-pdf-math-row.is-matched").forEach((row) => {
+    const host = row.closest("[data-block-id]");
+    const block = (layout?.blocks || []).find((item) => item.id === host?.dataset?.blockId);
+    const matched = matchedDisplayCssSize({
+      bbox: block?.bbox,
+      pageWidth: layout?.pageWidth,
+      pageHeight: layout?.pageHeight,
+      paperHeight
+    });
+    if (!matched) return;
+    row.style.setProperty("--oi-formula-h", paperCssPx(matched.cssHeight));
+  });
+}
+
 function applyPaperMetrics() {
   const stack = paperStackEl();
   const scroll = translateScrollRoot();
@@ -1345,6 +1423,8 @@ function applyPaperMetrics() {
     paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
     paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
     paper.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
+    applyBodyFont(paper, size.width);
+    refreshMatchedFormulas(paper, size.heightBase);
   });
 }
 
@@ -2430,12 +2510,12 @@ async function ingestVendorLayout(n, mode, isStale) {
   if (isStale()) return null;
   const blocks = await cropLayoutBlocks(raster, page, mapped.blocks, n, isStale);
   if (!blocks || isStale()) return null;
-  const layout = {
+  const layout = stampBodyFont({
     ...mapped,
     kind: "blocks",
     blocks,
     itemCount: extractPageItems(content).length
-  };
+  }, content.items, viewport);
   setPageLayout(n, layout);
   return layout;
 }
@@ -2460,13 +2540,13 @@ async function ingestTextLayerLayout(n, isStale) {
   if (isStale()) return null;
   const blocks = await cropLayoutBlocks(raster, page, built.blocks, n, isStale);
   if (!blocks || isStale()) return null;
-  const layout = {
+  const layout = stampBodyFont({
     ...built,
     kind: "blocks",
     protocol: built.protocol || PROTOCOL,
     blocks,
     itemCount: extractPageItems(content).length
-  };
+  }, content.items, viewport);
   setPageLayout(n, layout);
   return layout;
 }
@@ -2488,11 +2568,12 @@ async function ingestFixtureLayout(n, isStale) {
   if (isStale()) return null;
   const content = await page.getTextContent();
   if (isStale()) return null;
+  const viewport = page.getViewport({ scale: 1 });
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
   const blocks = await cropLayoutBlocks(raster, page, sample.blocks, n, isStale);
   if (!blocks || isStale()) return null;
-  const layout = {
+  const layout = stampBodyFont({
     kind: "blocks",
     protocol: sample.protocol || PROTOCOL,
     page: n,
@@ -2501,7 +2582,7 @@ async function ingestFixtureLayout(n, isStale) {
     textSource: sample.textSource || "text-layer",
     blocks,
     itemCount: extractPageItems(content).length
-  };
+  }, content.items, viewport);
   setPageLayout(n, layout);
   return layout;
 }
@@ -2514,13 +2595,13 @@ async function ingestReadoutLayout(n, isStale) {
   if (isStale()) return null;
   const items = extractPageItems(content);
   const blocks = extractReadoutBlocks(content, { width: viewport.width, height: viewport.height });
-  const layout = {
+  const layout = stampBodyFont({
     kind: "readout",
     blocks,
     itemCount: items.length,
     pageWidth: viewport.width,
     pageHeight: viewport.height
-  };
+  }, content.items, viewport);
   setPageLayout(n, layout);
   return layout;
 }

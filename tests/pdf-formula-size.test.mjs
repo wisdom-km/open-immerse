@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CROP_SCALE, DISPLAY_INK_PREFER, displayFormulaWidthCss } from "../lib/pdf-blocks.js";
+import { CROP_SCALE, DISPLAY_BODY_HARD_MAX, displayFormulaWidthCss } from "../lib/pdf-blocks.js";
 import { FORMULA_CROP_PAD } from "../lib/pdf-text-layer.js";
 import {
   INLINE_SIDE_GAP_EM,
@@ -16,9 +16,11 @@ import {
   DISPLAY_INK_PAINT,
   UNIFORM_SCALE_TOL,
   displayFormulaMinEm,
+  matchedDisplayCssSize,
   inlinePaintBox,
   inlinePromotesToDisplay,
   scriptInkPx,
+  scriptMinEm,
   uniformScaleDelta,
   uniformScaleOk
 } from "../lib/pdf-formula-size.js";
@@ -44,10 +46,8 @@ test("F3-S3 script ink uses the 7px hard gate and promotes a tall inline", () =>
   assert.equal(inlinePromotesToDisplay(16 / 24, null), true);
   assert.equal(inlinePromotesToDisplay(16 / 24, 0.8), true);
   const painted = displayFormulaMinEm(0.76, 0.8);
-  const paintedH = painted * 15;
-  assert.ok(paintedH > 60);
-  assert.ok(scriptInkPx(paintedH, 0.11) >= SCRIPT_INK_MIN_PX - 1e-6);
-  assert.ok(scriptInkPx(paintedH, SCRIPT_SHARE_DEFAULT * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
+  assert.equal(painted, DISPLAY_BODY_HARD_MAX);
+  assert.ok(scriptInkPx(scriptMinEm(SCRIPT_SHARE_DEFAULT) * 15, SCRIPT_SHARE_DEFAULT * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
   const tall = inlinePaintBox(0.5, 0.1);
   assert.equal(tall.promote, true);
   assert.ok(tall.box > 2.2);
@@ -61,19 +61,29 @@ test("F3-S3 script ink uses the 7px hard gate and promotes a tall inline", () =>
   assert.ok(inflated.box > 2.2);
 });
 
-test("F3-S1 display em keeps prefer ink and does not cap the width at the column", () => {
+test("F3-S1 display paint stays capped at 2.5em and the live box matches the page", () => {
   assert.equal(DISPLAY_INK_PAINT, 1.45);
+  assert.equal(DISPLAY_BODY_HARD_MAX, 2.5);
   const em = displayFormulaMinEm(0.5, 0.2);
-  assert.ok(em * 0.5 >= DISPLAY_INK_PAINT - 1e-9);
-  assert.ok(scriptInkPx(em * 15, SCRIPT_SHARE_DEFAULT * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
-  // F04 measured 1.398 against a 1.40 floor. Paint 1.45 clears that hair.
-  const ffn = displayFormulaMinEm(20.97 / 35.64, 6.29 / 35.64);
-  assert.ok(ffn * (20.97 / 35.64) >= 1.4);
-  assert.ok(ffn * 15 * (6.29 / 35.64) >= 7);
-  const css = displayFormulaWidthCss(0.48, 0.04, em);
+  assert.equal(em, DISPLAY_BODY_HARD_MAX);
+  assert.ok(em <= DISPLAY_BODY_HARD_MAX);
+  const low = displayFormulaMinEm(0.22, 0.05);
+  assert.ok(low <= DISPLAY_BODY_HARD_MAX);
+  assert.ok(low * 0.22 <= DISPLAY_BODY_HARD_MAX);
+  const css = displayFormulaWidthCss(0.48, 0.04, 8);
   assert.match(css, /^max\(calc\(var\(--oi-pdf-left-w/);
-  assert.doesNotMatch(css, /^min\(100%/);
-  assert.match(css, new RegExp(`${em}em`));
+  assert.match(css, /2\.5em/);
+  assert.doesNotMatch(css, /8em/);
+  const pageWidth = 612;
+  const pageHeight = 792;
+  const paperHeight = 764.47;
+  const bbox = [0.26, 0.4, 0.74, 0.44];
+  const matched = matchedDisplayCssSize({ bbox, pageWidth, pageHeight, paperHeight });
+  assert.ok(Math.abs(matched.cssHeight - 0.04 * paperHeight) < 1e-6);
+  assert.ok(Math.abs(matched.cssWidth / matched.cssHeight - (0.48 * pageWidth) / (0.04 * pageHeight)) < 1e-6);
+  const exploded = displayFormulaWidthCss(0.9, 0.015, displayFormulaMinEm(0.22, null));
+  assert.match(exploded, /2\.5em/);
+  assert.doesNotMatch(exploded, /(?<![0-9.])[3-9](?:\.\d+)?em/);
 });
 
 test("F3-S6 side gap is the locked 0.2em and freezes stay put", () => {

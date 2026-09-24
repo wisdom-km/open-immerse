@@ -253,7 +253,10 @@ h1 {
   flex-direction: column;
   align-items: center;
   gap: var(--oi-pdf-paper-gap-y);
-  width: 100%;
+  /* zoom shrinks the flex box by the same factor. Multiplying the specified
+     width back keeps centered papers inside the scroll origin, so scrollLeft
+     0 still shows the left edge at 150%. */
+  width: calc(100% * var(--oi-mirror-zoom, 1));
   min-height: 0;
   zoom: var(--oi-mirror-zoom, 1);
 }
@@ -265,6 +268,7 @@ h1 {
   display: flex;
   flex-direction: column;
   width: var(--oi-pdf-paper-w);
+  min-width: 0;
   min-height: var(--oi-pdf-paper-h-base);
   background: var(--oi-paper);
   color: var(--oi-paper-ink);
@@ -388,7 +392,7 @@ h1 {
   background: transparent;
   border: none;
   box-shadow: none;
-  font-size: 15px;
+  font-size: var(--oi-pdf-body-fs, 15px);
 }
 .oi-pdf-p:has(+ .oi-pdf-display-math),
 .oi-pdf-p:has(+ .oi-pdf-figure),
@@ -437,6 +441,9 @@ h1 {
   max-width: none;
   background: transparent;
 }
+.oi-pdf-math-row.is-matched .oi-pdf-math-clip {
+  width: calc(var(--oi-formula-h) * var(--oi-formula-ar, 1) * var(--oi-eq-keep, 1));
+}
 .oi-pdf-eq-num {
   flex: 0 0 auto;
   align-self: center;
@@ -459,6 +466,7 @@ h1 {
   width: var(--oi-formula-w, max-content);
   height: auto;
   max-width: none;
+  max-height: 2.5em;
   min-height: 0;
   object-fit: contain;
   vertical-align: baseline;
@@ -466,6 +474,12 @@ h1 {
   box-shadow: none;
   border-radius: 0;
   background: transparent;
+}
+.pane-translate .readout.md-readout .oi-pdf-math-row.is-matched .oi-pdf-math-crop {
+  width: auto;
+  height: var(--oi-formula-h);
+  max-width: none;
+  max-height: none;
 }
 .oi-pdf-inline-math {
   display: inline-block;
@@ -737,7 +751,7 @@ h1 {
 .oi-pdf-h1 + .oi-pdf-h2 { margin-top: 16px; }
 .oi-pdf-p {
   margin: 0 0 0.7em;
-  font: 400 15px/1.7 var(--oi-font);
+  font: 400 var(--oi-pdf-body-fs, 15px)/1.7 var(--oi-font);
   color: var(--oi-text);
 }
 .oi-pdf-p:last-child { margin-bottom: 0; }
