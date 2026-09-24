@@ -201,7 +201,7 @@ test("inline box height is ink divided by pad share, not a taller fixed em", () 
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   assert.match(css, new RegExp(`--oi-pdf-inline-crop-em, ${box}em`));
   assert.match(css, new RegExp(`--oi-pdf-inline-line-em, ${line}em`));
-  assert.match(viewer, /matchedFormulaStyle\(formula, node\.dataset\.page\)/);
+  assert.match(viewer, /matchedFormulaStyle\(formula, layout\?\.page \?\? node\.dataset\.page\)/);
   assert.match(viewer, /INLINE_BODY_HARD_MAX/);
   assert.doesNotMatch(viewer, /classList\.add\("is-promoted"\)/);
   assert.match(viewer, /displayFormulaMinEm\(block\?\.inkShare, block\?\.scriptShare\)/);

@@ -1139,7 +1139,7 @@ function fillBlockText(node, block, layout) {
     // Stay on the line. A tall paint box used to promote these to a display
     // row, which then clamped at 2.5em. Height follows the left bbox; without
     // one it stops near 1.4× body.
-    const matched = matchedFormulaStyle(formula, node.dataset.page);
+    const matched = matchedFormulaStyle(formula, layout?.page ?? node.dataset.page);
     if (matched) {
       span.classList.add("is-matched");
       span.style.setProperty("--oi-formula-h", matched.height);
@@ -1258,12 +1258,12 @@ function appendFixtureReadout(parent, layout, options = {}) {
     const node = document.createElement(plan.tag);
     node.className = plan.className;
     if (plan.role) node.dataset.role = plan.role;
-    if (plan.image) appendCropOrNotice(node, block, plan.imageClass, page);
-    else fillBlockText(node, block, layout);
-    if (block.translationStatus) node.dataset.translationStatus = block.translationStatus;
     node.dataset.page = String(page);
     node.dataset.blockId = String(block.id || "");
     node.dataset.label = String(block.label || "");
+    if (block.translationStatus) node.dataset.translationStatus = block.translationStatus;
+    if (plan.image) appendCropOrNotice(node, block, plan.imageClass, page);
+    else fillBlockText(node, block, layout);
     if (block.label === "heading") {
       decorateAbstractHeading(node, block.text);
       decorateAbstractHeading(node, block.translation);

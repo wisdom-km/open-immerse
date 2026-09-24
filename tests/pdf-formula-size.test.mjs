@@ -113,6 +113,12 @@ test("inline formulas stay on the bbox and cap at 1.4 body without one", () => {
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
   assert.match(viewer, /oi-pdf-inline-math/);
+  assert.match(viewer, /matchedFormulaStyle\(formula, layout\?\.page \?\? node\.dataset\.page\)/);
+  const readout = viewer.slice(viewer.indexOf("function appendFixtureReadout"), viewer.indexOf("function onReadoutBlockClick"));
+  const paragraph = readout.slice(readout.lastIndexOf("const plan = blockReadoutPlan(block)"));
+  const pageStamp = paragraph.indexOf("node.dataset.page = String(page)");
+  const fillAt = paragraph.indexOf("fillBlockText(node, block, layout)");
+  assert.ok(pageStamp >= 0 && fillAt > pageStamp);
   assert.doesNotMatch(viewer, /classList\.add\("is-promoted"\)/);
   assert.match(css, /\.oi-pdf-inline-math\.is-matched:has\(\.oi-pdf-math-crop\)\s*\{[^}]*display:\s*inline-block/s);
   assert.match(css, /\.oi-pdf-inline-math\.is-matched \.oi-pdf-math-crop\s*\{[^}]*height:\s*var\(--oi-formula-h\)/s);
