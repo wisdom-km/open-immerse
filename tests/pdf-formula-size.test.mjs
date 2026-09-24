@@ -9,6 +9,8 @@ import {
   INLINE_SIDE_GAP_EM,
   SCRIPT_INK_MIN_PX,
   SCRIPT_INK_TARGET_PX,
+  SCRIPT_SHARE_DEFAULT,
+  SCRIPT_SHARE_LOW,
   SCRIPT_SHARE_SAFETY,
   DISPLAY_INK_PAINT,
   UNIFORM_SCALE_TOL,
@@ -35,7 +37,14 @@ test("F3-S3 script ink uses the 7px hard gate and promotes a tall inline", () =>
   const cssH = 7 / 0.25;
   assert.ok(scriptInkPx(cssH, 0.25) >= 7);
   assert.equal(SCRIPT_SHARE_SAFETY, 0.5);
-  assert.equal(inlinePromotesToDisplay(16 / 24, null), false);
+  assert.equal(SCRIPT_SHARE_LOW, 0.28);
+  assert.equal(SCRIPT_SHARE_DEFAULT, 0.32);
+  // F09 had no usable scriptShare, so the inline box never grew (k ≈ 6.86).
+  assert.equal(inlinePromotesToDisplay(16 / 24, null), true);
+  const missing = displayFormulaMinEm(0.76, null);
+  assert.ok(scriptInkPx(missing * 15, SCRIPT_SHARE_DEFAULT * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
+  // A share that would push inline ink past 1.35 becomes display, not a fatter inline.
+  assert.equal(inlinePromotesToDisplay(0.867, 0.533), true);
   const tall = inlinePaintBox(0.5, 0.1);
   assert.equal(tall.promote, true);
   assert.ok(tall.box > 2.2);

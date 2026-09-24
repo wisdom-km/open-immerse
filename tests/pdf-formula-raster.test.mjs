@@ -56,7 +56,7 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
 
   const bbox = [0.26, 0.4, 0.74, 0.44];
   const size = formulaDisplayCssSize({
-    block: { label: "formula", display: true, bbox },
+    block: { label: "formula", display: true, bbox, scriptShare: 0.8 },
     pageWidth,
     pageHeight,
     leftWidth: paperWidth,
@@ -78,7 +78,7 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
   assert.ok(atTwo.pixelHeight / size.cssHeight >= 2);
 
   const zoomed = formulaDisplayCssSize({
-    block: { label: "formula", display: true, bbox },
+    block: { label: "formula", display: true, bbox, scriptShare: 0.8 },
     pageWidth,
     pageHeight,
     leftWidth: paperWidth,
@@ -117,7 +117,7 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
 
   const shortBox = [0.26, 0.4, 0.74, 0.41];
   const short = formulaDisplayCssSize({
-    block: { label: "formula", display: true, bbox: shortBox },
+    block: { label: "formula", display: true, bbox: shortBox, scriptShare: 0.8 },
     pageWidth,
     pageHeight,
     leftWidth: paperWidth,
