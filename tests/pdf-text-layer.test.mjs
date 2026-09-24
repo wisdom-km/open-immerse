@@ -76,6 +76,52 @@ test("body citations and a base with subscript stay in one source sentence", () 
   assert.equal(page.blocks.some((block) => block.label === "formula"), false);
 });
 
+test("CMMI/CMSY h_{t−1} stays Unicode and does not become a formula crop", () => {
+  const math = (str, x, y, width, height, face) => pdfItem(str, x, y, width, height, {
+    fontName: "g_d0_f3",
+    fontRealName: face
+  });
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("hidden states ", 72, 500, 78, 10, { fontName: "NimbusRomNo9L-Regu" }),
+      math("h", 152, 500, 6, 10, "LICAEO+CMMI10"),
+      math("t", 158, 496, 4, 7, "LICAEO+CMMI7"),
+      pdfItem(", previous ", 164, 500, 58, 10, { fontName: "NimbusRomNo9L-Regu" }),
+      math("h", 224, 500, 6, 10, "LICAEO+CMMI10"),
+      math("t", 230, 496.5, 4, 7, "LICAEO+CMMI7"),
+      math("−", 234.2, 497, 7, 10, "LICAEO+CMSY10"),
+      math("1", 241.4, 496.5, 4, 7, "LICAEO+CMMI7"),
+      pdfItem(" and the input.", 248, 500, 72, 10, { fontName: "NimbusRomNo9L-Regu" })
+    ],
+    viewport: unitViewport(612, 792),
+    page: 2
+  });
+  const sentence = page.blocks.find((block) => /hidden states/.test(block.text || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /h_t/);
+  assert.match(sentence.text, /h_\{t−1\}/);
+  assert.doesNotMatch(sentence.text, /⟦f\d+⟧/);
+  assert.equal(sentence.placeholders?.length || 0, 0);
+  assert.equal(page.blocks.some((block) => block.label === "formula"), false);
+
+  const split = textLayerToBlocks({
+    items: [
+      pdfItem("state ", 72, 480, 36, 10),
+      pdfItem("h", 110, 480, 8, 10, { fontName: "CMMI10" }),
+      pdfItem("t", 118, 476, 5, 7, { fontName: "CMMI7" }),
+      pdfItem("−", 124, 477, 8, 10, { fontName: "CMSY10" }),
+      pdfItem("1", 133, 476, 5, 7, { fontName: "CMMI7" }),
+      pdfItem(" remains.", 140, 480, 52, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 2
+  });
+  const again = split.blocks.find((block) => /state /.test(block.text || ""));
+  assert.match(again.text, /h_\{t−1\}/);
+  assert.doesNotMatch(again.text, /⟦f\d+⟧/);
+  assert.equal(split.blocks.some((block) => block.label === "formula"), false);
+});
+
 test("a fraction beside softmax is cropped with the full display equation", () => {
   const page = textLayerToBlocks({
     items: [

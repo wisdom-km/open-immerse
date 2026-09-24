@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { blockReadoutPlan, blockRenderPieces, blockTranslationIntegrity, displayCropWidthCss, displayInkMinEm, DISPLAY_CROP_MIN_HEIGHT_EM, DISPLAY_INK_PREFER } from "../lib/pdf-blocks.js";
+import { blockReadoutPlan, blockRenderPieces, blockTranslationIntegrity, displayCropWidthCss, displayInkMinEm, DISPLAY_CROP_MIN_HEIGHT_EM, DISPLAY_INK_PREFER, remapLiveExtraPlaceholders } from "../lib/pdf-blocks.js";
 import { applySavedPairs, blockSoftLead } from "../lib/pdf-library.js";
 import { formatPlaintextRelation, plaintextRelationParts, plaintextRelationsIn } from "../lib/pdf-plaintext-formula.js";
 import {
@@ -240,7 +240,8 @@ test("inline box height is ink divided by pad share, not a taller fixed em", () 
 
 test("retired simple placeholders remap to Unicode instead of dumping English", () => {
   const library = readFileSync(join(root, "lib/pdf-library.js"), "utf8");
-  assert.match(library, /（译文中的公式或引用与原文不符，以下为原文）/);
+  assert.match(library, /（公式槽待对齐）/);
+  assert.doesNotMatch(library, /公式或引用与原文不符，以下为原文/);
   assert.match(library, /（旧译文未沿用。以下为文字层原文）/);
   assert.match(library, /（译文待核对，以下为原文）/);
 
@@ -284,7 +285,81 @@ test("retired simple placeholders remap to Unicode instead of dumping English", 
     ]
   };
   assert.equal(blockTranslationIntegrity(real).reason, "formula-placeholder-mismatch");
-  assert.match(blockSoftLead(real), /公式或引用与原文不符/);
+  assert.match(blockSoftLead(real), /公式槽待对齐/);
+  assert.doesNotMatch(blockSoftLead(real), /以下为原文/);
   const fallen = blockRenderPieces(real, [real, { id: "f1", label: "formula" }, { id: "f2", label: "formula" }]);
-  assert.match(fallen.map((piece) => piece.text || "").join(""), /^Where the projections/);
+  const fallenText = fallen.map((piece) => piece.text || "").join("");
+  assert.match(fallenText, /其中这些投影是参数矩阵/);
+  assert.doesNotMatch(fallenText, /Where the projections/);
+  assert.equal(fallen.some((piece) => piece.type === "image"), false);
+});
+
+test("live extra ⟦f1⟧ remaps onto Unicode h_{t−1} and keeps the Chinese sentence", () => {
+  const text = "Aligning the positions, they generate hidden states h_t, as a function of the previous hidden state ⟦f1⟧ and the input for position t. Factorizations [21] and conditional computation [32] help.";
+  const translation = "将位置对齐后，模型生成隐藏状态h_t，其取决于前一隐藏状态h_{t−1}和位置t的输入。因子分解[21]和条件计算[32]有帮助。";
+  const block = {
+    id: "p2-b3",
+    sourceId: "p2-s17zxts",
+    label: "text",
+    text,
+    sourceText: text.replace("⟦f1⟧", "h_{t−1}"),
+    translation,
+    translationStatus: "verified",
+    placeholders: [{ token: "⟦f1⟧", blockId: "p2-b4" }]
+  };
+  const remapped = remapLiveExtraPlaceholders(block);
+  assert.match(remapped, /隐藏状态h_t/);
+  assert.match(remapped, /前一隐藏状态⟦f1⟧/);
+  assert.doesNotMatch(remapped, /h_\{t−1\}/);
+  assert.equal(blockTranslationIntegrity(block).valid, true);
+  assert.equal(blockSoftLead(block), "");
+  const pieces = blockRenderPieces(block, [
+    block,
+    { id: "p2-b4", label: "formula", imageUrl: "data:image/png;base64,crop" }
+  ]);
+  const rendered = pieces.map((piece) => piece.text || "").join("");
+  assert.match(rendered, /隐藏状态h_t/);
+  assert.doesNotMatch(rendered, /hidden states/);
+  assert.equal(pieces.filter((piece) => piece.type === "image").length, 1);
+  assert.equal(pieces.find((piece) => piece.type === "image").blockId, "p2-b4");
+
+  const restored = applySavedPairs([{
+    id: "p2-b3",
+    sourceId: "p2-s17zxts",
+    label: "text",
+    text,
+    sourceText: block.sourceText
+  }], [{
+    sourceId: "p2-s17zxts",
+    text,
+    sourceText: block.sourceText,
+    translation,
+    status: "verified"
+  }]);
+  assert.match(restored[0].translation, /前一隐藏状态⟦f1⟧/);
+  assert.match(restored[0].translation, /因子分解\[21\]/);
+  assert.equal(blockTranslationIntegrity(restored[0]).valid, true);
+
+  const unsafe = {
+    text: "hidden states h_t, previous hidden state ⟦f1⟧ and ⟦f2⟧.",
+    sourceText: "hidden states h_t, previous hidden state h_{t−1} and W.",
+    translation: "隐藏状态h_t，前一隐藏状态h_{t−1}。",
+    placeholders: [
+      { token: "⟦f1⟧", blockId: "f1" },
+      { token: "⟦f2⟧", blockId: "f2" }
+    ]
+  };
+  assert.equal(remapLiveExtraPlaceholders(unsafe), "");
+  assert.equal(blockTranslationIntegrity(unsafe).reason, "formula-placeholder-mismatch");
+  assert.match(blockSoftLead(unsafe), /公式槽待对齐/);
+  assert.doesNotMatch(blockSoftLead(unsafe), /以下为原文/);
+  const kept = blockRenderPieces(unsafe, [
+    unsafe,
+    { id: "f1", label: "formula" },
+    { id: "f2", label: "formula" }
+  ]);
+  const keptText = kept.map((piece) => piece.text || "").join("");
+  assert.match(keptText, /隐藏状态h_t，前一隐藏状态h_\{t−1\}/);
+  assert.doesNotMatch(keptText, /hidden states/);
+  assert.equal(kept.some((piece) => piece.type === "image"), false);
 });
