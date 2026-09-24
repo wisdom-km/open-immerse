@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CROP_SCALE } from "../lib/pdf-blocks.js";
+import { CROP_SCALE, contentColumnShare } from "../lib/pdf-blocks.js";
 import {
   FORMULA_CROP_MAX_EDGE,
   FORMULA_CROP_MAX_PIXELS,
   FORMULA_RASTER_SLACK,
+  assetLayoutCapPx,
   capFormulaRasterScale,
   createFormulaRasterCache,
   formulaDisplayCssSize,
@@ -16,7 +17,9 @@ import {
   formulaRasterCacheKey,
   formulaRasterPlan,
   formulaRegionWindow,
-  scaleCovering
+  isSourceRedrawBlock,
+  scaleCovering,
+  visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { FORMULA_INK_PAD_PX, measureFormulaCrop } from "../lib/pdf-text-layer.js";
 
@@ -330,6 +333,192 @@ test("viewer sharpens formula crops with a viewport offset and leaves the page r
   const trimAt = imageFn.indexOf("formulaInkBbox");
   const cropAt = imageFn.indexOf("return cropBlockImage");
   assert.ok(drawnAt >= 0 && trimAt > drawnAt && cropAt > trimAt);
+});
+
+test("raster plan covers css times devicePixelRatio times slack", () => {
+  const covered = formulaRasterPlan({
+    bbox: [0, 0, 1, 1],
+    pageWidth: 100,
+    pageHeight: 80,
+    rasterWidth: 400,
+    rasterHeight: 320,
+    cssWidth: 150,
+    cssHeight: 120,
+    devicePixelRatio: 2
+  });
+  assert.equal(covered.reusePageRaster, true);
+  assert.equal(covered.scale, CROP_SCALE);
+  assert.ok(covered.pixelWidth >= Math.ceil(150 * 2 * FORMULA_RASTER_SLACK));
+  assert.ok(covered.pixelHeight >= Math.ceil(120 * 2 * FORMULA_RASTER_SLACK));
+
+  const soft = formulaRasterPlan({
+    bbox: [0, 0, 1, 1],
+    pageWidth: 100,
+    pageHeight: 80,
+    rasterWidth: 200,
+    rasterHeight: 160,
+    cssWidth: 180,
+    cssHeight: 140,
+    devicePixelRatio: 2
+  });
+  assert.equal(soft.reusePageRaster, false);
+  assert.equal(soft.capped, false);
+  assert.ok(soft.scale > CROP_SCALE);
+  assert.equal(soft.scale % CROP_SCALE, 0);
+  assert.ok(soft.pixelWidth >= Math.ceil(180 * 2 * FORMULA_RASTER_SLACK - 1e-9));
+  assert.ok(soft.pixelHeight >= Math.ceil(140 * 2 * FORMULA_RASTER_SLACK - 1e-9));
+  assert.equal(soft.pixelWidth / soft.pixelHeight, 200 / 160);
+});
+
+test("figure and table css boxes stay uniform and use the formula raster plan", () => {
+  const bbox = [0.1, 0.15, 0.9, 0.7];
+  const rasterWidth = pageWidth * CROP_SCALE;
+  const rasterHeight = pageHeight * CROP_SCALE;
+  const figure = visualDisplayCssSize({
+    block: { label: "figure", bbox },
+    pageWidth,
+    pageHeight,
+    paperWidth,
+    paperHeight,
+    rasterWidth,
+    rasterHeight
+  });
+  const table = visualDisplayCssSize({
+    block: { label: "table", bbox },
+    pageWidth,
+    pageHeight,
+    paperWidth,
+    paperHeight,
+    rasterWidth,
+    rasterHeight
+  });
+  assert.deepEqual(table, figure);
+  const column = paperWidth * contentColumnShare();
+  assert.ok(figure.cssWidth <= column + 1e-6);
+  assert.ok(figure.layoutCapPx > column);
+  const crop = formulaRegionWindow(bbox, rasterWidth, rasterHeight);
+  assert.ok(Math.abs(figure.cssWidth / figure.cssHeight - crop.pixelWidth / crop.pixelHeight) < 1e-9);
+  assert.equal(assetLayoutCapPx(bbox, rasterWidth, rasterHeight), figure.layoutCapPx);
+  const plan = formulaRasterPlan({
+    bbox,
+    pageWidth,
+    pageHeight,
+    rasterWidth,
+    rasterHeight,
+    cssWidth: figure.cssWidth,
+    cssHeight: figure.cssHeight,
+    devicePixelRatio: 2
+  });
+  const needW = Math.ceil(figure.cssWidth * 2 * FORMULA_RASTER_SLACK - 1e-9);
+  const needH = Math.ceil(figure.cssHeight * 2 * FORMULA_RASTER_SLACK - 1e-9);
+  assert.equal(plan.scale % CROP_SCALE, 0);
+  assert.ok(plan.pixelWidth >= needW);
+  assert.ok(plan.pixelHeight >= needH);
+  if (!plan.reusePageRaster) {
+    assert.ok(plan.scale > CROP_SCALE);
+    assert.equal(plan.capped, false);
+  }
+
+  const zoomed = visualDisplayCssSize({
+    block: { label: "figure", bbox },
+    pageWidth,
+    pageHeight,
+    paperWidth,
+    paperHeight,
+    rasterWidth,
+    rasterHeight,
+    mirrorZoom: 2
+  });
+  assert.ok(Math.abs(zoomed.cssWidth - figure.cssWidth * 2) < 1e-6);
+  assert.equal(zoomed.layoutCapPx, figure.layoutCapPx);
+
+  const smallBox = [0.4, 0.4, 0.48, 0.46];
+  const small = visualDisplayCssSize({
+    block: { label: "figure", bbox: smallBox },
+    pageWidth,
+    pageHeight,
+    paperWidth,
+    paperHeight,
+    rasterWidth,
+    rasterHeight
+  });
+  const smallCrop = formulaRegionWindow(smallBox, rasterWidth, rasterHeight);
+  assert.equal(small.cssWidth, smallCrop.pixelWidth);
+  assert.equal(small.cssHeight, smallCrop.pixelHeight);
+  assert.ok(small.cssWidth < column);
+  const soft = formulaRasterPlan({
+    bbox: smallBox,
+    pageWidth,
+    pageHeight,
+    rasterWidth,
+    rasterHeight,
+    cssWidth: small.cssWidth,
+    cssHeight: small.cssHeight,
+    devicePixelRatio: 2
+  });
+  assert.equal(soft.reusePageRaster, false);
+  assert.equal(soft.scale % CROP_SCALE, 0);
+  assert.ok(soft.pixelWidth >= Math.ceil(small.cssWidth * 2 * FORMULA_RASTER_SLACK - 1e-9));
+  assert.ok(soft.pixelHeight >= Math.ceil(small.cssHeight * 2 * FORMULA_RASTER_SLACK - 1e-9));
+
+  const formula = { label: "formula", display: true, bbox, scriptShare: 0.8 };
+  const via = visualDisplayCssSize({
+    block: formula,
+    bbox,
+    pageWidth,
+    pageHeight,
+    leftWidth: paperWidth,
+    paperWidth,
+    paperHeight,
+    rasterWidth,
+    rasterHeight
+  });
+  const direct = formulaDisplayCssSize({
+    block: formula,
+    bbox,
+    pageWidth,
+    pageHeight,
+    leftWidth: paperWidth,
+    paperWidth,
+    paperHeight
+  });
+  assert.deepEqual(via, direct);
+  assert.equal(isSourceRedrawBlock(formula), true);
+  assert.equal(isSourceRedrawBlock({ label: "figure" }), true);
+  assert.equal(isSourceRedrawBlock({ label: "table" }), true);
+  assert.equal(isSourceRedrawBlock({ label: "text" }), false);
+  assert.equal(visualDisplayCssSize({ block: { label: "figure" } }), null);
+});
+
+test("viewer redraws figures and tables on the formula quality path", () => {
+  assert.match(viewerSrc, /async function renderSharpVisualCrop/);
+  assert.match(viewerSrc, /visualDisplayCssSize/);
+  assert.match(viewerSrc, /isSourceRedrawBlock/);
+  assert.match(viewerSrc, /data-oi-surface/);
+  assert.match(viewerSrc, /surface = "png"/);
+  assert.match(viewerSrc, /surface = "redraw"/);
+  assert.doesNotMatch(viewerSrc, /oi-redraw-badge|surface-badge/);
+  const crop = viewerSrc.slice(
+    viewerSrc.indexOf("async function withRasterCrop"),
+    viewerSrc.indexOf("async function cropLayoutBlocks")
+  );
+  assert.match(crop, /renderSharpVisualCrop/);
+  assert.match(crop, /imageForVisualBlock/);
+  assert.match(crop, /assetLayoutCapPx/);
+  const append = viewerSrc.slice(
+    viewerSrc.indexOf("function appendCropOrNotice"),
+    viewerSrc.indexOf("function captionNode")
+  );
+  assert.match(append, /assetCapPx/);
+  assert.match(append, /setProperty\("height", "auto"\)/);
+  assert.match(append, /setProperty\("max-width"/);
+  assert.doesNotMatch(append, /object-fit|transform|scaleX|scaleY|style\.maxWidth/);
+  const refresh = viewerSrc.slice(
+    viewerSrc.indexOf("async function refreshFormulaCropsForDisplay"),
+    viewerSrc.indexOf("function setMirrorZoom")
+  );
+  assert.match(refresh, /isSourceRedrawBlock/);
+  assert.match(refresh, /renderSharpFormulaCrop/);
 });
 
 test("mirror zoom and device pixel ratio replan formula crops", () => {

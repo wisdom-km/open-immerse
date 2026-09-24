@@ -179,10 +179,19 @@ test("empty mode stays on the text layer, and cloud with no key does not fetch",
     protocol: "blocks-1",
     page: 1,
     textSource: "text-layer",
-    blocks: [{ id: "f", label: "formula", imageUrl: "data:image/png;base64,aa", content: "n" }]
+    blocks: [{
+      id: "f",
+      label: "formula",
+      imageUrl: "data:image/png;base64,aa",
+      content: "n",
+      surface: "redraw",
+      assetCapPx: 240
+    }]
   });
   assert.equal(stored.blocks[0].imageUrl, undefined);
   assert.equal(stored.blocks[0].content, undefined);
+  assert.equal(stored.blocks[0].surface, undefined);
+  assert.equal(stored.blocks[0].assetCapPx, undefined);
   assert.match(layoutCacheKey({ hash: "abc", page: 1, mode: "local-ocr" }), /abc:1:local-ocr:blocks-1/);
 });
 

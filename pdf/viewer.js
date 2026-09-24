@@ -118,10 +118,12 @@ import { measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js"
 import { inlinePaintBox, displayFormulaMinEm } from "../lib/pdf-formula-size.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
+  assetLayoutCapPx,
   createFormulaRasterCache,
-  formulaDisplayCssSize,
   formulaRasterCacheKey,
-  formulaRasterPlan
+  formulaRasterPlan,
+  isSourceRedrawBlock,
+  visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import {
@@ -917,11 +919,12 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
 }
 
 /**
- * Redraw one formula bbox when the CROP_SCALE crop is softer than the CSS box.
- * The page raster and its ink box stay as they are; a miss keeps that crop.
+ * Redraw one formula, figure, or table bbox when the CROP_SCALE crop is
+ * softer than the CSS box. The page raster stays as it is; a miss keeps
+ * that crop. No badge.
  */
-async function renderSharpFormulaCrop(page, raster, block, pageNumber) {
-  if (!page || block?.label !== "formula" || !Array.isArray(block.bbox) || !block.imageUrl) return "";
+async function renderSharpVisualCrop(page, raster, block, pageNumber) {
+  if (!page || !isSourceRedrawBlock(block) || !Array.isArray(block.bbox) || !block.imageUrl) return "";
   let unit = null;
   try {
     unit = page.getViewport({ scale: 1 });
@@ -929,7 +932,12 @@ async function renderSharpFormulaCrop(page, raster, block, pageNumber) {
     return "";
   }
   const metrics = formulaPaneMetrics(pageNumber, unit);
-  const css = formulaDisplayCssSize({ ...metrics, block });
+  const css = visualDisplayCssSize({
+    ...metrics,
+    block,
+    rasterWidth: raster?.pixelWidth,
+    rasterHeight: raster?.pixelHeight
+  });
   if (!css) return "";
   const plan = formulaRasterPlan({
     bbox: block.bbox,
@@ -980,13 +988,29 @@ async function renderSharpFormulaCrop(page, raster, block, pageNumber) {
   }
 }
 
+async function renderSharpFormulaCrop(page, raster, block, pageNumber) {
+  return renderSharpVisualCrop(page, raster, block, pageNumber);
+}
+
 async function withRasterCrop(raster, page, block, pageNumber) {
   if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
   const next = { ...block };
   next.imageUrl = imageForVisualBlock(raster, next);
-  if (next.label === "formula" && next.imageUrl) {
-    const sharp = await renderSharpFormulaCrop(page, raster, next, pageNumber);
-    if (sharp) next.imageUrl = sharp;
+  if (next.imageUrl) next.surface = "png";
+  if ((next.label === "figure" || next.label === "table") && raster) {
+    const cap = assetLayoutCapPx(
+      next.bbox,
+      raster.pixelWidth || raster.canvas?.width,
+      raster.pixelHeight || raster.canvas?.height
+    );
+    if (cap > 0) next.assetCapPx = cap;
+  }
+  if (isSourceRedrawBlock(next) && next.imageUrl) {
+    const sharp = await renderSharpVisualCrop(page, raster, next, pageNumber);
+    if (sharp) {
+      next.imageUrl = sharp;
+      next.surface = "redraw";
+    }
   }
   return next;
 }
@@ -1005,6 +1029,9 @@ function cropImage(block) {
   const img = document.createElement("img");
   img.alt = visualAlt(block.label);
   img.src = block.imageUrl;
+  if (block?.surface === "redraw" || block?.surface === "png") {
+    img.setAttribute("data-oi-surface", block.surface);
+  }
   return img;
 }
 
@@ -1052,6 +1079,10 @@ function appendCropOrNotice(node, block, imageClass) {
     if (block.label === "formula") {
       mountDisplayMath(node, block, img);
       return;
+    }
+    if ((block.label === "figure" || block.label === "table") && block.surface === "redraw" && block.assetCapPx > 0) {
+      img.style.setProperty("max-width", `min(100%, ${block.assetCapPx}px)`);
+      img.style.setProperty("height", "auto");
     }
     const pageFraction = displayCropColumnFraction(block);
     if (pageFraction) img.style.width = displayFormulaWidthCss(pageFraction, Number(block.bbox[3]) - Number(block.bbox[1]));
@@ -2764,8 +2795,9 @@ async function goPage(dir) {
 
 function formulaCropPlanKeyNow() {
   const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
-  const zoom = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
-  return `${zoom.toFixed(4)}|${dpr.toFixed(3)}`;
+  const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
+  const left = Number(zoom) > 0 ? Number(zoom) : 1;
+  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}`;
 }
 
 function noteFormulaCropPlan(layout) {
@@ -2773,9 +2805,10 @@ function noteFormulaCropPlan(layout) {
 }
 
 /**
- * Right-pane zoom and devicePixelRatio change the CSS size of a formula.
- * The #69 cache key already includes scale and DPR; this replans and
- * redraws only formula crops whose stored key is stale.
+ * Mirror zoom, left-pane zoom, and devicePixelRatio change the CSS size
+ * of a formula, figure, or table. The cache key already includes scale
+ * and DPR; this replans visuals whose stored key is stale. A miss keeps
+ * the page-raster crop.
  */
 let formulaCropGen = 0;
 
@@ -2806,7 +2839,7 @@ async function refreshFormulaCropsForDisplay() {
     if (gen !== formulaCropGen) return;
     const layout = getPageLayout(n);
     if (!layout?.blocks?.length || layout.formulaPlanKey === key) continue;
-    if (!layout.blocks.some((block) => block?.label === "formula" && block.imageUrl)) {
+    if (!layout.blocks.some((block) => isSourceRedrawBlock(block) && block.imageUrl)) {
       noteFormulaCropPlan(layout);
       continue;
     }
@@ -2823,10 +2856,11 @@ async function refreshFormulaCropsForDisplay() {
     };
     for (const block of layout.blocks) {
       if (gen !== formulaCropGen) return;
-      if (block?.label !== "formula" || !block.imageUrl) continue;
+      if (!isSourceRedrawBlock(block) || !block.imageUrl) continue;
       const sharp = await renderSharpFormulaCrop(page, raster, block, n);
       if (sharp && sharp !== block.imageUrl) {
         block.imageUrl = sharp;
+        block.surface = "redraw";
         changed = true;
       }
     }
@@ -2876,6 +2910,7 @@ async function setZoom(next) {
   $("zoomLabel").textContent = zoomLabel(zoom);
   await layoutPages();
   applyPaperMetrics();
+  refreshFormulaCropsForDisplay();
   await scheduleVisibleRenders();
   syncZoomChip();
   syncZoomButtons();
