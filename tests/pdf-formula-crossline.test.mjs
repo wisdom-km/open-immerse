@@ -8,6 +8,7 @@ import {
   DISPLAY_INK_OUTSET,
   FORMULA_CROP_PAD,
   FORMULA_PAD_LIMIT,
+  diagnoseDisplayMerge,
   displayLineGapRatio,
   measureFormulaCrop,
   textLayerToBlocks
@@ -15,6 +16,7 @@ import {
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const fixture = JSON.parse(readFileSync(join(root, "tests/fixtures/pdf-blocks/crossline-display.json"), "utf8"));
+const realGeometry = JSON.parse(readFileSync(join(root, "tests/fixtures/pdf-blocks/crossline-real-geometry.json"), "utf8"));
 
 function unitViewport(width, height) {
   return {
@@ -321,4 +323,103 @@ test("merged display crops keep descender and side-bearing ink inside the pad", 
   assert.equal(covers(bearing[0], bearing[1]), true);
   assert.ok(measured.bbox[0] >= formula.bbox[0] - 1 / rasterW - 1e-9);
   assert.ok(measured.bbox[3] <= formula.bbox[3] + 1 / rasterH + 1e-9);
+});
+
+function realViewport() {
+  const { width, height } = realGeometry.viewport;
+  return unitViewport(width, height);
+}
+
+function realPage(name) {
+  return textLayerToBlocks({
+    items: realGeometry[name].items,
+    viewport: realViewport(),
+    page: realGeometry[name].page
+  });
+}
+
+function realDiag(name) {
+  return diagnoseDisplayMerge({
+    items: realGeometry[name].items,
+    viewport: realViewport()
+  });
+}
+
+test("real Attention PE baselines merge by body leading and keep four-side ink room", () => {
+  const diag = realDiag("attentionP6");
+  const pair = diag.joins.find((join) => /sin\(/.test(join.upper) && /cos\(/.test(join.lower));
+  console.log("F05 real gates", JSON.stringify(pair));
+  assert.ok(Math.abs(diag.leading - 10.91) < 0.02);
+  assert.ok(pair.emRatio >= DISPLAY_CROSSLINE_GAP.hi, "font-em ratio is what rejected the real rows");
+  assert.ok(pair.ratio >= DISPLAY_CROSSLINE_GAP.lo && pair.ratio < DISPLAY_CROSSLINE_GAP.hi);
+  assert.equal(pair.between, false);
+  assert.equal(pair.align, true);
+  assert.equal(pair.formulaLower, true);
+  assert.equal(pair.join, true);
+  const page = realPage("attentionP6");
+  const displays = displaysOf(page);
+  assert.equal(displays.length, 1);
+  assert.ok(page.blocks.some((block) => /where pos is the position/.test(block.text || "")));
+  assert.equal(page.blocks.some((block) => /sin\(pos/.test(block.text || "")), false);
+  const glyphs = glyphUnion(realGeometry.attentionP6.items.filter((item) => item.y <= 456 && item.y >= 420));
+  assert.ok(displays[0].bbox[0] < glyphs[0]);
+  assert.ok(displays[0].bbox[1] < glyphs[1]);
+  assert.ok(displays[0].bbox[2] > glyphs[2]);
+  assert.ok(displays[0].bbox[3] > glyphs[3]);
+  assertOwned(page);
+});
+
+test("real MultiHead plus where head_i is one display and FFN stays separate", () => {
+  const diag = realDiag("attentionP5");
+  const pair = diag.joins.find((join) => /MultiHead/.test(join.upper) && /where head/.test(join.lower));
+  console.log("F02 real gates", JSON.stringify(pair));
+  assert.ok(Math.abs(diag.leading - 10.91) < 0.02);
+  assert.ok(pair.emRatio >= DISPLAY_CROSSLINE_GAP.hi);
+  assert.ok(pair.ratio < DISPLAY_CROSSLINE_GAP.hi);
+  assert.equal(pair.align, true);
+  assert.equal(pair.formulaLower, true);
+  assert.equal(pair.between, false);
+  assert.equal(pair.join, true);
+  const ffn = diag.joins.find((join) => /FFN\(/.test(join.lower));
+  assert.equal(ffn.join, false);
+  const page = realPage("attentionP5");
+  const displays = displaysOf(page);
+  assert.equal(displays.length, 2);
+  assert.ok(page.blocks.some((block) => /Where the projections are parameter matrices/.test(block.text || "")));
+  assert.ok(page.blocks.some((block) => /ReLU activation/.test(block.text || "")));
+  assert.equal(page.blocks.some((block) => /MultiHead|where headi/.test(block.text || "")), false);
+  const glyphs = glyphUnion(realGeometry.attentionP5.items.filter((item) => item.y <= 650 && item.y >= 610));
+  assert.ok(displays.some((block) =>
+    block.bbox[1] < glyphs[1] && block.bbox[3] > glyphs[3] &&
+    block.bbox[0] < glyphs[0] && block.bbox[2] > glyphs[2]));
+  assertOwned(page);
+});
+
+test("real DDPM Eq. (6) absorbs the where-line by ink overlap without swallowing prose", () => {
+  const diag = realDiag("ddpmEq67");
+  const pair = diag.joins.find((join) => /q\(xt/.test(join.upper) && /^where μ/.test(join.lower));
+  console.log("F12 real gates", JSON.stringify(pair));
+  assert.ok(Math.abs(diag.leading - 10.91) < 0.02);
+  assert.ok(pair.emRatio >= DISPLAY_CROSSLINE_GAP.hi);
+  assert.ok(pair.ratio >= DISPLAY_CROSSLINE_GAP.hi, "baseline ratio stays outside the band");
+  assert.ok(pair.inkRatio < DISPLAY_CROSSLINE_GAP.hi);
+  assert.equal(pair.relationLower, true);
+  assert.equal(pair.align, true);
+  assert.equal(pair.between, false);
+  assert.equal(pair.join, true);
+  const page = realPage("ddpmEq67");
+  const displays = displaysOf(page);
+  assert.equal(displays.length, 2, "Eq. (5) and Eq. (6)+(7) are two displays");
+  assert.ok(page.blocks.some((block) => /Consequently, all KL divergences/.test(block.text || "")));
+  assert.equal(page.blocks.some((block) => /^where μ/.test(block.text || "")), false);
+  const { width, height } = realGeometry.viewport;
+  const tiny = page.blocks.filter((block) => block.label === "formula").filter((block) => {
+    const boxW = (block.bbox[2] - block.bbox[0]) * width * 2;
+    const boxH = (block.bbox[3] - block.bbox[1]) * height * 2;
+    return boxW < 24 || boxH < 12;
+  });
+  assert.equal(tiny.length, 0);
+  const whereGlyphs = glyphUnion(realGeometry.ddpmEq67.items.filter((item) => item.y <= 620 && item.y >= 575));
+  assert.ok(displays.some((block) => block.bbox[1] < whereGlyphs[1] && block.bbox[3] > whereGlyphs[3]));
+  assertOwned(page);
 });
