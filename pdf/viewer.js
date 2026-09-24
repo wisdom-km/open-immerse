@@ -116,6 +116,7 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { inlineCropBoxEm, inlineLineTopEm, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   createFormulaRasterCache,
   formulaDisplayCssSize,
@@ -2332,6 +2333,7 @@ async function ingestVendorLayout(n, mode, isStale) {
       } catch {
         images = null;
       }
+      attachFontRealNames(content.items, page.commonObjs);
       mapped = vendorLayoutToBlocks(envelope, { items: content.items, viewport, images, page: n });
       await writeStoredLayout(key, mapped);
     } catch (err) {
@@ -2366,6 +2368,7 @@ async function ingestTextLayerLayout(n, isStale) {
     images = null;
   }
   if (isStale()) return null;
+  attachFontRealNames(content.items, page.commonObjs);
   const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
