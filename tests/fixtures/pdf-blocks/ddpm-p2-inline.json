@@ -1,0 +1,1144 @@
+{
+  "page": 2,
+  "viewport": {
+    "width": 612,
+    "height": 792
+  },
+  "note": "DDPM arXiv:2006.11239 page 2 text items around the latent-variable sentence and Eq. (1). fontName is the pdf.js id; fontRealName is the subset-stripped PostScript name.",
+  "items": [
+    {
+      "str": "Diffusion models [",
+      "x": 108,
+      "y": 340.72,
+      "width": 77.26,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "53",
+      "x": 185.26,
+      "y": 340.72,
+      "width": 9.96,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "] are latent variable models of the form",
+      "x": 195.22,
+      "y": 340.72,
+      "width": 161.23,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "p",
+      "x": 359.37,
+      "y": 340.72,
+      "width": 5.01,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "θ",
+      "x": 364.38,
+      "y": 339.23,
+      "width": 3.79,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "(",
+      "x": 368.89,
+      "y": 340.72,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 372.76,
+      "y": 340.72,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "0",
+      "x": 378.81,
+      "y": 339.23,
+      "width": 3.97,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": ") :=",
+      "x": 383.28,
+      "y": 340.72,
+      "width": 17.27,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "∫",
+      "x": 404.1,
+      "y": 348.75,
+      "width": 4.7,
+      "height": 9.96,
+      "fontName": "g_d0_f37",
+      "fontRealName": "CMEX10"
+    },
+    {
+      "str": "p",
+      "x": 412.4,
+      "y": 340.72,
+      "width": 5.01,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "θ",
+      "x": 417.42,
+      "y": 339.23,
+      "width": 3.79,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "(",
+      "x": 421.92,
+      "y": 340.72,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 425.8,
+      "y": 340.72,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "0:",
+      "x": 431.84,
+      "y": 339.23,
+      "width": 6.23,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": "T",
+      "x": 438.07,
+      "y": 339.23,
+      "width": 4.71,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ")",
+      "x": 444.35,
+      "y": 340.72,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "d",
+      "x": 449.88,
+      "y": 340.72,
+      "width": 5.19,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "x",
+      "x": 455.07,
+      "y": 340.72,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "1:",
+      "x": 461.11,
+      "y": 339.23,
+      "width": 6.23,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": "T",
+      "x": 467.34,
+      "y": 339.23,
+      "width": 4.71,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ", where",
+      "x": 473.62,
+      "y": 340.72,
+      "width": 30.38,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "x",
+      "x": 107.7,
+      "y": 329.81,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "1",
+      "x": 113.75,
+      "y": 328.32,
+      "width": 3.97,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": ", . . . ,",
+      "x": 118.22,
+      "y": 329.81,
+      "width": 20.48,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "x",
+      "x": 140.36,
+      "y": 329.81,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "T",
+      "x": 146.4,
+      "y": 328.32,
+      "width": 4.71,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "are latents of the same dimensionality as the data",
+      "x": 155.65,
+      "y": 329.81,
+      "width": 202.66,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "x",
+      "x": 361.27,
+      "y": 329.81,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "0",
+      "x": 367.32,
+      "y": 328.32,
+      "width": 3.97,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": "∼",
+      "x": 375.44,
+      "y": 329.81,
+      "width": 7.75,
+      "height": 9.96,
+      "fontName": "g_d0_f38",
+      "fontRealName": "CMSY10"
+    },
+    {
+      "str": "q",
+      "x": 386.84,
+      "y": 329.81,
+      "width": 4.45,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "(",
+      "x": 391.64,
+      "y": 329.81,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 395.52,
+      "y": 329.81,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "0",
+      "x": 401.56,
+      "y": 328.32,
+      "width": 3.97,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": ")",
+      "x": 406.03,
+      "y": 329.81,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": ". The joint distribution",
+      "x": 409.91,
+      "y": 329.81,
+      "width": 94.1,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "p",
+      "x": 108,
+      "y": 318.9,
+      "width": 5.01,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "θ",
+      "x": 113.01,
+      "y": 317.41,
+      "width": 3.79,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "(",
+      "x": 117.52,
+      "y": 318.9,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 121.39,
+      "y": 318.9,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "0:",
+      "x": 127.44,
+      "y": 317.41,
+      "width": 6.23,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": "T",
+      "x": 133.67,
+      "y": 317.41,
+      "width": 4.71,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ")",
+      "x": 139.94,
+      "y": 318.9,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "is called the",
+      "x": 146.63,
+      "y": 318.9,
+      "width": 49.09,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "reverse process",
+      "x": 198.55,
+      "y": 318.9,
+      "width": 62.7,
+      "height": 9.96,
+      "fontName": "g_d0_f39",
+      "fontRealName": "NimbusRomNo9L-ReguItal"
+    },
+    {
+      "str": ", and it is defined as a Markov chain with learned Gaussian",
+      "x": 261.25,
+      "y": 318.9,
+      "width": 242.76,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "transitions starting at",
+      "x": 108,
+      "y": 308,
+      "width": 83.58,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "p",
+      "x": 194.07,
+      "y": 308,
+      "width": 5.01,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "(",
+      "x": 199.08,
+      "y": 308,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 202.95,
+      "y": 308,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "T",
+      "x": 209,
+      "y": 306.5,
+      "width": 4.71,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ") =",
+      "x": 215.28,
+      "y": 308,
+      "width": 14.39,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "N",
+      "x": 232.43,
+      "y": 308,
+      "width": 8.17,
+      "height": 9.96,
+      "fontName": "g_d0_f38",
+      "fontRealName": "CMSY10"
+    },
+    {
+      "str": "(",
+      "x": 242.08,
+      "y": 308,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 245.95,
+      "y": 308,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "T",
+      "x": 252,
+      "y": 306.5,
+      "width": 4.71,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ";",
+      "x": 258.27,
+      "y": 308,
+      "width": 2.77,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "0",
+      "x": 262.7,
+      "y": 308,
+      "width": 5.73,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": ",",
+      "x": 268.43,
+      "y": 308,
+      "width": 2.77,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "I",
+      "x": 272.86,
+      "y": 308,
+      "width": 4.34,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": ")",
+      "x": 277.2,
+      "y": 308,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": ":",
+      "x": 281.08,
+      "y": 308,
+      "width": 2.77,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "p",
+      "x": 124.13,
+      "y": 282.82,
+      "width": 5.01,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "θ",
+      "x": 129.14,
+      "y": 281.33,
+      "width": 3.79,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "(",
+      "x": 133.65,
+      "y": 282.82,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 137.52,
+      "y": 282.82,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "0:",
+      "x": 143.57,
+      "y": 281.33,
+      "width": 6.23,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": "T",
+      "x": 149.8,
+      "y": 281.33,
+      "width": 4.71,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ") :=",
+      "x": 156.07,
+      "y": 282.82,
+      "width": 16.49,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "p",
+      "x": 175.33,
+      "y": 282.82,
+      "width": 5.01,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "(",
+      "x": 180.34,
+      "y": 282.82,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 184.22,
+      "y": 282.82,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "T",
+      "x": 190.27,
+      "y": 281.33,
+      "width": 4.71,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ")",
+      "x": 196.54,
+      "y": 282.82,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "T",
+      "x": 205.74,
+      "y": 295.27,
+      "width": 4.71,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "∏",
+      "x": 202.26,
+      "y": 292.29,
+      "width": 12.73,
+      "height": 9.96,
+      "fontName": "g_d0_f37",
+      "fontRealName": "CMEX10"
+    },
+    {
+      "str": "t",
+      "x": 202.08,
+      "y": 271.19,
+      "width": 3.01,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "=1",
+      "x": 205.09,
+      "y": 271.19,
+      "width": 10.09,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": "p",
+      "x": 216.83,
+      "y": 282.82,
+      "width": 5.01,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "θ",
+      "x": 221.85,
+      "y": 281.33,
+      "width": 3.79,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "(",
+      "x": 226.35,
+      "y": 282.82,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 230.23,
+      "y": 282.82,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "t",
+      "x": 236.28,
+      "y": 281.33,
+      "width": 3.01,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "−",
+      "x": 239.28,
+      "y": 281.33,
+      "width": 6.23,
+      "height": 6.97,
+      "fontName": "g_d0_f40",
+      "fontRealName": "CMSY7"
+    },
+    {
+      "str": "1",
+      "x": 245.51,
+      "y": 281.33,
+      "width": 3.97,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": "|",
+      "x": 249.98,
+      "y": 282.82,
+      "width": 2.77,
+      "height": 9.96,
+      "fontName": "g_d0_f38",
+      "fontRealName": "CMSY10"
+    },
+    {
+      "str": "x",
+      "x": 252.75,
+      "y": 282.82,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "t",
+      "x": 258.79,
+      "y": 281.33,
+      "width": 3.01,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ")",
+      "x": 262.3,
+      "y": 282.82,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": ",",
+      "x": 266.18,
+      "y": 282.82,
+      "width": 2.77,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "p",
+      "x": 290.53,
+      "y": 282.82,
+      "width": 5.01,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "θ",
+      "x": 295.54,
+      "y": 281.33,
+      "width": 3.79,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "(",
+      "x": 300.05,
+      "y": 282.82,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 303.92,
+      "y": 282.82,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "t",
+      "x": 309.97,
+      "y": 281.33,
+      "width": 3.01,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "−",
+      "x": 312.98,
+      "y": 281.33,
+      "width": 6.23,
+      "height": 6.97,
+      "fontName": "g_d0_f40",
+      "fontRealName": "CMSY7"
+    },
+    {
+      "str": "1",
+      "x": 319.21,
+      "y": 281.33,
+      "width": 3.97,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": "|",
+      "x": 323.68,
+      "y": 282.82,
+      "width": 2.77,
+      "height": 9.96,
+      "fontName": "g_d0_f38",
+      "fontRealName": "CMSY10"
+    },
+    {
+      "str": "x",
+      "x": 326.44,
+      "y": 282.82,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "t",
+      "x": 332.49,
+      "y": 281.33,
+      "width": 3.01,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ") :=",
+      "x": 336,
+      "y": 282.82,
+      "width": 16.49,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "N",
+      "x": 355.26,
+      "y": 282.82,
+      "width": 8.17,
+      "height": 9.96,
+      "fontName": "g_d0_f38",
+      "fontRealName": "CMSY10"
+    },
+    {
+      "str": "(",
+      "x": 364.9,
+      "y": 282.82,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 368.78,
+      "y": 282.82,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "t",
+      "x": 374.82,
+      "y": 281.33,
+      "width": 3.01,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "−",
+      "x": 377.83,
+      "y": 281.33,
+      "width": 6.23,
+      "height": 6.97,
+      "fontName": "g_d0_f40",
+      "fontRealName": "CMSY7"
+    },
+    {
+      "str": "1",
+      "x": 384.06,
+      "y": 281.33,
+      "width": 3.97,
+      "height": 6.97,
+      "fontName": "g_d0_f36",
+      "fontRealName": "CMR7"
+    },
+    {
+      "str": ";",
+      "x": 388.53,
+      "y": 282.82,
+      "width": 2.77,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "μ",
+      "x": 392.96,
+      "y": 282.82,
+      "width": 7.05,
+      "height": 9.96,
+      "fontName": "g_d0_f41",
+      "fontRealName": "CMMIB10"
+    },
+    {
+      "str": "θ",
+      "x": 400.01,
+      "y": 280.39,
+      "width": 3.79,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "(",
+      "x": 404.52,
+      "y": 282.82,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 408.39,
+      "y": 282.82,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "t",
+      "x": 414.44,
+      "y": 281.33,
+      "width": 3.01,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ", t",
+      "x": 417.94,
+      "y": 282.82,
+      "width": 8.03,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": ")",
+      "x": 425.97,
+      "y": 282.82,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": ",",
+      "x": 429.84,
+      "y": 282.82,
+      "width": 2.77,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "Σ",
+      "x": 434.27,
+      "y": 282.82,
+      "width": 8.27,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "θ",
+      "x": 442.55,
+      "y": 281.33,
+      "width": 3.79,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": "(",
+      "x": 447.05,
+      "y": 282.82,
+      "width": 3.87,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "x",
+      "x": 450.93,
+      "y": 282.82,
+      "width": 6.05,
+      "height": 9.96,
+      "fontName": "g_d0_f35",
+      "fontRealName": "CMBX10"
+    },
+    {
+      "str": "t",
+      "x": 456.98,
+      "y": 281.33,
+      "width": 3.01,
+      "height": 6.97,
+      "fontName": "g_d0_f33",
+      "fontRealName": "CMMI7"
+    },
+    {
+      "str": ", t",
+      "x": 460.48,
+      "y": 282.82,
+      "width": 8.03,
+      "height": 9.96,
+      "fontName": "g_d0_f32",
+      "fontRealName": "CMMI10"
+    },
+    {
+      "str": "))",
+      "x": 468.51,
+      "y": 282.82,
+      "width": 7.75,
+      "height": 9.96,
+      "fontName": "g_d0_f34",
+      "fontRealName": "CMR10"
+    },
+    {
+      "str": "(1)",
+      "x": 492.38,
+      "y": 282.82,
+      "width": 11.62,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    },
+    {
+      "str": "What distinguishes diffusion models from other types of latent variable models is that the approximate",
+      "x": 107.53,
+      "y": 258.97,
+      "width": 396.47,
+      "height": 9.96,
+      "fontName": "g_d0_f30",
+      "fontRealName": "NimbusRomNo9L-Regu"
+    }
+  ]
+}

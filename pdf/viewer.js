@@ -116,6 +116,7 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { inlineCropBoxEm, inlineLineTopEm, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   createFormulaRasterCache,
   formulaDisplayCssSize,
@@ -213,7 +214,9 @@ function init() {
   readMirrorZoom().then((saved) => {
     if (saved != null) mirrorZoom = saved;
     applyMirrorZoom();
+    refreshFormulaCropsForDisplay();
   });
+  watchFormulaRasterRatio();
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
   $("paperStack")?.addEventListener("click", onReadoutBlockClick);
@@ -769,6 +772,7 @@ function getPageLayout(page) {
 }
 
 function setPageLayout(page, layout) {
+  if (layout) noteFormulaCropPlan(layout);
   layoutCache.set(layoutKey(page), layout);
 }
 
@@ -2332,6 +2336,7 @@ async function ingestVendorLayout(n, mode, isStale) {
       } catch {
         images = null;
       }
+      attachFontRealNames(content.items, page.commonObjs);
       mapped = vendorLayoutToBlocks(envelope, { items: content.items, viewport, images, page: n });
       await writeStoredLayout(key, mapped);
     } catch (err) {
@@ -2366,6 +2371,7 @@ async function ingestTextLayerLayout(n, isStale) {
     images = null;
   }
   if (isStale()) return null;
+  attachFontRealNames(content.items, page.commonObjs);
   const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
@@ -2704,10 +2710,84 @@ async function goPage(dir) {
   await scheduleVisibleRenders();
 }
 
+function formulaCropPlanKeyNow() {
+  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+  const zoom = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
+  return `${zoom.toFixed(4)}|${dpr.toFixed(3)}`;
+}
+
+function noteFormulaCropPlan(layout) {
+  if (layout && typeof layout === "object") layout.formulaPlanKey = formulaCropPlanKeyNow();
+}
+
+/**
+ * Right-pane zoom and devicePixelRatio change the CSS size of a formula.
+ * The #69 cache key already includes scale and DPR; this replans and
+ * redraws only formula crops whose stored key is stale.
+ */
+let formulaCropGen = 0;
+
+function watchFormulaRasterRatio() {
+  if (typeof window.matchMedia !== "function") return;
+  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+  let query = null;
+  try {
+    query = window.matchMedia(`(resolution: ${dpr}dppx)`);
+  } catch {
+    return;
+  }
+  const onChange = () => {
+    query.removeEventListener?.("change", onChange);
+    watchFormulaRasterRatio();
+    refreshFormulaCropsForDisplay();
+  };
+  query.addEventListener?.("change", onChange);
+}
+
+async function refreshFormulaCropsForDisplay() {
+  if (!pdfDoc) return;
+  const key = formulaCropPlanKeyNow();
+  const gen = ++formulaCropGen;
+  const total = Number(pdfDoc.numPages) || 0;
+  let changed = false;
+  for (let n = 1; n <= total; n += 1) {
+    if (gen !== formulaCropGen) return;
+    const layout = getPageLayout(n);
+    if (!layout?.blocks?.length || layout.formulaPlanKey === key) continue;
+    if (!layout.blocks.some((block) => block?.label === "formula" && block.imageUrl)) {
+      noteFormulaCropPlan(layout);
+      continue;
+    }
+    let page = null;
+    try {
+      page = await pdfDoc.getPage(n);
+    } catch {
+      continue;
+    }
+    if (gen !== formulaCropGen) return;
+    const raster = {
+      pixelWidth: layout.pixelWidth,
+      pixelHeight: layout.pixelHeight
+    };
+    for (const block of layout.blocks) {
+      if (gen !== formulaCropGen) return;
+      if (block?.label !== "formula" || !block.imageUrl) continue;
+      const sharp = await renderSharpFormulaCrop(page, raster, block, n);
+      if (sharp && sharp !== block.imageUrl) {
+        block.imageUrl = sharp;
+        changed = true;
+      }
+    }
+    noteFormulaCropPlan(layout);
+  }
+  if (changed && gen === formulaCropGen) renderArticle();
+}
+
 function setMirrorZoom(next) {
   mirrorZoom = clampZoom(next);
   persistMirrorZoom(mirrorZoom);
   applyMirrorZoom();
+  refreshFormulaCropsForDisplay();
 }
 
 function applyMirrorZoom() {

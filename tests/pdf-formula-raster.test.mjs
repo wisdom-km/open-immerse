@@ -329,3 +329,21 @@ test("viewer sharpens formula crops with a viewport offset and leaves the page r
   const cropAt = imageFn.indexOf("return cropBlockImage");
   assert.ok(drawnAt >= 0 && trimAt > drawnAt && cropAt > trimAt);
 });
+
+test("mirror zoom and device pixel ratio replan formula crops", () => {
+  assert.match(viewerSrc, /function refreshFormulaCropsForDisplay/);
+  assert.match(viewerSrc, /function watchFormulaRasterRatio/);
+  assert.match(viewerSrc, /layout\.formulaPlanKey/);
+  const setMirror = viewerSrc.slice(
+    viewerSrc.indexOf("function setMirrorZoom"),
+    viewerSrc.indexOf("function applyMirrorZoom")
+  );
+  assert.match(setMirror, /refreshFormulaCropsForDisplay\(\)/);
+  const refresh = viewerSrc.slice(
+    viewerSrc.indexOf("async function refreshFormulaCropsForDisplay"),
+    viewerSrc.indexOf("function setMirrorZoom")
+  );
+  assert.match(refresh, /renderSharpFormulaCrop/);
+  assert.match(refresh, /formulaCropPlanKeyNow/);
+  assert.doesNotMatch(refresh, /FORMULA_CROP_PAD|displayInkMinEm|inlineCropBoxEm/);
+});
