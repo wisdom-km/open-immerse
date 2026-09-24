@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { CROP_SCALE } from "../lib/pdf-blocks.js";
 import {
   FORMULA_CROP_MAX_EDGE,
@@ -16,6 +19,9 @@ import {
   scaleCovering
 } from "../lib/pdf-formula-raster.js";
 import { FORMULA_INK_PAD_PX, measureFormulaCrop } from "../lib/pdf-text-layer.js";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const viewerSrc = readFileSync(join(root, "pdf/viewer.js"), "utf8");
 
 const pageWidth = 612;
 const pageHeight = 792;
@@ -306,4 +312,20 @@ test("formula raster cache keeps one render per page formula and drops the oldes
   assert.equal(cache.size, 2);
   cache.clear();
   assert.equal(cache.size, 0);
+});
+
+test("viewer sharpens formula crops with a viewport offset and leaves the page raster scale", () => {
+  assert.match(viewerSrc, /scale: CROP_SCALE/);
+  assert.match(viewerSrc, /formulaRasterPlan/);
+  assert.match(viewerSrc, /rasterWidth: raster\?\.pixelWidth/);
+  assert.match(viewerSrc, /offsetX: -originX \* full\.width/);
+  assert.match(viewerSrc, /offsetY: -originY \* full\.height/);
+  assert.match(viewerSrc, /displayCropWidthCss\(pageFraction/);
+  assert.match(viewerSrc, /inlineCropBoxEm\(formula\?\.inkShare\)/);
+  assert.doesNotMatch(viewerSrc, /cropCanvasToDataUrl/);
+  const imageFn = viewerSrc.slice(viewerSrc.indexOf("function imageForVisualBlock"));
+  const drawnAt = imageFn.indexOf("if (drawn) return drawn");
+  const trimAt = imageFn.indexOf("formulaInkBbox");
+  const cropAt = imageFn.indexOf("return cropBlockImage");
+  assert.ok(drawnAt >= 0 && trimAt > drawnAt && cropAt > trimAt);
 });
