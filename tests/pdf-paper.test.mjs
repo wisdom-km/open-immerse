@@ -8,6 +8,7 @@ import {
   pagesInTranslateScope,
   paperAvailWidth,
   paperCssPx,
+  basePageBox,
   readoutPaperSize
 } from "../lib/pdf-paper.js";
 
@@ -40,6 +41,12 @@ test("paper width tracks the left page and clamps to the right pane", () => {
   assert.notEqual(landscape.aspect, letter.aspect);
   assert.deepEqual(readoutPaperSize({ availWidth: 400 }), { width: 0, heightBase: 0, aspect: 0 });
   assert.deepEqual(readoutPaperSize({}), { width: 0, heightBase: 0, aspect: 0 });
+  assert.deepEqual(basePageBox({ width: 612, height: 792 }, 1), { width: 612, height: 792 });
+  assert.deepEqual(basePageBox({ width: 765, height: 990 }, 1.25), { width: 612, height: 792 });
+  assert.deepEqual(basePageBox({ width: 918, height: 1188 }, 1.5), { width: 612, height: 792 });
+  assert.deepEqual(basePageBox({ width: 1224, height: 1584 }, 2), { width: 612, height: 792 });
+  assert.deepEqual(basePageBox({ width: 612, height: 792 }, 0), { width: 612, height: 792 });
+  assert.equal(basePageBox(null, 1), null);
   assert.equal(paperCssPx(612), "612px");
   assert.equal(paperCssPx(792.126), "792.13px");
   assert.equal(paperCssPx(0), "0px");
@@ -67,6 +74,16 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
   assert.match(src, /--oi-pdf-left-w/);
   assert.match(src, /ResizeObserver/);
   assert.match(src, /applyPaperMetrics\(\)/);
+  assert.match(src, /function leftBaseBox/);
+  const metrics = src.slice(src.indexOf("function formulaPaneMetrics"), src.indexOf("async function renderSharpVisualCrop"));
+  const heightFor = src.slice(src.indexOf("function paperHeightFor"), src.indexOf("function matchedFormulaStyle"));
+  const apply = src.slice(src.indexOf("function applyPaperMetrics"), src.indexOf("function bindPaperMetrics"));
+  assert.match(metrics, /leftBaseBox\(/);
+  assert.match(heightFor, /leftBaseBox\(/);
+  assert.match(apply, /leftBaseBox\(/);
+  assert.doesNotMatch(apply, /leftPageBox\(/);
+  const planKey = src.slice(src.indexOf("function formulaCropPlanKeyNow"), src.indexOf("function noteFormulaCropPlan"));
+  assert.match(planKey, /zoom/);
   const setZoom = src.slice(src.indexOf("async function setZoom"), src.indexOf("async function scheduleVisibleRenders"));
   assert.match(setZoom, /applyPaperMetrics\(\)/);
   const split = src.slice(src.indexOf("function applySplit"), src.indexOf("function initZoomChip"));

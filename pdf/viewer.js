@@ -72,6 +72,7 @@ import {
 import {
   PDF_PAPER_GUTTER_X,
   pagesInTranslateScope,
+  basePageBox,
   paperAvailWidth,
   paperCssPx,
   readoutPaperSize
@@ -898,13 +899,15 @@ function imageForVisualBlock(raster, block) {
 const formulaRasterCache = createFormulaRasterCache();
 
 function formulaPaneMetrics(pageNumber, unitViewport) {
-  const left = leftPageBox(pageNumber);
   const unitW = Number(unitViewport?.width) || 0;
   const unitH = Number(unitViewport?.height) || 0;
-  const zoomedW = Math.floor(unitW * (Number(zoom) || 1));
+  const scale = Number(zoom) > 0 ? Number(zoom) : 1;
+  const zoomedW = Math.floor(unitW * scale);
   const zoomedH = unitW > 0 ? zoomedW * (unitH / unitW) : 0;
-  const leftWidth = left?.width || zoomedW;
-  const leftHeight = left?.height || zoomedH;
+  const fallback = basePageBox({ width: zoomedW, height: zoomedH }, scale);
+  const left = leftBaseBox(pageNumber) || fallback;
+  const leftWidth = left?.width || 0;
+  const leftHeight = left?.height || 0;
   const scroll = translateScrollRoot();
   const avail = paperAvailWidth(scroll?.clientWidth || 0);
   const paper = readoutPaperSize({ leftWidth, leftHeight, availWidth: avail });
@@ -1331,6 +1334,11 @@ function leftPageBox(page) {
   return null;
 }
 
+/** Unscaled left page box. Right-pane paper uses this, not the zoomed CSS box. */
+function leftBaseBox(page) {
+  return basePageBox(leftPageBox(page), zoom);
+}
+
 function stampBodyFont(layout, items, viewport) {
   if (!layout) return layout;
   const described = describeBodyFont(items, {
@@ -1346,11 +1354,15 @@ function stampBodyFont(layout, items, viewport) {
 
 function paperHeightFor(pageNumber) {
   const layout = getPageLayout(pageNumber);
-  const left = leftPageBox(pageNumber);
   const pageW = Number(layout?.pageWidth) || 0;
   const pageH = Number(layout?.pageHeight) || 0;
-  const leftW = left?.width || (pageW > 0 ? pageW * (Number(zoom) || 1) : 0);
-  const leftH = left?.height || (pageW > 0 && pageH > 0 && leftW > 0 ? leftW * (pageH / pageW) : 0);
+  const scale = Number(zoom) > 0 ? Number(zoom) : 1;
+  const zoomedW = pageW > 0 ? pageW * scale : 0;
+  const zoomedH = pageW > 0 && pageH > 0 && zoomedW > 0 ? zoomedW * (pageH / pageW) : 0;
+  const fallback = basePageBox({ width: zoomedW, height: zoomedH }, scale);
+  const left = leftBaseBox(pageNumber) || fallback;
+  const leftW = left?.width || 0;
+  const leftH = left?.height || 0;
   const scroll = translateScrollRoot();
   const avail = paperAvailWidth(scroll?.clientWidth || 0, PDF_PAPER_GUTTER_X);
   const paper = readoutPaperSize({ leftWidth: leftW, leftHeight: leftH, availWidth: avail });
@@ -1418,7 +1430,7 @@ function applyPaperMetrics() {
   if (!stack || !scroll) return;
   const avail = paperAvailWidth(scroll.clientWidth, PDF_PAPER_GUTTER_X);
   stack.querySelectorAll(".readout-paper").forEach((paper) => {
-    const left = leftPageBox(paper.dataset.page);
+    const left = leftBaseBox(paper.dataset.page);
     if (!left) return;
     const size = readoutPaperSize({
       leftWidth: left.width,
