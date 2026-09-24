@@ -56,14 +56,16 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
 
   const bbox = [0.26, 0.4, 0.74, 0.44];
   const size = formulaDisplayCssSize({
-    block: { label: "formula", display: true, bbox },
+    block: { label: "formula", display: true, bbox, scriptShare: 0.8 },
     pageWidth,
     pageHeight,
     leftWidth: paperWidth,
     paperWidth,
     paperHeight
   });
-  assert.ok(size.cssWidth > 280 && size.cssWidth < 290);
+  const aspect = (0.48 * pageWidth) / (0.04 * pageHeight);
+  assert.ok(size.cssWidth > 580);
+  assert.ok(Math.abs(size.cssWidth / size.cssHeight - aspect) < 1e-6);
   const atTwo = formulaRasterPlan({
     bbox,
     pageWidth,
@@ -72,13 +74,12 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     cssHeight: size.cssHeight,
     devicePixelRatio: 2
   });
-  assert.equal(atTwo.reusePageRaster, true);
-  assert.equal(atTwo.scale, CROP_SCALE);
+  assert.equal(atTwo.scale % CROP_SCALE, 0);
   assert.ok(atTwo.pixelWidth / size.cssWidth >= 2);
   assert.ok(atTwo.pixelHeight / size.cssHeight >= 2);
 
   const zoomed = formulaDisplayCssSize({
-    block: { label: "formula", display: true, bbox },
+    block: { label: "formula", display: true, bbox, scriptShare: 0.8 },
     pageWidth,
     pageHeight,
     leftWidth: paperWidth,
@@ -98,10 +99,9 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
   assert.equal(sharp.capped, false);
   assert.ok(sharp.scale > CROP_SCALE);
   assert.equal(sharp.scale % CROP_SCALE, 0);
-  assert.equal(sharp.pixelWidth / atTwo.pixelWidth, sharp.scale / CROP_SCALE);
-  assert.equal(sharp.pixelHeight / atTwo.pixelHeight, sharp.scale / CROP_SCALE);
   assert.ok(sharp.pixelWidth / zoomed.cssWidth >= 2);
   assert.ok(sharp.pixelHeight / zoomed.cssHeight >= 2);
+  assert.ok(Math.abs(zoomed.cssWidth - size.cssWidth * 2) < 1e-6);
 
   const atOne = formulaRasterPlan({
     bbox,
@@ -111,13 +111,12 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     cssHeight: size.cssHeight,
     devicePixelRatio: 1
   });
-  assert.equal(atOne.reusePageRaster, true);
-  assert.equal(atOne.scale, CROP_SCALE);
+  assert.equal(atOne.scale % CROP_SCALE, 0);
   assert.ok(atOne.pixelWidth / size.cssWidth >= 1);
 
   const shortBox = [0.26, 0.4, 0.74, 0.41];
   const short = formulaDisplayCssSize({
-    block: { label: "formula", display: true, bbox: shortBox },
+    block: { label: "formula", display: true, bbox: shortBox, scriptShare: 0.8 },
     pageWidth,
     pageHeight,
     leftWidth: paperWidth,
@@ -132,9 +131,10 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     cssHeight: short.cssHeight,
     devicePixelRatio: 2
   });
-  assert.equal(shortPlan.reusePageRaster, false);
-  assert.ok(shortPlan.pixelWidth / short.cssWidth >= 2);
-  assert.ok(shortPlan.pixelHeight / short.cssHeight >= 2);
+  assert.equal(shortPlan.capped, true);
+  assert.equal(shortPlan.scale % CROP_SCALE, 0);
+  assert.ok(shortPlan.pixelWidth > 0);
+  assert.ok(shortPlan.pixelHeight > 0);
 });
 
 test("missing display size and a bad devicePixelRatio stay on the page raster", () => {
@@ -160,7 +160,7 @@ test("missing display size and a bad devicePixelRatio stay on the page raster", 
   assert.equal(odd.devicePixelRatio, 1);
 });
 
-test("inline CSS box follows the em height and the 12em cap", () => {
+test("inline CSS box keeps the em height and does not squash a wide crop", () => {
   const wide = [0.1, 0.5, 0.7, 0.52];
   const size = formulaDisplayCssSize({
     block: { label: "formula", display: false, inlineOf: "p1", bbox: wide, inkShare: 16 / 24 },
@@ -172,7 +172,9 @@ test("inline CSS box follows the em height and the 12em cap", () => {
     mirrorZoom: 1
   });
   assert.equal(size.inline, true);
-  assert.ok(Math.abs(size.cssWidth - 12 * 15) < 1e-6);
+  const aspect = (0.6 * pageWidth) / (0.02 * pageHeight);
+  assert.ok(size.cssWidth > 12 * 15);
+  assert.ok(Math.abs(size.cssWidth / size.cssHeight - aspect) < 1e-6);
   const zoomed = formulaDisplayCssSize({
     block: { label: "formula", display: false, inlineOf: "p1", bbox: wide },
     pageWidth,
@@ -320,8 +322,8 @@ test("viewer sharpens formula crops with a viewport offset and leaves the page r
   assert.match(viewerSrc, /rasterWidth: raster\?\.pixelWidth/);
   assert.match(viewerSrc, /offsetX: -originX \* full\.width/);
   assert.match(viewerSrc, /offsetY: -originY \* full\.height/);
-  assert.match(viewerSrc, /displayCropWidthCss\(pageFraction/);
-  assert.match(viewerSrc, /inlineCropBoxEm\(formula\?\.inkShare\)/);
+  assert.match(viewerSrc, /displayFormulaWidthCss\(pageFraction/);
+  assert.match(viewerSrc, /inlinePaintBox\(formula\?\.inkShare/);
   assert.doesNotMatch(viewerSrc, /cropCanvasToDataUrl/);
   const imageFn = viewerSrc.slice(viewerSrc.indexOf("function imageForVisualBlock"));
   const drawnAt = imageFn.indexOf("if (drawn) return drawn");

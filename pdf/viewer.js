@@ -91,8 +91,7 @@ import {
   applyBlockTranslations,
   blockReadoutPlan,
   displayCropColumnFraction,
-  displayCropWidthCss,
-  displayInkMinEm,
+  displayFormulaWidthCss,
   blockRenderPieces,
   cropBlockImage,
   isTranslatableBlock,
@@ -115,7 +114,8 @@ import {
   resolveLayoutMode,
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
-import { inlineCropBoxEm, inlineLineTopEm, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { inlinePaintBox, displayFormulaMinEm } from "../lib/pdf-formula-size.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   createFormulaRasterCache,
@@ -1008,17 +1008,53 @@ function cropImage(block) {
   return img;
 }
 
+function formulaPageFraction(block) {
+  if (!Array.isArray(block?.bbox) || block.bbox.length < 4) return null;
+  const fraction = Number(block.bbox[2]) - Number(block.bbox[0]);
+  if (!(fraction > 0) || !Number.isFinite(fraction)) return null;
+  return Math.min(1, fraction);
+}
+
+function mountDisplayMath(node, block, img) {
+  const row = document.createElement("div");
+  row.className = "oi-pdf-math-row";
+  const scroll = document.createElement("div");
+  scroll.className = "oi-pdf-math-scroll";
+  scroll.tabIndex = 0;
+  const clip = document.createElement("div");
+  clip.className = "oi-pdf-math-clip";
+  const pageFraction = formulaPageFraction(block);
+  const bboxH = Array.isArray(block?.bbox) ? Number(block.bbox[3]) - Number(block.bbox[1]) : 0;
+  const minEm = displayFormulaMinEm(block?.inkShare, block?.scriptShare);
+  const width = pageFraction ? displayFormulaWidthCss(pageFraction, bboxH, minEm) : "";
+  if (width) row.style.setProperty("--oi-formula-w", width);
+  const keep = Number(block?.eqKeep);
+  if (keep > 0 && keep < 1) row.style.setProperty("--oi-eq-keep", String(keep));
+  clip.append(img);
+  scroll.append(clip);
+  row.append(scroll);
+  if (block?.eqLabel) {
+    const num = document.createElement("span");
+    num.className = "oi-pdf-eq-num";
+    num.textContent = block.eqLabel;
+    row.append(num);
+  }
+  node.append(row);
+  requestAnimationFrame(() => {
+    if (scroll.scrollWidth > scroll.clientWidth + 1) scroll.classList.add("is-overflowing");
+  });
+}
+
 function appendCropOrNotice(node, block, imageClass) {
   const img = cropImage(block);
   if (img) {
     img.className = imageClass || "oi-pdf-math-crop";
-    const pageFraction = displayCropColumnFraction(block);
-    if (pageFraction) {
-      const bboxH = Number(block.bbox[3]) - Number(block.bbox[1]);
-      const minEm = displayInkMinEm(block.inkShare);
-      img.style.width = displayCropWidthCss(pageFraction, bboxH, minEm);
-      img.style.minHeight = `${minEm}em`;
+    if (block.label === "formula") {
+      mountDisplayMath(node, block, img);
+      return;
     }
+    const pageFraction = displayCropColumnFraction(block);
+    if (pageFraction) img.style.width = displayFormulaWidthCss(pageFraction, Number(block.bbox[3]) - Number(block.bbox[1]));
     node.append(img);
     return;
   }
@@ -1055,8 +1091,24 @@ function fillBlockText(node, block, layout) {
     const img = cropImage({ ...(formula || {}), imageUrl: piece.src || formula?.imageUrl || "", label: "formula" });
     const span = document.createElement("span");
     span.className = "oi-pdf-inline-math";
-    span.style.setProperty("--oi-pdf-inline-crop-em", `${inlineCropBoxEm(formula?.inkShare)}em`);
-    span.style.setProperty("--oi-pdf-inline-line-em", `${inlineLineTopEm(formula?.inkShare)}em`);
+    const paint = inlinePaintBox(formula?.inkShare, formula?.scriptShare);
+    if (paint.promote) {
+      span.classList.add("is-promoted");
+      if (formula?.id) {
+        span.dataset.blockId = String(formula.id);
+        span.dataset.label = "formula";
+        if (node.dataset.page) span.dataset.page = node.dataset.page;
+      }
+      if (img) {
+        img.className = "oi-pdf-math-crop";
+        mountDisplayMath(span, formula || {}, img);
+      } else span.textContent = PDF_COPY.formulaFallback;
+      node.append(span);
+      return;
+    }
+    span.style.setProperty("--oi-pdf-inline-crop-em", `${paint.box}em`);
+    span.style.setProperty("--oi-pdf-inline-line-em", `${paint.line}em`);
+    span.tabIndex = 0;
     if (formula?.id) {
       span.dataset.blockId = String(formula.id);
       span.dataset.label = "formula";
