@@ -17,6 +17,8 @@ import {
   UNIFORM_SCALE_TOL,
   displayFormulaMinEm,
   matchedDisplayCssSize,
+  INLINE_BODY_HARD_MAX,
+  inlineFormulaCssSize,
   inlinePaintBox,
   inlinePromotesToDisplay,
   scriptInkPx,
@@ -84,6 +86,37 @@ test("F3-S1 display paint stays capped at 2.5em and the live box matches the pag
   const exploded = displayFormulaWidthCss(0.9, 0.015, displayFormulaMinEm(0.22, null));
   assert.match(exploded, /2\.5em/);
   assert.doesNotMatch(exploded, /(?<![0-9.])[3-9](?:\.\d+)?em/);
+});
+
+test("inline formulas stay on the bbox and cap at 1.4 body without one", () => {
+  assert.equal(INLINE_BODY_HARD_MAX, 1.4);
+  const pageWidth = 612;
+  const pageHeight = 792;
+  const paperHeight = 792;
+  const bbox = [0.2, 0.4, 0.28, 0.412];
+  const matched = inlineFormulaCssSize({ bbox, pageWidth, pageHeight, paperHeight, bodyFontPx: 9.56 });
+  assert.equal(matched.source, "bbox");
+  assert.ok(Math.abs(matched.cssHeight - 0.012 * paperHeight) < 1e-6);
+  assert.ok(matched.cssHeight < 9.56 * 2.2);
+  const tall = inlineFormulaCssSize({
+    bbox: [0.1, 0.4, 0.7, 0.457],
+    pageWidth,
+    pageHeight,
+    paperHeight,
+    bodyFontPx: 9.56
+  });
+  assert.equal(tall.source, "bbox");
+  assert.ok(tall.cssHeight > 9.56 * 2.5);
+  const capped = inlineFormulaCssSize({ bodyFontPx: 9.56 });
+  assert.equal(capped.source, "cap");
+  assert.ok(Math.abs(capped.cssHeight - 9.56 * 1.4) < 1e-9);
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
+  assert.match(viewer, /oi-pdf-inline-math/);
+  assert.doesNotMatch(viewer, /classList\.add\("is-promoted"\)/);
+  assert.match(css, /\.oi-pdf-inline-math\.is-matched:has\(\.oi-pdf-math-crop\)\s*\{[^}]*display:\s*inline-block/s);
+  assert.match(css, /\.oi-pdf-inline-math\.is-matched \.oi-pdf-math-crop\s*\{[^}]*height:\s*var\(--oi-formula-h\)/s);
+  assert.match(css, /\.oi-pdf-inline-math\s*\{[^}]*display:\s*inline-block/s);
 });
 
 test("F3-S6 side gap is the locked 0.2em and freezes stay put", () => {

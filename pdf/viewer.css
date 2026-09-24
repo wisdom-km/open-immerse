@@ -536,6 +536,20 @@ h1 {
   margin-top: 0;
   max-width: none;
 }
+.pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched:has(.oi-pdf-math-crop) {
+  display: inline-block;
+  height: auto;
+  overflow: visible;
+  vertical-align: baseline;
+}
+.pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched .oi-pdf-math-crop {
+  display: inline-block;
+  height: var(--oi-formula-h);
+  width: auto;
+  max-height: none;
+  margin-top: 0;
+  vertical-align: baseline;
+}
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
   font: 400 14px/1.55 var(--oi-font);
   color: var(--oi-paper-muted);

@@ -329,7 +329,8 @@ test("viewer sharpens formula crops with a viewport offset and leaves the page r
   assert.match(viewerSrc, /offsetX: -originX \* full\.width/);
   assert.match(viewerSrc, /offsetY: -originY \* full\.height/);
   assert.match(viewerSrc, /displayFormulaWidthCss\(pageFraction/);
-  assert.match(viewerSrc, /inlinePaintBox\(formula\?\.inkShare/);
+  assert.match(viewerSrc, /matchedFormulaStyle\(formula, node\.dataset\.page\)/);
+  assert.doesNotMatch(viewerSrc, /classList\.add\("is-promoted"\)/);
   assert.doesNotMatch(viewerSrc, /cropCanvasToDataUrl/);
   const imageFn = viewerSrc.slice(viewerSrc.indexOf("function imageForVisualBlock"));
   const drawnAt = imageFn.indexOf("if (drawn) return drawn");

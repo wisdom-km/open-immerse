@@ -116,7 +116,7 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
-import { inlinePaintBox, displayFormulaMinEm, matchedDisplayCssSize } from "../lib/pdf-formula-size.js";
+import { INLINE_BODY_HARD_MAX, displayFormulaMinEm, matchedDisplayCssSize } from "../lib/pdf-formula-size.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   assetLayoutCapPx,
@@ -1130,28 +1130,23 @@ function fillBlockText(node, block, layout) {
     const img = cropImage({ ...(formula || {}), imageUrl: piece.src || formula?.imageUrl || "", label: "formula" });
     const span = document.createElement("span");
     span.className = "oi-pdf-inline-math";
-    const paint = inlinePaintBox(formula?.inkShare, formula?.scriptShare);
-    if (paint.promote) {
-      span.classList.add("is-promoted");
-      if (formula?.id) {
-        span.dataset.blockId = String(formula.id);
-        span.dataset.label = "formula";
-        if (node.dataset.page) span.dataset.page = node.dataset.page;
-      }
-      if (img) {
-        img.className = "oi-pdf-math-crop";
-        mountDisplayMath(span, formula || {}, img, node.dataset.page);
-      } else span.textContent = PDF_COPY.formulaFallback;
-      node.append(span);
-      return;
-    }
-    span.style.setProperty("--oi-pdf-inline-crop-em", `${paint.box}em`);
-    span.style.setProperty("--oi-pdf-inline-line-em", `${paint.line}em`);
     span.tabIndex = 0;
     if (formula?.id) {
       span.dataset.blockId = String(formula.id);
       span.dataset.label = "formula";
       if (node.dataset.page) span.dataset.page = node.dataset.page;
+    }
+    // Stay on the line. A tall paint box used to promote these to a display
+    // row, which then clamped at 2.5em. Height follows the left bbox; without
+    // one it stops near 1.4× body.
+    const matched = matchedFormulaStyle(formula, node.dataset.page);
+    if (matched) {
+      span.classList.add("is-matched");
+      span.style.setProperty("--oi-formula-h", matched.height);
+      span.style.setProperty("--oi-formula-ar", matched.aspect);
+    } else {
+      span.style.setProperty("--oi-pdf-inline-crop-em", `${INLINE_BODY_HARD_MAX}em`);
+      span.style.setProperty("--oi-pdf-inline-line-em", `${INLINE_BODY_HARD_MAX}em`);
     }
     if (img) {
       img.className = "oi-pdf-math-crop";
@@ -1403,6 +1398,17 @@ function refreshMatchedFormulas(paper, paperHeight) {
     });
     if (!matched) return;
     row.style.setProperty("--oi-formula-h", paperCssPx(matched.cssHeight));
+  });
+  paper.querySelectorAll(".oi-pdf-inline-math.is-matched").forEach((span) => {
+    const block = (layout?.blocks || []).find((item) => item.id === span.dataset.blockId);
+    const matched = matchedDisplayCssSize({
+      bbox: block?.bbox,
+      pageWidth: layout?.pageWidth,
+      pageHeight: layout?.pageHeight,
+      paperHeight
+    });
+    if (!matched) return;
+    span.style.setProperty("--oi-formula-h", paperCssPx(matched.cssHeight));
   });
 }
 
