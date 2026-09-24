@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CROP_SCALE, DISPLAY_INK_PREFER, displayFormulaWidthCss } from "../lib/pdf-blocks.js";
+import { CROP_SCALE, DISPLAY_INK_PREFER, blockReadoutPlan, displayFormulaWidthCss } from "../lib/pdf-blocks.js";
 import { FORMULA_CROP_PAD } from "../lib/pdf-text-layer.js";
 import {
   INLINE_SIDE_GAP_EM,
@@ -18,6 +18,7 @@ import {
   displayFormulaMinEm,
   inlinePaintBox,
   inlinePromotesToDisplay,
+  markPromotedDisplay,
   scriptInkPx,
   uniformScaleDelta,
   uniformScaleOk
@@ -59,6 +60,23 @@ test("F3-S3 script ink uses the 7px hard gate and promotes a tall inline", () =>
   const inflated = inlinePaintBox(16 / 24, 0.7);
   assert.equal(inflated.promote, true);
   assert.ok(inflated.box > 2.2);
+});
+
+test("promote writes a display role for S1-D", () => {
+  const block = { label: "formula", display: false, inlineOf: "p1", inkShare: 0.7, scriptShare: null };
+  assert.equal(inlinePromotesToDisplay(block.inkShare, block.scriptShare), true);
+  markPromotedDisplay(block);
+  assert.equal(block.display, true);
+  assert.equal(block.role, "display");
+  assert.equal(block.promoted, true);
+  assert.equal(block.inlineOf, "p1");
+  assert.equal(blockReadoutPlan(block).role, "formula-display");
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  assert.match(viewer, /dataset\.formulaRole = "display"/);
+  assert.match(viewer, /dataset\.promoted = "1"/);
+  assert.match(viewer, /markPromotedDisplay\(formula\)/);
+  assert.equal(SCRIPT_SHARE_HIGH, 0.4);
+  assert.equal(SCRIPT_SHARE_DEFAULT, 0.24);
 });
 
 test("F3-S1 display em keeps prefer ink and does not cap the width at the column", () => {

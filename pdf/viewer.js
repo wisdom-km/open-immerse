@@ -115,7 +115,7 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
-import { inlinePaintBox, displayFormulaMinEm } from "../lib/pdf-formula-size.js";
+import { inlinePaintBox, displayFormulaMinEm, markPromotedDisplay } from "../lib/pdf-formula-size.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   createFormulaRasterCache,
@@ -1094,6 +1094,9 @@ function fillBlockText(node, block, layout) {
     const paint = inlinePaintBox(formula?.inkShare, formula?.scriptShare);
     if (paint.promote) {
       span.classList.add("is-promoted");
+      span.dataset.formulaRole = "display";
+      span.dataset.promoted = "1";
+      if (formula && typeof formula === "object") markPromotedDisplay(formula);
       if (formula?.id) {
         span.dataset.blockId = String(formula.id);
         span.dataset.label = "formula";
