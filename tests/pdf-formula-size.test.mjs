@@ -9,6 +9,8 @@ import {
   INLINE_SIDE_GAP_EM,
   SCRIPT_INK_MIN_PX,
   SCRIPT_INK_TARGET_PX,
+  SCRIPT_SHARE_SAFETY,
+  DISPLAY_INK_PAINT,
   UNIFORM_SCALE_TOL,
   displayFormulaMinEm,
   inlinePaintBox,
@@ -32,20 +34,31 @@ test("F3-S3 script ink uses the 7px hard gate and promotes a tall inline", () =>
   assert.equal(SCRIPT_INK_TARGET_PX, 8);
   const cssH = 7 / 0.25;
   assert.ok(scriptInkPx(cssH, 0.25) >= 7);
+  assert.equal(SCRIPT_SHARE_SAFETY, 0.5);
   assert.equal(inlinePromotesToDisplay(16 / 24, null), false);
   const tall = inlinePaintBox(0.5, 0.1);
   assert.equal(tall.promote, true);
   assert.ok(tall.box > 2.2);
-  const fitted = inlinePaintBox(16 / 24, 0.28);
+  // Font-box share 0.28 at the old 7px floor stays inside 2.2em and measured ~6.5.
+  // Paint target 8 plus the safety margin pushes that line box to display.
+  const footnote = inlinePaintBox(16 / 24, 0.28);
+  assert.equal(footnote.promote, true);
+  assert.ok(footnote.box > 2.2);
+  const fitted = inlinePaintBox(16 / 24, 0.7);
   assert.equal(fitted.promote, false);
   assert.ok(fitted.box <= 2.2);
-  assert.ok(scriptInkPx(fitted.box * 15, 0.28) >= 7 - 1e-6);
+  assert.ok(scriptInkPx(fitted.box * 15, 0.7 * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
 });
 
 test("F3-S1 display em keeps prefer ink and does not cap the width at the column", () => {
+  assert.equal(DISPLAY_INK_PAINT, 1.45);
   const em = displayFormulaMinEm(0.5, 0.2);
-  assert.ok(em * 0.5 >= DISPLAY_INK_PREFER - 1e-9);
-  assert.ok(scriptInkPx(em * 15, 0.2) >= 7 - 1e-6);
+  assert.ok(em * 0.5 >= DISPLAY_INK_PAINT - 1e-9);
+  assert.ok(scriptInkPx(em * 15, 0.2 * SCRIPT_SHARE_SAFETY) >= SCRIPT_INK_TARGET_PX - 1e-6);
+  // F04 measured 1.398 against a 1.40 floor. Paint 1.45 clears that hair.
+  const ffn = displayFormulaMinEm(20.97 / 35.64, 6.29 / 35.64);
+  assert.ok(ffn * (20.97 / 35.64) >= 1.4);
+  assert.ok(ffn * 15 * (6.29 / 35.64) * SCRIPT_SHARE_SAFETY >= 7);
   const css = displayFormulaWidthCss(0.48, 0.04, em);
   assert.match(css, /^max\(calc\(var\(--oi-pdf-left-w/);
   assert.doesNotMatch(css, /^min\(100%/);
