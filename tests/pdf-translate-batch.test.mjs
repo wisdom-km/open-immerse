@@ -89,7 +89,7 @@ test("formula and author blocks stay out of the translation batch", () => {
   assert.match(batch[0].text, /⟦f1⟧/);
 });
 
-test("a dropped placeholder falls back to the source sentence at its original position", () => {
+test("a dropped placeholder keeps the Chinese sentence instead of the English source", () => {
   const formula = { id: "f", label: "formula", imageUrl: "data:image/png;base64,same" };
   const block = {
     id: "t",
@@ -100,21 +100,45 @@ test("a dropped placeholder falls back to the source sentence at its original po
   };
   const pieces = blockRenderPieces(block, [block, formula]);
   assert.equal(blockTranslationIntegrity(block).reason, "formula-placeholder-mismatch");
-  assert.equal(pieces.filter((piece) => piece.type === "image").length, 1);
-  assert.deepEqual(pieces.map((piece) => piece.type), ["text", "image", "text"]);
-  assert.equal(pieces[0].text, "see ");
-  assert.equal(pieces[1].src, "data:image/png;base64,same");
-  assert.equal(pieces[2].text, " here");
+  assert.equal(pieces.filter((piece) => piece.type === "image").length, 0);
+  assert.equal(pieces.map((piece) => piece.text || "").join(""), "见图");
+  assert.doesNotMatch(pieces.map((piece) => piece.text || "").join(""), /see /);
   const filled = applyBlockTranslations([block, formula], [{ id: "t", translation: "见图" }]);
   assert.equal(filled[1].imageUrl, "data:image/png;base64,same");
   assert.equal(filled[0].translation, "见图");
 });
 
-test("a translation with missing citation numbers falls back to the source", () => {
+test("a partial placeholder translation slots what it can and appends the rest", () => {
+  const block = {
+    id: "t",
+    label: "text",
+    text: "see ⟦f1⟧ and ⟦f2⟧",
+    translation: "见 ⟦f1⟧ 和后式",
+    placeholders: [
+      { token: "⟦f1⟧", blockId: "f1" },
+      { token: "⟦f2⟧", blockId: "f2" }
+    ]
+  };
+  const pieces = blockRenderPieces(block, [
+    block,
+    { id: "f1", label: "formula", imageUrl: "data:image/png;base64,one" },
+    { id: "f2", label: "formula", imageUrl: "data:image/png;base64,two" }
+  ]);
+  assert.equal(blockTranslationIntegrity(block).reason, "formula-placeholder-mismatch");
+  assert.deepEqual(pieces.map((piece) => piece.type), ["text", "image", "text", "image"]);
+  assert.match(pieces[0].text, /见 /);
+  assert.equal(pieces[1].blockId, "f1");
+  assert.match(pieces[2].text, /和后式/);
+  assert.equal(pieces[3].blockId, "f2");
+  assert.doesNotMatch(pieces.map((piece) => piece.text || "").join(""), /see /);
+});
+
+test("a translation with missing citation numbers keeps the Chinese sentence", () => {
   const block = { text: "memory [13] and recurrent [7]", sourceText: "memory [13] and recurrent [7]",
     translation: "记忆 [ ] 和循环 [7]" };
   assert.equal(blockTranslationIntegrity(block).reason, "citation-mismatch");
-  assert.equal(blockRenderPieces(block)[0].text, block.text);
+  assert.equal(blockRenderPieces(block)[0].text, "记忆 [ ] 和循环 [7]");
+  assert.doesNotMatch(blockRenderPieces(block)[0].text, /memory/);
 });
 
 test("webpage and document batches do not send a PDF addendum", () => {
