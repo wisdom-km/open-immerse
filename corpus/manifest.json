@@ -51,7 +51,7 @@
       "pageCount": 15,
       "producer": "pdfTeX-1.40.25",
       "creator": "LaTeX with hyperref",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 135
     },
     {
       "id": "2006.11239",
@@ -69,7 +69,7 @@
       "pageCount": 25,
       "producer": "pdfTeX-1.40.21",
       "creator": "LaTeX with hyperref",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 234
     },
     {
       "id": "1412.6980",
@@ -87,7 +87,7 @@
       "pageCount": 15,
       "producer": "pdfTeX-1.40.12",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 262
     },
     {
       "id": "s41467-018-07210-0",
@@ -105,7 +105,7 @@
       "pageCount": 10,
       "producer": "Acrobat Distiller 10.1.16 (Windows); modified using iText® 5.3.5 ©2000-2012 1T3XT BVBA (AGPL-version)",
       "creator": "Arbortext Advanced Print Publisher 10.0.1465/W Unicode",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 190
     },
     {
       "id": "jmlr-21-19-1015",
@@ -123,7 +123,7 @@
       "pageCount": 63,
       "producer": "pdfTeX-1.40.20",
       "creator": "LaTeX with hyperref",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 1647
     },
     {
       "id": "fms-2015-24",
@@ -141,7 +141,7 @@
       "pageCount": 53,
       "producer": "pdfTeX-1.40.14; modified using iText 5.0.3 (c) 1T3XT BVBA",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 972
     },
     {
       "id": "fms-2021-7",
@@ -159,7 +159,7 @@
       "pageCount": 40,
       "producer": "dvips + MiKTeX GPL Ghostscript 9.25",
       "creator": "LaTeX with hyperref",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 1187
     },
     {
       "id": "fms-2020-28",
@@ -177,7 +177,7 @@
       "pageCount": 37,
       "producer": "pdfTeX-1.40.17",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 1358
     },
     {
       "id": "crmath-64",
@@ -195,7 +195,7 @@
       "pageCount": 8,
       "producer": "pdfTeX-1.40.18",
       "creator": "Centre Mersenne",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 251
     },
     {
       "id": "2004.05463",
@@ -213,7 +213,7 @@
       "pageCount": 20,
       "producer": "dvips + GPL Ghostscript GIT PRERELEASE 9.22",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 519
     },
     {
       "id": "hep-th-9711200",
@@ -231,7 +231,7 @@
       "pageCount": 22,
       "producer": "GPL Ghostscript 10.01.2",
       "creator": "dvips(k) 5.86 Copyright 1999 Radical Eye Software",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 475
     },
     {
       "id": "0901.2686",
@@ -249,7 +249,7 @@
       "pageCount": 9,
       "producer": "GPL Ghostscript 10.01.2",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 339
     },
     {
       "id": "hep-th-0603001",
@@ -267,7 +267,7 @@
       "pageCount": 5,
       "producer": "dvips + GPL Ghostscript SVN PRE-RELEASE 8.62",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 258
     },
     {
       "id": "1712.03344",
@@ -285,7 +285,7 @@
       "pageCount": 17,
       "producer": "dvips + GPL Ghostscript GIT PRERELEASE 9.22",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 526
     },
     {
       "id": "jhep04-2021-102",
@@ -303,7 +303,7 @@
       "pageCount": 102,
       "producer": "medialab",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 3163
     },
     {
       "id": "pcbi-1009231",
@@ -321,7 +321,7 @@
       "pageCount": 25,
       "producer": "PDFlib+PDI 9.0.6 (C++/Win64)",
       "creator": "Arbortext Advanced Print Publisher 11.0.3521/W Unicode-x64",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 315
     },
     {
       "id": "pcbi-1005421",
@@ -339,7 +339,7 @@
       "pageCount": 16,
       "producer": "PDFlib+PDI 8.0.2p1 (C++/Win64); modified using iTextSharp™ 5.5.3 ©2000-2014 iText Group NV (AGPL-version)",
       "creator": "Arbortext Advanced Print Publisher 11.0.2857/W Unicode-x64",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 137
     },
     {
       "id": "pcbi-1007670",
@@ -357,7 +357,7 @@
       "pageCount": 17,
       "producer": "PDFlib+PDI 9.0.6 (C++/Win64)",
       "creator": "Arbortext Advanced Print Publisher 11.0.3521/W Unicode-x64",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 159
     },
     {
       "id": "pcbi-1008462",
@@ -375,7 +375,7 @@
       "pageCount": 29,
       "producer": "PDFlib+PDI 9.0.6 (C++/Win64)",
       "creator": "Arbortext Advanced Print Publisher 11.0.3521/W Unicode-x64",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 453
     },
     {
       "id": "pcbi-1004584",
@@ -393,7 +393,7 @@
       "pageCount": 38,
       "producer": "Acrobat Distiller 11.0 (Windows); modified using iTextSharp™ 5.5.3 ©2000-2014 iText Group NV (AGPL-version)",
       "creator": "Arbortext Advanced Print Publisher 11.0.2857/W Unicode-x64",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 249
     },
     {
       "id": "1704.00447",
@@ -411,7 +411,7 @@
       "pageCount": 29,
       "producer": "pdfTeX-1.40.17",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 325
     },
     {
       "id": "1707.06474",
@@ -429,7 +429,7 @@
       "pageCount": 11,
       "producer": "pdfTeX-1.40.17",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 193
     },
     {
       "id": "1906.08754",
@@ -447,7 +447,7 @@
       "pageCount": 14,
       "producer": "pdfTeX-1.40.17",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 313
     },
     {
       "id": "1811.08839",
@@ -465,7 +465,7 @@
       "pageCount": 35,
       "producer": "pdfTeX-1.40.17",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 241
     },
     {
       "id": "2002.05702",
@@ -483,7 +483,7 @@
       "pageCount": 19,
       "producer": "pdfTeX-1.40.17",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 95
     },
     {
       "id": "qe533",
@@ -501,7 +501,7 @@
       "pageCount": 31,
       "producer": "Acrobat Distiller 9.5.5 (Windows)",
       "creator": "LaTeX2e",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 518
     },
     {
       "id": "1410.3394",
@@ -519,7 +519,7 @@
       "pageCount": 41,
       "producer": "pdfTeX-1.40.12",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 546
     },
     {
       "id": "1802.03042",
@@ -537,7 +537,7 @@
       "pageCount": 32,
       "producer": "pdfTeX-1.40.17",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 824
     },
     {
       "id": "1601.00991",
@@ -555,7 +555,7 @@
       "pageCount": 22,
       "producer": "GPL Ghostscript 8.64",
       "creator": "PScript5.dll Version 5.2.2",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 123
     },
     {
       "id": "1809.02233",
@@ -573,7 +573,7 @@
       "pageCount": 14,
       "producer": "pdfTeX-1.40.17",
       "creator": "LaTeX with hyperref package",
-      "formulaUnitsEstimate": null
+      "formulaUnitsEstimate": 82
     }
   ]
 }
