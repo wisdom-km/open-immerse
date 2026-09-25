@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>公式标注复核</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%231f2a30'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/tools/label-review/review.css">
+</head>
+<body>
+  <header>
+    <strong>公式标注复核</strong>
+    <span id="progress">正在读取清单…</span>
+    <span id="save-state">未修改</span>
+    <button id="mode-units" type="button">单元队列</button>
+    <button id="mode-pages" type="button">整页队列</button>
+    <button id="confirm-unit" type="button">看过，下一个</button>
+    <label>缩放 <input id="zoom" type="range" min="0.8" max="2" step="0.1" value="1.25"></label>
+    <button id="export" type="button">导出</button>
+    <button id="import" type="button">导入</button>
+    <input id="import-file" type="file" accept="application/json" hidden>
+    <button id="revert" type="button">本页恢复预标注</button>
+    <a id="sheet-link" href="#" target="_blank">接触图</a>
+  </header>
+  <div class="layout">
+    <aside id="queue"></aside>
+    <main>
+      <div id="stage"></div>
+    </main>
+    <aside id="inspector">
+      <p id="selection-summary">还没有选中元素。</p>
+      <div class="actions">
+        <button type="button" data-label="formula">1 公式</button>
+        <button type="button" data-label="text">2 正文</button>
+        <button type="button" data-label="code">3 代码</button>
+        <button type="button" data-label="other">4 其他</button>
+        <button type="button" id="as-display">d 行间</button>
+        <button type="button" id="as-inline">i 行内</button>
+        <button type="button" id="eq-toggle">e 公式编号</button>
+        <button type="button" id="merge">m 合并</button>
+        <button type="button" id="split">s 拆开</button>
+      </div>
+      <p class="help">默认按约 1000 个单元的复核集往下走。Enter 或「看过，下一个」记下当前单元并跳到下一个。单元队列里 j / k 是上一个或下一个单元。整页队列里 j / k 在低置信度元素之间跳。n / p 翻页。点击只选中一个字形。从空白处拖出方框可以多选，Shift 追加。当前单元是红色粗实线，盖过橙色虚线。合并前要框住整式。公式编号只选中 (n) 再按 e。缺 PDF 时会挡住画面，这时确认和快捷键不起作用。</p>
+      <pre id="detail"></pre>
+    </aside>
+  </div>
+  <script type="module" src="/tools/label-review/review.js"></script>
+</body>
+</html>

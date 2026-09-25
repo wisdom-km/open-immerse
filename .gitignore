@@ -11,6 +11,13 @@ dist/
 
 # Local regression PDF; only the small boundary annotations are versioned.
 tests/fixtures/Attention_Is_All_You_Need.pdf
+tests/fixtures/DDPM_2006.11239.pdf
+
+# M1 corpus PDFs stay local. Reviewed JSON under labels/reviewed is committed
+# when a pass is finished. Sheets and check caches stay local.
+corpus/pdfs/
+labels/sheets/
+labels/checks/
 
 # Chrome rejects unpacked dirs starting with _ (except _locales)
 _qa-out/

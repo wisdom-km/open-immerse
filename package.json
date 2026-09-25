@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "description": "Optional tooling for the M1 corpus. The extension itself stays zero-build; @napi-rs/canvas (MIT) is only used by the label and check scripts.",
+  "devDependencies": {
+    "@napi-rs/canvas": "1.0.9"
+  }
+}
