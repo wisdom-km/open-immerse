@@ -213,10 +213,10 @@ try {
     console.error(result.error);
     process.exitCode = 1;
   } else {
-    const gates = result.cases.filter((row) => String(row.gate || "").startsWith("G-") || ["p4-b6", "p4-b14", "p4-b19", "p3-b16"].includes(row.id));
+    const gates = result.cases.filter((row) => String(row.gate || "").startsWith("G-") || ["p4-b6", "p4-b14", "p4-b15", "p4-b19", "p3-b16", "p3-b30"].includes(row.id));
     console.log(`cases ${result.cases.length} reported rows ${gates.length}`);
     for (const row of gates) {
-      console.log(`${row.gate || "report"} ${row.label} ${row.id} z${row.zoom} missing ${row.missing}/${row.missingSolid} oob ${row.outOfBounds}/${row.outOfBoundsSolid} outlineOob ${row.outlineOutOfBounds}/${row.outlineOutOfBoundsSolid} svgOut ${row.svgVsOutlineMissing} body ${row.bodyGlyphs} rules ${JSON.stringify(row.rules)}`);
+      console.log(`${row.gate || "report"} ${row.label} ${row.id} z${row.zoom} union ${row.unionMissing}/${row.unionMissingSolid} body ${row.bodyGlyphs} empty ${row.empty} unjust ${row.unjustified} els ${row.elements} rules ${JSON.stringify(row.rules)}`);
     }
     for (const page of result.pages) {
       console.log(`page ${page.label} p${page.page} record ${page.recordMs}ms build ${page.buildMs}ms svg ${page.svgBytes} unsupported ${JSON.stringify(page.unsupported)}`);

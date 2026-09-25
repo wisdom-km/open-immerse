@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildFormulaSvg,
+  isBodyGlyphLeak,
   countExtraInk,
   countMissingInk,
   countOutOfBoundsInk,
@@ -270,7 +271,223 @@ test("out of bounds counts svg ink with no reference ink nearby", () => {
   assert.equal(shifted.svgInk, 2);
 });
 
+test("a tall operator that covers a formula glyph is kept", () => {
+  const tall = {
+    width: 100,
+    height: 80,
+    elements: [glyph(11, [8, 8, 22, 70])]
+  };
+  const built = buildFormulaSvg(tall, {
+    bbox: [0.08, 0.35, 0.4, 0.6],
+    glyphBoxes: [[0.1, 0.4, 0.18, 0.52]],
+    pageWidth: 100,
+    pageHeight: 80,
+    runs: [{
+      box: [10, 32, 18, 42],
+      font: "CMEX10",
+      math: true,
+      body: false,
+      baseline: 42,
+      str: "∑",
+      member: true
+    }]
+  });
+  assert.equal(built.elements.length, 1);
+  assert.equal(built.elements[0].id, 11);
+  assert.equal(built.elements[0].bodyLine, false);
+});
+
+test("a body glyph on the line above is dropped and marked", () => {
+  const page = {
+    width: 100,
+    height: 80,
+    elements: [
+      glyph(1, [12, 28, 20, 40]),
+      glyph(12, [10, 2, 18, 14])
+    ]
+  };
+  const built = buildFormulaSvg(page, {
+    bbox: [0.08, 0.3, 0.5, 0.6],
+    glyphBoxes: [[0.12, 0.35, 0.2, 0.5]],
+    pageWidth: 100,
+    pageHeight: 80,
+    runs: [
+      {
+        box: [12, 28, 20, 40],
+        font: "CMMI10",
+        math: true,
+        body: false,
+        baseline: 40,
+        str: "x",
+        member: true
+      },
+      {
+        box: [8, 2, 40, 16],
+        font: "CMR10",
+        math: false,
+        body: true,
+        baseline: 14,
+        str: "by",
+        member: false
+      }
+    ]
+  });
+  assert.deepEqual(built.elements.map((element) => element.id), [1]);
+  assert.equal(built.rejected.some((element) => element.id === 12 && element.reason === "body-line"), true);
+});
+
+test("a formula comma and a lone delimiter are kept", () => {
+  const page = {
+    width: 80,
+    height: 40,
+    elements: [glyph(21, [30, 16, 34, 22]), glyph(22, [50, 8, 58, 28])]
+  };
+  const built = buildFormulaSvg(page, {
+    bbox: [0.2, 0.15, 0.8, 0.8],
+    glyphBoxes: [[0.36, 0.35, 0.44, 0.6], [0.62, 0.2, 0.74, 0.75]],
+    pageWidth: 80,
+    pageHeight: 40,
+    runs: [
+      {
+        box: [28, 14, 40, 24],
+        font: "CMMI10",
+        math: true,
+        body: false,
+        baseline: 22,
+        str: "Q,",
+        member: true
+      },
+      {
+        box: [50, 10, 58, 26],
+        font: "CMR10",
+        math: false,
+        body: true,
+        baseline: 24,
+        str: ")",
+        member: true
+      }
+    ]
+  });
+  assert.deepEqual(built.elements.map((element) => element.id).sort((a, b) => a - b), [21, 22]);
+});
+
 test("selection refuses a glyph whose center of mass is the neighbor", () => {
   const chosen = selectFormulaElements(record, formula);
   assert.equal(chosen.elements.some((element) => element.id === 3), false);
+});
+
+test("a math glyph on the next line is not pulled in by column alignment", () => {
+  const page = {
+    width: 100,
+    height: 120,
+    elements: [
+      glyph(1, [12, 40, 22, 52]),
+      glyph(30, [12, 70, 22, 82])
+    ]
+  };
+  const built = buildFormulaSvg(page, {
+    bbox: [0.08, 0.3, 0.4, 0.5],
+    glyphBoxes: [[0.12, 0.33, 0.22, 0.44]],
+    pageWidth: 100,
+    pageHeight: 120,
+    runs: [
+      {
+        box: [12, 40, 22, 52],
+        font: "CMMI10",
+        math: true,
+        body: false,
+        baseline: 52,
+        str: "x",
+        member: true
+      },
+      {
+        box: [12, 70, 22, 82],
+        font: "CMMI10",
+        math: true,
+        body: false,
+        baseline: 82,
+        str: "y",
+        member: false
+      }
+    ]
+  });
+  assert.deepEqual(built.elements.map((element) => element.id), [1]);
+});
+
+test("known neighbour leaks are body-line and a radical that touches the cluster stays", () => {
+  const page = {
+    width: 120,
+    height: 100,
+    elements: [
+      glyph(1, [30, 40, 40, 52]),
+      glyph(2, [18, 28, 34, 58]),
+      glyph(3, [20, 8, 28, 20]),
+      glyph(4, [70, 6, 80, 18]),
+      glyph(5, [90, 8, 104, 20])
+    ]
+  };
+  const built = buildFormulaSvg(page, {
+    bbox: [0.15, 0.28, 0.6, 0.6],
+    glyphBoxes: [[0.25, 0.4, 0.34, 0.52]],
+    pageWidth: 120,
+    pageHeight: 100,
+    runs: [
+      {
+        box: [30, 40, 40, 52],
+        font: "CMMI10",
+        math: true,
+        body: false,
+        baseline: 52,
+        str: "k",
+        member: true
+      },
+      {
+        box: [16, 30, 36, 56],
+        font: "CMSY10",
+        math: true,
+        body: false,
+        baseline: 52,
+        str: "√",
+        member: true
+      },
+      {
+        box: [8, 4, 36, 18],
+        font: "NimbusRomNo9L-Regu",
+        math: false,
+        body: true,
+        baseline: 18,
+        str: "by",
+        member: false
+      },
+      {
+        box: [60, 4, 90, 18],
+        font: "NimbusRomNo9L-Regu",
+        math: false,
+        body: true,
+        baseline: 16,
+        str: "and",
+        member: false
+      },
+      {
+        box: [88, 4, 120, 18],
+        font: "NimbusRomNo9L-Regu",
+        math: false,
+        body: true,
+        baseline: 16,
+        str: "ne",
+        member: false
+      }
+    ]
+  });
+  assert.deepEqual(built.elements.map((element) => element.id).sort((a, b) => a - b), [1, 2]);
+  for (const id of [3, 4, 5]) {
+    const rejected = built.rejected.find((element) => element.id === id);
+    assert.equal(rejected?.reason, "body-line");
+    assert.equal(rejected?.bodyLine, true);
+  }
+  assert.equal(built.elements.filter((element) => element.bodyLine).length, 0);
+  assert.equal(built.rejected.filter((element) => isBodyGlyphLeak(element)).length, 3);
+  assert.equal(isBodyGlyphLeak({ provenance: "glyph", font: "NimbusRomNo9L-Regu", reason: "glyph-cluster", bodyLine: false }), true);
+  assert.equal(isBodyGlyphLeak({ provenance: "glyph", font: "NimbusRomNo9L-Regu", reason: "formula-run", bodyLine: false }), false);
+  assert.equal(isBodyGlyphLeak({ provenance: "glyph", font: "CMR10", reason: "formula-run", bodyLine: false }), false);
 });

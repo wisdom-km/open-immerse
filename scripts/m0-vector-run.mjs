@@ -5,12 +5,15 @@ import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import {
   INK_AA_TOLERANCE,
   boxArea,
+  buildFormulaRuns,
   buildFormulaSvg,
+  glyphIdsAt20487d4,
   countExtraInk,
   countMissingInk,
   countOutOfBoundsInk,
   diffStats,
   foreignGlyphBoxes,
+  isBodyGlyphLeak,
   lumaOf,
   maskFromBoxes,
   overlapArea,
@@ -49,7 +52,9 @@ const WATCH = new Set([
   "attention:p4-b14",
   "attention:p4-b19",
   "ddpm:p2-b19",
-  "ddpm:p3-b16"
+  "ddpm:p3-b16",
+  "ddpm:p4-b15",
+  "ddpm:p3-b30"
 ]);
 
 function status(text) {
@@ -252,11 +257,14 @@ function ruleLengths(elements, reference, svg, width, height, sx, sy, zoom) {
         row = yy;
       }
     }
-    const refPx = Math.max(
-      runOnRow(reference, width, height, x0, x1, row - 1),
-      runOnRow(reference, width, height, x0, x1, row),
-      runOnRow(reference, width, height, x0, x1, row + 1)
-    );
+    let refPx = runOnRow(reference, width, height, x0, x1, row);
+    if (refPx < 8) {
+      for (const yy of [row - 1, row + 1]) {
+        const near = runOnRow(reference, width, height, x0, x1, yy);
+        const scale = Math.max(near, svgPx, 1);
+        if (near >= 8 && Math.abs(near - svgPx) / scale <= 0.2) refPx = Math.max(refPx, near);
+      }
+    }
     if (refPx < 8 && svgPx < 8) continue;
     rows.push({
       svgPx,
@@ -330,13 +338,33 @@ async function run() {
         const builtSvgs = formulas.map((block) => {
           const text = blockText({ ...block, page: pageNo }, content.items, viewport);
           const foreignBoxes = foreignGlyphBoxes(block, content.items, viewport);
-          const svg = buildFormulaSvg(recorded.context, {
+          const runs = buildFormulaRuns(content.items, viewport, block);
+          const formula = {
             ...block,
             foreignBoxes,
+            runs,
             pageWidth: viewport.width,
             pageHeight: viewport.height
-          });
-          return { block, text, svg, gate: gateFor(doc, { ...block, page: pageNo }, text) };
+          };
+          const svg = buildFormulaSvg(recorded.context, formula);
+          const previous = new Set(glyphIdsAt20487d4(recorded.context, formula));
+          const kept = new Set((svg.elements || []).filter((element) => element.provenance === "glyph").map((element) => element.id));
+          const removed = [];
+          const rejectedById = new Map((svg.rejected || []).map((element) => [element.id, element]));
+          for (const id of previous) {
+            if (kept.has(id)) continue;
+            const element = rejectedById.get(id) || (recorded.context.elements || []).find((item) => item.id === id) || {};
+            const bbox = element.bbox || [];
+            removed.push({
+              id,
+              font: element.font || "",
+              text: element.text || "",
+              reason: element.reason || "unclaimed",
+              bodyLine: element.bodyLine === true || element.reason === "body-line",
+              y: bbox.length ? Math.round(bbox[1]) : null
+            });
+          }
+          return { block, text, svg, removed, gate: gateFor(doc, { ...block, page: pageNo }, text) };
         });
         const buildMs = performance.now() - buildStarted;
         const provenance = {};
@@ -417,6 +445,24 @@ async function run() {
               })
               .map((box) => toCropBox(box, face.sx, face.sy, zoom));
             const allowed = maskFromBoxes(face.width, face.height, geometry.length ? geometry : [[0, 0, 0, 0]]);
+            const formulaPage = (entry.block.glyphBoxes || [])
+              .map((box) => pageBox(box, viewport.width, viewport.height))
+              .filter(Boolean);
+            const keptIds = new Set((entry.svg.elements || []).map((element) => element.id));
+            const rejectedById = new Map((entry.svg.rejected || []).map((element) => [element.id, element]));
+            const exclude = [];
+            for (const element of recorded.context.elements || []) {
+              if (element?.provenance !== "glyph" || !element.bbox || keptIds.has(element.id)) continue;
+              const known = rejectedById.get(element.id);
+              const bodyLine = known?.reason === "body-line";
+              const touchesFormula = formulaPage.some((glyph) => overlapArea(element.bbox, glyph) > 0);
+              if (!bodyLine && touchesFormula) continue;
+              const box = toCropBox(element.bbox, face.sx, face.sy, zoom);
+              const pad = 2;
+              exclude.push([box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad]);
+            }
+            const unionMask = maskFromBoxes(face.width, face.height, [[0, 0, face.width, face.height]], exclude);
+            const unionMissing = countMissingInk(face.image, svgPixels, face.width, face.height, unionMask);
             const missing = countMissingInk(face.image, svgPixels, face.width, face.height, glyphMask);
             const extra = countExtraInk(svgPixels, face.width, face.height, allowed);
             const bounds = countOutOfBoundsInk(face.image, svgPixels, face.width, face.height);
@@ -424,15 +470,7 @@ async function run() {
             const outlineDiff = diffStats(face.image, outline.image, face.width, face.height, glyphMask);
             const svgVsOutline = countMissingInk(outline.image, svgPixels, face.width, face.height, glyphMask);
             const rules = ruleLengths(entry.svg.elements, face.image, svgPixels, face.width, face.height, face.sx, face.sy, zoom);
-            const glyphPage = (entry.block.glyphBoxes || []).map((box) => pageBox(box, viewport.width, viewport.height)).filter(Boolean);
-            const foreignPage = foreignGlyphBoxes(entry.block, content.items, viewport).map((box) => pageBox(box, viewport.width, viewport.height)).filter(Boolean);
-            let bodyGlyphs = 0;
-            for (const element of entry.svg.elements || []) {
-              if (element.provenance !== "glyph" || !element.bbox) continue;
-              const onFormula = glyphPage.reduce((best, box) => Math.max(best, overlapArea(element.bbox, box)), 0);
-              const onForeign = foreignPage.reduce((best, box) => Math.max(best, overlapArea(element.bbox, box)), 0);
-              if (onForeign > onFormula) bodyGlyphs += 1;
-            }
+            const bodyGlyphs = (entry.svg.elements || []).filter((element) => isBodyGlyphLeak(element)).length;
             const row = {
               doc: doc.id,
               label: doc.label,
@@ -444,6 +482,11 @@ async function run() {
               display: entry.block.display !== false && !entry.block.inlineOf,
               missing: missing.missing,
               missingSolid: missing.solid,
+              unionMissing: unionMissing.missing,
+              unionMissingSolid: unionMissing.solid,
+              empty: entry.svg.elementCount === 0,
+              removed: zoom === 1 ? entry.removed : [],
+              unjustified: (entry.removed || []).filter((glyph) => !glyph.bodyLine).length,
               referenceInk: missing.referenceInk,
               extra: extra.extra,
               outOfBounds: bounds.outOfBounds,
