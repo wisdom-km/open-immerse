@@ -118,3 +118,15 @@ test("formula paths outside the glyph box survive the neighbor mask", () => {
   assert.equal(dark(image, 80, 80), true);
   assert.equal(dark(image, 50, 12), false);
 });
+
+test("a radical tip that leaves its glyph box and enters a neighbor box stays", () => {
+  const image = paper(40, 40);
+  const glyph = [0.2, 0.2, 0.7, 0.55];
+  const neighbor = [0.05, 0.5, 0.95, 0.95];
+  for (let y = 12; y < 28; y += 1) ink(image, 16, y);
+  for (let x = 4; x < 12; x += 1) ink(image, x, 34);
+  blankFormulaMask(image, { maskBoxes: [neighbor], glyphBoxes: [glyph] });
+  assert.equal(dark(image, 16, 14), true, "ink inside the glyph box stays");
+  assert.equal(dark(image, 16, 26), true, "the connected tip inside the neighbor box stays");
+  assert.equal(dark(image, 8, 34), false, "detached neighbor ink is still cleared");
+});
