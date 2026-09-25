@@ -511,7 +511,7 @@ async function run() {
             cases.push(row);
             if (row.gate) gateHits.push(`${row.gate}:${row.id}`);
             const watch = WATCH.has(`${doc.label}:${entry.block.id}`) || (doc.label === "ddpm" && entry.block.id === "p4-b14");
-            const wantSheet = watch || (doc.label === "attention" && pageNo === 4 && zoom === 1.5);
+            const wantSheet = watch || unionMissing.solid > 0 || (doc.label === "attention" && pageNo === 4 && zoom === 1.5);
             if (wantSheet && face.width > 1 && face.height > 1 && face.width * face.height < 2_000_000) {
               const diff = diffImage(face.image, svgPixels, face.width, face.height);
               const png = sheetPng(face.image, svgPixels, diff, face.width, face.height);
