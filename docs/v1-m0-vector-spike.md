@@ -1,6 +1,6 @@
 # M0 向量公式 SVG 探针（GATE 1）
 
-基线 `main@1d467b3ed944eb3c922ebd48a39698e0d8abeb96`。分支 `feature/v1-m0-vector-svg`。横线长度修复仍是 `e288cd479ac3bf4c2e29a5f1e70abe0e8ec589f3`。字形选择改为正向成员，与本文件同一批提交。pdf.js `4.10.38`（`pdf/vendor` 未改）。未接分类器、阅读器 UI 或翻译。
+基线 `main@1d467b3ed944eb3c922ebd48a39698e0d8abeb96`。分支 `feature/v1-m0-vector-svg`。横线长度修复 `e288cd4`。字形选择 `13911f2` 与 `bceb629`。pdf.js `4.10.38`（`pdf/vendor` 未改）。未接分类器、阅读器 UI 或翻译。
 
 ## 结论
 
