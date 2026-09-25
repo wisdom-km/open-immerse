@@ -2,14 +2,17 @@
  * Score the M0 baseline selector against prelabels.
  *
  *   node scripts/baseline-checks.mjs
+ *   node scripts/baseline-checks.mjs --write-docs
  *
- * Writes docs/v1-m1-baseline.md. Per-paper progress is kept in
- * labels/checks/ so a rerun continues. Pass --force to recompute.
+ * Does not download. Papers whose PDF is missing are listed and skipped.
+ * The default report is labels/checks/baseline-report.md (gitignored).
+ * --write-docs updates docs/v1-m1-baseline.md and
+ * labels/baseline-summary.json. Those files omit timings. Timings are
+ * printed on stdout. Per-paper progress is kept in labels/checks/.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fetchCorpus } from "./corpus-fetch.mjs";
 import { openDocuments, scoreBaselinePage } from "./m1-pdf.mjs";
 import { markdownTable, round3 } from "../lib/label-checks.js";
 
@@ -59,17 +62,53 @@ function rate(part, total) {
   return round3(part / total).toFixed(3);
 }
 
-export async function runChecks({ force = false } = {}) {
-  const files = await fetchCorpus();
-  const manifest = JSON.parse(readFileSync(join(root, "corpus/manifest.json"), "utf8"));
-  mkdirSync(checkDir, { recursive: true });
+export function publicRow(row) {
+  const copy = { ...row };
+  delete copy.recordMs;
+  delete copy.buildMs;
+  return copy;
+}
+
+export function formatTiming(rows) {
+  const lines = ["id  record ms/page  build ms/page"];
+  for (const row of rows) {
+    lines.push(`${row.id}  ${rate(row.recordMs, row.pages)}  ${rate(row.buildMs, row.pages)}`);
+  }
+  return lines.join("\n");
+}
+
+export async function runChecks({
+  force = false,
+  writeDocs = false,
+  manifestPath = join(root, "corpus/manifest.json"),
+  pdfDir = join(root, "corpus/pdfs"),
+  cacheDir = checkDir,
+  reportPath = "",
+  summaryPath = ""
+} = {}) {
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  mkdirSync(cacheDir, { recursive: true });
+  const missing = [];
+  const files = [];
+  for (const doc of manifest.documents) {
+    const path = join(pdfDir, `${doc.id}.pdf`);
+    if (!existsSync(path)) missing.push(doc.id);
+    else files.push({ id: doc.id, path, doc });
+  }
+  console.log(`本地 PDF ${files.length} 篇，缺少 ${missing.length} 篇（不下载）`);
+  if (missing.length) {
+    console.log("缺少这些文件，已跳过：");
+    for (const id of missing) console.log(`  corpus/pdfs/${id}.pdf`);
+  }
   const byPaper = [];
-  for (const file of files) {
-    const doc = manifest.documents.find((entry) => entry.id === file.id);
-    const cache = join(checkDir, `${file.id}.json`);
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    const doc = file.doc;
+    const cache = join(cacheDir, `${file.id}.json`);
+    console.log(`开始 ${index + 1}/${files.length} ${file.id}`);
     if (!force && existsSync(cache)) {
       byPaper.push(JSON.parse(readFileSync(cache, "utf8")));
-      console.log(`${file.id} cached`);
+      console.log(`${file.id} 使用缓存`);
       continue;
     }
     const labelsDir = join(root, "labels/prelabel", file.id);
@@ -110,15 +149,21 @@ export async function runChecks({ force = false } = {}) {
     writeFileSync(cache, JSON.stringify(row));
     byPaper.push(row);
   }
-  const markdown = renderReport(manifest, byPaper);
-  writeFileSync(join(root, "docs/v1-m1-baseline.md"), markdown);
-  writeFileSync(join(root, "labels/baseline-summary.json"), JSON.stringify(byPaper, null, 2));
-  console.log(`wrote docs/v1-m1-baseline.md`);
-  return byPaper;
+  const markdown = renderReport(manifest, byPaper, missing);
+  const stored = byPaper.map(publicRow);
+  const reportDest = reportPath || (writeDocs ? join(root, "docs/v1-m1-baseline.md") : join(cacheDir, "baseline-report.md"));
+  const summaryDest = summaryPath || (writeDocs ? join(root, "labels/baseline-summary.json") : join(cacheDir, "baseline-summary.json"));
+  mkdirSync(join(reportDest, ".."), { recursive: true });
+  mkdirSync(join(summaryDest, ".."), { recursive: true });
+  writeFileSync(reportDest, markdown);
+  writeFileSync(summaryDest, JSON.stringify(stored, null, 2));
+  console.log(formatTiming(byPaper));
+  console.log(writeDocs ? `wrote ${reportDest}` : `wrote ${reportDest}（未改写 docs/v1-m1-baseline.md）`);
+  return { rows: byPaper, missing };
 }
 
-function renderReport(manifest, rows) {
-  const headers = ["paper", "field", "source", "pages", "units", "A1 miss/solid", "A2 neighbours", "identity conflicts", "A3 exact", "A3 Jaccard", "empty SVG", "A4 fallback", "record ms/page", "build ms/page", "SVG kB/page"];
+export function renderReport(manifest, rows, missing = []) {
+  const headers = ["paper", "field", "source", "pages", "units", "A1 miss/solid", "A2 neighbours", "identity conflicts", "A3 exact", "A3 Jaccard", "empty SVG", "A4 fallback", "SVG kB/page"];
   const tableRows = rows.map((row) => [
     row.id,
     row.field,
@@ -132,8 +177,6 @@ function renderReport(manifest, rows) {
     rate(row.jaccard, row.units),
     rate(row.emptySvgs, row.baselineBlocks),
     rate(row.prelabelFallback, row.units),
-    rate(row.recordMs, row.pages),
-    rate(row.buildMs, row.pages),
     rate(row.svgBytes / 1024, row.pages)
   ]);
   const groups = [];
@@ -163,11 +206,17 @@ function renderReport(manifest, rows) {
     ]);
     return `## ${title}\n\n${markdownTable(["group", "pages", "units", "A1 miss/solid", "A2", "identity conflicts", "A3 exact", "A3 Jaccard", "empty SVG", "A4 fallback"], body)}\n`;
   };
-  return `# M1 baseline\n\nThe selector is \`lib/formula-svg.js\` as carried from the M0 spike. It was not changed. These numbers are measured against the unreviewed pre-labels in \`labels/prelabel/\`. Reviewed JSON under \`labels/reviewed/\` is not substituted.\n\nA1 counts left-hand outline ink with no SVG ink within r = 1, over the whole pre-label unit crop. The reference render is pdf.js with font faces off, the same paint the recorder saw. A2 counts a selected element whose label is not \`formula\`. A3 is exact element-set equality against pre-label units, plus mean Jaccard. Empty SVG is the share of text-layer formula blocks whose SVG is empty. A4 fallback is the share of pre-label formula units whose confidence is below 0.65. Those are different columns.\n\nIdentity conflicts are paints that matched two labels at once and were not given a character.\n\n${markdownTable(headers, tableRows)}\n\n${groupTable("By field", groups[0][1])}\n${groupTable("By source type", groups[1][1])}\n`;
+  const skipped = missing.length
+    ? missing.map((id) => `- corpus/pdfs/${id}.pdf`).join("\n")
+    : "No papers were skipped.";
+  return `# M1 baseline\n\nThe selector is \`lib/formula-svg.js\` as carried from the M0 spike. It was not changed. These numbers are measured against the unreviewed pre-labels in \`labels/prelabel/\`. Reviewed JSON under \`labels/reviewed/\` is not substituted.\n\nA1 counts left-hand outline ink with no SVG ink within r = 1, over the whole pre-label unit crop. The reference render is pdf.js with font faces off, the same paint the recorder saw. A2 counts a selected element whose label is not \`formula\`. A3 is exact element-set equality against pre-label units, plus mean Jaccard. Empty SVG is the share of text-layer formula blocks whose SVG is empty. A4 fallback is the share of pre-label formula units whose confidence is below 0.65. Those are different columns.\n\nIdentity conflicts are paints that matched two labels at once and were not given a character.\n\nRecord and build timings are printed by the script and are not stored in this file.\n\n${markdownTable(headers, tableRows)}\n\n${groupTable("By field", groups[0][1])}\n${groupTable("By source type", groups[1][1])}\n## Skipped\n\n${skipped}\n`;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  runChecks({ force: process.argv.includes("--force") }).catch((error) => {
+  runChecks({
+    force: process.argv.includes("--force"),
+    writeDocs: process.argv.includes("--write-docs")
+  }).catch((error) => {
     console.error(error.stack || error.message || error);
     process.exitCode = 1;
   });

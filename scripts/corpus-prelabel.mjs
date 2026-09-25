@@ -1,7 +1,7 @@
 /**
  * Write pre-labels for every corpus page.
  *
- *   npm install
+ *   npm ci
  *   node scripts/corpus-fetch.mjs
  *   node scripts/corpus-prelabel.mjs
  *
@@ -22,7 +22,9 @@ function pagePath(paperId, page) {
 }
 
 export async function prelabelCorpus({ only = "", pages = null, force = false } = {}) {
-  const files = await fetchCorpus();
+  const fetched = await fetchCorpus();
+  const files = fetched.results.filter((row) => row.status === "ok");
+  if (!files.length) throw new Error("没有可用的 PDF。先运行 node scripts/corpus-fetch.mjs，或用 --import 放入手动下载的文件。");
   const manifest = JSON.parse(readFileSync(join(root, "corpus/manifest.json"), "utf8"));
   const summary = [];
   for (const file of files) {
@@ -72,7 +74,7 @@ export async function prelabelCorpus({ only = "", pages = null, force = false } 
   }
   const totals = summary.reduce((sum, row) => sum + row.units, 0);
   writeFileSync(join(root, "labels/prelabel-summary.json"), JSON.stringify({ papers: summary, formulaUnits: totals }, null, 2));
-  if (!only && !pages) {
+  if (!only && !pages && summary.length === manifest.documents.length) {
     const byId = new Map(summary.map((row) => [row.id, row.units]));
     for (const doc of manifest.documents) {
       if (byId.has(doc.id)) doc.formulaUnitsEstimate = byId.get(doc.id);

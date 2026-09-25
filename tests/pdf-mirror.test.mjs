@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { Module } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
@@ -341,7 +341,12 @@ test("vendored KaTeX renders recovered LaTeX and is wired into the viewer", () =
   const version = readFileSync(join(katexDir, "VERSION"), "utf8");
   assert.match(version, /katex 0\.18\.7/);
   assert.match(version, /total_kib\s+542/);
-  const katex = createRequire(import.meta.url)("../pdf/vendor/katex/katex.min.js");
+  const katexPath = join(katexDir, "katex.min.js");
+  const katexModule = new Module(katexPath);
+  katexModule.filename = katexPath;
+  katexModule.paths = Module._nodeModulePaths(katexDir);
+  katexModule._compile(readFileSync(katexPath, "utf8"), katexPath);
+  const katex = katexModule.exports;
   const htmlMath = katex.renderToString(recoverFormulaLatex("softmax(QK^T)"), { throwOnError: false });
   assert.match(htmlMath, /katex/);
   assert.match(htmlMath, /softmax/);

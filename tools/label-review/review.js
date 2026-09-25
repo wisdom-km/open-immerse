@@ -1,4 +1,5 @@
 import { unitIdFromMembers, verifyPageLabels } from "/lib/label-schema.js";
+import { importRejection, missingPdfBanner, planMerge, reviewActionsLocked } from "/lib/review-actions.js";
 import * as pdfjs from "/pdf/vendor/pdf.min.mjs";
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf/vendor/pdf.worker.min.mjs";
@@ -17,7 +18,9 @@ const state = {
   mode: "units",
   reviewSet: { units: [] },
   unitCursor: 0,
-  pendingFocus: null
+  pendingFocus: null,
+  pdfMissing: false,
+  scrollSelection: false
 };
 
 const progress = document.querySelector("#progress");
@@ -116,12 +119,40 @@ function renderQueue() {
   queue.querySelector("button.current")?.scrollIntoView({ block: "nearest" });
 }
 
+function setLocked(locked) {
+  state.pdfMissing = locked;
+  document.body.classList.toggle("pdf-missing", locked);
+  for (const button of document.querySelectorAll(".actions button, #confirm-unit")) {
+    button.disabled = locked;
+  }
+}
+
+async function showMissingPdf(paperId) {
+  if (state.pdf) await state.pdf.destroy();
+  state.pdf = null;
+  state.scrollSelection = false;
+  state.pendingFocus = null;
+  setLocked(true);
+  stage.innerHTML = "";
+  const banner = document.createElement("div");
+  banner.id = "pdf-missing";
+  banner.setAttribute("role", "alert");
+  banner.textContent = missingPdfBanner(paperId);
+  stage.append(banner);
+  saveState.textContent = "缺少 PDF，已停止复核这一单元";
+  renderQueue();
+}
+
 async function openPage(paperId, pageNumber, focus = null) {
   state.paperId = paperId;
   state.pageNumber = pageNumber;
   state.pendingFocus = focus;
   state.selected = new Set();
   const response = await fetch(`/api/page/${encodeURIComponent(paperId)}/${pageNumber}`);
+  if (!response.ok) {
+    await showMissingPdf(paperId);
+    return;
+  }
   const payload = await response.json();
   state.page = payload.page;
   state.prelabel = payload.prelabel;
@@ -129,9 +160,21 @@ async function openPage(paperId, pageNumber, focus = null) {
     .filter((element) => Number(element.confidence) < 0.75)
     .sort((a, b) => a.confidence - b.confidence)
     .map((element) => element.id);
+  const pdfResponse = await fetch(`/api/pdf/${encodeURIComponent(paperId)}`);
+  if (!pdfResponse.ok) {
+    await showMissingPdf(paperId);
+    return;
+  }
   if (state.pdf) await state.pdf.destroy();
-  const pdf = await pdfjs.getDocument({ url: `/api/pdf/${encodeURIComponent(paperId)}`, verbosity: 0 }).promise;
-  state.pdf = pdf;
+  try {
+    const pdf = await pdfjs.getDocument({ url: `/api/pdf/${encodeURIComponent(paperId)}`, verbosity: 0 }).promise;
+    state.pdf = pdf;
+  } catch (error) {
+    console.error(error);
+    await showMissingPdf(paperId);
+    return;
+  }
+  setLocked(false);
   document.querySelector("#sheet-link").href = `/api/sheet/${encodeURIComponent(paperId)}/${pageNumber}`;
   await paint();
   renderQueue();
@@ -139,7 +182,30 @@ async function openPage(paperId, pageNumber, focus = null) {
 }
 
 let paintToken = 0;
+function scrollCurrentToCenter() {
+  const main = stage.closest("main");
+  const nodes = [...stage.querySelectorAll("rect.hit.selected")];
+  if (!main || !nodes.length) return;
+  const mainBox = main.getBoundingClientRect();
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const node of nodes) {
+    const box = node.getBoundingClientRect();
+    minX = Math.min(minX, box.left);
+    minY = Math.min(minY, box.top);
+    maxX = Math.max(maxX, box.right);
+    maxY = Math.max(maxY, box.bottom);
+  }
+  main.scrollBy({
+    left: (minX + maxX) / 2 - (mainBox.left + mainBox.width / 2),
+    top: (minY + maxY) / 2 - (mainBox.top + mainBox.height / 2)
+  });
+}
+
 async function paint() {
+  if (reviewActionsLocked(state.pdfMissing) || !state.pdf) return;
   const token = ++paintToken;
   const pdfPage = await state.pdf.getPage(state.pageNumber);
   if (token !== paintToken) return;
@@ -174,7 +240,12 @@ async function paint() {
     if (state.selected.has(element.id)) classes.push("selected");
     if (Number(element.confidence) < 0.75) classes.push("uncertain");
     rect.setAttribute("class", classes.join(" "));
-    if (element.label === "formula" && element.unitId) {
+    if (state.selected.has(element.id)) {
+      rect.style.stroke = "#b00000";
+      rect.style.strokeWidth = "3.5px";
+      rect.style.strokeDasharray = "none";
+      rect.style.fill = "rgba(176, 0, 0, 0.25)";
+    } else if (element.label === "formula" && element.unitId) {
       if (!hues.has(element.unitId)) hues.set(element.unitId, hues.size * 47);
       rect.style.stroke = `hsl(${hues.get(element.unitId)} 70% 32%)`;
     }
@@ -184,9 +255,10 @@ async function paint() {
   overlay.addEventListener("mousedown", onPointerDown);
   overlay.addEventListener("click", onClick);
   describeSelection();
-  if (state.pendingFocus) {
-    stage.querySelector("rect.selected")?.scrollIntoView({ block: "center", inline: "center" });
+  if (state.pendingFocus || state.scrollSelection) {
     state.pendingFocus = null;
+    state.scrollSelection = false;
+    requestAnimationFrame(() => requestAnimationFrame(scrollCurrentToCenter));
   }
 }
 
@@ -228,7 +300,7 @@ function rebuild() {
   state.page.source = "reviewed";
   const issues = verifyPageLabels(state.page);
   if (issues.length) {
-    saveState.textContent = `未保存：${issues[0]}`;
+    saveState.textContent = importRejection(issues);
     return;
   }
   scheduleSave();
@@ -271,6 +343,7 @@ function describeSelection() {
 let dragSelect = false;
 
 function onClick(event) {
+  if (reviewActionsLocked(state.pdfMissing)) return;
   if (dragSelect) {
     dragSelect = false;
     return;
@@ -287,6 +360,7 @@ function onClick(event) {
 }
 
 function onPointerDown(event) {
+  if (reviewActionsLocked(state.pdfMissing)) return;
   if (event.target?.dataset?.id && !event.altKey) return;
   const start = point(event);
   const band = document.createElementNS("http://www.w3.org/2000/svg", "rect");
@@ -332,6 +406,7 @@ function point(event) {
 }
 
 function relabel(label) {
+  if (reviewActionsLocked(state.pdfMissing)) return;
   for (const element of selectedElements()) {
     element.label = label;
     element.confidence = 1;
@@ -343,6 +418,7 @@ function relabel(label) {
 }
 
 function setType(type) {
+  if (reviewActionsLocked(state.pdfMissing)) return;
   for (const element of selectedElements()) {
     if (element.label !== "formula") continue;
     element.unitType = type;
@@ -352,15 +428,22 @@ function setType(type) {
 }
 
 function merge() {
-  const elements = selectedElements().filter((element) => element.label === "formula");
-  if (elements.length < 2) return;
-  const id = `merge-${elements[0].id}`;
-  for (const element of elements) element.unitId = id;
+  if (reviewActionsLocked(state.pdfMissing)) return;
+  const plan = planMerge(state.page?.elements, state.selected);
+  if (!plan.ok) {
+    summary.textContent = plan.message;
+    return;
+  }
+  const id = `merge-${plan.ids[0]}`;
+  for (const element of state.page.elements) {
+    if (plan.ids.includes(element.id)) element.unitId = id;
+  }
   rebuild();
   paint();
 }
 
 function split() {
+  if (reviewActionsLocked(state.pdfMissing)) return;
   for (const element of selectedElements()) {
     if (element.label !== "formula") continue;
     element.unitId = `split-${element.id}`;
@@ -370,14 +453,14 @@ function split() {
 }
 
 function jumpUncertain(step) {
+  if (reviewActionsLocked(state.pdfMissing)) return;
   if (!state.uncertain.length) return;
   const current = [...state.selected][0];
   let index = state.uncertain.indexOf(current);
   index = index < 0 ? 0 : (index + step + state.uncertain.length) % state.uncertain.length;
   state.selected = new Set([state.uncertain[index]]);
+  state.scrollSelection = true;
   paint();
-  const node = stage.querySelector(`[data-id="${state.uncertain[index]}"]`);
-  node?.scrollIntoView({ block: "center", inline: "center" });
 }
 
 document.querySelectorAll("[data-label]").forEach((button) => {
@@ -386,6 +469,7 @@ document.querySelectorAll("[data-label]").forEach((button) => {
 document.querySelector("#as-display").addEventListener("click", () => setType("display"));
 document.querySelector("#as-inline").addEventListener("click", () => setType("inline"));
 document.querySelector("#eq-toggle").addEventListener("click", () => {
+  if (reviewActionsLocked(state.pdfMissing)) return;
   for (const element of selectedElements()) {
     if (element.label !== "formula") continue;
     element.equationNumber = element.equationNumber !== true;
@@ -419,7 +503,7 @@ document.querySelector("#import-file").addEventListener("change", async (event) 
   const page = JSON.parse(await file.text());
   const issues = verifyPageLabels(page);
   if (issues.length) {
-    saveState.textContent = `导入被拒绝：${issues[0]}`;
+    saveState.textContent = importRejection(issues);
     return;
   }
   state.page = page;
@@ -445,6 +529,7 @@ async function openUnit(index) {
 }
 
 async function confirmUnit() {
+  if (reviewActionsLocked(state.pdfMissing)) return;
   const unit = state.reviewSet.units?.[state.unitCursor];
   if (!unit || state.paperId !== unit.paperId || state.pageNumber !== unit.page) return;
   if (!Array.isArray(state.page.reviewedUnitIds)) state.page.reviewedUnitIds = [];
@@ -471,6 +556,7 @@ document.querySelector("#confirm-unit").addEventListener("click", confirmUnit);
 
 window.addEventListener("keydown", (event) => {
   if (event.target.matches("input, textarea, select")) return;
+  if (reviewActionsLocked(state.pdfMissing)) return;
   const key = event.key.toLowerCase();
   if (key === "enter") confirmUnit();
   else if (key === "1") relabel("formula");

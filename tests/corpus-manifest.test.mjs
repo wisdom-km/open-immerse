@@ -13,6 +13,7 @@ test("the corpus is six fields of five downloadable papers, including the two re
     counts.set(doc.field, (counts.get(doc.field) || 0) + 1);
     sources.set(doc.sourceType, (sources.get(doc.sourceType) || 0) + 1);
     assert.match(doc.sha256, /^[a-f0-9]{64}$/);
+    assert.match(doc.contentFingerprint, /^[a-f0-9]{64}$/);
     assert.ok(doc.url.startsWith("https://"));
     assert.ok(doc.license);
     assert.ok(doc.pageCount > 0);

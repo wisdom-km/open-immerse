@@ -1,8 +1,9 @@
 /**
  * Shared PDF open/record/prelabel/check path for the M1 scripts.
- * Requires the optional MIT package @napi-rs/canvas (npm install).
+ * Requires the optional MIT package @napi-rs/canvas (npm ci).
  * pdf/vendor is used as-is and is not modified.
  */
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { installRecordingPath2D, createRecordingContext } from "../lib/svg-recorder.js";
 import { attachFontRealNames, fontNameForFormula } from "../lib/pdf-mirror.js";
@@ -30,7 +31,7 @@ export function loadCanvas() {
   try {
     return require("@napi-rs/canvas");
   } catch {
-    throw new Error("缺少 @napi-rs/canvas。在仓库根目录运行 npm install 后再执行本脚本。");
+    throw new Error("缺少 @napi-rs/canvas。在仓库根目录运行 npm ci 后再执行本脚本。");
   }
 }
 
@@ -47,6 +48,48 @@ export function loadPdfjs() {
     })();
   }
   return pdfjsPromise;
+}
+
+function round2(value) {
+  return Math.round(Number(value) * 100) / 100;
+}
+
+/**
+ * SHA-256 of page count, media-box size, and pdf.js text items.
+ * The Info dictionary, XMP metadata, and trailer /ID are not included,
+ * so a publisher download stamp does not change the fingerprint.
+ */
+export async function contentFingerprint(bytes) {
+  const { getDocument } = await loadPdfjs();
+  const doc = await getDocument({
+    data: new Uint8Array(bytes).slice(),
+    disableFontFace: true,
+    verbosity: 0,
+    isEvalSupported: false
+  }).promise;
+  const lines = [`pages:${doc.numPages}`];
+  try {
+    for (let number = 1; number <= doc.numPages; number += 1) {
+      const page = await doc.getPage(number);
+      try {
+        const view = page.view || [0, 0, 0, 0];
+        const width = round2(view[2] - view[0]);
+        const height = round2(view[3] - view[1]);
+        lines.push(`page:${number}:${width}x${height}:rot${page.rotate || 0}`);
+        const text = await page.getTextContent({ includeMarkedContent: false });
+        for (const item of text.items || []) {
+          if (!item || typeof item.str !== "string") continue;
+          const transform = (item.transform || []).map(round2).join(",");
+          lines.push(`${item.str}\t${transform}`);
+        }
+      } finally {
+        page.cleanup?.();
+      }
+    }
+  } finally {
+    await doc.destroy();
+  }
+  return createHash("sha256").update(lines.join("\n")).digest("hex");
 }
 
 export async function openDocuments(bytes) {

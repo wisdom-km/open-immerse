@@ -1,10 +1,10 @@
 # M1 标注：编号、预标注、复核
 
-这一页给复核的人用。产品界面不在这里。
+这一页给复核的人用。产品界面不在这里。需要 Node.js 20 或更新的版本。
 
 ## 语料
 
-30 篇公式比较密的开放获取论文，6 个领域各 5 篇。清单在 `corpus/manifest.json`。PDF 不进 git。
+30 篇公式比较密的开放获取论文，6 个领域各 5 篇。清单在 `corpus/manifest.json`。PDF 不进 git。`git status` 在只多了本地 PDF 或 `tests/fixtures/DDPM_2006.11239.pdf` 时应当是空的：这两个路径都在 `.gitignore` 里。
 
 经济学/金融是第 6 个领域。每个领域至少 3 篇出版社排版的开放获取 PDF。人工智能保留 Attention 和 DDPM 两篇 arXiv，另外 3 篇是 Nature Communications。定量生物学 5 篇都是 PLOS Computational Biology。医学 5 篇都是出版社排版：Scientific Reports 的药代和成像重建，加上 BMC Medical Research Methodology 的样条轨迹模型。物理是 Nature Communications、Communications Physics 和 JHEP。数学是 Scientific Reports 3 篇，加上 Forum of Mathematics Sigma 和 Comptes Rendus。经济是 Scientific Reports、PLOS ONE、Quantitative Economics，并保留一篇公式很密的 q-fin 预印本。Physical Review X、Wiley、IOP、PNAS、Royal Society 的直接 PDF 返回 403，这些站点已跳过，没有改请求头。公式印成图片的论文已剔除。清单里每篇都有许可证、PDF 直链和原因。没有 Word 导出的 PDF。
 
@@ -14,14 +14,34 @@
 - `author-latex-journal`：期刊的正式版本，文件仍是作者 LaTeX，例如 JMLR、Forum of Mathematics Sigma、JHEP、Quantitative Economics。
 - `author-latex-preprint`：arXiv 预印本。
 
-下载并核对 SHA-256：
+安装依赖并下载。用 `npm ci`，不要用 `npm install`（后者会改写锁文件）：
 
 ```
-npm install
+npm ci
 node scripts/corpus-fetch.mjs
 ```
 
-`tests/fixtures/DDPM_2006.11239.pdf` 如果已经在磁盘上，并且哈希和清单里的 `2006.11239` 一致，就直接用它，不必再下一次。
+核对用的是内容指纹 `contentFingerprint`，不是字节 SHA-256。指纹是 pdf.js 抽出的每页文字（字符串和文本矩阵，坐标保留两位小数）、页数、页面宽高和旋转角的 SHA-256。Info 字典、XMP 和文件尾的 `/ID` 不参与。Cambridge 的 Forum of Mathematics Sigma（`fms-2021-7`）每次下载都会在 XMP 里写下载者的 IP 和时间，字节哈希因此对不上，内容指纹可以。清单里的 `sha256` 只记录某一次下载的字节，脚本打印它，但不拿它判断成败。
+
+脚本不会在第一篇失败时停。每篇结束都会留下一行，最后打印表，状态是 `ok`、`hash-mismatch`、`blocked-by-challenge` 或 `network-error`。只有结束时还有失败，退出码才不是 0。短暂的网络错误会退避重试几次。出版商的机器人检查不会重试，也不会用伪装的请求头、Cookie 或无头浏览器绕过。
+
+Springer Nature、BMC、JHEP 在有的网络上会跳到 `idp.nature.com` 或 `idp.springer.com`，返回大约 3 KB 的 Client Challenge 网页。表里的说明是：`blocked by publisher bot check, obtain the PDF manually and use --import`。
+
+手动补文件：
+
+1. 用浏览器打开 `corpus/manifest.json` 里该篇的 `url`。
+2. 把 PDF 保存为 `corpus/pdfs/<id>.pdf`。`id` 就是清单里的 `id`，例如 `s41467-018-07210-0.pdf`。
+3. 再运行 `node scripts/corpus-fetch.mjs`。已经在 `corpus/pdfs/` 里、并且内容指纹相符的文件会直接通过，不再下载。
+
+如果 PDF 在浏览器的下载目录里，而不是仓库里：
+
+```
+node scripts/corpus-fetch.mjs --import <目录>
+```
+
+目录里要有 `<id>.pdf`。脚本先核对内容指纹，再复制到 `corpus/pdfs/`。指纹不符的文件不会复制。
+
+`tests/fixtures/DDPM_2006.11239.pdf` 如果已经在磁盘上，并且内容指纹和清单里的 `2006.11239` 一致，就直接用它，不必再下一次。
 
 ## 元素编号
 
@@ -29,15 +49,11 @@ node scripts/corpus-fetch.mjs
 
 文字项的 `char` 是 pdf.js 给出的整段，不会从一段里按比例切出一个字母。路径的 `char` 和 `font` 必须是空的。把「i」写到根号的框上，id 会对不上，`verifyPageLabels` 会失败。
 
-预标注：
-
-```
-node scripts/corpus-prelabel.mjs
-```
-
-输出在 `labels/prelabel/<论文>/<page-001.json>`。已经写过的页会跳过，要重做加 `--force`。
+预标注文件已经在 `labels/prelabel/`。复核前不要运行 `node scripts/corpus-prelabel.mjs`。重跑会改编号，和已经提交的 `labels/review-set.json` 对不上。只有清单或预标注规则以后变了，才需要重跑并重新生成复核集。这一轮不改预标注规则。
 
 ## 预标注规则
+
+这些是机器规则，不是人工判断标准。人工标准在下一节。抽样里上下标经常被拆开，脚注号和引用上标也会被标成公式。复核时按下一节改，不要为了这个重跑预标注。
 
 - 数学字体，或 NewTX、Fourier、TeX CM 这类补充字体：公式，置信度 0.96。
 - 数学 Unicode：公式，0.90。
@@ -50,6 +66,31 @@ node scripts/corpus-prelabel.mjs
 
 算法环境如果用的是正文字体，预标注仍标成文字。需要的话在复核里改成「其他」。
 
+## 复核判定标准
+
+一个公式单元是读者会当成同一个式子的那一组字形。
+
+算进同一个单元：
+
+- 基字母和它的上下标。`k_a` 是一个单元，不要只留下下标 `a`。`P_Ω^L`、`E_hb`、`β_T = 0.02` 也是整段一个单元。
+- 行间公式的全部行，包括分数线、根号、大的求和号 `∑`。不要把左半和右半拆开。
+- 括号、运算符和它们包住的式子，中间没有正文的时候放在一起。
+- 行末单独的 `(1)`、`(2.3)` 这类公式编号，并进它旁边的那个行间单元。
+
+不算公式。标成正文（按 `2`）：
+
+- 脚注号，例如页边上的小 `4`、`16`。复核集打开后的第一条如果是这种脚注号，按 `2` 改成正文，再按 Enter。
+- 引用上标，例如 `17`，以及表格里的 `[23]`。
+- 作者单位上标 `1`、`2`。
+- 节标题，例如 `B.2`。
+- 图注里的整句说明。图注和正文之间的分隔线标成其他（按 `4`），不要标成行间公式。
+
+行内单个变量，例如句子里的 `x` 或 `λ`，如果它在当数学符号用，标成行内公式。普通英文单词不要标成公式。
+
+正例：`k_a` 整组一个单元；行间式和右侧 `(1)` 在同一个单元；`β_T = 0.02` 整段一个行内单元。
+
+反例：只框住下标 `a`；引用上标 `17` 被标成公式；两个不相干的式子并成一个单元；一个行间式被拆成左右两截；节标题或脚注号被标成行间公式。
+
 ## 复核
 
 ```
@@ -58,16 +99,31 @@ node scripts/label-review.mjs
 
 用 Chrome 打开它打印的 `http://127.0.0.1:4173/`。这是给 Windows 上复核用的本地页，不是读者界面。
 
-- 颜色：公式按单元分色，正文灰，代码绿，其他橙。置信度低于 0.75 的是虚线。
-- 点击选中。拖出方框多选。Shift 追加。
+Ctrl+C 停止服务。端口被占用时，在 PowerShell 里换一个端口：
+
+```
+$env:PORT=4174; node scripts/label-review.mjs
+```
+
+- 颜色：公式按单元分色，正文灰，代码绿，其他橙。置信度低于 0.75 的是橙色虚线。
+- 当前单元是红色粗实线，盖过虚线和单元配色。每次用队列、Enter、`j` 或 `k` 换单元，这个红框会滚到画面中间。
+- 左栏已经换了单元、画面却还是上一篇时，先看中间有没有深红色横幅。横幅会写出缺少的 `corpus/pdfs/<id>.pdf`，以及要手动下载或用 `--import`。这时确认、改标签和快捷键都不起作用，不会把没看见的单元记成已复核。
+- 点击只选中一个字形。从空白处拖出方框可以多选。Shift 追加。右栏会写「选中 N 个」。
 - `1` 公式，`2` 正文，`3` 代码，`4` 其他。
-- `d` 行间，`i` 行内，`e` 切换公式编号。
-- `m` 把选中的公式并成一个单元。`s` 把选中的成员拆成各自的单元。
-- `j` / `k` 在低置信度元素之间跳。`n` / `p` 翻页。
-- 默认队列是 `labels/review-set.json` 里的大约 1000 个单元，六个领域尽量均分，每个领域里再按来源均分，并偏向低置信度，同时照顾行间、行内和公式编号。种子固定，同一批预标注会得到同一份名单。生成命令是 `node scripts/review-set.mjs`。
+- `d` 行间，`i` 行内。`e` 只切换公式编号：先只选中 `(n)` 那几个字形，再按 `e`。选中整式再按 `e` 会把整式都标成编号。
+- `m` 合并已经完整选中的公式单元。只点了一个字形，或只框住单元的一部分时，`m` 会停下来并说明原因，不会把原单元拆碎。要合并两个整式：从空白处拖框，盖住每个式子的全部字形，确认右栏的选中数，再按 `m`。
+- `s` 把选中的成员拆成各自的单元。
+- 单元队列里，`j` / `k` 是下一个或上一个单元。整页队列里，`j` / `k` 改为在低置信度元素之间跳。`n` / `p` 翻页。
+- 默认队列是 `labels/review-set.json` 里的大约 1000 个单元，六个领域尽量均分，每个领域里再按来源均分，并偏向低置信度，同时照顾行间、行内和公式编号。种子固定，同一批预标注会得到同一份名单。生成命令是 `node scripts/review-set.mjs`。复核前不要重新生成。
 - 点队列里的一条会打开那一页，并把该单元滚到画面中间。Enter 或「看过，下一个」把这个单元 id 写入该页的 `reviewedUnitIds`，顶栏变成「已复核 37/1000 个单元」，然后跳到下一个还没看的单元。
-- 「整页队列」仍按低置信度元素多少列出页面。在这个模式里，j / k 在低置信度元素之间跳。
-- 改动大约 0.4 秒后写入 `labels/reviewed/<论文>/page-NNN.json`。这个目录可以提交。接触图和检查缓存不提交。导出、导入 JSON 仍可用。导入会先做编号校验。
+- 「整页队列」仍按低置信度元素多少列出页面。
+- 改动大约 0.4 秒后写入 `labels/reviewed/<论文>/page-NNN.json`。这个目录可以提交。接触图和检查缓存不提交。
+
+导出和导入：
+
+- 「导出」把当前页 JSON 下载到 Chrome 的下载目录，当作备份。要提交的是服务已经写好的 `labels/reviewed/<论文>/page-NNN.json`，不是下载目录里的那份。
+- 「导入」读一份 JSON，先做编号校验，通过才写入 `labels/reviewed/`。被拒绝时提示是中文，并说明要用本页导出的文件，不要手改元素编号、字符或框。
+- 做完一批后：`git add labels/reviewed`，再提交。不要提交 `corpus/pdfs/`。`git status` 里不应出现基线文档的改动。
 
 接触图（左：页面轮廓，中：基线 SVG，右：差异。红色是页面有而 SVG 没有）：
 
@@ -83,7 +139,11 @@ node scripts/contact-sheet.mjs --paper 1706.03762 --page 4
 node scripts/baseline-checks.mjs
 ```
 
-表写在 `docs/v1-m1-baseline.md`。基线选择器是 M0 的 `lib/formula-svg.js`，这里没有改它。表里的数字对着未复核的预标注，不会改用 `labels/reviewed/`。
+这个命令不下载。磁盘上有哪些 PDF 就检查哪些，缺少的会列出来并跳过。进度会打印到终端。默认结果写到 `labels/checks/baseline-report.md` 和 `labels/checks/baseline-summary.json`，这两个路径被 git 忽略。耗时只打印在终端，不写进文件。跑完以后 `git status` 应当仍是空的（除了你正在写的 `labels/reviewed/`）。
+
+仓库里的 `docs/v1-m1-baseline.md` 和 `labels/baseline-summary.json` 只有加上 `--write-docs` 才会更新，而且这两份里没有耗时列。复核时不需要跑 `--write-docs`，也不必提交它造成的差异。
+
+表里的数字对着未复核的预标注，不会改用 `labels/reviewed/`。基线选择器是 M0 的 `lib/formula-svg.js`，这里没有改它。
 
 - A1：单元裁切矩形里的每一个像素。左边是 pdf.js 关闭字体、画出的轮廓（和录制看到的是同一层墨），右边是基线 SVG。左边有墨、r = 1 内 SVG 没有墨，就计缺笔。
 - A2：进了公式 SVG、但标注不是公式的元素。看的是标注，不是选择器自己的字体判断。
