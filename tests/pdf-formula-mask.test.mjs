@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   FORMULA_GLYPH_SCAN_PAD,
-  FORMULA_MASK_KEEP_EM,
   blankFormulaMask,
   formulaPixelMasked,
+  isFormulaMaskSeedItem,
   measureFormulaCrop,
   textLayerToBlocks
 } from "../lib/pdf-text-layer.js";
@@ -92,6 +92,12 @@ test("formula blocks keep neighbor boxes for the mask and still gate glyph redra
   assert.equal(formula.glyphRedraw, undefined);
   assert.ok(formula.glyphBoxes?.length >= 1);
   assert.ok(formula.maskBoxes?.length >= 1);
+  assert.equal(formula.seedBoxes?.length, 1);
+  assert.equal(isFormulaMaskSeedItem({ str: "√" }), true);
+  assert.equal(isFormulaMaskSeedItem({ str: "∑" }), true);
+  assert.equal(isFormulaMaskSeedItem({ str: "d" }), false);
+  assert.equal(isFormulaMaskSeedItem({ str: "≤" }), false);
+  assert.equal(isFormulaMaskSeedItem({ str: "p", fontName: "CMEX10-radical" }), true);
 });
 
 test("formula paths outside the glyph box survive the neighbor mask", () => {
@@ -126,28 +132,26 @@ test("a radical tip that leaves its glyph box and enters a neighbor box stays", 
   const neighbor = [0.05, 0.5, 0.95, 0.95];
   for (let y = 12; y < 28; y += 1) ink(image, 16, y);
   for (let x = 4; x < 12; x += 1) ink(image, x, 34);
-  blankFormulaMask(image, { maskBoxes: [neighbor], glyphBoxes: [glyph] });
+  blankFormulaMask(image, { maskBoxes: [neighbor], glyphBoxes: [glyph], seedBoxes: [glyph] });
   assert.equal(dark(image, 16, 14), true, "ink inside the glyph box stays");
   assert.equal(dark(image, 16, 26), true, "the connected tip inside the neighbor box stays");
   assert.equal(dark(image, 8, 34), false, "detached neighbor ink is still cleared");
 });
 
-test("a neighbor letter that touches a formula stroke is still erased", () => {
-  const image = paper(80, 64);
-  const glyph = [0.4, 0.05, 0.55, 0.34];
-  const neighbor = [0, 0.28, 1, 0.98];
-  const em = (glyph[3] - glyph[1]) * image.height;
-  const radius = Math.max(1, Math.ceil(em * FORMULA_MASK_KEEP_EM));
-  const glyphBottom = Math.floor(glyph[3] * image.height - 0.5);
-  for (let y = 4; y <= glyphBottom + radius + 8; y += 1) ink(image, 38, y);
-  for (let x = 38; x < 72; x += 1) ink(image, x, glyphBottom + 2);
-  blankFormulaMask(image, { maskBoxes: [neighbor], glyphBoxes: [glyph] });
-  assert.equal(dark(image, 38, glyphBottom - 2), true, "glyph ink stays");
-  assert.equal(dark(image, 38, glyphBottom + 4), true, "a short connected tip stays");
-  assert.equal(dark(image, 70, glyphBottom + 2), false, "the letter running past the glyph x-range is erased");
-  assert.equal(
-    dark(image, 38, glyphBottom + radius + 6),
-    false,
-    "ink farther than the keep radius is erased even though it touches the stroke"
-  );
+test("a letter that runs into the mask is erased and a radical tip is kept", () => {
+  const image = paper(80, 48);
+  const letter = [0.05, 0.15, 0.28, 0.42];
+  const radical = [0.55, 0.12, 0.72, 0.4];
+  const neighbor = [0, 0.36, 1, 0.95];
+  for (let y = 10; y < 30; y += 1) ink(image, 12, y);
+  for (let y = 8; y < 32; y += 1) ink(image, 50, y);
+  blankFormulaMask(image, {
+    maskBoxes: [neighbor],
+    glyphBoxes: [letter, radical],
+    seedBoxes: [radical]
+  });
+  assert.equal(dark(image, 12, 12), true, "letter ink inside its glyph box stays");
+  assert.equal(dark(image, 12, 24), false, "the letter stroke inside the mask is erased");
+  assert.equal(dark(image, 50, 12), true, "radical ink inside its glyph box stays");
+  assert.equal(dark(image, 50, 26), true, "the radical tip inside the mask stays");
 });

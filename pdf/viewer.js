@@ -936,7 +936,8 @@ function paintFormulaMask(canvas, crop, block) {
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
   blankFormulaMask(image, {
     maskBoxes: boxesInCrop(block.maskBoxes, crop),
-    glyphBoxes: boxesInCrop(block.glyphBoxes, crop)
+    glyphBoxes: boxesInCrop(block.glyphBoxes, crop),
+    seedBoxes: boxesInCrop(block.seedBoxes, crop)
   });
   ctx.putImageData(image, 0, 0);
   return true;
