@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   FORMULA_GLYPH_SCAN_PAD,
+  FORMULA_INK_DESCENT_EM,
   blankFormulaMask,
   formulaPixelMasked,
   measureFormulaCrop,
@@ -117,4 +118,37 @@ test("formula paths outside the glyph box survive the neighbor mask", () => {
   for (const [x, y] of tilde) assert.equal(dark(image, x, y), true, `tilde ${x},${y}`);
   assert.equal(dark(image, 80, 80), true);
   assert.equal(dark(image, 50, 12), false);
+});
+
+test("a dark scan bottom grows through ink and stops at a blank row or the next letter top", () => {
+  assert.equal(FORMULA_INK_DESCENT_EM, 0.35);
+  const width = 200;
+  const height = 200;
+  const glyph = [0.2, 0.3, 0.7, 0.5];
+  const bbox = [0.1, 0.2, 0.85, 0.8];
+  const tight = { padPx: 0, minSpanX: 1, minSpanY: 1, glyphBoxes: [glyph] };
+  const scanNorm = Math.min(bbox[3], glyph[3] + FORMULA_GLYPH_SCAN_PAD.y);
+  const scanBottom = Math.ceil(scanNorm * height);
+
+  const clipped = paper(width, height);
+  for (let y = 70; y < scanBottom; y += 1) ink(clipped, 80, y);
+  for (let y = scanBottom; y < scanBottom + 4; y += 1) ink(clipped, 80, y);
+  const grown = measureFormulaCrop(bbox, clipped, tight);
+  assert.ok(grown.bbox[3] > glyph[3], "bottom ink extends the crop");
+  assert.ok(grown.bbox[3] > (scanBottom + 3) / height, "the connected rows stay");
+  assert.ok(grown.bbox[3] <= (scanBottom + 4) / height + 1e-6, "the blank row after the stroke stays out");
+
+  const clear = paper(width, height);
+  for (let y = 70; y < scanBottom - 2; y += 1) ink(clear, 80, y);
+  for (let y = scanBottom + 2; y < scanBottom + 6; y += 1) ink(clear, 80, y);
+  const held = measureFormulaCrop(bbox, clear, tight);
+  assert.ok(held.bbox[3] <= glyph[3] + 1 / height, "a blank bottom row does not reach the lower stroke");
+
+  const blocked = paper(width, height);
+  for (let y = 70; y < scanBottom + 8; y += 1) ink(blocked, 80, y);
+  const letterTop = glyph[3] + 0.02;
+  assert.ok(letterTop < glyph[3] + FORMULA_INK_DESCENT_EM * (glyph[3] - glyph[1]));
+  const stopped = measureFormulaCrop(bbox, blocked, { ...tight, letterTop });
+  assert.ok(stopped.bbox[3] > glyph[3], "ink below the scan is kept");
+  assert.ok(stopped.bbox[3] <= letterTop + 1e-6, "the next line's letter top stays out");
 });
