@@ -185,7 +185,7 @@ async function runChrome(port, url) {
       }
     });
     await session.send("Runtime.enable");
-    const deadline = Date.now() + 240000;
+    const deadline = Date.now() + 420000;
     while (Date.now() < deadline) {
       if (existsSync(resultPath)) break;
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -202,7 +202,9 @@ await ensurePdfs();
 const server = await startServer();
 const address = server.address();
 const debug = process.argv.includes("--debug");
-const url = `http://127.0.0.1:${address.port}/scripts/m0-vector-harness.html${debug ? "?debug=1" : ""}`;
+const watch = process.argv.includes("--watch");
+const query = debug ? "?debug=1" : watch ? "?watch=1" : "";
+const url = `http://127.0.0.1:${address.port}/scripts/m0-vector-harness.html${query}`;
 console.log(url);
 try {
   const result = await runChrome(9333, url);
@@ -211,10 +213,10 @@ try {
     console.error(result.error);
     process.exitCode = 1;
   } else {
-    const gates = result.cases.filter((row) => String(row.gate || "").startsWith("G-"));
-    console.log(`cases ${result.cases.length} gate rows ${gates.length}`);
+    const gates = result.cases.filter((row) => String(row.gate || "").startsWith("G-") || ["p4-b6", "p4-b14", "p4-b19", "p3-b16"].includes(row.id));
+    console.log(`cases ${result.cases.length} reported rows ${gates.length}`);
     for (const row of gates) {
-      console.log(`${row.gate} ${row.id} z${row.zoom} missing ${row.missing}/${row.referenceInk} extra ${row.extra} outlineMax ${row.outlineMax} svgVsOutline ${row.svgVsOutlineMissing} els ${row.elements}`);
+      console.log(`${row.gate || "report"} ${row.label} ${row.id} z${row.zoom} missing ${row.missing}/${row.missingSolid} oob ${row.outOfBounds}/${row.outOfBoundsSolid} outlineOob ${row.outlineOutOfBounds}/${row.outlineOutOfBoundsSolid} svgOut ${row.svgVsOutlineMissing} body ${row.bodyGlyphs} rules ${JSON.stringify(row.rules)}`);
     }
     for (const page of result.pages) {
       console.log(`page ${page.label} p${page.page} record ${page.recordMs}ms build ${page.buildMs}ms svg ${page.svgBytes} unsupported ${JSON.stringify(page.unsupported)}`);

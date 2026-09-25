@@ -61,7 +61,22 @@ test("save and restore put the transform back and do not restore the path", () =
   ctx.lineTo(1, 0);
   ctx.fill();
   assert.equal(ctx.elements.length, 1);
-  assert.ok(ctx.elements[0].bbox[0] < 1);
+  assert.match(ctx.elements[0].d, /^M4 0L1 0/);
+});
+
+test("a scale after the path thickens the stroke and does not stretch it", () => {
+  const ctx = createRecordingContext(80, 40);
+  ctx.lineWidth = 0.4;
+  ctx.moveTo(10, 20);
+  ctx.lineTo(30, 20);
+  ctx.save();
+  ctx.scale(2.5, 2.5);
+  ctx.stroke();
+  ctx.restore();
+  const rule = ctx.elements[0];
+  assert.ok(Math.abs(rule.bbox[0] - 10) < 1e-6);
+  assert.ok(Math.abs(rule.bbox[2] - 30) < 1e-6);
+  assert.ok(Math.abs(rule.lineWidth - 1) < 1e-6);
 });
 
 test("unsupported calls are counted and not thrown", () => {

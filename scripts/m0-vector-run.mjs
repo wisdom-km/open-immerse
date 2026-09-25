@@ -8,6 +8,7 @@ import {
   buildFormulaSvg,
   countExtraInk,
   countMissingInk,
+  countOutOfBoundsInk,
   diffStats,
   foreignGlyphBoxes,
   lumaOf,
@@ -21,6 +22,7 @@ import {
 GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
 
 const DEBUG = new URLSearchParams(location.search).get("debug") === "1";
+const WATCH_ONLY = new URLSearchParams(location.search).get("watch") === "1";
 const DOCS = DEBUG
   ? [{ id: "1706.03762", label: "attention", file: "1706.03762.pdf", pages: [4] }]
   : [
@@ -40,6 +42,15 @@ const DOCS = DEBUG
 
 const ZOOMS = [1, 1.5, 2];
 const NAMED = new Set(["p3-b16", "p4-b14", "p4-b15"]);
+const WATCH = new Set([
+  "attention:p4-b6",
+  "attention:p4-b8",
+  "attention:p4-b10",
+  "attention:p4-b14",
+  "attention:p4-b19",
+  "ddpm:p2-b19",
+  "ddpm:p3-b16"
+]);
 
 function status(text) {
   const node = document.getElementById("status");
@@ -154,21 +165,46 @@ function toCropBox(box, sx, sy, zoom) {
   return [box[0] * zoom - sx, box[1] * zoom - sy, box[2] * zoom - sx, box[3] * zoom - sy];
 }
 
+function dilateInk(data, width, height, lumaMax, radius) {
+  const ink = new Uint8Array(width * height);
+  for (let i = 0; i < ink.length; i += 1) {
+    if (lumaOf(data, i * 4) < lumaMax) ink[i] = 1;
+  }
+  if (!radius) return ink;
+  const out = ink.slice();
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (!ink[y * width + x]) continue;
+      const x0 = Math.max(0, x - radius);
+      const y0 = Math.max(0, y - radius);
+      const x1 = Math.min(width - 1, x + radius);
+      const y1 = Math.min(height - 1, y + radius);
+      for (let yy = y0; yy <= y1; yy += 1) {
+        out.fill(1, yy * width + x0, yy * width + x1 + 1);
+      }
+    }
+  }
+  return out;
+}
+
 function diffImage(reference, svg, width, height) {
   const out = new Uint8ClampedArray(width * height * 4);
+  const radius = INK_AA_TOLERANCE.radius;
+  const refInk = dilateInk(reference, width, height, INK_AA_TOLERANCE.referenceInkLuma, 0);
+  const refNear = dilateInk(reference, width, height, INK_AA_TOLERANCE.referenceInkLuma, radius);
+  const svgInk = dilateInk(svg, width, height, INK_AA_TOLERANCE.referenceInkLuma, 0);
+  const svgNear = dilateInk(svg, width, height, INK_AA_TOLERANCE.svgCoverLuma, radius);
   for (let i = 0; i < width * height; i += 1) {
-    const refInk = lumaOf(reference, i * 4) < INK_AA_TOLERANCE.referenceInkLuma;
-    const svgInk = lumaOf(svg, i * 4) < INK_AA_TOLERANCE.referenceInkLuma;
     const offset = i * 4;
-    if (refInk && svgInk) {
+    if (refInk[i] && svgNear[i]) {
       out[offset] = 20;
       out[offset + 1] = 20;
       out[offset + 2] = 20;
-    } else if (refInk) {
+    } else if (refInk[i]) {
       out[offset] = 220;
       out[offset + 1] = 32;
       out[offset + 2] = 32;
-    } else if (svgInk) {
+    } else if (svgInk[i] && !refNear[i]) {
       out[offset] = 32;
       out[offset + 1] = 92;
       out[offset + 2] = 220;
@@ -178,6 +214,57 @@ function diffImage(reference, svg, width, height) {
     out[offset + 3] = 255;
   }
   return out;
+}
+
+function runOnRow(data, width, height, x0, x1, y) {
+  if (y < 0 || y >= height) return 0;
+  const ink = INK_AA_TOLERANCE.referenceInkLuma;
+  const left = Math.max(0, Math.floor(x0));
+  const right = Math.min(width - 1, Math.ceil(x1));
+  let best = 0;
+  let run = 0;
+  for (let x = left; x <= right; x += 1) {
+    if (lumaOf(data, (y * width + x) * 4) < ink) {
+      run += 1;
+      if (run > best) best = run;
+    } else run = 0;
+  }
+  return best;
+}
+
+function ruleLengths(elements, reference, svg, width, height, sx, sy, zoom) {
+  const rows = [];
+  for (const element of elements || []) {
+    if (element.op !== "stroke" || !element.bbox) continue;
+    const box = element.bbox;
+    const span = box[2] - box[0];
+    const rise = Math.abs(box[3] - box[1]);
+    if (span < 8 || rise > Math.max(1.2, Number(element.lineWidth) || 1)) continue;
+    const x0 = box[0] * zoom - sx;
+    const x1 = box[2] * zoom - sx;
+    const y = Math.round(((box[1] + box[3]) / 2) * zoom - sy);
+    let svgPx = -1;
+    let row = y;
+    for (const yy of [y - 1, y, y + 1]) {
+      const run = runOnRow(svg, width, height, x0, x1, yy);
+      if (run > svgPx) {
+        svgPx = run;
+        row = yy;
+      }
+    }
+    const refPx = Math.max(
+      runOnRow(reference, width, height, x0, x1, row - 1),
+      runOnRow(reference, width, height, x0, x1, row),
+      runOnRow(reference, width, height, x0, x1, row + 1)
+    );
+    if (refPx < 8 && svgPx < 8) continue;
+    rows.push({
+      svgPx,
+      refPx,
+      delta: Math.round((svgPx - refPx) * 10) / 10
+    });
+  }
+  return rows;
 }
 
 function sheetPng(left, mid, right, width, height) {
@@ -298,6 +385,8 @@ async function run() {
           outlineCanvas[zoom] = await renderCanvas(outlinePage, zoom);
         }
         for (const entry of builtSvgs) {
+          const watchId = `${doc.label}:${entry.block.id}`;
+          if (WATCH_ONLY && !WATCH.has(watchId) && !(doc.label === "ddpm" && entry.block.id === "p4-b14")) continue;
           const view = entry.svg.viewBox;
           const security = svgSecurityIssues(entry.svg.svg);
           for (const zoom of ZOOMS) {
@@ -330,8 +419,20 @@ async function run() {
             const allowed = maskFromBoxes(face.width, face.height, geometry.length ? geometry : [[0, 0, 0, 0]]);
             const missing = countMissingInk(face.image, svgPixels, face.width, face.height, glyphMask);
             const extra = countExtraInk(svgPixels, face.width, face.height, allowed);
+            const bounds = countOutOfBoundsInk(face.image, svgPixels, face.width, face.height);
+            const outlineBounds = countOutOfBoundsInk(outline.image, svgPixels, face.width, face.height);
             const outlineDiff = diffStats(face.image, outline.image, face.width, face.height, glyphMask);
             const svgVsOutline = countMissingInk(outline.image, svgPixels, face.width, face.height, glyphMask);
+            const rules = ruleLengths(entry.svg.elements, face.image, svgPixels, face.width, face.height, face.sx, face.sy, zoom);
+            const glyphPage = (entry.block.glyphBoxes || []).map((box) => pageBox(box, viewport.width, viewport.height)).filter(Boolean);
+            const foreignPage = foreignGlyphBoxes(entry.block, content.items, viewport).map((box) => pageBox(box, viewport.width, viewport.height)).filter(Boolean);
+            let bodyGlyphs = 0;
+            for (const element of entry.svg.elements || []) {
+              if (element.provenance !== "glyph" || !element.bbox) continue;
+              const onFormula = glyphPage.reduce((best, box) => Math.max(best, overlapArea(element.bbox, box)), 0);
+              const onForeign = foreignPage.reduce((best, box) => Math.max(best, overlapArea(element.bbox, box)), 0);
+              if (onForeign > onFormula) bodyGlyphs += 1;
+            }
             const row = {
               doc: doc.id,
               label: doc.label,
@@ -342,9 +443,16 @@ async function run() {
               zoom,
               display: entry.block.display !== false && !entry.block.inlineOf,
               missing: missing.missing,
+              missingSolid: missing.solid,
               referenceInk: missing.referenceInk,
               extra: extra.extra,
-              svgInk: extra.svgInk,
+              outOfBounds: bounds.outOfBounds,
+              outOfBoundsSolid: bounds.solid,
+              outlineOutOfBounds: outlineBounds.outOfBounds,
+              outlineOutOfBoundsSolid: outlineBounds.solid,
+              svgInk: bounds.svgInk,
+              rules,
+              bodyGlyphs,
               outlineMax: Math.round(outlineDiff.max * 10) / 10,
               outlineMean: Math.round(outlineDiff.mean * 100) / 100,
               svgVsOutlineMissing: svgVsOutline.missing,
@@ -359,7 +467,8 @@ async function run() {
             };
             cases.push(row);
             if (row.gate) gateHits.push(`${row.gate}:${row.id}`);
-            const wantSheet = row.gate || row.missing > 0 || row.extra > 0 || zoom === 1.5;
+            const watch = WATCH.has(`${doc.label}:${entry.block.id}`) || (doc.label === "ddpm" && entry.block.id === "p4-b14");
+            const wantSheet = watch || (doc.label === "attention" && pageNo === 4 && zoom === 1.5);
             if (wantSheet && face.width > 1 && face.height > 1 && face.width * face.height < 2_000_000) {
               const diff = diffImage(face.image, svgPixels, face.width, face.height);
               const png = sheetPng(face.image, svgPixels, diff, face.width, face.height);

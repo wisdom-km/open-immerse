@@ -4,6 +4,7 @@ import {
   buildFormulaSvg,
   countExtraInk,
   countMissingInk,
+  countOutOfBoundsInk,
   diffStats,
   maskFromBoxes,
   selectFormulaElements,
@@ -185,7 +186,7 @@ test("outline diff reports max and mean luma", () => {
   assert.equal(stats.mean, 25);
 });
 
-test("a rule that runs past the formula box is clipped to the unit", () => {
+test("a rule that runs far past the formula box is not part of the unit", () => {
   const longRule = {
     width: 200,
     height: 40,
@@ -210,10 +211,63 @@ test("a rule that runs past the formula box is clipped to the unit", () => {
     pageWidth: 200,
     pageHeight: 40
   });
+  assert.equal(built.elements.length, 0);
+});
+
+test("a rule that belongs to the formula keeps its painted length", () => {
+  const rule = {
+    width: 200,
+    height: 40,
+    elements: [{
+      id: 8,
+      op: "stroke",
+      provenance: "path",
+      d: "M50 20L88 20",
+      bbox: [50, 20, 88, 20],
+      fill: null,
+      stroke: "#000000",
+      lineWidth: 1,
+      alpha: 1,
+      fillRule: "nonzero",
+      clips: []
+    }]
+  };
+  const built = buildFormulaSvg(rule, {
+    bbox: [0.2, 0.2, 0.45, 0.8],
+    glyphBoxes: [[0.25, 0.4, 0.4, 0.7]],
+    foreignBoxes: [],
+    pageWidth: 200,
+    pageHeight: 40
+  });
   assert.equal(built.elements.length, 1);
-  assert.match(built.svg, /L/);
-  assert.ok(built.elements[0].bbox[2] < 100);
-  assert.ok(built.elements[0].bbox[0] > 30);
+  assert.equal(built.elements[0].bbox[0], 50);
+  assert.equal(built.elements[0].bbox[2], 88);
+});
+
+test("a body glyph that only grazes the formula box stays out", () => {
+  const grazed = {
+    ...record,
+    elements: record.elements.concat([glyph(6, [12, 0, 24, 9])])
+  };
+  const chosen = selectFormulaElements(grazed, formula);
+  assert.equal(chosen.elements.some((element) => element.id === 6), false);
+});
+
+test("out of bounds counts svg ink with no reference ink nearby", () => {
+  const width = 5;
+  const height = 3;
+  const reference = new Uint8ClampedArray(width * height * 4).fill(255);
+  const svg = new Uint8ClampedArray(width * height * 4).fill(255);
+  const paint = (buffer, x, y) => {
+    const index = (y * width + x) * 4;
+    buffer[index] = buffer[index + 1] = buffer[index + 2] = 0;
+  };
+  paint(reference, 1, 1);
+  paint(svg, 2, 1);
+  paint(svg, 4, 1);
+  const shifted = countOutOfBoundsInk(reference, svg, width, height);
+  assert.equal(shifted.outOfBounds, 1);
+  assert.equal(shifted.svgInk, 2);
 });
 
 test("selection refuses a glyph whose center of mass is the neighbor", () => {
