@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { contentFingerprint, isCambridgePageStamp } from "../scripts/m1-pdf.mjs";
+import { contentFingerprint, isCambridgePageStamp, labelPageFromRecord } from "../scripts/m1-pdf.mjs";
 
 function pdfBytes({ title, idHex, lines = ["Hello"] }) {
   const showing = lines.map((line) => `(${line}) Tj 0 -14 Td`).join(" ");
@@ -75,4 +75,32 @@ test("Cambridge download stamp does not change the fms content fingerprint", asy
   replacement.copy(stamped, at);
   assert.notEqual(sha256(original), sha256(stamped));
   assert.equal(await contentFingerprint(original), await contentFingerprint(stamped));
+});
+
+test("pre-label drops a Cambridge download line and keeps the other glyphs", () => {
+  const stamp = "Downloaded from https://www.cambridge.org/core. IP address: 203.0.113.4, on 01 Jan 2000 at 12:15:41, subject to the Cambridge Core terms of use, available at";
+  const viewport = {
+    width: 400,
+    height: 600,
+    convertToViewportRectangle: (box) => box,
+    convertToViewportPoint: (x, y) => [x, y]
+  };
+  const item = (str, x, y) => ({
+    str,
+    fontName: "Times-Roman",
+    width: 80,
+    height: 10,
+    transform: [1, 0, 0, 1, x, y]
+  });
+  const page = labelPageFromRecord({
+    paperId: "fms-2021-7",
+    pageNumber: 1,
+    viewport,
+    text: { items: [item(stamp, 40, 20), item("x = 1", 40, 100), item("Downloaded from the archive yesterday", 40, 140)] },
+    record: { elements: [] }
+  });
+  const chars = page.elements.map((element) => element.char);
+  assert.equal(chars.includes(stamp), false);
+  assert.equal(chars.includes("x = 1"), true);
+  assert.equal(chars.includes("Downloaded from the archive yesterday"), true);
 });

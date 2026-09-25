@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { importRejection, missingPdfBanner, planMerge, reviewActionsLocked } from "../lib/review-actions.js";
+import { importRejection, isRenderingCancelled, missingPdfBanner, planMerge, reviewActionsLocked } from "../lib/review-actions.js";
 
 test("a missing PDF locks confirm and names the file", () => {
   assert.equal(reviewActionsLocked(true), true);
@@ -19,6 +19,14 @@ test("a missing PDF locks confirm and names the file", () => {
   assert.match(review, /data: bytes\.slice\(\)/);
   assert.equal(review.includes("getDocument({ url:"), false);
   assert.match(review, /missingPdfBanner\(/);
+  assert.match(review, /pdfBytes\.delete\(paperId\)/);
+  assert.match(review, /method: "HEAD"/);
+  assert.match(review.slice(review.indexOf("async function showMissingPdf"), review.indexOf("async function loadPdfBytes")), /summary\.textContent = "还没有选中元素。"/);
+  assert.match(review.slice(review.indexOf("async function showMissingPdf"), review.indexOf("async function loadPdfBytes")), /detail\.textContent = ""/);
+  assert.match(review, /isRenderingCancelled\(error\)/);
+  assert.equal(isRenderingCancelled({ name: "RenderingCancelledException" }), true);
+  assert.equal(isRenderingCancelled(new Error("Rendering cancelled, page 4")), true);
+  assert.equal(isRenderingCancelled(new Error("missing-pdf")), false);
   const css = readFileSync(new URL("../tools/label-review/review.css", import.meta.url), "utf8");
   assert.ok(css.indexOf(".hit.uncertain") < css.indexOf("rect.hit.selected"));
   assert.match(css, /rect\.hit\.selected[\s\S]*stroke:\s*#b00000 !important/);

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CHALLENGE_NOTE, classifyPayload, fetchCorpus, formatSummary } from "../scripts/corpus-fetch.mjs";
@@ -135,4 +135,54 @@ test("--import copies a verified local PDF and rejects a challenge page", async 
   assert.match(CHALLENGE_NOTE, /--import/);
   assert.equal(outcome.results[2].status, "skipped");
   assert.match(outcome.results[2].note, /未下载/);
+  assert.equal(outcome.ok, false);
+});
+
+test("--import stays successful when every provided file verifies", async () => {
+  const { dir, path, pdfs } = manifest([
+    doc("local-ok", "http://publisher.example/nope.pdf"),
+    doc("not-here", "http://publisher.example/nope3.pdf")
+  ]);
+  const incoming = join(dir, "incoming");
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(incoming);
+  writeFileSync(join(incoming, "local-ok.pdf"), Buffer.from("%PDF-1.4\nlocal"));
+  const outcome = await fetchCorpus({
+    manifest: path,
+    dir: pdfs,
+    importDir: incoming,
+    pause: async () => {},
+    fingerprint: async () => FINGERPRINT,
+    fetchImpl: async () => {
+      throw new Error("should not download");
+    }
+  });
+  assert.deepEqual(outcome.results.map((row) => row.status), ["ok", "skipped"]);
+  assert.equal(outcome.ok, true);
+});
+
+test("--import fails when a provided file does not match the fingerprint", async () => {
+  const { dir, path, pdfs } = manifest([
+    doc("local-ok", "http://publisher.example/nope.pdf"),
+    doc("local-bad", "http://publisher.example/nope2.pdf"),
+    doc("not-here", "http://publisher.example/nope3.pdf")
+  ]);
+  const incoming = join(dir, "incoming");
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(incoming);
+  writeFileSync(join(incoming, "local-ok.pdf"), Buffer.from("%PDF-1.4\nlocal"));
+  writeFileSync(join(incoming, "local-bad.pdf"), Buffer.from("%PDF-1.4\nbad"));
+  const outcome = await fetchCorpus({
+    manifest: path,
+    dir: pdfs,
+    importDir: incoming,
+    pause: async () => {},
+    fingerprint: async (bytes) => (Buffer.from(bytes).includes("bad") ? OTHER : FINGERPRINT),
+    fetchImpl: async () => {
+      throw new Error("should not download");
+    }
+  });
+  assert.deepEqual(outcome.results.map((row) => row.status), ["ok", "hash-mismatch", "skipped"]);
+  assert.equal(existsSync(join(pdfs, "local-bad.pdf")), false);
+  assert.equal(outcome.ok, false);
 });

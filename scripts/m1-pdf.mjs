@@ -161,12 +161,15 @@ export async function readPageContent(page) {
 export function labelPageFromRecord({ paperId, pageNumber, viewport, text, record }) {
   const width = Math.ceil(viewport.width);
   const height = Math.ceil(viewport.height);
+  const items = text.items || [];
+  const stamp = cambridgeStampIndexes(items);
   const glyphs = [];
-  for (const item of text.items || []) {
+  items.forEach((item, index) => {
+    if (stamp.has(index)) return;
     const char = String(item?.str ?? "");
-    if (!char.trim()) continue;
+    if (!char.trim() || isCambridgePageStamp(char)) return;
     const bbox = textItemPageBox(item, viewport);
-    if (!(bbox[2] > bbox[0]) || !(bbox[3] > bbox[1])) continue;
+    if (!(bbox[2] > bbox[0]) || !(bbox[3] > bbox[1])) return;
     glyphs.push({
       char,
       font: fontNameForFormula(item),
@@ -174,7 +177,7 @@ export function labelPageFromRecord({ paperId, pageNumber, viewport, text, recor
       baseline: textItemBaseline(item, viewport),
       fontSize: Number(item.height) || (bbox[3] - bbox[1])
     });
-  }
+  });
   const { paints, paths, images } = paintsOf(record);
   const elements = assemblePageElements({ glyphs, paints, paths, images });
   const labelled = prelabelElements(elements, viewport.width, viewport.height);

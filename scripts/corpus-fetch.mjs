@@ -250,6 +250,8 @@ export async function fetchCorpus({
   }
   const table = formatSummary(results);
   console.log(table);
+  // Missing --import files are skipped. A file that was provided and failed
+  // verification (challenge page, not a PDF, fingerprint mismatch) fails the run.
   const ok = results.every((row) => row.status === "ok" || row.status === "skipped");
   return { results, ok };
 }

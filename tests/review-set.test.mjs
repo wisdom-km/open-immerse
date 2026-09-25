@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildReviewSet, REVIEW_FIELDS } from "../lib/review-set.js";
+import { readFileSync } from "node:fs";
+import { buildReviewSet, orderReviewQueue, REVIEW_FIELDS } from "../lib/review-set.js";
 
 function synthetic() {
   const units = [];
@@ -49,4 +50,45 @@ test("the review set is a seeded thousand-unit sample balanced by field", () => 
   assert.ok(first.composition.byType.inline > 0);
   const low = first.units.filter((unit) => unit.confidence < 0.5).length;
   assert.ok(low > 300, `expected low-confidence weight, got ${low}`);
+});
+
+test("the queue interleaves papers inside a field before repeating one", () => {
+  const units = [];
+  for (const paperId of ["aa", "bb", "cc"]) {
+    for (let index = 0; index < 4; index += 1) {
+      units.push({
+        paperId,
+        field: "math",
+        sourceType: "publisher-typeset",
+        page: index + 1,
+        unitId: `${paperId}-${index}`,
+        confidence: 0.5,
+        type: "inline",
+        equationNumber: false,
+        elementIds: [`e-${paperId}-${index}`]
+      });
+    }
+  }
+  const set = buildReviewSet(units, { target: 12 });
+  assert.deepEqual(set.units.map((unit) => unit.unitId), [
+    "aa-0", "bb-0", "cc-0",
+    "aa-1", "bb-1", "cc-1",
+    "aa-2", "bb-2", "cc-2",
+    "aa-3", "bb-3", "cc-3"
+  ]);
+  const again = orderReviewQueue(set.units.slice().reverse());
+  assert.deepEqual(again.map((unit) => unit.unitId), set.units.map((unit) => unit.unitId));
+});
+
+test("the committed review queue keeps the same thousand ids and varies early papers", () => {
+  const set = JSON.parse(readFileSync(new URL("../labels/review-set.json", import.meta.url), "utf8"));
+  assert.equal(set.seed, 20260925);
+  assert.equal(set.units.length, 1000);
+  const ids = set.units.map((unit) => `${unit.paperId}:${unit.page}:${unit.unitId}`);
+  assert.equal(new Set(ids).size, 1000);
+  assert.deepEqual(set.units.slice(0, 6).map((unit) => unit.field), REVIEW_FIELDS);
+  const early = set.units.slice(0, 30);
+  assert.equal(new Set(early.map((unit) => unit.paperId)).size, 30);
+  const ordered = orderReviewQueue(set.units);
+  assert.deepEqual(ordered.map((unit) => unit.unitId), set.units.map((unit) => unit.unitId));
 });

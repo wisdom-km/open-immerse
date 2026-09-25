@@ -1,5 +1,5 @@
 import { unitIdFromMembers, verifyPageLabels } from "/lib/label-schema.js";
-import { importRejection, missingPdfBanner, planMerge, reviewActionsLocked } from "/lib/review-actions.js";
+import { importRejection, isRenderingCancelled, missingPdfBanner, planMerge, reviewActionsLocked } from "/lib/review-actions.js";
 import * as pdfjs from "/pdf/vendor/pdf.min.mjs";
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf/vendor/pdf.worker.min.mjs";
@@ -107,7 +107,7 @@ function renderQueue() {
     }
     return;
   }
-  head.textContent = "单元队列 · 低置信度靠前，领域交错";
+  head.textContent = "单元队列 · 领域和论文交错";
   queue.append(head);
   const keys = reviewedKeySet();
   const units = state.reviewSet.units || [];
@@ -132,12 +132,16 @@ function setLocked(locked) {
 }
 
 async function showMissingPdf(paperId) {
+  pdfBytes.delete(paperId);
   if (state.pdf) await state.pdf.destroy();
   state.pdf = null;
+  state.selected = new Set();
   state.scrollSelection = false;
   state.pendingFocus = null;
   setLocked(true);
   stage.innerHTML = "";
+  summary.textContent = "还没有选中元素。";
+  detail.textContent = "";
   const banner = document.createElement("div");
   banner.id = "pdf-missing";
   banner.setAttribute("role", "alert");
@@ -148,10 +152,23 @@ async function showMissingPdf(paperId) {
 }
 
 async function loadPdfBytes(paperId) {
-  if (pdfBytes.has(paperId)) return pdfBytes.get(paperId);
   pdfLoad?.abort();
   const controller = new AbortController();
   pdfLoad = controller;
+  if (pdfBytes.has(paperId)) {
+    const head = await fetch(`/api/pdf/${encodeURIComponent(paperId)}`, { method: "HEAD", signal: controller.signal });
+    if (controller.signal.aborted) {
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      throw error;
+    }
+    if (head.ok) return pdfBytes.get(paperId);
+    await head.body?.cancel?.();
+    pdfBytes.delete(paperId);
+    const missing = new Error("missing-pdf");
+    missing.code = "missing-pdf";
+    throw missing;
+  }
   const response = await fetch(`/api/pdf/${encodeURIComponent(paperId)}`, { signal: controller.signal });
   if (!response.ok) {
     await response.body?.cancel?.();
@@ -263,7 +280,12 @@ async function paint() {
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
-  await pdfPage.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+  try {
+    await pdfPage.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+  } catch (error) {
+    if (isRenderingCancelled(error)) return;
+    throw error;
+  }
   if (token !== paintToken) return;
   if (state.pendingFocus) {
     const ids = new Set(state.pendingFocus.elementIds || []);
