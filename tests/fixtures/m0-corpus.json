@@ -1,0 +1,17 @@
+{
+  "note": "PDFs are downloaded by scripts/m0-vector-spike.mjs and are not committed.",
+  "documents": [
+    {
+      "id": "1706.03762",
+      "title": "Attention Is All You Need",
+      "url": "https://arxiv.org/pdf/1706.03762.pdf",
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697"
+    },
+    {
+      "id": "2006.11239",
+      "title": "Denoising Diffusion Probabilistic Models",
+      "url": "https://arxiv.org/pdf/2006.11239.pdf",
+      "sha256": "aee5e07a802e8dfd2a386374c94fd61d1d056cb7e1e0fec4f28e8120ff5d8505"
+    }
+  ]
+}
