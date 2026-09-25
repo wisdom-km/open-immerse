@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formulaDevicePixels } from "../lib/pdf-formula-raster.js";
+import { formulaDevicePixels, formulaEdgeWindow } from "../lib/pdf-formula-raster.js";
 import {
-  FORMULA_GLYPH_DESCENT_PAD,
+  FORMULA_GLYPH_DESCENT_EM,
   FORMULA_GLYPH_SCAN_PAD,
   blankFormulaMask,
   formulaPixelMasked,
+  glyphBodyBox,
   measureFormulaCrop,
+  nextLineLetterTop,
   textLayerToBlocks
 } from "../lib/pdf-text-layer.js";
 
@@ -121,38 +123,62 @@ test("formula paths outside the glyph box survive the neighbor mask", () => {
   assert.equal(dark(image, 50, 12), false);
 });
 
-test("a radical tip below the glyph box stays in the crop at 100%, 150%, and 200%", () => {
-  assert.ok(FORMULA_GLYPH_DESCENT_PAD > FORMULA_GLYPH_SCAN_PAD.y);
-  const width = 612;
-  const height = 1000;
-  const image = paper(width, height);
-  const glyph = [0.2, 0.4, 0.6, 0.5];
-  const bbox = [0.12, 0.36, 0.8, 0.7];
-  const tipY = Math.floor((glyph[3] + FORMULA_GLYPH_SCAN_PAD.y) * height) + 2;
-  assert.ok(tipY / height < glyph[3] + FORMULA_GLYPH_DESCENT_PAD);
-  for (let x = 180; x < 200; x += 1) ink(image, x, tipY);
-  const above = Math.floor((glyph[1] - FORMULA_GLYPH_DESCENT_PAD) * height);
-  for (let x = 180; x < 200; x += 1) ink(image, x, above);
-  const measured = measureFormulaCrop(bbox, image, { glyphBoxes: [glyph] });
-  assert.ok(measured.bbox[3] > (tipY + 0.5) / height, "tip row is inside the crop");
-  assert.ok(measured.bbox[1] > above / height, "the extra pad does not reach upward");
-  const pdfH = (measured.bbox[3] - measured.bbox[1]) * height;
-  const pdfW = (measured.bbox[2] - measured.bbox[0]) * width;
-  for (const zoom of [1, 1.5, 2]) {
-    const plan = formulaDevicePixels({
-      cssWidth: pdfW,
-      cssHeight: pdfH,
-      pdfWidth: pdfW,
-      pdfHeight: pdfH,
-      bbox: measured.bbox,
-      pageWidth: width,
-      pageHeight: height,
-      mirrorZoom: zoom,
-      devicePixelRatio: 1
-    });
-    const tipDeviceY = ((tipY + 0.5) / height) * height * plan.scale - plan.offsetY;
-    assert.ok(tipDeviceY >= 0 && tipDeviceY < plan.pixelHeight, `tip kept at ${zoom}`);
-    assert.ok(Math.abs(plan.cssHeight * zoom - plan.pixelHeight) < 1e-6);
-    assert.ok(Math.abs(plan.cssWidth * zoom - plan.pixelWidth) < 1e-6);
+test("radical tip, relation bar, and comma tail sit in the glyph body and the next line stays out", () => {
+  const viewport = {
+    width: 612,
+    height: 792,
+    convertToViewportRectangle(rect) {
+      const [x1, y1, x2, y2] = rect;
+      return [x1, 792 - y2, x2, 792 - y1];
+    }
+  };
+  const radical = { str: "√", x: 100, y: 400, width: 12, height: 10, descent: -0.3, ascent: 0.8 };
+  const leq = { str: "≤", x: 120, y: 400, width: 10, height: 10 };
+  const comma = { str: ",", x: 140, y: 400, width: 4, height: 10, descent: -0.22, ascent: 0.7 };
+  const next = { str: "and", x: 90, y: 392, width: 24, height: 10, ascent: 0.75, sourceIndex: 9 };
+  for (const item of [radical, leq, comma]) {
+    const body = glyphBodyBox(item, viewport);
+    const font = itemBboxLike(item, viewport);
+    assert.ok(body[3] > font[3], `${item.str} body extends below the font box`);
+    const em = item.height / viewport.height;
+    const descent = item.descent == null ? FORMULA_GLYPH_DESCENT_EM : Math.abs(item.descent);
+    assert.ok(body[3] >= font[3] + descent * em - 1e-6, `${item.str} descent is inside the body`);
   }
+  const bodies = [radical, leq, comma].map((item) => glyphBodyBox(item, viewport));
+  const unionBottom = Math.max(...bodies.map((box) => box[3]));
+  const cap = nextLineLetterTop([radical, leq, comma], [next], viewport);
+  assert.ok(cap != null && cap < unionBottom, "next line letter top cuts the scan");
+  assert.ok(cap > nextLineLetterTop([radical], [next], viewport) - 1 || cap <= glyphBodyBox(next, viewport)[1] + 0.02);
+  const image = paper(612, 792);
+  const fontBottom = Math.max(...[radical, leq, comma].map((item) => itemBboxLike(item, viewport)[3]));
+  const tipY = Math.round((fontBottom + cap) / 2 * 792);
+  const barY = tipY;
+  const commaY = tipY;
+  const letterY = Math.ceil(cap * 792);
+  ink(image, 106, tipY);
+  ink(image, 124, barY);
+  ink(image, 142, commaY);
+  ink(image, 100, letterY);
+  const bbox = [0.1, 0.4, 0.4, 0.7];
+  const measured = measureFormulaCrop(bbox, image, {
+    glyphBoxes: bodies,
+    scanBottomCap: cap
+  });
+  assert.ok(measured.bbox[3] > tipY / 792, "radical tip stays");
+  assert.ok(measured.bbox[3] > barY / 792, "≤ bar stays");
+  assert.ok(measured.bbox[3] > commaY / 792, "comma tail stays");
+  assert.ok(measured.bbox[3] <= cap + 1 / 792, "next line letter top stays out");
+  assert.equal(FORMULA_GLYPH_SCAN_PAD.y, 0.002);
 });
+
+function itemBboxLike(item, viewport) {
+  const rect = viewport.convertToViewportRectangle([
+    item.x, item.y, item.x + item.width, item.y + item.height
+  ]);
+  return [
+    Math.min(rect[0], rect[2]) / viewport.width,
+    Math.min(rect[1], rect[3]) / viewport.height,
+    Math.max(rect[0], rect[2]) / viewport.width,
+    Math.max(rect[1], rect[3]) / viewport.height
+  ];
+}

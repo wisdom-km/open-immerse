@@ -12,6 +12,7 @@ import {
   capFormulaRasterScale,
   createFormulaRasterCache,
   formulaDevicePixels,
+  formulaEdgeWindow,
   formulaDisplayCssSize,
   formulaInkMeasureOptions,
   formulaInkPadPx,
@@ -366,6 +367,28 @@ test("formula redraw is one device pixel per CSS pixel and does not reuse the pa
   assert.equal(plan.pixelWidth, Math.round(pdfW * plan.scale));
   assert.ok(Math.abs(plan.cssHeight * zoom * dpr - plan.pixelHeight) < 1e-9);
   assert.ok(Math.abs(plan.cssWidth * zoom * dpr - plan.pixelWidth) < 1e-9);
+  for (const mirror of [1, 1.5, 2]) {
+    const edged = formulaDevicePixels({
+      cssWidth: cssW,
+      cssHeight: cssH,
+      pdfWidth: pdfW,
+      pdfHeight: pdfH,
+      bbox: [0.2, 0.3, 0.5, 0.42],
+      pageWidth: 612,
+      pageHeight: 792,
+      mirrorZoom: mirror,
+      devicePixelRatio: dpr
+    });
+    const edge = formulaEdgeWindow([0.2, 0.3, 0.5, 0.42], 612, 792, edged.scale);
+    const floatTop = 0.3 * 792 * edged.scale;
+    const floatBottom = 0.42 * 792 * edged.scale;
+    const oldBottom = floatTop + Math.round(floatBottom - floatTop);
+    assert.ok(edge.offsetY <= floatTop, `top expands outward at ${mirror}`);
+    assert.ok(edge.offsetY + edge.pixelHeight >= oldBottom, `bottom covers the round window at ${mirror}`);
+    assert.ok(edge.offsetY + edge.pixelHeight >= floatBottom, `bottom covers the float edge at ${mirror}`);
+    assert.ok(Math.abs(edged.cssHeight * mirror * dpr - edged.targetPx) < 1e-6);
+    assert.ok(edged.pixelHeight >= edged.targetPx);
+  }
   assert.ok(Math.abs(plan.cssHeight * zoom * dpr - cssH * zoom * dpr) <= 1);
   const covered = formulaRasterPlan({
     bbox: [0, 0, 1, 1],

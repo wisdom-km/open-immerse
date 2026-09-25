@@ -882,7 +882,8 @@ function formulaInkBbox(canvas, block) {
       inline: block.display === false || Boolean(block.inlineOf),
       protect: block.formulaInkProtect === true,
       maskBoxes: block.maskBoxes,
-      glyphBoxes: block.glyphBoxes
+      glyphBoxes: block.glyphBoxes,
+      scanBottomCap: block.scanBottomCap
     });
     if (measured?.inkShare) block.inkShare = measured.inkShare;
     return measured?.bbox || bbox;
@@ -927,6 +928,50 @@ function compositeWhitePaper(context, canvas) {
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.globalCompositeOperation = previous || "source-over";
+}
+
+function rowIsPaper(data, width, y) {
+  const row = y * width * 4;
+  for (let x = 0; x < width; x += 1) {
+    const index = row + x * 4;
+    if (data[index + 3] < 16) continue;
+    if (data[index] < 246 || data[index + 1] < 246 || data[index + 2] < 246) return false;
+  }
+  return true;
+}
+
+function colIsPaper(data, width, height, x) {
+  for (let y = 0; y < height; y += 1) {
+    const index = (y * width + x) * 4;
+    if (data[index + 3] < 16) continue;
+    if (data[index] < 246 || data[index + 1] < 246 || data[index + 2] < 246) return false;
+  }
+  return true;
+}
+
+/** Drop blank rows the outward pixel window added. Stop at the round ink window. */
+function trimFormulaExpansion(canvas, plan) {
+  const keepW = Number(plan?.innerWidth) || 0;
+  const keepH = Number(plan?.innerHeight) || 0;
+  if (!canvas || keepW < 1 || keepH < 1) return;
+  if (canvas.width <= keepW && canvas.height <= keepH) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || typeof ctx.getImageData !== "function") return;
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  let top = 0;
+  let left = 0;
+  let bottom = canvas.height;
+  let right = canvas.width;
+  while (bottom - top > keepH && rowIsPaper(image.data, canvas.width, top)) top += 1;
+  while (bottom - top > keepH && rowIsPaper(image.data, canvas.width, bottom - 1)) bottom -= 1;
+  while (right - left > keepW && colIsPaper(image.data, canvas.width, canvas.height, left)) left += 1;
+  while (right - left > keepW && colIsPaper(image.data, canvas.width, canvas.height, right - 1)) right -= 1;
+  if (top === 0 && left === 0 && bottom === canvas.height && right === canvas.width) return;
+  const cut = ctx.getImageData(left, top, right - left, bottom - top);
+  canvas.width = right - left;
+  canvas.height = bottom - top;
+  const next = canvas.getContext("2d");
+  if (next) next.putImageData(cut, 0, 0);
 }
 
 function paintFormulaMask(canvas, crop, block) {
@@ -1046,6 +1091,7 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     await page.render({ canvasContext: context, viewport }).promise;
     if (formula) compositeWhitePaper(context, canvas);
     paintFormulaMask(canvas, block.bbox, block);
+    if (formula) trimFormulaExpansion(canvas, plan);
     const url = canvas.toDataURL("image/png");
     canvas.width = 0;
     canvas.height = 0;
@@ -2625,7 +2671,7 @@ async function ingestVendorLayout(n, mode, isStale) {
         images = null;
       }
       attachFontRealNames(content.items, page.commonObjs);
-      mapped = vendorLayoutToBlocks(envelope, { items: content.items, viewport, images, page: n });
+      mapped = vendorLayoutToBlocks(envelope, { items: content.items, viewport, images, page: n, styles: content.styles });
       await writeStoredLayout(key, mapped);
     } catch (err) {
       if (!isStale() && err?.code !== "empty-key") layoutNotice = LAYOUT_FALLBACK_STATUS;
@@ -2660,7 +2706,7 @@ async function ingestTextLayerLayout(n, isStale) {
   }
   if (isStale()) return null;
   attachFontRealNames(content.items, page.commonObjs);
-  const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
+  const built = textLayerToBlocks({ items: content.items, viewport, images, page: n, styles: content.styles });
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
   const blocks = await cropLayoutBlocks(raster, page, built.blocks, n, isStale);
