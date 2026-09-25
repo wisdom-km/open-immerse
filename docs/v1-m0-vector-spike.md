@@ -1,6 +1,6 @@
 # M0 向量公式 SVG 探针（GATE 1）
 
-基线 `main@1d467b3ed944eb3c922ebd48a39698e0d8abeb96`。分支 `feature/v1-m0-vector-svg`。pdf.js `4.10.38`（`pdf/vendor` 未改）。未接分类器、阅读器 UI 或翻译。
+基线 `main@1d467b3ed944eb3c922ebd48a39698e0d8abeb96`。分支 `feature/v1-m0-vector-svg`。实现提交 `25a61eb171839b0f2c39abe5091e502a4e2ad65a`。pdf.js `4.10.38`（`pdf/vendor` 未改）。未接分类器、阅读器 UI 或翻译。
 
 ## 结论
 
