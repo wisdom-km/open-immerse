@@ -11,6 +11,13 @@ dist/
 
 # Local regression PDF; only the small boundary annotations are versioned.
 tests/fixtures/Attention_Is_All_You_Need.pdf
+tests/fixtures/DDPM_2006.11239.pdf
+
+# M1 corpus PDFs and human review progress. Prelabels under labels/prelabel are committed.
+corpus/pdfs/
+labels/reviewed/
+labels/sheets/
+labels/checks/
 
 # Chrome rejects unpacked dirs starting with _ (except _locales)
 _qa-out/

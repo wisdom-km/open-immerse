@@ -1,0 +1,28 @@
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.4 "Segoe UI", "Noto Sans SC", sans-serif; color: #1c1c1c; background: #f4f1ea; }
+header { display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: #1f2a30; color: #f7f4ee; flex-wrap: wrap; }
+header button, header a { color: inherit; background: #314049; border: 0; padding: 6px 10px; text-decoration: none; cursor: pointer; }
+.layout { display: grid; grid-template-columns: 240px 1fr 280px; height: calc(100vh - 48px); }
+aside { overflow: auto; background: #fff; border-right: 1px solid #ddd; padding: 8px; }
+#inspector { border-right: 0; border-left: 1px solid #ddd; }
+main { overflow: auto; background: #d9d3c7; }
+#stage { position: relative; margin: 12px; display: inline-block; background: white; }
+#stage canvas, #stage svg { display: block; }
+#overlay { position: absolute; inset: 0; }
+.hit { fill: transparent; stroke-width: 1.2; cursor: pointer; }
+.hit.formula { stroke: #1d4e89; fill: rgba(29, 78, 137, 0.12); }
+.hit.text { stroke: #66707a; fill: rgba(80, 80, 80, 0.05); }
+.hit.code { stroke: #1b7f4e; fill: rgba(27, 127, 78, 0.12); }
+.hit.other { stroke: #c46b12; fill: rgba(196, 107, 18, 0.12); }
+.hit.selected { stroke: #111; stroke-width: 2.4; }
+.hit.uncertain { stroke-dasharray: 3 2; stroke: #a15c00; }
+#queue button { display: block; width: 100%; text-align: left; margin: 0 0 4px; border: 0; background: #f6f3ec; padding: 6px; cursor: pointer; }
+#queue button.current { background: #1f2a30; color: white; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.actions button { border: 1px solid #ccc; background: white; padding: 6px 8px; cursor: pointer; }
+#detail { white-space: pre-wrap; font-size: 12px; }
+.help { color: #444; }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; height: auto; }
+  aside, main { max-height: none; }
+}

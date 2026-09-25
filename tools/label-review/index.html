@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>公式标注复核</title>
+  <link rel="stylesheet" href="/tools/label-review/review.css">
+</head>
+<body>
+  <header>
+    <strong>公式标注复核</strong>
+    <span id="progress">正在读取清单…</span>
+    <span id="save-state">未修改</span>
+    <label>缩放 <input id="zoom" type="range" min="0.8" max="2" step="0.1" value="1.25"></label>
+    <button id="export" type="button">导出</button>
+    <button id="import" type="button">导入</button>
+    <input id="import-file" type="file" accept="application/json" hidden>
+    <button id="revert" type="button">本页恢复预标注</button>
+    <a id="sheet-link" href="#" target="_blank">接触图</a>
+  </header>
+  <div class="layout">
+    <aside id="queue"></aside>
+    <main>
+      <div id="stage"></div>
+    </main>
+    <aside id="inspector">
+      <p id="selection-summary">还没有选中元素。</p>
+      <div class="actions">
+        <button type="button" data-label="formula">1 公式</button>
+        <button type="button" data-label="text">2 正文</button>
+        <button type="button" data-label="code">3 代码</button>
+        <button type="button" data-label="other">4 其他</button>
+        <button type="button" id="as-display">d 行间</button>
+        <button type="button" id="as-inline">i 行内</button>
+        <button type="button" id="eq-toggle">e 公式编号</button>
+        <button type="button" id="merge">m 合并</button>
+        <button type="button" id="split">s 拆开</button>
+      </div>
+      <p class="help">j / k 上一个或下一个低置信度元素。n / p 翻页。拖出一个框可以多选，按住 Shift 再点可以追加。红虚线是置信度低于 0.75 的元素。</p>
+      <pre id="detail"></pre>
+    </aside>
+  </div>
+  <script type="module" src="/tools/label-review/review.js"></script>
+</body>
+</html>
