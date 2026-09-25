@@ -84,21 +84,24 @@ export async function runChecks({ force = false } = {}) {
       for (let page = 1; page <= face.numPages; page += 1) {
         const labelPath = join(labelsDir, `page-${String(page).padStart(3, "0")}.json`);
         const labels = JSON.parse(readFileSync(labelPath, "utf8"));
-        const score = await scoreBaselinePage({
-          paperId: file.id,
-          pageNumber: page,
-          facePage: await face.getPage(page),
-          outlinePage: await outline.getPage(page),
-          labels
-        });
-        add(row, score);
-        if (page === 1 || page % 10 === 0 || page === face.numPages) {
-          console.log(`${file.id} p${page}/${face.numPages} units ${row.units} missing ${row.missing}`);
-        }
         const facePage = await face.getPage(page);
         const outlinePage = await outline.getPage(page);
-        facePage.cleanup?.();
-        outlinePage.cleanup?.();
+        try {
+          const score = await scoreBaselinePage({
+            paperId: file.id,
+            pageNumber: page,
+            facePage,
+            outlinePage,
+            labels
+          });
+          add(row, score);
+          if (page === 1 || page % 10 === 0 || page === face.numPages) {
+            console.log(`${file.id} p${page}/${face.numPages} units ${row.units} missing ${row.missing}`);
+          }
+        } finally {
+          facePage.cleanup?.();
+          outlinePage.cleanup?.();
+        }
       }
     } finally {
       await face.destroy();
@@ -115,7 +118,7 @@ export async function runChecks({ force = false } = {}) {
 }
 
 function renderReport(manifest, rows) {
-  const headers = ["paper", "field", "source", "pages", "units", "A1 miss/solid", "A2 neighbours", "A3 exact", "A3 Jaccard", "A4 empty SVG", "prelabel fallback", "record ms/page", "build ms/page", "SVG kB/page"];
+  const headers = ["paper", "field", "source", "pages", "units", "A1 miss/solid", "A2 neighbours", "identity conflicts", "A3 exact", "A3 Jaccard", "A4 empty SVG", "prelabel fallback", "record ms/page", "build ms/page", "SVG kB/page"];
   const tableRows = rows.map((row) => [
     row.id,
     row.field,
@@ -124,6 +127,7 @@ function renderReport(manifest, rows) {
     row.units,
     `${row.missing}/${row.solid}`,
     row.neighbours,
+    row.conflicts,
     rate(row.correct, row.units),
     rate(row.jaccard, row.units),
     rate(row.emptySvgs, row.baselineBlocks),
@@ -151,12 +155,13 @@ function renderReport(manifest, rows) {
       row.units,
       `${row.missing}/${row.solid}`,
       row.neighbours,
+      row.conflicts,
       rate(row.correct, row.units),
       rate(row.jaccard, row.units),
       rate(row.emptySvgs, row.baselineBlocks),
       rate(row.prelabelFallback, row.units)
     ]);
-    return `## ${title}\n\n${markdownTable(["group", "pages", "units", "A1 miss/solid", "A2", "A3 exact", "A3 Jaccard", "A4 empty", "prelabel fallback"], body)}\n`;
+    return `## ${title}\n\n${markdownTable(["group", "pages", "units", "A1 miss/solid", "A2", "identity conflicts", "A3 exact", "A3 Jaccard", "A4 empty", "prelabel fallback"], body)}\n`;
   };
   return `# M1 baseline\n\nThe selector is \`lib/formula-svg.js\` as carried from the M0 spike. It was not changed. Ground truth for this table is the pre-label set, not a finished human review. When \`labels/reviewed/\` has a page, that file is not substituted here yet; re-run after review if you want the reviewed numbers.\n\nA1 counts left-hand outline ink with no SVG ink within r = 1, over the whole pre-label unit crop. The reference render is pdf.js with font faces off, the same paint the recorder saw. A2 counts a selected element whose label is not \`formula\`. A3 is exact element-set equality against pre-label units, plus mean Jaccard. A4 is the share of text-layer formula blocks whose SVG is empty. Prelabel fallback is the share of units whose confidence is below 0.65; that is the review queue, not the selector.\n\nIdentity conflicts are paints that matched two labels at once and were not given a character.\n\n${markdownTable(headers, tableRows)}\n\n${groupTable("By field", groups[0][1])}\n${groupTable("By source type", groups[1][1])}\n`;
 }

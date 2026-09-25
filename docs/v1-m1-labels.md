@@ -6,7 +6,7 @@
 
 30 篇公式比较密的开放获取论文，6 个领域各 5 篇。清单在 `corpus/manifest.json`。PDF 不进 git。
 
-经济学/金融是第 6 个领域：Quantitative Economics 的期刊 PDF，加上量化金融预印本。Physical Review X、Wiley 和 IOP 的直接 PDF 在这台机器上返回了 403 或 HTML，这些位置用 arXiv 补上，清单里每篇都写了原因。没有 Word 导出的 PDF。
+经济学/金融是第 6 个领域。匿名可下的出版社或期刊 PDF 是：定量生物学 5 篇 PLOS Computational Biology；人工智能 Nature Communications 1 篇、JMLR 1 篇；数学 Forum of Mathematics Sigma 3 篇、Comptes Rendus 1 篇；物理 JHEP 1 篇；经济 Quantitative Economics 1 篇。物理其余 4 篇是 arXiv，因为 Physical Review X 的直接 PDF 返回 403。医学 5 篇全是 arXiv：Magnetic Resonance in Medicine 的 Wiley PDF，以及 IEEE、IOP 的链接，返回 403 或 HTML。数学第 5 篇、经济其余 4 篇同样用 arXiv 补齐。清单里每篇都有许可证、PDF 直链和原因。没有 Word 导出的 PDF。
 
 来源分三种：
 

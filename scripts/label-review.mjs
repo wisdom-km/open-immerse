@@ -36,28 +36,43 @@ function pagePath(dir, paperId, page) {
   return join(root, dir, paperId, `page-${String(page).padStart(3, "0")}.json`);
 }
 
-function status() {
+let prelabelIndex = null;
+
+function loadPrelabelIndex() {
   const manifest = readJson(join(root, "corpus/manifest.json"));
-  const queue = [];
-  let pages = 0;
-  let reviewedPages = 0;
+  const pages = [];
   let formulaUnits = 0;
   for (const doc of manifest.documents) {
     for (let page = 1; page <= doc.pageCount; page += 1) {
-      pages += 1;
-      const reviewed = pagePath("labels/reviewed", doc.id, page);
       const pre = pagePath("labels/prelabel", doc.id, page);
-      if (existsSync(reviewed)) reviewedPages += 1;
-      if (!existsSync(pre)) continue;
-      const prelabel = readJson(pre);
-      formulaUnits += prelabel.units?.length || 0;
-      const data = existsSync(reviewed) ? readJson(reviewed) : prelabel;
-      const uncertain = (data.elements || []).filter((element) => Number(element.confidence) < 0.75).length;
-      if (uncertain > 0) queue.push({ paperId: doc.id, page, uncertain, field: doc.field });
+      let uncertain = 0;
+      if (existsSync(pre)) {
+        const prelabel = readJson(pre);
+        formulaUnits += prelabel.units?.length || 0;
+        uncertain = (prelabel.elements || []).filter((element) => Number(element.confidence) < 0.75).length;
+      }
+      pages.push({ paperId: doc.id, page, field: doc.field, uncertain });
     }
   }
+  prelabelIndex = { pages, formulaUnits };
+}
+
+function status() {
+  if (!prelabelIndex) loadPrelabelIndex();
+  const queue = [];
+  let reviewedPages = 0;
+  for (const entry of prelabelIndex.pages) {
+    const reviewed = pagePath("labels/reviewed", entry.paperId, entry.page);
+    let uncertain = entry.uncertain;
+    if (existsSync(reviewed)) {
+      reviewedPages += 1;
+      const data = readJson(reviewed);
+      uncertain = (data.elements || []).filter((element) => Number(element.confidence) < 0.75).length;
+    }
+    if (uncertain > 0) queue.push({ paperId: entry.paperId, page: entry.page, uncertain, field: entry.field });
+  }
   queue.sort((a, b) => b.uncertain - a.uncertain || a.paperId.localeCompare(b.paperId) || a.page - b.page);
-  return { pages, reviewedPages, formulaUnits, queue };
+  return { pages: prelabelIndex.pages.length, reviewedPages, formulaUnits: prelabelIndex.formulaUnits, queue };
 }
 
 function send(response, statusCode, body, type = "application/json; charset=utf-8") {

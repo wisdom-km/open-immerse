@@ -85,15 +85,19 @@ async function openPage(paperId, pageNumber) {
   saveState.textContent = payload.source === "reviewed" ? "已载入复核稿" : "预标注";
 }
 
+let paintToken = 0;
 async function paint() {
+  const token = ++paintToken;
   const pdfPage = await state.pdf.getPage(state.pageNumber);
+  if (token !== paintToken) return;
   const viewport = pdfPage.getViewport({ scale: state.scale });
-  stage.innerHTML = "";
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
-  stage.append(canvas);
   await pdfPage.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+  if (token !== paintToken) return;
+  stage.innerHTML = "";
+  stage.append(canvas);
   const overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   overlay.setAttribute("id", "overlay");
   overlay.setAttribute("width", canvas.width);
@@ -201,7 +205,13 @@ function describeSelection() {
   }).join("\n\n");
 }
 
+let dragSelect = false;
+
 function onClick(event) {
+  if (dragSelect) {
+    dragSelect = false;
+    return;
+  }
   const id = event.target?.dataset?.id;
   if (!id) return;
   if (event.shiftKey) {
@@ -234,6 +244,7 @@ function onPointerDown(event) {
     window.removeEventListener("mouseup", up);
     band.remove();
     const now = point(ev);
+    if (Math.abs(now.x - start.x) + Math.abs(now.y - start.y) > 3) dragSelect = true;
     const rect = [
       Math.min(start.x, now.x) / state.scale,
       Math.min(start.y, now.y) / state.scale,
