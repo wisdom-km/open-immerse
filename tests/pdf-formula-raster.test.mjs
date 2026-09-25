@@ -379,6 +379,11 @@ test("formula redraw is one device pixel per CSS pixel and does not reuse the pa
   assert.match(viewerSrc, /formulaDevicePixels/);
   assert.match(viewerSrc, /block\.label === "formula"/);
   assert.match(viewerSrc, /paintFormulaMask/);
+  assert.match(viewerSrc, /function formulaDrawContext/);
+  assert.match(viewerSrc, /destination-over/);
+  const sharp = viewerSrc.slice(viewerSrc.indexOf("async function renderSharpVisualCrop"), viewerSrc.indexOf("async function renderSharpFormulaCrop"));
+  assert.match(sharp, /formula \? formulaDrawContext\(canvas\) : canvas\.getContext\("2d", \{ alpha: false \}\)/);
+  assert.match(sharp, /if \(formula\) compositeWhitePaper/);
 });
 
 test("raster plan covers css times devicePixelRatio times slack", () => {

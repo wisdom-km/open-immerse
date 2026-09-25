@@ -915,6 +915,20 @@ function cropFormulaImage(canvas, block) {
   }
 }
 
+/** Grayscale AA. An opaque canvas makes Chrome use LCD subpixel text. */
+function formulaDrawContext(canvas) {
+  return canvas.getContext("2d");
+}
+
+function compositeWhitePaper(context, canvas) {
+  if (!context || !canvas) return;
+  const previous = context.globalCompositeOperation;
+  context.globalCompositeOperation = "destination-over";
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.globalCompositeOperation = previous || "source-over";
+}
+
 function paintFormulaMask(canvas, crop, block) {
   if (!canvas || block?.label !== "formula" || !block.maskBoxes?.length) return false;
   const ctx = canvas.getContext("2d");
@@ -1024,9 +1038,10 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     const canvas = document.createElement("canvas");
     canvas.width = plan.pixelWidth;
     canvas.height = plan.pixelHeight;
-    const context = canvas.getContext("2d", { alpha: false });
+    const context = formula ? formulaDrawContext(canvas) : canvas.getContext("2d", { alpha: false });
     if (!context) return "";
     await page.render({ canvasContext: context, viewport }).promise;
+    if (formula) compositeWhitePaper(context, canvas);
     paintFormulaMask(canvas, block.bbox, block);
     const url = canvas.toDataURL("image/png");
     canvas.width = 0;
@@ -2643,8 +2658,9 @@ async function renderPageRaster(page) {
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.floor(viewport.width));
   canvas.height = Math.max(1, Math.floor(viewport.height));
-  const context = canvas.getContext("2d", { alpha: false });
+  const context = formulaDrawContext(canvas);
   await page.render({ canvasContext: context, viewport }).promise;
+  compositeWhitePaper(context, canvas);
   return { canvas, pixelWidth: canvas.width, pixelHeight: canvas.height };
 }
 
