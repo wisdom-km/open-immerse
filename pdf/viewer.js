@@ -117,7 +117,7 @@ import {
   resolveLayoutMode,
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
-import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { blankFormulaMask, boxesInCrop, dropDetachedFormulaInk, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { INLINE_BODY_HARD_MAX, displayFormulaMinEm, matchedDisplayCssSize } from "../lib/pdf-formula-size.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
@@ -901,7 +901,7 @@ function imageForVisualBlock(raster, block) {
 }
 
 function cropFormulaImage(canvas, block) {
-  if (block?.label !== "formula" || !block.maskBoxes?.length) return cropBlockImage(canvas, block?.bbox);
+  if (block?.label !== "formula" || (!block.maskBoxes?.length && !block.glyphBoxes?.length)) return cropBlockImage(canvas, block?.bbox);
   const out = cropBlockCanvas(canvas, block?.bbox);
   if (!out) return "";
   paintFormulaMask(out, block.bbox, block);
@@ -930,14 +930,17 @@ function compositeWhitePaper(context, canvas) {
 }
 
 function paintFormulaMask(canvas, crop, block) {
-  if (!canvas || block?.label !== "formula" || !block.maskBoxes?.length) return false;
+  if (!canvas || block?.label !== "formula") return false;
+  if (!block.maskBoxes?.length && !block.glyphBoxes?.length) return false;
   const ctx = canvas.getContext("2d");
   if (!ctx || typeof ctx.getImageData !== "function") return false;
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const glyphBoxes = boxesInCrop(block.glyphBoxes, crop);
   blankFormulaMask(image, {
     maskBoxes: boxesInCrop(block.maskBoxes, crop),
-    glyphBoxes: boxesInCrop(block.glyphBoxes, crop)
+    glyphBoxes
   });
+  dropDetachedFormulaInk(image, { glyphBoxes });
   ctx.putImageData(image, 0, 0);
   return true;
 }

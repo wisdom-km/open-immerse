@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   FORMULA_GLYPH_SCAN_PAD,
+  NEIGHBOR_INK_EM,
   blankFormulaMask,
+  dropDetachedFormulaInk,
+  expandNeighborInkBox,
   formulaPixelMasked,
   measureFormulaCrop,
   textLayerToBlocks
@@ -91,4 +94,44 @@ test("formula blocks keep neighbor boxes for the mask and still gate glyph redra
   assert.equal(formula.glyphRedraw, undefined);
   assert.ok(formula.glyphBoxes?.length >= 1);
   assert.ok(formula.maskBoxes?.length >= 1);
+  const tight = [0.1, 0.2, 0.2, 0.22];
+  const grown = expandNeighborInkBox(tight, 792);
+  assert.equal(NEIGHBOR_INK_EM, 0.25);
+  assert.ok(grown[1] < tight[1] - 0.25 * 0.02);
+  assert.ok(grown[3] > tight[3] + 0.25 * 0.02 + 1 / 792 - 1e-9);
+  assert.deepEqual(expandNeighborInkBox([0, 0.1, 1, 0.4], 792).slice(1, 4), [0.1, 1, 0.4]);
+});
+
+test("detached neighbor ink is dropped and formula bars, scripts, and limits stay", () => {
+  const image = paper(160, 120);
+  const letter = [0.25, 0.45, 0.7, 0.8];
+  const superscript = [0.55, 0.3, 0.68, 0.48];
+  const subscript = [0.72, 0.78, 0.84, 0.92];
+  const limit = [0.08, 0.18, 0.22, 0.4];
+  const fill = (x0, x1, y0, y1) => {
+    for (let y = y0; y < y1; y += 1) {
+      for (let x = x0; x < x1; x += 1) ink(image, x, y);
+    }
+  };
+  fill(40, 90, 78, 92);
+  fill(48, 78, 56, 64);
+  fill(16, 20, 58, 62);
+  fill(30, 52, 60, 63);
+  fill(20, 140, 50, 53);
+  fill(24, 130, 70, 73);
+  fill(92, 100, 46, 52);
+  fill(118, 128, 100, 108);
+  fill(16, 28, 34, 42);
+  fill(8, 18, 0, 4);
+  dropDetachedFormulaInk(image, { glyphBoxes: [letter, superscript, limit, subscript] });
+  assert.equal(dark(image, 60, 84), true);
+  assert.equal(dark(image, 60, 58), false);
+  assert.equal(dark(image, 17, 60), false);
+  assert.equal(dark(image, 40, 61), false);
+  assert.equal(dark(image, 12, 1), false);
+  assert.equal(dark(image, 80, 51), true);
+  assert.equal(dark(image, 80, 71), true);
+  assert.equal(dark(image, 96, 48), true);
+  assert.equal(dark(image, 122, 104), true);
+  assert.equal(dark(image, 20, 38), true);
 });
