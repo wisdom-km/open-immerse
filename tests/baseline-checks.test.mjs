@@ -3,7 +3,16 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatTiming, renderReport, runChecks } from "../scripts/baseline-checks.mjs";
+import { cacheMatches, formatTiming, renderReport, runChecks } from "../scripts/baseline-checks.mjs";
+import { PRELABEL_VERSION } from "../lib/prelabel.js";
+
+test("the baseline cache key includes the PDF fingerprint and prelabel version", () => {
+  const doc = { contentFingerprint: "abc" };
+  assert.equal(cacheMatches({ prelabelVersion: PRELABEL_VERSION, contentFingerprint: "abc" }, doc), true);
+  assert.equal(cacheMatches({ prelabelVersion: "old", contentFingerprint: "abc" }, doc), false);
+  assert.equal(cacheMatches({ prelabelVersion: PRELABEL_VERSION, contentFingerprint: "other" }, doc), false);
+  assert.equal(cacheMatches({ id: "paper" }, doc), false);
+});
 
 test("the tracked report has no timing columns", () => {
   const markdown = renderReport({ documents: [] }, [{

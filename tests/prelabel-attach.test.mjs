@@ -35,9 +35,12 @@ test("a body-font subscript joins its base as one formula unit", () => {
   assert.equal(base.label, "formula");
   assert.equal(script.label, "formula");
   assert.equal(base.unitId, script.unitId);
-  assert.ok(script.confidence <= 0.74);
-  assert.ok(base.confidence <= 0.74);
-  assert.notEqual(script.confidence, 0.96);
+  assert.equal(script.rule, "script-attached");
+  assert.equal(base.rule, "script-base");
+  assert.ok(script.confidence < 0.65);
+  assert.ok(base.confidence < 0.65);
+  assert.equal(script.confidence, 0.55);
+  assert.equal(base.confidence, 0.55);
 });
 
 test("a raised numeral after a word is text, not a formula", () => {
@@ -166,6 +169,70 @@ test("operators, brackets, and numerals on the same line join a math run", () =>
   const ids = ["(", "ν", "=", "0.01", ")"].map((char) => byChar.get(char)[0].unitId);
   assert.equal(new Set(ids).size, 1);
   assert.equal(labelled.units.length, 1);
-  assert.ok(byChar.get("=")[0].confidence <= 0.74);
-  assert.ok(byChar.get("0.01")[0].confidence <= 0.74);
+  assert.equal(byChar.get("0.01")[0].rule, "math-run");
+  assert.equal(byChar.get("0.01")[0].confidence, 0.5);
+  assert.ok(labelled.units[0].confidence < 0.65);
+  assert.equal(labelled.units[0].fallback, true);
+});
+
+test("formulas on different lines are not merged", () => {
+  const { byChar } = label([
+    glyph("x", [40, 40, 52, 52], { baseline: 52, fontSize: 12, font: "CMMI10" }),
+    glyph("+", [54, 40, 64, 52], { baseline: 52, fontSize: 12, font: "CMR10" }),
+    glyph("y", [40, 70, 52, 82], { baseline: 82, fontSize: 12, font: "CMMI10" }),
+    glyph("z", [54, 70, 64, 82], { baseline: 82, fontSize: 12, font: "CMMI10" })
+  ]);
+  assert.equal(byChar.get("x")[0].unitId, byChar.get("+")[0].unitId);
+  assert.notEqual(byChar.get("x")[0].unitId, byChar.get("y")[0].unitId);
+});
+
+test("a footnote yin-yang and a table-note letter are text", () => {
+  const { byChar } = label([
+    glyph("☯", [40, 40, 48, 48], { baseline: 48, fontSize: 8, font: "CMMI10" }),
+    glyph("a", [36, 160, 44, 170], { baseline: 170, fontSize: 9 }),
+    glyph("Significant at the 5 percent level", [48, 160, 220, 172], { baseline: 172, fontSize: 10 })
+  ]);
+  assert.equal(byChar.get("☯")[0].label, "text");
+  assert.equal(byChar.get("☯")[0].unitId, null);
+  assert.equal(byChar.get("a")[0].label, "text");
+  assert.equal(byChar.get("a")[0].rule, "table-note");
+  assert.equal(byChar.get("a")[0].unitId, null);
+});
+
+test("a subscript a on k stays a formula", () => {
+  const { byChar } = label([
+    glyph("k", [40, 40, 48, 52], { baseline: 52, fontSize: 12, font: "CMMI10" }),
+    glyph("a", [48, 46, 54, 54], { baseline: 56, fontSize: 7, font: "CMMI7" })
+  ]);
+  assert.equal(byChar.get("a")[0].label, "formula");
+  assert.equal(byChar.get("k")[0].unitId, byChar.get("a")[0].unitId);
+});
+
+test("table rules and illustration paths are not formulas", () => {
+  const glyphs = [
+    glyph("x", [40, 40, 52, 52], { baseline: 52, fontSize: 12, font: "CMMI10" })
+  ];
+  const labelled = prelabelElements(assignStableIds([
+    ...glyphs,
+    { kind: "path", char: "", font: "", bbox: [20, 90, 300, 91.2], pathHash: "rule" },
+    { kind: "path", char: "", font: "", bbox: [30, 100, 48, 118], pathHash: "fig" }
+  ]), 400, 220);
+  const paths = labelled.elements.filter((element) => element.kind === "path");
+  assert.equal(paths[0].label, "other");
+  assert.equal(paths[0].rule, "rule-line");
+  assert.equal(paths[1].label, "other");
+  assert.equal(paths[1].rule, "path");
+  assert.equal(paths.every((path) => path.unitId == null), true);
+});
+
+test("an inline unit with 60 members is flagged below 0.65", () => {
+  const glyphs = [];
+  for (let index = 0; index < 60; index += 1) {
+    glyphs.push(glyph("x", [10 + index * 6, 40, 14 + index * 6, 52], { baseline: 52, fontSize: 12, font: "CMMI10" }));
+  }
+  const labelled = prelabelElements(assignStableIds(glyphs), 2000, 200);
+  assert.equal(labelled.units.length, 1);
+  assert.equal(labelled.units[0].type, "inline");
+  assert.ok(labelled.units[0].confidence <= 0.55);
+  assert.equal(labelled.units[0].fallback, true);
 });

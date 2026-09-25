@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDocuments, scoreBaselinePage } from "./m1-pdf.mjs";
+import { PRELABEL_VERSION } from "../lib/prelabel.js";
 import { markdownTable, round3 } from "../lib/label-checks.js";
 
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -66,7 +67,15 @@ export function publicRow(row) {
   const copy = { ...row };
   delete copy.recordMs;
   delete copy.buildMs;
+  delete copy.prelabelVersion;
+  delete copy.contentFingerprint;
   return copy;
+}
+
+export function cacheMatches(row, doc) {
+  return Boolean(row
+    && row.prelabelVersion === PRELABEL_VERSION
+    && row.contentFingerprint === (doc?.contentFingerprint || ""));
 }
 
 export function formatTiming(rows) {
@@ -107,9 +116,13 @@ export async function runChecks({
     const cache = join(cacheDir, `${file.id}.json`);
     console.log(`开始 ${index + 1}/${files.length} ${file.id}`);
     if (!force && existsSync(cache)) {
-      byPaper.push(JSON.parse(readFileSync(cache, "utf8")));
-      console.log(`${file.id} 使用缓存`);
-      continue;
+      const cached = JSON.parse(readFileSync(cache, "utf8"));
+      if (cacheMatches(cached, doc)) {
+        byPaper.push(cached);
+        console.log(`${file.id} 使用缓存`);
+        continue;
+      }
+      console.log(`${file.id} 缓存与 PDF 指纹或预标注版本不符，重新计算`);
     }
     const labelsDir = join(root, "labels/prelabel", file.id);
     const bytes = readFileSync(file.path);
@@ -119,6 +132,8 @@ export async function runChecks({
     row.field = doc.field;
     row.sourceType = doc.sourceType;
     row.title = doc.title;
+    row.prelabelVersion = PRELABEL_VERSION;
+    row.contentFingerprint = doc.contentFingerprint || "";
     try {
       for (let page = 1; page <= face.numPages; page += 1) {
         const labelPath = join(labelsDir, `page-${String(page).padStart(3, "0")}.json`);
@@ -158,6 +173,12 @@ export async function runChecks({
   writeFileSync(reportDest, markdown);
   writeFileSync(summaryDest, JSON.stringify(stored, null, 2));
   console.log(formatTiming(byPaper));
+  if (missing.length) {
+    console.log("汇总：缺少这些 PDF，已跳过：");
+    for (const id of missing) console.log(`  corpus/pdfs/${id}.pdf`);
+  } else {
+    console.log("汇总：没有跳过的 PDF。");
+  }
   console.log(writeDocs ? `wrote ${reportDest}` : `wrote ${reportDest}（未改写 docs/v1-m1-baseline.md）`);
   return { rows: byPaper, missing };
 }
@@ -209,7 +230,7 @@ export function renderReport(manifest, rows, missing = []) {
   const skipped = missing.length
     ? missing.map((id) => `- corpus/pdfs/${id}.pdf`).join("\n")
     : "No papers were skipped.";
-  return `# M1 baseline\n\nThe selector is \`lib/formula-svg.js\` as carried from the M0 spike. It was not changed. These numbers are measured against the unreviewed pre-labels in \`labels/prelabel/\`. Reviewed JSON under \`labels/reviewed/\` is not substituted.\n\nA1 counts left-hand outline ink with no SVG ink within r = 1, over the whole pre-label unit crop. The reference render is pdf.js with font faces off, the same paint the recorder saw. A2 counts a selected element whose label is not \`formula\`. A3 is exact element-set equality against pre-label units, plus mean Jaccard. Empty SVG is the share of text-layer formula blocks whose SVG is empty. A4 fallback is the share of pre-label formula units whose confidence is below 0.65. Those are different columns.\n\nIdentity conflicts are paints that matched two labels at once and were not given a character.\n\nRecord and build timings are printed by the script and are not stored in this file.\n\n${markdownTable(headers, tableRows)}\n\n${groupTable("By field", groups[0][1])}\n${groupTable("By source type", groups[1][1])}\n## Skipped\n\n${skipped}\n`;
+  return `# M1 baseline\n\nThe selector is \`lib/formula-svg.js\` as carried from the M0 spike. It was not changed. These numbers are measured against the unreviewed pre-labels in \`labels/prelabel/\`. Reviewed JSON under \`labels/reviewed/\` is not substituted.\n\nA1 counts left-hand outline ink with no SVG ink within r = 1, over the whole pre-label unit crop. The reference render is pdf.js with font faces off, the same paint the recorder saw. A2 counts a selected element whose label is not \`formula\`. A3 is exact element-set equality against pre-label units, plus mean Jaccard. Empty SVG is the share of text-layer formula blocks whose SVG is empty. A4 fallback is the share of pre-label formula units whose self-reported confidence is below 0.65. It is not an accuracy rate. Those are different columns.\n\nIdentity conflicts are paints that matched two labels at once and were not given a character.\n\nRecord and build timings are printed by the script and are not stored in this file.\n\n${markdownTable(headers, tableRows)}\n\n${groupTable("By field", groups[0][1])}\n${groupTable("By source type", groups[1][1])}\n## Skipped\n\n${skipped}\n`;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

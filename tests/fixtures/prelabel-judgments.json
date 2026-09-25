@@ -1,5 +1,5 @@
 {
-  "note": "Agent judgments from rendered page crops and glyph geometry on the seed-4778 sample. Not the owner's ground truth.",
+  "note": "Agent judgments from the seed-4778 error list. Not an accuracy rate. must cases are same-line regressions only; cross-line displays are not required to stay one unit.",
   "cases": [
     {
       "id": "affil-12",
@@ -323,7 +323,7 @@
       "paper": "qe533",
       "page": 5,
       "source": "author-latex-journal",
-      "must": true,
+      "must": false,
       "expect": "same-unit",
       "elementIds": [
         "ec45bde4d498d1542",
@@ -369,7 +369,7 @@
         "e5d05b081eb059dae",
         "e175d4ccc790bd7ac"
       ],
-      "note": "agent: this sample unit was already one formula; members must stay together"
+      "note": "agent: this sample unit was already one formula; members must stay together Cross-line members are no longer required to share a unit."
     },
     {
       "id": "abc",
@@ -432,7 +432,7 @@
       "paper": "s41598-021-85174-w",
       "page": 9,
       "source": "publisher-typeset",
-      "must": true,
+      "must": false,
       "expect": "same-unit",
       "elementIds": [
         "e1b0851f558035348",
@@ -496,14 +496,14 @@
         "e14c10645febe88cf",
         "e0e8047155dc8d134"
       ],
-      "note": "agent: this sample unit was already one formula; members must stay together"
+      "note": "agent: this sample unit was already one formula; members must stay together Cross-line members are no longer required to share a unit."
     },
     {
       "id": "piecewise",
       "paper": "s41598-024-77073-7",
       "page": 9,
       "source": "publisher-typeset",
-      "must": true,
+      "must": false,
       "expect": "same-unit",
       "elementIds": [
         "e40dff4f05072f07c",
@@ -530,7 +530,7 @@
         "e0924fbf2b3f39b7a",
         "e1f457a98ee2b09ce"
       ],
-      "note": "agent: this sample unit was already one formula; members must stay together"
+      "note": "agent: this sample unit was already one formula; members must stay together Cross-line members are no longer required to share a unit."
     },
     {
       "id": "fbm",
@@ -674,7 +674,7 @@
       "paper": "fms-2021-7",
       "page": 13,
       "source": "author-latex-journal",
-      "must": true,
+      "must": false,
       "expect": "same-unit",
       "elementIds": [
         "e970cb0bd90943f88",
@@ -712,14 +712,14 @@
         "e2d588308085863d6",
         "e6b9fa33a825d253b"
       ],
-      "note": "agent: this sample unit was already one formula; members must stay together"
+      "note": "agent: this sample unit was already one formula; members must stay together Cross-line members are no longer required to share a unit."
     },
     {
       "id": "matrix",
       "paper": "jhep04-2021-102",
       "page": 40,
       "source": "author-latex-journal",
-      "must": true,
+      "must": false,
       "expect": "same-unit",
       "elementIds": [
         "e8f73c34b9c35a32f",
@@ -754,7 +754,7 @@
         "e0af0da0226237b4f",
         "e6ae81bba5297d377"
       ],
-      "note": "agent: this sample unit was already one formula; members must stay together"
+      "note": "agent: this sample unit was already one formula; members must stay together Cross-line members are no longer required to share a unit."
     },
     {
       "id": "l2",

@@ -25,7 +25,7 @@ const manifestPath = join(root, "corpus/manifest.json");
 const pdfDir = join(root, "corpus/pdfs");
 const ddpmFixture = join(root, "tests/fixtures/DDPM_2006.11239.pdf");
 
-export const CHALLENGE_NOTE = "blocked by publisher bot check, obtain the PDF manually and use --import";
+export const CHALLENGE_NOTE = "出版商的机器人检查拦住了这次下载。请用浏览器打开清单里的链接，手动保存 PDF，再运行 node scripts/corpus-fetch.mjs --import <目录>。";
 
 export function sha256File(path) {
   return new Promise((resolve, reject) => {
@@ -192,23 +192,26 @@ export async function fetchCorpus({
     }
     if (importDir) {
       const source = join(importDir, `${doc.id}.pdf`);
-      if (existsSync(source)) {
-        const imported = await verifyFile(doc, source, fingerprint);
-        if (imported.status === "ok") {
-          if (source !== dest) {
-            writeFileSync(`${dest}.part`, readFileSync(source));
-            renameSync(`${dest}.part`, dest);
-          }
-          imported.path = dest;
-          imported.note = `已从 ${source} 导入。${imported.note}`;
-          console.log(`${doc.id} imported`);
-          results.push(imported);
-          continue;
+      if (!existsSync(source)) {
+        console.log(`${doc.id} 不在导入目录，跳过`);
+        results.push(result(doc.id, "skipped", { note: "导入目录里没有这一篇，未下载" }));
+        continue;
+      }
+      const imported = await verifyFile(doc, source, fingerprint);
+      if (imported.status === "ok") {
+        if (source !== dest) {
+          writeFileSync(`${dest}.part`, readFileSync(source));
+          renameSync(`${dest}.part`, dest);
         }
-        console.log(`${doc.id} ${imported.status}`);
+        imported.path = dest;
+        imported.note = `已从 ${source} 导入。${imported.note}`;
+        console.log(`${doc.id} imported`);
         results.push(imported);
         continue;
       }
+      console.log(`${doc.id} ${imported.status}`);
+      results.push(imported);
+      continue;
     }
     if (!force && existsSync(dest)) {
       const verified = await verifyFile(doc, dest, fingerprint);
@@ -247,7 +250,7 @@ export async function fetchCorpus({
   }
   const table = formatSummary(results);
   console.log(table);
-  const ok = results.every((row) => row.status === "ok");
+  const ok = results.every((row) => row.status === "ok" || row.status === "skipped");
   return { results, ok };
 }
 

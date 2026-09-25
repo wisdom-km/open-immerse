@@ -14,7 +14,10 @@ test("a missing PDF locks confirm and names the file", () => {
   const confirm = review.slice(review.indexOf("async function confirmUnit"));
   assert.match(confirm, /reviewActionsLocked\(state\.pdfMissing\)/);
   const keys = review.slice(review.indexOf("window.addEventListener(\"keydown\""));
-  assert.match(keys, /reviewActionsLocked\(state\.pdfMissing\)/);
+  assert.match(keys, /reviewActionsLocked\(state\.pdfMissing\) && !isNavigationKey\(key\)/);
+  assert.match(review, /arrayBuffer\(\)/);
+  assert.match(review, /data: bytes\.slice\(\)/);
+  assert.equal(review.includes("getDocument({ url:"), false);
   assert.match(review, /missingPdfBanner\(/);
   const css = readFileSync(new URL("../tools/label-review/review.css", import.meta.url), "utf8");
   assert.ok(css.indexOf(".hit.uncertain") < css.indexOf("rect.hit.selected"));

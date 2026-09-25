@@ -23,6 +23,10 @@ const state = {
   scrollSelection: false
 };
 
+const pdfBytes = new Map();
+let pdfLoad = null;
+let pageToken = 0;
+
 const progress = document.querySelector("#progress");
 const saveState = document.querySelector("#save-state");
 const stage = document.querySelector("#stage");
@@ -143,33 +147,64 @@ async function showMissingPdf(paperId) {
   renderQueue();
 }
 
+async function loadPdfBytes(paperId) {
+  if (pdfBytes.has(paperId)) return pdfBytes.get(paperId);
+  pdfLoad?.abort();
+  const controller = new AbortController();
+  pdfLoad = controller;
+  const response = await fetch(`/api/pdf/${encodeURIComponent(paperId)}`, { signal: controller.signal });
+  if (!response.ok) {
+    await response.body?.cancel?.();
+    const error = new Error("missing-pdf");
+    error.code = "missing-pdf";
+    throw error;
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (controller.signal.aborted) {
+    const error = new Error("aborted");
+    error.name = "AbortError";
+    throw error;
+  }
+  pdfBytes.set(paperId, bytes);
+  return bytes;
+}
+
 async function openPage(paperId, pageNumber, focus = null) {
+  const token = ++pageToken;
   state.paperId = paperId;
   state.pageNumber = pageNumber;
   state.pendingFocus = focus;
   state.selected = new Set();
   const response = await fetch(`/api/page/${encodeURIComponent(paperId)}/${pageNumber}`);
+  if (token !== pageToken) {
+    await response.body?.cancel?.();
+    return;
+  }
   if (!response.ok) {
+    await response.body?.cancel?.();
     await showMissingPdf(paperId);
     return;
   }
   const payload = await response.json();
+  if (token !== pageToken) return;
   state.page = payload.page;
   state.prelabel = payload.prelabel;
   state.uncertain = state.page.elements
     .filter((element) => Number(element.confidence) < 0.75)
     .sort((a, b) => a.confidence - b.confidence)
     .map((element) => element.id);
-  const pdfResponse = await fetch(`/api/pdf/${encodeURIComponent(paperId)}`);
-  if (!pdfResponse.ok) {
-    await showMissingPdf(paperId);
-    return;
-  }
-  if (state.pdf) await state.pdf.destroy();
   try {
-    const pdf = await pdfjs.getDocument({ url: `/api/pdf/${encodeURIComponent(paperId)}`, verbosity: 0 }).promise;
+    const bytes = await loadPdfBytes(paperId);
+    if (token !== pageToken) return;
+    if (state.pdf) await state.pdf.destroy();
+    const pdf = await pdfjs.getDocument({ data: bytes.slice(), verbosity: 0 }).promise;
+    if (token !== pageToken) {
+      await pdf.destroy();
+      return;
+    }
     state.pdf = pdf;
   } catch (error) {
+    if (token !== pageToken || error?.name === "AbortError") return;
     console.error(error);
     await showMissingPdf(paperId);
     return;
@@ -185,7 +220,12 @@ let paintToken = 0;
 function scrollCurrentToCenter() {
   const main = stage.closest("main");
   const nodes = [...stage.querySelectorAll("rect.hit.selected")];
-  if (!main || !nodes.length) return;
+  if (!main || !nodes.length) {
+    stage.style.margin = "12px";
+    return;
+  }
+  const view = main.getBoundingClientRect();
+  stage.style.margin = `${view.height / 2}px ${view.width / 2}px`;
   const mainBox = main.getBoundingClientRect();
   let minX = Infinity;
   let minY = Infinity;
@@ -204,7 +244,17 @@ function scrollCurrentToCenter() {
   });
 }
 
+function paperPageCount() {
+  const doc = state.manifest?.documents?.find((entry) => entry.id === state.paperId);
+  return doc?.pageCount || state.pdf?.numPages || state.pageNumber;
+}
+
+function isNavigationKey(key) {
+  return key === "j" || key === "k" || key === "n" || key === "p";
+}
+
 async function paint() {
+  stage.style.margin = "12px";
   if (reviewActionsLocked(state.pdfMissing) || !state.pdf) return;
   const token = ++paintToken;
   const pdfPage = await state.pdf.getPage(state.pageNumber);
@@ -556,8 +606,8 @@ document.querySelector("#confirm-unit").addEventListener("click", confirmUnit);
 
 window.addEventListener("keydown", (event) => {
   if (event.target.matches("input, textarea, select")) return;
-  if (reviewActionsLocked(state.pdfMissing)) return;
   const key = event.key.toLowerCase();
+  if (reviewActionsLocked(state.pdfMissing) && !isNavigationKey(key)) return;
   if (key === "enter") confirmUnit();
   else if (key === "1") relabel("formula");
   else if (key === "2") relabel("text");
@@ -572,7 +622,7 @@ window.addEventListener("keydown", (event) => {
   else if (key === "k" && state.mode === "units") openUnit(Math.max(0, state.unitCursor - 1));
   else if (key === "j") jumpUncertain(1);
   else if (key === "k") jumpUncertain(-1);
-  else if (key === "n") openPage(state.paperId, Math.min(state.pdf.numPages, state.pageNumber + 1));
+  else if (key === "n") openPage(state.paperId, Math.min(paperPageCount(), state.pageNumber + 1));
   else if (key === "p") openPage(state.paperId, Math.max(1, state.pageNumber - 1));
   else return;
   event.preventDefault();

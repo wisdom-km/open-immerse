@@ -9,7 +9,7 @@
  * labels/review-set.json. Confirmed units are stored in
  * labels/reviewed/<paper>/page-NNN.json and can be committed.
  */
-import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -120,9 +120,29 @@ function staticPath(urlPath) {
   return full;
 }
 
-const server = createServer(async (request, response) => {
+function pdfFile(pdfDir, paperId) {
+  if (!paperId || paperId.includes("..") || paperId.includes("/") || paperId.includes("\\")) return "";
+  const file = join(pdfDir, `${paperId}.pdf`);
+  if (!existsSync(file)) return "";
+  return file;
+}
+
+/**
+ * Local review server. PDF responses set Content-Length and always end.
+ * `pdfPending()` is the number of PDF bodies still open; it must return to
+ * 0 after each page open once the client reads or cancels the body.
+ */
+export function createReviewServer({ pdfDir = join(root, "corpus/pdfs") } = {}) {
+  let pendingPdf = 0;
+  let maxPendingPdf = 0;
+  const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
+    if (url.pathname === "/favicon.ico") {
+      response.writeHead(204, { "cache-control": "public, max-age=86400" });
+      response.end();
+      return;
+    }
     if (url.pathname === "/") {
       response.writeHead(302, { location: "/tools/label-review/index.html" });
       response.end();
@@ -179,15 +199,45 @@ const server = createServer(async (request, response) => {
       return;
     }
     const pdfMatch = url.pathname.match(/^\/api\/pdf\/([^/]+)$/);
-    if (pdfMatch && request.method === "GET") {
+    if (pdfMatch && (request.method === "GET" || request.method === "HEAD")) {
       const paperId = decodeURIComponent(pdfMatch[1]);
-      const file = join(root, "corpus/pdfs", `${paperId}.pdf`);
-      if (!existsSync(file) || paperId.includes("..") || paperId.includes("/") || paperId.includes("\\")) {
+      const file = pdfFile(pdfDir, paperId);
+      if (!file) {
         send(response, 404, JSON.stringify({ error: "PDF 不在 corpus/pdfs。先运行 node scripts/corpus-fetch.mjs" }));
         return;
       }
-      response.writeHead(200, { "content-type": "application/pdf", "cache-control": "no-store" });
-      createReadStream(file).pipe(response);
+      const size = statSync(file).size;
+      const headers = {
+        "content-type": "application/pdf",
+        "content-length": String(size),
+        "cache-control": "no-store"
+      };
+      if (request.method === "HEAD") {
+        response.writeHead(200, headers);
+        response.end();
+        return;
+      }
+      pendingPdf += 1;
+      if (pendingPdf > maxPendingPdf) maxPendingPdf = pendingPdf;
+      response.writeHead(200, headers);
+      const stream = createReadStream(file);
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        pendingPdf = Math.max(0, pendingPdf - 1);
+      };
+      response.on("finish", finish);
+      response.on("close", () => {
+        stream.destroy();
+        finish();
+      });
+      stream.on("error", () => {
+        stream.destroy();
+        if (!response.writableEnded) response.destroy();
+        finish();
+      });
+      stream.pipe(response);
       return;
     }
     const sheetMatch = url.pathname.match(/^\/api\/sheet\/([^/]+)\/(\d+)$/);
@@ -220,9 +270,18 @@ const server = createServer(async (request, response) => {
   } catch (error) {
     send(response, 500, JSON.stringify({ error: error.message || String(error) }));
   }
-});
+  });
+  return {
+    server,
+    pdfPending: () => pendingPdf,
+    maxPdfPending: () => maxPendingPdf
+  };
+}
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`复核页 http://127.0.0.1:${port}/`);
-  console.log("在 Windows Chrome 打开上面的地址。改动会自动写到 labels/reviewed/。");
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const { server } = createReviewServer();
+  server.listen(port, "127.0.0.1", () => {
+    console.log(`复核页 http://127.0.0.1:${port}/`);
+    console.log("在 Windows Chrome 打开上面的地址。改动会自动写到 labels/reviewed/。");
+  });
+}

@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { contentFingerprint } from "../scripts/m1-pdf.mjs";
+import { contentFingerprint, isCambridgePageStamp } from "../scripts/m1-pdf.mjs";
 
-function pdfBytes({ title, idHex }) {
-  const stream = "BT /F1 12 Tf 72 72 Td (Hello) Tj ET";
+function pdfBytes({ title, idHex, lines = ["Hello"] }) {
+  const showing = lines.map((line) => `(${line}) Tj 0 -14 Td`).join(" ");
+  const stream = `BT /F1 9 Tf 72 160 Td ${showing} ET`;
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -46,6 +47,18 @@ test("content fingerprint ignores Info and trailer ID", async () => {
   const right = await contentFingerprint(second);
   assert.equal(left, right);
   assert.match(left, /^[a-f0-9]{64}$/);
+});
+
+test("Cambridge page stamps that differ only by the clock hash the same", async () => {
+  const early = "Downloaded from https://www.cambridge.org/core. IP address: 203.0.113.4, on 01 Jan 2000 at 12:15:41, subject to the Cambridge Core terms of use, available at";
+  const later = early.replace("12:15:41", "12:15:44");
+  assert.equal(isCambridgePageStamp(early), true);
+  assert.equal(isCambridgePageStamp("Downloaded from the archive yesterday"), false);
+  const first = pdfBytes({ title: "A", idHex: "00112233445566778899AABBCCDDEEFF", lines: [early, "x = 1"] });
+  const second = pdfBytes({ title: "B", idHex: "FFEEDDCCBBAA99887766554433221100", lines: [later, "x = 1"] });
+  const changed = pdfBytes({ title: "C", idHex: "00112233445566778899AABBCCDDEEFF", lines: [later, "x = 2"] });
+  assert.equal(await contentFingerprint(first), await contentFingerprint(second));
+  assert.notEqual(await contentFingerprint(first), await contentFingerprint(changed));
 });
 
 test("Cambridge download stamp does not change the fms content fingerprint", async () => {

@@ -4,182 +4,182 @@
       "id": "1706.03762",
       "pages": 15,
       "elements": 2101,
-      "units": 125
+      "units": 135
     },
     {
       "id": "2006.11239",
       "pages": 25,
       "elements": 10984,
-      "units": 220
+      "units": 396
     },
     {
       "id": "s41467-018-07210-0",
       "pages": 10,
       "elements": 24672,
-      "units": 176
+      "units": 228
     },
     {
       "id": "s41467-019-09785-8",
       "pages": 11,
       "elements": 9257,
-      "units": 261
+      "units": 332
     },
     {
       "id": "s41467-021-26434-1",
       "pages": 13,
       "elements": 93831,
-      "units": 287
+      "units": 328
     },
     {
       "id": "crmath-64",
       "pages": 8,
       "elements": 3777,
-      "units": 207
+      "units": 344
     },
     {
       "id": "fms-2021-7",
       "pages": 40,
       "elements": 28004,
-      "units": 1146
+      "units": 2040
     },
     {
       "id": "s41598-017-00844-y",
       "pages": 11,
       "elements": 4942,
-      "units": 146
+      "units": 221
     },
     {
       "id": "s41598-022-19656-w",
       "pages": 16,
       "elements": 6605,
-      "units": 228
+      "units": 362
     },
     {
       "id": "s41598-023-28973-7",
       "pages": 11,
       "elements": 4018,
-      "units": 106
+      "units": 157
     },
     {
       "id": "jhep04-2021-102",
       "pages": 102,
       "elements": 32180,
-      "units": 3017
+      "units": 3913
     },
     {
       "id": "s41467-019-10988-2",
       "pages": 9,
       "elements": 6382,
-      "units": 137
+      "units": 165
     },
     {
       "id": "s41467-020-19530-1",
       "pages": 7,
       "elements": 4814,
-      "units": 168
+      "units": 198
     },
     {
       "id": "s41467-026-69035-6",
       "pages": 6,
       "elements": 3292,
-      "units": 138
+      "units": 163
     },
     {
       "id": "s42005-024-01697-4",
       "pages": 12,
       "elements": 8401,
-      "units": 309
+      "units": 367
     },
     {
       "id": "pcbi-1004584",
       "pages": 38,
       "elements": 4777,
-      "units": 230
+      "units": 276
     },
     {
       "id": "pcbi-1005421",
       "pages": 16,
       "elements": 2046,
-      "units": 129
+      "units": 141
     },
     {
       "id": "pcbi-1007670",
       "pages": 17,
       "elements": 2557,
-      "units": 145
+      "units": 177
     },
     {
       "id": "pcbi-1008462",
       "pages": 29,
       "elements": 5872,
-      "units": 405
+      "units": 523
     },
     {
       "id": "pcbi-1009231",
       "pages": 25,
       "elements": 4091,
-      "units": 260
+      "units": 335
     },
     {
       "id": "bmc-12874-022-01542-8",
       "pages": 20,
       "elements": 92016,
-      "units": 193
+      "units": 205
     },
     {
       "id": "s41598-020-70551-8",
       "pages": 13,
       "elements": 2271,
-      "units": 70
+      "units": 86
     },
     {
       "id": "s41598-021-85174-w",
       "pages": 17,
       "elements": 3609,
-      "units": 155
+      "units": 192
     },
     {
       "id": "s41598-022-05108-y",
       "pages": 18,
       "elements": 3016,
-      "units": 44
+      "units": 61
     },
     {
       "id": "s41598-023-31124-7",
       "pages": 12,
       "elements": 2918,
-      "units": 113
+      "units": 144
     },
     {
       "id": "1410.3394",
       "pages": 41,
       "elements": 5573,
-      "units": 501
+      "units": 706
     },
     {
       "id": "pone-0125679",
       "pages": 35,
       "elements": 11968,
-      "units": 611
+      "units": 775
     },
     {
       "id": "pone-0215032",
       "pages": 18,
       "elements": 5037,
-      "units": 247
+      "units": 350
     },
     {
       "id": "qe533",
       "pages": 31,
       "elements": 9229,
-      "units": 459
+      "units": 789
     },
     {
       "id": "s41598-024-77073-7",
       "pages": 13,
       "elements": 3635,
-      "units": 108
+      "units": 184
     }
   ],
-  "formulaUnits": 10341
+  "formulaUnits": 14293
 }

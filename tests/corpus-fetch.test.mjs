@@ -106,7 +106,8 @@ test("a fingerprint mismatch does not abort the rest of the corpus", async () =>
 test("--import copies a verified local PDF and rejects a challenge page", async () => {
   const { dir, path, pdfs } = manifest([
     doc("local-ok", "http://publisher.example/nope.pdf"),
-    doc("local-wall", "http://publisher.example/nope2.pdf")
+    doc("local-wall", "http://publisher.example/nope2.pdf"),
+    doc("not-here", "http://publisher.example/nope3.pdf")
   ]);
   const incoming = join(dir, "incoming");
   const { mkdirSync } = await import("node:fs");
@@ -130,4 +131,8 @@ test("--import copies a verified local PDF and rejects a challenge page", async 
   assert.equal(readFileSync(join(pdfs, "local-ok.pdf")).toString().includes("local"), true);
   assert.equal(outcome.results[1].status, "blocked-by-challenge");
   assert.equal(outcome.results[1].note, CHALLENGE_NOTE);
+  assert.match(CHALLENGE_NOTE, /手动保存/);
+  assert.match(CHALLENGE_NOTE, /--import/);
+  assert.equal(outcome.results[2].status, "skipped");
+  assert.match(outcome.results[2].note, /未下载/);
 });

@@ -55,9 +55,44 @@ function round2(value) {
 }
 
 /**
+ * Cambridge Core prints this line in the page text of every page, not only
+ * in XMP. The IP, date, and clock change on every download:
+ *   Downloaded from https://www.cambridge.org/core. IP address: 203.0.113.4, on 01 Jan 2000 at 12:15:41, subject to the Cambridge Core terms of use, available at
+ * Drop a text item, or a whole baseline whose joined text starts this way,
+ * before hashing. The pattern requires both "Downloaded from" and
+ * "IP address", so a sentence that only says "Downloaded from" stays.
+ */
+export const CAMBRIDGE_PAGE_STAMP = /^Downloaded from\b.{0,500}\bIP address\b/i;
+
+export function isCambridgePageStamp(text) {
+  const flat = String(text || "").replace(/\s+/g, " ").trim();
+  return CAMBRIDGE_PAGE_STAMP.test(flat);
+}
+
+export function cambridgeStampIndexes(items) {
+  const drop = new Set();
+  const list = items || [];
+  const groups = new Map();
+  list.forEach((item, index) => {
+    if (isCambridgePageStamp(item?.str)) drop.add(index);
+    const y = Math.round((Number((item?.transform || [])[5]) || 0) * 2) / 2;
+    if (!groups.has(y)) groups.set(y, []);
+    groups.get(y).push(index);
+  });
+  for (const indexes of groups.values()) {
+    const joined = indexes.map((index) => list[index]?.str || "").join("");
+    if (isCambridgePageStamp(joined)) {
+      for (const index of indexes) drop.add(index);
+    }
+  }
+  return drop;
+}
+
+/**
  * SHA-256 of page count, media-box size, and pdf.js text items.
- * The Info dictionary, XMP metadata, and trailer /ID are not included,
- * so a publisher download stamp does not change the fingerprint.
+ * The Info dictionary, XMP metadata, and trailer /ID are not included.
+ * Cambridge's per-page "Downloaded from … IP address …" line is removed
+ * before hashing, so a new download time does not change the fingerprint.
  */
 export async function contentFingerprint(bytes) {
   const { getDocument } = await loadPdfjs();
@@ -77,11 +112,13 @@ export async function contentFingerprint(bytes) {
         const height = round2(view[3] - view[1]);
         lines.push(`page:${number}:${width}x${height}:rot${page.rotate || 0}`);
         const text = await page.getTextContent({ includeMarkedContent: false });
-        for (const item of text.items || []) {
-          if (!item || typeof item.str !== "string") continue;
+        const items = (text.items || []).filter((item) => item && typeof item.str === "string");
+        const drop = cambridgeStampIndexes(items);
+        items.forEach((item, index) => {
+          if (drop.has(index)) return;
           const transform = (item.transform || []).map(round2).join(",");
           lines.push(`${item.str}\t${transform}`);
-        }
+        });
       } finally {
         page.cleanup?.();
       }
