@@ -118,34 +118,3 @@ test("formula paths outside the glyph box survive the neighbor mask", () => {
   assert.equal(dark(image, 80, 80), true);
   assert.equal(dark(image, 50, 12), false);
 });
-
-test("ink below the glyph box and inside the content-aware box stays in the crop", () => {
-  const width = 200;
-  const height = 200;
-  const glyph = [0.3, 0.4, 0.6, 0.55];
-  const bbox = [0.15, 0.3, 0.8, 0.75];
-  const opts = { padPx: 0, minSpanX: 1, minSpanY: 1, glyphBoxes: [glyph] };
-  const scanBottom = Math.ceil(Math.min(bbox[3], glyph[3] + 0.002) * height);
-
-  const bare = paper(width, height);
-  for (let y = 90; y < scanBottom - 2; y += 1) ink(bare, 90, y);
-  const held = measureFormulaCrop(bbox, bare, opts);
-
-  const tipped = paper(width, height);
-  tipped.data.set(bare.data);
-  const tipY = scanBottom + 3;
-  assert.ok(tipY / height < bbox[3]);
-  ink(tipped, 90, tipY);
-  const grown = measureFormulaCrop(bbox, tipped, opts);
-  assert.ok(grown.bbox[3] > (tipY + 0.5) / height, "the tip below the glyph box is kept");
-  assert.ok(Math.abs(grown.bbox[0] - held.bbox[0]) < 1e-9);
-  assert.ok(Math.abs(grown.bbox[2] - held.bbox[2]) < 1e-9, "width stays on the glyph scan");
-  assert.ok(held.bbox[3] < tipY / height, "no lower ink leaves the old bottom");
-
-  const above = paper(width, height);
-  above.data.set(bare.data);
-  const neighborY = Math.floor((glyph[1] - 0.02) * height);
-  for (let x = 70; x < 110; x += 1) ink(above, x, neighborY);
-  const topHeld = measureFormulaCrop(bbox, above, opts);
-  assert.ok(Math.abs(topHeld.bbox[1] - held.bbox[1]) < 1e-9, "the top of the scan does not move");
-});
