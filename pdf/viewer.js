@@ -123,6 +123,7 @@ import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   assetLayoutCapPx,
   createFormulaRasterCache,
+  formulaDevicePixels,
   formulaRasterCacheKey,
   formulaRasterPlan,
   isSourceRedrawBlock,
@@ -974,17 +975,27 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     rasterHeight: raster?.pixelHeight
   });
   if (!css) return "";
-  const plan = formulaRasterPlan({
-    bbox: block.bbox,
-    pageWidth: metrics.pageWidth,
-    pageHeight: metrics.pageHeight,
-    rasterWidth: raster?.pixelWidth,
-    rasterHeight: raster?.pixelHeight,
-    cssWidth: css.cssWidth,
-    cssHeight: css.cssHeight,
-    devicePixelRatio: metrics.devicePixelRatio
-  });
-  if (plan.reusePageRaster) return "";
+  const formula = block.label === "formula";
+  const plan = formula
+    ? formulaDevicePixels({
+      cssWidth: css.cssWidth / metrics.mirrorZoom,
+      cssHeight: css.cssHeight / metrics.mirrorZoom,
+      pdfWidth: css.pdfWidth,
+      pdfHeight: css.pdfHeight,
+      mirrorZoom: metrics.mirrorZoom,
+      devicePixelRatio: metrics.devicePixelRatio
+    })
+    : formulaRasterPlan({
+      bbox: block.bbox,
+      pageWidth: metrics.pageWidth,
+      pageHeight: metrics.pageHeight,
+      rasterWidth: raster?.pixelWidth,
+      rasterHeight: raster?.pixelHeight,
+      cssWidth: css.cssWidth,
+      cssHeight: css.cssHeight,
+      devicePixelRatio: metrics.devicePixelRatio
+    });
+  if (!plan || (!formula && plan.reusePageRaster)) return "";
   const key = formulaRasterCacheKey({
     docId,
     page: pageNumber,
@@ -999,8 +1010,12 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     const full = page.getViewport({ scale: plan.scale });
     const rasterW = Number(raster?.pixelWidth) || 0;
     const rasterH = Number(raster?.pixelHeight) || 0;
-    const originX = rasterW > 0 ? (plan.offsetX / plan.multiplier) / rasterW : 0;
-    const originY = rasterH > 0 ? (plan.offsetY / plan.multiplier) / rasterH : 0;
+    const originX = formula
+      ? Number(block.bbox[0]) || 0
+      : (rasterW > 0 ? (plan.offsetX / plan.multiplier) / rasterW : 0);
+    const originY = formula
+      ? Number(block.bbox[1]) || 0
+      : (rasterH > 0 ? (plan.offsetY / plan.multiplier) / rasterH : 0);
     const viewport = page.getViewport({
       scale: plan.scale,
       offsetX: -originX * full.width,
@@ -1401,6 +1416,19 @@ function paperHeightFor(pageNumber) {
   return paper.heightBase > 0 ? paper.heightBase : leftH;
 }
 
+function snappedFormulaBox(matched) {
+  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+  const zoom = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
+  return formulaDevicePixels({
+    cssWidth: matched.cssWidth,
+    cssHeight: matched.cssHeight,
+    pdfWidth: matched.cssWidth,
+    pdfHeight: matched.cssHeight,
+    mirrorZoom: zoom,
+    devicePixelRatio: dpr
+  });
+}
+
 function matchedFormulaStyle(block, page) {
   const layout = getPageLayout(page);
   const paperHeight = paperHeightFor(page);
@@ -1411,9 +1439,12 @@ function matchedFormulaStyle(block, page) {
     paperHeight
   });
   if (!matched) return null;
+  const snapped = snappedFormulaBox(matched) || matched;
+  const height = snapped.cssHeight;
+  const width = snapped.cssWidth > 0 ? snapped.cssWidth : matched.cssWidth;
   return {
-    height: paperCssPx(matched.cssHeight),
-    aspect: String(Math.round(matched.aspect * 10000) / 10000)
+    height: paperCssPx(height),
+    aspect: String(Math.round((width / height) * 10000) / 10000)
   };
 }
 
@@ -1441,7 +1472,11 @@ function refreshMatchedFormulas(paper, paperHeight) {
       paperHeight
     });
     if (!matched) return;
-    row.style.setProperty("--oi-formula-h", paperCssPx(matched.cssHeight));
+    const snapped = snappedFormulaBox(matched);
+    row.style.setProperty("--oi-formula-h", paperCssPx(snapped?.cssHeight || matched.cssHeight));
+    if (snapped?.cssWidth > 0 && snapped.cssHeight > 0) {
+      row.style.setProperty("--oi-formula-ar", String(Math.round((snapped.cssWidth / snapped.cssHeight) * 10000) / 10000));
+    }
   });
   paper.querySelectorAll(".oi-pdf-inline-math.is-matched").forEach((span) => {
     const block = (layout?.blocks || []).find((item) => item.id === span.dataset.blockId);
@@ -1452,7 +1487,8 @@ function refreshMatchedFormulas(paper, paperHeight) {
       paperHeight
     });
     if (!matched) return;
-    span.style.setProperty("--oi-formula-h", paperCssPx(matched.cssHeight));
+    const snapped = snappedFormulaBox(matched);
+    span.style.setProperty("--oi-formula-h", paperCssPx(snapped?.cssHeight || matched.cssHeight));
   });
 }
 
@@ -1476,6 +1512,7 @@ function applyPaperMetrics() {
     applyBodyFont(paper, size.width);
     refreshMatchedFormulas(paper, size.heightBase);
   });
+  refreshFormulaCropsForDisplay();
 }
 
 function bindPaperMetrics() {
@@ -2928,7 +2965,8 @@ function formulaCropPlanKeyNow() {
   const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
   const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
   const left = Number(zoom) > 0 ? Number(zoom) : 1;
-  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}`;
+  const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0);
+  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}`;
 }
 
 function noteFormulaCropPlan(layout) {
