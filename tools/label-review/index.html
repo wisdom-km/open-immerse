@@ -11,6 +11,9 @@
     <strong>公式标注复核</strong>
     <span id="progress">正在读取清单…</span>
     <span id="save-state">未修改</span>
+    <button id="mode-units" type="button">单元队列</button>
+    <button id="mode-pages" type="button">整页队列</button>
+    <button id="confirm-unit" type="button">看过，下一个</button>
     <label>缩放 <input id="zoom" type="range" min="0.8" max="2" step="0.1" value="1.25"></label>
     <button id="export" type="button">导出</button>
     <button id="import" type="button">导入</button>
@@ -36,7 +39,7 @@
         <button type="button" id="merge">m 合并</button>
         <button type="button" id="split">s 拆开</button>
       </div>
-      <p class="help">j / k 上一个或下一个低置信度元素。n / p 翻页。拖出一个框可以多选，按住 Shift 再点可以追加。红虚线是置信度低于 0.75 的元素。</p>
+      <p class="help">默认按约 1000 个单元的复核集往下走。Enter 或「看过，下一个」记下当前单元并跳到下一个。j / k 在单元之间移动。整页队列里，j / k 改为低置信度元素。n / p 翻页。拖出方框可以多选，Shift 追加。红虚线是置信度低于 0.75 的元素。</p>
       <pre id="detail"></pre>
     </aside>
   </div>

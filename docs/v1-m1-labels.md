@@ -6,7 +6,7 @@
 
 30 篇公式比较密的开放获取论文，6 个领域各 5 篇。清单在 `corpus/manifest.json`。PDF 不进 git。
 
-经济学/金融是第 6 个领域。匿名可下的出版社或期刊 PDF 是：定量生物学 5 篇 PLOS Computational Biology；人工智能 Nature Communications 1 篇、JMLR 1 篇；数学 Forum of Mathematics Sigma 3 篇、Comptes Rendus 1 篇；物理 JHEP 1 篇；经济 Quantitative Economics 1 篇。物理其余 4 篇是 arXiv，因为 Physical Review X 的直接 PDF 返回 403。医学 5 篇全是 arXiv：Magnetic Resonance in Medicine 的 Wiley PDF，以及 IEEE、IOP 的链接，返回 403 或 HTML。数学第 5 篇、经济其余 4 篇同样用 arXiv 补齐。清单里每篇都有许可证、PDF 直链和原因。没有 Word 导出的 PDF。
+经济学/金融是第 6 个领域。每个领域至少 3 篇出版社排版的开放获取 PDF。人工智能保留 Attention 和 DDPM 两篇 arXiv，另外 3 篇是 Nature Communications。定量生物学 5 篇都是 PLOS Computational Biology。医学 5 篇都是出版社排版：Scientific Reports 的药代和成像重建，加上 BMC Medical Research Methodology 的样条轨迹模型。物理是 Nature Communications、Communications Physics 和 JHEP。数学是 Scientific Reports 3 篇，加上 Forum of Mathematics Sigma 和 Comptes Rendus。经济是 Scientific Reports、PLOS ONE、Quantitative Economics，并保留一篇公式很密的 q-fin 预印本。Physical Review X、Wiley、IOP、PNAS、Royal Society 的直接 PDF 返回 403，这些站点已跳过，没有改请求头。公式印成图片的论文已剔除。清单里每篇都有许可证、PDF 直链和原因。没有 Word 导出的 PDF。
 
 来源分三种：
 
@@ -64,9 +64,10 @@ node scripts/label-review.mjs
 - `d` 行间，`i` 行内，`e` 切换公式编号。
 - `m` 把选中的公式并成一个单元。`s` 把选中的成员拆成各自的单元。
 - `j` / `k` 在低置信度元素之间跳。`n` / `p` 翻页。
-- 左侧队列按低置信度元素多少排序。
-- 改动大约 0.4 秒后写入 `labels/reviewed/`。可以导出、导入 JSON。导入会先做编号校验。
-- 顶栏有已复核页数和预标注公式单元总数，用来估计要不要复到 1000 个单元以上。
+- 默认队列是 `labels/review-set.json` 里的大约 1000 个单元，六个领域尽量均分，每个领域里再按来源均分，并偏向低置信度，同时照顾行间、行内和公式编号。种子固定，同一批预标注会得到同一份名单。生成命令是 `node scripts/review-set.mjs`。
+- 点队列里的一条会打开那一页，并把该单元滚到画面中间。Enter 或「看过，下一个」把这个单元 id 写入该页的 `reviewedUnitIds`，顶栏变成「已复核 37/1000 个单元」，然后跳到下一个还没看的单元。
+- 「整页队列」仍按低置信度元素多少列出页面。在这个模式里，j / k 在低置信度元素之间跳。
+- 改动大约 0.4 秒后写入 `labels/reviewed/<论文>/page-NNN.json`。这个目录可以提交。接触图和检查缓存不提交。导出、导入 JSON 仍可用。导入会先做编号校验。
 
 接触图（左：页面轮廓，中：基线 SVG，右：差异。红色是页面有而 SVG 没有）：
 
@@ -82,12 +83,13 @@ node scripts/contact-sheet.mjs --paper 1706.03762 --page 4
 node scripts/baseline-checks.mjs
 ```
 
-表写在 `docs/v1-m1-baseline.md`。基线选择器是 M0 的 `lib/formula-svg.js`，这里没有改它。
+表写在 `docs/v1-m1-baseline.md`。基线选择器是 M0 的 `lib/formula-svg.js`，这里没有改它。表里的数字对着未复核的预标注，不会改用 `labels/reviewed/`。
 
-- A1：单元裁切矩形里的每一个像素。左边是 pdf.js 关闭字体、画出的轮廓（和录制看到的是同一层墨），右边是基线 SVG。左边有墨、r = 1 内 SVG 没有墨，就计缺笔。不再只在「保留下来的元素」里数。
+- A1：单元裁切矩形里的每一个像素。左边是 pdf.js 关闭字体、画出的轮廓（和录制看到的是同一层墨），右边是基线 SVG。左边有墨、r = 1 内 SVG 没有墨，就计缺笔。
 - A2：进了公式 SVG、但标注不是公式的元素。看的是标注，不是选择器自己的字体判断。
 - A3：和预标注单元的元素集合是否完全一致，另外给平均 Jaccard。
-- A4：文本层公式块里，SVG 为空的比例。预标注置信度低于 0.65 的比例另列，那是复核队列，不是选择器的回退。
+- 空 SVG：文本层公式块里，SVG 为空的比例。这不是 A4。
+- A4：预标注公式单元里，置信度低于 0.65 的比例。
 
 编号一致性：
 

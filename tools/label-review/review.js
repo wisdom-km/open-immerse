@@ -13,7 +13,11 @@ const state = {
   selected: new Set(),
   scale: 1.25,
   pdf: null,
-  uncertain: []
+  uncertain: [],
+  mode: "units",
+  reviewSet: { units: [] },
+  unitCursor: 0,
+  pendingFocus: null
 };
 
 const progress = document.querySelector("#progress");
@@ -30,13 +34,40 @@ function pageFile(pageNumber) {
 async function loadManifest() {
   state.manifest = await (await fetch("/api/manifest")).json();
   state.status = await (await fetch("/api/status")).json();
-  renderQueue();
+  const setResponse = await fetch("/api/review-set");
+  state.reviewSet = setResponse.ok ? await setResponse.json() : { units: [] };
   const params = new URLSearchParams(location.search);
+  if (params.get("paper")) {
+    await openPage(params.get("paper"), Number(params.get("page") || 1));
+    return;
+  }
+  if (state.reviewSet.units?.length) {
+    const start = nextUnreviewed(0);
+    await openUnit(start < 0 ? 0 : start);
+    return;
+  }
   const first = state.status.queue[0] || {
     paperId: state.manifest.documents[0].id,
     page: 1
   };
-  await openPage(params.get("paper") || first.paperId, Number(params.get("page") || first.page || 1));
+  await openPage(first.paperId, first.page || 1);
+}
+
+function unitKey(unit) {
+  return `${unit.paperId}:${unit.page}:${unit.unitId}`;
+}
+
+function reviewedKeySet() {
+  const keys = new Set(state.status?.reviewedKeys || []);
+  if (state.page?.reviewedUnitIds && state.paperId) {
+    for (const id of state.page.reviewedUnitIds) keys.add(`${state.paperId}:${state.pageNumber}:${id}`);
+  }
+  return keys;
+}
+
+function reviewedCount() {
+  const keys = reviewedKeySet();
+  return (state.reviewSet.units || []).filter((unit) => keys.has(unitKey(unit))).length;
 }
 
 function renderQueue() {
@@ -49,24 +80,46 @@ function renderQueue() {
     if (doc.id === state.paperId) option.selected = true;
     picker.append(option);
   }
-  picker.addEventListener("change", () => openPage(picker.value, 1));
+  picker.addEventListener("change", () => {
+    state.mode = "pages";
+    openPage(picker.value, 1);
+  });
   queue.append(picker);
+  const total = state.reviewSet.units?.length || state.status?.reviewTarget || 0;
+  progress.textContent = `已复核 ${reviewedCount()}/${total} 个单元`;
   const head = document.createElement("p");
-  head.textContent = "低置信度优先";
+  if (state.mode === "pages") {
+    head.textContent = "整页队列 · 低置信度优先";
+    queue.append(head);
+    for (const row of state.status.queue.slice(0, 40)) {
+      const button = document.createElement("button");
+      button.textContent = `${row.field} ${row.paperId} 第 ${row.page} 页 · ${row.uncertain}`;
+      button.className = row.paperId === state.paperId && row.page === state.pageNumber ? "current" : "";
+      button.addEventListener("click", () => openPage(row.paperId, row.page));
+      queue.append(button);
+    }
+    return;
+  }
+  head.textContent = "单元队列 · 低置信度靠前，领域交错";
   queue.append(head);
-  for (const row of state.status.queue.slice(0, 40)) {
+  const keys = reviewedKeySet();
+  const units = state.reviewSet.units || [];
+  for (let index = 0; index < units.length; index += 1) {
+    const unit = units[index];
     const button = document.createElement("button");
-    button.textContent = `${row.field} ${row.paperId} 第 ${row.page} 页 · ${row.uncertain}`;
-    button.className = row.paperId === state.paperId && row.page === state.pageNumber ? "current" : "";
-    button.addEventListener("click", () => openPage(row.paperId, row.page));
+    const done = keys.has(unitKey(unit)) ? "已看 · " : "";
+    button.textContent = `${done}${unit.field} ${unit.paperId} 第 ${unit.page} 页 ${unit.type === "display" ? "行间" : "行内"} ${unit.confidence}`;
+    button.className = index === state.unitCursor ? "current" : "";
+    button.addEventListener("click", () => openUnit(index));
     queue.append(button);
   }
-  progress.textContent = `已复核 ${state.status.reviewedPages}/${state.status.pages} 页 · 预标注公式单元 ${state.status.formulaUnits}`;
+  queue.querySelector("button.current")?.scrollIntoView({ block: "nearest" });
 }
 
-async function openPage(paperId, pageNumber) {
+async function openPage(paperId, pageNumber, focus = null) {
   state.paperId = paperId;
   state.pageNumber = pageNumber;
+  state.pendingFocus = focus;
   state.selected = new Set();
   const response = await fetch(`/api/page/${encodeURIComponent(paperId)}/${pageNumber}`);
   const payload = await response.json();
@@ -96,6 +149,12 @@ async function paint() {
   canvas.height = Math.ceil(viewport.height);
   await pdfPage.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
   if (token !== paintToken) return;
+  if (state.pendingFocus) {
+    const ids = new Set(state.pendingFocus.elementIds || []);
+    const matched = state.page.elements.filter((element) => ids.has(element.id));
+    const fallback = matched.length ? matched : state.page.elements.filter((element) => element.unitId === state.pendingFocus.unitId);
+    if (fallback.length) state.selected = new Set(fallback.map((element) => element.id));
+  }
   stage.innerHTML = "";
   stage.append(canvas);
   const overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -125,6 +184,10 @@ async function paint() {
   overlay.addEventListener("mousedown", onPointerDown);
   overlay.addEventListener("click", onClick);
   describeSelection();
+  if (state.pendingFocus) {
+    stage.querySelector("rect.selected")?.scrollIntoView({ block: "center", inline: "center" });
+    state.pendingFocus = null;
+  }
 }
 
 function rebuild() {
@@ -178,11 +241,11 @@ function scheduleSave() {
   saveTimer = setTimeout(save, 400);
 }
 
-async function save() {
-  const response = await fetch(`/api/page/${encodeURIComponent(state.paperId)}/${state.pageNumber}`, {
+async function save(payload = state.page, paperId = state.paperId, pageNumber = state.pageNumber) {
+  const response = await fetch(`/api/page/${encodeURIComponent(paperId)}/${pageNumber}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(state.page)
+    body: JSON.stringify(payload)
   });
   if (!response.ok) {
     saveState.textContent = "保存失败";
@@ -364,10 +427,53 @@ document.querySelector("#import-file").addEventListener("change", async (event) 
   await save();
   await paint();
 });
+function nextUnreviewed(start) {
+  const keys = reviewedKeySet();
+  const units = state.reviewSet.units || [];
+  for (let index = start; index < units.length; index += 1) {
+    if (!keys.has(unitKey(units[index]))) return index;
+  }
+  return -1;
+}
+
+async function openUnit(index) {
+  const unit = state.reviewSet.units?.[index];
+  if (!unit) return;
+  state.mode = "units";
+  state.unitCursor = index;
+  await openPage(unit.paperId, unit.page, unit);
+}
+
+async function confirmUnit() {
+  const unit = state.reviewSet.units?.[state.unitCursor];
+  if (!unit || state.paperId !== unit.paperId || state.pageNumber !== unit.page) return;
+  if (!Array.isArray(state.page.reviewedUnitIds)) state.page.reviewedUnitIds = [];
+  if (!state.page.reviewedUnitIds.includes(unit.unitId)) state.page.reviewedUnitIds.push(unit.unitId);
+  const payload = state.page;
+  const paperId = state.paperId;
+  const pageNumber = state.pageNumber;
+  const next = nextUnreviewed(state.unitCursor + 1);
+  clearTimeout(saveTimer);
+  await save(payload, paperId, pageNumber);
+  if (next >= 0) await openUnit(next);
+}
+
+document.querySelector("#mode-units").addEventListener("click", () => {
+  state.mode = "units";
+  const index = state.unitCursor || 0;
+  openUnit(index);
+});
+document.querySelector("#mode-pages").addEventListener("click", () => {
+  state.mode = "pages";
+  renderQueue();
+});
+document.querySelector("#confirm-unit").addEventListener("click", confirmUnit);
+
 window.addEventListener("keydown", (event) => {
-  if (event.target.matches("input, textarea")) return;
+  if (event.target.matches("input, textarea, select")) return;
   const key = event.key.toLowerCase();
-  if (key === "1") relabel("formula");
+  if (key === "enter") confirmUnit();
+  else if (key === "1") relabel("formula");
   else if (key === "2") relabel("text");
   else if (key === "3") relabel("code");
   else if (key === "4") relabel("other");
@@ -376,6 +482,8 @@ window.addEventListener("keydown", (event) => {
   else if (key === "e") document.querySelector("#eq-toggle").click();
   else if (key === "m") merge();
   else if (key === "s") split();
+  else if (key === "j" && state.mode === "units") openUnit(Math.min((state.reviewSet.units?.length || 1) - 1, state.unitCursor + 1));
+  else if (key === "k" && state.mode === "units") openUnit(Math.max(0, state.unitCursor - 1));
   else if (key === "j") jumpUncertain(1);
   else if (key === "k") jumpUncertain(-1);
   else if (key === "n") openPage(state.paperId, Math.min(state.pdf.numPages, state.pageNumber + 1));

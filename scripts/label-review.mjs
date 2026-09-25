@@ -5,8 +5,9 @@
  *   node scripts/corpus-prelabel.mjs
  *   node scripts/label-review.mjs
  *
- * Then open the printed URL in Chrome. Progress is written to
- * labels/reviewed/ and is not committed.
+ * Then open the printed URL in Chrome. The default queue is
+ * labels/review-set.json. Confirmed units are stored in
+ * labels/reviewed/<paper>/page-NNN.json and can be committed.
  */
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -57,10 +58,17 @@ function loadPrelabelIndex() {
   prelabelIndex = { pages, formulaUnits };
 }
 
+function loadReviewSet() {
+  const path = join(root, "labels/review-set.json");
+  if (!existsSync(path)) return { units: [] };
+  return readJson(path);
+}
+
 function status() {
   if (!prelabelIndex) loadPrelabelIndex();
   const queue = [];
   let reviewedPages = 0;
+  const reviewedByPage = new Map();
   for (const entry of prelabelIndex.pages) {
     const reviewed = pagePath("labels/reviewed", entry.paperId, entry.page);
     let uncertain = entry.uncertain;
@@ -68,11 +76,26 @@ function status() {
       reviewedPages += 1;
       const data = readJson(reviewed);
       uncertain = (data.elements || []).filter((element) => Number(element.confidence) < 0.75).length;
+      reviewedByPage.set(`${entry.paperId}:${entry.page}`, data.reviewedUnitIds || []);
     }
     if (uncertain > 0) queue.push({ paperId: entry.paperId, page: entry.page, uncertain, field: entry.field });
   }
   queue.sort((a, b) => b.uncertain - a.uncertain || a.paperId.localeCompare(b.paperId) || a.page - b.page);
-  return { pages: prelabelIndex.pages.length, reviewedPages, formulaUnits: prelabelIndex.formulaUnits, queue };
+  const reviewSet = loadReviewSet();
+  const reviewedKeys = [];
+  for (const unit of reviewSet.units || []) {
+    const ids = reviewedByPage.get(`${unit.paperId}:${unit.page}`) || [];
+    if (ids.includes(unit.unitId)) reviewedKeys.push(`${unit.paperId}:${unit.page}:${unit.unitId}`);
+  }
+  return {
+    pages: prelabelIndex.pages.length,
+    reviewedPages,
+    formulaUnits: prelabelIndex.formulaUnits,
+    queue,
+    reviewTarget: (reviewSet.units || []).length,
+    reviewedUnits: reviewedKeys.length,
+    reviewedKeys
+  };
 }
 
 function send(response, statusCode, body, type = "application/json; charset=utf-8") {
@@ -111,6 +134,15 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === "/api/status" && request.method === "GET") {
       send(response, 200, JSON.stringify(status()));
+      return;
+    }
+    if (url.pathname === "/api/review-set" && request.method === "GET") {
+      const path = join(root, "labels/review-set.json");
+      if (!existsSync(path)) {
+        send(response, 404, JSON.stringify({ error: "还没有复核集。先运行 node scripts/review-set.mjs" }));
+        return;
+      }
+      send(response, 200, readFileSync(path));
       return;
     }
     const pageMatch = url.pathname.match(/^\/api\/page\/([^/]+)\/(\d+)$/);
