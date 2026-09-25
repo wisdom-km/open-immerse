@@ -92,3 +92,29 @@ test("formula blocks keep neighbor boxes for the mask and still gate glyph redra
   assert.ok(formula.glyphBoxes?.length >= 1);
   assert.ok(formula.maskBoxes?.length >= 1);
 });
+
+test("formula paths outside the glyph box survive the neighbor mask", () => {
+  const image = paper(200, 160);
+  const glyph = [0.3, 0.4, 0.55, 0.62];
+  const neighbor = [0.05, 0.02, 0.95, 0.16];
+  const stroke = (x0, x1, y) => {
+    for (let x = x0; x < x1; x += 1) ink(image, x, y);
+  };
+  stroke(40, 90, 12);
+  stroke(40, 170, 120);
+  stroke(50, 160, 40);
+  stroke(90, 140, 136);
+  const tilde = [[70, 108], [72, 106], [74, 108], [76, 106], [78, 108]];
+  for (const [x, y] of tilde) ink(image, x, y);
+  for (let y = 70; y < 90; y += 1) ink(image, 80, y);
+  blankFormulaMask(image, { maskBoxes: [neighbor], glyphBoxes: [glyph] });
+  const kept = (x0, x1, y) => {
+    for (let x = x0; x < x1; x += 1) assert.equal(dark(image, x, y), true, `${x},${y}`);
+  };
+  kept(40, 170, 120);
+  kept(50, 160, 40);
+  kept(90, 140, 136);
+  for (const [x, y] of tilde) assert.equal(dark(image, x, y), true, `tilde ${x},${y}`);
+  assert.equal(dark(image, 80, 80), true);
+  assert.equal(dark(image, 50, 12), false);
+});
