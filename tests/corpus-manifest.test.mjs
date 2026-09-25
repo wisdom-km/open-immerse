@@ -20,8 +20,15 @@ test("the corpus is six fields of five downloadable papers, including the two re
     assert.equal(/microsoft word/i.test(`${doc.producer} ${doc.creator}`), false);
     assert.ok(["publisher-typeset", "author-latex-journal", "author-latex-preprint"].includes(doc.sourceType));
   }
+  const publisherByField = new Map();
+  for (const doc of manifest.documents) {
+    if (doc.sourceType === "publisher-typeset") {
+      publisherByField.set(doc.field, (publisherByField.get(doc.field) || 0) + 1);
+    }
+  }
   for (const field of ["ai", "math", "physics", "qbio", "med", "econ"]) {
     assert.equal(counts.get(field), 5, field);
+    assert.ok(publisherByField.get(field) >= 3, `${field} publisher-typeset`);
   }
   const ids = new Set(manifest.documents.map((doc) => doc.id));
   assert.ok(ids.has("1706.03762"));

@@ -118,7 +118,7 @@ export async function runChecks({ force = false } = {}) {
 }
 
 function renderReport(manifest, rows) {
-  const headers = ["paper", "field", "source", "pages", "units", "A1 miss/solid", "A2 neighbours", "identity conflicts", "A3 exact", "A3 Jaccard", "A4 empty SVG", "prelabel fallback", "record ms/page", "build ms/page", "SVG kB/page"];
+  const headers = ["paper", "field", "source", "pages", "units", "A1 miss/solid", "A2 neighbours", "identity conflicts", "A3 exact", "A3 Jaccard", "empty SVG", "A4 fallback", "record ms/page", "build ms/page", "SVG kB/page"];
   const tableRows = rows.map((row) => [
     row.id,
     row.field,
@@ -161,9 +161,9 @@ function renderReport(manifest, rows) {
       rate(row.emptySvgs, row.baselineBlocks),
       rate(row.prelabelFallback, row.units)
     ]);
-    return `## ${title}\n\n${markdownTable(["group", "pages", "units", "A1 miss/solid", "A2", "identity conflicts", "A3 exact", "A3 Jaccard", "A4 empty", "prelabel fallback"], body)}\n`;
+    return `## ${title}\n\n${markdownTable(["group", "pages", "units", "A1 miss/solid", "A2", "identity conflicts", "A3 exact", "A3 Jaccard", "empty SVG", "A4 fallback"], body)}\n`;
   };
-  return `# M1 baseline\n\nThe selector is \`lib/formula-svg.js\` as carried from the M0 spike. It was not changed. Ground truth for this table is the pre-label set, not a finished human review. When \`labels/reviewed/\` has a page, that file is not substituted here yet; re-run after review if you want the reviewed numbers.\n\nA1 counts left-hand outline ink with no SVG ink within r = 1, over the whole pre-label unit crop. The reference render is pdf.js with font faces off, the same paint the recorder saw. A2 counts a selected element whose label is not \`formula\`. A3 is exact element-set equality against pre-label units, plus mean Jaccard. A4 is the share of text-layer formula blocks whose SVG is empty. Prelabel fallback is the share of units whose confidence is below 0.65; that is the review queue, not the selector.\n\nIdentity conflicts are paints that matched two labels at once and were not given a character.\n\n${markdownTable(headers, tableRows)}\n\n${groupTable("By field", groups[0][1])}\n${groupTable("By source type", groups[1][1])}\n`;
+  return `# M1 baseline\n\nThe selector is \`lib/formula-svg.js\` as carried from the M0 spike. It was not changed. These numbers are measured against the unreviewed pre-labels in \`labels/prelabel/\`. Reviewed JSON under \`labels/reviewed/\` is not substituted.\n\nA1 counts left-hand outline ink with no SVG ink within r = 1, over the whole pre-label unit crop. The reference render is pdf.js with font faces off, the same paint the recorder saw. A2 counts a selected element whose label is not \`formula\`. A3 is exact element-set equality against pre-label units, plus mean Jaccard. Empty SVG is the share of text-layer formula blocks whose SVG is empty. A4 fallback is the share of pre-label formula units whose confidence is below 0.65. Those are different columns.\n\nIdentity conflicts are paints that matched two labels at once and were not given a character.\n\n${markdownTable(headers, tableRows)}\n\n${groupTable("By field", groups[0][1])}\n${groupTable("By source type", groups[1][1])}\n`;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
