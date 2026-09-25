@@ -72,6 +72,7 @@ import {
 import {
   PDF_PAPER_GUTTER_X,
   pagesInTranslateScope,
+  basePageBox,
   paperAvailWidth,
   paperCssPx,
   readoutPaperSize
@@ -94,6 +95,7 @@ import {
   displayCropColumnFraction,
   displayFormulaWidthCss,
   blockRenderPieces,
+  cropBlockCanvas,
   cropBlockImage,
   isTranslatableBlock,
   isVisualBlock,
@@ -115,12 +117,13 @@ import {
   resolveLayoutMode,
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
-import { measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { INLINE_BODY_HARD_MAX, displayFormulaMinEm, matchedDisplayCssSize } from "../lib/pdf-formula-size.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   assetLayoutCapPx,
   createFormulaRasterCache,
+  formulaDevicePixels,
   formulaRasterCacheKey,
   formulaRasterPlan,
   isSourceRedrawBlock,
@@ -877,7 +880,9 @@ function formulaInkBbox(canvas, block) {
     if (!image) return bbox;
     const measured = measureFormulaCrop(bbox, image, {
       inline: block.display === false || Boolean(block.inlineOf),
-      protect: block.formulaInkProtect === true
+      protect: block.formulaInkProtect === true,
+      maskBoxes: block.maskBoxes,
+      glyphBoxes: block.glyphBoxes
     });
     if (measured?.inkShare) block.inkShare = measured.inkShare;
     return measured?.bbox || bbox;
@@ -892,19 +897,64 @@ function imageForVisualBlock(raster, block) {
     if (drawn) return drawn;
   }
   if (block?.label === "formula") block.bbox = formulaInkBbox(raster?.canvas, block);
-  return cropBlockImage(raster?.canvas, block?.bbox);
+  return cropFormulaImage(raster?.canvas, block);
+}
+
+function cropFormulaImage(canvas, block) {
+  if (block?.label !== "formula" || !block.maskBoxes?.length) return cropBlockImage(canvas, block?.bbox);
+  const out = cropBlockCanvas(canvas, block?.bbox);
+  if (!out) return "";
+  paintFormulaMask(out, block.bbox, block);
+  try {
+    const url = out.toDataURL("image/png");
+    out.width = 0;
+    out.height = 0;
+    return /^data:image\/png;base64,/.test(url) ? url : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Grayscale AA. An opaque canvas makes Chrome use LCD subpixel text. */
+function formulaDrawContext(canvas) {
+  return canvas.getContext("2d");
+}
+
+function compositeWhitePaper(context, canvas) {
+  if (!context || !canvas) return;
+  const previous = context.globalCompositeOperation;
+  context.globalCompositeOperation = "destination-over";
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.globalCompositeOperation = previous || "source-over";
+}
+
+function paintFormulaMask(canvas, crop, block) {
+  if (!canvas || block?.label !== "formula" || !block.maskBoxes?.length) return false;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || typeof ctx.getImageData !== "function") return false;
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  blankFormulaMask(image, {
+    maskBoxes: boxesInCrop(block.maskBoxes, crop),
+    glyphBoxes: boxesInCrop(block.glyphBoxes, crop),
+    seedBoxes: boxesInCrop(block.seedBoxes, crop)
+  });
+  ctx.putImageData(image, 0, 0);
+  return true;
 }
 
 const formulaRasterCache = createFormulaRasterCache();
 
 function formulaPaneMetrics(pageNumber, unitViewport) {
-  const left = leftPageBox(pageNumber);
   const unitW = Number(unitViewport?.width) || 0;
   const unitH = Number(unitViewport?.height) || 0;
-  const zoomedW = Math.floor(unitW * (Number(zoom) || 1));
+  const scale = Number(zoom) > 0 ? Number(zoom) : 1;
+  const zoomedW = Math.floor(unitW * scale);
   const zoomedH = unitW > 0 ? zoomedW * (unitH / unitW) : 0;
-  const leftWidth = left?.width || zoomedW;
-  const leftHeight = left?.height || zoomedH;
+  const fallback = basePageBox({ width: zoomedW, height: zoomedH }, scale);
+  const left = leftBaseBox(pageNumber) || fallback;
+  const leftWidth = left?.width || 0;
+  const leftHeight = left?.height || 0;
   const scroll = translateScrollRoot();
   const avail = paperAvailWidth(scroll?.clientWidth || 0);
   const paper = readoutPaperSize({ leftWidth, leftHeight, availWidth: avail });
@@ -940,17 +990,27 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     rasterHeight: raster?.pixelHeight
   });
   if (!css) return "";
-  const plan = formulaRasterPlan({
-    bbox: block.bbox,
-    pageWidth: metrics.pageWidth,
-    pageHeight: metrics.pageHeight,
-    rasterWidth: raster?.pixelWidth,
-    rasterHeight: raster?.pixelHeight,
-    cssWidth: css.cssWidth,
-    cssHeight: css.cssHeight,
-    devicePixelRatio: metrics.devicePixelRatio
-  });
-  if (plan.reusePageRaster) return "";
+  const formula = block.label === "formula";
+  const plan = formula
+    ? formulaDevicePixels({
+      cssWidth: css.cssWidth / metrics.mirrorZoom,
+      cssHeight: css.cssHeight / metrics.mirrorZoom,
+      pdfWidth: css.pdfWidth,
+      pdfHeight: css.pdfHeight,
+      mirrorZoom: metrics.mirrorZoom,
+      devicePixelRatio: metrics.devicePixelRatio
+    })
+    : formulaRasterPlan({
+      bbox: block.bbox,
+      pageWidth: metrics.pageWidth,
+      pageHeight: metrics.pageHeight,
+      rasterWidth: raster?.pixelWidth,
+      rasterHeight: raster?.pixelHeight,
+      cssWidth: css.cssWidth,
+      cssHeight: css.cssHeight,
+      devicePixelRatio: metrics.devicePixelRatio
+    });
+  if (!plan || (!formula && plan.reusePageRaster)) return "";
   const key = formulaRasterCacheKey({
     docId,
     page: pageNumber,
@@ -965,8 +1025,12 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     const full = page.getViewport({ scale: plan.scale });
     const rasterW = Number(raster?.pixelWidth) || 0;
     const rasterH = Number(raster?.pixelHeight) || 0;
-    const originX = rasterW > 0 ? (plan.offsetX / plan.multiplier) / rasterW : 0;
-    const originY = rasterH > 0 ? (plan.offsetY / plan.multiplier) / rasterH : 0;
+    const originX = formula
+      ? Number(block.bbox[0]) || 0
+      : (rasterW > 0 ? (plan.offsetX / plan.multiplier) / rasterW : 0);
+    const originY = formula
+      ? Number(block.bbox[1]) || 0
+      : (rasterH > 0 ? (plan.offsetY / plan.multiplier) / rasterH : 0);
     const viewport = page.getViewport({
       scale: plan.scale,
       offsetX: -originX * full.width,
@@ -975,9 +1039,11 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     const canvas = document.createElement("canvas");
     canvas.width = plan.pixelWidth;
     canvas.height = plan.pixelHeight;
-    const context = canvas.getContext("2d", { alpha: false });
+    const context = formula ? formulaDrawContext(canvas) : canvas.getContext("2d", { alpha: false });
     if (!context) return "";
     await page.render({ canvasContext: context, viewport }).promise;
+    if (formula) compositeWhitePaper(context, canvas);
+    paintFormulaMask(canvas, block.bbox, block);
     const url = canvas.toDataURL("image/png");
     canvas.width = 0;
     canvas.height = 0;
@@ -1331,6 +1397,11 @@ function leftPageBox(page) {
   return null;
 }
 
+/** Unscaled left page box. Right-pane paper uses this, not the zoomed CSS box. */
+function leftBaseBox(page) {
+  return basePageBox(leftPageBox(page), zoom);
+}
+
 function stampBodyFont(layout, items, viewport) {
   if (!layout) return layout;
   const described = describeBodyFont(items, {
@@ -1346,15 +1417,32 @@ function stampBodyFont(layout, items, viewport) {
 
 function paperHeightFor(pageNumber) {
   const layout = getPageLayout(pageNumber);
-  const left = leftPageBox(pageNumber);
   const pageW = Number(layout?.pageWidth) || 0;
   const pageH = Number(layout?.pageHeight) || 0;
-  const leftW = left?.width || (pageW > 0 ? pageW * (Number(zoom) || 1) : 0);
-  const leftH = left?.height || (pageW > 0 && pageH > 0 && leftW > 0 ? leftW * (pageH / pageW) : 0);
+  const scale = Number(zoom) > 0 ? Number(zoom) : 1;
+  const zoomedW = pageW > 0 ? pageW * scale : 0;
+  const zoomedH = pageW > 0 && pageH > 0 && zoomedW > 0 ? zoomedW * (pageH / pageW) : 0;
+  const fallback = basePageBox({ width: zoomedW, height: zoomedH }, scale);
+  const left = leftBaseBox(pageNumber) || fallback;
+  const leftW = left?.width || 0;
+  const leftH = left?.height || 0;
   const scroll = translateScrollRoot();
   const avail = paperAvailWidth(scroll?.clientWidth || 0, PDF_PAPER_GUTTER_X);
   const paper = readoutPaperSize({ leftWidth: leftW, leftHeight: leftH, availWidth: avail });
   return paper.heightBase > 0 ? paper.heightBase : leftH;
+}
+
+function snappedFormulaBox(matched) {
+  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+  const zoom = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
+  return formulaDevicePixels({
+    cssWidth: matched.cssWidth,
+    cssHeight: matched.cssHeight,
+    pdfWidth: matched.cssWidth,
+    pdfHeight: matched.cssHeight,
+    mirrorZoom: zoom,
+    devicePixelRatio: dpr
+  });
 }
 
 function matchedFormulaStyle(block, page) {
@@ -1367,9 +1455,12 @@ function matchedFormulaStyle(block, page) {
     paperHeight
   });
   if (!matched) return null;
+  const snapped = snappedFormulaBox(matched) || matched;
+  const height = snapped.cssHeight;
+  const width = snapped.cssWidth > 0 ? snapped.cssWidth : matched.cssWidth;
   return {
-    height: paperCssPx(matched.cssHeight),
-    aspect: String(Math.round(matched.aspect * 10000) / 10000)
+    height: paperCssPx(height),
+    aspect: String(Math.round((width / height) * 10000) / 10000)
   };
 }
 
@@ -1397,7 +1488,11 @@ function refreshMatchedFormulas(paper, paperHeight) {
       paperHeight
     });
     if (!matched) return;
-    row.style.setProperty("--oi-formula-h", paperCssPx(matched.cssHeight));
+    const snapped = snappedFormulaBox(matched);
+    row.style.setProperty("--oi-formula-h", paperCssPx(snapped?.cssHeight || matched.cssHeight));
+    if (snapped?.cssWidth > 0 && snapped.cssHeight > 0) {
+      row.style.setProperty("--oi-formula-ar", String(Math.round((snapped.cssWidth / snapped.cssHeight) * 10000) / 10000));
+    }
   });
   paper.querySelectorAll(".oi-pdf-inline-math.is-matched").forEach((span) => {
     const block = (layout?.blocks || []).find((item) => item.id === span.dataset.blockId);
@@ -1408,7 +1503,8 @@ function refreshMatchedFormulas(paper, paperHeight) {
       paperHeight
     });
     if (!matched) return;
-    span.style.setProperty("--oi-formula-h", paperCssPx(matched.cssHeight));
+    const snapped = snappedFormulaBox(matched);
+    span.style.setProperty("--oi-formula-h", paperCssPx(snapped?.cssHeight || matched.cssHeight));
   });
 }
 
@@ -1418,7 +1514,7 @@ function applyPaperMetrics() {
   if (!stack || !scroll) return;
   const avail = paperAvailWidth(scroll.clientWidth, PDF_PAPER_GUTTER_X);
   stack.querySelectorAll(".readout-paper").forEach((paper) => {
-    const left = leftPageBox(paper.dataset.page);
+    const left = leftBaseBox(paper.dataset.page);
     if (!left) return;
     const size = readoutPaperSize({
       leftWidth: left.width,
@@ -1432,6 +1528,7 @@ function applyPaperMetrics() {
     applyBodyFont(paper, size.width);
     refreshMatchedFormulas(paper, size.heightBase);
   });
+  refreshFormulaCropsForDisplay();
 }
 
 function bindPaperMetrics() {
@@ -2562,8 +2659,9 @@ async function renderPageRaster(page) {
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.floor(viewport.width));
   canvas.height = Math.max(1, Math.floor(viewport.height));
-  const context = canvas.getContext("2d", { alpha: false });
+  const context = formulaDrawContext(canvas);
   await page.render({ canvasContext: context, viewport }).promise;
+  compositeWhitePaper(context, canvas);
   return { canvas, pixelWidth: canvas.width, pixelHeight: canvas.height };
 }
 
@@ -2884,7 +2982,8 @@ function formulaCropPlanKeyNow() {
   const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
   const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
   const left = Number(zoom) > 0 ? Number(zoom) : 1;
-  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}`;
+  const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0);
+  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}`;
 }
 
 function noteFormulaCropPlan(layout) {

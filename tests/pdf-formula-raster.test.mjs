@@ -11,6 +11,7 @@ import {
   assetLayoutCapPx,
   capFormulaRasterScale,
   createFormulaRasterCache,
+  formulaDevicePixels,
   formulaDisplayCssSize,
   formulaInkMeasureOptions,
   formulaInkPadPx,
@@ -335,8 +336,54 @@ test("viewer sharpens formula crops with a viewport offset and leaves the page r
   const imageFn = viewerSrc.slice(viewerSrc.indexOf("function imageForVisualBlock"));
   const drawnAt = imageFn.indexOf("if (drawn) return drawn");
   const trimAt = imageFn.indexOf("formulaInkBbox");
-  const cropAt = imageFn.indexOf("return cropBlockImage");
+  const cropAt = imageFn.indexOf("return cropFormulaImage");
   assert.ok(drawnAt >= 0 && trimAt > drawnAt && cropAt > trimAt);
+});
+
+test("formula redraw is one device pixel per CSS pixel and does not reuse the page raster", () => {
+  const cssH = 30.2;
+  const cssW = 120.8;
+  const pdfH = 18.4;
+  const pdfW = cssW * (pdfH / cssH);
+  const zoom = 1.5;
+  const dpr = 1.25;
+  const plan = formulaDevicePixels({
+    cssWidth: cssW,
+    cssHeight: cssH,
+    pdfWidth: pdfW,
+    pdfHeight: pdfH,
+    mirrorZoom: zoom,
+    devicePixelRatio: dpr
+  });
+  const target = Math.round(cssH * zoom * dpr);
+  assert.equal(plan.reusePageRaster, false);
+  assert.equal(plan.targetPx, target);
+  assert.equal(plan.pixelHeight, target);
+  assert.ok(Math.abs(plan.scale - target / pdfH) < 1e-9);
+  assert.notEqual(plan.scale % 1, 0);
+  assert.equal(plan.pixelWidth, Math.round(pdfW * plan.scale));
+  assert.ok(Math.abs(plan.cssHeight * zoom * dpr - plan.pixelHeight) < 1e-9);
+  assert.ok(Math.abs(plan.cssWidth * zoom * dpr - plan.pixelWidth) < 1e-9);
+  assert.ok(Math.abs(plan.cssHeight * zoom * dpr - cssH * zoom * dpr) <= 1);
+  const covered = formulaRasterPlan({
+    bbox: [0, 0, 1, 1],
+    pageWidth: 100,
+    pageHeight: 80,
+    rasterWidth: 400,
+    rasterHeight: 320,
+    cssWidth: 150,
+    cssHeight: 120,
+    devicePixelRatio: 2
+  });
+  assert.equal(covered.reusePageRaster, true);
+  assert.match(viewerSrc, /formulaDevicePixels/);
+  assert.match(viewerSrc, /block\.label === "formula"/);
+  assert.match(viewerSrc, /paintFormulaMask/);
+  assert.match(viewerSrc, /function formulaDrawContext/);
+  assert.match(viewerSrc, /destination-over/);
+  const sharp = viewerSrc.slice(viewerSrc.indexOf("async function renderSharpVisualCrop"), viewerSrc.indexOf("async function renderSharpFormulaCrop"));
+  assert.match(sharp, /formula \? formulaDrawContext\(canvas\) : canvas\.getContext\("2d", \{ alpha: false \}\)/);
+  assert.match(sharp, /if \(formula\) compositeWhitePaper/);
 });
 
 test("raster plan covers css times devicePixelRatio times slack", () => {
