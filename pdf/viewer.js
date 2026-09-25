@@ -996,6 +996,9 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
       cssHeight: css.cssHeight / metrics.mirrorZoom,
       pdfWidth: css.pdfWidth,
       pdfHeight: css.pdfHeight,
+      bbox: block.bbox,
+      pageWidth: metrics.pageWidth,
+      pageHeight: metrics.pageHeight,
       mirrorZoom: metrics.mirrorZoom,
       devicePixelRatio: metrics.devicePixelRatio
     })
@@ -1032,8 +1035,8 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
       : (rasterH > 0 ? (plan.offsetY / plan.multiplier) / rasterH : 0);
     const viewport = page.getViewport({
       scale: plan.scale,
-      offsetX: -originX * full.width,
-      offsetY: -originY * full.height
+      offsetX: formula && Number.isFinite(plan.offsetX) ? -plan.offsetX : -originX * full.width,
+      offsetY: formula && Number.isFinite(plan.offsetY) ? -plan.offsetY : -originY * full.height
     });
     const canvas = document.createElement("canvas");
     canvas.width = plan.pixelWidth;
@@ -1431,14 +1434,22 @@ function paperHeightFor(pageNumber) {
   return paper.heightBase > 0 ? paper.heightBase : leftH;
 }
 
-function snappedFormulaBox(matched) {
+function snappedFormulaBox(matched, frame) {
   const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
   const zoom = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
+  const pageW = Number(frame?.pageWidth) || 0;
+  const pageH = Number(frame?.pageHeight) || 0;
+  const box = frame?.bbox;
+  const pdfW = Array.isArray(box) && pageW > 0 ? (Number(box[2]) - Number(box[0])) * pageW : 0;
+  const pdfH = Array.isArray(box) && pageH > 0 ? (Number(box[3]) - Number(box[1])) * pageH : 0;
   return formulaDevicePixels({
     cssWidth: matched.cssWidth,
     cssHeight: matched.cssHeight,
-    pdfWidth: matched.cssWidth,
-    pdfHeight: matched.cssHeight,
+    pdfWidth: pdfW > 0 ? pdfW : matched.cssWidth,
+    pdfHeight: pdfH > 0 ? pdfH : matched.cssHeight,
+    bbox: pdfW > 0 && pdfH > 0 ? box : undefined,
+    pageWidth: pdfW > 0 && pdfH > 0 ? pageW : undefined,
+    pageHeight: pdfW > 0 && pdfH > 0 ? pageH : undefined,
     mirrorZoom: zoom,
     devicePixelRatio: dpr
   });
@@ -1454,7 +1465,11 @@ function matchedFormulaStyle(block, page) {
     paperHeight
   });
   if (!matched) return null;
-  const snapped = snappedFormulaBox(matched) || matched;
+  const snapped = snappedFormulaBox(matched, {
+    bbox: block?.bbox,
+    pageWidth: layout?.pageWidth,
+    pageHeight: layout?.pageHeight
+  }) || matched;
   const height = snapped.cssHeight;
   const width = snapped.cssWidth > 0 ? snapped.cssWidth : matched.cssWidth;
   return {
@@ -1487,7 +1502,11 @@ function refreshMatchedFormulas(paper, paperHeight) {
       paperHeight
     });
     if (!matched) return;
-    const snapped = snappedFormulaBox(matched);
+    const snapped = snappedFormulaBox(matched, {
+      bbox: block?.bbox,
+      pageWidth: layout?.pageWidth,
+      pageHeight: layout?.pageHeight
+    });
     row.style.setProperty("--oi-formula-h", paperCssPx(snapped?.cssHeight || matched.cssHeight));
     if (snapped?.cssWidth > 0 && snapped.cssHeight > 0) {
       row.style.setProperty("--oi-formula-ar", String(Math.round((snapped.cssWidth / snapped.cssHeight) * 10000) / 10000));
@@ -1502,7 +1521,11 @@ function refreshMatchedFormulas(paper, paperHeight) {
       paperHeight
     });
     if (!matched) return;
-    const snapped = snappedFormulaBox(matched);
+    const snapped = snappedFormulaBox(matched, {
+      bbox: block?.bbox,
+      pageWidth: layout?.pageWidth,
+      pageHeight: layout?.pageHeight
+    });
     span.style.setProperty("--oi-formula-h", paperCssPx(snapped?.cssHeight || matched.cssHeight));
   });
 }

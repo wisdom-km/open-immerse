@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { formulaDevicePixels } from "../lib/pdf-formula-raster.js";
 import {
+  FORMULA_GLYPH_DESCENT_PAD,
   FORMULA_GLYPH_SCAN_PAD,
   blankFormulaMask,
   formulaPixelMasked,
@@ -117,4 +119,40 @@ test("formula paths outside the glyph box survive the neighbor mask", () => {
   for (const [x, y] of tilde) assert.equal(dark(image, x, y), true, `tilde ${x},${y}`);
   assert.equal(dark(image, 80, 80), true);
   assert.equal(dark(image, 50, 12), false);
+});
+
+test("a radical tip below the glyph box stays in the crop at 100%, 150%, and 200%", () => {
+  assert.ok(FORMULA_GLYPH_DESCENT_PAD > FORMULA_GLYPH_SCAN_PAD.y);
+  const width = 612;
+  const height = 1000;
+  const image = paper(width, height);
+  const glyph = [0.2, 0.4, 0.6, 0.5];
+  const bbox = [0.12, 0.36, 0.8, 0.7];
+  const tipY = Math.floor((glyph[3] + FORMULA_GLYPH_SCAN_PAD.y) * height) + 2;
+  assert.ok(tipY / height < glyph[3] + FORMULA_GLYPH_DESCENT_PAD);
+  for (let x = 180; x < 200; x += 1) ink(image, x, tipY);
+  const above = Math.floor((glyph[1] - FORMULA_GLYPH_DESCENT_PAD) * height);
+  for (let x = 180; x < 200; x += 1) ink(image, x, above);
+  const measured = measureFormulaCrop(bbox, image, { glyphBoxes: [glyph] });
+  assert.ok(measured.bbox[3] > (tipY + 0.5) / height, "tip row is inside the crop");
+  assert.ok(measured.bbox[1] > above / height, "the extra pad does not reach upward");
+  const pdfH = (measured.bbox[3] - measured.bbox[1]) * height;
+  const pdfW = (measured.bbox[2] - measured.bbox[0]) * width;
+  for (const zoom of [1, 1.5, 2]) {
+    const plan = formulaDevicePixels({
+      cssWidth: pdfW,
+      cssHeight: pdfH,
+      pdfWidth: pdfW,
+      pdfHeight: pdfH,
+      bbox: measured.bbox,
+      pageWidth: width,
+      pageHeight: height,
+      mirrorZoom: zoom,
+      devicePixelRatio: 1
+    });
+    const tipDeviceY = ((tipY + 0.5) / height) * height * plan.scale - plan.offsetY;
+    assert.ok(tipDeviceY >= 0 && tipDeviceY < plan.pixelHeight, `tip kept at ${zoom}`);
+    assert.ok(Math.abs(plan.cssHeight * zoom - plan.pixelHeight) < 1e-6);
+    assert.ok(Math.abs(plan.cssWidth * zoom - plan.pixelWidth) < 1e-6);
+  }
 });

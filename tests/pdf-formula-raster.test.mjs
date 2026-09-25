@@ -327,8 +327,10 @@ test("viewer sharpens formula crops with a viewport offset and leaves the page r
   assert.match(viewerSrc, /scale: CROP_SCALE/);
   assert.match(viewerSrc, /formulaRasterPlan/);
   assert.match(viewerSrc, /rasterWidth: raster\?\.pixelWidth/);
-  assert.match(viewerSrc, /offsetX: -originX \* full\.width/);
-  assert.match(viewerSrc, /offsetY: -originY \* full\.height/);
+  assert.match(viewerSrc, /-originX \* full\.width/);
+  assert.match(viewerSrc, /-originY \* full\.height/);
+  assert.match(viewerSrc, /plan\.offsetX/);
+  assert.match(viewerSrc, /plan\.offsetY/);
   assert.match(viewerSrc, /displayFormulaWidthCss\(pageFraction/);
   assert.match(viewerSrc, /matchedFormulaStyle\(formula, layout\?\.page \?\? node\.dataset\.page\)/);
   assert.doesNotMatch(viewerSrc, /classList\.add\("is-promoted"\)/);
