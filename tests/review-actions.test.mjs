@@ -808,34 +808,88 @@ test("extension glyphs pair with the ink below and ignore the box inside", () =>
   const pairs = extensionDelimiterPairs([brace, ink, tiny, farther, symbols, paintedPath]);
   assert.equal(pairs.length, 1);
   assert.equal(pairs[0].glyphId, "brace");
-  assert.equal(pairs[0].inkId, "ink");
+  assert.deepEqual(pairs[0].inkIds, ["ink", "farther"]);
+  assert.equal(pairs[0].inkIds.includes("tiny"), false);
   assert.deepEqual(pairs[0].bbox.map((value) => Math.round(value * 100) / 100), [177.52, 155.66, 188.63, 191.91]);
-  const ids = pairs.flatMap((pair) => [pair.glyphId, pair.inkId]);
+  const ids = pairs.flatMap((pair) => [pair.glyphId, ...pair.inkIds]);
   assert.equal(new Set(ids).size, ids.length);
+  const onlyParen = glyph(")", [194.79, 155.66, 199.31, 164.83], {
+    id: "paren",
+    font: "Fourier-Math-Extension",
+    label: "formula",
+    unitId: "u-eq",
+    unitType: "inline"
+  });
+  const parenInk = glyph("", [195.25, 164.56, 198.12, 191.87], { id: "paren-ink", font: "", label: "text", source: "unbound-paint" });
+  const parenExtra = glyph("", [196.4, 164.6, 198.9, 191.9], { id: "paren-extra", font: "", label: "text", source: "unbound-paint" });
+  const oneSlot = extensionDelimiterPairs([onlyParen, parenInk, parenExtra]);
+  assert.equal(oneSlot.length, 1);
+  assert.equal(oneSlot[0].inkIds.length, 1);
 
   const cr = JSON.parse(readFileSync(new URL("../labels/prelabel/crmath-64/page-005.json", import.meta.url), "utf8"));
   const crPairs = extensionDelimiterPairs(cr.elements);
-  const crInk = new Map(crPairs.map((pair) => [pair.glyphId, pair.inkId]));
-  assert.equal(crInk.get("e25ce4faa62374675"), "e0448a8642b781e0d");
-  assert.equal(crInk.get("e907e3ababfca8a6a"), "ef0af246d7975657b");
-  assert.equal(crInk.get("ee7a7487b33dd7257"), "e99832899dc5cd27d");
-  assert.equal(crInk.get("ee4555cd760a81ff9"), "e6e27d2e248a55194");
-  assert.equal([...crInk.values()].includes("eaae12e455d302d3f"), false);
-  assert.notEqual(crInk.get("e25ce4faa62374675"), "eb833ef31c1d52903");
+  const crInk = new Map(crPairs.map((pair) => [pair.glyphId, pair.inkIds]));
+  assert.deepEqual(crInk.get("e25ce4faa62374675"), ["e0448a8642b781e0d", "eb833ef31c1d52903"]);
+  assert.deepEqual(crInk.get("e907e3ababfca8a6a"), ["ef0af246d7975657b"]);
+  assert.deepEqual(crInk.get("ee7a7487b33dd7257"), ["e99832899dc5cd27d"]);
+  assert.deepEqual(crInk.get("ee4555cd760a81ff9"), ["e6e27d2e248a55194"]);
+  assert.equal(crPairs.some((pair) => pair.inkIds.includes("eaae12e455d302d3f")), false);
 
   const arxiv = JSON.parse(readFileSync(new URL("../labels/prelabel/2006.11239/page-002.json", import.meta.url), "utf8"));
-  const arxivInk = new Map(extensionDelimiterPairs(arxiv.elements).map((pair) => [pair.glyphId, pair.inkId]));
-  assert.equal(arxivInk.get("ea5c3b6f6d0f752a8"), "ee44bf55eb920979a");
-  assert.equal(arxivInk.get("eb17055b427a63e74"), "e3bdf6e7fb9ba5755");
-  assert.equal(arxivInk.get("e34429737bb4d31b9"), "e752b0bd9a00095b1");
-  assert.equal(arxivInk.get("ea35c268111d01425"), "e8580da14d84458e9");
-  assert.equal(arxivInk.get("e5819031f18367c66"), "eae5ad76e83bfffd0");
+  const arxivInk = new Map(extensionDelimiterPairs(arxiv.elements).map((pair) => [pair.glyphId, pair.inkIds]));
+  assert.deepEqual(arxivInk.get("ea5c3b6f6d0f752a8"), ["ee44bf55eb920979a"]);
+  assert.deepEqual(arxivInk.get("eb17055b427a63e74"), ["e3bdf6e7fb9ba5755"]);
+  assert.deepEqual(arxivInk.get("e34429737bb4d31b9"), ["e752b0bd9a00095b1"]);
+  assert.deepEqual(arxivInk.get("ea35c268111d01425"), ["e8580da14d84458e9"]);
+  assert.deepEqual(arxivInk.get("e5819031f18367c66"), ["eae5ad76e83bfffd0"]);
   const used = new Set();
   for (const pair of extensionDelimiterPairs(arxiv.elements)) {
-    assert.equal(used.has(pair.glyphId) || used.has(pair.inkId), false);
+    assert.equal(used.has(pair.glyphId), false);
     used.add(pair.glyphId);
-    used.add(pair.inkId);
+    for (const inkId of pair.inkIds) {
+      assert.equal(used.has(inkId), false);
+      used.add(inkId);
+    }
   }
+});
+
+test("a two-delimiter glyph keeps both inks in one box", () => {
+  const cr = JSON.parse(readFileSync(new URL("../labels/prelabel/crmath-64/page-005.json", import.meta.url), "utf8"));
+  const groups = extensionDelimiterPairs(cr.elements);
+  const expected = [
+    { char: "{(", x: 177.5, y: 155.7, inks: [[178.4, 164.5, 182.6, 191.9], [185.3, 164.6, 188.2, 191.9]] },
+    { char: "{(", x: 249, y: 233, inks: [[249.7, 241.6, 253.8, 269], [256.6, 241.7, 259.4, 269]] },
+    { char: "{(", x: 309, y: 276, inks: [[309.7, 284.9, 312.5, 295.8], [314.1, 284.9, 316.3, 295.9]] },
+    { char: ")}", x: 365, y: 276, inks: [[365.6, 284.9, 367.8, 295.9], [369.4, 284.9, 372.2, 295.8]] }
+  ];
+  for (const spec of expected) {
+    const glyph = cr.elements.find((element) => element.char === spec.char
+      && /Extension/i.test(element.font || "")
+      && Math.abs(element.bbox[0] - spec.x) < 1.5
+      && Math.abs(element.bbox[1] - spec.y) < 1.5);
+    const group = groups.find((pair) => pair.glyphId === glyph.id);
+    assert.equal(group.inkIds.length, spec.inks.length, spec.char);
+    const inkBoxes = group.inkIds.map((id) => cr.elements.find((element) => element.id === id).bbox);
+    for (const ink of spec.inks) {
+      assert.equal(inkBoxes.some((box) => ink.every((value, index) => Math.abs(box[index] - value) < 0.6)), true, `${spec.char} ${ink.join(",")}`);
+    }
+    const marks = reviewMarkBoxes(cr.elements.filter((element) => element.id === glyph.id || group.inkIds.includes(element.id)));
+    assert.equal(marks.length, 1);
+    assert.equal(marks[0].id, glyph.id);
+    assert.equal(marks[0].bbox[1], Math.min(glyph.bbox[1], ...inkBoxes.map((box) => box[1])));
+    assert.equal(marks[0].bbox[3], Math.max(glyph.bbox[3], ...inkBoxes.map((box) => box[3])));
+    assert.deepEqual(expandPairIds(cr.elements, [group.inkIds[1]]).sort(), [glyph.id, ...group.inkIds].sort());
+  }
+  const sample = [
+    glyph("{(", [177.52, 155.66, 188.63, 164.83], { id: "g", font: "Fourier-Math-Extension", label: "formula", unitId: "u", unitType: "inline" }),
+    glyph("", [178.43, 164.53, 182.55, 191.91], { id: "brace-ink", font: "", label: "text", source: "unbound-paint" }),
+    glyph("", [185.3, 164.56, 188.17, 191.87], { id: "paren-ink", font: "", label: "text", source: "unbound-paint" })
+  ];
+  const selected = expandPairIds(sample, ["paren-ink"]);
+  assert.deepEqual(selected.sort(), ["brace-ink", "g", "paren-ink"]);
+  applyMerge(sample, selected);
+  assert.equal(sample.every((element) => element.label === "formula" && element.unitId === sample[0].unitId), true);
+  assert.equal(sample.length, 3);
 });
 
 test("a delimiter pair is one box and one selection in every review action", () => {

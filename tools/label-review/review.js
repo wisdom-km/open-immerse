@@ -399,7 +399,7 @@ async function paint() {
     rect.setAttribute("width", Math.max(0.5, (x1 - x0) * state.scale));
     rect.setAttribute("height", Math.max(0.5, (y1 - y0) * state.scale));
     rect.dataset.id = element.id;
-    if (mark.paired) rect.dataset.pair = mark.inkId;
+    if (mark.paired) rect.dataset.pair = (mark.inkIds || []).join(",");
     const className = overlayClass({
       mode: unitMode ? "units" : "pages",
       elementId: element.id,
@@ -525,7 +525,7 @@ function appendInspectorGroups(model, nonFormula) {
   const paired = new Set();
   for (const pair of extensionDelimiterPairs(state.page?.elements || [])) {
     paired.add(pair.glyphId);
-    paired.add(pair.inkId);
+    for (const inkId of pair.inkIds || []) paired.add(inkId);
   }
   for (const group of model.groups) {
     const block = document.createElement("section");
