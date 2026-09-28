@@ -644,3 +644,62 @@ test("split peels a selected subset into one inline unit", () => {
   assert.match(docs, /每个符号单独是一个行内单元/);
   assert.match(docs, /按住 Alt 再拖/);
 });
+
+function srgbChannel(hex, offset) {
+  const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+  return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
+
+function contrastRatio(foreground, background) {
+  const luminance = (hex) => 0.2126 * srgbChannel(hex, 1) + 0.7152 * srgbChannel(hex, 3) + 0.0722 * srgbChannel(hex, 5);
+  const lighter = Math.max(luminance(foreground), luminance(background));
+  const darker = Math.min(luminance(foreground), luminance(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function cssBlock(css, selector) {
+  const blocks = css.match(/[^{}]+\{[^}]*\}/g) || [];
+  const block = blocks.find((entry) => entry.split("{")[0].split(",").some((part) => part.trim() === selector));
+  assert.ok(block, selector);
+  return block;
+}
+
+function cssHex(block, property) {
+  const match = block.match(new RegExp(`${property}\\s*:\\s*(#[0-9a-fA-F]{6})`));
+  assert.ok(match, property);
+  return match[1].toLowerCase();
+}
+
+test("queue items stay readable against their background", () => {
+  const css = readFileSync(new URL("../tools/label-review/review.css", import.meta.url), "utf8");
+  const review = readFileSync(new URL("../tools/label-review/review.js", import.meta.url), "utf8");
+  const pairs = [
+    ["#queue button", "color", "background"],
+    ["#queue button.reviewed", "color", "background"],
+    ["#queue button.current", "color", "background"]
+  ];
+  for (const [selector, foreground, background] of pairs) {
+    const block = cssBlock(css, selector);
+    const ratio = contrastRatio(cssHex(block, foreground), cssHex(block, background));
+    assert.equal(ratio >= 4.5, true, `${selector} contrast ${ratio}`);
+  }
+  assert.match(review, /已看 · /);
+  assert.match(review, /"reviewed"/);
+});
+
+test("merge keeps a trailing comma or period on a display equation", () => {
+  for (const mark of [",", "."]) {
+    assert.equal(isWideProseText({ label: "text", char: mark }), false);
+    const formula = formulaRow("eq", "x^2", "u-display", { bbox: [80, 400, 200, 424], unitType: "display" });
+    const punct = glyph(mark, [204, 410, 210, 422], { id: "punct", label: "text" });
+    const merged = applyMerge([formula, punct], ["eq", "punct"]);
+    assert.equal(merged.ok, true, mark);
+    assert.equal(punct.label, "formula");
+    assert.equal(punct.unitType, "display");
+    assert.equal(punct.unitId, formula.unitId);
+    assert.equal(merged.units.some((unit) => unit.type === "display" && unit.elementIds.includes("punct")), true);
+  }
+  const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
+  assert.match(docs, /行间公式同一行末尾的逗号或句号属于这个行间单元/);
+  assert.match(docs, /行内公式后面的逗号或句号是句子的标点/);
+});

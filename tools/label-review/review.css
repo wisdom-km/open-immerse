@@ -65,8 +65,22 @@ main { overflow: auto; min-height: 0; background: #d9d3c7; }
 }
 body.pdf-missing #confirm-unit:disabled,
 body.pdf-missing .actions button:disabled { opacity: 0.45; cursor: not-allowed; }
-#queue button { display: block; width: 100%; text-align: left; margin: 0 0 4px; border: 0; background: #f6f3ec; padding: 6px; cursor: pointer; }
-#queue button.current { background: #1f2a30; color: white; }
+#queue { color: #1a1a1a; }
+#queue select { color: #1a1a1a; background: #fff; }
+#queue button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 0 0 4px;
+  border: 0;
+  background: #f7f4ee;
+  color: #1a1a1a;
+  padding: 6px;
+  cursor: pointer;
+}
+#queue button.reviewed { background: #e5f2eb; color: #143d32; }
+#queue button.current,
+#queue button.reviewed.current { background: #1f2a30; color: #ffffff; }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .actions button { border: 1px solid #ccc; background: white; padding: 6px 8px; cursor: pointer; }
 #detail { margin: 8px 0 0; font-size: 12px; line-height: 1.35; }

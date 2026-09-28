@@ -145,9 +145,10 @@ function renderQueue() {
   for (let index = 0; index < units.length; index += 1) {
     const unit = units[index];
     const button = document.createElement("button");
-    const done = keys.has(unitKey(unit)) ? "已看 · " : "";
+    const reviewed = keys.has(unitKey(unit));
+    const done = reviewed ? "已看 · " : "";
     button.textContent = `${done}${unit.field} ${unit.paperId} 第 ${unit.page} 页 ${unit.type === "display" ? "行间" : "行内"} ${unit.confidence}`;
-    button.className = index === state.unitCursor ? "current" : "";
+    button.className = [index === state.unitCursor ? "current" : "", reviewed ? "reviewed" : ""].filter(Boolean).join(" ");
     button.addEventListener("click", () => openUnit(index));
     queue.append(button);
   }
