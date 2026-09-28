@@ -118,6 +118,22 @@ function glyph(char, bbox, extra = {}) {
   };
 }
 
+test("e refuses a selection that is not a line-end equation number and does not write", () => {
+  const elements = [
+    glyph("P", [0, 100, 10, 110], { id: "p", label: "formula", unitId: "u1", unitType: "display" }),
+    glyph("a", [12, 100, 20, 110], { id: "a", label: "formula", unitId: "u1", unitType: "display" }),
+    glyph("(2)", [80, 100, 100, 110], { id: "n", label: "text" })
+  ];
+  const refused = applyEquationNumber(elements, ["p", "a"]);
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /不像公式编号/);
+  assert.equal(elements.every((element) => element.equationNumber !== true), true);
+  assert.equal(elements.find((element) => element.id === "p").unitId, "u1");
+  const marked = applyEquationNumber(elements, ["n"]);
+  assert.equal(marked.ok, true);
+  assert.equal(elements.find((element) => element.id === "n").equationNumber, true);
+});
+
 test("merge keeps one element from becoming a silent no-op failure", () => {
   const elements = [
     glyph("x", [0, 0, 8, 10], { label: "formula", unitId: "u1", unitType: "inline", id: "a" })
@@ -1334,11 +1350,10 @@ test("a delimiter pair is one box and one selection in every review action", () 
     glyph("", [42, 40, 52, 58], { id: "op-ink", font: "", label: "formula", unitId: "u-num", unitType: "display", source: "unbound-paint" })
   ];
   const eq = planEquationNumber(numbered, expandPairIds(numbered, ["op"]));
-  assert.equal(eq.action, "toggle");
-  assert.deepEqual(eq.ids.sort(), ["op", "op-ink"]);
-  applyEquationNumber(numbered, eq.ids);
-  assert.equal(numbered.find((element) => element.id === "op").equationNumber, true);
-  assert.equal(numbered.find((element) => element.id === "op-ink").equationNumber, true);
+  assert.equal(eq.ok, false);
+  assert.match(eq.message, /不像公式编号/);
+  applyEquationNumber(numbered, expandPairIds(numbered, ["op"]));
+  assert.notEqual(numbered.find((element) => element.id === "op").equationNumber, true);
 
   const looseInk = glyph("", [42, 40, 52, 58], { id: "loose", font: "", label: "text", source: "unbound-paint" });
   const op = glyph("∑", [40, 30, 54, 40], { id: "op2", font: "CMEX10", label: "formula", unitId: "u-op", unitType: "inline" });

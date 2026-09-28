@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isMathSymbolFont, proseTextWords, selectionForReviewUnit } from "../lib/review-actions.js";
+import { equationNumberShape, isMathSymbolFont, pageColumnCut, proseTextWords, selectionForReviewUnit } from "../lib/review-actions.js";
 
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 
@@ -59,15 +59,17 @@ const MIN_GLYPHS_PER_LINE = 2;
 const SHORT_ATTACH_MAX_CHARS = 24;
 
 const RULES = [
+  ["R9", 1, "编号标记误用"],
   ["R8", 1, "公式和 units 对不上"],
   ["R1", 2, "公式单元里混进正文"],
   ["R4", 3, "看起来应是正文的公式"],
   ["R2", 4, "行间单元跨行"],
   ["R3", 5, "公式编号不在行间单元里"],
   ["R6", 6, "行间或行内类型不对"],
-  ["R5", 7, "紧贴公式却没合并"],
-  ["R7", 8, "标点归错了单元"],
-  ["R0", 9, "队列里还没确认"]
+  ["R10", 7, "同一行漏合了公式"],
+  ["R5", 8, "紧贴公式却没合并"],
+  ["R7", 9, "标点归错了单元"],
+  ["R0", 10, "队列里还没确认"]
 ];
 
 const SEVERITY = new Map(RULES.map(([rule, severity]) => [rule, severity]));
@@ -355,13 +357,13 @@ function readingText(members) {
 
 function isClosingDelimiter(element) {
   const text = String(element?.char || "").trim();
-  if (/^[)\]）〕]$/.test(text)) return true;
+  if (/^[)\]）〕Þ]$/.test(text)) return true;
   return text.length === 1 && isMathSymbolFont(element.font);
 }
 
 function isOpeningDelimiter(element) {
   const text = String(element?.char || "").trim();
-  return /^[(\[（〔]$/.test(text);
+  return /^[(\[（〔ð]$/.test(text);
 }
 
 function isOperatorOrBracket(element) {
@@ -502,12 +504,28 @@ function auditUnitRules(entry, page, findings) {
     const lineText = (page.elements || []).filter((element) => element.label === "text" && proseTextWords(element.char).length > 0 && sameLine(element, box, height));
     const leftProse = lineText.filter((element) => element.bbox[2] <= box[0] + 1);
     const rightProse = lineText.filter((element) => element.bbox[0] >= box[2] - 1);
-    if (unit.type === "inline" && !lineText.length && members.filter(isLetterGlyph).length >= MIN_GLYPHS_PER_LINE) {
+    const numberedLine = lineEndNumbers(page.elements || [], members, height).length > 0;
+    if (unit.type === "inline" && (( !lineText.length && members.filter(isLetterGlyph).length >= MIN_GLYPHS_PER_LINE) || numberedLine)) {
       findings.push(finding(entry, "R6", {
         currentUnitId: unit.id,
         elements: members.filter(isLetterGlyph).slice(0, 4),
-        suggestion: "这一行没有正文，公式却是行内。独占一行的式子按 d 改成行间。"
+        suggestion: numberedLine
+          ? "这一行有行末编号，单元却标成行内。按 d 改成行间。同一基线上另一栏的句子，或编号旁边的单词，不算行内。"
+          : "这一行没有正文，公式却是行内。独占一行的式子按 d 改成行间。"
       }));
+    }
+    const numbered = members.filter((element) => element.equationNumber === true);
+    if (numbered.length) {
+      const tooMany = numbered.length > 4 && numbered.length * 2 > members.length;
+      const shaped = equationNumberShape(numbered);
+      const atEnd = numberedAtLineEnd(page.elements || [], members, numbered, height);
+      if (tooMany || !shaped || !atEnd) {
+        findings.push(finding(entry, "R9", {
+          currentUnitId: unit.id,
+          elements: numbered.slice(0, 6),
+          suggestion: "严重：这些字形被标成公式编号，但不像行末的短编号，或编号占了单元的大半。选中它们再按 e，取消错误标记。不要把整段式子标成编号。"
+        }));
+      }
     }
     if (unit.type === "display" && leftProse.length && rightProse.length) {
       findings.push(finding(entry, "R6", {
@@ -622,25 +640,10 @@ function splitColumns(glyphs, gutters) {
   return columns;
 }
 
-function ownedEquationNumber(unit, elements, height) {
-  const members = (elements || []).filter((element) => (unit?.elementIds || []).includes(element.id) && isLetterGlyph(element));
-  const sorted = members.slice().sort((a, b) => b.bbox[2] - a.bbox[2] || b.bbox[0] - a.bbox[0]);
-  let token = sorted[0];
-  if (token && isClosingDelimiter(token)) {
-    const inward = sorted.find((glyph) => glyph !== token && glyph.bbox[2] <= token.bbox[0] + 1 && horizontalGap(glyph.bbox, token.bbox) <= Math.max(height, 4));
-    if (inward) token = inward;
-  }
-  const text = String(token?.char || "").trim();
-  const wrapped = token && token !== sorted[0] && isClosingDelimiter(sorted[0]) && BARE_EQ_NUMBER.test(text);
-  if (FULL_EQ_NUMBER.test(text) || wrapped) return token;
-  if (unit?.equationNumber) return { id: "" };
-  return null;
-}
-
 function isRaisedSmallDigit(element, cluster, height) {
   const text = String(element?.char || "").trim();
   if (!/^\d/.test(text)) return false;
-  const others = (cluster?.glyphs || []).filter((glyph) => glyph.id !== element.id && boxHeight(glyph) > boxHeight(element));
+  const others = (cluster?.glyphs || []).filter((glyph) => glyph.id !== element.id);
   const body = median(others.map(boxHeight)) || height;
   const h = boxHeight(element);
   if (!(h > 0 && body > 0 && h < SUPERSCRIPT_HEIGHT_RATIO * body)) return false;
@@ -657,7 +660,64 @@ export function isLeftMarginNumber(element, elements) {
   return element.bbox[2] < column - 12 && element.bbox[0] < 90;
 }
 
-function auditPageRules(entries, page, findings) {
+function anchorOnLeft(members, cut) {
+  const x = Math.min(...members.map((element) => element.bbox[0]));
+  return cut == null || x < cut;
+}
+
+function columnPiece(cluster, members, elements, height) {
+  const ids = new Set(members.map((element) => element.id));
+  const cut = pageColumnCut(elements);
+  const onLeft = anchorOnLeft(members, cut);
+  const sided = cluster.glyphs.filter((glyph) => cut == null || (glyph.bbox[0] < cut) === onLeft);
+  // A single column has no gutter to cross. An 80pt gap inside one
+  // equation (the two halves of W) is still the same line.
+  const pieces = splitColumns(sided, cut == null ? [] : columnGutters(sided, height));
+  return pieces.find((piece) => piece.glyphs.some((glyph) => ids.has(glyph.id))) || null;
+}
+
+function rightEdgeNumber(column, elements, height) {
+  const band = column.glyphs.filter((glyph) => !(glyph.label === "text" && proseTextWords(glyph.char).length > 0));
+  const sorted = band.slice().sort((a, b) => b.bbox[2] - a.bbox[2] || b.bbox[0] - a.bbox[0]);
+  if (!sorted.length) return null;
+  let token = sorted[0];
+  const edge = token;
+  const delimiters = [];
+  if (isClosingDelimiter(token)) {
+    delimiters.push(token);
+    const inward = sorted.find((glyph) => glyph.bbox[2] <= token.bbox[0] + 1 && horizontalGap(glyph.bbox, token.bbox) <= height);
+    if (!inward) return null;
+    token = inward;
+  }
+  const text = String(token.char || "").trim();
+  if (!FULL_EQ_NUMBER.test(text) && !BARE_EQ_NUMBER.test(text)) return null;
+  if (token.bbox[2] < edge.bbox[2] - 1.5 && !isClosingDelimiter(edge)) return null;
+  if (isRaisedSmallDigit(token, column, height) || isLeftMarginNumber(token, elements)) return null;
+  const opening = sorted.find((glyph) => glyph !== token && glyph !== edge && glyph.bbox[2] <= token.bbox[0] + 1 && horizontalGap(glyph.bbox, token.bbox) <= height && isOpeningDelimiter(glyph));
+  return { token, glyphs: [opening, token, ...delimiters].filter(Boolean) };
+}
+
+function lineEndNumbers(elements, members, height) {
+  const usable = members.filter((element) => element?.bbox);
+  if (!usable.length) return [];
+  const hits = [];
+  for (const cluster of equationLineClusters(elements, height)) {
+    const piece = columnPiece(cluster, usable, elements, height);
+    if (!piece) continue;
+    const number = rightEdgeNumber(piece, elements, height);
+    if (number) hits.push({ ...number, column: piece.glyphs });
+  }
+  return hits;
+}
+
+function numberedAtLineEnd(elements, members, numbered, height) {
+  const hits = lineEndNumbers(elements, members, height);
+  if (!hits.length) return false;
+  const ids = new Set(numbered.map((element) => element.id));
+  return hits.every((hit) => ids.has(hit.token.id));
+}
+
+function auditPageRules(entries, page, findings, info) {
   if (!page) return;
   const elements = page.elements || [];
   const unitById = new Map((page.units || []).map((unit) => [unit.id, unit]));
@@ -694,42 +754,47 @@ function auditPageRules(entries, page, findings) {
   });
   const queueIds = new Set(entryIds.flatMap((item) => [...item.ids]));
   const seenNumbers = new Set();
-  for (const cluster of equationLineClusters(elements, height)) {
-    if (!cluster.glyphs.some((glyph) => queueIds.has(glyph.id))) continue;
-    const columns = splitColumns(cluster.glyphs, columnGutters(cluster.glyphs, height));
-    for (const column of columns) {
-      if (!column.glyphs.some((glyph) => queueIds.has(glyph.id))) continue;
-      const sorted = column.glyphs.slice().sort((a, b) => b.bbox[2] - a.bbox[2] || b.bbox[0] - a.bbox[0]);
-      let candidate = sorted[0];
-      const rightEdge = candidate.bbox[2];
-      if (isClosingDelimiter(candidate)) {
-        const inward = sorted.find((glyph) => glyph.bbox[2] <= candidate.bbox[0] + 1 && horizontalGap(glyph.bbox, candidate.bbox) <= height);
-        if (!inward) continue;
-        candidate = inward;
+  const seenMerges = new Set();
+  for (const item of entryIds) {
+    const members = elements.filter((element) => item.ids.has(element.id) && element.bbox);
+    if (!members.length) continue;
+    const unit = unitById.get(members.find((element) => element.unitId)?.unitId) || null;
+    for (const hit of lineEndNumbers(elements, members, height)) {
+      if (seenNumbers.has(hit.token.id)) continue;
+      seenNumbers.add(hit.token.id);
+      const inside = item.ids.has(hit.token.id);
+      const hostType = unit?.type || members.find((element) => element.unitType)?.unitType || "";
+      if (inside && hostType === "display" && hit.token.equationNumber !== true && hit.token.label === "formula") {
+        info.push({ rule: "R3", queueIndex: item.entry.queueIndex });
+        continue;
       }
-      const text = String(candidate.char || "").trim();
-      const shaped = FULL_EQ_NUMBER.test(text) || BARE_EQ_NUMBER.test(text);
-      if (!shaped || seenNumbers.has(candidate.id)) continue;
-      if (candidate.bbox[2] < rightEdge - 1.5 && !isClosingDelimiter(sorted[0])) continue;
-      if (isRaisedSmallDigit(candidate, column, height) || isLeftMarginNumber(candidate, elements)) continue;
-      const displays = [...new Set(column.glyphs.map((glyph) => unitById.get(glyph.unitId)).filter((unit) => unit?.type === "display"))];
-      if (!displays.length) continue;
-      const eligible = displays.filter((unit) => {
-        const members = elements.filter((element) => (unit.elementIds || []).includes(element.id) && column.glyphs.includes(element));
-        const box = unionBox(members.length ? members : elements.filter((element) => (unit.elementIds || []).includes(element.id)));
-        if (box[0] > candidate.bbox[2] + 1) return false;
-        const owned = ownedEquationNumber(unit, elements, height);
-        return !owned || owned.id === candidate.id;
-      });
-      if (!eligible.length) continue;
-      seenNumbers.add(candidate.id);
-      const inside = eligible.some((unit) => (unit.elementIds || []).includes(candidate.id));
-      if (inside && candidate.label === "formula") continue;
-      const owner = entryIds.find((item) => column.glyphs.some((glyph) => item.ids.has(glyph.id)))?.entry || host;
-      findings.push(finding(owner, "R3", {
-        currentUnitId: eligible[0]?.id || "",
-        elements: [candidate],
-        suggestion: "这一行同一栏里的公式编号不在对齐的行间单元里，或标签不是 formula。另一栏的编号、单元自己已有的编号、页边行号和上标小数字不算。选中编号按 e，并进同一栏对齐的那一行。"
+      if (inside && hostType === "display" && hit.token.label === "formula") continue;
+      const elsewhere = hit.token.unitId && !item.ids.has(hit.token.id);
+      findings.push(finding(item.entry, "R3", {
+        currentUnitId: unit?.id || hit.token.unitId || "",
+        elements: hit.glyphs,
+        suggestion: hostType === "inline" && inside
+          ? "行末编号在行内单元里。按 d 改成行间。"
+          : elsewhere
+            ? "行末编号落在别的单元里。框住本行式子和编号按 m 并成一个行间单元，再按 e 只标编号。"
+            : "行末编号不在这一行的单元里。选中编号按 e，并进同一栏的行间单元。"
+      }));
+    }
+    for (const cluster of equationLineClusters(elements, height)) {
+      const piece = columnPiece(cluster, members, elements, height);
+      if (!piece) continue;
+      const prose = piece.glyphs.some((glyph) => glyph.label === "text" && proseTextWords(glyph.char).length > 0);
+      if (prose) continue;
+      const numberIds = new Set(lineEndNumbers(elements, members, height).flatMap((hit) => hit.glyphs.map((glyph) => glyph.id)));
+      const other = piece.glyphs.filter((glyph) => glyph.label === "formula" && !item.ids.has(glyph.id) && !numberIds.has(glyph.id) && !isRaisedSmallDigit(glyph, piece, height));
+      if (!other.length) continue;
+      const key = `${item.entry.queueIndex}:${other.map((glyph) => glyph.unitId || glyph.id).sort().join(",")}`;
+      if (seenMerges.has(key)) continue;
+      seenMerges.add(key);
+      findings.push(finding(item.entry, "R10", {
+        currentUnitId: unit?.id || "",
+        elements: other.slice(0, 4),
+        suggestion: "同一行同一栏还有别的公式，这一行没有正文。一行只能有一个单元。框住整行按 m。"
       }));
     }
   }
@@ -790,6 +855,7 @@ function dedupe(findings) {
 export function auditReviewed({ queue, loadPage, confirmedKeys, limit } = {}) {
   const window = selectAuditWindow(queue, confirmedKeys, limit);
   const findings = [];
+  const info = [];
   const byPage = new Map();
   for (const entry of window) {
     const key = `${entry.unit.paperId}:${entry.unit.page}`;
@@ -798,7 +864,7 @@ export function auditReviewed({ queue, loadPage, confirmedKeys, limit } = {}) {
   }
   for (const { page, entries } of byPage.values()) {
     for (const entry of entries) auditUnitRules(entry, page, findings);
-    auditPageRules(entries, page, findings);
+    auditPageRules(entries, page, findings, info);
   }
   const sorted = dedupe(findings).sort((a, b) => a.severity - b.severity || a.queueIndex - b.queueIndex || a.rule.localeCompare(b.rule));
   const counts = Object.fromEntries(RULES.map(([rule]) => [rule, sorted.filter((item) => item.rule === rule).length]));
@@ -813,6 +879,7 @@ export function auditReviewed({ queue, loadPage, confirmedKeys, limit } = {}) {
       limit: Number.isInteger(limit) ? limit : null
     },
     counts,
+    info: { R3: info.length },
     findings: sorted
   };
 }
@@ -846,6 +913,8 @@ export function renderMarkdown(report) {
   for (const [rule, , title] of RULES) {
     lines.push(`| ${rule} | ${title} | ${report.counts[rule] || 0} |`);
   }
+  const noted = report.info?.R3 || 0;
+  if (noted) lines.push("", `信息：${noted} 个行末编号已经在行间单元里，只是 equationNumber 仍是 false。这不是错误，留给 M2 自动推导。`);
   lines.push("", "## 按序号汇总", "");
   const byIndex = summarizeByQueueIndex(report.findings);
   if (!byIndex.length) lines.push("没有发现。");
@@ -907,9 +976,9 @@ export function loadAuditInputs(base = root) {
   return { queue: reviewSet.units || [], loadPage, confirmed };
 }
 
-function parseArgs(argv) {
+export function parseAuditArgs(argv) {
   let limit = null;
-  let out = join(root, "reports/audit.md");
+  let out = null;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--limit") limit = Number(argv[++index]);
@@ -921,7 +990,7 @@ function parseArgs(argv) {
 }
 
 function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseAuditArgs(process.argv.slice(2));
   if (args.help) {
     console.log("node scripts/audit-reviewed.mjs [--limit N] [--out reports/audit.md]");
     return;
@@ -929,6 +998,11 @@ function main() {
   const inputs = loadAuditInputs(root);
   const report = auditReviewed({ ...inputs, confirmedKeys: inputs.confirmed, limit: args.limit });
   const markdown = renderMarkdown(report);
+  if (!args.out) {
+    process.stdout.write(markdown);
+    console.log(JSON.stringify(report.counts));
+    return;
+  }
   const jsonPath = args.out.endsWith(".json") ? args.out : args.out.replace(/\.md$/i, "") + ".json";
   const mdPath = args.out.endsWith(".json") ? args.out.replace(/\.json$/i, ".md") : args.out;
   mkdirSync(dirname(mdPath), { recursive: true });

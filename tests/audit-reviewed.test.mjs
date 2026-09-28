@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   auditReviewed,
   formulaProseWords,
+  parseAuditArgs,
   renderMarkdown,
   selectAuditWindow,
   summarizeByQueueIndex
@@ -19,7 +20,7 @@ function glyph(id, char, bbox, extra = {}) {
     label: extra.label || "text",
     unitId: extra.unitId ?? null,
     unitType: extra.unitType ?? null,
-    equationNumber: false
+    equationNumber: extra.equationNumber === true
   };
 }
 
@@ -240,15 +241,20 @@ test("R3 flags a right-hand equation number outside the display unit", () => {
     formula("l50", "50", [158, 100, 170, 110], "uLeft"),
     formula("rpar", ")", [172, 100, 178, 110], "uLeft")
   ];
-  const rightBody = ["r1", "r2", "r3"].map((id, index) => formula(id, id, [240 + index * 16, 100, 252 + index * 16, 110], "uRight"));
+  const rightBody = ["r1", "r2", "r3"].map((id, index) => formula(id, id, [340 + index * 16, 100, 352 + index * 16, 110], "uRight"));
   const rightNumber = [
-    glyph("rp1", "(", [350, 100, 356, 110]),
-    glyph("n57", "57", [360, 100, 372, 110]),
-    glyph("rp2", ")", [374, 100, 380, 110])
+    glyph("rp1", "(", [470, 100, 476, 110]),
+    glyph("n57", "57", [478, 100, 490, 110]),
+    glyph("rp2", ")", [492, 100, 498, 110])
   ];
+  const columnProse = [];
+  for (let index = 0; index < 8; index += 1) {
+    columnProse.push(glyph(`left-prose-${index}`, "the left column continues with ordinary prose", [40, 20 + index * 24, 220, 30 + index * 24]));
+    columnProse.push(glyph(`right-prose-${index}`, "the right column continues with ordinary prose", [320, 20 + index * 24, 520, 30 + index * 24]));
+  }
   const twoColumn = run(
     [entry("uLeft", [...leftBody, ...leftNumber].map((element) => element.id))],
-    pageOf([...leftBody, ...leftNumber, ...rightBody, ...rightNumber], [
+    pageOf([...columnProse, ...leftBody, ...leftNumber, ...rightBody, ...rightNumber], [
       { id: "uLeft", type: "display", equationNumber: true, elementIds: [...leftBody, ...leftNumber].map((element) => element.id) },
       { id: "uRight", type: "display", equationNumber: false, elementIds: rightBody.map((element) => element.id) }
     ])
@@ -257,7 +263,7 @@ test("R3 flags a right-hand equation number outside the display unit", () => {
 
   const leftWithoutNumber = run(
     [entry("uLeft", leftBody.map((element) => element.id))],
-    pageOf([...leftBody, ...rightBody, ...rightNumber], [
+    pageOf([...columnProse, ...leftBody, ...rightBody, ...rightNumber], [
       { id: "uLeft", type: "display", equationNumber: false, elementIds: leftBody.map((element) => element.id) },
       { id: "uRight", type: "display", equationNumber: false, elementIds: rightBody.map((element) => element.id) }
     ])
@@ -270,7 +276,7 @@ test("R3 flags a right-hand equation number outside the display unit", () => {
       id: "uLeft", type: "display", equationNumber: true, elementIds: [...leftBody, ...leftNumber].map((element) => element.id)
     }])
   );
-  assert.equal(alreadyNumbered.findings.some((item) => item.rule === "R3"), false);
+  assert.equal(alreadyNumbered.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(57)")), true);
 });
 
 test("R4 flags body-font measures and page-1 author marks", () => {
@@ -426,6 +432,145 @@ test("R8 flags a formula without a unit and a unit id that points nowhere", () =
     id: "u1", type: "inline", equationNumber: false, elementIds: ["ok"]
   }]));
   assert.equal(rules(sound).includes("R8"), false);
+});
+
+test("R9 flags a unit whose glyphs are all marked as the equation number", () => {
+  const body = ["P", "a", "=", "1"].map((char, index) => formula(`g${index}`, char, [index * 12, 100, index * 12 + 10, 110], "u1", { equationNumber: true }));
+  const hit = run([entry("u1", body.map((element) => element.id))], pageOf(body, [{
+    id: "u1", type: "display", equationNumber: true, elementIds: body.map((element) => element.id)
+  }]));
+  assert.equal(hit.findings.some((item) => item.rule === "R9" && item.suggestion.includes("按 e")), true);
+
+  const kept = ["x", "y"].map((char, index) => formula(char, char, [index * 14, 100, index * 14 + 10, 110], "u2"));
+  const number = [
+    formula("lp", "(", [80, 100, 86, 110], "u2"),
+    formula("n", "50", [88, 100, 100, 110], "u2", { equationNumber: true }),
+    formula("rp", ")", [102, 100, 108, 110], "u2")
+  ];
+  const miss = run([entry("u2", [...kept, ...number].map((element) => element.id))], pageOf([...kept, ...number], [{
+    id: "u2", type: "display", equationNumber: true, elementIds: [...kept, ...number].map((element) => element.id)
+  }]));
+  assert.equal(miss.findings.some((item) => item.rule === "R9"), false);
+});
+
+test("R3 reports a line-end number in another unit or an inline unit, and only notes a display flag", () => {
+  const body = ["a", "b"].map((id, index) => formula(id, id, [index * 14, 100, index * 14 + 10, 110], "u1"));
+  const foreign = formula("num", "(2.8)", [80, 100, 110, 110], "u2");
+  const elsewhere = run([entry("u1", body.map((element) => element.id))], pageOf([...body, foreign], [
+    { id: "u1", type: "display", equationNumber: false, elementIds: body.map((element) => element.id) },
+    { id: "u2", type: "display", equationNumber: true, elementIds: ["num"] }
+  ]));
+  assert.equal(elsewhere.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(2.8)")), true);
+
+  const inlineBody = ["c", "d"].map((id, index) => formula(id, id, [index * 14, 140, index * 14 + 10, 150], "u3", { unitType: "inline" }));
+  const inlineNumber = formula("n3", "(4)", [80, 140, 100, 150], "u3", { unitType: "inline" });
+  const inline = run([entry("u3", [...inlineBody, inlineNumber].map((element) => element.id), { type: "inline" })], pageOf([...inlineBody, inlineNumber], [{
+    id: "u3", type: "inline", equationNumber: false, elementIds: [...inlineBody, inlineNumber].map((element) => element.id)
+  }]));
+  assert.equal(inline.findings.some((item) => item.rule === "R3" && item.suggestion.includes("按 d")), true);
+
+  const quiet = ["e", "f"].map((id, index) => formula(id, id, [index * 14, 180, index * 14 + 10, 190], "u4"));
+  const quietNumber = formula("n4", "(9)", [80, 180, 100, 190], "u4");
+  const noted = run([entry("u4", [...quiet, quietNumber].map((element) => element.id))], pageOf([...quiet, quietNumber], [{
+    id: "u4", type: "display", equationNumber: false, elementIds: [...quiet, quietNumber].map((element) => element.id)
+  }]));
+  assert.equal(noted.findings.some((item) => item.rule === "R3"), false);
+  assert.equal(noted.info.R3 >= 1, true);
+});
+
+test("R6 flags an inline unit that owns a line-end number even when words share the baseline", () => {
+  const body = ["a", "b", "c"].map((id, index) => formula(id, id, [20 + index * 14, 100, 30 + index * 14, 110], "u1", { unitType: "inline" }));
+  const number = [
+    formula("lp", "(", [80, 100, 86, 110], "u1", { unitType: "inline" }),
+    formula("n", "2", [88, 100, 96, 110], "u1", { unitType: "inline" }),
+    formula("rp", ")", [98, 100, 104, 110], "u1", { unitType: "inline" })
+  ];
+  const prose = glyph("words", "where all", [120, 100, 180, 110]);
+  const hit = run([entry("u1", [...body, ...number].map((element) => element.id), { type: "inline" })], pageOf([...body, ...number, prose], [{
+    id: "u1", type: "inline", equationNumber: false, elementIds: [...body, ...number].map((element) => element.id)
+  }]));
+  assert.equal(hit.findings.some((item) => item.rule === "R6" && item.suggestion.includes("按 d")), true);
+});
+
+test("R3 keeps a gutter number with the left column when the other column shares the baseline", () => {
+  const body = ["a", "b", "c"].map((id, index) => formula(id, id, [40 + index * 14, 200, 50 + index * 14, 210], "u1", { unitType: "inline" }));
+  const number = [
+    glyph("eth", "ð", [230, 200, 236, 210], { font: "TeX_CM_Maths_Symbols" }),
+    glyph("two", "2", [238, 200, 246, 210], { font: "MinionPro-Regular" }),
+    glyph("thorn", "Þ", [248, 200, 254, 210], { font: "TeX_CM_Maths_Symbols" })
+  ];
+  const prose = [];
+  for (let index = 0; index < 8; index += 1) {
+    prose.push(glyph(`lp${index}`, "left column sentence about the method", [40, 20 + index * 22, 200, 30 + index * 22]));
+    prose.push(glyph(`rp${index}`, "right column sentence about the method", [300, 20 + index * 22, 500, 30 + index * 22]));
+  }
+  prose.push(glyph("share", "solution could be obtained by going", [300, 200, 520, 210]));
+  const far = glyph("far", "(99)", [470, 200, 498, 210]);
+  const hit = run([entry("u1", body.map((element) => element.id), { type: "inline" })], pageOf([...prose, ...body, ...number, far], [{
+    id: "u1", type: "inline", equationNumber: false, elementIds: body.map((element) => element.id)
+  }]));
+  assert.equal(hit.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "2")), true);
+  assert.equal(hit.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(99)")), false);
+  assert.equal(hit.findings.some((item) => item.rule === "R6" && item.suggestion.includes("按 d")), true);
+});
+
+test("R3 reads a ð number Þ inside an inline unit", () => {
+  const body = ["a", "b"].map((id, index) => formula(id, id, [40 + index * 14, 100, 50 + index * 14, 110], "u1", { unitType: "inline" }));
+  const number = [
+    formula("eth", "ð", [200, 100, 206, 110], "u1", { font: "TeX_CM_Maths_Symbols", unitType: "inline" }),
+    formula("n", "17", [208, 100, 222, 110], "u1", { font: "MinionPro-Regular", unitType: "inline" }),
+    formula("thorn", "Þ", [224, 100, 230, 110], "u1", { font: "TeX_CM_Maths_Symbols", unitType: "inline" })
+  ];
+  const hit = run([entry("u1", [...body, ...number].map((element) => element.id), { type: "inline" })], pageOf([...body, ...number], [{
+    id: "u1", type: "inline", equationNumber: false, elementIds: [...body, ...number].map((element) => element.id)
+  }]));
+  assert.equal(hit.findings.some((item) => item.rule === "R3" && item.suggestion.includes("按 d")), true);
+  assert.equal(hit.findings.some((item) => item.rule === "R6" && item.suggestion.includes("按 d")), true);
+
+  const tall = formula("tall", "(", [20, 90, 28, 120], "u9", { font: "AdvP4C4E74", unitType: "inline" });
+  const letter = formula("a", "a", [32, 100, 42, 110], "u9", { unitType: "inline" });
+  const beside = [
+    formula("eth2", "ð", [180, 100, 186, 110], "u9", { font: "AdvP4C4E74", unitType: "inline" }),
+    formula("n35", "35", [188, 100, 200, 110], "u9", { unitType: "inline" }),
+    formula("thorn2", "Þ", [202, 100, 208, 110], "u9", { font: "AdvP4C4E74", unitType: "inline" })
+  ];
+  const withTall = run([entry("u9", [tall, letter, ...beside].map((element) => element.id), { type: "inline" })], pageOf([tall, letter, ...beside], [{
+    id: "u9", type: "inline", equationNumber: false, elementIds: [tall, letter, ...beside].map((element) => element.id)
+  }]));
+  assert.equal(withTall.findings.some((item) => item.rule === "R6" && item.suggestion.includes("按 d")), true);
+});
+
+test("R10 flags a second formula on a prose-free line and ignores a line with words", () => {
+  const left = ["A", "="].map((char, index) => formula(`L${index}`, char, [20 + index * 16, 100, 32 + index * 16, 110], "u1"));
+  const right = ["B", "="].map((char, index) => formula(`R${index}`, char, [60 + index * 16, 100, 72 + index * 16, 110], "u2"));
+  const hit = run([entry("u1", left.map((element) => element.id))], pageOf([...left, ...right], [
+    { id: "u1", type: "display", equationNumber: false, elementIds: left.map((element) => element.id) },
+    { id: "u2", type: "display", equationNumber: false, elementIds: right.map((element) => element.id) }
+  ]));
+  assert.equal(hit.findings.some((item) => item.rule === "R10" && item.suggestion.includes("按 m")), true);
+
+  const word = glyph("and", "and", [70, 140, 90, 150]);
+  const apartLeft = left.map((element) => ({ ...element, id: `w${element.id}`, bbox: [element.bbox[0], 140, element.bbox[2], 150] }));
+  const apartRight = right.map((element) => ({ ...element, id: `w${element.id}`, unitId: "u4", bbox: [element.bbox[0], 140, element.bbox[2], 150] }));
+  const miss = run([entry("u3", apartLeft.map((element) => element.id))], pageOf([...apartLeft, word, ...apartRight], [
+    { id: "u3", type: "display", equationNumber: false, elementIds: apartLeft.map((element) => element.id) },
+    { id: "u4", type: "display", equationNumber: false, elementIds: apartRight.map((element) => element.id) }
+  ]));
+  assert.equal(miss.findings.some((item) => item.rule === "R10"), false);
+
+  const half = ["W", "="].map((char, index) => formula(`h${index}`, char, [20 + index * 16, 220, 32 + index * 16, 230], "u4"));
+  const otherHalf = ["W", "x"].map((char, index) => formula(`o${index}`, char, [140 + index * 16, 220, 152 + index * 16, 230], "u5"));
+  const wide = run([entry("u4", half.map((element) => element.id))], pageOf([...half, ...otherHalf], [
+    { id: "u4", type: "display", equationNumber: false, elementIds: half.map((element) => element.id) },
+    { id: "u5", type: "inline", equationNumber: false, elementIds: otherHalf.map((element) => element.id) }
+  ]));
+  assert.equal(wide.findings.some((item) => item.rule === "R10" && item.suggestion.includes("按 m")), true);
+});
+
+test("audit args print to stdout unless --out is set", () => {
+  assert.equal(parseAuditArgs([]).out, null);
+  assert.equal(parseAuditArgs(["--out", "reports/audit.md"]).out, "reports/audit.md");
+  assert.equal(parseAuditArgs(["--limit", "4"]).limit, 4);
 });
 
 test("the markdown report names the queue index, unit ids, and element", () => {

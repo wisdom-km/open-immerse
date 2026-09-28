@@ -18,6 +18,7 @@ tests/fixtures/DDPM_2006.11239.pdf
 corpus/pdfs/
 labels/sheets/
 labels/checks/
+reports/
 
 # Chrome rejects unpacked dirs starting with _ (except _locales)
 _qa-out/
