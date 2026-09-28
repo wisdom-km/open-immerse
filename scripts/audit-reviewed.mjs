@@ -1,0 +1,752 @@
+/**
+ * Read-only audit of reviewed formula labels against the M1 rules.
+ *
+ *   node scripts/audit-reviewed.mjs [--limit N] [--out reports/audit.md]
+ *
+ * The queue is labels/review-set.json, the same list
+ * scripts/review-set.mjs writes with buildReviewSet. Nothing here talks
+ * to the review server, and nothing here writes labels/reviewed or
+ * labels/prelabel. A missing reviewed page falls back to the prelabel
+ * so a skipped unit can still be checked.
+ *
+ * Default window: every queue unit up to and including the last one
+ * whose original unit id is in that page's reviewedUnitIds. --limit N
+ * checks the first N queue units instead.
+ */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { isMathSymbolFont, proseTextWords, selectionForReviewUnit } from "../lib/review-actions.js";
+
+const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+
+// A text subscript is shorter than the other glyphs in its formula.
+// 0.8 matches the merge guard: a 6pt "sites" under a 9pt operator.
+const SUBSCRIPT_HEIGHT_RATIO = 0.8;
+
+// "ia" in a math-italic face is a product, not a word. Same cutoff as merge.
+const ITALIC_PRODUCT_MAX_LETTERS = 3;
+
+// Two baselines farther apart than about 1.5 glyph heights are separate
+// display lines. Fraction bars and tall delimiters tie clusters first.
+const DISPLAY_LINE_GAP_RATIO = 1.5;
+
+// Superscripts and subscripts stay on the base line when their centers
+// are within about one glyph height of it.
+const SAME_LINE_CENTER_RATIO = 0.85;
+
+// A fraction bar is much flatter than a letter. One between two clusters
+// means those clusters are one fraction, not two display lines.
+const FRACTION_BAR_HEIGHT_RATIO = 0.25;
+
+// Big braces and integrals are taller than a letter and narrower than
+// they are tall. A cluster pair they cross is still one formula.
+const TALL_GLYPH_HEIGHT_RATIO = 1.8;
+
+// "Touching" for a missed merge: horizontal gap under about 0.3 glyph heights.
+const TOUCH_GAP_RATIO = 0.3;
+
+// Each side of a cross-line report needs several glyphs, so one stray
+// subscript does not look like a second display line.
+const MIN_GLYPHS_PER_LINE = 2;
+
+// Short symbol runs such as ") = ln(1 +" can still belong to the formula.
+// A longer text run is left to the prose check.
+const SHORT_ATTACH_MAX_CHARS = 24;
+
+const RULES = [
+  ["R8", 1, "公式和 units 对不上"],
+  ["R1", 2, "公式单元里混进正文"],
+  ["R4", 3, "看起来应是正文的公式"],
+  ["R2", 4, "行间单元跨行"],
+  ["R3", 5, "公式编号不在行间单元里"],
+  ["R6", 6, "行间或行内类型不对"],
+  ["R5", 7, "紧贴公式却没合并"],
+  ["R7", 8, "标点归错了单元"],
+  ["R0", 9, "队列里还没确认"]
+];
+
+const SEVERITY = new Map(RULES.map(([rule, severity]) => [rule, severity]));
+const RULE_TITLE = new Map(RULES.map(([rule, , title]) => [rule, title]));
+
+const MATH_ITALIC_FONT = /\.I(?:\+[^.]*)?$/i;
+const FULL_EQ_NUMBER = /^\(\d+(?:\.\d+)?[a-z]?\)$/;
+const BARE_EQ_NUMBER = /^\d{1,3}(?:\.\d+)?[a-z]?$/;
+
+function confirmKey(unit) {
+  return `${unit.paperId}:${unit.page}:${unit.unitId}`;
+}
+
+export function selectAuditWindow(queue, confirmedKeys, limit) {
+  const list = Array.isArray(queue) ? queue : [];
+  const confirmed = confirmedKeys instanceof Set ? confirmedKeys : new Set(confirmedKeys || []);
+  let end = list.length;
+  if (Number.isInteger(limit) && limit >= 0) end = Math.min(limit, list.length);
+  else {
+    let last = -1;
+    list.forEach((unit, index) => {
+      if (confirmed.has(confirmKey(unit))) last = index;
+    });
+    end = last + 1;
+  }
+  return list.slice(0, end).map((unit, index) => ({
+    unit,
+    queueIndex: index + 1,
+    confirmed: confirmed.has(confirmKey(unit))
+  }));
+}
+
+function boxHeight(element) {
+  const box = element?.bbox;
+  if (!Array.isArray(box) || box.length < 4) return 0;
+  return Math.max(0, Number(box[3]) - Number(box[1]));
+}
+
+function boxWidth(element) {
+  const box = element?.bbox;
+  if (!Array.isArray(box) || box.length < 4) return 0;
+  return Math.max(0, Number(box[2]) - Number(box[0]));
+}
+
+function midY(element) {
+  const box = element.bbox;
+  return (Number(box[1]) + Number(box[3])) / 2;
+}
+
+function median(values) {
+  if (!values.length) return 0;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2) return sorted[mid];
+  return (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function isLetterGlyph(element) {
+  const kind = element?.kind || "glyph";
+  return kind === "glyph" && boxWidth(element) > 0 && boxHeight(element) > 0.4;
+}
+
+function isMathItalicFont(font) {
+  const name = String(font || "");
+  return MATH_ITALIC_FONT.test(name) || /Italic/i.test(name);
+}
+
+function isBodyFont(font) {
+  if (!font) return false;
+  if (isMathSymbolFont(font)) return false;
+  if (isMathItalicFont(font)) return false;
+  return true;
+}
+
+function snap(element) {
+  if (!element) return null;
+  return {
+    id: element.id || "",
+    char: element.char ?? "",
+    font: element.font || "",
+    label: element.label || "",
+    bbox: Array.isArray(element.bbox) ? element.bbox.slice(0, 4).map(Number) : []
+  };
+}
+
+function unionBox(elements) {
+  const boxes = elements.map((element) => element.bbox).filter((box) => Array.isArray(box) && box.length >= 4);
+  if (!boxes.length) return [0, 0, 0, 0];
+  return [
+    Math.min(...boxes.map((box) => Number(box[0]))),
+    Math.min(...boxes.map((box) => Number(box[1]))),
+    Math.max(...boxes.map((box) => Number(box[2]))),
+    Math.max(...boxes.map((box) => Number(box[3])))
+  ];
+}
+
+function horizontalGap(a, b) {
+  const left = Array.isArray(a) ? a : a.bbox;
+  const right = Array.isArray(b) ? b : b.bbox;
+  if (left[2] < right[0]) return right[0] - left[2];
+  if (right[2] < left[0]) return left[0] - right[2];
+  return 0;
+}
+
+function glyphHeight(elements) {
+  const heights = elements.filter(isLetterGlyph).map(boxHeight);
+  return median(heights) || 8;
+}
+
+function sameLine(element, box, height) {
+  if (!element?.bbox || !box) return false;
+  const mid = midY(element);
+  const other = (Number(box[1]) + Number(box[3])) / 2;
+  return Math.abs(mid - other) <= SAME_LINE_CENTER_RATIO * height;
+}
+
+/**
+ * Words that are still prose inside a formula element. Math-symbol fonts,
+ * operator names, ligature junk, subscripts, and short italic products
+ * are not. The both-sides merge exception is not used here: inside an
+ * already merged unit it would hide a real word.
+ */
+export function formulaProseWords(element, members) {
+  if (!element || isMathSymbolFont(element.font)) return [];
+  const words = proseTextWords(element.char);
+  if (!words.length) return [];
+  const text = String(element.char || "").trim();
+  if (
+    text.length <= ITALIC_PRODUCT_MAX_LETTERS
+    && /^[a-z]+$/.test(text)
+    && isMathItalicFont(element.font)
+  ) return [];
+  const others = (members || []).filter((item) => item && item !== element && item.id !== element.id && isLetterGlyph(item));
+  const mid = median(others.map(boxHeight));
+  const height = boxHeight(element);
+  if (mid > 0 && height > 0 && height < SUBSCRIPT_HEIGHT_RATIO * mid) return [];
+  return words;
+}
+
+function clusterGlyphs(glyphs, height) {
+  const sorted = glyphs.filter(isLetterGlyph).slice().sort((a, b) => midY(a) - midY(b) || a.bbox[0] - b.bbox[0]);
+  const lines = [];
+  for (const glyph of sorted) {
+    const previous = lines[lines.length - 1];
+    const overlap = previous
+      ? Math.min(previous.bottom, glyph.bbox[3]) - Math.max(previous.top, glyph.bbox[1])
+      : 0;
+    const close = previous && (
+      Math.abs(midY(glyph) - previous.mid) <= SAME_LINE_CENTER_RATIO * height
+      || overlap >= 0.3 * Math.min(boxHeight(glyph), previous.bottom - previous.top)
+    );
+    if (!close) {
+      lines.push({
+        glyphs: [glyph],
+        mid: midY(glyph),
+        top: glyph.bbox[1],
+        bottom: glyph.bbox[3]
+      });
+      continue;
+    }
+    previous.glyphs.push(glyph);
+    previous.top = Math.min(previous.top, glyph.bbox[1]);
+    previous.bottom = Math.max(previous.bottom, glyph.bbox[3]);
+    previous.mid = median(previous.glyphs.map(midY));
+  }
+  return lines;
+}
+
+function isFractionBar(element, height) {
+  const h = boxHeight(element);
+  const w = boxWidth(element);
+  const flat = h > 0 && h <= Math.max(1.2, FRACTION_BAR_HEIGHT_RATIO * height) && w >= Math.max(4, h * 3);
+  if (!flat) return false;
+  return element.kind === "path" || element.label === "other" || element.char === "" || element.char === "−" || element.char === "-";
+}
+
+function isTallDelimiter(element, height) {
+  const h = boxHeight(element);
+  const w = boxWidth(element);
+  return h >= TALL_GLYPH_HEIGHT_RATIO * height && w > 0 && w < h;
+}
+
+function mergeLineGroups(lines, extras, height) {
+  const parent = lines.map((_, index) => index);
+  const find = (index) => {
+    let cursor = index;
+    while (parent[cursor] !== cursor) cursor = parent[cursor];
+    return cursor;
+  };
+  const unite = (left, right) => {
+    parent[find(left)] = find(right);
+  };
+  for (const extra of extras) {
+    if (isTallDelimiter(extra, height)) {
+      const hit = lines.map((line, index) => (extra.bbox[3] >= line.top - 1 && extra.bbox[1] <= line.bottom + 1 ? index : -1)).filter((index) => index >= 0);
+      for (let i = 1; i < hit.length; i += 1) unite(hit[0], hit[i]);
+    }
+    if (isFractionBar(extra, height)) {
+      const above = lines.filter((line) => line.bottom <= extra.bbox[1] + 1);
+      const below = lines.filter((line) => line.top >= extra.bbox[3] - 1);
+      const barLeft = extra.bbox[0];
+      const barRight = extra.bbox[2];
+      const covers = (line) => {
+        const left = Math.min(...line.glyphs.map((glyph) => glyph.bbox[0]));
+        const right = Math.max(...line.glyphs.map((glyph) => glyph.bbox[2]));
+        return Math.min(barRight, right) - Math.max(barLeft, left) > 0;
+      };
+      const up = above.filter(covers).sort((a, b) => b.bottom - a.bottom)[0];
+      const down = below.filter(covers).sort((a, b) => a.top - b.top)[0];
+      if (up && down) unite(lines.indexOf(up), lines.indexOf(down));
+    }
+  }
+  const groups = new Map();
+  lines.forEach((line, index) => {
+    const root = find(index);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(line);
+  });
+  return [...groups.values()].map((group) => ({
+    glyphs: group.flatMap((line) => line.glyphs),
+    top: Math.min(...group.map((line) => line.top)),
+    bottom: Math.max(...group.map((line) => line.bottom)),
+    mid: median(group.flatMap((line) => line.glyphs.map(midY)))
+  })).sort((a, b) => a.top - b.top);
+}
+
+export function displayLineGroups(members) {
+  const glyphs = members.filter(isLetterGlyph);
+  const height = glyphHeight(glyphs);
+  const lines = clusterGlyphs(glyphs, height);
+  const extras = members.filter((element) => isTallDelimiter(element, height) || isFractionBar(element, height));
+  return { groups: mergeLineGroups(lines, extras, height), height };
+}
+
+function looksLikeMeasure(text) {
+  const compact = String(text || "").replace(/\s+/g, " ").trim().replace(/[.,]$/, "");
+  if (!compact || compact.length > 48) return false;
+  if (/^-?\d+(?:\.\d+)?\s*%$/.test(compact)) return true;
+  if (/^-?\d+(?:\.\d+)?\s*(?:±|\+\/-)\s*-?\d+(?:\.\d+)?(?:\s*%|\s*[A-Za-zμµ℃°][A-Za-zμµ℃°0-9/^-]*)?$/.test(compact)) return true;
+  if (/^-?\d+(?:\.\d+)?\s*[μµu]?[A-Za-z℃°][A-Za-zμµ℃°0-9/^-]*$/.test(compact)) return true;
+  if (/^[A-Za-zμµ]{1,8}\^(?:\{)?-?\d+(?:\.\d+)?(?:\})?$/.test(compact)) return true;
+  return false;
+}
+
+function looksLikeAuthorMark(members, pageNumber) {
+  if (Number(pageNumber) !== 1) return false;
+  const glyphs = members.filter(isLetterGlyph);
+  const joined = glyphs.slice().sort((a, b) => a.bbox[0] - b.bbox[0]).map((element) => element.char || "").join("").replace(/\s+/g, "");
+  if (/^[A-Z][\p{L}.'’-]*[¹²³⁴⁵⁶⁷⁸⁹⁰]+$/u.test(joined)) return true;
+  const letters = glyphs.filter((element) => /\p{L}/u.test(element.char || ""));
+  const digits = glyphs.filter((element) => /^[0-9¹²³⁴⁵⁶⁷⁸⁹⁰]+$/u.test(String(element.char || "").trim()));
+  if (!letters.length || !digits.length) return false;
+  const name = letters.slice().sort((a, b) => a.bbox[0] - b.bbox[0]).map((element) => element.char || "").join("");
+  if (!/^[A-Z][\p{L}.'’-]*$/u.test(name)) return false;
+  return median(digits.map(boxHeight)) < SUBSCRIPT_HEIGHT_RATIO * median(letters.map(boxHeight));
+}
+
+function readingText(members) {
+  return members.filter(isLetterGlyph).slice().sort((a, b) => a.bbox[0] - b.bbox[0] || a.bbox[1] - b.bbox[1]).map((element) => element.char || "").join("");
+}
+
+function isClosingDelimiter(element) {
+  const text = String(element?.char || "").trim();
+  if (/^[)\]）〕]$/.test(text)) return true;
+  return text.length === 1 && isMathSymbolFont(element.font);
+}
+
+function isOpeningDelimiter(element) {
+  const text = String(element?.char || "").trim();
+  return /^[(\[（〔]$/.test(text);
+}
+
+function isOperatorOrBracket(element) {
+  const text = String(element?.char || "").trim();
+  if (!text || text.length > 3) return false;
+  if (proseTextWords(text).length > 0) return false;
+  return /^[=+\-−–×*<>≤≥≈≠()[\]{}]+$/.test(text) || isClosingDelimiter(element) || isOpeningDelimiter(element);
+}
+
+function isAttachableText(element) {
+  if (!element || element.label !== "text") return false;
+  const text = String(element.char || "").trim();
+  if (!text || text.length > SHORT_ATTACH_MAX_CHARS) return false;
+  if (text === "," || text === "." || text === "，" || text === "。") return false;
+  if (isMathItalicFont(element.font) && /^\p{L}$/u.test(text)) return true;
+  if (isMathSymbolFont(element.font)) return true;
+  if (isOperatorOrBracket(element)) return true;
+  return proseTextWords(text).length === 0;
+}
+
+function finding(entry, rule, extra) {
+  return {
+    severity: SEVERITY.get(rule),
+    rule,
+    title: RULE_TITLE.get(rule),
+    queueIndex: entry.queueIndex,
+    paperId: entry.unit.paperId,
+    page: entry.unit.page,
+    queueUnitId: entry.unit.unitId,
+    currentUnitId: extra.currentUnitId || "",
+    elements: (extra.elements || []).filter(Boolean).map(snap),
+    suggestion: extra.suggestion
+  };
+}
+
+function currentUnits(page, entry) {
+  const elements = page?.elements || [];
+  const selected = selectionForReviewUnit(elements, entry.unit.elementIds || [], entry.unit.unitId);
+  const byId = new Map(elements.map((element) => [element.id, element]));
+  const unitById = new Map((page?.units || []).map((unit) => [unit.id, unit]));
+  const ids = selected.unitIds.length ? selected.unitIds : [];
+  return {
+    selected,
+    units: ids.map((id) => unitById.get(id)).filter(Boolean),
+    currentUnitId: ids.join(",")
+  };
+}
+
+function membersOf(page, unit) {
+  const byId = new Map((page.elements || []).map((element) => [element.id, element]));
+  return (unit.elementIds || []).map((id) => byId.get(id)).filter(Boolean);
+}
+
+function auditUnitRules(entry, page, findings) {
+  if (!entry.confirmed) {
+    findings.push(finding(entry, "R0", {
+      suggestion: "这条队列还没确认。打开它核对后按 Enter。故意用 j 或 k 跳过的可以忽略。"
+    }));
+  }
+  if (!page) {
+    findings.push(finding(entry, "R8", {
+      suggestion: "这一页在 labels/reviewed 和 labels/prelabel 里都没有。先确认文件还在。"
+    }));
+    return;
+  }
+  const { units, currentUnitId } = currentUnits(page, entry);
+  for (const unit of units) {
+    const members = membersOf(page, unit);
+    const height = glyphHeight(members);
+    const box = unionBox(members);
+    for (const element of members) {
+      if (element.label !== "formula") continue;
+      const words = formulaProseWords(element, members);
+      if (!words.length) continue;
+      findings.push(finding(entry, "R1", {
+        currentUnitId: unit.id,
+        elements: [element],
+        suggestion: `公式里还有正文单词（${words.slice(0, 6).join("、")}）。把这个元素改回 text，或按 s 拆出去。`
+      }));
+    }
+    if (unit.type === "display") {
+      const { groups } = displayLineGroups(members);
+      const separate = [];
+      for (let index = 1; index < groups.length; index += 1) {
+        const gap = groups[index].top - groups[index - 1].bottom;
+        if (gap > DISPLAY_LINE_GAP_RATIO * height
+          && groups[index].glyphs.length >= MIN_GLYPHS_PER_LINE
+          && groups[index - 1].glyphs.length >= MIN_GLYPHS_PER_LINE) {
+          separate.push(groups[index]);
+        }
+      }
+      if (separate.length) {
+        findings.push(finding(entry, "R2", {
+          currentUnitId: unit.id,
+          elements: [groups[0].glyphs[0], separate[0].glyphs[0]],
+          suggestion: "这个行间单元跨了多行。每一行各自按 d 成一个行间单元，不要跨行合并。"
+        }));
+      }
+    }
+    const fonts = members.filter((element) => element.font);
+    if (fonts.length && fonts.every((element) => isBodyFont(element.font))) {
+      const text = readingText(members);
+      if (looksLikeMeasure(text) || looksLikeAuthorMark(members, entry.unit.page)) {
+        findings.push(finding(entry, "R4", {
+          currentUnitId: unit.id,
+          elements: members.filter(isLetterGlyph).slice(0, 6),
+          suggestion: "整个单元都是正文字体，内容像数字加单位、± 区间、百分数、带上标的单位，或第 1 页作者角标。整单元改成 text。"
+        }));
+      }
+    }
+    const lineText = (page.elements || []).filter((element) => element.label === "text" && proseTextWords(element.char).length > 0 && sameLine(element, box, height));
+    const leftProse = lineText.filter((element) => element.bbox[2] <= box[0] + 1);
+    const rightProse = lineText.filter((element) => element.bbox[0] >= box[2] - 1);
+    if (unit.type === "inline" && !lineText.length && members.filter(isLetterGlyph).length >= MIN_GLYPHS_PER_LINE) {
+      findings.push(finding(entry, "R6", {
+        currentUnitId: unit.id,
+        elements: members.filter(isLetterGlyph).slice(0, 4),
+        suggestion: "这一行没有正文，公式却是行内。独占一行的式子按 d 改成行间。"
+      }));
+    }
+    if (unit.type === "display" && leftProse.length && rightProse.length) {
+      findings.push(finding(entry, "R6", {
+        currentUnitId: unit.id,
+        elements: [leftProse[0], rightProse[0]],
+        suggestion: "左右都有正文单词，这个单元却是行间。写在句子中间的公式按 i 改成行内。"
+      }));
+    }
+    const ordered = members.filter(isLetterGlyph).slice().sort((a, b) => a.bbox[2] - b.bbox[2]);
+    const tail = ordered[ordered.length - 1];
+    if (unit.type === "inline" && tail && /^[,.，。]$/.test(String(tail.char || "").trim())) {
+      findings.push(finding(entry, "R7", {
+        currentUnitId: unit.id,
+        elements: [tail],
+        suggestion: "行内公式末尾这个元素只有逗号或句号，应是正文。把它改成 text，不要留在公式里。"
+      }));
+    }
+    if (unit.type === "display") {
+      const trailing = (page.elements || []).filter((element) => {
+        const text = String(element.char || "").trim();
+        return /^[,.，。]$/.test(text)
+          && element.label !== "formula"
+          && !members.includes(element)
+          && sameLine(element, box, height)
+          && element.bbox[0] >= box[2] - 1
+          && horizontalGap(box, element.bbox) <= 1.2 * height;
+      });
+      if (trailing.length) {
+        findings.push(finding(entry, "R7", {
+          currentUnitId: unit.id,
+          elements: trailing.slice(0, 2),
+          suggestion: "行间公式这一行末尾的逗号或句号不在单元里。框住它和公式再按 m。"
+        }));
+      }
+    }
+  }
+}
+
+function lineGlyphs(elements, seed, height) {
+  return elements.filter((element) => isLetterGlyph(element) && sameLine(element, seed.bbox || unionBox([seed]), height));
+}
+
+function auditPageRules(entries, page, findings) {
+  if (!page) return;
+  const elements = page.elements || [];
+  const unitById = new Map((page.units || []).map((unit) => [unit.id, unit]));
+  const knownIds = new Set(elements.map((element) => element.id));
+  const height = glyphHeight(elements);
+  const host = entries[0];
+
+  for (const element of elements) {
+    if (element.label !== "formula") continue;
+    const owner = entries.find((entry) => (entry.unit.elementIds || []).includes(element.id)) || host;
+    if (!element.unitId || !unitById.has(element.unitId)) {
+      findings.push(finding(owner, "R8", {
+        currentUnitId: element.unitId || "",
+        elements: [element],
+        suggestion: "这个公式元素没有对得上的 unitId。不要手改编号，回到复核页重新合并。"
+      }));
+    }
+  }
+  for (const unit of page.units || []) {
+    for (const id of unit.elementIds || []) {
+      if (knownIds.has(id)) continue;
+      const owner = entries.find((entry) => entry.unit.unitId === unit.id || (entry.unit.elementIds || []).includes(id)) || host;
+      findings.push(finding(owner, "R8", {
+        currentUnitId: unit.id,
+        elements: [{ id, char: "", font: "", label: "", bbox: [] }],
+        suggestion: `units 里的 ${id} 在元素列表中不存在。不要手改编号，用复核页导出的文件重新导入。`
+      }));
+    }
+  }
+
+  const seenNumbers = new Set();
+  const displayUnits = (page.units || []).filter((unit) => unit.type === "display");
+  for (const element of elements.filter(isLetterGlyph)) {
+    const around = lineGlyphs(elements, element, height);
+    const sorted = around.slice().sort((a, b) => b.bbox[2] - a.bbox[2] || b.bbox[0] - a.bbox[0]);
+    if (!sorted.length || sorted[0].id !== element.id && !isClosingDelimiter(sorted[0])) continue;
+    let candidate = sorted[0];
+    if (isClosingDelimiter(candidate)) {
+      const inward = sorted.find((glyph) => glyph.bbox[2] <= candidate.bbox[0] + 1 && horizontalGap(glyph.bbox, candidate.bbox) <= height);
+      if (!inward) continue;
+      candidate = inward;
+    }
+    const text = String(candidate.char || "").trim();
+    const shaped = FULL_EQ_NUMBER.test(text) || BARE_EQ_NUMBER.test(text);
+    if (!shaped || seenNumbers.has(candidate.id)) continue;
+    const rightEdge = Math.max(...around.map((glyph) => glyph.bbox[2]));
+    const ownRight = isClosingDelimiter(sorted[0]) ? sorted[0].bbox[2] : candidate.bbox[2];
+    if (ownRight < rightEdge - 1.5) continue;
+    const lineBox = unionBox(around);
+    const displays = displayUnits.filter((unit) => {
+      const members = membersOf(page, unit);
+      return members.some((member) => sameLine(member, lineBox, height));
+    });
+    if (!displays.length && !FULL_EQ_NUMBER.test(text)) continue;
+    seenNumbers.add(candidate.id);
+    const inside = displays.some((unit) => (unit.elementIds || []).includes(candidate.id));
+    if (inside && candidate.label === "formula") continue;
+    const owner = entries.find((entry) => displays.some((unit) => unit.id === entry.unit.unitId || (entry.unit.elementIds || []).some((id) => (unit.elementIds || []).includes(id)))) || host;
+    findings.push(finding(owner, "R3", {
+      currentUnitId: displays[0]?.id || "",
+      elements: [candidate],
+      suggestion: "行末的公式编号不在同一行的行间单元里，或标签不是 formula。选中编号按 e，并进这一行的 display 单元。"
+    }));
+  }
+
+  const formulaUnits = (page.units || []).filter((unit) => (unit.elementIds || []).length);
+  const auditedIds = new Set(entries.flatMap((entry) => currentUnits(page, entry).units.map((unit) => unit.id)));
+  const relevant = formulaUnits.filter((unit) => auditedIds.has(unit.id));
+  for (const unit of relevant) {
+    const members = membersOf(page, unit);
+    const box = unionBox(members);
+    const unitHeight = glyphHeight(members) || height;
+    for (const element of elements) {
+      if (!isAttachableText(element) || members.includes(element)) continue;
+      if (!sameLine(element, box, unitHeight)) continue;
+      if (horizontalGap(element.bbox, box) > TOUCH_GAP_RATIO * unitHeight) continue;
+      const owner = entries.find((entry) => currentUnits(page, entry).units.some((item) => item.id === unit.id)) || host;
+      findings.push(finding(owner, "R5", {
+        currentUnitId: unit.id,
+        elements: [element],
+        suggestion: "这个元素紧贴已在队列里的公式，又像公式的一部分（斜体单字母、数学字体、运算符，或不含单词的短串）。框住后按 m。"
+      }));
+    }
+  }
+  const orderedUnits = relevant.map((unit) => ({ unit, box: unionBox(membersOf(page, unit)) })).sort((a, b) => a.box[0] - b.box[0]);
+  for (let index = 1; index < orderedUnits.length; index += 1) {
+    const left = orderedUnits[index - 1];
+    const right = orderedUnits[index];
+    if (!sameLine({ bbox: left.box }, right.box, height)) continue;
+    const gap = horizontalGap(left.box, right.box);
+    const between = elements.filter((element) => {
+      if (!isLetterGlyph(element) && element.kind === "path") return false;
+      const mid = (element.bbox[0] + element.bbox[2]) / 2;
+      return mid > left.box[2] - 0.5 && mid < right.box[0] + 0.5 && sameLine(element, left.box, height);
+    });
+    const onlySymbols = between.length > 0 && between.every(isOperatorOrBracket);
+    const touching = gap <= TOUCH_GAP_RATIO * height && between.length === 0;
+    if (!onlySymbols && !touching) continue;
+    const owner = entries.find((entry) => currentUnits(page, entry).units.some((unit) => unit.id === left.unit.id || unit.id === right.unit.id)) || host;
+    findings.push(finding(owner, "R5", {
+      currentUnitId: `${left.unit.id},${right.unit.id}`,
+      elements: between.slice(0, 3),
+      suggestion: "同一行两个公式单元紧贴，或中间只隔运算符、括号。它们多半该是一个单元。框住后按 m。"
+    }));
+  }
+}
+
+function dedupe(findings) {
+  const seen = new Set();
+  return findings.filter((item) => {
+    const ids = item.elements.map((element) => element.id).join(",");
+    const key = [item.rule, item.paperId, item.page, item.queueUnitId, item.currentUnitId, ids, item.suggestion].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function auditReviewed({ queue, loadPage, confirmedKeys, limit } = {}) {
+  const window = selectAuditWindow(queue, confirmedKeys, limit);
+  const findings = [];
+  const byPage = new Map();
+  for (const entry of window) {
+    const key = `${entry.unit.paperId}:${entry.unit.page}`;
+    if (!byPage.has(key)) byPage.set(key, { page: loadPage ? loadPage(entry.unit.paperId, entry.unit.page) : null, entries: [] });
+    byPage.get(key).entries.push(entry);
+  }
+  for (const { page, entries } of byPage.values()) {
+    for (const entry of entries) auditUnitRules(entry, page, findings);
+    auditPageRules(entries, page, findings);
+  }
+  const sorted = dedupe(findings).sort((a, b) => a.severity - b.severity || a.queueIndex - b.queueIndex || a.rule.localeCompare(b.rule));
+  const counts = Object.fromEntries(RULES.map(([rule]) => [rule, sorted.filter((item) => item.rule === rule).length]));
+  const confirmedCount = window.filter((entry) => entry.confirmed).length;
+  return {
+    window: {
+      from: window[0]?.queueIndex || 0,
+      to: window[window.length - 1]?.queueIndex || 0,
+      size: window.length,
+      confirmed: confirmedCount,
+      skipped: window.length - confirmedCount,
+      limit: Number.isInteger(limit) ? limit : null
+    },
+    counts,
+    findings: sorted
+  };
+}
+
+export function renderMarkdown(report) {
+  const lines = [
+    "# 复核审计",
+    "",
+    `窗口：队列 ${report.window.from || 0}–${report.window.to || 0}，共 ${report.window.size} 条，已确认 ${report.window.confirmed}，未确认 ${report.window.skipped}。`,
+    `发现 ${report.findings.length} 条，按严重度排列。`,
+    "",
+    "## 汇总",
+    "",
+    "| 规则 | 含义 | 条数 |",
+    "| --- | --- | --- |"
+  ];
+  for (const [rule, , title] of RULES) {
+    lines.push(`| ${rule} | ${title} | ${report.counts[rule] || 0} |`);
+  }
+  lines.push("", "## 发现", "");
+  if (!report.findings.length) lines.push("没有发现。");
+  for (const item of report.findings) {
+    lines.push(`### ${item.rule} 队列 ${item.queueIndex} · ${item.paperId} 第 ${item.page} 页`);
+    lines.push("");
+    lines.push(`- 队列 unitId：\`${item.queueUnitId}\``);
+    lines.push(`- 当前 unitId：\`${item.currentUnitId || "（无）"}\``);
+    lines.push(`- 建议：${item.suggestion}`);
+    if (item.elements.length) {
+      lines.push("- 元素：");
+      for (const element of item.elements) {
+        const box = element.bbox.length ? element.bbox.map((value) => Number(value).toFixed(2)).join(", ") : "无";
+        lines.push(`  - \`${element.id}\` char=\`${element.char}\` font=\`${element.font}\` label=\`${element.label}\` bbox=[${box}]`);
+      }
+    }
+    lines.push("");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function pageFile(page) {
+  return `page-${String(page).padStart(3, "0")}.json`;
+}
+
+function readJson(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+export function loadAuditInputs(base = root) {
+  const reviewPath = join(base, "labels/review-set.json");
+  if (!existsSync(reviewPath)) {
+    throw new Error("还没有 labels/review-set.json。先运行 node scripts/review-set.mjs");
+  }
+  const reviewSet = readJson(reviewPath);
+  const cache = new Map();
+  const loadPage = (paperId, page) => {
+    const key = `${paperId}:${page}`;
+    if (cache.has(key)) return cache.get(key);
+    const reviewed = join(base, "labels/reviewed", paperId, pageFile(page));
+    const prelabel = join(base, "labels/prelabel", paperId, pageFile(page));
+    const path = existsSync(reviewed) ? reviewed : (existsSync(prelabel) ? prelabel : "");
+    const data = path ? readJson(path) : null;
+    cache.set(key, data);
+    return data;
+  };
+  const confirmed = new Set();
+  for (const unit of reviewSet.units || []) {
+    const reviewed = join(base, "labels/reviewed", unit.paperId, pageFile(unit.page));
+    if (!existsSync(reviewed)) continue;
+    const key = `${unit.paperId}:${unit.page}`;
+    if (!cache.has(key)) cache.set(key, readJson(reviewed));
+    const ids = cache.get(key)?.reviewedUnitIds || [];
+    if (ids.includes(unit.unitId)) confirmed.add(confirmKey(unit));
+  }
+  return { queue: reviewSet.units || [], loadPage, confirmed };
+}
+
+function parseArgs(argv) {
+  let limit = null;
+  let out = join(root, "reports/audit.md");
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--limit") limit = Number(argv[++index]);
+    else if (arg === "--out") out = argv[++index];
+    else if (arg === "--help") return { help: true, limit, out };
+  }
+  if (limit != null && (!Number.isInteger(limit) || limit < 0)) throw new Error("--limit 要是非负整数");
+  return { limit, out };
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    console.log("node scripts/audit-reviewed.mjs [--limit N] [--out reports/audit.md]");
+    return;
+  }
+  const inputs = loadAuditInputs(root);
+  const report = auditReviewed({ ...inputs, confirmedKeys: inputs.confirmed, limit: args.limit });
+  const markdown = renderMarkdown(report);
+  const jsonPath = args.out.endsWith(".json") ? args.out : args.out.replace(/\.md$/i, "") + ".json";
+  const mdPath = args.out.endsWith(".json") ? args.out.replace(/\.json$/i, ".md") : args.out;
+  mkdirSync(dirname(mdPath), { recursive: true });
+  mkdirSync(dirname(jsonPath), { recursive: true });
+  writeFileSync(mdPath, markdown);
+  writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`${mdPath}`);
+  console.log(`${jsonPath}`);
+  console.log(JSON.stringify(report.counts));
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();
