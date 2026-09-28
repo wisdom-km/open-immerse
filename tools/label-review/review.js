@@ -3,9 +3,13 @@ import {
   applyEquationNumber,
   applyMerge,
   applySplit,
+  attachExtensionPairs,
+  bindExtensionPairUnits,
   clampZoom,
   confirmBlocked,
   dragSelectsElement,
+  expandPairIds,
+  extensionDelimiterPairs,
   EXTRA_SELECTION_HEADING,
   formatQueueStatus,
   importRejection,
@@ -19,6 +23,7 @@ import {
   pageUnitColor,
   rebuildFormulaUnits,
   reviewActionsLocked,
+  reviewMarkBoxes,
   selectionAside,
   selectionForReviewUnit,
   selectionKey,
@@ -380,22 +385,29 @@ async function paint() {
   const queuedIds = new Set(marks.flatMap((mark) => mark.elementIds));
   const hueByUnit = new Map();
   let hueIndex = 0;
-  for (const element of state.page.elements) {
+  const byId = new Map(state.page.elements.map((element) => [element.id, element]));
+  const paintCurrent = new Set(expandPairIds(state.page.elements, currentIds));
+  const paintSelected = new Set(expandPairIds(state.page.elements, state.selected));
+  const paintQueued = new Set(expandPairIds(state.page.elements, queuedIds));
+  for (const mark of reviewMarkBoxes(state.page.elements)) {
+    const element = byId.get(mark.id);
+    if (!element) continue;
     const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    const [x0, y0, x1, y1] = element.bbox;
+    const [x0, y0, x1, y1] = mark.bbox;
     rect.setAttribute("x", x0 * state.scale);
     rect.setAttribute("y", y0 * state.scale);
     rect.setAttribute("width", Math.max(0.5, (x1 - x0) * state.scale));
     rect.setAttribute("height", Math.max(0.5, (y1 - y0) * state.scale));
     rect.dataset.id = element.id;
+    if (mark.paired) rect.dataset.pair = mark.inkId;
     const className = overlayClass({
       mode: unitMode ? "units" : "pages",
       elementId: element.id,
       label: element.label,
       uncertain: Number(element.confidence) < 0.75,
-      currentIds,
-      selectedIds: state.selected,
-      queuedIds
+      currentIds: paintCurrent,
+      selectedIds: paintSelected,
+      queuedIds: paintQueued
     });
     rect.setAttribute("class", className);
     if (!unitMode && element.label === "formula" && element.unitId && !className.includes("picked")) {
@@ -405,7 +417,6 @@ async function paint() {
     overlay.append(rect);
   }
   if (unitMode) {
-    const byId = new Map(state.page.elements.map((element) => [element.id, element]));
     for (const mark of marks) {
       appendQueueBadge(overlay, mark.elementIds.map((id) => byId.get(id)).filter(Boolean), state.scale, mark.queueNumber);
     }
@@ -511,6 +522,11 @@ function describeSelection() {
 }
 
 function appendInspectorGroups(model, nonFormula) {
+  const paired = new Set();
+  for (const pair of extensionDelimiterPairs(state.page?.elements || [])) {
+    paired.add(pair.glyphId);
+    paired.add(pair.inkId);
+  }
   for (const group of model.groups) {
     const block = document.createElement("section");
     block.className = "unit-group";
@@ -530,6 +546,7 @@ function appendInspectorGroups(model, nonFormula) {
       line.className = nonFormula.has(row.id) ? "element-line non-formula" : "element-line";
       const bits = [row.char || (row.label === "formula" ? "路径" : "空"), row.label];
       if (row.equationNumber) bits.push("编号");
+      if (row.paired || paired.has(row.id)) bits.push("成对");
       if (nonFormula.has(row.id)) bits.push("已不是公式");
       bits.push(row.unitId || "—");
       line.textContent = bits.join(" · ");
@@ -569,6 +586,12 @@ function finishEdit(result) {
   paint();
 }
 
+function selectionWithPairs(ids = state.selected) {
+  const next = expandPairIds(state.page?.elements, ids);
+  state.selected = new Set(next);
+  return next;
+}
+
 function forgetNoticeIfSelectionMoved() {
   const next = selectionKey(state.selected);
   if (state.notice?.selectionKey && state.notice.selectionKey !== next) state.notice = null;
@@ -584,7 +607,8 @@ function onClick(event) {
   }
   const id = event.target?.dataset?.id;
   if (!id) return;
-  state.selected = new Set(nextClickSelection(state.selected, id, {
+  const ids = expandPairIds(state.page?.elements, [id]);
+  state.selected = new Set(nextClickSelection(state.selected, ids, {
     shift: event.shiftKey,
     toggle: event.altKey || event.ctrlKey || event.metaKey
   }));
@@ -625,7 +649,10 @@ function onPointerDown(event) {
     }
     dragSelect = true;
     const rect = pageRectFromPointer(start, now, state.scale);
-    const hits = state.page.elements.filter((element) => dragSelectsElement(element.bbox, rect)).map((element) => element.id);
+    const hits = expandPairIds(
+      state.page.elements,
+      state.page.elements.filter((element) => dragSelectsElement(element.bbox, rect)).map((element) => element.id)
+    );
     state.selected = new Set(nextDragSelection(state.selected, hits, {
       shift: event.shiftKey,
       alt: event.altKey
@@ -644,6 +671,7 @@ function point(event) {
 
 function relabel(label) {
   if (reviewActionsLocked(state.pdfMissing)) return;
+  selectionWithPairs();
   state.notice = null;
   for (const element of selectedElements()) {
     element.label = label;
@@ -651,29 +679,32 @@ function relabel(label) {
     element.rule = "human";
     if (label === "formula" && !element.unitId) element.unitId = `tmp-${element.id}`;
   }
+  bindExtensionPairUnits(state.page.elements, state.selected);
   rebuild();
   paint();
 }
 
 function setType(type) {
   if (reviewActionsLocked(state.pdfMissing)) return;
+  selectionWithPairs();
   state.notice = null;
   for (const element of selectedElements()) {
     if (element.label !== "formula") continue;
     element.unitType = type;
   }
+  bindExtensionPairUnits(state.page.elements, state.selected);
   rebuild();
   paint();
 }
 
 function merge() {
   if (reviewActionsLocked(state.pdfMissing)) return;
-  finishEdit(applyMerge(state.page?.elements, state.selected));
+  finishEdit(applyMerge(state.page?.elements, selectionWithPairs()));
 }
 
 function split() {
   if (reviewActionsLocked(state.pdfMissing)) return;
-  finishEdit(applySplit(state.page?.elements, state.selected));
+  finishEdit(applySplit(state.page?.elements, selectionWithPairs()));
 }
 
 function jumpUncertain(step) {
@@ -682,7 +713,7 @@ function jumpUncertain(step) {
   const current = [...state.selected][0];
   let index = state.uncertain.indexOf(current);
   index = index < 0 ? 0 : (index + step + state.uncertain.length) % state.uncertain.length;
-  state.selected = new Set([state.uncertain[index]]);
+  state.selected = new Set(expandPairIds(state.page?.elements, [state.uncertain[index]]));
   forgetNoticeIfSelectionMoved();
   state.scrollSelection = true;
   paint();
@@ -695,7 +726,7 @@ document.querySelector("#as-display").addEventListener("click", () => setType("d
 document.querySelector("#as-inline").addEventListener("click", () => setType("inline"));
 document.querySelector("#eq-toggle").addEventListener("click", () => {
   if (reviewActionsLocked(state.pdfMissing)) return;
-  finishEdit(applyEquationNumber(state.page?.elements, state.selected));
+  finishEdit(applyEquationNumber(state.page?.elements, selectionWithPairs()));
 });
 document.querySelector("#merge").addEventListener("click", merge);
 document.querySelector("#split").addEventListener("click", split);
@@ -787,6 +818,37 @@ async function confirmUnit() {
   }
   const unit = state.reviewSet.units?.[state.unitCursor];
   if (!unit || state.paperId !== unit.paperId || state.pageNumber !== unit.page) return;
+  const mapped = selectionForReviewUnit(state.page.elements, unit.elementIds, unit.unitId);
+  const snapshot = structuredClone(state.page.elements);
+  const snapshotUnits = state.page.units;
+  const attached = attachExtensionPairs(state.page.elements, mapped.ids);
+  if (attached.blocked) {
+    state.page.elements = snapshot;
+    state.page.units = snapshotUnits;
+    state.notice = {
+      ok: false,
+      text: attached.message,
+      selectionKey: selectionKey(state.selected)
+    };
+    describeSelection();
+    return;
+  }
+  if (attached.changed) {
+    state.page.units = attached.units;
+    state.page.source = "reviewed";
+    const issues = verifyPageLabels(state.page);
+    if (issues.length) {
+      state.page.elements = snapshot;
+      state.page.units = snapshotUnits;
+      state.notice = {
+        ok: false,
+        text: importRejection(issues),
+        selectionKey: selectionKey(state.selected)
+      };
+      describeSelection();
+      return;
+    }
+  }
   if (!Array.isArray(state.page.reviewedUnitIds)) state.page.reviewedUnitIds = [];
   if (!state.page.reviewedUnitIds.includes(unit.unitId)) state.page.reviewedUnitIds.push(unit.unitId);
   const payload = state.page;

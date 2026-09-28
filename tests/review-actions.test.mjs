@@ -5,8 +5,12 @@ import {
   applyEquationNumber,
   applyMerge,
   applySplit,
+  attachExtensionPairs,
+  bindExtensionPairUnits,
   confirmBlocked,
   dragSelectsElement,
+  expandPairIds,
+  extensionDelimiterPairs,
   EXTRA_SELECTION_HEADING,
   formatQueueStatus,
   importRejection,
@@ -21,9 +25,12 @@ import {
   overlayClass,
   pageRectFromPointer,
   pageUnitColor,
+  PAIR_SPLIT_NOTICE,
+  planEquationNumber,
   planMerge,
   rebuildFormulaUnits,
   reviewActionsLocked,
+  reviewMarkBoxes,
   selectionAside,
   selectionForReviewUnit,
   selectionKey,
@@ -751,4 +758,258 @@ test("merge keeps a trailing comma or period on a display equation", () => {
   const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
   assert.match(docs, /行间公式同一行末尾的逗号或句号属于这个行间单元/);
   assert.match(docs, /行内公式后面的逗号或句号是句子的标点/);
+});
+
+test("extension glyphs pair with the ink below and ignore the box inside", () => {
+  const brace = glyph("{(", [177.52, 155.66, 188.63, 164.83], {
+    id: "brace",
+    font: "Fourier-Math-Extension",
+    label: "formula",
+    unitId: "u-eq",
+    unitType: "inline"
+  });
+  const ink = glyph("", [178.43, 164.53, 182.55, 191.91], {
+    id: "ink",
+    font: "",
+    label: "text",
+    source: "unbound-paint"
+  });
+  const tiny = glyph("", [177.65, 156.04, 181.39, 159.62], {
+    id: "tiny",
+    font: "",
+    label: "formula",
+    unitId: "u-eq",
+    unitType: "inline",
+    source: "unbound-paint"
+  });
+  const farther = glyph("", [185.3, 164.56, 188.17, 191.87], {
+    id: "farther",
+    font: "",
+    label: "text",
+    source: "unbound-paint"
+  });
+  const symbols = glyph("{(", [177.52, 155.66, 188.63, 164.83], {
+    id: "symbols",
+    font: "Fourier-Math-Symbols",
+    label: "formula",
+    unitId: "u-eq",
+    unitType: "inline"
+  });
+  const paintedPath = {
+    id: "path",
+    kind: "path",
+    char: "",
+    font: "",
+    bbox: [178.43, 164.53, 182.55, 191.91],
+    pathHash: "abc",
+    label: "other",
+    source: "unbound-paint"
+  };
+  const pairs = extensionDelimiterPairs([brace, ink, tiny, farther, symbols, paintedPath]);
+  assert.equal(pairs.length, 1);
+  assert.equal(pairs[0].glyphId, "brace");
+  assert.equal(pairs[0].inkId, "ink");
+  assert.deepEqual(pairs[0].bbox.map((value) => Math.round(value * 100) / 100), [177.52, 155.66, 188.63, 191.91]);
+  const ids = pairs.flatMap((pair) => [pair.glyphId, pair.inkId]);
+  assert.equal(new Set(ids).size, ids.length);
+
+  const cr = JSON.parse(readFileSync(new URL("../labels/prelabel/crmath-64/page-005.json", import.meta.url), "utf8"));
+  const crPairs = extensionDelimiterPairs(cr.elements);
+  const crInk = new Map(crPairs.map((pair) => [pair.glyphId, pair.inkId]));
+  assert.equal(crInk.get("e25ce4faa62374675"), "e0448a8642b781e0d");
+  assert.equal(crInk.get("e907e3ababfca8a6a"), "ef0af246d7975657b");
+  assert.equal(crInk.get("ee7a7487b33dd7257"), "e99832899dc5cd27d");
+  assert.equal(crInk.get("ee4555cd760a81ff9"), "e6e27d2e248a55194");
+  assert.equal([...crInk.values()].includes("eaae12e455d302d3f"), false);
+  assert.notEqual(crInk.get("e25ce4faa62374675"), "eb833ef31c1d52903");
+
+  const arxiv = JSON.parse(readFileSync(new URL("../labels/prelabel/2006.11239/page-002.json", import.meta.url), "utf8"));
+  const arxivInk = new Map(extensionDelimiterPairs(arxiv.elements).map((pair) => [pair.glyphId, pair.inkId]));
+  assert.equal(arxivInk.get("ea5c3b6f6d0f752a8"), "ee44bf55eb920979a");
+  assert.equal(arxivInk.get("eb17055b427a63e74"), "e3bdf6e7fb9ba5755");
+  assert.equal(arxivInk.get("e34429737bb4d31b9"), "e752b0bd9a00095b1");
+  assert.equal(arxivInk.get("ea35c268111d01425"), "e8580da14d84458e9");
+  assert.equal(arxivInk.get("e5819031f18367c66"), "eae5ad76e83bfffd0");
+  const used = new Set();
+  for (const pair of extensionDelimiterPairs(arxiv.elements)) {
+    assert.equal(used.has(pair.glyphId) || used.has(pair.inkId), false);
+    used.add(pair.glyphId);
+    used.add(pair.inkId);
+  }
+});
+
+test("a delimiter pair is one box and one selection in every review action", () => {
+  const elements = [
+    glyph("{(", [177.52, 155.66, 188.63, 164.83], {
+      id: "brace",
+      font: "Fourier-Math-Extension",
+      label: "formula",
+      unitId: "u-eq",
+      unitType: "display"
+    }),
+    glyph("", [178.43, 164.53, 182.55, 191.91], {
+      id: "ink",
+      font: "",
+      label: "text",
+      source: "unbound-paint"
+    }),
+    glyph("x", [210, 160, 220, 170], {
+      id: "x",
+      font: "CMMI10",
+      label: "formula",
+      unitId: "u-eq",
+      unitType: "display"
+    }),
+    glyph("∑", [377.66, 610.67, 392.05, 620.63], {
+      id: "sum",
+      font: "CMEX10",
+      label: "formula",
+      unitId: "u-sum",
+      unitType: "display"
+    }),
+    glyph("", [378.21, 620.63, 391.47, 634.58], {
+      id: "sum-ink",
+      font: "",
+      label: "formula",
+      unitId: "u-sum",
+      unitType: "display",
+      source: "unbound-paint"
+    }),
+    glyph("n", [360, 612, 368, 622], {
+      id: "limit",
+      font: "CMMI10",
+      label: "formula",
+      unitId: "u-sum",
+      unitType: "display"
+    })
+  ];
+  const marks = reviewMarkBoxes(elements);
+  const braceMark = marks.find((mark) => mark.id === "brace");
+  assert.equal(braceMark.paired, true);
+  assert.equal(braceMark.inkId, "ink");
+  assert.equal(marks.some((mark) => mark.id === "ink"), false);
+  assert.deepEqual(braceMark.bbox.map((value) => Math.round(value * 100) / 100), [177.52, 155.66, 188.63, 191.91]);
+
+  const inkHits = elements.filter((element) => dragSelectsElement(element.bbox, [178, 166, 183, 192])).map((element) => element.id);
+  assert.equal(inkHits.includes("brace"), false);
+  assert.deepEqual(expandPairIds(elements, inkHits).sort(), ["brace", "ink"]);
+  assert.deepEqual(nextDragSelection(["x"], expandPairIds(elements, inkHits), { shift: true }).sort(), ["brace", "ink", "x"]);
+  assert.deepEqual(nextDragSelection(["brace", "ink", "x"], expandPairIds(elements, ["ink"]), { alt: true }), ["x"]);
+  assert.deepEqual(nextClickSelection([], expandPairIds(elements, ["brace"])).sort(), ["brace", "ink"]);
+  assert.deepEqual(nextClickSelection(["brace", "ink", "x"], expandPairIds(elements, ["ink"]), { toggle: true }), ["x"]);
+
+  const merged = applyMerge(elements, expandPairIds(elements, ["ink"]));
+  assert.equal(merged.ok, true);
+  const ink = elements.find((element) => element.id === "ink");
+  const brace = elements.find((element) => element.id === "brace");
+  assert.equal(ink.label, "formula");
+  assert.equal(ink.unitId, brace.unitId);
+  assert.equal(elements.length, 6);
+  assert.notEqual(ink.id, brace.id);
+
+  const sum = elements.find((element) => element.id === "sum");
+  const sumInk = elements.find((element) => element.id === "sum-ink");
+  const split = applySplit(elements, expandPairIds(elements, ["sum"]));
+  assert.equal(split.ok, true);
+  assert.equal(sum.unitId, sumInk.unitId);
+  assert.equal(sum.unitType, "inline");
+  assert.notEqual(sum.unitId, brace.unitId);
+  const limit = elements.find((element) => element.id === "limit");
+  assert.notEqual(limit.unitId, sum.unitId);
+  const whole = [
+    glyph("∑", [10, 10, 24, 20], { id: "whole-sum", font: "CMEX10", label: "formula", unitId: "u-whole", unitType: "display" }),
+    glyph("", [11, 20, 23, 34], { id: "whole-ink", font: "", label: "formula", unitId: "u-whole", unitType: "display", source: "unbound-paint" }),
+    glyph("k", [30, 12, 36, 20], { id: "whole-k", font: "CMMI10", label: "formula", unitId: "u-whole", unitType: "display" })
+  ];
+  const atomized = applySplit(whole, ["whole-sum", "whole-ink", "whole-k"]);
+  assert.equal(atomized.ok, true);
+  assert.equal(whole[0].unitId, whole[1].unitId);
+  assert.notEqual(whole[0].unitId, whole[2].unitId);
+  assert.equal(whole[0].unitType, "display");
+
+  const numbered = [
+    glyph("(", [20, 40, 28, 50], { id: "body", font: "CMR10", label: "formula", unitId: "u-num", unitType: "display" }),
+    glyph("∑", [40, 30, 54, 40], { id: "op", font: "LMMathExtension10", label: "formula", unitId: "u-num", unitType: "display" }),
+    glyph("", [42, 40, 52, 58], { id: "op-ink", font: "", label: "formula", unitId: "u-num", unitType: "display", source: "unbound-paint" })
+  ];
+  const eq = planEquationNumber(numbered, expandPairIds(numbered, ["op"]));
+  assert.equal(eq.action, "toggle");
+  assert.deepEqual(eq.ids.sort(), ["op", "op-ink"]);
+  applyEquationNumber(numbered, eq.ids);
+  assert.equal(numbered.find((element) => element.id === "op").equationNumber, true);
+  assert.equal(numbered.find((element) => element.id === "op-ink").equationNumber, true);
+
+  const looseInk = glyph("", [42, 40, 52, 58], { id: "loose", font: "", label: "text", source: "unbound-paint" });
+  const op = glyph("∑", [40, 30, 54, 40], { id: "op2", font: "CMEX10", label: "formula", unitId: "u-op", unitType: "inline" });
+  looseInk.label = "formula";
+  looseInk.unitId = "tmp-loose";
+  looseInk.unitType = "inline";
+  looseInk.equationNumber = false;
+  bindExtensionPairUnits([op, looseInk], ["loose"]);
+  assert.equal(looseInk.unitId, "u-op");
+  assert.equal(looseInk.unitType, "inline");
+
+  const model = inspectorModel([brace, ink]);
+  assert.equal(model.groups.flatMap((group) => group.rows).every((row) => row.paired), true);
+
+  const review = readFileSync(new URL("../tools/label-review/review.js", import.meta.url), "utf8");
+  assert.match(review, /reviewMarkBoxes\(/);
+  assert.match(review, /expandPairIds\(/);
+  assert.match(review, /selectionWithPairs\(/);
+  assert.match(review, /bindExtensionPairUnits\(/);
+  assert.match(review.slice(review.indexOf("function relabel"), review.indexOf("function setType")), /bindExtensionPairUnits\(/);
+  assert.match(review.slice(review.indexOf("function setType"), review.indexOf("function merge")), /selectionWithPairs\(/);
+  assert.match(review.slice(review.indexOf("async function confirmUnit")), /attachExtensionPairs\(/);
+  assert.match(review, /成对/);
+  const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
+  assert.match(docs, /复核工具现在把这一对画成一个框/);
+});
+
+test("confirm auto-includes the missing ink and keeps both elements", () => {
+  const page = JSON.parse(readFileSync(new URL("../labels/prelabel/crmath-64/page-005.json", import.meta.url), "utf8"));
+  page.reviewedUnitIds = ["ue00cad5ca361"];
+  const glyphId = "e25ce4faa62374675";
+  const inkId = "e0448a8642b781e0d";
+  const before = page.elements.find((element) => element.id === inkId);
+  const snapshot = {
+    id: before.id,
+    char: before.char,
+    font: before.font,
+    bbox: [...before.bbox],
+    pathHash: before.pathHash
+  };
+  const members = page.elements.filter((element) => element.unitId === "ue00cad5ca361").map((element) => element.id);
+  assert.equal(members.includes(inkId), false);
+  const attached = attachExtensionPairs(page.elements, members);
+  assert.equal(attached.changed, true);
+  assert.equal(attached.blocked, false);
+  const ink = page.elements.find((element) => element.id === inkId);
+  const brace = page.elements.find((element) => element.id === glyphId);
+  assert.equal(ink.label, "formula");
+  assert.equal(ink.unitId, brace.unitId);
+  assert.equal(ink.unitType, brace.unitType);
+  assert.deepEqual({
+    id: ink.id,
+    char: ink.char,
+    font: ink.font,
+    bbox: ink.bbox,
+    pathHash: ink.pathHash
+  }, snapshot);
+  assert.equal(page.elements.filter((element) => element.id === inkId).length, 1);
+  assert.equal(page.elements.filter((element) => element.id === glyphId).length, 1);
+  page.units = attached.units;
+  assert.deepEqual(verifyPageLabels(page), []);
+  assert.deepEqual(page.reviewedUnitIds, ["ue00cad5ca361"]);
+  const again = attachExtensionPairs(page.elements, page.elements.filter((element) => element.unitId === brace.unitId).map((element) => element.id));
+  assert.equal(again.changed, false);
+
+  const orphan = [
+    glyph("∑", [377.7, 610.7, 392.1, 620.6], { id: "sum", font: "CMEX10", label: "text" }),
+    glyph("", [378.2, 620.6, 391.5, 634.6], { id: "paint", font: "", label: "text", source: "unbound-paint" })
+  ];
+  const refused = attachExtensionPairs(orphan, ["sum"]);
+  assert.equal(refused.blocked, true);
+  assert.equal(refused.message, PAIR_SPLIT_NOTICE);
+  assert.equal(orphan[1].label, "text");
+  assert.match(PAIR_SPLIT_NOTICE, /Enter/);
 });
