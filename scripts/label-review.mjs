@@ -144,7 +144,7 @@ export function createReviewServer({ pdfDir = join(root, "corpus/pdfs") } = {}) 
       return;
     }
     if (url.pathname === "/") {
-      response.writeHead(302, { location: "/tools/label-review/index.html" });
+      response.writeHead(302, { location: `/tools/label-review/index.html${url.search}` });
       response.end();
       return;
     }

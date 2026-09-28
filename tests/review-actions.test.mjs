@@ -12,7 +12,9 @@ import {
   expandPairIds,
   extensionDelimiterPairs,
   EXTRA_SELECTION_HEADING,
+  formatPageQueueLabel,
   formatQueueStatus,
+  formatUnitQueueLabel,
   importRejection,
   inspectorModel,
   isRenderingCancelled,
@@ -28,6 +30,9 @@ import {
   overlayClass,
   pageRectFromPointer,
   pageUnitColor,
+  parseQueueJump,
+  parseQueueQuery,
+  queueIndexesOnPage,
   PAIR_SPLIT_NOTICE,
   planEquationNumber,
   planMerge,
@@ -283,6 +288,62 @@ test("reopening an unchanged review unit selects its current members", () => {
     elementCount: mapped.count
   });
   assert.equal(saved.statusLine, `已复核 · 当前单元 ${unitId} · 3 个元素`);
+});
+
+test("queue labels show #N and jump parsing rejects out of range", () => {
+  const unit = { field: "ml", paperId: "p", page: 4, type: "inline", confidence: 0.5 };
+  assert.equal(
+    formatUnitQueueLabel({ index: 0, unit, reviewed: false }),
+    "#1 ml p 第 4 页 行内 0.5"
+  );
+  assert.equal(
+    formatUnitQueueLabel({ index: 11, unit: { ...unit, type: "display" }, reviewed: true }),
+    "#12 已看 · ml p 第 4 页 行间 0.5"
+  );
+  const units = [
+    { paperId: "a", page: 1 },
+    { paperId: "b", page: 2 },
+    { paperId: "a", page: 1 }
+  ];
+  assert.deepEqual(queueIndexesOnPage(units, "a", 1), [1, 3]);
+  assert.deepEqual(queueIndexesOnPage(units, "a", "1"), [1, 3]);
+  assert.deepEqual(queueIndexesOnPage(units, "c", 1), []);
+  assert.equal(
+    formatPageQueueLabel({ row: { field: "cs", paperId: "a", page: 1, uncertain: 3 }, queueIndexes: [1, 3] }),
+    "#1 #3 · cs a 第 1 页 · 3"
+  );
+  assert.equal(
+    formatPageQueueLabel({ row: { field: "cs", paperId: "a", page: 9, uncertain: 1 }, queueIndexes: [] }),
+    "cs a 第 9 页 · 1"
+  );
+
+  assert.deepEqual(parseQueueJump("12", 1000), { ok: true, index: 11, queueIndex: 12 });
+  assert.deepEqual(parseQueueJump(" #12 ", 1000), { ok: true, index: 11, queueIndex: 12 });
+  assert.equal(parseQueueJump("0", 1000).ok, false);
+  assert.match(parseQueueJump("1001", 1000).message, /1 到 1000/);
+  assert.equal(parseQueueJump("", 1000).ok, false);
+  assert.match(parseQueueJump("abc", 1000).message, /队列序号/);
+  assert.match(parseQueueJump("1", 0).message, /空/);
+
+  assert.deepEqual(parseQueueQuery("?q=3", 10), { ok: true, index: 2, queueIndex: 3 });
+  assert.equal(parseQueueQuery("?q=3&paper=x", 10).ok, true);
+  assert.equal(parseQueueQuery("?q=0", 10).ok, false);
+  assert.match(parseQueueQuery("?q=0", 10).message, /1 到 10/);
+  assert.equal(parseQueueQuery("?paper=x", 10).absent, true);
+  assert.equal(parseQueueQuery("?q=", 10).absent, true);
+
+  const review = readFileSync(new URL("../tools/label-review/review.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../tools/label-review/index.html", import.meta.url), "utf8");
+  assert.match(review, /formatUnitQueueLabel\(/);
+  assert.match(review, /formatPageQueueLabel\(/);
+  assert.match(review, /parseQueueQuery\(/);
+  assert.match(review, /parseQueueJump\(/);
+  assert.match(html, /id="jump-queue"/);
+  assert.match(html, /跳到 #/);
+  const keys = review.slice(review.indexOf('window.addEventListener("keydown"'));
+  const beforeEnter = keys.slice(0, keys.indexOf('key === "enter"'));
+  assert.match(beforeEnter, /key === "g"/);
+  assert.doesNotMatch(beforeEnter, /key === "j"|key === "m"|key === "z"/);
 });
 
 test("reopening the merged page-4 equation selects all 14 current members", () => {
@@ -973,7 +1034,15 @@ test("queue items stay readable against their background", () => {
     const ratio = contrastRatio(cssHex(block, foreground), cssHex(block, background));
     assert.equal(ratio >= 4.5, true, `${selector} contrast ${ratio}`);
   }
-  assert.match(review, /已看 · /);
+  assert.match(review, /formatUnitQueueLabel\(/);
+  assert.match(
+    formatUnitQueueLabel({
+      index: 0,
+      unit: { field: "f", paperId: "p", page: 1, type: "inline", confidence: 1 },
+      reviewed: true
+    }),
+    /已看 · /
+  );
   assert.match(review, /"reviewed"/);
 });
 

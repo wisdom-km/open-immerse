@@ -5,7 +5,8 @@ import {
   auditReviewed,
   formulaProseWords,
   renderMarkdown,
-  selectAuditWindow
+  selectAuditWindow,
+  summarizeByQueueIndex
 } from "../scripts/audit-reviewed.mjs";
 
 function glyph(id, char, bbox, extra = {}) {
@@ -307,11 +308,38 @@ test("the markdown report names the queue index, unit ids, and element", () => {
     id: "u1", type: "inline", equationNumber: false, elementIds: ["prose"]
   }]));
   const markdown = renderMarkdown(report);
-  assert.match(markdown, /队列 1/);
+  assert.match(markdown, /### #1 /);
+  assert.match(markdown, /## 按序号汇总/);
+  assert.match(markdown, /- #1：/);
   assert.match(markdown, /u1/);
   assert.match(markdown, /prose/);
   assert.match(markdown, /is not possible/);
   assert.equal(report.findings[0].severity <= report.findings.at(-1).severity, true);
+});
+
+test("the index summary lists each #N once, ahead of later numbers", () => {
+  const findings = [
+    { queueIndex: 4, rule: "R1", suggestion: "删掉正文" },
+    { queueIndex: 2, rule: "R5", suggestion: "并进公式" },
+    { queueIndex: 2, rule: "R7", suggestion: "收进逗号" }
+  ];
+  assert.deepEqual(summarizeByQueueIndex(findings), [
+    "- #2：R5 并进公式；R7 收进逗号",
+    "- #4：R1 删掉正文"
+  ]);
+  const markdown = renderMarkdown({
+    window: { from: 2, to: 4, size: 2, confirmed: 1, skipped: 1 },
+    counts: {},
+    findings: [
+      { ...findings[0], paperId: "a", page: 1, queueUnitId: "u4", currentUnitId: "u4", elements: [] },
+      { ...findings[1], paperId: "b", page: 3, queueUnitId: "u2", currentUnitId: "u2", elements: [] },
+      { ...findings[2], paperId: "b", page: 3, queueUnitId: "u2", currentUnitId: "u2", elements: [] }
+    ]
+  });
+  assert.match(markdown, /### #4 R1 · a 第 1 页/);
+  const summary = markdown.slice(markdown.indexOf("## 按序号汇总"), markdown.indexOf("## 发现"));
+  assert.ok(summary.indexOf("#2") < summary.indexOf("#4"));
+  assert.match(summary, /- #2：R5 并进公式；R7 收进逗号/);
 });
 
 test("auditing prelabel pages as the reviewed draft does not throw", () => {
@@ -342,4 +370,6 @@ test("auditing prelabel pages as the reviewed draft does not throw", () => {
   const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
   assert.match(docs, /## 复核审计/);
   assert.match(docs, /node scripts\/audit-reviewed\.mjs/);
+  assert.match(docs, /按序号汇总/);
+  assert.match(docs, /跳到 #/);
 });

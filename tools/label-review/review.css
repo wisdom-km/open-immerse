@@ -3,6 +3,7 @@ html, body { height: 100%; }
 body { margin: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; font: 14px/1.4 "Segoe UI", "Noto Sans SC", sans-serif; color: #1c1c1c; background: #f4f1ea; }
 header { flex: none; display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: #1f2a30; color: #f7f4ee; flex-wrap: wrap; }
 header button, header a { color: inherit; background: #314049; border: 0; padding: 6px 10px; text-decoration: none; cursor: pointer; }
+#jump-queue { width: 4.5em; color: #1a1a1a; background: #fff; border: 0; padding: 4px 6px; }
 .layout { display: grid; grid-template-columns: 240px minmax(0, 1fr) 280px; flex: 1; min-height: 0; }
 aside { overflow: auto; min-height: 0; background: #fff; border-right: 1px solid #ddd; padding: 8px; }
 #inspector {

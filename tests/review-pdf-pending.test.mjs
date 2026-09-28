@@ -40,6 +40,9 @@ test("thirty sequential PDF opens leave no pending request", async () => {
     }
     const icon = await fetch(`http://127.0.0.1:${port}/favicon.ico`);
     assert.equal(icon.status, 204);
+    const jump = await fetch(`http://127.0.0.1:${port}/?q=3`, { redirect: "manual" });
+    assert.equal(jump.status, 302);
+    assert.equal(jump.headers.get("location"), "/tools/label-review/index.html?q=3");
   } finally {
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }

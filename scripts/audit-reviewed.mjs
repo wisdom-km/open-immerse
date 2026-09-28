@@ -644,6 +644,20 @@ export function auditReviewed({ queue, loadPage, confirmedKeys, limit } = {}) {
   };
 }
 
+/** One line per queue index: rules and suggested actions, in index order. */
+export function summarizeByQueueIndex(findings = []) {
+  const groups = new Map();
+  for (const item of findings) {
+    const list = groups.get(item.queueIndex) || [];
+    list.push(item);
+    groups.set(item.queueIndex, list);
+  }
+  return [...groups.keys()].sort((a, b) => a - b).map((queueIndex) => {
+    const parts = groups.get(queueIndex).map((item) => `${item.rule} ${item.suggestion}`);
+    return `- #${queueIndex}：${parts.join("；")}`;
+  });
+}
+
 export function renderMarkdown(report) {
   const lines = [
     "# 复核审计",
@@ -659,10 +673,14 @@ export function renderMarkdown(report) {
   for (const [rule, , title] of RULES) {
     lines.push(`| ${rule} | ${title} | ${report.counts[rule] || 0} |`);
   }
+  lines.push("", "## 按序号汇总", "");
+  const byIndex = summarizeByQueueIndex(report.findings);
+  if (!byIndex.length) lines.push("没有发现。");
+  else lines.push(...byIndex);
   lines.push("", "## 发现", "");
   if (!report.findings.length) lines.push("没有发现。");
   for (const item of report.findings) {
-    lines.push(`### ${item.rule} 队列 ${item.queueIndex} · ${item.paperId} 第 ${item.page} 页`);
+    lines.push(`### #${item.queueIndex} ${item.rule} · ${item.paperId} 第 ${item.page} 页`);
     lines.push("");
     lines.push(`- 队列 unitId：\`${item.queueUnitId}\``);
     lines.push(`- 当前 unitId：\`${item.currentUnitId || "（无）"}\``);

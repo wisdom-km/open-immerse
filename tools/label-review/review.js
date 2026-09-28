@@ -11,7 +11,9 @@ import {
   expandPairIds,
   extensionDelimiterPairs,
   EXTRA_SELECTION_HEADING,
+  formatPageQueueLabel,
   formatQueueStatus,
+  formatUnitQueueLabel,
   importRejection,
   isRenderingCancelled,
   missingPdfBanner,
@@ -21,6 +23,9 @@ import {
   overlayClass,
   pageRectFromPointer,
   pageUnitColor,
+  parseQueueJump,
+  parseQueueQuery,
+  queueIndexesOnPage,
   rebuildFormulaUnits,
   reviewActionsLocked,
   reviewMarkBoxes,
@@ -79,6 +84,13 @@ async function loadManifest() {
   state.status = await (await fetch("/api/status")).json();
   const setResponse = await fetch("/api/review-set");
   state.reviewSet = setResponse.ok ? await setResponse.json() : { units: [] };
+  const units = state.reviewSet.units || [];
+  const jump = parseQueueQuery(location.search, units.length);
+  if (jump.ok) {
+    await openUnit(jump.index);
+    return;
+  }
+  if (!jump.absent) saveState.textContent = jump.message;
   const params = new URLSearchParams(location.search);
   if (params.get("paper")) {
     await openPage(params.get("paper"), Number(params.get("page") || 1));
@@ -132,11 +144,17 @@ function renderQueue() {
   progress.textContent = `已复核 ${reviewedCount()}/${total} 个单元`;
   const head = document.createElement("p");
   if (state.mode === "pages") {
-    head.textContent = "整页队列 · 低置信度优先";
+    const here = queueIndexesOnPage(state.reviewSet.units, state.paperId, state.pageNumber);
+    head.textContent = here.length
+      ? `整页队列 · 低置信度优先 · 本页 ${here.map((n) => `#${n}`).join(" ")}`
+      : "整页队列 · 低置信度优先";
     queue.append(head);
     for (const row of state.status.queue.slice(0, 40)) {
       const button = document.createElement("button");
-      button.textContent = `${row.field} ${row.paperId} 第 ${row.page} 页 · ${row.uncertain}`;
+      button.textContent = formatPageQueueLabel({
+        row,
+        queueIndexes: queueIndexesOnPage(state.reviewSet.units, row.paperId, row.page)
+      });
       button.className = row.paperId === state.paperId && row.page === state.pageNumber ? "current" : "";
       button.addEventListener("click", () => openPage(row.paperId, row.page));
       queue.append(button);
@@ -151,8 +169,7 @@ function renderQueue() {
     const unit = units[index];
     const button = document.createElement("button");
     const reviewed = keys.has(unitKey(unit));
-    const done = reviewed ? "已看 · " : "";
-    button.textContent = `${done}${unit.field} ${unit.paperId} 第 ${unit.page} 页 ${unit.type === "display" ? "行间" : "行内"} ${unit.confidence}`;
+    button.textContent = formatUnitQueueLabel({ index, unit, reviewed });
     button.className = [index === state.unitCursor ? "current" : "", reviewed ? "reviewed" : ""].filter(Boolean).join(" ");
     button.addEventListener("click", () => openUnit(index));
     queue.append(button);
@@ -876,9 +893,28 @@ document.querySelector("#mode-pages").addEventListener("click", () => {
 });
 document.querySelector("#confirm-unit").addEventListener("click", confirmUnit);
 
+document.querySelector("#jump-queue").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  const input = event.currentTarget;
+  const parsed = parseQueueJump(input.value, state.reviewSet.units?.length || 0);
+  if (!parsed.ok) {
+    saveState.textContent = parsed.message;
+    return;
+  }
+  openUnit(parsed.index);
+});
+
 window.addEventListener("keydown", (event) => {
   if (event.target.matches("input, textarea, select")) return;
   const key = event.key.toLowerCase();
+  if (key === "g" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    const input = document.querySelector("#jump-queue");
+    input.focus();
+    input.select();
+    event.preventDefault();
+    return;
+  }
   if (reviewActionsLocked(state.pdfMissing) && !isNavigationKey(key)) return;
   if (key === "enter") confirmUnit();
   else if (key === "1") relabel("formula");
