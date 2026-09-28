@@ -98,6 +98,25 @@ test("R1 flags body-font prose inside a formula and keeps subscripts, operators,
     id: "u3", type: "inline", equationNumber: false, elementIds: ["tr", "ia", "junk"]
   }]));
   assert.equal(clean.findings.some((item) => item.rule === "R1"), false);
+
+  const symbol = formula("svx", "SVX", [0, 100, 24, 110], "u4", { font: "MinionPro-It" });
+  const ky = formula("ky", "Ky", [30, 100, 42, 110], "u4", { font: "AdvOTb65e897d.B" });
+  const rise = formula("rise", "rise,", [48, 104, 70, 109], "u4", { font: "AdvTT7d4973e5.I" });
+  const decay = formula("decay", "decay", [72, 104, 96, 109], "u4", { font: "AdvTT7d4973e5.I" });
+  const qualifier = formula("ae", "-a.e. on", [0, 200, 40, 210], "u5");
+  const et = formula("et", "et", [0, 300, 12, 310], "u6", { unitType: "inline" });
+  const keptWords = run(
+    [entry("u4", ["svx", "ky", "rise", "decay"]), entry("u5", ["ae"]), entry("u6", ["et"], { type: "inline" })],
+    pageOf(
+      [symbol, ky, rise, decay, qualifier, et],
+      [
+        { id: "u4", type: "display", equationNumber: false, elementIds: ["svx", "ky", "rise", "decay"] },
+        { id: "u5", type: "display", equationNumber: false, elementIds: ["ae"] },
+        { id: "u6", type: "inline", equationNumber: false, elementIds: ["et"] }
+      ]
+    )
+  );
+  assert.equal(keptWords.findings.some((item) => item.rule === "R1"), false);
 });
 
 test("R2 flags a display unit across two baselines and ignores fractions, subscripts, and tall braces", () => {
@@ -164,6 +183,56 @@ test("R3 flags a right-hand equation number outside the display unit", () => {
     id: "u3", type: "display", equationNumber: false, elementIds: notRight.map((element) => element.id)
   }]));
   assert.equal(rules(notRightReport).includes("R3"), false);
+
+  const neighbor = glyph("far", "(12)", [200, 107, 220, 117]);
+  const neighborReport = run([entry("u1", body.map((element) => element.id))], pageOf([...body, neighbor], [{
+    id: "u1", type: "display", equationNumber: false, elementIds: body.map((element) => element.id)
+  }]));
+  assert.equal(neighborReport.findings.some((item) => item.rule === "R3"), false);
+
+  const raised = glyph("sup", "2", [200, 100, 206, 104]);
+  const raisedReport = run([entry("u1", body.map((element) => element.id))], pageOf([...body, raised], [{
+    id: "u1", type: "display", equationNumber: false, elementIds: body.map((element) => element.id)
+  }]));
+  assert.equal(raisedReport.findings.some((item) => item.rule === "R3"), false);
+
+  const stub = [formula("stub", "x", [0, 100, 8, 110], "u8")];
+  const margin = glyph("margin", "(43)", [16, 100, 32, 110]);
+  const prose = glyph("sentence", "This sentence is ordinary prose", [120, 400, 280, 410]);
+  const marginReport = run([entry("u8", ["stub"])], pageOf([...stub, margin, prose], [{
+    id: "u8", type: "display", equationNumber: false, elementIds: ["stub"]
+  }]));
+  assert.equal(marginReport.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(43)")), false);
+
+  const middle = ["m1", "m2"].map((id, index) => formula(id, id, [index * 14, 160, index * 14 + 10, 170], "u9"));
+  const middleNumber = formula("mid", "(57)", [200, 160, 224, 170], "u9");
+  const aligned = run([entry("u9", [...middle, middleNumber].map((element) => element.id))], pageOf([...middle, middleNumber], [{
+    id: "u9", type: "display", equationNumber: true, elementIds: [...middle, middleNumber].map((element) => element.id)
+  }]));
+  assert.equal(aligned.findings.some((item) => item.rule === "R3"), false);
+
+  const upper = ["p", "q"].map((id, index) => formula(id, id, [index * 14, 100, index * 14 + 10, 110], "u1"));
+  const bridge = glyph("bridge", "x", [40, 106, 50, 116]);
+  const lower = formula("low", "y", [0, 128, 10, 138], "uLow");
+  const bare = glyph("n56", "56", [188, 128, 204, 138]);
+  const otherNumber = formula("other", "(2)", [200, 40, 220, 50], "uOther");
+  const split = run([entry("u1", upper.map((element) => element.id))], pageOf(
+    [...upper, bridge, lower, bare, otherNumber],
+    [
+      { id: "u1", type: "display", equationNumber: false, elementIds: upper.map((element) => element.id) },
+      { id: "uLow", type: "inline", equationNumber: false, elementIds: ["low"] },
+      { id: "uOther", type: "inline", equationNumber: true, elementIds: ["other"] }
+    ]
+  ));
+  assert.equal(split.findings.some((item) => item.rule === "R3"), false);
+
+  const open = glyph("po", "(", [180, 100, 186, 110]);
+  const bareSame = glyph("n57", "57", [188, 100, 202, 110]);
+  const close = glyph("pc", ")", [204, 100, 210, 110]);
+  const sameLine = run([entry("u1", upper.map((element) => element.id))], pageOf([...upper, open, bareSame, close], [{
+    id: "u1", type: "display", equationNumber: false, elementIds: upper.map((element) => element.id)
+  }]));
+  assert.equal(sameLine.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "57")), true);
 });
 
 test("R4 flags body-font measures and page-1 author marks", () => {
@@ -229,6 +298,18 @@ test("R5 flags a touching symbol and two formula units split by an operator", ()
     ])
   );
   assert.equal(apart.findings.some((item) => item.rule === "R5" && item.suggestion.includes("两个公式")), false);
+
+  const glued = [
+    glyph("donc", ") . D'où", [18, 100, 50, 110]),
+    glyph("eq0", "= 0,", [18, 120, 40, 130]),
+    glyph("adapt", "ADAPT(", [18, 140, 48, 150], { font: "AdvOTcb88df00" }),
+    glyph("sec", "3.2.2", [18, 160, 40, 170])
+  ];
+  const hosts = glued.map((element, index) => formula(`h${index}`, "x", [0, 100 + index * 20, 16, 110 + index * 20], "u9", { unitType: "inline" }));
+  const glueReport = run([entry("u9", hosts.map((element) => element.id), { type: "inline" })], pageOf([...hosts, ...glued], [{
+    id: "u9", type: "inline", equationNumber: false, elementIds: hosts.map((element) => element.id)
+  }]));
+  assert.equal(glueReport.findings.some((item) => item.rule === "R5"), false);
 });
 
 test("R6 flags an inline formula alone on a line and a display formula inside a sentence", () => {
@@ -278,7 +359,14 @@ test("R7 flags an inline trailing comma and a display comma left outside", () =>
   const displayHit = run([entry("u3", ["y"])], pageOf([display, outside], [{
     id: "u3", type: "display", equationNumber: false, elementIds: ["y"]
   }]));
-  assert.equal(displayHit.findings.some((item) => item.rule === "R7" && item.suggestion.includes("行间")), true);
+  assert.equal(displayHit.findings.some((item) => item.rule === "R7"), false);
+
+  const abbrev = formula("iid", "i.i.d", [0, 300, 24, 310], "u5", { unitType: "inline" });
+  const abbrevDot = formula("iid-dot", ".", [24, 300, 28, 310], "u5", { unitType: "inline" });
+  const abbrevReport = run([entry("u5", ["iid", "iid-dot"], { type: "inline" })], pageOf([abbrev, abbrevDot], [{
+    id: "u5", type: "inline", equationNumber: false, elementIds: ["iid", "iid-dot"]
+  }]));
+  assert.equal(abbrevReport.findings.some((item) => item.rule === "R7"), false);
 
   const inside = formula("dot2", ".", [22, 200, 26, 210], "u4");
   const kept = run([entry("u4", ["y2", "dot2"])], pageOf([
@@ -372,4 +460,7 @@ test("auditing prelabel pages as the reviewed draft does not throw", () => {
   assert.match(docs, /node scripts\/audit-reviewed\.mjs/);
   assert.match(docs, /按序号汇总/);
   assert.match(docs, /跳到 #/);
+  assert.match(docs, /## 复核完成状态/);
+  assert.match(docs, /860eadb/);
+  assert.match(docs, /#1/);
 });

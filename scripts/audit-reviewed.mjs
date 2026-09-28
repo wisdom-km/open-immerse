@@ -24,8 +24,12 @@ const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 // 0.8 matches the merge guard: a 6pt "sites" under a 9pt operator.
 const SUBSCRIPT_HEIGHT_RATIO = 0.8;
 
-// "ia" in a math-italic face is a product, not a word. Same cutoff as merge.
-const ITALIC_PRODUCT_MAX_LETTERS = 3;
+// Italic and bold-math symbol names (SVX, Ky, Up, dA) are not prose.
+// *.I, *-It, Italic, and *.B. Longer than the old 3-letter product cutoff.
+const ITALIC_SYMBOL_MAX_LETTERS = 4;
+
+// A raised digit this much shorter than the line is a superscript, not an equation number.
+const SUPERSCRIPT_HEIGHT_RATIO = 0.75;
 
 // Two baselines farther apart than about 1.5 glyph heights are separate
 // display lines. Fraction bars and tall delimiters tie clusters first.
@@ -70,6 +74,7 @@ const SEVERITY = new Map(RULES.map(([rule, severity]) => [rule, severity]));
 const RULE_TITLE = new Map(RULES.map(([rule, , title]) => [rule, title]));
 
 const MATH_ITALIC_FONT = /\.I(?:\+[^.]*)?$/i;
+const AUDIT_SYMBOL_FONT = /-It|\.I(?:\+[^.]*)?$|Italic|\.B(?:\+[^.]*)?$/i;
 const FULL_EQ_NUMBER = /^\(\d+(?:\.\d+)?[a-z]?\)$/;
 const BARE_EQ_NUMBER = /^\d{1,3}(?:\.\d+)?[a-z]?$/;
 
@@ -186,16 +191,39 @@ function sameLine(element, box, height) {
  * are not. The both-sides merge exception is not used here: inside an
  * already merged unit it would hide a real word.
  */
+function isAuditSymbolFont(font) {
+  return AUDIT_SYMBOL_FONT.test(String(font || ""));
+}
+
+function shortSymbolToken(char) {
+  return String(char || "").trim().replace(/[,;:]$/, "");
+}
+
+/** a.e. on, if, for all, et, and, and the same kind of ≤3-word qualifier. */
+export function isShortFormulaQualifier(char) {
+  const compact = String(char || "").trim().replace(/^[−–-]\s*/, "").replace(/\s+/g, " ");
+  if (!compact) return false;
+  if (compact.split(" ").length > 3) return false;
+  return /^(?:a\.e\.(?: on)?|for all|if|et|and|i\.e\.|e\.g\.|etc\.)$/i.test(compact);
+}
+
+function isItalicSubscriptName(element) {
+  if (!isAuditSymbolFont(element?.font)) return false;
+  return /^(?:rise|decay)$/i.test(shortSymbolToken(element.char));
+}
+
 export function formulaProseWords(element, members) {
   if (!element || isMathSymbolFont(element.font)) return [];
   const words = proseTextWords(element.char);
   if (!words.length) return [];
-  const text = String(element.char || "").trim();
+  const token = shortSymbolToken(element.char);
   if (
-    text.length <= ITALIC_PRODUCT_MAX_LETTERS
-    && /^[a-z]+$/.test(text)
-    && isMathItalicFont(element.font)
+    isAuditSymbolFont(element.font)
+    && token.length <= ITALIC_SYMBOL_MAX_LETTERS
+    && /^[A-Za-z]+$/.test(token)
   ) return [];
+  if (isItalicSubscriptName(element)) return [];
+  if (isShortFormulaQualifier(element.char)) return [];
   const others = (members || []).filter((item) => item && item !== element && item.id !== element.id && isLetterGlyph(item));
   const mid = median(others.map(boxHeight));
   const height = boxHeight(element);
@@ -343,15 +371,42 @@ function isOperatorOrBracket(element) {
   return /^[=+\-−–×*<>≤≥≈≠()[\]{}]+$/.test(text) || isClosingDelimiter(element) || isOpeningDelimiter(element);
 }
 
+function isIgnoredAttachText(element) {
+  const text = String(element?.char || "").trim();
+  if (/^(?:=|,|\)|\(|\.|\[|\])/.test(text)) return true;
+  if (/^[()[\]{}]+$/.test(text)) return true;
+  if (element?.label === "text" && isBodyFont(element.font)) {
+    if (/^\d+(?:\.\d+)+$/.test(text)) return true;
+    if (/^[A-Za-z][A-Za-z0-9]*\s*\($/.test(text)) return true;
+  }
+  return false;
+}
+
 function isAttachableText(element) {
   if (!element || element.label !== "text") return false;
   const text = String(element.char || "").trim();
   if (!text || text.length > SHORT_ATTACH_MAX_CHARS) return false;
+  if (isIgnoredAttachText(element)) return false;
   if (text === "," || text === "." || text === "，" || text === "。") return false;
   if (isMathItalicFont(element.font) && /^\p{L}$/u.test(text)) return true;
   if (isMathSymbolFont(element.font)) return true;
   if (isOperatorOrBracket(element)) return true;
   return proseTextWords(text).length === 0;
+}
+
+const ABBREVIATION_DOT = /(?:i\.i\.d|e\.g|i\.e|a\.e|etc)\.$/i;
+
+function trailingAbbreviation(members, tail) {
+  const mark = String(tail?.char || "").trim();
+  if (mark !== "." && mark !== "。") return false;
+  if (ABBREVIATION_DOT.test(mark)) return true;
+  const left = members.filter(isLetterGlyph)
+    .filter((glyph) => glyph !== tail && glyph.bbox[2] <= tail.bbox[0] + 1)
+    .sort((a, b) => b.bbox[2] - a.bbox[2])
+    .slice(0, 6)
+    .reverse();
+  const compact = `${left.map((glyph) => glyph.char || "").join("")}.`.replace(/\s+/g, "");
+  return ABBREVIATION_DOT.test(compact);
 }
 
 function finding(entry, rule, extra) {
@@ -463,36 +518,81 @@ function auditUnitRules(entry, page, findings) {
     }
     const ordered = members.filter(isLetterGlyph).slice().sort((a, b) => a.bbox[2] - b.bbox[2]);
     const tail = ordered[ordered.length - 1];
-    if (unit.type === "inline" && tail && /^[,.，。]$/.test(String(tail.char || "").trim())) {
+    if (unit.type === "inline" && tail && /^[,.，。]$/.test(String(tail.char || "").trim()) && !trailingAbbreviation(members, tail)) {
       findings.push(finding(entry, "R7", {
         currentUnitId: unit.id,
         elements: [tail],
-        suggestion: "行内公式末尾这个元素只有逗号或句号，应是正文。把它改成 text，不要留在公式里。"
+        suggestion: "行内公式末尾这个元素只有逗号或句号，应是正文。把它改成 text，不要留在公式里。缩写 i.i.d.、e.g.、i.e.、a.e.、etc. 结尾的点不算。"
       }));
-    }
-    if (unit.type === "display") {
-      const trailing = (page.elements || []).filter((element) => {
-        const text = String(element.char || "").trim();
-        return /^[,.，。]$/.test(text)
-          && element.label !== "formula"
-          && !members.includes(element)
-          && sameLine(element, box, height)
-          && element.bbox[0] >= box[2] - 1
-          && horizontalGap(box, element.bbox) <= 1.2 * height;
-      });
-      if (trailing.length) {
-        findings.push(finding(entry, "R7", {
-          currentUnitId: unit.id,
-          elements: trailing.slice(0, 2),
-          suggestion: "行间公式这一行末尾的逗号或句号不在单元里。框住它和公式再按 m。"
-        }));
-      }
     }
   }
 }
 
-function lineGlyphs(elements, seed, height) {
-  return elements.filter((element) => isLetterGlyph(element) && sameLine(element, seed.bbox || unionBox([seed]), height));
+function equationLineClusters(elements, height) {
+  const glyphs = elements.filter(isLetterGlyph);
+  const limit = Math.max(3.5, 0.5 * height);
+  // One visual line. A growing union used to swallow the next row whenever
+  // a superscript or a tall brace overlapped it, so a number was checked
+  // against the wrong row of a multi-line equation.
+  const span = Math.max(limit, 0.9 * height);
+  const body = glyphs.filter((glyph) => boxHeight(glyph) >= SUPERSCRIPT_HEIGHT_RATIO * height);
+  const seeds = (body.length ? body : glyphs).slice().sort((a, b) => midY(a) - midY(b) || a.bbox[0] - b.bbox[0]);
+  const lines = [];
+  for (const glyph of seeds) {
+    const y = midY(glyph);
+    const current = lines[lines.length - 1];
+    const ys = current ? current.glyphs.map(midY) : [];
+    const anchor = ys.length ? median(ys) : y;
+    const same = current && Math.abs(y - anchor) <= limit && y - Math.min(...ys) <= span;
+    if (!same) {
+      lines.push({ glyphs: [glyph], top: glyph.bbox[1], bottom: glyph.bbox[3] });
+      continue;
+    }
+    current.glyphs.push(glyph);
+    current.top = Math.min(current.top, glyph.bbox[1]);
+    current.bottom = Math.max(current.bottom, glyph.bbox[3]);
+  }
+  const placed = new Set(lines.flatMap((line) => line.glyphs));
+  for (const glyph of glyphs) {
+    if (placed.has(glyph)) continue;
+    let best = null;
+    let bestDist = Infinity;
+    for (const line of lines) {
+      const dist = Math.abs(midY(glyph) - median(line.glyphs.map(midY)));
+      if (dist <= limit && dist < bestDist) {
+        best = line;
+        bestDist = dist;
+      }
+    }
+    if (!best) {
+      lines.push({ glyphs: [glyph], top: glyph.bbox[1], bottom: glyph.bbox[3] });
+      continue;
+    }
+    best.glyphs.push(glyph);
+    best.top = Math.min(best.top, glyph.bbox[1]);
+    best.bottom = Math.max(best.bottom, glyph.bbox[3]);
+  }
+  return lines;
+}
+
+function isRaisedSmallDigit(element, cluster, height) {
+  const text = String(element?.char || "").trim();
+  if (!/^\d/.test(text)) return false;
+  const others = (cluster?.glyphs || []).filter((glyph) => glyph.id !== element.id && boxHeight(glyph) > boxHeight(element));
+  const body = median(others.map(boxHeight)) || height;
+  const h = boxHeight(element);
+  if (!(h > 0 && body > 0 && h < SUPERSCRIPT_HEIGHT_RATIO * body)) return false;
+  const baseline = median(others.map((glyph) => glyph.bbox[3]));
+  if (!baseline) return false;
+  return element.bbox[3] <= baseline - 0.15 * body;
+}
+
+export function isLeftMarginNumber(element, elements) {
+  const text = String(element?.char || "").trim();
+  if (!/^\(\d{1,3}\)$/.test(text) && !/^\d{1,3}$/.test(text)) return false;
+  const prose = (elements || []).filter((item) => item?.label === "text" && String(item.char || "").trim().length > 12 && item.bbox);
+  const column = prose.length ? median(prose.map((item) => item.bbox[0])) : 72;
+  return element.bbox[2] < column - 12 && element.bbox[0] < 90;
 }
 
 function auditPageRules(entries, page, findings) {
@@ -526,13 +626,17 @@ function auditPageRules(entries, page, findings) {
     }
   }
 
+  const entryIds = entries.map((entry) => {
+    const mapped = selectionForReviewUnit(elements, entry.unit.elementIds || [], entry.unit.unitId);
+    return { entry, ids: new Set([...(mapped.ids || []), ...(entry.unit.elementIds || [])]) };
+  });
+  const queueIds = new Set(entryIds.flatMap((item) => [...item.ids]));
   const seenNumbers = new Set();
-  const displayUnits = (page.units || []).filter((unit) => unit.type === "display");
-  for (const element of elements.filter(isLetterGlyph)) {
-    const around = lineGlyphs(elements, element, height);
-    const sorted = around.slice().sort((a, b) => b.bbox[2] - a.bbox[2] || b.bbox[0] - a.bbox[0]);
-    if (!sorted.length || sorted[0].id !== element.id && !isClosingDelimiter(sorted[0])) continue;
+  for (const cluster of equationLineClusters(elements, height)) {
+    if (!cluster.glyphs.some((glyph) => queueIds.has(glyph.id))) continue;
+    const sorted = cluster.glyphs.slice().sort((a, b) => b.bbox[2] - a.bbox[2] || b.bbox[0] - a.bbox[0]);
     let candidate = sorted[0];
+    let rightEdge = candidate.bbox[2];
     if (isClosingDelimiter(candidate)) {
       const inward = sorted.find((glyph) => glyph.bbox[2] <= candidate.bbox[0] + 1 && horizontalGap(glyph.bbox, candidate.bbox) <= height);
       if (!inward) continue;
@@ -541,23 +645,18 @@ function auditPageRules(entries, page, findings) {
     const text = String(candidate.char || "").trim();
     const shaped = FULL_EQ_NUMBER.test(text) || BARE_EQ_NUMBER.test(text);
     if (!shaped || seenNumbers.has(candidate.id)) continue;
-    const rightEdge = Math.max(...around.map((glyph) => glyph.bbox[2]));
-    const ownRight = isClosingDelimiter(sorted[0]) ? sorted[0].bbox[2] : candidate.bbox[2];
-    if (ownRight < rightEdge - 1.5) continue;
-    const lineBox = unionBox(around);
-    const displays = displayUnits.filter((unit) => {
-      const members = membersOf(page, unit);
-      return members.some((member) => sameLine(member, lineBox, height));
-    });
+    if (candidate.bbox[2] < rightEdge - 1.5 && !isClosingDelimiter(sorted[0])) continue;
+    if (isRaisedSmallDigit(candidate, cluster, height) || isLeftMarginNumber(candidate, elements)) continue;
+    const displays = [...new Set(cluster.glyphs.map((glyph) => unitById.get(glyph.unitId)).filter((unit) => unit?.type === "display"))];
     if (!displays.length && !FULL_EQ_NUMBER.test(text)) continue;
     seenNumbers.add(candidate.id);
     const inside = displays.some((unit) => (unit.elementIds || []).includes(candidate.id));
     if (inside && candidate.label === "formula") continue;
-    const owner = entries.find((entry) => displays.some((unit) => unit.id === entry.unit.unitId || (entry.unit.elementIds || []).some((id) => (unit.elementIds || []).includes(id)))) || host;
+    const owner = entryIds.find((item) => cluster.glyphs.some((glyph) => item.ids.has(glyph.id)))?.entry || host;
     findings.push(finding(owner, "R3", {
       currentUnitId: displays[0]?.id || "",
       elements: [candidate],
-      suggestion: "行末的公式编号不在同一行的行间单元里，或标签不是 formula。选中编号按 e，并进这一行的 display 单元。"
+      suggestion: "这一行的公式编号不在对齐的那一行的行间单元里，或标签不是 formula。页边行号和上标小数字不算。选中编号按 e，并进对齐的那一行。"
     }));
   }
 
