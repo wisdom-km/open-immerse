@@ -616,6 +616,46 @@ test("merge refuses a wide prose run and still accepts a short symbol", () => {
   assert.equal(short.unitId, tau.unitId);
 });
 
+test("merge accepts operator names such as max, Cov[ and i.i.d.", () => {
+  const names = [
+    "max", "min", "sup", "inf", "lim", "liminf", "limsup",
+    "arg", "argmax", "argmin", "log", "ln", "lg", "exp",
+    "sin", "cos", "tan", "cot", "sec", "csc",
+    "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
+    "det", "dim", "ker", "deg", "gcd", "lcm", "ppcm", "pgcd", "mod",
+    "tr", "Tr", "diag", "rank", "sgn", "sign",
+    "Pr", "Var", "Cov", "Corr", "var", "cov",
+    "span", "Re", "Im", "erf", "Id",
+    "s.t.", "i.i.d.", "a.e."
+  ];
+  for (const name of names) {
+    assert.equal(isWideProseText({ label: "text", char: name }), false, name);
+  }
+  assert.equal(isWideProseText({ label: "text", char: "Cov[" }), false);
+  assert.equal(isWideProseText({ label: "text", char: "max min" }), false);
+  assert.equal(isWideProseText({ label: "text", char: "Indeed, Cov[" }), true);
+  assert.equal(isWideProseText({ label: "text", char: ") and random effects (" }), true);
+  const max = glyph("max", [40, 80, 62, 92], { id: "max", label: "text" });
+  const sub = formulaRow("sub", "j", "u-display", { bbox: [44, 92, 50, 100], unitType: "display" });
+  const merged = applyMerge([max, sub], ["max", "sub"]);
+  assert.equal(merged.ok, true);
+  assert.equal(max.label, "formula");
+  assert.equal(max.unitId, sub.unitId);
+  assert.equal(max.unitType, "display");
+  const cov = glyph("Cov[", [10, 10, 28, 20], { id: "cov", label: "text" });
+  const arg = formulaRow("arg", "X", "u-cov", { bbox: [28, 12, 36, 20], unitType: "inline" });
+  const covMerged = applyMerge([cov, arg], ["cov", "arg"]);
+  assert.equal(covMerged.ok, true);
+  assert.equal(cov.label, "formula");
+  assert.equal(cov.unitId, arg.unitId);
+  const iid = glyph("i.i.d.", [70, 40, 92, 50], { id: "iid", label: "text" });
+  const host = formulaRow("host", "X", "u-iid", { bbox: [94, 40, 104, 50], unitType: "inline" });
+  const iidMerged = applyMerge([iid, host], ["iid", "host"]);
+  assert.equal(iidMerged.ok, true);
+  assert.equal(iid.label, "formula");
+  assert.equal(iid.unitId, host.unitId);
+});
+
 test("split peels a selected subset into one inline unit", () => {
   const ids = ["rise", "sub", "decay", "dsub", "g"];
   const unitId = unitIdFromMembers(ids);
