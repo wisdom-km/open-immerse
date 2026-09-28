@@ -17,6 +17,7 @@ import {
   inspectorModel,
   isRenderingCancelled,
   isTaskRed,
+  isFormulaTextWord,
   isMathSymbolFont,
   isWideProseText,
   proseTextWords,
@@ -716,6 +717,83 @@ test("math-symbol font junk is not prose; body-font sentences still block merge"
     assert.match(refused.message, snippet);
     assert.equal(element.label, "text", id);
   }
+});
+
+test("a formula text subscript such as sites can merge, and prose beside the formula cannot", () => {
+  const page = JSON.parse(readFileSync(new URL("../labels/prelabel/s42005-024-01697-4/page-005.json", import.meta.url), "utf8"));
+  const boxed = page.elements
+    .filter((element) => dragSelectsElement(element.bbox, [70, 335, 300, 400]))
+    .map((element) => structuredClone(element));
+  const sites = boxed.find((element) => element.id === "e16669787120a48d7");
+  assert.equal(sites.char, "sites");
+  assert.equal(sites.font, "AdvOT1ef757c0");
+  assert.equal(isWideProseText(sites), true);
+  assert.equal(isFormulaTextWord(sites, boxed), true);
+  const merged = applyMerge(boxed, boxed.map((element) => element.id));
+  assert.equal(merged.ok, true);
+  assert.equal(merged.message.includes("整段正文"), false);
+  assert.equal(sites.label, "formula");
+  assert.equal(boxed.some((element) => element.id !== sites.id && element.unitId === sites.unitId && element.label === "formula"), true);
+
+  const fresh = () => page.elements
+    .filter((element) => dragSelectsElement(element.bbox, [70, 335, 300, 400]))
+    .map((element) => structuredClone(element));
+  const proseLine = structuredClone(page.elements.find((element) => element.id === "e6bd1004caf1a7b30"));
+  assert.match(proseLine.char, /basis states/);
+  const withLine = [...fresh(), proseLine];
+  const refusedLine = planMerge(withLine, withLine.map((element) => element.id));
+  assert.equal(refusedLine.ok, false);
+  assert.match(refusedLine.message, /整段正文/);
+  assert.match(refusedLine.message, /basis states/);
+  assert.equal(proseLine.label, "text");
+
+  const outside = structuredClone(page.elements.find((element) => element.id === "e270d7e2285fb28f0"));
+  assert.equal(outside.char, "of");
+  assert.equal(isWideProseText(outside), true);
+  const withWord = [...fresh(), outside];
+  assert.equal(isFormulaTextWord(outside, withWord), false);
+  const refusedWord = planMerge(withWord, withWord.map((element) => element.id));
+  assert.equal(refusedWord.ok, false);
+  assert.match(refusedWord.message, /整段正文/);
+  assert.match(refusedWord.message, /「of」/);
+  assert.equal(outside.label, "text");
+
+  const left = formulaRow("left", "∏", "u-left", { bbox: [10, 100, 22, 112] });
+  const inside = glyph("vac", [28, 100, 48, 112], { id: "vac", label: "text", font: "AdvOT1ef757c0" });
+  const right = formulaRow("right", "H", "u-right", { bbox: [52, 100, 64, 112] });
+  assert.equal(isFormulaTextWord(inside, [left, inside, right]), true);
+  const vacMerged = applyMerge([left, inside, right], ["left", "vac", "right"]);
+  assert.equal(vacMerged.ok, true);
+  assert.equal(inside.label, "formula");
+  assert.equal(inside.unitId, left.unitId);
+
+  const body = formulaRow("body", "H", "u-body", { bbox: [0, 0, 16, 10] });
+  const subscript = glyph("vac", [0, 14, 14, 19], { id: "sub", label: "text", font: "AdvOT1ef757c0" });
+  assert.equal(isFormulaTextWord(subscript, [body, subscript]), true);
+  const subMerged = applyMerge([body, subscript], ["body", "sub"]);
+  assert.equal(subMerged.ok, true);
+  assert.equal(subscript.label, "formula");
+
+  const host = formulaRow("host", "x", "u-host", { bbox: [0, 40, 12, 50] });
+  const beside = glyph("where", [16, 40, 48, 50], { id: "beside", label: "text", font: "AdvOT1ef757c0" });
+  const refusedBeside = planMerge([host, beside], ["host", "beside"]);
+  assert.equal(refusedBeside.ok, false);
+  assert.match(refusedBeside.message, /整段正文/);
+  assert.match(refusedBeside.message, /where/);
+  assert.equal(beside.label, "text");
+
+  const title = glyph("pharmacokinetics", [40, 180, 200, 206], { id: "title", label: "text", font: "Corbel-Bold" });
+  const titleAnd = glyph("and", [210, 180, 250, 206], { id: "and", label: "text", font: "Corbel-Bold" });
+  const pageStroke = glyph("", [30, 0, 30.2, 600], { id: "stroke", kind: "path", label: "other" });
+  const headerRule = glyph("", [0, 210, 500, 210.3], { id: "rule", kind: "path", label: "other" });
+  const refusedTitle = planMerge([title, titleAnd, pageStroke, headerRule], ["title", "and", "stroke", "rule"]);
+  assert.equal(refusedTitle.ok, false);
+  assert.match(refusedTitle.message, /pharmacokinetics/);
+  assert.equal(title.label, "text");
+
+  const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
+  assert.match(docs, /公式里的文字下标（∏_sites、H_vac 等）属于公式/);
+  assert.match(docs, /整式框选按 `m`/);
 });
 
 test("merge accepts operator names such as max, Cov[ and i.i.d.", () => {
