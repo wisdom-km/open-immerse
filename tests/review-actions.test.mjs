@@ -739,6 +739,15 @@ test("merge keeps a trailing comma or period on a display equation", () => {
     assert.equal(punct.unitId, formula.unitId);
     assert.equal(merged.units.some((unit) => unit.type === "display" && unit.elementIds.includes("punct")), true);
   }
+  for (const mark of ["0:", "0,"]) {
+    assert.equal(isWideProseText({ label: "text", char: mark }), false, mark);
+    const formula = formulaRow("eq2", "q", "u-cond", { bbox: [10, 40, 22, 52], unitType: "inline" });
+    const glued = glyph(mark, [24, 40, 36, 52], { id: "glued", label: "text" });
+    const merged = applyMerge([formula, glued], ["eq2", "glued"]);
+    assert.equal(merged.ok, true, mark);
+    assert.equal(glued.label, "formula");
+    assert.equal(glued.unitId, formula.unitId);
+  }
   const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
   assert.match(docs, /行间公式同一行末尾的逗号或句号属于这个行间单元/);
   assert.match(docs, /行内公式后面的逗号或句号是句子的标点/);
