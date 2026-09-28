@@ -18,6 +18,7 @@ import {
   isRenderingCancelled,
   isTaskRed,
   isWideProseText,
+  proseTextWords,
   missingPdfBanner,
   nextClickSelection,
   nextDragSelection,
@@ -621,6 +622,45 @@ test("merge refuses a wide prose run and still accepts a short symbol", () => {
   assert.equal(merged.ok, true);
   assert.equal(short.label, "formula");
   assert.equal(short.unitId, tau.unitId);
+});
+
+test("a radical bar mapped to ffiffiffi is not prose and can merge", () => {
+  assert.deepEqual(proseTextWords("ffiffiffi"), []);
+  assert.deepEqual(proseTextWords("ffiffi"), []);
+  assert.deepEqual(proseTextWords("fifi"), []);
+  assert.deepEqual(proseTextWords("\uFB03\uFB03\uFB01"), []);
+  assert.deepEqual(proseTextWords("fi"), ["fi"]);
+  assert.deepEqual(proseTextWords("ffi"), ["ffi"]);
+  assert.deepEqual(proseTextWords("office"), ["office"]);
+  assert.deepEqual(proseTextWords("offer"), ["offer"]);
+  assert.equal(isWideProseText({ label: "text", char: "ffiffiffi" }), false);
+  assert.equal(isWideProseText({ label: "text", char: "office" }), true);
+  const page = JSON.parse(readFileSync(new URL("../labels/prelabel/s42005-024-01697-4/page-003.json", import.meta.url), "utf8"));
+  const bars = ["ef2f79b5b2c65ba57", "eb95c9529cd32c591", "eb6add80e7d984f25"];
+  const line = page.elements.filter((element) => dragSelectsElement(element.bbox, [360, 640, 570, 675]));
+  assert.equal(bars.every((id) => line.some((element) => element.id === id)), true);
+  for (const id of bars) {
+    const bar = line.find((element) => element.id === id);
+    assert.equal(bar.char, "ffiffiffi");
+    assert.equal(bar.font, "AdvP4C4E46");
+    assert.equal(isWideProseText(bar), false);
+  }
+  const merged = applyMerge(line, line.map((element) => element.id));
+  assert.equal(merged.ok, true);
+  assert.equal(merged.changed, true);
+  assert.equal(merged.message.includes("整段正文"), false);
+  const unitIds = new Set(bars.map((id) => line.find((element) => element.id === id).unitId));
+  assert.equal(unitIds.size, 1);
+  assert.equal(bars.every((id) => line.find((element) => element.id === id).label === "formula"), true);
+  const prose = glyph("where the field strength", [0, 0, 80, 10], { id: "prose", label: "text" });
+  const symbol = formulaRow("sqrt", "√", "u-sqrt", { bbox: [84, 0, 92, 10] });
+  const refused = planMerge([prose, symbol], ["prose", "sqrt"]);
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /整段正文/);
+  assert.equal(prose.label, "text");
+  const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
+  assert.match(docs, /根号上的横线有时被抽成 `ffiffiffi` 这种 ffi 乱码/);
+  assert.match(docs, /把整式框住再按 `m` 即可/);
 });
 
 test("merge accepts operator names such as max, Cov[ and i.i.d.", () => {
