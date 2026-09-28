@@ -23,11 +23,35 @@ main { overflow: auto; min-height: 0; background: #d9d3c7; }
 .hit.code { stroke: #1b7f4e; fill: rgba(27, 127, 78, 0.12); }
 .hit.other { stroke: #c46b12; fill: rgba(196, 107, 18, 0.12); }
 .hit.uncertain { stroke-dasharray: 3 2; stroke: #a15c00; }
-#overlay rect.hit.selected {
-  stroke: #b00000 !important;
-  stroke-width: 3.5px !important;
-  stroke-dasharray: none !important;
-  fill: rgba(176, 0, 0, 0.25) !important;
+#overlay.unit-mode .hit {
+  stroke: #c8c8c8;
+  stroke-width: 1px;
+  fill: none;
+  stroke-dasharray: none;
+}
+#overlay.unit-mode .hit.queued {
+  stroke: #8a8a8a;
+  stroke-width: 1.15px;
+  stroke-dasharray: 1.5 2.5;
+  fill: none;
+}
+#overlay.unit-mode .hit.picked,
+#overlay.page-mode .hit.picked {
+  stroke: #c46b12;
+  stroke-width: 2.4px;
+  stroke-dasharray: 5 3;
+  fill: rgba(196, 107, 18, 0.16);
+}
+#overlay.unit-mode .hit.current {
+  stroke: #b00000;
+  stroke-width: 3.5px;
+  stroke-dasharray: none;
+  fill: rgba(176, 0, 0, 0.25);
+}
+#overlay .queue-badge {
+  fill: #6e6e6e;
+  font: 11px/1 sans-serif;
+  pointer-events: none;
 }
 #pdf-missing {
   min-width: min(640px, 90vw);
@@ -49,6 +73,8 @@ body.pdf-missing .actions button:disabled { opacity: 0.45; cursor: not-allowed; 
 #detail .unit-head { margin: 8px 0 2px; font-weight: 700; }
 #queue-unit-status { margin: 0 0 6px; font-weight: 700; white-space: pre-line; }
 #queue-unit-status[hidden] { display: none; }
+#overlay-legend { margin: 0 0 8px; color: #444; }
+#overlay-legend[hidden] { display: none; }
 #detail .element-line { margin: 0 0 2px; word-break: break-all; }
 #detail .element-line.non-formula { color: #8a3b00; }
 #action-notice { margin: 8px 0; font-weight: 700; }

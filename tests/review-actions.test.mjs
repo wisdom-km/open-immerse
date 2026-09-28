@@ -10,7 +10,11 @@ import {
   importRejection,
   inspectorModel,
   isRenderingCancelled,
+  isTaskRed,
   missingPdfBanner,
+  otherQueueMarks,
+  overlayClass,
+  pageUnitColor,
   planMerge,
   rebuildFormulaUnits,
   reviewActionsLocked,
@@ -48,14 +52,22 @@ test("a missing PDF locks confirm and names the file", () => {
   assert.equal(isRenderingCancelled(new Error("Rendering cancelled, page 4")), true);
   assert.equal(isRenderingCancelled(new Error("missing-pdf")), false);
   const css = readFileSync(new URL("../tools/label-review/review.css", import.meta.url), "utf8");
-  assert.ok(css.indexOf(".hit.uncertain") < css.indexOf("rect.hit.selected"));
-  assert.match(css, /rect\.hit\.selected[\s\S]*stroke:\s*#b00000 !important/);
+  assert.ok(css.indexOf(".hit.uncertain") < css.indexOf(".hit.current"));
+  assert.match(css, /#overlay\.unit-mode \.hit\.current \{[^}]*stroke:\s*#b00000/);
+  assert.match(css, /#overlay\.unit-mode \.hit\.picked[\s\S]*?stroke:\s*#c46b12/);
+  assert.equal(css.includes("rect.hit.selected"), false);
+  assert.match(review, /overlayClass\(/);
+  assert.equal(review.includes("rect.hit.selected"), false);
+  assert.equal(review.includes("#b00000"), false);
   assert.match(css, /#pdf-missing/);
   assert.match(css, /#inspector[\s\S]*min-height:\s*0/);
   assert.match(css, /#inspector[\s\S]*overflow-y:\s*auto/);
   const html = readFileSync(new URL("../tools/label-review/index.html", import.meta.url), "utf8");
   assert.match(html, /id="action-notice"/);
   assert.match(html, /id="detail"/);
+  assert.match(html, /红色实心：当前要核对的单元。灰色细框：其他预标注，不用管。橙色虚线：你的选区。/);
+  const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
+  assert.match(docs, /红色实心是当前要核对的单元，灰色细框是其他预标注，不用管，橙色虚线是你的选区/);
 });
 
 function glyph(char, bbox, extra = {}) {
@@ -339,4 +351,175 @@ test("reopening keeps a glyph that was relabeled to text and marks it", () => {
   });
   assert.match(status.statusLine, /未复核 · 已改过，尚未确认/);
   assert.match(status.statusLine, /1 个已不是公式/);
+});
+
+test("unit mode paints only the queue unit red", () => {
+  const currentIds = ["eq-a", "eq-b"];
+  const selectedIds = ["eq-b", "body-d"];
+  const queuedIds = ["other-a"];
+  const current = overlayClass({
+    mode: "units",
+    elementId: "eq-a",
+    label: "formula",
+    uncertain: true,
+    currentIds,
+    selectedIds,
+    queuedIds
+  });
+  const overlap = overlayClass({
+    mode: "units",
+    elementId: "eq-b",
+    label: "formula",
+    currentIds,
+    selectedIds,
+    queuedIds
+  });
+  const picked = overlayClass({
+    mode: "units",
+    elementId: "body-d",
+    label: "formula",
+    currentIds,
+    selectedIds,
+    queuedIds
+  });
+  const queued = overlayClass({
+    mode: "units",
+    elementId: "other-a",
+    label: "formula",
+    currentIds,
+    selectedIds,
+    queuedIds
+  });
+  const neutral = overlayClass({
+    mode: "units",
+    elementId: "plain",
+    label: "text",
+    uncertain: true,
+    currentIds,
+    selectedIds,
+    queuedIds
+  });
+  assert.equal(current, "hit formula current");
+  assert.equal(overlap, "hit formula current");
+  assert.equal(picked, "hit formula picked");
+  assert.equal(queued, "hit formula queued");
+  assert.equal(neutral, "hit text neutral");
+  for (const className of [picked, queued, neutral]) {
+    assert.equal(className.includes("current"), false);
+  }
+});
+
+test("page mode keeps unit colours and never uses the task red", () => {
+  const selected = overlayClass({
+    mode: "pages",
+    elementId: "eq-a",
+    label: "formula",
+    uncertain: true,
+    currentIds: ["eq-a"],
+    selectedIds: ["eq-a"]
+  });
+  const idle = overlayClass({
+    mode: "pages",
+    elementId: "body-d",
+    label: "formula",
+    currentIds: ["eq-a"],
+    selectedIds: []
+  });
+  assert.equal(selected, "hit formula uncertain picked");
+  assert.equal(selected.includes("current"), false);
+  assert.equal(idle, "hit formula");
+  const colors = Array.from({ length: 240 }, (_, index) => pageUnitColor(index));
+  assert.equal(new Set(colors).size > 8, true);
+  for (const color of colors) {
+    assert.equal(isTaskRed(color), false);
+    assert.notEqual(color, "#b00000");
+  }
+  assert.equal(isTaskRed("#b00000"), true);
+  assert.equal(isTaskRed("hsl(0 70% 32%)"), true);
+  assert.equal(isTaskRed("hsl(47 70% 32%)"), false);
+});
+
+test("page 4 equation is the only red mark and a second queue unit stays grey", () => {
+  const page = JSON.parse(readFileSync(new URL("../labels/prelabel/1706.03762/page-004.json", import.meta.url), "utf8"));
+  const reviewSet = JSON.parse(readFileSync(new URL("../labels/review-set.json", import.meta.url), "utf8"));
+  const onPage = reviewSet.units.filter((unit) => unit.paperId === "1706.03762" && unit.page === 4);
+  assert.equal(onPage.length, 1);
+  assert.equal(onPage[0].unitId, "ud1cbf2babd77");
+  const mapped = selectionForReviewUnit(page.elements, onPage[0].elementIds, onPage[0].unitId);
+  assert.equal(mapped.count, 9);
+  const marks = otherQueueMarks({
+    units: reviewSet.units,
+    paperId: "1706.03762",
+    page: 4,
+    elements: page.elements,
+    currentReviewUnitId: "ud1cbf2babd77"
+  });
+  assert.deepEqual(marks, []);
+  const body = page.elements.find((element) => element.label === "formula" && element.char === "d" && !mapped.ids.includes(element.id));
+  assert.ok(body);
+  const bodyClass = overlayClass({
+    mode: "units",
+    elementId: body.id,
+    label: body.label,
+    uncertain: Number(body.confidence) < 0.75,
+    currentIds: mapped.ids,
+    selectedIds: mapped.ids,
+    queuedIds: []
+  });
+  assert.equal(bodyClass, "hit formula neutral");
+  for (const element of page.elements) {
+    const className = overlayClass({
+      mode: "units",
+      elementId: element.id,
+      label: element.label,
+      currentIds: mapped.ids,
+      selectedIds: ["outside", ...mapped.ids],
+      queuedIds: []
+    });
+    if (mapped.ids.includes(element.id)) assert.equal(className.endsWith("current"), true);
+    else if (element.id === "outside") assert.fail("missing id");
+    else assert.equal(className.includes("current"), false);
+  }
+  const dragged = overlayClass({
+    mode: "units",
+    elementId: body.id,
+    label: "formula",
+    currentIds: mapped.ids,
+    selectedIds: [body.id, mapped.ids[0]],
+    queuedIds: []
+  });
+  assert.equal(dragged, "hit formula picked");
+  const stillCurrent = overlayClass({
+    mode: "units",
+    elementId: mapped.ids[0],
+    label: "formula",
+    currentIds: mapped.ids,
+    selectedIds: [body.id, mapped.ids[0]],
+    queuedIds: []
+  });
+  assert.equal(stillCurrent.endsWith("current"), true);
+
+  const extra = formulaRow("zz", "z", "u-other");
+  const elements = [extra, ...page.elements];
+  const withSecond = otherQueueMarks({
+    units: [
+      onPage[0],
+      { paperId: "1706.03762", page: 4, unitId: "u-other", elementIds: ["zz"] }
+    ],
+    paperId: "1706.03762",
+    page: 4,
+    elements,
+    currentReviewUnitId: "ud1cbf2babd77"
+  });
+  assert.equal(withSecond.length, 1);
+  assert.equal(withSecond[0].queueNumber, 2);
+  assert.deepEqual(withSecond[0].elementIds, ["zz"]);
+  assert.equal(overlayClass({
+    mode: "units",
+    elementId: "zz",
+    label: "formula",
+    currentIds: mapped.ids,
+    selectedIds: mapped.ids,
+    queuedIds: withSecond[0].elementIds
+  }), "hit formula queued");
 });

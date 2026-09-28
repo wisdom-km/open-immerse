@@ -9,6 +9,9 @@ import {
   inspectorModel,
   isRenderingCancelled,
   missingPdfBanner,
+  otherQueueMarks,
+  overlayClass,
+  pageUnitColor,
   rebuildFormulaUnits,
   reviewActionsLocked,
   selectionForReviewUnit,
@@ -51,6 +54,7 @@ const detail = document.querySelector("#detail");
 const summary = document.querySelector("#selection-summary");
 const notice = document.querySelector("#action-notice");
 const queueStatus = document.querySelector("#queue-unit-status");
+const overlayLegend = document.querySelector("#overlay-legend");
 
 function pageFile(pageNumber) {
   return `page-${String(pageNumber).padStart(3, "0")}.json`;
@@ -162,6 +166,7 @@ async function showMissingPdf(paperId) {
   detail.textContent = "";
   state.notice = null;
   state.queueUnit = null;
+  if (overlayLegend) overlayLegend.hidden = true;
   if (queueStatus) {
     queueStatus.hidden = true;
     queueStatus.textContent = "";
@@ -267,7 +272,8 @@ async function openPage(paperId, pageNumber, focus = null) {
 let paintToken = 0;
 function scrollCurrentToCenter() {
   const main = stage.closest("main");
-  const nodes = [...stage.querySelectorAll("rect.hit.selected")];
+  const currentNodes = [...stage.querySelectorAll("rect.hit.current")];
+  const nodes = currentNodes.length ? currentNodes : [...stage.querySelectorAll("rect.hit.picked")];
   if (!main || !nodes.length) {
     stage.style.margin = "12px";
     return;
@@ -301,6 +307,24 @@ function isNavigationKey(key) {
   return key === "j" || key === "k" || key === "n" || key === "p";
 }
 
+function appendQueueBadge(overlay, members, scale, queueNumber) {
+  let x1 = -Infinity;
+  let y0 = Infinity;
+  for (const element of members) {
+    const box = element?.bbox;
+    if (!box) continue;
+    x1 = Math.max(x1, box[2]);
+    y0 = Math.min(y0, box[1]);
+  }
+  if (!Number.isFinite(x1)) return;
+  const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  text.setAttribute("class", "queue-badge");
+  text.setAttribute("x", String(x1 * scale + 3));
+  text.setAttribute("y", String(Math.max(10, y0 * scale + 8)));
+  text.textContent = String(queueNumber);
+  overlay.append(text);
+}
+
 async function paint() {
   stage.style.margin = "12px";
   if (reviewActionsLocked(state.pdfMissing) || !state.pdf) return;
@@ -328,7 +352,24 @@ async function paint() {
   overlay.setAttribute("id", "overlay");
   overlay.setAttribute("width", canvas.width);
   overlay.setAttribute("height", canvas.height);
-  const hues = new Map();
+  const unitMode = state.mode === "units";
+  overlay.setAttribute("class", unitMode ? "unit-mode" : "page-mode");
+  const currentMapped = unitMode && state.queueUnit
+    ? selectionForReviewUnit(state.page.elements, state.queueUnit.elementIds, state.queueUnit.unitId)
+    : null;
+  const currentIds = new Set(currentMapped?.ids || []);
+  const marks = unitMode
+    ? otherQueueMarks({
+      units: state.reviewSet.units,
+      paperId: state.paperId,
+      page: state.pageNumber,
+      elements: state.page.elements,
+      currentReviewUnitId: state.queueUnit?.unitId
+    })
+    : [];
+  const queuedIds = new Set(marks.flatMap((mark) => mark.elementIds));
+  const hueByUnit = new Map();
+  let hueIndex = 0;
   for (const element of state.page.elements) {
     const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     const [x0, y0, x1, y1] = element.bbox;
@@ -337,20 +378,27 @@ async function paint() {
     rect.setAttribute("width", Math.max(0.5, (x1 - x0) * state.scale));
     rect.setAttribute("height", Math.max(0.5, (y1 - y0) * state.scale));
     rect.dataset.id = element.id;
-    const classes = ["hit", element.label];
-    if (state.selected.has(element.id)) classes.push("selected");
-    if (Number(element.confidence) < 0.75) classes.push("uncertain");
-    rect.setAttribute("class", classes.join(" "));
-    if (state.selected.has(element.id)) {
-      rect.style.stroke = "#b00000";
-      rect.style.strokeWidth = "3.5px";
-      rect.style.strokeDasharray = "none";
-      rect.style.fill = "rgba(176, 0, 0, 0.25)";
-    } else if (element.label === "formula" && element.unitId) {
-      if (!hues.has(element.unitId)) hues.set(element.unitId, hues.size * 47);
-      rect.style.stroke = `hsl(${hues.get(element.unitId)} 70% 32%)`;
+    const className = overlayClass({
+      mode: unitMode ? "units" : "pages",
+      elementId: element.id,
+      label: element.label,
+      uncertain: Number(element.confidence) < 0.75,
+      currentIds,
+      selectedIds: state.selected,
+      queuedIds
+    });
+    rect.setAttribute("class", className);
+    if (!unitMode && element.label === "formula" && element.unitId && !className.includes("picked")) {
+      if (!hueByUnit.has(element.unitId)) hueByUnit.set(element.unitId, pageUnitColor(hueIndex++));
+      rect.style.stroke = hueByUnit.get(element.unitId);
     }
     overlay.append(rect);
+  }
+  if (unitMode) {
+    const byId = new Map(state.page.elements.map((element) => [element.id, element]));
+    for (const mark of marks) {
+      appendQueueBadge(overlay, mark.elementIds.map((id) => byId.get(id)).filter(Boolean), state.scale, mark.queueNumber);
+    }
   }
   stage.append(overlay);
   overlay.addEventListener("mousedown", onPointerDown);
@@ -407,6 +455,7 @@ function describeSelection() {
     ? selectionForReviewUnit(state.page.elements, state.queueUnit.elementIds, state.queueUnit.unitId)
     : null;
   const nonFormula = new Set(mapped?.nonFormulaIds || []);
+  if (overlayLegend) overlayLegend.hidden = state.mode !== "units";
   if (queueStatus) {
     if (mapped && state.queueUnit) {
       const reviewed = (state.page.reviewedUnitIds || []).includes(state.queueUnit.unitId);
@@ -705,6 +754,10 @@ document.querySelector("#mode-units").addEventListener("click", () => {
 document.querySelector("#mode-pages").addEventListener("click", () => {
   state.mode = "pages";
   renderQueue();
+  if (state.page) {
+    describeSelection();
+    paint();
+  } else if (overlayLegend) overlayLegend.hidden = true;
 });
 document.querySelector("#confirm-unit").addEventListener("click", confirmUnit);
 
