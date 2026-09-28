@@ -233,6 +233,44 @@ test("R3 flags a right-hand equation number outside the display unit", () => {
     id: "u1", type: "display", equationNumber: false, elementIds: upper.map((element) => element.id)
   }]));
   assert.equal(sameLine.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "57")), true);
+
+  const leftBody = ["l1", "l2", "l3"].map((id, index) => formula(id, id, [20 + index * 16, 100, 32 + index * 16, 110], "uLeft"));
+  const leftNumber = [
+    formula("lpar", "(", [150, 100, 156, 110], "uLeft"),
+    formula("l50", "50", [158, 100, 170, 110], "uLeft"),
+    formula("rpar", ")", [172, 100, 178, 110], "uLeft")
+  ];
+  const rightBody = ["r1", "r2", "r3"].map((id, index) => formula(id, id, [240 + index * 16, 100, 252 + index * 16, 110], "uRight"));
+  const rightNumber = [
+    glyph("rp1", "(", [350, 100, 356, 110]),
+    glyph("n57", "57", [360, 100, 372, 110]),
+    glyph("rp2", ")", [374, 100, 380, 110])
+  ];
+  const twoColumn = run(
+    [entry("uLeft", [...leftBody, ...leftNumber].map((element) => element.id))],
+    pageOf([...leftBody, ...leftNumber, ...rightBody, ...rightNumber], [
+      { id: "uLeft", type: "display", equationNumber: true, elementIds: [...leftBody, ...leftNumber].map((element) => element.id) },
+      { id: "uRight", type: "display", equationNumber: false, elementIds: rightBody.map((element) => element.id) }
+    ])
+  );
+  assert.equal(twoColumn.findings.some((item) => item.rule === "R3"), false);
+
+  const leftWithoutNumber = run(
+    [entry("uLeft", leftBody.map((element) => element.id))],
+    pageOf([...leftBody, ...rightBody, ...rightNumber], [
+      { id: "uLeft", type: "display", equationNumber: false, elementIds: leftBody.map((element) => element.id) },
+      { id: "uRight", type: "display", equationNumber: false, elementIds: rightBody.map((element) => element.id) }
+    ])
+  );
+  assert.equal(leftWithoutNumber.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "57")), false);
+
+  const alreadyNumbered = run(
+    [entry("uLeft", [...leftBody, ...leftNumber].map((element) => element.id))],
+    pageOf([...leftBody, ...leftNumber, glyph("far57", "(57)", [360, 100, 384, 110])], [{
+      id: "uLeft", type: "display", equationNumber: true, elementIds: [...leftBody, ...leftNumber].map((element) => element.id)
+    }])
+  );
+  assert.equal(alreadyNumbered.findings.some((item) => item.rule === "R3"), false);
 });
 
 test("R4 flags body-font measures and page-1 author marks", () => {

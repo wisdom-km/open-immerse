@@ -575,6 +575,68 @@ function equationLineClusters(elements, height) {
   return lines;
 }
 
+function isEquationNumberBlock(glyphs) {
+  const visible = glyphs.filter((glyph) => String(glyph.char || "").trim());
+  if (!visible.length || visible.length > 4) return false;
+  const core = visible.filter((glyph) => !isOpeningDelimiter(glyph) && !isClosingDelimiter(glyph));
+  const text = (core.length ? core : visible).map((glyph) => String(glyph.char || "").trim()).join("");
+  return FULL_EQ_NUMBER.test(text) || BARE_EQ_NUMBER.test(text);
+}
+
+function columnGutters(glyphs, height) {
+  const sorted = glyphs.filter(isLetterGlyph).slice().sort((a, b) => a.bbox[0] - b.bbox[0] || a.bbox[2] - b.bbox[2]);
+  const minGap = Math.max(32, 3.2 * height);
+  const gaps = [];
+  for (let index = 1; index < sorted.length; index += 1) {
+    const previous = sorted[index - 1];
+    const glyph = sorted[index];
+    const width = glyph.bbox[0] - previous.bbox[2];
+    if (width < minGap) continue;
+    gaps.push({ x0: previous.bbox[2], x1: glyph.bbox[0], left: previous, right: glyph });
+  }
+  return gaps.filter((gap) => {
+    if (!gap.left.unitId && !gap.right.unitId) return false;
+    if (gap.left.unitId && gap.left.unitId === gap.right.unitId) return false;
+    const next = gaps.find((item) => item.x0 > gap.x0 + 0.5);
+    const block = sorted.filter((glyph) => glyph.bbox[0] >= gap.x1 - 0.5 && (!next || glyph.bbox[2] <= next.x0 + 0.5));
+    return !isEquationNumberBlock(block);
+  });
+}
+
+function splitColumns(glyphs, gutters) {
+  if (!gutters.length) return [{ glyphs }];
+  const cuts = gutters.map((gap) => gap.x1).sort((a, b) => a - b);
+  const columns = [];
+  let current = [];
+  let cut = 0;
+  const sorted = glyphs.slice().sort((a, b) => a.bbox[0] - b.bbox[0] || a.bbox[2] - b.bbox[2]);
+  for (const glyph of sorted) {
+    while (cut < cuts.length && glyph.bbox[0] >= cuts[cut] - 0.5) {
+      if (current.length) columns.push({ glyphs: current });
+      current = [];
+      cut += 1;
+    }
+    current.push(glyph);
+  }
+  if (current.length) columns.push({ glyphs: current });
+  return columns;
+}
+
+function ownedEquationNumber(unit, elements, height) {
+  const members = (elements || []).filter((element) => (unit?.elementIds || []).includes(element.id) && isLetterGlyph(element));
+  const sorted = members.slice().sort((a, b) => b.bbox[2] - a.bbox[2] || b.bbox[0] - a.bbox[0]);
+  let token = sorted[0];
+  if (token && isClosingDelimiter(token)) {
+    const inward = sorted.find((glyph) => glyph !== token && glyph.bbox[2] <= token.bbox[0] + 1 && horizontalGap(glyph.bbox, token.bbox) <= Math.max(height, 4));
+    if (inward) token = inward;
+  }
+  const text = String(token?.char || "").trim();
+  const wrapped = token && token !== sorted[0] && isClosingDelimiter(sorted[0]) && BARE_EQ_NUMBER.test(text);
+  if (FULL_EQ_NUMBER.test(text) || wrapped) return token;
+  if (unit?.equationNumber) return { id: "" };
+  return null;
+}
+
 function isRaisedSmallDigit(element, cluster, height) {
   const text = String(element?.char || "").trim();
   if (!/^\d/.test(text)) return false;
@@ -634,30 +696,42 @@ function auditPageRules(entries, page, findings) {
   const seenNumbers = new Set();
   for (const cluster of equationLineClusters(elements, height)) {
     if (!cluster.glyphs.some((glyph) => queueIds.has(glyph.id))) continue;
-    const sorted = cluster.glyphs.slice().sort((a, b) => b.bbox[2] - a.bbox[2] || b.bbox[0] - a.bbox[0]);
-    let candidate = sorted[0];
-    let rightEdge = candidate.bbox[2];
-    if (isClosingDelimiter(candidate)) {
-      const inward = sorted.find((glyph) => glyph.bbox[2] <= candidate.bbox[0] + 1 && horizontalGap(glyph.bbox, candidate.bbox) <= height);
-      if (!inward) continue;
-      candidate = inward;
+    const columns = splitColumns(cluster.glyphs, columnGutters(cluster.glyphs, height));
+    for (const column of columns) {
+      if (!column.glyphs.some((glyph) => queueIds.has(glyph.id))) continue;
+      const sorted = column.glyphs.slice().sort((a, b) => b.bbox[2] - a.bbox[2] || b.bbox[0] - a.bbox[0]);
+      let candidate = sorted[0];
+      const rightEdge = candidate.bbox[2];
+      if (isClosingDelimiter(candidate)) {
+        const inward = sorted.find((glyph) => glyph.bbox[2] <= candidate.bbox[0] + 1 && horizontalGap(glyph.bbox, candidate.bbox) <= height);
+        if (!inward) continue;
+        candidate = inward;
+      }
+      const text = String(candidate.char || "").trim();
+      const shaped = FULL_EQ_NUMBER.test(text) || BARE_EQ_NUMBER.test(text);
+      if (!shaped || seenNumbers.has(candidate.id)) continue;
+      if (candidate.bbox[2] < rightEdge - 1.5 && !isClosingDelimiter(sorted[0])) continue;
+      if (isRaisedSmallDigit(candidate, column, height) || isLeftMarginNumber(candidate, elements)) continue;
+      const displays = [...new Set(column.glyphs.map((glyph) => unitById.get(glyph.unitId)).filter((unit) => unit?.type === "display"))];
+      if (!displays.length) continue;
+      const eligible = displays.filter((unit) => {
+        const members = elements.filter((element) => (unit.elementIds || []).includes(element.id) && column.glyphs.includes(element));
+        const box = unionBox(members.length ? members : elements.filter((element) => (unit.elementIds || []).includes(element.id)));
+        if (box[0] > candidate.bbox[2] + 1) return false;
+        const owned = ownedEquationNumber(unit, elements, height);
+        return !owned || owned.id === candidate.id;
+      });
+      if (!eligible.length) continue;
+      seenNumbers.add(candidate.id);
+      const inside = eligible.some((unit) => (unit.elementIds || []).includes(candidate.id));
+      if (inside && candidate.label === "formula") continue;
+      const owner = entryIds.find((item) => column.glyphs.some((glyph) => item.ids.has(glyph.id)))?.entry || host;
+      findings.push(finding(owner, "R3", {
+        currentUnitId: eligible[0]?.id || "",
+        elements: [candidate],
+        suggestion: "这一行同一栏里的公式编号不在对齐的行间单元里，或标签不是 formula。另一栏的编号、单元自己已有的编号、页边行号和上标小数字不算。选中编号按 e，并进同一栏对齐的那一行。"
+      }));
     }
-    const text = String(candidate.char || "").trim();
-    const shaped = FULL_EQ_NUMBER.test(text) || BARE_EQ_NUMBER.test(text);
-    if (!shaped || seenNumbers.has(candidate.id)) continue;
-    if (candidate.bbox[2] < rightEdge - 1.5 && !isClosingDelimiter(sorted[0])) continue;
-    if (isRaisedSmallDigit(candidate, cluster, height) || isLeftMarginNumber(candidate, elements)) continue;
-    const displays = [...new Set(cluster.glyphs.map((glyph) => unitById.get(glyph.unitId)).filter((unit) => unit?.type === "display"))];
-    if (!displays.length && !FULL_EQ_NUMBER.test(text)) continue;
-    seenNumbers.add(candidate.id);
-    const inside = displays.some((unit) => (unit.elementIds || []).includes(candidate.id));
-    if (inside && candidate.label === "formula") continue;
-    const owner = entryIds.find((item) => cluster.glyphs.some((glyph) => item.ids.has(glyph.id)))?.entry || host;
-    findings.push(finding(owner, "R3", {
-      currentUnitId: displays[0]?.id || "",
-      elements: [candidate],
-      suggestion: "这一行的公式编号不在对齐的那一行的行间单元里，或标签不是 formula。页边行号和上标小数字不算。选中编号按 e，并进对齐的那一行。"
-    }));
   }
 
   const formulaUnits = (page.units || []).filter((unit) => (unit.elementIds || []).length);
