@@ -151,7 +151,7 @@ node scripts/corpus-fetch.mjs --import <目录>
 
 ### 公式里的文字下标
 
-公式里的文字下标（∏_sites、H_vac 等）属于公式，整式框选按 `m`。
+公式里的文字下标（∏_sites、H_vac 等）属于公式，整式框选按 `m`。分数上的数学斜体短串也是，例如 `ia/2` 的分子 `ia`（i 乘 a）。正文字体的迹算子 `Tr`，以及 `det`、`diag`、`rank`、`sgn`、`Re`、`Im`，同样属于公式。
 
 ### 带括号的名称
 

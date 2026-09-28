@@ -796,6 +796,76 @@ test("a formula text subscript such as sites can merge, and prose beside the for
   assert.match(docs, /整式框选按 `m`/);
 });
 
+test("italic ia in a fraction and the operator Tr merge into the formula", () => {
+  const page = JSON.parse(readFileSync(new URL("../labels/prelabel/s42005-024-01697-4/page-008.json", import.meta.url), "utf8"));
+  const line = page.elements
+    .filter((element) => dragSelectsElement(element.bbox, [320, 180, 540, 230]))
+    .map((element) => structuredClone(element));
+  const ia = line.find((element) => element.id === "eb781da07cd2d8111");
+  assert.equal(ia.char, "ia");
+  assert.equal(ia.font, "AdvOT7d6df7ab.I");
+  assert.equal(isWideProseText(ia), true);
+  const asBody = line.map((element) => (element.id === ia.id ? { ...element, font: "AdvOT1ef757c0" } : element));
+  assert.equal(isFormulaTextWord(asBody.find((element) => element.id === ia.id), asBody), true);
+  const merged = applyMerge(line, line.map((element) => element.id));
+  assert.equal(merged.ok, true);
+  assert.equal(merged.message.includes("整段正文"), false);
+  assert.equal(ia.label, "formula");
+
+  const fractionIds = ["eb781da07cd2d8111", "ea5635679d3c3d8ed", "e77766cdcc82c8291"];
+  const fraction = page.elements
+    .filter((element) => fractionIds.includes(element.id))
+    .map((element) => structuredClone(element));
+  const numerator = fraction.find((element) => element.id === "eb781da07cd2d8111");
+  assert.equal(isFormulaTextWord(numerator, fraction), true);
+  const fractionMerged = applyMerge(fraction, fractionIds);
+  assert.equal(fractionMerged.ok, true);
+  assert.equal(numerator.label, "formula");
+  const bodyFraction = fraction.map((element) => (
+    element.id === numerator.id ? { ...element, font: "AdvOT1ef757c0", label: "text" } : { ...element }
+  ));
+  const bodyNumerator = bodyFraction.find((element) => element.id === numerator.id);
+  assert.equal(isFormulaTextWord(bodyNumerator, bodyFraction), false);
+  const refusedBody = planMerge(bodyFraction, fractionIds);
+  assert.equal(refusedBody.ok, false);
+  assert.match(refusedBody.message, /「ia」/);
+
+  const edge = glyph("ia", [0, 0, 10, 9], { id: "edge", label: "text", font: "AdvOT7d6df7ab.I" });
+  const onlyRight = formulaRow("denom", "2", "u-denom", { bbox: [14, 0, 20, 9] });
+  assert.equal(isFormulaTextWord(edge, [edge, onlyRight]), true);
+  const edgeBody = glyph("ia", [0, 0, 10, 9], { id: "edge-body", label: "text", font: "AdvOT1ef757c0" });
+  assert.equal(isFormulaTextWord(edgeBody, [edgeBody, onlyRight]), false);
+  const tagged = glyph("bc", [0, 0, 10, 9], { id: "tagged", label: "text", font: "AdvOT7d6df7ab.I+03" });
+  assert.equal(isFormulaTextWord(tagged, [tagged, onlyRight]), true);
+  const italicWord = glyph("site", [0, 0, 16, 9], { id: "site", label: "text", font: "Times-Italic" });
+  assert.equal(isFormulaTextWord(italicWord, [italicWord, onlyRight]), false);
+  const proseOnly = glyph("where the field", [20, 0, 80, 9], { id: "prose", label: "text", font: "AdvOT1ef757c0" });
+  assert.equal(isFormulaTextWord(edge, [edge, proseOnly]), false);
+
+  for (const name of ["Tr", "tr", "Tr.", "det", "diag", "rank", "sgn", "Re", "Im"]) {
+    assert.equal(isWideProseText({ label: "text", char: name, font: "AdvOT1ef757c0" }), false, name);
+  }
+  const trLine = page.elements
+    .filter((element) => dragSelectsElement(element.bbox, [320, 318, 545, 350]))
+    .map((element) => structuredClone(element));
+  const tr = trLine.find((element) => element.id === "e3144e07502e2481e");
+  assert.equal(tr.char, "Tr");
+  assert.equal(tr.font, "AdvOT1ef757c0");
+  assert.equal(isWideProseText(tr), false);
+  const trs = page.elements.filter((element) => element.char === "Tr");
+  assert.equal(trs.length >= 2, true);
+  assert.equal(trs.every((element) => isWideProseText(element) === false), true);
+  const trMerged = applyMerge(trLine, trLine.map((element) => element.id));
+  assert.equal(trMerged.ok, true);
+  assert.equal(tr.label, "formula");
+
+  const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
+  assert.match(docs, /ia\/2/);
+  assert.match(docs, /分子 `ia`/);
+  assert.match(docs, /迹算子 `Tr`/);
+  assert.match(docs, /`det`、`diag`、`rank`、`sgn`、`Re`、`Im`/);
+});
+
 test("merge accepts operator names such as max, Cov[ and i.i.d.", () => {
   const names = [
     "max", "min", "sup", "inf", "lim", "liminf", "limsup",
@@ -803,7 +873,7 @@ test("merge accepts operator names such as max, Cov[ and i.i.d.", () => {
     "sin", "cos", "tan", "cot", "sec", "csc",
     "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
     "det", "dim", "ker", "deg", "gcd", "lcm", "ppcm", "pgcd", "mod",
-    "tr", "Tr", "diag", "rank", "sgn", "sign",
+    "tr", "Tr", "Tr.", "diag", "rank", "sgn", "sign",
     "Pr", "Var", "Cov", "Corr", "var", "cov",
     "span", "Re", "Im", "erf", "Id",
     "s.t.", "i.i.d.", "a.e."
