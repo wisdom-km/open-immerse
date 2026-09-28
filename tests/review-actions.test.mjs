@@ -1,7 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { importRejection, isRenderingCancelled, missingPdfBanner, planMerge, reviewActionsLocked } from "../lib/review-actions.js";
+import {
+  applyEquationNumber,
+  applyMerge,
+  applySplit,
+  confirmBlocked,
+  importRejection,
+  inspectorModel,
+  isRenderingCancelled,
+  missingPdfBanner,
+  planMerge,
+  reviewActionsLocked,
+  selectionKey
+} from "../lib/review-actions.js";
+import { LABEL_SCHEMA, unitIdFromMembers, verifyPageLabels } from "../lib/label-schema.js";
 
 test("a missing PDF locks confirm and names the file", () => {
   assert.equal(reviewActionsLocked(true), true);
@@ -13,6 +26,7 @@ test("a missing PDF locks confirm and names the file", () => {
   const review = readFileSync(new URL("../tools/label-review/review.js", import.meta.url), "utf8");
   const confirm = review.slice(review.indexOf("async function confirmUnit"));
   assert.match(confirm, /reviewActionsLocked\(state\.pdfMissing\)/);
+  assert.match(confirm, /confirmBlocked\(state\.notice, state\.selected\)/);
   const keys = review.slice(review.indexOf("window.addEventListener(\"keydown\""));
   assert.match(keys, /reviewActionsLocked\(state\.pdfMissing\) && !isNavigationKey\(key\)/);
   assert.match(review, /arrayBuffer\(\)/);
@@ -24,6 +38,8 @@ test("a missing PDF locks confirm and names the file", () => {
   assert.match(review.slice(review.indexOf("async function showMissingPdf"), review.indexOf("async function loadPdfBytes")), /summary\.textContent = "还没有选中元素。"/);
   assert.match(review.slice(review.indexOf("async function showMissingPdf"), review.indexOf("async function loadPdfBytes")), /detail\.textContent = ""/);
   assert.match(review, /isRenderingCancelled\(error\)/);
+  assert.equal(review.includes("slice(0, 8)"), false);
+  assert.match(review, /inspectorModel\(/);
   assert.equal(isRenderingCancelled({ name: "RenderingCancelledException" }), true);
   assert.equal(isRenderingCancelled(new Error("Rendering cancelled, page 4")), true);
   assert.equal(isRenderingCancelled(new Error("missing-pdf")), false);
@@ -31,24 +47,150 @@ test("a missing PDF locks confirm and names the file", () => {
   assert.ok(css.indexOf(".hit.uncertain") < css.indexOf("rect.hit.selected"));
   assert.match(css, /rect\.hit\.selected[\s\S]*stroke:\s*#b00000 !important/);
   assert.match(css, /#pdf-missing/);
+  assert.match(css, /#inspector[\s\S]*min-height:\s*0/);
+  assert.match(css, /#inspector[\s\S]*overflow-y:\s*auto/);
+  const html = readFileSync(new URL("../tools/label-review/index.html", import.meta.url), "utf8");
+  assert.match(html, /id="action-notice"/);
+  assert.match(html, /id="detail"/);
 });
 
-test("merge refuses a partial unit instead of pulling glyphs out", () => {
+function glyph(char, bbox, extra = {}) {
+  return {
+    kind: "glyph",
+    char,
+    font: extra.font || "CMR10",
+    bbox,
+    pathHash: "",
+    label: extra.label || "text",
+    confidence: extra.confidence ?? 0.93,
+    rule: extra.rule || "body-font",
+    unitId: extra.unitId || null,
+    unitType: extra.unitType || null,
+    equationNumber: extra.equationNumber === true,
+    ...extra,
+    char,
+    bbox
+  };
+}
+
+test("merge keeps one element from becoming a silent no-op failure", () => {
   const elements = [
-    { id: "a", label: "formula", unitId: "u1" },
-    { id: "b", label: "formula", unitId: "u1" },
-    { id: "c", label: "formula", unitId: "u2" },
-    { id: "d", label: "formula", unitId: "u2" }
+    glyph("x", [0, 0, 8, 10], { label: "formula", unitId: "u1", unitType: "inline", id: "a" })
   ];
-  const oneGlyph = planMerge(elements, ["a"]);
-  assert.equal(oneGlyph.ok, false);
-  assert.match(oneGlyph.message, /拖出方框/);
-  const partial = planMerge(elements, ["a", "c"]);
-  assert.equal(partial.ok, false);
-  assert.match(partial.message, /拆碎/);
-  const whole = planMerge(elements, ["a", "b", "c", "d"]);
-  assert.equal(whole.ok, true);
-  assert.deepEqual(whole.ids.sort(), ["a", "b", "c", "d"]);
+  const alone = planMerge(elements, ["a"]);
+  assert.equal(alone.ok, false);
+  assert.match(alone.message, /拖出方框/);
+  assert.equal(confirmBlocked({ ok: false, selectionKey: selectionKey(["a"]) }, ["a"]), true);
+  assert.equal(confirmBlocked({ ok: false, selectionKey: selectionKey(["a"]) }, ["a", "b"]), false);
+  const same = planMerge([
+    glyph("x", [0, 0, 8, 10], { label: "formula", unitId: "u1", unitType: "inline", id: "a" }),
+    glyph("y", [10, 0, 18, 10], { label: "formula", unitId: "u1", unitType: "inline", id: "b" })
+  ], ["a", "b"]);
+  assert.equal(same.ok, true);
+  assert.equal(same.changed, false);
+  assert.match(same.message, /已经是同一个单元/);
+});
+
+test("merge turns text plus formula into one unit and leaves a remainder", () => {
+  const elements = [
+    glyph("Attention(", [0, 0, 40, 10], { id: "text" }),
+    glyph("Q", [42, 0, 52, 10], { id: "q", label: "formula", unitId: "u-old", unitType: "display", confidence: 0.96, rule: "math-font" }),
+    glyph("V", [54, 0, 64, 10], { id: "v", label: "formula", unitId: "u-old", unitType: "display", confidence: 0.96, rule: "math-font" }),
+    glyph("(1)", [200, 0, 220, 10], { id: "num", label: "formula", unitId: "u-old", unitType: "display", confidence: 0.7, rule: "equation-number", equationNumber: true })
+  ];
+  const result = applyMerge(elements, ["text", "q", "v"]);
+  assert.equal(result.ok, true);
+  assert.equal(result.message, "已合并 3 个元素为 1 个单元；原单元剩余 1 个元素（(1)）");
+  assert.equal(elements[0].label, "formula");
+  assert.equal(elements[0].rule, "human");
+  assert.equal(elements[0].confidence, 1);
+  const merged = elements.filter((element) => element.unitId === elements[0].unitId);
+  assert.deepEqual(merged.map((element) => element.id).sort(), ["q", "text", "v"]);
+  assert.equal(merged[0].unitType, "display");
+  assert.equal(merged[0].unitId, unitIdFromMembers(["text", "q", "v"]));
+  const rest = elements.find((element) => element.id === "num");
+  assert.equal(rest.unitId, unitIdFromMembers(["num"]));
+  assert.equal(rest.equationNumber, true);
+  assert.notEqual(rest.unitId, merged[0].unitId);
+  const numbered = applyEquationNumber(elements, ["num"]);
+  assert.equal(numbered.ok, true);
+  assert.match(numbered.message, /已把 \(1\) 标成公式编号，并入旁边的单元/);
+  assert.equal(elements.every((element) => element.unitId === elements[0].unitId), true);
+  assert.equal(elements.find((element) => element.id === "num").equationNumber, true);
+  assert.equal(elements.find((element) => element.id === "num").rule, "equation-number");
+  assert.equal(elements.filter((element) => element.equationNumber).map((element) => element.id).join(), "num");
+  const unit = numbered.units.find((entry) => entry.elementIds.includes("num"));
+  assert.equal(unit.equationNumber, true);
+  assert.equal(unit.type, "display");
+  assert.equal(unit.id, unitIdFromMembers(unit.elementIds));
+});
+
+test("the page 4 attention equation merges the dragged glyphs and then takes (1)", () => {
+  const page = JSON.parse(readFileSync(new URL("../labels/prelabel/1706.03762/page-004.json", import.meta.url), "utf8"));
+  const number = page.elements.find((element) => element.char === "(1)" && element.rule === "equation-number");
+  assert.equal(number.equationNumber, true);
+  assert.equal(number.unitId, "ud1cbf2babd77");
+  const dragged = page.elements.filter((element) => {
+    const box = element.bbox;
+    return box[0] < 420 && box[2] > 210 && box[1] < 495 && box[3] > 450;
+  });
+  assert.equal(dragged.length, 13);
+  assert.equal(dragged.some((element) => element.char === "(1)"), false);
+  assert.equal(dragged.some((element) => element.char === "V"), true);
+  assert.equal(dragged.some((element) => element.char === ")"), true);
+  const result = applyMerge(page.elements, dragged.map((element) => element.id));
+  assert.equal(result.ok, true);
+  assert.equal(result.message, "已合并 13 个元素为 1 个单元；原单元剩余 1 个元素（(1)）");
+  const mergedId = dragged[0].unitId;
+  assert.equal(dragged.every((element) => element.unitId === mergedId && element.label === "formula"), true);
+  assert.equal(number.unitId === mergedId, false);
+  assert.equal(number.equationNumber, true);
+  const attached = applyEquationNumber(page.elements, [number.id]);
+  assert.match(attached.message, /已把 \(1\) 标成公式编号/);
+  assert.equal(number.equationNumber, true);
+  assert.equal(number.rule, "equation-number");
+  assert.equal(dragged.every((element) => element.unitId === number.unitId), true);
+  assert.equal(dragged.some((element) => element.id !== number.id && element.equationNumber), false);
+  page.units = attached.units;
+  page.source = "reviewed";
+  assert.deepEqual(verifyPageLabels(page), []);
+  const unit = page.units.find((entry) => entry.id === number.unitId);
+  assert.equal(unit.equationNumber, true);
+  assert.equal(unit.type, "display");
+  assert.equal(unit.elementIds.length, 14);
+  assert.equal(unit.id, unitIdFromMembers(unit.elementIds));
+});
+
+test("the inspector lists every selected element and groups them by unit", () => {
+  const rows = [];
+  for (let index = 0; index < 13; index += 1) {
+    rows.push({
+      id: `e${index}`,
+      char: index === 10 ? ")" : index === 11 ? "V" : `g${index}`,
+      label: index < 2 ? "text" : "formula",
+      unitId: index < 2 ? "" : "ud1cbf2babd77",
+      equationNumber: false
+    });
+  }
+  const model = inspectorModel(rows);
+  assert.equal(model.count, 13);
+  assert.equal(model.groups.length, 2);
+  assert.equal(model.groups[1].unitId, "ud1cbf2babd77");
+  const lines = model.groups.flatMap((group) => group.rows);
+  assert.equal(lines.length, 13);
+  assert.equal(lines.some((row) => row.char === "V" && row.unitId === "ud1cbf2babd77"), true);
+  assert.equal(lines.some((row) => row.char === ")"), true);
+  const page = { schema: LABEL_SCHEMA };
+  assert.equal(page.schema, "open-immerse.labels/v1");
+});
+
+test("split of a non-formula selection fails visibly and blocks confirm", () => {
+  const elements = [glyph("Attention(", [0, 0, 40, 10], { id: "text" })];
+  const result = applySplit(elements, ["text"]);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /没有可拆开/);
+  const notice = { ok: false, selectionKey: selectionKey(["text"]) };
+  assert.equal(confirmBlocked(notice, ["text"]), true);
 });
 
 test("import rejection is Chinese and does not echo the English id mismatch", () => {

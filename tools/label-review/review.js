@@ -1,5 +1,17 @@
-import { unitIdFromMembers, verifyPageLabels } from "/lib/label-schema.js";
-import { importRejection, isRenderingCancelled, missingPdfBanner, planMerge, reviewActionsLocked } from "/lib/review-actions.js";
+import { verifyPageLabels } from "/lib/label-schema.js";
+import {
+  applyEquationNumber,
+  applyMerge,
+  applySplit,
+  confirmBlocked,
+  importRejection,
+  inspectorModel,
+  isRenderingCancelled,
+  missingPdfBanner,
+  rebuildFormulaUnits,
+  reviewActionsLocked,
+  selectionKey
+} from "/lib/review-actions.js";
 import * as pdfjs from "/pdf/vendor/pdf.min.mjs";
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf/vendor/pdf.worker.min.mjs";
@@ -20,7 +32,8 @@ const state = {
   unitCursor: 0,
   pendingFocus: null,
   pdfMissing: false,
-  scrollSelection: false
+  scrollSelection: false,
+  notice: null
 };
 
 const pdfBytes = new Map();
@@ -33,6 +46,7 @@ const stage = document.querySelector("#stage");
 const queue = document.querySelector("#queue");
 const detail = document.querySelector("#detail");
 const summary = document.querySelector("#selection-summary");
+const notice = document.querySelector("#action-notice");
 
 function pageFile(pageNumber) {
   return `page-${String(pageNumber).padStart(3, "0")}.json`;
@@ -142,6 +156,12 @@ async function showMissingPdf(paperId) {
   stage.innerHTML = "";
   summary.textContent = "还没有选中元素。";
   detail.textContent = "";
+  state.notice = null;
+  if (notice) {
+    notice.hidden = true;
+    notice.textContent = "";
+    notice.className = "";
+  }
   const banner = document.createElement("div");
   banner.id = "pdf-missing";
   banner.setAttribute("role", "alert");
@@ -192,6 +212,7 @@ async function openPage(paperId, pageNumber, focus = null) {
   state.pageNumber = pageNumber;
   state.pendingFocus = focus;
   state.selected = new Set();
+  state.notice = null;
   const response = await fetch(`/api/page/${encodeURIComponent(paperId)}/${pageNumber}`);
   if (token !== pageToken) {
     await response.body?.cancel?.();
@@ -335,40 +356,7 @@ async function paint() {
 }
 
 function rebuild() {
-  const groups = new Map();
-  for (const element of state.page.elements) {
-    if (element.label !== "formula") {
-      element.unitId = null;
-      element.unitType = null;
-      element.equationNumber = false;
-      continue;
-    }
-    if (!element.unitId) element.unitId = `tmp-${element.id}`;
-    if (!element.unitType) element.unitType = "inline";
-    element.equationNumber = element.equationNumber === true;
-    if (!groups.has(element.unitId)) groups.set(element.unitId, []);
-    groups.get(element.unitId).push(element);
-  }
-  state.page.units = [];
-  for (const members of groups.values()) {
-    const id = unitIdFromMembers(members.map((member) => member.id));
-    const type = members.some((member) => member.unitType === "display") ? "display" : "inline";
-    const equationNumber = members.some((member) => member.equationNumber === true);
-    const confidence = Math.min(...members.map((member) => Number(member.confidence) || 0));
-    for (const member of members) {
-      member.unitId = id;
-      member.unitType = type;
-      member.equationNumber = member.equationNumber === true && equationNumber;
-    }
-    state.page.units.push({
-      id,
-      type,
-      equationNumber,
-      confidence: Math.round(confidence * 1000) / 1000,
-      fallback: confidence < 0.65,
-      elementIds: members.map((member) => member.id)
-    });
-  }
+  state.page.units = rebuildFormulaUnits(state.page.elements);
   state.page.source = "reviewed";
   const issues = verifyPageLabels(state.page);
   if (issues.length) {
@@ -406,10 +394,80 @@ function selectedElements() {
 
 function describeSelection() {
   const elements = selectedElements();
+  const model = inspectorModel(elements);
   summary.textContent = elements.length ? `选中 ${elements.length} 个` : "还没有选中元素。";
-  detail.textContent = elements.slice(0, 8).map((element) => {
-    return `${element.label} ${element.confidence} ${element.rule || ""}\n${JSON.stringify(element.char)} ${element.font}\n${element.bbox.join(", ")} ${element.unitId || ""}`;
-  }).join("\n\n");
+  if (notice) {
+    if (state.notice?.text) {
+      notice.hidden = false;
+      notice.textContent = state.notice.text;
+      notice.className = state.notice.ok ? "ok" : "fail";
+    } else {
+      notice.hidden = true;
+      notice.textContent = "";
+      notice.className = "";
+    }
+  }
+  detail.replaceChildren();
+  for (const group of model.groups) {
+    const block = document.createElement("section");
+    block.className = "unit-group";
+    if (group.unitId) block.dataset.unit = group.unitId;
+    const head = document.createElement("p");
+    head.className = "unit-head";
+    if (group.unitId) {
+      const kind = group.type === "display" ? " · 行间" : group.type === "inline" ? " · 行内" : "";
+      const numbered = group.equationNumber ? " · 含公式编号" : "";
+      head.textContent = `单元 ${group.unitId}${kind}${numbered}`;
+    } else {
+      head.textContent = "非公式";
+    }
+    block.append(head);
+    for (const row of group.rows) {
+      const line = document.createElement("p");
+      line.className = "element-line";
+      const bits = [row.char || (row.label === "formula" ? "路径" : "空"), row.label];
+      if (row.equationNumber) bits.push("编号");
+      bits.push(row.unitId || "—");
+      line.textContent = bits.join(" · ");
+      block.append(line);
+    }
+    detail.append(block);
+  }
+}
+
+function noteResult(result) {
+  state.notice = {
+    ok: result.ok === true,
+    text: result.message || "",
+    selectionKey: selectionKey(state.selected)
+  };
+}
+
+function finishEdit(result) {
+  noteResult(result);
+  if (!result.ok || result.changed === false) {
+    describeSelection();
+    return;
+  }
+  state.page.units = result.units;
+  state.page.source = "reviewed";
+  const issues = verifyPageLabels(state.page);
+  if (issues.length) {
+    state.notice = {
+      ok: false,
+      text: importRejection(issues),
+      selectionKey: selectionKey(state.selected)
+    };
+    describeSelection();
+    return;
+  }
+  scheduleSave();
+  paint();
+}
+
+function forgetNoticeIfSelectionMoved() {
+  const next = selectionKey(state.selected);
+  if (state.notice?.selectionKey && state.notice.selectionKey !== next) state.notice = null;
 }
 
 let dragSelect = false;
@@ -428,6 +486,7 @@ function onClick(event) {
   } else {
     state.selected = new Set([id]);
   }
+  forgetNoticeIfSelectionMoved();
   paint();
 }
 
@@ -466,6 +525,7 @@ function onPointerDown(event) {
       const hit = box[0] < rect[2] && box[2] > rect[0] && box[1] < rect[3] && box[3] > rect[1];
       if (hit) state.selected.add(element.id);
     }
+    forgetNoticeIfSelectionMoved();
     paint();
   }
   window.addEventListener("mousemove", move);
@@ -479,6 +539,7 @@ function point(event) {
 
 function relabel(label) {
   if (reviewActionsLocked(state.pdfMissing)) return;
+  state.notice = null;
   for (const element of selectedElements()) {
     element.label = label;
     element.confidence = 1;
@@ -491,6 +552,7 @@ function relabel(label) {
 
 function setType(type) {
   if (reviewActionsLocked(state.pdfMissing)) return;
+  state.notice = null;
   for (const element of selectedElements()) {
     if (element.label !== "formula") continue;
     element.unitType = type;
@@ -501,27 +563,12 @@ function setType(type) {
 
 function merge() {
   if (reviewActionsLocked(state.pdfMissing)) return;
-  const plan = planMerge(state.page?.elements, state.selected);
-  if (!plan.ok) {
-    summary.textContent = plan.message;
-    return;
-  }
-  const id = `merge-${plan.ids[0]}`;
-  for (const element of state.page.elements) {
-    if (plan.ids.includes(element.id)) element.unitId = id;
-  }
-  rebuild();
-  paint();
+  finishEdit(applyMerge(state.page?.elements, state.selected));
 }
 
 function split() {
   if (reviewActionsLocked(state.pdfMissing)) return;
-  for (const element of selectedElements()) {
-    if (element.label !== "formula") continue;
-    element.unitId = `split-${element.id}`;
-  }
-  rebuild();
-  paint();
+  finishEdit(applySplit(state.page?.elements, state.selected));
 }
 
 function jumpUncertain(step) {
@@ -531,6 +578,7 @@ function jumpUncertain(step) {
   let index = state.uncertain.indexOf(current);
   index = index < 0 ? 0 : (index + step + state.uncertain.length) % state.uncertain.length;
   state.selected = new Set([state.uncertain[index]]);
+  forgetNoticeIfSelectionMoved();
   state.scrollSelection = true;
   paint();
 }
@@ -542,12 +590,7 @@ document.querySelector("#as-display").addEventListener("click", () => setType("d
 document.querySelector("#as-inline").addEventListener("click", () => setType("inline"));
 document.querySelector("#eq-toggle").addEventListener("click", () => {
   if (reviewActionsLocked(state.pdfMissing)) return;
-  for (const element of selectedElements()) {
-    if (element.label !== "formula") continue;
-    element.equationNumber = element.equationNumber !== true;
-  }
-  rebuild();
-  paint();
+  finishEdit(applyEquationNumber(state.page?.elements, state.selected));
 });
 document.querySelector("#merge").addEventListener("click", merge);
 document.querySelector("#split").addEventListener("click", split);
@@ -602,6 +645,10 @@ async function openUnit(index) {
 
 async function confirmUnit() {
   if (reviewActionsLocked(state.pdfMissing)) return;
+  if (confirmBlocked(state.notice, state.selected)) {
+    describeSelection();
+    return;
+  }
   const unit = state.reviewSet.units?.[state.unitCursor];
   if (!unit || state.paperId !== unit.paperId || state.pageNumber !== unit.page) return;
   if (!Array.isArray(state.page.reviewedUnitIds)) state.page.reviewedUnitIds = [];
