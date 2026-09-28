@@ -13,11 +13,14 @@ import {
   EXTRA_SELECTION_HEADING,
   formatPageQueueLabel,
   formatQueueStatus,
+  formatSavedStamp,
   formatUnitQueueLabel,
   importRejection,
+  keepaliveSave,
   isRenderingCancelled,
   missingPdfBanner,
   nextClickSelection,
+  nextQueueIndex,
   nextDragSelection,
   otherQueueMarks,
   overlayClass,
@@ -58,7 +61,8 @@ const state = {
   notice: null,
   queueUnit: null,
   zoomBefore: 1.25,
-  zoomFitted: false
+  zoomFitted: false,
+  holdView: false
 };
 
 const pdfBytes = new Map();
@@ -174,7 +178,7 @@ function renderQueue() {
     button.addEventListener("click", () => openUnit(index));
     queue.append(button);
   }
-  queue.querySelector("button.current")?.scrollIntoView({ block: "nearest" });
+  if (!state.holdView) queue.querySelector("button.current")?.scrollIntoView({ block: "nearest" });
 }
 
 function setLocked(locked) {
@@ -253,6 +257,11 @@ async function loadPdfBytes(paperId) {
 }
 
 async function openPage(paperId, pageNumber, focus = null) {
+  await saveChain;
+  if (pendingSave) {
+    saveState.textContent = "保存失败，还停在当前页。";
+    return;
+  }
   const token = ++pageToken;
   state.paperId = paperId;
   state.pageNumber = pageNumber;
@@ -295,6 +304,7 @@ async function openPage(paperId, pageNumber, focus = null) {
     return;
   }
   setLocked(false);
+  hideSavedStamp();
   document.querySelector("#sheet-link").href = `/api/sheet/${encodeURIComponent(paperId)}/${pageNumber}`;
   await paint();
   renderQueue();
@@ -336,7 +346,7 @@ function paperPageCount() {
 }
 
 function isNavigationKey(key) {
-  return key === "j" || key === "k" || key === "n" || key === "p";
+  return key === "j" || key === "k" || key === "n" || key === "p" || key === "u";
 }
 
 function appendQueueBadge(overlay, members, scale, queueNumber) {
@@ -460,26 +470,105 @@ function rebuild() {
   scheduleSave();
 }
 
-let saveTimer = 0;
+let pendingSave = null;
+let inflightSave = null;
+let saveChain = Promise.resolve();
+let saveBusy = 0;
+
 function scheduleSave() {
+  if (!state.page || !state.paperId || state.pdfMissing) return;
+  pendingSave = { payload: state.page, paperId: state.paperId, pageNumber: state.pageNumber };
   saveState.textContent = "正在保存…";
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(save, 400);
+  saveChain = saveChain.then(() => flushPendingSave()).catch(() => {});
+}
+
+async function flushPendingSave() {
+  const job = pendingSave;
+  if (!job) return true;
+  pendingSave = null;
+  const ok = await save(job.payload, job.paperId, job.pageNumber);
+  if (!ok && !pendingSave) pendingSave = job;
+  return ok;
+}
+
+function captureView() {
+  const main = stage.closest("main");
+  return {
+    mainLeft: main?.scrollLeft || 0,
+    mainTop: main?.scrollTop || 0,
+    queueLeft: queue.scrollLeft,
+    queueTop: queue.scrollTop,
+    scale: state.scale
+  };
+}
+
+function restoreView(view) {
+  const main = stage.closest("main");
+  if (main) {
+    main.scrollLeft = view.mainLeft;
+    main.scrollTop = view.mainTop;
+  }
+  queue.scrollLeft = view.queueLeft;
+  queue.scrollTop = view.queueTop;
+  state.scale = view.scale;
+  const zoom = document.querySelector("#zoom");
+  if (zoom) zoom.value = String(view.scale);
+}
+
+function hideSavedStamp() {
+  const node = document.querySelector("#saved-stamp");
+  if (!node) return;
+  node.hidden = true;
+  node.textContent = "";
+}
+
+function showSavedStamp(text) {
+  const node = document.querySelector("#saved-stamp");
+  if (!node) return;
+  node.hidden = false;
+  node.textContent = text;
 }
 
 async function save(payload = state.page, paperId = state.paperId, pageNumber = state.pageNumber) {
-  const response = await fetch(`/api/page/${encodeURIComponent(paperId)}/${pageNumber}`, {
+  const body = JSON.stringify(payload);
+  inflightSave = { paperId, pageNumber, body };
+  saveBusy += 1;
+  try {
+    const response = await fetch(`/api/page/${encodeURIComponent(paperId)}/${pageNumber}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body
+    });
+    if (!response.ok) {
+      saveState.textContent = "保存失败";
+      return false;
+    }
+    inflightSave = null;
+    saveState.textContent = "已自动保存";
+    state.status = await (await fetch("/api/status")).json();
+    const view = state.holdView ? captureView() : null;
+    renderQueue();
+    if (view) restoreView(view);
+    return true;
+  } catch {
+    saveState.textContent = "保存失败";
+    return false;
+  } finally {
+    saveBusy -= 1;
+  }
+}
+
+function sendPendingSave({ keepalive = false } = {}) {
+  if (!pendingSave) return;
+  const job = pendingSave;
+  pendingSave = null;
+  const body = JSON.stringify(job.payload);
+  fetch(`/api/page/${encodeURIComponent(job.paperId)}/${job.pageNumber}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload)
+    body,
+    keepalive: keepalive && keepaliveSave(body.length)
   });
-  if (!response.ok) {
-    saveState.textContent = "保存失败";
-    return;
-  }
-  saveState.textContent = "已自动保存";
-  state.status = await (await fetch("/api/status")).json();
-  renderQueue();
 }
 
 function selectedElements() {
@@ -783,6 +872,8 @@ document.querySelector("#zoom").addEventListener("input", (event) => {
   setZoom(event.target.value);
 });
 document.querySelector("#revert").addEventListener("click", async () => {
+  await saveChain;
+  pendingSave = null;
   state.page = structuredClone(state.prelabel);
   state.page.source = "reviewed";
   await save();
@@ -805,6 +896,8 @@ document.querySelector("#import-file").addEventListener("change", async (event) 
     saveState.textContent = importRejection(issues);
     return;
   }
+  await saveChain;
+  pendingSave = null;
   state.page = page;
   state.page.source = "reviewed";
   await save();
@@ -827,12 +920,23 @@ async function openUnit(index) {
   await openPage(unit.paperId, unit.page, unit);
 }
 
-async function confirmUnit() {
+function openNextUnreviewed() {
+  const next = nextUnreviewed(state.unitCursor + 1);
+  if (next < 0) {
+    saveState.textContent = "后面没有未复核的单元。";
+    return;
+  }
+  openUnit(next);
+}
+
+async function confirmUnit(stay = false) {
   if (reviewActionsLocked(state.pdfMissing)) return;
   if (confirmBlocked(state.notice, state.selected)) {
     describeSelection();
     return;
   }
+  await saveChain;
+  pendingSave = null;
   const unit = state.reviewSet.units?.[state.unitCursor];
   if (!unit || state.paperId !== unit.paperId || state.pageNumber !== unit.page) return;
   const mapped = selectionForReviewUnit(state.page.elements, unit.elementIds, unit.unitId);
@@ -871,11 +975,25 @@ async function confirmUnit() {
   const payload = state.page;
   const paperId = state.paperId;
   const pageNumber = state.pageNumber;
-  const next = nextUnreviewed(state.unitCursor + 1);
-  clearTimeout(saveTimer);
-  await save(payload, paperId, pageNumber);
+  const next = stay ? -1 : nextQueueIndex(state.unitCursor, state.reviewSet.units?.length || 0);
+  const view = stay ? captureView() : null;
+  state.holdView = stay;
+  const saved = await save(payload, paperId, pageNumber);
+  state.holdView = false;
+  if (!saved) return;
+  if (stay) {
+    if (view) restoreView(view);
+    const stamp = formatSavedStamp(new Date());
+    showSavedStamp(stamp);
+    saveState.textContent = stamp;
+    describeSelection();
+    return;
+  }
   if (next >= 0) await openUnit(next);
-  else describeSelection();
+  else {
+    saveState.textContent = "已确认，这是队列最后一个。";
+    describeSelection();
+  }
 }
 
 document.querySelector("#mode-units").addEventListener("click", () => {
@@ -891,7 +1009,8 @@ document.querySelector("#mode-pages").addEventListener("click", () => {
     paint();
   } else if (overlayLegend) overlayLegend.hidden = true;
 });
-document.querySelector("#confirm-unit").addEventListener("click", confirmUnit);
+document.querySelector("#confirm-unit").addEventListener("click", () => confirmUnit(false));
+document.querySelector("#save-stay").addEventListener("click", () => confirmUnit(true));
 
 document.querySelector("#jump-queue").addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
@@ -916,7 +1035,8 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (reviewActionsLocked(state.pdfMissing) && !isNavigationKey(key)) return;
-  if (key === "enter") confirmUnit();
+  if (key === "enter" && event.shiftKey) confirmUnit(true);
+  else if (key === "enter") confirmUnit(false);
   else if (key === "1") relabel("formula");
   else if (key === "2") relabel("text");
   else if (key === "3") relabel("code");
@@ -929,6 +1049,7 @@ window.addEventListener("keydown", (event) => {
   else if ((key === "+" || key === "=") && !event.ctrlKey && !event.metaKey) setZoom(state.scale + 0.1);
   else if ((key === "-" || key === "_") && !event.ctrlKey && !event.metaKey) setZoom(state.scale - 0.1);
   else if (key === "z" && !event.ctrlKey && !event.metaKey) toggleZoomFit();
+  else if (key === "u") openNextUnreviewed();
   else if (key === "j" && state.mode === "units") openUnit(Math.min((state.reviewSet.units?.length || 1) - 1, state.unitCursor + 1));
   else if (key === "k" && state.mode === "units") openUnit(Math.max(0, state.unitCursor - 1));
   else if (key === "j") jumpUncertain(1);
@@ -937,6 +1058,26 @@ window.addEventListener("keydown", (event) => {
   else if (key === "p") openPage(state.paperId, Math.max(1, state.pageNumber - 1));
   else return;
   event.preventDefault();
+});
+
+window.addEventListener("pagehide", () => {
+  if (pendingSave) {
+    sendPendingSave({ keepalive: true });
+    return;
+  }
+  if (!inflightSave) return;
+  fetch(`/api/page/${encodeURIComponent(inflightSave.paperId)}/${inflightSave.pageNumber}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: inflightSave.body,
+    keepalive: keepaliveSave(inflightSave.body.length)
+  });
+});
+
+window.addEventListener("beforeunload", (event) => {
+  if (!pendingSave && saveBusy === 0) return;
+  event.preventDefault();
+  event.returnValue = "";
 });
 
 loadManifest().catch((error) => {

@@ -97,6 +97,8 @@ body.pdf-missing .actions button:disabled { opacity: 0.45; cursor: not-allowed; 
 #action-notice.fail { color: #b00000; }
 #action-notice.ok { color: #0d5c2e; }
 #action-notice[hidden] { display: none; }
+#saved-stamp { margin: 0 0 8px; font-weight: 700; color: #0d5c2e; }
+#saved-stamp[hidden] { display: none; }
 .help { color: #444; }
 @media (max-width: 900px) {
   body { height: auto; overflow: auto; }

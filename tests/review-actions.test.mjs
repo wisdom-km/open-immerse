@@ -14,7 +14,9 @@ import {
   EXTRA_SELECTION_HEADING,
   formatPageQueueLabel,
   formatQueueStatus,
+  formatSavedStamp,
   formatUnitQueueLabel,
+  keepaliveSave,
   importRejection,
   inspectorModel,
   isRenderingCancelled,
@@ -25,6 +27,7 @@ import {
   proseTextWords,
   missingPdfBanner,
   nextClickSelection,
+  nextQueueIndex,
   nextDragSelection,
   otherQueueMarks,
   overlayClass,
@@ -344,6 +347,38 @@ test("queue labels show #N and jump parsing rejects out of range", () => {
   const beforeEnter = keys.slice(0, keys.indexOf('key === "enter"'));
   assert.match(beforeEnter, /key === "g"/);
   assert.doesNotMatch(beforeEnter, /key === "j"|key === "m"|key === "z"/);
+});
+
+test("confirm advances one queue index and staying save stamps the clock", () => {
+  assert.equal(nextQueueIndex(0, 1000), 1);
+  assert.equal(nextQueueIndex(49, 1000), 50);
+  assert.equal(nextQueueIndex(999, 1000), -1);
+  assert.equal(nextQueueIndex(0, 0), -1);
+  assert.equal(formatSavedStamp(new Date(2026, 8, 28, 9, 5, 7)), "已保存 09:05:07");
+  assert.equal(keepaliveSave(60000), true);
+  assert.equal(keepaliveSave(60001), false);
+
+  const review = readFileSync(new URL("../tools/label-review/review.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../tools/label-review/index.html", import.meta.url), "utf8");
+  const confirm = review.slice(review.indexOf("async function confirmUnit"));
+  assert.match(confirm, /nextQueueIndex\(/);
+  assert.equal(confirm.includes("nextUnreviewed"), false);
+  assert.match(confirm, /formatSavedStamp\(/);
+  assert.match(confirm, /holdView/);
+  assert.match(review, /openNextUnreviewed\(/);
+  assert.match(review.slice(review.indexOf("async function openPage")), /await saveChain/);
+  assert.match(review, /pagehide/);
+  assert.match(review, /keepaliveSave\(/);
+  assert.match(html, /保存本页/);
+  assert.match(html, /id="saved-stamp"/);
+  const keys = review.slice(review.indexOf('window.addEventListener("keydown"'));
+  assert.match(keys, /event\.shiftKey\) confirmUnit\(true\)/);
+  assert.match(keys, /key === "u"/);
+  const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
+  assert.match(docs, /Shift\+Enter/);
+  assert.match(docs, /保存本页/);
+  assert.match(docs, /#N\+1/);
+  assert.match(docs, /`u`/);
 });
 
 test("reopening the merged page-4 equation selects all 14 current members", () => {
