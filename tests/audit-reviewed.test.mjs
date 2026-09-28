@@ -451,6 +451,26 @@ test("R9 flags a unit whose glyphs are all marked as the equation number", () =>
     id: "u2", type: "display", equationNumber: true, elementIds: [...kept, ...number].map((element) => element.id)
   }]));
   assert.equal(miss.findings.some((item) => item.rule === "R9"), false);
+
+  const base = [
+    formula("x", "x", [20, 100, 30, 110], "u3"),
+    formula("eq", "=", [40, 100, 50, 110], "u3"),
+    formula("dot", ".", [180, 100, 184, 110], "u3")
+  ];
+  const numerator = [
+    formula("lp", "(", [60, 86, 66, 96], "u3"),
+    formula("ell", "l", [68, 86, 74, 96], "u3"),
+    formula("plus", "+", [78, 86, 86, 96], "u3"),
+    formula("one", "1", [90, 86, 96, 96], "u3"),
+    formula("rp", ")", [98, 86, 104, 96], "u3")
+  ];
+  const denominator = [formula("four", "4", [80, 112, 88, 122], "u3")];
+  const tagged = formula("num", "(5)", [220, 100, 236, 110], "u3", { equationNumber: true });
+  const fraction = run([entry("u3", [...base, ...numerator, ...denominator, tagged].map((element) => element.id))], pageOf(
+    [...base, ...numerator, ...denominator, tagged],
+    [{ id: "u3", type: "display", equationNumber: true, elementIds: [...base, ...numerator, ...denominator, tagged].map((element) => element.id) }]
+  ));
+  assert.equal(fraction.findings.some((item) => item.rule === "R9"), false);
 });
 
 test("R3 reports a line-end number in another unit or an inline unit, and only notes a display flag", () => {
@@ -461,6 +481,18 @@ test("R3 reports a line-end number in another unit or an inline unit, and only n
     { id: "u2", type: "display", equationNumber: true, elementIds: ["num"] }
   ]));
   assert.equal(elsewhere.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(2.8)")), true);
+
+  const call = [
+    formula("y", "y", [0, 220, 8, 230], "u5"),
+    formula("eq5", "=", [12, 220, 22, 230], "u5"),
+    formula("f", "f", [40, 220, 48, 230], "u5")
+  ];
+  const arg = formula("arg", "(3)", [49, 220, 64, 230], "u6");
+  const callReport = run([entry("u5", call.map((element) => element.id))], pageOf([...call, arg], [
+    { id: "u5", type: "display", equationNumber: false, elementIds: call.map((element) => element.id) },
+    { id: "u6", type: "inline", equationNumber: false, elementIds: ["arg"] }
+  ]));
+  assert.equal(callReport.findings.some((item) => item.rule === "R3"), false);
 
   const inlineBody = ["c", "d"].map((id, index) => formula(id, id, [index * 14, 140, index * 14 + 10, 150], "u3", { unitType: "inline" }));
   const inlineNumber = formula("n3", "(4)", [80, 140, 100, 150], "u3", { unitType: "inline" });
@@ -512,6 +544,20 @@ test("R3 keeps a gutter number with the left column when the other column shares
   assert.equal(hit.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "2")), true);
   assert.equal(hit.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(99)")), false);
   assert.equal(hit.findings.some((item) => item.rule === "R6" && item.suggestion.includes("按 d")), true);
+
+  const split = [
+    glyph("eth2", "ð", [286, 260, 292, 270], { font: "TeX_CM_Maths_Symbols" }),
+    glyph("three", "3", [297, 260, 304, 270], { font: "MinionPro-Regular" }),
+    glyph("thorn2", "Þ", [305, 260, 312, 270], { font: "TeX_CM_Maths_Symbols" })
+  ];
+  const splitBody = body.map((element) => ({ ...element, id: `s${element.id}`, bbox: [element.bbox[0], 260, element.bbox[2], 270] }));
+  const splitProse = prose.map((element) => ({ ...element, id: `s${element.id}`, bbox: [element.bbox[0], element.bbox[1] + 400, element.bbox[2], element.bbox[3] + 400] }));
+  const splitLine = glyph("after", "approximate results follow in this column", [360, 260, 540, 270]);
+  const straddling = run([entry("u1", splitBody.map((element) => element.id), { type: "inline" })], pageOf([...splitProse, ...splitBody, ...split, splitLine], [{
+    id: "u1", type: "inline", equationNumber: false, elementIds: splitBody.map((element) => element.id)
+  }]));
+  assert.equal(straddling.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "3")), true);
+  assert.equal(straddling.findings.some((item) => item.rule === "R6"), true);
 });
 
 test("R3 reads a ð number Þ inside an inline unit", () => {
@@ -565,6 +611,23 @@ test("R10 flags a second formula on a prose-free line and ignores a line with wo
     { id: "u5", type: "inline", equationNumber: false, elementIds: otherHalf.map((element) => element.id) }
   ]));
   assert.equal(wide.findings.some((item) => item.rule === "R10" && item.suggestion.includes("按 m")), true);
+
+  const cell = ["t", "2"].map((char, index) => formula(`c${index}`, char, [200 + index * 12, 260, 210 + index * 12, 270], "u6"));
+  const neighbor = formula("nine", "9", [140, 260, 150, 270], "u7");
+  const bridge = glyph("cell", "2 1/2", [160, 260, 190, 270]);
+  const table = run([entry("u6", cell.map((element) => element.id))], pageOf([...cell, neighbor, bridge], [
+    { id: "u6", type: "inline", equationNumber: false, elementIds: cell.map((element) => element.id) },
+    { id: "u7", type: "inline", equationNumber: false, elementIds: ["nine"] }
+  ]));
+  assert.equal(table.findings.some((item) => item.rule === "R10"), false);
+
+  const paren = formula("lp", "(", [40, 300, 46, 310], "u8");
+  const host = ["a", "b"].map((char, index) => formula(`p${index}`, char, [20 + index * 16, 300, 32 + index * 16, 310], "u9"));
+  const fences = run([entry("u9", host.map((element) => element.id))], pageOf([...host, paren], [
+    { id: "u9", type: "display", equationNumber: false, elementIds: host.map((element) => element.id) },
+    { id: "u8", type: "inline", equationNumber: false, elementIds: ["lp"] }
+  ]));
+  assert.equal(fences.findings.some((item) => item.rule === "R10"), false);
 });
 
 test("audit args print to stdout unless --out is set", () => {

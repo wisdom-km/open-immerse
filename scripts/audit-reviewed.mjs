@@ -665,11 +665,21 @@ function anchorOnLeft(members, cut) {
   return cut == null || x < cut;
 }
 
+function gutterNumberGlyph(glyph, glyphs, cut) {
+  if (cut == null || glyph.bbox[0] < cut || glyph.bbox[0] > cut + 16) return false;
+  return glyphs.some((other) => other !== glyph && other.bbox[0] < cut && isOpeningDelimiter(other)
+    && Math.abs(midY(other) - midY(glyph)) <= 6 && horizontalGap(other.bbox, glyph.bbox) <= 14);
+}
+
 function columnPiece(cluster, members, elements, height) {
   const ids = new Set(members.map((element) => element.id));
   const cut = pageColumnCut(elements);
   const onLeft = anchorOnLeft(members, cut);
-  const sided = cluster.glyphs.filter((glyph) => cut == null || (glyph.bbox[0] < cut) === onLeft);
+  const sided = cluster.glyphs.filter((glyph) => {
+    if (cut == null) return true;
+    const left = glyph.bbox[0] < cut || gutterNumberGlyph(glyph, cluster.glyphs, cut);
+    return left === onLeft;
+  });
   // A single column has no gutter to cross. An 80pt gap inside one
   // equation (the two halves of W) is still the same line.
   const pieces = splitColumns(sided, cut == null ? [] : columnGutters(sided, height));
@@ -690,10 +700,29 @@ function rightEdgeNumber(column, elements, height) {
     token = inward;
   }
   const text = String(token.char || "").trim();
-  if (!FULL_EQ_NUMBER.test(text) && !BARE_EQ_NUMBER.test(text)) return null;
+  const full = FULL_EQ_NUMBER.test(text);
+  const bare = BARE_EQ_NUMBER.test(text);
+  if (!full && !bare) return null;
   if (token.bbox[2] < edge.bbox[2] - 1.5 && !isClosingDelimiter(edge)) return null;
   if (isRaisedSmallDigit(token, column, height) || isLeftMarginNumber(token, elements)) return null;
   const opening = sorted.find((glyph) => glyph !== token && glyph !== edge && glyph.bbox[2] <= token.bbox[0] + 1 && horizontalGap(glyph.bbox, token.bbox) <= height && isOpeningDelimiter(glyph));
+  // A bare digit at the right of a fraction, or the 1 inside (l+1), is not
+  // an equation number. The number is either one glyph "(5)" / "(2.50)",
+  // or brackets / ðÞ wrapped tightly around the digits.
+  if (!full) {
+    if (!isClosingDelimiter(edge) || !opening) return null;
+    const between = sorted.some((glyph) => {
+      if (glyph === token || glyph === edge || glyph === opening) return false;
+      if (glyph.bbox[0] < opening.bbox[2] - 1 || glyph.bbox[2] > token.bbox[0] + 1) return false;
+      return !isOpeningDelimiter(glyph) && !isClosingDelimiter(glyph);
+    });
+    if (between) return null;
+  }
+  // f(3) sits against the function name. A line-end number has a gap.
+  const anchor = opening || token;
+  const left = sorted.filter((glyph) => glyph !== token && glyph !== edge && glyph !== opening && glyph.bbox[2] <= anchor.bbox[0] + 1)
+    .sort((a, b) => b.bbox[2] - a.bbox[2])[0];
+  if (left && horizontalGap(left.bbox, anchor.bbox) < 3 && /\p{L}/u.test(String(left.char || ""))) return null;
   return { token, glyphs: [opening, token, ...delimiters].filter(Boolean) };
 }
 
@@ -780,14 +809,52 @@ function auditPageRules(entries, page, findings, info) {
             : "行末编号不在这一行的单元里。选中编号按 e，并进同一栏的行间单元。"
       }));
     }
-    for (const cluster of equationLineClusters(elements, height)) {
-      const piece = columnPiece(cluster, members, elements, height);
-      if (!piece) continue;
-      const prose = piece.glyphs.some((glyph) => glyph.label === "text" && proseTextWords(glyph.char).length > 0);
-      if (prose) continue;
-      const numberIds = new Set(lineEndNumbers(elements, members, height).flatMap((hit) => hit.glyphs.map((glyph) => glyph.id)));
-      const other = piece.glyphs.filter((glyph) => glyph.label === "formula" && !item.ids.has(glyph.id) && !numberIds.has(glyph.id) && !isRaisedSmallDigit(glyph, piece, height));
-      if (!other.length) continue;
+    const mergeHeight = glyphHeight(members) || height;
+    const limit = Math.max(4, 0.55 * mergeHeight);
+    const body = members.filter((glyph) => isLetterGlyph(glyph) && boxHeight(glyph) >= SUPERSCRIPT_HEIGHT_RATIO * mergeHeight);
+    const seeds = (body.length >= 2 ? body : members.filter(isLetterGlyph)).slice().sort((a, b) => midY(a) - midY(b));
+    const baselines = [];
+    for (const glyph of seeds) {
+      const y = midY(glyph);
+      const current = baselines[baselines.length - 1];
+      if (!current || Math.abs(y - current.y) > limit) baselines.push({ y, glyphs: [glyph] });
+      else {
+        current.glyphs.push(glyph);
+        current.y = median(current.glyphs.map(midY));
+      }
+    }
+    const cut = pageColumnCut(elements);
+    const onLeft = anchorOnLeft(members, cut);
+    const numberIds = new Set(lineEndNumbers(elements, members, height).flatMap((hit) => hit.glyphs.map((glyph) => glyph.id)));
+    const maxGap = Math.max(96, 8 * mergeHeight);
+    for (const base of baselines) {
+      if (base.glyphs.length < 2) continue;
+      const band = elements.filter((glyph) => isLetterGlyph(glyph) && Math.abs(midY(glyph) - base.y) <= limit
+        && (cut == null || (glyph.bbox[0] < cut) === onLeft));
+      if (band.some((glyph) => glyph.label === "text" && proseTextWords(glyph.char).length > 0)) continue;
+      const lineText = elements.filter((glyph) => glyph.label === "text" && isLetterGlyph(glyph)
+        && Math.abs(midY(glyph) - base.y) <= Math.max(limit, 0.85 * mergeHeight) && String(glyph.char || "").trim());
+      if (lineText.length >= 4) continue;
+      const ours = band.filter((glyph) => item.ids.has(glyph.id));
+      if (ours.length < 2) continue;
+      const left = Math.min(...ours.map((glyph) => glyph.bbox[0]));
+      const right = Math.max(...ours.map((glyph) => glyph.bbox[2]));
+      const gapTo = (glyph) => (glyph.bbox[2] < left ? left - glyph.bbox[2] : glyph.bbox[0] > right ? glyph.bbox[0] - right : 0);
+      const candidates = band.filter((glyph) => glyph.label === "formula" && !item.ids.has(glyph.id) && !numberIds.has(glyph.id)
+        && !isRaisedSmallDigit(glyph, { glyphs: band }, mergeHeight)
+        && !isOpeningDelimiter(glyph) && !isClosingDelimiter(glyph));
+      const close = new Set(candidates.filter((glyph) => gapTo(glyph) <= maxGap).map((glyph) => glyph.unitId || glyph.id));
+      const other = candidates.filter((glyph) => close.has(glyph.unitId || glyph.id));
+      if (other.length < 2 && !other.some((glyph) => String(glyph.char || "").trim().length > 1)) continue;
+      const otherLeft = Math.min(...other.map((glyph) => glyph.bbox[0]));
+      const otherRight = Math.max(...other.map((glyph) => glyph.bbox[2]));
+      const gapText = band.some((glyph) => {
+        if (glyph.label !== "text" || !String(glyph.char || "").trim()) return false;
+        const start = Math.min(right, otherRight);
+        const end = Math.max(left, otherLeft);
+        return glyph.bbox[0] >= start - 1 && glyph.bbox[2] <= end + 1;
+      });
+      if (gapText) continue;
       const key = `${item.entry.queueIndex}:${other.map((glyph) => glyph.unitId || glyph.id).sort().join(",")}`;
       if (seenMerges.has(key)) continue;
       seenMerges.add(key);
