@@ -17,6 +17,7 @@ import {
   inspectorModel,
   isRenderingCancelled,
   isTaskRed,
+  isMathSymbolFont,
   isWideProseText,
   proseTextWords,
   missingPdfBanner,
@@ -661,6 +662,60 @@ test("a radical bar mapped to ffiffiffi is not prose and can merge", () => {
   const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
   assert.match(docs, /根号上的横线有时被抽成 `ffiffiffi` 这种 ffi 乱码/);
   assert.match(docs, /把整式框住再按 `m` 即可/);
+  assert.match(docs, /数学符号字体里的乱码（根号横线、大括号等）属于公式/);
+});
+
+test("math-symbol font junk is not prose; body-font sentences still block merge", () => {
+  for (const name of [
+    "AdvMacMthSyN", "AdvP4C4E46", "AdvP4C4E74",
+    "CMEX10", "CMSY10", "CMMI10", "CMMIB10",
+    "Fourier-Math-Extension", "Fourier-Math-Symbols", "LMMathExtension"
+  ]) {
+    assert.equal(isMathSymbolFont(name), true, name);
+  }
+  for (const name of ["Calibri-Bold", "MinionPro-Regular", "CMR10", "CMSS10", "AdvOT1ef757c0", "Helvetica"]) {
+    assert.equal(isMathSymbolFont(name), false, name);
+  }
+  const junk = [
+    ["../labels/prelabel/s41467-020-19530-1/page-002.json", "e16a3204154466dfa"],
+    ["../labels/prelabel/s41467-020-19530-1/page-002.json", "e885fc6a384b36ba5"],
+    ["../labels/prelabel/s41467-020-19530-1/page-005.json", "e9d1cb89396f73c14"],
+    ["../labels/prelabel/s42005-024-01697-4/page-005.json", "e6b1701021515d34f"]
+  ];
+  for (const [file, id] of junk) {
+    const page = JSON.parse(readFileSync(new URL(file, import.meta.url), "utf8"));
+    const element = structuredClone(page.elements.find((item) => item.id === id));
+    assert.equal(isMathSymbolFont(element.font), true, id);
+    assert.equal(proseTextWords(element.char).length > 0, true, id);
+    assert.equal(isWideProseText(element), false, id);
+    const host = formulaRow(`host-${id}`, "x", "u-host", {
+      bbox: [element.bbox[2] + 1, element.bbox[1], element.bbox[2] + 8, element.bbox[3]]
+    });
+    const merged = applyMerge([element, host], [element.id, host.id]);
+    assert.equal(merged.ok, true, id);
+    assert.equal(merged.message.includes("整段正文"), false, id);
+    assert.equal(element.label, "formula", id);
+    assert.equal(element.unitId, host.unitId, id);
+  }
+  const prose = [
+    ["../labels/prelabel/s41467-021-26434-1/page-008.json", "e35d95425295edb8b", /Equa/],
+    ["../labels/prelabel/s41467-021-26434-1/page-008.json", "eb1312130029a7e3c", /Equa/],
+    ["../labels/prelabel/s41598-017-00844-y/page-002.json", "e1284302be6d5b665", /Pffafion/]
+  ];
+  for (const [file, id, snippet] of prose) {
+    const page = JSON.parse(readFileSync(new URL(file, import.meta.url), "utf8"));
+    const element = structuredClone(page.elements.find((item) => item.id === id));
+    assert.equal(isMathSymbolFont(element.font), false, id);
+    assert.equal(isWideProseText(element), true, id);
+    const host = formulaRow(`host-${id}`, "x", "u-host", {
+      bbox: [element.bbox[2] + 1, element.bbox[1], element.bbox[2] + 8, element.bbox[3]]
+    });
+    const refused = planMerge([element, host], [element.id, host.id]);
+    assert.equal(refused.ok, false, id);
+    assert.match(refused.message, /整段正文/);
+    assert.match(refused.message, snippet);
+    assert.equal(element.label, "text", id);
+  }
 });
 
 test("merge accepts operator names such as max, Cov[ and i.i.d.", () => {
