@@ -71,6 +71,7 @@ body.pdf-missing .actions button:disabled { opacity: 0.45; cursor: not-allowed; 
 .actions button { border: 1px solid #ccc; background: white; padding: 6px 8px; cursor: pointer; }
 #detail { margin: 8px 0 0; font-size: 12px; line-height: 1.35; }
 #detail .unit-head { margin: 8px 0 2px; font-weight: 700; }
+#detail .extra-selection { color: #8a3b00; }
 #queue-unit-status { margin: 0 0 6px; font-weight: 700; white-space: pre-line; }
 #queue-unit-status[hidden] { display: none; }
 #overlay-legend { margin: 0 0 8px; color: #444; }

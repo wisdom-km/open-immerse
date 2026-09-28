@@ -3,19 +3,26 @@ import {
   applyEquationNumber,
   applyMerge,
   applySplit,
+  clampZoom,
   confirmBlocked,
+  dragSelectsElement,
+  EXTRA_SELECTION_HEADING,
   formatQueueStatus,
   importRejection,
-  inspectorModel,
   isRenderingCancelled,
   missingPdfBanner,
+  nextClickSelection,
+  nextDragSelection,
   otherQueueMarks,
   overlayClass,
+  pageRectFromPointer,
   pageUnitColor,
   rebuildFormulaUnits,
   reviewActionsLocked,
+  selectionAside,
   selectionForReviewUnit,
-  selectionKey
+  selectionKey,
+  zoomToFitWidth
 } from "/lib/review-actions.js";
 import * as pdfjs from "/pdf/vendor/pdf.min.mjs";
 
@@ -39,7 +46,9 @@ const state = {
   pdfMissing: false,
   scrollSelection: false,
   notice: null,
-  queueUnit: null
+  queueUnit: null,
+  zoomBefore: 1.25,
+  zoomFitted: false
 };
 
 const pdfBytes = new Map();
@@ -450,7 +459,6 @@ function selectedElements() {
 
 function describeSelection() {
   const elements = selectedElements();
-  const model = inspectorModel(elements);
   const mapped = state.queueUnit && state.page
     ? selectionForReviewUnit(state.page.elements, state.queueUnit.elementIds, state.queueUnit.unitId)
     : null;
@@ -490,6 +498,18 @@ function describeSelection() {
     }
   }
   detail.replaceChildren();
+  const aside = selectionAside(elements, state.mode === "units" && mapped ? mapped.ids : []);
+  appendInspectorGroups(aside.inside, nonFormula);
+  if (state.mode === "units" && mapped && aside.extra.count) {
+    const extraHead = document.createElement("p");
+    extraHead.className = "unit-head extra-selection";
+    extraHead.textContent = EXTRA_SELECTION_HEADING;
+    detail.append(extraHead);
+    appendInspectorGroups(aside.extra, nonFormula);
+  }
+}
+
+function appendInspectorGroups(model, nonFormula) {
   for (const group of model.groups) {
     const block = document.createElement("section");
     block.className = "unit-group";
@@ -563,12 +583,10 @@ function onClick(event) {
   }
   const id = event.target?.dataset?.id;
   if (!id) return;
-  if (event.shiftKey) {
-    if (state.selected.has(id)) state.selected.delete(id);
-    else state.selected.add(id);
-  } else {
-    state.selected = new Set([id]);
-  }
+  state.selected = new Set(nextClickSelection(state.selected, id, {
+    shift: event.shiftKey,
+    toggle: event.altKey || event.ctrlKey || event.metaKey
+  }));
   forgetNoticeIfSelectionMoved();
   paint();
 }
@@ -595,19 +613,22 @@ function onPointerDown(event) {
     window.removeEventListener("mouseup", up);
     band.remove();
     const now = point(ev);
-    if (Math.abs(now.x - start.x) + Math.abs(now.y - start.y) > 3) dragSelect = true;
-    const rect = [
-      Math.min(start.x, now.x) / state.scale,
-      Math.min(start.y, now.y) / state.scale,
-      Math.max(start.x, now.x) / state.scale,
-      Math.max(start.y, now.y) / state.scale
-    ];
-    if (!event.shiftKey) state.selected = new Set();
-    for (const element of state.page.elements) {
-      const box = element.bbox;
-      const hit = box[0] < rect[2] && box[2] > rect[0] && box[1] < rect[3] && box[3] > rect[1];
-      if (hit) state.selected.add(element.id);
+    const moved = Math.abs(now.x - start.x) + Math.abs(now.y - start.y) > 3;
+    if (!moved) {
+      if (!event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.target?.dataset?.id) {
+        state.selected = new Set();
+        forgetNoticeIfSelectionMoved();
+        paint();
+      }
+      return;
     }
+    dragSelect = true;
+    const rect = pageRectFromPointer(start, now, state.scale);
+    const hits = state.page.elements.filter((element) => dragSelectsElement(element.bbox, rect)).map((element) => element.id);
+    state.selected = new Set(nextDragSelection(state.selected, hits, {
+      shift: event.shiftKey,
+      alt: event.altKey
+    }));
     forgetNoticeIfSelectionMoved();
     paint();
   }
@@ -677,9 +698,40 @@ document.querySelector("#eq-toggle").addEventListener("click", () => {
 });
 document.querySelector("#merge").addEventListener("click", merge);
 document.querySelector("#split").addEventListener("click", split);
-document.querySelector("#zoom").addEventListener("input", (event) => {
-  state.scale = Number(event.target.value);
+function setZoom(value, { fitted = false } = {}) {
+  state.scale = clampZoom(value);
+  const slider = document.querySelector("#zoom");
+  if (slider) slider.value = String(state.scale);
+  if (!fitted) state.zoomFitted = false;
   paint();
+}
+
+function currentQueueMembers() {
+  if (state.mode !== "units" || !state.queueUnit || !state.page) return [];
+  const mapped = selectionForReviewUnit(state.page.elements, state.queueUnit.elementIds, state.queueUnit.unitId);
+  const ids = new Set(mapped.ids);
+  return state.page.elements.filter((element) => ids.has(element.id));
+}
+
+function toggleZoomFit() {
+  if (state.zoomFitted) {
+    const previous = state.zoomBefore ?? 1.25;
+    state.zoomFitted = false;
+    state.scrollSelection = true;
+    setZoom(previous);
+    return;
+  }
+  const members = currentQueueMembers();
+  if (!members.length) return;
+  const main = stage.closest("main");
+  state.zoomBefore = state.scale;
+  state.zoomFitted = true;
+  state.scrollSelection = true;
+  setZoom(zoomToFitWidth(members, main?.clientWidth || 800), { fitted: true });
+}
+
+document.querySelector("#zoom").addEventListener("input", (event) => {
+  setZoom(event.target.value);
 });
 document.querySelector("#revert").addEventListener("click", async () => {
   state.page = structuredClone(state.prelabel);
@@ -775,6 +827,9 @@ window.addEventListener("keydown", (event) => {
   else if (key === "e") document.querySelector("#eq-toggle").click();
   else if (key === "m") merge();
   else if (key === "s") split();
+  else if ((key === "+" || key === "=") && !event.ctrlKey && !event.metaKey) setZoom(state.scale + 0.1);
+  else if ((key === "-" || key === "_") && !event.ctrlKey && !event.metaKey) setZoom(state.scale - 0.1);
+  else if (key === "z" && !event.ctrlKey && !event.metaKey) toggleZoomFit();
   else if (key === "j" && state.mode === "units") openUnit(Math.min((state.reviewSet.units?.length || 1) - 1, state.unitCursor + 1));
   else if (key === "k" && state.mode === "units") openUnit(Math.max(0, state.unitCursor - 1));
   else if (key === "j") jumpUncertain(1);

@@ -6,20 +6,28 @@ import {
   applyMerge,
   applySplit,
   confirmBlocked,
+  dragSelectsElement,
+  EXTRA_SELECTION_HEADING,
   formatQueueStatus,
   importRejection,
   inspectorModel,
   isRenderingCancelled,
   isTaskRed,
+  isWideProseText,
   missingPdfBanner,
+  nextClickSelection,
+  nextDragSelection,
   otherQueueMarks,
   overlayClass,
+  pageRectFromPointer,
   pageUnitColor,
   planMerge,
   rebuildFormulaUnits,
   reviewActionsLocked,
+  selectionAside,
   selectionForReviewUnit,
-  selectionKey
+  selectionKey,
+  zoomToFitWidth
 } from "../lib/review-actions.js";
 import { LABEL_SCHEMA, unitIdFromMembers, verifyPageLabels } from "../lib/label-schema.js";
 
@@ -47,7 +55,10 @@ test("a missing PDF locks confirm and names the file", () => {
   assert.match(review, /isRenderingCancelled\(error\)/);
   assert.match(review, /selectionForReviewUnit\(/);
   assert.equal(review.includes("slice(0, 8)"), false);
-  assert.match(review, /inspectorModel\(/);
+  assert.match(review, /selectionAside\(/);
+  assert.match(review, /EXTRA_SELECTION_HEADING/);
+  assert.match(review, /dragSelectsElement\(/);
+  assert.match(review, /zoomToFitWidth\(/);
   assert.equal(isRenderingCancelled({ name: "RenderingCancelledException" }), true);
   assert.equal(isRenderingCancelled(new Error("Rendering cancelled, page 4")), true);
   assert.equal(isRenderingCancelled(new Error("missing-pdf")), false);
@@ -522,4 +533,114 @@ test("page 4 equation is the only red mark and a second queue unit stays grey", 
     selectedIds: mapped.ids,
     queuedIds: withSecond[0].elementIds
   }), "hit formula queued");
+});
+
+test("drag selection keeps covered symbols and drops grazed wide text", () => {
+  const pcbi = JSON.parse(readFileSync(new URL("../labels/prelabel/pcbi-1004584/page-008.json", import.meta.url), "utf8"));
+  const rect = [278, 524, 370, 542];
+  const hits = pcbi.elements.filter((element) => dragSelectsElement(element.bbox, rect));
+  const members = pcbi.elements.filter((element) => element.unitId === "u8e8ec589c717");
+  assert.equal(members.every((element) => hits.some((hit) => hit.id === element.id)), true);
+  assert.equal(hits.some((element) => element.char === "for each connection type"), false);
+  assert.equal(hits.some((element) => element.char === "Description"), false);
+  assert.equal(hits.some((element) => element.label === "other" && element.bbox[2] - element.bbox[0] > 200), false);
+  const wide = pcbi.elements.find((element) => element.char === "for each connection type");
+  const mid = (wide.bbox[0] + wide.bbox[2]) / 2;
+  assert.equal(dragSelectsElement(wide.bbox, [mid - 8, wide.bbox[1], mid + 8, wide.bbox[3]]), false);
+  const subscript = members.find((element) => element.char === "rise,");
+  assert.equal(dragSelectsElement(subscript.bbox, rect), true);
+
+  const bmc = JSON.parse(readFileSync(new URL("../labels/prelabel/bmc-12874-022-01542-8/page-002.json", import.meta.url), "utf8"));
+  const inline = bmc.elements.filter((element) => element.unitId === "u0126a8e48b5d");
+  const box = inline.reduce((acc, element) => [
+    Math.min(acc[0], element.bbox[0]),
+    Math.min(acc[1], element.bbox[1]),
+    Math.max(acc[2], element.bbox[2]),
+    Math.max(acc[3], element.bbox[3])
+  ], [Infinity, Infinity, -Infinity, -Infinity]);
+  const loose = [box[0] - 4, box[1] - 3, box[2] + 8, box[3] + 4];
+  const bmcHits = bmc.elements.filter((element) => dragSelectsElement(element.bbox, loose));
+  assert.equal(inline.every((element) => bmcHits.some((hit) => hit.id === element.id)), true);
+  assert.equal(bmcHits.some((element) => element.char === ") and random effects ("), false);
+  assert.equal(bmcHits.some((element) => String(element.char || "").includes("normally distrib")), false);
+});
+
+test("drag geometry matches at 100% and 400% zoom", () => {
+  const subscript = [286.2, 531, 297.1, 536.4];
+  const wide = [365.7, 527, 452.1, 535];
+  const start = { x: 278, y: 524 };
+  const end = { x: 370, y: 542 };
+  const at1 = pageRectFromPointer(start, end, 1);
+  const at4 = pageRectFromPointer({ x: start.x * 4, y: start.y * 4 }, { x: end.x * 4, y: end.y * 4 }, 4);
+  assert.deepEqual(at4.map((value) => Math.round(value * 10) / 10), at1);
+  assert.equal(dragSelectsElement(subscript, at1), dragSelectsElement(subscript, at4));
+  assert.equal(dragSelectsElement(wide, at1), false);
+  assert.equal(dragSelectsElement(wide, at4), false);
+  assert.equal(zoomToFitWidth([{ bbox: [0, 0, 100, 12] }], 800), 4);
+  assert.equal(zoomToFitWidth([{ bbox: [0, 0, 20, 8] }], 800), 4);
+  assert.equal(zoomToFitWidth([{ bbox: [0, 0, 2000, 12] }], 800), 0.8);
+});
+
+test("alt-drag subtracts and ctrl-click toggles", () => {
+  assert.deepEqual(nextDragSelection(["a", "b"], ["b", "c"], { alt: true }), ["a"]);
+  assert.deepEqual(nextDragSelection(["a"], ["b"], { shift: true }).sort(), ["a", "b"]);
+  assert.deepEqual(nextDragSelection(["a"], ["b"], {}), ["b"]);
+  assert.deepEqual(nextClickSelection(["a", "b"], "b", { toggle: true }), ["a"]);
+  assert.deepEqual(nextClickSelection(["a"], "b", { toggle: true }).sort(), ["a", "b"]);
+  assert.deepEqual(nextClickSelection(["a"], "c", { shift: true }).sort(), ["a", "c"]);
+  assert.deepEqual(nextClickSelection(["a", "b"], "c", {}), ["c"]);
+});
+
+test("merge refuses a wide prose run and still accepts a short symbol", () => {
+  assert.equal(isWideProseText({ label: "text", char: "for each connection type" }), true);
+  assert.equal(isWideProseText({ label: "text", char: ") and random effects (" }), true);
+  assert.equal(isWideProseText({ label: "text", char: "G" }), false);
+  assert.equal(isWideProseText({ label: "text", char: "d" }), false);
+  assert.equal(isWideProseText({ label: "text", char: "(" }), false);
+  assert.equal(isWideProseText({ label: "text", char: "Attention(" }), false);
+  assert.equal(isWideProseText({ label: "text", char: ") = softmax(" }), false);
+  const prose = glyph(") and random effects (", [360, 633, 455, 643], { id: "prose", label: "text" });
+  const symbol = formulaRow("u", "u", "u-inline", { bbox: [423, 633, 429, 643] });
+  const refused = planMerge([prose, symbol], ["prose", "u"]);
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /and random effects/);
+  assert.match(refused.message, /Ctrl/);
+  assert.match(refused.message, /Alt/);
+  assert.equal(prose.label, "text");
+  assert.equal(confirmBlocked({ ok: false, selectionKey: selectionKey(["prose", "u"]) }, ["prose", "u"]), true);
+  const short = glyph("G", [339, 527, 345, 535], { id: "g", label: "text" });
+  const tau = formulaRow("tau", "τ", "u-tau", { bbox: [283, 527, 286, 535] });
+  const merged = applyMerge([short, tau], ["g", "tau"]);
+  assert.equal(merged.ok, true);
+  assert.equal(short.label, "formula");
+  assert.equal(short.unitId, tau.unitId);
+});
+
+test("split peels a selected subset into one inline unit", () => {
+  const ids = ["rise", "sub", "decay", "dsub", "g"];
+  const unitId = unitIdFromMembers(ids);
+  const elements = ids.map((id, index) => formulaRow(id, id, unitId, {
+    bbox: [index * 12, 0, index * 12 + 8, 10],
+    unitType: "inline"
+  }));
+  const result = applySplit(elements, ["rise", "sub"]);
+  assert.equal(result.ok, true);
+  assert.match(result.message, /行内单元/);
+  const rise = elements.find((element) => element.id === "rise");
+  const sub = elements.find((element) => element.id === "sub");
+  const decay = elements.find((element) => element.id === "decay");
+  const rest = elements.find((element) => element.id === "g");
+  assert.equal(rise.unitId, sub.unitId);
+  assert.equal(rise.unitType, "inline");
+  assert.equal(decay.unitId, rest.unitId);
+  assert.notEqual(rise.unitId, decay.unitId);
+  assert.equal(elements.filter((element) => element.unitId === decay.unitId).length, 3);
+  const kept = elements.find((element) => element.id === "dsub");
+  const aside = selectionAside([rise, sub, decay], [decay.id, rest.id, kept.id]);
+  assert.equal(aside.extra.count, 2);
+  assert.equal(aside.inside.count, 1);
+  assert.equal(EXTRA_SELECTION_HEADING, "选区里还有这些（不属于当前单元）");
+  const docs = readFileSync(new URL("../docs/v1-m1-labels.md", import.meta.url), "utf8");
+  assert.match(docs, /每个符号单独是一个行内单元/);
+  assert.match(docs, /按住 Alt 再拖/);
 });
