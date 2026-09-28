@@ -4,12 +4,14 @@ import {
   applyMerge,
   applySplit,
   confirmBlocked,
+  formatQueueStatus,
   importRejection,
   inspectorModel,
   isRenderingCancelled,
   missingPdfBanner,
   rebuildFormulaUnits,
   reviewActionsLocked,
+  selectionForReviewUnit,
   selectionKey
 } from "/lib/review-actions.js";
 import * as pdfjs from "/pdf/vendor/pdf.min.mjs";
@@ -33,7 +35,8 @@ const state = {
   pendingFocus: null,
   pdfMissing: false,
   scrollSelection: false,
-  notice: null
+  notice: null,
+  queueUnit: null
 };
 
 const pdfBytes = new Map();
@@ -47,6 +50,7 @@ const queue = document.querySelector("#queue");
 const detail = document.querySelector("#detail");
 const summary = document.querySelector("#selection-summary");
 const notice = document.querySelector("#action-notice");
+const queueStatus = document.querySelector("#queue-unit-status");
 
 function pageFile(pageNumber) {
   return `page-${String(pageNumber).padStart(3, "0")}.json`;
@@ -157,6 +161,11 @@ async function showMissingPdf(paperId) {
   summary.textContent = "还没有选中元素。";
   detail.textContent = "";
   state.notice = null;
+  state.queueUnit = null;
+  if (queueStatus) {
+    queueStatus.hidden = true;
+    queueStatus.textContent = "";
+  }
   if (notice) {
     notice.hidden = true;
     notice.textContent = "";
@@ -210,7 +219,8 @@ async function openPage(paperId, pageNumber, focus = null) {
   const token = ++pageToken;
   state.paperId = paperId;
   state.pageNumber = pageNumber;
-  state.pendingFocus = focus;
+  state.pendingFocus = focus?.elementIds ? focus : null;
+  state.queueUnit = state.pendingFocus;
   state.selected = new Set();
   state.notice = null;
   const response = await fetch(`/api/page/${encodeURIComponent(paperId)}/${pageNumber}`);
@@ -309,10 +319,8 @@ async function paint() {
   }
   if (token !== paintToken) return;
   if (state.pendingFocus) {
-    const ids = new Set(state.pendingFocus.elementIds || []);
-    const matched = state.page.elements.filter((element) => ids.has(element.id));
-    const fallback = matched.length ? matched : state.page.elements.filter((element) => element.unitId === state.pendingFocus.unitId);
-    if (fallback.length) state.selected = new Set(fallback.map((element) => element.id));
+    const mapped = selectionForReviewUnit(state.page.elements, state.pendingFocus.elementIds, state.pendingFocus.unitId);
+    if (mapped.ids.length) state.selected = new Set(mapped.ids);
   }
   stage.innerHTML = "";
   stage.append(canvas);
@@ -395,6 +403,31 @@ function selectedElements() {
 function describeSelection() {
   const elements = selectedElements();
   const model = inspectorModel(elements);
+  const mapped = state.queueUnit && state.page
+    ? selectionForReviewUnit(state.page.elements, state.queueUnit.elementIds, state.queueUnit.unitId)
+    : null;
+  const nonFormula = new Set(mapped?.nonFormulaIds || []);
+  if (queueStatus) {
+    if (mapped && state.queueUnit) {
+      const reviewed = (state.page.reviewedUnitIds || []).includes(state.queueUnit.unitId);
+      const status = formatQueueStatus({
+        reviewedCount: reviewedCount(),
+        reviewTotal: state.reviewSet.units?.length || state.status?.reviewTarget || 0,
+        reviewed,
+        changed: mapped.changed,
+        unitIds: mapped.unitIds,
+        elementCount: mapped.count,
+        equationNumber: mapped.equationNumber,
+        spanned: mapped.spanned,
+        nonFormulaCount: nonFormula.size
+      });
+      queueStatus.hidden = false;
+      queueStatus.textContent = `${status.countLine}\n${status.statusLine}`;
+    } else {
+      queueStatus.hidden = true;
+      queueStatus.textContent = "";
+    }
+  }
   summary.textContent = elements.length ? `选中 ${elements.length} 个` : "还没有选中元素。";
   if (notice) {
     if (state.notice?.text) {
@@ -424,9 +457,10 @@ function describeSelection() {
     block.append(head);
     for (const row of group.rows) {
       const line = document.createElement("p");
-      line.className = "element-line";
+      line.className = nonFormula.has(row.id) ? "element-line non-formula" : "element-line";
       const bits = [row.char || (row.label === "formula" ? "路径" : "空"), row.label];
       if (row.equationNumber) bits.push("编号");
+      if (nonFormula.has(row.id)) bits.push("已不是公式");
       bits.push(row.unitId || "—");
       line.textContent = bits.join(" · ");
       block.append(line);
@@ -660,6 +694,7 @@ async function confirmUnit() {
   clearTimeout(saveTimer);
   await save(payload, paperId, pageNumber);
   if (next >= 0) await openUnit(next);
+  else describeSelection();
 }
 
 document.querySelector("#mode-units").addEventListener("click", () => {

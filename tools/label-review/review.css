@@ -47,7 +47,10 @@ body.pdf-missing .actions button:disabled { opacity: 0.45; cursor: not-allowed; 
 .actions button { border: 1px solid #ccc; background: white; padding: 6px 8px; cursor: pointer; }
 #detail { margin: 8px 0 0; font-size: 12px; line-height: 1.35; }
 #detail .unit-head { margin: 8px 0 2px; font-weight: 700; }
+#queue-unit-status { margin: 0 0 6px; font-weight: 700; white-space: pre-line; }
+#queue-unit-status[hidden] { display: none; }
 #detail .element-line { margin: 0 0 2px; word-break: break-all; }
+#detail .element-line.non-formula { color: #8a3b00; }
 #action-notice { margin: 8px 0; font-weight: 700; }
 #action-notice.fail { color: #b00000; }
 #action-notice.ok { color: #0d5c2e; }

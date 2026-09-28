@@ -6,12 +6,15 @@ import {
   applyMerge,
   applySplit,
   confirmBlocked,
+  formatQueueStatus,
   importRejection,
   inspectorModel,
   isRenderingCancelled,
   missingPdfBanner,
   planMerge,
+  rebuildFormulaUnits,
   reviewActionsLocked,
+  selectionForReviewUnit,
   selectionKey
 } from "../lib/review-actions.js";
 import { LABEL_SCHEMA, unitIdFromMembers, verifyPageLabels } from "../lib/label-schema.js";
@@ -38,6 +41,7 @@ test("a missing PDF locks confirm and names the file", () => {
   assert.match(review.slice(review.indexOf("async function showMissingPdf"), review.indexOf("async function loadPdfBytes")), /summary\.textContent = "还没有选中元素。"/);
   assert.match(review.slice(review.indexOf("async function showMissingPdf"), review.indexOf("async function loadPdfBytes")), /detail\.textContent = ""/);
   assert.match(review, /isRenderingCancelled\(error\)/);
+  assert.match(review, /selectionForReviewUnit\(/);
   assert.equal(review.includes("slice(0, 8)"), false);
   assert.match(review, /inspectorModel\(/);
   assert.equal(isRenderingCancelled({ name: "RenderingCancelledException" }), true);
@@ -199,4 +203,140 @@ test("import rejection is Chinese and does not echo the English id mismatch", ()
   assert.match(message, /第 0 个元素/);
   assert.equal(message.includes("id does not match"), false);
   assert.match(message, /不要手改元素编号/);
+});
+
+function formulaRow(id, char, unitId, extra = {}) {
+  return {
+    id,
+    kind: "glyph",
+    char,
+    font: "CMMI10",
+    bbox: extra.bbox || [0, 0, 8, 10],
+    pathHash: "",
+    label: "formula",
+    confidence: 0.96,
+    rule: "math-font",
+    unitId,
+    unitType: extra.unitType || "inline",
+    equationNumber: extra.equationNumber === true
+  };
+}
+
+test("reopening an unchanged review unit selects its current members", () => {
+  const ids = ["a", "b", "c"];
+  const unitId = unitIdFromMembers(ids);
+  const elements = ids.map((id, index) => formulaRow(id, id, unitId, { bbox: [index * 10, 0, index * 10 + 8, 10] }));
+  const mapped = selectionForReviewUnit(elements, ids, unitId);
+  assert.deepEqual(mapped.ids, ids);
+  assert.deepEqual(mapped.unitIds, [unitId]);
+  assert.equal(mapped.changed, false);
+  assert.equal(mapped.spanned, false);
+  const fresh = formatQueueStatus({
+    reviewedCount: 0,
+    reviewTotal: 1000,
+    reviewed: false,
+    changed: mapped.changed,
+    unitIds: mapped.unitIds,
+    elementCount: mapped.count
+  });
+  assert.equal(fresh.countLine, "队列已复核 0/1000");
+  assert.equal(fresh.statusLine, "未复核");
+  const saved = formatQueueStatus({
+    reviewedCount: 1,
+    reviewTotal: 1000,
+    reviewed: true,
+    changed: false,
+    unitIds: mapped.unitIds,
+    elementCount: mapped.count
+  });
+  assert.equal(saved.statusLine, `已复核 · 当前单元 ${unitId} · 3 个元素`);
+});
+
+test("reopening the merged page-4 equation selects all 14 current members", () => {
+  const page = JSON.parse(readFileSync(new URL("../labels/prelabel/1706.03762/page-004.json", import.meta.url), "utf8"));
+  const original = page.units.find((unit) => unit.id === "ud1cbf2babd77").elementIds.slice();
+  assert.equal(original.length, 9);
+  const number = page.elements.find((element) => element.char === "(1)" && element.rule === "equation-number");
+  const dragged = page.elements.filter((element) => {
+    const box = element.bbox;
+    return box[0] < 420 && box[2] > 210 && box[1] < 495 && box[3] > 450;
+  });
+  assert.equal(dragged.length, 13);
+  applyMerge(page.elements, dragged.map((element) => element.id));
+  applyEquationNumber(page.elements, [number.id]);
+  const mapped = selectionForReviewUnit(page.elements, original, "ud1cbf2babd77");
+  assert.equal(mapped.count, 14);
+  assert.equal(mapped.ids.length, 14);
+  assert.equal(mapped.unitIds.length, 1);
+  assert.notEqual(mapped.unitIds[0], "ud1cbf2babd77");
+  assert.equal(mapped.equationNumber, true);
+  assert.equal(mapped.spanned, false);
+  assert.equal(original.every((id) => mapped.ids.includes(id)), true);
+  const selected = page.elements.filter((element) => mapped.ids.includes(element.id));
+  assert.equal(selected.some((element) => element.char === "Attention("), true);
+  assert.equal(selected.some((element) => element.char === ") = softmax("), true);
+  assert.equal(selected.every((element) => element.unitId === mapped.unitIds[0]), true);
+  const status = formatQueueStatus({
+    reviewedCount: 1,
+    reviewTotal: 1000,
+    reviewed: true,
+    changed: mapped.changed,
+    unitIds: mapped.unitIds,
+    elementCount: mapped.count,
+    equationNumber: mapped.equationNumber
+  });
+  assert.equal(status.countLine, "队列已复核 1/1000");
+  assert.equal(status.statusLine, `已复核 · 当前单元 ${mapped.unitIds[0]} · 14 个元素（含公式编号）`);
+});
+
+test("reopening a split unit selects every piece and says so", () => {
+  const ids = ["a", "b", "c", "d"];
+  const unitId = unitIdFromMembers(ids);
+  const elements = ids.map((id, index) => formulaRow(id, id, unitId, { bbox: [index * 12, 0, index * 12 + 8, 10] }));
+  applySplit(elements, ids);
+  const mapped = selectionForReviewUnit(elements, ids, unitId);
+  assert.equal(mapped.spanned, true);
+  assert.equal(mapped.changed, true);
+  assert.equal(mapped.unitIds.length, 4);
+  assert.deepEqual(mapped.ids, ids);
+  const status = formatQueueStatus({
+    reviewed: false,
+    changed: mapped.changed,
+    unitIds: mapped.unitIds,
+    elementCount: mapped.count,
+    spanned: mapped.spanned,
+    reviewTotal: 1000,
+    reviewedCount: 0
+  });
+  assert.match(status.statusLine, /^未复核 · 已改过，尚未确认/);
+  assert.match(status.statusLine, /当前 4 个单元 · 4 个元素/);
+  assert.match(status.statusLine, /原单元现在分成多个单元/);
+});
+
+test("reopening keeps a glyph that was relabeled to text and marks it", () => {
+  const ids = ["a", "b", "c"];
+  const unitId = unitIdFromMembers(ids);
+  const elements = ids.map((id, index) => formulaRow(id, id, unitId, { bbox: [index * 12, 0, index * 12 + 8, 10] }));
+  const text = elements.find((element) => element.id === "b");
+  text.label = "text";
+  text.rule = "human";
+  text.confidence = 1;
+  rebuildFormulaUnits(elements);
+  const mapped = selectionForReviewUnit(elements, ids, unitId);
+  assert.deepEqual(mapped.nonFormulaIds, ["b"]);
+  assert.equal(mapped.ids.includes("b"), true);
+  assert.equal(mapped.changed, true);
+  assert.equal(elements.find((element) => element.id === "a").unitId, elements.find((element) => element.id === "c").unitId);
+  assert.equal(mapped.unitIds.length, 1);
+  const status = formatQueueStatus({
+    reviewed: false,
+    changed: true,
+    unitIds: mapped.unitIds,
+    elementCount: mapped.count,
+    nonFormulaCount: mapped.nonFormulaIds.length,
+    reviewTotal: 1000,
+    reviewedCount: 0
+  });
+  assert.match(status.statusLine, /未复核 · 已改过，尚未确认/);
+  assert.match(status.statusLine, /1 个已不是公式/);
 });
