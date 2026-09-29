@@ -873,3 +873,159 @@ test("R2 flags a display unit that covers two formula rows", () => {
   assert.equal(report.findings.some((item) => item.rule === "R2"), true);
   assert.equal(report.findings.some((item) => item.rule === "R9"), false);
 });
+
+function reviewedPage(paperId, page) {
+  const file = new URL(`../labels/reviewed/${paperId}/page-${String(page).padStart(3, "0")}.json`, import.meta.url);
+  return JSON.parse(readFileSync(file, "utf8"));
+}
+
+let reviewUnits;
+function queueFor(paperId, page) {
+  if (!reviewUnits) {
+    reviewUnits = JSON.parse(readFileSync(new URL("../labels/review-set.json", import.meta.url), "utf8")).units;
+  }
+  return reviewUnits.filter((unit) => unit.paperId === paperId && unit.page === page);
+}
+
+function auditReal(paperId, page, mutate) {
+  const queue = queueFor(paperId, page);
+  const data = structuredClone(reviewedPage(paperId, page));
+  if (mutate) mutate(data);
+  return run(queue, data);
+}
+
+test("an operator continuation or a cross-row bracket is one display unit", () => {
+  const upper = ["D", "=", "F"].map((char, index) => formula(`u${index}`, char, [40 + index * 16, 100, 52 + index * 16, 110], "uWrap"));
+  const number = formula("n18", "(18)", [400, 116, 424, 126], "uWrap", { equationNumber: true });
+  const lower = ["+", "E", "G"].map((char, index) => formula(`l${index}`, char, [40 + index * 16, 132, 52 + index * 16, 142], "uWrap"));
+  const wrapped = run([entry("uWrap", [...upper, number, ...lower].map((element) => element.id))], pageOf([...upper, number, ...lower], [{
+    id: "uWrap", type: "display", equationNumber: true, elementIds: [...upper, number, ...lower].map((element) => element.id)
+  }]));
+  assert.equal(wrapped.findings.some((item) => item.rule === "R2"), false);
+
+  const open = formula("brOpen", "[", [28, 200, 36, 210], "uBr", { font: "AdvP4C4E46" });
+  const openChar = formula("brOpenCtl", "\u0014", [28, 200, 36, 210], "uBr", { font: "AdvP4C4E46" });
+  const row1 = ["S", "x"].map((char, index) => formula(`s${index}`, char, [48 + index * 16, 200, 60 + index * 16, 210], "uBr"));
+  const close = formula("brClose", "]", [220, 232, 228, 242], "uBr", { font: "AdvP4C4E46" });
+  const closeChar = formula("brCloseCtl", "\u0015", [220, 232, 228, 242], "uBr", { font: "AdvP4C4E46" });
+  const row2 = ["+", "y"].map((char, index) => formula(`t${index}`, char, [48 + index * 16, 232, 60 + index * 16, 242], "uBr"));
+  const bracketed = [...row1, open, openChar, ...row2, close, closeChar];
+  const brackets = run([entry("uBr", bracketed.map((element) => element.id))], pageOf(bracketed, [{
+    id: "uBr", type: "display", equationNumber: false, elementIds: bracketed.map((element) => element.id)
+  }]));
+  assert.equal(brackets.findings.some((item) => item.rule === "R2"), false);
+
+  const splitLower = lower.map((element) => ({ ...element, unitId: "uLow" }));
+  const splitNumber = { ...number, unitId: "uLow" };
+  const split = run([entry("uWrap", [...upper, splitNumber, ...splitLower].map((element) => element.id))], pageOf([...upper, splitNumber, ...splitLower], [
+    { id: "uWrap", type: "display", equationNumber: false, elementIds: upper.map((element) => element.id) },
+    { id: "uLow", type: "display", equationNumber: true, elementIds: [splitNumber, ...splitLower].map((element) => element.id) }
+  ]));
+  assert.equal(split.findings.some((item) => item.rule === "R2" && item.suggestion.includes("按 m")), true);
+});
+
+test("R3 reports the lone (9) once it is moved out and marked text", () => {
+  const report = auditReal("2006.11239", 3, (data) => {
+    const number = data.elements.find((element) => element.id === "e3231d3473f28eb2c");
+    number.label = "text";
+    number.unitId = null;
+    number.unitType = null;
+    number.equationNumber = false;
+    const unit = data.units.find((item) => item.id === "u5888f399cf15");
+    unit.elementIds = unit.elementIds.filter((id) => id !== number.id);
+  });
+  assert.equal(report.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(9)")), true);
+});
+
+test("R2 reports two rows that each carry an equation number", () => {
+  const report = auditReal("2006.11239", 3, (data) => {
+    const upper = data.units.find((unit) => unit.id === "u5888f399cf15");
+    const lower = data.units.find((unit) => unit.id === "ue0869dd97863");
+    const ids = lower.elementIds.slice();
+    upper.elementIds.push(...ids);
+    for (const id of ids) data.elements.find((element) => element.id === id).unitId = upper.id;
+    data.units = data.units.filter((unit) => unit.id !== lower.id);
+  });
+  assert.equal(report.findings.some((item) => item.rule === "R2" && item.suggestion.includes("各自带编号")), true);
+});
+
+test("R3 reports equation (18) once it is split into its own unit", () => {
+  const report = auditReal("s41598-021-85174-w", 9, (data) => {
+    const id = "e1b0851f558035348";
+    const unit = data.units.find((item) => item.id === "u064572585535");
+    unit.elementIds = unit.elementIds.filter((item) => item !== id);
+    const number = data.elements.find((element) => element.id === id);
+    number.unitId = "uNum18";
+    data.units.push({ id: "uNum18", type: "display", equationNumber: true, elementIds: [id] });
+  });
+  assert.equal(report.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(18)")), true);
+});
+
+test("the wrapped (18) unit is valid, and merging the next inline formula is not", () => {
+  const clean = auditReal("s41598-021-85174-w", 9);
+  assert.equal(clean.findings.some((item) => item.rule === "R2"), false);
+  const report = auditReal("s41598-021-85174-w", 9, (data) => {
+    const unit = data.units.find((item) => item.id === "u064572585535");
+    const inline = data.units.find((item) => item.id === "ue5d393902418");
+    for (const id of inline.elementIds) {
+      const element = data.elements.find((item) => item.id === id);
+      element.unitId = unit.id;
+      element.unitType = "display";
+      unit.elementIds.push(id);
+    }
+    data.units = data.units.filter((item) => item.id !== inline.id);
+  });
+  assert.equal(report.findings.some((item) => item.rule === "R2" && item.suggestion.includes("正文")), true);
+});
+
+test("splitting the wrapped (18) formula per row is reported", () => {
+  const report = auditReal("s41598-021-85174-w", 9, (data) => {
+    const unit = data.units.find((item) => item.id === "u064572585535");
+    const byId = new Map(data.elements.map((element) => [element.id, element]));
+    const moving = unit.elementIds.filter((id) => {
+      const element = byId.get(id);
+      return element?.bbox && (element.bbox[1] + element.bbox[3]) / 2 >= 332;
+    });
+    unit.elementIds = unit.elementIds.filter((id) => !moving.includes(id));
+    for (const id of moving) byId.get(id).unitId = "uLower18";
+    data.units.push({ id: "uLower18", type: "display", equationNumber: true, elementIds: moving });
+  });
+  assert.equal(report.findings.some((item) => item.rule === "R2" && item.suggestion.includes("折行")), true);
+});
+
+test("a full line drop is not the same row, and sentences beside a display are not R10", () => {
+  const dropped = auditReal("2006.11239", 3, (data) => {
+    const unit = data.units.find((item) => item.id === "u186b97b94c49");
+    const ids = new Set(unit.elementIds);
+    for (const element of data.elements) {
+      if (!ids.has(element.id) || !element.bbox) continue;
+      element.bbox = [element.bbox[0], element.bbox[1] + 14, element.bbox[2], element.bbox[3] + 14];
+    }
+  });
+  assert.equal(dropped.findings.some((item) => item.rule === "R10"), false);
+
+  const sentences = auditReal("2006.11239", 3, (data) => {
+    data.elements.find((element) => element.id === "e8b313bb50956da3c").char = "the previous value";
+    data.elements.find((element) => element.id === "ee2a0d492acc1ed24").char = "grows later today";
+  });
+  assert.equal(sentences.findings.some((item) => item.rule === "R10"), false);
+});
+
+test("the split bracket formula is one unit after its two rows are merged", () => {
+  const split = auditReal("s41467-020-19530-1", 2);
+  assert.equal(split.findings.some((item) => item.rule === "R2" && item.queueUnitId === "ude716a502627" && item.suggestion.includes("按 m")), true);
+  const merged = auditReal("s41467-020-19530-1", 2, (data) => {
+    const upper = data.units.find((unit) => unit.id === "u1edb751eba16");
+    const lower = data.units.find((unit) => unit.id === "u93a3f3092b3d");
+    const ids = lower.elementIds.slice();
+    upper.elementIds.push(...ids);
+    upper.equationNumber = true;
+    for (const id of ids) {
+      const element = data.elements.find((item) => item.id === id);
+      element.unitId = upper.id;
+      element.unitType = "display";
+    }
+    data.units = data.units.filter((unit) => unit.id !== lower.id);
+  });
+  assert.equal(merged.findings.some((item) => item.rule === "R2"), false);
+});
