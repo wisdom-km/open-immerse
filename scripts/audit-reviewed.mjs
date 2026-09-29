@@ -579,6 +579,44 @@ function continuesWrap(elements, upperMembers, lowerMembers, height) {
   return false;
 }
 
+function rowSpanBox(row) {
+  return [
+    Math.min(...row.glyphs.map((glyph) => glyph.bbox[0])),
+    row.top,
+    Math.max(...row.glyphs.map((glyph) => glyph.bbox[2])),
+    row.bottom
+  ];
+}
+
+// Two formula rows of one display unit are one block only when nothing else's
+// formula row sits between them. Merging the left-hand side into a later
+// equation, skipping the block in the middle, is not a wrap.
+function foreignRowBetween(page, unit, rowsById) {
+  if (unit.type !== "display") return null;
+  const rows = rowsById.get(unit.id) || [];
+  if (rows.length < 2) return null;
+  const members = membersOf(page, unit);
+  for (let index = 1; index < rows.length; index += 1) {
+    const above = rowSpanBox(rows[index - 1]);
+    const below = rowSpanBox(rows[index]);
+    for (const [otherId, otherRows] of rowsById) {
+      if (otherId === unit.id) continue;
+      for (const row of otherRows) {
+        const mid = (row.top + row.bottom) / 2;
+        if (mid <= above[3] + 1 || mid >= below[1] - 1) continue;
+        const box = rowSpanBox(row);
+        const overlapAbove = Math.min(above[2], box[2]) - Math.max(above[0], box[0]);
+        const overlapBelow = Math.min(below[2], box[2]) - Math.max(below[0], box[0]);
+        if (overlapAbove < 16 || overlapBelow < 16) continue;
+        const sample = row.glyphs.find((glyph) => glyph?.bbox);
+        if (!sample || !sameColumnGlyph(sample, members, page.elements || [])) continue;
+        return { otherId, glyph: sample };
+      }
+    }
+  }
+  return null;
+}
+
 function equationNumberBetweenRows(elements, members, height) {
   const groups = separateDisplayRows(members);
   if (groups.length < 2) return false;
@@ -1402,6 +1440,20 @@ function auditPageRules(entries, page, findings, info) {
         }));
       }
     }
+  }
+
+  const rowsById = new Map(wrappedCandidates.map((unit) => [unit.id, separateDisplayRows(membersOf(page, unit).filter((element) => element.bbox))]));
+  for (const unit of displays) {
+    const hit = foreignRowBetween(page, unit, rowsById);
+    if (!hit) continue;
+    const entry = entryFor(unit.id) || entryFor(hit.otherId);
+    if (!entry) continue;
+    const ownGlyph = membersOf(page, unit).find(isLetterGlyph);
+    findings.push(finding(entry, "R2", {
+      currentUnitId: unit.id,
+      elements: [ownGlyph, hit.glyph].filter(Boolean),
+      suggestion: "这个行间单元并进了不相邻的公式行，中间隔着别的单元。折行只包括紧挨着的下一行。把中间隔开的那一行按 s 拆出去。"
+    }));
   }
 
   const formulaUnits = (page.units || []).filter((unit) => (unit.elementIds || []).length);
