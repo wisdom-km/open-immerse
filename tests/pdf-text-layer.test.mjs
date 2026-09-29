@@ -14,7 +14,7 @@ import {
   textLayerToBlocks,
   trimFormulaBboxToInk
 } from "../lib/pdf-text-layer.js";
-import { isTranslatableBlock } from "../lib/pdf-blocks.js";
+import { blockReadoutPlan, isTranslatableBlock } from "../lib/pdf-blocks.js";
 import { renderAuthorGrid } from "../lib/pdf-structure-render.js";
 import { segmentPageBlocks } from "../lib/pdf-viewer.js";
 
@@ -477,6 +477,34 @@ test("a scripted membership line is cropped instead of spelling formula letters"
   const hitH = Math.min(crops[1].bbox[3], proseBox[3]) - Math.max(crops[1].bbox[1], proseBox[1]);
   assert.ok(!(hitW > 0.01 && hitH > 0.003), `second crop swallowed the line above (${hitW}, ${hitH})`);
   assert.ok(crops[1].bbox[0] > 110 / 612, "the second crop must not swallow the line above");
+});
+
+test("an indented numbered equation stays one display formula", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("We varied the learning rate over the course of training, according to the formula:", 108, 206, 396, 10),
+      pdfItem("lrate", 163, 165, 22, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("=", 190, 165, 8, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem("d", 210, 165, 6, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("model", 216, 162, 24, 7, { fontName: "NimbusRomNo9L-Regu", fontRealName: "NimbusRomNo9L-Regu" }),
+      pdfItem("step", 250, 165, 20, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("warmup", 280, 165, 40, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("steps", 330, 165, 28, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("(3)", 400, 165, 16, 10),
+      pdfItem("This corresponds to increasing the learning rate linearly for the first warmup steps.", 108, 141, 390, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 7
+  });
+  const display = page.blocks.find((block) => block.label === "formula" && block.display === true);
+  assert.ok(display);
+  assert.equal(blockReadoutPlan(display).className, "oi-pdf-display-math");
+  const before = page.blocks.find((block) => /according to the formula/.test(block.sourceText || ""));
+  const after = page.blocks.find((block) => /This corresponds to increasing/.test(block.sourceText || ""));
+  assert.ok(before);
+  assert.ok(after);
+  assert.equal(before.sourceText.includes("lrate"), false);
+  assert.equal(after.sourceText.includes("(3)"), false);
 });
 
 test("a footnote digit under the previous line starts the next sentence", () => {
