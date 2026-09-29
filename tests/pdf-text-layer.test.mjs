@@ -479,6 +479,29 @@ test("a scripted membership line is cropped instead of spelling formula letters"
   assert.ok(crops[1].bbox[0] > 110 / 612, "the second crop must not swallow the line above");
 });
 
+test("a bare 10000·2π scale stays in the sentence", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("The wavelengths form a geometric progression from ", 72, 396, 300, 10),
+      pdfItem("2", 380, 396, 4, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem("π", 384, 396, 5, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem(" to ", 394, 396, 16, 10),
+      pdfItem("10000", 416, 396, 25, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem("·", 442, 396, 4, 10, { fontName: "CMSY10", fontRealName: "CMSY10" }),
+      pdfItem("2", 448, 396, 5, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem("π", 454, 396, 6, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem(". We chose this function because it would allow the model to learn.", 462, 396, 220, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 6
+  });
+  const sentence = page.blocks.find((block) => /wavelengths form/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.sourceText, /10000·2π/);
+  assert.match(sentence.text, /10000·2π/);
+  assert.equal(sentence.placeholders, undefined);
+});
+
 test("an indented numbered equation stays one display formula", () => {
   const page = textLayerToBlocks({
     items: [
