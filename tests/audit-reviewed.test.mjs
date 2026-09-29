@@ -1117,3 +1117,69 @@ test("moving a ð4Þ equation number out of its display unit is R3", () => {
     assert.equal(report.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "4")), true, mode);
   }
 });
+
+function merge224Rows(data) {
+  const host = data.units.find((unit) => unit.id === "u5f6dd0b28c6c");
+  const byId = new Map(data.elements.map((element) => [element.id, element]));
+  for (const id of ["u9aa5453fe661", "u6640d511349b"]) {
+    const unit = data.units.find((item) => item.id === id);
+    for (const elementId of unit.elementIds) {
+      const element = byId.get(elementId);
+      element.unitId = host.id;
+      element.unitType = "display";
+      host.elementIds.push(elementId);
+    }
+  }
+  data.units = data.units.filter((unit) => unit.id !== "u9aa5453fe661" && unit.id !== "u6640d511349b");
+}
+
+function insertNarrow(data, bbox) {
+  data.elements.push({
+    id: "eNarrow",
+    kind: "glyph",
+    char: "≡",
+    font: "LMMathSymbols10-Regular",
+    bbox,
+    label: "formula",
+    unitId: "uNarrow",
+    unitType: "inline",
+    equationNumber: false
+  });
+  data.units.push({ id: "uNarrow", type: "inline", equationNumber: false, elementIds: ["eNarrow"] });
+}
+
+function skippedMiddle(report) {
+  return report.findings.some((item) => item.rule === "R2" && item.suggestion.includes("中间隔着") && item.elements.some((element) => element.char === "≡"));
+}
+
+test("N24 a lone ≡ between two merged rows is skipped over", () => {
+  const report = auditReal("jhep04-2021-102", 12, (data) => {
+    merge224Rows(data);
+    // (2.24b) ends near y=686 and (2.24c) starts near y=690. 8pt wide, inside both rows.
+    insertNarrow(data, [200, 684, 208, 692]);
+  });
+  assert.equal(skippedMiddle(report), true);
+  assert.equal(report.findings.some((item) => item.rule === "R2" && item.queueUnitId === "u46b41d385d16" && item.currentUnitId === "u5f6dd0b28c6c"), true);
+});
+
+test("N25 a narrow mark in the equation-number column is not between the rows", () => {
+  const report = auditReal("jhep04-2021-102", 12, (data) => {
+    merge224Rows(data);
+    insertNarrow(data, [490, 684, 498, 692]);
+  });
+  assert.equal(skippedMiddle(report), false);
+});
+
+test("N26 a narrow mark outside one row span is not skipped over", () => {
+  const straddling = auditReal("jhep04-2021-102", 12, (data) => {
+    merge224Rows(data);
+    insertNarrow(data, [154, 684, 163, 692]);
+  });
+  assert.equal(skippedMiddle(straddling), false);
+
+  const oneSide = auditReal("jhep04-2021-102", 12, (data) => {
+    merge224Rows(data);
+    insertNarrow(data, [400, 684, 408, 692]);
+  });
+  assert.equal(skippedMiddle(oneSide), false);
+});
