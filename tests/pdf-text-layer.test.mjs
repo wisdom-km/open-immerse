@@ -479,6 +479,65 @@ test("a scripted membership line is cropped instead of spelling formula letters"
   assert.ok(crops[1].bbox[0] > 110 / 612, "the second crop must not swallow the line above");
 });
 
+test("Adam's three Greek parameter relations are separate inline crops", () => {
+  const math = (str, x, y, width, height = 10, font = "CMR10") =>
+    pdfItem(str, x, y, width, height, { fontName: font, fontRealName: font });
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("We used the Adam optimizer with ", 72, 206, 150, 10),
+      math("β", 230, 206, 6, 10, "CMMI10"),
+      math("1", 236, 204, 4, 7, "CMR7"),
+      math("= 0", 244, 206, 16, 10),
+      math(".", 260, 206, 3, 10, "CMMI10"),
+      math("9", 264, 206, 5, 10),
+      pdfItem(",", 270, 206, 3, 10),
+      math("β", 278, 206, 6, 10, "CMMI10"),
+      math("2", 284, 204, 4, 7, "CMR7"),
+      math("= 0", 292, 206, 16, 10),
+      math(".", 308, 206, 3, 10, "CMMI10"),
+      math("98", 312, 206, 10, 10),
+      pdfItem(" and ", 324, 206, 22, 10),
+      math("ϵ", 350, 206, 5, 10, "CMMI10"),
+      math("= 10", 358, 206, 20, 10),
+      math("−", 380, 210, 6, 7, "CMSY7"),
+      math("9", 386, 210, 4, 7, "CMR7"),
+      pdfItem(". We varied the learning rate.", 394, 206, 140, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 7
+  });
+  const sentence = page.blocks.find((block) => /Adam optimizer/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /⟦f\d+⟧, ⟦f\d+⟧ and ⟦f\d+⟧/);
+  assert.doesNotMatch(sentence.text, /⟦f\d+⟧−9/);
+  assert.equal(sentence.placeholders.length, 3);
+  for (const entry of sentence.placeholders) {
+    const crop = page.blocks.find((block) => block.id === entry.blockId);
+    const width = (crop.bbox[2] - crop.bbox[0]) * 612;
+    assert.ok(width < 80, `crop stays under 80pt (${width.toFixed(1)})`);
+    assert.equal(crop.display, false);
+  }
+});
+
+test("a latin a = 1, b = 2 list is not split by the Greek relation comma", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("We set ", 72, 400, 36, 10),
+      pdfItem("a", 110, 400, 6, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("= 1", 118, 400, 16, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem(",", 136, 400, 3, 10),
+      pdfItem("b", 142, 400, 6, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("= 2", 150, 400, 16, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem(" in the example.", 170, 400, 80, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 3
+  });
+  const sentence = page.blocks.find((block) => /We set/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.equal(sentence.placeholders?.length || 0, 1);
+});
+
 test("a bare 10000·2π scale stays in the sentence", () => {
   const page = textLayerToBlocks({
     items: [
