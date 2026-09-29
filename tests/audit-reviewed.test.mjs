@@ -1027,3 +1027,61 @@ test("the saved bracket wrap passes, and splitting it per row is reported", () =
   });
   assert.equal(split.findings.some((item) => item.rule === "R2" && item.queueUnitId === "ude716a502627" && item.suggestion.includes("按 m")), true);
 });
+
+test("a × continuation split from its ≡ row, and a text (2.24a), are reported", () => {
+  const live = auditReal("jhep04-2021-102", 12);
+  const on123 = live.findings.filter((item) => item.queueUnitId === "u46b41d385d16");
+  assert.equal(on123.some((item) => item.rule === "R2" && item.currentUnitId.includes("ud286fcf1616e") && item.suggestion.includes("按 m")), true);
+  assert.equal(on123.some((item) => item.rule === "R2" && item.currentUnitId.includes("u19f3c9a06a7a") && item.suggestion.includes("按 m")), true);
+  assert.equal(on123.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(2.24a)")), true);
+  assert.equal(live.findings.some((item) => item.elements.some((element) => element.char === "(2.24b)" || element.char === "(2.24c)")), false);
+
+  const fixed = auditReal("jhep04-2021-102", 12, (data) => {
+    const target = data.units.find((unit) => unit.id === "u17ce90a8dd50");
+    for (const id of ["u19f3c9a06a7a", "ud286fcf1616e"]) {
+      const unit = data.units.find((item) => item.id === id);
+      for (const elementId of unit.elementIds) {
+        const element = data.elements.find((item) => item.id === elementId);
+        element.unitId = target.id;
+        element.unitType = "display";
+        target.elementIds.push(elementId);
+      }
+    }
+    const number = data.elements.find((element) => element.id === "e8b03c85ecd4e8d5d");
+    number.label = "formula";
+    number.unitId = target.id;
+    number.unitType = "display";
+    number.equationNumber = true;
+    target.elementIds.push(number.id);
+    target.equationNumber = true;
+    data.units = data.units.filter((unit) => unit.id !== "u19f3c9a06a7a" && unit.id !== "ud286fcf1616e");
+  });
+  const still = fixed.findings.filter((item) => item.queueUnitId === "u46b41d385d16");
+  assert.equal(still.some((item) => item.rule === "R2" || item.rule === "R3"), false);
+});
+
+function moveSplitNumber(data, mode) {
+  const ids = ["ed05eb80be2e3b36b", "ebd200e46005effa3", "e7346bab338c7080c"];
+  const unit = data.units.find((item) => item.id === "ue194e03da9a8");
+  unit.elementIds = unit.elementIds.filter((id) => !ids.includes(id));
+  for (const id of ids) {
+    const element = data.elements.find((item) => item.id === id);
+    if (mode === "text") {
+      element.label = "text";
+      element.unitId = null;
+      element.unitType = null;
+      element.equationNumber = false;
+    } else {
+      element.unitId = "uNum4";
+      element.unitType = "display";
+    }
+  }
+  if (mode === "unit") data.units.push({ id: "uNum4", type: "display", equationNumber: true, elementIds: ids });
+}
+
+test("moving a ð4Þ equation number out of its display unit is R3", () => {
+  for (const mode of ["text", "unit"]) {
+    const report = auditReal("s41467-020-19530-1", 2, (data) => moveSplitNumber(data, mode));
+    assert.equal(report.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "4")), true, mode);
+  }
+});

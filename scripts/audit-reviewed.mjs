@@ -433,28 +433,52 @@ function separateDisplayRows(members) {
   });
 }
 
-function continuationOperator(element) {
+function operatorText(element) {
   const text = String(element?.char || "").trim();
-  if (!text || [...text].length > 2) return false;
-  return /^[=+\-−–—×∗*±∓⊕⊗⊖<>≤≥≈≠≡∝·∙⋅]$/u.test(text);
+  if (!text || [...text].length > 2) return "";
+  return text;
+}
+
+// × · + − continue the same product or sum. = ≡ and other relations start a
+// new line of the same formula only when the row above has no equation number.
+function expressionOperator(element) {
+  return /^[++\-−–—×✕⋅·∙∗*±∓⊕⊗⊖⊙∧∨∩∪∘]$/u.test(operatorText(element));
+}
+
+function equalityOperator(element) {
+  return /^[=≡≈≠≤≥<>≃≅≍≔≕≜≝≐∼∽∝]$/u.test(operatorText(element));
 }
 
 function wrapBracketKind(element) {
   const text = String(element?.char || "");
   const point = text.codePointAt(0);
-  // Only a square or curly bracket can tie two rows. Ordinary ( ) and ð Þ
-  // sit inside each row and must not look like a cross-row pair.
-  if (/^[\[{［]$/u.test(text)) return "open";
-  if (/^[\]}］]$/u.test(text)) return "close";
+  // Only a square or curly bracket can tie two rows, and only as a matched
+  // pair. Ordinary ( ) and ð Þ sit inside each row.
+  if (/^[\[［]$/u.test(text)) return "square-open";
+  if (/^[\]］]$/u.test(text)) return "square-close";
+  if (text === "{") return "curly-open";
+  if (text === "}") return "curly-close";
   // AdvP4C4E46 draws “[” / “]” as U+0014 / U+0015.
-  if (isMathSymbolFont(element?.font) && point === 0x14) return "open";
-  if (isMathSymbolFont(element?.font) && point === 0x15) return "close";
+  if (isMathSymbolFont(element?.font) && point === 0x14) return "square-open";
+  if (isMathSymbolFont(element?.font) && point === 0x15) return "square-close";
   return "";
 }
 
 function leftmostBodyGlyph(row) {
   const glyphs = (row?.glyphs || []).filter((glyph) => String(glyph.char || "").trim() && !isFencePiece(glyph));
   glyphs.sort((a, b) => a.bbox[0] - b.bbox[0] || a.bbox[1] - b.bbox[1]);
+  return glyphs[0] || null;
+}
+
+function rowStartGlyph(members, row) {
+  const pad = Math.max(3, (row.bottom - row.top) * 0.35);
+  const glyphs = members.filter((glyph) => {
+    if (!glyph?.bbox || !String(glyph.char || "").trim()) return false;
+    const y = midY(glyph);
+    return y >= row.top - pad && y <= row.bottom + pad;
+  }).sort((a, b) => a.bbox[0] - b.bbox[0] || a.bbox[1] - b.bbox[1]);
+  // The continuation is the first glyph. × and ≡ are math-symbol fences, but
+  // they still count. A bracket before an interior = does not.
   return glyphs[0] || null;
 }
 
@@ -468,26 +492,91 @@ function rowOwnsEquationNumber(row, hits) {
 function bracketSpansRows(members, rows) {
   if (rows.length !== 2) return false;
   const mid = (rows[0].bottom + rows[1].top) / 2;
-  const opens = members.filter((glyph) => glyph?.bbox && wrapBracketKind(glyph) === "open" && midY(glyph) < mid + 1);
-  const closes = members.filter((glyph) => glyph?.bbox && wrapBracketKind(glyph) === "close" && midY(glyph) > mid - 1);
-  return opens.length > 0 && closes.length > 0;
+  return ["square", "curly"].some((kind) => {
+    const opens = members.filter((glyph) => glyph?.bbox && wrapBracketKind(glyph) === `${kind}-open` && midY(glyph) < mid + 1);
+    const closes = members.filter((glyph) => glyph?.bbox && wrapBracketKind(glyph) === `${kind}-close` && midY(glyph) > mid - 1);
+    return opens.some((open) => closes.some((close) => close.bbox[0] > open.bbox[0] + 8));
+  });
+}
+
+function numbersLandOnDistinctRows(rows, hits, height) {
+  if (hits.length < 2) return false;
+  const owners = new Set();
+  for (const hit of hits) {
+    let best = null;
+    let distance = Infinity;
+    const y = midY(hit.token);
+    for (const row of rows) {
+      const center = (row.top + row.bottom) / 2;
+      const gap = Math.abs(y - center);
+      if (gap < distance) {
+        distance = gap;
+        best = row;
+      }
+    }
+    if (best && distance <= 2.2 * height) owners.add(best);
+  }
+  return owners.size >= 2;
 }
 
 /**
- * One formula wrapped over two rows: the next row starts with an operator,
- * or a bracket opens on the first row and closes on the second. A number
- * in either row belongs to that one unit. Two rows that each carry their
- * own equation number are two formulas.
+ * One formula wrapped over two or more rows. A later row continues it when
+ * that row starts with × · + −, or with = ≡ only if no earlier row already
+ * ends in its own equation number, or when a bracket opens above and closes
+ * here. Rows that each carry a number are separate formulas.
  */
-function isSingleWrappedFormula(elements, members, height) {
+function isWrappedChain(elements, members, height) {
   const rows = separateDisplayRows(members);
-  if (rows.length !== 2) return false;
-  const gap = rows[1].top - rows[0].bottom;
-  if (gap > 2.4 * (height || 8)) return false;
+  if (rows.length < 2) return false;
   const hits = lineEndNumbers(elements, members, height);
+  if (numbersLandOnDistinctRows(rows, hits, height)) return false;
   if (rows.every((row) => rowOwnsEquationNumber(row, hits))) return false;
-  if (continuationOperator(leftmostBodyGlyph(rows[1]))) return true;
-  return bracketSpansRows(members, rows);
+  for (let index = 1; index < rows.length; index += 1) {
+    const gap = rows[index].top - rows[index - 1].bottom;
+    if (gap > 2.4 * (height || 8)) return false;
+    if (bracketSpansRows(members, [rows[index - 1], rows[index]])) continue;
+    const start = rowStartGlyph(members, rows[index]);
+    if (expressionOperator(start)) continue;
+    if (equalityOperator(start)) {
+      const earlier = hits.some((hit) => midY(hit.token) <= rows[index - 1].bottom + Math.max(4, 0.8 * height));
+      if (!earlier) continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+// Split detection cannot use separateDisplayRows on the union: a tall integral
+// whose box clips the next line by a point glues the two rows into one.
+function continuesWrap(elements, upperMembers, lowerMembers, height) {
+  const upperRows = separateDisplayRows(upperMembers);
+  const lowerRows = separateDisplayRows(lowerMembers);
+  if (!upperRows.length || !lowerRows.length) return false;
+  const above = upperRows[upperRows.length - 1];
+  const below = lowerRows[0];
+  const gap = below.top - above.bottom;
+  if (gap > 2.4 * (height || 8)) return false;
+  const upperMid = (above.top + above.bottom) / 2;
+  const lowerMid = (below.top + below.bottom) / 2;
+  if (lowerMid - upperMid < Math.max(6, 0.7 * (height || 8))) return false;
+  const combined = [...upperMembers, ...lowerMembers];
+  const hits = lineEndNumbers(elements, combined, height);
+  const pair = [above, below];
+  if (numbersLandOnDistinctRows(pair, hits, height)) return false;
+  if (pair.every((row) => rowOwnsEquationNumber(row, hits))) return false;
+  if (bracketSpansRows(combined, pair)) return true;
+  const start = rowStartGlyph(lowerMembers, below);
+  if (expressionOperator(start)) return true;
+  if (equalityOperator(start)) {
+    // A lone one-line left-hand side joins the following ≡ or = row.
+    // A display that is already several lines tall does not.
+    const upperHeight = glyphHeight(upperMembers) || height || 8;
+    const span = upperRows[upperRows.length - 1].bottom - upperRows[0].top;
+    if (upperRows.length !== 1 || span > 2.2 * upperHeight) return false;
+    const earlier = hits.some((hit) => midY(hit.token) <= above.bottom + Math.max(4, 0.8 * (height || 8)));
+    return !earlier;
+  }
+  return false;
 }
 
 function equationNumberBetweenRows(elements, members, height) {
@@ -697,7 +786,7 @@ function auditUnitRules(entry, page, findings) {
     if (unit.type === "display") {
       const { groups, height: lineHeight } = displayLineGroups(members);
       const rows = separateDisplayRows(members);
-      const wrapped = isSingleWrappedFormula(page.elements || [], members, height);
+      const wrapped = isWrappedChain(page.elements || [], members, height);
       const farApart = !wrapped && groups.some((group, index) => {
         const previous = groups[index - 1];
         if (!previous) return false;
@@ -1020,23 +1109,57 @@ function displayUnitHasFormulaBody(page, unit, hit) {
   return membersOf(page, unit).some((glyph) => !ids.has(glyph.id) && glyph.label === "formula" && isLetterGlyph(glyph) && !isFencePiece(glyph) && boxHeight(glyph) >= 4);
 }
 
-function splitWrappedPredecessor(page, lower, displays, height) {
+function rowHasProse(members) {
+  return members.some((element) => formulaProseWords(element, members).length > 0);
+}
+
+function unitSitsBetween(page, units, upper, lower, upperBox, lowerBox) {
+  const top = upperBox[3];
+  const bottom = lowerBox[1];
+  if (bottom <= top + 2) return false;
+  return units.some((unit) => {
+    if (unit.id === upper.id || unit.id === lower.id) return false;
+    const members = membersOf(page, unit).filter((element) => element.bbox);
+    if (separateDisplayRows(members).length < 1) return false;
+    const box = unionBox(members);
+    const mid = (box[1] + box[3]) / 2;
+    return mid > top + 1 && mid < bottom - 1;
+  });
+}
+
+function numberOwnedByFormula(page, hit, height) {
+  const owner = (page.units || []).find((unit) => unit.id === hit.token.unitId);
+  if (!owner || owner.type !== "display") return false;
+  return displayUnitHasFormulaBody(page, owner, hit) && rowFormulaBody(membersOf(page, owner), hit, height);
+}
+
+// A line-end (n) / ðnÞ that sits on this row but is text, or lives in a unit
+// that has no formula beside it.
+function detachedLineEndNumbers(page, members, height) {
+  return lineEndNumbers(page.elements || [], members, height).filter((hit) => !numberOwnedByFormula(page, hit, height));
+}
+
+function splitWrappedPredecessor(page, lower, units, height) {
   const lowerMembers = membersOf(page, lower).filter((element) => element.bbox);
   if (separateDisplayRows(lowerMembers).length < 1) return null;
   const lowerBox = unionBox(lowerMembers);
   let best = null;
   let bestBottom = -Infinity;
-  for (const upper of displays) {
-    if (upper.id === lower.id || upper.type !== "display") continue;
+  for (const upper of units) {
+    if (upper.id === lower.id) continue;
+    if (upper.type !== "display" && upper.type !== "inline") continue;
     const upperMembers = membersOf(page, upper).filter((element) => element.bbox);
     if (separateDisplayRows(upperMembers).length < 1) continue;
+    // A lone left-hand side is often inline. A prose sentence is not.
+    if (upper.type === "inline" && rowHasProse(upperMembers)) continue;
     const upperBox = unionBox(upperMembers);
     if ((upperBox[1] + upperBox[3]) / 2 >= (lowerBox[1] + lowerBox[3]) / 2) continue;
     const gap = lowerBox[1] - upperBox[3];
     if (gap > 2.4 * height) continue;
     const overlap = Math.min(upperBox[2], lowerBox[2]) - Math.max(upperBox[0], lowerBox[0]);
     if (overlap < 16) continue;
-    if (!isSingleWrappedFormula(page.elements || [], [...upperMembers, ...lowerMembers], height)) continue;
+    if (unitSitsBetween(page, units, upper, lower, upperBox, lowerBox)) continue;
+    if (!continuesWrap(page.elements || [], upperMembers, lowerMembers, height)) continue;
     if (upperBox[3] > bestBottom) {
       best = upper;
       bestBottom = upperBox[3];
@@ -1106,7 +1229,21 @@ function auditPageRules(entries, page, findings, info) {
           seenNumbers.add(hit.token.id);
           continue;
         }
-        if (!inside && !formulaHere) continue;
+        // ð4Þ on a Nature/PLOS page sits on the tall bracket, between the two
+        // formula baselines, so it is not "on" either letter row. It still
+        // belongs to this display when its box is inside the unit. A number
+        // one line below the box does not.
+        if (!inside && !formulaHere) {
+          const span = unionBox(members);
+          const y = midY(hit.token);
+          const unitHeight = glyphHeight(members) || height;
+          const inSpan = unit.type === "display"
+            && y >= span[1] - 1
+            && y <= span[3] + 1
+            && hit.token.bbox[0] >= span[2] - Math.max(72, 8 * unitHeight)
+            && sameColumnGlyph(hit.token, members, elements);
+          if (!inSpan) continue;
+        }
         seenNumbers.add(hit.token.id);
         const elsewhere = Boolean(hit.token.unitId) && !inside;
         findings.push(finding(entry, "R3", {
@@ -1233,14 +1370,16 @@ function auditPageRules(entries, page, findings, info) {
   }
 
   const splitSeen = new Set();
-  const displays = (page.units || []).filter((unit) => unit.type === "display" && (unit.elementIds || []).length);
+  const wrappedCandidates = (page.units || []).filter((unit) => (unit.elementIds || []).length && (unit.type === "display" || unit.type === "inline"));
+  const displays = wrappedCandidates.filter((unit) => unit.type === "display");
+  const entryFor = (unitId) => entries.find((item) => currentUnits(page, item).units.some((unit) => unit.id === unitId));
   for (const lower of displays) {
-    const upper = splitWrappedPredecessor(page, lower, displays, height);
+    const upper = splitWrappedPredecessor(page, lower, wrappedCandidates, height);
     if (!upper) continue;
     const key = [upper.id, lower.id].sort().join("|");
     if (splitSeen.has(key)) continue;
     splitSeen.add(key);
-    const entry = entries.find((item) => currentUnits(page, item).units.some((unit) => unit.id === lower.id));
+    const entry = entryFor(lower.id) || entryFor(upper.id);
     if (!entry) continue;
     const upperGlyph = membersOf(page, upper).find(isLetterGlyph);
     const lowerGlyph = membersOf(page, lower).find(isLetterGlyph);
@@ -1249,6 +1388,20 @@ function auditPageRules(entries, page, findings, info) {
       elements: [upperGlyph, lowerGlyph].filter(Boolean),
       suggestion: "这两行是同一个折行公式：下一行以运算符开头，或同一对括号在上一行打开、下一行闭合。框住两行按 m 并成一个行间单元。编号写在任一行都算这个单元的成员。"
     }));
+    // The number of a wrapped formula may sit on the continuation row as text, outside either unit.
+    for (const side of [upper, lower]) {
+      for (const hit of detachedLineEndNumbers(page, membersOf(page, side), height)) {
+        if (seenNumbers.has(hit.token.id)) continue;
+        seenNumbers.add(hit.token.id);
+        findings.push(finding(entry, "R3", {
+          currentUnitId: `${upper.id},${lower.id}`,
+          elements: hit.glyphs,
+          suggestion: hit.token.unitId
+            ? "行末编号落在别的单元里。框住本行式子和编号按 m 并成一个行间单元，再按 e 只标编号。"
+            : "行末编号不在这一行的单元里。选中编号按 e，并进同一栏的行间单元。"
+        }));
+      }
+    }
   }
 
   const formulaUnits = (page.units || []).filter((unit) => (unit.elementIds || []).length);
