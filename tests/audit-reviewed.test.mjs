@@ -1011,21 +1011,19 @@ test("a full line drop is not the same row, and sentences beside a display are n
   assert.equal(sentences.findings.some((item) => item.rule === "R10"), false);
 });
 
-test("the split bracket formula is one unit after its two rows are merged", () => {
-  const split = auditReal("s41467-020-19530-1", 2);
-  assert.equal(split.findings.some((item) => item.rule === "R2" && item.queueUnitId === "ude716a502627" && item.suggestion.includes("按 m")), true);
-  const merged = auditReal("s41467-020-19530-1", 2, (data) => {
-    const upper = data.units.find((unit) => unit.id === "u1edb751eba16");
-    const lower = data.units.find((unit) => unit.id === "u93a3f3092b3d");
-    const ids = lower.elementIds.slice();
-    upper.elementIds.push(...ids);
-    upper.equationNumber = true;
-    for (const id of ids) {
-      const element = data.elements.find((item) => item.id === id);
-      element.unitId = upper.id;
-      element.unitType = "display";
-    }
-    data.units = data.units.filter((unit) => unit.id !== lower.id);
+test("the saved bracket wrap passes, and splitting it per row is reported", () => {
+  const saved = auditReal("s41467-020-19530-1", 2);
+  assert.equal(saved.findings.some((item) => item.rule === "R2"), false);
+  const split = auditReal("s41467-020-19530-1", 2, (data) => {
+    const unit = data.units.find((item) => item.id === "ue194e03da9a8");
+    const byId = new Map(data.elements.map((element) => [element.id, element]));
+    const moving = unit.elementIds.filter((id) => {
+      const element = byId.get(id);
+      return element?.bbox && (element.bbox[1] + element.bbox[3]) / 2 >= 524;
+    });
+    unit.elementIds = unit.elementIds.filter((id) => !moving.includes(id));
+    for (const id of moving) byId.get(id).unitId = "uLower4";
+    data.units.push({ id: "uLower4", type: "display", equationNumber: true, elementIds: moving });
   });
-  assert.equal(merged.findings.some((item) => item.rule === "R2"), false);
+  assert.equal(split.findings.some((item) => item.rule === "R2" && item.queueUnitId === "ude716a502627" && item.suggestion.includes("按 m")), true);
 });
