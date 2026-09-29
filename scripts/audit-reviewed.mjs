@@ -201,6 +201,40 @@ function shortSymbolToken(char) {
   return String(char || "").trim().replace(/[,;:]$/, "");
 }
 
+const DISPLAY_CONNECTIVE = /^(?:where|and|with|for|if|or|let|then|when|of|to|by|as|a|an|the)$/i;
+
+/** where / and / with, and the same one- or two-word connective beside a display row. */
+function isDisplayConnective(element) {
+  const words = proseTextWords(element?.char);
+  return words.length > 0 && words.length <= 2 && words.every((word) => DISPLAY_CONNECTIVE.test(word));
+}
+
+function fontPointSize(font) {
+  const sizes = [...String(font || "").matchAll(/(?:^|[^0-9])(\d{1,2})(?![0-9])/g)].map((match) => Number(match[1]));
+  return sizes.find((size) => size >= 5 && size <= 14) || 0;
+}
+
+function isRomanTextFont(font) {
+  const name = String(font || "");
+  if (/italic|math|symbol|\.I\b|-It/i.test(name)) return false;
+  return /roman|cmr\d|nimbusrom|minionpro-reg/i.test(name);
+}
+
+/**
+ * A short roman token set in a smaller point size and shifted off the
+ * neighbor's center is a sub/superscript (E_cm), not a prose word.
+ */
+function isSmallerRomanScript(element, members) {
+  const size = fontPointSize(element?.font);
+  const text = String(element?.char || "").trim();
+  if (!size || !isRomanTextFont(element?.font) || text.length > 6 || !element?.bbox) return false;
+  const neighbors = (members || []).filter((item) => item && item !== element && item.id !== element.id && isLetterGlyph(item) && fontPointSize(item.font) >= size + 1
+    && horizontalGap(item.bbox, element.bbox) <= Math.max(boxHeight(item), 8));
+  if (!neighbors.length) return false;
+  const anchor = neighbors.slice().sort((a, b) => horizontalGap(a.bbox, element.bbox) - horizontalGap(b.bbox, element.bbox))[0];
+  return Math.abs(midY(element) - midY(anchor)) >= 0.12 * boxHeight(anchor);
+}
+
 /** a.e. on, if, for all, et, and, and the same kind of ≤3-word qualifier. */
 export function isShortFormulaQualifier(char) {
   const compact = String(char || "").trim().replace(/^[−–-]\s*/, "").replace(/\s+/g, " ");
@@ -226,6 +260,7 @@ export function formulaProseWords(element, members) {
   ) return [];
   if (isItalicSubscriptName(element)) return [];
   if (isShortFormulaQualifier(element.char)) return [];
+  if (isSmallerRomanScript(element, members)) return [];
   const others = (members || []).filter((item) => item && item !== element && item.id !== element.id && isLetterGlyph(item));
   const mid = median(others.map(boxHeight));
   const height = boxHeight(element);
@@ -364,6 +399,18 @@ function isClosingDelimiter(element) {
 function isOpeningDelimiter(element) {
   const text = String(element?.char || "").trim();
   return /^[(\[（〔ð]$/.test(text);
+}
+
+function isFencePiece(glyph) {
+  const text = String(glyph?.char || "").replace(/\s+/g, "");
+  if (!text) return true;
+  if (isOpeningDelimiter(glyph) || isClosingDelimiter(glyph)) return true;
+  return /^[{}()\[\]|]+$/.test(text);
+}
+
+function sharesBaseline(glyph, anchor, coreTop, coreBottom, limit) {
+  if (Math.abs(midY(glyph) - anchor) > limit) return false;
+  return overlapRatio(glyph, coreTop, coreBottom) >= 0.5;
 }
 
 function isOperatorOrBracket(element) {
@@ -527,7 +574,8 @@ function auditUnitRules(entry, page, findings) {
         }));
       }
     }
-    if (unit.type === "display" && leftProse.length && rightProse.length) {
+    const connectiveRow = [...leftProse, ...rightProse].every((element) => isDisplayConnective(element));
+    if (unit.type === "display" && leftProse.length && rightProse.length && !numberedLine && !connectiveRow) {
       findings.push(finding(entry, "R6", {
         currentUnitId: unit.id,
         elements: [leftProse[0], rightProse[0]],
@@ -546,27 +594,33 @@ function auditUnitRules(entry, page, findings) {
   }
 }
 
+function overlapRatio(glyph, top, bottom) {
+  const overlap = Math.min(bottom, glyph.bbox[3]) - Math.max(top, glyph.bbox[1]);
+  const denom = Math.min(boxHeight(glyph), Math.max(0.1, bottom - top));
+  return denom > 0 ? overlap / denom : 0;
+}
+
 function equationLineClusters(elements, height) {
   const glyphs = elements.filter(isLetterGlyph);
-  const limit = Math.max(3.5, 0.5 * height);
-  // One visual line. A growing union used to swallow the next row whenever
-  // a superscript or a tall brace overlapped it, so a number was checked
-  // against the wrong row of a multi-line equation.
-  const span = Math.max(limit, 0.9 * height);
+  // Centers, not a growing box. A line just above can sit a few points
+  // away and still overlap a tall fence; that must stay a separate row.
+  const limit = Math.max(3, 0.35 * height);
+  const band = Math.max(3, 0.45 * height);
   const body = glyphs.filter((glyph) => boxHeight(glyph) >= SUPERSCRIPT_HEIGHT_RATIO * height);
   const seeds = (body.length ? body : glyphs).slice().sort((a, b) => midY(a) - midY(b) || a.bbox[0] - b.bbox[0]);
   const lines = [];
   for (const glyph of seeds) {
     const y = midY(glyph);
     const current = lines[lines.length - 1];
-    const ys = current ? current.glyphs.map(midY) : [];
-    const anchor = ys.length ? median(ys) : y;
-    const same = current && Math.abs(y - anchor) <= limit && y - Math.min(...ys) <= span;
+    const coreTop = current ? current.anchor - band : glyph.bbox[1];
+    const coreBottom = current ? current.anchor + band : glyph.bbox[3];
+    const same = current && Math.abs(y - current.anchor) <= limit && overlapRatio(glyph, coreTop, coreBottom) >= 0.45;
     if (!same) {
-      lines.push({ glyphs: [glyph], top: glyph.bbox[1], bottom: glyph.bbox[3] });
+      lines.push({ glyphs: [glyph], anchor: y, top: glyph.bbox[1], bottom: glyph.bbox[3] });
       continue;
     }
     current.glyphs.push(glyph);
+    current.anchor = median(current.glyphs.map(midY));
     current.top = Math.min(current.top, glyph.bbox[1]);
     current.bottom = Math.max(current.bottom, glyph.bbox[3]);
   }
@@ -576,14 +630,14 @@ function equationLineClusters(elements, height) {
     let best = null;
     let bestDist = Infinity;
     for (const line of lines) {
-      const dist = Math.abs(midY(glyph) - median(line.glyphs.map(midY)));
-      if (dist <= limit && dist < bestDist) {
+      const dist = Math.abs(midY(glyph) - line.anchor);
+      if (dist <= limit && overlapRatio(glyph, line.anchor - band, line.anchor + band) >= 0.45 && dist < bestDist) {
         best = line;
         bestDist = dist;
       }
     }
     if (!best) {
-      lines.push({ glyphs: [glyph], top: glyph.bbox[1], bottom: glyph.bbox[3] });
+      lines.push({ glyphs: [glyph], anchor: midY(glyph), top: glyph.bbox[1], bottom: glyph.bbox[3] });
       continue;
     }
     best.glyphs.push(glyph);
@@ -740,10 +794,30 @@ function lineEndNumbers(elements, members, height) {
 }
 
 function numberedAtLineEnd(elements, members, numbered, height) {
-  const hits = lineEndNumbers(elements, members, height);
-  if (!hits.length) return false;
-  const ids = new Set(numbered.map((element) => element.id));
-  return hits.every((hit) => ids.has(hit.token.id));
+  const usable = numbered.filter((element) => element?.bbox && String(element.char || "").trim());
+  if (!usable.length) return false;
+  // The marked token's own row. A short (n) on the right margin counts
+  // even when the wrapped formula continues on the rows above it, and a
+  // number belonging to the next equation does not cancel it.
+  const y = median(usable.map(midY));
+  const limit = Math.max(3, 0.35 * height);
+  const cut = pageColumnCut(elements);
+  const onLeft = anchorOnLeft(members.length ? members : usable, cut);
+  const ids = new Set(usable.map((element) => element.id));
+  const right = Math.max(...usable.map((element) => element.bbox[2]));
+  const row = (elements || []).filter((glyph) => {
+    if (!isLetterGlyph(glyph) || Math.abs(midY(glyph) - y) > limit) return false;
+    if (cut == null) return true;
+    const left = glyph.bbox[0] < cut || gutterNumberGlyph(glyph, elements, cut);
+    return left === onLeft;
+  });
+  return !row.some((glyph) => {
+    if (ids.has(glyph.id) || glyph.bbox[0] < right - 1) return false;
+    if (!String(glyph.char || "").trim()) return false;
+    if (isClosingDelimiter(glyph)) return false;
+    if (glyph.label === "text" && proseTextWords(glyph.char).length > 0) return false;
+    return true;
+  });
 }
 
 function auditPageRules(entries, page, findings, info) {
@@ -792,7 +866,8 @@ function auditPageRules(entries, page, findings, info) {
       if (seenNumbers.has(hit.token.id)) continue;
       seenNumbers.add(hit.token.id);
       const inside = item.ids.has(hit.token.id);
-      const hostType = unit?.type || members.find((element) => element.unitType)?.unitType || "";
+      const tokenUnit = unitById.get(hit.token.unitId);
+      const hostType = tokenUnit?.type || unit?.type || members.find((element) => element.unitType)?.unitType || "";
       if (inside && hostType === "display" && hit.token.equationNumber !== true && hit.token.label === "formula") {
         info.push({ rule: "R3", queueIndex: item.entry.queueIndex });
         continue;
@@ -811,8 +886,8 @@ function auditPageRules(entries, page, findings, info) {
     }
     const mergeHeight = glyphHeight(members) || height;
     const limit = Math.max(4, 0.55 * mergeHeight);
-    const body = members.filter((glyph) => isLetterGlyph(glyph) && boxHeight(glyph) >= SUPERSCRIPT_HEIGHT_RATIO * mergeHeight);
-    const seeds = (body.length >= 2 ? body : members.filter(isLetterGlyph)).slice().sort((a, b) => midY(a) - midY(b));
+    const body = members.filter((glyph) => isLetterGlyph(glyph) && boxHeight(glyph) >= SUPERSCRIPT_HEIGHT_RATIO * mergeHeight && !isFencePiece(glyph));
+    const seeds = (body.length >= 2 ? body : members.filter((glyph) => isLetterGlyph(glyph) && !isFencePiece(glyph))).slice().sort((a, b) => midY(a) - midY(b));
     const baselines = [];
     for (const glyph of seeds) {
       const y = midY(glyph);
@@ -829,7 +904,9 @@ function auditPageRules(entries, page, findings, info) {
     const maxGap = Math.max(96, 8 * mergeHeight);
     for (const base of baselines) {
       if (base.glyphs.length < 2) continue;
-      const band = elements.filter((glyph) => isLetterGlyph(glyph) && Math.abs(midY(glyph) - base.y) <= limit
+      const coreTop = Math.min(...base.glyphs.map((glyph) => glyph.bbox[1]));
+      const coreBottom = Math.max(...base.glyphs.map((glyph) => glyph.bbox[3]));
+      const band = elements.filter((glyph) => isLetterGlyph(glyph) && sharesBaseline(glyph, base.y, coreTop, coreBottom, limit)
         && (cut == null || (glyph.bbox[0] < cut) === onLeft));
       if (band.some((glyph) => glyph.label === "text" && proseTextWords(glyph.char).length > 0)) continue;
       const lineText = elements.filter((glyph) => glyph.label === "text" && isLetterGlyph(glyph)

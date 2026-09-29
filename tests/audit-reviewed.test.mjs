@@ -710,3 +710,81 @@ test("auditing prelabel pages as the reviewed draft does not throw", () => {
   assert.match(docs, /860eadb/);
   assert.match(docs, /#1/);
 });
+
+test("R9 accepts a short equation number on its own row under a wrapped display", () => {
+  const upper = ["a", "b", "c", "d"].map((char, index) => formula(`u${index}`, char, [40 + index * 16, 100, 52 + index * 16, 110], "u1"));
+  const lower = ["e", "f", "g"].map((char, index) => formula(`l${index}`, char, [40 + index * 16, 160, 52 + index * 16, 170], "u1"));
+  const number = formula("n9", "(9)", [400, 128, 416, 138], "u1", { equationNumber: true });
+  const next = formula("n10", "(10)", [400, 160, 420, 170], "u2", { equationNumber: true });
+  const report = run([entry("u1", [...upper, ...lower, number].map((element) => element.id))], pageOf(
+    [...upper, ...lower, number, next],
+    [
+      { id: "u1", type: "display", equationNumber: true, elementIds: [...upper, ...lower, number].map((element) => element.id) },
+      { id: "u2", type: "display", equationNumber: true, elementIds: ["n10"] }
+    ]
+  ));
+  assert.equal(report.findings.some((item) => item.rule === "R9"), false);
+});
+
+test("R3 does not treat a display number as inline when the line above is close", () => {
+  const inline = formula("alpha", "α", [40, 96, 50, 106], "uInline", { unitType: "inline" });
+  const body = ["q", "x"].map((char, index) => formula(`d${index}`, char, [40 + index * 16, 112, 52 + index * 16, 122], "uDisplay"));
+  const number = formula("n4", "(4)", [400, 112, 416, 122], "uDisplay", { equationNumber: true });
+  const report = run(
+    [entry("uMix", [inline.id, ...body.map((element) => element.id), number.id])],
+    pageOf([inline, ...body, number], [
+      { id: "uInline", type: "inline", equationNumber: false, elementIds: [inline.id] },
+      { id: "uDisplay", type: "display", equationNumber: true, elementIds: [...body.map((element) => element.id), number.id] }
+    ])
+  );
+  assert.equal(report.findings.some((item) => item.rule === "R3"), false);
+});
+
+test("R10 ignores under-braces whose boxes only clip the row above", () => {
+  const above = ["p", "a", "q"].map((char, index) => formula(`a${index}`, char, [40 + index * 18, 100, 52 + index * 18, 110], "uAbove"));
+  const below = ["x", "y", "z"].map((char, index) => formula(`b${index}`, char, [40 + index * 18, 140, 52 + index * 18, 150], "uBelow"));
+  const brace = formula("brace", "{(", [70, 108, 82, 118], "uBelow");
+  const report = run([entry("uBelow", [...below, brace].map((element) => element.id))], pageOf(
+    [...above, ...below, brace],
+    [
+      { id: "uAbove", type: "display", equationNumber: false, elementIds: above.map((element) => element.id) },
+      { id: "uBelow", type: "display", equationNumber: false, elementIds: [...below, brace].map((element) => element.id) }
+    ]
+  ));
+  assert.equal(report.findings.some((item) => item.rule === "R10"), false);
+});
+
+test("R1 keeps a smaller roman subscript attached to a formula glyph", () => {
+  const base = formula("E", "E", [40, 100, 52, 112], "u1", { font: "LMMathItalic10-Regular" });
+  const sub = formula("cm", "cm", [52, 106, 66, 114], "u1", { font: "LMRoman8-Regular" });
+  const report = run([entry("u1", ["E", "cm"])], pageOf([base, sub], [{
+    id: "u1", type: "display", equationNumber: false, elementIds: ["E", "cm"]
+  }]));
+  assert.equal(report.findings.some((item) => item.rule === "R1"), false);
+  assert.deepEqual(formulaProseWords(sub, [base, sub]), []);
+});
+
+test("R6 ignores connectives around a display row that ends in an equation number", () => {
+  const body = ["μ", "t"].map((char, index) => formula(`m${index}`, char, [80 + index * 16, 100, 92 + index * 16, 110], "u1"));
+  const where = glyph("where", "where", [20, 100, 52, 110]);
+  const and = glyph("and", "and", [140, 100, 160, 110]);
+  const rest = formula("beta", "β", [180, 100, 192, 110], "u2");
+  const number = formula("n7", "(7)", [400, 100, 416, 110], "u2", { equationNumber: true });
+  const report = run([entry("u1", body.map((element) => element.id))], pageOf(
+    [...body, where, and, rest, number],
+    [
+      { id: "u1", type: "display", equationNumber: false, elementIds: body.map((element) => element.id) },
+      { id: "u2", type: "display", equationNumber: true, elementIds: ["beta", "n7"] }
+    ]
+  ));
+  assert.equal(report.findings.some((item) => item.rule === "R6"), false);
+  assert.equal(report.findings.some((item) => item.rule === "R10"), false);
+
+  const sentenceLeft = glyph("left", "the value", [20, 160, 70, 170]);
+  const sentenceRight = glyph("right", "grows later", [140, 160, 200, 170]);
+  const inline = formula("x", "x", [90, 160, 100, 170], "u3");
+  const real = run([entry("u3", ["x"])], pageOf([sentenceLeft, inline, sentenceRight], [{
+    id: "u3", type: "display", equationNumber: false, elementIds: ["x"]
+  }]));
+  assert.equal(real.findings.some((item) => item.rule === "R6" && item.suggestion.includes("按 i")), true);
+});
