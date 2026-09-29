@@ -479,6 +479,28 @@ test("a scripted membership line is cropped instead of spelling formula letters"
   assert.ok(crops[1].bbox[0] > 110 / 612, "the second crop must not swallow the line above");
 });
 
+test("a citation tucked under References is the first entry, not a heading script", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("References", 108, 186.47, 55.54, 11.96, { fontName: "NimbusRomNo9L-Medi" }),
+      pdfItem("[1]", 112.98, 169.29, 11.62, 9.96),
+      pdfItem("Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E Hinton. Layer normalization.", 129.58, 169.29, 314, 9.96),
+      pdfItem("arXiv preprint arXiv:1607.06450, 2016.", 129.58, 158.38, 180, 9.96),
+      pdfItem("[2]", 108, 140, 14, 9.96),
+      pdfItem("Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua Bengio.", 126, 140, 280, 9.96)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 10
+  });
+  const heading = page.blocks.find((block) => block.text === "References");
+  assert.ok(heading);
+  const refs = page.blocks.filter((block) => /^\[\d+\]/.test(block.text || ""));
+  assert.deepEqual(refs.map((block) => block.text.slice(0, 3)), ["[1]", "[2]"]);
+  assert.match(refs[0].text, /arXiv preprint arXiv:1607\.06450/);
+  assert.equal(refs.every((block) => block.skipTranslate === true), true);
+  assert.equal(heading.skipTranslate, undefined);
+});
+
 test("reference entries keep column order and stay out of translation", () => {
   const page = textLayerToBlocks({
     items: [
