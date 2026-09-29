@@ -1,0 +1,107 @@
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; font: 14px/1.4 "Segoe UI", "Noto Sans SC", sans-serif; color: #1c1c1c; background: #f4f1ea; }
+header { flex: none; display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: #1f2a30; color: #f7f4ee; flex-wrap: wrap; }
+header button, header a { color: inherit; background: #314049; border: 0; padding: 6px 10px; text-decoration: none; cursor: pointer; }
+#jump-queue { width: 4.5em; color: #1a1a1a; background: #fff; border: 0; padding: 4px 6px; }
+.layout { display: grid; grid-template-columns: 240px minmax(0, 1fr) 280px; flex: 1; min-height: 0; }
+aside { overflow: auto; min-height: 0; background: #fff; border-right: 1px solid #ddd; padding: 8px; }
+#inspector {
+  border-right: 0;
+  border-left: 1px solid #ddd;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+main { overflow: auto; min-height: 0; background: #d9d3c7; }
+#stage { position: relative; margin: 12px; display: inline-block; background: white; }
+#stage canvas, #stage svg { display: block; }
+#overlay { position: absolute; inset: 0; }
+.hit { fill: transparent; stroke-width: 1.2; cursor: pointer; }
+.hit.formula { stroke: #1d4e89; fill: rgba(29, 78, 137, 0.12); }
+.hit.text { stroke: #66707a; fill: rgba(80, 80, 80, 0.05); }
+.hit.code { stroke: #1b7f4e; fill: rgba(27, 127, 78, 0.12); }
+.hit.other { stroke: #c46b12; fill: rgba(196, 107, 18, 0.12); }
+.hit.uncertain { stroke-dasharray: 3 2; stroke: #a15c00; }
+#overlay.unit-mode .hit {
+  stroke: #c8c8c8;
+  stroke-width: 1px;
+  fill: none;
+  stroke-dasharray: none;
+}
+#overlay.unit-mode .hit.queued {
+  stroke: #8a8a8a;
+  stroke-width: 1.15px;
+  stroke-dasharray: 1.5 2.5;
+  fill: none;
+}
+#overlay.unit-mode .hit.picked,
+#overlay.page-mode .hit.picked {
+  stroke: #c46b12;
+  stroke-width: 2.4px;
+  stroke-dasharray: 5 3;
+  fill: rgba(196, 107, 18, 0.16);
+}
+#overlay.unit-mode .hit.current {
+  stroke: #b00000;
+  stroke-width: 3.5px;
+  stroke-dasharray: none;
+  fill: rgba(176, 0, 0, 0.25);
+}
+#overlay .queue-badge {
+  fill: #6e6e6e;
+  font: 11px/1 sans-serif;
+  pointer-events: none;
+}
+#pdf-missing {
+  min-width: min(640px, 90vw);
+  min-height: 220px;
+  margin: 24px;
+  padding: 28px;
+  background: #3b0d0d;
+  color: #fff;
+  font-size: 18px;
+  line-height: 1.55;
+}
+body.pdf-missing #confirm-unit:disabled,
+body.pdf-missing .actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+#queue { color: #1a1a1a; }
+#queue select { color: #1a1a1a; background: #fff; }
+#queue button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 0 0 4px;
+  border: 0;
+  background: #f7f4ee;
+  color: #1a1a1a;
+  padding: 6px;
+  cursor: pointer;
+}
+#queue button.reviewed { background: #e5f2eb; color: #143d32; }
+#queue button.current,
+#queue button.reviewed.current { background: #1f2a30; color: #ffffff; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.actions button { border: 1px solid #ccc; background: white; padding: 6px 8px; cursor: pointer; }
+#detail { margin: 8px 0 0; font-size: 12px; line-height: 1.35; }
+#detail .unit-head { margin: 8px 0 2px; font-weight: 700; }
+#detail .extra-selection { color: #8a3b00; }
+#queue-unit-status { margin: 0 0 6px; font-weight: 700; white-space: pre-line; }
+#queue-unit-status[hidden] { display: none; }
+#overlay-legend { margin: 0 0 8px; color: #444; }
+#overlay-legend[hidden] { display: none; }
+#detail .element-line { margin: 0 0 2px; word-break: break-all; }
+#detail .element-line.non-formula { color: #8a3b00; }
+#action-notice { margin: 8px 0; font-weight: 700; }
+#action-notice.fail { color: #b00000; }
+#action-notice.ok { color: #0d5c2e; }
+#action-notice[hidden] { display: none; }
+#saved-stamp { margin: 0 0 8px; font-weight: 700; color: #0d5c2e; }
+#saved-stamp[hidden] { display: none; }
+.help { color: #444; }
+@media (max-width: 900px) {
+  body { height: auto; overflow: auto; }
+  .layout { grid-template-columns: 1fr; height: auto; flex: none; }
+  aside, main { max-height: none; overflow: visible; }
+}
