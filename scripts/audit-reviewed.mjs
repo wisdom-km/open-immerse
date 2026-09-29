@@ -24,6 +24,19 @@ const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 // 0.8 matches the merge guard: a 6pt "sites" under a 9pt operator.
 const SUBSCRIPT_HEIGHT_RATIO = 0.8;
 
+// Same-row center window, as a fraction of glyph height.
+// Reviewed pages (277 confirmed items, 134 pages): body glyphs at least
+// 0.82× the line, fences and stacked delimiter pieces left out, joined
+// while each center stays within 0.20 heights of the running median.
+// 3348 baselines, 15472 glyphs. Offset from that median: p50 0, p90 0.001,
+// p95 0.035, p99 0.127, max 0.259. None above 0.30. 0.35 is 0.09 above
+// that maximum and 0.06 below a 0.41 offset.
+const SAME_ROW_CENTER_RATIO = 0.35;
+
+// Two body rows closer than half a glyph height are not a stacked fraction
+// (those sit near one full height). They are two blocks still called one row.
+const MISALIGNED_ROW_MAX_RATIO = 0.5;
+
 // Italic and bold-math symbol names (SVX, Ky, Up, dA) are not prose.
 // *.I, *-It, Italic, and *.B. Longer than the old 3-letter product cutoff.
 const ITALIC_SYMBOL_MAX_LETTERS = 4;
@@ -579,6 +592,15 @@ function continuesWrap(elements, upperMembers, lowerMembers, height) {
   return false;
 }
 
+function rowSpanBox(row) {
+  return [
+    Math.min(...row.glyphs.map((glyph) => glyph.bbox[0])),
+    row.top,
+    Math.max(...row.glyphs.map((glyph) => glyph.bbox[2])),
+    row.bottom
+  ];
+}
+
 function extentInside(inner, outer) {
   return inner[0] >= outer[0] && inner[2] <= outer[2];
 }
@@ -593,15 +615,6 @@ function rowsBetweenCandidates(members) {
   const box = rowSpanBox({ glyphs, top: glyphs[0].bbox[1], bottom: glyphs[0].bbox[3] });
   if (box[2] - box[0] >= 16) return rows;
   return [{ glyphs, top: glyphs[0].bbox[1], bottom: glyphs[0].bbox[3] }];
-}
-
-function rowSpanBox(row) {
-  return [
-    Math.min(...row.glyphs.map((glyph) => glyph.bbox[0])),
-    row.top,
-    Math.max(...row.glyphs.map((glyph) => glyph.bbox[2])),
-    row.bottom
-  ];
 }
 
 // Two formula rows of one display unit are one block only when nothing else's
@@ -813,6 +826,40 @@ function membersOf(page, unit) {
   return (unit.elementIds || []).map((id) => byId.get(id)).filter(Boolean);
 }
 
+function misalignedBlockPair(members, height) {
+  if (!(height > 0)) return false;
+  if (members.some((element) => isFractionBar(element, height) || isTallDelimiter(element, height))) return false;
+  const body = members.filter((glyph) => isLetterGlyph(glyph) && !isFencePiece(glyph) && boxHeight(glyph) >= 0.82 * height);
+  const lines = [];
+  for (const glyph of body.slice().sort((a, b) => midY(a) - midY(b) || a.bbox[0] - b.bbox[0])) {
+    const y = midY(glyph);
+    const current = lines[lines.length - 1];
+    if (!current || Math.abs(y - current.anchor) > SAME_ROW_CENTER_RATIO * height) {
+      lines.push({ glyphs: [glyph], anchor: y });
+      continue;
+    }
+    current.glyphs.push(glyph);
+    current.anchor = median(current.glyphs.map(midY));
+  }
+  const rows = lines.filter((line) => line.glyphs.length >= 3);
+  if (rows.length !== 2) return false;
+  const delta = Math.abs(rows[1].anchor - rows[0].anchor);
+  if (delta <= SAME_ROW_CENTER_RATIO * height || delta > MISALIGNED_ROW_MAX_RATIO * height) return false;
+  const span = (line) => [
+    Math.min(...line.glyphs.map((glyph) => glyph.bbox[0])),
+    Math.max(...line.glyphs.map((glyph) => glyph.bbox[2]))
+  ];
+  const upper = span(rows[0]);
+  const lower = span(rows[1]);
+  const overlap = Math.min(upper[1], lower[1]) - Math.max(upper[0], lower[0]);
+  if (overlap < 16) return false;
+  // A short script under a long formula is not a second block. The two
+  // rows have to be about the same width.
+  const wide = Math.max(upper[1] - upper[0], lower[1] - lower[0]);
+  const narrow = Math.min(upper[1] - upper[0], lower[1] - lower[0]);
+  return narrow >= 0.5 * wide;
+}
+
 function auditUnitRules(entry, page, findings) {
   if (!entry.confirmed) {
     findings.push(finding(entry, "R0", {
@@ -855,7 +902,8 @@ function auditUnitRules(entry, page, findings) {
       const numberedRows = rows.filter((row) => rowOwnsEquationNumber(row, lineEndNumbers(page.elements || [], members, height)));
       const twoNumbers = numberedRows.length >= 2;
       const proseLine = displayIncludesProseLine(members, page.elements || [], height);
-      if (farApart || numberBetween || twoNumbers || proseLine) {
+      const misaligned = !wrapped && misalignedBlockPair(members, lineHeight);
+      if (farApart || numberBetween || twoNumbers || proseLine || misaligned) {
         const sample = rows.length >= 2 ? rows : groups;
         const first = sample[0]?.glyphs?.[0] || members.find(isLetterGlyph);
         const second = (sample[1] || sample[0])?.glyphs?.[0] || first;
@@ -1330,15 +1378,16 @@ function auditPageRules(entries, page, findings, info) {
       }
       const mergeHeight = glyphHeight(members) || height;
       const limit = Math.max(4, 0.55 * mergeHeight);
-      // A full text line is about 14pt. Same-row stays inside one glyph height and never a whole line below.
-      const sameRowLimit = Math.min(8, Math.max(4, 0.45 * mergeHeight));
+      // Same row is 0.35 glyph heights. The old 0.45 window, and its 4pt floor,
+      // still treated a 0.41 offset as one row.
+      const sameRowLimit = SAME_ROW_CENTER_RATIO * mergeHeight;
       const body = members.filter((glyph) => isLetterGlyph(glyph) && boxHeight(glyph) >= SUPERSCRIPT_HEIGHT_RATIO * mergeHeight && !isFencePiece(glyph));
       const seeds = (body.length >= 2 ? body : members.filter((glyph) => isLetterGlyph(glyph) && !isFencePiece(glyph))).slice().sort((a, b) => midY(a) - midY(b));
       const baselines = [];
       for (const glyph of seeds) {
         const y = midY(glyph);
         const current = baselines[baselines.length - 1];
-        if (!current || Math.abs(y - current.y) > limit) baselines.push({ y, glyphs: [glyph] });
+        if (!current || Math.abs(y - current.y) > sameRowLimit) baselines.push({ y, glyphs: [glyph] });
         else {
           current.glyphs.push(glyph);
           current.y = median(current.glyphs.map(midY));
