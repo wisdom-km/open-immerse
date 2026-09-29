@@ -1183,3 +1183,36 @@ test("N26 a narrow mark outside one row span is not skipped over", () => {
   });
   assert.equal(skippedMiddle(oneSide), false);
 });
+
+function offsetBlocks(dy) {
+  const height = 10;
+  const upper = ["a", "b", "c"].map((char, index) => formula(`u${index}`, char, [40 + index * 16, 100, 52 + index * 16, 100 + height], "u1"));
+  const lower = ["d", "e", "f"].map((char, index) => formula(`l${index}`, char, [40 + index * 16, 100 + dy, 52 + index * 16, 100 + height + dy], "u2"));
+  return { upper, lower, height };
+}
+
+test("N2b a 20% offset is still the same row", () => {
+  const { upper, lower } = offsetBlocks(2);
+  const report = run([entry("u1", upper.map((element) => element.id))], pageOf([...upper, ...lower], [
+    { id: "u1", type: "display", equationNumber: false, elementIds: upper.map((element) => element.id) },
+    { id: "u2", type: "display", equationNumber: false, elementIds: lower.map((element) => element.id) }
+  ]));
+  assert.equal(report.findings.some((item) => item.rule === "R10"), true);
+});
+
+test("N2c two blocks offset by 41% of the glyph height are reported", () => {
+  const dy = 4.1;
+  const upper = ["a", "b", "c"].map((char, index) => formula(`u${index}`, char, [40 + index * 16, 100, 52 + index * 16, 110], "u1"));
+  const lower = ["d", "e", "f"].map((char, index) => formula(`l${index}`, char, [40 + index * 16, 100 + dy, 52 + index * 16, 110 + dy], "u1"));
+  const report = run([entry("u1", [...upper, ...lower].map((element) => element.id))], pageOf([...upper, ...lower], [{
+    id: "u1", type: "display", equationNumber: false, elementIds: [...upper, ...lower].map((element) => element.id)
+  }]));
+  assert.equal(report.findings.some((item) => item.rule === "R2"), true);
+
+  const { upper: left, lower: right } = offsetBlocks(dy);
+  const apart = run([entry("u1", left.map((element) => element.id))], pageOf([...left, ...right], [
+    { id: "u1", type: "display", equationNumber: false, elementIds: left.map((element) => element.id) },
+    { id: "u2", type: "display", equationNumber: false, elementIds: right.map((element) => element.id) }
+  ]));
+  assert.equal(apart.findings.some((item) => item.rule === "R10"), false);
+});
