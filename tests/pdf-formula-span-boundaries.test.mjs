@@ -293,3 +293,132 @@ test("a sentence that merely cites equation (n) stays prose", () => {
   });
   assert.equal(named.blocks.some((block) => block.label === "formula" && block.display === true), false);
 });
+
+test("a function name inside a display is not prose", () => {
+  const page = textLayerToBlocks({
+    items: pageItems([
+      { lead: 24, parts: [["Then the identity is the display", BODY, { w: 180 }]] },
+      {
+        x0: 160,
+        parts: [
+          ["ppcm (", "Utopia-Regular", { w: 42, dy: 6 }],
+          cmmi("a"),
+          [" , ", "CMR10"],
+          cmmi("b"),
+          [") = ", "CMR10"],
+          cmmi("c"),
+          [" . (1)", "CMR10", { w: 28 }]
+        ]
+      }
+    ]),
+    viewport: viewport(),
+    page: 5
+  });
+  const prose = page.blocks.filter((block) => block.label === "text").map((block) => block.sourceText || block.text).join("\n");
+  assert.doesNotMatch(prose, /ppcm/);
+  assert.equal(page.blocks.some((block) => block.label === "formula" && block.display === true), true);
+});
+
+test("a relation does not grow a box that ends in the middle of a number", () => {
+  const items = row([
+    cmmi("H"),
+    cmr("= 0"),
+    cmmi("."),
+    ["139 for the NASDAQ index in the sample", BODY, { w: 180 }]
+  ]);
+  assert.deepEqual(spanText(items), []);
+});
+
+test("a relation stops before a citation bracket", () => {
+  const items = row([
+    cmmi("ϵ"),
+    sub("ls"),
+    cmr("= 0"),
+    cmmi("."),
+    cmr("1"),
+    ["[", BODY],
+    ["36", BODY],
+    ["]. This", BODY, { w: 40 }]
+  ]);
+  const spans = spanText(items);
+  assert.equal(spans.some((text) => text.includes("[")), false);
+  assert.equal(spans.some((text) => /0\.1/.test(text)), true);
+});
+
+test("a superscript after a minus stays an exponent", () => {
+  const page = textLayerToBlocks({
+    items: pageItems([
+      {
+        parts: [["for any value above the line. Likewise the measure stays in the sentence", BODY, { w: 340 }]]
+      },
+      {
+        lead: 12,
+        parts: [
+          ["S", BODY],
+          ["d", BODY, { h: 7, dy: 4 }],
+          ["−", BODY, { h: 7, dy: 4 }],
+          ["1", BODY, { h: 7, dy: 4 }],
+          [", an equivalent norm for the space follows at once from the definition", BODY, { w: 280 }]
+        ]
+      }
+    ]),
+    viewport: viewport(),
+    page: 6
+  });
+  const prose = page.blocks.filter((block) => block.label === "text").map((block) => block.sourceText || block.text);
+  assert.equal(prose.some((text) => text.trim() === "1"), false);
+  assert.match(prose.join(" "), /d−1/);
+});
+
+test("a footnote paragraph does not merge into the body", () => {
+  const body = glyph("The surface shape does not change, at least to a first approximation.", BODY, { w: 340 });
+  body.y = 220;
+  cursor = 72;
+  const mark = glyph("2", BODY, { h: 6, w: 6 });
+  mark.y = 180;
+  cursor = 80;
+  const note = glyph("Closing prices of every listed strike were recorded on that date.", BODY, { h: 8, w: 320 });
+  note.y = 168;
+  const page = textLayerToBlocks({ items: [body, mark, note], viewport: viewport(), page: 4 });
+  const prose = page.blocks.filter((block) => block.label === "text").map((block) => block.sourceText || block.text);
+  const sentence = prose.find((text) => /first approximation/.test(text));
+  assert.ok(sentence);
+  assert.doesNotMatch(sentence, /Closing prices/);
+});
+
+test("a hyphenated word stays on the sentence that contains it", () => {
+  const page = textLayerToBlocks({
+    items: pageItems([
+      {
+        parts: [
+          ["U.S.O. solved the k", BODY, { w: 150 }],
+          ["-dependent radial equation follows at once from the definition", BODY, { w: 280, dy: -10 }]
+        ]
+      }
+    ]),
+    viewport: viewport(),
+    page: 10
+  });
+  const hit = page.blocks.filter((block) => block.label === "text" && /solved the k/.test(block.sourceText || block.text));
+  assert.equal(hit.length, 1);
+  assert.match(hit[0].sourceText || hit[0].text, /k-dependent/);
+});
+
+test("a radical ligature stays on the sentence that contains it", () => {
+  const page = textLayerToBlocks({
+    items: pageItems([
+      {
+        parts: [
+          ["gauge links that are shorter by a factor of ", BODY, { w: 220 }],
+          ["pffiffiffi2, and", BODY, { w: 52, dy: 6 }],
+          [" each site has eight nearest neighbors in the lattice", BODY, { w: 240 }]
+        ]
+      }
+    ]),
+    viewport: viewport(),
+    page: 4
+  });
+  const hit = page.blocks.filter((block) => block.label === "text" && /factor of/.test(block.sourceText || block.text));
+  assert.equal(hit.length, 1);
+  assert.match(hit[0].sourceText || hit[0].text, /and each site/);
+});
