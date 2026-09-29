@@ -788,3 +788,88 @@ test("R6 ignores connectives around a display row that ends in an equation numbe
   }]));
   assert.equal(real.findings.some((item) => item.rule === "R6" && item.suggestion.includes("按 i")), true);
 });
+
+test("R9 flags an extra marked glyph beside a real equation number", () => {
+  const body = ["a", "b"].map((char, index) => formula(`b${index}`, char, [40 + index * 16, 100, 52 + index * 16, 110], "u1"));
+  const number = formula("n", "(3)", [400, 100, 416, 110], "u1", { equationNumber: true });
+  const extra = formula("L", "L", [380, 100, 392, 110], "u1", { equationNumber: true });
+  const marked = run([entry("u1", [...body, extra, number].map((element) => element.id))], pageOf([...body, extra, number], [{
+    id: "u1", type: "display", equationNumber: true, elementIds: [...body, extra, number].map((element) => element.id)
+  }]));
+  assert.equal(marked.findings.some((item) => item.rule === "R9" && item.elements.some((element) => element.id === "L")), true);
+  assert.equal(marked.findings.some((item) => item.rule === "R9" && item.elements.some((element) => element.id === "n")), false);
+
+  const head = formula("E", "E", [20, 140, 32, 150], "u2", { equationNumber: true });
+  const rest = ["x", "y"].map((char, index) => formula(`e${index}`, char, [40 + index * 16, 140, 52 + index * 16, 150], "u2"));
+  const headNumber = formula("n2", "(4)", [400, 140, 416, 150], "u2", { equationNumber: true });
+  const initial = run([entry("u2", [head, ...rest, headNumber].map((element) => element.id))], pageOf([head, ...rest, headNumber], [{
+    id: "u2", type: "display", equationNumber: true, elementIds: [head, ...rest, headNumber].map((element) => element.id)
+  }]));
+  assert.equal(initial.findings.some((item) => item.rule === "R9" && item.elements.some((element) => element.id === "E")), true);
+
+  const big = [
+    formula("open", "(", [30, 180, 38, 210], "u3", { equationNumber: true }),
+    formula("close", ")", [200, 180, 208, 210], "u3", { equationNumber: true })
+  ];
+  const line = ["f", "s"].map((char, index) => formula(`g${index}`, char, [50 + index * 16, 188, 62 + index * 16, 198], "u3"));
+  const sup = formula("sup", "2", [78, 184, 84, 190], "u3", { equationNumber: true });
+  const real = formula("n110", "(1.10)", [400, 188, 428, 198], "u3", { equationNumber: true });
+  const parens = run([entry("u3", [...big, ...line, sup, real].map((element) => element.id))], pageOf([...big, ...line, sup, real], [{
+    id: "u3", type: "display", equationNumber: true, elementIds: [...big, ...line, sup, real].map((element) => element.id)
+  }]));
+  const stray = parens.findings.filter((item) => item.rule === "R9").flatMap((item) => item.elements.map((element) => element.id));
+  assert.equal(stray.includes("open") && stray.includes("close") && stray.includes("sup"), true);
+  assert.equal(stray.includes("n110"), false);
+});
+
+test("R3 flags an equation number moved into its own unit or into the previous row", () => {
+  const body = ["a", "b", "c"].map((char, index) => formula(`a${index}`, char, [40 + index * 16, 100, 52 + index * 16, 110], "u1"));
+  const alone = formula("n8", "(8)", [400, 100, 420, 110], "uNum", { equationNumber: true });
+  const split = run([entry("u1", [...body, alone].map((element) => element.id))], pageOf([...body, alone], [
+    { id: "u1", type: "display", equationNumber: false, elementIds: body.map((element) => element.id) },
+    { id: "uNum", type: "display", equationNumber: true, elementIds: ["n8"] }
+  ]));
+  assert.equal(split.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(8)")), true);
+
+  const previous = ["p", "q"].map((char, index) => formula(`p${index}`, char, [40 + index * 16, 60, 52 + index * 16, 70], "uPrev"));
+  const current = ["r", "s"].map((char, index) => formula(`c${index}`, char, [40 + index * 16, 100, 52 + index * 16, 110], "uCur"));
+  const moved = formula("n9", "(9)", [400, 100, 420, 110], "uPrev", { equationNumber: true });
+  const relocated = run([entry("uPrev", [...previous, ...current, moved].map((element) => element.id))], pageOf([...previous, ...current, moved], [
+    { id: "uPrev", type: "display", equationNumber: true, elementIds: [...previous, moved].map((element) => element.id) },
+    { id: "uCur", type: "display", equationNumber: false, elementIds: current.map((element) => element.id) }
+  ]));
+  assert.equal(relocated.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "(9)")), true);
+});
+
+test("R10 flags one row split into two display units, including a binomial parenthesis pair", () => {
+  const left = ["p", "="].map((char, index) => formula(`L${index}`, char, [40 + index * 16, 100, 52 + index * 16, 110], "uLeft"));
+  const right = ["q", "x"].map((char, index) => formula(`R${index}`, char, [120 + index * 16, 100, 132 + index * 16, 110], "uRight"));
+  const number = formula("n1", "(1)", [400, 100, 416, 110], "uRight", { equationNumber: true });
+  const row = run([entry("uLeft", [...left, ...right, number].map((element) => element.id))], pageOf([...left, ...right, number], [
+    { id: "uLeft", type: "display", equationNumber: false, elementIds: left.map((element) => element.id) },
+    { id: "uRight", type: "display", equationNumber: true, elementIds: [...right, number].map((element) => element.id) }
+  ]));
+  assert.equal(row.findings.some((item) => item.rule === "R10"), true);
+
+  const contents = ["n", "k"].map((char, index) => formula(`c${index}`, char, [40 + index * 14, 200, 50 + index * 14, 210], "uBody", { unitType: "inline" }));
+  const pair = [
+    formula("lp", "(", [28, 196, 36, 214], "uPar", { unitType: "inline" }),
+    formula("rp", ")", [70, 196, 78, 214], "uPar", { unitType: "inline" })
+  ];
+  const binomial = run([entry("uBody", [...contents, ...pair].map((element) => element.id), { type: "inline" })], pageOf([...contents, ...pair], [
+    { id: "uBody", type: "inline", equationNumber: false, elementIds: contents.map((element) => element.id) },
+    { id: "uPar", type: "inline", equationNumber: false, elementIds: pair.map((element) => element.id) }
+  ]));
+  assert.equal(binomial.findings.some((item) => item.rule === "R10" && item.elements.some((element) => element.char === "(")), true);
+});
+
+test("R2 flags a display unit that covers two formula rows", () => {
+  const upper = ["a", "=", "b"].map((char, index) => formula(`u${index}`, char, [40 + index * 16, 100, 52 + index * 16, 110], "u1"));
+  const number = formula("n4", "(4)", [400, 116, 416, 126], "u1", { equationNumber: true });
+  const lower = ["c", "=", "d"].map((char, index) => formula(`l${index}`, char, [40 + index * 16, 132, 52 + index * 16, 142], "u1"));
+  const report = run([entry("u1", [...upper, number, ...lower].map((element) => element.id))], pageOf([...upper, number, ...lower], [{
+    id: "u1", type: "display", equationNumber: true, elementIds: [...upper, number, ...lower].map((element) => element.id)
+  }]));
+  assert.equal(report.findings.some((item) => item.rule === "R2"), true);
+  assert.equal(report.findings.some((item) => item.rule === "R9"), false);
+});
