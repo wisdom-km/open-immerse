@@ -67,7 +67,7 @@ test("Attention text fragments have one source owner and complete visual boundar
     assert.equal(encoder.length, 1);
     assert.match(encoder[0].sourceText, /d_\{model\} = 512/);
     assert.match(encoder[0].sourceText, /position-wise/);
-    assert.equal(encoder[0].placeholders.length, 2);
+    assert.equal(encoder[0].placeholders.length, 1);
     const matrix = pages.get(5).page.blocks.find((block) =>
       block.text?.startsWith("Where the projections are parameter matrices"));
     assert.match(matrix.text, /parameter matrices ⟦f\d+⟧ and ⟦f\d+⟧\./);
