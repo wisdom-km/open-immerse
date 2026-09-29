@@ -479,6 +479,24 @@ test("a scripted membership line is cropped instead of spelling formula letters"
   assert.ok(crops[1].bbox[0] > 110 / 612, "the second crop must not swallow the line above");
 });
 
+test("a footnote digit under the previous line starts the next sentence", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("queries, keys and values we then perform the attention function in parallel, yielding", 108, 102.22, 331.72, 9.96),
+      pdfItem("4", 120.65, 87.16, 2.99, 5.98, { fontName: "NimbusRomNo9L-Regu", fontRealName: "NimbusRomNo9L-Regu" }),
+      pdfItem("To illustrate why the dot products get large, assume that the components of", 123.86, 83.35, 263.96, 8.97)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 4
+  });
+  const footnote = page.blocks.find((block) => /To illustrate why the dot products get large/.test(block.sourceText || ""));
+  assert.ok(footnote);
+  assert.ok(footnote.sourceText.startsWith("4"));
+  const body = page.blocks.find((block) => /queries, keys and values we then perform/.test(block.sourceText || ""));
+  assert.ok(body);
+  assert.equal(body.sourceText.includes("To illustrate why"), false);
+});
+
 test("a citation tucked under References is the first entry, not a heading script", () => {
   const page = textLayerToBlocks({
     items: [
