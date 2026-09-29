@@ -579,6 +579,22 @@ function continuesWrap(elements, upperMembers, lowerMembers, height) {
   return false;
 }
 
+function extentInside(inner, outer) {
+  return inner[0] >= outer[0] && inner[2] <= outer[2];
+}
+
+// separateDisplayRows drops a one-glyph row. A lone ≡ is still a formula
+// sitting between two rows when the whole mark is narrower than 16pt.
+function rowsBetweenCandidates(members) {
+  const rows = separateDisplayRows(members);
+  if (rows.length) return rows;
+  const glyphs = members.filter((glyph) => glyph?.bbox && isLetterGlyph(glyph) && String(glyph.char || "").trim());
+  if (glyphs.length !== 1) return rows;
+  const box = rowSpanBox({ glyphs, top: glyphs[0].bbox[1], bottom: glyphs[0].bbox[3] });
+  if (box[2] - box[0] >= 16) return rows;
+  return [{ glyphs, top: glyphs[0].bbox[1], bottom: glyphs[0].bbox[3] }];
+}
+
 function rowSpanBox(row) {
   return [
     Math.min(...row.glyphs.map((glyph) => glyph.bbox[0])),
@@ -605,9 +621,12 @@ function foreignRowBetween(page, unit, rowsById) {
         const mid = (row.top + row.bottom) / 2;
         if (mid <= above[3] + 1 || mid >= below[1] - 1) continue;
         const box = rowSpanBox(row);
+        const width = box[2] - box[0];
         const overlapAbove = Math.min(above[2], box[2]) - Math.max(above[0], box[0]);
         const overlapBelow = Math.min(below[2], box[2]) - Math.max(below[0], box[0]);
-        if (overlapAbove < 16 || overlapBelow < 16) continue;
+        const narrowInside = width < 16 && extentInside(box, above) && extentInside(box, below);
+        const wideOverlap = width >= 16 && overlapAbove >= 16 && overlapBelow >= 16;
+        if (!narrowInside && !wideOverlap) continue;
         const sample = row.glyphs.find((glyph) => glyph?.bbox);
         if (!sample || !sameColumnGlyph(sample, members, page.elements || [])) continue;
         return { otherId, glyph: sample };
@@ -1442,7 +1461,7 @@ function auditPageRules(entries, page, findings, info) {
     }
   }
 
-  const rowsById = new Map(wrappedCandidates.map((unit) => [unit.id, separateDisplayRows(membersOf(page, unit).filter((element) => element.bbox))]));
+  const rowsById = new Map(wrappedCandidates.map((unit) => [unit.id, rowsBetweenCandidates(membersOf(page, unit).filter((element) => element.bbox))]));
   for (const unit of displays) {
     const hit = foreignRowBetween(page, unit, rowsById);
     if (!hit) continue;
