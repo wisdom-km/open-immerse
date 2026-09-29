@@ -1117,3 +1117,102 @@ test("moving a ð4Þ equation number out of its display unit is R3", () => {
     assert.equal(report.findings.some((item) => item.rule === "R3" && item.elements.some((element) => element.char === "4")), true, mode);
   }
 });
+
+function merge224Rows(data) {
+  const host = data.units.find((unit) => unit.id === "u5f6dd0b28c6c");
+  const byId = new Map(data.elements.map((element) => [element.id, element]));
+  for (const id of ["u9aa5453fe661", "u6640d511349b"]) {
+    const unit = data.units.find((item) => item.id === id);
+    for (const elementId of unit.elementIds) {
+      const element = byId.get(elementId);
+      element.unitId = host.id;
+      element.unitType = "display";
+      host.elementIds.push(elementId);
+    }
+  }
+  data.units = data.units.filter((unit) => unit.id !== "u9aa5453fe661" && unit.id !== "u6640d511349b");
+}
+
+function insertNarrow(data, bbox) {
+  data.elements.push({
+    id: "eNarrow",
+    kind: "glyph",
+    char: "≡",
+    font: "LMMathSymbols10-Regular",
+    bbox,
+    label: "formula",
+    unitId: "uNarrow",
+    unitType: "inline",
+    equationNumber: false
+  });
+  data.units.push({ id: "uNarrow", type: "inline", equationNumber: false, elementIds: ["eNarrow"] });
+}
+
+function skippedMiddle(report) {
+  return report.findings.some((item) => item.rule === "R2" && item.suggestion.includes("中间隔着") && item.elements.some((element) => element.char === "≡"));
+}
+
+test("N24 a lone ≡ between two merged rows is skipped over", () => {
+  const report = auditReal("jhep04-2021-102", 12, (data) => {
+    merge224Rows(data);
+    // (2.24b) ends near y=686 and (2.24c) starts near y=690. 8pt wide, inside both rows.
+    insertNarrow(data, [200, 684, 208, 692]);
+  });
+  assert.equal(skippedMiddle(report), true);
+  assert.equal(report.findings.some((item) => item.rule === "R2" && item.queueUnitId === "u46b41d385d16" && item.currentUnitId === "u5f6dd0b28c6c"), true);
+});
+
+test("N25 a narrow mark in the equation-number column is not between the rows", () => {
+  const report = auditReal("jhep04-2021-102", 12, (data) => {
+    merge224Rows(data);
+    insertNarrow(data, [490, 684, 498, 692]);
+  });
+  assert.equal(skippedMiddle(report), false);
+});
+
+test("N26 a narrow mark outside one row span is not skipped over", () => {
+  const straddling = auditReal("jhep04-2021-102", 12, (data) => {
+    merge224Rows(data);
+    insertNarrow(data, [154, 684, 163, 692]);
+  });
+  assert.equal(skippedMiddle(straddling), false);
+
+  const oneSide = auditReal("jhep04-2021-102", 12, (data) => {
+    merge224Rows(data);
+    insertNarrow(data, [400, 684, 408, 692]);
+  });
+  assert.equal(skippedMiddle(oneSide), false);
+});
+
+function offsetBlocks(dy) {
+  const height = 10;
+  const upper = ["a", "b", "c"].map((char, index) => formula(`u${index}`, char, [40 + index * 16, 100, 52 + index * 16, 100 + height], "u1"));
+  const lower = ["d", "e", "f"].map((char, index) => formula(`l${index}`, char, [40 + index * 16, 100 + dy, 52 + index * 16, 100 + height + dy], "u2"));
+  return { upper, lower, height };
+}
+
+test("N2b a 20% offset is still the same row", () => {
+  const { upper, lower } = offsetBlocks(2);
+  const report = run([entry("u1", upper.map((element) => element.id))], pageOf([...upper, ...lower], [
+    { id: "u1", type: "display", equationNumber: false, elementIds: upper.map((element) => element.id) },
+    { id: "u2", type: "display", equationNumber: false, elementIds: lower.map((element) => element.id) }
+  ]));
+  assert.equal(report.findings.some((item) => item.rule === "R10"), true);
+});
+
+test("N2c two blocks offset by 41% of the glyph height are reported", () => {
+  const dy = 4.1;
+  const upper = ["a", "b", "c"].map((char, index) => formula(`u${index}`, char, [40 + index * 16, 100, 52 + index * 16, 110], "u1"));
+  const lower = ["d", "e", "f"].map((char, index) => formula(`l${index}`, char, [40 + index * 16, 100 + dy, 52 + index * 16, 110 + dy], "u1"));
+  const report = run([entry("u1", [...upper, ...lower].map((element) => element.id))], pageOf([...upper, ...lower], [{
+    id: "u1", type: "display", equationNumber: false, elementIds: [...upper, ...lower].map((element) => element.id)
+  }]));
+  assert.equal(report.findings.some((item) => item.rule === "R2"), true);
+
+  const { upper: left, lower: right } = offsetBlocks(dy);
+  const apart = run([entry("u1", left.map((element) => element.id))], pageOf([...left, ...right], [
+    { id: "u1", type: "display", equationNumber: false, elementIds: left.map((element) => element.id) },
+    { id: "u2", type: "display", equationNumber: false, elementIds: right.map((element) => element.id) }
+  ]));
+  assert.equal(apart.findings.some((item) => item.rule === "R10"), false);
+});
