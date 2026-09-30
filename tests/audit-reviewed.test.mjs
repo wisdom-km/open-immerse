@@ -1216,3 +1216,69 @@ test("N2c two blocks offset by 41% of the glyph height are reported", () => {
   ]));
   assert.equal(apart.findings.some((item) => item.rule === "R10"), false);
 });
+
+function splitScriptPair(dy, gap, { rightHeight = 10, leftHeight = 10 } = {}) {
+  const leftTop = 100;
+  const leftCenter = leftTop + leftHeight / 2;
+  const rightCenter = leftCenter + dy;
+  const left = formula("eL", "k", [40, leftTop, 50, leftTop + leftHeight], "uL");
+  const right = formula("eR", "i", [50 + gap, rightCenter - rightHeight / 2, 58 + gap, rightCenter + rightHeight / 2], "uR");
+  const report = run([entry("uL", ["eL"])], pageOf([left, right], [
+    { id: "uL", type: "display", equationNumber: false, elementIds: ["eL"] },
+    { id: "uR", type: "display", equationNumber: false, elementIds: ["eR"] }
+  ]));
+  return report.findings.find((item) => item.rule === "R11") || null;
+}
+
+test("R11 flags a side-by-side block dropped by 0.35 to 0.50 glyph heights", () => {
+  const hit = splitScriptPair(4, 1);
+  assert.ok(hit);
+  assert.equal(hit.leftUnitId, "uL");
+  assert.equal(hit.rightUnitId, "uR");
+  assert.equal(hit.currentUnitId, "uL,uR");
+  assert.ok(Math.abs(hit.offsetRatio - 0.4) < 1e-9);
+  assert.ok(Math.abs(hit.centerRatio - 0.4) < 1e-9);
+  assert.ok(Math.abs(hit.baselineRatio - 0.4) < 1e-9);
+  assert.ok(Math.abs(hit.gap - 1) < 1e-9);
+  assert.match(hit.suggestion, /疑似上下标被拆开/);
+  assert.match(hit.suggestion, /左块 `uL`/);
+  assert.match(hit.suggestion, /右块 `uR`/);
+  assert.match(hit.suggestion, /垂直中心偏低 0\.400 字高/);
+  assert.match(hit.suggestion, /基线偏低 0\.400 字高/);
+  assert.match(hit.suggestion, /水平间隙 1\.00/);
+
+  const atMin = splitScriptPair(3.5, 1);
+  assert.ok(atMin);
+  assert.ok(Math.abs(atMin.offsetRatio - 0.35) < 1e-9);
+
+  const atMax = splitScriptPair(5, 0);
+  assert.ok(atMax);
+  assert.ok(Math.abs(atMax.offsetRatio - 0.5) < 1e-9);
+  assert.ok(Math.abs(atMax.gap) < 1e-9);
+
+  // Center in the band, baseline not. Either one is enough.
+  const centerOnly = splitScriptPair(4, 1, { rightHeight: 6 });
+  assert.ok(centerOnly);
+  assert.ok(Math.abs(centerOnly.centerRatio - 0.4) < 1e-9);
+  assert.ok(centerOnly.baselineRatio < 0.35);
+  assert.match(centerOnly.suggestion, /垂直中心偏低 0\.400 字高/);
+  assert.match(centerOnly.suggestion, /基线偏移 /);
+
+  // Baseline in the band, center not.
+  const baselineOnly = splitScriptPair(2, 1, { rightHeight: 14 });
+  assert.ok(baselineOnly);
+  assert.ok(Math.abs(baselineOnly.baselineRatio - 0.4) < 1e-9);
+  assert.ok(baselineOnly.centerRatio < 0.35);
+  assert.match(baselineOnly.suggestion, /基线偏低 0\.400 字高/);
+});
+
+test("R11 ignores a normal 0.30 same-line offset, a 0.55 script, and a wide gap", () => {
+  assert.equal(splitScriptPair(3, 1), null);
+  assert.equal(splitScriptPair(5.5, 1), null);
+  assert.equal(splitScriptPair(6, 1), null);
+  assert.equal(splitScriptPair(4, 8), null);
+  assert.equal(splitScriptPair(4, 3.01), null);
+  const touching = splitScriptPair(4, 3);
+  assert.ok(touching);
+  assert.ok(Math.abs(touching.gap - 3) < 1e-9);
+});

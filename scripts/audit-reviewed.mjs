@@ -63,6 +63,21 @@ const TALL_GLYPH_HEIGHT_RATIO = 1.8;
 // "Touching" for a missed merge: horizontal gap under about 0.3 glyph heights.
 const TOUCH_GAP_RATIO = 0.3;
 
+// A base and a piece beside it, low enough to look like a peeled-off
+// subscript, not low enough to be the next row. Inclusive.
+// Below SAME_ROW_CENTER_RATIO (0.35) is still one line: on the 277
+// reviewed pages the same-line center offset max is 0.259 (PR #79).
+// Above MISALIGNED_ROW_MAX_RATIO (0.5) is a real subscript or another row.
+const SPLIT_SCRIPT_OFFSET_MIN = 0.35;
+const SPLIT_SCRIPT_OFFSET_MAX = 0.5;
+
+// The horizontal gap for that pair, as a fraction of the LEFT block's
+// glyph height. A subscript sits against its base. 0.3 is the same
+// "touching" cutoff as TOUCH_GAP_RATIO: under about 0.3 glyph heights,
+// tighter than a word space in these papers. A wider gap is two tokens
+// on the line, not a subscript of the block on the left.
+const SPLIT_SCRIPT_GAP_RATIO = 0.3;
+
 // Each side of a cross-line report needs several glyphs, so one stray
 // subscript does not look like a second display line.
 const MIN_GLYPHS_PER_LINE = 2;
@@ -80,6 +95,7 @@ const RULES = [
   ["R3", 5, "公式编号不在行间单元里"],
   ["R6", 6, "行间或行内类型不对"],
   ["R10", 7, "同一行漏合了公式"],
+  ["R11", 7, "疑似上下标被拆开"],
   ["R5", 8, "紧贴公式却没合并"],
   ["R7", 9, "标点归错了单元"],
   ["R0", 10, "队列里还没确认"]
@@ -794,7 +810,7 @@ function trailingAbbreviation(members, tail) {
 }
 
 function finding(entry, rule, extra) {
-  return {
+  const item = {
     severity: SEVERITY.get(rule),
     rule,
     title: RULE_TITLE.get(rule),
@@ -806,6 +822,13 @@ function finding(entry, rule, extra) {
     elements: (extra.elements || []).filter(Boolean).map(snap),
     suggestion: extra.suggestion
   };
+  if (extra.leftUnitId) item.leftUnitId = extra.leftUnitId;
+  if (extra.rightUnitId) item.rightUnitId = extra.rightUnitId;
+  if (Number.isFinite(extra.offsetRatio)) item.offsetRatio = extra.offsetRatio;
+  if (Number.isFinite(extra.centerRatio)) item.centerRatio = extra.centerRatio;
+  if (Number.isFinite(extra.baselineRatio)) item.baselineRatio = extra.baselineRatio;
+  if (Number.isFinite(extra.gap)) item.gap = extra.gap;
+  return item;
 }
 
 function currentUnits(page, entry) {
@@ -1562,6 +1585,82 @@ function auditPageRules(entries, page, findings, info) {
       currentUnitId: `${left.unit.id},${right.unit.id}`,
       elements: between.slice(0, 3),
       suggestion: "同一行两个公式单元紧贴，或中间只隔运算符、括号。它们多半该是一个单元。框住后按 m。"
+    }));
+  }
+  auditSplitScripts(entries, page, findings);
+}
+
+function inSplitScriptBand(ratio) {
+  return Number.isFinite(ratio) && ratio >= SPLIT_SCRIPT_OFFSET_MIN && ratio <= SPLIT_SCRIPT_OFFSET_MAX;
+}
+
+function scriptBlock(page, unit) {
+  const members = membersOf(page, unit);
+  const letters = members.filter((glyph) => isLetterGlyph(glyph) && String(glyph.char || "").trim());
+  if (!letters.length) return null;
+  const height = glyphHeight(letters);
+  if (!(height > 0)) return null;
+  return {
+    unit,
+    letters,
+    height,
+    box: unionBox(letters),
+    center: median(letters.map(midY)),
+    baseline: median(letters.map((glyph) => glyph.bbox[3]))
+  };
+}
+
+// Two units side by side. The right one sits 0.35–0.50 left-glyph-heights
+// lower (baseline or vertical center) and the horizontal gap stays within
+// SPLIT_SCRIPT_GAP_RATIO. That is the band between normal same-line jitter
+// and a real subscript or the next row.
+function auditSplitScripts(entries, page, findings) {
+  const blocks = (page.units || [])
+    .filter((unit) => (unit.type === "display" || unit.type === "inline") && (unit.elementIds || []).length)
+    .map((unit) => scriptBlock(page, unit))
+    .filter(Boolean);
+  const entryFor = (unitId) => entries.find((item) => currentUnits(page, item).units.some((unit) => unit.id === unitId));
+  const seen = new Set();
+  for (const left of blocks) {
+    let neighbor = null;
+    for (const right of blocks) {
+      if (right.unit.id === left.unit.id) continue;
+      // Just after the left block, allowing a little italic overlap.
+      // A block stacked under the left one is not beside it.
+      if (right.box[0] < left.box[2] - 0.2 * left.height) continue;
+      const gap = horizontalGap(left.box, right.box);
+      if (gap > SPLIT_SCRIPT_GAP_RATIO * left.height) continue;
+      if (!neighbor || gap < neighbor.gap) neighbor = { block: right, gap };
+    }
+    if (!neighbor) continue;
+    const right = neighbor.block;
+    const centerRatio = (right.center - left.center) / left.height;
+    const baselineRatio = (right.baseline - left.baseline) / left.height;
+    const centerHit = inSplitScriptBand(centerRatio);
+    const baselineHit = inSplitScriptBand(baselineRatio);
+    if (!centerHit && !baselineHit) continue;
+    const key = `${left.unit.id}|${right.unit.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const entry = entryFor(left.unit.id) || entryFor(right.unit.id);
+    if (!entry) continue;
+    const offsetRatio = centerHit ? centerRatio : baselineRatio;
+    const centerText = centerHit
+      ? `垂直中心偏低 ${centerRatio.toFixed(3)} 字高`
+      : `垂直中心偏移 ${centerRatio.toFixed(3)} 字高`;
+    const baselineText = baselineHit
+      ? `基线偏低 ${baselineRatio.toFixed(3)} 字高`
+      : `基线偏移 ${baselineRatio.toFixed(3)} 字高`;
+    findings.push(finding(entry, "R11", {
+      currentUnitId: `${left.unit.id},${right.unit.id}`,
+      leftUnitId: left.unit.id,
+      rightUnitId: right.unit.id,
+      offsetRatio,
+      centerRatio,
+      baselineRatio,
+      gap: neighbor.gap,
+      elements: [left.letters[0], right.letters[0]].filter(Boolean),
+      suggestion: `疑似上下标被拆开。左块 \`${left.unit.id}\`、右块 \`${right.unit.id}\`，${centerText}，${baselineText}，水平间隙 ${neighbor.gap.toFixed(2)}。框住两块按 m 并成一个单元。`
     }));
   }
 }
