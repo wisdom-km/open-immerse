@@ -382,9 +382,7 @@ test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.equal(nextZoom(steps.at(-1), 1), 5);
   assert.equal(zoomLabel(1), "100%");
   assert.equal(zoomLabel(2.25), "225%");
-  assert.equal(mirrorZoomWidth(1), "calc(100% * 1)");
-  assert.equal(mirrorZoomWidth(1.25), "calc(100% * 1.25)");
-  assert.equal(mirrorZoomWidth(9), "calc(100% * 5)");
+  assert.equal(mirrorZoomWidth(), "max(100%, var(--oi-pdf-stack-w, 0px))");
   assert.match(src, /function setMirrorZoom/);
   assert.match(src, /function applyMirrorZoom/);
   assert.match(src, /--oi-mirror-zoom/);

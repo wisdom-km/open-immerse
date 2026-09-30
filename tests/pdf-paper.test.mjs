@@ -9,7 +9,9 @@ import {
   paperAvailWidth,
   paperCssPx,
   basePageBox,
-  readoutPaperSize
+  readoutPaperSize,
+  paintedPaperWidth,
+  paneHasHScroll
 } from "../lib/pdf-paper.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -81,6 +83,7 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
   assert.match(metrics, /leftBaseBox\(/);
   assert.match(heightFor, /leftBaseBox\(/);
   assert.match(apply, /leftBaseBox\(/);
+  assert.match(apply, /--oi-pdf-stack-w/);
   assert.doesNotMatch(apply, /leftPageBox\(/);
   const planKey = src.slice(src.indexOf("function formulaCropPlanKeyNow"), src.indexOf("function noteFormulaCropPlan"));
   assert.match(planKey, /zoom/);
@@ -97,7 +100,8 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
   assert.match(css, /\.paper-stack\s*\{[^}]*align-items:\s*center/s);
   assert.match(css, /\.paper-stack\s*\{[^}]*gap:\s*var\(--oi-pdf-paper-gap-y\)/s);
   assert.match(css, /\.paper-stack\s*\{[^}]*zoom:\s*var\(--oi-mirror-zoom/s);
-  assert.match(css, /\.paper-stack\s*\{[^}]*width:\s*calc\(100% \* var\(--oi-mirror-zoom,\s*1\)\)/s);
+  assert.match(css, /\.paper-stack\s*\{[^}]*width:\s*max\(100%,\s*var\(--oi-pdf-stack-w,\s*0px\)\)/s);
+  assert.doesNotMatch(css, /\.paper-stack\s*\{[^}]*width:\s*calc\(100% \* var\(--oi-mirror-zoom/s);
   assert.match(css, /\.readout-type\s*\{[^}]*calc\(var\(--oi-pdf-paper-h-base\) \* 0\.075\)/);
   assert.match(css, /calc\(var\(--oi-pdf-paper-w\) \* 0\.085\)/);
   assert.match(css, /calc\(var\(--oi-pdf-paper-h-base\) \* 0\.08\)/);
@@ -136,4 +140,31 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
     src.slice(src.indexOf("function appendFixtureReadout"), src.indexOf("function onReadoutBlockClick")),
     /katex\.render/
   );
+});
+
+test("right pane horizontal scrollbar matches the left page: only when the painted page exceeds the pane", () => {
+  // Letter page, scrollport wide enough that 150% still fits and 200% does not.
+  // Same client width for both panes. Right paper is the unzoomed page (not clamped).
+  const unit = 612;
+  const client = 1000;
+  const zooms = [1, 1.25, 1.5, 2, 2.5];
+  const right = zooms.map((zoom) => paneHasHScroll(paintedPaperWidth(unit, zoom), client));
+  const left = zooms.map((zoom) => paneHasHScroll(Math.floor(unit * zoom), client));
+  assert.deepEqual(right, [false, false, false, true, true]);
+  assert.deepEqual(left, right);
+  // Old .paper-stack width calc(100% * zoom) overflowed at the first step above 100%.
+  const oldStack = zooms.map((zoom) => paneHasHScroll(client * zoom, client));
+  assert.deepEqual(oldStack, [false, true, true, true, true]);
+  assert.equal(paintedPaperWidth(612, 1.25) > 1000, false);
+  assert.equal(paneHasHScroll(0, 1000), false);
+  assert.equal(paneHasHScroll(100, 0), false);
+  assert.equal(paneHasHScroll(100, 100), false);
+  assert.equal(paneHasHScroll(102, 100), true);
+  assert.equal(paintedPaperWidth(0, 1.25), 0);
+  assert.equal(paintedPaperWidth(400, 0), 0);
+  const narrow = 400;
+  const clamped = Math.min(unit, narrow - 32);
+  assert.equal(paneHasHScroll(paintedPaperWidth(clamped, 1), narrow), false);
+  assert.equal(paneHasHScroll(Math.floor(unit * 1), narrow), true);
+  assert.equal(paneHasHScroll(paintedPaperWidth(clamped, 1.25), narrow), true);
 });

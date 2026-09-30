@@ -1513,6 +1513,7 @@ function applyPaperMetrics() {
   const scroll = translateScrollRoot();
   if (!stack || !scroll) return;
   const avail = paperAvailWidth(scroll.clientWidth, PDF_PAPER_GUTTER_X);
+  let widest = 0;
   stack.querySelectorAll(".readout-paper").forEach((paper) => {
     const left = leftBaseBox(paper.dataset.page);
     if (!left) return;
@@ -1522,12 +1523,14 @@ function applyPaperMetrics() {
       availWidth: avail
     });
     if (!(size.width > 0)) return;
+    if (size.width > widest) widest = size.width;
     paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
     paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
     paper.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
     applyBodyFont(paper, size.width);
     refreshMatchedFormulas(paper, size.heightBase);
   });
+  stack.style.setProperty("--oi-pdf-stack-w", paperCssPx(widest));
   refreshFormulaCropsForDisplay();
 }
 

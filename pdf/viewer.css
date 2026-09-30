@@ -253,10 +253,14 @@ h1 {
   flex-direction: column;
   align-items: center;
   gap: var(--oi-pdf-paper-gap-y);
-  /* zoom shrinks the flex box by the same factor. Multiplying the specified
-     width back keeps centered papers inside the scroll origin, so scrollLeft
-     0 still shows the left edge at 150%. */
-  width: calc(100% * var(--oi-mirror-zoom, 1));
+  /* scrollWidth follows this element's border box. CSS zoom multiplies px
+     lengths on that box and leaves a 100% width at the scrollport size, so
+     calc(100% * zoom) overflows as soon as zoom goes above 1 — even while
+     the paper still fits. The px branch is the unzoomed paper width; zoom
+     turns it into the painted paper. The scrollbar appears only once that
+     painted paper is wider than the pane, and scrollLeft 0 stays on its
+     left edge. Do not multiply this width by zoom again. */
+  width: max(100%, var(--oi-pdf-stack-w, 0px));
   min-height: 0;
   zoom: var(--oi-mirror-zoom, 1);
 }
