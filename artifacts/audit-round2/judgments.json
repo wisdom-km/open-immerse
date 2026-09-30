@@ -1,0 +1,37 @@
+{
+  "window": { "from": 1, "to": 277, "size": 277, "confirmed": 277 },
+  "pagesRead": 134,
+  "heldOut": "queue entries 278 and later were not opened or counted",
+  "r11Hits": [],
+  "r11HitCount": 0,
+  "equivSpecificHits": 0,
+  "falsePositivesAmongHits": 0,
+  "nearBandNotOnQueueUnits": [
+    {
+      "paperId": "qe533",
+      "page": 13,
+      "leftUnitId": "u0e80fc9b4d36",
+      "rightUnitId": "udee02060f971",
+      "centerRatio": 0.292,
+      "baselineRatio": 0.412,
+      "gapRatio": 0,
+      "reported": false,
+      "reason": "neither unit is a current unit of queue items 1-277",
+      "judgment": "false positive if it had been reported: one equation split left/right, not a peeled subscript",
+      "figure": "artifacts/audit-round2/near-qe533-p13.png"
+    },
+    {
+      "paperId": "jhep04-2021-102",
+      "page": 12,
+      "leftUnitId": "u2f542f68ec8c",
+      "rightUnitId": "u1150c4bbcf04",
+      "centerRatio": 0.353,
+      "baselineRatio": 0.501,
+      "gapRatio": 0.184,
+      "reported": false,
+      "reason": "neither unit is a current unit of queue items 1-277",
+      "judgment": "false positive if it had been reported: the right block is a period, the left block's center is pulled by its own scripts",
+      "figure": "artifacts/audit-round2/near-jhep-p12.png"
+    }
+  ]
+}
