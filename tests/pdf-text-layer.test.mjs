@@ -167,18 +167,19 @@ test("an inflated em box does not pull a digit from the next line", () => {
   const sentence = page.blocks.find((block) => /departments/.test(block.sourceText || ""));
   assert.ok(sentence);
   assert.match(sentence.text, /departments published/);
-  assert.match(sentence.text, /\b3\b/);
-  assert.doesNotMatch(sentence.text, /sciences/);
+  assert.match(sentence.text, /3/);
+  assert.match(sentence.text, /sciences/);
+  assert.equal(sentence.placeholders?.length || 0, 0);
 });
 
-test("a subscript symbol keeps the following unit and the measured value", () => {
+test("a short subscript stays in the crop and the unit and the measured value stay out", () => {
   const page = textLayerToBlocks({
     items: [
       pdfItem("Neuron ", 72, 400, 40, 10),
       pdfItem("V", 114, 400, 7, 10),
-      pdfItem("reset", 121, 396, 18, 6),
-      pdfItem("(mV)", 142, 400, 22, 10),
-      pdfItem(" 11", 170, 400, 16, 10)
+      pdfItem("r", 121, 396, 6, 6),
+      pdfItem("(mV)", 130, 400, 22, 10),
+      pdfItem(" 11", 156, 400, 16, 10)
     ],
     viewport: unitViewport(612, 792),
     page: 7
@@ -187,28 +188,255 @@ test("a subscript symbol keeps the following unit and the measured value", () =>
   assert.ok(sentence);
   assert.match(sentence.text, /\(mV\)/);
   assert.match(sentence.text, /11/);
-  assert.doesNotMatch(sentence.text, /reset/);
+  assert.doesNotMatch(sentence.text, /\br\b/);
+  assert.equal(sentence.placeholders.length, 1);
 });
 
-test("a lowered multi-letter tail stays on the Greek base", () => {
+test("a prose word of two or more letters stops the crop, and the same identifier without it is cropped", () => {
+  const prose = textLayerToBlocks({
+    items: [
+      pdfItem("la suite de ", 72, 400, 70, 10),
+      pdfItem("(", 144, 400, 4, 10),
+      pdfItem("a", 148, 400, 6, 10),
+      pdfItem("n", 154, 396, 5, 6),
+      pdfItem(")", 160, 400, 4, 10),
+      pdfItem(" continue.", 166, 400, 50, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 6
+  });
+  const sentence = prose.blocks.find((block) => /suite/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /la suite de/);
+  assert.match(sentence.text, /⟦f\d+⟧/);
+  assert.equal(sentence.placeholders.length, 1);
+  const bare = textLayerToBlocks({
+    items: [
+      pdfItem("Set ", 72, 400, 24, 10),
+      pdfItem("(", 98, 400, 4, 10),
+      pdfItem("a", 102, 400, 6, 10),
+      pdfItem("n", 108, 396, 5, 6),
+      pdfItem(")", 114, 400, 4, 10),
+      pdfItem(" holds.", 120, 400, 36, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 6
+  });
+  const held = bare.blocks.find((block) => /holds/.test(block.sourceText || ""));
+  assert.ok(held);
+  assert.match(held.text, /Set ⟦f\d+⟧ holds/);
+  assert.equal(held.placeholders.length, 1);
+});
+
+test("an abbreviation stays outside the crop, and the identifier alone is cropped", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("rate of change ", 40, 400, 80, 10),
+      pdfItem("(i.e.", 122, 400, 22, 10),
+      pdfItem("u", 146, 400, 8, 10),
+      pdfItem("t", 154, 396, 6, 6),
+      pdfItem(") next.", 162, 400, 36, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 2
+  });
+  const sentence = page.blocks.find((block) => /change/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /i\.e\./);
+  assert.match(sentence.text, /⟦f\d+⟧/);
+  assert.match(sentence.text, /i\.e\..*⟦f\d+⟧/);
+  const twin = textLayerToBlocks({
+    items: [
+      pdfItem("rate ", 40, 400, 28, 10),
+      pdfItem("(", 70, 400, 4, 10),
+      pdfItem("u", 74, 400, 8, 10),
+      pdfItem("t", 82, 396, 6, 6),
+      pdfItem(")", 90, 400, 4, 10),
+      pdfItem(" next.", 96, 400, 36, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 2
+  });
+  const held = twin.blocks.find((block) => /rate/.test(block.sourceText || ""));
+  assert.ok(held);
+  assert.match(held.text, /rate ⟦f\d+⟧ next/);
+  assert.equal(held.placeholders.length, 1);
+});
+
+test("a drop cap is not a base, and a body-sized letter with a real subscript is", () => {
+  const dropped = textLayerToBlocks({
+    items: [
+      pdfItem("N", 40, 700, 24, 40),
+      pdfItem("sciences", 66, 690, 48, 10),
+      pdfItem(" published it.", 116, 690, 70, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 2
+  });
+  const sentence = dropped.blocks.find((block) => /sciences/.test(block.sourceText || block.text || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /sciences published/);
+  assert.equal(sentence.placeholders?.length || 0, 0);
+  const normal = textLayerToBlocks({
+    items: [
+      pdfItem("Let ", 40, 400, 24, 10),
+      pdfItem("N", 66, 400, 8, 10),
+      pdfItem("B", 74, 396, 6, 6),
+      pdfItem(" samples.", 82, 400, 48, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 2
+  });
+  const held = normal.blocks.find((block) => /samples/.test(block.sourceText || ""));
+  assert.ok(held);
+  assert.match(held.text, /Let ⟦f\d+⟧ samples/);
+  assert.equal(held.placeholders.length, 1);
+});
+
+test("a legacy math run keeps its leading letter, and a prose word in that slot stays out", () => {
+  const math = textLayerToBlocks({
+    items: [
+      pdfItem("so ", 40, 400, 16, 10),
+      pdfItem("ρ", 58, 400, 8, 10),
+      pdfItem("t", 66, 396, 5, 6),
+      pdfItem("=", 72, 400, 8, 10),
+      pdfItem("γ", 82, 400, 8, 10),
+      pdfItem(" holds.", 92, 400, 36, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 9
+  });
+  const sentence = math.blocks.find((block) => /holds/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.doesNotMatch(sentence.text, /ρ/);
+  assert.match(sentence.text, /so ⟦f\d+⟧ holds/);
+  const prose = textLayerToBlocks({
+    items: [
+      pdfItem("so ", 40, 400, 16, 10),
+      pdfItem("See", 58, 400, 18, 10),
+      pdfItem("t", 78, 396, 5, 6),
+      pdfItem("=", 84, 400, 8, 10),
+      pdfItem("γ", 94, 400, 8, 10),
+      pdfItem(" holds.", 104, 400, 36, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 9
+  });
+  const words = prose.blocks.find((block) => /See/.test(block.sourceText || block.text || ""));
+  assert.ok(words);
+  assert.match(words.text, /See/);
+});
+
+test("a decimal stays in one block, and a script exponent stays inside the crop", () => {
+  const table = textLayerToBlocks({
+    items: [
+      pdfItem("score ", 40, 400, 32, 10),
+      pdfItem("(", 74, 400, 4, 10),
+      pdfItem("L", 78, 400, 7, 10),
+      pdfItem("s", 85, 396, 5, 6),
+      pdfItem(")", 91, 400, 4, 10),
+      pdfItem("9", 100, 400, 6, 10),
+      pdfItem(".", 106, 400, 3, 10),
+      pdfItem("46", 109, 400, 12, 10),
+      pdfItem(" later.", 124, 400, 32, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 5
+  });
+  const sentence = table.blocks.find((block) => /score/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /9\.46/);
+  assert.doesNotMatch(sentence.text, /9\. ⟦f|⟦f\d+⟧46/);
+  const exponent = textLayerToBlocks({
+    items: [
+      pdfItem("scale ", 40, 400, 32, 10),
+      pdfItem("x", 74, 400, 8, 10),
+      pdfItem("2", 82, 404, 6, 6),
+      pdfItem(" terms.", 90, 400, 36, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 5
+  });
+  const held = exponent.blocks.find((block) => /scale/.test(block.sourceText || ""));
+  assert.ok(held);
+  assert.match(held.text, /scale ⟦f\d+⟧ terms/);
+  assert.doesNotMatch(held.text, /x|2/);
+});
+
+test("an equation line is not cut into overlapping crops, and a prose identifier still is", () => {
+  const equation = textLayerToBlocks({
+    items: [
+      pdfItem("a", 180, 400, 8, 10),
+      pdfItem("1", 188, 396, 5, 6),
+      pdfItem("+", 196, 400, 8, 10),
+      pdfItem("a", 206, 400, 8, 10),
+      pdfItem("2", 214, 396, 5, 6),
+      pdfItem("+", 222, 400, 8, 10),
+      pdfItem("a", 232, 400, 8, 10),
+      pdfItem("3", 240, 396, 5, 6)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 16
+  });
+  const formulas = equation.blocks.filter((block) => block.label === "formula");
+  let overlaps = 0;
+  for (let i = 0; i < formulas.length; i += 1) {
+    for (let j = i + 1; j < formulas.length; j += 1) {
+      const a = formulas[i].bbox;
+      const b = formulas[j].bbox;
+      const iw = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+      const ih = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+      if (iw > 0.001 && ih > 0.001) overlaps += 1;
+    }
+  }
+  assert.equal(overlaps, 0);
+  assert.ok(formulas.length <= 1);
+  const prose = textLayerToBlocks({
+    items: [
+      pdfItem("where ", 40, 400, 32, 10),
+      pdfItem("a", 74, 400, 8, 10),
+      pdfItem("1", 82, 396, 6, 6),
+      pdfItem(" holds.", 90, 400, 36, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 16
+  });
+  const sentence = prose.blocks.find((block) => /where/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /where ⟦f\d+⟧ holds/);
+  assert.equal(sentence.placeholders.length, 1);
+});
+
+test("a multi-letter subscript word stays in the sentence, and a one-letter subscript is cropped", () => {
   const page = textLayerToBlocks({
     items: [
       pdfItem("Parameters ", 72, 400, 60, 10),
       pdfItem("τ", 134, 400, 6, 10),
       pdfItem("decay", 141, 396, 22, 6),
-      pdfItem(", ", 164, 400, 4, 10),
-      pdfItem("τ", 170, 400, 6, 10),
-      pdfItem("rise", 177, 396, 16, 6),
-      pdfItem(" for each.", 196, 400, 50, 10)
+      pdfItem(" for each.", 166, 400, 50, 10)
     ],
     viewport: unitViewport(612, 792),
     page: 8
   });
   const sentence = page.blocks.find((block) => /Parameters/.test(block.sourceText || ""));
   assert.ok(sentence);
-  assert.match(sentence.text, /Parameters ⟦f\d+⟧ for each/);
-  assert.doesNotMatch(sentence.text, /decay|rise/);
-  assert.equal(sentence.placeholders.length, 1);
+  assert.match(sentence.text, /decay/);
+  assert.equal(sentence.placeholders?.length || 0, 0);
+  const twin = textLayerToBlocks({
+    items: [
+      pdfItem("Parameters ", 72, 400, 60, 10),
+      pdfItem("τ", 134, 400, 8, 10),
+      pdfItem("k", 142, 396, 6, 6),
+      pdfItem(" for each.", 150, 400, 50, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 8
+  });
+  const held = twin.blocks.find((block) => /Parameters/.test(block.sourceText || ""));
+  assert.ok(held);
+  assert.match(held.text, /Parameters ⟦f\d+⟧ for each/);
+  assert.doesNotMatch(held.text, /\bk\b/);
+  assert.equal(held.placeholders.length, 1);
 });
 
 test("a tiny math-font glyph stays in the trusted text instead of making a fragment crop", () => {
