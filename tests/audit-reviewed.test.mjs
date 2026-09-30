@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   auditReviewed,
   formulaProseWords,
@@ -1577,14 +1579,16 @@ test("R11 drops a pair that is neither inside nor beside the queue unit", () => 
   assert.equal(hits.length, 0);
 });
 
-test("R11 keeps the same-line superscript when the previous line is nearer", () => {
+test("R11 keeps the same-line superscript when its offset is smaller", () => {
   const units = [
     { id: "uPrev", type: "display", equationNumber: false, elementIds: ["ePrev"] },
     { id: "uBody", type: "display", equationNumber: false, elementIds: ["eBody"] }
   ];
+  // Previous line is horizontally nearer (gap 1pt vs 2pt) but |offset| 0.6
+  // against this line's 0.4. The smaller |offset| wins.
   const prev = formula("ePrev", "A", [42, 90, 51, 100], "uPrev");
   const body = formula("eBody", "x", [40, 100, 50, 110], "uBody");
-  const script = glyph("eStar", "∗", [52, 95.5, 58, 102.5], { label: "text" });
+  const script = glyph("eStar", "∗", [52, 97.5, 58, 104.5], { label: "text" });
   const wide = r11Of([prev, body, script], units, "uBody");
   assert.equal(wide.length, 1);
   assert.match(wide[0].suggestion, /主体 `eBody`/);
@@ -1593,7 +1597,7 @@ test("R11 keeps the same-line superscript when the previous line is nearer", () 
 
   const prevNear = formula("ePrev", "A", [42, 91, 51.2, 101], "uPrev");
   const bodyNear = formula("eBody", "x", [40, 100, 50, 110], "uBody");
-  const scriptNear = glyph("eStar", "∗", [52, 96.5, 58, 103.5], { label: "text" });
+  const scriptNear = glyph("eStar", "∗", [52, 98, 58, 105], { label: "text" });
   const tight = r11Of([prevNear, bodyNear, scriptNear], units, "uBody");
   assert.equal(tight.length, 1);
   assert.match(tight[0].suggestion, /主体 `eBody`/);
@@ -1752,10 +1756,12 @@ test("auditReviewed requires isHeldOut and defaults to reviewed", () => {
   assert.throws(() => parseAuditArgs(["--mode", "other"]), /--mode/);
 });
 
-test("R11 keeps an upper-line subscript when the next line is nearer", () => {
-  const upper = formula("eUpper", "A", [42, 98, 49, 108], "uUp");
-  const lower = formula("eLower", "x", [44, 110, 50, 120], "uDown");
-  const script = glyph("eSub", "i", [51, 106, 57, 114], { label: "text" });
+test("R11 keeps an upper-line subscript when its offset is smaller", () => {
+  // The next line is horizontally nearer (gap 1pt vs 3pt) but |offset| 0.65
+  // against the upper line's 0.35.
+  const upper = formula("eUpper", "A", [42, 101.5, 48, 111.5], "uUp");
+  const lower = formula("eLower", "x", [44, 111.5, 50, 121.5], "uDown");
+  const script = glyph("eSub", "i", [51, 106.5, 57, 113.5], { label: "text" });
   const hits = r11Of([upper, lower, script], [
     { id: "uUp", type: "display", equationNumber: false, elementIds: ["eUpper"] },
     { id: "uDown", type: "display", equationNumber: false, elementIds: ["eLower"] }
@@ -1784,6 +1790,148 @@ test("R11 drops a script whose distances to the two baselines match", () => {
     { id: "uDown", type: "display", equationNumber: false, elementIds: ["eDown2"] }
   ], "uUp");
   assert.equal(below.length, 0);
+});
+
+test("R11 drops a cross-line pair whose offsets differ by under 0.1", () => {
+  const upper = formula("eUpper", "A", [40, 100, 50, 110], "uUp");
+  const lower = formula("eLower", "x", [42, 110, 51, 120], "uDown");
+  const script = glyph("eStar", "∗", [52, 107.4, 58, 113.4], { label: "text" });
+  const units = [
+    { id: "uUp", type: "display", equationNumber: false, elementIds: ["eUpper"] },
+    { id: "uDown", type: "display", equationNumber: false, elementIds: ["eLower"] }
+  ];
+  const page = pageOf([upper, lower, script], units);
+  const close = run([entry("uUp", ["eUpper"]), entry("uDown", ["eLower"])], page);
+  assert.equal(close.findings.filter((item) => item.rule === "R11").length, 0);
+
+  const apart = glyph("eMark", "∗", [52, 107.5, 58, 113.5], { label: "text" });
+  const picked = run([entry("uUp", ["eUpper"]), entry("uDown", ["eLower"])], pageOf([upper, lower, apart], units));
+  const hits = picked.findings.filter((item) => item.rule === "R11");
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eLower`/);
+  assert.match(hits[0].suggestion, /上下标 `eMark`/);
+});
+
+test("R11 pairs each exponent with its own row when the lines are 10pt apart", () => {
+  const row1 = formula("eRow1", "0", [20, 90, 40, 104], "uRow1");
+  const exp1 = glyph("eExp1", "2", [41, 88.8, 47, 96.8], { label: "text" });
+  const row2 = formula("eRow2", "0", [20, 100, 37, 114], "uRow2");
+  const exp2 = glyph("eExp2", "3", [41, 98.8, 47, 106.8], { label: "text" });
+  const page = pageOf([row1, exp1, row2, exp2], [
+    { id: "uRow1", type: "display", equationNumber: false, elementIds: ["eRow1"] },
+    { id: "uRow2", type: "display", equationNumber: false, elementIds: ["eRow2"] }
+  ]);
+  const hits = run([entry("uRow1", ["eRow1"]), entry("uRow2", ["eRow2"])], page).findings.filter((item) => item.rule === "R11");
+  assert.equal(hits.length, 2);
+  const byScript = Object.fromEntries(hits.map((item) => [item.elements.at(-1).id, item]));
+  assert.match(byScript.eExp1.suggestion, /主体 `eRow1`/);
+  assert.match(byScript.eExp2.suggestion, /主体 `eRow2`/);
+});
+
+test("R11 reports a script that shares the numerator or the denominator", () => {
+  const bar = glyph("eBar", "", [30, 108, 80, 108.8], { kind: "path", label: "other" });
+  const body = formula("eG", "G", [36, 96, 46, 106], "uBody");
+  const script = glyph("e1", "1", [48, 100.5, 54, 106.5], { label: "text" });
+  const den = glyph("eDen", "2", [40, 112, 48, 118], { label: "text" });
+  const numerator = r11Of([body, script, bar, den], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eG"] }
+  ]);
+  assert.equal(numerator.length, 1);
+  assert.match(numerator[0].suggestion, /主体 `eG`/);
+  assert.match(numerator[0].suggestion, /上下标 `e1`/);
+
+  const lowerBar = glyph("eBar2", "", [30, 100, 80, 100.8], { kind: "path", label: "other" });
+  const num = glyph("eNum", "1", [40, 90, 48, 96], { label: "text" });
+  const base = formula("eL", "L", [36, 104, 46, 114], "uDen");
+  const sub = glyph("e2", "2", [48, 108.5, 54, 114.5], { label: "text" });
+  const denominator = r11Of([base, sub, lowerBar, num], [
+    { id: "uDen", type: "display", equationNumber: false, elementIds: ["eL"] }
+  ], "uDen");
+  assert.equal(denominator.length, 1);
+  assert.match(denominator[0].suggestion, /主体 `eL`/);
+  assert.match(denominator[0].suggestion, /上下标 `e2`/);
+});
+
+test("R11 does not treat a wide table rule as a fraction bar", () => {
+  const rule = glyph("eRule", "", [100, 108, 400, 108.6], { kind: "path", label: "other" });
+  const body = formula("eTen", "n", [88, 96, 99, 106], "uBody");
+  const script = glyph("eMinus", "−", [100, 92, 110, 98], { label: "text" });
+  const below = glyph("eCell", "8", [100, 112, 110, 118], { label: "text" });
+  const other = glyph("eOther", "Q", [220, 96, 230, 106], { label: "text" });
+  const hits = r11Of([body, script, rule, below, other], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eTen"] }
+  ]);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eTen`/);
+  assert.match(hits[0].suggestion, /上下标 `eMinus`/);
+});
+
+test("R11 trims operators and text from both ends of a bracket group", () => {
+  const fused = formula("eFused", "+ ‖(", [40, 98, 55, 112], "uBody");
+  const inner = formula("eInner", "A", [56, 100, 64, 110], "uBody");
+  const close = formula("eClose", ")", [66, 98, 70, 112], "uBody");
+  const sub = glyph("eX", "x", [71, 106, 77, 112], { label: "text" });
+  const trimmed = r11Of([fused, inner, close, sub], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eFused", "eInner", "eClose"] }
+  ]);
+  assert.equal(trimmed.length, 1);
+  assert.equal(trimmed[0].elements.some((element) => element.id === "eFused"), false);
+  assert.match(trimmed[0].suggestion, /主体 `eInner`…`eClose`/);
+  assert.match(trimmed[0].suggestion, /上下标 `eX`/);
+
+  const open = formula("eOpen", "(", [20, 98, 24, 112], "uBody");
+  const junk = glyph("eJunk", ") − (", [30, 98, 48, 112], { label: "text" });
+  const letter = formula("eA", "A", [50, 100, 58, 110], "uBody");
+  const end = formula("eEnd", ")", [60, 98, 64, 112], "uBody");
+  const mark = glyph("eY", "y", [65, 106, 71, 112], { label: "text" });
+  const paired = r11Of([open, junk, letter, end, mark], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eOpen", "eA", "eEnd"] }
+  ]);
+  assert.equal(paired.length, 1);
+  assert.equal(paired[0].elements[0].id, "eOpen");
+  assert.match(paired[0].suggestion, /主体 `eOpen`…`eEnd`/);
+  assert.equal(paired[0].suggestion.includes("主体 `eJunk`"), false);
+});
+
+test("auditReviewed defaults a missing limit to 277 and rejects a larger one", () => {
+  const queue = Array.from({ length: 300 }, (_, index) => entry(`u${index}`, [`e${index}`]));
+  assert.throws(() => auditReviewed({
+    queue,
+    confirmedKeys: [],
+    loadPage: () => null,
+    isHeldOut: () => false,
+    limit: 278
+  }), /不能超过 277/);
+  const report = auditReviewed({
+    queue,
+    confirmedKeys: [],
+    loadPage: () => null,
+    isHeldOut: () => false
+  });
+  assert.equal(report.window.size, 277);
+  assert.equal(report.window.to, 277);
+  assert.equal(report.window.limit, 277);
+});
+
+test("an empty or missing mode is an error, and the CLI exits without a stack", () => {
+  assert.throws(() => parseAuditArgs(["--mode"]), /--mode/);
+  assert.throws(() => parseAuditArgs(["--mode", ""]), /--mode/);
+  assert.throws(() => auditReviewed({
+    queue: [],
+    confirmedKeys: [],
+    loadPage: () => null,
+    isHeldOut: () => false,
+    mode: ""
+  }), /--mode/);
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  for (const args of [["--mode"], ["--mode", ""], ["--mode", "nope"]]) {
+    const result = spawnSync(process.execPath, ["scripts/audit-reviewed.mjs", ...args], { cwd: root, encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    const lines = result.stderr.trim().split(/\n/).filter(Boolean);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /--mode/);
+    assert.equal(result.stderr.includes("at "), false);
+  }
 });
 
 test("reviewed mode ignores a split on the union box that is far from every member", () => {

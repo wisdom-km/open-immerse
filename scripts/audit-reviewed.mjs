@@ -9,9 +9,9 @@
  * labels/prelabel. A missing reviewed page falls back to the prelabel
  * so a skipped unit can still be checked.
  *
- * Default window: the first 277 queue units, stopping at the last
- * confirmed one inside that prefix. --limit N checks the first N of
- * those units. N above 277 is an error. --mode defaults to reviewed.
+ * Default window: the first 277 queue units. Omitting limit does the
+ * same. --limit N checks the first N of those units. N above 277 is an
+ * error. --mode defaults to reviewed; an empty or unknown mode is an error.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -79,9 +79,9 @@ const SPLIT_SCRIPT_MAX_CHARS = 3;
 const SPLIT_SCRIPT_OVERLAP_PT = 1;
 // The reviewed queue is #1–#277. A larger --limit is an error.
 const AUDIT_REVIEW_LIMIT = 277;
-// Two baselines this close, in body heights, are the same reading.
-// The pair is ambiguous and is not reported.
-const SPLIT_SCRIPT_BASELINE_TIE = 0.05;
+// Two successful cross-line readings this close in |offset| are the same
+// pair. The difference is in body heights. Under 0.1 is not reported.
+const SPLIT_SCRIPT_OFFSET_TIE = 0.1;
 
 // Each side of a cross-line report needs several glyphs, so one stray
 // subscript does not look like a second display line.
@@ -1722,29 +1722,91 @@ function isDropCap(body, pool) {
   return false;
 }
 
-// A numerator or denominator sitting on its bar is not a script of the next letter.
-function isFractionPiece(script, elements) {
+function isTableRule(bar, script, elements) {
+  const barY = midY(bar);
+  const glyphs = [];
+  for (const other of elements || []) {
+    if (!other?.bbox || other === bar) continue;
+    const height = boxHeight(other);
+    if (!(height > 1)) continue;
+    if (Math.abs(midY(other) - barY) > Math.max(height, boxHeight(script), 4) * 1.8) continue;
+    if (other.bbox[2] < bar.bbox[0] - 1 || other.bbox[0] > bar.bbox[2] + 1) continue;
+    glyphs.push(other);
+  }
+  glyphs.sort((a, b) => a.bbox[0] - b.bbox[0] || a.bbox[1] - b.bbox[1]);
+  if (!glyphs.length) return false;
+  const gapLimit = Math.max(14, boxHeight(script) * 2);
+  const clusters = [];
+  let current = [glyphs[0]];
+  for (let index = 1; index < glyphs.length; index += 1) {
+    const prev = current[current.length - 1];
+    if (glyphs[index].bbox[0] - prev.bbox[2] > gapLimit) {
+      clusters.push(current);
+      current = [glyphs[index]];
+    } else current.push(glyphs[index]);
+  }
+  clusters.push(current);
+  const local = clusters.find((group) => group.some((glyph) => glyph === script || (glyph.bbox[0] <= script.bbox[2] + 0.6 && glyph.bbox[2] >= script.bbox[0] - 0.6)));
+  if (!local || clusters.length < 2) return false;
+  const left = Math.min(...local.map((glyph) => glyph.bbox[0]));
+  const right = Math.max(...local.map((glyph) => glyph.bbox[2]));
+  const span = Math.max(right - left, 1);
+  const overhang = (left - bar.bbox[0]) + (bar.bbox[2] - right);
+  return boxWidth(bar) > span * 2.5 && overhang > span;
+}
+
+function bodySharesFractionSide(body, script, bar, elements) {
+  const barY = midY(bar);
+  const scriptY = midY(script);
+  const bodyY = midY(body);
+  if ((scriptY - barY) * (bodyY - barY) <= 0) return false;
+  if (!(body.bbox[2] > bar.bbox[0] + 0.6 && body.bbox[0] < bar.bbox[2] - 0.6)) return false;
+  const y0 = Math.min(bodyY, barY);
+  const y1 = Math.max(bodyY, barY);
+  const ref = Math.max(boxHeight(body), 1);
+  for (const other of elements || []) {
+    if (!other?.bbox || other === body || other === script || other === bar) continue;
+    if (boxHeight(other) < 0.7 * ref) continue;
+    const otherY = midY(other);
+    if (otherY <= y0 + 0.4 || otherY >= y1 - 0.4) continue;
+    const left = Math.min(body.bbox[0], script.bbox[0]);
+    const right = Math.max(body.bbox[2], script.bbox[2]);
+    if (other.bbox[2] <= left + 0.4 || other.bbox[0] >= right - 0.4) continue;
+    return false;
+  }
+  return true;
+}
+
+// The script is the numerator or the denominator itself: it sits on a
+// fraction bar, the bar covers its horizontal span, and a glyph sits on
+// the other side. A subscript that shares that side with its body still
+// counts. A rule much wider than the two side glyphs is a table rule.
+function isFractionPiece(script, body, elements) {
   const height = boxHeight(script);
   if (!(height > 0)) return false;
   for (const bar of elements || []) {
-    if (!bar?.bbox || bar === script) continue;
+    if (!bar?.bbox || bar === script || bar === body) continue;
     const barHeight = boxHeight(bar);
     const barWidth = boxWidth(bar);
     if (barWidth < 1.5 || barHeight > Math.max(1.2, 0.45 * height)) continue;
     const flat = bar.kind === "path" || bar.label === "other" || bar.char === "" || bar.char === "−" || bar.char === "-";
     if (!flat) continue;
-    if (bar.bbox[2] < script.bbox[0] - 0.6 || bar.bbox[0] > script.bbox[2] + 0.6) continue;
+    if (bar.bbox[0] > script.bbox[0] + 0.6 || bar.bbox[2] < script.bbox[2] - 0.6) continue;
     const barY = midY(bar);
     const scriptY = midY(script);
-    if (Math.abs(barY - scriptY) > height * 1.4 || Math.abs(barY - scriptY) < 0.2) continue;
-    const partner = (elements || []).some((other) => {
+    const rise = barY - scriptY;
+    if (Math.abs(rise) > height * 1.4 || Math.abs(rise) < 0.2) continue;
+    const partner = (elements || []).find((other) => {
       if (!other?.bbox || other === script || other === bar) return false;
       if (other.bbox[2] < script.bbox[0] - 0.8 || other.bbox[0] > script.bbox[2] + 0.8) return false;
       const otherY = midY(other);
-      if ((barY - scriptY) * (otherY - barY) <= 0) return false;
-      return Math.abs(otherY - scriptY) < height * 2.5 && boxHeight(other) <= height * 1.4;
+      if (rise * (otherY - barY) <= 0) return false;
+      return Math.abs(otherY - scriptY) < height * 2.5 && boxHeight(other) > 0 && boxHeight(other) <= height * 1.4;
     });
-    if (partner) return true;
+    if (!partner) continue;
+    if (isTableRule(bar, script, elements)) continue;
+    if (body?.bbox && bodySharesFractionSide(body, script, bar, elements)) continue;
+    return true;
   }
   return false;
 }
@@ -1845,7 +1907,7 @@ function measurePair(body, script) {
 }
 
 function pairFilters(body, script, pool, elements) {
-  if (fractionBarBetween(body, script, elements) || isFractionPiece(script, elements)) return false;
+  if (fractionBarBetween(body, script, elements) || isFractionPiece(script, body, elements)) return false;
   if (sameLetterCollision(body, script) || fullLetterBetween(body, script, pool)) return false;
   if (crossedByFormulaUnit(body, script, pool)) return false;
   return true;
@@ -1893,10 +1955,39 @@ function lastChar(text) {
   return chars[chars.length - 1] || "";
 }
 
+function isPureOpener(glyph, openChar) {
+  const text = String(glyph?.char || "").replace(/\s+/g, "");
+  if (!text.endsWith(openChar)) return false;
+  return text.replace(/^[|‖∥∣]+/u, "") === openChar;
+}
+
+function isPureCloser(glyph, closeChar) {
+  return String(glyph?.char || "").replace(/\s+/g, "") === closeChar;
+}
+
+function isBracketEdgeNoise(glyph, openChar) {
+  if (!glyph || isPureOpener(glyph, openChar)) return false;
+  if (glyph.label === "text") return true;
+  if (isOperatorGlyph(glyph)) return true;
+  const text = String(glyph.char || "").replace(/\s+/g, "");
+  if (/^[+−\-–—=≈≠<>≤≥×·∙∗*]/.test(text)) return true;
+  const hasBracket = /[()[\]{}（）]/.test(text);
+  const hasOperator = /[+−\-–—=≈≠<>≤≥×·∙∗*]/.test(text);
+  return hasBracket && hasOperator;
+}
+
+function trimBracketEnds(group, openChar, closer) {
+  const drop = (glyph) => glyph !== closer && isBracketEdgeNoise(glyph, openChar);
+  const trimmed = group.slice();
+  while (trimmed.length > 1 && drop(trimmed[0])) trimmed.shift();
+  while (trimmed.length > 1 && drop(trimmed[trimmed.length - 1])) trimmed.pop();
+  return trimmed;
+}
+
 function matchingBracketGroup(closer, pool) {
   const closeChar = String(closer?.char || "").trim();
   const openChar = CLOSE_TO_OPEN[closeChar];
-  if (!openChar || closeChar.length !== 1 && ![...closeChar].every((char) => char === closeChar[0])) return null;
+  if (!openChar || (closeChar.length !== 1 && ![...closeChar].every((char) => char === closeChar[0]))) return null;
   const ref = Math.max(boxHeight(closer), 1);
   const onLine = (glyph) => {
     const limit = SAME_LINE_CENTER_RATIO * Math.max(ref, boxHeight(glyph), 1);
@@ -1910,21 +2001,40 @@ function matchingBracketGroup(closer, pool) {
   let opener = null;
   for (const glyph of leftward) {
     if (glyph === closer) continue;
-    const text = String(glyph.char || "").trim();
-    const end = lastChar(text);
-    if (end === closeChar && text === closeChar) depth += 1;
-    else if (end === openChar) {
+    if (glyph.label === "text" && !isPureOpener(glyph, openChar) && !isPureCloser(glyph, closeChar)) continue;
+    if (isPureCloser(glyph, closeChar)) {
+      depth += 1;
+      continue;
+    }
+    if (isPureOpener(glyph, openChar)) {
       if (depth === 0) {
         opener = glyph;
         break;
       }
       depth -= 1;
+      continue;
+    }
+    const text = String(glyph.char || "").replace(/\s+/g, "");
+    const events = [...text].reverse().filter((char) => char === openChar || char === closeChar);
+    let matched = false;
+    for (const char of events) {
+      if (char === closeChar) depth += 1;
+      else if (depth === 0) {
+        matched = true;
+        break;
+      } else depth -= 1;
+    }
+    if (matched) {
+      opener = glyph;
+      break;
     }
   }
   if (!opener) return null;
-  return line
+  const group = line
     .filter((glyph) => glyph.bbox[0] >= opener.bbox[0] - 0.4 && glyph.bbox[2] <= closer.bbox[2] + 0.4)
     .sort((a, b) => a.bbox[0] - b.bbox[0] || a.bbox[1] - b.bbox[1]);
+  const trimmed = trimBracketEnds(group, openChar, closer);
+  return trimmed.length ? trimmed : null;
 }
 
 function glyphUnderAccent(accent, pool, script) {
@@ -1987,11 +2097,10 @@ function attachScript(script, pool, dropCaps, elements) {
   if (!otherHit) return nearHit;
   const opposite = nearHit.offset > 0 ? otherHit.offset < 0 : otherHit.offset > 0;
   if (!opposite) return nearHit;
-  const nearDy = Math.abs(midY(script) - midY(nearest));
-  const otherDy = Math.abs(midY(script) - midY(other));
-  if (Math.abs(nearDy - otherDy) <= SPLIT_SCRIPT_BASELINE_TIE * nearHit.bodyHeight) return null;
-  if (nearDy < otherDy) return otherHit;
-  return nearHit;
+  const nearAbs = Math.abs(nearHit.offset);
+  const otherAbs = Math.abs(otherHit.offset);
+  if (Math.abs(nearAbs - otherAbs) < SPLIT_SCRIPT_OFFSET_TIE) return null;
+  return nearAbs < otherAbs ? nearHit : otherHit;
 }
 
 function boundsOfEntry(page, entry, isHeldOut) {
@@ -2150,9 +2259,11 @@ function dedupe(findings) {
 
 export function auditReviewed({ queue, loadPage, confirmedKeys, limit, isHeldOut, mode } = {}) {
   if (typeof isHeldOut !== "function") throw new Error("isHeldOut 是必填参数");
-  const auditMode = mode || "reviewed";
+  const auditMode = mode == null ? "reviewed" : mode;
   if (auditMode !== "reviewed" && auditMode !== "prelabel") throw new Error("--mode 只能是 reviewed 或 prelabel");
-  const window = selectAuditWindow(queue, confirmedKeys, limit);
+  const auditLimit = limit == null ? AUDIT_REVIEW_LIMIT : limit;
+  if (auditLimit > AUDIT_REVIEW_LIMIT) throw new Error("--limit 不能超过 277");
+  const window = selectAuditWindow(queue, confirmedKeys, auditLimit);
   const findings = [];
   const info = [];
   const byPage = new Map();
@@ -2185,7 +2296,7 @@ export function auditReviewed({ queue, loadPage, confirmedKeys, limit, isHeldOut
       size: window.length,
       confirmed: confirmedCount,
       skipped: window.length - confirmedCount,
-      limit: Number.isInteger(limit) ? limit : null
+      limit: Number.isInteger(auditLimit) ? auditLimit : null
     },
     counts,
     info: { R3: info.length },
@@ -2305,17 +2416,27 @@ export function parseAuditArgs(argv) {
     const arg = argv[index];
     if (arg === "--limit") limit = Number(argv[++index]);
     else if (arg === "--out") out = argv[++index];
-    else if (arg === "--mode") mode = argv[++index];
-    else if (arg === "--help") return { help: true, limit, out, mode: mode || "reviewed" };
+    else if (arg === "--mode") {
+      const value = argv[++index];
+      if (value == null || String(value).startsWith("--")) throw new Error("--mode 只能是 reviewed 或 prelabel");
+      mode = value;
+    }
+    else if (arg === "--help") return { help: true, limit, out, mode: mode == null ? "reviewed" : mode };
   }
   if (limit != null && (!Number.isInteger(limit) || limit < 0)) throw new Error("--limit 要是非负整数");
   if (limit != null && limit > AUDIT_REVIEW_LIMIT) throw new Error("--limit 不能超过 277");
   if (mode != null && mode !== "reviewed" && mode !== "prelabel") throw new Error("--mode 只能是 reviewed 或 prelabel");
-  return { limit, out, mode: mode || "reviewed" };
+  return { limit, out, mode: mode == null ? "reviewed" : mode };
 }
 
 function main() {
-  const args = parseAuditArgs(process.argv.slice(2));
+  let args;
+  try {
+    args = parseAuditArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   if (args.help) {
     console.log("node scripts/audit-reviewed.mjs [--mode reviewed|prelabel] [--limit N] [--out reports/audit.md]");
     return;
