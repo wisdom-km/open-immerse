@@ -221,6 +221,33 @@ $env:PORT=4174; node scripts/label-review.mjs
 - 「导入」读一份 JSON，先做编号校验，通过才写入 `labels/reviewed/`。被拒绝时提示是中文，并说明要用本页导出的文件，不要手改元素编号、字符或框。
 - 做完一批后：`git add labels/reviewed`，再提交。不要提交 `corpus/pdfs/`。`git status` 里不应出现基线文档的改动。
 
+### 清单模式
+
+不带 `--manifest` 和 `--out-dir` 时，复核页和以前一样，确认结果写进 `labels/reviewed/<论文>/page-NNN.json`。两个参数要一起给，只给一个会打一行错误并退出，没有 Node 堆栈。
+
+清单文件每行一个 `#N`，和左侧队列序号相同。空行可以留，行尾空白可以留。解析失败、重复、编号越界，都是一行错误后退出。输出目录必须在仓库根目录外面；符号链接按 realpath 判断，指回仓库里面也会拒绝启动。
+
+PowerShell 里可以照抄（路径换成自己的）：
+
+```
+$env:PORT=4174; node scripts/label-review.mjs --manifest D:\review\batch.txt --out-dir D:\review\out
+```
+
+`batch.txt` 例如：
+
+```
+#12
+#40
+```
+
+清单模式下：
+
+- 左侧队列只列出清单里的条目。清单外条目的论文、页码、类型、置信度不会发给页面。
+- Enter、Shift+Enter、`u` / `j` / `k`、`g` 跳转、地址栏 `?q=N`、以及打开后的第一条，都只在清单里面移动。请求清单外的编号时，服务返回 404，页面提示「不在本次清单内」。
+- 同一页上，其他单元的序号标记只画清单内的条目。
+- 顶栏是「清单模式：已标 x / 共 y」。
+- 写入只落在 `--out-dir`，每个条目一个文件，例如 `D:\review\out\12.json`，里面是这一条的标注和写入时间。不会读、也不会改 `labels/reviewed/`。
+
 接触图（左：页面轮廓，中：基线 SVG，右：差异。红色是页面有而 SVG 没有）：
 
 ```
