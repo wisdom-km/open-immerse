@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -454,6 +454,7 @@ test("the review page and the label docs describe manifest mode", () => {
   assert.match(docs, /UTF-16LE/);
   assert.match(docs, /不要把清单文件和 out-dir 提交进仓库/);
   assert.match(docs, /会自动创建/);
+  assert.match(docs, /未保存/);
   assert.match(todo, /标注用复核工具的清单模式，结果写到仓库外目录，不进 labels\/reviewed。/);
   const html = readFileSync(new URL("../tools/label-review/index.html", import.meta.url), "utf8");
   assert.match(html, /默认按复核集往下走/);
@@ -463,7 +464,14 @@ test("the review page and the label docs describe manifest mode", () => {
   assert.match(review, /\/tools\/label-review\/runtime\/label-schema\.js/);
   const jump = review.slice(review.indexOf("async function jumpToQueueNumber"), review.indexOf("async function confirmUnit"));
   const missed = jump.slice(jump.indexOf("不在本次清单内"));
-  assert.match(missed, /renderQueue\(/);
+  assert.match(jump, /clearMissedQueueHighlight\(/);
+  assert.match(missed, /clearMissedQueueHighlight\(/);
+  const clearer = review.slice(review.indexOf("function clearMissedQueueHighlight"), review.indexOf("async function moveManifest"));
+  assert.match(clearer, /showQueueCurrent = false/);
+  assert.match(clearer, /renderQueue\(/);
+  assert.match(review, /stepManifestPage\(/);
+  assert.match(review, /这个元素不在当前条目里，未保存/);
+  assert.match(review, /未保存/);
 });
 
 test("manifest text accepts a UTF-8 BOM and UTF-16LE", () => {
@@ -597,6 +605,134 @@ test("a page-queue wipe cannot replace a reviewed manifest item", async () => {
       const ids = reloaded.page.elements.map((element) => element.id).sort();
       assert.deepEqual(ids, [elementId, otherId].sort());
       assert.equal(reloaded.page.elements.every((element) => element.unitType === "display"), true);
+    });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+function reviewAssetUrls() {
+  const source = readFileSync(new URL("../tools/label-review/review.js", import.meta.url), "utf8");
+  const urls = [];
+  for (const match of source.matchAll(/from\s+"([^"]+)"/g)) urls.push(match[1]);
+  for (const match of source.matchAll(/workerSrc\s*=\s*"([^"]+)"/g)) urls.push(match[1]);
+  assert.ok(urls.length >= 4);
+  return urls;
+}
+
+test("default and manifest modes serve every module the review page imports", async () => {
+  const urls = reviewAssetUrls();
+  const base = mkdtempSync(join(tmpdir(), "review-manifest-assets-"));
+  const outDir = mkdtempSync(join(tmpdir(), "review-manifest-assets-out-"));
+  syntheticCorpus(base);
+  try {
+    for (const options of [{ root: base }, { root: base, manifestIndexes: [1, 3], outDir }]) {
+      await withServer(options, async (origin) => {
+        for (const url of urls) {
+          const response = await fetch(`${origin}${url}`);
+          const body = Buffer.from(await response.arrayBuffer());
+          assert.equal(response.status, 200, `${url} ${options.manifestIndexes ? "manifest" : "default"}`);
+          assert.ok(body.length > 0);
+        }
+      });
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("manifest static files are an explicit list and ignore a symlink into labels", async () => {
+  const base = mkdtempSync(join(tmpdir(), "review-manifest-link-root-"));
+  const outDir = mkdtempSync(join(tmpdir(), "review-manifest-link-out-"));
+  syntheticCorpus(base);
+  const pageDir = join(base, "tools/label-review");
+  mkdirSync(pageDir, { recursive: true });
+  cpSync(join(repo, "tools/label-review/index.html"), join(pageDir, "index.html"));
+  cpSync(join(repo, "tools/label-review/review.css"), join(pageDir, "review.css"));
+  writeFileSync(join(pageDir, "extra.js"), "extra-token");
+  symlinkSync(join(base, "labels/reviewed/keep.txt"), join(pageDir, "review.js"));
+  try {
+    await withServer({ root: base, manifestIndexes: [1, 3], outDir }, async (origin) => {
+      const page = await fetch(`${origin}/tools/label-review/index.html`);
+      assert.equal(page.status, 200);
+      assert.match(await page.text(), /公式标注复核/);
+      const style = await fetch(`${origin}/tools/label-review/review.css`);
+      assert.equal(style.status, 200);
+      const leaked = await fetch(`${origin}/tools/label-review/review.js`);
+      const leakedText = await leaked.text();
+      assert.equal(leaked.status, 404);
+      assert.equal(leakedText, "not found");
+      assert.equal(leakedText.includes(SENTINEL), false);
+      const extra = await fetch(`${origin}/tools/label-review/extra.js`);
+      assert.equal(extra.status, 404);
+      assert.equal(await extra.text(), "not found");
+    });
+    await withServer({ root: base }, async (origin) => {
+      const extra = await fetch(`${origin}/tools/label-review/extra.js`);
+      assert.equal(extra.status, 200);
+      assert.equal(await extra.text(), "extra-token");
+    });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("a merge of two manifest items on one page is still there after restart", async () => {
+  const base = mkdtempSync(join(tmpdir(), "review-manifest-merge-"));
+  const outDir = mkdtempSync(join(tmpdir(), "review-manifest-merge-out-"));
+  const made = syntheticCorpus(base);
+  const keptId = made.kept.elementIds[0];
+  const otherId = made.other.elementIds[0];
+  const mergedId = unitIdFromMembers([keptId, otherId]);
+  const options = { root: base, manifestIndexes: [1, 3], outDir };
+  try {
+    await withServer(options, async (origin) => {
+      const first = await fetch(`${origin}/api/item/3`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          queueIndex: 3,
+          paperId: INSIDE,
+          page: 1,
+          unitId: made.other.id,
+          elementIds: [otherId],
+          elements: [{ id: otherId, label: "formula", confidence: 0.2, rule: "math-font", unitId: made.other.id, unitType: "display", equationNumber: false }],
+          reviewed: true
+        })
+      });
+      assert.equal(first.status, 200);
+      const merged = await fetch(`${origin}/api/item/1`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          queueIndex: 1,
+          paperId: INSIDE,
+          page: 1,
+          unitId: made.kept.id,
+          type: "display",
+          elementIds: [keptId, otherId],
+          elements: [
+            { id: keptId, label: "formula", confidence: 1, rule: "human", unitId: mergedId, unitType: "display", equationNumber: false },
+            { id: otherId, label: "formula", confidence: 1, rule: "human", unitId: mergedId, unitType: "display", equationNumber: false }
+          ],
+          reviewed: true
+        })
+      });
+      assert.equal(merged.status, 200);
+    });
+    const absorbed = JSON.parse(readFileSync(join(outDir, "3.json"), "utf8"));
+    assert.equal(absorbed.annotation.mergedInto, 1);
+    assert.deepEqual(absorbed.annotation.elementIds, []);
+    await withServer(options, async (origin) => {
+      const reloaded = await (await fetch(`${origin}/api/page/${INSIDE}/1`)).json();
+      assert.deepEqual(verifyPageLabels(reloaded.page), []);
+      const other = reloaded.page.elements.find((element) => element.id === otherId);
+      assert.equal(other.unitId, mergedId);
+      assert.equal(other.unitType, "display");
+      assert.equal(other.unitId === made.other.id, false);
     });
   } finally {
     rmSync(base, { recursive: true, force: true });

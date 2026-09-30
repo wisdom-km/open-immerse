@@ -62,7 +62,8 @@ const state = {
   queueUnit: null,
   zoomBefore: 1.25,
   zoomFitted: false,
-  holdView: false
+  holdView: false,
+  showQueueCurrent: true
 };
 
 const pdfBytes = new Map();
@@ -190,6 +191,24 @@ function itemBody(page, unit) {
   };
 }
 
+const SAVED_FIELDS = ["label", "confidence", "rule", "unitId", "unitType", "equationNumber"];
+
+function manifestEditOutsideItem(page, body) {
+  const saved = new Set(body?.elementIds || []);
+  const prior = new Map((state.prelabel?.elements || []).map((element) => [element.id, element]));
+  return (page?.elements || []).some((element) => {
+    const before = prior.get(element.id);
+    if (!before) return false;
+    const changed = SAVED_FIELDS.some((field) => before[field] !== element[field]);
+    return changed && !saved.has(element.id);
+  });
+}
+
+function unsavedMessage(request) {
+  if (request?.blocked) return "这个元素不在当前条目里，未保存";
+  return "未保存";
+}
+
 function saveRequest(payload, paperId, pageNumber) {
   if (!manifestMode()) {
     return {
@@ -203,6 +222,7 @@ function saveRequest(payload, paperId, pageNumber) {
   if (unit.paperId !== paperId || Number(unit.page) !== Number(pageNumber)) return null;
   const body = itemBody(payload, unit);
   if (!body.elementIds.length) return null;
+  if (manifestEditOutsideItem(payload, body)) return { blocked: true };
   return {
     url: `/api/item/${unit.queueIndex}`,
     body: JSON.stringify(body)
@@ -299,7 +319,8 @@ function renderQueue() {
     const button = document.createElement("button");
     const reviewed = keys.has(unitKey(unit));
     button.textContent = formatUnitQueueLabel({ index: queueLabelIndex(unit, index), unit, reviewed });
-    button.className = [index === state.unitCursor ? "current" : "", reviewed ? "reviewed" : ""].filter(Boolean).join(" ");
+    const current = state.showQueueCurrent !== false && index === state.unitCursor;
+    button.className = [current ? "current" : "", reviewed ? "reviewed" : ""].filter(Boolean).join(" ");
     button.addEventListener("click", () => openUnit(index));
     queue.append(button);
   }
@@ -625,7 +646,10 @@ let saveBusy = 0;
 function scheduleSave() {
   if (!state.page || !state.paperId || state.pdfMissing) return;
   const request = saveRequest(state.page, state.paperId, state.pageNumber);
-  if (!request) return;
+  if (!request?.url) {
+    if (manifestMode()) saveState.textContent = unsavedMessage(request);
+    return;
+  }
   pendingSave = {
     payload: state.page,
     paperId: state.paperId,
@@ -644,7 +668,7 @@ async function flushPendingSave() {
   const ok = await save(job.payload, job.paperId, job.pageNumber);
   if (!ok && !pendingSave) {
     const again = saveRequest(job.payload, job.paperId, job.pageNumber);
-    pendingSave = again ? { ...job, url: again.url, body: again.body } : job;
+    if (again?.url) pendingSave = { ...job, url: again.url, body: again.body };
   }
   return ok;
 }
@@ -689,8 +713,8 @@ function showSavedStamp(text) {
 
 async function save(payload = state.page, paperId = state.paperId, pageNumber = state.pageNumber) {
   const request = saveRequest(payload, paperId, pageNumber);
-  if (!request) {
-    saveState.textContent = "保存失败";
+  if (!request?.url) {
+    saveState.textContent = manifestMode() ? unsavedMessage(request) : "保存失败";
     return false;
   }
   inflightSave = { paperId, pageNumber, body: request.body, url: request.url };
@@ -1079,9 +1103,47 @@ function nextUnreviewed(start) {
 async function openUnit(index) {
   const unit = state.reviewSet.units?.[index];
   if (!unit) return;
+  state.showQueueCurrent = true;
   state.mode = "units";
   state.unitCursor = index;
   await openPage(unit.paperId, unit.page, unit);
+}
+
+function manifestPageStops() {
+  const stops = [];
+  const seen = new Set();
+  const order = new Map((state.manifest?.documents || []).map((doc, index) => [doc.id, index]));
+  (state.reviewSet.units || []).forEach((unit, index) => {
+    const page = Number(unit.page);
+    const key = `${unit.paperId}:${page}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    stops.push({
+      paperId: unit.paperId,
+      page,
+      index,
+      order: order.get(unit.paperId) ?? 0
+    });
+  });
+  stops.sort((a, b) => a.order - b.order || a.page - b.page || a.paperId.localeCompare(b.paperId));
+  return stops;
+}
+
+async function stepManifestPage(direction) {
+  const stops = manifestPageStops();
+  const here = stops.findIndex((stop) => stop.paperId === state.paperId && stop.page === Number(state.pageNumber));
+  const next = here >= 0 ? stops[here + direction] : null;
+  if (!next) {
+    saveState.textContent = direction > 0 ? "后面没有清单页。" : "前面没有清单页。";
+    return;
+  }
+  await openUnit(next.index);
+}
+
+function clearMissedQueueHighlight() {
+  state.showQueueCurrent = false;
+  if (!state.page) state.unitCursor = -1;
+  renderQueue();
 }
 
 function openNextUnreviewed() {
@@ -1146,15 +1208,15 @@ async function jumpToQueueNumber(raw) {
   const response = await fetch(`/api/review-unit/${Number(text)}`);
   if (!response.ok) {
     await response.json().catch(() => null);
+    clearMissedQueueHighlight();
     saveState.textContent = "不在本次清单内";
-    renderQueue();
     return;
   }
   const unit = await response.json();
   const index = (state.reviewSet.units || []).findIndex((item) => item.queueIndex === unit.queueIndex);
   if (index < 0) {
+    clearMissedQueueHighlight();
     saveState.textContent = "不在本次清单内";
-    renderQueue();
     return;
   }
   await openUnit(index);
@@ -1295,6 +1357,8 @@ window.addEventListener("keydown", async (event) => {
   else if (key === "k" && state.mode === "units") openUnit(Math.max(0, state.unitCursor - 1));
   else if (key === "j") jumpUncertain(1);
   else if (key === "k") jumpUncertain(-1);
+  else if (key === "n" && manifestMode()) await stepManifestPage(1);
+  else if (key === "p" && manifestMode()) await stepManifestPage(-1);
   else if (key === "n") openPage(state.paperId, Math.min(paperPageCount(), state.pageNumber + 1));
   else if (key === "p") openPage(state.paperId, Math.max(1, state.pageNumber - 1));
   else return;
