@@ -1216,3 +1216,113 @@ test("N2c two blocks offset by 41% of the glyph height are reported", () => {
   ]));
   assert.equal(apart.findings.some((item) => item.rule === "R10"), false);
 });
+
+function r11Of(elements, units, unitId = "uBody") {
+  const ids = elements.filter((element) => element.unitId === unitId).map((element) => element.id);
+  const report = run([entry(unitId, ids.length ? ids : [elements[0].id])], pageOf(elements, units));
+  return report.findings.filter((item) => item.rule === "R11");
+}
+
+test("R11 flags a text subscript and a superscript in either direction", () => {
+  const base = formula("eX", "x", [40, 100, 50, 110], "uBody");
+  const sub = glyph("eI", "i", [52, 104, 58, 111], { label: "text" });
+  const subscript = r11Of([base, sub], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eX"] }
+  ]);
+  assert.equal(subscript.length, 1);
+  assert.match(subscript[0].suggestion, /疑似上下标被拆开/);
+  assert.match(subscript[0].suggestion, /主体 `eX`/);
+  assert.match(subscript[0].suggestion, /上下标 `eI`/);
+  assert.match(subscript[0].suggestion, /中心偏移 0\.250 主体字高（右块更低）/);
+  assert.match(subscript[0].suggestion, /水平间隙 0\.200 主体字高/);
+  assert.equal(subscript[0].elements.map((element) => element.id).join(","), "eX,eI");
+
+  const sup = glyph("eStar", "∗", [52, 96, 58, 102], { label: "text" });
+  const superscript = r11Of([base, sup], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eX"] }
+  ]);
+  assert.equal(superscript.length, 1);
+  assert.match(superscript[0].suggestion, /中心偏移 -0\.600 主体字高（右块更高）/);
+  assert.match(superscript[0].suggestion, /水平间隙 0\.200 主体字高/);
+});
+
+test("N55 uses the body height when the left glyph is the superscript", () => {
+  const sup = glyph("eStar", "∗", [40, 96, 46, 102], { label: "text" });
+  const body = formula("eX", "x", [48, 100, 58, 110], "uBody");
+  const hits = r11Of([sup, body], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eX"] }
+  ]);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eX`/);
+  assert.match(hits[0].suggestion, /中心偏移 0\.600 主体字高（右块更低）/);
+  assert.match(hits[0].suggestion, /水平间隙 0\.200 主体字高/);
+});
+
+test("N53 a block on another line does not hide the same-line script", () => {
+  const base = formula("eX", "x", [40, 100, 50, 110], "uBody");
+  const blocker = glyph("eBlock", "M", [50.4, 140, 56, 150], { label: "text" });
+  const script = glyph("eI", "i", [52, 104, 58, 111], { label: "text" });
+  const hits = r11Of([base, blocker, script], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eX"] }
+  ]);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].elements.map((element) => element.id).sort().join(","), "eI,eX");
+  assert.match(hits[0].suggestion, /上下标 `eI`/);
+});
+
+test("R11 ignores a full-height period at 0.353 and an English word", () => {
+  const base = formula("eX", "x", [40, 100, 50, 110], "uBody");
+  const period = glyph("eDot", ".", [53, 103.53, 58, 113.53], { label: "text" });
+  const periodHits = r11Of([base, period], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eX"] }
+  ]);
+  assert.equal(periodHits.length, 0);
+
+  const word = glyph("eWhere", "where", [50, 100, 90, 110], { label: "text" });
+  const short = formula("eT", "t", [40, 96, 48, 102], "uBody");
+  const wordHits = r11Of([short, word], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eT"] }
+  ]);
+  assert.equal(wordHits.length, 0);
+
+  const clause = glyph("eClause", "):=", [50, 100, 80, 110], { label: "text" });
+  const clauseHits = r11Of([short, clause], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eT"] }
+  ]);
+  assert.equal(clauseHits.length, 0);
+});
+
+test("N59 and N60 name a line-start ≡ left of the span, with reading-order ranges", () => {
+  const upper = [
+    formula("eA", "A", [40, 100, 50, 110], "uMerge"),
+    formula("eB", "B", [56, 100, 66, 110], "uMerge"),
+    formula("eN1", "(1)", [200, 100, 224, 110], "uMerge", { equationNumber: true })
+  ];
+  const equiv = formula("eEq", "≡", [20, 130, 28, 140], "uMerge", { font: "LMMathSymbols10-Regular" });
+  const lower = [
+    formula("eC", "C", [40, 130, 50, 140], "uMerge"),
+    formula("eD", "D", [56, 130, 66, 140], "uMerge"),
+    formula("eN2", "(2)", [200, 130, 224, 140], "uMerge", { equationNumber: true })
+  ];
+  const elements = [...upper, equiv, ...lower];
+  const report = run([entry("uMerge", elements.map((element) => element.id))], pageOf(elements, [{
+    id: "uMerge", type: "display", equationNumber: true, elementIds: elements.map((element) => element.id)
+  }]));
+  const hit = report.findings.find((item) => item.rule === "R2" && item.suggestion.includes("在跨度左侧"));
+  assert.ok(hit);
+  const expected = "行首 ≡（`eEq`）在跨度左侧。并入前，左边这一行单独占一行（元素 `eA`–`eN1`）。并入后，它并进紧接着的带编号单元 `uMerge`（元素 `eA`–`eN2`）。两行之间隔着的是别的单元，不是这个 ≡ 所在的单元。把多并进去的那一行按 s 拆出去。";
+  assert.equal(hit.suggestion, expected);
+  assert.equal(hit.suggestion.includes("中间隔着单元 `uMerge`"), false);
+  assert.equal(hit.elements.some((element) => element.id === "eEq"), true);
+
+  // eA sits slightly lower, so its top edge is below eB. Sorting by top edge
+  // would start the range at eB. Reading order still starts at the left glyph.
+  const dropped = formula("eA", "A", [40, 104, 50, 114], "uMerge");
+  const n60 = [dropped, ...upper.slice(1), equiv, ...lower];
+  const droppedReport = run([entry("uMerge", n60.map((element) => element.id))], pageOf(n60, [{
+    id: "uMerge", type: "display", equationNumber: true, elementIds: n60.map((element) => element.id)
+  }]));
+  const n60Hit = droppedReport.findings.find((item) => item.rule === "R2" && item.suggestion.includes("在跨度左侧"));
+  assert.ok(n60Hit);
+  assert.equal(n60Hit.suggestion, expected);
+});

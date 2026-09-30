@@ -63,6 +63,17 @@ const TALL_GLYPH_HEIGHT_RATIO = 1.8;
 // "Touching" for a missed merge: horizontal gap under about 0.3 glyph heights.
 const TOUCH_GAP_RATIO = 0.3;
 
+// Split script, glyph against glyph (a text element counts). Fixed from the
+// prelabel recall check. Do not refit these on the dev set.
+// Center shift is |ΔmidY| / body height, either direction. Body height is the
+// taller glyph, never the left one (a left superscript would inflate it).
+// Gap is in body heights. The script is the shorter glyph.
+const SPLIT_SCRIPT_CENTER_MIN = 0.2;
+const SPLIT_SCRIPT_CENTER_MAX = 0.7;
+const SPLIT_SCRIPT_GAP_RATIO = 0.3;
+const SPLIT_SCRIPT_HEIGHT_RATIO = 0.85;
+const SPLIT_SCRIPT_MAX_CHARS = 3;
+
 // Each side of a cross-line report needs several glyphs, so one stray
 // subscript does not look like a second display line.
 const MIN_GLYPHS_PER_LINE = 2;
@@ -80,6 +91,7 @@ const RULES = [
   ["R3", 5, "公式编号不在行间单元里"],
   ["R6", 6, "行间或行内类型不对"],
   ["R10", 7, "同一行漏合了公式"],
+  ["R11", 7, "疑似上下标被拆开"],
   ["R5", 8, "紧贴公式却没合并"],
   ["R7", 9, "标点归错了单元"],
   ["R0", 10, "队列里还没确认"]
@@ -860,6 +872,80 @@ function misalignedBlockPair(members, height) {
   return narrow >= 0.5 * wide;
 }
 
+function readingOrder(glyphs) {
+  const items = (glyphs || []).filter((glyph) => glyph?.bbox);
+  if (!items.length) return [];
+  const height = glyphHeight(items) || 8;
+  const limit = Math.max(4, 0.45 * height);
+  const lines = [];
+  for (const glyph of items.slice().sort((a, b) => midY(a) - midY(b) || a.bbox[0] - b.bbox[0])) {
+    const y = midY(glyph);
+    const line = lines.find((entry) => Math.abs(y - entry.y) <= limit);
+    if (!line) {
+      lines.push({ y, glyphs: [glyph] });
+      continue;
+    }
+    line.glyphs.push(glyph);
+    line.y = median(line.glyphs.map(midY));
+  }
+  lines.sort((a, b) => a.y - b.y);
+  const ordered = [];
+  for (const line of lines) {
+    line.glyphs.sort((a, b) => a.bbox[0] - b.bbox[0] || a.bbox[1] - b.bbox[1] || String(a.id).localeCompare(String(b.id)));
+    ordered.push(...line.glyphs);
+  }
+  return ordered;
+}
+
+function readingRange(glyphs) {
+  const ordered = readingOrder(glyphs);
+  if (!ordered.length) return "（无）";
+  const first = ordered[0];
+  const last = ordered[ordered.length - 1];
+  if (first.id === last.id) return `\`${first.id}\``;
+  return `\`${first.id}\`–\`${last.id}\``;
+}
+
+// ≡ is a one-character math-symbol glyph, so the fence test drops it from the
+// row span. A line-start ≡ then sits to the left of that span (x=138.1 against
+// rows that start at x=149.6) and the generic multi-line note is all that fires.
+function lineStartEquivLeftOfSpan(members) {
+  const rows = separateDisplayRows(members);
+  if (rows.length < 2) return null;
+  // Only glyphs already in this unit. A ≡ that belongs to some other queue
+  // entry on the same page is not a candidate.
+  const pool = members.filter((glyph) => glyph?.bbox && String(glyph.char || "").trim() === "≡");
+  for (const row of rows) {
+    const span = rowSpanBox(row);
+    const pad = Math.max(3, (row.bottom - row.top) * 0.45);
+    const hit = pool.find((glyph) => {
+      const y = midY(glyph);
+      return y >= row.top - pad && y <= row.bottom + pad && glyph.bbox[2] <= span[0] + 0.6;
+    });
+    if (hit) return hit;
+  }
+  for (let index = 1; index < rows.length; index += 1) {
+    const above = rowSpanBox(rows[index - 1]);
+    const below = rowSpanBox(rows[index]);
+    const leftEdge = Math.min(above[0], below[0]);
+    const hit = pool.find((glyph) => {
+      const y = midY(glyph);
+      return y > above[3] - 1 && y < below[1] + 1 && glyph.bbox[2] <= leftEdge + 0.6;
+    });
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function lineStartEquivSuggestion(unit, members, equiv) {
+  const rows = separateDisplayRows(members);
+  const before = rows[0]?.glyphs || [];
+  // 并入前: the left-hand line before it joins the following numbered unit.
+  // 并入后: that numbered unit, after the join. Reading order, not top-edge y.
+  // The unit named as "in between" is never the unit that holds this ≡.
+  return `行首 ≡（\`${equiv.id}\`）在跨度左侧。并入前，左边这一行单独占一行（元素 ${readingRange(before)}）。并入后，它并进紧接着的带编号单元 \`${unit.id}\`（元素 ${readingRange(members)}）。两行之间隔着的是别的单元，不是这个 ≡ 所在的单元。把多并进去的那一行按 s 拆出去。`;
+}
+
 function auditUnitRules(entry, page, findings) {
   if (!entry.confirmed) {
     findings.push(finding(entry, "R0", {
@@ -907,12 +993,15 @@ function auditUnitRules(entry, page, findings) {
         const sample = rows.length >= 2 ? rows : groups;
         const first = sample[0]?.glyphs?.[0] || members.find(isLetterGlyph);
         const second = (sample[1] || sample[0])?.glyphs?.[0] || first;
+        const equiv = proseLine ? null : lineStartEquivLeftOfSpan(members);
         findings.push(finding(entry, "R2", {
           currentUnitId: unit.id,
-          elements: [first, second].filter(Boolean),
+          elements: [equiv, first, second].filter(Boolean),
           suggestion: proseLine
             ? "这个行间单元并进了正文行里的公式。折行只包括以运算符续写的下一行，或同一对括号跨过的两行。正文句子旁边的公式按 s 拆出去。"
-            : "这个行间单元跨了多行独立的式子。每一行各自按 d 成一个行间单元。以运算符续行的折行，或同一对括号跨过的两行，才是一个单元；两行各自带编号则不是。"
+            : equiv
+              ? lineStartEquivSuggestion(unit, members, equiv)
+              : "这个行间单元跨了多行独立的式子。每一行各自按 d 成一个行间单元。以运算符续行的折行，或同一对括号跨过的两行，才是一个单元；两行各自带编号则不是。"
         }));
       }
     }
@@ -1562,6 +1651,116 @@ function auditPageRules(entries, page, findings, info) {
       currentUnitId: `${left.unit.id},${right.unit.id}`,
       elements: between.slice(0, 3),
       suggestion: "同一行两个公式单元紧贴，或中间只隔运算符、括号。它们多半该是一个单元。框住后按 m。"
+    }));
+  }
+  auditSplitScripts(entries, page, findings);
+}
+
+function scriptCharCount(element) {
+  return [...String(element?.char || "").trim()].length;
+}
+
+function isSentencePeriod(element) {
+  const text = String(element?.char || "").trim();
+  return text === "." || text === "。";
+}
+
+// A punctuation or operator run is not a script body. f F, B B, x, 8.5 × 10
+// and a lone accent (˜, ¯) still are. This is the glyph, not a threshold.
+function isPunctuationRun(element) {
+  const text = String(element?.char || "").replace(/\s+/g, "");
+  if (!text) return true;
+  return /^[.,;:()[\]{}+−\-–—=≈≠<>≤≥…·∙|/\\]+$/u.test(text);
+}
+
+// Another row can sit between two glyphs in x. It is not the neighbor, and it
+// does not hide the glyph that is actually on this line.
+function sameScriptLine(a, b) {
+  const scale = Math.max(boxHeight(a), boxHeight(b), 0.1);
+  return Math.abs(midY(a) - midY(b)) <= 1.05 * scale;
+}
+
+function nearestSameLineRight(glyph, pool) {
+  let best = null;
+  let bestGap = Infinity;
+  for (const other of pool) {
+    if (other === glyph || !other?.bbox || !sameScriptLine(glyph, other)) continue;
+    const slack = 0.35 * Math.max(boxHeight(glyph), boxHeight(other));
+    const gap = other.bbox[0] - glyph.bbox[2];
+    if (gap < -slack) continue;
+    if (gap < bestGap) {
+      best = other;
+      bestGap = gap;
+    }
+  }
+  return best;
+}
+
+function splitScriptPair(left, right, allowed) {
+  if (!left?.bbox || !right?.bbox) return null;
+  if (left.unitId && !allowed.has(left.unitId)) return null;
+  if (right.unitId && !allowed.has(right.unitId)) return null;
+  const leftAllowed = Boolean(left.unitId) && allowed.has(left.unitId);
+  const rightAllowed = Boolean(right.unitId) && allowed.has(right.unitId);
+  if (!leftAllowed && !rightAllowed) return null;
+  if (left.unitId && right.unitId && left.unitId === right.unitId) return null;
+  if (isSentencePeriod(right) || isSentencePeriod(left)) return null;
+  if (proseTextWords(left.char).length || proseTextWords(right.char).length) return null;
+  const taller = boxHeight(left) >= boxHeight(right) ? left : right;
+  if (taller.label === "text" && isPunctuationRun(taller)) return null;
+  const leftHeight = boxHeight(left);
+  const rightHeight = boxHeight(right);
+  if (!(leftHeight > 0) || !(rightHeight > 0)) return null;
+  const body = leftHeight >= rightHeight ? left : right;
+  const script = body === left ? right : left;
+  const bodyHeight = boxHeight(body);
+  const scriptHeight = boxHeight(script);
+  if (!(bodyHeight > 0)) return null;
+  if (scriptHeight > SPLIT_SCRIPT_HEIGHT_RATIO * bodyHeight) return null;
+  if (scriptCharCount(script) < 1 || scriptCharCount(script) > SPLIT_SCRIPT_MAX_CHARS) return null;
+  const offset = (midY(right) - midY(left)) / bodyHeight;
+  if (Math.abs(offset) < SPLIT_SCRIPT_CENTER_MIN || Math.abs(offset) > SPLIT_SCRIPT_CENTER_MAX) return null;
+  const gap = (right.bbox[0] - left.bbox[2]) / bodyHeight;
+  if (gap > SPLIT_SCRIPT_GAP_RATIO) return null;
+  return { left, right, body, script, offset, gap, bodyHeight, scriptHeight };
+}
+
+function auditSplitScripts(entries, page, findings) {
+  if (!page) return;
+  const allowed = new Set();
+  const entryForUnit = new Map();
+  for (const entry of entries) {
+    for (const unit of currentUnits(page, entry).units) {
+      allowed.add(unit.id);
+      if (!entryForUnit.has(unit.id)) entryForUnit.set(unit.id, entry);
+    }
+  }
+  if (!allowed.size) return;
+  const pool = (page.elements || []).filter((element) => {
+    if (!isLetterGlyph(element) || !String(element.char || "").trim()) return false;
+    if (element.unitId && !allowed.has(element.unitId)) return false;
+    if (element.unitId && allowed.has(element.unitId)) return true;
+    return element.label === "text" && !element.unitId;
+  });
+  const seen = new Set();
+  for (const glyph of pool) {
+    const next = nearestSameLineRight(glyph, pool);
+    if (!next) continue;
+    const left = glyph.bbox[0] <= next.bbox[0] ? glyph : next;
+    const right = left === glyph ? next : glyph;
+    const key = [left.id, right.id].sort().join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const hit = splitScriptPair(left, right, allowed);
+    if (!hit) continue;
+    const entry = entryForUnit.get(hit.left.unitId) || entryForUnit.get(hit.right.unitId) || entries[0];
+    const hostId = [hit.left.unitId, hit.right.unitId].filter((id) => id && allowed.has(id));
+    const direction = hit.offset < 0 ? "右块更高" : "右块更低";
+    const heightRatio = hit.scriptHeight / hit.bodyHeight;
+    findings.push(finding(entry, "R11", {
+      currentUnitId: hostId.join(","),
+      elements: [hit.body, hit.script],
+      suggestion: `疑似上下标被拆开。主体 \`${hit.body.id}\` 与上下标 \`${hit.script.id}\`，中心偏移 ${hit.offset.toFixed(3)} 主体字高（${direction}），上下标高度是主体的 ${heightRatio.toFixed(2)} 倍，水平间隙 ${hit.gap.toFixed(3)} 主体字高。框住两块按 m。`
     }));
   }
 }
