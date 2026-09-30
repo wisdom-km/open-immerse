@@ -10,10 +10,12 @@ import { otherQueueMarks } from "../lib/review-actions.js";
 import {
   assertOutDirOutsideRepo,
   createReviewServer,
+  decodeManifestBytes,
   ensureManifestInRange,
   openManifestSession,
   parseManifestText,
   parseReviewArgs,
+  setReviewPathTrace,
   stepManifest,
   unitsForManifest
 } from "../scripts/label-review.mjs";
@@ -337,6 +339,7 @@ test("manifest mode filters the queue, rejects other numbers, and writes outside
       assert.equal(pageText.includes(SENTINEL), false);
       assert.equal(pageText.includes("prelabel-marker"), true);
       assert.equal(pageText.includes("outside-page-marker"), false);
+      assert.equal(pageText.includes(made.samePageUnitId), false);
 
       const pagePut = await fetch(`${origin}/api/page/${INSIDE}/1`, {
         method: "PUT",
@@ -352,11 +355,12 @@ test("manifest mode filters the queue, rejects other numbers, and writes outside
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           queueIndex: 1,
+          paperId: INSIDE,
+          page: 1,
+          unitId: made.kept.id,
           elementIds: [elementId],
           elements: [{ id: elementId, label: "text", confidence: 1, rule: "human", unitId: null, unitType: null, equationNumber: false }],
-          reviewed: true,
-          paperId: OUTSIDE,
-          unitId: made.samePageUnitId
+          reviewed: true
         })
       });
       assert.equal(saved.status, 200);
@@ -448,4 +452,142 @@ test("the review page and the label docs describe manifest mode", () => {
   assert.match(docs, /不在本次清单内/);
   assert.match(docs, /清单模式：已标 x \/ 共 y/);
   assert.match(todo, /标注用复核工具的清单模式，结果写到仓库外目录，不进 labels\/reviewed。/);
+});
+
+test("manifest text accepts a UTF-8 BOM and UTF-16LE", () => {
+  assert.deepEqual(parseManifestText("\uFEFF#1\n#3\n"), [1, 3]);
+  const utf8 = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("#1\n#3\n", "utf8")]);
+  assert.deepEqual(parseManifestText(decodeManifestBytes(utf8)), [1, 3]);
+  const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("#1\n#3\n", "utf16le")]);
+  assert.deepEqual(parseManifestText(decodeManifestBytes(utf16)), [1, 3]);
+});
+
+test("manifest mode does not serve labels and a directory path is 404", async () => {
+  const base = mkdtempSync(join(tmpdir(), "review-manifest-static-"));
+  const outDir = mkdtempSync(join(tmpdir(), "review-manifest-static-out-"));
+  syntheticCorpus(base);
+  mkdirSync(join(base, "a-directory"));
+  const seen = [];
+  setReviewPathTrace((path) => seen.push(path));
+  try {
+    await withServer({ root: base, manifestIndexes: [1, 3], outDir }, async (origin) => {
+      seen.length = 0;
+      const reviewed = await fetch(`${origin}/labels/reviewed/keep.txt`);
+      const prelabel = await fetch(`${origin}/labels/prelabel/${INSIDE}/page-001.json`);
+      const nested = await fetch(`${origin}/labels/reviewed/${INSIDE}/page-001.json`);
+      const script = await fetch(`${origin}/scripts/label-review.mjs`);
+      const runtime = await fetch(`${origin}/tools/label-review/runtime/label-schema.js`);
+      const runtimeText = await runtime.text();
+      assert.equal(reviewed.status, 404);
+      assert.equal(await reviewed.text(), "not found");
+      assert.equal(prelabel.status, 404);
+      assert.equal(nested.status, 404);
+      assert.equal(script.status, 404);
+      assert.equal(runtime.status, 200);
+      assert.match(runtimeText, /LABEL_SCHEMA/);
+      const page = await fetch(`${origin}/api/page/${INSIDE}/1`);
+      assert.equal(page.status, 200);
+      const manifest = await (await fetch(`${origin}/api/manifest`)).json();
+      assert.deepEqual(manifest.documents.map((doc) => doc.id), [INSIDE]);
+      assert.equal(JSON.stringify(manifest).includes(OUTSIDE), false);
+      assert.equal(JSON.stringify(manifest).includes(FIELD_OUT), false);
+      const pdf = await fetch(`${origin}/api/pdf/${OUTSIDE}`);
+      assert.equal(pdf.status, 404);
+      assert.equal(await pdf.text(), JSON.stringify({ error: "不在本次清单内" }));
+      const folder = await fetch(`${origin}/a-directory`);
+      assert.equal(folder.status, 404);
+      assert.equal(await folder.text(), "not found");
+      assert.equal(seen.some((path) => path.includes(`${join("labels", "reviewed")}`)), false);
+    });
+    seen.length = 0;
+    await withServer({ root: base }, async (origin) => {
+      const folder = await fetch(`${origin}/a-directory`);
+      assert.equal(folder.status, 404);
+      assert.equal(await folder.text(), "not found");
+    });
+  } finally {
+    setReviewPathTrace(null);
+    rmSync(base, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("a page-queue wipe cannot replace a reviewed manifest item", async () => {
+  const base = mkdtempSync(join(tmpdir(), "review-manifest-wipe-"));
+  const outDir = mkdtempSync(join(tmpdir(), "review-manifest-wipe-out-"));
+  const made = syntheticCorpus(base);
+  const elementId = made.kept.elementIds[0];
+  const otherId = made.other.elementIds[0];
+  try {
+    await withServer({ root: base, manifestIndexes: [1, 3], outDir }, async (origin) => {
+      const good = await fetch(`${origin}/api/item/1`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          queueIndex: 1,
+          paperId: INSIDE,
+          page: 1,
+          unitId: made.kept.id,
+          elementIds: [elementId],
+          elements: [{ id: elementId, label: "formula", confidence: 1, rule: "human", unitId: made.kept.id, unitType: "inline", equationNumber: false }],
+          reviewed: true
+        })
+      });
+      assert.equal(good.status, 200);
+      const before = readFileSync(join(outDir, "1.json"), "utf8");
+      const wipe = await fetch(`${origin}/api/item/1`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ queueIndex: 1, elementIds: [], elements: [], reviewed: false })
+      });
+      assert.equal(wipe.status, 400);
+      const mismatch = await fetch(`${origin}/api/item/1`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          queueIndex: 1,
+          paperId: OUTSIDE,
+          page: 2,
+          unitId: made.samePageUnitId,
+          elementIds: [],
+          elements: [],
+          reviewed: false
+        })
+      });
+      assert.equal(mismatch.status, 400);
+      assert.equal(readFileSync(join(outDir, "1.json"), "utf8"), before);
+      assert.equal(JSON.parse(before).annotation.reviewed, true);
+      assert.deepEqual(JSON.parse(before).annotation.elementIds, [elementId]);
+
+      const mergedId = unitIdFromMembers([elementId, otherId]);
+      const merged = await fetch(`${origin}/api/item/1`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          queueIndex: 1,
+          paperId: INSIDE,
+          page: 1,
+          unitId: made.kept.id,
+          type: "display",
+          equationNumber: false,
+          elementIds: [elementId, otherId],
+          elements: [
+            { id: elementId, label: "formula", confidence: 1, rule: "human", unitId: mergedId, unitType: "display", equationNumber: false },
+            { id: otherId, label: "formula", confidence: 1, rule: "human", unitId: mergedId, unitType: "display", equationNumber: false }
+          ],
+          reviewed: true
+        })
+      });
+      assert.equal(merged.status, 200);
+      const reloaded = await (await fetch(`${origin}/api/page/${INSIDE}/1`)).json();
+      assert.deepEqual(verifyPageLabels(reloaded.page), []);
+      assert.equal(JSON.stringify(reloaded).includes(made.samePageUnitId), false);
+      const ids = reloaded.page.elements.map((element) => element.id).sort();
+      assert.deepEqual(ids, [elementId, otherId].sort());
+      assert.equal(reloaded.page.elements.every((element) => element.unitType === "display"), true);
+    });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
 });
