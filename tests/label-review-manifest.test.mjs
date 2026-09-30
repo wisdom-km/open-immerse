@@ -451,6 +451,9 @@ test("the review page and the label docs describe manifest mode", () => {
   assert.match(docs, /\$env:PORT=4174; node scripts\/label-review\.mjs --manifest D:\\review\\batch\.txt --out-dir D:\\review\\out/);
   assert.match(docs, /不在本次清单内/);
   assert.match(docs, /清单模式：已标 x \/ 共 y/);
+  assert.match(docs, /UTF-16LE/);
+  assert.match(docs, /不要把清单文件和 out-dir 提交进仓库/);
+  assert.match(docs, /会自动创建/);
   assert.match(todo, /标注用复核工具的清单模式，结果写到仓库外目录，不进 labels\/reviewed。/);
   const html = readFileSync(new URL("../tools/label-review/index.html", import.meta.url), "utf8");
   assert.match(html, /默认按复核集往下走/);
