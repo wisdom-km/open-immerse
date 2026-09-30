@@ -73,6 +73,10 @@ const SPLIT_SCRIPT_CENTER_MAX = 0.7;
 const SPLIT_SCRIPT_GAP_RATIO = 0.3;
 const SPLIT_SCRIPT_HEIGHT_RATIO = 0.85;
 const SPLIT_SCRIPT_MAX_CHARS = 3;
+// Boxes may kiss. Overlap of 0.35 glyph heights paired a radical with the
+// subscript on the line above. 1pt is the same slop as the other touching
+// checks in this file, not a refit of the center band.
+const SPLIT_SCRIPT_OVERLAP_PT = 1;
 
 // Each side of a cross-line report needs several glyphs, so one stray
 // subscript does not look like a second display line.
@@ -872,80 +876,6 @@ function misalignedBlockPair(members, height) {
   return narrow >= 0.5 * wide;
 }
 
-function readingOrder(glyphs) {
-  const items = (glyphs || []).filter((glyph) => glyph?.bbox);
-  if (!items.length) return [];
-  const height = glyphHeight(items) || 8;
-  const limit = Math.max(4, 0.45 * height);
-  const lines = [];
-  for (const glyph of items.slice().sort((a, b) => midY(a) - midY(b) || a.bbox[0] - b.bbox[0])) {
-    const y = midY(glyph);
-    const line = lines.find((entry) => Math.abs(y - entry.y) <= limit);
-    if (!line) {
-      lines.push({ y, glyphs: [glyph] });
-      continue;
-    }
-    line.glyphs.push(glyph);
-    line.y = median(line.glyphs.map(midY));
-  }
-  lines.sort((a, b) => a.y - b.y);
-  const ordered = [];
-  for (const line of lines) {
-    line.glyphs.sort((a, b) => a.bbox[0] - b.bbox[0] || a.bbox[1] - b.bbox[1] || String(a.id).localeCompare(String(b.id)));
-    ordered.push(...line.glyphs);
-  }
-  return ordered;
-}
-
-function readingRange(glyphs) {
-  const ordered = readingOrder(glyphs);
-  if (!ordered.length) return "（无）";
-  const first = ordered[0];
-  const last = ordered[ordered.length - 1];
-  if (first.id === last.id) return `\`${first.id}\``;
-  return `\`${first.id}\`–\`${last.id}\``;
-}
-
-// ≡ is a one-character math-symbol glyph, so the fence test drops it from the
-// row span. A line-start ≡ then sits to the left of that span (x=138.1 against
-// rows that start at x=149.6) and the generic multi-line note is all that fires.
-function lineStartEquivLeftOfSpan(members) {
-  const rows = separateDisplayRows(members);
-  if (rows.length < 2) return null;
-  // Only glyphs already in this unit. A ≡ that belongs to some other queue
-  // entry on the same page is not a candidate.
-  const pool = members.filter((glyph) => glyph?.bbox && String(glyph.char || "").trim() === "≡");
-  for (const row of rows) {
-    const span = rowSpanBox(row);
-    const pad = Math.max(3, (row.bottom - row.top) * 0.45);
-    const hit = pool.find((glyph) => {
-      const y = midY(glyph);
-      return y >= row.top - pad && y <= row.bottom + pad && glyph.bbox[2] <= span[0] + 0.6;
-    });
-    if (hit) return hit;
-  }
-  for (let index = 1; index < rows.length; index += 1) {
-    const above = rowSpanBox(rows[index - 1]);
-    const below = rowSpanBox(rows[index]);
-    const leftEdge = Math.min(above[0], below[0]);
-    const hit = pool.find((glyph) => {
-      const y = midY(glyph);
-      return y > above[3] - 1 && y < below[1] + 1 && glyph.bbox[2] <= leftEdge + 0.6;
-    });
-    if (hit) return hit;
-  }
-  return null;
-}
-
-function lineStartEquivSuggestion(unit, members, equiv) {
-  const rows = separateDisplayRows(members);
-  const before = rows[0]?.glyphs || [];
-  // 并入前: the left-hand line before it joins the following numbered unit.
-  // 并入后: that numbered unit, after the join. Reading order, not top-edge y.
-  // The unit named as "in between" is never the unit that holds this ≡.
-  return `行首 ≡（\`${equiv.id}\`）在跨度左侧。并入前，左边这一行单独占一行（元素 ${readingRange(before)}）。并入后，它并进紧接着的带编号单元 \`${unit.id}\`（元素 ${readingRange(members)}）。两行之间隔着的是别的单元，不是这个 ≡ 所在的单元。把多并进去的那一行按 s 拆出去。`;
-}
-
 function auditUnitRules(entry, page, findings) {
   if (!entry.confirmed) {
     findings.push(finding(entry, "R0", {
@@ -993,15 +923,12 @@ function auditUnitRules(entry, page, findings) {
         const sample = rows.length >= 2 ? rows : groups;
         const first = sample[0]?.glyphs?.[0] || members.find(isLetterGlyph);
         const second = (sample[1] || sample[0])?.glyphs?.[0] || first;
-        const equiv = proseLine ? null : lineStartEquivLeftOfSpan(members);
         findings.push(finding(entry, "R2", {
           currentUnitId: unit.id,
-          elements: [equiv, first, second].filter(Boolean),
+          elements: [first, second].filter(Boolean),
           suggestion: proseLine
             ? "这个行间单元并进了正文行里的公式。折行只包括以运算符续写的下一行，或同一对括号跨过的两行。正文句子旁边的公式按 s 拆出去。"
-            : equiv
-              ? lineStartEquivSuggestion(unit, members, equiv)
-              : "这个行间单元跨了多行独立的式子。每一行各自按 d 成一个行间单元。以运算符续行的折行，或同一对括号跨过的两行，才是一个单元；两行各自带编号则不是。"
+            : "这个行间单元跨了多行独立的式子。每一行各自按 d 成一个行间单元。以运算符续行的折行，或同一对括号跨过的两行，才是一个单元；两行各自带编号则不是。"
         }));
       }
     }
@@ -1362,7 +1289,7 @@ function splitWrappedPredecessor(page, lower, units, height) {
   return best;
 }
 
-function auditPageRules(entries, page, findings, info) {
+function auditPageRules(entries, page, findings, info, isHeldOut = () => false) {
   if (!page) return;
   const elements = page.elements || [];
   const elementById = new Map(elements.map((element) => [element.id, element]));
@@ -1653,7 +1580,7 @@ function auditPageRules(entries, page, findings, info) {
       suggestion: "同一行两个公式单元紧贴，或中间只隔运算符、括号。它们多半该是一个单元。框住后按 m。"
     }));
   }
-  auditSplitScripts(entries, page, findings);
+  auditSplitScripts(entries, page, findings, isHeldOut);
 }
 
 function scriptCharCount(element) {
@@ -1665,104 +1592,365 @@ function isSentencePeriod(element) {
   return text === "." || text === "。";
 }
 
-// A punctuation or operator run is not a script body. f F, B B, x, 8.5 × 10
-// and a lone accent (˜, ¯) still are. This is the glyph, not a threshold.
+// A punctuation or operator run is not a script body. f F, B B, x and
+// 8.5 × 10 still are. Accents are rejected separately.
 function isPunctuationRun(element) {
   const text = String(element?.char || "").replace(/\s+/g, "");
   if (!text) return true;
   return /^[.,;:()[\]{}+−\-–—=≈≠<>≤≥…·∙|/\\]+$/u.test(text);
 }
 
-// Another row can sit between two glyphs in x. It is not the neighbor, and it
-// does not hide the glyph that is actually on this line.
-function sameScriptLine(a, b) {
-  const scale = Math.max(boxHeight(a), boxHeight(b), 0.1);
-  return Math.abs(midY(a) - midY(b)) <= 1.05 * scale;
+function isAccentGlyph(element) {
+  const text = String(element?.char || "").trim();
+  return /^[~¯˜ˉ˘ˆˇ´`¨¸˚˛ˊˋ^]$/u.test(text);
 }
 
-function nearestSameLineRight(glyph, pool) {
-  let best = null;
-  let bestGap = Infinity;
+function isControlGlyph(element) {
+  const text = String(element?.char || "");
+  return [...text].some((char) => char.charCodeAt(0) < 32);
+}
+
+function isWeakPunctuation(element) {
+  const text = String(element?.char || "").replace(/\s+/g, "");
+  return /^[,.;:!?，。、…]+$/u.test(text);
+}
+
+function isBracketOrOperatorChar(element) {
+  const text = String(element?.char || "").replace(/\s+/g, "");
+  if (!text) return false;
+  return /^[()[\]{}（）〔〕ðþÞ+−\-–—=≈≠<>≤≥×·∙∗*|/\\]+$/u.test(text);
+}
+
+// "= min" and the same operator glued to a function name.
+function isOperatorFunctionText(element) {
+  if (element?.label !== "text") return false;
+  const raw = String(element.char || "").trim();
+  if (!/[=\-+−–—()（）]/.test(raw)) return false;
+  const bare = raw.replace(/[=+−\-–—≈≠<>≤≥()[\]{}（）.,;:]/g, " ").replace(/\s+/g, " ").trim();
+  return /^(?:min|max|ln|log|sin|cos|tan|det|dim|sup|inf|lim|tr|arg|exp|pr)$/i.test(bare);
+}
+
+// A text letter or function name sitting on the script's right is the next
+// token, not the base. The base is the glyph the script hangs on.
+function isBareFunctionName(element) {
+  const text = String(element?.char || "").trim();
+  return /^(?:min|max|ln|log|sin|cos|tan|det|dim|sup|inf|lim|tr|arg|exp|pr|sinh|cosh|tanh|argmin|argmax|gcd|lcm|ppcm|pgcd|ker|deg|mod|diag|rank)$/i.test(text);
+}
+
+function isDelimiterGlyph(element) {
+  const text = String(element?.char || "").replace(/\s+/g, "");
+  return /^[()[\]{}（）〔〕ðþÞ|]+$/u.test(text);
+}
+
+function isTextAfterScript(element, script) {
+  if (!script?.bbox || element?.label !== "text" || !element.bbox) return false;
+  if (element.bbox[0] < script.bbox[0] - 0.4) return false;
+  const text = String(element.char || "").trim();
+  if (/^\p{L}$/u.test(text)) return true;
+  if (isBareFunctionName(element)) return true;
+  return isOperatorFunctionText(element);
+}
+
+function startsWithOperatorOrPunct(element) {
+  const text = String(element?.char || "").trim();
+  return /^[=+−\-–—≈≠<>≤≥()[\]{}（）〔〕,.;:!?/\\|&ðþÞ*∗]/.test(text);
+}
+
+// Vulgar fractions, C1 controls, and private-use bracket pieces are not bases.
+function hasNonBaseChar(element) {
+  const text = String(element?.char || "");
+  for (const char of text) {
+    const code = char.codePointAt(0);
+    if (code >= 0x80 && code <= 0x9f) return true;
+    if (code >= 0xe000 && code <= 0xf8ff) return true;
+    if ((code >= 0x00bc && code <= 0x00be) || (code >= 0x2150 && code <= 0x215e)) return true;
+  }
+  return false;
+}
+
+function isScriptBase(element, script) {
+  if (!element?.bbox || isAccentGlyph(element) || isControlGlyph(element) || hasNonBaseChar(element)) return false;
+  if (isSentencePeriod(element) || isWeakPunctuation(element)) return false;
+  if (isBracketOrOperatorChar(element) || isPunctuationRun(element) || startsWithOperatorOrPunct(element)) return false;
+  if (isOperatorFunctionText(element) || isTextAfterScript(element, script)) return false;
+  if (proseTextWords(element.char).length) return false;
+  return true;
+}
+
+// A drop cap is the first letter of a prose word, not a formula base.
+function isDropCap(body, pool) {
+  const text = String(body?.char || "").trim();
+  if (!/^\p{L}$/u.test(text)) return false;
+  const height = boxHeight(body);
+  if (!(height > 0)) return false;
   for (const other of pool) {
-    if (other === glyph || !other?.bbox || !sameScriptLine(glyph, other)) continue;
-    const slack = 0.35 * Math.max(boxHeight(glyph), boxHeight(other));
-    const gap = other.bbox[0] - glyph.bbox[2];
-    if (gap < -slack) continue;
-    if (gap < bestGap) {
-      best = other;
-      bestGap = gap;
+    if (other === body || !other?.bbox || !proseTextWords(other.char).length) continue;
+    const otherHeight = boxHeight(other);
+    if (!(otherHeight > 0) || otherHeight > 0.55 * height) continue;
+    if (other.bbox[0] < body.bbox[2] - 1 || other.bbox[0] > body.bbox[2] + 6) continue;
+    const overlap = Math.min(body.bbox[3], other.bbox[3]) - Math.max(body.bbox[1], other.bbox[1]);
+    if (overlap >= 0.8 * otherHeight) return true;
+  }
+  return false;
+}
+
+function isFenceLike(element) {
+  const text = String(element?.char || "").trim();
+  if (/^[()[\]{}|⎧⎨⎩⎫⎬⎭⟨⟩⌈⌉⌊⌋]/u.test(text)) return true;
+  const width = boxWidth(element);
+  const height = boxHeight(element);
+  return height > 0 && width > 0 && width < 0.45 * height;
+}
+
+// A short glyph on the previous or next line is not this base's script.
+// Same-row letters, matrix neighbors, and fences stay out of the way.
+function scriptOnAnotherLine(script, body, pool) {
+  const ref = boxHeight(body);
+  if (!(ref > 0)) return false;
+  const scriptDy = Math.abs(midY(script) - midY(body));
+  for (const other of pool) {
+    if (other === script || other === body) continue;
+    if (isFenceLike(other) || isBracketOrOperatorChar(other) || isAccentGlyph(other) || isControlGlyph(other)) continue;
+    if (boxHeight(other) < 0.9 * ref) continue;
+    if (other.bbox[2] < script.bbox[0] - 2 * ref || other.bbox[0] > script.bbox[2] + 2 * ref) continue;
+    if (Math.abs(midY(other) - midY(body)) <= SAME_LINE_CENTER_RATIO * ref) continue;
+    if (Math.abs(midY(other) - midY(script)) < scriptDy) return true;
+  }
+  return false;
+}
+
+// A numerator or denominator sitting on its bar is not a script of the next letter.
+function isFractionPiece(script, elements) {
+  const height = boxHeight(script);
+  if (!(height > 0)) return false;
+  for (const bar of elements || []) {
+    if (!bar?.bbox || bar === script) continue;
+    const barHeight = boxHeight(bar);
+    const barWidth = boxWidth(bar);
+    if (barWidth < 1.5 || barHeight > Math.max(1.2, 0.45 * height)) continue;
+    const flat = bar.kind === "path" || bar.label === "other" || bar.char === "" || bar.char === "−" || bar.char === "-";
+    if (!flat) continue;
+    if (bar.bbox[2] < script.bbox[0] - 0.6 || bar.bbox[0] > script.bbox[2] + 0.6) continue;
+    const barY = midY(bar);
+    const scriptY = midY(script);
+    if (Math.abs(barY - scriptY) > height * 1.4 || Math.abs(barY - scriptY) < 0.2) continue;
+    const partner = (elements || []).some((other) => {
+      if (!other?.bbox || other === script || other === bar) return false;
+      if (other.bbox[2] < script.bbox[0] - 0.8 || other.bbox[0] > script.bbox[2] + 0.8) return false;
+      const otherY = midY(other);
+      if ((barY - scriptY) * (otherY - barY) <= 0) return false;
+      return Math.abs(otherY - scriptY) < height * 2.5 && boxHeight(other) <= height * 1.4;
+    });
+    if (partner) return true;
+  }
+  return false;
+}
+
+// The reported body is covered by the glyph the script actually touches.
+function eclipsedByNearerGlyph(body, script, pool) {
+  for (const other of pool) {
+    if (other === body || other === script || !other?.bbox) continue;
+    const cover = String(other.char || "").trim();
+    if (/^\p{L}/u.test(cover) || /^\d/u.test(cover) || isBracketOrOperatorChar(other)) continue;
+    if (boxWidth(other) > 2.5 * Math.max(boxWidth(body), 1)) continue;
+    if (boxHeight(other) < 0.8 * boxHeight(body)) continue;
+    const overlap = Math.min(body.bbox[2], other.bbox[2]) - Math.max(body.bbox[0], other.bbox[0]);
+    if (overlap < 0.9 * boxWidth(body)) continue;
+    if (String(other.char || "").trim() === String(body.char || "").trim()) continue;
+    const gap = other.bbox[0] <= script.bbox[0] ? script.bbox[0] - other.bbox[2] : other.bbox[0] - script.bbox[2];
+    if (gap > 0.15 || gap < -0.15) continue;
+    return true;
+  }
+  return false;
+}
+
+// The same letter overlapping itself is a collision, not a script on that letter.
+function sameLetterCollision(body, script) {
+  if (String(body.char || "").trim() !== String(script.char || "").trim()) return false;
+  const overlap = Math.min(body.bbox[2], script.bbox[2]) - Math.max(body.bbox[0], script.bbox[0]);
+  if (overlap <= 0) return false;
+  const scriptY = midY(script);
+  return scriptY > body.bbox[1] && scriptY < body.bbox[3];
+}
+
+// A full-size letter on this baseline, sitting in the gap, blocks the pair.
+// Brackets do not: a closing paren often overlaps a real subscript.
+function fullLetterBetween(a, b, pool) {
+  const left = a.bbox[0] <= b.bbox[0] ? a : b;
+  const right = left === a ? b : a;
+  const ref = Math.max(boxHeight(a), boxHeight(b), 1);
+  for (const other of pool) {
+    if (other === a || other === b || !other?.bbox) continue;
+    if (isBracketOrOperatorChar(other) || isAccentGlyph(other) || isControlGlyph(other) || hasNonBaseChar(other)) continue;
+    if (boxHeight(other) < 0.9 * ref) continue;
+    const mid = (Number(other.bbox[0]) + Number(other.bbox[2])) / 2;
+    if (mid <= left.bbox[2] || mid >= right.bbox[0]) continue;
+    const dy = Math.min(Math.abs(midY(other) - midY(a)), Math.abs(midY(other) - midY(b)));
+    if (dy > SAME_ROW_CENTER_RATIO * ref) continue;
+    return true;
+  }
+  return false;
+}
+
+// A formula unit sitting between the two glyphs on this line blocks the pair.
+// A block on another line does not, even when its x is in between.
+function crossedByFormulaUnit(a, b, pool) {
+  const left = a.bbox[0] <= b.bbox[0] ? a : b;
+  const right = left === a ? b : a;
+  const band = Math.max(boxHeight(a), boxHeight(b), 1);
+  for (const other of pool) {
+    if (other === a || other === b || !other?.bbox) continue;
+    if (other.label !== "formula" || !other.unitId) continue;
+    if (other.unitId === a.unitId || other.unitId === b.unitId) continue;
+    const mid = (Number(other.bbox[0]) + Number(other.bbox[2])) / 2;
+    if (mid <= left.bbox[2] || mid >= right.bbox[0]) continue;
+    const dy = Math.min(Math.abs(midY(other) - midY(a)), Math.abs(midY(other) - midY(b)));
+    if (dy > SAME_ROW_CENTER_RATIO * band) continue;
+    return true;
+  }
+  return false;
+}
+
+function fractionBarBetween(a, b, elements) {
+  const y0 = Math.min(midY(a), midY(b));
+  const y1 = Math.max(midY(a), midY(b));
+  if (y1 - y0 < 0.5) return false;
+  const x0 = Math.min(a.bbox[0], b.bbox[0]);
+  const x1 = Math.max(a.bbox[2], b.bbox[2]);
+  const ref = Math.max(boxHeight(a), boxHeight(b), 1);
+  return (elements || []).some((element) => {
+    if (!element?.bbox) return false;
+    const height = boxHeight(element);
+    const width = boxWidth(element);
+    if (width < 4 || height > Math.max(1.2, FRACTION_BAR_HEIGHT_RATIO * ref)) return false;
+    const flat = element.kind === "path" || element.label === "other" || element.char === "" || element.char === "−" || element.char === "-";
+    if (!flat) return false;
+    const y = midY(element);
+    if (y <= y0 + 0.15 || y >= y1 - 0.15) return false;
+    return element.bbox[2] > x0 + 0.5 && element.bbox[0] < x1 - 0.5;
+  });
+}
+
+function hostEntry(entries, page, body, script) {
+  for (const entry of entries) {
+    const packed = currentUnits(page, entry);
+    const ids = new Set(packed.units.flatMap((unit) => unit.elementIds || []));
+    const owns = [body, script].some((glyph) => ids.has(glyph.id) || packed.units.some((unit) => unit.id && unit.id === glyph.unitId));
+    if (owns) return entry;
+  }
+  let best = entries[0];
+  let bestDist = Infinity;
+  const y = (midY(body) + midY(script)) / 2;
+  for (const entry of entries) {
+    const members = currentUnits(page, entry).units.flatMap((unit) => membersOf(page, unit)).filter((item) => item?.bbox);
+    if (!members.length) continue;
+    const dist = Math.min(...members.map((item) => Math.abs(midY(item) - y)));
+    if (dist < bestDist) {
+      best = entry;
+      bestDist = dist;
     }
   }
   return best;
 }
 
-function splitScriptPair(left, right, allowed) {
-  if (!left?.bbox || !right?.bbox) return null;
-  if (left.unitId && !allowed.has(left.unitId)) return null;
-  if (right.unitId && !allowed.has(right.unitId)) return null;
-  const leftAllowed = Boolean(left.unitId) && allowed.has(left.unitId);
-  const rightAllowed = Boolean(right.unitId) && allowed.has(right.unitId);
-  if (!leftAllowed && !rightAllowed) return null;
-  if (left.unitId && right.unitId && left.unitId === right.unitId) return null;
-  if (isSentencePeriod(right) || isSentencePeriod(left)) return null;
-  if (proseTextWords(left.char).length || proseTextWords(right.char).length) return null;
-  const taller = boxHeight(left) >= boxHeight(right) ? left : right;
-  if (taller.label === "text" && isPunctuationRun(taller)) return null;
-  const leftHeight = boxHeight(left);
-  const rightHeight = boxHeight(right);
-  if (!(leftHeight > 0) || !(rightHeight > 0)) return null;
-  const body = leftHeight >= rightHeight ? left : right;
-  const script = body === left ? right : left;
-  const bodyHeight = boxHeight(body);
+function nearestScriptBase(script, pool, elements, dropCaps) {
+  if (isAccentGlyph(script) || isControlGlyph(script) || hasNonBaseChar(script) || isSentencePeriod(script) || isWeakPunctuation(script)) return null;
+  if (isDelimiterGlyph(script)) return null;
+  if (proseTextWords(script.char).length) return null;
   const scriptHeight = boxHeight(script);
-  if (!(bodyHeight > 0)) return null;
-  if (scriptHeight > SPLIT_SCRIPT_HEIGHT_RATIO * bodyHeight) return null;
-  if (scriptCharCount(script) < 1 || scriptCharCount(script) > SPLIT_SCRIPT_MAX_CHARS) return null;
-  const offset = (midY(right) - midY(left)) / bodyHeight;
-  if (Math.abs(offset) < SPLIT_SCRIPT_CENTER_MIN || Math.abs(offset) > SPLIT_SCRIPT_CENTER_MAX) return null;
-  const gap = (right.bbox[0] - left.bbox[2]) / bodyHeight;
-  if (gap > SPLIT_SCRIPT_GAP_RATIO) return null;
-  return { left, right, body, script, offset, gap, bodyHeight, scriptHeight };
-}
-
-function auditSplitScripts(entries, page, findings) {
-  if (!page) return;
-  const allowed = new Set();
-  const entryForUnit = new Map();
-  for (const entry of entries) {
-    for (const unit of currentUnits(page, entry).units) {
-      allowed.add(unit.id);
-      if (!entryForUnit.has(unit.id)) entryForUnit.set(unit.id, entry);
+  if (!(scriptHeight > 0) || scriptCharCount(script) < 1 || scriptCharCount(script) > SPLIT_SCRIPT_MAX_CHARS) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (const body of pool) {
+    if (body === script || !isScriptBase(body, script) || dropCaps.has(body)) continue;
+    if (!((body.label === "text" && script.label === "formula") || (body.label === "formula" && script.label === "text"))) continue;
+    if (body.unitId && script.unitId && body.unitId === script.unitId) continue;
+    const bodyHeight = boxHeight(body);
+    if (!(bodyHeight > scriptHeight)) continue;
+    if (scriptHeight > SPLIT_SCRIPT_HEIGHT_RATIO * bodyHeight) continue;
+    const left = body.bbox[0] <= script.bbox[0] ? body : script;
+    const right = left === body ? script : body;
+    const gapPt = right.bbox[0] - left.bbox[2];
+    if (gapPt < -SPLIT_SCRIPT_OVERLAP_PT) continue;
+    const gap = gapPt / bodyHeight;
+    if (gap > SPLIT_SCRIPT_GAP_RATIO) continue;
+    const offset = (midY(right) - midY(left)) / bodyHeight;
+    if (Math.abs(offset) < SPLIT_SCRIPT_CENTER_MIN || Math.abs(offset) > SPLIT_SCRIPT_CENTER_MAX) continue;
+    if (fractionBarBetween(body, script, elements) || isFractionPiece(script, elements)) continue;
+    if (eclipsedByNearerGlyph(body, script, pool) || sameLetterCollision(body, script)) continue;
+    if (fullLetterBetween(body, script, pool)) continue;
+    if (crossedByFormulaUnit(body, script, pool)) continue;
+    if (scriptOnAnotherLine(script, body, pool)) continue;
+    const dist = Math.abs(gapPt);
+    if (dist < bestDist) {
+      best = { body, left, right, offset, gap, bodyHeight, scriptHeight };
+      bestDist = dist;
     }
   }
-  if (!allowed.size) return;
+  return best;
+}
+
+function auditSplitScripts(entries, page, findings, isHeldOut = () => false) {
+  if (!page || !entries?.length) return;
   const pool = (page.elements || []).filter((element) => {
+    if (isHeldOut(element)) return false;
     if (!isLetterGlyph(element) || !String(element.char || "").trim()) return false;
-    if (element.unitId && !allowed.has(element.unitId)) return false;
-    if (element.unitId && allowed.has(element.unitId)) return true;
-    return element.label === "text" && !element.unitId;
+    return true;
   });
   const seen = new Set();
-  for (const glyph of pool) {
-    const next = nearestSameLineRight(glyph, pool);
-    if (!next) continue;
-    const left = glyph.bbox[0] <= next.bbox[0] ? glyph : next;
-    const right = left === glyph ? next : glyph;
-    const key = [left.id, right.id].sort().join("|");
+  const dropCaps = new Set(pool.filter((element) => isDropCap(element, pool)));
+  for (const script of pool) {
+    const hit = nearestScriptBase(script, pool, page.elements || [], dropCaps);
+    if (!hit || isHeldOut(hit.body) || isHeldOut(script)) continue;
+    const key = `${hit.body.id}|${script.id}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const hit = splitScriptPair(left, right, allowed);
-    if (!hit) continue;
-    const entry = entryForUnit.get(hit.left.unitId) || entryForUnit.get(hit.right.unitId) || entries[0];
-    const hostId = [hit.left.unitId, hit.right.unitId].filter((id) => id && allowed.has(id));
+    const entry = hostEntry(entries, page, hit.body, script);
+    if (!entry) continue;
+    const hostId = [hit.body.unitId, script.unitId].filter(Boolean);
     const direction = hit.offset < 0 ? "右块更高" : "右块更低";
     const heightRatio = hit.scriptHeight / hit.bodyHeight;
     findings.push(finding(entry, "R11", {
       currentUnitId: hostId.join(","),
-      elements: [hit.body, hit.script],
-      suggestion: `疑似上下标被拆开。主体 \`${hit.body.id}\` 与上下标 \`${hit.script.id}\`，中心偏移 ${hit.offset.toFixed(3)} 主体字高（${direction}），上下标高度是主体的 ${heightRatio.toFixed(2)} 倍，水平间隙 ${hit.gap.toFixed(3)} 主体字高。框住两块按 m。`
+      elements: [hit.body, script],
+      suggestion: `疑似上下标被拆开。主体 \`${hit.body.id}\` 与上下标 \`${script.id}\`，中心偏移 ${hit.offset.toFixed(3)} 主体字高（${direction}），上下标高度是主体的 ${heightRatio.toFixed(2)} 倍，水平间隙 ${hit.gap.toFixed(3)} 主体字高。框住两块按 m。`
     }));
   }
+}
+
+// In-memory yes/no. A glyph is held out when a later entry lists it, or it
+// sits in a later entry's current unit that is not also a #1–#277 unit.
+// A shared unit keeps the early glyphs and drops only the later entry's own
+// elements. Callers must not print those entries.
+export function heldOutGlyphFilter(laterUnits, loadPage, earlyUnits = []) {
+  const elementIds = new Set();
+  const exclusiveUnitIds = new Set();
+  const earlyUnitIds = new Set();
+  for (const unit of earlyUnits || []) {
+    if (unit?.unitId) earlyUnitIds.add(unit.unitId);
+    if (!unit || typeof loadPage !== "function") continue;
+    const page = loadPage(unit.paperId, unit.page);
+    if (!page) continue;
+    const selected = selectionForReviewUnit(page.elements, unit.elementIds || [], unit.unitId || "");
+    for (const unitId of selected.unitIds || []) earlyUnitIds.add(unitId);
+  }
+  for (const unit of laterUnits || []) {
+    for (const id of unit?.elementIds || []) elementIds.add(id);
+    if (!unit || typeof loadPage !== "function") continue;
+    const page = loadPage(unit.paperId, unit.page);
+    if (!page) continue;
+    const selected = selectionForReviewUnit(page.elements, unit.elementIds || [], unit.unitId || "");
+    for (const unitId of selected.unitIds || []) {
+      if (earlyUnitIds.has(unitId)) continue;
+      exclusiveUnitIds.add(unitId);
+      const found = (page.units || []).find((item) => item.id === unitId);
+      for (const id of found?.elementIds || []) elementIds.add(id);
+      for (const element of page.elements || []) {
+        if (element?.unitId === unitId && element.id) elementIds.add(element.id);
+      }
+    }
+  }
+  return (element) => Boolean(element && (elementIds.has(element.id) || (element.unitId && exclusiveUnitIds.has(element.unitId))));
 }
 
 function dedupe(findings) {
@@ -1776,7 +1964,8 @@ function dedupe(findings) {
   });
 }
 
-export function auditReviewed({ queue, loadPage, confirmedKeys, limit } = {}) {
+export function auditReviewed({ queue, loadPage, confirmedKeys, limit, isHeldOut } = {}) {
+  const held = typeof isHeldOut === "function" ? isHeldOut : () => false;
   const window = selectAuditWindow(queue, confirmedKeys, limit);
   const findings = [];
   const info = [];
@@ -1788,7 +1977,7 @@ export function auditReviewed({ queue, loadPage, confirmedKeys, limit } = {}) {
   }
   for (const { page, entries } of byPage.values()) {
     for (const entry of entries) auditUnitRules(entry, page, findings);
-    auditPageRules(entries, page, findings, info);
+    auditPageRules(entries, page, findings, info, held);
   }
   const sorted = dedupe(findings).sort((a, b) => a.severity - b.severity || a.queueIndex - b.queueIndex || a.rule.localeCompare(b.rule));
   const counts = Object.fromEntries(RULES.map(([rule]) => [rule, sorted.filter((item) => item.rule === rule).length]));
@@ -1889,7 +2078,9 @@ export function loadAuditInputs(base = root) {
     return data;
   };
   const confirmed = new Set();
-  for (const unit of reviewSet.units || []) {
+  // Later queue entries stay out of this scan. Their pages are only opened
+  // to build the yes/no glyph filter.
+  for (const unit of (reviewSet.units || []).slice(0, 277)) {
     const reviewed = join(base, "labels/reviewed", unit.paperId, pageFile(unit.page));
     if (!existsSync(reviewed)) continue;
     const key = `${unit.paperId}:${unit.page}`;
@@ -1920,7 +2111,9 @@ function main() {
     return;
   }
   const inputs = loadAuditInputs(root);
-  const report = auditReviewed({ ...inputs, confirmedKeys: inputs.confirmed, limit: args.limit });
+  const queue = (inputs.queue || []).slice(0, 277);
+  const isHeldOut = heldOutGlyphFilter((inputs.queue || []).slice(277), inputs.loadPage, queue);
+  const report = auditReviewed({ ...inputs, queue, isHeldOut, confirmedKeys: inputs.confirmed, limit: args.limit });
   const markdown = renderMarkdown(report);
   if (!args.out) {
     process.stdout.write(markdown);

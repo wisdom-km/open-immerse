@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   auditReviewed,
   formulaProseWords,
+  heldOutGlyphFilter,
   parseAuditArgs,
   renderMarkdown,
   selectAuditWindow,
@@ -1292,37 +1293,207 @@ test("R11 ignores a full-height period at 0.353 and an English word", () => {
   assert.equal(clauseHits.length, 0);
 });
 
-test("N59 and N60 name a line-start ≡ left of the span, with reading-order ranges", () => {
-  const upper = [
-    formula("eA", "A", [40, 100, 50, 110], "uMerge"),
-    formula("eB", "B", [56, 100, 66, 110], "uMerge"),
-    formula("eN1", "(1)", [200, 100, 224, 110], "uMerge", { equationNumber: true })
+test("R11 does not pair across a line break at offsets -0.533 and -0.69", () => {
+  const units = [
+    { id: "uUp", type: "display", equationNumber: false, elementIds: ["eX", "e0"] },
+    { id: "uDown", type: "display", equationNumber: false, elementIds: ["eRad"] }
   ];
-  const equiv = formula("eEq", "≡", [20, 130, 28, 140], "uMerge", { font: "LMMathSymbols10-Regular" });
-  const lower = [
-    formula("eC", "C", [40, 130, 50, 140], "uMerge"),
-    formula("eD", "D", [56, 130, 66, 140], "uMerge"),
-    formula("eN2", "(2)", [200, 130, 224, 140], "uMerge", { equationNumber: true })
-  ];
-  const elements = [...upper, equiv, ...lower];
-  const report = run([entry("uMerge", elements.map((element) => element.id))], pageOf(elements, [{
-    id: "uMerge", type: "display", equationNumber: true, elementIds: elements.map((element) => element.id)
-  }]));
-  const hit = report.findings.find((item) => item.rule === "R2" && item.suggestion.includes("在跨度左侧"));
-  assert.ok(hit);
-  const expected = "行首 ≡（`eEq`）在跨度左侧。并入前，左边这一行单独占一行（元素 `eA`–`eN1`）。并入后，它并进紧接着的带编号单元 `uMerge`（元素 `eA`–`eN2`）。两行之间隔着的是别的单元，不是这个 ≡ 所在的单元。把多并进去的那一行按 s 拆出去。";
-  assert.equal(hit.suggestion, expected);
-  assert.equal(hit.suggestion.includes("中间隔着单元 `uMerge`"), false);
-  assert.equal(hit.elements.some((element) => element.id === "eEq"), true);
+  const upper = formula("eX", "x", [80, 90, 90, 100], "uUp");
+  const sub = formula("e0", "0", [88, 96.17, 94, 103.17], "uUp");
+  const radical = formula("eRad", "√", [78, 100, 90, 110], "uDown");
+  assert.equal(r11Of([upper, sub, radical], units, "uUp").length, 0);
 
-  // eA sits slightly lower, so its top edge is below eB. Sorting by top edge
-  // would start the range at eB. Reading order still starts at the left glyph.
-  const dropped = formula("eA", "A", [40, 104, 50, 114], "uMerge");
-  const n60 = [dropped, ...upper.slice(1), equiv, ...lower];
-  const droppedReport = run([entry("uMerge", n60.map((element) => element.id))], pageOf(n60, [{
-    id: "uMerge", type: "display", equationNumber: true, elementIds: n60.map((element) => element.id)
-  }]));
-  const n60Hit = droppedReport.findings.find((item) => item.rule === "R2" && item.suggestion.includes("在跨度左侧"));
-  assert.ok(n60Hit);
-  assert.equal(n60Hit.suggestion, expected);
+  const subFar = formula("e0", "0", [88, 94.6, 94, 101.6], "uUp");
+  const radicalFar = formula("eRad", "√", [78, 100, 90, 110], "uDown");
+  const upperFar = formula("eX", "x", [80, 88, 90, 98], "uUp");
+  assert.equal(r11Of([upperFar, subFar, radicalFar], units, "uUp").length, 0);
+});
+
+test("R11 does not pair a short glyph with the line above", () => {
+  const upper = formula("eUpper", "b", [44, 104.19, 54, 113.69], "uUp");
+  const side = formula("eSide", "i", [40, 110.7, 43, 117.3], "uDown");
+  const lower = formula("eLower", "a", [22, 114, 32, 123.5], "uDown");
+  const hits = r11Of([upper, side, lower], [
+    { id: "uUp", type: "display", equationNumber: false, elementIds: ["eUpper"] },
+    { id: "uDown", type: "display", equationNumber: false, elementIds: ["eSide", "eLower"] }
+  ], "uUp");
+  assert.equal(hits.length, 0);
+});
+
+test("R11 uses the base glyph instead of a following operator or bracket", () => {
+  const base = formula("eF", "F", [40, 100, 50, 110], "uBody");
+  const sub = glyph("eS", "S", [52, 104, 58, 111], { label: "text" });
+  const plus = glyph("ePlus", "+", [60, 100, 70, 110], { label: "text" });
+  const hits = r11Of([base, sub, plus], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eF"] }
+  ]);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eF`/);
+  assert.match(hits[0].suggestion, /上下标 `eS`/);
+  assert.equal(hits[0].elements.some((element) => element.id === "ePlus"), false);
+
+  const close = glyph("eClose", ")", [60, 100, 68, 110], { label: "text" });
+  const bracketHits = r11Of([base, sub, close], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eF"] }
+  ]);
+  assert.equal(bracketHits.length, 1);
+  assert.match(bracketHits[0].suggestion, /主体 `eF`/);
+  assert.equal(bracketHits[0].elements.some((element) => element.id === "eClose"), false);
+
+  const owned = formula("eS", "S", [52, 104, 58, 111], "uBody");
+  const hidden = r11Of([base, owned, plus], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eF", "eS"] }
+  ]);
+  assert.equal(hidden.length, 0);
+});
+
+test("R11 ignores a macron or tilde accent", () => {
+  const sub = formula("eT", "t", [52, 104, 58, 111], "uBody");
+  for (const [id, char] of [["eBar", "¯"], ["eTilde", "˜"]]) {
+    const accent = glyph(id, char, [40, 100, 50, 110], { label: "text" });
+    const hits = r11Of([accent, sub], [
+      { id: "uBody", type: "display", equationNumber: false, elementIds: ["eT"] }
+    ]);
+    assert.equal(hits.length, 0);
+  }
+});
+
+test("R11 does not pair across an intervening formula unit", () => {
+  const base = formula("eFar", "x", [40, 100, 50, 110], "uFar");
+  const mid = formula("eMid", "M", [47, 100, 55, 110], "uMid");
+  const script = glyph("eI", "i", [52.5, 104, 58.5, 111], { label: "text" });
+  const hits = r11Of([base, mid, script], [
+    { id: "uFar", type: "display", equationNumber: false, elementIds: ["eFar"] },
+    { id: "uMid", type: "display", equationNumber: false, elementIds: ["eMid"] }
+  ], "uFar");
+  assert.equal(hits.length, 0);
+});
+
+test("R11 ignores a numerator sitting on a fraction bar", () => {
+  const numerator = glyph("eNum", "n", [40, 96, 46, 102], { label: "text" });
+  const bar = glyph("eBar", "", [38, 103.6, 58, 104], { kind: "path", label: "other" });
+  const denominator = formula("eDen", "b", [47, 100, 57, 110], "uBody");
+  const hits = r11Of([numerator, bar, denominator], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eDen"] }
+  ]);
+  assert.equal(hits.length, 0);
+});
+
+test("R11 ignores a vulgar fraction, a leading asterisk, and a private-use bracket", () => {
+  const fraction = glyph("eFrac", "¼", [40, 100, 50, 110], { label: "text" });
+  const beside = formula("eO", "o", [52, 104, 58, 111], "uBody");
+  assert.equal(r11Of([fraction, beside], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eO"] }
+  ]).length, 0);
+
+  const star = glyph("eStarText", "*A,", [40, 100, 58, 110], { label: "text" });
+  const sub = formula("eT", "t", [60, 104, 66, 111], "uBody");
+  assert.equal(r11Of([star, sub], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eT"] }
+  ]).length, 0);
+
+  const bracket = formula("eBracket", "", [40, 100, 48, 112], "uBody");
+  const index = glyph("eI", "i", [50, 106, 54, 112], { label: "text" });
+  assert.equal(r11Of([bracket, index], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eBracket"] }
+  ]).length, 0);
+});
+
+test("R11 does not pair across a full-size letter on the same baseline", () => {
+  const base = glyph("eV", "v", [40, 100, 48, 110], { label: "text" });
+  const mid = formula("eJ", "j", [48.2, 100, 50.4, 110], "uMid");
+  const side = formula("eG", "G", [50.6, 104, 57, 111], "uMid");
+  const hits = r11Of([base, mid, side], [
+    { id: "uMid", type: "display", equationNumber: false, elementIds: ["eJ", "eG"] }
+  ], "uMid");
+  assert.equal(hits.length, 0);
+});
+
+test("R11 ignores a drop cap beside the rest of a prose word", () => {
+  const cap = formula("eN", "N", [40, 90, 70, 130], "uBody");
+  const rest = glyph("eWord", "onlinearity is common", [71, 100, 180, 110], { label: "text" });
+  const cite = glyph("eCite", "1,2", [72, 122, 84, 129], { label: "text" });
+  const hits = r11Of([cap, rest, cite], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eN"] }
+  ]);
+  assert.equal(hits.length, 0);
+});
+
+test("held-out filter drops a later element inside an early unit and keeps the early glyph", () => {
+  const early = formula("eEarly", "d", [40, 100, 50, 110], "uShared");
+  const mixed = formula("eLater", "z", [60, 100, 70, 110], "uShared");
+  const alone = formula("eAlone", "q", [80, 100, 90, 110], "uLater");
+  const page = pageOf([early, mixed, alone], [
+    { id: "uShared", type: "display", equationNumber: false, elementIds: ["eEarly", "eLater"] },
+    { id: "uLater", type: "display", equationNumber: false, elementIds: ["eAlone"] }
+  ]);
+  const filter = heldOutGlyphFilter(
+    [entry("uLaterEntry", ["eLater"])],
+    () => page,
+    [entry("uShared", ["eEarly"])]
+  );
+  assert.equal(filter(early), false);
+  assert.equal(filter(mixed), true);
+  assert.equal(filter(alone), false);
+
+  const exclusive = heldOutGlyphFilter(
+    [entry("uLater", ["eAlone"])],
+    () => page,
+    [entry("uShared", ["eEarly"])]
+  );
+  assert.equal(exclusive(alone), true);
+  assert.equal(exclusive(early), false);
+  assert.equal(exclusive(mixed), false);
+});
+
+test("R11 ignores a fraction numerator, an eclipsed body, a colliding letter, and a following function name", () => {
+  const base = formula("eZ", "Z", [40, 100, 50, 110], "uBody");
+  const numerator = glyph("eNum", "1", [36, 106, 39.2, 112], { label: "text" });
+  const denominator = glyph("eDen", "2", [36, 113, 39.2, 118], { label: "text" });
+  const bar = glyph("eBar", "", [36, 112.3, 39.2, 112.7], { kind: "path", label: "other" });
+  assert.equal(r11Of([base, numerator, denominator, bar], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eZ"] }
+  ]).length, 0);
+
+  const covered = glyph("eB", "b", [40, 100, 48, 110], { label: "text" });
+  const nabla = formula("eNabla", "∇", [39.6, 102, 48.2, 112], "uMid");
+  const index = formula("eI", "i", [48.2, 106, 52, 112], "uMid");
+  assert.equal(r11Of([covered, nabla, index], [
+    { id: "uMid", type: "display", equationNumber: false, elementIds: ["eNabla", "eI"] }
+  ], "uMid").length, 0);
+
+  const big = glyph("eBig", "N", [40, 100, 50, 110], { label: "text" });
+  const small = formula("eSmall", "N", [49.2, 98, 54, 106], "uBody");
+  assert.equal(r11Of([big, small], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eSmall"] }
+  ]).length, 0);
+
+  const name = glyph("eName", "ppcm", [48, 100, 70, 110], { label: "text" });
+  const mark = formula("eA", "a", [40, 104, 46, 111], "uBody");
+  assert.equal(r11Of([name, mark], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eA"] }
+  ]).length, 0);
+});
+
+test("R11 keeps a formula outside the queue unit and drops a held-out glyph", () => {
+  const queueGlyph = formula("eQ", "Q", [10, 100, 20, 110], "uQueue");
+  const base = formula("eD", "d", [40, 100, 50, 110], "uSide");
+  const sub = glyph("eJ", "j", [52, 104, 58, 111], { label: "text" });
+  const page = pageOf([queueGlyph, base, sub], [
+    { id: "uQueue", type: "display", equationNumber: false, elementIds: ["eQ"] },
+    { id: "uSide", type: "display", equationNumber: false, elementIds: ["eD"] }
+  ]);
+  const open = run([entry("uQueue", ["eQ"])], page);
+  const hits = open.findings.filter((item) => item.rule === "R11");
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eD`/);
+  assert.match(hits[0].suggestion, /上下标 `eJ`/);
+
+  const closed = auditReviewed({
+    queue: [entry("uQueue", ["eQ"])],
+    confirmedKeys: ["paper:2:uQueue"],
+    loadPage: () => page,
+    isHeldOut: (element) => element.id === "eD"
+  });
+  assert.equal(closed.findings.filter((item) => item.rule === "R11").length, 0);
 });
