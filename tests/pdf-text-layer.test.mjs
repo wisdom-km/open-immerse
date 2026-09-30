@@ -35,6 +35,182 @@ function unitViewport(width, height) {
   };
 }
 
+test("a text-face subscript list is one inline formula, and a baseline word still splits it", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("where ", 72, 400, 32, 10, { fontName: "MinionPro-Regular", fontRealName: "MinionPro-Regular" }),
+      pdfItem("A", 106, 400, 7, 10, { fontName: "MinionPro-It", fontRealName: "MinionPro-It" }),
+      pdfItem("C", 113, 396, 6, 7, { fontName: "MinionPro-It", fontRealName: "MinionPro-It" }),
+      pdfItem(", ", 120, 400, 4, 10, { fontName: "MinionPro-Regular", fontRealName: "MinionPro-Regular" }),
+      pdfItem("A", 126, 400, 7, 10, { fontName: "MinionPro-It", fontRealName: "MinionPro-It" }),
+      pdfItem("H", 133, 396, 7, 7, { fontName: "MinionPro-It", fontRealName: "MinionPro-It" }),
+      pdfItem(" are compartments.", 142, 400, 90, 10, { fontName: "MinionPro-Regular", fontRealName: "MinionPro-Regular" })
+    ],
+    viewport: unitViewport(612, 792),
+    page: 4
+  });
+  const sentence = page.blocks.find((block) => /where/.test(block.sourceText || block.text || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /where ⟦f\d+⟧ are compartments/);
+  assert.equal(sentence.placeholders?.length, 1);
+  const crop = page.blocks.find((block) => block.id === sentence.placeholders[0].blockId);
+  assert.equal(crop.label, "formula");
+  assert.equal(crop.display, false);
+
+  const split = textLayerToBlocks({
+    items: [
+      pdfItem("Parameters ", 72, 360, 60, 10),
+      pdfItem("τ", 134, 360, 6, 10),
+      pdfItem(" decay ", 142, 360, 36, 10),
+      pdfItem("for each connection.", 180, 360, 100, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 4
+  });
+  const prose = split.blocks.find((block) => /Parameters/.test(block.text || ""));
+  assert.ok(prose);
+  assert.match(prose.text, /τ decay/);
+  assert.equal(prose.placeholders?.length || 0, 0);
+});
+
+test("a tall title does not absorb the byline that follows it", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("Cohort studies", 72, 720, 180, 24),
+      pdfItem("Ada", 72, 690, 24, 11),
+      pdfItem("1,2", 98, 696, 16, 7),
+      pdfItem(" Lovelace", 118, 690, 64, 11),
+      pdfItem(" wrote the notes.", 184, 690, 80, 11)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 1
+  });
+  const text = page.blocks.filter((block) => block.label !== "formula").map((block) => block.text || "").join(" ");
+  assert.match(text, /Ada/);
+  assert.match(text, /Lovelace/);
+  assert.match(text, /wrote the notes/);
+});
+
+test("a split surname beside a tall line stays in the sentence", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("spatio-temporal convolutions", 72, 520, 200, 26),
+      pdfItem("T", 72, 500, 6, 10),
+      pdfItem("homas", 78, 500, 28, 10),
+      pdfItem(" ", 108, 500, 4, 10),
+      pdfItem("Reza", 72, 488, 22, 10),
+      pdfItem(" wrote the notes.", 114, 500, 80, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 1
+  });
+  const text = page.blocks.filter((block) => block.label !== "formula").map((block) => block.text || "").join(" ");
+  assert.match(text, /homas/);
+  assert.match(text, /Reza/);
+  assert.match(text, /wrote the notes/);
+  assert.equal(page.blocks.some((block) => block.label === "formula"), false);
+});
+
+test("a later subscript does not swallow the prose after an earlier operator", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("(", 40, 400, 4, 10),
+      pdfItem("=", 46, 400, 6, 10),
+      pdfItem("1,", 54, 400, 10, 10),
+      pdfItem(",", 76, 400, 3, 10),
+      pdfItem("N", 82, 400, 8, 10),
+      pdfItem(")", 92, 400, 4, 10),
+      pdfItem(" from the ", 98, 400, 40, 10),
+      pdfItem("ordinary words. The ", 140, 400, 70, 10),
+      pdfItem("N", 212, 400, 8, 10),
+      pdfItem("B", 220, 396, 6, 7),
+      pdfItem(" bootstrap samples.", 228, 400, 90, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 3
+  });
+  const sentence = page.blocks.find((block) => /bootstrap/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /from the/);
+  assert.match(sentence.text, /ordinary words/);
+  assert.match(sentence.text, /⟦f\d+⟧ bootstrap samples/);
+});
+
+test("a subscript identifier does not absorb the equation citation after it", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("The coefficients ", 72, 400, 70, 10),
+      pdfItem("a", 144, 400, 6, 10),
+      pdfItem("jk", 150, 396, 8, 6),
+      pdfItem(" in Eq. (5). For convenience.", 160, 400, 120, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 5
+  });
+  const sentence = page.blocks.find((block) => /coefficients/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /in Eq\. \(5\)/);
+  assert.match(sentence.text, /For convenience/);
+});
+
+test("an inflated em box does not pull a digit from the next line", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("N", 40, 700, 20, 40),
+      pdfItem("sciences", 40, 690, 36, 9),
+      pdfItem("3", 70, 640, 6, 8),
+      pdfItem(" departments published it.", 78, 688, 110, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 2
+  });
+  const sentence = page.blocks.find((block) => /departments/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /departments published/);
+  assert.match(sentence.text, /\b3\b/);
+  assert.doesNotMatch(sentence.text, /sciences/);
+});
+
+test("a subscript symbol keeps the following unit and the measured value", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("Neuron ", 72, 400, 40, 10),
+      pdfItem("V", 114, 400, 7, 10),
+      pdfItem("reset", 121, 396, 18, 6),
+      pdfItem("(mV)", 142, 400, 22, 10),
+      pdfItem(" 11", 170, 400, 16, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 7
+  });
+  const sentence = page.blocks.find((block) => /Neuron/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /\(mV\)/);
+  assert.match(sentence.text, /11/);
+  assert.doesNotMatch(sentence.text, /reset/);
+});
+
+test("a lowered multi-letter tail stays on the Greek base", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("Parameters ", 72, 400, 60, 10),
+      pdfItem("τ", 134, 400, 6, 10),
+      pdfItem("decay", 141, 396, 22, 6),
+      pdfItem(", ", 164, 400, 4, 10),
+      pdfItem("τ", 170, 400, 6, 10),
+      pdfItem("rise", 177, 396, 16, 6),
+      pdfItem(" for each.", 196, 400, 50, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 8
+  });
+  const sentence = page.blocks.find((block) => /Parameters/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /Parameters ⟦f\d+⟧ for each/);
+  assert.doesNotMatch(sentence.text, /decay|rise/);
+  assert.equal(sentence.placeholders.length, 1);
+});
+
 test("a tiny math-font glyph stays in the trusted text instead of making a fragment crop", () => {
   const page = textLayerToBlocks({
     items: [
