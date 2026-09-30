@@ -16,7 +16,7 @@
  * The queue, navigation, and page marks stay inside the manifest.
  * Each saved item is out-dir/<N>.json. labels/reviewed/ is not read or written.
  */
-import { createReadStream as openReadStream, existsSync as pathExists, mkdirSync as makeDir, readFileSync as readFile, realpathSync as realPath, statSync as pathStat, writeFileSync as writeFile } from "node:fs";
+import { createReadStream as openReadStream, existsSync as pathExists, lstatSync as pathLstat, mkdirSync as makeDir, readFileSync as readFile, realpathSync as realPath, statSync as pathStat, writeFileSync as writeFile } from "node:fs";
 import { createServer } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -76,6 +76,11 @@ function tracedWrite(path, data) {
 function tracedRealpath(path) {
   notePath(path);
   return realPath(path);
+}
+
+function tracedLstat(path) {
+  notePath(path);
+  return pathLstat(path);
 }
 
 function tracedStream(path) {
@@ -264,7 +269,6 @@ function readBody(request) {
   });
 }
 
-const REVIEW_PAGE_PREFIX = "/tools/label-review/";
 const REVIEW_RUNTIME = {
   "/tools/label-review/runtime/label-schema.js": join(root, "lib/label-schema.js"),
   "/tools/label-review/runtime/sha256.js": join(root, "lib/sha256.js"),
@@ -293,13 +297,39 @@ function staticPath(base, urlPath) {
   return full;
 }
 
-function manifestStaticTarget(base, urlPath) {
+const REVIEW_FRONTEND = new Set([
+  "/tools/label-review/index.html",
+  "/tools/label-review/review.js",
+  "/tools/label-review/review.css"
+]);
+
+function fileInsideDir(file, dir) {
+  try {
+    const listed = tracedLstat(file);
+    if (!listed.isFile() && !listed.isSymbolicLink()) return "";
+    const realFile = tracedRealpath(file);
+    const realDir = tracedRealpath(dir);
+    if (!pathIsInside(realDir, realFile)) return "";
+    if (!tracedStat(realFile).isFile()) return "";
+    return realFile;
+  } catch {
+    return "";
+  }
+}
+
+function runtimeStaticTarget(urlPath) {
   const decoded = requestPath(urlPath);
-  if (!decoded.startsWith(REVIEW_PAGE_PREFIX)) return "";
-  const rest = decoded.slice(REVIEW_PAGE_PREFIX.length);
-  if (!rest || rest.endsWith("/")) return "";
-  if (Object.prototype.hasOwnProperty.call(REVIEW_RUNTIME, decoded)) return REVIEW_RUNTIME[decoded];
-  return staticPath(base, decoded);
+  const expected = Object.prototype.hasOwnProperty.call(REVIEW_RUNTIME, decoded) ? REVIEW_RUNTIME[decoded] : "";
+  if (!expected) return "";
+  return fileInsideDir(expected, dirname(expected));
+}
+
+function manifestFrontendTarget(base, urlPath) {
+  const decoded = requestPath(urlPath);
+  if (!REVIEW_FRONTEND.has(decoded)) return "";
+  const full = staticPath(base, decoded);
+  if (!full) return "";
+  return fileInsideDir(full, join(base, "tools/label-review"));
 }
 
 function sendStatic(response, file) {
@@ -467,23 +497,72 @@ export function createReviewServer({ pdfDir, root: baseOverride, manifestIndexes
     };
   }
 
+  function readManifestRecord(queueIndex) {
+    const file = join(outDir, `${queueIndex}.json`);
+    if (!tracedExists(file)) return null;
+    try {
+      return readJson(file);
+    } catch {
+      return null;
+    }
+  }
+
+  function writeManifestRecord(queueIndex, annotation, writtenAt) {
+    const record = { queueIndex, writtenAt, annotation };
+    tracedMkdir(outDir, { recursive: true });
+    tracedWrite(join(outDir, `${queueIndex}.json`), `${JSON.stringify(record, null, 2)}\n`);
+  }
+
+  function markAbsorbedUnits(unit, elementIds, writtenAt) {
+    const claimed = new Set(elementIds.map(String));
+    for (const other of manifestUnits()) {
+      if (other.queueIndex === unit.queueIndex) continue;
+      if (other.paperId !== unit.paperId || Number(other.page) !== Number(unit.page)) continue;
+      const saved = readManifestRecord(other.queueIndex);
+      const owned = new Set((other.elementIds || []).map(String));
+      for (const id of saved?.annotation?.elementIds || []) owned.add(String(id));
+      for (const element of saved?.annotation?.elements || []) {
+        if (element?.id) owned.add(String(element.id));
+      }
+      if (![...owned].some((id) => claimed.has(id))) continue;
+      writeManifestRecord(other.queueIndex, {
+        paperId: other.paperId,
+        page: other.page,
+        unitId: other.unitId,
+        type: other.type,
+        equationNumber: other.equationNumber === true,
+        elementIds: [],
+        elements: [],
+        reviewed: saved?.annotation?.reviewed === true,
+        mergedInto: unit.queueIndex
+      }, writtenAt);
+    }
+  }
+
   function overlayManifestPage(prelabel, paperId, page) {
     const pageData = structuredClone(prelabel);
     const byId = new Map((pageData.elements || []).map((element) => [element.id, element]));
     const reviewedIds = [];
     let applied = false;
+    const records = [];
     for (const unit of manifestUnits()) {
       if (unit.paperId !== paperId || Number(unit.page) !== Number(page)) continue;
-      const file = join(outDir, `${unit.queueIndex}.json`);
-      if (!tracedExists(file)) continue;
-      let saved;
-      try {
-        saved = readJson(file);
-      } catch {
-        continue;
-      }
-      applied = true;
+      const saved = readManifestRecord(unit.queueIndex);
+      if (!saved) continue;
+      records.push({ unit, saved, writtenAt: String(saved.writtenAt || "") });
+    }
+    records.sort((a, b) => {
+      const time = a.writtenAt.localeCompare(b.writtenAt);
+      if (time !== 0) return time;
+      const aLive = a.saved?.annotation?.mergedInto == null ? 1 : 0;
+      const bLive = b.saved?.annotation?.mergedInto == null ? 1 : 0;
+      return aLive - bLive;
+    });
+    for (const { unit, saved } of records) {
       const annotation = saved.annotation || {};
+      if (annotation.reviewed === true && unit.unitId) reviewedIds.push(unit.unitId);
+      if (annotation.mergedInto != null) continue;
+      applied = true;
       for (const element of annotation.elements || []) {
         const target = element?.id ? byId.get(element.id) : null;
         if (!target) continue;
@@ -491,7 +570,6 @@ export function createReviewServer({ pdfDir, root: baseOverride, manifestIndexes
           if (Object.prototype.hasOwnProperty.call(element, field)) target[field] = element[field];
         }
       }
-      if (annotation.reviewed === true && unit.unitId) reviewedIds.push(unit.unitId);
     }
     if (reviewedIds.length) pageData.reviewedUnitIds = reviewedIds;
     return { page: pageData, applied };
@@ -503,16 +581,11 @@ export function createReviewServer({ pdfDir, root: baseOverride, manifestIndexes
     const savedIds = new Set();
     for (const unit of onPage) {
       for (const id of unit.elementIds || []) seeds.add(String(id));
-      const file = join(outDir, `${unit.queueIndex}.json`);
-      if (!tracedExists(file)) continue;
-      try {
-        const saved = readJson(file);
-        for (const id of saved?.annotation?.elementIds || []) savedIds.add(String(id));
-        for (const element of saved?.annotation?.elements || []) {
-          if (element?.id) savedIds.add(String(element.id));
-        }
-      } catch {
-        continue;
+      const saved = readManifestRecord(unit.queueIndex);
+      if (!saved || saved.annotation?.mergedInto != null) continue;
+      for (const id of saved.annotation?.elementIds || []) savedIds.add(String(id));
+      for (const element of saved.annotation?.elements || []) {
+        if (element?.id) savedIds.add(String(element.id));
       }
     }
     const live = new Set();
@@ -691,8 +764,8 @@ export function createReviewServer({ pdfDir, root: baseOverride, manifestIndexes
           reviewed: body?.reviewed === true
         }
       };
-      tracedMkdir(outDir, { recursive: true });
-      tracedWrite(join(outDir, `${n}.json`), `${JSON.stringify(record, null, 2)}\n`);
+      writeManifestRecord(n, record.annotation, record.writtenAt);
+      markAbsorbedUnits(unit, elementIds, record.writtenAt);
       send(response, 200, JSON.stringify({ ok: true }));
       return;
     }
@@ -815,7 +888,12 @@ export function createReviewServer({ pdfDir, root: baseOverride, manifestIndexes
       send(response, 200, `<!DOCTYPE html><meta charset="utf-8"><title>接触图</title><style>body{font-family:sans-serif}img{max-width:100%;background:white}figure{margin:12px 0}</style><h1>${paperId} 第 ${page} 页</h1><p>从左到右：页面轮廓、基线 SVG、差异（红 = 页面有而 SVG 没有，蓝 = SVG 多出来的）。</p>${items}`, "text/html; charset=utf-8");
       return;
     }
-    const file = manifestMode ? manifestStaticTarget(base, url.pathname) : staticPath(base, url.pathname);
+    const runtimeFile = runtimeStaticTarget(url.pathname);
+    if (runtimeFile) {
+      sendStatic(response, runtimeFile);
+      return;
+    }
+    const file = manifestMode ? manifestFrontendTarget(base, url.pathname) : staticPath(base, url.pathname);
     sendStatic(response, file);
   } catch (error) {
     send(response, 500, JSON.stringify({ error: error.message || String(error) }));
