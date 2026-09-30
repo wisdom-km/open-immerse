@@ -456,7 +456,11 @@ test("the review page and the label docs describe manifest mode", () => {
   assert.match(docs, /不要把清单文件和 out-dir 提交进仓库/);
   assert.match(docs, /会自动创建/);
   assert.match(docs, /未保存/);
+  assert.match(docs, /计分时 mergedInto 条目按「与主条目同一公式」处理/);
+  assert.match(docs, /编号最小/);
+  assert.match(docs, /"mergedInto": 12/);
   assert.match(todo, /标注用复核工具的清单模式，结果写到仓库外目录，不进 labels\/reviewed。/);
+  assert.match(todo, /复核工具默认模式仍把整个仓库当静态文件提供（只监听本机，沿用原行为）；标 held-out 必须用清单模式。/);
   const html = readFileSync(new URL("../tools/label-review/index.html", import.meta.url), "utf8");
   assert.match(html, /默认按复核集往下走/);
   assert.equal(html.includes("约 1000"), false);

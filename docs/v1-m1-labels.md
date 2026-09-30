@@ -249,6 +249,37 @@ $env:PORT=4174; node scripts/label-review.mjs --manifest D:\review\batch.txt --o
 - `n` / `p` 打开下一页或上一页上的清单条目。那一页没有清单条目时，继续转到还有条目的页。没有真正写盘的改动会显示「未保存」。
 - 写入只落在 `--out-dir`，每个条目一个文件，例如 `D:\review\out\12.json`，里面是这一条的标注和写入时间。不会读、也不会改 `labels/reviewed/`。
 
+`out-dir/<N>.json` 的记录是：
+
+```json
+{
+  "queueIndex": 12,
+  "writtenAt": "2026-09-30T00:00:00.000Z",
+  "annotation": {
+    "paperId": "论文 id",
+    "page": 1,
+    "unitId": "队列里原来的 unitId",
+    "type": "display",
+    "equationNumber": false,
+    "elementIds": ["元素 id"],
+    "elements": [
+      {
+        "id": "元素 id",
+        "label": "formula",
+        "confidence": 1,
+        "rule": "human",
+        "unitId": "当前公式的 unitId",
+        "unitType": "display",
+        "equationNumber": false
+      }
+    ],
+    "reviewed": true
+  }
+}
+```
+
+同一页上几条清单条目合成一条公式时，主条目固定为其中编号最小的那一条，不随最后是谁保存而换成另一条。主条目的 `elementIds` 和 `elements` 记下合并后的全部成员，没有 `mergedInto`。其余条目写成 `elementIds: []`、`elements: []`、`reviewed: true`，并带 `mergedInto`，值是主条目的编号。例如 #12 和 #40 合并后，主条目是 #12，`40.json` 里是 `"mergedInto": 12`。主条目保存时，被并入的条目一并记为 `reviewed: true`，按 `u` 不会再跳到它们。已经拆开的条目会清掉 `mergedInto`，并写回它自己的成员。计分时 mergedInto 条目按「与主条目同一公式」处理。
+
 接触图（左：页面轮廓，中：基线 SVG，右：差异。红色是页面有而 SVG 没有）：
 
 ```
