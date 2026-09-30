@@ -715,7 +715,8 @@ test("auditing prelabel pages as the reviewed draft does not throw", () => {
   assert.match(docs, /按序号汇总/);
   assert.match(docs, /跳到 #/);
   assert.match(docs, /## 复核完成状态/);
-  assert.match(docs, /860eadb/);
+  assert.match(docs, /7e10df3/);
+  assert.doesNotMatch(docs, /860eadb/);
   assert.match(docs, /#1/);
 });
 
