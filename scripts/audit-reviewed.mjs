@@ -9,10 +9,9 @@
  * labels/prelabel. A missing reviewed page falls back to the prelabel
  * so a skipped unit can still be checked.
  *
- * Default window: every queue unit up to and including the last one
- * whose original unit id is in that page's reviewedUnitIds. --limit N
- * checks the first N queue units instead. N above 277 exits with an
- * error; the queue is not silently truncated.
+ * Default window: the first 277 queue units, stopping at the last
+ * confirmed one inside that prefix. --limit N checks the first N of
+ * those units. N above 277 is an error. --mode defaults to reviewed.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -78,11 +77,11 @@ const SPLIT_SCRIPT_MAX_CHARS = 3;
 // subscript on the line above. 1pt is the same slop as the other touching
 // checks in this file, not a refit of the center band.
 const SPLIT_SCRIPT_OVERLAP_PT = 1;
-// The reviewed queue is #1–#277. A larger --limit is an error, not a clip.
+// The reviewed queue is #1–#277. A larger --limit is an error.
 const AUDIT_REVIEW_LIMIT = 277;
-// A glyph is adjacent to a queue unit when the gap between the two boxes
-// is at most this many body heights.
-const SPLIT_SCRIPT_UNIT_GAP = 0.5;
+// Two baselines this close, in body heights, are the same reading.
+// The pair is ambiguous and is not reported.
+const SPLIT_SCRIPT_BASELINE_TIE = 0.05;
 
 // Each side of a cross-line report needs several glyphs, so one stray
 // subscript does not look like a second display line.
@@ -1295,7 +1294,7 @@ function splitWrappedPredecessor(page, lower, units, height) {
   return best;
 }
 
-function auditPageRules(entries, page, findings, info, isHeldOut = () => false) {
+function auditPageRules(entries, page, findings, info, isHeldOut, mode) {
   if (!page) return;
   const elements = page.elements || [];
   const elementById = new Map(elements.map((element) => [element.id, element]));
@@ -1586,7 +1585,7 @@ function auditPageRules(entries, page, findings, info, isHeldOut = () => false) 
       suggestion: "同一行两个公式单元紧贴，或中间只隔运算符、括号。它们多半该是一个单元。框住后按 m。"
     }));
   }
-  auditSplitScripts(entries, page, findings, isHeldOut);
+  auditSplitScripts(entries, page, findings, isHeldOut, mode);
 }
 
 function scriptCharCount(element) {
@@ -1980,31 +1979,31 @@ function attachScript(script, pool, dropCaps, elements) {
   // the search. Do not skip it for a farther glyph or one on the right.
   if (!canBeBody(nearest, script) || dropCaps.has(nearest)) return null;
   const nearHit = tryPair(nearest, script, pool, elements, dropCaps);
-  // A superscript of this line can sit closer to the previous baseline.
-  // Keep this line when the nearer glyph reads as a subscript of that line.
-  if (nearHit && nearHit.offset > 0) {
-    const lower = lefts.find((glyph) => glyph !== nearest && midY(glyph) > midY(nearest));
-    const lowerHit = lower && tryPair(lower, script, pool, elements, dropCaps);
-    if (
-      lowerHit && lowerHit.offset < 0
-      && Math.abs(midY(script) - midY(nearest)) < Math.abs(midY(script) - midY(lower))
-    ) return lowerHit;
-  }
+  if (!nearHit) return null;
+  // The other line is below when this glyph reads as its subscript, and
+  // above when it reads as its superscript. Both directions use the same rule.
+  const other = lefts.find((glyph) => glyph !== nearest && (nearHit.offset > 0 ? midY(glyph) > midY(nearest) : midY(glyph) < midY(nearest)));
+  const otherHit = other && tryPair(other, script, pool, elements, dropCaps);
+  if (!otherHit) return nearHit;
+  const opposite = nearHit.offset > 0 ? otherHit.offset < 0 : otherHit.offset > 0;
+  if (!opposite) return nearHit;
+  const nearDy = Math.abs(midY(script) - midY(nearest));
+  const otherDy = Math.abs(midY(script) - midY(other));
+  if (Math.abs(nearDy - otherDy) <= SPLIT_SCRIPT_BASELINE_TIE * nearHit.bodyHeight) return null;
+  if (nearDy < otherDy) return otherHit;
   return nearHit;
 }
 
-function boundsOfEntry(page, entry) {
+function boundsOfEntry(page, entry, isHeldOut) {
   const packed = currentUnits(page, entry);
-  const members = packed.units.flatMap((unit) => membersOf(page, unit)).filter((item) => item?.bbox && item.bbox.length >= 4);
+  const members = packed.units
+    .flatMap((unit) => membersOf(page, unit))
+    .filter((item) => item?.bbox && item.bbox.length >= 4 && !isHeldOut(item));
   if (!members.length) return null;
   return {
     entry,
-    x0: Math.min(...members.map((item) => Number(item.bbox[0]))),
-    y0: Math.min(...members.map((item) => Number(item.bbox[1]))),
-    x1: Math.max(...members.map((item) => Number(item.bbox[2]))),
-    y1: Math.max(...members.map((item) => Number(item.bbox[3]))),
-    ids: new Set(members.map((item) => item.id)),
-    unitIds: new Set(packed.units.map((unit) => unit.id).filter(Boolean))
+    members,
+    ids: new Set(members.map((item) => item.id))
   };
 }
 
@@ -2014,26 +2013,52 @@ function rectGap(bbox, box) {
   return Math.hypot(dx, dy);
 }
 
-function attachEntry(hosts, glyphs, bodyHeight) {
-  let best = null;
-  let bestRank = 2;
-  for (const host of hosts) {
-    let rank = 2;
-    for (const glyph of glyphs) {
-      if (!glyph?.bbox) continue;
-      const inside = host.ids.has(glyph.id) || (glyph.unitId && host.unitIds.has(glyph.unitId));
-      if (inside) rank = 0;
-      else if (rank > 1 && bodyHeight > 0 && rectGap(glyph.bbox, host) <= SPLIT_SCRIPT_UNIT_GAP * bodyHeight) rank = 1;
-    }
-    if (rank < bestRank) {
-      best = host;
-      bestRank = rank;
-    }
-  }
-  return bestRank <= 1 ? best : null;
+function memberBox(member) {
+  return { x0: Number(member.bbox[0]), y0: Number(member.bbox[1]), x1: Number(member.bbox[2]), y1: Number(member.bbox[3]) };
 }
 
-function auditSplitScripts(entries, page, findings, isHeldOut = () => false) {
+// Reviewed mode: a pair counts only when one glyph is a member element.
+// The union box of those members is not a host.
+function attachReviewed(hosts, glyphs) {
+  let best = null;
+  for (const host of hosts) {
+    if (!glyphs.some((glyph) => glyph?.id && host.ids.has(glyph.id))) continue;
+    if (!best || host.entry.queueIndex < best.entry.queueIndex) best = host;
+  }
+  return best ? { host: best, distance: 0 } : null;
+}
+
+// Prelabel mode: no scope cutoff. Hang the pair on the queue entry whose
+// member element is closest, by box gap, and keep that distance.
+function attachPrelabel(hosts, glyphs, bodyHeight) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const host of hosts) {
+    let dist = Infinity;
+    for (const glyph of glyphs) {
+      if (!glyph?.bbox) continue;
+      if (host.ids.has(glyph.id)) dist = 0;
+      for (const member of host.members) {
+        if (member.id === glyph.id) {
+          dist = 0;
+          continue;
+        }
+        const gap = rectGap(glyph.bbox, memberBox(member)) / bodyHeight;
+        if (gap < dist) dist = gap;
+      }
+    }
+    const closer = dist < bestDist - 1e-9;
+    const tie = Math.abs(dist - bestDist) <= 1e-9 && best && host.entry.queueIndex < best.entry.queueIndex;
+    if (closer || tie) {
+      best = host;
+      bestDist = dist;
+    }
+  }
+  if (!best || !Number.isFinite(bestDist)) return null;
+  return { host: best, distance: bestDist };
+}
+
+function auditSplitScripts(entries, page, findings, isHeldOut, mode) {
   if (!page || !entries?.length) return;
   const pool = (page.elements || []).filter((element) => {
     if (isHeldOut(element)) return false;
@@ -2041,7 +2066,7 @@ function auditSplitScripts(entries, page, findings, isHeldOut = () => false) {
     return true;
   });
   const dropCaps = new Set(pool.filter((element) => isDropCap(element, pool)));
-  const hosts = entries.map((entry) => boundsOfEntry(page, entry)).filter(Boolean);
+  const hosts = entries.map((entry) => boundsOfEntry(page, entry, isHeldOut)).filter(Boolean);
   const seen = new Set();
   const elements = page.elements || [];
   for (const script of pool) {
@@ -2052,17 +2077,20 @@ function auditSplitScripts(entries, page, findings, isHeldOut = () => false) {
     if (shown.some((glyph) => isHeldOut(glyph))) continue;
     const key = `${hit.body.id}|${script.id}`;
     if (seen.has(key)) continue;
-    const host = attachEntry(hosts, shown, hit.bodyHeight);
-    if (!host) continue;
+    const attached = mode === "prelabel"
+      ? attachPrelabel(hosts, shown, hit.bodyHeight)
+      : attachReviewed(hosts, shown);
+    if (!attached) continue;
     seen.add(key);
     const hostIds = [...new Set(shown.map((glyph) => glyph.unitId).filter(Boolean))];
     const direction = hit.offset < 0 ? "右块更高" : "右块更低";
     const heightRatio = hit.scriptHeight / hit.bodyHeight;
     const bodyName = hit.group ? `${hit.group[0].id}\`…\`${hit.body.id}` : hit.body.id;
-    findings.push(finding(host.entry, "R11", {
+    const distance = mode === "prelabel" ? `距所挂条目 ${attached.distance.toFixed(3)} 主体字高。` : "";
+    findings.push(finding(attached.host.entry, "R11", {
       currentUnitId: hostIds.join(","),
       elements: shown,
-      suggestion: `疑似上下标被拆开。主体 \`${bodyName}\` 与上下标 \`${script.id}\`，中心偏移 ${hit.offset.toFixed(3)} 主体字高（${direction}），上下标高度是主体的 ${heightRatio.toFixed(2)} 倍，水平间隙 ${hit.gap.toFixed(3)} 主体字高。框住两块按 m。`
+      suggestion: `疑似上下标被拆开。主体 \`${bodyName}\` 与上下标 \`${script.id}\`，中心偏移 ${hit.offset.toFixed(3)} 主体字高（${direction}），上下标高度是主体的 ${heightRatio.toFixed(2)} 倍，水平间隙 ${hit.gap.toFixed(3)} 主体字高。框住两块按 m。${distance}`
     }));
   }
 }
@@ -2071,22 +2099,29 @@ function auditSplitScripts(entries, page, findings, isHeldOut = () => false) {
 // sits in a later entry's current unit that is not also a #1–#277 unit.
 // A shared unit keeps the early glyphs and drops only the later entry's own
 // elements. Callers must not print those entries.
+function loadPageQuiet(loadPage, unit) {
+  if (!unit || typeof loadPage !== "function") return null;
+  try {
+    return loadPage(unit.paperId, unit.page) || null;
+  } catch {
+    return null;
+  }
+}
+
 export function heldOutGlyphFilter(laterUnits, loadPage, earlyUnits = []) {
   const elementIds = new Set();
   const exclusiveUnitIds = new Set();
   const earlyUnitIds = new Set();
   for (const unit of earlyUnits || []) {
     if (unit?.unitId) earlyUnitIds.add(unit.unitId);
-    if (!unit || typeof loadPage !== "function") continue;
-    const page = loadPage(unit.paperId, unit.page);
+    const page = loadPageQuiet(loadPage, unit);
     if (!page) continue;
     const selected = selectionForReviewUnit(page.elements, unit.elementIds || [], unit.unitId || "");
     for (const unitId of selected.unitIds || []) earlyUnitIds.add(unitId);
   }
   for (const unit of laterUnits || []) {
     for (const id of unit?.elementIds || []) elementIds.add(id);
-    if (!unit || typeof loadPage !== "function") continue;
-    const page = loadPage(unit.paperId, unit.page);
+    const page = loadPageQuiet(loadPage, unit);
     if (!page) continue;
     const selected = selectionForReviewUnit(page.elements, unit.elementIds || [], unit.unitId || "");
     for (const unitId of selected.unitIds || []) {
@@ -2113,20 +2148,32 @@ function dedupe(findings) {
   });
 }
 
-export function auditReviewed({ queue, loadPage, confirmedKeys, limit, isHeldOut } = {}) {
-  const held = typeof isHeldOut === "function" ? isHeldOut : () => false;
+export function auditReviewed({ queue, loadPage, confirmedKeys, limit, isHeldOut, mode } = {}) {
+  if (typeof isHeldOut !== "function") throw new Error("isHeldOut 是必填参数");
+  const auditMode = mode || "reviewed";
+  if (auditMode !== "reviewed" && auditMode !== "prelabel") throw new Error("--mode 只能是 reviewed 或 prelabel");
   const window = selectAuditWindow(queue, confirmedKeys, limit);
   const findings = [];
   const info = [];
   const byPage = new Map();
   for (const entry of window) {
     const key = `${entry.unit.paperId}:${entry.unit.page}`;
-    if (!byPage.has(key)) byPage.set(key, { page: loadPage ? loadPage(entry.unit.paperId, entry.unit.page) : null, entries: [] });
+    if (!byPage.has(key)) {
+      let page = null;
+      if (loadPage) {
+        try {
+          page = loadPage(entry.unit.paperId, entry.unit.page);
+        } catch {
+          page = null;
+        }
+      }
+      byPage.set(key, { page, entries: [] });
+    }
     byPage.get(key).entries.push(entry);
   }
   for (const { page, entries } of byPage.values()) {
     for (const entry of entries) auditUnitRules(entry, page, findings);
-    auditPageRules(entries, page, findings, info, held);
+    auditPageRules(entries, page, findings, info, isHeldOut, auditMode);
   }
   const sorted = dedupe(findings).sort((a, b) => a.severity - b.severity || a.queueIndex - b.queueIndex || a.rule.localeCompare(b.rule));
   const counts = Object.fromEntries(RULES.map(([rule]) => [rule, sorted.filter((item) => item.rule === rule).length]));
@@ -2209,7 +2256,7 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-export function loadAuditInputs(base = root) {
+export function loadAuditInputs(base = root, { source = "reviewed" } = {}) {
   const reviewPath = join(base, "labels/review-set.json");
   if (!existsSync(reviewPath)) {
     throw new Error("还没有 labels/review-set.json。先运行 node scripts/review-set.mjs");
@@ -2217,25 +2264,35 @@ export function loadAuditInputs(base = root) {
   const reviewSet = readJson(reviewPath);
   const cache = new Map();
   const loadPage = (paperId, page) => {
-    const key = `${paperId}:${page}`;
+    const key = `${source}:${paperId}:${page}`;
     if (cache.has(key)) return cache.get(key);
-    const reviewed = join(base, "labels/reviewed", paperId, pageFile(page));
-    const prelabel = join(base, "labels/prelabel", paperId, pageFile(page));
-    const path = existsSync(reviewed) ? reviewed : (existsSync(prelabel) ? prelabel : "");
-    const data = path ? readJson(path) : null;
-    cache.set(key, data);
-    return data;
+    try {
+      const reviewed = join(base, "labels/reviewed", paperId, pageFile(page));
+      const prelabel = join(base, "labels/prelabel", paperId, pageFile(page));
+      const path = source === "prelabel"
+        ? (existsSync(prelabel) ? prelabel : "")
+        : (existsSync(reviewed) ? reviewed : (existsSync(prelabel) ? prelabel : ""));
+      const data = path ? readJson(path) : null;
+      cache.set(key, data);
+      return data;
+    } catch {
+      cache.set(key, null);
+      return null;
+    }
   };
   const confirmed = new Set();
   // Later queue entries stay out of this scan. Their pages are only opened
   // to build the yes/no glyph filter.
   for (const unit of (reviewSet.units || []).slice(0, AUDIT_REVIEW_LIMIT)) {
-    const reviewed = join(base, "labels/reviewed", unit.paperId, pageFile(unit.page));
-    if (!existsSync(reviewed)) continue;
-    const key = `${unit.paperId}:${unit.page}`;
-    if (!cache.has(key)) cache.set(key, readJson(reviewed));
-    const ids = cache.get(key)?.reviewedUnitIds || [];
-    if (ids.includes(unit.unitId)) confirmed.add(confirmKey(unit));
+    try {
+      const reviewed = join(base, "labels/reviewed", unit.paperId, pageFile(unit.page));
+      if (!existsSync(reviewed)) continue;
+      const page = readJson(reviewed);
+      const ids = page?.reviewedUnitIds || [];
+      if (ids.includes(unit.unitId)) confirmed.add(confirmKey(unit));
+    } catch {
+      continue;
+    }
   }
   return { queue: reviewSet.units || [], loadPage, confirmed };
 }
@@ -2243,27 +2300,30 @@ export function loadAuditInputs(base = root) {
 export function parseAuditArgs(argv) {
   let limit = null;
   let out = null;
+  let mode = null;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--limit") limit = Number(argv[++index]);
     else if (arg === "--out") out = argv[++index];
-    else if (arg === "--help") return { help: true, limit, out };
+    else if (arg === "--mode") mode = argv[++index];
+    else if (arg === "--help") return { help: true, limit, out, mode: mode || "reviewed" };
   }
   if (limit != null && (!Number.isInteger(limit) || limit < 0)) throw new Error("--limit 要是非负整数");
   if (limit != null && limit > AUDIT_REVIEW_LIMIT) throw new Error("--limit 不能超过 277");
-  return { limit, out };
+  if (mode != null && mode !== "reviewed" && mode !== "prelabel") throw new Error("--mode 只能是 reviewed 或 prelabel");
+  return { limit, out, mode: mode || "reviewed" };
 }
 
 function main() {
   const args = parseAuditArgs(process.argv.slice(2));
   if (args.help) {
-    console.log("node scripts/audit-reviewed.mjs [--limit N] [--out reports/audit.md]");
+    console.log("node scripts/audit-reviewed.mjs [--mode reviewed|prelabel] [--limit N] [--out reports/audit.md]");
     return;
   }
-  const inputs = loadAuditInputs(root);
+  const inputs = loadAuditInputs(root, { source: args.mode === "prelabel" ? "prelabel" : "reviewed" });
   const queue = (inputs.queue || []).slice(0, AUDIT_REVIEW_LIMIT);
   const isHeldOut = heldOutGlyphFilter((inputs.queue || []).slice(AUDIT_REVIEW_LIMIT), inputs.loadPage, queue);
-  const report = auditReviewed({ ...inputs, queue, isHeldOut, confirmedKeys: inputs.confirmed, limit: args.limit });
+  const report = auditReviewed({ ...inputs, queue, isHeldOut, confirmedKeys: inputs.confirmed, limit: args.limit, mode: args.mode });
   const markdown = renderMarkdown(report);
   if (!args.out) {
     process.stdout.write(markdown);

@@ -44,12 +44,14 @@ function entry(unitId, elementIds, extra = {}) {
   };
 }
 
-function run(queue, page, { confirmed = true, limit } = {}) {
+function run(queue, page, { confirmed = true, limit, mode } = {}) {
   const keys = confirmed ? queue.map((unit) => `${unit.paperId}:${unit.page}:${unit.unitId}`) : [];
   return auditReviewed({
     queue,
     confirmedKeys: keys,
     limit,
+    mode,
+    isHeldOut: () => false,
     loadPage: () => page
   });
 }
@@ -685,6 +687,7 @@ test("auditing prelabel pages as the reviewed draft does not throw", () => {
     queue,
     confirmedKeys: queue.map((unit) => `${unit.paperId}:${unit.page}:${unit.unitId}`),
     limit: 20,
+    isHeldOut: () => false,
     loadPage(paperId, page) {
       const key = `${paperId}:${page}`;
       if (!cache.has(key)) {
@@ -1307,6 +1310,15 @@ test("R11 does not pair across a line break at offsets -0.533 and -0.69", () => 
   const radicalFar = formula("eRad", "√", [78, 100, 90, 110], "uDown");
   const upperFar = formula("eX", "x", [80, 88, 90, 98], "uUp");
   assert.equal(r11Of([upperFar, subFar, radicalFar], units, "uUp").length, 0);
+
+  const same = formula("eX2", "x", [80, 90, 90, 100], "uSame");
+  const mark = glyph("e0b", "0", [91, 94, 97, 101], { label: "text" });
+  const hits = r11Of([same, mark], [
+    { id: "uSame", type: "display", equationNumber: false, elementIds: ["eX2"] }
+  ], "uSame");
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eX2`/);
+  assert.match(hits[0].suggestion, /上下标 `e0b`/);
 });
 
 test("R11 does not pair a short glyph with the line above", () => {
@@ -1318,6 +1330,15 @@ test("R11 does not pair a short glyph with the line above", () => {
     { id: "uDown", type: "display", equationNumber: false, elementIds: ["eSide", "eLower"] }
   ], "uUp");
   assert.equal(hits.length, 0);
+
+  const body = formula("eA", "a", [22, 114, 32, 123.5], "uDown");
+  const sub = glyph("eI", "i", [33, 118, 38, 124], { label: "text" });
+  const reported = r11Of([body, sub], [
+    { id: "uDown", type: "display", equationNumber: false, elementIds: ["eA"] }
+  ], "uDown");
+  assert.equal(reported.length, 1);
+  assert.match(reported[0].suggestion, /主体 `eA`/);
+  assert.match(reported[0].suggestion, /上下标 `eI`/);
 });
 
 test("R11 uses the base glyph instead of a following operator or bracket", () => {
@@ -1397,6 +1418,22 @@ test("R11 ignores a vulgar fraction, a leading asterisk, and a private-use brack
   assert.equal(r11Of([bracket, index], [
     { id: "uBody", type: "display", equationNumber: false, elementIds: ["eBracket"] }
   ]).length, 0);
+
+  const letter = formula("eK", "k", [40, 100, 50, 110], "uBody");
+  const keptScript = glyph("eS", "s", [52, 104, 58, 111], { label: "text" });
+  const vulgarKept = r11Of([letter, keptScript], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eK"] }
+  ]);
+  assert.equal(vulgarKept.length, 1);
+  assert.match(vulgarKept[0].suggestion, /主体 `eK`/);
+
+  const plain = formula("eM", "M", [40, 100, 50, 110], "uBody");
+  const keptSub = glyph("eT2", "t", [52, 104, 58, 111], { label: "text" });
+  const starKept = r11Of([plain, keptSub], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eM"] }
+  ]);
+  assert.equal(starKept.length, 1);
+  assert.match(starKept[0].suggestion, /主体 `eM`/);
 });
 
 test("R11 does not pair across a full-size letter on the same baseline", () => {
@@ -1407,6 +1444,13 @@ test("R11 does not pair across a full-size letter on the same baseline", () => {
     { id: "uMid", type: "display", equationNumber: false, elementIds: ["eJ", "eG"] }
   ], "uMid");
   assert.equal(hits.length, 0);
+
+  const open = r11Of([base, side], [
+    { id: "uMid", type: "display", equationNumber: false, elementIds: ["eG"] }
+  ], "uMid");
+  assert.equal(open.length, 1);
+  assert.match(open[0].suggestion, /主体 `eV`/);
+  assert.match(open[0].suggestion, /上下标 `eG`/);
 });
 
 test("R11 ignores a drop cap beside the rest of a prose word", () => {
@@ -1473,6 +1517,24 @@ test("R11 ignores a fraction numerator, an eclipsed body, a colliding letter, an
   assert.equal(r11Of([name, mark], [
     { id: "uBody", type: "display", equationNumber: false, elementIds: ["eA"] }
   ]).length, 0);
+
+  const bare = glyph("eB", "b", [40, 100, 48, 110], { label: "text" });
+  const indexOnly = formula("eI2", "i", [48.2, 106, 52, 112], "uMid");
+  const uncovered = r11Of([bare, indexOnly], [
+    { id: "uMid", type: "display", equationNumber: false, elementIds: ["eI2"] }
+  ], "uMid");
+  assert.equal(uncovered.length, 1);
+  assert.match(uncovered[0].suggestion, /主体 `eB`/);
+  assert.match(uncovered[0].suggestion, /上下标 `eI2`/);
+
+  const bigN = glyph("eBigN", "N", [40, 100, 50, 110], { label: "text" });
+  const smallK = formula("eSmallK", "k", [49.2, 98, 54, 106], "uBody");
+  const distinct = r11Of([bigN, smallK], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eSmallK"] }
+  ]);
+  assert.equal(distinct.length, 1);
+  assert.match(distinct[0].suggestion, /主体 `eBigN`/);
+  assert.match(distinct[0].suggestion, /上下标 `eSmallK`/);
 });
 
 test("R11 keeps a formula outside the queue unit and drops a held-out glyph", () => {
@@ -1483,7 +1545,7 @@ test("R11 keeps a formula outside the queue unit and drops a held-out glyph", ()
     { id: "uQueue", type: "display", equationNumber: false, elementIds: ["eQ"] },
     { id: "uSide", type: "display", equationNumber: false, elementIds: ["eD"] }
   ]);
-  const open = run([entry("uQueue", ["eQ"])], page);
+  const open = run([entry("uQueue", ["eQ"])], page, { mode: "prelabel" });
   const hits = open.findings.filter((item) => item.rule === "R11");
   assert.equal(hits.length, 1);
   assert.match(hits[0].suggestion, /主体 `eD`/);
@@ -1608,6 +1670,15 @@ test("R11 uses the letter under an accent and still reports a plain base", () =>
   ]);
   assert.equal(reported.length, 1);
   assert.match(reported[0].suggestion, /主体 `eX`/);
+
+  const host = formula("eHost", "H", [10, 100, 20, 110], "uHost");
+  const touch = formula("eTouch", "t", [20.4, 100, 30, 110], "uTouch");
+  const ink = glyph("eInk", "i", [31, 104, 37, 111], { label: "text" });
+  const besideHost = r11Of([host, touch, ink], [
+    { id: "uHost", type: "display", equationNumber: false, elementIds: ["eHost"] },
+    { id: "uTouch", type: "display", equationNumber: false, elementIds: ["eTouch"] }
+  ], "uHost");
+  assert.equal(besideHost.length, 0);
 });
 
 test("R11 treats a positive-size control glyph as an ordinary base", () => {
@@ -1672,4 +1743,102 @@ test("R11 reports a real split beside each shape it refuses", () => {
   assert.equal(r11Of([host, mark], [
     { id: "uBody", type: "display", equationNumber: false, elementIds: ["eZ"] }
   ]).length, 1);
+});
+
+test("auditReviewed requires isHeldOut and defaults to reviewed", () => {
+  assert.throws(() => auditReviewed({ queue: [], confirmedKeys: [], loadPage: () => null }), /isHeldOut/);
+  assert.equal(parseAuditArgs([]).mode, "reviewed");
+  assert.equal(parseAuditArgs(["--mode", "prelabel"]).mode, "prelabel");
+  assert.throws(() => parseAuditArgs(["--mode", "other"]), /--mode/);
+});
+
+test("R11 keeps an upper-line subscript when the next line is nearer", () => {
+  const upper = formula("eUpper", "A", [42, 98, 49, 108], "uUp");
+  const lower = formula("eLower", "x", [44, 110, 50, 120], "uDown");
+  const script = glyph("eSub", "i", [51, 106, 57, 114], { label: "text" });
+  const hits = r11Of([upper, lower, script], [
+    { id: "uUp", type: "display", equationNumber: false, elementIds: ["eUpper"] },
+    { id: "uDown", type: "display", equationNumber: false, elementIds: ["eLower"] }
+  ], "uUp");
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eUpper`/);
+  assert.match(hits[0].suggestion, /上下标 `eSub`/);
+  assert.equal(hits[0].elements.some((element) => element.id === "eLower"), false);
+});
+
+test("R11 drops a script whose distances to the two baselines match", () => {
+  const upper = formula("eUpper", "A", [40, 100, 50, 110], "uUp");
+  const lower = formula("eLower", "x", [42, 110, 51, 120], "uDown");
+  const script = glyph("eStar", "∗", [52, 107, 58, 113], { label: "text" });
+  const above = r11Of([upper, lower, script], [
+    { id: "uUp", type: "display", equationNumber: false, elementIds: ["eUpper"] },
+    { id: "uDown", type: "display", equationNumber: false, elementIds: ["eLower"] }
+  ], "uUp");
+  assert.equal(above.length, 0);
+
+  const upperFar = formula("eUp2", "B", [38, 99.8, 48, 109.8], "uUp");
+  const lowerNear = formula("eDown2", "y", [42, 110.2, 50, 120.2], "uDown");
+  const sub = glyph("eI", "i", [51, 107, 57, 113], { label: "text" });
+  const below = r11Of([upperFar, lowerNear, sub], [
+    { id: "uUp", type: "display", equationNumber: false, elementIds: ["eUp2"] },
+    { id: "uDown", type: "display", equationNumber: false, elementIds: ["eDown2"] }
+  ], "uUp");
+  assert.equal(below.length, 0);
+});
+
+test("reviewed mode ignores a split on the union box that is far from every member", () => {
+  const top = formula("eTop", "T", [0, 100, 10, 110], "uHost");
+  const bottom = formula("eBot", "B", [0, 400, 10, 410], "uHost");
+  const base = formula("eD", "d", [12, 240, 22, 250], "uSide");
+  const sub = glyph("eJ", "j", [23, 244, 29, 251], { label: "text" });
+  const page = pageOf([top, bottom, base, sub], [
+    { id: "uHost", type: "display", equationNumber: false, elementIds: ["eTop", "eBot"] },
+    { id: "uSide", type: "display", equationNumber: false, elementIds: ["eD"] }
+  ]);
+  const hits = run([entry("uHost", ["eTop", "eBot"])], page).findings.filter((item) => item.rule === "R11");
+  assert.equal(hits.length, 0);
+});
+
+test("reviewed mode reports a member and ignores a glyph that only touches the unit", () => {
+  const member = formula("eM", "M", [40, 100, 50, 110], "uHost");
+  const sub = glyph("eI", "i", [51, 104, 57, 111], { label: "text" });
+  const page = pageOf([member, sub], [
+    { id: "uHost", type: "display", equationNumber: false, elementIds: ["eM"] }
+  ]);
+  const inside = run([entry("uHost", ["eM"])], page).findings.filter((item) => item.rule === "R11");
+  assert.equal(inside.length, 1);
+  assert.match(inside[0].suggestion, /主体 `eM`/);
+  assert.match(inside[0].suggestion, /上下标 `eI`/);
+
+  const host = formula("eH", "H", [10, 100, 20, 110], "uHost");
+  const touch = formula("eT", "t", [20.2, 100, 30, 110], "uSide");
+  const mark = glyph("eK", "k", [31, 104, 37, 111], { label: "text" });
+  const touching = pageOf([host, touch, mark], [
+    { id: "uHost", type: "display", equationNumber: false, elementIds: ["eH"] },
+    { id: "uSide", type: "display", equationNumber: false, elementIds: ["eT"] }
+  ]);
+  const outside = run([entry("uHost", ["eH"])], touching).findings.filter((item) => item.rule === "R11");
+  assert.equal(outside.length, 0);
+});
+
+test("prelabel mode reports a far split and hangs it on the nearest member", () => {
+  const far = formula("eFar", "F", [0, 100, 10, 110], "uFar");
+  const near = formula("eNear", "N", [80, 100, 90, 110], "uNear");
+  const base = formula("eD", "d", [200, 100, 210, 110], "uSide");
+  const sub = glyph("eJ", "j", [212, 104, 218, 111], { label: "text" });
+  const page = pageOf([far, near, base, sub], [
+    { id: "uFar", type: "display", equationNumber: false, elementIds: ["eFar"] },
+    { id: "uNear", type: "display", equationNumber: false, elementIds: ["eNear"] },
+    { id: "uSide", type: "display", equationNumber: false, elementIds: ["eD"] }
+  ]);
+  const hits = run(
+    [entry("uFar", ["eFar"]), entry("uNear", ["eNear"])],
+    page,
+    { mode: "prelabel" }
+  ).findings.filter((item) => item.rule === "R11");
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].queueIndex, 2);
+  assert.match(hits[0].suggestion, /主体 `eD`/);
+  assert.match(hits[0].suggestion, /上下标 `eJ`/);
+  assert.match(hits[0].suggestion, /距所挂条目 11\.000 主体字高/);
 });
