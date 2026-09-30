@@ -11,7 +11,8 @@
  *
  * Default window: every queue unit up to and including the last one
  * whose original unit id is in that page's reviewedUnitIds. --limit N
- * checks the first N queue units instead.
+ * checks the first N queue units instead. N above 277 exits with an
+ * error; the queue is not silently truncated.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -77,6 +78,11 @@ const SPLIT_SCRIPT_MAX_CHARS = 3;
 // subscript on the line above. 1pt is the same slop as the other touching
 // checks in this file, not a refit of the center band.
 const SPLIT_SCRIPT_OVERLAP_PT = 1;
+// The reviewed queue is #1–#277. A larger --limit is an error, not a clip.
+const AUDIT_REVIEW_LIMIT = 277;
+// A glyph is adjacent to a queue unit when the gap between the two boxes
+// is at most this many body heights.
+const SPLIT_SCRIPT_UNIT_GAP = 0.5;
 
 // Each side of a cross-line report needs several glyphs, so one stray
 // subscript does not look like a second display line.
@@ -1602,12 +1608,15 @@ function isPunctuationRun(element) {
 
 function isAccentGlyph(element) {
   const text = String(element?.char || "").trim();
-  return /^[~¯˜ˉ˘ˆˇ´`¨¸˚˛ˊˋ^]$/u.test(text);
+  return /^[~¯˜ˉ˘ˆˇ´`¨¸˚˛ˊˋ˙^]$/u.test(text);
 }
 
+// A mapped control character with a real box is an ordinary math glyph.
+// Zero width or zero height is still not a glyph.
 function isControlGlyph(element) {
   const text = String(element?.char || "");
-  return [...text].some((char) => char.charCodeAt(0) < 32);
+  if (![...text].some((char) => char.charCodeAt(0) < 32)) return false;
+  return !(boxWidth(element) > 0 && boxHeight(element) > 0);
 }
 
 function isWeakPunctuation(element) {
@@ -1668,10 +1677,30 @@ function hasNonBaseChar(element) {
   return false;
 }
 
-function isScriptBase(element, script) {
+function isLeftBracketChar(element) {
+  const text = String(element?.char || "").trim();
+  return text.length === 1 && "([{（〔〈〈⌈⌊⟨".includes(text);
+}
+
+function isRightBracketChar(element) {
+  const text = String(element?.char || "").trim();
+  return text === ")" || text === "]" || text === "}" || text === "）" || text === "］" || text === "｝";
+}
+
+// Operators and opening fences are not bases. A closing bracket is handled
+// on its own: the body is the whole matched group, not the operator class.
+function isOperatorGlyph(element) {
+  const text = String(element?.char || "").replace(/\s+/g, "");
+  if (!text || isRightBracketChar(element)) return false;
+  if (/^[()[\]{}（）〔〕【】〈〉〈〉⟨⟩⌈⌉⌊⌋|]+$/u.test(text)) return true;
+  return /^[+−\-–—=≈≠<>≤≥×·∙∗*|/\\∇∂∑∏∫∮√∞±∓⊗⊕⊖⊙∧∨∩∪∈∉⊂⊃⊆⊇≅∼∝∀∃¬]+$/u.test(text);
+}
+
+function canBeBody(element, script) {
   if (!element?.bbox || isAccentGlyph(element) || isControlGlyph(element) || hasNonBaseChar(element)) return false;
   if (isSentencePeriod(element) || isWeakPunctuation(element)) return false;
-  if (isBracketOrOperatorChar(element) || isPunctuationRun(element) || startsWithOperatorOrPunct(element)) return false;
+  if (isLeftBracketChar(element) || isOperatorGlyph(element) || isDelimiterGlyph(element)) return false;
+  if (isPunctuationRun(element) || startsWithOperatorOrPunct(element)) return false;
   if (isOperatorFunctionText(element) || isTextAfterScript(element, script)) return false;
   if (proseTextWords(element.char).length) return false;
   return true;
@@ -1690,31 +1719,6 @@ function isDropCap(body, pool) {
     if (other.bbox[0] < body.bbox[2] - 1 || other.bbox[0] > body.bbox[2] + 6) continue;
     const overlap = Math.min(body.bbox[3], other.bbox[3]) - Math.max(body.bbox[1], other.bbox[1]);
     if (overlap >= 0.8 * otherHeight) return true;
-  }
-  return false;
-}
-
-function isFenceLike(element) {
-  const text = String(element?.char || "").trim();
-  if (/^[()[\]{}|⎧⎨⎩⎫⎬⎭⟨⟩⌈⌉⌊⌋]/u.test(text)) return true;
-  const width = boxWidth(element);
-  const height = boxHeight(element);
-  return height > 0 && width > 0 && width < 0.45 * height;
-}
-
-// A short glyph on the previous or next line is not this base's script.
-// Same-row letters, matrix neighbors, and fences stay out of the way.
-function scriptOnAnotherLine(script, body, pool) {
-  const ref = boxHeight(body);
-  if (!(ref > 0)) return false;
-  const scriptDy = Math.abs(midY(script) - midY(body));
-  for (const other of pool) {
-    if (other === script || other === body) continue;
-    if (isFenceLike(other) || isBracketOrOperatorChar(other) || isAccentGlyph(other) || isControlGlyph(other)) continue;
-    if (boxHeight(other) < 0.9 * ref) continue;
-    if (other.bbox[2] < script.bbox[0] - 2 * ref || other.bbox[0] > script.bbox[2] + 2 * ref) continue;
-    if (Math.abs(midY(other) - midY(body)) <= SAME_LINE_CENTER_RATIO * ref) continue;
-    if (Math.abs(midY(other) - midY(script)) < scriptDy) return true;
   }
   return false;
 }
@@ -1742,24 +1746,6 @@ function isFractionPiece(script, elements) {
       return Math.abs(otherY - scriptY) < height * 2.5 && boxHeight(other) <= height * 1.4;
     });
     if (partner) return true;
-  }
-  return false;
-}
-
-// The reported body is covered by the glyph the script actually touches.
-function eclipsedByNearerGlyph(body, script, pool) {
-  for (const other of pool) {
-    if (other === body || other === script || !other?.bbox) continue;
-    const cover = String(other.char || "").trim();
-    if (/^\p{L}/u.test(cover) || /^\d/u.test(cover) || isBracketOrOperatorChar(other)) continue;
-    if (boxWidth(other) > 2.5 * Math.max(boxWidth(body), 1)) continue;
-    if (boxHeight(other) < 0.8 * boxHeight(body)) continue;
-    const overlap = Math.min(body.bbox[2], other.bbox[2]) - Math.max(body.bbox[0], other.bbox[0]);
-    if (overlap < 0.9 * boxWidth(body)) continue;
-    if (String(other.char || "").trim() === String(body.char || "").trim()) continue;
-    const gap = other.bbox[0] <= script.bbox[0] ? script.bbox[0] - other.bbox[2] : other.bbox[0] - script.bbox[2];
-    if (gap > 0.15 || gap < -0.15) continue;
-    return true;
   }
   return false;
 }
@@ -1831,63 +1817,220 @@ function fractionBarBetween(a, b, elements) {
   });
 }
 
-function hostEntry(entries, page, body, script) {
-  for (const entry of entries) {
-    const packed = currentUnits(page, entry);
-    const ids = new Set(packed.units.flatMap((unit) => unit.elementIds || []));
-    const owns = [body, script].some((glyph) => ids.has(glyph.id) || packed.units.some((unit) => unit.id && unit.id === glyph.unitId));
-    if (owns) return entry;
+function scriptOk(script) {
+  if (!script?.bbox || isAccentGlyph(script) || isControlGlyph(script) || hasNonBaseChar(script)) return false;
+  if (isSentencePeriod(script) || isWeakPunctuation(script) || isDelimiterGlyph(script)) return false;
+  if (proseTextWords(script.char).length) return false;
+  const count = scriptCharCount(script);
+  const height = boxHeight(script);
+  return height > 0 && count >= 1 && count <= SPLIT_SCRIPT_MAX_CHARS;
+}
+
+function measurePair(body, script) {
+  const bodyHeight = boxHeight(body);
+  const scriptHeight = boxHeight(script);
+  if (!(bodyHeight > scriptHeight)) return null;
+  if (scriptHeight > SPLIT_SCRIPT_HEIGHT_RATIO * bodyHeight) return null;
+  const textFormula = (body.label === "text" && script.label === "formula") || (body.label === "formula" && script.label === "text");
+  if (!textFormula) return null;
+  if (body.unitId && script.unitId && body.unitId === script.unitId) return null;
+  const left = body.bbox[0] <= script.bbox[0] ? body : script;
+  const right = left === body ? script : body;
+  const gapPt = right.bbox[0] - left.bbox[2];
+  if (gapPt < -SPLIT_SCRIPT_OVERLAP_PT) return null;
+  const gap = gapPt / bodyHeight;
+  if (gap > SPLIT_SCRIPT_GAP_RATIO) return null;
+  const offset = (midY(right) - midY(left)) / bodyHeight;
+  if (Math.abs(offset) < SPLIT_SCRIPT_CENTER_MIN || Math.abs(offset) > SPLIT_SCRIPT_CENTER_MAX) return null;
+  return { bodyHeight, scriptHeight, gap, offset };
+}
+
+function pairFilters(body, script, pool, elements) {
+  if (fractionBarBetween(body, script, elements) || isFractionPiece(script, elements)) return false;
+  if (sameLetterCollision(body, script) || fullLetterBetween(body, script, pool)) return false;
+  if (crossedByFormulaUnit(body, script, pool)) return false;
+  return true;
+}
+
+function tryPair(body, script, pool, elements, dropCaps) {
+  if (!body || body === script || dropCaps.has(body) || !canBeBody(body, script)) return null;
+  const measured = measurePair(body, script);
+  if (!measured || !pairFilters(body, script, pool, elements)) return null;
+  return { body, group: null, ...measured };
+}
+
+function glyphsToTheLeft(script, pool) {
+  const list = [];
+  for (const glyph of pool) {
+    if (glyph === script) continue;
+    const gapPt = script.bbox[0] - glyph.bbox[2];
+    if (gapPt < -SPLIT_SCRIPT_OVERLAP_PT) continue;
+    const reach = 1.5 * Math.max(boxHeight(glyph), boxHeight(script), 1);
+    if (Math.abs(midY(glyph) - midY(script)) > reach) continue;
+    list.push(glyph);
   }
-  let best = entries[0];
-  let bestDist = Infinity;
-  const y = (midY(body) + midY(script)) / 2;
-  for (const entry of entries) {
-    const members = currentUnits(page, entry).units.flatMap((unit) => membersOf(page, unit)).filter((item) => item?.bbox);
-    if (!members.length) continue;
-    const dist = Math.min(...members.map((item) => Math.abs(midY(item) - y)));
-    if (dist < bestDist) {
-      best = entry;
-      bestDist = dist;
+  list.sort((a, b) => (script.bbox[0] - a.bbox[2]) - (script.bbox[0] - b.bbox[2]) || a.bbox[0] - b.bbox[0]);
+  return list;
+}
+
+function glyphsToTheRight(script, pool) {
+  const list = [];
+  for (const glyph of pool) {
+    if (glyph === script) continue;
+    const gapPt = glyph.bbox[0] - script.bbox[2];
+    if (gapPt < -SPLIT_SCRIPT_OVERLAP_PT) continue;
+    const reach = 1.5 * Math.max(boxHeight(glyph), boxHeight(script), 1);
+    if (Math.abs(midY(glyph) - midY(script)) > reach) continue;
+    list.push(glyph);
+  }
+  list.sort((a, b) => (a.bbox[0] - script.bbox[2]) - (b.bbox[0] - script.bbox[2]) || a.bbox[0] - b.bbox[0]);
+  return list;
+}
+
+const CLOSE_TO_OPEN = { ")": "(", "]": "[", "}": "{", "）": "（", "］": "［", "｝": "｛" };
+
+function lastChar(text) {
+  const chars = [...String(text || "").trim()];
+  return chars[chars.length - 1] || "";
+}
+
+function matchingBracketGroup(closer, pool) {
+  const closeChar = String(closer?.char || "").trim();
+  const openChar = CLOSE_TO_OPEN[closeChar];
+  if (!openChar || closeChar.length !== 1 && ![...closeChar].every((char) => char === closeChar[0])) return null;
+  const ref = Math.max(boxHeight(closer), 1);
+  const onLine = (glyph) => {
+    const limit = SAME_LINE_CENTER_RATIO * Math.max(ref, boxHeight(glyph), 1);
+    return Math.abs(midY(glyph) - midY(closer)) <= limit;
+  };
+  const line = pool.filter((glyph) => onLine(glyph));
+  const leftward = line
+    .filter((glyph) => glyph === closer || glyph.bbox[2] <= closer.bbox[2] + 0.4)
+    .sort((a, b) => b.bbox[0] - a.bbox[0] || b.bbox[2] - a.bbox[2]);
+  let depth = 0;
+  let opener = null;
+  for (const glyph of leftward) {
+    if (glyph === closer) continue;
+    const text = String(glyph.char || "").trim();
+    const end = lastChar(text);
+    if (end === closeChar && text === closeChar) depth += 1;
+    else if (end === openChar) {
+      if (depth === 0) {
+        opener = glyph;
+        break;
+      }
+      depth -= 1;
+    }
+  }
+  if (!opener) return null;
+  return line
+    .filter((glyph) => glyph.bbox[0] >= opener.bbox[0] - 0.4 && glyph.bbox[2] <= closer.bbox[2] + 0.4)
+    .sort((a, b) => a.bbox[0] - b.bbox[0] || a.bbox[1] - b.bbox[1]);
+}
+
+function glyphUnderAccent(accent, pool, script) {
+  let best = null;
+  let bestDy = Infinity;
+  let bestOverlap = 0;
+  for (const other of pool) {
+    if (other === accent || other === script || !other?.bbox) continue;
+    const overlap = Math.min(accent.bbox[2], other.bbox[2]) - Math.max(accent.bbox[0], other.bbox[0]);
+    if (overlap <= 0) continue;
+    if (midY(other) <= midY(accent)) continue;
+    const dy = midY(other) - midY(accent);
+    if (dy < bestDy - 0.01 || (Math.abs(dy - bestDy) <= 0.01 && overlap > bestOverlap)) {
+      best = other;
+      bestDy = dy;
+      bestOverlap = overlap;
     }
   }
   return best;
 }
 
-function nearestScriptBase(script, pool, elements, dropCaps) {
-  if (isAccentGlyph(script) || isControlGlyph(script) || hasNonBaseChar(script) || isSentencePeriod(script) || isWeakPunctuation(script)) return null;
-  if (isDelimiterGlyph(script)) return null;
-  if (proseTextWords(script.char).length) return null;
-  const scriptHeight = boxHeight(script);
-  if (!(scriptHeight > 0) || scriptCharCount(script) < 1 || scriptCharCount(script) > SPLIT_SCRIPT_MAX_CHARS) return null;
+function tryBracket(closer, script, pool, elements) {
+  const group = matchingBracketGroup(closer, pool);
+  if (!group?.length) return null;
+  const measured = measurePair(closer, script);
+  if (!measured || !pairFilters(closer, script, pool, elements)) return null;
+  return { body: closer, group, ...measured };
+}
+
+function tryAccent(accent, script, pool, elements, dropCaps) {
+  const under = glyphUnderAccent(accent, pool, script);
+  if (!under) return null;
+  return tryPair(under, script, pool, elements, dropCaps);
+}
+
+function sameTextLine(script, glyph) {
+  const ref = Math.max(boxHeight(glyph), boxHeight(script), 1);
+  return Math.abs(midY(script) - midY(glyph)) <= SAME_LINE_CENTER_RATIO * ref;
+}
+
+function attachScript(script, pool, dropCaps, elements) {
+  const lefts = glyphsToTheLeft(script, pool).filter((glyph) => sameTextLine(script, glyph));
+  const nearest = lefts[0];
+  if (!nearest) {
+    const right = glyphsToTheRight(script, pool).find((glyph) => sameTextLine(script, glyph));
+    if (!right) return null;
+    return tryPair(right, script, pool, elements, dropCaps);
+  }
+  if (isAccentGlyph(nearest)) return tryAccent(nearest, script, pool, elements, dropCaps);
+  if (isRightBracketChar(nearest)) return tryBracket(nearest, script, pool, elements);
+  // An operator, opening bracket, or punctuation on the immediate left ends
+  // the search. Do not skip it for a farther glyph or one on the right.
+  if (!canBeBody(nearest, script) || dropCaps.has(nearest)) return null;
+  const nearHit = tryPair(nearest, script, pool, elements, dropCaps);
+  // A superscript of this line can sit closer to the previous baseline.
+  // Keep this line when the nearer glyph reads as a subscript of that line.
+  if (nearHit && nearHit.offset > 0) {
+    const lower = lefts.find((glyph) => glyph !== nearest && midY(glyph) > midY(nearest));
+    const lowerHit = lower && tryPair(lower, script, pool, elements, dropCaps);
+    if (
+      lowerHit && lowerHit.offset < 0
+      && Math.abs(midY(script) - midY(nearest)) < Math.abs(midY(script) - midY(lower))
+    ) return lowerHit;
+  }
+  return nearHit;
+}
+
+function boundsOfEntry(page, entry) {
+  const packed = currentUnits(page, entry);
+  const members = packed.units.flatMap((unit) => membersOf(page, unit)).filter((item) => item?.bbox && item.bbox.length >= 4);
+  if (!members.length) return null;
+  return {
+    entry,
+    x0: Math.min(...members.map((item) => Number(item.bbox[0]))),
+    y0: Math.min(...members.map((item) => Number(item.bbox[1]))),
+    x1: Math.max(...members.map((item) => Number(item.bbox[2]))),
+    y1: Math.max(...members.map((item) => Number(item.bbox[3]))),
+    ids: new Set(members.map((item) => item.id)),
+    unitIds: new Set(packed.units.map((unit) => unit.id).filter(Boolean))
+  };
+}
+
+function rectGap(bbox, box) {
+  const dx = Math.max(0, box.x0 - Number(bbox[2]), Number(bbox[0]) - box.x1);
+  const dy = Math.max(0, box.y0 - Number(bbox[3]), Number(bbox[1]) - box.y1);
+  return Math.hypot(dx, dy);
+}
+
+function attachEntry(hosts, glyphs, bodyHeight) {
   let best = null;
-  let bestDist = Infinity;
-  for (const body of pool) {
-    if (body === script || !isScriptBase(body, script) || dropCaps.has(body)) continue;
-    if (!((body.label === "text" && script.label === "formula") || (body.label === "formula" && script.label === "text"))) continue;
-    if (body.unitId && script.unitId && body.unitId === script.unitId) continue;
-    const bodyHeight = boxHeight(body);
-    if (!(bodyHeight > scriptHeight)) continue;
-    if (scriptHeight > SPLIT_SCRIPT_HEIGHT_RATIO * bodyHeight) continue;
-    const left = body.bbox[0] <= script.bbox[0] ? body : script;
-    const right = left === body ? script : body;
-    const gapPt = right.bbox[0] - left.bbox[2];
-    if (gapPt < -SPLIT_SCRIPT_OVERLAP_PT) continue;
-    const gap = gapPt / bodyHeight;
-    if (gap > SPLIT_SCRIPT_GAP_RATIO) continue;
-    const offset = (midY(right) - midY(left)) / bodyHeight;
-    if (Math.abs(offset) < SPLIT_SCRIPT_CENTER_MIN || Math.abs(offset) > SPLIT_SCRIPT_CENTER_MAX) continue;
-    if (fractionBarBetween(body, script, elements) || isFractionPiece(script, elements)) continue;
-    if (eclipsedByNearerGlyph(body, script, pool) || sameLetterCollision(body, script)) continue;
-    if (fullLetterBetween(body, script, pool)) continue;
-    if (crossedByFormulaUnit(body, script, pool)) continue;
-    if (scriptOnAnotherLine(script, body, pool)) continue;
-    const dist = Math.abs(gapPt);
-    if (dist < bestDist) {
-      best = { body, left, right, offset, gap, bodyHeight, scriptHeight };
-      bestDist = dist;
+  let bestRank = 2;
+  for (const host of hosts) {
+    let rank = 2;
+    for (const glyph of glyphs) {
+      if (!glyph?.bbox) continue;
+      const inside = host.ids.has(glyph.id) || (glyph.unitId && host.unitIds.has(glyph.unitId));
+      if (inside) rank = 0;
+      else if (rank > 1 && bodyHeight > 0 && rectGap(glyph.bbox, host) <= SPLIT_SCRIPT_UNIT_GAP * bodyHeight) rank = 1;
+    }
+    if (rank < bestRank) {
+      best = host;
+      bestRank = rank;
     }
   }
-  return best;
+  return bestRank <= 1 ? best : null;
 }
 
 function auditSplitScripts(entries, page, findings, isHeldOut = () => false) {
@@ -1897,23 +2040,29 @@ function auditSplitScripts(entries, page, findings, isHeldOut = () => false) {
     if (!isLetterGlyph(element) || !String(element.char || "").trim()) return false;
     return true;
   });
-  const seen = new Set();
   const dropCaps = new Set(pool.filter((element) => isDropCap(element, pool)));
+  const hosts = entries.map((entry) => boundsOfEntry(page, entry)).filter(Boolean);
+  const seen = new Set();
+  const elements = page.elements || [];
   for (const script of pool) {
-    const hit = nearestScriptBase(script, pool, page.elements || [], dropCaps);
-    if (!hit || isHeldOut(hit.body) || isHeldOut(script)) continue;
+    if (!scriptOk(script)) continue;
+    const hit = attachScript(script, pool, dropCaps, elements);
+    if (!hit) continue;
+    const shown = [...(hit.group || [hit.body]), script];
+    if (shown.some((glyph) => isHeldOut(glyph))) continue;
     const key = `${hit.body.id}|${script.id}`;
     if (seen.has(key)) continue;
+    const host = attachEntry(hosts, shown, hit.bodyHeight);
+    if (!host) continue;
     seen.add(key);
-    const entry = hostEntry(entries, page, hit.body, script);
-    if (!entry) continue;
-    const hostId = [hit.body.unitId, script.unitId].filter(Boolean);
+    const hostIds = [...new Set(shown.map((glyph) => glyph.unitId).filter(Boolean))];
     const direction = hit.offset < 0 ? "右块更高" : "右块更低";
     const heightRatio = hit.scriptHeight / hit.bodyHeight;
-    findings.push(finding(entry, "R11", {
-      currentUnitId: hostId.join(","),
-      elements: [hit.body, script],
-      suggestion: `疑似上下标被拆开。主体 \`${hit.body.id}\` 与上下标 \`${script.id}\`，中心偏移 ${hit.offset.toFixed(3)} 主体字高（${direction}），上下标高度是主体的 ${heightRatio.toFixed(2)} 倍，水平间隙 ${hit.gap.toFixed(3)} 主体字高。框住两块按 m。`
+    const bodyName = hit.group ? `${hit.group[0].id}\`…\`${hit.body.id}` : hit.body.id;
+    findings.push(finding(host.entry, "R11", {
+      currentUnitId: hostIds.join(","),
+      elements: shown,
+      suggestion: `疑似上下标被拆开。主体 \`${bodyName}\` 与上下标 \`${script.id}\`，中心偏移 ${hit.offset.toFixed(3)} 主体字高（${direction}），上下标高度是主体的 ${heightRatio.toFixed(2)} 倍，水平间隙 ${hit.gap.toFixed(3)} 主体字高。框住两块按 m。`
     }));
   }
 }
@@ -2080,7 +2229,7 @@ export function loadAuditInputs(base = root) {
   const confirmed = new Set();
   // Later queue entries stay out of this scan. Their pages are only opened
   // to build the yes/no glyph filter.
-  for (const unit of (reviewSet.units || []).slice(0, 277)) {
+  for (const unit of (reviewSet.units || []).slice(0, AUDIT_REVIEW_LIMIT)) {
     const reviewed = join(base, "labels/reviewed", unit.paperId, pageFile(unit.page));
     if (!existsSync(reviewed)) continue;
     const key = `${unit.paperId}:${unit.page}`;
@@ -2101,6 +2250,7 @@ export function parseAuditArgs(argv) {
     else if (arg === "--help") return { help: true, limit, out };
   }
   if (limit != null && (!Number.isInteger(limit) || limit < 0)) throw new Error("--limit 要是非负整数");
+  if (limit != null && limit > AUDIT_REVIEW_LIMIT) throw new Error("--limit 不能超过 277");
   return { limit, out };
 }
 
@@ -2111,8 +2261,8 @@ function main() {
     return;
   }
   const inputs = loadAuditInputs(root);
-  const queue = (inputs.queue || []).slice(0, 277);
-  const isHeldOut = heldOutGlyphFilter((inputs.queue || []).slice(277), inputs.loadPage, queue);
+  const queue = (inputs.queue || []).slice(0, AUDIT_REVIEW_LIMIT);
+  const isHeldOut = heldOutGlyphFilter((inputs.queue || []).slice(AUDIT_REVIEW_LIMIT), inputs.loadPage, queue);
   const report = auditReviewed({ ...inputs, queue, isHeldOut, confirmedKeys: inputs.confirmed, limit: args.limit });
   const markdown = renderMarkdown(report);
   if (!args.out) {

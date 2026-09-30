@@ -1477,8 +1477,8 @@ test("R11 ignores a fraction numerator, an eclipsed body, a colliding letter, an
 
 test("R11 keeps a formula outside the queue unit and drops a held-out glyph", () => {
   const queueGlyph = formula("eQ", "Q", [10, 100, 20, 110], "uQueue");
-  const base = formula("eD", "d", [40, 100, 50, 110], "uSide");
-  const sub = glyph("eJ", "j", [52, 104, 58, 111], { label: "text" });
+  const base = formula("eD", "d", [24, 100, 34, 110], "uSide");
+  const sub = glyph("eJ", "j", [36, 104, 42, 111], { label: "text" });
   const page = pageOf([queueGlyph, base, sub], [
     { id: "uQueue", type: "display", equationNumber: false, elementIds: ["eQ"] },
     { id: "uSide", type: "display", equationNumber: false, elementIds: ["eD"] }
@@ -1496,4 +1496,180 @@ test("R11 keeps a formula outside the queue unit and drops a held-out glyph", ()
     isHeldOut: (element) => element.id === "eD"
   });
   assert.equal(closed.findings.filter((item) => item.rule === "R11").length, 0);
+});
+
+test("parseAuditArgs rejects a limit past the reviewed queue", () => {
+  assert.equal(parseAuditArgs(["--limit", "277"]).limit, 277);
+  assert.throws(() => parseAuditArgs(["--limit", "278"]), /不能超过 277/);
+});
+
+test("R11 drops a pair that is neither inside nor beside the queue unit", () => {
+  const queueGlyph = formula("eQ", "Q", [10, 100, 20, 110], "uQueue");
+  const base = formula("eD", "d", [40, 100, 50, 110], "uSide");
+  const sub = glyph("eJ", "j", [52, 104, 58, 111], { label: "text" });
+  const page = pageOf([queueGlyph, base, sub], [
+    { id: "uQueue", type: "display", equationNumber: false, elementIds: ["eQ"] },
+    { id: "uSide", type: "display", equationNumber: false, elementIds: ["eD"] }
+  ]);
+  const hits = run([entry("uQueue", ["eQ"])], page).findings.filter((item) => item.rule === "R11");
+  assert.equal(hits.length, 0);
+});
+
+test("R11 keeps the same-line superscript when the previous line is nearer", () => {
+  const units = [
+    { id: "uPrev", type: "display", equationNumber: false, elementIds: ["ePrev"] },
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eBody"] }
+  ];
+  const prev = formula("ePrev", "A", [42, 90, 51, 100], "uPrev");
+  const body = formula("eBody", "x", [40, 100, 50, 110], "uBody");
+  const script = glyph("eStar", "∗", [52, 95.5, 58, 102.5], { label: "text" });
+  const wide = r11Of([prev, body, script], units, "uBody");
+  assert.equal(wide.length, 1);
+  assert.match(wide[0].suggestion, /主体 `eBody`/);
+  assert.match(wide[0].suggestion, /上下标 `eStar`/);
+  assert.equal(wide[0].elements.some((element) => element.id === "ePrev"), false);
+
+  const prevNear = formula("ePrev", "A", [42, 91, 51.2, 101], "uPrev");
+  const bodyNear = formula("eBody", "x", [40, 100, 50, 110], "uBody");
+  const scriptNear = glyph("eStar", "∗", [52, 96.5, 58, 103.5], { label: "text" });
+  const tight = r11Of([prevNear, bodyNear, scriptNear], units, "uBody");
+  assert.equal(tight.length, 1);
+  assert.match(tight[0].suggestion, /主体 `eBody`/);
+  assert.match(tight[0].suggestion, /上下标 `eStar`/);
+  assert.equal(tight[0].elements.some((element) => element.id === "ePrev"), false);
+});
+
+test("R11 reports a closing bracket group and not the letter inside it", () => {
+  const open = formula("eOpen", "(", [40, 98, 44, 112], "uBody");
+  const inner = formula("eInner", "A", [46, 100, 56, 110], "uBody");
+  const close = formula("eClose", ")", [58, 98, 62, 112], "uBody");
+  const sub = glyph("eX", "x", [63, 106, 69, 112], { label: "text" });
+  const hits = r11Of([open, inner, close, sub], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eOpen", "eInner", "eClose"] }
+  ]);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eOpen`…`eClose`/);
+  assert.match(hits[0].suggestion, /上下标 `eX`/);
+  assert.equal(hits[0].suggestion.includes("主体 `eInner`"), false);
+  assert.equal(hits[0].elements.map((element) => element.id).join(","), "eOpen,eInner,eClose,eX");
+
+  const sup = glyph("eStar", "∗", [63, 94, 69, 100], { label: "text" });
+  const raised = r11Of([open, inner, close, sup], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eOpen", "eInner", "eClose"] }
+  ]);
+  assert.equal(raised.length, 1);
+  assert.match(raised[0].suggestion, /主体 `eOpen`…`eClose`/);
+  assert.match(raised[0].suggestion, /上下标 `eStar`/);
+});
+
+test("R11 does not skip an operator or an opening bracket to reach another glyph", () => {
+  const rho = formula("eRho", "ρ", [28, 100, 36, 110], "uBody");
+  const nabla = formula("eNab", "∇", [38, 100, 48, 110], "uBody");
+  const sup = glyph("e2", "2", [49, 96, 55, 102], { label: "text" });
+  assert.equal(r11Of([rho, nabla, sup], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eRho", "eNab"] }
+  ]).length, 0);
+
+  const open = formula("eOpen", "(", [38, 98, 44, 112], "uBody");
+  assert.equal(r11Of([rho, open, sup], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eRho", "eOpen"] }
+  ]).length, 0);
+
+  const near = formula("eRho2", "ρ", [40, 100, 50, 110], "uBody");
+  const mark = glyph("eTwo", "2", [51, 96, 57, 102], { label: "text" });
+  const kept = r11Of([near, mark], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eRho2"] }
+  ]);
+  assert.equal(kept.length, 1);
+  assert.match(kept[0].suggestion, /主体 `eRho2`/);
+  assert.match(kept[0].suggestion, /上下标 `eTwo`/);
+});
+
+test("R11 uses the letter under an accent and still reports a plain base", () => {
+  const beta = formula("eBeta", "β", [40, 100, 50, 110], "uBody");
+  const tilde = glyph("eTilde", "˜", [44, 92, 52, 98], { label: "text" });
+  const sub = glyph("eT", "t", [53, 104, 59, 111], { label: "text" });
+  const hits = r11Of([beta, tilde, sub], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eBeta"] }
+  ]);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eBeta`/);
+  assert.match(hits[0].suggestion, /上下标 `eT`/);
+
+  const owned = formula("eT", "t", [53, 104, 59, 111], "uBody");
+  assert.equal(r11Of([beta, tilde, owned], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eBeta", "eT"] }
+  ]).length, 0);
+
+  const plain = formula("eX", "x", [40, 100, 50, 110], "uBody");
+  const mark = glyph("eI", "i", [52, 104, 58, 111], { label: "text" });
+  const reported = r11Of([plain, mark], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eX"] }
+  ]);
+  assert.equal(reported.length, 1);
+  assert.match(reported[0].suggestion, /主体 `eX`/);
+});
+
+test("R11 treats a positive-size control glyph as an ordinary base", () => {
+  const base = formula("eCtl", "\u0002", [40, 100, 50, 110], "uBody");
+  const sub = glyph("e2", "2", [52, 104, 58, 111], { label: "text" });
+  const hits = r11Of([base, sub], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eCtl"] }
+  ]);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eCtl`/);
+  assert.match(hits[0].suggestion, /上下标 `e2`/);
+});
+
+test("R11 reports a real split beside each shape it refuses", () => {
+  const base = formula("eX", "x", [40, 100, 50, 110], "uBody");
+  const sub = glyph("eI", "i", [52, 104, 58, 111], { label: "text" });
+  const units = [{ id: "uBody", type: "display", equationNumber: false, elementIds: ["eX"] }];
+  assert.equal(r11Of([base, sub], units).length, 1);
+
+  const word = glyph("eWord", "x", [50, 100, 90, 110], { label: "formula", unitId: "uBody" });
+  const short = glyph("eT", "t", [40, 96, 48, 102], { label: "text" });
+  const wordHits = r11Of([short, word], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eWord"] }
+  ], "uBody");
+  assert.equal(wordHits.length, 1);
+  assert.match(wordHits[0].suggestion, /主体 `eWord`/);
+
+  const upper = formula("eUp", "b", [40, 100, 50, 110], "uUp");
+  const same = glyph("eSub", "i", [52, 104, 58, 111], { label: "text" });
+  const lineHits = r11Of([upper, same], [
+    { id: "uUp", type: "display", equationNumber: false, elementIds: ["eUp"] }
+  ], "uUp");
+  assert.equal(lineHits.length, 1);
+  assert.match(lineHits[0].suggestion, /主体 `eUp`/);
+
+  const left = formula("eFar", "x", [40, 100, 50, 110], "uFar");
+  const right = glyph("eI2", "i", [52, 104, 58, 111], { label: "text" });
+  assert.equal(r11Of([left, right], [
+    { id: "uFar", type: "display", equationNumber: false, elementIds: ["eFar"] }
+  ], "uFar").length, 1);
+
+  const num = glyph("eNum", "n", [40, 96, 46, 102], { label: "text" });
+  const den = formula("eDen", "b", [47, 100, 57, 110], "uBody");
+  assert.equal(r11Of([num, den], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eDen"] }
+  ]).length, 1);
+
+  const letter = formula("eO", "o", [40, 100, 50, 110], "uBody");
+  const beside = glyph("eS", "s", [52, 104, 58, 111], { label: "text" });
+  assert.equal(r11Of([letter, beside], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eO"] }
+  ]).length, 1);
+
+  const tall = formula("eN", "N", [40, 100, 50, 110], "uBody");
+  const index = glyph("eK", "k", [52, 104, 58, 111], { label: "text" });
+  assert.equal(r11Of([tall, index], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eN"] }
+  ]).length, 1);
+
+  const host = formula("eZ", "Z", [40, 100, 50, 110], "uBody");
+  const mark = glyph("eJ", "j", [52, 104, 58, 111], { label: "text" });
+  assert.equal(r11Of([host, mark], [
+    { id: "uBody", type: "display", equationNumber: false, elementIds: ["eZ"] }
+  ]).length, 1);
 });
