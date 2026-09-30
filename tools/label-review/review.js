@@ -1,4 +1,4 @@
-import { verifyPageLabels } from "/lib/label-schema.js";
+import { verifyPageLabels } from "/tools/label-review/runtime/label-schema.js";
 import {
   applyEquationNumber,
   applyMerge,
@@ -36,10 +36,10 @@ import {
   selectionForReviewUnit,
   selectionKey,
   zoomToFitWidth
-} from "/lib/review-actions.js";
-import * as pdfjs from "/pdf/vendor/pdf.min.mjs";
+} from "/tools/label-review/runtime/review-actions.js";
+import * as pdfjs from "/tools/label-review/runtime/pdf.min.mjs";
 
-pdfjs.GlobalWorkerOptions.workerSrc = "/pdf/vendor/pdf.worker.min.mjs";
+pdfjs.GlobalWorkerOptions.workerSrc = "/tools/label-review/runtime/pdf.worker.min.mjs";
 
 const state = {
   manifest: null,
@@ -160,12 +160,33 @@ function currentManifestUnit() {
 
 function itemBody(page, unit) {
   const original = new Set(unit.elementIds || []);
-  const elements = (page?.elements || []).filter((element) => original.has(element.id) || element.unitId === unit.unitId);
+  let liveUnitId = null;
+  for (const element of page?.elements || []) {
+    if (original.has(element.id) && element.unitId) {
+      liveUnitId = element.unitId;
+      break;
+    }
+  }
+  const elements = (page?.elements || []).filter((element) => {
+    if (liveUnitId && element.unitId === liveUnitId) return true;
+    return original.has(element.id);
+  });
+  const type = elements.some((element) => element.unitType === "display")
+    ? "display"
+    : elements.some((element) => element.unitType === "inline")
+      ? "inline"
+      : unit.type;
+  const reviewedIds = page?.reviewedUnitIds || [];
   return {
     queueIndex: unit.queueIndex,
+    paperId: unit.paperId,
+    page: unit.page,
+    unitId: unit.unitId,
+    type,
+    equationNumber: elements.some((element) => element.equationNumber === true),
     elementIds: elements.map((element) => element.id),
     elements,
-    reviewed: (page?.reviewedUnitIds || []).includes(unit.unitId)
+    reviewed: reviewedIds.includes(unit.unitId) || (liveUnitId != null && reviewedIds.includes(liveUnitId))
   };
 }
 
@@ -176,12 +197,34 @@ function saveRequest(payload, paperId, pageNumber) {
       body: JSON.stringify(payload)
     };
   }
+  if (state.mode === "pages") return null;
   const unit = currentManifestUnit();
   if (!unit?.queueIndex) return null;
+  if (unit.paperId !== paperId || Number(unit.page) !== Number(pageNumber)) return null;
+  const body = itemBody(payload, unit);
+  if (!body.elementIds.length) return null;
   return {
     url: `/api/item/${unit.queueIndex}`,
-    body: JSON.stringify(itemBody(payload, unit))
+    body: JSON.stringify(body)
   };
+}
+
+function manifestPageView(page) {
+  if (!page) return page;
+  const units = (state.reviewSet.units || []).filter((unit) => unit.paperId === state.paperId && Number(unit.page) === Number(state.pageNumber));
+  const seeds = new Set(units.flatMap((unit) => unit.elementIds || []));
+  const live = new Set();
+  for (const element of page.elements || []) {
+    if (seeds.has(element.id) && element.unitId) live.add(element.unitId);
+  }
+  const elements = (page.elements || []).filter((element) => {
+    if (seeds.has(element.id)) return true;
+    if (element.unitId && live.has(element.unitId)) return true;
+    return !element.unitId && element.label !== "formula";
+  });
+  const ids = new Set(elements.map((element) => element.id));
+  const kept = (page.units || []).filter((unit) => (unit.elementIds || []).length && (unit.elementIds || []).every((id) => ids.has(id)));
+  return { ...page, elements, units: kept };
 }
 
 function reviewedKeySet() {
@@ -198,6 +241,7 @@ function reviewedCount() {
 }
 
 function renderQueue() {
+  if (manifestMode() && state.mode === "pages") state.mode = "units";
   queue.innerHTML = "";
   const picker = document.createElement("select");
   const docs = (state.manifest.documents || []).filter((doc) => {
@@ -212,9 +256,16 @@ function renderQueue() {
     picker.append(option);
   }
   picker.addEventListener("change", () => {
+    if (manifestMode()) {
+      const index = (state.reviewSet.units || []).findIndex((unit) => unit.paperId === picker.value);
+      if (index >= 0) openUnit(index);
+      return;
+    }
     state.mode = "pages";
     openPage(picker.value, 1);
   });
+  const pagesButton = document.querySelector("#mode-pages");
+  if (pagesButton) pagesButton.disabled = manifestMode();
   queue.append(picker);
   const total = state.reviewSet.units?.length || state.status?.reviewTarget || 0;
   progress.textContent = manifestMode()
@@ -992,7 +1043,8 @@ document.querySelector("#revert").addEventListener("click", async () => {
   await paint();
 });
 document.querySelector("#export").addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(state.page, null, 2)], { type: "application/json" });
+  const exported = manifestMode() ? manifestPageView(state.page) : state.page;
+  const blob = new Blob([JSON.stringify(exported, null, 2)], { type: "application/json" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = `${state.paperId}-${pageFile(state.pageNumber)}`;
@@ -1088,18 +1140,21 @@ async function jumpToQueueNumber(raw) {
   const text = String(raw ?? "").trim().replace(/^#/, "");
   if (!/^\d+$/.test(text)) {
     saveState.textContent = "请输入队列序号，例如 12。";
+    renderQueue();
     return;
   }
   const response = await fetch(`/api/review-unit/${Number(text)}`);
   if (!response.ok) {
     await response.json().catch(() => null);
     saveState.textContent = "不在本次清单内";
+    renderQueue();
     return;
   }
   const unit = await response.json();
   const index = (state.reviewSet.units || []).findIndex((item) => item.queueIndex === unit.queueIndex);
   if (index < 0) {
     saveState.textContent = "不在本次清单内";
+    renderQueue();
     return;
   }
   await openUnit(index);
@@ -1186,6 +1241,12 @@ document.querySelector("#mode-units").addEventListener("click", () => {
   openUnit(index);
 });
 document.querySelector("#mode-pages").addEventListener("click", () => {
+  if (manifestMode()) {
+    state.mode = "units";
+    saveState.textContent = "清单模式不用整页队列。";
+    renderQueue();
+    return;
+  }
   state.mode = "pages";
   renderQueue();
   if (state.page) {

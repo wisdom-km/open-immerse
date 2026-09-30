@@ -452,6 +452,15 @@ test("the review page and the label docs describe manifest mode", () => {
   assert.match(docs, /不在本次清单内/);
   assert.match(docs, /清单模式：已标 x \/ 共 y/);
   assert.match(todo, /标注用复核工具的清单模式，结果写到仓库外目录，不进 labels\/reviewed。/);
+  const html = readFileSync(new URL("../tools/label-review/index.html", import.meta.url), "utf8");
+  assert.match(html, /默认按复核集往下走/);
+  assert.equal(html.includes("约 1000"), false);
+  assert.match(review, /清单模式不用整页队列/);
+  assert.match(review, /manifestPageView\(/);
+  assert.match(review, /\/tools\/label-review\/runtime\/label-schema\.js/);
+  const jump = review.slice(review.indexOf("async function jumpToQueueNumber"), review.indexOf("async function confirmUnit"));
+  const missed = jump.slice(jump.indexOf("不在本次清单内"));
+  assert.match(missed, /renderQueue\(/);
 });
 
 test("manifest text accepts a UTF-8 BOM and UTF-16LE", () => {
