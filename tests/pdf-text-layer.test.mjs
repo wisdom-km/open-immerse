@@ -14,7 +14,7 @@ import {
   textLayerToBlocks,
   trimFormulaBboxToInk
 } from "../lib/pdf-text-layer.js";
-import { isTranslatableBlock } from "../lib/pdf-blocks.js";
+import { blockReadoutPlan, isTranslatableBlock } from "../lib/pdf-blocks.js";
 import { renderAuthorGrid } from "../lib/pdf-structure-render.js";
 import { segmentPageBlocks } from "../lib/pdf-viewer.js";
 
@@ -477,6 +477,156 @@ test("a scripted membership line is cropped instead of spelling formula letters"
   const hitH = Math.min(crops[1].bbox[3], proseBox[3]) - Math.max(crops[1].bbox[1], proseBox[1]);
   assert.ok(!(hitW > 0.01 && hitH > 0.003), `second crop swallowed the line above (${hitW}, ${hitH})`);
   assert.ok(crops[1].bbox[0] > 110 / 612, "the second crop must not swallow the line above");
+});
+
+test("Adam's three Greek parameter relations are separate inline crops", () => {
+  const math = (str, x, y, width, height = 10, font = "CMR10") =>
+    pdfItem(str, x, y, width, height, { fontName: font, fontRealName: font });
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("We used the Adam optimizer with ", 72, 206, 150, 10),
+      math("β", 230, 206, 6, 10, "CMMI10"),
+      math("1", 236, 204, 4, 7, "CMR7"),
+      math("= 0", 244, 206, 16, 10),
+      math(".", 260, 206, 3, 10, "CMMI10"),
+      math("9", 264, 206, 5, 10),
+      pdfItem(",", 270, 206, 3, 10),
+      math("β", 278, 206, 6, 10, "CMMI10"),
+      math("2", 284, 204, 4, 7, "CMR7"),
+      math("= 0", 292, 206, 16, 10),
+      math(".", 308, 206, 3, 10, "CMMI10"),
+      math("98", 312, 206, 10, 10),
+      pdfItem(" and ", 324, 206, 22, 10),
+      math("ϵ", 350, 206, 5, 10, "CMMI10"),
+      math("= 10", 358, 206, 20, 10),
+      math("−", 380, 210, 6, 7, "CMSY7"),
+      math("9", 386, 210, 4, 7, "CMR7"),
+      pdfItem(". We varied the learning rate.", 394, 206, 140, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 7
+  });
+  const sentence = page.blocks.find((block) => /Adam optimizer/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /⟦f\d+⟧, ⟦f\d+⟧ and ⟦f\d+⟧/);
+  assert.doesNotMatch(sentence.text, /⟦f\d+⟧−9/);
+  assert.equal(sentence.placeholders.length, 3);
+  for (const entry of sentence.placeholders) {
+    const crop = page.blocks.find((block) => block.id === entry.blockId);
+    const width = (crop.bbox[2] - crop.bbox[0]) * 612;
+    assert.ok(width < 80, `crop stays under 80pt (${width.toFixed(1)})`);
+    assert.equal(crop.display, false);
+  }
+});
+
+test("a latin a = 1, b = 2 list is not split by the Greek relation comma", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("We set ", 72, 400, 36, 10),
+      pdfItem("a", 110, 400, 6, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("= 1", 118, 400, 16, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem(",", 136, 400, 3, 10),
+      pdfItem("b", 142, 400, 6, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("= 2", 150, 400, 16, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem(" in the example.", 170, 400, 80, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 3
+  });
+  const sentence = page.blocks.find((block) => /We set/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.equal(sentence.placeholders?.length || 0, 1);
+});
+
+test("a bare 10000·2π scale stays in the sentence", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("The wavelengths form a geometric progression from ", 72, 396, 300, 10),
+      pdfItem("2", 380, 396, 4, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem("π", 384, 396, 5, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem(" to ", 394, 396, 16, 10),
+      pdfItem("10000", 416, 396, 25, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem("·", 442, 396, 4, 10, { fontName: "CMSY10", fontRealName: "CMSY10" }),
+      pdfItem("2", 448, 396, 5, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem("π", 454, 396, 6, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem(". We chose this function because it would allow the model to learn.", 462, 396, 220, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 6
+  });
+  const sentence = page.blocks.find((block) => /wavelengths form/.test(block.sourceText || ""));
+  assert.ok(sentence);
+  assert.match(sentence.sourceText, /10000·2π/);
+  assert.match(sentence.text, /10000·2π/);
+  assert.equal(sentence.placeholders, undefined);
+});
+
+test("an indented numbered equation stays one display formula", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("We varied the learning rate over the course of training, according to the formula:", 108, 206, 396, 10),
+      pdfItem("lrate", 163, 165, 22, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("=", 190, 165, 8, 10, { fontName: "CMR10", fontRealName: "CMR10" }),
+      pdfItem("d", 210, 165, 6, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("model", 216, 162, 24, 7, { fontName: "NimbusRomNo9L-Regu", fontRealName: "NimbusRomNo9L-Regu" }),
+      pdfItem("step", 250, 165, 20, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("warmup", 280, 165, 40, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("steps", 330, 165, 28, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("(3)", 400, 165, 16, 10),
+      pdfItem("This corresponds to increasing the learning rate linearly for the first warmup steps.", 108, 141, 390, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 7
+  });
+  const display = page.blocks.find((block) => block.label === "formula" && block.display === true);
+  assert.ok(display);
+  assert.equal(blockReadoutPlan(display).className, "oi-pdf-display-math");
+  const before = page.blocks.find((block) => /according to the formula/.test(block.sourceText || ""));
+  const after = page.blocks.find((block) => /This corresponds to increasing/.test(block.sourceText || ""));
+  assert.ok(before);
+  assert.ok(after);
+  assert.equal(before.sourceText.includes("lrate"), false);
+  assert.equal(after.sourceText.includes("(3)"), false);
+});
+
+test("a footnote digit under the previous line starts the next sentence", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("queries, keys and values we then perform the attention function in parallel, yielding", 108, 102.22, 331.72, 9.96),
+      pdfItem("4", 120.65, 87.16, 2.99, 5.98, { fontName: "NimbusRomNo9L-Regu", fontRealName: "NimbusRomNo9L-Regu" }),
+      pdfItem("To illustrate why the dot products get large, assume that the components of", 123.86, 83.35, 263.96, 8.97)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 4
+  });
+  const footnote = page.blocks.find((block) => /To illustrate why the dot products get large/.test(block.sourceText || ""));
+  assert.ok(footnote);
+  assert.ok(footnote.sourceText.startsWith("4"));
+  const body = page.blocks.find((block) => /queries, keys and values we then perform/.test(block.sourceText || ""));
+  assert.ok(body);
+  assert.equal(body.sourceText.includes("To illustrate why"), false);
+});
+
+test("a citation tucked under References is the first entry, not a heading script", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("References", 108, 186.47, 55.54, 11.96, { fontName: "NimbusRomNo9L-Medi" }),
+      pdfItem("[1]", 112.98, 169.29, 11.62, 9.96),
+      pdfItem("Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E Hinton. Layer normalization.", 129.58, 169.29, 314, 9.96),
+      pdfItem("arXiv preprint arXiv:1607.06450, 2016.", 129.58, 158.38, 180, 9.96),
+      pdfItem("[2]", 108, 140, 14, 9.96),
+      pdfItem("Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua Bengio.", 126, 140, 280, 9.96)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 10
+  });
+  const heading = page.blocks.find((block) => block.text === "References");
+  assert.ok(heading);
+  const refs = page.blocks.filter((block) => /^\[\d+\]/.test(block.text || ""));
+  assert.deepEqual(refs.map((block) => block.text.slice(0, 3)), ["[1]", "[2]"]);
+  assert.match(refs[0].text, /arXiv preprint arXiv:1607\.06450/);
+  assert.equal(refs.every((block) => block.skipTranslate === true), true);
+  assert.equal(heading.skipTranslate, undefined);
 });
 
 test("reference entries keep column order and stay out of translation", () => {
