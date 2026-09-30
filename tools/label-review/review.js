@@ -89,6 +89,19 @@ async function loadManifest() {
   const setResponse = await fetch("/api/review-set");
   state.reviewSet = setResponse.ok ? await setResponse.json() : { units: [] };
   const units = state.reviewSet.units || [];
+  if (manifestMode()) {
+    const params = new URLSearchParams(location.search);
+    if (params.has("q") && params.get("q") !== "") {
+      await jumpToQueueNumber(params.get("q"));
+      return;
+    }
+    if (params.get("paper")) {
+      await openPage(params.get("paper"), Number(params.get("page") || 1));
+      return;
+    }
+    await moveManifest("first");
+    return;
+  }
   const jump = parseQueueQuery(location.search, units.length);
   if (jump.ok) {
     await openUnit(jump.index);
@@ -116,6 +129,61 @@ function unitKey(unit) {
   return `${unit.paperId}:${unit.page}:${unit.unitId}`;
 }
 
+function manifestMode() {
+  return state.status?.manifestMode === true || state.reviewSet?.manifestMode === true;
+}
+
+function queueLabelIndex(unit, index) {
+  return manifestMode() && Number.isInteger(unit?.queueIndex) ? unit.queueIndex - 1 : index;
+}
+
+function numbersOnPage(units, paperId, page) {
+  if (!manifestMode()) return queueIndexesOnPage(units, paperId, page);
+  const numbers = [];
+  (units || []).forEach((unit, index) => {
+    if (unit?.paperId === paperId && Number(unit.page) === Number(page)) {
+      numbers.push(queueLabelIndex(unit, index) + 1);
+    }
+  });
+  return numbers;
+}
+
+function pageAllowed(paperId, pageNumber) {
+  if (!manifestMode()) return true;
+  return (state.reviewSet.units || []).some((unit) => unit.paperId === paperId && Number(unit.page) === Number(pageNumber));
+}
+
+function currentManifestUnit() {
+  if (!manifestMode()) return null;
+  return state.reviewSet.units?.[state.unitCursor] || null;
+}
+
+function itemBody(page, unit) {
+  const original = new Set(unit.elementIds || []);
+  const elements = (page?.elements || []).filter((element) => original.has(element.id) || element.unitId === unit.unitId);
+  return {
+    queueIndex: unit.queueIndex,
+    elementIds: elements.map((element) => element.id),
+    elements,
+    reviewed: (page?.reviewedUnitIds || []).includes(unit.unitId)
+  };
+}
+
+function saveRequest(payload, paperId, pageNumber) {
+  if (!manifestMode()) {
+    return {
+      url: `/api/page/${encodeURIComponent(paperId)}/${pageNumber}`,
+      body: JSON.stringify(payload)
+    };
+  }
+  const unit = currentManifestUnit();
+  if (!unit?.queueIndex) return null;
+  return {
+    url: `/api/item/${unit.queueIndex}`,
+    body: JSON.stringify(itemBody(payload, unit))
+  };
+}
+
 function reviewedKeySet() {
   const keys = new Set(state.status?.reviewedKeys || []);
   if (state.page?.reviewedUnitIds && state.paperId) {
@@ -132,7 +200,11 @@ function reviewedCount() {
 function renderQueue() {
   queue.innerHTML = "";
   const picker = document.createElement("select");
-  for (const doc of state.manifest.documents) {
+  const docs = (state.manifest.documents || []).filter((doc) => {
+    if (!manifestMode()) return true;
+    return (state.reviewSet.units || []).some((unit) => unit.paperId === doc.id);
+  });
+  for (const doc of docs) {
     const option = document.createElement("option");
     option.value = doc.id;
     option.textContent = `${doc.field} · ${doc.id}`;
@@ -145,10 +217,12 @@ function renderQueue() {
   });
   queue.append(picker);
   const total = state.reviewSet.units?.length || state.status?.reviewTarget || 0;
-  progress.textContent = `已复核 ${reviewedCount()}/${total} 个单元`;
+  progress.textContent = manifestMode()
+    ? `清单模式：已标 ${reviewedCount()} / 共 ${total}`
+    : `已复核 ${reviewedCount()}/${total} 个单元`;
   const head = document.createElement("p");
   if (state.mode === "pages") {
-    const here = queueIndexesOnPage(state.reviewSet.units, state.paperId, state.pageNumber);
+    const here = numbersOnPage(state.reviewSet.units, state.paperId, state.pageNumber);
     head.textContent = here.length
       ? `整页队列 · 低置信度优先 · 本页 ${here.map((n) => `#${n}`).join(" ")}`
       : "整页队列 · 低置信度优先";
@@ -157,7 +231,7 @@ function renderQueue() {
       const button = document.createElement("button");
       button.textContent = formatPageQueueLabel({
         row,
-        queueIndexes: queueIndexesOnPage(state.reviewSet.units, row.paperId, row.page)
+        queueIndexes: numbersOnPage(state.reviewSet.units, row.paperId, row.page)
       });
       button.className = row.paperId === state.paperId && row.page === state.pageNumber ? "current" : "";
       button.addEventListener("click", () => openPage(row.paperId, row.page));
@@ -173,7 +247,7 @@ function renderQueue() {
     const unit = units[index];
     const button = document.createElement("button");
     const reviewed = keys.has(unitKey(unit));
-    button.textContent = formatUnitQueueLabel({ index, unit, reviewed });
+    button.textContent = formatUnitQueueLabel({ index: queueLabelIndex(unit, index), unit, reviewed });
     button.className = [index === state.unitCursor ? "current" : "", reviewed ? "reviewed" : ""].filter(Boolean).join(" ");
     button.addEventListener("click", () => openUnit(index));
     queue.append(button);
@@ -257,6 +331,10 @@ async function loadPdfBytes(paperId) {
 }
 
 async function openPage(paperId, pageNumber, focus = null) {
+  if (!pageAllowed(paperId, pageNumber)) {
+    saveState.textContent = "不在本次清单内";
+    return;
+  }
   await saveChain;
   if (pendingSave) {
     saveState.textContent = "保存失败，还停在当前页。";
@@ -275,7 +353,16 @@ async function openPage(paperId, pageNumber, focus = null) {
     return;
   }
   if (!response.ok) {
-    await response.body?.cancel?.();
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+    if (payload?.error === "不在本次清单内") {
+      saveState.textContent = "不在本次清单内";
+      return;
+    }
     await showMissingPdf(paperId);
     return;
   }
@@ -308,7 +395,8 @@ async function openPage(paperId, pageNumber, focus = null) {
   document.querySelector("#sheet-link").href = `/api/sheet/${encodeURIComponent(paperId)}/${pageNumber}`;
   await paint();
   renderQueue();
-  saveState.textContent = payload.source === "reviewed" ? "已载入复核稿" : "预标注";
+  if (payload.source === "manifest") saveState.textContent = "已载入清单标注";
+  else saveState.textContent = payload.source === "reviewed" ? "已载入复核稿" : "预标注";
 }
 
 let paintToken = 0;
@@ -400,7 +488,7 @@ async function paint() {
     ? selectionForReviewUnit(state.page.elements, state.queueUnit.elementIds, state.queueUnit.unitId)
     : null;
   const currentIds = new Set(currentMapped?.ids || []);
-  const marks = unitMode
+  let marks = unitMode
     ? otherQueueMarks({
       units: state.reviewSet.units,
       paperId: state.paperId,
@@ -409,6 +497,14 @@ async function paint() {
       currentReviewUnitId: state.queueUnit?.unitId
     })
     : [];
+  if (unitMode && manifestMode()) {
+    const numberByUnit = new Map((state.reviewSet.units || []).map((unit) => [unit.unitId, unit.queueIndex]));
+    marks = marks.flatMap((mark) => {
+      const queueNumber = numberByUnit.get(mark.reviewUnitId);
+      if (!Number.isInteger(queueNumber)) return [];
+      return [{ ...mark, queueNumber }];
+    });
+  }
   const queuedIds = new Set(marks.flatMap((mark) => mark.elementIds));
   const hueByUnit = new Map();
   let hueIndex = 0;
@@ -477,7 +573,15 @@ let saveBusy = 0;
 
 function scheduleSave() {
   if (!state.page || !state.paperId || state.pdfMissing) return;
-  pendingSave = { payload: state.page, paperId: state.paperId, pageNumber: state.pageNumber };
+  const request = saveRequest(state.page, state.paperId, state.pageNumber);
+  if (!request) return;
+  pendingSave = {
+    payload: state.page,
+    paperId: state.paperId,
+    pageNumber: state.pageNumber,
+    url: request.url,
+    body: request.body
+  };
   saveState.textContent = "正在保存…";
   saveChain = saveChain.then(() => flushPendingSave()).catch(() => {});
 }
@@ -487,7 +591,10 @@ async function flushPendingSave() {
   if (!job) return true;
   pendingSave = null;
   const ok = await save(job.payload, job.paperId, job.pageNumber);
-  if (!ok && !pendingSave) pendingSave = job;
+  if (!ok && !pendingSave) {
+    const again = saveRequest(job.payload, job.paperId, job.pageNumber);
+    pendingSave = again ? { ...job, url: again.url, body: again.body } : job;
+  }
   return ok;
 }
 
@@ -530,14 +637,18 @@ function showSavedStamp(text) {
 }
 
 async function save(payload = state.page, paperId = state.paperId, pageNumber = state.pageNumber) {
-  const body = JSON.stringify(payload);
-  inflightSave = { paperId, pageNumber, body };
+  const request = saveRequest(payload, paperId, pageNumber);
+  if (!request) {
+    saveState.textContent = "保存失败";
+    return false;
+  }
+  inflightSave = { paperId, pageNumber, body: request.body, url: request.url };
   saveBusy += 1;
   try {
-    const response = await fetch(`/api/page/${encodeURIComponent(paperId)}/${pageNumber}`, {
+    const response = await fetch(request.url, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body
+      body: request.body
     });
     if (!response.ok) {
       saveState.textContent = "保存失败";
@@ -562,12 +673,11 @@ function sendPendingSave({ keepalive = false } = {}) {
   if (!pendingSave) return;
   const job = pendingSave;
   pendingSave = null;
-  const body = JSON.stringify(job.payload);
-  fetch(`/api/page/${encodeURIComponent(job.paperId)}/${job.pageNumber}`, {
+  fetch(job.url, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body,
-    keepalive: keepalive && keepaliveSave(body.length)
+    body: job.body,
+    keepalive: keepalive && keepaliveSave(job.body.length)
   });
 }
 
@@ -585,9 +695,10 @@ function describeSelection() {
   if (queueStatus) {
     if (mapped && state.queueUnit) {
       const reviewed = (state.page.reviewedUnitIds || []).includes(state.queueUnit.unitId);
+      const total = state.reviewSet.units?.length || state.status?.reviewTarget || 0;
       const status = formatQueueStatus({
         reviewedCount: reviewedCount(),
-        reviewTotal: state.reviewSet.units?.length || state.status?.reviewTarget || 0,
+        reviewTotal: total,
         reviewed,
         changed: mapped.changed,
         unitIds: mapped.unitIds,
@@ -596,8 +707,9 @@ function describeSelection() {
         spanned: mapped.spanned,
         nonFormulaCount: nonFormula.size
       });
+      const countLine = manifestMode() ? `清单模式：已标 ${reviewedCount()} / 共 ${total}` : status.countLine;
       queueStatus.hidden = false;
-      queueStatus.textContent = `${status.countLine}\n${status.statusLine}`;
+      queueStatus.textContent = `${countLine}\n${status.statusLine}`;
     } else {
       queueStatus.hidden = true;
       queueStatus.textContent = "";
@@ -921,12 +1033,76 @@ async function openUnit(index) {
 }
 
 function openNextUnreviewed() {
+  if (manifestMode()) {
+    moveManifest("unreviewed");
+    return;
+  }
   const next = nextUnreviewed(state.unitCursor + 1);
   if (next < 0) {
     saveState.textContent = "后面没有未复核的单元。";
     return;
   }
   openUnit(next);
+}
+
+async function moveManifest(move) {
+  const from = state.reviewSet.units?.[state.unitCursor]?.queueIndex;
+  const query = new URLSearchParams({ move });
+  if (Number.isInteger(from)) query.set("from", String(from));
+  const response = await fetch(`/api/review-nav?${query}`);
+  if (!response.ok) {
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+    saveState.textContent = payload?.error || "不在本次清单内";
+    return false;
+  }
+  const data = await response.json();
+  if (data.end && move === "unreviewed") {
+    saveState.textContent = "后面没有未复核的单元。";
+    return false;
+  }
+  if (data.end && (move === "next" || move === "prev")) return false;
+  const index = (state.reviewSet.units || []).findIndex((unit) => unit.queueIndex === data.queueIndex);
+  if (index < 0) {
+    saveState.textContent = "不在本次清单内";
+    return false;
+  }
+  await openUnit(index);
+  return true;
+}
+
+async function jumpToQueueNumber(raw) {
+  if (!manifestMode()) {
+    const parsed = parseQueueJump(raw, state.reviewSet.units?.length || 0);
+    if (!parsed.ok) {
+      saveState.textContent = parsed.message;
+      return;
+    }
+    await openUnit(parsed.index);
+    return;
+  }
+  const text = String(raw ?? "").trim().replace(/^#/, "");
+  if (!/^\d+$/.test(text)) {
+    saveState.textContent = "请输入队列序号，例如 12。";
+    return;
+  }
+  const response = await fetch(`/api/review-unit/${Number(text)}`);
+  if (!response.ok) {
+    await response.json().catch(() => null);
+    saveState.textContent = "不在本次清单内";
+    return;
+  }
+  const unit = await response.json();
+  const index = (state.reviewSet.units || []).findIndex((item) => item.queueIndex === unit.queueIndex);
+  if (index < 0) {
+    saveState.textContent = "不在本次清单内";
+    return;
+  }
+  await openUnit(index);
 }
 
 async function confirmUnit(stay = false) {
@@ -989,6 +1165,14 @@ async function confirmUnit(stay = false) {
     describeSelection();
     return;
   }
+  if (manifestMode()) {
+    const moved = await moveManifest("next");
+    if (!moved) {
+      saveState.textContent = "已确认，这是队列最后一个。";
+      describeSelection();
+    }
+    return;
+  }
   if (next >= 0) await openUnit(next);
   else {
     saveState.textContent = "已确认，这是队列最后一个。";
@@ -1015,16 +1199,10 @@ document.querySelector("#save-stay").addEventListener("click", () => confirmUnit
 document.querySelector("#jump-queue").addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
-  const input = event.currentTarget;
-  const parsed = parseQueueJump(input.value, state.reviewSet.units?.length || 0);
-  if (!parsed.ok) {
-    saveState.textContent = parsed.message;
-    return;
-  }
-  openUnit(parsed.index);
+  jumpToQueueNumber(event.currentTarget.value);
 });
 
-window.addEventListener("keydown", (event) => {
+window.addEventListener("keydown", async (event) => {
   if (event.target.matches("input, textarea, select")) return;
   const key = event.key.toLowerCase();
   if (key === "g" && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -1050,6 +1228,8 @@ window.addEventListener("keydown", (event) => {
   else if ((key === "-" || key === "_") && !event.ctrlKey && !event.metaKey) setZoom(state.scale - 0.1);
   else if (key === "z" && !event.ctrlKey && !event.metaKey) toggleZoomFit();
   else if (key === "u") openNextUnreviewed();
+  else if (key === "j" && state.mode === "units" && manifestMode()) await moveManifest("next");
+  else if (key === "k" && state.mode === "units" && manifestMode()) await moveManifest("prev");
   else if (key === "j" && state.mode === "units") openUnit(Math.min((state.reviewSet.units?.length || 1) - 1, state.unitCursor + 1));
   else if (key === "k" && state.mode === "units") openUnit(Math.max(0, state.unitCursor - 1));
   else if (key === "j") jumpUncertain(1);
@@ -1066,7 +1246,7 @@ window.addEventListener("pagehide", () => {
     return;
   }
   if (!inflightSave) return;
-  fetch(`/api/page/${encodeURIComponent(inflightSave.paperId)}/${inflightSave.pageNumber}`, {
+  fetch(inflightSave.url, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: inflightSave.body,
