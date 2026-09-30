@@ -1170,6 +1170,44 @@ test("N25 a narrow mark in the equation-number column is not between the rows", 
   assert.equal(skippedMiddle(report), false);
 });
 
+test("a skipped line-start ≡ names the unit it joined and the element ranges", () => {
+  const report = auditReal("jhep04-2021-102", 12, (data) => {
+    merge224Rows(data);
+    insertNarrow(data, [200, 684, 208, 692]);
+  });
+  const hit = report.findings.find((item) => item.rule === "R2" && item.suggestion.includes("eNarrow"));
+  assert.ok(hit);
+  assert.match(hit.suggestion, /行首孤立的 ≡（`eNarrow`）被跨过，跨行并入单元 `u5f6dd0b28c6c`/);
+  assert.match(hit.suggestion, /中间隔着单元 `uNarrow`/);
+  assert.match(hit.suggestion, /并入前的元素范围是 `e77637580a3a69f41`–`ec1aef4c7e28d8bab`/);
+  assert.match(hit.suggestion, /并入后的元素范围是 `e7ffd7808bcb33004`–`eb2abda53d1c62968`/);
+});
+
+function insertMark(data, bbox, char) {
+  data.elements.push({
+    id: "eMark",
+    kind: "glyph",
+    char,
+    font: "LMMathSymbols10-Regular",
+    bbox,
+    label: "formula",
+    unitId: "uMark",
+    unitType: "inline",
+    equationNumber: false
+  });
+  data.units.push({ id: "uMark", type: "inline", equationNumber: false, elementIds: ["eMark"] });
+}
+
+test("a skipped narrow mark that is not a line-start ≡ keeps the general reason", () => {
+  const report = auditReal("jhep04-2021-102", 12, (data) => {
+    merge224Rows(data);
+    insertMark(data, [200, 684, 208, 692], "+");
+  });
+  const between = report.findings.filter((item) => item.rule === "R2" && item.suggestion.includes("中间隔着"));
+  assert.equal(between.some((item) => item.elements.some((element) => element.char === "+")), true);
+  assert.equal(between.every((item) => !item.suggestion.includes("行首孤立的 ≡")), true);
+});
+
 test("N26 a narrow mark outside one row span is not skipped over", () => {
   const straddling = auditReal("jhep04-2021-102", 12, (data) => {
     merge224Rows(data);

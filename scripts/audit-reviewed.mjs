@@ -658,11 +658,39 @@ function foreignRowBetween(page, unit, rowsById) {
         if (!narrowInside && !wideOverlap) continue;
         const sample = row.glyphs.find((glyph) => glyph?.bbox);
         if (!sample || !sameColumnGlyph(sample, members, page.elements || [])) continue;
-        return { otherId, glyph: sample };
+        return { otherId, glyph: sample, glyphs: row.glyphs };
       }
     }
   }
   return null;
+}
+
+function readingRange(members) {
+  const glyphs = (members || []).filter((glyph) => glyph?.bbox);
+  if (!glyphs.length) return "（无）";
+  const ordered = glyphs.slice().sort((a, b) => a.bbox[1] - b.bbox[1] || a.bbox[0] - b.bbox[0] || String(a.id).localeCompare(String(b.id)));
+  const first = ordered[0];
+  const last = ordered[ordered.length - 1];
+  if (first.id === last.id) return `\`${first.id}\``;
+  return `\`${first.id}\`–\`${last.id}\``;
+}
+
+// A one-glyph ≡ row starts its own line. Nothing in that unit sits to its left.
+function loneLineStartEquiv(hit) {
+  // ≡ is a one-character math-symbol glyph, so the fence test would drop it.
+  // The row is the whole unit: nothing in that unit sits to the left of ≡.
+  const glyphs = (hit?.glyphs || []).filter((glyph) => String(glyph.char || "").trim());
+  return glyphs.length === 1 && String(glyphs[0].char || "").trim() === "≡";
+}
+
+function skippedRowSuggestion(page, unit, hit) {
+  const generic = "这个行间单元并进了不相邻的公式行，中间隔着别的单元。折行只包括紧挨着的下一行。把中间隔开的那一行按 s 拆出去。";
+  if (!loneLineStartEquiv(hit)) return generic;
+  const members = membersOf(page, unit);
+  const y = midY(hit.glyph);
+  const before = members.filter((glyph) => glyph?.bbox && midY(glyph) < y - 0.5);
+  const after = members.filter((glyph) => glyph?.bbox && midY(glyph) > y + 0.5);
+  return `行首孤立的 ≡（\`${hit.glyph.id}\`）被跨过，跨行并入单元 \`${unit.id}\`，中间隔着单元 \`${hit.otherId}\`。并入前的元素范围是 ${readingRange(before)}，并入后的元素范围是 ${readingRange(after)}。把被跨过的 ≡ 行按 s 拆出去。`;
 }
 
 function equationNumberBetweenRows(elements, members, height) {
@@ -1543,7 +1571,7 @@ function auditPageRules(entries, page, findings, info) {
     findings.push(finding(entry, "R2", {
       currentUnitId: unit.id,
       elements: [ownGlyph, hit.glyph].filter(Boolean),
-      suggestion: "这个行间单元并进了不相邻的公式行，中间隔着别的单元。折行只包括紧挨着的下一行。把中间隔开的那一行按 s 拆出去。"
+      suggestion: skippedRowSuggestion(page, unit, hit)
     }));
   }
 
