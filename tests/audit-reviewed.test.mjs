@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   auditReviewed,
@@ -1852,6 +1854,31 @@ test("R11 reports a script that shares the numerator or the denominator", () => 
   assert.match(denominator[0].suggestion, /上下标 `e2`/);
 });
 
+test("D2 prelabel reports a superscript under a wide table rule and ignores a real denominator", () => {
+  const rule = glyph("eRule", "", [20, 111.2, 420, 111.8], { kind: "path", label: "other" });
+  const header = glyph("eHead", "k", [59, 105.2, 71, 111], { label: "text" });
+  const body = formula("eTen", "10", [40, 120, 58, 132], "uCell");
+  const script = glyph("eExp", "−7", [59, 116.5, 71, 122.5], { label: "text" });
+  const otherHead = glyph("eHead2", "Q", [260, 105.2, 272, 111], { label: "text" });
+  const other = glyph("eCell", "8", [260, 120, 272, 132], { label: "text" });
+  const table = pageOf([rule, header, body, script, otherHead, other], [
+    { id: "uCell", type: "inline", equationNumber: false, elementIds: ["eTen"] }
+  ]);
+  const hits = run([entry("uCell", ["eTen"], { type: "inline" })], table, { mode: "prelabel" }).findings.filter((item) => item.rule === "R11");
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].suggestion, /主体 `eTen`/);
+  assert.match(hits[0].suggestion, /上下标 `eExp`/);
+
+  const numerator = formula("eNum", "10", [30, 106, 44, 114], "uFrac");
+  const bar = glyph("eBar", "", [32, 112.2, 58, 112.7], { kind: "path", label: "other" });
+  const denominator = glyph("eDen", "−7", [43, 112, 55, 118], { label: "text" });
+  const fraction = pageOf([numerator, bar, denominator], [
+    { id: "uFrac", type: "display", equationNumber: false, elementIds: ["eNum"] }
+  ]);
+  const quiet = run([entry("uFrac", ["eNum"])], fraction, { mode: "prelabel" }).findings.filter((item) => item.rule === "R11");
+  assert.equal(quiet.length, 0);
+});
+
 test("R11 does not treat a wide table rule as a fraction bar", () => {
   const rule = glyph("eRule", "", [100, 108, 400, 108.6], { kind: "path", label: "other" });
   const body = formula("eTen", "n", [88, 96, 99, 106], "uBody");
@@ -1923,14 +1950,28 @@ test("an empty or missing mode is an error, and the CLI exits without a stack", 
     isHeldOut: () => false,
     mode: ""
   }), /--mode/);
-  const root = fileURLToPath(new URL("..", import.meta.url));
-  for (const args of [["--mode"], ["--mode", ""], ["--mode", "nope"]]) {
-    const result = spawnSync(process.execPath, ["scripts/audit-reviewed.mjs", ...args], { cwd: root, encoding: "utf8" });
-    assert.notEqual(result.status, 0);
-    const lines = result.stderr.trim().split(/\n/).filter(Boolean);
-    assert.equal(lines.length, 1);
-    assert.match(lines[0], /--mode/);
-    assert.equal(result.stderr.includes("at "), false);
+  // Root is the script file's parent. There is no flag or env override, so the
+  // CLI copy lives under tmpdir and a later legal --mode cannot see this tree.
+  const repo = fileURLToPath(new URL("..", import.meta.url));
+  const fakeRoot = mkdtempSync(join(tmpdir(), "audit-reviewed-cli-"));
+  try {
+    mkdirSync(join(fakeRoot, "scripts"));
+    mkdirSync(join(fakeRoot, "lib"));
+    cpSync(join(repo, "scripts/audit-reviewed.mjs"), join(fakeRoot, "scripts/audit-reviewed.mjs"));
+    for (const name of ["review-actions.js", "label-schema.js", "sha256.js"]) {
+      cpSync(join(repo, "lib", name), join(fakeRoot, "lib", name));
+    }
+    for (const args of [["--mode"], ["--mode", ""], ["--mode", "nope"]]) {
+      const result = spawnSync(process.execPath, ["scripts/audit-reviewed.mjs", ...args], { cwd: fakeRoot, encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      const lines = result.stderr.trim().split(/\n/).filter(Boolean);
+      assert.equal(lines.length, 1);
+      assert.match(lines[0], /--mode/);
+      assert.equal(result.stderr.includes("at "), false);
+      assert.equal(/[/\\]/.test(lines[0]), false);
+    }
+  } finally {
+    rmSync(fakeRoot, { recursive: true, force: true });
   }
 });
 
