@@ -259,7 +259,7 @@ node scripts/audit-reviewed.mjs --mode prelabel --limit 50 --out reports/audit.m
 
 ## 复核完成状态
 
-队列 `#1`–`#277` 已人工确认。复核稿在提交 `860eadb`，共 134 个 `labels/reviewed/<论文>/page-NNN.json`。审计和文档改动不修改这些文件，也不改预标注。
+队列 `#1`–`#277` 已人工确认。复核稿在 main 提交 `7e10df3`（PR #78 合入），共 134 个 `labels/reviewed/<论文>/page-NNN.json`。审计和文档改动不修改这些文件，也不改预标注。
 
 ## 自动检查
 
