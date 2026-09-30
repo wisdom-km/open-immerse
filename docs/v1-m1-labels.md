@@ -278,7 +278,7 @@ $env:PORT=4174; node scripts/label-review.mjs --manifest D:\review\batch.txt --o
 }
 ```
 
-同一页上几条清单条目合成一条公式时，主条目固定为其中编号最小的那一条，不随最后是谁保存而换成另一条。主条目的 `elementIds` 和 `elements` 记下合并后的全部成员，没有 `mergedInto`。其余条目写成 `elementIds: []`、`elements: []`、`reviewed: true`，并带 `mergedInto`，值是主条目的编号。例如 #12 和 #40 合并后，主条目是 #12，`40.json` 里是 `"mergedInto": 12`。主条目保存时，被并入的条目一并记为 `reviewed: true`，按 `u` 不会再跳到它们。已经拆开的条目会清掉 `mergedInto`，并写回它自己的成员。计分时 mergedInto 条目按「与主条目同一公式」处理。
+同一页上几条清单条目合成一条公式时，主条目固定为其中编号最小的那一条，不随最后是谁保存而换成另一条。主条目没有 `mergedInto`。`elementIds` 和 `elements` 里可能混有同页正文字形，它们会跟着最后保存的那一条走。计分时，一条的成员只取 `elements` 中 `label` 为 `formula`、且 `unitId` 等于该条单元的元素；其余元素不计入成员。其余条目写成 `elementIds: []`、`elements: []`、`reviewed: true`，并带 `mergedInto`，值是主条目的编号。例如 #12 和 #40 合并后，主条目是 #12，`40.json` 里是 `"mergedInto": 12`。主条目保存时，被并入的条目一并记为 `reviewed: true`，按 `u` 不会再跳到它们。已经拆开的条目会清掉 `mergedInto`，并写回它自己的成员。计分时 mergedInto 条目按「与主条目同一公式」处理。
 
 接触图（左：页面轮廓，中：基线 SVG，右：差异。红色是页面有而 SVG 没有）：
 
