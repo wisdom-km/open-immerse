@@ -13,6 +13,7 @@ import {
   decodeManifestBytes,
   ensureManifestInRange,
   openManifestSession,
+  manifestMergeIssues,
   parseManifestText,
   parseReviewArgs,
   setReviewPathTrace,
@@ -733,6 +734,289 @@ test("a merge of two manifest items on one page is still there after restart", a
       assert.equal(other.unitId, mergedId);
       assert.equal(other.unitType, "display");
       assert.equal(other.unitId === made.other.id, false);
+    });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("manifestMergeIssues flags a mergedInto that does not match the members", () => {
+  const units = [
+    { queueIndex: 3, paperId: "paper-trio-token", page: 1, elementIds: ["member-a"] },
+    { queueIndex: 5, paperId: "paper-trio-token", page: 1, elementIds: ["member-b"] }
+  ];
+  const stale = {
+    3: { annotation: { elementIds: ["member-a"], elements: [], reviewed: true } },
+    5: { annotation: { elementIds: [], elements: [], reviewed: true, mergedInto: 3 } }
+  };
+  assert.ok(manifestMergeIssues(units, stale).length > 0);
+  const sound = {
+    3: { annotation: { elementIds: ["member-a", "member-b"], elements: [], reviewed: true } },
+    5: { annotation: { elementIds: [], elements: [], reviewed: true, mergedInto: 3 } }
+  };
+  assert.deepEqual(manifestMergeIssues(units, sound), []);
+});
+
+function trioCorpus(dir) {
+  const paper = "paper-trio-token";
+  const fillerPaper = "paper-filler-token";
+  const page = buildPage(paper, 1, [
+    { key: "u3", char: "x", bbox: [0, 0, 10, 10], type: "inline", confidence: 0.22 },
+    { key: "u5", char: "y", bbox: [20, 0, 30, 10], type: "inline", confidence: 0.32 },
+    { key: "u7", char: "z", bbox: [40, 0, 50, 10], type: "display", confidence: 0.42 }
+  ], "trio-page");
+  const filler = buildPage(fillerPaper, 1, [
+    { key: "f1", char: "f", bbox: [0, 0, 8, 8], type: "inline", confidence: 0.2 },
+    { key: "f2", char: "g", bbox: [10, 0, 18, 8], type: "inline", confidence: 0.2 },
+    { key: "f3", char: "h", bbox: [20, 0, 28, 8], type: "inline", confidence: 0.2 },
+    { key: "f4", char: "i", bbox: [30, 0, 38, 8], type: "inline", confidence: 0.2 }
+  ], "filler-page");
+  const unitByKey = (source, key) => source.units.find((unit) => unit.key === key);
+  const units = [
+    queueUnit(fillerPaper, "field-filler-token", 1, unitByKey(filler, "f1")),
+    queueUnit(fillerPaper, "field-filler-token", 1, unitByKey(filler, "f2")),
+    queueUnit(paper, "field-trio-token", 1, unitByKey(page, "u3")),
+    queueUnit(fillerPaper, "field-filler-token", 1, unitByKey(filler, "f3")),
+    queueUnit(paper, "field-trio-token", 1, unitByKey(page, "u5")),
+    queueUnit(fillerPaper, "field-filler-token", 1, unitByKey(filler, "f4")),
+    queueUnit(paper, "field-trio-token", 1, unitByKey(page, "u7"))
+  ];
+  writeJson(join(dir, "labels/review-set.json"), { schema: "open-immerse.review-set/v1", units });
+  writeJson(join(dir, "labels/prelabel", paper, "page-001.json"), page);
+  writeJson(join(dir, "corpus/manifest.json"), { documents: [{ id: paper, field: "field-trio-token", pageCount: 1 }] });
+  return { paper, page, units, u3: unitByKey(page, "u3"), u5: unitByKey(page, "u5"), u7: unitByKey(page, "u7") };
+}
+
+function trioQueueUnits(made) {
+  return [
+    { ...made.units[2], queueIndex: 3 },
+    { ...made.units[4], queueIndex: 5 },
+    { ...made.units[6], queueIndex: 7 }
+  ];
+}
+
+function readOutRecords(outDir, indexes) {
+  const records = {};
+  for (const n of indexes) {
+    const file = join(outDir, `${n}.json`);
+    if (existsSync(file)) records[n] = JSON.parse(readFileSync(file, "utf8"));
+  }
+  return records;
+}
+
+function glyph(id, unitId, type, extra = {}) {
+  return {
+    id,
+    label: "formula",
+    confidence: 1,
+    rule: "human",
+    unitId,
+    unitType: type,
+    equationNumber: false,
+    ...extra
+  };
+}
+
+async function putItem(origin, queueIndex, unit, elements, reviewed = true) {
+  return fetch(`${origin}/api/item/${queueIndex}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      queueIndex,
+      paperId: unit.paperId,
+      page: unit.page,
+      unitId: unit.unitId,
+      elementIds: elements.map((element) => element.id),
+      elements,
+      reviewed
+    })
+  });
+}
+
+test("undoing a merge clears mergedInto and restoring one item does not leave an empty record", async () => {
+  const base = mkdtempSync(join(tmpdir(), "review-manifest-undo-"));
+  const outDir = mkdtempSync(join(tmpdir(), "review-manifest-undo-out-"));
+  const made = trioCorpus(base);
+  const id3 = made.u3.elementIds[0];
+  const id5 = made.u5.elementIds[0];
+  const id7 = made.u7.elementIds[0];
+  const options = { root: base, manifestIndexes: [3, 5, 7], outDir };
+  try {
+    await withServer(options, async (origin) => {
+      const mergedId = unitIdFromMembers([id3, id5]);
+      const merged = await putItem(origin, 5, made.units[4], [
+        glyph(id3, mergedId, "inline"),
+        glyph(id5, mergedId, "inline")
+      ]);
+      assert.equal(merged.status, 200);
+      let records = readOutRecords(outDir, [3, 5, 7]);
+      assert.equal(records[3].annotation.mergedInto, undefined);
+      assert.deepEqual(records[3].annotation.elementIds, [id3, id5]);
+      assert.equal(records[5].annotation.mergedInto, 3);
+      assert.deepEqual(records[5].annotation.elementIds, []);
+      assert.equal(records[5].annotation.reviewed, true);
+      assert.equal(records[5].annotation.mergedInto === 5, false);
+      assert.deepEqual(manifestMergeIssues(trioQueueUnits(made), records), []);
+      const skip = await (await fetch(`${origin}/api/review-nav?from=3&move=unreviewed`)).json();
+      assert.deepEqual(skip, { queueIndex: 7, end: false });
+
+      const reverted = await putItem(origin, 3, made.units[2], [
+        glyph(id3, made.u3.id, "inline", { confidence: 0.22, rule: "math-font" }),
+        glyph(id5, made.u5.id, "inline", { confidence: 0.32, rule: "math-font" })
+      ], false);
+      assert.equal(reverted.status, 200);
+      records = readOutRecords(outDir, [3, 5, 7]);
+      assert.equal(records[5].annotation.mergedInto, undefined);
+      assert.deepEqual(records[5].annotation.elementIds, [id5]);
+      assert.deepEqual(records[3].annotation.elementIds, [id3]);
+      assert.equal(records[3].annotation.mergedInto, undefined);
+      assert.deepEqual(manifestMergeIssues(trioQueueUnits(made), records), []);
+
+      const swallowed = unitIdFromMembers([id3, id5, id7]);
+      const wide = await putItem(origin, 7, made.units[6], [
+        glyph(id3, swallowed, "display"),
+        glyph(id5, swallowed, "display"),
+        glyph(id7, swallowed, "display")
+      ]);
+      assert.equal(wide.status, 200);
+      records = readOutRecords(outDir, [3, 5, 7]);
+      assert.equal(records[3].annotation.mergedInto, undefined);
+      assert.deepEqual(records[3].annotation.elementIds, [id3, id5, id7]);
+      assert.equal(records[5].annotation.mergedInto, 3);
+      assert.equal(records[7].annotation.mergedInto, 3);
+      assert.deepEqual(records[5].annotation.elementIds, []);
+      assert.deepEqual(records[7].annotation.elementIds, []);
+      assert.deepEqual(manifestMergeIssues(trioQueueUnits(made), records), []);
+
+      const onlySelf = await putItem(origin, 3, made.units[2], [
+        glyph(id3, made.u3.id, "inline")
+      ]);
+      assert.equal(onlySelf.status, 200);
+      records = readOutRecords(outDir, [3, 5, 7]);
+      assert.equal(records[3].annotation.mergedInto, undefined);
+      assert.deepEqual(records[3].annotation.elementIds, [id3]);
+      assert.equal(records[5].annotation.mergedInto, undefined);
+      assert.deepEqual(records[5].annotation.elementIds, [id5, id7]);
+      assert.equal(records[7].annotation.mergedInto, 5);
+      assert.deepEqual(records[7].annotation.elementIds, []);
+      assert.equal(records[7].annotation.mergedInto === 3, false);
+      assert.deepEqual(manifestMergeIssues(trioQueueUnits(made), records), []);
+    });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("item saves reject cross-page and out-of-manifest element ids", async () => {
+  const base = mkdtempSync(join(tmpdir(), "review-manifest-ids-"));
+  const outDir = mkdtempSync(join(tmpdir(), "review-manifest-ids-out-"));
+  const made = syntheticCorpus(base);
+  const textId = "text-glyph-token";
+  const prelabel = join(base, "labels/prelabel", INSIDE, "page-001.json");
+  const page = JSON.parse(readFileSync(prelabel, "utf8"));
+  page.elements.push({
+    id: textId,
+    kind: "glyph",
+    char: "t",
+    font: "CMR10",
+    bbox: [70, 0, 80, 10],
+    label: "text",
+    confidence: 1,
+    rule: "human"
+  });
+  writeFileSync(prelabel, JSON.stringify(page));
+  const keptId = made.kept.elementIds[0];
+  const outsideId = made.outside.elements[0].id;
+  const outsiderId = made.units[3].elementIds[0];
+  try {
+    await withServer({ root: base, manifestIndexes: [1, 3], outDir }, async (origin) => {
+      const cross = await putItem(origin, 1, made.units[0], [
+        glyph(keptId, made.kept.id, "inline"),
+        glyph(outsideId, made.kept.id, "inline")
+      ]);
+      assert.equal(cross.status, 400);
+      assert.equal(existsSync(join(outDir, "1.json")), false);
+      const outsider = await putItem(origin, 1, made.units[0], [
+        glyph(keptId, made.kept.id, "inline"),
+        glyph(outsiderId, made.kept.id, "inline")
+      ]);
+      assert.equal(outsider.status, 400);
+      assert.equal(existsSync(join(outDir, "1.json")), false);
+      const text = await putItem(origin, 1, made.units[0], [
+        glyph(keptId, made.kept.id, "inline"),
+        { id: textId, label: "text", confidence: 1, rule: "human", unitId: null, unitType: null, equationNumber: false }
+      ]);
+      assert.equal(text.status, 200);
+      const saved = readFileSync(join(outDir, "1.json"), "utf8");
+      const record = JSON.parse(saved);
+      assert.deepEqual(record.annotation.elementIds, [keptId, textId]);
+      const again = await putItem(origin, 1, made.units[0], [
+        glyph(keptId, made.kept.id, "inline"),
+        glyph(outsideId, made.kept.id, "inline")
+      ]);
+      assert.equal(again.status, 400);
+      assert.equal(readFileSync(join(outDir, "1.json"), "utf8"), saved);
+    });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("a later merge still saves after another edit, and a split recalculates mergedInto", async () => {
+  const review = readFileSync(new URL("../tools/label-review/review.js", import.meta.url), "utf8");
+  const body = review.slice(review.indexOf("function itemBody"), review.indexOf("const SAVED_FIELDS"));
+  assert.match(body, /const elements = \[\.\.\.\(page\?\.elements \|\| \[\]\)\];/);
+  assert.match(body, /elementIds: elements\.map/);
+  assert.match(review, /else if \(key === "s"\) split\(\)/);
+  const base = mkdtempSync(join(tmpdir(), "review-manifest-split-"));
+  const outDir = mkdtempSync(join(tmpdir(), "review-manifest-split-out-"));
+  const made = trioCorpus(base);
+  const id3 = made.u3.elementIds[0];
+  const id5 = made.u5.elementIds[0];
+  const id7 = made.u7.elementIds[0];
+  try {
+    await withServer({ root: base, manifestIndexes: [3, 5, 7], outDir }, async (origin) => {
+      const edited = await putItem(origin, 5, made.units[4], [
+        glyph(id5, made.u5.id, "inline", { confidence: 0.9, rule: "human" })
+      ]);
+      assert.equal(edited.status, 200);
+      const mergedId = unitIdFromMembers([id3, id5]);
+      const merged = await putItem(origin, 3, made.units[2], [
+        glyph(id3, mergedId, "display"),
+        glyph(id5, mergedId, "display", { confidence: 0.9, rule: "human" }),
+        glyph(id7, made.u7.id, "display", { confidence: 0.42, rule: "math-font" })
+      ]);
+      assert.equal(merged.status, 200);
+      let records = readOutRecords(outDir, [3, 5, 7]);
+      assert.equal(records[5].annotation.mergedInto, 3);
+      assert.equal(records[7].annotation.mergedInto, undefined);
+      assert.deepEqual(records[7].annotation.elementIds, [id7]);
+      const kept = records[3].annotation.elements.find((element) => element.id === id5);
+      assert.equal(kept.rule, "human");
+      assert.equal(kept.confidence, 0.9);
+      assert.deepEqual(manifestMergeIssues(trioQueueUnits(made), records), []);
+
+      const split = await putItem(origin, 3, made.units[2], [
+        glyph(id3, made.u3.id, "inline"),
+        glyph(id5, made.u5.id, "inline", { confidence: 0.9, rule: "human" }),
+        glyph(id7, made.u7.id, "display", { confidence: 0.42, rule: "math-font" })
+      ], false);
+      assert.equal(split.status, 200);
+      records = readOutRecords(outDir, [3, 5, 7]);
+      assert.equal(records[5].annotation.mergedInto, undefined);
+      assert.deepEqual(records[5].annotation.elementIds, [id5]);
+      assert.equal(records[5].annotation.elements[0].rule, "human");
+      assert.equal(records[3].annotation.mergedInto, undefined);
+      assert.deepEqual(records[3].annotation.elementIds, [id3]);
+      assert.deepEqual(manifestMergeIssues(trioQueueUnits(made), records), []);
+      const reloaded = await (await fetch(`${origin}/api/page/${made.paper}/1`)).json();
+      assert.deepEqual(verifyPageLabels(reloaded.page), []);
+      const separated = reloaded.page.elements.find((element) => element.id === id5);
+      assert.equal(separated.unitId, made.u5.id);
+      assert.equal(separated.rule, "human");
     });
   } finally {
     rmSync(base, { recursive: true, force: true });

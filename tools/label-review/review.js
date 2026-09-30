@@ -168,13 +168,14 @@ function itemBody(page, unit) {
       break;
     }
   }
-  const elements = (page?.elements || []).filter((element) => {
+  const own = (page?.elements || []).filter((element) => {
     if (liveUnitId && element.unitId === liveUnitId) return true;
     return original.has(element.id);
   });
-  const type = elements.some((element) => element.unitType === "display")
+  const elements = [...(page?.elements || [])];
+  const type = own.some((element) => element.unitType === "display")
     ? "display"
-    : elements.some((element) => element.unitType === "inline")
+    : own.some((element) => element.unitType === "inline")
       ? "inline"
       : unit.type;
   const reviewedIds = page?.reviewedUnitIds || [];
@@ -184,7 +185,7 @@ function itemBody(page, unit) {
     page: unit.page,
     unitId: unit.unitId,
     type,
-    equationNumber: elements.some((element) => element.equationNumber === true),
+    equationNumber: own.some((element) => element.equationNumber === true),
     elementIds: elements.map((element) => element.id),
     elements,
     reviewed: reviewedIds.includes(unit.unitId) || (liveUnitId != null && reviewedIds.includes(liveUnitId))

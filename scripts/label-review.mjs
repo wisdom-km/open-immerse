@@ -236,6 +236,85 @@ export function stepManifest(indexes, from, move, reviewed) {
   return { ok: false, error: OUTSIDE_MANIFEST };
 }
 
+/**
+ * mergedInto must name the smallest manifest item that actually holds the members.
+ * Anything else — a stale pointer, a chain, or an empty absorbed record — is a problem.
+ */
+export function manifestMergeIssues(units, records) {
+  const list = Array.isArray(units) ? units : [];
+  const recordOf = (n) => {
+    if (records instanceof Map) return records.get(n) ?? records.get(String(n)) ?? null;
+    if (!records || typeof records !== "object") return null;
+    return records[n] ?? records[String(n)] ?? null;
+  };
+  const annotationOf = (record) => {
+    if (!record || typeof record !== "object") return null;
+    if (record.annotation && typeof record.annotation === "object") return record.annotation;
+    return record;
+  };
+  const issues = [];
+  const owners = new Map();
+  for (const unit of list) {
+    const annotation = annotationOf(recordOf(unit.queueIndex));
+    if (!annotation || annotation.mergedInto != null) continue;
+    for (const id of annotation.elementIds || []) {
+      const key = String(id);
+      if (!owners.has(key)) owners.set(key, []);
+      owners.get(key).push(Number(unit.queueIndex));
+    }
+  }
+  for (const [id, indexes] of owners) {
+    if (indexes.length > 1) issues.push(`元素 ${id} 同时属于 ${indexes.map((n) => `#${n}`).join("、")}`);
+  }
+  for (const unit of list) {
+    const annotation = annotationOf(recordOf(unit.queueIndex));
+    if (!annotation || annotation.mergedInto == null) continue;
+    const into = Number(annotation.mergedInto);
+    if ((annotation.elementIds || []).length || (annotation.elements || []).length) {
+      issues.push(`#${unit.queueIndex} 已并入 #${into}，成员没有清掉`);
+    }
+    if (annotation.reviewed !== true) issues.push(`#${unit.queueIndex} 已并入 #${into}，却不是已复核`);
+    const target = annotationOf(recordOf(into));
+    if (!target) {
+      issues.push(`#${unit.queueIndex} 的 mergedInto 指向 #${into}，主条目没有记录`);
+      continue;
+    }
+    if (target.mergedInto != null) {
+      issues.push(`#${unit.queueIndex} 的 mergedInto 指向已并入的 #${into}`);
+      continue;
+    }
+    const samePage = list.filter((item) => item.paperId === unit.paperId && Number(item.page) === Number(unit.page));
+    if (!samePage.some((item) => Number(item.queueIndex) === into)) {
+      issues.push(`#${unit.queueIndex} 的 mergedInto 不在同一页`);
+    }
+    const held = new Set((target.elementIds || []).map(String));
+    for (const id of unit.elementIds || []) {
+      if (!held.has(String(id))) issues.push(`#${unit.queueIndex} 的成员不在主条目 #${into}`);
+    }
+    const cluster = samePage.filter((item) => (item.elementIds || []).some((id) => held.has(String(id))));
+    const min = cluster.length ? Math.min(...cluster.map((item) => Number(item.queueIndex))) : null;
+    if (min != null && into !== min) issues.push(`#${unit.queueIndex} 应并入 #${min}，现在指向 #${into}`);
+  }
+  for (const unit of list) {
+    const annotation = annotationOf(recordOf(unit.queueIndex));
+    if (!annotation || annotation.mergedInto != null) continue;
+    const held = new Set((annotation.elementIds || []).map(String));
+    const samePage = list.filter((item) => item.paperId === unit.paperId && Number(item.page) === Number(unit.page));
+    const cluster = samePage.filter((item) => (item.elementIds || []).some((id) => held.has(String(id))));
+    if (!cluster.length) continue;
+    const min = Math.min(...cluster.map((item) => Number(item.queueIndex)));
+    if (Number(unit.queueIndex) !== min) issues.push(`#${unit.queueIndex} 持有别人的成员，主条目应是 #${min}`);
+    for (const other of cluster) {
+      if (Number(other.queueIndex) === Number(unit.queueIndex)) continue;
+      const otherAnn = annotationOf(recordOf(other.queueIndex));
+      if (!otherAnn || Number(otherAnn.mergedInto) !== Number(unit.queueIndex)) {
+        issues.push(`#${other.queueIndex} 的成员在 #${unit.queueIndex}，但没有标成并入它`);
+      }
+    }
+  }
+  return issues;
+}
+
 function reviewSetLength(base) {
   const path = join(base, "labels/review-set.json");
   if (!tracedExists(path)) throw new Error("找不到复核集");
@@ -513,30 +592,190 @@ export function createReviewServer({ pdfDir, root: baseOverride, manifestIndexes
     tracedWrite(join(outDir, `${queueIndex}.json`), `${JSON.stringify(record, null, 2)}\n`);
   }
 
-  function markAbsorbedUnits(unit, elementIds, writtenAt) {
-    const claimed = new Set(elementIds.map(String));
-    for (const other of manifestUnits()) {
-      if (other.queueIndex === unit.queueIndex) continue;
-      if (other.paperId !== unit.paperId || Number(other.page) !== Number(unit.page)) continue;
-      const saved = readManifestRecord(other.queueIndex);
-      const owned = new Set((other.elementIds || []).map(String));
-      for (const id of saved?.annotation?.elementIds || []) owned.add(String(id));
-      for (const element of saved?.annotation?.elements || []) {
-        if (element?.id) owned.add(String(element.id));
-      }
-      if (![...owned].some((id) => claimed.has(id))) continue;
-      writeManifestRecord(other.queueIndex, {
-        paperId: other.paperId,
-        page: other.page,
-        unitId: other.unitId,
-        type: other.type,
-        equationNumber: other.equationNumber === true,
-        elementIds: [],
-        elements: [],
-        reviewed: saved?.annotation?.reviewed === true,
-        mergedInto: unit.queueIndex
-      }, writtenAt);
+  function copyLabelElement(element) {
+    const copy = { id: String(element.id) };
+    for (const field of LABEL_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(element, field)) copy[field] = element[field];
     }
+    return copy;
+  }
+
+  function applyLabelFields(target, element) {
+    for (const field of LABEL_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(element, field)) target[field] = element[field];
+    }
+  }
+
+  function unitsOnManifestPage(unit) {
+    return manifestUnits().filter((item) => item.paperId === unit.paperId && Number(item.page) === Number(unit.page));
+  }
+
+  function pageMembership(unit) {
+    const pre = readJson(pagePath(base, "labels/prelabel", unit.paperId, unit.page));
+    const onPage = unitsOnManifestPage(unit);
+    const manifestIds = new Set(onPage.flatMap((item) => (item.elementIds || []).map(String)));
+    const prelabelIds = new Set((pre.units || []).flatMap((item) => (item.elementIds || []).map(String)));
+    const onPageElements = new Set((pre.elements || []).map((element) => String(element.id)));
+    return { pre, onPage, manifestIds, prelabelIds, onPageElements };
+  }
+
+  function elementAllowed(id, membership) {
+    if (!membership.onPageElements.has(id)) return false;
+    if (membership.manifestIds.has(id)) return true;
+    if (membership.prelabelIds.has(id)) return false;
+    return true;
+  }
+
+  function planManifestRecords(unit, body, membership) {
+    const byId = new Map();
+    for (const element of membership.pre.elements || []) byId.set(String(element.id), copyLabelElement(element));
+    const prior = [];
+    for (const item of membership.onPage) {
+      const saved = readManifestRecord(item.queueIndex);
+      if (!saved || saved.annotation?.mergedInto != null) continue;
+      prior.push(saved);
+    }
+    prior.sort((a, b) => String(a.writtenAt || "").localeCompare(String(b.writtenAt || "")));
+    for (const saved of prior) {
+      for (const element of saved.annotation?.elements || []) {
+        const target = element?.id ? byId.get(String(element.id)) : null;
+        if (target) applyLabelFields(target, element);
+      }
+    }
+    const accepted = new Set((body.elementIds || []).map(String));
+    for (const element of Array.isArray(body.elements) ? body.elements : []) {
+      if (!element?.id || !accepted.has(String(element.id))) continue;
+      const target = byId.get(String(element.id));
+      if (target) applyLabelFields(target, element);
+    }
+    const groups = new Map();
+    for (const [id, element] of byId) {
+      if (element.label !== "formula" || !element.unitId) continue;
+      if (!groups.has(element.unitId)) groups.set(element.unitId, new Set());
+      groups.get(element.unitId).add(id);
+    }
+    const originals = new Map(membership.onPage.map((item) => [item.queueIndex, new Set((item.elementIds || []).map(String))]));
+    const groupOwners = new Map();
+    for (const item of membership.onPage) {
+      const own = originals.get(item.queueIndex);
+      for (const [unitId, ids] of groups) {
+        let hit = false;
+        for (const id of ids) {
+          if (own.has(id)) {
+            hit = true;
+            break;
+          }
+        }
+        if (!hit) continue;
+        if (!groupOwners.has(unitId)) groupOwners.set(unitId, []);
+        groupOwners.get(unitId).push(item.queueIndex);
+      }
+    }
+    const parent = new Map(membership.onPage.map((item) => [item.queueIndex, item.queueIndex]));
+    const find = (n) => {
+      let root = n;
+      while (parent.get(root) !== root) root = parent.get(root);
+      while (parent.get(n) !== root) {
+        const next = parent.get(n);
+        parent.set(n, root);
+        n = next;
+      }
+      return root;
+    };
+    const unite = (a, b) => {
+      const left = find(a);
+      const right = find(b);
+      if (left !== right) parent.set(right, left);
+    };
+    for (const owners of groupOwners.values()) {
+      for (let index = 1; index < owners.length; index += 1) unite(owners[0], owners[index]);
+    }
+    const clusters = new Map();
+    for (const item of membership.onPage) {
+      const root = find(item.queueIndex);
+      if (!clusters.has(root)) clusters.set(root, []);
+      clusters.get(root).push(item);
+    }
+    const ownedOriginal = new Set();
+    for (const ids of originals.values()) {
+      for (const id of ids) ownedOriginal.add(id);
+    }
+    const loose = new Set();
+    for (const id of byId.keys()) {
+      if (ownedOriginal.has(id) || membership.prelabelIds.has(id)) continue;
+      loose.add(id);
+    }
+    const looseHome = new Map();
+    for (const saved of prior) {
+      for (const id of saved.annotation?.elementIds || []) {
+        const key = String(id);
+        if (loose.has(key)) looseHome.set(key, Number(saved.queueIndex));
+      }
+    }
+    const order = (membership.pre.elements || []).map((element) => String(element.id));
+    const records = new Map();
+    for (const items of clusters.values()) {
+      const primary = items.reduce((best, item) => (Number(item.queueIndex) < Number(best.queueIndex) ? item : best));
+      const routeHere = items.some((item) => item.queueIndex === unit.queueIndex);
+      const touched = new Set();
+      for (const item of items) {
+        const own = originals.get(item.queueIndex);
+        for (const [unitId, ids] of groups) {
+          for (const id of ids) {
+            if (own.has(id)) {
+              touched.add(unitId);
+              break;
+            }
+          }
+        }
+      }
+      const memberIds = [];
+      for (const id of order) {
+        const element = byId.get(id);
+        if (!element) continue;
+        const inGroup = element.label === "formula" && element.unitId && touched.has(element.unitId);
+        const originalHere = items.some((item) => originals.get(item.queueIndex).has(id));
+        const carryLoose = loose.has(id) && (
+          (routeHere && accepted.has(id)) ||
+          (!accepted.has(id) && items.some((item) => looseHome.get(id) === Number(item.queueIndex)))
+        );
+        if (inGroup || originalHere || carryLoose) memberIds.push(id);
+      }
+      const elements = memberIds.map((id) => copyLabelElement(byId.get(id)));
+      const type = elements.some((element) => element.unitType === "display")
+        ? "display"
+        : elements.some((element) => element.unitType === "inline")
+          ? "inline"
+          : primary.type;
+      const savedPrimary = readManifestRecord(primary.queueIndex);
+      const primaryWasLive = savedPrimary?.annotation?.mergedInto == null && savedPrimary?.annotation?.reviewed === true;
+      records.set(primary.queueIndex, {
+        paperId: primary.paperId,
+        page: primary.page,
+        unitId: primary.unitId,
+        type,
+        equationNumber: elements.some((element) => element.equationNumber === true),
+        elementIds: memberIds,
+        elements,
+        reviewed: routeHere ? body.reviewed === true : primaryWasLive
+      });
+      if (items.length < 2) continue;
+      for (const item of items) {
+        if (item.queueIndex === primary.queueIndex) continue;
+        records.set(item.queueIndex, {
+          paperId: item.paperId,
+          page: item.page,
+          unitId: item.unitId,
+          type: item.type,
+          equationNumber: false,
+          elementIds: [],
+          elements: [],
+          reviewed: true,
+          mergedInto: primary.queueIndex
+        });
+      }
+    }
+    return { writtenAt: new Date().toISOString(), records };
   }
 
   function overlayManifestPage(prelabel, paperId, page) {
@@ -740,32 +979,19 @@ export function createReviewServer({ pdfDir, root: baseOverride, manifestIndexes
         return;
       }
       const elementIds = body.elementIds.map(String);
-      const idSet = new Set(elementIds);
-      const elements = (Array.isArray(body?.elements) ? body.elements : [])
-        .filter((element) => element && idSet.has(String(element.id)))
-        .map((element) => {
-          const copy = { id: String(element.id) };
-          for (const field of LABEL_FIELDS) {
-            if (Object.prototype.hasOwnProperty.call(element, field)) copy[field] = element[field];
-          }
-          return copy;
-        });
-      const record = {
-        queueIndex: n,
-        writtenAt: new Date().toISOString(),
-        annotation: {
-          paperId: unit.paperId,
-          page: unit.page,
-          unitId: unit.unitId,
-          type: body?.type === "display" || body?.type === "inline" ? body.type : unit.type,
-          equationNumber: body?.equationNumber === true,
-          elementIds,
-          elements,
-          reviewed: body?.reviewed === true
-        }
-      };
-      writeManifestRecord(n, record.annotation, record.writtenAt);
-      markAbsorbedUnits(unit, elementIds, record.writtenAt);
+      const membership = pageMembership(unit);
+      if (!elementIds.every((id) => elementAllowed(id, membership))) {
+        send(response, 400, JSON.stringify({ error: "标注格式不对" }));
+        return;
+      }
+      const planned = planManifestRecords(unit, { ...body, elementIds, reviewed: body?.reviewed === true }, membership);
+      if (manifestMergeIssues(membership.onPage, planned.records).length) {
+        send(response, 500, JSON.stringify({ error: "合并记录不一致" }));
+        return;
+      }
+      for (const [queueIndex, annotation] of planned.records) {
+        writeManifestRecord(queueIndex, annotation, planned.writtenAt);
+      }
       send(response, 200, JSON.stringify({ ok: true }));
       return;
     }
