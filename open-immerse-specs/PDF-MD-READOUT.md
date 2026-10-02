@@ -8,8 +8,8 @@
 | | |
 | --- | --- |
 | 原文栏 | **现有** pdf.js PDF 渲染（不改网页）。译文不进入原文栏 |
-| 右栏 | **`.readout` Markdown 通读**（连续滚动）。当前已发布的公式画面按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层：`surface="redraw"` 把原页区域高清重渲染，本质上是区域渲染。右栏使用原页裁图（译文段落，加上公式、图、表的原页画面）。目标是按原字体、原位置重绘字符 |
-| 公式 / 图 / 表 | 跟打开的 PDF 同一套内容。当前已发布的是 pageRaster 上的区域渲染（`surface="redraw"`），按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。默认用 pageRaster 裁图。其他手段须过同一条验收。右栏块级/行内排版以 [`PDF-MD-FORMULA-LAYOUT.md`](./PDF-MD-FORMULA-LAYOUT.md) 为准 |
+| 右栏 | **`.readout` Markdown 通读**（连续滚动）。当前已上线的公式画面按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层：`surface="redraw"` 是 `renderSharpVisualCrop` 的原页高清重渲染。右栏使用原页裁图（译文段落，加上公式、图、表的原页画面）；pageRaster 裁图是 png 回退。目标是按原字体、原位置重绘字符 |
+| 公式 / 图 / 表 | 跟打开的 PDF 同一套内容。当前已上线的第一层是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`），或 pageRaster 裁图这条 png 回退（`surface="png"`）。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。其他手段须过同一条验收。右栏块级/行内排版以 [`PDF-MD-FORMULA-LAYOUT.md`](./PDF-MD-FORMULA-LAYOUT.md) 为准 |
 | 停 | 把译文贴进原文栏原文框（**#40 closed**）。Issue #40 保持关闭。禁止再开 bbox 镜像 |
 | 网页 | **仍主路径**；本单 **勿回归** 网页 content/Options |
 | 藏入口 | **本轨不做**（`PDF-ENTRY-SECONDARY` 本轨作废） |
@@ -22,7 +22,7 @@
 ## 1. 产品事实
 
 - 译文跟抽出的原文一致：不增主张、不漏句子、不改数字和变量名。
-- 公式、图、表跟打开的 PDF 是同一套内容。当前已发布的公式画面是 pageRaster 上的区域渲染（`surface="redraw"`），按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层，本质上是区域渲染。目标是按原字体、原位置重绘字符。矢量画不出来退成 png，静默、不加徽章（V1-B1），不算换层。换层只看框的把握。默认用 pageRaster 原页裁图。内嵌图原样取出也可以。换手段时，右栏这一块仍须与原文栏同一区域的内容一致。重画图内英文，不采用。
+- 公式、图、表跟打开的 PDF 是同一套内容。当前已上线的公式画面是第一层：`renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`），或 pageRaster 的 png 裁图。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。按 `pdf/high-precision/REQUIREMENTS.md` §2.6，高清重渲染本质上仍是区域渲染。目标是按原字体、原位置重绘字符。高清重渲染画不出来退成 png，静默、不加徽章（V1-B1），不算换层。换层只看框的把握。第三层占位默认关闭：开关关着时，框把握不足的公式仍按现状显示。内嵌图原样取出也可以。换手段时，右栏这一块仍须与原文栏同一区域的内容一致。重画图内英文，不采用。
 - OCR 认错的字母不上屏，也不得送进翻译。把 `i` 认成 `n`，或把 `n` 认成 `i`，都算失败。
 - 有文字层的正文用文字层原句。这是主场景。没有可信文字层时，正文才用识别结果，并在右栏标明可能有误差。公式、图、表仍是原页裁图。划区框内的字母不进正文。文字层兜底时，一行里除去公式函数名后没有普通句子，就整行裁图，不把 `softmax` 送去翻译。
 - 译文只出现在右栏。
