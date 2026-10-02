@@ -1152,12 +1152,15 @@ button:disabled { opacity: 0.45; cursor: default; }
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  width: max-content;
+  justify-content: center;
+  width: var(--rf-capsule-w, auto);
+  min-width: var(--rf-capsule-w, 0px);
+  max-width: var(--rf-capsule-w, none);
   height: var(--oi-reader-capsule-height);
   min-height: var(--oi-reader-capsule-height);
   max-height: var(--oi-reader-capsule-height);
   margin: 0 max(var(--oi-reader-capsule-end-floor), var(--rf-capsule-end, var(--oi-reader-capsule-inset))) 0 0;
-  padding: 0 var(--oi-reader-capsule-pad-x);
+  padding: 0 var(--rf-capsule-pad-x, var(--oi-reader-capsule-pad-x));
   border: 0;
   border-radius: var(--oi-reader-capsule-radius);
   background: var(--oi-reader-capsule-bg);

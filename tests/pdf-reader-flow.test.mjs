@@ -224,6 +224,7 @@ test("Aa panel exposes font steps and background radios, and hides the tier-2 sw
 test("capsule yields before it covers glyphs", () => {
   const fullW = 91;
   const shortW = 67;
+  const reserved = (place, visible) => visible - place.measure - place.capsuleW - place.gap - place.end;
   const wide = capsulePlacement({ paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW, shortW });
   assert.equal(wide.mode, "float");
   assert.equal(wide.label, "short");
@@ -231,12 +232,47 @@ test("capsule yields before it covers glyphs", () => {
   assert.ok(wide.gap >= 12);
   assert.ok(wide.end >= 8);
   assert.ok(wide.start >= 24);
-  const live = capsulePlacement({ paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW, shortW: 59.3 });
-  assert.equal(live.mode, "float");
-  assert.equal(live.measure, 576);
-  assert.ok(live.start >= 49 && live.start <= 56);
-  assert.ok(Math.abs(live.gap - 12) < 0.05);
-  assert.ok(live.end >= 4);
+  const one = capsulePlacement({
+    paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW,
+    shortW: 59.3, shortWMin: 53.3, padX: 11, padXMin: 8, maxPage: 9
+  });
+  assert.equal(one.mode, "float");
+  assert.equal(one.measure, 576);
+  assert.equal(one.padX, 11);
+  assert.equal(one.capsuleW, 59.3);
+  assert.ok(one.start >= 49 && one.start <= 56, `one-digit start ${one.start}`);
+  assert.ok(Math.abs(one.gap - 12) < 0.05);
+  assert.ok(one.end >= 4);
+  assert.ok(Math.abs(reserved(one, 701) - one.start) < 0.05);
+  for (const maxPage of [15, 27, 99]) {
+    const two = capsulePlacement({
+      paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW,
+      shortW: 66, shortWMin: 60, padX: 11, padXMin: 8, maxPage
+    });
+    assert.equal(two.mode, "float");
+    assert.equal(two.measure, 576, `two-digit measure at ${maxPage}`);
+    assert.equal(two.padX, 8, `two-digit pad at ${maxPage}`);
+    assert.equal(two.capsuleW, 60, `two-digit width at ${maxPage}`);
+    assert.ok(two.start >= 49 && two.start <= 56, `two-digit start ${two.start}`);
+    assert.ok(Math.abs(two.gap - 12) < 0.05);
+    assert.ok(two.end >= 4);
+    assert.ok(Math.abs(reserved(two, 701) - two.start) < 0.05);
+  }
+  for (const maxPage of [100, 256]) {
+    const three = capsulePlacement({
+      paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW: 110,
+      shortW: 73, shortWMin: 67, padX: 11, padXMin: 8, maxPage
+    });
+    const atPad = 73 + (67 - 73) * ((11 - three.padX) / (11 - 8));
+    assert.equal(three.mode, "float");
+    assert.equal(three.measure, 576, `three-digit measure at ${maxPage}`);
+    assert.ok(three.padX >= 8 && three.padX < 11, `three-digit pad ${three.padX}`);
+    assert.ok(Math.abs(three.capsuleW - atPad) < 0.05, `three-digit width ${three.capsuleW}`);
+    assert.ok(three.start >= 40, `three-digit start ${three.start}`);
+    assert.ok(three.gap >= 12);
+    assert.ok(three.end >= 4);
+    assert.ok(Math.abs(reserved(three, 701) - three.start) < 0.05);
+  }
   const mid = capsulePlacement({ paneW: 655, pad: 28, fontPx: 16, fullW, shortW });
   assert.equal(mid.mode, "float");
   assert.equal(mid.label, "short");
@@ -244,6 +280,8 @@ test("capsule yields before it covers glyphs", () => {
   assert.equal(mid.start, 28);
   assert.ok(mid.end >= 8);
   assert.ok(mid.gap >= 12);
+  assert.equal(mid.padX, 11);
+  assert.equal(mid.capsuleW, shortW);
   const large = capsulePlacement({ paneW: 701, scrollbar: 15, pad: 40, fontPx: 20, fullW, shortW });
   assert.equal(large.mode, "float");
   assert.equal(large.label, "short");
@@ -251,31 +289,54 @@ test("capsule yields before it covers glyphs", () => {
   assert.ok(large.start >= 24);
   assert.ok(large.end >= 8);
   assert.ok(large.gap >= 12);
+  assert.equal(large.padX, 11);
+  assert.equal(large.capsuleW, shortW);
   const tight = capsulePlacement({ paneW: 655, scrollbar: 15, pad: 28, fontPx: 16, fullW, shortW });
   assert.equal(tight.mode, "float");
   assert.ok(tight.start >= 24);
   assert.ok(tight.end >= 8);
   assert.ok(tight.gap >= 12);
   assert.equal(Math.round(tight.measure), 536);
+  assert.equal(tight.padX, 11);
+  assert.equal(tight.capsuleW, shortW);
   const bar = capsulePlacement({ paneW: 496, pad: 28, fontPx: 16, fullW, shortW });
   assert.equal(bar.mode, "bar");
   assert.equal(bar.label, "full");
   assert.equal(bar.start, null);
+  assert.equal(bar.capsuleW, fullW);
   const centered = capsulePlacement({ paneW: 1080, pad: 40, fontPx: 16, fullW, shortW });
   assert.equal(centered.mode, "float");
   assert.equal(centered.label, "full");
   assert.equal(centered.measure, 576);
   assert.equal(centered.start, null);
   assert.ok(centered.end >= 8);
+  assert.equal(centered.padX, 11);
+  assert.equal(centered.capsuleW, fullW);
   const stacked = capsulePlacement({ paneW: 800, pad: 20, fontPx: 16, fullW, shortW, forceBar: true });
   assert.equal(stacked.mode, "bar");
   assert.equal(stacked.label, "full");
+  assert.equal(stacked.capsuleW, fullW);
+  const capsuleRule = css.match(/\.rf-page-capsule\s*\{[^}]*\}/)[0];
+  assert.match(capsuleRule, /width:\s*var\(--rf-capsule-w/);
+  assert.match(capsuleRule, /min-width:\s*var\(--rf-capsule-w/);
+  assert.match(capsuleRule, /max-width:\s*var\(--rf-capsule-w/);
+  assert.match(capsuleRule, /justify-content:\s*center/);
+  assert.doesNotMatch(capsuleRule, /max-content/);
+  assert.match(tokens, /--oi-reader-capsule-pad-x:\s*11px/);
+  assert.match(tokens, /--oi-reader-capsule-pad-x-min:\s*8px/);
   assert.match(tokens, /--oi-reader-capsule-end-min:\s*8px/);
   assert.match(tokens, /--oi-reader-capsule-end-floor:\s*4px/);
   assert.match(css, /max\(\s*var\(--oi-reader-capsule-end-floor\)/);
   assert.match(css, /\.rf-capsule-probe\s*\{[^}]*font-variant-numeric:\s*tabular-nums/s);
   assert.match(viewer, /--oi-reader-capsule-end-min/);
-  assert.match(viewer, /capsuleLabel\(maxPage, \{ short: true \}\)/);
+  const layout = viewer.slice(viewer.indexOf("function layoutCapsule"), viewer.indexOf("function updateReaderFade"));
+  assert.match(layout, /pdfDoc\?\.numPages/);
+  assert.match(layout, /setProperty\("--rf-capsule-w", `\$\{place\.capsuleW\}px`\)/);
+  assert.match(layout, /setProperty\("--rf-capsule-pad-x", `\$\{place\.padX\}px`\)/);
+  assert.doesNotMatch(layout, /data-src-page|libraryArticle|pageCache/);
+  const paging = viewer.slice(viewer.indexOf("function updatePageCapsule"), viewer.indexOf("function onPageCapsuleClick"));
+  assert.match(paging, /textContent = capsuleLabel\(page/);
+  assert.doesNotMatch(paging, /--rf-capsule-w|max-content/);
 });
 
 test("split keeps a ratio and the translation column stays at least 540px", () => {

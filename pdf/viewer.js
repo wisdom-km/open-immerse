@@ -132,6 +132,8 @@ import {
   READER_THEME_LABELS,
   CAPSULE_END_BAND,
   CAPSULE_END_MIN,
+  CAPSULE_PAD_X,
+  CAPSULE_PAD_X_MIN,
   CAPSULE_START_FLOOR,
   applyReaderFontAction,
   capsuleLabel,
@@ -2333,16 +2335,29 @@ function capsuleLabelWidths(maxPage) {
     const style = getComputedStyle(capsule);
     probe.style.font = style.font;
     probe.style.letterSpacing = style.letterSpacing;
-    probe.style.padding = style.padding;
   }
   probe.style.fontVariantNumeric = "tabular-nums";
+  const padX = readerTokenPx("--oi-reader-capsule-pad-x", CAPSULE_PAD_X);
+  const padXMin = readerTokenPx("--oi-reader-capsule-pad-x-min", CAPSULE_PAD_X_MIN);
   document.body.append(probe);
-  probe.textContent = capsuleLabel(maxPage);
-  const fullW = probe.offsetWidth;
-  probe.textContent = capsuleLabel(maxPage, { short: true });
-  const shortW = probe.offsetWidth;
+  const measure = (text, pad) => {
+    probe.style.padding = `0 ${pad}px`;
+    probe.textContent = text;
+    const box = probe.getBoundingClientRect();
+    return box.width > 0 ? box.width : probe.offsetWidth;
+  };
+  const fullW = measure(capsuleLabel(maxPage), padX);
+  const shortLabel = capsuleLabel(maxPage, { short: true });
+  const shortW = measure(shortLabel, padX);
+  const shortWMin = measure(shortLabel, padXMin);
   probe.remove();
-  return { fullW: fullW || 1, shortW: shortW || 1 };
+  return {
+    fullW: fullW || 1,
+    shortW: shortW || 1,
+    shortWMin: shortWMin || 1,
+    padX,
+    padXMin
+  };
 }
 
 function readerTokenPx(name, fallback) {
@@ -2355,18 +2370,19 @@ function layoutCapsule({ keepAnchor = false } = {}) {
   if (!pane || pane.clientWidth <= 0) return;
   const had = pane.style.getPropertyValue("--rf-measure");
   const before = keepAnchor && had ? anchorBlock(pane) : null;
-  const pages = [...(readerFlowEl()?.querySelectorAll("[data-src-page]") || [])]
-    .map((el) => Number(el.dataset.srcPage))
-    .filter((n) => n >= 1);
-  const maxPage = Math.max(1, Number(pdfDoc?.numPages) || 0, ...pages);
-  const { fullW, shortW } = capsuleLabelWidths(maxPage);
+  const maxPage = Math.max(1, Number(pdfDoc?.numPages) || 0);
+  const widths = capsuleLabelWidths(maxPage);
   const place = capsulePlacement({
     paneW: pane.clientWidth,
     scrollbar: measureScrollbarWidth(pane),
     pad: readerMeasurePad(),
     fontPx: readerPrefs.fontSize,
-    fullW,
-    shortW,
+    fullW: widths.fullW,
+    shortW: widths.shortW,
+    shortWMin: widths.shortWMin,
+    padX: widths.padX,
+    padXMin: widths.padXMin,
+    maxPage,
     minEnd: readerTokenPx("--oi-reader-capsule-end-min", CAPSULE_END_MIN),
     endBand: readerTokenPx("--oi-reader-capsule-end-floor", CAPSULE_END_BAND),
     startFloor: CAPSULE_START_FLOOR,
@@ -2376,6 +2392,8 @@ function layoutCapsule({ keepAnchor = false } = {}) {
   pane.style.setProperty("--rf-measure", `${place.measure}px`);
   pane.style.setProperty("--rf-start", place.start == null ? "auto" : `${place.start}px`);
   pane.style.setProperty("--rf-capsule-end", `${Number.isFinite(place.end) ? place.end : 12}px`);
+  pane.style.setProperty("--rf-capsule-w", `${place.capsuleW}px`);
+  pane.style.setProperty("--rf-capsule-pad-x", `${place.padX}px`);
   pane.dataset.capsuleMode = place.mode;
   pane.dataset.capsuleLabel = place.label;
   const next = `${place.mode}|${place.label}|${place.measure}px|${place.start == null ? "auto" : `${place.start}px`}`;
