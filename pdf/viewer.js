@@ -1630,6 +1630,7 @@ function renderStoredArticle(blocks) {
 function renderArticle() {
   const pane = translateScrollRoot();
   const keep = pane ? pane.scrollTop : 0;
+  const keepLeft = pane ? pane.scrollLeft : 0;
   const stack = paperStackEl();
   if ($("mirrorPages")) $("mirrorPages").replaceChildren();
   if (stack) {
@@ -1642,6 +1643,7 @@ function renderArticle() {
     syncReadoutEmpty(true);
     applyPaperMetrics();
     if (pane) pane.scrollTop = keep;
+    if (pane) pane.scrollLeft = keepLeft;
     return;
   }
   const pages = pagesInTranslateScope(
@@ -1700,6 +1702,7 @@ function renderArticle() {
   syncReadoutEmpty(true);
   applyPaperMetrics();
   if (pane) pane.scrollTop = keep;
+  if (pane) pane.scrollLeft = keepLeft;
   updateTranslateControls();
 }
 

@@ -173,6 +173,16 @@ test("right pane horizontal scrollbar matches the left page: only when the paint
   assert.equal(paneHasHScroll(paintedPaperWidth(clamped, 1.25), narrow), true);
 });
 
+test("renderArticle saves and restores the right pane scrollLeft", () => {
+  const render = src.slice(src.indexOf("function renderArticle"), src.indexOf("function applyViewMode"));
+  const saved = render.indexOf("const keepLeft = pane ? pane.scrollLeft : 0;");
+  const reset = render.indexOf('stack.style.setProperty("--oi-pdf-stack-w", "0px")');
+  assert.ok(saved >= 0 && reset > saved);
+  assert.match(render, /const keep = pane \? pane\.scrollTop : 0;\s*const keepLeft = pane \? pane\.scrollLeft : 0;/);
+  const restores = render.match(/if \(pane\) pane\.scrollTop = keep;\s*if \(pane\) pane\.scrollLeft = keepLeft;/g);
+  assert.equal(restores?.length, 2);
+});
+
 test("appending a paper raises --oi-pdf-stack-w only when the new paper is wider", () => {
   assert.equal(raisedStackWidth(400, 612), 612);
   assert.equal(raisedStackWidth(612, 400), 612);
