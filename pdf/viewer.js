@@ -75,6 +75,7 @@ import {
   basePageBox,
   paperAvailWidth,
   paperCssPx,
+  raisedStackWidth,
   readoutPaperSize
 } from "../lib/pdf-paper.js";
 import { describeBodyFont, mapBodyFontPx } from "../lib/pdf-body-font.js";
@@ -1513,6 +1514,7 @@ function applyPaperMetrics() {
   const scroll = translateScrollRoot();
   if (!stack || !scroll) return;
   const avail = paperAvailWidth(scroll.clientWidth, PDF_PAPER_GUTTER_X);
+  let widest = 0;
   stack.querySelectorAll(".readout-paper").forEach((paper) => {
     const left = leftBaseBox(paper.dataset.page);
     if (!left) return;
@@ -1522,12 +1524,14 @@ function applyPaperMetrics() {
       availWidth: avail
     });
     if (!(size.width > 0)) return;
+    if (size.width > widest) widest = size.width;
     paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
     paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
     paper.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
     applyBodyFont(paper, size.width);
     refreshMatchedFormulas(paper, size.heightBase);
   });
+  stack.style.setProperty("--oi-pdf-stack-w", paperCssPx(widest));
   refreshFormulaCropsForDisplay();
 }
 
@@ -1541,6 +1545,13 @@ function bindPaperMetrics() {
     if (pages) observer.observe(pages);
   }
   window.addEventListener("resize", watch);
+}
+
+function raiseStackWidth(nextWidth) {
+  const stack = paperStackEl();
+  if (!stack) return;
+  const current = parseFloat(stack.style.getPropertyValue("--oi-pdf-stack-w"));
+  stack.style.setProperty("--oi-pdf-stack-w", paperCssPx(raisedStackWidth(current, nextWidth)));
 }
 
 function ensurePaper(page) {
@@ -1559,6 +1570,17 @@ function ensurePaper(page) {
     type.append(readout);
     paper.append(type);
     stack.append(paper);
+    const left = leftBaseBox(key);
+    const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0, PDF_PAPER_GUTTER_X);
+    const size = left
+      ? readoutPaperSize({ leftWidth: left.width, leftHeight: left.height, availWidth: avail })
+      : null;
+    if (size?.width > 0) {
+      paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
+      paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
+      paper.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
+      raiseStackWidth(size.width);
+    }
   }
   return paper.querySelector(".readout");
 }
@@ -1608,15 +1630,20 @@ function renderStoredArticle(blocks) {
 function renderArticle() {
   const pane = translateScrollRoot();
   const keep = pane ? pane.scrollTop : 0;
+  const keepLeft = pane ? pane.scrollLeft : 0;
   const stack = paperStackEl();
   if ($("mirrorPages")) $("mirrorPages").replaceChildren();
-  if (stack) stack.replaceChildren();
+  if (stack) {
+    stack.replaceChildren();
+    stack.style.setProperty("--oi-pdf-stack-w", "0px");
+  }
   if (libraryArticle?.length && scopeShowsPage(1)) {
     renderStoredArticle(libraryArticle);
     applyViewMode();
     syncReadoutEmpty(true);
     applyPaperMetrics();
     if (pane) pane.scrollTop = keep;
+    if (pane) pane.scrollLeft = keepLeft;
     return;
   }
   const pages = pagesInTranslateScope(
@@ -1675,6 +1702,7 @@ function renderArticle() {
   syncReadoutEmpty(true);
   applyPaperMetrics();
   if (pane) pane.scrollTop = keep;
+  if (pane) pane.scrollLeft = keepLeft;
   updateTranslateControls();
 }
 

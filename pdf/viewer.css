@@ -207,7 +207,12 @@ h1 {
   overflow: auto;
   display: flex;
   flex-direction: column;
+  /* Chrome 114 ignores `safe` and keeps the line above. safe center: a page
+     wider than the pane aligns to the start edge, so scrollLeft 0 shows the
+     left edge and max scrollLeft equals the overflow. A page that still fits
+     stays centered. */
   align-items: center;
+  align-items: safe center;
   gap: 16px;
   overscroll-behavior: contain;
   scroll-behavior: auto;
@@ -253,10 +258,14 @@ h1 {
   flex-direction: column;
   align-items: center;
   gap: var(--oi-pdf-paper-gap-y);
-  /* zoom shrinks the flex box by the same factor. Multiplying the specified
-     width back keeps centered papers inside the scroll origin, so scrollLeft
-     0 still shows the left edge at 150%. */
-  width: calc(100% * var(--oi-mirror-zoom, 1));
+  /* scrollWidth follows this element's border box. CSS zoom multiplies px
+     lengths on that box and leaves a 100% width at the scrollport size, so
+     calc(100% * zoom) overflows as soon as zoom goes above 1 — even while
+     the paper still fits. The px branch is the unzoomed paper width; zoom
+     turns it into the painted paper. The scrollbar appears only once that
+     painted paper is wider than the pane, and scrollLeft 0 stays on its
+     left edge. Do not multiply this width by zoom again. */
+  width: max(100%, var(--oi-pdf-stack-w, 0px));
   min-height: 0;
   zoom: var(--oi-mirror-zoom, 1);
 }
