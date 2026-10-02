@@ -1,7 +1,7 @@
 # PDF 右栏 · 公式 / 图 / 表 排版（PDF-MD-FORMULA-LAYOUT）
 
 **任务来源：** 2026-09-23 Wisdom via Jone copy → Loom 出规格 → Forge → Cloud。  
-**挂接：** [`PDF-MD-READOUT.md`](./PDF-MD-READOUT.md)（通读产品权威）；通读皮肤数字仍见 [`PDF-RIGHT-PANE.md`](./PDF-RIGHT-PANE.md)。节奏数字（空隙、行内高度、密度）若与 [`high-precision/FORMULA-RIGHT-PANE.md`](./high-precision/FORMULA-RIGHT-PANE.md) 冲突，以那份 §2–§5 为准。  
+**挂接：** [`PDF-MD-READOUT.md`](./PDF-MD-READOUT.md)（通读产品权威）。节奏数字（空隙、行内高度、密度）若与 [`high-precision/FORMULA-RIGHT-PANE.md`](./high-precision/FORMULA-RIGHT-PANE.md) 冲突，以那份 §2–§5 为准。  
 **fixture：** `/workspace/oi-qa/fixtures/pdf/Attention_Is_All_You_Need.pdf`  
 **反例证图：** `oi-qa/pdf-lab-attention/p07-lr-formula.png`（行内整行糊裁 + 白底大块砸版）。
 
@@ -12,7 +12,7 @@
 | 项 | 锁定 |
 | --- | --- |
 | 产品路径 | 左 **pdf.js** + 右 **Markdown 通读**（非 bbox 镜像；非 BabelDOC 矢量回写整页） |
-| 公式展示 | **原件为准** → 默认 **页渲染裁切**（保准）；可靠 LaTeX + KaTeX 为可选增强，**不得**为「好看」编造 TeX |
+| 公式展示 | 当前已发布的是裁图，目标见 `pdf/high-precision/REQUIREMENTS.md` §2.6。不得为「好看」编造 TeX |
 | 独立公式块 | 相对右栏正文列 **水平居中**；宽度 ≤ 通读列宽；上下空隙见 §3 |
 | 行内公式 | **句中基线对齐**；高度随正文字号；**禁止**整行大图砸版 |
 | 图 / 表 | 保持原件裁切；题注用 Soft Graphite **既有 token**（muted），**不改**网页 Soft Graphite / `tokens.css` |
@@ -46,7 +46,7 @@
 | `figure` / `table` | XObject / 大图区 / 表栅格 | `figure.oi-pdf-figure` |
 | `caption` | 「Figure / Table / 图 / 表」题注 | `figcaption.oi-pdf-caption` |
 
-数据槽建议：`{ role, cropUrl?, latex?, alt, page, bbox? }`。有可靠 `latex` 时可渲染 KaTeX，**仍须**满足 §3–§4 尺寸与对齐；不确定结构 → **只走裁切**，禁止幻觉 TeX。
+数据槽建议：`{ role, cropUrl?, latex?, alt, page, bbox? }`。当前已发布的是裁图，目标见 `pdf/high-precision/REQUIREMENTS.md` §2.6。尺寸与对齐仍须满足 §3–§4。不确定结构时不编造 TeX。
 
 ---
 
@@ -58,7 +58,7 @@
 | --- | --- |
 | 水平 | **居中**于 `.readout` 内容列（Attention 类论文行间式默认居中） |
 | 宽度上限 | `max-width: 100%`（列宽即 `PDF-RIGHT-PANE` 的 `.readout`，约 `42rem`） |
-| 过宽 | **等比缩小**至列宽；勿横向撑破通读；缩小后墨迹高度仍 ≥ **14px**（否则改写明位置的占位，例如「公式 (4) · 原文第 4 页」，没有编号时「公式 · 原文第 N 页」，加小缩略图；点击后原文栏跳到原位并画框。原页裁图不嵌在译文里。UI 以 Loom 规格为准） |
+| 过宽 | **先缩到硬门再在盒内横滚**（F3-S4）。硬门是缩小后墨迹高度仍 ≥ **14px**。勿横向撑破通读，也不要改成占位来躲过宽 |
 | 垂直空隙 | `margin-block: 12px 16px`（约 **0.8em / 1.05em** @ 15px 正文）；参考 Attention 原页：公式上下约一行呼吸，**不要**叠成两段正文间距 |
 | 与邻段 | 上一 `p` 的 `margin-bottom` 与本块上边距 **取大不叠加盲加**（实现可用相邻选择器消重，避免「段尾 14px + 公式上 12px」过空） |
 
@@ -137,7 +137,7 @@
 }
 ```
 
-**降级（仅当裁切失败）：** 段内插入「（公式 (n) 见原文第 N 页）」，点击后原文栏跳到原位并画框；**不要**塞一整行糊图。行内高度改按墨迹 / inkShare，不再以 1.45em 当硬顶。原页小段裁图只用在行内公式路径上。
+**降级（仅当裁切失败）：** 行内文字兜底是目标状态，待实现：「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。**不要**塞一整行糊图。行内高度改按墨迹 / inkShare，不再以 1.45em 当硬顶。原页小段裁图只用在行内公式路径上。
 
 ---
 
@@ -197,9 +197,9 @@ Jone FYI：**内容精准优先，裁图宁可略松** — 松在 **公式墨迹
 
 | 情况 | 导出 |
 | --- | --- |
-| 有可靠 `latex` | 行内 `$...$`；独立 `$$...$$` |
-| 仅裁切 | `![公式](asset…)` 或「[公式]」；图 `![题注](…)` |
-| 降级占位 | `（公式 (n) 见原文第 N 页）` |
+| 当前已发布 | 图片，或一行「见图」（`lib/pdf-blocks.js` 的 `visualBlockMarkdown`）。不是屏幕上的「（公式见左栏）」 |
+| 目标状态，待实现 | 独立公式「（公式 (n) 见原文第 N 页）」；图「（图 n 见原文第 N 页）」。见 `pdf/high-precision/REQUIREMENTS.md` §2.6 |
+| 有可靠 `latex` | 不在当前导出里写未经核对的 TeX。核对通过的第二层见 REQUIREMENTS §2.6 |
 
 导出是阅读序语义，**不是**版面引擎。
 

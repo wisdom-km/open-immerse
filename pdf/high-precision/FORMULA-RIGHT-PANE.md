@@ -99,7 +99,7 @@ CSS 贴片：
 }
 ```
 
-降级：紧裁+缩放仍超高 → 段内「（公式 (n) 见原文第 N 页）」，点击后原文栏跳到原位并画框；**宁缺勿砸版**。具体 UI 以 Loom 规格为准。
+降级文案是目标状态，待实现：行内文字兜底「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。紧裁加缩放仍超高时宁缺勿砸版。具体 UI 以 Loom 规格为准。
 
 ---
 
@@ -191,6 +191,6 @@ CSS 贴片：
 | --- | --- |
 | `pdf/high-precision/REQUIREMENTS.md` | 精准硬门 / blocks 协议 |
 | `open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md` | 通读轨公式总规；**节奏数字以本文 §2–§5 为准**（若冲突） |
-| `PDF-MD-READOUT.md` / `PDF-RIGHT-PANE.md` | 通读产品与正文皮肤 |
+| `PDF-MD-READOUT.md` | 通读产品 |
 
 **建议 tip：** `pdf-formula-right-pane-rhythm`（挂本文路径）。

@@ -1,6 +1,6 @@
 # 公式呈现：行内 / 独占，以及裁框
 
-本轮只改进右栏怎么放公式。笔画仍来自当前打开的 PDF。不把 KaTeX、OCR 字母或 OCR LaTeX 当成公式画面。不嵌入 BabelDOC / pdf2zh。第 5 页矩阵句的中文译文不在本轮。
+本轮只改进右栏怎么放公式。笔画仍来自当前打开的 PDF。当前已发布的是裁图，目标见 `REQUIREMENTS.md` §2.6。OCR 字母和 OCR 返回的 LaTeX 仍不上屏。不嵌入 BabelDOC / pdf2zh。第 5 页矩阵句的中文译文不在本轮。
 
 可借鉴的只有想法：公式保持原页字形，版面节奏靠近论文；裁图可以略松，但只为了下标和括号。
 
@@ -34,7 +34,7 @@
 DOM 仍按 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md)。间距以 [`FORMULA-RIGHT-PANE.md`](./FORMULA-RIGHT-PANE.md) 为准。正文段距约 `0.7em`；紧挨公式或图时，段落下边距与块上边距取较大的一个，不叠成两层。
 
 - 独占公式：`margin: 10px 0 14px`，水平居中。宽度是页宽占比除掉正文列左右边（`pageFraction / 0.83`），纸比左页窄时再向左页对齐，夹在列宽内。高硬门 ≥ 1.6× 正文；仍矮才 `min-height: 2em`。无描边、无阴影。白边目标约 6 CSS px 以内。
-- 行内公式：盒高按墨迹 / inkShare（名义 `1.95em`，目标墨迹 1.25–1.35× 正文，行顶 ~1.8–2.1em），不再用 `1.22em` 盒和 `1.45em` 硬顶。左右 `margin: 0 1px`，最宽 `12em`。裁切失败时在段内写「（公式 (n) 见原文第 N 页）」。
+- 行内公式：盒高按墨迹 / inkShare（名义 `1.95em`，目标墨迹 1.25–1.35× 正文，行顶 ~1.8–2.1em），不再用 `1.22em` 盒和 `1.45em` 硬顶。左右 `margin: 0 1px`，最宽 `12em`。裁切失败时的行内文字兜底是目标状态，待实现：「〔公式 · 原文第 N 页〕」。屏幕上现在仍是代码里的「（公式见左栏）」（`lib/pdf-viewer.js`、`lib/pdf-readout.js`，用在 `pdf/viewer.js`）。
 - 图 / 表：`figure.oi-pdf-figure`（下边距 12px）+ `img.oi-pdf-asset-crop`，题注 `figcaption.oi-pdf-caption` 上边距 6px（13px、`var(--oi-text-muted)`）。公式框与图、表、题注不相交。只使用已有 Soft Graphite token，不改 `ui/tokens.css`。
 
 ## 本轮不改
