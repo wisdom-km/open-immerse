@@ -74,7 +74,7 @@ import {
   zoomChipRightClearance,
   zoomChipRightGutter,
   zoomLabel,
-  mirrorZoomWidth,
+  PAPER_STACK_WIDTH,
   MIRROR_ZOOM_STORAGE_KEY,
   MIRROR_ZOOM_CHIP_POS_KEY
 } from "../lib/pdf-viewer.js";
@@ -382,7 +382,9 @@ test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.equal(nextZoom(steps.at(-1), 1), 5);
   assert.equal(zoomLabel(1), "100%");
   assert.equal(zoomLabel(2.25), "225%");
-  assert.equal(mirrorZoomWidth(), "max(100%, var(--oi-pdf-stack-w, 0px))");
+  assert.equal(PAPER_STACK_WIDTH, "max(100%, var(--oi-pdf-stack-w, 0px))");
+  assert.match(css, new RegExp(`\\.paper-stack\\s*\\{[^}]*width:\\s*${PAPER_STACK_WIDTH.replace(/[()]/g, "\\$&")}`));
+  assert.equal(libSrc.includes("function mirrorZoomWidth"), false);
   assert.match(src, /function setMirrorZoom/);
   assert.match(src, /function applyMirrorZoom/);
   assert.match(src, /--oi-mirror-zoom/);

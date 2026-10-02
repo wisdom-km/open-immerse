@@ -11,7 +11,8 @@ import {
   basePageBox,
   readoutPaperSize,
   paintedPaperWidth,
-  paneHasHScroll
+  paneHasHScroll,
+  raisedStackWidth
 } from "../lib/pdf-paper.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -127,10 +128,11 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
   assert.doesNotMatch(src, /appendMirrorPage|buildMirrorLayout/);
   assert.doesNotMatch(css, /--oi-paper:\s*#/);
   assert.doesNotMatch(css, /\.readout-paper\s*\{[^}]*[^-]height:\s*var\(--oi-pdf-paper-h-base\)/);
-  assert.doesNotMatch(
-    src.slice(src.indexOf("function ensurePaper"), src.indexOf("function renderStoredArticle")),
-    /position:\s*["']absolute["']|dataset\.bbox/
-  );
+  const ensure = src.slice(src.indexOf("function ensurePaper"), src.indexOf("function renderStoredArticle"));
+  assert.doesNotMatch(ensure, /position:\s*["']absolute["']|dataset\.bbox/);
+  assert.match(ensure, /raiseStackWidth\(/);
+  assert.match(ensure, /if \(!paper\)/);
+  assert.match(src.slice(src.indexOf("function raiseStackWidth"), src.indexOf("function ensurePaper")), /raisedStackWidth\(/);
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*overflow:\s*auto/s);
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*scroll-behavior:\s*auto/s);
   assert.doesNotMatch(src, /behavior:\s*["']smooth["']/);
@@ -167,4 +169,15 @@ test("right pane horizontal scrollbar matches the left page: only when the paint
   assert.equal(paneHasHScroll(paintedPaperWidth(clamped, 1), narrow), false);
   assert.equal(paneHasHScroll(Math.floor(unit * 1), narrow), true);
   assert.equal(paneHasHScroll(paintedPaperWidth(clamped, 1.25), narrow), true);
+});
+
+test("appending a paper raises --oi-pdf-stack-w only when the new paper is wider", () => {
+  assert.equal(raisedStackWidth(400, 612), 612);
+  assert.equal(raisedStackWidth(612, 400), 612);
+  assert.equal(raisedStackWidth(612, 612), 612);
+  assert.equal(raisedStackWidth(0, 500), 500);
+  assert.equal(raisedStackWidth(Number.NaN, 480), 480);
+  assert.equal(raisedStackWidth(480, Number.NaN), 480);
+  assert.equal(raisedStackWidth(undefined, -1), 0);
+  assert.equal(paperCssPx(raisedStackWidth(612, 700.126)), "700.13px");
 });

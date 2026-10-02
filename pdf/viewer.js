@@ -75,6 +75,7 @@ import {
   basePageBox,
   paperAvailWidth,
   paperCssPx,
+  raisedStackWidth,
   readoutPaperSize
 } from "../lib/pdf-paper.js";
 import { describeBodyFont, mapBodyFontPx } from "../lib/pdf-body-font.js";
@@ -1546,6 +1547,15 @@ function bindPaperMetrics() {
   window.addEventListener("resize", watch);
 }
 
+function raiseStackWidth(nextWidth) {
+  const stack = paperStackEl();
+  if (!stack) return;
+  const current = parseFloat(stack.style.getPropertyValue("--oi-pdf-stack-w"));
+  const raised = raisedStackWidth(current, nextWidth);
+  if (!(raised > (Number.isFinite(current) && current > 0 ? current : 0))) return;
+  stack.style.setProperty("--oi-pdf-stack-w", paperCssPx(raised));
+}
+
 function ensurePaper(page) {
   const stack = paperStackEl();
   if (!stack || page == null || page === "") return null;
@@ -1562,6 +1572,17 @@ function ensurePaper(page) {
     type.append(readout);
     paper.append(type);
     stack.append(paper);
+    const left = leftBaseBox(key);
+    const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0, PDF_PAPER_GUTTER_X);
+    const size = left
+      ? readoutPaperSize({ leftWidth: left.width, leftHeight: left.height, availWidth: avail })
+      : null;
+    if (size?.width > 0) {
+      paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
+      paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
+      paper.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
+      raiseStackWidth(size.width);
+    }
   }
   return paper.querySelector(".readout");
 }

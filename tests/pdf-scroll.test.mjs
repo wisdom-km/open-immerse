@@ -15,6 +15,7 @@ import {
   createSyncOwner,
   createWheelFlipGuard,
   normalizePdfScroll,
+  leftPaneScroll,
   planPaneFollow,
   readSoftPageFollow
 } from "../lib/pdf-scroll.js";
@@ -297,6 +298,8 @@ test("viewer sync path has no smooth fight and no fixed 360ms lock", () => {
   assert.doesNotMatch(follow, /scrollIntoView/);
   assert.match(viewerCss, /\.pages\s*\{[^}]*overscroll-behavior:\s*contain/s);
   assert.match(viewerCss, /\.pages\s*\{[^}]*scroll-behavior:\s*auto/s);
+  assert.match(viewerCss, /\.pages\s*\{[^}]*align-items:\s*safe center/s);
+  assert.doesNotMatch(viewerCss, /\.pages\s*\{[^}]*align-items:\s*center\s*;/s);
   assert.match(viewerCss, /\.pane-translate-scroll\s*\{[^}]*overscroll-behavior:\s*contain/s);
   assert.match(viewerCss, /\.pane-translate-scroll\s*\{[^}]*scroll-behavior:\s*auto/s);
 });
@@ -322,4 +325,22 @@ test("options expose pdf soft follow above layout, default off, only with the PD
   assert.match(optionsJs, /reading\.hidden = !on/);
   assert.match(optionsJs, /box\.hidden = !on/);
   assert.match(optionsJs, /data-feat="pdf"/);
+});
+
+test("safe center makes the scrollable distance equal the overflow", () => {
+  // Narrow pane at 100%: a 612px page in a 424px scrollport overflows 188px.
+  // align-items: center could scroll only the right half (94px).
+  const narrow = leftPaneScroll({ pageWidth: 612, clientWidth: 424 });
+  assert.equal(narrow.overflow, 188);
+  assert.equal(narrow.maxScrollLeft, 188);
+  assert.equal(narrow.maxScrollLeft, narrow.overflow);
+  assert.equal(narrow.centered, false);
+  assert.equal(narrow.overflow / 2, 94);
+  const fit = leftPaneScroll({ pageWidth: 612, clientWidth: 1000 });
+  assert.deepEqual(fit, { overflow: 0, maxScrollLeft: 0, centered: true });
+  const zoomed = leftPaneScroll({ pageWidth: Math.floor(612 * 1.25), clientWidth: 470 });
+  assert.equal(zoomed.overflow, 765 - 470);
+  assert.equal(zoomed.maxScrollLeft, zoomed.overflow);
+  assert.deepEqual(leftPaneScroll({}), { overflow: 0, maxScrollLeft: 0, centered: false });
+  assert.deepEqual(leftPaneScroll({ pageWidth: 100, clientWidth: 0 }), { overflow: 0, maxScrollLeft: 0, centered: false });
 });
