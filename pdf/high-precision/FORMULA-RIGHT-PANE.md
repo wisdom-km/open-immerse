@@ -2,7 +2,7 @@
 
 **角色：** 在 PR#51 精准硬门之上的 **第二目标：贴原版节奏 / 更优雅**。  
 **权威归属：** Loom。Cloud tip 跟本文 + [`PDF-MD-FORMULA-LAYOUT.md`](../../open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md)。  
-**硬门（不变）：** 文字层 + **原页笔画裁切**；**禁止** KaTeX / OCR-LaTeX 作主展示；#40 镜像关。  
+**硬门（不变）：** 文字层 + **原页笔画裁切**；**禁止** KaTeX / OCR-LaTeX 作主展示；#40 镜像关。第二层例外见 REQUIREMENTS §2.6。  
 **fixture：** Attention Is All You Need · 对照左栏 pdf.js。  
 **软注靶子（Anvil）：** softmax 误带 Fig.2；邻行多裁；行内砸成卡片。
 
@@ -150,7 +150,7 @@ CSS 贴片：
 2. 把 **行内** 公式做成独立 section / 块级大图打断段落  
 3. softmax（或任一公式）裁框 **吞入** Fig.n / 题注 / 邻段文字  
 4. 邻行多裁（上一行脚、下一行头进框）  
-5. KaTeX / OCR 认 LaTeX 作主展示（与 PR#51 冲突）  
+5. KaTeX / OCR 认 LaTeX 作主展示（与 PR#51 冲突）。第二层例外见 REQUIREMENTS §2.6。  
 6. 为 PDF 右栏改网页 Soft Graphite / bilingual gap  
 
 ---

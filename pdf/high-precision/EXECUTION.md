@@ -20,7 +20,7 @@ node --test tests/*.test.mjs
 
 1. 改写 `pdf/PDF-MD-READOUT.md`，使它和 `ARCHITECTURE.md` 描述的是同一条已发布目标。保留这些仍成立的句子，测试还在匹配它们：`PDF-MD-READOUT`、`本单权威规格`、阅读序、`Markdown`、`.readout`、`#40 closed`、`bbox`、Attention、`PDF-ENTRY-SECONDARY` 作废、不要回归网页 content/Options、`PDF-READOUT-MARKDOWN.md` 以本文为准。
 2. 在该文里写明这些产品事实：内容精准第一，排版第二且尽量做好；译文跟抽出的原文一致；公式、图、表跟打开的 PDF 同一套内容，默认用 pageRaster 裁图，其他手段须过同一条验收；OCR 认错的字母（`i` 与 `n` 互认）不上屏；有文字层的正文用文字层原句；译文只出现在右栏；点击右栏用左栏高亮对齐；测试期划区是本机智谱 GLM-OCR，上线是 OCR API 加现有大模型 API。Issue #40 保持关闭。
-3. 同步 `README.md`、`README.en.md` 的实验室 PDF 段，以及 `lib/features.js` 里 pdf 那条 hint。文案改为：文字层正文 + 原页内容精准展示（默认裁图）；公式画面不来自 LaTeX 渲染。中英文都改。
+3. 同步 `README.md`、`README.en.md` 的实验室 PDF 段，以及 `lib/features.js` 里 pdf 那条 hint。文案改为：文字层正文 + 原页内容精准展示（默认裁图）；公式画面不来自 LaTeX 渲染。第二层例外见 REQUIREMENTS §2.6。中英文都改。
 4. 更新 `tests/pdf-readout.test.mjs` 里匹配 README「保留公式/LaTeX」「preserve formulas/LaTeX」的正则，使它们匹配新文案。不要放宽到空断言。
 5. `CONTRIBUTING.md` 里描述右栏公式的那句，改成裁图。若测试因此失败，只更新对应正则。
 
@@ -43,7 +43,7 @@ node --test tests/*.test.mjs
 
 ### 新建
 
-- `lib/pdf-blocks.js`：`PROTOCOL`、`CROP_SCALE`、`LABELS`、`LAYOUT_MODES`（`text-layer` | `local-ocr` | `cloud-ocr`）、`rasterCropRect`、`bboxToPercentRect`、`normalizeIncomingBlock`（视觉块删除 `latex`/`content`/`html`/`md`/`text`）、`preparePageBlocks`（丢掉 `header`/`footer`，保留顺序）、`textLayerTrust`、占位符正则。三个模式这一阶段只是常量：`local-ocr` 注释为测试期本机智谱 GLM-OCR，`cloud-ocr` 注释为上线 OCR API，`text-layer` 注释为划区不可用时的兜底。不发网络请求。
+- `lib/pdf-blocks.js`：`PROTOCOL`、`CROP_SCALE`、`LABELS`、`LAYOUT_MODES`（`text-layer` | `local-ocr` | `cloud-ocr`）、`rasterCropRect`、`bboxToPercentRect`、`normalizeIncomingBlock`（视觉块删除 `latex`/`content`/`html`/`md`/`text`）、`preparePageBlocks`（丢掉 `header`/`footer`，保留顺序）、`textLayerTrust`、占位符正则。三个模式这一阶段只是常量：`local-ocr` 注释为测试期本机智谱 GLM-OCR，`cloud-ocr` 注释为上线 OCR API，`text-layer` 注释为划区不可用时的兜底。不发网络请求。第二层例外见 REQUIREMENTS §2.6。
 - `tests/pdf-blocks.test.mjs`。
 - `tests/fixtures/pdf-blocks/sample-page.json`：一页，含一个 `text`、一个独占 `formula`、一个带 `inlineOf` 的 `formula`、一个 `figure`、一个带 LaTeX 垃圾字段的 `formula`（用来证明会被删掉）。bbox 使用 `ARCHITECTURE.md` 第 4 节那组 CTM 换算结果作为 figure。
 
@@ -93,7 +93,7 @@ node --test tests/*.test.mjs
 - `ingest` 使用 `textLayerToBlocks`。视觉块用阶段 1 的裁图函数。
 - 删除阅读器里对 `renderFormulaNode` 的调用。函数体和 `lib/pdf-latex.js` 可以留下，直到没有引用。
 - 这一阶段允许 `viewer.js` 出现 `cropCanvasToDataUrl` 与 `walkImageCtms` 的调用（若裁图仍经由新模块，则不必出现这两个字符串）。仍然禁止 `buildMirrorLayout` 与 `appendMirrorPage`。
-- 更新 `tests/pdf-readout.test.mjs` 的 `formulas stay in reading order as LaTeX`：独占公式块没有 `latex`，有 `bbox`，`label` 或 `role` 为 formula；其文本不进入可译单元。
+- 更新 `tests/pdf-readout.test.mjs` 的 `formulas stay in reading order as LaTeX`：独占公式块没有 `latex`，有 `bbox`，`label` 或 `role` 为 formula；其文本不进入可译单元。第二层例外见 REQUIREMENTS §2.6。
 - 更新 `tests/pdf-mirror.test.mjs` 里「viewer 必须含 `renderFormulaNode` / 不得含 `cropCanvasToDataUrl`」的断言，使它锁定新事实：默认路径产出裁图；不得建立 mirror page。KaTeX 文件存在性断言保留。
 
 ### 完成时必须为真

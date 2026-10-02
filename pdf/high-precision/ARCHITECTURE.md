@@ -6,7 +6,7 @@
 
 内容精准指两件事。译文跟抽出的原文一致，不增、不漏、不改主张，数字和变量名原样保留。公式、图、表跟用户打开的 PDF 是同一套内容。OCR 把 `i` 认成 `n`，或把 `n` 认成 `i`，都不得上屏，也不得送进翻译模型。
 
-展示手段不锁死。第一版默认从 `pageRaster` 裁图，因为这条已经能保住笔画。内嵌图像原样取出、把原页矢量画进右栏，也可以。新手段先过同一条验收：右栏这一块与左栏同一区域的内容一致；过不了就用裁图。把识别结果渲染成 LaTeX、重画图内文字，不采用。正文能用文字层时就用文字层原句。
+展示手段不锁死。第一版默认从 `pageRaster` 裁图，因为这条已经能保住笔画。内嵌图像原样取出、把原页矢量画进右栏，也可以。新手段先过同一条验收：右栏这一块与左栏同一区域的内容一致；过不了就用裁图。把识别结果渲染成 LaTeX，不采用。第二层例外见 REQUIREMENTS §2.6。重画图内文字，不采用。正文能用文字层时就用文字层原句。
 
 主场景是有文字层的数字论文 PDF。划区（哪一块是公式、图、表）在测试期走本机智谱 GLM-OCR，上线走 OCR API。两套只换适配器的地址和密钥，块协议相同。翻译从第一天就用插件已配置的大模型 API，上线同样只走这个 API。文字层字体判断是划区服务不可用时的兜底：拿不准就整段裁图，不把字母交给模型。兜底不是上线时的划区器。
 
@@ -135,7 +135,7 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 
 每个 `pair` 至少包含源块 `sourceId`、送译文本 `text`、文字层原句 `sourceText`、`translation` 和状态。恢复时同时核对文件哈希、`sourceId` 与 `sourceText`；原句变化或公式占位符、引用编号不一致时，不展示不可信译文。批量翻译完成后，本地库写入按顺序执行，避免后到的早期批次覆盖同一页的完整记录。当前 Attention 的一次性迁移和剩余例外见 `STATUS.md`。
 
-视觉块是 `formula`、`figure`、`table`。进入右栏之前，适配器从这三类对象上删除 `latex`、`content`、`html`、`md`、`text`。校验函数发现这些键，删键并继续，不把它们渲染出来。
+视觉块是 `formula`、`figure`、`table`。进入右栏之前，适配器从这三类对象上删除 `latex`、`content`、`html`、`md`、`text`。校验函数发现这些键，删键并继续，不把它们渲染出来。第二层例外见 REQUIREMENTS §2.6。
 
 `header` 和 `footer` 在准备右栏数据时整块丢掉，规则复用 `isPageChromeItem` / `isPageChromeText`。适配器可以原样返回它们。
 
@@ -256,7 +256,7 @@ export function textLayerTrust(items) {
 | `formula` / `figure` / `table` | `p.oi-pdf-p` 内一个 `img`，`src` 为裁图 data URL，`alt` 为「公式」「图」「表」 |
 | 行内公式 | 不单独成块显示，插在句子的 token 位置 |
 
-属性：`data-page`、`data-block-id`、`data-label`。视觉块没有 `data-latex`。
+属性：`data-page`、`data-block-id`、`data-label`。视觉块没有 `data-latex`。第二层例外见 REQUIREMENTS §2.6。
 
 未翻译时右栏先显示原文句子和裁图，左栏不必等翻译。点击「翻译」后只替换可译块的文本。`skipTranslate` 的块保持原文。
 
@@ -369,13 +369,13 @@ Faithfulness to the source outranks smoother wording.
 
 `collectReadoutExportNodes` 遇到视觉块时输出 Markdown 图片或一行「见图」，内容来自 `img.alt` 与 data URL。公式块不再走 `formulaExportMarkdown`。正文里的 `⟦fN⟧` 在 Markdown 中换成对应图片。
 
-`lib/pdf-latex.js` 和 `pdf/vendor/katex/` 在阶段 0–5 保留文件。新路径不调用 `recoverFormulaLatex` 和 `renderFormulaNode`。
+`lib/pdf-latex.js` 和 `pdf/vendor/katex/` 在阶段 0–5 保留文件。新路径不调用 `recoverFormulaLatex` 和 `renderFormulaNode`。第二层例外见 REQUIREMENTS §2.6。
 
 ## 12. 验收时看什么
 
 自动：
 
-- 视觉块的对象上没有 `latex` / `content` / `html`。
+- 视觉块的对象上没有 `latex` / `content` / `html`。第二层例外见 REQUIREMENTS §2.6。
 - `rasterCropRect` 与第 4 节的 CTM 样例一致。
 - 可信文字层的句子等于文字项拼接，而不是厂商 `content`。
 - 乱码页 `textSource === "ocr"`。
