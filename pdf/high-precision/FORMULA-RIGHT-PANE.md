@@ -1,5 +1,7 @@
 # PDF 右栏 · 公式节奏（FORMULA-RIGHT-PANE）
 
+REQUIREMENTS §2.6 的公式三层方案（2026-10-02）尚未落到本文。本文描述的是现在已发布的裁图路径。第一层和第三层的协议与执行步骤，等 UI 规格定稿后补。
+
 **角色：** 在 PR#51 精准硬门之上的 **第二目标：贴原版节奏 / 更优雅**。  
 **权威归属：** Loom。Cloud tip 跟本文 + [`PDF-MD-FORMULA-LAYOUT.md`](../../open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md)。  
 **硬门（不变）：** 文字层 + **原页笔画裁切**；**禁止** KaTeX / OCR-LaTeX 作主展示；#40 镜像关。第二层例外见 REQUIREMENTS §2.6。  
