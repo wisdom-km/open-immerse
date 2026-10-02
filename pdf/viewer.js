@@ -130,6 +130,7 @@ import {
 import {
   READER_FONT_SIZES,
   READER_THEME_LABELS,
+  CAPSULE_END_BAND,
   CAPSULE_END_MIN,
   CAPSULE_START_FLOOR,
   applyReaderFontAction,
@@ -159,6 +160,7 @@ import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   assetLayoutCapPx,
   createFormulaRasterCache,
+  fitSnappedFormulaCss,
   formulaDevicePixels,
   formulaRasterCacheKey,
   formulaRasterPlan,
@@ -1929,14 +1931,13 @@ function paperHeightFor(pageNumber) {
   return paper.heightBase > 0 ? paper.heightBase : leftH;
 }
 
-function snappedFormulaBox(matched) {
+function snappedFormulaBox(matched, columnPx) {
   const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
   const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
-  return formulaDevicePixels({
+  return fitSnappedFormulaCss({
     cssWidth: matched.cssWidth,
     cssHeight: matched.cssHeight,
-    pdfWidth: matched.cssWidth,
-    pdfHeight: matched.cssHeight,
+    columnPx,
     mirrorZoom: mirror,
     devicePixelRatio: dpr
   });
@@ -1982,7 +1983,8 @@ function readerFormulaStyle(block, page, inline, columnPx) {
     inline
   });
   if (!sized) return null;
-  const snapped = snappedFormulaBox(sized) || sized;
+  const limit = inline && !sized.raised ? 0 : (sized.scrolls ? 0 : column);
+  const snapped = snappedFormulaBox(sized, limit) || sized;
   const height = snapped.cssHeight || sized.cssHeight;
   const width = snapped.cssWidth > 0 ? snapped.cssWidth : sized.cssWidth;
   if (!(height > 0)) return null;
@@ -1995,7 +1997,7 @@ function readerFormulaStyle(block, page, inline, columnPx) {
 
 function matchedFormulaStyle(block, page) {
   const inline = block?.display === false || Boolean(block?.inlineOf);
-  return readerFormulaStyle(block, page, inline);
+  return readerFormulaStyle(block, page, inline, readerColumnPx());
 }
 
 function refreshMatchedFormulas(paper) {
@@ -2010,7 +2012,7 @@ function refreshMatchedFormulas(paper) {
   });
   paper.querySelectorAll(".oi-pdf-inline-math.is-matched").forEach((span) => {
     const block = (layout?.blocks || []).find((item) => item.id === span.dataset.blockId);
-    const matched = readerFormulaStyle(block, paper.dataset.page, true);
+    const matched = readerFormulaStyle(block, paper.dataset.page, true, readerColumnPx(span));
     if (!matched) return;
     span.style.setProperty("--oi-formula-h", matched.height);
     span.style.setProperty("--oi-formula-ar", matched.aspect);
@@ -2326,6 +2328,14 @@ function restoreReaderAnchor(token) {
 function capsuleLabelWidths(maxPage) {
   const probe = document.createElement("span");
   probe.className = "rf-capsule-probe";
+  const capsule = $("pageCapsule");
+  if (capsule) {
+    const style = getComputedStyle(capsule);
+    probe.style.font = style.font;
+    probe.style.letterSpacing = style.letterSpacing;
+    probe.style.padding = style.padding;
+  }
+  probe.style.fontVariantNumeric = "tabular-nums";
   document.body.append(probe);
   probe.textContent = capsuleLabel(maxPage);
   const fullW = probe.offsetWidth;
@@ -2358,6 +2368,7 @@ function layoutCapsule({ keepAnchor = false } = {}) {
     fullW,
     shortW,
     minEnd: readerTokenPx("--oi-reader-capsule-end-min", CAPSULE_END_MIN),
+    endBand: readerTokenPx("--oi-reader-capsule-end-floor", CAPSULE_END_BAND),
     startFloor: CAPSULE_START_FLOOR,
     forceBar: (window.innerWidth || 0) < 900
   });

@@ -718,7 +718,9 @@ body {
 .pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched.is-raised .oi-pdf-math-crop {
   display: block;
   height: var(--oi-formula-h);
+  width: calc(var(--oi-formula-h) * var(--oi-formula-ar, 1));
   max-height: none;
+  max-width: none;
 }
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
   font: 400 14px/1.55 var(--oi-font);
@@ -1154,7 +1156,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   height: var(--oi-reader-capsule-height);
   min-height: var(--oi-reader-capsule-height);
   max-height: var(--oi-reader-capsule-height);
-  margin: 0 max(var(--oi-reader-capsule-end-min), var(--rf-capsule-end, var(--oi-reader-capsule-inset))) 0 0;
+  margin: 0 max(var(--oi-reader-capsule-end-floor), var(--rf-capsule-end, var(--oi-reader-capsule-inset))) 0 0;
   padding: 0 var(--oi-reader-capsule-pad-x);
   border: 0;
   border-radius: var(--oi-reader-capsule-radius);
@@ -1184,6 +1186,8 @@ button:disabled { opacity: 0.45; cursor: default; }
   position: absolute;
   visibility: hidden;
   pointer-events: none;
+  box-sizing: border-box;
+  width: max-content;
   white-space: nowrap;
   height: var(--oi-reader-capsule-height);
   padding: 0 var(--oi-reader-capsule-pad-x);
@@ -1191,6 +1195,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   font-weight: var(--oi-reader-capsule-weight);
   font-size: var(--oi-reader-capsule-size);
   line-height: var(--oi-reader-capsule-height);
+  font-variant-numeric: tabular-nums;
 }
 .rf-page-capsule:hover {
   color: var(--oi-reader-ink);

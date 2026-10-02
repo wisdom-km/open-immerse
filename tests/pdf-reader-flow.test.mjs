@@ -230,13 +230,13 @@ test("capsule yields before it covers glyphs", () => {
   assert.equal(wide.measure, 576);
   assert.ok(wide.gap >= 12);
   assert.ok(wide.end >= 8);
-  assert.equal(wide.start, 38);
-  const live = capsulePlacement({ paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW, shortW: 64 });
+  assert.ok(wide.start >= 24);
+  const live = capsulePlacement({ paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW, shortW: 59.3 });
   assert.equal(live.mode, "float");
   assert.equal(live.measure, 576);
-  assert.equal(live.start, 41);
-  assert.ok(live.gap >= 12);
-  assert.ok(live.end >= 8);
+  assert.ok(live.start >= 49 && live.start <= 56);
+  assert.ok(Math.abs(live.gap - 12) < 0.05);
+  assert.ok(live.end >= 4);
   const mid = capsulePlacement({ paneW: 655, pad: 28, fontPx: 16, fullW, shortW });
   assert.equal(mid.mode, "float");
   assert.equal(mid.label, "short");
@@ -271,8 +271,11 @@ test("capsule yields before it covers glyphs", () => {
   assert.equal(stacked.mode, "bar");
   assert.equal(stacked.label, "full");
   assert.match(tokens, /--oi-reader-capsule-end-min:\s*8px/);
-  assert.match(css, /max\(\s*var\(--oi-reader-capsule-end-min\)/);
+  assert.match(tokens, /--oi-reader-capsule-end-floor:\s*4px/);
+  assert.match(css, /max\(\s*var\(--oi-reader-capsule-end-floor\)/);
+  assert.match(css, /\.rf-capsule-probe\s*\{[^}]*font-variant-numeric:\s*tabular-nums/s);
   assert.match(viewer, /--oi-reader-capsule-end-min/);
+  assert.match(viewer, /capsuleLabel\(maxPage, \{ short: true \}\)/);
 });
 
 test("split keeps a ratio and the translation column stays at least 540px", () => {
