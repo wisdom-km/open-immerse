@@ -132,7 +132,7 @@ test("seven and nine authors keep the same row breaks without a flat string", ()
 });
 
 test("paper CSS keeps max-4 auto-fit and tightens title-authors-abstract rhythm", () => {
-  assert.match(css, /repeat\(auto-fit, minmax\(140px, 1fr\)\)/);
+  assert.match(css, /repeat\(auto-fit, minmax\(var\(--oi-reader-author-min\), 1fr\)\)/);
   assert.doesNotMatch(css, /repeat\(4,\s*1fr\)/);
   assert.match(css, /\.reader-flow \.oi-pdf-author-row\s*\{[^}]*display:\s*flex/s);
   assert.match(css, /\.reader-flow \.oi-pdf-author-row\s*\{[^}]*flex-wrap:\s*nowrap/s);
@@ -141,11 +141,11 @@ test("paper CSS keeps max-4 auto-fit and tightens title-authors-abstract rhythm"
   assert.match(css, /\.reader-flow \.oi-pdf-author-row > \.oi-pdf-author-cell\s*\{[^}]*width:\s*max-content/s);
   assert.match(css, /\.reader-flow \.oi-pdf-author-cell\s*\{[^}]*justify-content:\s*flex-start/s);
   assert.match(css, /\.reader-flow \.oi-pdf-author-cell\s*\{[^}]*align-self:\s*start/s);
-  assert.match(css, /\.reader-flow \.oi-pdf-authors\[data-role="authors"\]\s*\{[^}]*margin:\s*0 0 8px/s);
-  assert.match(css, /\.reader-flow \.oi-pdf-authors\[data-role="authors"\]:has\(> \.oi-pdf-author-row\)\s*\{[^}]*gap:\s*2px/s);
-  assert.match(css, /\.reader-flow \.oi-pdf-h1\s*\{[^}]*margin:\s*8px 0 12px/s);
-  assert.match(css, /\.reader-flow \.oi-pdf-h1\s*\{[^}]*border:\s*0/s);
-  assert.match(css, /\.reader-flow \.oi-pdf-h2\[data-role="abstract_heading"\]\s*\{[^}]*margin-top:\s*8px/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-authors\[data-role="authors"\]\s*\{[^}]*margin:\s*var\(--oi-reader-authors-margin\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-authors\[data-role="authors"\]:has\(> \.oi-pdf-author-row\)\s*\{[^}]*gap:\s*var\(--oi-reader-authors-row-gap\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-h1\s*\{[^}]*margin:\s*var\(--oi-reader-h1-margin\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-h1\s*\{[^}]*border:\s*var\(--oi-reader-h1-border\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-h2\[data-role="abstract_heading"\]\s*\{[^}]*margin-top:\s*var\(--oi-reader-abstract-gap\)/s);
   assert.match(css, /\.reader-flow \.oi-pdf-h2\[data-role="abstract_heading"\]\s*\{[^}]*text-align:\s*center/s);
   assert.doesNotMatch(css, /\.oi-pdf-h1\s*\{[^}]*font:\s*650 (?!22px)/);
 });

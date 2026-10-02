@@ -6,9 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   READER_FONT_DEFAULT,
   READER_FONT_SIZES,
-  READER_MEASURE_EM,
   READER_THEME_DEFAULT,
-  READER_THEME_TOKENS,
   READER_THEMES,
   applyReaderFontAction,
   capsuleLabel,
@@ -89,12 +87,6 @@ test("theme switch normalizes to warm/white/sepia/green and remembers the choice
   assert.equal(readerThemeAriaLabel("white"), "纯白");
   assert.equal(readerThemeAriaLabel("sepia"), "灰褐");
   assert.equal(readerThemeAriaLabel("green"), "淡灰绿");
-  assert.equal(READER_THEME_TOKENS.warm.paper, "#F7F3EA");
-  assert.equal(READER_THEME_TOKENS.warm.ink, "#22201C");
-  assert.equal(READER_THEME_TOKENS.white.paper, "#FFFFFF");
-  assert.equal(READER_THEME_TOKENS.sepia.paper, "#ECE7DD");
-  assert.equal(READER_THEME_TOKENS.green.paper, "#E8EDE6");
-  assert.equal(READER_THEME_TOKENS.sepia.lineStrong, "#827868");
   const store = { "reader.theme": "white", "reader.fontSize": "18" };
   assert.equal(readReaderPrefs(store).theme, "white");
   assert.equal(readReaderPrefs(store).fontSize, 18);
@@ -107,11 +99,15 @@ test("reader tokens stay on the reader scope and do not edit tokens.css", () => 
   assert.match(tokens, /\.oi-reader\[data-reader-theme="white"\]/);
   assert.match(tokens, /\.oi-reader\[data-reader-theme="sepia"\]/);
   assert.match(tokens, /\.oi-reader\[data-reader-theme="green"\]/);
-  assert.match(tokens, /--oi-reader-paper:\s*#F7F3EA/);
-  assert.match(tokens, /--oi-reader-paper:\s*#FFFFFF/);
-  assert.match(tokens, /--oi-reader-paper:\s*#ECE7DD/);
-  assert.match(tokens, /--oi-reader-paper:\s*#E8EDE6/);
-  assert.match(tokens, /--oi-reader-pair:\s*#A86B12/);
+  for (const theme of ["warm", "white", "sepia", "green"]) {
+    assert.match(tokens, new RegExp(`--oi-reader-${theme}-paper:`));
+    assert.match(tokens, new RegExp(`--oi-reader-${theme}-ink:`));
+    assert.match(tokens, new RegExp(`--oi-reader-paper:\\s*var\\(--oi-reader-${theme}-paper\\)`));
+  }
+  assert.match(tokens, /--oi-reader-font:/);
+  assert.match(tokens, /--oi-reader-measure:/);
+  assert.match(tokens, /--oi-reader-line-height:/);
+  assert.match(tokens, /--oi-reader-panel-shadow:/);
   assert.doesNotMatch(globalTokens, /--oi-reader-paper/);
   assert.doesNotMatch(globalTokens, /data-reader-theme/);
   assert.match(html, /reader-tokens\.css/);
@@ -119,17 +115,16 @@ test("reader tokens stay on the reader scope and do not edit tokens.css", () => 
 });
 
 test("continuous flow replaces the paper stack and keeps the title mount", () => {
-  assert.equal(READER_MEASURE_EM, 38);
   assert.match(html, /id="readerFlow"[^>]*class="reader-flow"/);
   assert.match(html, /class="oi-reader"[^>]*data-reader-theme="warm"/);
   assert.doesNotMatch(html, /id="paperStack"/);
   assert.doesNotMatch(html, /id="viewSeg"/);
   assert.doesNotMatch(html, /id="mirrorPages"/);
   assert.doesNotMatch(html, /class="readout-paper"/);
-  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*min\(38em,/s);
-  assert.match(css, /\.reader-flow\s*\{[^}]*font-size:\s*var\(--oi-reader-font-size,\s*16px\)/s);
-  assert.match(css, /\.reader-flow\s*\{[^}]*line-height:\s*1\.85/s);
-  assert.match(css, /\.reader-flow \.oi-pdf-p \+ \.oi-pdf-p\s*\{[^}]*margin-top:\s*16px/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*min\(var\(--oi-reader-measure\)/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*font-size:\s*var\(--oi-reader-font-size\)/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*line-height:\s*var\(--oi-reader-line-height\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-p \+ \.oi-pdf-p\s*\{[^}]*margin-top:\s*var\(--oi-reader-paragraph-gap\)/s);
   assert.doesNotMatch(css, /\.paper-stack\s*\{[^}]*zoom:/s);
   assert.match(viewer, /renderPdfStructure/);
   assert.match(viewer, /className = "rf-page readout md-readout"/);
@@ -181,7 +176,10 @@ test("multiply is the default blend and forced-colors keeps the original pixels"
   assert.equal(readerImageBlend({ supportsMultiply: false, forcedColors: false }), "precomposite");
   assert.equal(readerImageBlend({ supportsMultiply: false, forcedColors: true }), "original");
   assert.equal(readerImageBlend({ supportsMultiply: true, forcedColors: true }), "original");
-  const paper = themePaperRgb("warm");
+  const paper = themePaperRgb("#102040");
+  assert.deepEqual(paper, [16, 32, 64]);
+  assert.deepEqual(themePaperRgb("rgb(1, 2, 3)"), [1, 2, 3]);
+  assert.equal(themePaperRgb("not-a-color"), null);
   const pixels = precompositeMultiplyPixels(
     Uint8ClampedArray.of(255, 255, 255, 255, 0, 0, 0, 255),
     paper
@@ -204,5 +202,7 @@ test("Aa panel exposes font steps and background radios, and hides the tier-2 sw
   assert.match(viewer, /aria-label", readerThemeAriaLabel/);
   assert.doesNotMatch(html, /katexTier2|用看图模型补全公式/);
   assert.doesNotMatch(viewer, /reader\.katexTier2/);
-  assert.match(css, /\.aa-panel\s*\{[^}]*width:\s*320px/s);
+  assert.match(css, /\.aa-panel\s*\{[^}]*width:\s*var\(--oi-reader-panel-width\)/s);
+  assert.match(css, /\.aa-swatch\[data-theme="warm"\] \.aa-swatch-chip/);
+  assert.match(css, /\.aa-swatch\[data-theme="green"\] \.aa-swatch-chip/);
 });

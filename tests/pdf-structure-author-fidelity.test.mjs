@@ -316,7 +316,7 @@ test("Attention fixture keeps eight authors, drops one stray symbol, and leaves 
   assert.equal(renderSrc.includes("separateAuthorRows"), false);
   assert.equal(renderSrc.includes("innerHTML"), false);
   assert.match(css, /\.oi-pdf-footnotes/);
-  assert.match(css, /repeat\(auto-fit, minmax\(140px, 1fr\)\)/);
+  assert.match(css, /repeat\(auto-fit, minmax\(var\(--oi-reader-author-min\), 1fr\)\)/);
   assert.doesNotMatch(css, /repeat\(4,\s*1fr\)/);
 });
 

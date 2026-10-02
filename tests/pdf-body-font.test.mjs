@@ -108,13 +108,13 @@ test("viewer maps body font and matches formula height without dropping the redr
   assert.match(viewer, /is-matched/);
   assert.match(viewer, /matchedDisplayCssSize/);
   assert.match(viewer, /renderSharpVisualCrop/);
-  assert.match(css, /\.reader-flow\s*\{[^}]*font-size:\s*var\(--oi-reader-font-size,\s*16px\)/s);
-  assert.match(css, /\.reader-flow \.oi-pdf-p\s*\{[^}]*font:\s*400 1em\/1\.85/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*font-size:\s*var\(--oi-reader-font-size\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-p\s*\{[^}]*line-height:\s*var\(--oi-reader-line-height\)/s);
   assert.match(css, /\.oi-pdf-math-row\.is-matched \.oi-pdf-math-crop\s*\{[^}]*height:\s*var\(--oi-formula-h\)/s);
   assert.match(css, /\.oi-pdf-math-row\.is-matched \.oi-pdf-math-crop\s*\{[^}]*width:\s*auto/s);
   assert.match(css, /\.oi-pdf-math-row\.is-matched \.oi-pdf-math-crop\s*\{[^}]*max-height:\s*none/s);
   assert.match(css, /\.oi-pdf-math-scroll \.oi-pdf-math-crop\s*\{[^}]*max-height:\s*2\.5em/s);
   assert.doesNotMatch(css, /\.paper-stack\s*\{[^}]*zoom:/s);
-  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*min\(38em,/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*min\(var\(--oi-reader-measure\)/s);
   assert.equal(readFileSync(join(root, "lib/pdf-formula-size.js"), "utf8").includes("SCRIPT_INK_MIN_PX = 7"), true);
 });

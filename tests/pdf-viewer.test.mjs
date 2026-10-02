@@ -255,7 +255,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.equal(css.includes(".translate-block"), false);
   assert.equal(css.includes(".translate-article"), false);
   assert.equal(css.includes(".oi-pdf-h {"), false);
-  assert.match(css, /\.pane-translate-scroll\s*\{[^}]*padding:\s*16px 0 24px/s);
+  assert.match(css, /\.pane-translate-scroll\s*\{[^}]*padding:\s*var\(--oi-reader-scroll-padding\)/s);
   assert.doesNotMatch(css, /max-width:\s*42rem/);
   assert.match(css, /\.pane-translate \.readout\.is-mirror\s*\{[^}]*max-width:\s*none/s);
   assert.match(css, /\.view-seg\s*\{/);
@@ -384,7 +384,7 @@ test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.equal(zoomLabel(2.25), "225%");
   assert.equal(PAPER_STACK_WIDTH, "max(100%, var(--oi-pdf-stack-w, 0px))");
   assert.doesNotMatch(css, /\.paper-stack\s*\{/);
-  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*min\(38em,/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*min\(var\(--oi-reader-measure\)/s);
   assert.equal(libSrc.includes("function mirrorZoomWidth"), false);
   assert.match(src, /function setMirrorZoom/);
   assert.match(src, /function applyMirrorZoom/);

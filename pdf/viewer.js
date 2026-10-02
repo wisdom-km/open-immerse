@@ -122,7 +122,6 @@ import { INLINE_BODY_HARD_MAX, displayFormulaMinEm, matchedDisplayCssSize } from
 import {
   READER_FONT_SIZES,
   READER_THEME_LABELS,
-  READER_THEME_TOKENS,
   applyReaderFontAction,
   capsuleLabel,
   contentPagesForScope,
@@ -363,12 +362,20 @@ function detectReaderBlend() {
   return readerBlend;
 }
 
+function readerPaperRgb() {
+  const el = readerRootEl() || $("aaPanel");
+  if (!el || typeof getComputedStyle !== "function") return null;
+  const theme = el.dataset.readerTheme || "warm";
+  const raw = getComputedStyle(el).getPropertyValue(`--oi-reader-${theme}-paper`);
+  return themePaperRgb(raw);
+}
+
 function applyReaderImageBlend(img) {
   if (!img) return img;
   const mode = readerBlend || detectReaderBlend();
   img.dataset.rfBlend = mode;
   if (mode !== "precomposite") return img;
-  const paper = themePaperRgb(readerPrefs.theme);
+  const paper = readerPaperRgb();
   if (!paper || !img.src) return img;
   const source = img.src;
   const image = new Image();
@@ -385,9 +392,6 @@ function applyReaderImageBlend(img) {
     frame.data.set(precompositeMultiplyPixels(frame.data, paper));
     ctx.putImageData(frame, 0, 0);
     img.src = canvas.toDataURL("image/png");
-    img.style.background = `rgb(${paper[0]}, ${paper[1]}, ${paper[2]})`;
-    img.style.paddingInline = "2px";
-    img.style.marginInline = "-2px";
     img.dataset.rfComposited = readerPrefs.theme;
   };
   image.src = source;
@@ -506,9 +510,6 @@ function buildAaThemes() {
     const chip = document.createElement("span");
     chip.className = "aa-swatch-chip";
     chip.textContent = "文";
-    const tokens = READER_THEME_TOKENS[theme];
-    chip.style.background = tokens.paper;
-    chip.style.color = tokens.ink;
     const check = document.createElement("span");
     check.className = "aa-swatch-check";
     check.textContent = "✓";
