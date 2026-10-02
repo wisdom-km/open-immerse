@@ -241,6 +241,7 @@
   --oi-reader-capsule-z: 5;
   --oi-reader-capsule-height: 26px;
   --oi-reader-capsule-inset: 12px;
+  --oi-reader-capsule-end-min: 8px;
   --oi-reader-capsule-pad-x: 11px;
   --oi-reader-capsule-radius: 13px;
   --oi-reader-capsule-weight: 500;

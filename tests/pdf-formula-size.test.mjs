@@ -4,9 +4,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CROP_SCALE, DISPLAY_BODY_HARD_MAX, displayFormulaWidthCss } from "../lib/pdf-blocks.js";
-import { FORMULA_CROP_PAD } from "../lib/pdf-text-layer.js";
+import { FORMULA_CROP_PAD, equationKeepFraction } from "../lib/pdf-text-layer.js";
 import {
   INLINE_SIDE_GAP_EM,
+  FORMULA_FIT_SLACK,
   SCRIPT_INK_MIN_PX,
   SCRIPT_INK_TARGET_PX,
   SCRIPT_SHARE_DEFAULT,
@@ -20,6 +21,7 @@ import {
   INLINE_BODY_HARD_MAX,
   inlineFormulaCssSize,
   inlinePaintBox,
+  displayFormulaColumnPx,
   readerFormulaCssSize,
   INLINE_CROP_K,
   DISPLAY_INK_PREFER,
@@ -296,6 +298,56 @@ test("a display formula wider than the column shrinks from 1.4× before it scrol
   assert.equal(overflow.k, DISPLAY_INK_HARD);
   assert.equal(overflow.scrolls, true);
   assert.ok(overflow.cssWidth > 400);
+});
+
+test("a display formula still above 1.0× fits the live box with rounding slack", () => {
+  assert.equal(FORMULA_FIT_SLACK, 2);
+  const column = 466;
+  const widthPt = 470 / (DISPLAY_INK_PREFER * 1.6);
+  const fitted = readerFormulaCssSize({
+    bodyFontPx: 16,
+    sourceBodyPt: 10,
+    inkPt: 40,
+    widthPt,
+    columnPx: column
+  });
+  assert.ok(fitted.k > DISPLAY_INK_HARD);
+  assert.ok(fitted.cssWidth <= column - FORMULA_FIT_SLACK + 0.05);
+  assert.equal(fitted.scrolls, false);
+  assert.equal(displayFormulaColumnPx({ flowPx: 490, eqNumPx: 20, gapPx: 4 }), 466);
+  assert.equal(displayFormulaColumnPx({ flowPx: 456 }), 456);
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const columnFn = viewer.slice(viewer.indexOf("function readerColumnPx"), viewer.indexOf("function readerFormulaStyle"));
+  assert.match(columnFn, /displayFormulaColumnPx/);
+  assert.doesNotMatch(columnFn, /oi-pdf-math-scroll/);
+  const watch = viewer.slice(viewer.indexOf("function bindPaperMetrics"), viewer.indexOf("function ensurePaper"));
+  assert.match(watch, /requestAnimationFrame/);
+  assert.match(watch, /applyPaperMetrics\(\)/);
+});
+
+test("a display formula clip crops the trailing equation number", () => {
+  const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
+  const start = css.indexOf(".oi-pdf-math-row.is-matched .oi-pdf-math-clip");
+  const rule = css.slice(start, css.indexOf(".oi-pdf-eq-num", start));
+  assert.ok(rule.includes(".oi-pdf-math-row.is-matched .oi-pdf-math-clip"));
+  assert.match(rule, /\.oi-pdf-inline-math\.is-matched(?:\.is-raised)? \.oi-pdf-math-clip/);
+  assert.match(rule, /overflow:\s*hidden/);
+  assert.match(rule, /--oi-eq-keep/);
+  assert.doesNotMatch(rule, /overflow:\s*visible/);
+  const cropW = 552.5;
+  const numberLeft = 523.2;
+  const keep = equationKeepFraction(0, cropW, numberLeft);
+  assert.ok(keep > 0.4 && keep < 0.98);
+  const kept = cropW * keep;
+  assert.ok(kept <= numberLeft);
+  assert.ok(numberLeft - kept < 0.1);
+  const text = readFileSync(join(root, "lib/pdf-text-layer.js"), "utf8");
+  const meta = text.slice(text.indexOf("function formulaPaintMeta"), text.indexOf("function formulaSeedBoxes"));
+  assert.match(meta, /equationKeepFraction/);
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const fill = viewer.slice(viewer.indexOf("function fillBlockText"), viewer.indexOf("function unitsForLayout"));
+  assert.match(fill, /oi-pdf-math-clip/);
+  assert.match(fill, /eqKeep/);
 });
 
 test("F3-S6 side gap is the locked 0.2em and freezes stay put", () => {

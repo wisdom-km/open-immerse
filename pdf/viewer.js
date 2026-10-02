@@ -122,6 +122,7 @@ import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } 
 import {
   INLINE_BODY_HARD_MAX,
   READER_SOURCE_BODY_PT,
+  displayFormulaColumnPx,
   displayFormulaMinEm,
   formulaScriptPt,
   readerFormulaCssSize
@@ -129,6 +130,8 @@ import {
 import {
   READER_FONT_SIZES,
   READER_THEME_LABELS,
+  CAPSULE_END_MIN,
+  CAPSULE_START_FLOOR,
   applyReaderFontAction,
   capsuleLabel,
   capsulePlacement,
@@ -1695,7 +1698,14 @@ function fillBlockText(node, block, layout) {
     }
     if (img) {
       img.className = "oi-pdf-math-crop";
-      span.append(img);
+      const keep = Number(formula?.eqKeep);
+      if (keep > 0 && keep < 1) {
+        const clip = document.createElement("span");
+        clip.className = "oi-pdf-math-clip";
+        span.style.setProperty("--oi-eq-keep", String(keep));
+        clip.append(img);
+        span.append(clip);
+      } else span.append(img);
     } else span.textContent = PDF_COPY.formulaFallback;
     node.append(span);
   });
@@ -1932,26 +1942,26 @@ function snappedFormulaBox(matched) {
   });
 }
 
-function readerColumnPx() {
+function readerColumnPx(row) {
   const pane = translateScrollRoot();
   const flow = readerFlowEl();
-  const widths = [];
-  if (flow) {
-    const scroll = flow.querySelector(".oi-pdf-math-row .oi-pdf-math-scroll");
-    const box = scroll?.clientWidth || 0;
-    if (box > 0 && (!flow.clientWidth || box >= flow.clientWidth * 0.5)) widths.push(box);
-    if (flow.clientWidth > 0) widths.push(flow.clientWidth);
-  }
-  if (pane) {
+  let flowPx = flow?.clientWidth || 0;
+  if (!(flowPx > 0) && pane) {
     const measure = parseFloat(pane.style.getPropertyValue("--rf-measure") || "");
-    if (measure > 0) widths.push(measure);
-    if (!widths.length && pane.clientWidth > 0) widths.push(pane.clientWidth);
+    flowPx = measure > 0 ? measure : (pane.clientWidth || 0);
   }
-  if (!widths.length) return 0;
-  return Math.min(...widths);
+  const host = row?.classList?.contains("oi-pdf-math-row") ? row : null;
+  const num = host?.querySelector(":scope > .oi-pdf-eq-num");
+  const eqNumPx = num ? (num.getBoundingClientRect().width || num.offsetWidth || 0) : 0;
+  let gapPx = 0;
+  if (eqNumPx > 0 && host) {
+    const gap = parseFloat(getComputedStyle(host).columnGap);
+    gapPx = Number.isFinite(gap) ? gap : 0;
+  }
+  return displayFormulaColumnPx({ flowPx, eqNumPx, gapPx });
 }
 
-function readerFormulaStyle(block, page, inline) {
+function readerFormulaStyle(block, page, inline, columnPx) {
   const layout = getPageLayout(page);
   const bbox = block?.bbox;
   const pageW = Number(layout?.pageWidth) || 0;
@@ -1961,13 +1971,14 @@ function readerFormulaStyle(block, page, inline) {
   const fracH = Number(bbox[3]) - Number(bbox[1]);
   if (!(fracW > 0) || !(fracH > 0)) return null;
   const inkPt = fracH * pageH;
+  const column = columnPx > 0 ? columnPx : readerColumnPx();
   const sized = readerFormulaCssSize({
     bodyFontPx: readerPrefs.fontSize,
     sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
     inkPt,
     widthPt: fracW * pageW,
     scriptPt: formulaScriptPt(block, inkPt),
-    columnPx: readerColumnPx(),
+    columnPx: column,
     inline
   });
   if (!sized) return null;
@@ -1992,7 +2003,7 @@ function refreshMatchedFormulas(paper) {
   paper.querySelectorAll(".oi-pdf-math-row.is-matched").forEach((row) => {
     const host = row.closest("[data-block-id]");
     const block = (layout?.blocks || []).find((item) => item.id === host?.dataset?.blockId);
-    const matched = readerFormulaStyle(block, paper.dataset.page, false);
+    const matched = readerFormulaStyle(block, paper.dataset.page, false, readerColumnPx(row));
     if (!matched) return;
     row.style.setProperty("--oi-formula-h", matched.height);
     row.style.setProperty("--oi-formula-ar", matched.aspect);
@@ -2019,10 +2030,17 @@ function applyPaperMetrics() {
 }
 
 function bindPaperMetrics() {
+  let pass = 0;
   const watch = () => {
+    const token = ++pass;
     layoutCapsule({ keepAnchor: true });
     applyPaperMetrics();
     updateReaderFade();
+    requestAnimationFrame(() => {
+      if (token !== pass) return;
+      applyPaperMetrics();
+      updateReaderFade();
+    });
   };
   if (typeof ResizeObserver === "function") {
     const observer = new ResizeObserver(watch);
@@ -2317,6 +2335,11 @@ function capsuleLabelWidths(maxPage) {
   return { fullW: fullW || 1, shortW: shortW || 1 };
 }
 
+function readerTokenPx(name, fallback) {
+  const value = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
 function layoutCapsule({ keepAnchor = false } = {}) {
   const pane = translateScrollRoot();
   if (!pane || pane.clientWidth <= 0) return;
@@ -2334,6 +2357,8 @@ function layoutCapsule({ keepAnchor = false } = {}) {
     fontPx: readerPrefs.fontSize,
     fullW,
     shortW,
+    minEnd: readerTokenPx("--oi-reader-capsule-end-min", CAPSULE_END_MIN),
+    startFloor: CAPSULE_START_FLOOR,
     forceBar: (window.innerWidth || 0) < 900
   });
   const prev = `${pane.dataset.capsuleMode}|${pane.dataset.capsuleLabel}|${had}|${pane.style.getPropertyValue("--rf-start")}`;

@@ -583,9 +583,18 @@ body {
   max-width: none;
   background: transparent;
 }
-.oi-pdf-math-row.is-matched .oi-pdf-math-clip {
+.oi-pdf-math-row.is-matched .oi-pdf-math-clip,
+.oi-pdf-inline-math.is-matched .oi-pdf-math-clip {
+  /* Width stops at the trailing number. Hidden overflow crops that strip only. */
   width: calc(var(--oi-formula-h) * var(--oi-formula-ar, 1) * var(--oi-eq-keep, 1));
-  overflow: visible;
+  overflow: hidden;
+}
+.oi-pdf-inline-math.is-matched .oi-pdf-math-clip {
+  display: inline-block;
+  vertical-align: middle;
+}
+.oi-pdf-inline-math.is-matched.is-raised .oi-pdf-math-clip {
+  display: block;
 }
 .oi-pdf-eq-num {
   flex: 0 0 auto;
@@ -1145,7 +1154,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   height: var(--oi-reader-capsule-height);
   min-height: var(--oi-reader-capsule-height);
   max-height: var(--oi-reader-capsule-height);
-  margin: 0 var(--rf-capsule-end, var(--oi-reader-capsule-inset)) 0 0;
+  margin: 0 max(var(--oi-reader-capsule-end-min), var(--rf-capsule-end, var(--oi-reader-capsule-inset))) 0 0;
   padding: 0 var(--oi-reader-capsule-pad-x);
   border: 0;
   border-radius: var(--oi-reader-capsule-radius);
