@@ -21,7 +21,7 @@ node --test tests/*.test.mjs
 ### 步骤
 
 1. 改写 `pdf/PDF-MD-READOUT.md`，使它和 `ARCHITECTURE.md` 描述的是同一条已发布目标。保留这些仍成立的句子，测试还在匹配它们：`PDF-MD-READOUT`、`本单权威规格`、阅读序、`Markdown`、`.readout`、`#40 closed`、`bbox`、Attention、`PDF-ENTRY-SECONDARY` 作废、不要回归网页 content/Options、`PDF-READOUT-MARKDOWN.md` 以本文为准。
-2. 在该文里写明这些产品事实：内容精准第一，排版第二且尽量做好；译文跟抽出的原文一致；公式、图、表跟打开的 PDF 同一套内容，默认用 pageRaster 裁图，其他手段须过同一条验收；OCR 认错的字母（`i` 与 `n` 互认）不上屏；有文字层的正文用文字层原句；译文只出现在右栏；点击右栏用左栏高亮对齐；测试期划区是本机智谱 GLM-OCR，上线是 OCR API 加现有大模型 API。Issue #40 保持关闭。
+2. 在该文里写明这些产品事实：内容精准第一，排版第二且尽量做好；译文跟抽出的原文一致；公式、图、表跟打开的 PDF 同一套内容，默认用 pageRaster 裁图，其他手段须过同一条验收；OCR 认错的字母（`i` 与 `n` 互认）不上屏；有文字层的正文用文字层原句；译文只出现在右栏；点击右栏用原文栏高亮对齐；测试期划区是本机智谱 GLM-OCR，上线是 OCR API 加现有大模型 API。Issue #40 保持关闭。
 3. 同步 `README.md`、`README.en.md` 的实验室 PDF 段，以及 `lib/features.js` 里 pdf 那条 hint。文案改为：文字层正文 + 原页内容精准展示（默认裁图）；公式画面不来自 LaTeX 渲染。这里的默认裁图是当时已发布的过渡状态。目标做法是运行时 1→2→3，见阶段 6 与 REQUIREMENTS §2.6。中英文都改。
 4. 更新 `tests/pdf-readout.test.mjs` 里匹配 README「保留公式/LaTeX」「preserve formulas/LaTeX」的正则，使它们匹配新文案。不要放宽到空断言。
 5. `CONTRIBUTING.md` 里描述右栏公式的那句，改成裁图。若测试因此失败，只更新对应正则。
@@ -53,7 +53,7 @@ node --test tests/*.test.mjs
 
 - 读 `oi-pdf-engine`。未设置或 `legacy` 时走今天的 `ingestReadoutLayout`。
 - `fixture`：不请求网络。对当前打开的 PDF 第 1 页，用 sample-page 的块（页码改成 1），按 `CROP_SCALE` 做 pageRaster，视觉块变成 `img`。
-- 右栏节点带 `data-page`、`data-block-id`、`data-label`。点击后左栏对应页 `scrollIntoView`，并画一个 `.mirror-source-mark`。
+- 右栏节点带 `data-page`、`data-block-id`、`data-label`。点击后原文栏对应页 `scrollIntoView`，并画一个 `.mirror-source-mark`。
 - `fixture` 路径不调用 `renderFormulaNode`。`legacy` 路径保持原调用。
 
 实现裁图时调用 `cropCanvasToDataUrl`。阶段 1 的调用放在新模块或仅在 `fixture` 分支。`tests/pdf-mirror.test.mjs` 目前要求整个 `viewer.js` 都不出现 `cropCanvasToDataUrl`。因此这一阶段把裁图调用放在 `lib/pdf-blocks.js` 或 `lib/pdf-crop.js`，`viewer.js` 只调用新模块的函数名（例如 `cropBlockImage`）。不要在 `viewer.js` 写出被禁的三个名字：`cropCanvasToDataUrl`、`buildMirrorLayout`、`appendMirrorPage`。
@@ -64,7 +64,7 @@ node --test tests/*.test.mjs
 - `rasterCropRect([72/612, 312/792, 172/612, 392/792], 1224, 1584)` 的宽约为 `100/612*1224`，高约为 `80/792*1584`（允许四舍五入 ±1 像素）。
 - `textLayerTrust` 的三个用例与 `ARCHITECTURE.md` 第 5 节一致。
 - `legacy` 下现有公式测试仍通过，包括 `formulas stay in reading order as LaTeX`。
-- 手动：实验室打开一份 PDF，控制台执行 `localStorage.setItem("oi-pdf-engine","fixture")` 后重载阅读器。右栏出现裁图；缩小左栏后该图清晰度不变；点击该图，左栏出现高亮。把这三句写入阶段记录（PR 说明或提交说明即可）。
+- 手动：实验室打开一份 PDF，控制台执行 `localStorage.setItem("oi-pdf-engine","fixture")` 后重载阅读器。右栏出现裁图；缩小原文栏后该图清晰度不变；点击该图，原文栏出现高亮。把这三句写入阶段记录（PR 说明或提交说明即可）。
 
 ### 结束后停手
 
@@ -178,11 +178,11 @@ node --test tests/*.test.mjs
 - `local-ocr` 与 `cloud-ocr` 都经过 `vendorLayoutToBlocks`。阅读器在模式为 `cloud-ocr` 且密钥为空时不发请求，并回退文字层，状态栏说明已回退。
 - 未设置模式时先尝试 `local-ocr` 的本机基址，失败再落到 `text-layer`。
 - `node --test tests/*.test.mjs` 通过。
-- 有本机服务时：Attention 一页走 `local-ocr`，公式图与左栏同一笔画。有云端密钥时再对同一页走 `cloud-ocr`，公式 data URL 仍来自 pageRaster，与本地模式的裁图函数相同。密钥不要写入仓库。
+- 有本机服务时：Attention 一页走 `local-ocr`，公式图与原文栏同一笔画。有云端密钥时再对同一页走 `cloud-ocr`，公式 data URL 仍来自 pageRaster，与本地模式的裁图函数相同。密钥不要写入仓库。
 
 ### 结束后停手
 
-不要做表格单元格翻译，不要把译文画回左栏。
+不要做表格单元格翻译，不要把译文画回原文栏。
 
 ---
 
@@ -221,10 +221,11 @@ node --test tests/*.test.mjs
 
 完成时必须为真：
 
-- 没走到第一层、也没走通第二层时，右栏是占位加缩略图。
-- 点一下，左栏滚到原位置并画框高亮。
-- 现有原页裁图可以作缩略图。
-- 图裁得准就放进译文并配译后题注；裁不准走同样的占位。
+- 没走到第一层、也没走通第二层时，独立公式在译文里是写明位置的占位加一张小缩略图。有编号写「公式 (4) · 原文第 4 页」，没有编号写「公式 · 原文第 N 页」。
+- 点击后，原文栏跳到原位并画框。原页裁图在原文栏或弹出面板里看，不嵌在译文里。
+- 原页小段裁图只用在行内公式路径上。
+- 图裁得准就放进译文并配译后题注；裁不准时写「图 2 · 原文第 3 页（点击查看）」。
+- 导出 MD/PDF 写「（公式 (n) 见原文第 N 页）」，代替旧的「（公式见左栏）」。
 - UI 以 Loom 规格为准。
 - 行内公式只走第一层，加一小段原页裁图，不走第二层的大模型。见 REQUIREMENTS §2.6「行内公式」。
 

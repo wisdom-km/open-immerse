@@ -42,7 +42,7 @@ node --test tests/*.test.mjs
 
 - 扩展仓：`D:\open-immerse`，MIT，零构建。改完到 `chrome://extensions` 重新加载，不要移除扩展。
 - 实验室开关：`lib/features.js` 的 `features.pdf` 默认 `false`。入口在设置 → 高级。
-- 阅读器：`pdf/viewer.html`、`pdf/viewer.js`。左栏 `#pages` 里的 pdf.js canvas。右栏 `#readout`。
+- 阅读器：`pdf/viewer.html`、`pdf/viewer.js`。原文栏 `#pages` 里的 pdf.js canvas。右栏 `#readout`。
 - 翻译：阅读器发 `OI_TRANSLATE_BATCH`，`background/service-worker.js` 的 `translateBatch`。密钥在 `chrome.storage.sync`。
 - 划区 sidecar 放在扩展仓外面，目录 `D:\pdf-layout-sidecar`。它听 `127.0.0.1:8765`。`7860` 是 GLM-OCR 网页，不是这个接口。认字模型在 `127.0.0.1:5002`。版面模型在 `D:\pdf-layout-models`，仓库名 `PaddlePaddle/PP-DocLayoutV3_safetensors`。`id2label` 在模型加载后从权重配置读取，不写进扩展仓。权重、PyTorch、vLLM 不进本仓库。
 - `tests/fixtures/Attention_Is_All_You_Need.pdf` 若在本地，不要 `git add`。手标样例只用小 JSON。
@@ -62,7 +62,7 @@ node --test tests/*.test.mjs
 | `cropCanvasToDataUrl` / `canvasCropSource` | `lib/pdf-mirror.js` | 按百分比矩形裁 canvas。百分比是 `{left,top,width,height}`，0–100，原点左上 |
 | `articleNodeSpec` | `lib/pdf-viewer.js` | 标题 `h1`、小节 `h2`、其余 `p` |
 
-`buildMirrorLayout`、`appendMirrorPage`、`percentRectToTextStyle` 继续留在镜像实验里。阅读器不要调用它们。Issue #40 关闭的是「译文贴进左栏原文框」。右栏插入原页裁图、左栏用已有的 `.mirror-source-mark` 高亮，是本目录的产品路径。
+`buildMirrorLayout`、`appendMirrorPage`、`percentRectToTextStyle` 继续留在镜像实验里。阅读器不要调用它们。Issue #40 关闭的是「译文贴进原文栏原文框」。右栏插入原页裁图、原文栏用已有的 `.mirror-source-mark` 高亮，是本目录的产品路径。
 
 ## 测试怎样锁着旧行为
 
