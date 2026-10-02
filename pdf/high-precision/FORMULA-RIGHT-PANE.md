@@ -1,10 +1,10 @@
 # PDF 右栏 · 公式节奏（FORMULA-RIGHT-PANE）
 
-目标做法是运行时 1→2→3（REQUIREMENTS §2.6）。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的原页高清重渲染也算第一层，本质上是区域渲染。pageRaster 裁图是 png 回退，静默、不加徽章（V1-B1），不算换层。换层只看框的把握。在门槛定下来之前，第三层占位默认关闭：开关关着时，框把握不足的公式仍按现状显示；开关打开时，过阈值用第一层，没过且第二层开启并核对通过则用 KaTeX，否则第三层占位。下文的节奏数字仍用于高清重渲染、png 裁图和缩略图。UI 以 Loom 规格为准。
+目标做法是运行时 1→2→3（REQUIREMENTS §2.6）。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的原页高清重渲染也算第一层，本质上是区域渲染。失败时静默退成 pageRaster 的 png，不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。换层只看框的把握。两个开关互相独立，都默认关闭。第二层开关在 Aa 面板，叫「用看图模型补全公式」。第三层占位开关等上线门槛。框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。过宽公式的现状和目标见 §2。F3-S4 见 REQUIREMENTS §2.6 术语表。UI 以 Loom 规格为准。
 
 **角色：** 在 PR#51 精准硬门之上的 **第二目标：贴原版节奏 / 更优雅**。  
 **权威归属：** Loom。Cloud tip 跟本文 + [`PDF-MD-FORMULA-LAYOUT.md`](../../open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md)。  
-**硬门：** 文字层仍在。公式按运行时 1→2→3，换层只看框的把握。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的高清重渲染也算第一层。pageRaster 裁图是 png 回退，不算换层（V1-B1）。第三层占位在门槛定下来之前默认关闭。开关打开后，没过阈值且第二层开启并核对通过则用 KaTeX，否则第三层占位。#40 镜像关。UI 以 Loom 规格为准。  
+**验收：** 文字层仍在。这里不是过宽公式的尺寸硬门；尺寸硬门待定，见 §2。公式按运行时 1→2→3，换层只看框的把握。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的高清重渲染也算第一层。失败时静默退 png，不算换层（V1-B1，见 REQUIREMENTS §2.6 术语表）。两个开关互相独立，都默认关闭。框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。#40 镜像关。UI 以 Loom 规格为准。  
 **fixture：** Attention Is All You Need · 对照原文栏 pdf.js。  
 **软注靶子（Anvil）：** softmax 误带 Fig.2；邻行多裁；行内砸成卡片。
 
@@ -37,13 +37,15 @@
 | | 规格 |
 | --- | --- |
 | 容器 | 块级 `figure` / 等价；**仅**独占行公式（无 `inlineOf`） |
-| 水平 | `text-align: center`；裁图 `max-width: 100%`；过宽先等比缩小到硬门，再在盒内横向滚动（F3-S4）。硬门是缩小后墨迹高度仍 ≥ **14px**。勿横向撑破通读，也不要改成占位来躲过宽 |
-| 宽度 | 页宽占比不要直接写成正文列的 `%`。正文列已经扣过左右 `0.085`，宽度用 `pageFraction / (1 − 2×0.085)`，纸比左页窄时再乘左页宽 / 纸宽，最后夹在列宽内。宽应明显大于合前约 48% 列宽。列宽仍优先。量测墨迹硬门 ≥ **1.0×** `bodyFs`（专有 display 偏好 ≥ **1.4×**）。#63 的 ≥ **1.6×** 仍是修宽后的强期望（盒 `2em` × 约 0.8 share；自然到约 3× 且 ≤ **5×** 仍通过）。短裁图若实测 share 让墨迹低于 1.4×，只把这一张的 floor 抬到 `1.4 / inkShare`，不先把图拉满整列，也不动 #62 pad |
+| 水平 | `text-align: center`。现状（已上线）：公式宽度不夹到列宽（`lib/pdf-blocks.js` 约第 529–545 行，`displayFormulaWidthCss`，由 `tests/pdf-formula-size.test.mjs` 第 75–76 行锁定）。裁图是 `max-width: none`（`pdf/viewer.css` 约第 473–477 行），超出部分在公式框内横向滚动（`.oi-pdf-math-scroll`，约第 425 行）。这是 #72 的实现。没有 14px 硬门，也没有墨迹下限。右栏整张纸面的横滚是 PR #90（`.pane-translate-scroll` 约第 244–250 行），和公式框内的横滚是两件事。目标（待实现）：先等比缩小到列宽，但不低于硬门；到了硬门还放不下，就在框内横向滚动（F3-S4，见 REQUIREMENTS §2.6 术语表）。硬门的数值跟着 F3 尺寸规则走，待定，实现时与 F3 一起定。实现时要改 `tests/pdf-formula-size.test.mjs` 第 75–76 行。不要改成占位来躲过宽 |
+| 宽度 | 与上一行同一套说法。现状（已上线）：公式宽度不夹到列宽（`lib/pdf-blocks.js` 约第 529–545 行，`displayFormulaWidthCss`，由 `tests/pdf-formula-size.test.mjs` 第 75–76 行锁定）。裁图是 `max-width: none`（`pdf/viewer.css` 约第 473–477 行），超出部分在公式框内横向滚动（`.oi-pdf-math-scroll`，约第 425 行）。这是 #72 的实现。没有 14px 硬门，也没有墨迹下限。右栏整张纸面的横滚是 PR #90（`.pane-translate-scroll` 约第 244–250 行），和公式框内的横滚是两件事。目标（待实现）：先等比缩小到列宽，但不低于硬门；到了硬门还放不下，就在框内横向滚动（F3-S4，见 REQUIREMENTS §2.6 术语表）。硬门的数值跟着 F3 尺寸规则走，待定，实现时与 F3 一起定。实现时要改 `tests/pdf-formula-size.test.mjs` 第 75–76 行。不要改成占位来躲过宽 |
 | 上下空隙 | `margin-block: 10px 14px`（@ 正文 15px ≈ **0.67em / 0.93em**）——对标 Attention 原文栏：公式上下约 **半行～一行** 呼吸，**小于** 段间距 14px 的 dual 叠加 |
 | 与邻段 | 段 `margin-bottom` 与公式 `margin-top` **取大不叠盲加** |
 | 裁框 | 只盖公式墨迹（含 softmax / 括号 / 等号 / 上下标）；**禁止**并入下方/旁侧 `figure`、`table`、题注 |
 
-CSS 贴片：
+下面的 CSS 贴片不是已上线样式。已上线的过宽行为见上表「水平」和「宽度」。
+
+CSS 贴片（目标稿，待实现）：
 
 ```css
 .oi-pdf-display-math {
@@ -179,7 +181,7 @@ CSS 贴片：
 
 ### D. 回归
 
-- [ ] 现在已上线的高清重渲染（`surface="redraw"`）和 pageRaster 的 png 裁图按 REQUIREMENTS §2.6 算第一层。换层只看框的把握。第三层占位默认关闭：开关打开后，过阈值用第一层，没过且第二层开启并核对通过则用 KaTeX，否则第三层占位  
+- [ ] 现在已上线的高清重渲染（`surface="redraw"`）和 pageRaster 的 png 裁图按 REQUIREMENTS §2.6 算第一层。失败时静默退 png。两个开关互相独立，都默认关闭。框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示  
 - [ ] 网页 Soft Graphite / Options / bilingual **无回归**  
 - [ ] #40 镜像未回潮  
 

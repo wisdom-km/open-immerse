@@ -57,8 +57,8 @@
 | | 规格 |
 | --- | --- |
 | 水平 | **居中**于 `.readout` 内容列（Attention 类论文行间式默认居中） |
-| 宽度上限 | `max-width: 100%`（列宽即 `PDF-RIGHT-PANE` 的 `.readout`，约 `42rem`） |
-| 过宽 | **先缩到硬门再在盒内横滚**（F3-S4）。硬门是缩小后墨迹高度仍 ≥ **14px**。勿横向撑破通读，也不要改成占位来躲过宽 |
+| 宽度上限 | 现状不夹到列宽。目标见下一行 |
+| 过宽 | 现状（已上线）：公式宽度不夹到列宽（`lib/pdf-blocks.js` 约第 529–545 行，`displayFormulaWidthCss`，由 `tests/pdf-formula-size.test.mjs` 第 75–76 行锁定）。裁图是 `max-width: none`（`pdf/viewer.css` 约第 473–477 行），超出部分在公式框内横向滚动（`.oi-pdf-math-scroll`，约第 425 行）。这是 #72 的实现。没有 14px 硬门，也没有墨迹下限。右栏整张纸面的横滚是 PR #90（`.pane-translate-scroll` 约第 244–250 行），和公式框内的横滚是两件事。目标（待实现）：先等比缩小到列宽，但不低于硬门；到了硬门还放不下，就在框内横向滚动（F3-S4，见 `pdf/high-precision/REQUIREMENTS.md` §2.6 术语表）。硬门的数值跟着 F3 尺寸规则走，待定，实现时与 F3 一起定。实现时要改 `tests/pdf-formula-size.test.mjs` 第 75–76 行。不要改成占位来躲过宽 |
 | 垂直空隙 | `margin-block: 12px 16px`（约 **0.8em / 1.05em** @ 15px 正文）；参考 Attention 原页：公式上下约一行呼吸，**不要**叠成两段正文间距 |
 | 与邻段 | 上一 `p` 的 `margin-bottom` 与本块上边距 **取大不叠加盲加**（实现可用相邻选择器消重，避免「段尾 14px + 公式上 12px」过空） |
 
