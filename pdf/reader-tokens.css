@@ -1,0 +1,73 @@
+/**
+ * Reader-only tokens. Scoped to .oi-reader (the translation column and the
+ * Aa panel). Does not change ui/tokens.css or the web-translation surface.
+ * SPEC §3.2, Loom rev 3.
+ */
+
+.oi-reader {
+  --oi-reader-pair: #A86B12;
+  --oi-reader-pair-bg: rgba(168, 107, 18, 0.10);
+  --oi-reader-pair-halo: rgba(168, 107, 18, 0.25);
+  --oi-reader-warn: #8A4B0F;
+  --oi-reader-focus: #2F55D4;
+  --oi-reader-mark: rgba(34, 32, 28, 0.12);
+  --oi-reader-tooltip-bg: #22201C;
+  --oi-reader-tooltip-fg: #F7F3EA;
+  --oi-reader-font: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", STSong, serif;
+  --oi-reader-ui-font: var(--oi-font);
+  --oi-reader-font-size: 16px;
+  --oi-reader-paper: #F7F3EA;
+  --oi-reader-surface: #FBF9F4;
+  --oi-reader-ink: #22201C;
+  --oi-reader-ink-2: #4A463E;
+  --oi-reader-muted: #615B50;
+  --oi-reader-line: #DDD5C4;
+  --oi-reader-line-strong: #8A806C;
+  --oi-reader-disabled: #9A9282;
+  color: var(--oi-reader-ink);
+  background: var(--oi-reader-paper);
+}
+
+.oi-reader[data-reader-theme="warm"] {
+  --oi-reader-paper: #F7F3EA;
+  --oi-reader-surface: #FBF9F4;
+  --oi-reader-ink: #22201C;
+  --oi-reader-ink-2: #4A463E;
+  --oi-reader-muted: #615B50;
+  --oi-reader-line: #DDD5C4;
+  --oi-reader-line-strong: #8A806C;
+  --oi-reader-disabled: #9A9282;
+}
+
+.oi-reader[data-reader-theme="white"] {
+  --oi-reader-paper: #FFFFFF;
+  --oi-reader-surface: #FFFFFF;
+  --oi-reader-ink: #202020;
+  --oi-reader-ink-2: #454545;
+  --oi-reader-muted: #5E5E5E;
+  --oi-reader-line: #E3E3E3;
+  --oi-reader-line-strong: #888888;
+  --oi-reader-disabled: #9A9A9A;
+}
+
+.oi-reader[data-reader-theme="sepia"] {
+  --oi-reader-paper: #ECE7DD;
+  --oi-reader-surface: #F3EFE8;
+  --oi-reader-ink: #26221C;
+  --oi-reader-ink-2: #463F35;
+  --oi-reader-muted: #57504A;
+  --oi-reader-line: #D6CEC0;
+  --oi-reader-line-strong: #827868;
+  --oi-reader-disabled: #948B7E;
+}
+
+.oi-reader[data-reader-theme="green"] {
+  --oi-reader-paper: #E8EDE6;
+  --oi-reader-surface: #F1F4EF;
+  --oi-reader-ink: #1E2420;
+  --oi-reader-ink-2: #3E4740;
+  --oi-reader-muted: #4F5A52;
+  --oi-reader-line: #CED6CB;
+  --oi-reader-line-strong: #747F75;
+  --oi-reader-disabled: #8E968D;
+}

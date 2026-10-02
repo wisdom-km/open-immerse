@@ -133,7 +133,7 @@ test("schema DOM centers the abstract heading by role and lays authors out as ce
   assert.equal(restHeading.attrs["data-role"], undefined);
   assert.match(css, /repeat\(auto-fit, minmax\(140px, 1fr\)\)/);
   assert.doesNotMatch(css, /repeat\(4,\s*1fr\)/);
-  assert.match(css, /\.readout-paper \.oi-pdf-h2\[data-role="abstract_heading"\]/);
+  assert.match(css, /\.reader-flow \.oi-pdf-h2\[data-role="abstract_heading"\]/);
   assert.match(viewer, /renderPdfStructure/);
   assert.doesNotMatch(viewer, /\$\("mirrorPages"\)\.hidden = false/);
 });

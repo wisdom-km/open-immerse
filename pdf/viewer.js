@@ -70,15 +70,14 @@ import {
   readSoftPageFollow
 } from "../lib/pdf-scroll.js";
 import {
-  PDF_PAPER_GUTTER_X,
   pagesInTranslateScope,
+  PDF_PAPER_GUTTER_X,
   basePageBox,
   paperAvailWidth,
   paperCssPx,
-  raisedStackWidth,
   readoutPaperSize
 } from "../lib/pdf-paper.js";
-import { describeBodyFont, mapBodyFontPx } from "../lib/pdf-body-font.js";
+import { describeBodyFont } from "../lib/pdf-body-font.js";
 import {
   PDF_READOUT_COPY,
   extractReadoutBlocks,
@@ -120,6 +119,25 @@ import {
 } from "../lib/pdf-layout-client.js";
 import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { INLINE_BODY_HARD_MAX, displayFormulaMinEm, matchedDisplayCssSize } from "../lib/pdf-formula-size.js";
+import {
+  READER_FONT_SIZES,
+  READER_THEME_LABELS,
+  READER_THEME_TOKENS,
+  applyReaderFontAction,
+  capsuleLabel,
+  contentPagesForScope,
+  pageAtAnchor,
+  pageBreakLabel,
+  planReaderFlow,
+  precompositeMultiplyPixels,
+  readReaderPrefs,
+  readerFontShortcut,
+  readerImageBlend,
+  readerThemeAriaLabel,
+  themePaperRgb,
+  untranslatedLabel,
+  writeReaderPrefs
+} from "../lib/pdf-reader-flow.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   assetLayoutCapPx,
@@ -188,6 +206,8 @@ const readoutSyncGate = createScrollSyncGate();
 let translateScrollTick = 0;
 let viewMode = "readout";
 let mirrorZoom = DEFAULT_ZOOM;
+let readerPrefs = readReaderPrefs(null);
+let readerBlend = readerImageBlend({ supportsMultiply: true, forcedColors: false });
 
 init();
 
@@ -226,7 +246,14 @@ function init() {
   watchFormulaRasterRatio();
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
-  $("paperStack")?.addEventListener("click", onReadoutBlockClick);
+  $("readerFlow")?.addEventListener("click", onReaderFlowClick);
+  $("readerFlow")?.addEventListener("pointerdown", (event) => {
+    const interactive = event.target.closest?.("button, a, input, textarea, select");
+    if (interactive) return;
+    $("readerFlow")?.focus({ preventScroll: true });
+  });
+  $("pageCapsule")?.addEventListener("click", onPageCapsuleClick);
+  bindReaderChrome();
   bindPaperMetrics();
   bindPaneScroll();
   bindPdfScrollSettings();
@@ -278,15 +305,317 @@ function applyPageProgress(message) {
 }
 
 function onKey(event) {
-  if (eventTargetIsField(event.target)) return;
+  if (event.key === "Escape" && closeAaPanel()) {
+    event.preventDefault();
+    return;
+  }
+  const shortcut = readerFontShortcut({
+    key: event.key,
+    metaKey: event.metaKey,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    inField: eventTargetIsField(event.target),
+    editing: Boolean(event.target?.isContentEditable),
+    inReader: focusInReader(event.target),
+    singleKey: readerPrefs.singleKey !== false
+  });
+  if (shortcut) {
+    event.preventDefault();
+    applyReaderFontStep(shortcut);
+    return;
+  }
+  if (eventTargetIsField(event.target) || event.target?.isContentEditable) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "ArrowLeft") goPage(-1);
   if (event.key === "ArrowRight") goPage(1);
+  if (focusInReader(event.target)) return;
   if (event.key === "-" || event.key === "_") setZoom(nextZoom(zoom, -1));
   if (event.key === "+" || event.key === "=") setZoom(nextZoom(zoom, 1));
 }
 
 function eventTargetIsField(target) {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+  const tag = target?.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+    || target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement;
+}
+
+function focusInReader(target) {
+  if (!target || typeof target.closest !== "function") return false;
+  return Boolean(target.closest(".oi-reader, .pane-translate, .aa-panel"));
+}
+
+function detectReaderBlend() {
+  let supportsMultiply = true;
+  let forcedColors = false;
+  try {
+    supportsMultiply = window.CSS?.supports?.("mix-blend-mode", "multiply") !== false;
+  } catch {
+    supportsMultiply = true;
+  }
+  try {
+    forcedColors = window.matchMedia?.("(forced-colors: active)")?.matches === true;
+  } catch {
+    forcedColors = false;
+  }
+  readerBlend = readerImageBlend({ supportsMultiply, forcedColors });
+  return readerBlend;
+}
+
+function applyReaderImageBlend(img) {
+  if (!img) return img;
+  const mode = readerBlend || detectReaderBlend();
+  img.dataset.rfBlend = mode;
+  if (mode !== "precomposite") return img;
+  const paper = themePaperRgb(readerPrefs.theme);
+  if (!paper || !img.src) return img;
+  const source = img.src;
+  const image = new Image();
+  image.onload = () => {
+    if (img.dataset.rfBlend !== "precomposite") return;
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth || image.width;
+    canvas.height = image.naturalHeight || image.height;
+    if (!(canvas.width > 0) || !(canvas.height > 0)) return;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return;
+    ctx.drawImage(image, 0, 0);
+    const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    frame.data.set(precompositeMultiplyPixels(frame.data, paper));
+    ctx.putImageData(frame, 0, 0);
+    img.src = canvas.toDataURL("image/png");
+    img.style.background = `rgb(${paper[0]}, ${paper[1]}, ${paper[2]})`;
+    img.style.paddingInline = "2px";
+    img.style.marginInline = "-2px";
+    img.dataset.rfComposited = readerPrefs.theme;
+  };
+  image.src = source;
+  return img;
+}
+
+function applyReaderFontStep(action) {
+  const next = applyReaderFontAction(readerPrefs.fontSize, action);
+  if (next === readerPrefs.fontSize) return;
+  readerPrefs = { ...readerPrefs, fontSize: next };
+  persistReaderPrefs();
+  applyReaderSurface();
+  renderArticle();
+}
+
+function setReaderTheme(theme) {
+  if (theme === readerPrefs.theme) return;
+  readerPrefs = { ...readerPrefs, theme };
+  persistReaderPrefs();
+  applyReaderSurface();
+  if (readerBlend === "precomposite") renderArticle();
+}
+
+function persistReaderPrefs() {
+  try {
+    writeReaderPrefs(localStorage, readerPrefs);
+  } catch {
+    /* private mode */
+  }
+}
+
+function applyReaderSurface() {
+  const size = `${readerPrefs.fontSize}px`;
+  for (const el of [readerRootEl(), $("aaPanel")]) {
+    if (!el) continue;
+    el.dataset.readerTheme = readerPrefs.theme;
+    el.style.setProperty("--oi-reader-font-size", size);
+    el.style.setProperty("--oi-pdf-body-fs", size);
+  }
+  syncAaPanel();
+}
+
+function loadReaderPrefs() {
+  try {
+    readerPrefs = readReaderPrefs(localStorage);
+  } catch {
+    readerPrefs = readReaderPrefs(null);
+  }
+  detectReaderBlend();
+  applyReaderSurface();
+}
+
+function syncAaPanel() {
+  const value = $("aaFontValue");
+  if (value) value.textContent = `${readerPrefs.fontSize}px`;
+  const down = $("aaFontDown");
+  const up = $("aaFontUp");
+  const reset = $("aaFontDefault");
+  if (down) down.disabled = readerPrefs.fontSize <= READER_FONT_SIZES[0];
+  if (up) up.disabled = readerPrefs.fontSize >= READER_FONT_SIZES[READER_FONT_SIZES.length - 1];
+  if (reset) reset.disabled = readerPrefs.fontSize === 16;
+  document.querySelectorAll("#aaFontScale [data-size]").forEach((tick) => {
+    const on = Number(tick.dataset.size) === readerPrefs.fontSize;
+    tick.setAttribute("aria-checked", on ? "true" : "false");
+    tick.tabIndex = on ? 0 : -1;
+  });
+  document.querySelectorAll("#aaThemes [data-theme]").forEach((swatch) => {
+    const on = swatch.dataset.theme === readerPrefs.theme;
+    swatch.setAttribute("aria-checked", on ? "true" : "false");
+    swatch.tabIndex = on ? 0 : -1;
+    const mark = swatch.querySelector(".aa-swatch-check");
+    if (mark) mark.hidden = !on;
+  });
+  const single = $("aaSingleKey");
+  if (single) single.checked = readerPrefs.singleKey !== false;
+}
+
+function buildAaScale() {
+  const scale = $("aaFontScale");
+  if (!scale || scale.childElementCount) return;
+  for (const size of READER_FONT_SIZES) {
+    const tick = document.createElement("button");
+    tick.type = "button";
+    tick.className = "aa-tick";
+    tick.dataset.size = String(size);
+    tick.setAttribute("role", "radio");
+    tick.setAttribute("aria-checked", size === readerPrefs.fontSize ? "true" : "false");
+    tick.tabIndex = size === readerPrefs.fontSize ? 0 : -1;
+    const mark = document.createElement("span");
+    mark.className = "aa-tick-mark";
+    mark.setAttribute("aria-hidden", "true");
+    const num = document.createElement("span");
+    num.textContent = String(size);
+    tick.append(mark, num);
+    if (size === 16) {
+      const note = document.createElement("span");
+      note.className = "aa-tick-note";
+      note.textContent = "默认";
+      tick.append(note);
+    }
+    scale.append(tick);
+  }
+}
+
+function buildAaThemes() {
+  const group = $("aaThemes");
+  if (!group || group.childElementCount) return;
+  for (const theme of ["warm", "white", "sepia", "green"]) {
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = "aa-swatch";
+    swatch.dataset.theme = theme;
+    swatch.setAttribute("role", "radio");
+    swatch.setAttribute("aria-label", readerThemeAriaLabel(theme));
+    swatch.setAttribute("aria-checked", "false");
+    const chip = document.createElement("span");
+    chip.className = "aa-swatch-chip";
+    chip.textContent = "文";
+    const tokens = READER_THEME_TOKENS[theme];
+    chip.style.background = tokens.paper;
+    chip.style.color = tokens.ink;
+    const check = document.createElement("span");
+    check.className = "aa-swatch-check";
+    check.textContent = "✓";
+    check.hidden = true;
+    chip.append(check);
+    const name = document.createElement("span");
+    name.textContent = READER_THEME_LABELS[theme];
+    swatch.append(chip, name);
+    group.append(swatch);
+  }
+}
+
+function openAaPanel() {
+  const panel = $("aaPanel");
+  const button = $("aaButton");
+  if (!panel) return;
+  panel.hidden = false;
+  if (button) button.setAttribute("aria-expanded", "true");
+  syncAaPanel();
+}
+
+function closeAaPanel() {
+  const panel = $("aaPanel");
+  if (!panel || panel.hidden) return false;
+  panel.hidden = true;
+  const button = $("aaButton");
+  if (button) {
+    button.setAttribute("aria-expanded", "false");
+    button.focus();
+  }
+  return true;
+}
+
+function onAaFontScaleKey(event) {
+  const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+  if (!keys.includes(event.key)) return;
+  event.preventDefault();
+  const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+  const index = READER_FONT_SIZES.indexOf(readerPrefs.fontSize);
+  const next = READER_FONT_SIZES[Math.min(READER_FONT_SIZES.length - 1, Math.max(0, index + delta))];
+  readerPrefs = { ...readerPrefs, fontSize: next };
+  persistReaderPrefs();
+  applyReaderSurface();
+  renderArticle();
+  $("aaFontScale")?.querySelector(`[data-size="${next}"]`)?.focus();
+}
+
+function onAaThemeKey(event) {
+  const order = ["warm", "white", "sepia", "green"];
+  const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+  if (!keys.includes(event.key)) return;
+  event.preventDefault();
+  const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+  const index = Math.max(0, order.indexOf(readerPrefs.theme));
+  const next = order[Math.min(order.length - 1, Math.max(0, index + delta))];
+  setReaderTheme(next);
+  $("aaThemes")?.querySelector(`[data-theme="${next}"]`)?.focus();
+}
+
+function bindReaderChrome() {
+  buildAaScale();
+  buildAaThemes();
+  loadReaderPrefs();
+  $("aaButton")?.addEventListener("click", () => {
+    const panel = $("aaPanel");
+    if (!panel) return;
+    if (panel.hidden) openAaPanel();
+    else closeAaPanel();
+  });
+  $("aaFontDown")?.addEventListener("click", () => applyReaderFontStep("decrease"));
+  $("aaFontUp")?.addEventListener("click", () => applyReaderFontStep("increase"));
+  $("aaFontDefault")?.addEventListener("click", () => {
+    if (readerPrefs.fontSize === 16) return;
+    readerPrefs = { ...readerPrefs, fontSize: 16 };
+    persistReaderPrefs();
+    applyReaderSurface();
+    renderArticle();
+  });
+  $("aaFontScale")?.addEventListener("click", (event) => {
+    const tick = event.target.closest?.("[data-size]");
+    if (!tick) return;
+    const size = Number(tick.dataset.size);
+    if (!READER_FONT_SIZES.includes(size) || size === readerPrefs.fontSize) return;
+    readerPrefs = { ...readerPrefs, fontSize: size };
+    persistReaderPrefs();
+    applyReaderSurface();
+    renderArticle();
+  });
+  $("aaFontScale")?.addEventListener("keydown", onAaFontScaleKey);
+  $("aaThemes")?.addEventListener("click", (event) => {
+    const swatch = event.target.closest?.("[data-theme]");
+    if (!swatch) return;
+    setReaderTheme(swatch.dataset.theme);
+  });
+  $("aaThemes")?.addEventListener("keydown", onAaThemeKey);
+  $("aaSingleKey")?.addEventListener("change", () => {
+    readerPrefs = { ...readerPrefs, singleKey: $("aaSingleKey").checked };
+    persistReaderPrefs();
+  });
+  document.addEventListener("click", (event) => {
+    const panel = $("aaPanel");
+    if (!panel || panel.hidden) return;
+    const target = event.target;
+    if (panel.contains(target) || $("aaButton")?.contains(target)) return;
+    panel.hidden = true;
+    $("aaButton")?.setAttribute("aria-expanded", "false");
+  });
 }
 
 function bindPaneScroll() {
@@ -965,7 +1294,7 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
     leftWidth,
     paperWidth: paper.width > 0 ? paper.width : leftWidth,
     paperHeight: paper.heightBase > 0 ? paper.heightBase : leftHeight,
-    mirrorZoom: Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1,
+    mirrorZoom: 1,
     devicePixelRatio: Math.max(1, Number(window.devicePixelRatio) || 1)
   };
 }
@@ -1100,6 +1429,7 @@ function cropImage(block) {
   if (block?.surface === "redraw" || block?.surface === "png") {
     img.setAttribute("data-oi-surface", block.surface);
   }
+  applyReaderImageBlend(img);
   return img;
 }
 
@@ -1203,9 +1533,6 @@ function fillBlockText(node, block, layout) {
       span.dataset.label = "formula";
       if (node.dataset.page) span.dataset.page = node.dataset.page;
     }
-    // Stay on the line. A tall paint box used to promote these to a display
-    // row, which then clamped at 2.5em. Height follows the left bbox; without
-    // one it stops near 1.4× body.
     const matched = matchedFormulaStyle(formula, layout?.page ?? node.dataset.page);
     if (matched) {
       span.classList.add("is-matched");
@@ -1375,8 +1702,16 @@ function syncReadoutEmpty(hasArticle) {
   $("pendingRead").hidden = copy !== PDF_COPY.translatingWait;
 }
 
+function readerRootEl() {
+  return $("reader");
+}
+
+function readerFlowEl() {
+  return $("readerFlow");
+}
+
 function paperStackEl() {
-  return $("paperStack");
+  return readerFlowEl();
 }
 
 function scopeShowsPage(page) {
@@ -1435,13 +1770,13 @@ function paperHeightFor(pageNumber) {
 
 function snappedFormulaBox(matched) {
   const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
-  const zoom = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
+  const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
   return formulaDevicePixels({
     cssWidth: matched.cssWidth,
     cssHeight: matched.cssHeight,
     pdfWidth: matched.cssWidth,
     pdfHeight: matched.cssHeight,
-    mirrorZoom: zoom,
+    mirrorZoom: mirror,
     devicePixelRatio: dpr
   });
 }
@@ -1463,18 +1798,6 @@ function matchedFormulaStyle(block, page) {
     height: paperCssPx(height),
     aspect: String(Math.round((width / height) * 10000) / 10000)
   };
-}
-
-function applyBodyFont(paper, paperWidth) {
-  const layout = getPageLayout(paper.dataset.page);
-  const mapped = mapBodyFontPx({
-    bodyHeight: layout?.bodyItemHeight,
-    pageWidth: layout?.pageWidth,
-    paperWidth,
-    trusted: layout?.bodyFontTrusted === true
-  });
-  if (mapped.source === "text-layer") paper.style.setProperty("--oi-pdf-body-fs", paperCssPx(mapped.px));
-  else paper.style.removeProperty("--oi-pdf-body-fs");
 }
 
 function refreshMatchedFormulas(paper, paperHeight) {
@@ -1510,28 +1833,13 @@ function refreshMatchedFormulas(paper, paperHeight) {
 }
 
 function applyPaperMetrics() {
-  const stack = paperStackEl();
-  const scroll = translateScrollRoot();
-  if (!stack || !scroll) return;
-  const avail = paperAvailWidth(scroll.clientWidth, PDF_PAPER_GUTTER_X);
-  let widest = 0;
-  stack.querySelectorAll(".readout-paper").forEach((paper) => {
-    const left = leftBaseBox(paper.dataset.page);
-    if (!left) return;
-    const size = readoutPaperSize({
-      leftWidth: left.width,
-      leftHeight: left.height,
-      availWidth: avail
-    });
-    if (!(size.width > 0)) return;
-    if (size.width > widest) widest = size.width;
-    paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
-    paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
-    paper.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
-    applyBodyFont(paper, size.width);
-    refreshMatchedFormulas(paper, size.heightBase);
+  const flow = readerFlowEl();
+  if (!flow) return;
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => {
+    const left = leftBaseBox(slot.dataset.page);
+    if (left?.width > 0) slot.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
+    refreshMatchedFormulas(slot, paperHeightFor(slot.dataset.page));
   });
-  stack.style.setProperty("--oi-pdf-stack-w", paperCssPx(widest));
   refreshFormulaCropsForDisplay();
 }
 
@@ -1547,42 +1855,19 @@ function bindPaperMetrics() {
   window.addEventListener("resize", watch);
 }
 
-function raiseStackWidth(nextWidth) {
-  const stack = paperStackEl();
-  if (!stack) return;
-  const current = parseFloat(stack.style.getPropertyValue("--oi-pdf-stack-w"));
-  stack.style.setProperty("--oi-pdf-stack-w", paperCssPx(raisedStackWidth(current, nextWidth)));
-}
-
 function ensurePaper(page) {
-  const stack = paperStackEl();
-  if (!stack || page == null || page === "") return null;
+  const flow = readerFlowEl();
+  if (!flow || page == null || page === "") return null;
   const key = String(page);
-  let paper = stack.querySelector(`.readout-paper[data-page="${key}"]`);
-  if (!paper) {
-    paper = document.createElement("article");
-    paper.className = "readout-paper";
-    paper.dataset.page = key;
-    const type = document.createElement("div");
-    type.className = "readout-type";
-    const readout = document.createElement("div");
-    readout.className = "readout md-readout";
-    type.append(readout);
-    paper.append(type);
-    stack.append(paper);
-    const left = leftBaseBox(key);
-    const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0, PDF_PAPER_GUTTER_X);
-    const size = left
-      ? readoutPaperSize({ leftWidth: left.width, leftHeight: left.height, availWidth: avail })
-      : null;
-    if (size?.width > 0) {
-      paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
-      paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
-      paper.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
-      raiseStackWidth(size.width);
-    }
+  let slot = flow.querySelector(`:scope > .rf-page[data-page="${key}"]`);
+  if (!slot) {
+    slot = document.createElement("div");
+    slot.className = "rf-page readout md-readout";
+    slot.dataset.page = key;
+    slot.dataset.srcPage = key;
+    flow.append(slot);
   }
-  return paper.querySelector(".readout");
+  return slot;
 }
 
 function renderStoredArticle(blocks) {
@@ -1632,16 +1917,12 @@ function renderArticle() {
   const keep = pane ? pane.scrollTop : 0;
   const keepLeft = pane ? pane.scrollLeft : 0;
   const stack = paperStackEl();
-  if ($("mirrorPages")) $("mirrorPages").replaceChildren();
-  if (stack) {
-    stack.replaceChildren();
-    stack.style.setProperty("--oi-pdf-stack-w", "0px");
-  }
+  if (stack) stack.replaceChildren();
   if (libraryArticle?.length && scopeShowsPage(1)) {
     renderStoredArticle(libraryArticle);
     applyViewMode();
+    finalizeReaderFlow();
     syncReadoutEmpty(true);
-    applyPaperMetrics();
     if (pane) pane.scrollTop = keep;
     if (pane) pane.scrollLeft = keepLeft;
     return;
@@ -1659,8 +1940,10 @@ function renderArticle() {
     if (showsBlockReadout(layout) && scopeShowsPage(n)) blockPages.push(layout);
   }
   if (!pages.length && !blockPages.length) {
+    finalizeReaderFlow();
     syncReadoutEmpty(false);
     updateTranslateControls();
+    if (pane) pane.scrollTop = keep;
     return;
   }
   if (blockPages.length) {
@@ -1691,19 +1974,143 @@ function renderArticle() {
       );
     });
   });
-  stack?.querySelectorAll(".readout-paper").forEach((paper) => {
-    if (!paper.querySelector(".readout")?.childNodes.length) paper.remove();
-  });
-  if (!stack?.querySelector(".readout-paper")) {
-    syncReadoutEmpty(false);
+  const hasContent = finalizeReaderFlow();
+  syncReadoutEmpty(hasContent);
+  if (!hasContent) {
     updateTranslateControls();
+    if (pane) pane.scrollTop = keep;
     return;
   }
-  syncReadoutEmpty(true);
-  applyPaperMetrics();
   if (pane) pane.scrollTop = keep;
   if (pane) pane.scrollLeft = keepLeft;
   updateTranslateControls();
+}
+
+function stampReaderPage(slot) {
+  const page = String(slot.dataset.page || slot.dataset.srcPage || "");
+  slot.dataset.srcPage = page;
+  slot.querySelectorAll(":scope > *").forEach((node) => {
+    node.dataset.srcPage = page;
+    if (!node.dataset.page) node.dataset.page = page;
+    const tag = node.tagName;
+    const block = tag === "P" || tag === "H1" || tag === "H2" || tag === "H3" || tag === "H4"
+      || tag === "FIGURE" || node.classList.contains("oi-pdf-authors")
+      || node.classList.contains("oi-pdf-footnotes");
+    if (block) node.classList.add("rf-block");
+  });
+}
+
+function makePageBreak(page) {
+  const el = document.createElement("div");
+  el.className = "rf-pagebreak";
+  el.dataset.srcPage = String(page);
+  const label = document.createElement("span");
+  label.textContent = pageBreakLabel(page);
+  const rule = document.createElement("span");
+  rule.className = "rf-pagebreak-rule";
+  rule.setAttribute("aria-hidden", "true");
+  el.append(label, rule);
+  return el;
+}
+
+function makeUntranslated(page) {
+  const el = document.createElement("div");
+  el.className = "rf-untranslated";
+  el.dataset.srcPage = String(page);
+  const label = document.createElement("span");
+  label.textContent = untranslatedLabel(page);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "rf-untranslated-btn";
+  btn.dataset.action = "translate-page";
+  btn.dataset.srcPage = String(page);
+  btn.textContent = pdfTranslateBusy(session) ? "排队中" : "翻译本页";
+  btn.disabled = pdfTranslateBusy(session);
+  el.append(label, btn);
+  return el;
+}
+
+function finalizeReaderFlow() {
+  const flow = readerFlowEl();
+  if (!flow) return false;
+  const slotMax = slots.size ? Math.max(...slots.keys()) : 0;
+  const total = Math.max(Number(pdfDoc?.numPages) || 0, slotMax);
+  const slots = new Map();
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => {
+    if (!slot.childNodes.length) {
+      slot.remove();
+      return;
+    }
+    slots.set(Number(slot.dataset.page), slot);
+  });
+  const wanted = new Set(contentPagesForScope({
+    scope: currentScope(),
+    currentPage: pageNum,
+    pagesWithContent: [...slots.keys()]
+  }));
+  for (const [page, slot] of slots) {
+    if (!wanted.has(page)) {
+      slot.remove();
+      slots.delete(page);
+    }
+  }
+  const plan = planReaderFlow({ pageCount: total, contentPages: [...wanted] });
+  const frag = document.createDocumentFragment();
+  for (const item of plan) {
+    if (item.kind === "break") frag.append(makePageBreak(item.page));
+    else if (item.kind === "untranslated") frag.append(makeUntranslated(item.page));
+    else if (slots.get(item.page)) frag.append(slots.get(item.page));
+  }
+  flow.replaceChildren(frag);
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => stampReaderPage(slot));
+  updatePageCapsule();
+  return wanted.size > 0;
+}
+
+function updatePageCapsule() {
+  const cap = $("pageCapsule");
+  const flow = readerFlowEl();
+  const pane = translateScrollRoot();
+  if (!cap) return;
+  const blocks = flow ? [...flow.querySelectorAll(".rf-block[data-src-page]")] : [];
+  if (!blocks.length || !pane) {
+    cap.hidden = true;
+    return;
+  }
+  const paneRect = pane.getBoundingClientRect();
+  const line = paneRect.top + paneRect.height * 0.3;
+  const entries = blocks.map((el) => {
+    const box = el.getBoundingClientRect();
+    return { page: Number(el.dataset.srcPage), top: box.top, bottom: box.bottom };
+  });
+  const page = pageAtAnchor(entries, line);
+  if (!page) {
+    cap.hidden = true;
+    return;
+  }
+  cap.hidden = false;
+  cap.textContent = capsuleLabel(page);
+  cap.dataset.srcPage = String(page);
+}
+
+function onPageCapsuleClick() {
+  const page = Number($("pageCapsule")?.dataset.srcPage);
+  if (!Number.isFinite(page) || page < 1) return;
+  syncPdfToPage(page);
+}
+
+function onReaderFlowClick(event) {
+  const btn = event.target.closest?.("[data-action='translate-page']");
+  if (btn && !btn.disabled) {
+    const page = Number(btn.dataset.srcPage);
+    if (Number.isFinite(page) && page >= 1) {
+      pageNum = page;
+      updatePager();
+      loadCurrentPageText().then(() => translateCurrentPage());
+    }
+    return;
+  }
+  onReadoutBlockClick(event);
 }
 
 function applyViewMode() {
@@ -1761,6 +2168,7 @@ async function exportReadout(kind) {
 }
 
 function onTranslateScroll() {
+  updatePageCapsule();
   if (!pdfDoc) return;
   if (syncOwner.ignores("readout")) return;
   takeDriver("readout");
@@ -1773,9 +2181,9 @@ function onTranslateScroll() {
       if (generation !== followGeneration || syncOwner.owner !== "readout") return;
       const pane = translateScrollRoot();
       if (!pane) return;
-      const rects = [...pane.querySelectorAll(".readout-paper[data-page]")].map((el) => {
+      const rects = [...pane.querySelectorAll(".rf-block[data-src-page]")].map((el) => {
         const box = el.getBoundingClientRect();
-        return { page: Number(el.dataset.page), top: box.top, bottom: box.bottom };
+        return { page: Number(el.dataset.srcPage), top: box.top, bottom: box.bottom };
       });
       if (!rects.length) return;
       const paneRect = pane.getBoundingClientRect();
@@ -1828,7 +2236,7 @@ function syncPdfToPage(page) {
 
 function syncReadoutToPage(page) {
   const pane = translateScrollRoot();
-  const node = paperStackEl()?.querySelector(`.readout-paper${readoutPageSelector(page)}`);
+  const node = readerFlowEl()?.querySelector(`.rf-block[data-src-page="${page}"], .rf-untranslated[data-src-page="${page}"]`);
   return writeAnchorScroll(pane, node);
 }
 
