@@ -14,6 +14,8 @@ import {
   clearFadeScroll,
   contentPagesForScope,
   defaultSplitRatio,
+  formulaScrollLeft,
+  indexFormulaScrolls,
   needsFade,
   normalizeReaderFontSize,
   normalizeReaderTheme,
@@ -226,7 +228,13 @@ test("capsule yields before it covers glyphs", () => {
   assert.equal(wide.mode, "float");
   assert.equal(wide.label, "short");
   assert.equal(wide.measure, 576);
-  assert.ok(wide.start >= 49 && wide.start <= 56);
+  assert.ok(wide.gap >= 12);
+  assert.equal(wide.start, 46);
+  const live = capsulePlacement({ paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW, shortW: 64 });
+  assert.equal(live.mode, "float");
+  assert.equal(live.measure, 576);
+  assert.ok(live.start >= 49 && live.start <= 56);
+  assert.ok(live.gap >= 12);
   const mid = capsulePlacement({ paneW: 655, pad: 28, fontPx: 16, fullW, shortW });
   assert.equal(mid.mode, "float");
   assert.equal(mid.label, "short");
@@ -265,6 +273,32 @@ test("split keeps a ratio and the translation column stays at least 540px", () =
   writeReaderPrefs(saved, { splitRatio: wide.ratio });
   assert.equal(saved["reader.splitRatio"], String(wide.ratio));
   assert.equal(readReaderPrefs(saved).splitRatio, wide.ratio);
+  const home = splitLayout({ width: 1440, ratio: 0 });
+  assert.equal(home.source, 320);
+  const end = splitLayout({ width: 1440, ratio: 1 });
+  assert.ok(Math.abs(end.translate - 560) < 0.2);
+  const endMid = splitLayout({ width: 1100, ratio: 1 });
+  assert.ok(Math.abs(endMid.translate - 540) < 0.2);
+  const stored = {};
+  writeReaderPrefs(stored, { splitRatio: 0.6 });
+  const restored = splitLayout({ width: 1440, ratio: readReaderPrefs(stored).splitRatio });
+  assert.ok(Math.abs(restored.ratio - 0.6) < 0.001);
+  const restoredNarrow = splitLayout({ width: 1100, ratio: readReaderPrefs(stored).splitRatio });
+  assert.ok(restoredNarrow.translate >= 540);
+  assert.ok(restoredNarrow.source >= 320);
+  const initStart = viewer.indexOf("function init()");
+  const init = viewer.slice(initStart, initStart + 2800);
+  assert.ok(init.indexOf("bindSplitResize()") >= 0);
+  assert.ok(init.indexOf("bindReaderChrome()") > init.indexOf("bindSplitResize()"));
+  const bind = viewer.slice(viewer.indexOf("function bindSplitResize"), viewer.indexOf("function applyStoredSplitRatio"));
+  assert.doesNotMatch(bind, /readerPrefs\.splitRatio/);
+  const load = viewer.slice(viewer.indexOf("function loadReaderPrefs"), viewer.indexOf("function syncAaPanel"));
+  assert.match(load, /applyStoredSplitRatio\(\)/);
+  const paint = viewer.slice(viewer.indexOf("function paintSplitRatio"), viewer.indexOf("function persistSplitRatio"));
+  assert.match(paint, /const safe = Number\.isFinite\(requested\) \? requested : defaultSplitRatio/);
+  assert.match(paint, /ratio:\s*safe/);
+  assert.match(viewer, /else if \(event\.key === "Home"\) next = 0/);
+  assert.match(viewer, /else if \(event\.key === "End"\) next = 1/);
   assert.match(html, /class="split-handle"[^>]*tabindex="0"/);
   assert.match(html, /role="separator"[^>]*aria-valuenow="/);
   assert.match(viewer, /--oi-split-ratio/);
@@ -276,6 +310,17 @@ test("split keeps a ratio and the translation column stays at least 540px", () =
   assert.match(viewer, /rf-pagebreak-rule/);
   assert.match(css, /\.rf-pagebreak\s*\{[^}]*justify-content:\s*center/s);
   assert.equal((viewer.match(/className = "rf-pagebreak-rule"/g) || []).length, 2);
+  const kept = indexFormulaScrolls([
+    { page: "3", id: "eq4", left: 16 },
+    { page: "3", id: "eq1", left: 0 }
+  ]);
+  assert.equal(formulaScrollLeft(kept, "3", "eq4"), 16);
+  assert.equal(formulaScrollLeft(kept, "3", "eq1"), 0);
+  const render = viewer.slice(viewer.indexOf("function renderArticle"), viewer.indexOf("function stampReaderPage"));
+  const captured = render.indexOf("captureFormulaScrolls");
+  const cleared = render.indexOf("stack.replaceChildren()");
+  assert.ok(captured >= 0 && cleared > captured);
+  assert.equal((render.match(/restoreFormulaScrolls\(readerFlowEl\(\), formulaScrolls\)/g) || []).length, 2);
 });
 
 test("fade shows only when more content sits below the fold", () => {

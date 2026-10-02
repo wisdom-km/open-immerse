@@ -585,6 +585,7 @@ body {
 }
 .oi-pdf-math-row.is-matched .oi-pdf-math-clip {
   width: calc(var(--oi-formula-h) * var(--oi-formula-ar, 1) * var(--oi-eq-keep, 1));
+  overflow: visible;
 }
 .oi-pdf-eq-num {
   flex: 0 0 auto;
@@ -681,24 +682,28 @@ body {
 .pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched:has(.oi-pdf-math-crop) {
   display: inline-block;
   height: auto;
-  max-height: var(--oi-reader-inline-line-max);
-  overflow: hidden;
-  vertical-align: baseline;
+  max-height: none;
+  max-width: none;
+  overflow: visible;
+  vertical-align: middle;
+  margin-top: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
+  margin-bottom: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
 }
 .pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched .oi-pdf-math-crop {
   display: inline-block;
   height: var(--oi-formula-h);
   width: auto;
-  max-height: var(--oi-reader-inline-line-max);
+  max-height: none;
+  max-width: none;
   margin-top: 0;
-  vertical-align: baseline;
+  vertical-align: middle;
 }
 .pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched.is-raised,
 .pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched.is-raised:has(.oi-pdf-math-crop) {
   display: block;
   max-height: none;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   margin: var(--oi-reader-display-margin);
 }
 .pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched.is-raised .oi-pdf-math-crop {
@@ -874,7 +879,7 @@ body {
   object-fit: fill;
   cursor: pointer;
   user-select: none;
-  font: 400 11px/1.3 var(--oi-reader-ui-font);
+  font: 400 var(--oi-reader-mirror-size)/1.3 var(--oi-reader-ui-font);
   color: var(--oi-reader-muted);
 }
 .mirror-visual.is-pending,
@@ -972,11 +977,11 @@ button {
 .btn-secondary:hover { background: var(--oi-reader-hover); }
 #retranslatePage.btn-secondary {
   background: transparent;
-  border: 1px solid var(--oi-line);
-  color: var(--oi-text-muted);
+  border: 1px solid var(--oi-reader-line);
+  color: var(--oi-reader-muted);
   font-weight: 500;
 }
-#retranslatePage.btn-secondary:hover { background: var(--oi-accent-subtle); }
+#retranslatePage.btn-secondary:hover { background: var(--oi-reader-hover); }
 .btn-ghost {
   background: transparent;
   border: 0;
@@ -1140,7 +1145,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   height: var(--oi-reader-capsule-height);
   min-height: var(--oi-reader-capsule-height);
   max-height: var(--oi-reader-capsule-height);
-  margin: 0 var(--oi-reader-capsule-inset) 0 0;
+  margin: 0 var(--rf-capsule-end, var(--oi-reader-capsule-inset)) 0 0;
   padding: 0 var(--oi-reader-capsule-pad-x);
   border: 0;
   border-radius: var(--oi-reader-capsule-radius);

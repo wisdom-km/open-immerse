@@ -169,6 +169,7 @@ test("renderArticle saves and restores the right pane scrollLeft", () => {
   assert.match(render, /const keep = pane \? pane\.scrollTop : 0;\s*const keepLeft = pane \? pane\.scrollLeft : 0;/);
   const restores = render.match(/if \(pane\) pane\.scrollTop = keep;\s*if \(pane\) pane\.scrollLeft = keepLeft;/g);
   assert.equal(restores?.length, 2);
+  assert.ok(render.indexOf("captureFormulaScrolls") < render.indexOf("stack.replaceChildren()"));
 });
 
 test("appending a paper raises --oi-pdf-stack-w only when the new paper is wider", () => {

@@ -135,6 +135,8 @@ import {
   clearFadeScroll,
   contentPagesForScope,
   defaultSplitRatio,
+  formulaScrollLeft,
+  indexFormulaScrolls,
   needsFade,
   pageAtAnchor,
   pageBreakLabel,
@@ -499,6 +501,7 @@ function loadReaderPrefs() {
   }
   detectReaderBlend();
   applyReaderSurface();
+  applyStoredSplitRatio();
 }
 
 function syncAaPanel() {
@@ -718,15 +721,23 @@ function bindSplitResize() {
   const workspace = document.querySelector(".workspace");
   const handle = document.querySelector(".split-handle");
   if (!workspace || !handle) return;
-  const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
-  const saved = readerPrefs.splitRatio;
-  const initial = saved || defaultSplitRatio(width);
-  workspace.style.setProperty("--oi-split-ratio", String(initial));
-  handle.setAttribute("aria-valuenow", String(Math.round(initial * 100)));
   handle.addEventListener("pointerdown", (event) => startSplitDrag(event, workspace, handle));
   handle.addEventListener("dblclick", () => resetSplit(workspace));
   handle.addEventListener("keydown", (event) => onSplitKey(event, workspace));
   window.addEventListener("resize", () => syncSplitAria(workspace));
+}
+
+/** Apply the stored fraction after prefs load. CSS minmax keeps the minimum widths. */
+function applyStoredSplitRatio() {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
+  const ratio = readerPrefs.splitRatio == null ? defaultSplitRatio(width) : readerPrefs.splitRatio;
+  workspace.style.setProperty("--oi-split-ratio", String(ratio));
+  const handle = workspace.querySelector(".split-handle");
+  if (handle && ratio > 0 && ratio < 1) {
+    handle.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+  }
 }
 
 function startSplitDrag(event, workspace, handle) {
@@ -752,9 +763,10 @@ function paintSplitRatio(workspace, ratio) {
   const rect = workspace.getBoundingClientRect();
   const width = rect.width || window.innerWidth || 1200;
   const requested = Number(ratio);
-  const safe = requested > 0 && requested < 1 ? requested : defaultSplitRatio(width);
+  const safe = Number.isFinite(requested) ? requested : defaultSplitRatio(width);
   if (!(rect.width > 0)) {
-    workspace.style.setProperty("--oi-split-ratio", String(Math.round(safe * 10000) / 10000));
+    const held = requested > 0 && requested < 1 ? requested : defaultSplitRatio(width);
+    workspace.style.setProperty("--oi-split-ratio", String(Math.round(held * 10000) / 10000));
     return;
   }
   const layout = splitLayout({ width, ratio: safe, splitW: splitColumnWidth(workspace) });
@@ -1922,10 +1934,21 @@ function snappedFormulaBox(matched) {
 
 function readerColumnPx() {
   const pane = translateScrollRoot();
-  if (!pane) return 0;
-  const measure = parseFloat(pane.style.getPropertyValue("--rf-measure"));
-  if (measure > 0) return measure;
-  return Math.max(0, (pane.clientWidth || 0) + measureScrollbarWidth(pane));
+  const flow = readerFlowEl();
+  const widths = [];
+  if (flow) {
+    const scroll = flow.querySelector(".oi-pdf-math-row .oi-pdf-math-scroll");
+    const box = scroll?.clientWidth || 0;
+    if (box > 0 && (!flow.clientWidth || box >= flow.clientWidth * 0.5)) widths.push(box);
+    if (flow.clientWidth > 0) widths.push(flow.clientWidth);
+  }
+  if (pane) {
+    const measure = parseFloat(pane.style.getPropertyValue("--rf-measure") || "");
+    if (measure > 0) widths.push(measure);
+    if (!widths.length && pane.clientWidth > 0) widths.push(pane.clientWidth);
+  }
+  if (!widths.length) return 0;
+  return Math.min(...widths);
 }
 
 function readerFormulaStyle(block, page, inline) {
@@ -1997,8 +2020,8 @@ function applyPaperMetrics() {
 
 function bindPaperMetrics() {
   const watch = () => {
-    applyPaperMetrics();
     layoutCapsule({ keepAnchor: true });
+    applyPaperMetrics();
     updateReaderFade();
   };
   if (typeof ResizeObserver === "function") {
@@ -2068,10 +2091,44 @@ function renderStoredArticle(blocks) {
   }
 }
 
+function captureFormulaScrolls(root) {
+  const entries = [];
+  if (!root) return indexFormulaScrolls(entries);
+  root.querySelectorAll(".oi-pdf-math-scroll, .oi-pdf-inline-math.is-raised").forEach((scroll) => {
+    const host = scroll.closest("[data-block-id]") || scroll;
+    entries.push({
+      page: host.dataset.page || host.closest("[data-src-page]")?.dataset.srcPage || "",
+      id: host.dataset.blockId || "",
+      left: scroll.scrollLeft
+    });
+  });
+  return indexFormulaScrolls(entries);
+}
+
+function restoreFormulaScrolls(root, saved) {
+  if (!root || !saved?.size) return;
+  const apply = () => {
+    root.querySelectorAll(".oi-pdf-math-scroll, .oi-pdf-inline-math.is-raised").forEach((scroll) => {
+      const host = scroll.closest("[data-block-id]") || scroll;
+      const page = host.dataset.page || host.closest("[data-src-page]")?.dataset.srcPage || "";
+      const left = formulaScrollLeft(saved, page, host.dataset.blockId || "");
+      if (left > 0 && scroll.scrollLeft !== left) scroll.scrollLeft = left;
+    });
+  };
+  apply();
+  requestAnimationFrame(() => {
+    apply();
+    root.querySelectorAll(".oi-pdf-math-scroll img, .oi-pdf-inline-math.is-raised img").forEach((img) => {
+      if (!img.complete) img.addEventListener("load", apply, { once: true });
+    });
+  });
+}
+
 function renderArticle() {
   const pane = translateScrollRoot();
   const keep = pane ? pane.scrollTop : 0;
   const keepLeft = pane ? pane.scrollLeft : 0;
+  const formulaScrolls = captureFormulaScrolls(readerFlowEl());
   const stack = paperStackEl();
   if (stack) stack.replaceChildren();
   if (libraryArticle?.length && scopeShowsPage(1)) {
@@ -2081,6 +2138,7 @@ function renderArticle() {
     syncReadoutEmpty(true);
     if (pane) pane.scrollTop = keep;
     if (pane) pane.scrollLeft = keepLeft;
+    restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
     return;
   }
   const pages = pagesInTranslateScope(
@@ -2139,6 +2197,7 @@ function renderArticle() {
   }
   if (pane) pane.scrollTop = keep;
   if (pane) pane.scrollLeft = keepLeft;
+  restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
   updateTranslateControls();
 }
 
@@ -2280,6 +2339,7 @@ function layoutCapsule({ keepAnchor = false } = {}) {
   const prev = `${pane.dataset.capsuleMode}|${pane.dataset.capsuleLabel}|${had}|${pane.style.getPropertyValue("--rf-start")}`;
   pane.style.setProperty("--rf-measure", `${place.measure}px`);
   pane.style.setProperty("--rf-start", place.start == null ? "auto" : `${place.start}px`);
+  pane.style.setProperty("--rf-capsule-end", `${Number.isFinite(place.end) ? place.end : 12}px`);
   pane.dataset.capsuleMode = place.mode;
   pane.dataset.capsuleLabel = place.label;
   const next = `${place.mode}|${place.label}|${place.measure}px|${place.start == null ? "auto" : `${place.start}px`}`;
@@ -2334,6 +2394,7 @@ function finalizeReaderFlow() {
   flow.replaceChildren(frag);
   flow.querySelectorAll(":scope > .rf-page").forEach((slot) => stampReaderPage(slot));
   layoutCapsule();
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => refreshMatchedFormulas(slot));
   return wanted.size > 0;
 }
 

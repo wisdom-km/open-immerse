@@ -160,11 +160,12 @@ test("reader formula size follows the font step and raises a 14px subscript", ()
   assert.ok(cramped.k < DISPLAY_INK_PREFER);
   assert.equal(cramped.scrolls, true);
   assert.ok(cramped.inkPx >= 16 - 1e-6);
-  const attention = { inkPt: 13.98, scriptPt: 3.54, widthPt: 40, sourceBodyPt: 10, inline: true };
+  const attention = { inkPt: 13.98, scriptPt: 3.54, widthPt: 40, sourceBodyPt: 10, inline: true, columnPx: 800 };
   for (const font of [15, 16, 17, 18, 20]) {
     const box = readerFormulaCssSize({ ...attention, bodyFontPx: font });
     assert.equal(box.k, INLINE_CROP_K);
     assert.equal(box.raised, false);
+    assert.ok(Math.abs(box.cssHeight - 13.98 * (font / 10) * INLINE_CROP_K) < 0.2);
   }
   const at16 = readerFormulaCssSize({ ...attention, bodyFontPx: 16 });
   const at20 = readerFormulaCssSize({ ...attention, bodyFontPx: 20 });
@@ -184,6 +185,117 @@ test("reader formula size follows the font step and raises a 14px subscript", ()
     inline: true
   });
   assert.equal(tall.raised, true);
+});
+
+test("inline promotion ignores the font step and never scales a staying crop below k", () => {
+  const sizeSrc = readFileSync(join(root, "lib/pdf-formula-size.js"), "utf8");
+  const body = sizeSrc.slice(
+    sizeSrc.indexOf("export function readerFormulaCssSize"),
+    sizeSrc.indexOf("function inlineCropRaises")
+  );
+  assert.doesNotMatch(body, /font\s*<=\s*14/);
+  assert.doesNotMatch(body, /font\s*<\s*15/);
+  const inlineBranch = body.slice(body.indexOf("if (inline && !raise)"), body.indexOf("const prefer"));
+  assert.match(inlineBranch, /k:\s*INLINE_CROP_K/);
+  assert.doesNotMatch(inlineBranch, /DISPLAY_INK_HARD|column \/|fit/);
+  const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
+  assert.doesNotMatch(
+    css,
+    /\.oi-pdf-inline-math\.is-matched \.oi-pdf-math-crop\s*\{[^}]*max-height:\s*var\(--oi-reader-inline-line-max\)/s
+  );
+  assert.doesNotMatch(
+    css,
+    /\.oi-pdf-inline-math\.is-matched:has\(\.oi-pdf-math-crop\)\s*\{[^}]*overflow:\s*hidden/s
+  );
+  assert.match(
+    css,
+    /\.oi-pdf-inline-math\.is-matched:has\(\.oi-pdf-math-crop\)\s*\{[^}]*(vertical-align|margin-top)/s
+  );
+  for (const font of [14, 15, 16, 17, 18, 20]) {
+    const tall = readerFormulaCssSize({
+      bodyFontPx: font,
+      sourceBodyPt: 10,
+      inkPt: 22.22,
+      widthPt: 40,
+      columnPx: 800,
+      inline: true
+    });
+    assert.equal(tall.raised, true, `font ${font} should raise a 3em crop`);
+    assert.ok(tall.k >= DISPLAY_INK_HARD);
+    const tinyScript = readerFormulaCssSize({
+      bodyFontPx: font,
+      sourceBodyPt: 10,
+      inkPt: 13.98,
+      scriptPt: 3.54,
+      widthPt: 20,
+      columnPx: 800,
+      inline: true
+    });
+    const scriptAtK = 3.54 * (font / 10) * INLINE_CROP_K;
+    if (scriptAtK < 7) assert.equal(tinyScript.raised, true);
+    else {
+      assert.equal(tinyScript.raised, false);
+      assert.equal(tinyScript.k, INLINE_CROP_K);
+    }
+  }
+  const wide = readerFormulaCssSize({
+    bodyFontPx: 20,
+    sourceBodyPt: 10,
+    inkPt: 12,
+    widthPt: 230,
+    columnPx: 586,
+    inline: true
+  });
+  assert.equal(wide.raised, true);
+  assert.ok(wide.cssWidth <= 586 + 0.6);
+  assert.ok(wide.k >= DISPLAY_INK_HARD);
+  const stay = readerFormulaCssSize({
+    bodyFontPx: 16,
+    sourceBodyPt: 10,
+    inkPt: 13.98,
+    scriptPt: 3.54,
+    widthPt: 200,
+    columnPx: 80,
+    inline: true
+  });
+  assert.equal(stay.raised, true);
+  assert.notEqual(stay.k, INLINE_CROP_K * 0.73);
+});
+
+test("a display formula wider than the column shrinks from 1.4× before it scrolls", () => {
+  const widthPt = 543 / (1.4 * 1.4);
+  for (const [font, column] of [[14, 481], [16, 520], [20, 560]]) {
+    const open = readerFormulaCssSize({
+      bodyFontPx: font,
+      sourceBodyPt: 10,
+      inkPt: 40,
+      widthPt,
+      columnPx: 2000
+    });
+    assert.equal(open.k, DISPLAY_INK_PREFER);
+    assert.equal(open.scrolls, false);
+    const fitted = readerFormulaCssSize({
+      bodyFontPx: font,
+      sourceBodyPt: 10,
+      inkPt: 40,
+      widthPt,
+      columnPx: column
+    });
+    assert.ok(fitted.k < DISPLAY_INK_PREFER);
+    assert.ok(fitted.k >= DISPLAY_INK_HARD);
+    assert.ok(fitted.cssWidth <= column + 0.6);
+    assert.equal(fitted.scrolls, false);
+  }
+  const overflow = readerFormulaCssSize({
+    bodyFontPx: 20,
+    sourceBodyPt: 10,
+    inkPt: 40,
+    widthPt,
+    columnPx: 400
+  });
+  assert.equal(overflow.k, DISPLAY_INK_HARD);
+  assert.equal(overflow.scrolls, true);
+  assert.ok(overflow.cssWidth > 400);
 });
 
 test("F3-S6 side gap is the locked 0.2em and freezes stay put", () => {
