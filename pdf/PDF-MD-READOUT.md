@@ -8,8 +8,8 @@
 | | |
 | --- | --- |
 | 原文栏 | **现有** pdf.js PDF 渲染（不改网页）。译文不进入原文栏 |
-| 右栏 | **`.readout` Markdown 通读**（连续滚动）。当前已发布的是裁图：右栏使用原页裁图（译文段落，加上公式、图、表的原页画面）。目标见 `pdf/high-precision/REQUIREMENTS.md` §2.6 |
-| 公式 / 图 / 表 | 跟打开的 PDF 同一套内容。当前已发布的是裁图（默认用 pageRaster 裁图）。目标见 `pdf/high-precision/REQUIREMENTS.md` §2.6。其他手段须过同一条验收。右栏块级/行内排版以 [`PDF-MD-FORMULA-LAYOUT.md`](./PDF-MD-FORMULA-LAYOUT.md) 为准 |
+| 右栏 | **`.readout` Markdown 通读**（连续滚动）。当前已发布的公式画面按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层：`surface="redraw"` 把原页区域高清重渲染，本质上是区域渲染。右栏使用原页裁图（译文段落，加上公式、图、表的原页画面）。目标是按原字体、原位置重绘字符 |
+| 公式 / 图 / 表 | 跟打开的 PDF 同一套内容。当前已发布的是 pageRaster 上的区域渲染（`surface="redraw"`），按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。默认用 pageRaster 裁图。其他手段须过同一条验收。右栏块级/行内排版以 [`PDF-MD-FORMULA-LAYOUT.md`](./PDF-MD-FORMULA-LAYOUT.md) 为准 |
 | 停 | 把译文贴进原文栏原文框（**#40 closed**）。Issue #40 保持关闭。禁止再开 bbox 镜像 |
 | 网页 | **仍主路径**；本单 **勿回归** 网页 content/Options |
 | 藏入口 | **本轨不做**（`PDF-ENTRY-SECONDARY` 本轨作废） |
@@ -22,7 +22,7 @@
 ## 1. 产品事实
 
 - 译文跟抽出的原文一致：不增主张、不漏句子、不改数字和变量名。
-- 公式、图、表跟打开的 PDF 是同一套内容。当前已发布的是裁图：默认用 pageRaster 原页裁图。内嵌图原样取出、原页矢量原样搬移也可以。换手段时，右栏这一块仍须与原文栏同一区域的内容一致。目标见 `pdf/high-precision/REQUIREMENTS.md` §2.6。重画图内英文，不采用。
+- 公式、图、表跟打开的 PDF 是同一套内容。当前已发布的公式画面是 pageRaster 上的区域渲染（`surface="redraw"`），按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层，本质上是区域渲染。目标是按原字体、原位置重绘字符。矢量画不出来退成 png，静默、不加徽章（V1-B1），不算换层。换层只看框的把握。默认用 pageRaster 原页裁图。内嵌图原样取出也可以。换手段时，右栏这一块仍须与原文栏同一区域的内容一致。重画图内英文，不采用。
 - OCR 认错的字母不上屏，也不得送进翻译。把 `i` 认成 `n`，或把 `n` 认成 `i`，都算失败。
 - 有文字层的正文用文字层原句。这是主场景。没有可信文字层时，正文才用识别结果，并在右栏标明可能有误差。公式、图、表仍是原页裁图。划区框内的字母不进正文。文字层兜底时，一行里除去公式函数名后没有普通句子，就整行裁图，不把 `softmax` 送去翻译。
 - 译文只出现在右栏。
@@ -37,7 +37,7 @@
 | --- | --- |
 | 抽 | 有文字层时，正文用文字层原句。主标题、小节、正文、题注按阅读序进入通读 |
 | 滤 | 页眉、页脚、纯页码不进主通读 |
-| 公式 / 图 / 表 | 当前已发布的是裁图：右栏使用原页裁图。目标见 `pdf/high-precision/REQUIREMENTS.md` §2.6。这些块不进翻译 |
+| 公式 / 图 / 表 | 当前已发布的是区域渲染，按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。右栏使用原页裁图。这些块不进翻译 |
 | 译 | 只译标题、小节、正文、题注。沿用现有翻译批次 |
 | 挂 | 右栏 `.readout` 连续块。点击该块时，原文栏高亮对齐 |
 
@@ -48,7 +48,7 @@
 只看网页阅读器里的原文栏和右栏，不看导出的译文文件。公式是否对上，以 `pdf/viewer.html` 里原文栏和右栏译文为准。当前状态和改法写在 `pdf/high-precision/STATUS.md`。
 
 - [ ] 原文栏：pdf.js 原文清晰
-- [ ] 右栏：译文连续可滚。当前已发布的是裁图（公式、图、表是原页裁图，与打开的 PDF 同一套内容）。目标见 `pdf/high-precision/REQUIREMENTS.md` §2.6
+- [ ] 右栏：译文连续可滚。当前已发布的公式画面是区域渲染（`surface="redraw"`），按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层，与打开的 PDF 同一套内容
 - [ ] 有文字层的正文是文字层原句，不是 OCR 改过的字母
 - [ ] 点击右栏，原文栏高亮同一区域
 - [ ] **无**网页 content / Options 间距回归
@@ -61,6 +61,6 @@
 | 文字层正文 + 右栏原页裁图 + 只译自然语言 | 把译文贴进原文栏 bbox（#40 closed） |
 | 按 `pdf/high-precision/EXECUTION.md` 分阶段接上本文 | 没到切换运行路径的阶段就改 `pdf/viewer.js` |
 | Attention 验收 | 回归网页 content/Options |
-| 测试期本机智谱 GLM-OCR，上线 OCR API | 用 OCR 字母代替原页公式画面。当前已发布的是裁图，目标见 `pdf/high-precision/REQUIREMENTS.md` §2.6 |
+| 测试期本机智谱 GLM-OCR，上线 OCR API | 用 OCR 字母代替原页公式画面。当前已发布的是区域渲染，按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层 |
 
-`pdf/viewer.js` 在切换默认路径之前可以仍走遗留渲染。那不是本文的展示手段。当前已发布的右栏是裁图。目标见 `pdf/high-precision/REQUIREMENTS.md` §2.6。
+`pdf/viewer.js` 在切换默认路径之前可以仍走遗留渲染。那不是本文的展示手段。当前已发布的右栏公式画面是区域渲染，按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。目标是按原字体、原位置重绘字符。
