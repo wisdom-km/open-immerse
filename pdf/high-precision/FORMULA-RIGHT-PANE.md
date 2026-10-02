@@ -38,7 +38,7 @@
 | --- | --- |
 | 容器 | 块级 `figure` / 等价；**仅**独占行公式（无 `inlineOf`） |
 | 水平 | `text-align: center`。现状（已上线）分主路径和回退路径。主路径没有墨迹下限，见 `pdf/viewer.js` 的 `matchedFormulaStyle`（约第 1449 行）：按原文栏这块框的高和宽来定。回退路径在主路径定不出尺寸时用 `displayFormulaWidthCss`（`lib/pdf-blocks.js` 约第 534 行）。这一支的宽度按 em 计算墨迹下限，取页宽占比和这条 em 下限里较大的一个，并且不把图缩到墨迹下限以下（同文件第 531–532 行注释："not shrunk below the ink floor"）。下限值来自 `displayFormulaMinEm`（`lib/pdf-formula-size.js` 第 121 行）和 `displayInkMinEm`（`lib/pdf-blocks.js` 第 482–487 行）。回退路径的宽度不夹到列宽，由 `tests/pdf-formula-size.test.mjs` 第 75–76 行锁定。裁图是 `max-width: none`（`pdf/viewer.css` 约第 473–477 行），超出部分在公式框内横向滚动。这是 #72 的实现。右栏纸面的横滚是 PR #90 做的，和公式框内的横滚（#72）是两件事。目标（待实现）：先等比缩小到列宽，但不低于硬门；到了硬门还放不下，就在框内横向滚动（F3-S4，见 REQUIREMENTS §2.6 术语表）。硬门的数值跟着 F3 尺寸规则走，待定，实现时与 F3 一起定。实现时要改 `tests/pdf-formula-size.test.mjs` 第 75–76 行。不要改成占位来躲过宽 |
-| 宽度 | 页宽占比不要直接写成正文列的 `%`。正文列已经扣过左右 `0.085`，宽度用 `pageFraction / (1 − 2×0.085)`，纸比左页窄时再乘左页宽 / 纸宽，最后夹在列宽内。宽应明显大于合前约 48% 列宽。列宽仍优先。量测墨迹硬门 ≥ **1.0×** `bodyFs`（专有 display 偏好 ≥ **1.4×**）。#63 的 ≥ **1.6×** 仍是修宽后的强期望（盒 `2em` × 约 0.8 share；自然到约 3× 且 ≤ **5×** 仍通过）。短裁图若实测 share 让墨迹低于 1.4×，只把这一张的 floor 抬到 `1.4 / inkShare`，不先把图拉满整列，也不动 #62 pad。已上线的主路径和回退路径见上一行，不把这一行的列宽夹取当成主路径现状 |
+| 宽度 | 目标稿（主路径和回退路径的现状见 FRP L40）。页宽占比不要直接写成正文列的 `%`。正文列已经扣过左右 `0.085`，宽度用 `pageFraction / (1 − 2×0.085)`，纸比左页窄时再乘左页宽 / 纸宽，最后夹在列宽内。宽应明显大于合前约 48% 列宽。列宽仍优先。量测墨迹硬门 ≥ **1.0×** `bodyFs`（专有 display 偏好 ≥ **1.4×**）。数值待定，以 FRP L40 为准。#63 的 ≥ **1.6×** 仍是修宽后的强期望（盒 `2em` × 约 0.8 share；自然到约 3× 且 ≤ **5×** 仍通过）。短裁图若实测 share 让墨迹低于 1.4×，只把这一张的 floor 抬到 `1.4 / inkShare`，不先把图拉满整列，也不动 #62 pad。已上线的主路径和回退路径见上一行，不把这一行的列宽夹取当成主路径或回退路径的现状 |
 | 上下空隙 | `margin-block: 10px 14px`（@ 正文 15px ≈ **0.67em / 0.93em**）——对标 Attention 原文栏：公式上下约 **半行～一行** 呼吸，**小于** 段间距 14px 的 dual 叠加 |
 | 与邻段 | 段 `margin-bottom` 与公式 `margin-top` **取大不叠盲加** |
 | 裁框 | 只盖公式墨迹（含 softmax / 括号 / 等号 / 上下标）；**禁止**并入下方/旁侧 `figure`、`table`、题注 |
@@ -56,7 +56,7 @@ CSS 贴片：
   background: transparent;
   border: none;
   box-shadow: none;
-  font-size: 15px;
+  font-size: var(--oi-pdf-body-fs, 15px);
 }
 .oi-pdf-display-math img {
   max-width: 100%;

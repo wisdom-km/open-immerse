@@ -96,7 +96,7 @@
 | 代号 | 含义 |
 | --- | --- |
 | V1-B1 | 第一层出不来时（矢量或高清重渲染失败）静默退到 png，不加徽章，不算换层 |
-| F3-S4 | 出处 `lib/pdf-blocks.js` 第 531–532 行注释：「if this exceeds the column, the formula scrollport scrolls; the image is not shrunk below the ink floor」。原意是：宽度超过列宽时，公式滚动口横向滚动；图像先缩小，但不低于硬门（注释里的 ink floor） |
+| F3-S4 | 出处 `lib/pdf-blocks.js` 第 531–532 行注释：「if this exceeds the column, the formula scrollport scrolls; the image is not shrunk below the ink floor」。原意是：宽度超过列宽时，公式滚动口横向滚动，不低于墨迹下限。硬门是产品目标，数值待定；现有代码里最接近它的是 ink floor（回退路径） |
 
 | 层 | 做法 | 优先级 | 可行性 | 何时采用 |
 | --- | --- | --- | --- | --- |
@@ -314,7 +314,7 @@ Chrome MV3 跑不动 0.9B 视觉模型。拆成三层：
      术语表 + 不译数字/占位符
 7. 右栏按阅读序：
      译文段落
-     公式 = 按 §2.6 分流；未命中第一层、也未走通核对通过的第二层时，走第三层点击看原文
+     公式 = 按 §2.6 分流；未命中第一层、也未走通核对通过的第二层时，交给第三层（点击看原文）。要第三层开关打开才走第三层，否则显示现状
      图 = 按 §2.6：裁得准就放进译文并配译后题注，裁不准走占位
      表 = 原页裁图
 8. 点击右栏块 → 原文栏 scrollIntoView + 高亮同一 bbox。公式三层共用的点击跳转见 §2.6
