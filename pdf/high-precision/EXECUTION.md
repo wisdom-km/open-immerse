@@ -1,6 +1,6 @@
 # 执行阶段
 
-REQUIREMENTS §2.6 的公式三层方案（2026-10-02）尚未落到本文。本文描述的是现在已发布的裁图路径。第一层和第三层的协议与执行步骤，等 UI 规格定稿后补。
+阶段 0–5 是现在已发布的裁图路径，那是过渡状态。目标做法是运行时 1→2→3（REQUIREMENTS §2.6）：第一层原字符矢量重绘，没把握时走第二层（开启且核对通过），再不行走第三层占位。开发顺序见阶段 6。UI 以 Loom 规格为准。
 
 一次只做一阶段。协议细节以 `ARCHITECTURE.md` 为准，这里不重复定义。每阶段结束运行：
 
@@ -22,14 +22,14 @@ node --test tests/*.test.mjs
 
 1. 改写 `pdf/PDF-MD-READOUT.md`，使它和 `ARCHITECTURE.md` 描述的是同一条已发布目标。保留这些仍成立的句子，测试还在匹配它们：`PDF-MD-READOUT`、`本单权威规格`、阅读序、`Markdown`、`.readout`、`#40 closed`、`bbox`、Attention、`PDF-ENTRY-SECONDARY` 作废、不要回归网页 content/Options、`PDF-READOUT-MARKDOWN.md` 以本文为准。
 2. 在该文里写明这些产品事实：内容精准第一，排版第二且尽量做好；译文跟抽出的原文一致；公式、图、表跟打开的 PDF 同一套内容，默认用 pageRaster 裁图，其他手段须过同一条验收；OCR 认错的字母（`i` 与 `n` 互认）不上屏；有文字层的正文用文字层原句；译文只出现在右栏；点击右栏用左栏高亮对齐；测试期划区是本机智谱 GLM-OCR，上线是 OCR API 加现有大模型 API。Issue #40 保持关闭。
-3. 同步 `README.md`、`README.en.md` 的实验室 PDF 段，以及 `lib/features.js` 里 pdf 那条 hint。文案改为：文字层正文 + 原页内容精准展示（默认裁图）；公式画面不来自 LaTeX 渲染。第二层例外见 REQUIREMENTS §2.6。中英文都改。
+3. 同步 `README.md`、`README.en.md` 的实验室 PDF 段，以及 `lib/features.js` 里 pdf 那条 hint。文案改为：文字层正文 + 原页内容精准展示（默认裁图）；公式画面不来自 LaTeX 渲染。这里的默认裁图是当时已发布的过渡状态。目标做法是运行时 1→2→3，见阶段 6 与 REQUIREMENTS §2.6。中英文都改。
 4. 更新 `tests/pdf-readout.test.mjs` 里匹配 README「保留公式/LaTeX」「preserve formulas/LaTeX」的正则，使它们匹配新文案。不要放宽到空断言。
 5. `CONTRIBUTING.md` 里描述右栏公式的那句，改成裁图。若测试因此失败，只更新对应正则。
 
 ### 完成时必须为真
 
 - `pdf/viewer.js` 仍包含 `renderFormulaNode`，且仍不包含 `cropCanvasToDataUrl`。
-- `PDF-MD-READOUT.md` 写明右栏使用原页裁图，并仍包含上列必须留下的短语。
+- `PDF-MD-READOUT.md` 写明右栏使用原页裁图，并仍包含上列必须留下的短语。这是已发布的过渡状态；目标做法是运行时 1→2→3。
 - `node --test tests/*.test.mjs` 通过。
 - `features.pdf` 默认值仍是 `false`。
 
@@ -72,7 +72,7 @@ node --test tests/*.test.mjs
 
 ---
 
-## 阶段 2 · 数字 PDF 的正文用文字层，公式仍是裁图
+## 阶段 2 · 数字 PDF 的正文用文字层，公式仍是裁图（已发布的过渡状态；目标做法是运行时 1→2→3）
 
 这一阶段做出文字层兜底，让有文字层的论文在划区服务还没接上时已经能读。它不是上线时的划区器。上线划区是阶段 4 的本机智谱（测试）和 OCR API（上线）。`legacy` 仅当 `localStorage["oi-pdf-engine"]=legacy` 时保留。设置页仍不加引擎下拉。未设置 `oi-pdf-engine` 时，阅读器先走 `text-layer` 兜底；阶段 4 再改成先尝试 `local-ocr`。
 
@@ -96,7 +96,7 @@ node --test tests/*.test.mjs
 - 删除阅读器里对 `renderFormulaNode` 的调用。函数体和 `lib/pdf-latex.js` 可以留下，直到没有引用。
 - 这一阶段允许 `viewer.js` 出现 `cropCanvasToDataUrl` 与 `walkImageCtms` 的调用（若裁图仍经由新模块，则不必出现这两个字符串）。仍然禁止 `buildMirrorLayout` 与 `appendMirrorPage`。
 - 更新 `tests/pdf-readout.test.mjs` 的 `formulas stay in reading order as LaTeX`：独占公式块没有 `latex`，有 `bbox`，`label` 或 `role` 为 formula；其文本不进入可译单元。第二层例外见 REQUIREMENTS §2.6。
-- 更新 `tests/pdf-mirror.test.mjs` 里「viewer 必须含 `renderFormulaNode` / 不得含 `cropCanvasToDataUrl`」的断言，使它锁定新事实：默认路径产出裁图；不得建立 mirror page。KaTeX 文件存在性断言保留。
+- 更新 `tests/pdf-mirror.test.mjs` 里「viewer 必须含 `renderFormulaNode` / 不得含 `cropCanvasToDataUrl`」的断言，使它锁定新事实：当时的默认路径产出裁图；不得建立 mirror page。KaTeX 文件存在性断言保留。裁图是已发布的过渡状态，目标做法是运行时 1→2→3。
 
 ### 完成时必须为真
 
@@ -201,6 +201,43 @@ node --test tests/*.test.mjs
 - 测试：可信页即使信封带了另一句 `vendorText`，上屏 `text` 仍是文字层句子。
 - `node --test tests/*.test.mjs` 通过。
 - 手动：用一份扫描 PDF 或把引擎指到 `cloud-ocr` 看一页。提示句出现；图区仍是原页截图。没有扫描件就在说明里写「未做目视」，不要伪造。
+
+---
+
+## 阶段 6 · 公式三层（运行时 1→2→3）
+
+提纲。现在已发布的裁图是过渡状态。目标做法：第一层原字符矢量重绘；没把握时，用户开启并且核对通过才走第二层；否则第三层占位。UI 以 Loom 规格为准。开发按下面的顺序，不按运行时顺序。
+
+### 第一层加把握分数
+
+完成时必须为真：
+
+- 把握分数过阈值的公式，右栏是原字符矢量重绘，字符来自打开的 PDF。
+- 分数用练习集校准：分数说有把握时，结果要真的对。
+- 没把握的不在这一层上屏。
+- UI 以 Loom 规格为准。
+
+### 第三层点击看原文
+
+完成时必须为真：
+
+- 没走到第一层、也没走通第二层时，右栏是占位加缩略图。
+- 点一下，左栏滚到原位置并画框高亮。
+- 现有原页裁图可以作缩略图。
+- 图裁得准就放进译文并配译后题注；裁不准走同样的占位。
+- UI 以 Loom 规格为准。
+- 行内公式怎么走三层仍待产品方定，见 REQUIREMENTS §2.6。本阶段不写死。
+
+### 第二层离线实验
+
+完成时必须为真：
+
+- 实验用 DPO 论文（arXiv 2305.18290v3）第 3–5 页的 79 个公式。
+- 报告能补回多少个第一层没把握的公式，以及核对能挡掉多少错。
+- 核对方法是实验要解决的问题之一：扩大区域，双向覆盖。报告单独给出漏报率（错的却通过）和误拦率。
+- 结果交产品方决定是否上线。未决定前第二层默认关闭。
+- 若上线，KaTeX 只在开启并核对通过时出现，一定带小记号。
+- UI 以 Loom 规格为准。
 
 ---
 
