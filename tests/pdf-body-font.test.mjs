@@ -115,6 +115,6 @@ test("viewer maps body font and matches formula height without dropping the redr
   assert.match(css, /\.oi-pdf-math-row\.is-matched \.oi-pdf-math-crop\s*\{[^}]*max-height:\s*none/s);
   assert.match(css, /\.oi-pdf-math-scroll \.oi-pdf-math-crop\s*\{[^}]*max-height:\s*2\.5em/s);
   assert.doesNotMatch(css, /\.paper-stack\s*\{[^}]*zoom:/s);
-  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*min\(var\(--oi-reader-measure\)/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*var\(--rf-measure,\s*min\(var\(--oi-reader-measure\)/s);
   assert.equal(readFileSync(join(root, "lib/pdf-formula-size.js"), "utf8").includes("SCRIPT_INK_MIN_PX = 7"), true);
 });

@@ -151,7 +151,7 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
 
 test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.pdf-page canvas\[hidden\]\s*\{\s*display:\s*none/);
-  assert.match(css, /\.workspace\s*\{[^}]*position:\s*relative[^}]*grid-template-columns:\s*1fr 1fr/s);
+  assert.match(css, /\.workspace\s*\{[^}]*position:\s*relative[^}]*grid-template-columns:\s*minmax\(0,\s*var\(--oi-split\)\)\s*var\(--oi-reader-split-w\)\s*minmax\(0,\s*1fr\)/s);
   assert.match(css, /@media \(max-width:\s*899px\)\s*\{[^}]*grid-template-columns:\s*1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.zoom-gutter\s*\{[^}]*flex-direction:\s*row/);
   assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.zoom-gutter\s*\{[^}]*right:\s*max\(12px, calc\(var\(--oi-scrollbar-gutter\) \+ 4px\)\)/);
@@ -167,8 +167,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(zoomGutterCss, /flex-direction:\s*row/);
   assert.match(zoomGutterCss, /backdrop-filter:\s*blur\(12px\)/);
   assert.match(zoomGutterCss, /-webkit-backdrop-filter:\s*blur\(12px\)/);
-  assert.match(zoomGutterCss, /color-mix\(in srgb, var\(--oi-card\) 52%/);
-  assert.match(zoomGutterCss, /box-shadow:\s*none/);
+  assert.match(zoomGutterCss, /color-mix\(in srgb, var\(--oi-reader-surface\) 72%/);
+  assert.match(zoomGutterCss, /box-shadow:\s*0 0 0 0\.5px color-mix\(in srgb, var\(--oi-reader-ink\)/);
   assert.match(zoomGutterCss, /cursor:\s*grab/);
   assert.match(zoomGutterCss, /touch-action:\s*none/);
   assert.match(zoomGutterCss, /\.zoom-gutter\.is-free/);
@@ -180,19 +180,19 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.equal(zoomGutterCss.includes("left: 50%"), false);
   assert.match(css, /\.pane-pdf\s*\{[^}]*position:\s*relative[^}]*overflow:\s*hidden[^}]*display:\s*flex[^}]*flex-direction:\s*column/s);
   assert.match(css, /#pages\s*\{[^}]*flex:\s*1[^}]*overflow:\s*auto/s);
-  assert.match(css, /\.zoom-gutter:hover\s*\{[^}]*color-mix\(in srgb, var\(--oi-card\) 68%/s);
-  assert.match(css, /\.zoom-gutter-btn\s*\{[^}]*min-height:\s*28px[^}]*height:\s*28px[^}]*font:\s*500 12px\/1 var\(--oi-font\)/s);
-  assert.match(css, /\.zoom-gutter-label\s*\{[^}]*font:\s*500 12px\/1 var\(--oi-font\)[^}]*font-variant-numeric:\s*tabular-nums/s);
+  assert.match(css, /\.zoom-gutter:hover\s*\{[^}]*background:\s*var\(--oi-reader-hover\)/s);
+  assert.match(css, /\.zoom-gutter-btn\s*\{[^}]*min-height:\s*28px[^}]*height:\s*28px[^}]*font:\s*500 12px\/1 var\(--oi-reader-ui-font\)/s);
+  assert.match(css, /\.zoom-gutter-label\s*\{[^}]*font:\s*500 12px\/1 var\(--oi-reader-ui-font\)[^}]*font-variant-numeric:\s*tabular-nums/s);
   assert.equal(css.includes(".split-gutter"), false);
   assert.equal(css.includes(".zoom-stack"), false);
   assert.match(css, /\.workspace\.is-splitting\s*\{[^}]*cursor:\s*col-resize[^}]*user-select:\s*none/s);
   assert.match(css, /\.workspace\.is-splitting \.pane-pdf,\s*\.workspace\.is-splitting \.pane-translate\s*\{[^}]*pointer-events:\s*none/s);
   assert.match(css, /\.split-handle\s*\{[^}]*top:\s*0[^}]*bottom:\s*0[^}]*width:\s*12px[^}]*z-index:\s*1[^}]*cursor:\s*col-resize[^}]*background:\s*transparent/s);
-  assert.match(css, /\.split-handle::before\s*\{[^}]*width:\s*1px[^}]*background:\s*transparent/s);
-  assert.match(css, /\.split-handle:hover::before,\s*\.split-handle:focus-visible::before\s*\{[^}]*color-mix\(in srgb, var\(--oi-accent\) 55%, var\(--oi-line\)\)/s);
-  assert.match(css, /\.workspace\.is-splitting \.split-handle::before\s*\{[^}]*width:\s*2px[^}]*background:\s*var\(--oi-accent\)/s);
-  assert.equal(css.includes(".split-handle::after"), false);
-  assert.match(css, /\.pane-translate\s*\{[^}]*border-left:\s*1px solid var\(--oi-line\)/s);
+  assert.match(css, /\.split-handle::before\s*\{[^}]*width:\s*var\(--oi-reader-split-w\)[^}]*background:\s*var\(--oi-reader-well\)/s);
+  assert.match(css, /\.split-handle::after\s*\{[^}]*width:\s*2px[^}]*height:\s*24px[^}]*opacity:\s*var\(--oi-reader-split-grip-opacity\)/s);
+  assert.match(css, /\.split-handle:hover::after,\s*\.split-handle:focus-visible::after\s*\{[^}]*var\(--oi-reader-ink-2\)/s);
+  assert.match(css, /\.workspace\.is-splitting \.split-handle::before\s*\{[^}]*var\(--oi-reader-focus\)/s);
+  assert.match(css, /\.pane-translate\s*\{[^}]*border-left:\s*0/s);
   assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.split-handle\s*\{[^}]*display:\s*none/);
   assert.equal(/\.zoom-gutter\s*\{[^}]*cursor:\s*col-resize/s.test(css), false);
   assert.match(src, /bindSplitResize/);
@@ -384,7 +384,7 @@ test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.equal(zoomLabel(2.25), "225%");
   assert.equal(PAPER_STACK_WIDTH, "max(100%, var(--oi-pdf-stack-w, 0px))");
   assert.doesNotMatch(css, /\.paper-stack\s*\{/);
-  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*min\(var\(--oi-reader-measure\)/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*var\(--rf-measure,\s*min\(var\(--oi-reader-measure\)/s);
   assert.equal(libSrc.includes("function mirrorZoomWidth"), false);
   assert.match(src, /function setMirrorZoom/);
   assert.match(src, /function applyMirrorZoom/);
@@ -943,12 +943,12 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
   assert.equal(html.includes("scope-field"), false);
   assert.match(html, /id="prev"[^>]*>上一页</);
   assert.match(html, /id="next"[^>]*>下一页</);
-  assert.match(css, /\.scope-seg\s*\{[^}]*display:\s*inline-flex[^}]*padding:\s*2px[^}]*border:\s*1px solid var\(--oi-line\)[^}]*border-radius:\s*8px[^}]*background:\s*var\(--oi-input, var\(--oi-bg\)\)/s);
-  assert.match(css, /\.scope-seg-btn\s*\{[^}]*min-height:\s*32px[^}]*padding:\s*0 12px[^}]*background:\s*transparent[^}]*color:\s*var\(--oi-text-muted\)[^}]*font:\s*500 13px\/1\.2 var\(--oi-font\)/s);
-  assert.match(css, /\.scope-seg-btn:hover\s*\{[^}]*color:\s*var\(--oi-text\)[^}]*color-mix\(in srgb, var\(--oi-line\) 35%/s);
-  assert.match(css, /\.scope-seg-btn\.is-on\s*\{[^}]*color-mix\(in srgb, var\(--oi-accent\) 18%[^}]*font-weight:\s*600/s);
-  assert.match(css, /\.scope-seg-btn:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-accent\)/s);
-  assert.match(css, /\.scope-seg-btn:disabled\s*\{[^}]*opacity:\s*0\.45/s);
+  assert.match(css, /\.scope-seg\s*\{[^}]*display:\s*inline-flex[^}]*padding:\s*var\(--oi-reader-seg-pad\)[^}]*border:\s*0[^}]*border-radius:\s*var\(--oi-reader-seg-radius\)[^}]*background:\s*var\(--oi-reader-track\)/s);
+  assert.match(css, /\.scope-seg-btn\s*\{[^}]*min-height:\s*24px[^}]*padding:\s*0 12px[^}]*background:\s*transparent[^}]*color:\s*var\(--oi-reader-ink-2\)[^}]*font:\s*var\(--oi-reader-ui-weight\)\s*var\(--oi-reader-ui-size\)\/1\.2 var\(--oi-reader-ui-font\)/s);
+  assert.match(css, /\.scope-seg-btn:hover\s*\{[^}]*color:\s*var\(--oi-reader-ink\)/s);
+  assert.match(css, /\.scope-seg-btn\.is-on\s*\{[^}]*background:\s*var\(--oi-reader-thumb\)[^}]*box-shadow:\s*var\(--oi-reader-seg-thumb-shadow\)[^}]*font-weight:\s*500/s);
+  assert.match(css, /\.scope-seg-btn:focus-visible\s*\{[^}]*outline:\s*var\(--oi-reader-focus-width\) solid var\(--oi-reader-focus\)/s);
+  assert.match(css, /\.scope-seg-btn:disabled\s*\{[^}]*opacity:\s*1/s);
   assert.equal(css.includes(".scope-seg.btn-primary"), false);
   assert.match(src, /setScopeEnabled\(ui\.scopeEnabled\)/);
   assert.match(src, /pdfToolbarActionState/);

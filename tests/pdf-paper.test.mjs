@@ -90,9 +90,9 @@ test("right pane DOM contract is a continuous reader flow, not a 42rem column", 
   assert.match(setZoom, /applyPaperMetrics\(\)/);
   const split = src.slice(src.indexOf("function applySplit"), src.indexOf("function initZoomChip"));
   assert.match(split, /applyPaperMetrics\(\)/);
-  assert.match(css, /\.reader-flow\s*\{[^}]*background:\s*transparent/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*background:\s*var\(--oi-reader-paper\)/s);
   assert.match(css, /\.reader-flow\s*\{[^}]*color:\s*var\(--oi-reader-ink\)/s);
-  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*min\(var\(--oi-reader-measure\)/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*var\(--rf-measure,\s*min\(var\(--oi-reader-measure\)/s);
   assert.match(css, /\.reader-flow \.readout\s*\{[^}]*overflow:\s*visible/s);
   assert.doesNotMatch(css, /\.paper-stack\s*\{[^}]*zoom:/s);
   assert.doesNotMatch(css, /\.paper-stack\s*\{[^}]*width:\s*calc\(100% \* var\(--oi-mirror-zoom/s);

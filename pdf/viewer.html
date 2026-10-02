@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PDF 阅读</title>
   <link rel="stylesheet" href="../ui/tokens.css" />
+  <link rel="preload" href="fonts/OISerifLatin-Regular.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="reader-tokens.css" />
   <link rel="stylesheet" href="./vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="viewer.css" />
 </head>
-<body>
+<body class="oi-reader-app" data-reader-theme="warm">
   <header class="toolbar">
     <div class="title-row">
       <div class="mark" aria-hidden="true"><span></span><span></span></div>
@@ -31,6 +32,7 @@
       <button type="button" id="prev" class="btn-ghost" disabled>上一页</button>
       <p id="pager" class="pager" aria-live="polite">0 / 0</p>
       <button type="button" id="next" class="btn-ghost" disabled>下一页</button>
+      <span class="toolbar-rule" aria-hidden="true"></span>
       <button type="button" id="aaButton" class="btn-ghost aa-button" aria-haspopup="dialog" aria-expanded="false" aria-controls="aaPanel">Aa</button>
     </div>
   </header>
@@ -48,6 +50,7 @@
     <div class="aa-group">
       <div class="aa-label" id="aaThemeLabel">背景</div>
       <div id="aaThemes" class="aa-themes" role="radiogroup" aria-label="阅读背景"></div>
+      <p id="aaFontHint" class="aa-font-hint" hidden>装上思源宋体会自动换成宋体。重启浏览器后生效<a class="aa-font-hint-link" href="https://source.typekit.com/source-han-serif/cn/" target="_blank" rel="noopener noreferrer">如何安装 ↗</a></p>
     </div>
     <div class="aa-group">
       <label class="aa-switch-row" for="aaSingleKey">
@@ -70,12 +73,15 @@
     <aside class="pane-translate" aria-label="译文">
       <div id="reader" class="oi-reader" data-reader-theme="warm">
         <div id="translateScroll" class="pane-translate-scroll">
-          <button type="button" id="pageCapsule" class="rf-page-capsule" hidden></button>
+          <div id="capsuleBar" class="rf-capsule-bar">
+            <button type="button" id="pageCapsule" class="rf-page-capsule" hidden></button>
+          </div>
           <div id="readerFlow" class="reader-flow" tabindex="0"></div>
           <p id="emptyRead" class="empty-read">点击翻译</p>
           <p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…</p>
           <p id="noTextLayerHint" class="m2-stub" hidden>本页没有文字层，无法提取阅读文本。扫描件翻译将在后续版本支持。</p>
         </div>
+        <div id="readerFade" class="rf-fade" aria-hidden="true" hidden></div>
       </div>
     </aside>
     <div class="split-handle" role="separator" aria-orientation="vertical" aria-label="调整分栏"></div>

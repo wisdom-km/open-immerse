@@ -1,47 +1,139 @@
 /**
- * Reader visual values. Scoped to .oi-reader (the translation column and the
- * Aa panel) and .aa-button. Does not change ui/tokens.css.
- * Colors, type, measure, spacing, radii, and shadows live only here.
- * Component rules in viewer.css reference these variables.
+ * Reader visual values. Scoped to the reader page (.oi-reader-app) and
+ * .oi-reader (the translation column and the Aa panel). Does not change
+ * ui/tokens.css. Colors, type, measure, spacing, radii, and shadows live
+ * only here. Component rules in viewer.css reference these variables.
  */
 
-.oi-reader,
-.aa-button {
-  --oi-reader-warm-paper: #F7F3EA;
-  --oi-reader-warm-surface: #FBF9F4;
+@font-face {
+  font-family: "OI Serif Latin";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/OISerifLatin-Regular.woff2") format("woff2");
+  unicode-range: U+0000-00B6, U+00B8-00FF, U+0100-017F, U+0192, U+02C6-02C7, U+02D8-02DD,
+    U+0391-03A9, U+03B1-03C9, U+03D1, U+03D5-03D6, U+03F0-03F1, U+03F5,
+    U+2000-2013, U+2016-2017, U+201A-201B, U+201E-2024, U+2027-203A, U+203C-206F,
+    U+20AC, U+2122, U+2202, U+2206-2207, U+2212, U+2215, U+221E;
+}
+@font-face {
+  font-family: "OI Serif Latin";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/OISerifLatin-Italic.woff2") format("woff2");
+  unicode-range: U+0000-00B6, U+00B8-00FF, U+0100-017F, U+0192, U+02C6-02C7, U+02D8-02DD,
+    U+0391-03A9, U+03B1-03C9, U+03D1, U+03D5-03D6, U+03F0-03F1, U+03F5,
+    U+2000-2013, U+2016-2017, U+201A-201B, U+201E-2024, U+2027-203A, U+203C-206F,
+    U+20AC, U+2122, U+2202, U+2206-2207, U+2212, U+2215, U+221E;
+}
+@font-face {
+  font-family: "OI Serif Latin";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/OISerifLatin-Semibold.woff2") format("woff2");
+  unicode-range: U+0000-00B6, U+00B8-00FF, U+0100-017F, U+0192, U+02C6-02C7, U+02D8-02DD,
+    U+0391-03A9, U+03B1-03C9, U+03D1, U+03D5-03D6, U+03F0-03F1, U+03F5,
+    U+2000-2013, U+2016-2017, U+201A-201B, U+201E-2024, U+2027-203A, U+203C-206F,
+    U+20AC, U+2122, U+2202, U+2206-2207, U+2212, U+2215, U+221E;
+}
+@font-face {
+  font-family: "OI Serif Latin";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/OISerifLatin-Bold.woff2") format("woff2");
+  unicode-range: U+0000-00B6, U+00B8-00FF, U+0100-017F, U+0192, U+02C6-02C7, U+02D8-02DD,
+    U+0391-03A9, U+03B1-03C9, U+03D1, U+03D5-03D6, U+03F0-03F1, U+03F5,
+    U+2000-2013, U+2016-2017, U+201A-201B, U+201E-2024, U+2027-203A, U+203C-206F,
+    U+20AC, U+2122, U+2202, U+2206-2207, U+2212, U+2215, U+221E;
+}
+@font-face {
+  font-family: "OI Latin Fallback";
+  src: local("Times New Roman"), local("TimesNewRomanPSMT");
+  unicode-range: U+0000-00B6, U+00B8-00FF, U+0100-017F, U+0192, U+02C6-02C7, U+02D8-02DD,
+    U+0391-03A9, U+03B1-03C9, U+03D1, U+03D5-03D6, U+03F0-03F1, U+03F5,
+    U+2000-2013, U+2016-2017, U+201A-201B, U+201E-2024, U+2027-203A, U+203C-206F,
+    U+20AC, U+2122, U+2202, U+2206-2207, U+2212, U+2215, U+221E;
+}
+@font-face {
+  font-family: "OI Latin Fallback";
+  font-style: italic;
+  src: local("Times New Roman Italic"), local("TimesNewRomanPS-ItalicMT");
+  unicode-range: U+0000-00B6, U+00B8-00FF, U+0100-017F, U+0192, U+02C6-02C7, U+02D8-02DD,
+    U+0391-03A9, U+03B1-03C9, U+03D1, U+03D5-03D6, U+03F0-03F1, U+03F5,
+    U+2000-2013, U+2016-2017, U+201A-201B, U+201E-2024, U+2027-203A, U+203C-206F,
+    U+20AC, U+2122, U+2202, U+2206-2207, U+2212, U+2215, U+221E;
+}
+@font-face {
+  font-family: "OI UI CJK";
+  font-weight: 100 900;
+  src: local("PingFang SC Regular"), local("PingFangSC-Regular"),
+    local("Microsoft YaHei UI"), local("MicrosoftYaHeiUI"),
+    local("Microsoft YaHei"), local("MicrosoftYaHei"),
+    local("Noto Sans CJK SC"), local("NotoSansCJKsc-Regular");
+  unicode-range: U+2E80-2FDF, U+3000-303F, U+3040-30FF, U+3100-312F, U+31C0-31EF, U+3200-33FF,
+    U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+
+.oi-reader-app,
+.oi-reader {
+  --oi-reader-warm-paper: #F6F3EC;
+  --oi-reader-warm-surface: #FCFAF6;
   --oi-reader-warm-ink: #22201C;
   --oi-reader-warm-ink-2: #4A463E;
-  --oi-reader-warm-muted: #615B50;
-  --oi-reader-warm-line: #DDD5C4;
+  --oi-reader-warm-muted: #655F54;
+  --oi-reader-warm-line: #E4DED2;
   --oi-reader-warm-line-strong: #8A806C;
   --oi-reader-warm-disabled: #9A9282;
+  --oi-reader-warm-well: #ECE9E2;
+  --oi-reader-warm-track: rgba(34, 32, 28, 0.06);
+  --oi-reader-warm-hover: rgba(34, 32, 28, 0.05);
+  --oi-reader-warm-thumb: #FFFFFF;
+  --oi-reader-warm-pair-bg-solid: #F5EDDA;
 
   --oi-reader-white-paper: #FFFFFF;
   --oi-reader-white-surface: #FFFFFF;
-  --oi-reader-white-ink: #202020;
+  --oi-reader-white-ink: #1F1F1F;
   --oi-reader-white-ink-2: #454545;
-  --oi-reader-white-muted: #5E5E5E;
-  --oi-reader-white-line: #E3E3E3;
+  --oi-reader-white-muted: #666666;
+  --oi-reader-white-line: #E6E6E6;
   --oi-reader-white-line-strong: #888888;
   --oi-reader-white-disabled: #9A9A9A;
+  --oi-reader-white-well: #F1F1EF;
+  --oi-reader-white-track: rgba(0, 0, 0, 0.055);
+  --oi-reader-white-hover: rgba(0, 0, 0, 0.045);
+  --oi-reader-white-thumb: #FFFFFF;
+  --oi-reader-white-pair-bg-solid: #FDF8EC;
 
   --oi-reader-sepia-paper: #ECE7DD;
-  --oi-reader-sepia-surface: #F3EFE8;
+  --oi-reader-sepia-surface: #F4F0E9;
   --oi-reader-sepia-ink: #26221C;
   --oi-reader-sepia-ink-2: #463F35;
-  --oi-reader-sepia-muted: #57504A;
-  --oi-reader-sepia-line: #D6CEC0;
-  --oi-reader-sepia-line-strong: #827868;
+  --oi-reader-sepia-muted: #5A534A;
+  --oi-reader-sepia-line: #DAD2C4;
+  --oi-reader-sepia-line-strong: #7E7464;
   --oi-reader-sepia-disabled: #948B7E;
+  --oi-reader-sepia-well: #E2DCD0;
+  --oi-reader-sepia-track: rgba(38, 34, 28, 0.07);
+  --oi-reader-sepia-hover: rgba(38, 34, 28, 0.05);
+  --oi-reader-sepia-thumb: #F8F5F0;
+  --oi-reader-sepia-pair-bg-solid: #ECE2CD;
 
   --oi-reader-green-paper: #E8EDE6;
-  --oi-reader-green-surface: #F1F4EF;
+  --oi-reader-green-surface: #F2F5F0;
   --oi-reader-green-ink: #1E2420;
   --oi-reader-green-ink-2: #3E4740;
-  --oi-reader-green-muted: #4F5A52;
-  --oi-reader-green-line: #CED6CB;
-  --oi-reader-green-line-strong: #747F75;
+  --oi-reader-green-muted: #505B53;
+  --oi-reader-green-line: #D2DACF;
+  --oi-reader-green-line-strong: #727D73;
   --oi-reader-green-disabled: #8E968D;
+  --oi-reader-green-well: #DDE3DA;
+  --oi-reader-green-track: rgba(30, 36, 32, 0.07);
+  --oi-reader-green-hover: rgba(30, 36, 32, 0.05);
+  --oi-reader-green-thumb: #F7F9F6;
+  --oi-reader-green-pair-bg-solid: #E8E7D5;
 
   --oi-reader-paper: var(--oi-reader-warm-paper);
   --oi-reader-surface: var(--oi-reader-warm-surface);
@@ -51,10 +143,16 @@
   --oi-reader-line: var(--oi-reader-warm-line);
   --oi-reader-line-strong: var(--oi-reader-warm-line-strong);
   --oi-reader-disabled: var(--oi-reader-warm-disabled);
+  --oi-reader-well: var(--oi-reader-warm-well);
+  --oi-reader-track: var(--oi-reader-warm-track);
+  --oi-reader-thumb: var(--oi-reader-warm-thumb);
+  --oi-reader-hover: var(--oi-reader-warm-hover);
+  --oi-reader-pair-bg-solid: var(--oi-reader-warm-pair-bg-solid);
 
   --oi-reader-pair: #A86B12;
-  --oi-reader-pair-bg: rgba(168, 107, 18, 0.10);
-  --oi-reader-pair-halo: rgba(168, 107, 18, 0.25);
+  --oi-reader-pair-bg: rgba(232, 180, 60, 0.10);
+  --oi-reader-pair-halo: rgba(168, 107, 18, 0.18);
+  --oi-reader-pair-halo-width: 4px;
   --oi-reader-warn: #8A4B0F;
   --oi-reader-focus: #2F55D4;
   --oi-reader-focus-width: 2px;
@@ -62,16 +160,28 @@
   --oi-reader-mark: rgba(34, 32, 28, 0.12);
   --oi-reader-tooltip-bg: #22201C;
   --oi-reader-tooltip-fg: #F7F3EA;
-  --oi-reader-hover: rgba(34, 32, 28, 0.06);
 
-  --oi-reader-font: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", STSong, serif;
-  --oi-reader-ui-font: var(--oi-font);
+  --oi-reader-font:
+    "OI Serif Latin",
+    "Source Han Serif SC", "Source Han Serif CN", "思源宋体", "Source Han Serif SC VF",
+    "Noto Serif CJK SC", "Noto Serif SC",
+    "Songti SC",
+    "OI Latin Fallback",
+    "SimSun",
+    serif;
+  --oi-reader-latin: "OI Serif Latin", "Times New Roman", "Times", serif;
+  --oi-reader-font-sans: "Segoe UI", "Microsoft YaHei", sans-serif;
+  --oi-reader-ui-font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    "OI UI CJK", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --oi-reader-ui-size: 13px;
+  --oi-reader-ui-weight: 500;
   --oi-reader-font-size: 16px;
-  --oi-reader-line-height: 1.85;
+  --oi-reader-line-height: 1.9;
   --oi-reader-tracking: 0.02em;
   --oi-reader-body-weight: 400;
 
-  --oi-reader-measure: 38em;
+  --oi-reader-measure: 36em;
+  --oi-reader-min-measure: 480px;
   --oi-reader-measure-inset: 80px;
   --oi-reader-measure-inset-lg: 56px;
   --oi-reader-measure-inset-md: 40px;
@@ -79,25 +189,29 @@
   --oi-reader-scroll-padding: 16px 0 24px;
 
   --oi-reader-h1-weight: 700;
-  --oi-reader-h1-size: 24px;
+  --oi-reader-h1-size: calc(1.625 * var(--oi-reader-font-size));
   --oi-reader-h1-line: 1.35;
-  --oi-reader-h1-margin: 8px 0 12px;
+  --oi-reader-h1-margin: calc(0.5 * var(--oi-reader-font-size)) 0 calc(1 * var(--oi-reader-font-size));
   --oi-reader-h1-tracking: 0;
   --oi-reader-h1-border: 0;
   --oi-reader-h2-weight: 700;
-  --oi-reader-h2-size: 20px;
-  --oi-reader-h2-line: 1.4;
-  --oi-reader-h2-margin: 32px 0 12px;
-  --oi-reader-h2-tracking: 0;
+  --oi-reader-h2-size: calc(1.25 * var(--oi-reader-font-size));
+  --oi-reader-h2-line: 1.45;
+  --oi-reader-h2-margin: calc(2.25 * var(--oi-reader-font-size)) 0 calc(0.75 * var(--oi-reader-font-size));
+  --oi-reader-h2-tracking: 0.03em;
   --oi-reader-h3-weight: 700;
-  --oi-reader-h3-size: 18px;
-  --oi-reader-h3-line: 1.4;
-  --oi-reader-h3-margin: 24px 0 10px;
-  --oi-reader-h4-weight: 600;
-  --oi-reader-h4-size: 16px;
-  --oi-reader-h4-line: 1.5;
-  --oi-reader-h4-margin: 20px 0 8px;
-  --oi-reader-paragraph-gap: 16px;
+  --oi-reader-h3-size: calc(1.0625 * var(--oi-reader-font-size));
+  --oi-reader-h3-line: 1.5;
+  --oi-reader-h3-margin: calc(2 * var(--oi-reader-font-size)) 0 calc(0.5 * var(--oi-reader-font-size));
+  --oi-reader-h3-tracking: 0.03em;
+  --oi-reader-h4-weight: 700;
+  --oi-reader-h4-size: calc(1 * var(--oi-reader-font-size));
+  --oi-reader-h4-line: 1.6;
+  --oi-reader-h4-margin: calc(1.25 * var(--oi-reader-font-size)) 0 calc(0.375 * var(--oi-reader-font-size));
+  --oi-reader-h4-tracking: 0.03em;
+  --oi-reader-hnum-weight: 600;
+  --oi-reader-hnum-gap: 0.6em;
+  --oi-reader-paragraph-gap: calc(1.125 * var(--oi-reader-font-size));
   --oi-reader-abstract-gap: 8px;
 
   --oi-reader-author-min: 140px;
@@ -119,19 +233,25 @@
 
   --oi-reader-capsule-top: 10px;
   --oi-reader-capsule-z: 5;
-  --oi-reader-capsule-height: 28px;
-  --oi-reader-capsule-inset: 16px;
-  --oi-reader-capsule-pad-x: 12px;
-  --oi-reader-capsule-radius: 14px;
-  --oi-reader-capsule-weight: 400;
+  --oi-reader-capsule-height: 26px;
+  --oi-reader-capsule-inset: 12px;
+  --oi-reader-capsule-pad-x: 11px;
+  --oi-reader-capsule-radius: 13px;
+  --oi-reader-capsule-weight: 500;
   --oi-reader-capsule-size: 12px;
-  --oi-reader-capsule-bg: color-mix(in srgb, var(--oi-reader-surface) 92%, transparent);
+  --oi-reader-capsule-bg: color-mix(in srgb, var(--oi-reader-paper) 72%, transparent);
+  --oi-reader-capsule-backdrop: blur(14px) saturate(1.3);
+  --oi-reader-capsule-shadow: 0 0 0 0.5px color-mix(in srgb, var(--oi-reader-ink) 14%, transparent), 0 1px 2px rgba(40, 30, 10, 0.04), 0 4px 12px -4px rgba(40, 30, 10, 0.10);
+  --oi-reader-capsule-gap: 12px;
+  --oi-reader-capsule-bar-h: 44px;
 
-  --oi-reader-break-gap: 12px;
-  --oi-reader-break-margin: 20px 0;
-  --oi-reader-break-weight: 400;
+  --oi-reader-break-gap: 14px;
+  --oi-reader-break-margin: calc(2 * var(--oi-reader-font-size)) 0;
+  --oi-reader-break-weight: 500;
   --oi-reader-break-size: 12px;
   --oi-reader-break-line: 16px;
+  --oi-reader-break-tracking: 0.04em;
+  --oi-reader-break-rule: 1px solid var(--oi-reader-line);
 
   --oi-reader-fold-gap: 12px;
   --oi-reader-fold-min-height: 40px;
@@ -146,66 +266,113 @@
   --oi-reader-fold-btn-size: 12px;
   --oi-reader-fold-btn-line: 1.2;
 
-  --oi-reader-aa-button-min: 32px;
-  --oi-reader-aa-button-weight: 650;
+  --oi-reader-aa-button-min: 30px;
+  --oi-reader-aa-button-weight: 500;
   --oi-reader-panel-top: 56px;
   --oi-reader-panel-right: 16px;
   --oi-reader-panel-z: 30;
   --oi-reader-panel-width: 320px;
-  --oi-reader-panel-pad: 16px;
-  --oi-reader-panel-radius: 10px;
-  --oi-reader-panel-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  --oi-reader-panel-group-gap: 16px;
+  --oi-reader-panel-pad: 16px 18px;
+  --oi-reader-panel-radius: 12px;
+  --oi-reader-panel-shadow: 0 18px 40px -12px rgba(40, 30, 10, 0.22), 0 2px 8px rgba(40, 30, 10, 0.06);
+  --oi-reader-panel-border: 1px solid var(--oi-reader-line);
+  --oi-reader-panel-group-gap: 14px;
   --oi-reader-panel-sheet-radius: 14px 14px 0 0;
   --oi-reader-panel-sheet-max-height: 70vh;
-  --oi-reader-aa-label-weight: 500;
+  --oi-reader-aa-label-weight: 400;
   --oi-reader-aa-label-size: 12px;
   --oi-reader-aa-label-line: 1.2;
   --oi-reader-aa-row-gap: 8px;
   --oi-reader-aa-icon-size: 32px;
-  --oi-reader-aa-icon-radius: 6px;
+  --oi-reader-aa-icon-radius: 8px;
   --oi-reader-aa-value-min: 42px;
   --oi-reader-aa-value-weight: 500;
   --oi-reader-aa-value-size: 14px;
   --oi-reader-aa-value-line: 1;
-  --oi-reader-aa-text-pad: 0 8px;
-  --oi-reader-aa-text-weight: 500;
+  --oi-reader-aa-text-pad: 0 4px 0 8px;
+  --oi-reader-aa-text-weight: 400;
   --oi-reader-aa-text-size: 13px;
   --oi-reader-aa-scale-gap: 4px;
-  --oi-reader-aa-scale-margin: 12px;
+  --oi-reader-aa-scale-margin: 14px;
   --oi-reader-aa-tick-min-height: 44px;
   --oi-reader-aa-tick-pad: 4px 0 0;
   --oi-reader-aa-tick-radius: 6px;
-  --oi-reader-aa-tick-weight: 500;
-  --oi-reader-aa-tick-size: 12px;
-  --oi-reader-aa-tick-line: 1.2;
-  --oi-reader-aa-mark-size: 8px;
-  --oi-reader-aa-mark-gap: 4px;
+  --oi-reader-aa-tick-weight: 400;
+  --oi-reader-aa-tick-size: 11px;
+  --oi-reader-aa-tick-line: 1;
+  --oi-reader-aa-mark-size: 5px;
+  --oi-reader-aa-mark-size-on: 9px;
+  --oi-reader-aa-mark-gap: 7px;
   --oi-reader-aa-note-size: 10px;
   --oi-reader-aa-note-gap: 2px;
-  --oi-reader-aa-themes-gap: 12px;
-  --oi-reader-aa-themes-margin: 8px;
+  --oi-reader-aa-themes-gap: 14px;
+  --oi-reader-aa-themes-margin: 10px;
   --oi-reader-aa-swatch-width: 52px;
   --oi-reader-aa-swatch-min-height: 64px;
   --oi-reader-aa-swatch-weight: 400;
-  --oi-reader-aa-chip-size: 40px;
-  --oi-reader-aa-chip-gap: 6px;
-  --oi-reader-aa-chip-radius: 8px;
-  --oi-reader-aa-chip-weight: 500;
-  --oi-reader-aa-chip-font-size: 16px;
-  --oi-reader-aa-check-offset: -6px;
-  --oi-reader-aa-check-size: 14px;
+  --oi-reader-aa-chip-size: 44px;
+  --oi-reader-aa-chip-gap: 7px;
+  --oi-reader-aa-chip-radius: 11px;
+  --oi-reader-aa-chip-weight: 400;
+  --oi-reader-aa-chip-font-size: 17px;
+  --oi-reader-aa-check-offset: -5px;
+  --oi-reader-aa-check-size: 16px;
   --oi-reader-aa-check-weight: 700;
   --oi-reader-aa-check-font-size: 10px;
   --oi-reader-aa-switch-gap: 12px;
   --oi-reader-aa-switch-min-height: 32px;
-  --oi-reader-aa-switch-weight: 500;
+  --oi-reader-aa-switch-weight: 400;
   --oi-reader-aa-switch-size: 13px;
   --oi-reader-aa-switch-line: 1.3;
-  --oi-reader-aa-note-margin: 8px 0 0;
+  --oi-reader-aa-switch-w: 30px;
+  --oi-reader-aa-switch-h: 18px;
+  --oi-reader-aa-note-margin: 6px 0 0;
   --oi-reader-aa-note-weight: 400;
-  --oi-reader-aa-note-line: 1.45;
+  --oi-reader-aa-note-line: 1.55;
+  --oi-reader-aa-hint-size: 12px;
+  --oi-reader-aa-hint-line: 1.55;
+  --oi-reader-aa-hint-margin: 8px 0 0;
   --oi-reader-touch-min: 44px;
+
+  --oi-reader-display-margin: 0.875em 0 1.125em;
+  --oi-reader-eqno: 400 15px/1 var(--oi-reader-latin);
+  --oi-reader-figure-margin: 20px 0 24px;
+  --oi-reader-caption-font: 400 14px/1.65 var(--oi-reader-font);
+  --oi-reader-fade-h: 40px;
+  --oi-reader-fade: linear-gradient(to bottom, transparent, var(--oi-reader-paper) 85%);
+  --oi-reader-topbar-h: 48px;
+  --oi-reader-topbar-btn-h: 30px;
+  --oi-reader-topbar-btn-pad-x: 9px;
+  --oi-reader-topbar-btn-radius: 7px;
+  --oi-reader-seg-h: 28px;
+  --oi-reader-seg-pad: 2px;
+  --oi-reader-seg-radius: 8px;
+  --oi-reader-seg-item-radius: 6px;
+  --oi-reader-seg-thumb-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.07), 0 1px 2px rgba(0, 0, 0, 0.07);
+  --oi-reader-icon-size: 16px;
+  --oi-reader-icon-stroke: 1.35;
+  --oi-reader-page-gap: 20px;
+  --oi-reader-page-shadow: 0 0 0 0.5px rgba(40, 30, 10, 0.07), 0 1px 2px rgba(40, 30, 10, 0.05), 0 10px 30px -10px rgba(40, 30, 10, 0.16);
+  --oi-reader-split-w: 8px;
+  --oi-reader-split-grip-opacity: 0.45;
+  --oi-reader-popover-shadow: var(--oi-reader-panel-shadow);
+
+  --oi-reader-pair-bar-w: 3px;
+  --oi-reader-pair-bar-radius: 3px 0 0 3px;
+  --oi-reader-pair-bar-inset: -12px;
+  --oi-reader-pair-bg-spread: 6px 12px;
+  --oi-reader-pair-bg-radius: 3px 8px 8px 3px;
+  --oi-reader-ph-min-h: 52px;
+  --oi-reader-ph-pad: 10px 14px 10px 12px;
+  --oi-reader-ph-radius: 10px;
+  --oi-reader-ph-shadow: 0 1px 2px rgba(40, 30, 10, 0.04);
+  --oi-reader-ph-shadow-hover: 0 2px 10px -2px rgba(40, 30, 10, 0.12);
+  --oi-reader-ph-active-border: 1.5px;
+}
+
+.oi-reader-app[data-reader-cjk="sans"],
+.oi-reader[data-reader-cjk="sans"] {
+  --oi-reader-font: var(--oi-reader-font-sans);
 }
 
 .oi-reader {
@@ -213,6 +380,7 @@
   background: var(--oi-reader-paper);
 }
 
+.oi-reader-app[data-reader-theme="warm"],
 .oi-reader[data-reader-theme="warm"] {
   --oi-reader-paper: var(--oi-reader-warm-paper);
   --oi-reader-surface: var(--oi-reader-warm-surface);
@@ -222,8 +390,14 @@
   --oi-reader-line: var(--oi-reader-warm-line);
   --oi-reader-line-strong: var(--oi-reader-warm-line-strong);
   --oi-reader-disabled: var(--oi-reader-warm-disabled);
+  --oi-reader-well: var(--oi-reader-warm-well);
+  --oi-reader-track: var(--oi-reader-warm-track);
+  --oi-reader-thumb: var(--oi-reader-warm-thumb);
+  --oi-reader-hover: var(--oi-reader-warm-hover);
+  --oi-reader-pair-bg-solid: var(--oi-reader-warm-pair-bg-solid);
 }
 
+.oi-reader-app[data-reader-theme="white"],
 .oi-reader[data-reader-theme="white"] {
   --oi-reader-paper: var(--oi-reader-white-paper);
   --oi-reader-surface: var(--oi-reader-white-surface);
@@ -233,8 +407,14 @@
   --oi-reader-line: var(--oi-reader-white-line);
   --oi-reader-line-strong: var(--oi-reader-white-line-strong);
   --oi-reader-disabled: var(--oi-reader-white-disabled);
+  --oi-reader-well: var(--oi-reader-white-well);
+  --oi-reader-track: var(--oi-reader-white-track);
+  --oi-reader-thumb: var(--oi-reader-white-thumb);
+  --oi-reader-hover: var(--oi-reader-white-hover);
+  --oi-reader-pair-bg-solid: var(--oi-reader-white-pair-bg-solid);
 }
 
+.oi-reader-app[data-reader-theme="sepia"],
 .oi-reader[data-reader-theme="sepia"] {
   --oi-reader-paper: var(--oi-reader-sepia-paper);
   --oi-reader-surface: var(--oi-reader-sepia-surface);
@@ -244,8 +424,14 @@
   --oi-reader-line: var(--oi-reader-sepia-line);
   --oi-reader-line-strong: var(--oi-reader-sepia-line-strong);
   --oi-reader-disabled: var(--oi-reader-sepia-disabled);
+  --oi-reader-well: var(--oi-reader-sepia-well);
+  --oi-reader-track: var(--oi-reader-sepia-track);
+  --oi-reader-thumb: var(--oi-reader-sepia-thumb);
+  --oi-reader-hover: var(--oi-reader-sepia-hover);
+  --oi-reader-pair-bg-solid: var(--oi-reader-sepia-pair-bg-solid);
 }
 
+.oi-reader-app[data-reader-theme="green"],
 .oi-reader[data-reader-theme="green"] {
   --oi-reader-paper: var(--oi-reader-green-paper);
   --oi-reader-surface: var(--oi-reader-green-surface);
@@ -255,4 +441,9 @@
   --oi-reader-line: var(--oi-reader-green-line);
   --oi-reader-line-strong: var(--oi-reader-green-line-strong);
   --oi-reader-disabled: var(--oi-reader-green-disabled);
+  --oi-reader-well: var(--oi-reader-green-well);
+  --oi-reader-track: var(--oi-reader-green-track);
+  --oi-reader-thumb: var(--oi-reader-green-thumb);
+  --oi-reader-hover: var(--oi-reader-green-hover);
+  --oi-reader-pair-bg-solid: var(--oi-reader-green-pair-bg-solid);
 }

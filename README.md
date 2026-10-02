@@ -339,3 +339,4 @@ MIT © 2026 wisdom-km
 
 - [pdf.js](https://github.com/mozilla/pdf.js) 4.10.38（Apache-2.0），见 `pdf/vendor/`
 - [KaTeX](https://github.com/KaTeX/KaTeX) 0.18.7（MIT），见 `pdf/vendor/katex/`
+- [Source Serif 4](https://github.com/adobe-fonts/source-serif) 4.005R（SIL OFL 1.1，保留字体名 Source）。阅读器打包的是拉丁子集，CSS 名「OI Serif Latin」，见 `pdf/fonts/OFL.txt`

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -10,7 +10,10 @@ import {
   READER_THEMES,
   applyReaderFontAction,
   capsuleLabel,
+  capsulePlacement,
+  clearFadeScroll,
   contentPagesForScope,
+  needsFade,
   normalizeReaderFontSize,
   normalizeReaderTheme,
   pageAtAnchor,
@@ -121,7 +124,7 @@ test("continuous flow replaces the paper stack and keeps the title mount", () =>
   assert.doesNotMatch(html, /id="viewSeg"/);
   assert.doesNotMatch(html, /id="mirrorPages"/);
   assert.doesNotMatch(html, /class="readout-paper"/);
-  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*min\(var\(--oi-reader-measure\)/s);
+  assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*var\(--rf-measure,\s*min\(var\(--oi-reader-measure\)/s);
   assert.match(css, /\.reader-flow\s*\{[^}]*font-size:\s*var\(--oi-reader-font-size\)/s);
   assert.match(css, /\.reader-flow\s*\{[^}]*line-height:\s*var\(--oi-reader-line-height\)/s);
   assert.match(css, /\.reader-flow \.oi-pdf-p \+ \.oi-pdf-p\s*\{[^}]*margin-top:\s*var\(--oi-reader-paragraph-gap\)/s);
@@ -155,6 +158,8 @@ test("page markers are a capsule, in-flow breaks, and untranslated rows", () => 
   assert.equal(pageBreakLabel(4), "原文第 4 页");
   assert.equal(untranslatedLabel(6), "原文第 6 页 · 未翻译");
   assert.equal(capsuleLabel(3), "原文第 3 页");
+  assert.equal(capsuleLabel(3, { short: true }), "第 3 页");
+  assert.equal(capsuleLabel(3, { short: true }) === capsuleLabel(3), false);
   assert.equal(pageAtAnchor([
     { page: 3, top: 0, bottom: 200 },
     { page: 4, top: 240, bottom: 400 }
@@ -164,7 +169,7 @@ test("page markers are a capsule, in-flow breaks, and untranslated rows", () => 
     { page: 5, top: 120, bottom: 200 }
   ], 100), 5);
   assert.match(html, /id="pageCapsule"/);
-  assert.match(css, /\.rf-page-capsule\s*\{[^}]*position:\s*sticky/s);
+  assert.match(css, /\.rf-capsule-bar\s*\{[^}]*position:\s*sticky/s);
   assert.match(css, /\.rf-pagebreak/);
   assert.match(css, /\.rf-untranslated/);
   assert.match(viewer, /data-src-page|dataset\.srcPage/);
@@ -205,4 +210,100 @@ test("Aa panel exposes font steps and background radios, and hides the tier-2 sw
   assert.match(css, /\.aa-panel\s*\{[^}]*width:\s*var\(--oi-reader-panel-width\)/s);
   assert.match(css, /\.aa-swatch\[data-theme="warm"\] \.aa-swatch-chip/);
   assert.match(css, /\.aa-swatch\[data-theme="green"\] \.aa-swatch-chip/);
+  assert.match(html, /id="aaFontHint"[^>]*hidden/);
+  assert.match(html, /装上思源宋体会自动换成宋体。重启浏览器后生效/);
+  assert.match(html, /class="aa-font-hint-link"/);
+  assert.doesNotMatch(html, /⇄|术语/);
+});
+
+test("capsule yields before it covers glyphs", () => {
+  const fullW = 91;
+  const shortW = 67;
+  const wide = capsulePlacement({ paneW: 716, pad: 40, fontPx: 16, fullW, shortW });
+  assert.equal(wide.mode, "float");
+  assert.equal(wide.label, "short");
+  assert.equal(wide.measure, 576);
+  assert.ok(wide.start >= 49 && wide.start <= 56);
+  const mid = capsulePlacement({ paneW: 655, pad: 28, fontPx: 16, fullW, shortW });
+  assert.equal(mid.mode, "float");
+  assert.equal(mid.label, "short");
+  assert.equal(Math.round(mid.measure), 536);
+  assert.equal(mid.start, 28);
+  const large = capsulePlacement({ paneW: 716, pad: 40, fontPx: 20, fullW, shortW });
+  assert.equal(large.mode, "float");
+  assert.equal(large.label, "short");
+  assert.ok(large.measure >= 585 && large.measure <= 592);
+  const bar = capsulePlacement({ paneW: 496, pad: 28, fontPx: 16, fullW, shortW });
+  assert.equal(bar.mode, "bar");
+  assert.equal(bar.label, "full");
+  assert.equal(bar.start, null);
+  const centered = capsulePlacement({ paneW: 1080, pad: 40, fontPx: 16, fullW, shortW });
+  assert.equal(centered.mode, "float");
+  assert.equal(centered.label, "full");
+  assert.equal(centered.measure, 576);
+  assert.equal(centered.start, null);
+});
+
+test("fade shows only when more content sits below the fold", () => {
+  assert.equal(needsFade(0, 400, 800), true);
+  assert.equal(needsFade(400, 400, 800), false);
+  assert.equal(needsFade(0, 400, 400), false);
+  assert.equal(needsFade(10, 400, 411), false);
+  const lifted = clearFadeScroll({
+    wantTop: 500,
+    paneHeight: 400,
+    blockHeight: 80,
+    blockTopInPane: 620
+  });
+  assert.ok(lifted <= 500);
+  assert.equal(clearFadeScroll({
+    wantTop: 100,
+    paneHeight: 400,
+    blockHeight: 40,
+    blockTopInPane: 220
+  }), 100);
+});
+
+test("approved reader tokens name the theme scopes and the latin subset", () => {
+  assert.match(html, /class="oi-reader-app"/);
+  assert.match(tokens, /\.oi-reader-app,\s*\.oi-reader\s*\{/);
+  for (const theme of ["warm", "white", "sepia", "green"]) {
+    assert.match(tokens, new RegExp(`\\.oi-reader-app\\[data-reader-theme="${theme}"\\]`));
+    assert.match(tokens, new RegExp(`\\.oi-reader\\[data-reader-theme="${theme}"\\]`));
+    for (const name of ["well", "track", "hover", "thumb"]) {
+      assert.match(tokens, new RegExp(`--oi-reader-${theme}-${name}:`));
+      assert.match(tokens, new RegExp(`--oi-reader-${name}:\\s*var\\(--oi-reader-${theme}-${name}\\)`));
+    }
+  }
+  assert.match(tokens, /--oi-reader-line-height:\s*1\.9/);
+  assert.match(tokens, /--oi-reader-measure:\s*36em/);
+  assert.match(tokens, /--oi-reader-h3-size:\s*calc\(1\.0625 \* var\(--oi-reader-font-size\)\)/);
+  assert.match(tokens, /--oi-reader-paragraph-gap:\s*calc\(1\.125 \* var\(--oi-reader-font-size\)\)/);
+  assert.match(tokens, /--oi-reader-font-sans:/);
+  assert.match(tokens, /--oi-reader-pair-bg-solid:/);
+  assert.match(tokens, /font-family:\s*"OI Serif Latin"/);
+  assert.doesNotMatch(tokens, /STSong/);
+  assert.match(tokens, /\[data-reader-cjk="sans"\][\s\S]*--oi-reader-font:\s*var\(--oi-reader-font-sans\)/);
+  const ranges = [...tokens.matchAll(/unicode-range:\s*([^;]+);/g)].map((hit) => hit[1]);
+  const latin = ranges.filter((range) => range.includes("U+0000-00B6"));
+  assert.equal(latin.length >= 4, true);
+  assert.equal(new Set(latin).size, 1);
+  for (const excluded of ["2014", "2018", "2019", "201C", "201D", "2026", "00B7"]) {
+    assert.equal(latin[0].toUpperCase().includes(excluded), false);
+  }
+  const fonts = readdirSync(join(root, "pdf/fonts")).filter((name) => name.endsWith(".woff2"));
+  assert.deepEqual(fonts.sort(), [
+    "OISerifLatin-Bold.woff2",
+    "OISerifLatin-Italic.woff2",
+    "OISerifLatin-Regular.woff2",
+    "OISerifLatin-Semibold.woff2"
+  ]);
+  const bytes = fonts.reduce((sum, name) => sum + statSync(join(root, "pdf/fonts", name)).size, 0);
+  assert.ok(bytes <= 256000, `font bytes ${bytes}`);
+  assert.match(readFileSync(join(root, "pdf/fonts/OFL.txt"), "utf8"), /SIL Open Font License/);
+  assert.match(css, /\.reader-flow\s*\{[^}]*background:\s*var\(--oi-reader-paper\)/s);
+  assert.match(css, /\.rf-page-capsule\s*\{[^}]*box-shadow:\s*var\(--oi-reader-capsule-shadow\)/s);
+  assert.match(css, /\.rf-pagebreak-rule\s*\{[^}]*border-top:\s*var\(--oi-reader-break-rule\)/s);
+  assert.match(viewer, /clearFadeScroll/);
+  assert.match(viewer, /document\.body/);
 });
