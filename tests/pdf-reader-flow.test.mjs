@@ -13,6 +13,7 @@ import {
   capsulePlacement,
   clearFadeScroll,
   contentPagesForScope,
+  defaultSplitRatio,
   needsFade,
   normalizeReaderFontSize,
   normalizeReaderTheme,
@@ -24,6 +25,7 @@ import {
   readerFontShortcut,
   readerImageBlend,
   readerThemeAriaLabel,
+  splitLayout,
   stepReaderFontSize,
   themePaperRgb,
   untranslatedLabel,
@@ -55,11 +57,12 @@ test("font steps stay on 14/15/16/17/18/20 and remember the chosen step", () => 
   assert.deepEqual(writeReaderPrefs(store, { fontSize: 20, theme: "green", singleKey: true }), {
     fontSize: 20,
     theme: "green",
-    singleKey: true
+    singleKey: true,
+    splitRatio: null
   });
   assert.equal(store["reader.fontSize"], "20");
   assert.equal(store["reader.theme"], "green");
-  assert.deepEqual(readReaderPrefs(store), { fontSize: 20, theme: "green", singleKey: true });
+  assert.deepEqual(readReaderPrefs(store), { fontSize: 20, theme: "green", singleKey: true, splitRatio: null });
   store["reader.fontSize"] = "13";
   assert.equal(readReaderPrefs(store).fontSize, 16);
 });
@@ -134,7 +137,7 @@ test("continuous flow replaces the paper stack and keeps the title mount", () =>
   assert.doesNotMatch(viewer, /className = "readout-paper"/);
   assert.doesNotMatch(viewer, /mapBodyFontPx/);
   assert.doesNotMatch(viewer, /function applyBodyFont/);
-  assert.match(viewer, /matchedDisplayCssSize/);
+  assert.match(viewer, /readerFormulaCssSize/);
 });
 
 test("page markers are a capsule, in-flow breaks, and untranslated rows", () => {
@@ -219,7 +222,7 @@ test("Aa panel exposes font steps and background radios, and hides the tier-2 sw
 test("capsule yields before it covers glyphs", () => {
   const fullW = 91;
   const shortW = 67;
-  const wide = capsulePlacement({ paneW: 716, pad: 40, fontPx: 16, fullW, shortW });
+  const wide = capsulePlacement({ paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW, shortW });
   assert.equal(wide.mode, "float");
   assert.equal(wide.label, "short");
   assert.equal(wide.measure, 576);
@@ -229,7 +232,7 @@ test("capsule yields before it covers glyphs", () => {
   assert.equal(mid.label, "short");
   assert.equal(Math.round(mid.measure), 536);
   assert.equal(mid.start, 28);
-  const large = capsulePlacement({ paneW: 716, pad: 40, fontPx: 20, fullW, shortW });
+  const large = capsulePlacement({ paneW: 701, scrollbar: 15, pad: 40, fontPx: 20, fullW, shortW });
   assert.equal(large.mode, "float");
   assert.equal(large.label, "short");
   assert.ok(large.measure >= 585 && large.measure <= 592);
@@ -242,6 +245,37 @@ test("capsule yields before it covers glyphs", () => {
   assert.equal(centered.label, "full");
   assert.equal(centered.measure, 576);
   assert.equal(centered.start, null);
+  const stacked = capsulePlacement({ paneW: 800, pad: 20, fontPx: 16, fullW, shortW, forceBar: true });
+  assert.equal(stacked.mode, "bar");
+  assert.equal(stacked.label, "full");
+});
+
+test("split keeps a ratio and the translation column stays at least 540px", () => {
+  assert.equal(defaultSplitRatio(1440), 0.5);
+  assert.equal(defaultSplitRatio(1100), 0.4);
+  const wide = splitLayout({ width: 1440, ratio: 0.5 });
+  assert.ok(wide.translate >= 540);
+  assert.ok(Math.abs(wide.source - 716) < 1);
+  const mid = splitLayout({ width: 1100, ratio: 0.4 });
+  assert.ok(mid.translate >= 540);
+  const dragged = splitLayout({ width: 1100, ratio: 0.6 });
+  assert.ok(dragged.translate >= 540);
+  assert.ok(dragged.source >= 320);
+  const saved = {};
+  writeReaderPrefs(saved, { splitRatio: wide.ratio });
+  assert.equal(saved["reader.splitRatio"], String(wide.ratio));
+  assert.equal(readReaderPrefs(saved).splitRatio, wide.ratio);
+  assert.match(html, /class="split-handle"[^>]*tabindex="0"/);
+  assert.match(html, /role="separator"[^>]*aria-valuenow="/);
+  assert.match(viewer, /--oi-split-ratio/);
+  assert.doesNotMatch(viewer, /gridTemplateColumns\s*=/);
+  assert.match(css, /\.rf-page-capsule\s*\{[^}]*min-height:\s*var\(--oi-reader-capsule-height\)/s);
+  assert.match(css, /\.aa-switch\s*\{[^}]*width:\s*var\(--oi-reader-aa-switch-w\)/s);
+  assert.match(css, /\.aa-switch:checked/);
+  assert.match(html, /class="aa-switch"[^>]*role="switch"/);
+  assert.match(viewer, /rf-pagebreak-rule/);
+  assert.match(css, /\.rf-pagebreak\s*\{[^}]*justify-content:\s*center/s);
+  assert.equal((viewer.match(/className = "rf-pagebreak-rule"/g) || []).length, 2);
 });
 
 test("fade shows only when more content sits below the fold", () => {

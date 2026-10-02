@@ -186,7 +186,12 @@
   --oi-reader-measure-inset-lg: 56px;
   --oi-reader-measure-inset-md: 40px;
   --oi-reader-measure-inset-sm: 32px;
-  --oi-reader-scroll-padding: 16px 0 24px;
+  --oi-reader-scroll-padding: 0 0 24px;
+  --oi-reader-flow-pad-top: 16px;
+  --oi-reader-pager-size: 12px;
+  --oi-reader-zoom-size: 12px;
+  --oi-reader-zoom-bg: color-mix(in srgb, var(--oi-reader-surface) 72%, transparent);
+  --oi-reader-zoom-hairline: 0 0 0 0.5px color-mix(in srgb, var(--oi-reader-ink) 14%, transparent);
 
   --oi-reader-h1-weight: 700;
   --oi-reader-h1-size: calc(1.625 * var(--oi-reader-font-size));
@@ -268,6 +273,7 @@
 
   --oi-reader-aa-button-min: 30px;
   --oi-reader-aa-button-weight: 500;
+  --oi-reader-aa-button-size: 14px;
   --oi-reader-panel-top: 56px;
   --oi-reader-panel-right: 16px;
   --oi-reader-panel-z: 30;
@@ -326,6 +332,13 @@
   --oi-reader-aa-switch-line: 1.3;
   --oi-reader-aa-switch-w: 30px;
   --oi-reader-aa-switch-h: 18px;
+  --oi-reader-aa-switch-knob: 14px;
+  --oi-reader-aa-switch-inset: 2px;
+  --oi-reader-aa-switch-travel: 12px;
+  --oi-reader-aa-switch-off: color-mix(in srgb, var(--oi-reader-ink) 16%, transparent);
+  --oi-reader-aa-switch-on: var(--oi-reader-ink-2);
+  --oi-reader-aa-chip-ring: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  --oi-reader-aa-chip-ring-on: inset 0 0 0 1px rgba(0, 0, 0, 0.08), 0 0 0 2px var(--oi-reader-surface), 0 0 0 3.5px var(--oi-reader-ink);
   --oi-reader-aa-note-margin: 6px 0 0;
   --oi-reader-aa-note-weight: 400;
   --oi-reader-aa-note-line: 1.55;
@@ -355,6 +368,13 @@
   --oi-reader-page-shadow: 0 0 0 0.5px rgba(40, 30, 10, 0.07), 0 1px 2px rgba(40, 30, 10, 0.05), 0 10px 30px -10px rgba(40, 30, 10, 0.16);
   --oi-reader-split-w: 8px;
   --oi-reader-split-grip-opacity: 0.45;
+  --oi-reader-source-min: 320px;
+  --oi-reader-translate-min: 560px;
+  --oi-reader-translate-min-mid: 540px;
+  --oi-reader-formula-fade: 8px;
+  --oi-reader-inline-line-max: 2.2em;
+  --oi-reader-mark-border: 2px solid var(--oi-reader-focus);
+  --oi-reader-mark-bg: color-mix(in srgb, var(--oi-reader-focus) 16%, transparent);
   --oi-reader-popover-shadow: var(--oi-reader-panel-shadow);
 
   --oi-reader-pair-bar-w: 3px;

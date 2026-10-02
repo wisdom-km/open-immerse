@@ -151,7 +151,16 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
 
 test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.pdf-page canvas\[hidden\]\s*\{\s*display:\s*none/);
-  assert.match(css, /\.workspace\s*\{[^}]*position:\s*relative[^}]*grid-template-columns:\s*minmax\(0,\s*var\(--oi-split\)\)\s*var\(--oi-reader-split-w\)\s*minmax\(0,\s*1fr\)/s);
+  assert.match(css, /\.workspace\s*\{[^}]*position:\s*relative[^}]*grid-template-columns:\s*minmax\(var\(--oi-source-min\),\s*var\(--oi-split\)\)\s*var\(--oi-reader-split-w\)\s*minmax\(var\(--oi-translate-min\),\s*1fr\)/s);
+  assert.match(css, /grid-template-areas:\s*"pdf split translate"/);
+  assert.match(css, /\.pane-pdf\s*\{[^}]*grid-area:\s*pdf/s);
+  assert.match(css, /\.split-handle\s*\{[^}]*grid-area:\s*split/s);
+  assert.match(css, /\.pane-translate\s*\{[^}]*grid-area:\s*translate/s);
+  const areas = css.match(/grid-template-areas:\s*"([^"]+)"/);
+  assert.ok(areas);
+  for (const name of areas[1].split(/\s+/)) {
+    assert.match(css, new RegExp(`grid-area:\\s*${name}\\b`));
+  }
   assert.match(css, /@media \(max-width:\s*899px\)\s*\{[^}]*grid-template-columns:\s*1fr/s);
   assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.zoom-gutter\s*\{[^}]*flex-direction:\s*row/);
   assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.zoom-gutter\s*\{[^}]*right:\s*max\(12px, calc\(var\(--oi-scrollbar-gutter\) \+ 4px\)\)/);
@@ -167,8 +176,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(zoomGutterCss, /flex-direction:\s*row/);
   assert.match(zoomGutterCss, /backdrop-filter:\s*blur\(12px\)/);
   assert.match(zoomGutterCss, /-webkit-backdrop-filter:\s*blur\(12px\)/);
-  assert.match(zoomGutterCss, /color-mix\(in srgb, var\(--oi-reader-surface\) 72%/);
-  assert.match(zoomGutterCss, /box-shadow:\s*0 0 0 0\.5px color-mix\(in srgb, var\(--oi-reader-ink\)/);
+  assert.match(zoomGutterCss, /background:\s*var\(--oi-reader-zoom-bg\)/);
+  assert.match(zoomGutterCss, /box-shadow:\s*var\(--oi-reader-zoom-hairline\)/);
   assert.match(zoomGutterCss, /cursor:\s*grab/);
   assert.match(zoomGutterCss, /touch-action:\s*none/);
   assert.match(zoomGutterCss, /\.zoom-gutter\.is-free/);
@@ -181,8 +190,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.pane-pdf\s*\{[^}]*position:\s*relative[^}]*overflow:\s*hidden[^}]*display:\s*flex[^}]*flex-direction:\s*column/s);
   assert.match(css, /#pages\s*\{[^}]*flex:\s*1[^}]*overflow:\s*auto/s);
   assert.match(css, /\.zoom-gutter:hover\s*\{[^}]*background:\s*var\(--oi-reader-hover\)/s);
-  assert.match(css, /\.zoom-gutter-btn\s*\{[^}]*min-height:\s*28px[^}]*height:\s*28px[^}]*font:\s*500 12px\/1 var\(--oi-reader-ui-font\)/s);
-  assert.match(css, /\.zoom-gutter-label\s*\{[^}]*font:\s*500 12px\/1 var\(--oi-reader-ui-font\)[^}]*font-variant-numeric:\s*tabular-nums/s);
+  assert.match(css, /\.zoom-gutter-btn\s*\{[^}]*min-height:\s*28px[^}]*height:\s*28px[^}]*font:\s*500 var\(--oi-reader-zoom-size\)\/1 var\(--oi-reader-ui-font\)/s);
+  assert.match(css, /\.zoom-gutter-label\s*\{[^}]*font:\s*500 var\(--oi-reader-zoom-size\)\/1 var\(--oi-reader-ui-font\)[^}]*font-variant-numeric:\s*tabular-nums/s);
   assert.equal(css.includes(".split-gutter"), false);
   assert.equal(css.includes(".zoom-stack"), false);
   assert.match(css, /\.workspace\.is-splitting\s*\{[^}]*cursor:\s*col-resize[^}]*user-select:\s*none/s);
@@ -275,7 +284,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.oi-pdf-h1 \+ \.oi-pdf-h2\s*\{\s*margin-top:\s*16px/s);
   assert.match(css, /\.oi-pdf-p\s*\{[^}]*font:\s*400 var\(--oi-pdf-body-fs,\s*15px\)\/1\.7 var\(--oi-font\)/s);
   assert.match(css, /\.oi-pdf-p:last-child\s*\{\s*margin-bottom:\s*0/s);
-  assert.match(css, /\.pane-translate \.empty-read\s*\{[^}]*color:\s*var\(--oi-text-muted\)/s);
+  assert.match(css, /\.pane-translate \.empty-read\s*\{[^}]*color:\s*var\(--oi-reader-muted\)/s);
   assert.match(html, /本页没有文字层，无法提取阅读文本/);
   assert.match(html, /扫描件翻译将在后续版本支持/);
 });

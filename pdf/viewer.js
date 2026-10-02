@@ -26,6 +26,7 @@ import {
   createTranslateSession,
   exceedsDragThreshold,
   effectiveScrollbarWidth,
+  measureScrollbarWidth,
   normalizeZoomChipPos,
   pdfExportControlState,
   pdfSourceBasename,
@@ -118,7 +119,13 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
-import { INLINE_BODY_HARD_MAX, displayFormulaMinEm, matchedDisplayCssSize } from "../lib/pdf-formula-size.js";
+import {
+  INLINE_BODY_HARD_MAX,
+  READER_SOURCE_BODY_PT,
+  displayFormulaMinEm,
+  formulaScriptPt,
+  readerFormulaCssSize
+} from "../lib/pdf-formula-size.js";
 import {
   READER_FONT_SIZES,
   READER_THEME_LABELS,
@@ -127,6 +134,7 @@ import {
   capsulePlacement,
   clearFadeScroll,
   contentPagesForScope,
+  defaultSplitRatio,
   needsFade,
   pageAtAnchor,
   pageBreakLabel,
@@ -136,6 +144,7 @@ import {
   readerFontShortcut,
   readerImageBlend,
   readerThemeAriaLabel,
+  splitLayout,
   themePaperRgb,
   untranslatedLabel,
   writeReaderPrefs
@@ -402,8 +411,7 @@ function applyReaderImageBlend(img) {
   return img;
 }
 
-function applyReaderFontStep(action) {
-  const next = applyReaderFontAction(readerPrefs.fontSize, action);
+function commitReaderFont(next) {
   if (next === readerPrefs.fontSize) return;
   const anchor = captureReaderAnchor();
   readerPrefs = { ...readerPrefs, fontSize: next };
@@ -411,7 +419,12 @@ function applyReaderFontStep(action) {
   applyReaderSurface();
   renderArticle();
   layoutCapsule();
+  applyPaperMetrics();
   restoreReaderAnchor(anchor);
+}
+
+function applyReaderFontStep(action) {
+  commitReaderFont(applyReaderFontAction(readerPrefs.fontSize, action));
 }
 
 function setReaderTheme(theme) {
@@ -594,14 +607,7 @@ function onAaFontScaleKey(event) {
   const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
   const index = READER_FONT_SIZES.indexOf(readerPrefs.fontSize);
   const next = READER_FONT_SIZES[Math.min(READER_FONT_SIZES.length - 1, Math.max(0, index + delta))];
-  if (next === readerPrefs.fontSize) return;
-  const anchor = captureReaderAnchor();
-  readerPrefs = { ...readerPrefs, fontSize: next };
-  persistReaderPrefs();
-  applyReaderSurface();
-  renderArticle();
-  layoutCapsule();
-  restoreReaderAnchor(anchor);
+  commitReaderFont(next);
   $("aaFontScale")?.querySelector(`[data-size="${next}"]`)?.focus();
 }
 
@@ -631,27 +637,14 @@ function bindReaderChrome() {
   $("aaFontDown")?.addEventListener("click", () => applyReaderFontStep("decrease"));
   $("aaFontUp")?.addEventListener("click", () => applyReaderFontStep("increase"));
   $("aaFontDefault")?.addEventListener("click", () => {
-    if (readerPrefs.fontSize === 16) return;
-    const anchor = captureReaderAnchor();
-    readerPrefs = { ...readerPrefs, fontSize: 16 };
-    persistReaderPrefs();
-    applyReaderSurface();
-    renderArticle();
-    layoutCapsule();
-    restoreReaderAnchor(anchor);
+    commitReaderFont(16);
   });
   $("aaFontScale")?.addEventListener("click", (event) => {
     const tick = event.target.closest?.("[data-size]");
     if (!tick) return;
     const size = Number(tick.dataset.size);
-    if (!READER_FONT_SIZES.includes(size) || size === readerPrefs.fontSize) return;
-    const anchor = captureReaderAnchor();
-    readerPrefs = { ...readerPrefs, fontSize: size };
-    persistReaderPrefs();
-    applyReaderSurface();
-    renderArticle();
-    layoutCapsule();
-    restoreReaderAnchor(anchor);
+    if (!READER_FONT_SIZES.includes(size)) return;
+    commitReaderFont(size);
   });
   $("aaFontScale")?.addEventListener("keydown", onAaFontScaleKey);
   $("aaThemes")?.addEventListener("click", (event) => {
@@ -725,7 +718,15 @@ function bindSplitResize() {
   const workspace = document.querySelector(".workspace");
   const handle = document.querySelector(".split-handle");
   if (!workspace || !handle) return;
+  const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
+  const saved = readerPrefs.splitRatio;
+  const initial = saved || defaultSplitRatio(width);
+  workspace.style.setProperty("--oi-split-ratio", String(initial));
+  handle.setAttribute("aria-valuenow", String(Math.round(initial * 100)));
   handle.addEventListener("pointerdown", (event) => startSplitDrag(event, workspace, handle));
+  handle.addEventListener("dblclick", () => resetSplit(workspace));
+  handle.addEventListener("keydown", (event) => onSplitKey(event, workspace));
+  window.addEventListener("resize", () => syncSplitAria(workspace));
 }
 
 function startSplitDrag(event, workspace, handle) {
@@ -739,11 +740,80 @@ function startSplitDrag(event, workspace, handle) {
     handle.removeEventListener("pointermove", onMove);
     handle.removeEventListener("pointerup", onUp);
     handle.removeEventListener("pointercancel", onUp);
+    persistSplitRatio(workspace);
   };
   handle.addEventListener("pointermove", onMove);
   handle.addEventListener("pointerup", onUp);
   handle.addEventListener("pointercancel", onUp);
   applySplit(workspace, event.clientX);
+}
+
+function paintSplitRatio(workspace, ratio) {
+  const rect = workspace.getBoundingClientRect();
+  const width = rect.width || window.innerWidth || 1200;
+  const requested = Number(ratio);
+  const safe = requested > 0 && requested < 1 ? requested : defaultSplitRatio(width);
+  if (!(rect.width > 0)) {
+    workspace.style.setProperty("--oi-split-ratio", String(Math.round(safe * 10000) / 10000));
+    return;
+  }
+  const layout = splitLayout({ width, ratio: safe, splitW: splitColumnWidth(workspace) });
+  workspace.style.setProperty("--oi-split-ratio", String(layout.ratio));
+  const handle = workspace.querySelector(".split-handle");
+  if (handle) handle.setAttribute("aria-valuenow", String(Math.round(layout.ratio * 100)));
+}
+
+function persistSplitRatio(workspace) {
+  const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+  if (!Number.isFinite(ratio)) return;
+  readerPrefs = { ...readerPrefs, splitRatio: ratio };
+  persistReaderPrefs();
+}
+
+function resetSplit(workspace) {
+  const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
+  paintSplitRatio(workspace, defaultSplitRatio(width));
+  persistSplitRatio(workspace);
+  syncZoomChip();
+  syncMirrorZoomChip();
+  applyPaperMetrics();
+  layoutCapsule({ keepAnchor: true });
+}
+
+function syncSplitAria(workspace) {
+  const handle = workspace.querySelector(".split-handle");
+  const pdf = workspace.querySelector(".pane-pdf");
+  if (!handle || !pdf) return;
+  const splitW = splitColumnWidth(workspace);
+  const available = Math.max(1, workspace.clientWidth - splitW);
+  const ratio = pdf.getBoundingClientRect().width / available;
+  if (ratio > 0 && ratio < 1) handle.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+}
+
+function onSplitKey(event, workspace) {
+  const width = workspace.getBoundingClientRect().width;
+  if (width < 900) return;
+  const splitW = splitColumnWidth(workspace);
+  const available = Math.max(1, width - splitW);
+  const current = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio")) || defaultSplitRatio(width);
+  const layout = splitLayout({ width, ratio: current, splitW });
+  let next = null;
+  if (event.key === "ArrowLeft") next = (layout.source - (event.shiftKey ? 64 : 16)) / available;
+  else if (event.key === "ArrowRight") next = (layout.source + (event.shiftKey ? 64 : 16)) / available;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = 1;
+  else if (event.key === "Enter") {
+    event.preventDefault();
+    resetSplit(workspace);
+    return;
+  } else return;
+  event.preventDefault();
+  paintSplitRatio(workspace, next);
+  persistSplitRatio(workspace);
+  syncZoomChip();
+  syncMirrorZoomChip();
+  applyPaperMetrics();
+  layoutCapsule({ keepAnchor: true });
 }
 
 function splitColumnWidth(workspace) {
@@ -754,13 +824,11 @@ function splitColumnWidth(workspace) {
 
 function applySplit(workspace, clientX) {
   const rect = workspace.getBoundingClientRect();
-  if (rect.width <= 0) return;
+  if (rect.width < 900) return;
   const splitW = splitColumnWidth(workspace);
-  const available = Math.max(0, rect.width - splitW);
+  const available = Math.max(1, rect.width - splitW);
   const pointer = clientX - rect.left - splitW / 2;
-  const left = Math.min(available * 0.8, Math.max(available * 0.2, pointer));
-  workspace.style.setProperty("--oi-split", `${left}px`);
-  workspace.style.gridTemplateColumns = `${left}px var(--oi-reader-split-w) minmax(0, 1fr)`;
+  paintSplitRatio(workspace, pointer / available);
   syncZoomChip();
   syncMirrorZoomChip();
   applyPaperMetrics();
@@ -1354,6 +1422,7 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
   const scroll = translateScrollRoot();
   const avail = paperAvailWidth(scroll?.clientWidth || 0);
   const paper = readoutPaperSize({ leftWidth, leftHeight, availWidth: avail });
+  const layout = getPageLayout(pageNumber);
   return {
     pageWidth: unitW,
     pageHeight: unitH,
@@ -1361,7 +1430,10 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
     paperWidth: paper.width > 0 ? paper.width : leftWidth,
     paperHeight: paper.heightBase > 0 ? paper.heightBase : leftHeight,
     mirrorZoom: 1,
-    devicePixelRatio: Math.max(1, Number(window.devicePixelRatio) || 1)
+    devicePixelRatio: Math.max(1, Number(window.devicePixelRatio) || 1),
+    readerFontPx: readerPrefs.fontSize,
+    sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
+    columnPx: readerColumnPx()
   };
 }
 
@@ -1602,6 +1674,7 @@ function fillBlockText(node, block, layout) {
     const matched = matchedFormulaStyle(formula, layout?.page ?? node.dataset.page);
     if (matched) {
       span.classList.add("is-matched");
+      if (matched.raised) span.classList.add("is-raised");
       span.style.setProperty("--oi-formula-h", matched.height);
       span.style.setProperty("--oi-formula-ar", matched.aspect);
     } else {
@@ -1847,54 +1920,67 @@ function snappedFormulaBox(matched) {
   });
 }
 
-function matchedFormulaStyle(block, page) {
+function readerColumnPx() {
+  const pane = translateScrollRoot();
+  if (!pane) return 0;
+  const measure = parseFloat(pane.style.getPropertyValue("--rf-measure"));
+  if (measure > 0) return measure;
+  return Math.max(0, (pane.clientWidth || 0) + measureScrollbarWidth(pane));
+}
+
+function readerFormulaStyle(block, page, inline) {
   const layout = getPageLayout(page);
-  const paperHeight = paperHeightFor(page);
-  const matched = matchedDisplayCssSize({
-    bbox: block?.bbox,
-    pageWidth: layout?.pageWidth,
-    pageHeight: layout?.pageHeight,
-    paperHeight
+  const bbox = block?.bbox;
+  const pageW = Number(layout?.pageWidth) || 0;
+  const pageH = Number(layout?.pageHeight) || 0;
+  if (!Array.isArray(bbox) || bbox.length < 4 || !(pageW > 0) || !(pageH > 0)) return null;
+  const fracW = Number(bbox[2]) - Number(bbox[0]);
+  const fracH = Number(bbox[3]) - Number(bbox[1]);
+  if (!(fracW > 0) || !(fracH > 0)) return null;
+  const inkPt = fracH * pageH;
+  const sized = readerFormulaCssSize({
+    bodyFontPx: readerPrefs.fontSize,
+    sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
+    inkPt,
+    widthPt: fracW * pageW,
+    scriptPt: formulaScriptPt(block, inkPt),
+    columnPx: readerColumnPx(),
+    inline
   });
-  if (!matched) return null;
-  const snapped = snappedFormulaBox(matched) || matched;
-  const height = snapped.cssHeight;
-  const width = snapped.cssWidth > 0 ? snapped.cssWidth : matched.cssWidth;
+  if (!sized) return null;
+  const snapped = snappedFormulaBox(sized) || sized;
+  const height = snapped.cssHeight || sized.cssHeight;
+  const width = snapped.cssWidth > 0 ? snapped.cssWidth : sized.cssWidth;
+  if (!(height > 0)) return null;
   return {
     height: paperCssPx(height),
-    aspect: String(Math.round((width / height) * 10000) / 10000)
+    aspect: width > 0 ? String(Math.round((width / height) * 10000) / 10000) : "1",
+    raised: Boolean(sized.raised)
   };
 }
 
-function refreshMatchedFormulas(paper, paperHeight) {
+function matchedFormulaStyle(block, page) {
+  const inline = block?.display === false || Boolean(block?.inlineOf);
+  return readerFormulaStyle(block, page, inline);
+}
+
+function refreshMatchedFormulas(paper) {
   const layout = getPageLayout(paper.dataset.page);
   paper.querySelectorAll(".oi-pdf-math-row.is-matched").forEach((row) => {
     const host = row.closest("[data-block-id]");
     const block = (layout?.blocks || []).find((item) => item.id === host?.dataset?.blockId);
-    const matched = matchedDisplayCssSize({
-      bbox: block?.bbox,
-      pageWidth: layout?.pageWidth,
-      pageHeight: layout?.pageHeight,
-      paperHeight
-    });
+    const matched = readerFormulaStyle(block, paper.dataset.page, false);
     if (!matched) return;
-    const snapped = snappedFormulaBox(matched);
-    row.style.setProperty("--oi-formula-h", paperCssPx(snapped?.cssHeight || matched.cssHeight));
-    if (snapped?.cssWidth > 0 && snapped.cssHeight > 0) {
-      row.style.setProperty("--oi-formula-ar", String(Math.round((snapped.cssWidth / snapped.cssHeight) * 10000) / 10000));
-    }
+    row.style.setProperty("--oi-formula-h", matched.height);
+    row.style.setProperty("--oi-formula-ar", matched.aspect);
   });
   paper.querySelectorAll(".oi-pdf-inline-math.is-matched").forEach((span) => {
     const block = (layout?.blocks || []).find((item) => item.id === span.dataset.blockId);
-    const matched = matchedDisplayCssSize({
-      bbox: block?.bbox,
-      pageWidth: layout?.pageWidth,
-      pageHeight: layout?.pageHeight,
-      paperHeight
-    });
+    const matched = readerFormulaStyle(block, paper.dataset.page, true);
     if (!matched) return;
-    const snapped = snappedFormulaBox(matched);
-    span.style.setProperty("--oi-formula-h", paperCssPx(snapped?.cssHeight || matched.cssHeight));
+    span.style.setProperty("--oi-formula-h", matched.height);
+    span.style.setProperty("--oi-formula-ar", matched.aspect);
+    span.classList.toggle("is-raised", matched.raised);
   });
 }
 
@@ -1904,7 +1990,7 @@ function applyPaperMetrics() {
   flow.querySelectorAll(":scope > .rf-page").forEach((slot) => {
     const left = leftBaseBox(slot.dataset.page);
     if (left?.width > 0) slot.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
-    refreshMatchedFormulas(slot, paperHeightFor(slot.dataset.page));
+    refreshMatchedFormulas(slot);
   });
   refreshFormulaCropsForDisplay();
 }
@@ -2076,10 +2162,13 @@ function makePageBreak(page) {
   el.dataset.srcPage = String(page);
   const label = document.createElement("span");
   label.textContent = pageBreakLabel(page);
-  const rule = document.createElement("span");
-  rule.className = "rf-pagebreak-rule";
-  rule.setAttribute("aria-hidden", "true");
-  el.append(label, rule);
+  const before = document.createElement("span");
+  const after = document.createElement("span");
+  before.className = "rf-pagebreak-rule";
+  after.className = "rf-pagebreak-rule";
+  before.setAttribute("aria-hidden", "true");
+  after.setAttribute("aria-hidden", "true");
+  el.append(before, label, after);
   return el;
 }
 
@@ -2181,10 +2270,12 @@ function layoutCapsule({ keepAnchor = false } = {}) {
   const { fullW, shortW } = capsuleLabelWidths(maxPage);
   const place = capsulePlacement({
     paneW: pane.clientWidth,
+    scrollbar: measureScrollbarWidth(pane),
     pad: readerMeasurePad(),
     fontPx: readerPrefs.fontSize,
     fullW,
-    shortW
+    shortW,
+    forceBar: (window.innerWidth || 0) < 900
   });
   const prev = `${pane.dataset.capsuleMode}|${pane.dataset.capsuleLabel}|${had}|${pane.style.getPropertyValue("--rf-start")}`;
   pane.style.setProperty("--rf-measure", `${place.measure}px`);
@@ -2276,6 +2367,10 @@ function updatePageCapsule() {
 function onPageCapsuleClick() {
   const page = Number($("pageCapsule")?.dataset.srcPage);
   if (!Number.isFinite(page) || page < 1) return;
+  if (page !== pageNum) {
+    pageNum = page;
+    updatePager();
+  }
   syncPdfToPage(page);
 }
 
@@ -2366,11 +2461,22 @@ function onTranslateScroll() {
         const box = el.getBoundingClientRect();
         return { page: Number(el.dataset.srcPage), top: box.top, bottom: box.bottom };
       });
-      if (!rects.length) return;
+      const shown = Number($("pageCapsule")?.dataset.srcPage);
+      if (!rects.length) {
+        if (shown >= 1 && shown !== pageNum) {
+          pageNum = shown;
+          updatePager();
+        }
+        return;
+      }
       const paneRect = pane.getBoundingClientRect();
       const next = pageFromViewport(rects, paneRect.top, paneRect.bottom);
-      if (next === pageNum) return;
       const fromPage = pageNum;
+      if (shown >= 1 && shown !== pageNum) {
+        pageNum = shown;
+        updatePager();
+      }
+      if (next === fromPage) return;
       const plan = planPaneFollow({
         softPageFollow,
         owner: syncOwner.owner,
@@ -3609,7 +3715,7 @@ function formulaCropPlanKeyNow() {
   const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
   const left = Number(zoom) > 0 ? Number(zoom) : 1;
   const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0);
-  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}`;
+  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}|${readerPrefs.fontSize}`;
 }
 
 function noteFormulaCropPlan(layout) {

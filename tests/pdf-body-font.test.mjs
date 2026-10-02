@@ -106,7 +106,7 @@ test("viewer maps body font and matches formula height without dropping the redr
   assert.match(viewer, /stampBodyFont/);
   assert.match(viewer, /readerPrefs\.fontSize/);
   assert.match(viewer, /is-matched/);
-  assert.match(viewer, /matchedDisplayCssSize/);
+  assert.match(viewer, /readerFormulaCssSize/);
   assert.match(viewer, /renderSharpVisualCrop/);
   assert.match(css, /\.reader-flow\s*\{[^}]*font-size:\s*var\(--oi-reader-font-size\)/s);
   assert.match(css, /\.reader-flow \.oi-pdf-p\s*\{[^}]*line-height:\s*var\(--oi-reader-line-height\)/s);

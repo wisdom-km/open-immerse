@@ -55,7 +55,7 @@
     <div class="aa-group">
       <label class="aa-switch-row" for="aaSingleKey">
         <span>单键快捷键</span>
-        <input type="checkbox" id="aaSingleKey" role="switch" checked />
+        <input type="checkbox" id="aaSingleKey" class="aa-switch" role="switch" checked />
       </label>
       <p class="aa-note">字号快捷键：- / = / 0（浏览器缩放 ⌘− / ⌘+ 不受影响）</p>
     </div>
@@ -84,7 +84,7 @@
         <div id="readerFade" class="rf-fade" aria-hidden="true" hidden></div>
       </div>
     </aside>
-    <div class="split-handle" role="separator" aria-orientation="vertical" aria-label="调整分栏"></div>
+    <div class="split-handle" role="separator" aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0" aria-label="调整分栏"></div>
   </div>
   <script src="./vendor/katex/katex.min.js"></script>
   <script type="module" src="viewer.js"></script>
