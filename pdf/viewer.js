@@ -1551,9 +1551,7 @@ function raiseStackWidth(nextWidth) {
   const stack = paperStackEl();
   if (!stack) return;
   const current = parseFloat(stack.style.getPropertyValue("--oi-pdf-stack-w"));
-  const raised = raisedStackWidth(current, nextWidth);
-  if (!(raised > (Number.isFinite(current) && current > 0 ? current : 0))) return;
-  stack.style.setProperty("--oi-pdf-stack-w", paperCssPx(raised));
+  stack.style.setProperty("--oi-pdf-stack-w", paperCssPx(raisedStackWidth(current, nextWidth)));
 }
 
 function ensurePaper(page) {
@@ -1634,7 +1632,10 @@ function renderArticle() {
   const keep = pane ? pane.scrollTop : 0;
   const stack = paperStackEl();
   if ($("mirrorPages")) $("mirrorPages").replaceChildren();
-  if (stack) stack.replaceChildren();
+  if (stack) {
+    stack.replaceChildren();
+    stack.style.setProperty("--oi-pdf-stack-w", "0px");
+  }
   if (libraryArticle?.length && scopeShowsPage(1)) {
     renderStoredArticle(libraryArticle);
     applyViewMode();

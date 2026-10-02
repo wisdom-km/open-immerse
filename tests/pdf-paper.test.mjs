@@ -133,6 +133,8 @@ test("right pane DOM contract is a paper stack, not a 42rem column", () => {
   assert.match(ensure, /raiseStackWidth\(/);
   assert.match(ensure, /if \(!paper\)/);
   assert.match(src.slice(src.indexOf("function raiseStackWidth"), src.indexOf("function ensurePaper")), /raisedStackWidth\(/);
+  const cleared = src.slice(src.indexOf("function renderArticle"), src.indexOf("function applyViewMode"));
+  assert.match(cleared, /stack\.replaceChildren\(\);\s*stack\.style\.setProperty\("--oi-pdf-stack-w", "0px"\)/);
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*overflow:\s*auto/s);
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*scroll-behavior:\s*auto/s);
   assert.doesNotMatch(src, /behavior:\s*["']smooth["']/);

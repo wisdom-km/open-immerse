@@ -298,8 +298,10 @@ test("viewer sync path has no smooth fight and no fixed 360ms lock", () => {
   assert.doesNotMatch(follow, /scrollIntoView/);
   assert.match(viewerCss, /\.pages\s*\{[^}]*overscroll-behavior:\s*contain/s);
   assert.match(viewerCss, /\.pages\s*\{[^}]*scroll-behavior:\s*auto/s);
-  assert.match(viewerCss, /\.pages\s*\{[^}]*align-items:\s*safe center/s);
-  assert.doesNotMatch(viewerCss, /\.pages\s*\{[^}]*align-items:\s*center\s*;/s);
+  const pagesRule = viewerCss.match(/\.pages\s*\{[^}]*\}/s)?.[0] ?? "";
+  const fallback = pagesRule.indexOf("align-items: center;");
+  const safe = pagesRule.indexOf("align-items: safe center;");
+  assert.ok(fallback >= 0 && safe > fallback);
   assert.match(viewerCss, /\.pane-translate-scroll\s*\{[^}]*overscroll-behavior:\s*contain/s);
   assert.match(viewerCss, /\.pane-translate-scroll\s*\{[^}]*scroll-behavior:\s*auto/s);
 });

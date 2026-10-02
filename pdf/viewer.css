@@ -207,10 +207,11 @@ h1 {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  /* safe: a page wider than the pane aligns to the start edge. scrollLeft 0
-     shows the left edge, and max scrollLeft equals the overflow. A page that
-     still fits stays centered. Plain center paints half the overflow to the
-     left, where scrollLeft cannot reach it. */
+  /* Chrome 114 ignores `safe` and keeps the line above. safe center: a page
+     wider than the pane aligns to the start edge, so scrollLeft 0 shows the
+     left edge and max scrollLeft equals the overflow. A page that still fits
+     stays centered. */
+  align-items: center;
   align-items: safe center;
   gap: 16px;
   overscroll-behavior: contain;
