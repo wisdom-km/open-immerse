@@ -5,7 +5,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,79 +55,69 @@ function serveRepo() {
 }
 
 function launchChrome(userDataDir) {
-  return new Promise((resolveChrome, reject) => {
-    const child = spawn("google-chrome", [
-      "--headless=new",
-      "--disable-gpu",
-      "--no-sandbox",
-      "--disable-dev-shm-usage",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${userDataDir}`,
-      "--window-size=1440,900",
-      "about:blank"
-    ], { stdio: ["ignore", "pipe", "pipe"] });
-    let buf = "";
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error(`Chrome did not open a debugging port\n${buf.slice(-800)}`));
-    }, 20000);
-    const onData = (chunk) => {
-      buf += chunk.toString();
-      const match = buf.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//);
-      if (!match || settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveChrome({ child, port: Number(match[1]) });
-    };
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.on("exit", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(`Chrome exited ${code}\n${buf.slice(-800)}`));
-    });
+  const child = spawn("google-chrome", [
+    "--headless=new",
+    "--disable-gpu",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--remote-debugging-pipe",
+    `--user-data-dir=${userDataDir}`,
+    "--window-size=1440,900",
+    "--no-first-run",
+    "--no-default-browser-check"
+  ], {
+    detached: true,
+    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"]
   });
+  child.stderr.on("data", () => {});
+  child.stdio[3].on("error", () => {});
+  child.stdio[4].on("error", () => {});
+  return child;
 }
 
-function openSocket(url) {
-  return new Promise((resolveSocket, reject) => {
-    const ws = new WebSocket(url);
-    const fail = () => reject(new Error(`websocket failed for ${url}`));
-    ws.addEventListener("open", () => resolveSocket(ws));
-    ws.addEventListener("error", fail);
-  });
-}
-
-class Cdp {
-  constructor(ws) {
-    this.ws = ws;
+class PipeCdp {
+  constructor(writeStream, readStream) {
+    this.writeStream = writeStream;
+    this.readStream = readStream;
+    this.buf = Buffer.alloc(0);
     this.next = 1;
     this.pending = new Map();
-    this.events = [];
-    ws.addEventListener("message", (event) => {
-      const raw = typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf8");
-      const message = JSON.parse(raw);
+    readStream.on("data", (chunk) => {
+      this.buf = Buffer.concat([this.buf, chunk]);
+      this.drain();
+    });
+  }
+
+  drain() {
+    while (this.buf.length) {
+      const end = this.buf.indexOf(0);
+      if (end < 0) return;
+      const text = this.buf.subarray(0, end).toString("utf8");
+      this.buf = this.buf.subarray(end + 1);
+      if (!text) continue;
+      const message = JSON.parse(text);
       if (message.id && this.pending.has(message.id)) {
-        const { resolve: done, reject } = this.pending.get(message.id);
+        const { done, reject, timer } = this.pending.get(message.id);
         this.pending.delete(message.id);
+        clearTimeout(timer);
         if (message.error) reject(new Error(message.error.message || JSON.stringify(message.error)));
         else done(message.result);
-        return;
       }
-      this.events.push(message);
-    });
+    }
   }
 
   send(method, params = {}, sessionId) {
     const id = this.next++;
     const payload = { id, method, params };
     if (sessionId) payload.sessionId = sessionId;
+    const body = Buffer.from(`${JSON.stringify(payload)}\0`, "utf8");
     return new Promise((done, reject) => {
-      this.pending.set(id, { resolve: done, reject });
-      this.ws.send(JSON.stringify(payload));
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP timeout: ${method}`));
+      }, 20000);
+      this.pending.set(id, { done, reject, timer });
+      this.writeStream.write(body);
     });
   }
 }
@@ -135,21 +126,59 @@ function sleep(ms) {
   return new Promise((done) => setTimeout(done, ms));
 }
 
-test("Attention arXiv v7 two-digit capsules stay on one line inside the box", { timeout: 180000 }, async () => {
+function waitForExit(child) {
+  if (!child) return Promise.resolve();
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((done) => {
+    child.once("exit", () => done());
+    child.once("close", () => done());
+  });
+}
+
+async function cleanupChrome({ child, server, userDataDir }) {
+  try {
+    if (child) {
+      const stopped = waitForExit(child);
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already exited */
+        }
+      }
+      await stopped;
+    }
+  } catch (error) {
+    console.error("capsule chrome stop failed:", error);
+  }
+  try {
+    if (server) await new Promise((done) => server.close(() => done()));
+  } catch (error) {
+    console.error("capsule server close failed:", error);
+  }
+  try {
+    if (userDataDir) {
+      await rm(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
+  } catch (error) {
+    console.error("capsule profile cleanup failed:", error);
+  }
+}
+
+test("Attention arXiv v7 capsules stay inside the content box on every page", { timeout: 180000 }, async () => {
   assert.equal(existsSync(fixture), true, "tests/fixtures/Attention_Is_All_You_Need.pdf is missing");
   const server = await serveRepo();
   const userDataDir = mkdtempSync(join(tmpdir(), "oi-capsule-chrome-"));
-  let chrome = null;
-  let ws = null;
+  let child = null;
   try {
     const address = server.address();
     const origin = `http://127.0.0.1:${address.port}`;
     const src = `${origin}/tests/fixtures/Attention_Is_All_You_Need.pdf`;
     const viewer = `${origin}/pdf/viewer.html?src=${encodeURIComponent(src)}`;
-    chrome = await launchChrome(userDataDir);
-    const version = await fetch(`http://127.0.0.1:${chrome.port}/json/version`).then((res) => res.json());
-    ws = await openSocket(version.webSocketDebuggerUrl);
-    const cdp = new Cdp(ws);
+    child = launchChrome(userDataDir);
+    const cdp = new PipeCdp(child.stdio[3], child.stdio[4]);
     const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
     await cdp.send("Page.enable", {}, sessionId);
@@ -201,49 +230,61 @@ test("Attention arXiv v7 two-digit capsules stay on one line inside the box", { 
       range.selectNodeContents(cap);
       const textBox = range.getBoundingClientRect();
       const style = getComputedStyle(cap);
+      const px = (name) => {
+        const value = parseFloat(style[name]);
+        return Number.isFinite(value) ? value : 0;
+      };
       return {
         text: cap.textContent || "",
         page: cap.dataset.srcPage || "",
         scrollHeight: cap.scrollHeight,
         clientHeight: cap.clientHeight,
-        scrollWidth: cap.scrollWidth,
-        clientWidth: cap.clientWidth,
         textLeft: textBox.left,
         textRight: textBox.right,
         textTop: textBox.top,
         textBottom: textBox.bottom,
+        contentLeft: box.left + px("borderLeftWidth") + px("paddingLeft"),
+        contentRight: box.right - px("borderRightWidth") - px("paddingRight"),
+        contentTop: box.top + px("borderTopWidth") + px("paddingTop"),
+        contentBottom: box.bottom - px("borderBottomWidth") - px("paddingBottom"),
         boxLeft: box.left,
-        boxRight: box.right,
-        boxTop: box.top,
-        boxBottom: box.bottom,
-        whiteSpace: style.whiteSpace,
-        fontSize: getComputedStyle(document.getElementById("aaFontValue") || document.body).fontSize
+        boxWidth: box.width,
+        whiteSpace: style.whiteSpace
       };
     })()`;
 
-    await waitFor(measureExpr, "page 1 capsule");
+    const pages = [];
+    pages.push(await waitFor(`(() => {
+      const row = ${measureExpr};
+      return row && Number(row.page) === 1 ? row : null;
+    })()`, "capsule for page 1"));
     for (let page = 2; page <= 15; page += 1) {
       await evaluate(`document.getElementById("next").click()`);
-      const measured = await waitFor(`(() => {
+      pages.push(await waitFor(`(() => {
         const row = ${measureExpr};
         return row && Number(row.page) === ${page} ? row : null;
-      })()`, `capsule for page ${page}`);
-      if (page < 10) continue;
+      })()`, `capsule for page ${page}`));
+    }
+
+    const slop = 0.5;
+    for (const measured of pages) {
+      const page = Number(measured.page);
       assert.equal(measured.whiteSpace, "nowrap", `${measured.text} white-space`);
       assert.match(measured.text, new RegExp(`第\\s*${page}\\s*页`), measured.text);
-      assert.ok(measured.scrollHeight <= measured.clientHeight + 1,
+      assert.ok(measured.scrollHeight <= measured.clientHeight,
         `${measured.text} wraps: scrollHeight ${measured.scrollHeight} > clientHeight ${measured.clientHeight}`);
-      assert.ok(measured.scrollWidth <= measured.clientWidth + 1,
-        `${measured.text} overflows width: scrollWidth ${measured.scrollWidth} > clientWidth ${measured.clientWidth}`);
-      assert.ok(measured.textLeft >= measured.boxLeft - 1 && measured.textRight <= measured.boxRight + 1,
-        `${measured.text} draws outside the capsule horizontally (${measured.textLeft.toFixed(1)}–${measured.textRight.toFixed(1)} vs ${measured.boxLeft.toFixed(1)}–${measured.boxRight.toFixed(1)})`);
-      assert.ok(measured.textTop >= measured.boxTop - 1 && measured.textBottom <= measured.boxBottom + 1,
-        `${measured.text} draws outside the capsule vertically`);
+      assert.ok(measured.textLeft >= measured.contentLeft - slop && measured.textRight <= measured.contentRight + slop,
+        `${measured.text} leaves the content box horizontally (${measured.textLeft.toFixed(2)}–${measured.textRight.toFixed(2)} vs ${measured.contentLeft.toFixed(2)}–${measured.contentRight.toFixed(2)})`);
+      assert.ok(measured.textTop >= measured.contentTop - slop && measured.textBottom <= measured.contentBottom + slop,
+        `${measured.text} leaves the content box vertically (${measured.textTop.toFixed(2)}–${measured.textBottom.toFixed(2)} vs ${measured.contentTop.toFixed(2)}–${measured.contentBottom.toFixed(2)})`);
+    }
+    const width = pages[0].boxWidth;
+    const left = pages[0].boxLeft;
+    for (const measured of pages) {
+      assert.equal(measured.boxWidth, width, `page ${measured.page} capsule width`);
+      assert.equal(measured.boxLeft, left, `page ${measured.page} capsule left`);
     }
   } finally {
-    if (ws) ws.close();
-    if (chrome?.child) chrome.child.kill("SIGKILL");
-    server.close();
-    rmSync(userDataDir, { recursive: true, force: true });
+    await cleanupChrome({ child, server, userDataDir });
   }
 });

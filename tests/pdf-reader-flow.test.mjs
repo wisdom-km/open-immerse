@@ -389,6 +389,7 @@ test("capsule content covers every label, and pad drops to 7 only when 8 does no
   covers(pastLabels, pastContent);
   const pastPlace = placeFor(pastContent);
   assert.ok(pastPlace.capsuleW - 2 * pastPlace.padX + 1e-6 >= Math.max(...pastLabels));
+  assert.ok(pastPlace.start >= 24 && pastPlace.start < 49, `past start ${pastPlace.start}`);
   assert.equal(reserveCapsuleContent([43.688, 46], 44), 46);
   const samples = capsuleSamplePages(27);
   assert.equal(samples.length, 27);
