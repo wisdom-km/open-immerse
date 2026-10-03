@@ -57,9 +57,9 @@
 | | 规格 |
 | --- | --- |
 | 水平 | **居中**于 `.readout` 内容列（Attention 类论文行间式默认居中） |
-| 宽度上限 | 现状不夹到列宽。目标见下一行 |
-| 过宽 | 现状（已上线）分主路径和回退路径。主路径没有墨迹下限，见 `pdf/viewer.js` 的 `matchedFormulaStyle`（约第 1449 行）：按原文栏这块框的高和宽来定。回退路径在主路径定不出尺寸时用 `displayFormulaWidthCss`（`lib/pdf-blocks.js` 约第 534 行）。这一支的宽度按 em 计算墨迹下限，取页宽占比和这条 em 下限里较大的一个，并且不把图缩到墨迹下限以下（同文件第 531–532 行注释："not shrunk below the ink floor"）。下限值来自 `displayFormulaMinEm`（`lib/pdf-formula-size.js` 第 121 行）和 `displayInkMinEm`（`lib/pdf-blocks.js` 第 482–487 行）。回退路径的宽度不夹到列宽，由 `tests/pdf-formula-size.test.mjs` 第 75–76 行锁定。裁图是 `max-width: none`（`pdf/viewer.css` 约第 473–477 行），超出部分在公式框内横向滚动。这是 #72 的实现。右栏纸面的横滚是 PR #90 做的，和公式框内的横滚（#72）是两件事。目标（待实现）：先等比缩小到列宽，但不低于硬门；到了硬门还放不下，就在框内横向滚动（F3-S4，见 `pdf/high-precision/REQUIREMENTS.md` §2.6 术语表）。硬门的数值跟着 F3 尺寸规则走，待定，实现时与 F3 一起定。实现时要改 `tests/pdf-formula-size.test.mjs` 第 75–76 行。不要改成占位来躲过宽 |
-| 垂直空隙 | 目标稿：`margin-block: 12px 16px`（约 **0.8em / 1.05em** @ 15px 正文）；参考 Attention 原页：公式上下约一行呼吸，**不要**叠成两段正文间距。线上是 10px/14px（`pdf/viewer.css` 第 398 行的 `margin: 10px 0 14px`） |
+| 宽度上限 | 主路径已上线：先缩到栏宽，不低于硬门 1.0×（默认 1.4×）。回退路径不夹到列宽。见下一行 |
+| 过宽 | 现状（已上线）分主路径和回退路径。主路径：`pdf/viewer.js` 的 `matchedFormulaStyle` 调用 `readerFormulaStyle`，再调用 `lib/pdf-formula-size.js` 的 `readerFormulaCssSize`。默认 `DISPLAY_INK_PREFER` 1.4×，硬门 `DISPLAY_INK_HARD` 1.0×。先缩到栏宽，到了硬门还放不下，才在公式框内横向滚动（F3-S4，见 `pdf/high-precision/REQUIREMENTS.md` §2.6 术语表）。`tests/pdf-formula-size.test.mjs` 锁定。不要改成占位来躲过宽。回退路径：`matchedFormulaStyle` 定不出尺寸时，`mountDisplayMath` 用 `lib/pdf-blocks.js` 的 `displayFormulaWidthCss`。这一支不缩到栏宽，宽度取页宽占比和 em 墨迹下限里较大的一个。函数注释是 "not shrunk below the ink floor"。下限来自 `displayFormulaMinEm` 和 `displayInkMinEm`。裁图是 `max-width: none`（`.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop`），超出部分在公式框内横向滚动。右栏纸面的横滚是 PR #90 做的，和公式框内的横滚是两件事 |
+| 垂直空隙 | 阅读页（`.reader-flow`）已上线：`margin: var(--oi-reader-display-margin)`，即 `0.875em 0 1.125em`。正文默认字号 16px，所以是 14px / 18px。`.reader-flow` 外，`.oi-pdf-display-math` 才是 `margin: 10px 0 14px`。参考 Attention 原页：公式上下约一行呼吸 |
 | 与邻段 | 上一 `p` 的 `margin-bottom` 与本块上边距 **取大不叠加盲加**（实现可用相邻选择器消重，避免「段尾 14px + 公式上 12px」过空） |
 
 ### 3.2 线框（ASCII）
@@ -75,12 +75,14 @@
 | 下一段正文 …
 ```
 
-### 3.3 Token / CSS（可落地）（目标稿，待实现）
+### 3.3 Token / CSS（可落地）
+
+阅读页上下空隙已上线，见 §3.1。下面贴片里的 `max-width: 100%` 仍是目标稿，待实现。
 
 ```css
 .oi-pdf-display-math {
   display: block;
-  margin: 12px 0 16px;
+  margin: var(--oi-reader-display-margin); /* 阅读页。页外是 10px 0 14px */
   padding: 0;
   text-align: center;
   background: transparent;

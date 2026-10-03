@@ -96,7 +96,7 @@
 | 代号 | 含义 |
 | --- | --- |
 | V1-B1 | 第一层出不来时（矢量或高清重渲染失败）静默退到 png，不加徽章，不算换层 |
-| F3-S4 | 出处 `lib/pdf-blocks.js` 第 531–532 行注释：「if this exceeds the column, the formula scrollport scrolls; the image is not shrunk below the ink floor」。原意是：宽度超过列宽时，公式滚动口横向滚动，不低于墨迹下限。硬门是产品目标，数值待定；现有代码里最接近它的是 ink floor（回退路径） |
+| F3-S4 | 已上线。主路径：`matchedFormulaStyle`（`pdf/viewer.js`）→ `readerFormulaStyle` → `readerFormulaCssSize`（`lib/pdf-formula-size.js`）。默认 1.4×（`DISPLAY_INK_PREFER`），硬门 1.0×（`DISPLAY_INK_HARD`）。先缩到栏宽，放不下才横滚。`tests/pdf-formula-size.test.mjs` 锁定。回退路径：`displayFormulaWidthCss`（`lib/pdf-blocks.js`）。注释仍是 "if this exceeds the column, the formula scrollport scrolls; the image is not shrunk below the ink floor"。这一支不缩到栏宽，横滚时不低于墨迹下限 |
 
 | 层 | 做法 | 优先级 | 可行性 | 何时采用 |
 | --- | --- | --- | --- | --- |
@@ -104,7 +104,7 @@
 | 第二层 | 看图大模型转成 LaTeX，再用 KaTeX 渲染。开关（待实现）在 Aa 面板，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭 | P2，后做 | 中 | 没过阈值、第二层开关开着、核对也通过 |
 | 第三层 | 点击看原文：独立公式用写明位置的占位加小缩略图。文案是目标状态，待实现：有编号「公式 (n) · 原文第 N 页」，没有编号「公式 · 原文第 N 页」，跨页「第 4–5 页」。点击后原文栏跳到原位并画框；没有框时只跳到页顶。原页裁图在原文栏里看；原文区隐藏时临时弹出原文。只有这种占位不把原页裁图嵌在译文里 | P1，先做 | 高 | 上面两支都没采用，且第三层占位开关开着。开关关着就按现状显示 |
 
-**第一层：按原字体、原位置重绘字符（P1，可行性中）。** 目标是把公式字符按原字体、原位置画到右栏。在这做出来之前，现有的 `surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`（约第 978 行）：用 pdf.js 把该区域按更高比例重新渲染，再做成 png；没画成时保留原来的裁图，不加徽章。`withRasterCrop`（约第 1066–1081 行）先从 pageRaster 裁出图并标 `surface="png"`；这块可以重渲染、并且高清重渲染成功时，才换成那张图并标 `surface="redraw"`。`lib/pdf-formula-redraw.js` 的 `redrawFormulaGlyphs` 是从页面光栅上按字形框贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支。第一层内部，高清重渲染画不出来时退成这支 png。这是同一块内容换一种渲染方式，静默回退，不加徽章（V1-B1），不算换层。高清重渲染本质上仍是区域渲染，还不是按原字体逐字矢量重绘。层与层之间只看框的把握。两个开关和分流见本节开头与「分流规则」。画面来自打开的 PDF，所以符合 §1 的「同一套内容」。但前提是框要准，而现在的框准率很低：要认出出版社的数学字体，并修掉两类错误——公式框吞进下一行正文，以及长公式被切成好几块。每个公式还要输出一个把握分数。这个分数用练习集校准：分数说有把握时，结果要真的对。
+**第一层：按原字体、原位置重绘字符（P1，可行性中）。** 目标是把公式字符按原字体、原位置画到右栏。在这做出来之前，现有的 `surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`：用 pdf.js 把该区域按更高比例重新渲染，再做成 png；没画成时保留原来的裁图，不加徽章。`withRasterCrop` 先从 pageRaster 裁出图并标 `surface="png"`；这块可以重渲染、并且高清重渲染成功时，才换成那张图并标 `surface="redraw"`。`lib/pdf-formula-redraw.js` 的 `redrawFormulaGlyphs` 是从页面光栅上按字形框贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支。第一层内部，高清重渲染画不出来时退成这支 png。这是同一块内容换一种渲染方式，静默回退，不加徽章（V1-B1），不算换层。高清重渲染本质上仍是区域渲染，还不是按原字体逐字矢量重绘。层与层之间只看框的把握。两个开关和分流见本节开头与「分流规则」。画面来自打开的 PDF，所以符合 §1 的「同一套内容」。但前提是框要准，而现在的框准率很低：要认出出版社的数学字体，并修掉两类错误——公式框吞进下一行正文，以及长公式被切成好几块。每个公式还要输出一个把握分数。这个分数用练习集校准：分数说有把握时，结果要真的对。
 
 **当前基线（2026-10-02）。** A3 是和预标注单元的元素集合完全一致（精确命中），另外还有平均 Jaccard；定义见 `docs/v1-m1-baseline.md`。下面这组计数不在该文件里。来源：2026-10-02 Anvil 验证报告。练习集 #1–#277 上 main 的 A3 精确命中是 36/258。引用上标过滤（R1）收益为 0。数学字体名单（R2）只加字体名修好 0 条，放宽到全部 Adv* 字体的理论上限是 25/258。DPO 论文第 3–5 页上 main 对 32/79。第一层要靠第一步的识别改进把框准率提上去。按 36/258 这个基线，若在门槛定下来之前就按 1→2→3 把把握不足的公式改成占位，大部分公式会变成占位。因此第三层占位开关默认关闭。
 

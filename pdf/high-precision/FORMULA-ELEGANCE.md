@@ -33,7 +33,7 @@
 
 DOM 仍按 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md)。间距以 [`FORMULA-RIGHT-PANE.md`](./FORMULA-RIGHT-PANE.md) 为准。正文段距约 `0.7em`；紧挨公式或图时，段落下边距与块上边距取较大的一个，不叠成两层。
 
-- 独占公式：上下空隙 `margin: 10px 0 14px` 已上线，水平居中，无描边、无阴影。目标稿：宽度是页宽占比除掉正文列左右边（`pageFraction / 0.83`），纸比左页窄时再向左页对齐，夹在列宽内；修宽后的强期望 ≥ 1.6× 正文，仍矮才 `min-height: 2em`。墨迹硬门的数值待定，见 [FORMULA-RIGHT-PANE](./FORMULA-RIGHT-PANE.md)（`pdf/high-precision/FORMULA-RIGHT-PANE.md`，PDF 右栏 · 公式节奏，下称 FRP）§2「水平」。已上线的主路径和回退路径见 FRP §2「水平」，不把列宽夹取当成主路径或回退路径的现状。白边目标约 6 CSS px 以内。
+- 独占公式：水平居中，无描边、无阴影。阅读页（`.reader-flow`）的上下空隙已上线，用 `var(--oi-reader-display-margin)`（`0.875em 0 1.125em`）。正文默认字号 16px，所以是 14px / 18px。`margin: 10px 0 14px` 只在阅读页外生效。过宽公式的硬门已上线：主路径默认 1.4×，最低 1.0×，先缩到栏宽，放不下才横滚。#63 的 ≥ 1.6× 仍是修宽后的强期望。回退路径不缩到栏宽。细节见 [FORMULA-RIGHT-PANE](./FORMULA-RIGHT-PANE.md)（`pdf/high-precision/FORMULA-RIGHT-PANE.md`，PDF 右栏 · 公式节奏，下称 FRP）§2「水平」。白边目标约 6 CSS px 以内。
 - 行内公式：盒高按墨迹 / inkShare（名义 `1.95em`，目标墨迹 1.25–1.35× 正文，行顶 ~1.8–2.1em），不再用 `1.22em` 盒和 `1.45em` 硬顶。左右 `margin: 0 1px`，最宽 `12em`。裁切失败时的行内文字兜底是目标状态，待实现：「〔公式 · 原文第 N 页〕」。屏幕上现在仍是代码里的「（公式见左栏）」（`lib/pdf-viewer.js`、`lib/pdf-readout.js`，用在 `pdf/viewer.js`）。
 - 图 / 表：`figure.oi-pdf-figure`（下边距 12px）+ `img.oi-pdf-asset-crop`，题注 `figcaption.oi-pdf-caption` 上边距 6px（13px、`var(--oi-text-muted)`）。公式框与图、表、题注不相交。只使用已有 Soft Graphite token，不改 `ui/tokens.css`。
 

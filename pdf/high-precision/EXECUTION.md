@@ -212,7 +212,7 @@ node --test tests/*.test.mjs
 
 完成时必须为真：
 
-- 框的把握分数过阈值的公式用第一层。目标是按原字体、原位置重绘字符。做出来之前，`surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`（约第 978 行）：把该区域高清重新渲染。`withRasterCrop`（约第 1066–1081 行）先从 pageRaster 得到图并标 `surface="png"`，高清重渲染成功才改成 `surface="redraw"`。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支。高清重渲染本质上是区域渲染。
+- 框的把握分数过阈值的公式用第一层。目标是按原字体、原位置重绘字符。做出来之前，`surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`：把该区域高清重新渲染。`withRasterCrop` 先从 pageRaster 得到图并标 `surface="png"`，高清重渲染成功才改成 `surface="redraw"`。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支。高清重渲染本质上是区域渲染。
 - 高清重渲染画不出来退成 png。同一块内容换渲染方式，静默回退，不加徽章（V1-B1），不算换层。
 - 分数用练习集校准：分数说有把握时，结果要真的对。
 - 框的把握过阈值，用第一层。没过阈值、第二层开关（待实现，上线前界面上不显示）开着、核对也通过，才离开这一层去用 KaTeX。否则，第三层开关开着才离开这一层去用占位；关着时这些公式仍按现状显示（第一层的高清重渲染或 png 裁图）。

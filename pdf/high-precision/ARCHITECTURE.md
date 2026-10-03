@@ -14,7 +14,7 @@
 
 ## 1. 页面光栅 pageRaster
 
-这一张图交给划区模型，也是 png 回退那一支的裁图源（pageRaster 裁图，`surface="png"`），以及第三层占位旁的小缩略图来源。第一层已上线的高清重渲染不是从这张光栅裁出来的，也不是 `lib/pdf-formula-redraw.js`：真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`（约第 978 行）。行内那一小段在高清重渲染成功时同样是 redraw，失败时用这张光栅的 png。第一层的画面嵌在译文里。只有第三层占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。目标做法按运行时 1→2→3，换层只看框的把握；第三层占位默认关闭，见 REQUIREMENTS §2.6。换手段时仍以这张图（或原文栏同一页）为验收参照。
+这一张图交给划区模型，也是 png 回退那一支的裁图源（pageRaster 裁图，`surface="png"`），以及第三层占位旁的小缩略图来源。第一层已上线的高清重渲染不是从这张光栅裁出来的，也不是 `lib/pdf-formula-redraw.js`：真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`。行内那一小段在高清重渲染成功时同样是 redraw，失败时用这张光栅的 png。第一层的画面嵌在译文里。只有第三层占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。目标做法按运行时 1→2→3，换层只看框的把握；第三层占位默认关闭，见 REQUIREMENTS §2.6。换手段时仍以这张图（或原文栏同一页）为验收参照。
 
 - 用 pdf.js 把该页画到**离屏 canvas**，比例 `CROP_SCALE = 2`，与原文栏缩放无关。
 - 原点在画布左上，y 向下。`getViewport({ scale: CROP_SCALE })` 已经包含页面旋转。
@@ -139,7 +139,7 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 
 视觉块是 `formula`、`figure`、`table`。进入右栏之前，适配器从这三类对象上删除 OCR 或划区 API 带来的 `latex`、`content`、`html`、`md`、`text`。校验函数发现这些键，删键并继续，不把它们渲染出来。公式块再按运行时 1→2→3 选择节点，换层只看框的把握。现在已上线的高清重渲染（`surface="redraw"`）和 pageRaster 的 png 裁图都算第一层。三层的节点形态：
 
-- 第一层：目标是按原字体、原位置重绘字符。做出来之前，`surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`（约第 978 行）：把该区域高清重新渲染。`withRasterCrop`（约第 1066–1081 行）先从 pageRaster 得到图并标 `surface="png"`，高清重渲染成功才改成 `surface="redraw"`。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支，静默、不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。框的把握过阈值用这一层。UI 以 Loom 规格为准。
+- 第一层：目标是按原字体、原位置重绘字符。做出来之前，`surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`：把该区域高清重新渲染。`withRasterCrop` 先从 pageRaster 得到图并标 `surface="png"`，高清重渲染成功才改成 `surface="redraw"`。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支，静默、不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。框的把握过阈值用这一层。UI 以 Loom 规格为准。
 - 第二层：主展示是 KaTeX，加小记号，点小记号看原图对照。只有没过阈值、Aa 面板里的「用看图模型补全公式」（待实现）开着、并且字符核对通过才出现。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。和第三层占位开关互相独立。`latex`、`latexSource: "vlm"`、`verified: true` 要同时在，规则见 REQUIREMENTS §6。
 - 第三层：独立公式用写明位置的占位加一张小缩略图。只有上面两支都没采用、并且第三层占位开关开着才出现；开关关着就按现状显示。文案是目标状态，待实现：有编号「公式 (n) · 原文第 N 页」，没有编号「公式 · 原文第 N 页」，跨页「第 4–5 页」。点公式本体也跳转原文。没有框时只跳到页顶。只有这种占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。UI 以 Loom 规格为准。
 
