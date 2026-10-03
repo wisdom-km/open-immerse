@@ -37,13 +37,13 @@
 | | 规格 |
 | --- | --- |
 | 容器 | 块级 `figure` / 等价；**仅**独占行公式（无 `inlineOf`） |
-| 水平 | `text-align: center`。现状（已上线）分主路径和回退路径。主路径：`pdf/viewer.js` 的 `matchedFormulaStyle` 调用 `readerFormulaStyle`，再调用 `lib/pdf-formula-size.js` 的 `readerFormulaCssSize`。默认 `DISPLAY_INK_PREFER` 1.4×，硬门 `DISPLAY_INK_HARD` 1.0×。先缩到栏宽，到了硬门还放不下，才在公式框内横向滚动。`tests/pdf-formula-size.test.mjs` 锁定：比栏宽宽时从 1.4× 往下缩，仍高于 1.0× 时先留出取整余量。不要改成占位来躲过宽。回退路径：`matchedFormulaStyle` 定不出尺寸时，`mountDisplayMath` 用 `lib/pdf-blocks.js` 的 `displayFormulaWidthCss`。这一支不缩到栏宽，宽度取页宽占比和 em 墨迹下限里较大的一个。函数注释是 "not shrunk below the ink floor"。下限来自 `displayFormulaMinEm` 和 `displayInkMinEm`。裁图是 `max-width: none`（`.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop`），超出部分在公式框内横向滚动。右栏纸面的横滚是 PR #90 做的，和公式框内的横滚是两件事 |
-| 宽度 | 已上线。主路径见上一行：量测墨迹默认 ≥ **1.4×** `bodyFs`，硬门 ≥ **1.0×** `bodyFs`。先缩到栏宽，到硬门还放不下才横滚。#63 的 ≥ **1.6×** 仍是修宽后的强期望（盒 `2em` × 约 0.8 share；自然到约 3× 且 ≤ **5×** 仍通过）。回退路径不缩到栏宽。它的正文列已经扣过左右 `0.085`，宽度用 `pageFraction / (1 − 2×0.085)`，纸比左页窄时再乘左页宽 / 纸宽，再和 em 墨迹下限取较大的一个。短裁图若实测 share 让墨迹低于 1.4×，只把这一张的 floor 抬到 `1.4 / inkShare`，不先把图拉满整列，也不动 #62 pad。页宽占比不要直接写成正文列的 `%` |
+| 水平 | `text-align: center`。现状（已上线）分主路径和回退路径。主路径：`pdf/viewer.js` 的 `matchedFormulaStyle` 调用 `readerFormulaStyle`，再调用 `lib/pdf-formula-size.js` 的 `readerFormulaCssSize`。公式相对正文的缩放倍数默认 `DISPLAY_INK_PREFER` **1.4×**、最低 `DISPLAY_INK_HARD` **1.0×**。先缩到栏宽，到了最低倍数还放不下，才在公式框内横向滚动。`tests/pdf-formula-size.test.mjs` 锁定：比栏宽宽时从 1.4× 往下缩，缩放倍数仍高于 1.0× 时先留出取整余量。不要改成占位来躲过宽。回退路径：`matchedFormulaStyle` 定不出尺寸时，`mountDisplayMath` 用 `lib/pdf-blocks.js` 的 `displayFormulaWidthCss`。这一支不缩到栏宽，宽度取页宽占比和 em 墨迹下限里较大的一个。函数注释是 "not shrunk below the ink floor"。下限来自 `displayFormulaMinEm` 和 `displayInkMinEm`。裁图是 `max-width: none`（`.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop`），超出部分在公式框内横向滚动。右栏纸面的横滚是 PR #90 做的，和公式框内的横滚是两件事 |
+| 宽度 | 已上线。主路径见上一行：公式相对正文的缩放倍数默认 **1.4×**、最低 **1.0×**。先缩到栏宽，到最低倍数还放不下才横滚。墨迹/正文 ≥ **1.6×** 仍是修宽后的强期望（盒 `2em` × 约 0.8 share；自然到约 3× 且 ≤ **5×** 仍通过）。回退路径不缩到栏宽。它的正文列已经扣过左右 `0.085`，宽度用 `pageFraction / (1 − 2×0.085)`，纸比左页窄时再乘左页宽 / 纸宽，再和 em 墨迹下限取较大的一个。短裁图若实测 share 让墨迹低于 1.4× 正文，只把这一张的 floor 抬到 `1.4 / inkShare`，不先把图拉满整列，也不动 #62 pad。页宽占比不要直接写成正文列的 `%` |
 | 上下空隙 | 阅读页（`.reader-flow`）已上线：`margin: var(--oi-reader-display-margin)`，即 `0.875em 0 1.125em`。正文默认字号 16px，所以是 14px / 18px。`.reader-flow` 外才是 `10px 0 14px`。对标 Attention 原文栏：公式上下约半行到一行呼吸 |
 | 与邻段 | 段 `margin-bottom` 与公式 `margin-top` **取大不叠盲加** |
 | 裁框 | 只盖公式墨迹（含 softmax / 括号 / 等号 / 上下标）；**禁止**并入下方/旁侧 `figure`、`table`、题注 |
 
-阅读页（`.reader-flow .oi-pdf-display-math`）的上下空隙已上线，用 `var(--oi-reader-display-margin)`。定义在 `pdf/reader-tokens.css`，值是 `0.875em 0 1.125em`。正文默认字号 16px，所以是 14px / 18px。阅读页会把 `--oi-pdf-body-fs` 设成这个字号。`margin: 10px 0 14px` 只在 `.reader-flow` 外生效，样式表回退字号仍是 15px。下面贴片里 `img` 的 `max-width: 100%` 和 `min-height: 2em` 仍是目标稿，待实现。现状裁图是 `max-width: none`，见 §2「水平」。
+阅读页（`.reader-flow .oi-pdf-display-math`）的上下空隙已上线，用 `var(--oi-reader-display-margin)`。定义在 `pdf/reader-tokens.css`，值是 `0.875em 0 1.125em`。正文默认字号 16px，所以是 14px / 18px。阅读页会把 `--oi-pdf-body-fs` 设成这个字号。`margin: 10px 0 14px` 只在 `.reader-flow` 外生效，样式表回退字号仍是 15px。下面贴片里 `img` 的 `max-width: 100%`、`min-height: 2em`、`vertical-align: middle` 仍是目标稿，待实现。现状裁图 `.oi-pdf-display-math .oi-pdf-math-crop` 是 `display: block`、`height: auto`、`object-fit: contain`、无描边、无阴影。阅读列（`.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop`）是 `vertical-align: baseline`、`border-radius: 0`、`max-width: none`。见 §2「水平」。
 
 CSS 贴片：
 
@@ -59,11 +59,11 @@ CSS 贴片：
   font-size: var(--oi-pdf-body-fs, 15px); /* 阅读页把变量设成默认 16px */
 }
 .oi-pdf-display-math img {
-  max-width: 100%;
+  max-width: 100%; /* 目标稿。现状是 max-width: none */
   height: auto;
-  min-height: 2em;
+  min-height: 2em; /* 目标稿。现状是 min-height: 0 */
   object-fit: contain;
-  vertical-align: middle;
+  vertical-align: middle; /* 目标稿。现状是 vertical-align: baseline */
   border: none;
   box-shadow: none;
   border-radius: 0; /* 勿圆角卡片感；最多 2px */
@@ -86,22 +86,23 @@ CSS 贴片：
 .oi-pdf-inline-math {
   display: inline-block;
   vertical-align: baseline;
-  margin: 0 1px;
+  margin: 0 0.2em;
   padding: 0;
   line-height: 1;
+  max-width: 100%;
 }
 .oi-pdf-inline-math img {
   display: block;
   height: var(--oi-pdf-inline-crop-em, 1.95em); /* 墨迹目标 ÷ inkShare，不是把 1.22 改成另一个常数 */
   width: auto;
-  max-width: min(100%, 12em);
+  max-width: none;
   object-fit: contain;
   border: none;
   box-shadow: none;
 }
 ```
 
-降级文案是目标状态，待实现：行内文字兜底「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。紧裁加缩放仍超高时宁缺勿砸版。具体 UI 以 Loom 规格为准。
+现状：容器 `.oi-pdf-inline-math` 最宽 `max-width: 100%`，左右 `margin: 0 0.2em`，超宽在框内横滚。裁图 `max-width: none`。裁图宽过栏、墨迹高过 `INLINE_LINE_BOX_EM`（2.2em）、或下标低于 `SCRIPT_INK_MIN_PX`（7px）时，`readerFormulaCssSize` 把这一张升成独立公式。降级文案是目标状态，待实现：行内文字兜底「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。紧裁加缩放仍超高时宁缺勿砸版。具体 UI 以 Loom 规格为准。
 
 ---
 
@@ -142,7 +143,7 @@ CSS 贴片：
 | --- | --- |
 | 独立公式视觉高 | 约为原文栏该式渲染高的 **0.9～1.1×**（通读列内）；勿放大成「海报块」 |
 | 行内公式 | 量测墨迹 **1.25～1.35×** 正文（硬门 ≥ **1.0×**）；盒按 inkShare 反推，名义 **1.95em**（行顶 ~1.8～2.1em）；仍嵌在句中 |
-| 通读列 | 保持 `PDF-RIGHT-PANE`：正文 **15px / 1.7**；公式块间距见 §2–§3，**不要**再给公式加 panel padding |
+| 通读列 | 正文 **16px**，行高 **1.9**（`--oi-reader-font-size`、`--oi-reader-line-height`）；公式块间距见 §2–§3，**不要**再给公式加 panel padding |
 | 白边 | 裁切近白边 ≤ **6 CSS px**；略松保笔画，不松到邻行（精准优先） |
 | 深色底 | 允许纸白底随原件；**禁止**再包一层 elevated/card；描边最多 `1px var(--oi-line)` |
 

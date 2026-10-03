@@ -96,7 +96,7 @@
 | 代号 | 含义 |
 | --- | --- |
 | V1-B1 | 第一层出不来时（矢量或高清重渲染失败）静默退到 png，不加徽章，不算换层 |
-| F3-S4 | 已上线。主路径：`matchedFormulaStyle`（`pdf/viewer.js`）→ `readerFormulaStyle` → `readerFormulaCssSize`（`lib/pdf-formula-size.js`）。默认 1.4×（`DISPLAY_INK_PREFER`），硬门 1.0×（`DISPLAY_INK_HARD`）。先缩到栏宽，放不下才横滚。`tests/pdf-formula-size.test.mjs` 锁定。回退路径：`displayFormulaWidthCss`（`lib/pdf-blocks.js`）。注释仍是 "if this exceeds the column, the formula scrollport scrolls; the image is not shrunk below the ink floor"。这一支不缩到栏宽，横滚时不低于墨迹下限 |
+| F3-S4 | 已上线。主路径：`matchedFormulaStyle`（`pdf/viewer.js`）→ `readerFormulaStyle` → `readerFormulaCssSize`（`lib/pdf-formula-size.js`）。公式相对正文的缩放倍数默认 1.4×（`DISPLAY_INK_PREFER`）、最低 1.0×（`DISPLAY_INK_HARD`）。先缩到栏宽，放不下才横滚。`tests/pdf-formula-size.test.mjs` 锁定。回退路径：`displayFormulaWidthCss`（`lib/pdf-blocks.js`）。注释仍是 "if this exceeds the column, the formula scrollport scrolls; the image is not shrunk below the ink floor"。这一支不缩到栏宽，横滚时不低于墨迹下限 |
 
 | 层 | 做法 | 优先级 | 可行性 | 何时采用 |
 | --- | --- | --- | --- | --- |

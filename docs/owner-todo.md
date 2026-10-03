@@ -82,7 +82,7 @@
 - 2026-10-03：胶囊渲染测试只覆盖 Attention、1440 宽、默认字号，不经扩展、不翻译，用的是 Linux 字体。
 - 2026-10-03：非默认档的起始侧：1440/20 是 29，1100/16 和 1100/20 是 28，都高于底线 24，但低于默认档的 49。刚打开、PDF 还没加载时胶囊不显示，用的是默认宽度，非默认档的版心会多 6px（空栏里看不出来）。
 - 2026-10-03：导出时，含行内公式图片的段落会丢正文。需要单独开 issue。
-- 2026-10-03：#92 合入后公式文档的现状曾经过时，已在 #93 更新。以后改公式代码时要同步这几份：`pdf/high-precision/FORMULA-ELEGANCE.md`、`pdf/high-precision/FORMULA-RIGHT-PANE.md`、`pdf/high-precision/REQUIREMENTS.md`、`pdf/PDF-MD-FORMULA-LAYOUT.md`、`open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md`。
+- 2026-10-03：#92 合入后公式文档的现状曾经过时，已在 #93 更新。以后改公式代码时要同步这几份：`pdf/high-precision/FORMULA-ELEGANCE.md`、`pdf/high-precision/FORMULA-RIGHT-PANE.md`、`pdf/high-precision/REQUIREMENTS.md`、`pdf/high-precision/ARCHITECTURE.md`、`pdf/high-precision/EXECUTION.md`、`pdf/high-precision/STATUS.md`、`pdf/PDF-MD-FORMULA-LAYOUT.md`、`open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md`。
 
 ## 五、复核工具快捷键
 
