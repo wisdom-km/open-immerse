@@ -5,10 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PDF 阅读</title>
   <link rel="stylesheet" href="../ui/tokens.css" />
+  <link rel="preload" href="fonts/OISerifLatin-Regular.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="reader-tokens.css" />
   <link rel="stylesheet" href="./vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="viewer.css" />
 </head>
-<body>
+<body class="oi-reader-app" data-reader-theme="warm">
   <header class="toolbar">
     <div class="title-row">
       <div class="mark" aria-hidden="true"><span></span><span></span></div>
@@ -30,8 +32,34 @@
       <button type="button" id="prev" class="btn-ghost" disabled>上一页</button>
       <p id="pager" class="pager" aria-live="polite">0 / 0</p>
       <button type="button" id="next" class="btn-ghost" disabled>下一页</button>
+      <span class="toolbar-rule" aria-hidden="true"></span>
+      <button type="button" id="aaButton" class="btn-ghost aa-button" aria-haspopup="dialog" aria-expanded="false" aria-controls="aaPanel">Aa</button>
     </div>
   </header>
+  <div id="aaPanel" class="aa-panel oi-reader" data-reader-theme="warm" hidden role="dialog" aria-label="阅读设置">
+    <div class="aa-group">
+      <div class="aa-font-row">
+        <span class="aa-label" id="aaFontLabel">字号</span>
+        <button type="button" id="aaFontDown" class="aa-icon-btn" aria-label="减小字号">−</button>
+        <span id="aaFontValue" class="aa-font-value" aria-live="polite">16px</span>
+        <button type="button" id="aaFontUp" class="aa-icon-btn" aria-label="增大字号">+</button>
+        <button type="button" id="aaFontDefault" class="aa-text-btn">默认</button>
+      </div>
+      <div id="aaFontScale" class="aa-scale" role="radiogroup" aria-labelledby="aaFontLabel"></div>
+    </div>
+    <div class="aa-group">
+      <div class="aa-label" id="aaThemeLabel">背景</div>
+      <div id="aaThemes" class="aa-themes" role="radiogroup" aria-label="阅读背景"></div>
+      <p id="aaFontHint" class="aa-font-hint" hidden>装上思源宋体会自动换成宋体。重启浏览器后生效<a class="aa-font-hint-link" href="https://source.typekit.com/source-han-serif/cn/" target="_blank" rel="noopener noreferrer">如何安装 ↗</a></p>
+    </div>
+    <div class="aa-group">
+      <label class="aa-switch-row" for="aaSingleKey">
+        <span>单键快捷键</span>
+        <input type="checkbox" id="aaSingleKey" class="aa-switch" role="switch" checked />
+      </label>
+      <p class="aa-note">字号快捷键：- / = / 0（浏览器缩放 ⌘− / ⌘+ 不受影响）</p>
+    </div>
+  </div>
   <p id="status" role="status">还没有打开 PDF。</p>
   <div class="workspace">
     <section class="pane-pdf" id="pdfPane" aria-label="PDF">
@@ -43,25 +71,20 @@
       </div>
     </section>
     <aside class="pane-translate" aria-label="译文">
-      <div id="translateScroll" class="pane-translate-scroll">
-        <div id="viewSeg" class="view-seg" hidden role="group" aria-label="译文视图">
-          <button type="button" class="view-seg-btn" data-view="mirror">版式</button>
-          <button type="button" class="view-seg-btn is-on" data-view="readout">通读</button>
+      <div id="reader" class="oi-reader" data-reader-theme="warm">
+        <div id="translateScroll" class="pane-translate-scroll">
+          <div id="capsuleBar" class="rf-capsule-bar">
+            <button type="button" id="pageCapsule" class="rf-page-capsule" hidden></button>
+          </div>
+          <div id="readerFlow" class="reader-flow" tabindex="0"></div>
+          <p id="emptyRead" class="empty-read">点击翻译</p>
+          <p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…</p>
+          <p id="noTextLayerHint" class="m2-stub" hidden>本页没有文字层，无法提取阅读文本。扫描件翻译将在后续版本支持。</p>
         </div>
-        <p id="mirrorHint" class="mirror-hint" hidden>按阅读顺序提取标题与正文，译成 Markdown 通读。公式尽量用 LaTeX；图可略。</p>
-        <div id="mirrorPages" class="mirror-pages" hidden></div>
-        <div id="paperStack" class="paper-stack"></div>
-        <p id="emptyRead" class="empty-read">点击翻译</p>
-        <p id="pendingRead" class="empty-read" hidden>正在翻译，请稍候…</p>
-        <p id="noTextLayerHint" class="m2-stub" hidden>本页没有文字层，无法提取阅读文本。扫描件翻译将在后续版本支持。</p>
-      </div>
-      <div id="mirrorZoomChip" class="zoom-gutter" role="group" aria-label="译文缩放">
-        <button type="button" id="mirrorZoomOut" class="zoom-gutter-btn" disabled>缩小</button>
-        <p id="mirrorZoomLabel" class="zoom-gutter-label">100%</p>
-        <button type="button" id="mirrorZoomIn" class="zoom-gutter-btn" disabled>放大</button>
+        <div id="readerFade" class="rf-fade" aria-hidden="true" hidden></div>
       </div>
     </aside>
-    <div class="split-handle" role="separator" aria-orientation="vertical" aria-label="调整分栏"></div>
+    <div class="split-handle" role="separator" aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0" aria-label="调整分栏"></div>
   </div>
   <script src="./vendor/katex/katex.min.js"></script>
   <script type="module" src="viewer.js"></script>

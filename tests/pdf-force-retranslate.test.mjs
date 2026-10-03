@@ -31,9 +31,9 @@ test("重译本页 is a Soft Graphite secondary button beside 翻译", () => {
   assert.equal(html.includes('id="retranslatePage" class="btn-primary"'), false);
   const rule = css.slice(css.indexOf("#retranslatePage.btn-secondary {"), css.indexOf(".btn-ghost {"));
   assert.match(rule, /background:\s*transparent/);
-  assert.match(rule, /border:\s*1px solid var\(--oi-line\)/);
-  assert.match(rule, /color:\s*var\(--oi-text-muted\)/);
-  assert.match(rule, /background:\s*var\(--oi-accent-subtle\)/);
+  assert.match(rule, /border:\s*1px solid var\(--oi-reader-line\)/);
+  assert.match(rule, /color:\s*var\(--oi-reader-muted\)/);
+  assert.match(rule, /background:\s*var\(--oi-reader-hover\)/);
   assert.equal(/#[0-9a-fA-F]{3,8}/.test(rule), false);
 });
 

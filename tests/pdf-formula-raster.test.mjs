@@ -11,6 +11,7 @@ import {
   assetLayoutCapPx,
   capFormulaRasterScale,
   createFormulaRasterCache,
+  fitSnappedFormulaCss,
   formulaDevicePixels,
   formulaDisplayCssSize,
   formulaInkMeasureOptions,
@@ -377,6 +378,59 @@ test("formula redraw is one device pixel per CSS pixel and does not reuse the pa
   });
   assert.equal(covered.reusePageRaster, true);
   assert.match(viewerSrc, /formulaDevicePixels/);
+});
+
+test("a snapped formula stays inside the column, including a 16:1 crop", () => {
+  const column = 586;
+  const cssWidth = column - 2;
+  const cssHeight = cssWidth / 16;
+  const raw = formulaDevicePixels({
+    cssWidth,
+    cssHeight,
+    pdfWidth: cssWidth,
+    pdfHeight: cssHeight,
+    devicePixelRatio: 1
+  });
+  const box = fitSnappedFormulaCss({
+    cssWidth,
+    cssHeight,
+    columnPx: column,
+    devicePixelRatio: 1
+  });
+  assert.ok(raw.cssWidth > column);
+  assert.ok(box.cssWidth <= column);
+  assert.ok(box.cssHeight < raw.cssHeight);
+  for (const ratio of [1.2, 2, 3, 5, 8, 16, 24]) {
+    for (const width of [400, 456, 466, 520, 560, 586, 694]) {
+      for (const dpr of [1, 1.25, 1.5, 2]) {
+        const fitted = width - 2;
+        const snapped = fitSnappedFormulaCss({
+          cssWidth: fitted,
+          cssHeight: fitted / ratio,
+          columnPx: width,
+          devicePixelRatio: dpr
+        });
+        assert.ok(
+          snapped.cssWidth <= width + 1e-6,
+          `aspect ${ratio} column ${width} dpr ${dpr} width ${snapped.cssWidth}`
+        );
+      }
+    }
+  }
+  const scrolling = fitSnappedFormulaCss({
+    cssWidth: 803,
+    cssHeight: 50,
+    columnPx: 560,
+    devicePixelRatio: 1
+  });
+  assert.ok(scrolling.cssWidth > 560);
+  const refresh = viewerSrc.slice(
+    viewerSrc.indexOf("function refreshMatchedFormulas"),
+    viewerSrc.indexOf("function applyPaperMetrics")
+  );
+  assert.match(refresh, /readerFormulaStyle\(block, paper\.dataset\.page, true, readerColumnPx\(span\)\)/);
+  assert.match(refresh, /readerFormulaStyle\(block, paper\.dataset\.page, false, readerColumnPx\(row\)\)/);
+  assert.match(viewerSrc, /fitSnappedFormulaCss/);
   assert.match(viewerSrc, /block\.label === "formula"/);
   assert.match(viewerSrc, /paintFormulaMask/);
   assert.match(viewerSrc, /function formulaDrawContext/);

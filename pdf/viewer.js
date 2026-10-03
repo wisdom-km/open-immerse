@@ -26,6 +26,7 @@ import {
   createTranslateSession,
   exceedsDragThreshold,
   effectiveScrollbarWidth,
+  measureScrollbarWidth,
   normalizeZoomChipPos,
   pdfExportControlState,
   pdfSourceBasename,
@@ -70,15 +71,14 @@ import {
   readSoftPageFollow
 } from "../lib/pdf-scroll.js";
 import {
-  PDF_PAPER_GUTTER_X,
   pagesInTranslateScope,
+  PDF_PAPER_GUTTER_X,
   basePageBox,
   paperAvailWidth,
   paperCssPx,
-  raisedStackWidth,
   readoutPaperSize
 } from "../lib/pdf-paper.js";
-import { describeBodyFont, mapBodyFontPx } from "../lib/pdf-body-font.js";
+import { describeBodyFont } from "../lib/pdf-body-font.js";
 import {
   PDF_READOUT_COPY,
   extractReadoutBlocks,
@@ -119,11 +119,56 @@ import {
   shouldFetchCloud
 } from "../lib/pdf-layout-client.js";
 import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
-import { INLINE_BODY_HARD_MAX, displayFormulaMinEm, matchedDisplayCssSize } from "../lib/pdf-formula-size.js";
+import {
+  INLINE_BODY_HARD_MAX,
+  READER_SOURCE_BODY_PT,
+  displayFormulaColumnPx,
+  displayFormulaMinEm,
+  formulaScriptPt,
+  readerFormulaCssSize
+} from "../lib/pdf-formula-size.js";
+import {
+  READER_FONT_SIZES,
+  READER_THEME_LABELS,
+  CAPSULE_END_BAND,
+  CAPSULE_END_MIN,
+  CAPSULE_PAD_X,
+  CAPSULE_PAD_X_MIN,
+  CAPSULE_START_BAND_MIN,
+  CAPSULE_START_FLOOR,
+  CAPSULE_START_RELAXED,
+  applyReaderFontAction,
+  capsuleLabel,
+  capsulePlacement,
+  capsuleSamplePages,
+  reserveCapsuleContent,
+  reserveDefaultCapsuleContent,
+  stableCapsulePane,
+  clearFadeScroll,
+  contentPagesForScope,
+  defaultSplitRatio,
+  formulaScrollLeft,
+  indexFormulaScrolls,
+  needsFade,
+  pageAtAnchor,
+  pageBreakLabel,
+  planReaderFlow,
+  precompositeMultiplyPixels,
+  readReaderPrefs,
+  readerFontShortcut,
+  readerImageBlend,
+  readerThemeAriaLabel,
+  splitLayout,
+  themePaperRgb,
+  untranslatedLabel,
+  writeReaderPrefs
+} from "../lib/pdf-reader-flow.js";
+import { canvasMeasure, detectCjkSerif } from "../lib/pdf-reader-cjk.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   assetLayoutCapPx,
   createFormulaRasterCache,
+  fitSnappedFormulaCss,
   formulaDevicePixels,
   formulaRasterCacheKey,
   formulaRasterPlan,
@@ -188,6 +233,8 @@ const readoutSyncGate = createScrollSyncGate();
 let translateScrollTick = 0;
 let viewMode = "readout";
 let mirrorZoom = DEFAULT_ZOOM;
+let readerPrefs = readReaderPrefs(null);
+let readerBlend = readerImageBlend({ supportsMultiply: true, forcedColors: false });
 
 init();
 
@@ -226,7 +273,14 @@ function init() {
   watchFormulaRasterRatio();
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
-  $("paperStack")?.addEventListener("click", onReadoutBlockClick);
+  $("readerFlow")?.addEventListener("click", onReaderFlowClick);
+  $("readerFlow")?.addEventListener("pointerdown", (event) => {
+    const interactive = event.target.closest?.("button, a, input, textarea, select");
+    if (interactive) return;
+    $("readerFlow")?.focus({ preventScroll: true });
+  });
+  $("pageCapsule")?.addEventListener("click", onPageCapsuleClick);
+  bindReaderChrome();
   bindPaperMetrics();
   bindPaneScroll();
   bindPdfScrollSettings();
@@ -278,15 +332,355 @@ function applyPageProgress(message) {
 }
 
 function onKey(event) {
-  if (eventTargetIsField(event.target)) return;
+  if (event.key === "Escape" && closeAaPanel()) {
+    event.preventDefault();
+    return;
+  }
+  const shortcut = readerFontShortcut({
+    key: event.key,
+    metaKey: event.metaKey,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    inField: eventTargetIsField(event.target),
+    editing: Boolean(event.target?.isContentEditable),
+    inReader: focusInReader(event.target),
+    singleKey: readerPrefs.singleKey !== false
+  });
+  if (shortcut) {
+    event.preventDefault();
+    applyReaderFontStep(shortcut);
+    return;
+  }
+  if (eventTargetIsField(event.target) || event.target?.isContentEditable) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "ArrowLeft") goPage(-1);
   if (event.key === "ArrowRight") goPage(1);
+  if (focusInReader(event.target)) return;
   if (event.key === "-" || event.key === "_") setZoom(nextZoom(zoom, -1));
   if (event.key === "+" || event.key === "=") setZoom(nextZoom(zoom, 1));
 }
 
 function eventTargetIsField(target) {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+  const tag = target?.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+    || target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement;
+}
+
+function focusInReader(target) {
+  if (!target || typeof target.closest !== "function") return false;
+  return Boolean(target.closest(".oi-reader, .pane-translate, .aa-panel"));
+}
+
+function detectReaderBlend() {
+  let supportsMultiply = true;
+  let forcedColors = false;
+  try {
+    supportsMultiply = window.CSS?.supports?.("mix-blend-mode", "multiply") !== false;
+  } catch {
+    supportsMultiply = true;
+  }
+  try {
+    forcedColors = window.matchMedia?.("(forced-colors: active)")?.matches === true;
+  } catch {
+    forcedColors = false;
+  }
+  readerBlend = readerImageBlend({ supportsMultiply, forcedColors });
+  return readerBlend;
+}
+
+function readerPaperRgb() {
+  const el = readerRootEl() || $("aaPanel");
+  if (!el || typeof getComputedStyle !== "function") return null;
+  const theme = el.dataset.readerTheme || "warm";
+  const raw = getComputedStyle(el).getPropertyValue(`--oi-reader-${theme}-paper`);
+  return themePaperRgb(raw);
+}
+
+function applyReaderImageBlend(img) {
+  if (!img) return img;
+  const mode = readerBlend || detectReaderBlend();
+  img.dataset.rfBlend = mode;
+  if (mode !== "precomposite") return img;
+  const paper = readerPaperRgb();
+  if (!paper || !img.src) return img;
+  const source = img.src;
+  const image = new Image();
+  image.onload = () => {
+    if (img.dataset.rfBlend !== "precomposite") return;
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth || image.width;
+    canvas.height = image.naturalHeight || image.height;
+    if (!(canvas.width > 0) || !(canvas.height > 0)) return;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return;
+    ctx.drawImage(image, 0, 0);
+    const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    frame.data.set(precompositeMultiplyPixels(frame.data, paper));
+    ctx.putImageData(frame, 0, 0);
+    img.src = canvas.toDataURL("image/png");
+    img.dataset.rfComposited = readerPrefs.theme;
+  };
+  image.src = source;
+  return img;
+}
+
+function commitReaderFont(next) {
+  if (next === readerPrefs.fontSize) return;
+  const anchor = captureReaderAnchor();
+  readerPrefs = { ...readerPrefs, fontSize: next };
+  persistReaderPrefs();
+  applyReaderSurface();
+  renderArticle();
+  layoutCapsule();
+  applyPaperMetrics();
+  restoreReaderAnchor(anchor);
+}
+
+function applyReaderFontStep(action) {
+  commitReaderFont(applyReaderFontAction(readerPrefs.fontSize, action));
+}
+
+function setReaderTheme(theme) {
+  if (theme === readerPrefs.theme) return;
+  readerPrefs = { ...readerPrefs, theme };
+  persistReaderPrefs();
+  applyReaderSurface();
+  if (readerBlend === "precomposite") renderArticle();
+}
+
+function persistReaderPrefs() {
+  try {
+    writeReaderPrefs(localStorage, readerPrefs);
+  } catch {
+    /* private mode */
+  }
+}
+
+function readerThemeRoots() {
+  return [document.body, readerRootEl(), $("aaPanel")].filter(Boolean);
+}
+
+function applyReaderSurface() {
+  const size = `${readerPrefs.fontSize}px`;
+  for (const el of readerThemeRoots()) {
+    el.dataset.readerTheme = readerPrefs.theme;
+    el.style.setProperty("--oi-reader-font-size", size);
+    el.style.setProperty("--oi-pdf-body-fs", size);
+  }
+  syncAaPanel();
+}
+
+const CJK_CACHE_KEY = "oi.reader.cjk";
+
+function applyCjkMode(mode) {
+  for (const el of readerThemeRoots()) el.dataset.readerCjk = mode;
+  const hint = $("aaFontHint");
+  if (hint) hint.hidden = mode !== "sans";
+}
+
+function runCjkDetect() {
+  const mode = detectCjkSerif(canvasMeasure()).serif ? "serif" : "sans";
+  try { sessionStorage.setItem(CJK_CACHE_KEY, mode); } catch { /* private mode */ }
+  applyCjkMode(mode);
+  return mode;
+}
+
+function initCjkMode() {
+  const forced = new URLSearchParams(location.search).get("cjk");
+  if (forced === "sans" || forced === "serif") {
+    applyCjkMode(forced);
+    return;
+  }
+  let cached = null;
+  try { cached = sessionStorage.getItem(CJK_CACHE_KEY); } catch { /* private mode */ }
+  if (cached === "serif" || cached === "sans") applyCjkMode(cached);
+  else runCjkDetect();
+  document.fonts?.addEventListener?.("loadingdone", () => {
+    const prev = document.body.dataset.readerCjk;
+    if (runCjkDetect() === prev) return;
+    const anchor = captureReaderAnchor();
+    layoutCapsule();
+    restoreReaderAnchor(anchor);
+  });
+}
+
+function loadReaderPrefs() {
+  try {
+    readerPrefs = readReaderPrefs(localStorage);
+  } catch {
+    readerPrefs = readReaderPrefs(null);
+  }
+  detectReaderBlend();
+  applyReaderSurface();
+  applyStoredSplitRatio();
+}
+
+function syncAaPanel() {
+  const value = $("aaFontValue");
+  if (value) value.textContent = `${readerPrefs.fontSize}px`;
+  const down = $("aaFontDown");
+  const up = $("aaFontUp");
+  const reset = $("aaFontDefault");
+  if (down) down.disabled = readerPrefs.fontSize <= READER_FONT_SIZES[0];
+  if (up) up.disabled = readerPrefs.fontSize >= READER_FONT_SIZES[READER_FONT_SIZES.length - 1];
+  if (reset) reset.disabled = readerPrefs.fontSize === 16;
+  document.querySelectorAll("#aaFontScale [data-size]").forEach((tick) => {
+    const on = Number(tick.dataset.size) === readerPrefs.fontSize;
+    tick.setAttribute("aria-checked", on ? "true" : "false");
+    tick.tabIndex = on ? 0 : -1;
+  });
+  document.querySelectorAll("#aaThemes [data-theme]").forEach((swatch) => {
+    const on = swatch.dataset.theme === readerPrefs.theme;
+    swatch.setAttribute("aria-checked", on ? "true" : "false");
+    swatch.tabIndex = on ? 0 : -1;
+    const mark = swatch.querySelector(".aa-swatch-check");
+    if (mark) mark.hidden = !on;
+  });
+  const single = $("aaSingleKey");
+  if (single) single.checked = readerPrefs.singleKey !== false;
+}
+
+function buildAaScale() {
+  const scale = $("aaFontScale");
+  if (!scale || scale.childElementCount) return;
+  for (const size of READER_FONT_SIZES) {
+    const tick = document.createElement("button");
+    tick.type = "button";
+    tick.className = "aa-tick";
+    tick.dataset.size = String(size);
+    tick.setAttribute("role", "radio");
+    tick.setAttribute("aria-checked", size === readerPrefs.fontSize ? "true" : "false");
+    tick.tabIndex = size === readerPrefs.fontSize ? 0 : -1;
+    const mark = document.createElement("span");
+    mark.className = "aa-tick-mark";
+    mark.setAttribute("aria-hidden", "true");
+    const num = document.createElement("span");
+    num.textContent = String(size);
+    tick.append(mark, num);
+    if (size === 16) {
+      const note = document.createElement("span");
+      note.className = "aa-tick-note";
+      note.textContent = "默认";
+      tick.append(note);
+    }
+    scale.append(tick);
+  }
+}
+
+function buildAaThemes() {
+  const group = $("aaThemes");
+  if (!group || group.childElementCount) return;
+  for (const theme of ["warm", "white", "sepia", "green"]) {
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = "aa-swatch";
+    swatch.dataset.theme = theme;
+    swatch.setAttribute("role", "radio");
+    swatch.setAttribute("aria-label", readerThemeAriaLabel(theme));
+    swatch.setAttribute("aria-checked", "false");
+    const chip = document.createElement("span");
+    chip.className = "aa-swatch-chip";
+    chip.textContent = "文";
+    const check = document.createElement("span");
+    check.className = "aa-swatch-check";
+    check.textContent = "✓";
+    check.hidden = true;
+    chip.append(check);
+    const name = document.createElement("span");
+    name.textContent = READER_THEME_LABELS[theme];
+    swatch.append(chip, name);
+    group.append(swatch);
+  }
+}
+
+function openAaPanel() {
+  const panel = $("aaPanel");
+  const button = $("aaButton");
+  if (!panel) return;
+  panel.hidden = false;
+  if (button) button.setAttribute("aria-expanded", "true");
+  syncAaPanel();
+}
+
+function closeAaPanel() {
+  const panel = $("aaPanel");
+  if (!panel || panel.hidden) return false;
+  panel.hidden = true;
+  const button = $("aaButton");
+  if (button) {
+    button.setAttribute("aria-expanded", "false");
+    button.focus();
+  }
+  return true;
+}
+
+function onAaFontScaleKey(event) {
+  const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+  if (!keys.includes(event.key)) return;
+  event.preventDefault();
+  const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+  const index = READER_FONT_SIZES.indexOf(readerPrefs.fontSize);
+  const next = READER_FONT_SIZES[Math.min(READER_FONT_SIZES.length - 1, Math.max(0, index + delta))];
+  commitReaderFont(next);
+  $("aaFontScale")?.querySelector(`[data-size="${next}"]`)?.focus();
+}
+
+function onAaThemeKey(event) {
+  const order = ["warm", "white", "sepia", "green"];
+  const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+  if (!keys.includes(event.key)) return;
+  event.preventDefault();
+  const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+  const index = Math.max(0, order.indexOf(readerPrefs.theme));
+  const next = order[Math.min(order.length - 1, Math.max(0, index + delta))];
+  setReaderTheme(next);
+  $("aaThemes")?.querySelector(`[data-theme="${next}"]`)?.focus();
+}
+
+function bindReaderChrome() {
+  buildAaScale();
+  buildAaThemes();
+  initCjkMode();
+  loadReaderPrefs();
+  $("aaButton")?.addEventListener("click", () => {
+    const panel = $("aaPanel");
+    if (!panel) return;
+    if (panel.hidden) openAaPanel();
+    else closeAaPanel();
+  });
+  $("aaFontDown")?.addEventListener("click", () => applyReaderFontStep("decrease"));
+  $("aaFontUp")?.addEventListener("click", () => applyReaderFontStep("increase"));
+  $("aaFontDefault")?.addEventListener("click", () => {
+    commitReaderFont(16);
+  });
+  $("aaFontScale")?.addEventListener("click", (event) => {
+    const tick = event.target.closest?.("[data-size]");
+    if (!tick) return;
+    const size = Number(tick.dataset.size);
+    if (!READER_FONT_SIZES.includes(size)) return;
+    commitReaderFont(size);
+  });
+  $("aaFontScale")?.addEventListener("keydown", onAaFontScaleKey);
+  $("aaThemes")?.addEventListener("click", (event) => {
+    const swatch = event.target.closest?.("[data-theme]");
+    if (!swatch) return;
+    setReaderTheme(swatch.dataset.theme);
+  });
+  $("aaThemes")?.addEventListener("keydown", onAaThemeKey);
+  $("aaSingleKey")?.addEventListener("change", () => {
+    readerPrefs = { ...readerPrefs, singleKey: $("aaSingleKey").checked };
+    persistReaderPrefs();
+  });
+  document.addEventListener("click", (event) => {
+    const panel = $("aaPanel");
+    if (!panel || panel.hidden) return;
+    const target = event.target;
+    if (panel.contains(target) || $("aaButton")?.contains(target)) return;
+    panel.hidden = true;
+    $("aaButton")?.setAttribute("aria-expanded", "false");
+  });
 }
 
 function bindPaneScroll() {
@@ -341,6 +735,22 @@ function bindSplitResize() {
   const handle = document.querySelector(".split-handle");
   if (!workspace || !handle) return;
   handle.addEventListener("pointerdown", (event) => startSplitDrag(event, workspace, handle));
+  handle.addEventListener("dblclick", () => resetSplit(workspace));
+  handle.addEventListener("keydown", (event) => onSplitKey(event, workspace));
+  window.addEventListener("resize", () => syncSplitAria(workspace));
+}
+
+/** Apply the stored fraction after prefs load. CSS minmax keeps the minimum widths. */
+function applyStoredSplitRatio() {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
+  const ratio = readerPrefs.splitRatio == null ? defaultSplitRatio(width) : readerPrefs.splitRatio;
+  workspace.style.setProperty("--oi-split-ratio", String(ratio));
+  const handle = workspace.querySelector(".split-handle");
+  if (handle && ratio > 0 && ratio < 1) {
+    handle.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+  }
 }
 
 function startSplitDrag(event, workspace, handle) {
@@ -354,6 +764,7 @@ function startSplitDrag(event, workspace, handle) {
     handle.removeEventListener("pointermove", onMove);
     handle.removeEventListener("pointerup", onUp);
     handle.removeEventListener("pointercancel", onUp);
+    persistSplitRatio(workspace);
   };
   handle.addEventListener("pointermove", onMove);
   handle.addEventListener("pointerup", onUp);
@@ -361,15 +772,92 @@ function startSplitDrag(event, workspace, handle) {
   applySplit(workspace, event.clientX);
 }
 
-function applySplit(workspace, clientX) {
+function paintSplitRatio(workspace, ratio) {
   const rect = workspace.getBoundingClientRect();
-  if (rect.width <= 0) return;
-  const pct = Math.min(80, Math.max(20, ((clientX - rect.left) / rect.width) * 100));
-  workspace.style.setProperty("--oi-split", `${pct}%`);
-  workspace.style.gridTemplateColumns = `${pct}% ${100 - pct}%`;
+  const width = rect.width || window.innerWidth || 1200;
+  const requested = Number(ratio);
+  const safe = Number.isFinite(requested) ? requested : defaultSplitRatio(width);
+  if (!(rect.width > 0)) {
+    const held = requested > 0 && requested < 1 ? requested : defaultSplitRatio(width);
+    workspace.style.setProperty("--oi-split-ratio", String(Math.round(held * 10000) / 10000));
+    return;
+  }
+  const layout = splitLayout({ width, ratio: safe, splitW: splitColumnWidth(workspace) });
+  workspace.style.setProperty("--oi-split-ratio", String(layout.ratio));
+  const handle = workspace.querySelector(".split-handle");
+  if (handle) handle.setAttribute("aria-valuenow", String(Math.round(layout.ratio * 100)));
+}
+
+function persistSplitRatio(workspace) {
+  const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+  if (!Number.isFinite(ratio)) return;
+  readerPrefs = { ...readerPrefs, splitRatio: ratio };
+  persistReaderPrefs();
+}
+
+function resetSplit(workspace) {
+  const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
+  paintSplitRatio(workspace, defaultSplitRatio(width));
+  persistSplitRatio(workspace);
   syncZoomChip();
   syncMirrorZoomChip();
   applyPaperMetrics();
+  layoutCapsule({ keepAnchor: true });
+}
+
+function syncSplitAria(workspace) {
+  const handle = workspace.querySelector(".split-handle");
+  const pdf = workspace.querySelector(".pane-pdf");
+  if (!handle || !pdf) return;
+  const splitW = splitColumnWidth(workspace);
+  const available = Math.max(1, workspace.clientWidth - splitW);
+  const ratio = pdf.getBoundingClientRect().width / available;
+  if (ratio > 0 && ratio < 1) handle.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+}
+
+function onSplitKey(event, workspace) {
+  const width = workspace.getBoundingClientRect().width;
+  if (width < 900) return;
+  const splitW = splitColumnWidth(workspace);
+  const available = Math.max(1, width - splitW);
+  const current = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio")) || defaultSplitRatio(width);
+  const layout = splitLayout({ width, ratio: current, splitW });
+  let next = null;
+  if (event.key === "ArrowLeft") next = (layout.source - (event.shiftKey ? 64 : 16)) / available;
+  else if (event.key === "ArrowRight") next = (layout.source + (event.shiftKey ? 64 : 16)) / available;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = 1;
+  else if (event.key === "Enter") {
+    event.preventDefault();
+    resetSplit(workspace);
+    return;
+  } else return;
+  event.preventDefault();
+  paintSplitRatio(workspace, next);
+  persistSplitRatio(workspace);
+  syncZoomChip();
+  syncMirrorZoomChip();
+  applyPaperMetrics();
+  layoutCapsule({ keepAnchor: true });
+}
+
+function splitColumnWidth(workspace) {
+  const raw = getComputedStyle(workspace).getPropertyValue("--oi-reader-split-w");
+  const width = parseFloat(raw);
+  return Number.isFinite(width) && width > 0 ? width : 8;
+}
+
+function applySplit(workspace, clientX) {
+  const rect = workspace.getBoundingClientRect();
+  if (rect.width < 900) return;
+  const splitW = splitColumnWidth(workspace);
+  const available = Math.max(1, rect.width - splitW);
+  const pointer = clientX - rect.left - splitW / 2;
+  paintSplitRatio(workspace, pointer / available);
+  syncZoomChip();
+  syncMirrorZoomChip();
+  applyPaperMetrics();
+  layoutCapsule({ keepAnchor: true });
 }
 
 function initZoomChip() {
@@ -959,14 +1447,18 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
   const scroll = translateScrollRoot();
   const avail = paperAvailWidth(scroll?.clientWidth || 0);
   const paper = readoutPaperSize({ leftWidth, leftHeight, availWidth: avail });
+  const layout = getPageLayout(pageNumber);
   return {
     pageWidth: unitW,
     pageHeight: unitH,
     leftWidth,
     paperWidth: paper.width > 0 ? paper.width : leftWidth,
     paperHeight: paper.heightBase > 0 ? paper.heightBase : leftHeight,
-    mirrorZoom: Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1,
-    devicePixelRatio: Math.max(1, Number(window.devicePixelRatio) || 1)
+    mirrorZoom: 1,
+    devicePixelRatio: Math.max(1, Number(window.devicePixelRatio) || 1),
+    readerFontPx: readerPrefs.fontSize,
+    sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
+    columnPx: readerColumnPx()
   };
 }
 
@@ -1100,6 +1592,7 @@ function cropImage(block) {
   if (block?.surface === "redraw" || block?.surface === "png") {
     img.setAttribute("data-oi-surface", block.surface);
   }
+  applyReaderImageBlend(img);
   return img;
 }
 
@@ -1203,12 +1696,10 @@ function fillBlockText(node, block, layout) {
       span.dataset.label = "formula";
       if (node.dataset.page) span.dataset.page = node.dataset.page;
     }
-    // Stay on the line. A tall paint box used to promote these to a display
-    // row, which then clamped at 2.5em. Height follows the left bbox; without
-    // one it stops near 1.4× body.
     const matched = matchedFormulaStyle(formula, layout?.page ?? node.dataset.page);
     if (matched) {
       span.classList.add("is-matched");
+      if (matched.raised) span.classList.add("is-raised");
       span.style.setProperty("--oi-formula-h", matched.height);
       span.style.setProperty("--oi-formula-ar", matched.aspect);
     } else {
@@ -1217,7 +1708,14 @@ function fillBlockText(node, block, layout) {
     }
     if (img) {
       img.className = "oi-pdf-math-crop";
-      span.append(img);
+      const keep = Number(formula?.eqKeep);
+      if (keep > 0 && keep < 1) {
+        const clip = document.createElement("span");
+        clip.className = "oi-pdf-math-clip";
+        span.style.setProperty("--oi-eq-keep", String(keep));
+        clip.append(img);
+        span.append(clip);
+      } else span.append(img);
     } else span.textContent = PDF_COPY.formulaFallback;
     node.append(span);
   });
@@ -1375,8 +1873,16 @@ function syncReadoutEmpty(hasArticle) {
   $("pendingRead").hidden = copy !== PDF_COPY.translatingWait;
 }
 
+function readerRootEl() {
+  return $("reader");
+}
+
+function readerFlowEl() {
+  return $("readerFlow");
+}
+
 function paperStackEl() {
-  return $("paperStack");
+  return readerFlowEl();
 }
 
 function scopeShowsPage(page) {
@@ -1433,110 +1939,119 @@ function paperHeightFor(pageNumber) {
   return paper.heightBase > 0 ? paper.heightBase : leftH;
 }
 
-function snappedFormulaBox(matched) {
+function snappedFormulaBox(matched, columnPx) {
   const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
-  const zoom = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
-  return formulaDevicePixels({
+  const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
+  return fitSnappedFormulaCss({
     cssWidth: matched.cssWidth,
     cssHeight: matched.cssHeight,
-    pdfWidth: matched.cssWidth,
-    pdfHeight: matched.cssHeight,
-    mirrorZoom: zoom,
+    columnPx,
+    mirrorZoom: mirror,
     devicePixelRatio: dpr
   });
 }
 
-function matchedFormulaStyle(block, page) {
+function readerColumnPx(row) {
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  let flowPx = flow?.clientWidth || 0;
+  if (!(flowPx > 0) && pane) {
+    const measure = parseFloat(pane.style.getPropertyValue("--rf-measure") || "");
+    flowPx = measure > 0 ? measure : (pane.clientWidth || 0);
+  }
+  const host = row?.classList?.contains("oi-pdf-math-row") ? row : null;
+  const num = host?.querySelector(":scope > .oi-pdf-eq-num");
+  const eqNumPx = num ? (num.getBoundingClientRect().width || num.offsetWidth || 0) : 0;
+  let gapPx = 0;
+  if (eqNumPx > 0 && host) {
+    const gap = parseFloat(getComputedStyle(host).columnGap);
+    gapPx = Number.isFinite(gap) ? gap : 0;
+  }
+  return displayFormulaColumnPx({ flowPx, eqNumPx, gapPx });
+}
+
+function readerFormulaStyle(block, page, inline, columnPx) {
   const layout = getPageLayout(page);
-  const paperHeight = paperHeightFor(page);
-  const matched = matchedDisplayCssSize({
-    bbox: block?.bbox,
-    pageWidth: layout?.pageWidth,
-    pageHeight: layout?.pageHeight,
-    paperHeight
+  const bbox = block?.bbox;
+  const pageW = Number(layout?.pageWidth) || 0;
+  const pageH = Number(layout?.pageHeight) || 0;
+  if (!Array.isArray(bbox) || bbox.length < 4 || !(pageW > 0) || !(pageH > 0)) return null;
+  const fracW = Number(bbox[2]) - Number(bbox[0]);
+  const fracH = Number(bbox[3]) - Number(bbox[1]);
+  if (!(fracW > 0) || !(fracH > 0)) return null;
+  const inkPt = fracH * pageH;
+  const column = columnPx > 0 ? columnPx : readerColumnPx();
+  const sized = readerFormulaCssSize({
+    bodyFontPx: readerPrefs.fontSize,
+    sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
+    inkPt,
+    widthPt: fracW * pageW,
+    scriptPt: formulaScriptPt(block, inkPt),
+    columnPx: column,
+    inline
   });
-  if (!matched) return null;
-  const snapped = snappedFormulaBox(matched) || matched;
-  const height = snapped.cssHeight;
-  const width = snapped.cssWidth > 0 ? snapped.cssWidth : matched.cssWidth;
+  if (!sized) return null;
+  const limit = inline && !sized.raised ? 0 : (sized.scrolls ? 0 : column);
+  const snapped = snappedFormulaBox(sized, limit) || sized;
+  const height = snapped.cssHeight || sized.cssHeight;
+  const width = snapped.cssWidth > 0 ? snapped.cssWidth : sized.cssWidth;
+  if (!(height > 0)) return null;
   return {
     height: paperCssPx(height),
-    aspect: String(Math.round((width / height) * 10000) / 10000)
+    aspect: width > 0 ? String(Math.round((width / height) * 10000) / 10000) : "1",
+    raised: Boolean(sized.raised)
   };
 }
 
-function applyBodyFont(paper, paperWidth) {
-  const layout = getPageLayout(paper.dataset.page);
-  const mapped = mapBodyFontPx({
-    bodyHeight: layout?.bodyItemHeight,
-    pageWidth: layout?.pageWidth,
-    paperWidth,
-    trusted: layout?.bodyFontTrusted === true
-  });
-  if (mapped.source === "text-layer") paper.style.setProperty("--oi-pdf-body-fs", paperCssPx(mapped.px));
-  else paper.style.removeProperty("--oi-pdf-body-fs");
+function matchedFormulaStyle(block, page) {
+  const inline = block?.display === false || Boolean(block?.inlineOf);
+  return readerFormulaStyle(block, page, inline, readerColumnPx());
 }
 
-function refreshMatchedFormulas(paper, paperHeight) {
+function refreshMatchedFormulas(paper) {
   const layout = getPageLayout(paper.dataset.page);
   paper.querySelectorAll(".oi-pdf-math-row.is-matched").forEach((row) => {
     const host = row.closest("[data-block-id]");
     const block = (layout?.blocks || []).find((item) => item.id === host?.dataset?.blockId);
-    const matched = matchedDisplayCssSize({
-      bbox: block?.bbox,
-      pageWidth: layout?.pageWidth,
-      pageHeight: layout?.pageHeight,
-      paperHeight
-    });
+    const matched = readerFormulaStyle(block, paper.dataset.page, false, readerColumnPx(row));
     if (!matched) return;
-    const snapped = snappedFormulaBox(matched);
-    row.style.setProperty("--oi-formula-h", paperCssPx(snapped?.cssHeight || matched.cssHeight));
-    if (snapped?.cssWidth > 0 && snapped.cssHeight > 0) {
-      row.style.setProperty("--oi-formula-ar", String(Math.round((snapped.cssWidth / snapped.cssHeight) * 10000) / 10000));
-    }
+    row.style.setProperty("--oi-formula-h", matched.height);
+    row.style.setProperty("--oi-formula-ar", matched.aspect);
   });
   paper.querySelectorAll(".oi-pdf-inline-math.is-matched").forEach((span) => {
     const block = (layout?.blocks || []).find((item) => item.id === span.dataset.blockId);
-    const matched = matchedDisplayCssSize({
-      bbox: block?.bbox,
-      pageWidth: layout?.pageWidth,
-      pageHeight: layout?.pageHeight,
-      paperHeight
-    });
+    const matched = readerFormulaStyle(block, paper.dataset.page, true, readerColumnPx(span));
     if (!matched) return;
-    const snapped = snappedFormulaBox(matched);
-    span.style.setProperty("--oi-formula-h", paperCssPx(snapped?.cssHeight || matched.cssHeight));
+    span.style.setProperty("--oi-formula-h", matched.height);
+    span.style.setProperty("--oi-formula-ar", matched.aspect);
+    span.classList.toggle("is-raised", matched.raised);
   });
 }
 
 function applyPaperMetrics() {
-  const stack = paperStackEl();
-  const scroll = translateScrollRoot();
-  if (!stack || !scroll) return;
-  const avail = paperAvailWidth(scroll.clientWidth, PDF_PAPER_GUTTER_X);
-  let widest = 0;
-  stack.querySelectorAll(".readout-paper").forEach((paper) => {
-    const left = leftBaseBox(paper.dataset.page);
-    if (!left) return;
-    const size = readoutPaperSize({
-      leftWidth: left.width,
-      leftHeight: left.height,
-      availWidth: avail
-    });
-    if (!(size.width > 0)) return;
-    if (size.width > widest) widest = size.width;
-    paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
-    paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
-    paper.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
-    applyBodyFont(paper, size.width);
-    refreshMatchedFormulas(paper, size.heightBase);
+  const flow = readerFlowEl();
+  if (!flow) return;
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => {
+    const left = leftBaseBox(slot.dataset.page);
+    if (left?.width > 0) slot.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
+    refreshMatchedFormulas(slot);
   });
-  stack.style.setProperty("--oi-pdf-stack-w", paperCssPx(widest));
   refreshFormulaCropsForDisplay();
 }
 
 function bindPaperMetrics() {
-  const watch = () => applyPaperMetrics();
+  let pass = 0;
+  const watch = () => {
+    const token = ++pass;
+    layoutCapsule({ keepAnchor: true });
+    applyPaperMetrics();
+    updateReaderFade();
+    requestAnimationFrame(() => {
+      if (token !== pass) return;
+      applyPaperMetrics();
+      updateReaderFade();
+    });
+  };
   if (typeof ResizeObserver === "function") {
     const observer = new ResizeObserver(watch);
     const scroll = translateScrollRoot();
@@ -1547,42 +2062,19 @@ function bindPaperMetrics() {
   window.addEventListener("resize", watch);
 }
 
-function raiseStackWidth(nextWidth) {
-  const stack = paperStackEl();
-  if (!stack) return;
-  const current = parseFloat(stack.style.getPropertyValue("--oi-pdf-stack-w"));
-  stack.style.setProperty("--oi-pdf-stack-w", paperCssPx(raisedStackWidth(current, nextWidth)));
-}
-
 function ensurePaper(page) {
-  const stack = paperStackEl();
-  if (!stack || page == null || page === "") return null;
+  const flow = readerFlowEl();
+  if (!flow || page == null || page === "") return null;
   const key = String(page);
-  let paper = stack.querySelector(`.readout-paper[data-page="${key}"]`);
-  if (!paper) {
-    paper = document.createElement("article");
-    paper.className = "readout-paper";
-    paper.dataset.page = key;
-    const type = document.createElement("div");
-    type.className = "readout-type";
-    const readout = document.createElement("div");
-    readout.className = "readout md-readout";
-    type.append(readout);
-    paper.append(type);
-    stack.append(paper);
-    const left = leftBaseBox(key);
-    const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0, PDF_PAPER_GUTTER_X);
-    const size = left
-      ? readoutPaperSize({ leftWidth: left.width, leftHeight: left.height, availWidth: avail })
-      : null;
-    if (size?.width > 0) {
-      paper.style.setProperty("--oi-pdf-paper-w", paperCssPx(size.width));
-      paper.style.setProperty("--oi-pdf-paper-h-base", paperCssPx(size.heightBase));
-      paper.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
-      raiseStackWidth(size.width);
-    }
+  let slot = flow.querySelector(`:scope > .rf-page[data-page="${key}"]`);
+  if (!slot) {
+    slot = document.createElement("div");
+    slot.className = "rf-page readout md-readout";
+    slot.dataset.page = key;
+    slot.dataset.srcPage = key;
+    flow.append(slot);
   }
-  return paper.querySelector(".readout");
+  return slot;
 }
 
 function renderStoredArticle(blocks) {
@@ -1627,23 +2119,54 @@ function renderStoredArticle(blocks) {
   }
 }
 
+function captureFormulaScrolls(root) {
+  const entries = [];
+  if (!root) return indexFormulaScrolls(entries);
+  root.querySelectorAll(".oi-pdf-math-scroll, .oi-pdf-inline-math.is-raised").forEach((scroll) => {
+    const host = scroll.closest("[data-block-id]") || scroll;
+    entries.push({
+      page: host.dataset.page || host.closest("[data-src-page]")?.dataset.srcPage || "",
+      id: host.dataset.blockId || "",
+      left: scroll.scrollLeft
+    });
+  });
+  return indexFormulaScrolls(entries);
+}
+
+function restoreFormulaScrolls(root, saved) {
+  if (!root || !saved?.size) return;
+  const apply = () => {
+    root.querySelectorAll(".oi-pdf-math-scroll, .oi-pdf-inline-math.is-raised").forEach((scroll) => {
+      const host = scroll.closest("[data-block-id]") || scroll;
+      const page = host.dataset.page || host.closest("[data-src-page]")?.dataset.srcPage || "";
+      const left = formulaScrollLeft(saved, page, host.dataset.blockId || "");
+      if (left > 0 && scroll.scrollLeft !== left) scroll.scrollLeft = left;
+    });
+  };
+  apply();
+  requestAnimationFrame(() => {
+    apply();
+    root.querySelectorAll(".oi-pdf-math-scroll img, .oi-pdf-inline-math.is-raised img").forEach((img) => {
+      if (!img.complete) img.addEventListener("load", apply, { once: true });
+    });
+  });
+}
+
 function renderArticle() {
   const pane = translateScrollRoot();
   const keep = pane ? pane.scrollTop : 0;
   const keepLeft = pane ? pane.scrollLeft : 0;
+  const formulaScrolls = captureFormulaScrolls(readerFlowEl());
   const stack = paperStackEl();
-  if ($("mirrorPages")) $("mirrorPages").replaceChildren();
-  if (stack) {
-    stack.replaceChildren();
-    stack.style.setProperty("--oi-pdf-stack-w", "0px");
-  }
+  if (stack) stack.replaceChildren();
   if (libraryArticle?.length && scopeShowsPage(1)) {
     renderStoredArticle(libraryArticle);
     applyViewMode();
+    finalizeReaderFlow();
     syncReadoutEmpty(true);
-    applyPaperMetrics();
     if (pane) pane.scrollTop = keep;
     if (pane) pane.scrollLeft = keepLeft;
+    restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
     return;
   }
   const pages = pagesInTranslateScope(
@@ -1659,8 +2182,10 @@ function renderArticle() {
     if (showsBlockReadout(layout) && scopeShowsPage(n)) blockPages.push(layout);
   }
   if (!pages.length && !blockPages.length) {
+    finalizeReaderFlow();
     syncReadoutEmpty(false);
     updateTranslateControls();
+    if (pane) pane.scrollTop = keep;
     return;
   }
   if (blockPages.length) {
@@ -1691,19 +2216,338 @@ function renderArticle() {
       );
     });
   });
-  stack?.querySelectorAll(".readout-paper").forEach((paper) => {
-    if (!paper.querySelector(".readout")?.childNodes.length) paper.remove();
-  });
-  if (!stack?.querySelector(".readout-paper")) {
-    syncReadoutEmpty(false);
+  const hasContent = finalizeReaderFlow();
+  syncReadoutEmpty(hasContent);
+  if (!hasContent) {
     updateTranslateControls();
+    if (pane) pane.scrollTop = keep;
     return;
   }
-  syncReadoutEmpty(true);
-  applyPaperMetrics();
   if (pane) pane.scrollTop = keep;
   if (pane) pane.scrollLeft = keepLeft;
+  restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
   updateTranslateControls();
+}
+
+function stampReaderPage(slot) {
+  const page = String(slot.dataset.page || slot.dataset.srcPage || "");
+  slot.dataset.srcPage = page;
+  slot.querySelectorAll(":scope > *").forEach((node) => {
+    node.dataset.srcPage = page;
+    if (!node.dataset.page) node.dataset.page = page;
+    const tag = node.tagName;
+    const block = tag === "P" || tag === "H1" || tag === "H2" || tag === "H3" || tag === "H4"
+      || tag === "FIGURE" || node.classList.contains("oi-pdf-authors")
+      || node.classList.contains("oi-pdf-footnotes");
+    if (block) node.classList.add("rf-block");
+  });
+}
+
+function makePageBreak(page) {
+  const el = document.createElement("div");
+  el.className = "rf-pagebreak";
+  el.dataset.srcPage = String(page);
+  const label = document.createElement("span");
+  label.textContent = pageBreakLabel(page);
+  const before = document.createElement("span");
+  const after = document.createElement("span");
+  before.className = "rf-pagebreak-rule";
+  after.className = "rf-pagebreak-rule";
+  before.setAttribute("aria-hidden", "true");
+  after.setAttribute("aria-hidden", "true");
+  el.append(before, label, after);
+  return el;
+}
+
+function makeUntranslated(page) {
+  const el = document.createElement("div");
+  el.className = "rf-untranslated";
+  el.dataset.srcPage = String(page);
+  const label = document.createElement("span");
+  label.textContent = untranslatedLabel(page);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "rf-untranslated-btn";
+  btn.dataset.action = "translate-page";
+  btn.dataset.srcPage = String(page);
+  btn.textContent = pdfTranslateBusy(session) ? "排队中" : "翻译本页";
+  btn.disabled = pdfTranslateBusy(session);
+  el.append(label, btn);
+  return el;
+}
+
+function readerMeasurePad() {
+  const width = window.innerWidth || 0;
+  if (width < 600) return 16;
+  if (width < 900) return 20;
+  if (width < 1200) return 28;
+  return 40;
+}
+
+function capsuleBarHeight() {
+  const raw = getComputedStyle(document.body).getPropertyValue("--oi-reader-capsule-bar-h");
+  const height = parseFloat(raw);
+  return Number.isFinite(height) && height > 0 ? height : 44;
+}
+
+function capsuleAnchorY(pane) {
+  const paneRect = pane.getBoundingClientRect();
+  const bar = pane.dataset.capsuleMode === "bar" ? capsuleBarHeight() : 0;
+  return paneRect.top + bar + (paneRect.height - bar) * 0.3;
+}
+
+function anchorBlock(pane) {
+  const flow = readerFlowEl();
+  if (!pane || !flow) return null;
+  const blocks = [...flow.querySelectorAll(".rf-block[data-src-page]")];
+  if (!blocks.length) return null;
+  const line = capsuleAnchorY(pane);
+  const page = pageAtAnchor(blocks.map((el) => {
+    const box = el.getBoundingClientRect();
+    return { page: Number(el.dataset.srcPage), top: box.top, bottom: box.bottom };
+  }), line);
+  if (!page) return null;
+  return blocks.find((el) => Number(el.dataset.srcPage) === page && el.getBoundingClientRect().bottom >= line)
+    || blocks.find((el) => Number(el.dataset.srcPage) === page)
+    || null;
+}
+
+function captureReaderAnchor() {
+  const block = anchorBlock(translateScrollRoot());
+  if (!block) return null;
+  return { page: block.dataset.srcPage || "", id: block.dataset.blockId || "" };
+}
+
+function restoreReaderAnchor(token) {
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  if (!pane || !flow || !token) return;
+  const esc = globalThis.CSS?.escape || ((value) => String(value).replace(/"/g, '\\"'));
+  const node = token.id
+    ? flow.querySelector(`[data-block-id="${esc(token.id)}"]`)
+    : flow.querySelector(`.rf-block[data-src-page="${esc(token.page)}"]`);
+  if (!node) return;
+  const paneRect = pane.getBoundingClientRect();
+  const line = capsuleAnchorY(pane);
+  pane.scrollTop += node.getBoundingClientRect().top - line;
+  updateReaderFade();
+}
+
+let cachedScrollbarWidth = null;
+
+function classicScrollbarWidth() {
+  if (cachedScrollbarWidth != null) return cachedScrollbarWidth;
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;top:-9999px;width:100px;height:100px;overflow:scroll;visibility:hidden;";
+  document.documentElement.append(probe);
+  cachedScrollbarWidth = Math.max(0, probe.offsetWidth - probe.clientWidth);
+  probe.remove();
+  return cachedScrollbarWidth;
+}
+
+function capsuleLabelWidths(maxPage) {
+  const probe = document.createElement("span");
+  probe.className = "rf-capsule-probe";
+  const capsule = $("pageCapsule");
+  if (capsule) {
+    const style = getComputedStyle(capsule);
+    probe.style.font = style.font;
+    probe.style.letterSpacing = style.letterSpacing;
+  }
+  probe.style.fontVariantNumeric = "tabular-nums";
+  probe.style.whiteSpace = "nowrap";
+  probe.style.padding = "0";
+  const padX = readerTokenPx("--oi-reader-capsule-pad-x", CAPSULE_PAD_X);
+  const padXMin = readerTokenPx("--oi-reader-capsule-pad-x-min", CAPSULE_PAD_X_MIN);
+  document.body.append(probe);
+  const measure = (text) => {
+    probe.textContent = text;
+    const box = probe.getBoundingClientRect();
+    return box.width > 0 ? box.width : probe.offsetWidth;
+  };
+  const digitWidths = {};
+  if (maxPage > 120) {
+    for (const digit of "0123456789") digitWidths[digit] = measure(digit);
+  }
+  const pages = capsuleSamplePages(maxPage, maxPage > 120 ? digitWidths : null);
+  const shortWidths = [];
+  const fullWidths = [];
+  for (const page of pages) {
+    shortWidths.push(measure(capsuleLabel(page, { short: true })));
+    fullWidths.push(measure(capsuleLabel(page)));
+  }
+  probe.remove();
+  const measured = (list) => {
+    const widths = list.filter((n) => n > 0);
+    return widths.length ? widths : [1];
+  };
+  return {
+    shortWidths: measured(shortWidths),
+    fullWidths: measured(fullWidths),
+    padX,
+    padXMin
+  };
+}
+
+function readerTokenPx(name, fallback) {
+  const value = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function layoutCapsule({ keepAnchor = false } = {}) {
+  const pane = translateScrollRoot();
+  if (!pane || pane.clientWidth <= 0) return;
+  const had = pane.style.getPropertyValue("--rf-measure");
+  const before = keepAnchor && had ? anchorBlock(pane) : null;
+  const maxPage = Math.max(1, Number(pdfDoc?.numPages) || 0);
+  const narrow = (window.innerWidth || 0) < 900;
+  const box = stableCapsulePane({
+    client: pane.clientWidth,
+    scrollbar: measureScrollbarWidth(pane),
+    gutter: narrow ? 0 : classicScrollbarWidth()
+  });
+  const widths = capsuleLabelWidths(maxPage);
+  const fontPx = readerPrefs.fontSize;
+  const measurePad = readerMeasurePad();
+  const column = box.paneW + (box.scrollbar > 0 ? box.scrollbar : 0);
+  const want = Math.min(36 * fontPx, column - 2 * measurePad);
+  const defaultFull = !narrow && fontPx === 16 && measurePad === 40 && Math.abs(want - 576) < 1e-6;
+  const shortContent = defaultFull
+    ? reserveDefaultCapsuleContent(widths.shortWidths, {
+      visible: box.paneW,
+      startMin: maxPage >= 100 ? CAPSULE_START_RELAXED : CAPSULE_START_BAND_MIN
+    })
+    : reserveCapsuleContent(widths.shortWidths);
+  const fullContent = reserveCapsuleContent(widths.fullWidths);
+  const place = capsulePlacement({
+    paneW: box.paneW,
+    scrollbar: box.scrollbar,
+    pad: measurePad,
+    fontPx,
+    fullW: fullContent + 2 * widths.padX,
+    shortW: shortContent + 2 * widths.padX,
+    shortWMin: shortContent + 2 * widths.padXMin,
+    padX: widths.padX,
+    padXMin: widths.padXMin,
+    maxPage,
+    minEnd: readerTokenPx("--oi-reader-capsule-end-min", CAPSULE_END_MIN),
+    endBand: readerTokenPx("--oi-reader-capsule-end-floor", CAPSULE_END_BAND),
+    startFloor: CAPSULE_START_FLOOR,
+    forceBar: (window.innerWidth || 0) < 900
+  });
+  const prev = `${pane.dataset.capsuleMode}|${pane.dataset.capsuleLabel}|${had}|${pane.style.getPropertyValue("--rf-start")}`;
+  pane.style.setProperty("--rf-measure", `${place.measure}px`);
+  pane.style.setProperty("--rf-start", place.start == null ? "auto" : `${place.start}px`);
+  pane.style.setProperty("--rf-capsule-end", `${Number.isFinite(place.end) ? place.end : 12}px`);
+  pane.style.setProperty("--rf-capsule-w", `${place.capsuleW}px`);
+  pane.style.setProperty("--rf-capsule-pad-x", `${place.padX}px`);
+  pane.dataset.capsuleMode = place.mode;
+  pane.dataset.capsuleLabel = place.label;
+  const next = `${place.mode}|${place.label}|${place.measure}px|${place.start == null ? "auto" : `${place.start}px`}`;
+  if (before && prev !== next) {
+    const line = capsuleAnchorY(pane);
+    pane.scrollTop += before.getBoundingClientRect().top - line;
+  }
+  updatePageCapsule();
+  updateReaderFade();
+}
+
+function updateReaderFade() {
+  const pane = translateScrollRoot();
+  const fade = $("readerFade");
+  if (!pane || !fade) return;
+  fade.hidden = !needsFade(pane.scrollTop, pane.clientHeight, pane.scrollHeight);
+  const scrollbar = pane.offsetHeight - pane.clientHeight;
+  fade.style.bottom = scrollbar > 0 ? `${scrollbar}px` : "0px";
+}
+
+function finalizeReaderFlow() {
+  const flow = readerFlowEl();
+  if (!flow) return false;
+  const slots = new Map();
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => {
+    if (!slot.childNodes.length) {
+      slot.remove();
+      return;
+    }
+    slots.set(Number(slot.dataset.page), slot);
+  });
+  const slotMax = slots.size ? Math.max(...slots.keys()) : 0;
+  const total = Math.max(Number(pdfDoc?.numPages) || 0, slotMax);
+  const wanted = new Set(contentPagesForScope({
+    scope: currentScope(),
+    currentPage: pageNum,
+    pagesWithContent: [...slots.keys()]
+  }));
+  for (const [page, slot] of slots) {
+    if (!wanted.has(page)) {
+      slot.remove();
+      slots.delete(page);
+    }
+  }
+  const plan = planReaderFlow({ pageCount: total, contentPages: [...wanted] });
+  const frag = document.createDocumentFragment();
+  for (const item of plan) {
+    if (item.kind === "break") frag.append(makePageBreak(item.page));
+    else if (item.kind === "untranslated") frag.append(makeUntranslated(item.page));
+    else if (slots.get(item.page)) frag.append(slots.get(item.page));
+  }
+  flow.replaceChildren(frag);
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => stampReaderPage(slot));
+  layoutCapsule();
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => refreshMatchedFormulas(slot));
+  return wanted.size > 0;
+}
+
+function updatePageCapsule() {
+  const cap = $("pageCapsule");
+  const flow = readerFlowEl();
+  const pane = translateScrollRoot();
+  if (!cap) return;
+  const blocks = flow ? [...flow.querySelectorAll(".rf-block[data-src-page]")] : [];
+  if (!blocks.length || !pane) {
+    cap.hidden = true;
+    return;
+  }
+  const line = capsuleAnchorY(pane);
+  const entries = blocks.map((el) => {
+    const box = el.getBoundingClientRect();
+    return { page: Number(el.dataset.srcPage), top: box.top, bottom: box.bottom };
+  });
+  const page = pageAtAnchor(entries, line);
+  if (!page) {
+    cap.hidden = true;
+    return;
+  }
+  cap.hidden = false;
+  const short = pane.dataset.capsuleLabel === "short";
+  cap.textContent = capsuleLabel(page, { short });
+  cap.setAttribute("aria-label", capsuleLabel(page));
+  cap.dataset.srcPage = String(page);
+}
+
+function onPageCapsuleClick() {
+  const page = Number($("pageCapsule")?.dataset.srcPage);
+  if (!Number.isFinite(page) || page < 1) return;
+  if (page !== pageNum) {
+    pageNum = page;
+    updatePager();
+  }
+  syncPdfToPage(page);
+}
+
+function onReaderFlowClick(event) {
+  const btn = event.target.closest?.("[data-action='translate-page']");
+  if (btn && !btn.disabled) {
+    const page = Number(btn.dataset.srcPage);
+    if (Number.isFinite(page) && page >= 1) {
+      pageNum = page;
+      updatePager();
+      loadCurrentPageText().then(() => translateCurrentPage());
+    }
+    return;
+  }
+  onReadoutBlockClick(event);
 }
 
 function applyViewMode() {
@@ -1761,6 +2605,8 @@ async function exportReadout(kind) {
 }
 
 function onTranslateScroll() {
+  updatePageCapsule();
+  updateReaderFade();
   if (!pdfDoc) return;
   if (syncOwner.ignores("readout")) return;
   takeDriver("readout");
@@ -1773,15 +2619,26 @@ function onTranslateScroll() {
       if (generation !== followGeneration || syncOwner.owner !== "readout") return;
       const pane = translateScrollRoot();
       if (!pane) return;
-      const rects = [...pane.querySelectorAll(".readout-paper[data-page]")].map((el) => {
+      const rects = [...pane.querySelectorAll(".rf-block[data-src-page]")].map((el) => {
         const box = el.getBoundingClientRect();
-        return { page: Number(el.dataset.page), top: box.top, bottom: box.bottom };
+        return { page: Number(el.dataset.srcPage), top: box.top, bottom: box.bottom };
       });
-      if (!rects.length) return;
+      const shown = Number($("pageCapsule")?.dataset.srcPage);
+      if (!rects.length) {
+        if (shown >= 1 && shown !== pageNum) {
+          pageNum = shown;
+          updatePager();
+        }
+        return;
+      }
       const paneRect = pane.getBoundingClientRect();
       const next = pageFromViewport(rects, paneRect.top, paneRect.bottom);
-      if (next === pageNum) return;
       const fromPage = pageNum;
+      if (shown >= 1 && shown !== pageNum) {
+        pageNum = shown;
+        updatePager();
+      }
+      if (next === fromPage) return;
       const plan = planPaneFollow({
         softPageFollow,
         owner: syncOwner.owner,
@@ -1815,9 +2672,18 @@ function writeAnchorScroll(pane, node) {
   const paneRect = pane.getBoundingClientRect();
   const nodeRect = node.getBoundingClientRect();
   if (!shouldSyncReadout(nodeRect.top, paneRect.top)) return false;
-  const top = alignScrollTop(pane, node);
+  let top = alignScrollTop(pane, node);
   if (!Number.isFinite(top)) return false;
+  if (pane === translateScrollRoot()) {
+    top = clearFadeScroll({
+      wantTop: top,
+      paneHeight: pane.clientHeight,
+      blockHeight: nodeRect.height + 12,
+      blockTopInPane: nodeRect.top - paneRect.top + pane.scrollTop
+    });
+  }
   pane.scrollTop = top;
+  updateReaderFade();
   return true;
 }
 
@@ -1828,7 +2694,7 @@ function syncPdfToPage(page) {
 
 function syncReadoutToPage(page) {
   const pane = translateScrollRoot();
-  const node = paperStackEl()?.querySelector(`.readout-paper${readoutPageSelector(page)}`);
+  const node = readerFlowEl()?.querySelector(`.rf-block[data-src-page="${page}"], .rf-untranslated[data-src-page="${page}"]`);
   return writeAnchorScroll(pane, node);
 }
 
@@ -3011,7 +3877,7 @@ function formulaCropPlanKeyNow() {
   const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
   const left = Number(zoom) > 0 ? Number(zoom) : 1;
   const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0);
-  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}`;
+  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}|${readerPrefs.fontSize}`;
 }
 
 function noteFormulaCropPlan(layout) {

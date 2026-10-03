@@ -4,9 +4,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CROP_SCALE, DISPLAY_BODY_HARD_MAX, displayFormulaWidthCss } from "../lib/pdf-blocks.js";
-import { FORMULA_CROP_PAD } from "../lib/pdf-text-layer.js";
+import { FORMULA_CROP_PAD, equationKeepFraction } from "../lib/pdf-text-layer.js";
 import {
   INLINE_SIDE_GAP_EM,
+  FORMULA_FIT_SLACK,
   SCRIPT_INK_MIN_PX,
   SCRIPT_INK_TARGET_PX,
   SCRIPT_SHARE_DEFAULT,
@@ -20,6 +21,11 @@ import {
   INLINE_BODY_HARD_MAX,
   inlineFormulaCssSize,
   inlinePaintBox,
+  displayFormulaColumnPx,
+  readerFormulaCssSize,
+  INLINE_CROP_K,
+  DISPLAY_INK_PREFER,
+  DISPLAY_INK_HARD,
   inlinePromotesToDisplay,
   scriptInkPx,
   scriptMinEm,
@@ -123,6 +129,225 @@ test("inline formulas stay on the bbox and cap at 1.4 body without one", () => {
   assert.match(css, /\.oi-pdf-inline-math\.is-matched:has\(\.oi-pdf-math-crop\)\s*\{[^}]*display:\s*inline-block/s);
   assert.match(css, /\.oi-pdf-inline-math\.is-matched \.oi-pdf-math-crop\s*\{[^}]*height:\s*var\(--oi-formula-h\)/s);
   assert.match(css, /\.oi-pdf-inline-math\s*\{[^}]*display:\s*inline-block/s);
+});
+
+test("reader formula size follows the font step and raises a 14px subscript", () => {
+  const eq = readerFormulaCssSize({
+    bodyFontPx: 16,
+    sourceBodyPt: 10,
+    inkPt: 62 / 2.24,
+    widthPt: 173,
+    columnPx: 800
+  });
+  assert.equal(eq.k, DISPLAY_INK_PREFER);
+  assert.ok(Math.abs(eq.cssHeight - 62) < 0.05);
+  assert.ok(Math.abs(eq.cssWidth - 173 * 2.24) < 0.5);
+  assert.ok(eq.inkPx >= 16);
+  const larger = readerFormulaCssSize({
+    bodyFontPx: 20,
+    sourceBodyPt: 10,
+    inkPt: 62 / 2.24,
+    widthPt: 173,
+    columnPx: 800
+  });
+  assert.ok(Math.abs(larger.cssHeight / eq.cssHeight - 20 / 16) < 0.01);
+  const cramped = readerFormulaCssSize({
+    bodyFontPx: 16,
+    sourceBodyPt: 10,
+    inkPt: 10,
+    widthPt: 400,
+    columnPx: 200
+  });
+  assert.ok(cramped.k >= DISPLAY_INK_HARD);
+  assert.ok(cramped.k < DISPLAY_INK_PREFER);
+  assert.equal(cramped.scrolls, true);
+  assert.ok(cramped.inkPx >= 16 - 1e-6);
+  const attention = { inkPt: 13.98, scriptPt: 3.54, widthPt: 40, sourceBodyPt: 10, inline: true, columnPx: 800 };
+  for (const font of [15, 16, 17, 18, 20]) {
+    const box = readerFormulaCssSize({ ...attention, bodyFontPx: font });
+    assert.equal(box.k, INLINE_CROP_K);
+    assert.equal(box.raised, false);
+    assert.ok(Math.abs(box.cssHeight - 13.98 * (font / 10) * INLINE_CROP_K) < 0.2);
+  }
+  const at16 = readerFormulaCssSize({ ...attention, bodyFontPx: 16 });
+  const at20 = readerFormulaCssSize({ ...attention, bodyFontPx: 20 });
+  assert.ok(Math.abs(at16.inkPx - 30.2) < 0.15);
+  assert.ok(Math.abs(at16.scriptPx - 7.65) < 0.1);
+  assert.ok(at16.cssHeight <= 35.2 + 0.05);
+  assert.ok(at20.cssHeight > at16.cssHeight);
+  const at14 = readerFormulaCssSize({ ...attention, bodyFontPx: 14 });
+  assert.equal(at14.raised, true);
+  assert.equal(at14.k, 1.45);
+  assert.ok(Math.abs(at14.inkPx - 28.4) < 0.15);
+  const tall = readerFormulaCssSize({
+    bodyFontPx: 14,
+    sourceBodyPt: 10,
+    inkPt: 20,
+    widthPt: 30,
+    inline: true
+  });
+  assert.equal(tall.raised, true);
+});
+
+test("inline promotion ignores the font step and never scales a staying crop below k", () => {
+  const sizeSrc = readFileSync(join(root, "lib/pdf-formula-size.js"), "utf8");
+  const body = sizeSrc.slice(
+    sizeSrc.indexOf("export function readerFormulaCssSize"),
+    sizeSrc.indexOf("function inlineCropRaises")
+  );
+  assert.doesNotMatch(body, /font\s*<=\s*14/);
+  assert.doesNotMatch(body, /font\s*<\s*15/);
+  const inlineBranch = body.slice(body.indexOf("if (inline && !raise)"), body.indexOf("const prefer"));
+  assert.match(inlineBranch, /k:\s*INLINE_CROP_K/);
+  assert.doesNotMatch(inlineBranch, /DISPLAY_INK_HARD|column \/|fit/);
+  const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
+  assert.doesNotMatch(
+    css,
+    /\.oi-pdf-inline-math\.is-matched \.oi-pdf-math-crop\s*\{[^}]*max-height:\s*var\(--oi-reader-inline-line-max\)/s
+  );
+  assert.doesNotMatch(
+    css,
+    /\.oi-pdf-inline-math\.is-matched:has\(\.oi-pdf-math-crop\)\s*\{[^}]*overflow:\s*hidden/s
+  );
+  assert.match(
+    css,
+    /\.oi-pdf-inline-math\.is-matched:has\(\.oi-pdf-math-crop\)\s*\{[^}]*(vertical-align|margin-top)/s
+  );
+  for (const font of [14, 15, 16, 17, 18, 20]) {
+    const tall = readerFormulaCssSize({
+      bodyFontPx: font,
+      sourceBodyPt: 10,
+      inkPt: 22.22,
+      widthPt: 40,
+      columnPx: 800,
+      inline: true
+    });
+    assert.equal(tall.raised, true, `font ${font} should raise a 3em crop`);
+    assert.ok(tall.k >= DISPLAY_INK_HARD);
+    const tinyScript = readerFormulaCssSize({
+      bodyFontPx: font,
+      sourceBodyPt: 10,
+      inkPt: 13.98,
+      scriptPt: 3.54,
+      widthPt: 20,
+      columnPx: 800,
+      inline: true
+    });
+    const scriptAtK = 3.54 * (font / 10) * INLINE_CROP_K;
+    if (scriptAtK < 7) assert.equal(tinyScript.raised, true);
+    else {
+      assert.equal(tinyScript.raised, false);
+      assert.equal(tinyScript.k, INLINE_CROP_K);
+    }
+  }
+  const wide = readerFormulaCssSize({
+    bodyFontPx: 20,
+    sourceBodyPt: 10,
+    inkPt: 12,
+    widthPt: 230,
+    columnPx: 586,
+    inline: true
+  });
+  assert.equal(wide.raised, true);
+  assert.ok(wide.cssWidth <= 586 + 0.6);
+  assert.ok(wide.k >= DISPLAY_INK_HARD);
+  const stay = readerFormulaCssSize({
+    bodyFontPx: 16,
+    sourceBodyPt: 10,
+    inkPt: 13.98,
+    scriptPt: 3.54,
+    widthPt: 200,
+    columnPx: 80,
+    inline: true
+  });
+  assert.equal(stay.raised, true);
+  assert.notEqual(stay.k, INLINE_CROP_K * 0.73);
+});
+
+test("a display formula wider than the column shrinks from 1.4× before it scrolls", () => {
+  const widthPt = 543 / (1.4 * 1.4);
+  for (const [font, column] of [[14, 481], [16, 520], [20, 560]]) {
+    const open = readerFormulaCssSize({
+      bodyFontPx: font,
+      sourceBodyPt: 10,
+      inkPt: 40,
+      widthPt,
+      columnPx: 2000
+    });
+    assert.equal(open.k, DISPLAY_INK_PREFER);
+    assert.equal(open.scrolls, false);
+    const fitted = readerFormulaCssSize({
+      bodyFontPx: font,
+      sourceBodyPt: 10,
+      inkPt: 40,
+      widthPt,
+      columnPx: column
+    });
+    assert.ok(fitted.k < DISPLAY_INK_PREFER);
+    assert.ok(fitted.k >= DISPLAY_INK_HARD);
+    assert.ok(fitted.cssWidth <= column + 0.6);
+    assert.equal(fitted.scrolls, false);
+  }
+  const overflow = readerFormulaCssSize({
+    bodyFontPx: 20,
+    sourceBodyPt: 10,
+    inkPt: 40,
+    widthPt,
+    columnPx: 400
+  });
+  assert.equal(overflow.k, DISPLAY_INK_HARD);
+  assert.equal(overflow.scrolls, true);
+  assert.ok(overflow.cssWidth > 400);
+});
+
+test("a display formula still above 1.0× fits the live box with rounding slack", () => {
+  assert.equal(FORMULA_FIT_SLACK, 2);
+  const column = 466;
+  const widthPt = 470 / (DISPLAY_INK_PREFER * 1.6);
+  const fitted = readerFormulaCssSize({
+    bodyFontPx: 16,
+    sourceBodyPt: 10,
+    inkPt: 40,
+    widthPt,
+    columnPx: column
+  });
+  assert.ok(fitted.k > DISPLAY_INK_HARD);
+  assert.ok(fitted.cssWidth <= column - FORMULA_FIT_SLACK + 0.05);
+  assert.equal(fitted.scrolls, false);
+  assert.equal(displayFormulaColumnPx({ flowPx: 490, eqNumPx: 20, gapPx: 4 }), 466);
+  assert.equal(displayFormulaColumnPx({ flowPx: 456 }), 456);
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const columnFn = viewer.slice(viewer.indexOf("function readerColumnPx"), viewer.indexOf("function readerFormulaStyle"));
+  assert.match(columnFn, /displayFormulaColumnPx/);
+  assert.doesNotMatch(columnFn, /oi-pdf-math-scroll/);
+  const watch = viewer.slice(viewer.indexOf("function bindPaperMetrics"), viewer.indexOf("function ensurePaper"));
+  assert.match(watch, /requestAnimationFrame/);
+  assert.match(watch, /applyPaperMetrics\(\)/);
+});
+
+test("a display formula clip crops the trailing equation number", () => {
+  const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
+  const start = css.indexOf(".oi-pdf-math-row.is-matched .oi-pdf-math-clip");
+  const rule = css.slice(start, css.indexOf(".oi-pdf-eq-num", start));
+  assert.ok(rule.includes(".oi-pdf-math-row.is-matched .oi-pdf-math-clip"));
+  assert.match(rule, /\.oi-pdf-inline-math\.is-matched(?:\.is-raised)? \.oi-pdf-math-clip/);
+  assert.match(rule, /overflow:\s*hidden/);
+  assert.match(rule, /--oi-eq-keep/);
+  assert.doesNotMatch(rule, /overflow:\s*visible/);
+  const cropW = 552.5;
+  const numberLeft = 523.2;
+  const keep = equationKeepFraction(0, cropW, numberLeft);
+  assert.ok(keep > 0.4 && keep < 0.98);
+  const kept = cropW * keep;
+  assert.ok(kept <= numberLeft);
+  assert.ok(numberLeft - kept < 0.1);
+  const text = readFileSync(join(root, "lib/pdf-text-layer.js"), "utf8");
+  const meta = text.slice(text.indexOf("function formulaPaintMeta"), text.indexOf("function formulaSeedBoxes"));
+  assert.match(meta, /equationKeepFraction/);
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const fill = viewer.slice(viewer.indexOf("function fillBlockText"), viewer.indexOf("function unitsForLayout"));
+  assert.match(fill, /oi-pdf-math-clip/);
+  assert.match(fill, /eqKeep/);
 });
 
 test("F3-S6 side gap is the locked 0.2em and freezes stay put", () => {

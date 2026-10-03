@@ -430,12 +430,12 @@ test("viewer defaults to Markdown readout and does not wire bbox mirror pages", 
   assert.match(src, /onTranslateScroll/);
   assert.match(src, /textLayerToBlocks/);
   assert.match(src, /cropBlockImage/);
-  assert.match(html, /id="mirrorPages"[^>]*class="mirror-pages"[^>]*hidden/);
-  assert.match(html, /id="paperStack"[^>]*class="paper-stack"/);
+  assert.doesNotMatch(html, /id="mirrorPages"/);
+  assert.match(html, /id="readerFlow"[^>]*class="reader-flow"/);
   assert.equal(html.includes('class="readout mirror-pages"'), false);
   const workspaceHtml = html.slice(html.indexOf('class="pane-translate"'), html.indexOf("split-handle"));
-  assert.ok(workspaceHtml.indexOf('id="viewSeg"') < workspaceHtml.indexOf('id="mirrorPages"'));
-  assert.ok(workspaceHtml.indexOf('id="mirrorPages"') < workspaceHtml.indexOf('id="paperStack"'));
+  assert.doesNotMatch(workspaceHtml, /id="viewSeg"/);
+  assert.match(workspaceHtml, /id="readerFlow"/);
   const toolbar = html.slice(html.indexOf('class="toolbar"'), html.indexOf('class="workspace"'));
   assert.equal(toolbar.includes("通读"), false);
   assert.equal(toolbar.includes("版式"), false);
@@ -445,7 +445,8 @@ test("viewer defaults to Markdown readout and does not wire bbox mirror pages", 
   assert.match(html, /id="exportMd"/);
   assert.match(html, /id="exportPdf"/);
   assert.match(html, /id="zoomChip"/);
-  assert.match(html, /id="mirrorZoomChip"/);
+  assert.doesNotMatch(html, /id="mirrorZoomChip"/);
+  assert.match(html, /id="aaButton"/);
   assert.match(html, /class="split-handle"/);
   assert.match(css, /\.zoom-gutter\s*\{/);
   assert.match(css, /\.split-handle\s*\{/);

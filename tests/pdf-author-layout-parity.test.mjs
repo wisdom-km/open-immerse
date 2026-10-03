@@ -79,7 +79,7 @@ test("a hard 140px floor cannot place four tracks in the letter measure", () => 
   const floor = 140;
   const gap = 12;
   assert.equal(Math.floor((content + gap) / (floor + gap)), 3);
-  assert.match(css, /\.readout-paper \.oi-pdf-author-row\s*\{[^}]*display:\s*flex/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-author-row\s*\{[^}]*display:\s*flex/s);
 });
 
 test("rendered Attention grid is 4|3|1 with a compact name-affiliation-email stack", () => {
@@ -132,20 +132,20 @@ test("seven and nine authors keep the same row breaks without a flat string", ()
 });
 
 test("paper CSS keeps max-4 auto-fit and tightens title-authors-abstract rhythm", () => {
-  assert.match(css, /repeat\(auto-fit, minmax\(140px, 1fr\)\)/);
+  assert.match(css, /repeat\(auto-fit, minmax\(var\(--oi-reader-author-min\), 1fr\)\)/);
   assert.doesNotMatch(css, /repeat\(4,\s*1fr\)/);
-  assert.match(css, /\.readout-paper \.oi-pdf-author-row\s*\{[^}]*display:\s*flex/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-author-row\s*\{[^}]*flex-wrap:\s*nowrap/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-author-row\s*\{[^}]*justify-content:\s*center/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-author-row\s*\{[^}]*align-items:\s*flex-start/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-author-row > \.oi-pdf-author-cell\s*\{[^}]*width:\s*max-content/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-author-cell\s*\{[^}]*justify-content:\s*flex-start/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-author-cell\s*\{[^}]*align-self:\s*start/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-authors\[data-role="authors"\]\s*\{[^}]*margin:\s*0 0 8px/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-authors\[data-role="authors"\]:has\(> \.oi-pdf-author-row\)\s*\{[^}]*gap:\s*2px/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-h1\s*\{[^}]*margin-bottom:\s*8px/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-h1\s*\{[^}]*border-block:\s*medium double var\(--oi-paper-muted\)/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-h2\[data-role="abstract_heading"\]\s*\{[^}]*margin-top:\s*8px/s);
-  assert.match(css, /\.readout-paper \.oi-pdf-h2\[data-role="abstract_heading"\]\s*\{[^}]*text-align:\s*center/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-author-row\s*\{[^}]*display:\s*flex/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-author-row\s*\{[^}]*flex-wrap:\s*nowrap/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-author-row\s*\{[^}]*justify-content:\s*center/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-author-row\s*\{[^}]*align-items:\s*flex-start/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-author-row > \.oi-pdf-author-cell\s*\{[^}]*width:\s*max-content/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-author-cell\s*\{[^}]*justify-content:\s*flex-start/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-author-cell\s*\{[^}]*align-self:\s*start/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-authors\[data-role="authors"\]\s*\{[^}]*margin:\s*var\(--oi-reader-authors-margin\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-authors\[data-role="authors"\]:has\(> \.oi-pdf-author-row\)\s*\{[^}]*gap:\s*var\(--oi-reader-authors-row-gap\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-h1\s*\{[^}]*margin:\s*var\(--oi-reader-h1-margin\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-h1\s*\{[^}]*border:\s*var\(--oi-reader-h1-border\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-h2\[data-role="abstract_heading"\]\s*\{[^}]*margin-top:\s*var\(--oi-reader-abstract-gap\)/s);
+  assert.match(css, /\.reader-flow \.oi-pdf-h2\[data-role="abstract_heading"\]\s*\{[^}]*text-align:\s*center/s);
   assert.doesNotMatch(css, /\.oi-pdf-h1\s*\{[^}]*font:\s*650 (?!22px)/);
 });
