@@ -1,5 +1,7 @@
 # 执行阶段
 
+阶段 0–5 已经在用的公式画面，按 REQUIREMENTS §2.6 算第一层：`renderSharpVisualCrop` 把原页区域高清重渲染（`surface="redraw"`），本质上是区域渲染；失败时静默退成 pageRaster 的 png，不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。目标仍是按原字体、原位置重绘字符。换层只看框的把握。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。第三层占位开关：等上线门槛。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示（第一层的高清重渲染或 png 裁图）。开发顺序见阶段 6。UI 以 Loom 规格为准。
+
 一次只做一阶段。协议细节以 `ARCHITECTURE.md` 为准，这里不重复定义。每阶段结束运行：
 
 ```bash
@@ -19,15 +21,15 @@ node --test tests/*.test.mjs
 ### 步骤
 
 1. 改写 `pdf/PDF-MD-READOUT.md`，使它和 `ARCHITECTURE.md` 描述的是同一条已发布目标。保留这些仍成立的句子，测试还在匹配它们：`PDF-MD-READOUT`、`本单权威规格`、阅读序、`Markdown`、`.readout`、`#40 closed`、`bbox`、Attention、`PDF-ENTRY-SECONDARY` 作废、不要回归网页 content/Options、`PDF-READOUT-MARKDOWN.md` 以本文为准。
-2. 在该文里写明这些产品事实：内容精准第一，排版第二且尽量做好；译文跟抽出的原文一致；公式、图、表跟打开的 PDF 同一套内容，默认用 pageRaster 裁图，其他手段须过同一条验收；OCR 认错的字母（`i` 与 `n` 互认）不上屏；有文字层的正文用文字层原句；译文只出现在右栏；点击右栏用左栏高亮对齐；测试期划区是本机智谱 GLM-OCR，上线是 OCR API 加现有大模型 API。Issue #40 保持关闭。
-3. 同步 `README.md`、`README.en.md` 的实验室 PDF 段，以及 `lib/features.js` 里 pdf 那条 hint。文案改为：文字层正文 + 原页内容精准展示（默认裁图）；公式画面不来自 LaTeX 渲染。中英文都改。
+2. 在该文里写明这些产品事实：内容精准第一，排版第二且尽量做好；译文跟抽出的原文一致；公式、图、表跟打开的 PDF 同一套内容，当前已上线的是原页高清重渲染（`renderSharpVisualCrop`）或 pageRaster 的 png 裁图，高清重渲染失败时静默退 png，其他手段须过同一条验收；OCR 认错的字母（`i` 与 `n` 互认）不上屏；有文字层的正文用文字层原句；译文只出现在右栏；点击右栏用原文栏高亮对齐；测试期划区是本机智谱 GLM-OCR，上线是 OCR API 加现有大模型 API。Issue #40 保持关闭。
+3. 同步 `README.md`、`README.en.md` 的实验室 PDF 段，以及 `lib/features.js` 里 pdf 那条 hint。文案改为：文字层正文 + 原页内容精准展示（默认裁图）；公式画面不来自 LaTeX 渲染。这里的默认裁图是当时已发布的过渡状态。目标做法是运行时 1→2→3，见阶段 6 与 REQUIREMENTS §2.6。中英文都改。
 4. 更新 `tests/pdf-readout.test.mjs` 里匹配 README「保留公式/LaTeX」「preserve formulas/LaTeX」的正则，使它们匹配新文案。不要放宽到空断言。
 5. `CONTRIBUTING.md` 里描述右栏公式的那句，改成裁图。若测试因此失败，只更新对应正则。
 
 ### 完成时必须为真
 
 - `pdf/viewer.js` 仍包含 `renderFormulaNode`，且仍不包含 `cropCanvasToDataUrl`。
-- `PDF-MD-READOUT.md` 写明右栏使用原页裁图，并仍包含上列必须留下的短语。
+- `PDF-MD-READOUT.md` 写明右栏使用原页裁图，并仍包含上列必须留下的短语。按 REQUIREMENTS §2.6，当前已上线的是高清重渲染或 png 裁图，失败时静默退 png。这是第一层，本质上还不是按原字体逐字重绘。目标做法是运行时 1→2→3。
 - `node --test tests/*.test.mjs` 通过。
 - `features.pdf` 默认值仍是 `false`。
 
@@ -43,7 +45,7 @@ node --test tests/*.test.mjs
 
 ### 新建
 
-- `lib/pdf-blocks.js`：`PROTOCOL`、`CROP_SCALE`、`LABELS`、`LAYOUT_MODES`（`text-layer` | `local-ocr` | `cloud-ocr`）、`rasterCropRect`、`bboxToPercentRect`、`normalizeIncomingBlock`（视觉块删除 `latex`/`content`/`html`/`md`/`text`）、`preparePageBlocks`（丢掉 `header`/`footer`，保留顺序）、`textLayerTrust`、占位符正则。三个模式这一阶段只是常量：`local-ocr` 注释为测试期本机智谱 GLM-OCR，`cloud-ocr` 注释为上线 OCR API，`text-layer` 注释为划区不可用时的兜底。不发网络请求。
+- `lib/pdf-blocks.js`：`PROTOCOL`、`CROP_SCALE`、`LABELS`、`LAYOUT_MODES`（`text-layer` | `local-ocr` | `cloud-ocr`）、`rasterCropRect`、`bboxToPercentRect`、`normalizeIncomingBlock`（视觉块删除 `latex`/`content`/`html`/`md`/`text`）、`preparePageBlocks`（丢掉 `header`/`footer`，保留顺序）、`textLayerTrust`、占位符正则。三个模式这一阶段只是常量：`local-ocr` 注释为测试期本机智谱 GLM-OCR，`cloud-ocr` 注释为上线 OCR API，`text-layer` 注释为划区不可用时的兜底。不发网络请求。第二层例外见 REQUIREMENTS §2.6。
 - `tests/pdf-blocks.test.mjs`。
 - `tests/fixtures/pdf-blocks/sample-page.json`：一页，含一个 `text`、一个独占 `formula`、一个带 `inlineOf` 的 `formula`、一个 `figure`、一个带 LaTeX 垃圾字段的 `formula`（用来证明会被删掉）。bbox 使用 `ARCHITECTURE.md` 第 4 节那组 CTM 换算结果作为 figure。
 
@@ -51,7 +53,7 @@ node --test tests/*.test.mjs
 
 - 读 `oi-pdf-engine`。未设置或 `legacy` 时走今天的 `ingestReadoutLayout`。
 - `fixture`：不请求网络。对当前打开的 PDF 第 1 页，用 sample-page 的块（页码改成 1），按 `CROP_SCALE` 做 pageRaster，视觉块变成 `img`。
-- 右栏节点带 `data-page`、`data-block-id`、`data-label`。点击后左栏对应页 `scrollIntoView`，并画一个 `.mirror-source-mark`。
+- 右栏节点带 `data-page`、`data-block-id`、`data-label`。点击后原文栏对应页 `scrollIntoView`，并画一个 `.mirror-source-mark`。
 - `fixture` 路径不调用 `renderFormulaNode`。`legacy` 路径保持原调用。
 
 实现裁图时调用 `cropCanvasToDataUrl`。阶段 1 的调用放在新模块或仅在 `fixture` 分支。`tests/pdf-mirror.test.mjs` 目前要求整个 `viewer.js` 都不出现 `cropCanvasToDataUrl`。因此这一阶段把裁图调用放在 `lib/pdf-blocks.js` 或 `lib/pdf-crop.js`，`viewer.js` 只调用新模块的函数名（例如 `cropBlockImage`）。不要在 `viewer.js` 写出被禁的三个名字：`cropCanvasToDataUrl`、`buildMirrorLayout`、`appendMirrorPage`。
@@ -62,7 +64,7 @@ node --test tests/*.test.mjs
 - `rasterCropRect([72/612, 312/792, 172/612, 392/792], 1224, 1584)` 的宽约为 `100/612*1224`，高约为 `80/792*1584`（允许四舍五入 ±1 像素）。
 - `textLayerTrust` 的三个用例与 `ARCHITECTURE.md` 第 5 节一致。
 - `legacy` 下现有公式测试仍通过，包括 `formulas stay in reading order as LaTeX`。
-- 手动：实验室打开一份 PDF，控制台执行 `localStorage.setItem("oi-pdf-engine","fixture")` 后重载阅读器。右栏出现裁图；缩小左栏后该图清晰度不变；点击该图，左栏出现高亮。把这三句写入阶段记录（PR 说明或提交说明即可）。
+- 手动：实验室打开一份 PDF，控制台执行 `localStorage.setItem("oi-pdf-engine","fixture")` 后重载阅读器。右栏出现裁图；缩小原文栏后该图清晰度不变；点击该图，原文栏出现高亮。把这三句写入阶段记录（PR 说明或提交说明即可）。
 
 ### 结束后停手
 
@@ -70,7 +72,7 @@ node --test tests/*.test.mjs
 
 ---
 
-## 阶段 2 · 数字 PDF 的正文用文字层，公式仍是裁图
+## 阶段 2 · 数字 PDF 的正文用文字层，公式是区域渲染（按 REQUIREMENTS §2.6 算第一层；目标做法是运行时 1→2→3）
 
 这一阶段做出文字层兜底，让有文字层的论文在划区服务还没接上时已经能读。它不是上线时的划区器。上线划区是阶段 4 的本机智谱（测试）和 OCR API（上线）。`legacy` 仅当 `localStorage["oi-pdf-engine"]=legacy` 时保留。设置页仍不加引擎下拉。未设置 `oi-pdf-engine` 时，阅读器先走 `text-layer` 兜底；阶段 4 再改成先尝试 `local-ocr`。
 
@@ -93,8 +95,8 @@ node --test tests/*.test.mjs
 - `ingest` 使用 `textLayerToBlocks`。视觉块用阶段 1 的裁图函数。
 - 删除阅读器里对 `renderFormulaNode` 的调用。函数体和 `lib/pdf-latex.js` 可以留下，直到没有引用。
 - 这一阶段允许 `viewer.js` 出现 `cropCanvasToDataUrl` 与 `walkImageCtms` 的调用（若裁图仍经由新模块，则不必出现这两个字符串）。仍然禁止 `buildMirrorLayout` 与 `appendMirrorPage`。
-- 更新 `tests/pdf-readout.test.mjs` 的 `formulas stay in reading order as LaTeX`：独占公式块没有 `latex`，有 `bbox`，`label` 或 `role` 为 formula；其文本不进入可译单元。
-- 更新 `tests/pdf-mirror.test.mjs` 里「viewer 必须含 `renderFormulaNode` / 不得含 `cropCanvasToDataUrl`」的断言，使它锁定新事实：默认路径产出裁图；不得建立 mirror page。KaTeX 文件存在性断言保留。
+- 更新 `tests/pdf-readout.test.mjs` 的 `formulas stay in reading order as LaTeX`：独占公式块没有 `latex`，有 `bbox`，`label` 或 `role` 为 formula；其文本不进入可译单元。第二层例外见 REQUIREMENTS §2.6。
+- 更新 `tests/pdf-mirror.test.mjs` 里「viewer 必须含 `renderFormulaNode` / 不得含 `cropCanvasToDataUrl`」的断言，使它锁定新事实：当时的默认路径产出裁图；不得建立 mirror page。KaTeX 文件存在性断言保留。按 REQUIREMENTS §2.6，当时锁定的默认路径是区域渲染，算第一层。目标做法是运行时 1→2→3。
 
 ### 完成时必须为真
 
@@ -176,11 +178,11 @@ node --test tests/*.test.mjs
 - `local-ocr` 与 `cloud-ocr` 都经过 `vendorLayoutToBlocks`。阅读器在模式为 `cloud-ocr` 且密钥为空时不发请求，并回退文字层，状态栏说明已回退。
 - 未设置模式时先尝试 `local-ocr` 的本机基址，失败再落到 `text-layer`。
 - `node --test tests/*.test.mjs` 通过。
-- 有本机服务时：Attention 一页走 `local-ocr`，公式图与左栏同一笔画。有云端密钥时再对同一页走 `cloud-ocr`，公式 data URL 仍来自 pageRaster，与本地模式的裁图函数相同。密钥不要写入仓库。
+- 有本机服务时：Attention 一页走 `local-ocr`，公式图与原文栏同一笔画。有云端密钥时再对同一页走 `cloud-ocr`，公式 data URL 仍来自 pageRaster，与本地模式的裁图函数相同。密钥不要写入仓库。
 
 ### 结束后停手
 
-不要做表格单元格翻译，不要把译文画回左栏。
+不要做表格单元格翻译，不要把译文画回原文栏。
 
 ---
 
@@ -202,12 +204,52 @@ node --test tests/*.test.mjs
 
 ---
 
+## 阶段 6 · 公式三层（运行时 1→2→3）
+
+提纲。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的原页高清重渲染（`surface="redraw"`）也算第一层，本质上是区域渲染。失败时静默退成 pageRaster 的 png，不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。换层只看框的把握。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。第三层占位开关：等上线门槛。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示（第一层的高清重渲染或 png 裁图）。UI 以 Loom 规格为准。开发按下面的顺序，不按运行时顺序。
+
+### 第一层加把握分数
+
+完成时必须为真：
+
+- 框的把握分数过阈值的公式用第一层。目标是按原字体、原位置重绘字符。做出来之前，`surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`（约第 978 行）：把该区域高清重新渲染。`withRasterCrop`（约第 1066–1081 行）先从 pageRaster 得到图并标 `surface="png"`，高清重渲染成功才改成 `surface="redraw"`。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支。高清重渲染本质上是区域渲染。
+- 高清重渲染画不出来退成 png。同一块内容换渲染方式，静默回退，不加徽章（V1-B1），不算换层。
+- 分数用练习集校准：分数说有把握时，结果要真的对。
+- 框的把握过阈值，用第一层。没过阈值、第二层开关（待实现，上线前界面上不显示）开着、核对也通过，才离开这一层去用 KaTeX。否则，第三层开关开着才离开这一层去用占位；关着时这些公式仍按现状显示（第一层的高清重渲染或 png 裁图）。
+- UI 以 Loom 规格为准。
+
+### 第三层点击看原文
+
+完成时必须为真：
+
+- 没走到第一层、也没走通第二层时：第三层占位开关开着，独立公式在译文里是写明位置的占位加一张小缩略图；开关关着就按现状显示。文案是目标状态，待实现：有编号「公式 (n) · 原文第 N 页」，没有编号「公式 · 原文第 N 页」，跨页「第 4–5 页」。
+- 点公式本体也跳转原文，各层都一样。原文栏跳到原位并画框；没有框时只跳到页顶。只有第三层占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。第二层点小记号是看原图对照。
+- 行内那一小段是和第一层相同的画面（高清重渲染或 png 裁图），嵌在句中。行内公式因为太高而升为独立公式时仍不走第二层：框的把握过阈值用第一层（高清重渲染画不出来则静默 png）。没过阈值时，第三层开关开着才用占位；关着就按现状显示。行内文字兜底（目标状态，待实现）是「〔公式 · 原文第 N 页〕」。屏幕上现在的兜底仍是「（公式见左栏）」。
+- 图裁得准就放进译文并配译后题注；裁不准时的占位见 REQUIREMENTS §2.6。
+- 导出是目标状态，待实现：「（公式 (n) 见原文第 N 页）」，图「（图 n 见原文第 N 页）」。当前导出是图片或「见图」，不是屏幕上的「（公式见左栏）」。
+- 第三层上线前要在练习集上报告各层占比。占位比例的上线门槛等基线出来后由产品方定。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。第三层占位开关：等上线门槛。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示（第一层的高清重渲染或 png 裁图）。
+- UI 以 Loom 规格为准。
+- 行内公式只走第一层，那一小段是同一种区域渲染，不走第二层的大模型。见 REQUIREMENTS §2.6「行内公式」。
+
+### 第二层离线实验
+
+完成时必须为真：
+
+- 实验用 DPO 论文（arXiv 2305.18290v3）第 3–5 页的 79 个公式。
+- 报告能补回多少个第一层没把握的公式，以及核对能挡掉多少错。
+- 核对按 REQUIREMENTS §2.6「第二层核对」：先合并同一公式里相邻、中间没有正文行的第一层框（「相邻」的距离待实验定），再扩大取字符。取字先按第一层的框外扩，框本身不准会影响核对。比字符集合前先做 NFKC，并只去掉最右侧、和公式主体分开的编号括号（括号里是数字、点、字母加数字的组合，例如 (2)、(2.3)、(A1)、(3a)）。表里没有的命令：这个公式核对不通过，交给第三层，要第三层开关打开才走第三层，否则显示现状，同时计数；实验列出这些命令，下结论前先补映射表。分别统计「转对却被判错」和「转错却被放行」的数量，并单独统计 Adv 字体上映射错误导致的放行。NFKC 把 ℓ 收成 l、把省略号收成三个点的情况也要统计。不在本文写这些数量。
+- 结果交产品方决定是否上线。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。和第三层占位开关互相独立。
+- 哪一层出结果，就用哪一层的形式作主展示。若上线，第二层的主展示是 KaTeX，一律带小记号。点小记号是看原图对照；点公式本体也跳转原文。未上线前第二层继续默认关闭。
+- UI 以 Loom 规格为准。
+
+---
+
 ## 阶段之外
 
 这些不在本目录的执行范围内，用户另开任务再做：
 
 - 表内文字翻译、图内英文重画、可复制 LaTeX、整页中文 PDF。
-- 删除 `pdf/vendor/katex`。
+- 保留 `pdf/vendor/katex`，第二层要用。
 - 论文术语表编辑器。
 - 把译文写入 PDF 文字框。
 - Chrome 网上应用店上架。

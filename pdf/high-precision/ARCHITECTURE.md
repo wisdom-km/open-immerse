@@ -1,26 +1,28 @@
 # 架构合同（blocks-1）
 
+公式右栏的目标做法是运行时 1→2→3（REQUIREMENTS §2.6）。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的原页高清重渲染（`surface="redraw"`）也算第一层，本质上是区域渲染。失败时静默退成 pageRaster 的 png，不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。层与层之间只看框的把握。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。UI 以 Loom 规格为准。
+
 实现高精度 PDF 时通读本文。阶段步骤在 `EXECUTION.md`。产品基准是同目录的 `REQUIREMENTS.md`。本文与需求正本冲突时，改本文。
 
-内容精准第一，排版第二。排版在不改内容的前提下尽量做到最高：阅读顺序、双栏不串、点击对回左栏、右栏不叠字、字号可读。
+内容精准第一，排版第二。排版在不改内容的前提下尽量做到最高：阅读顺序、双栏不串、点击对回原文栏、右栏不叠字、字号可读。
 
 内容精准指两件事。译文跟抽出的原文一致，不增、不漏、不改主张，数字和变量名原样保留。公式、图、表跟用户打开的 PDF 是同一套内容。OCR 把 `i` 认成 `n`，或把 `n` 认成 `i`，都不得上屏，也不得送进翻译模型。
 
-展示手段不锁死。第一版默认从 `pageRaster` 裁图，因为这条已经能保住笔画。内嵌图像原样取出、把原页矢量画进右栏，也可以。新手段先过同一条验收：右栏这一块与左栏同一区域的内容一致；过不了就用裁图。把识别结果渲染成 LaTeX、重画图内文字，不采用。正文能用文字层时就用文字层原句。
+展示手段不锁死。目标做法是运行时 1→2→3，换层只看框的把握。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的原页高清重渲染也算第一层，本质上是区域渲染。失败时静默退成 pageRaster 的 png，不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，这一层的主展示就是 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。内嵌图像原样取出也可以。新手段先过同一条验收：右栏这一块与原文栏同一区域的内容一致。把识别结果渲染成 LaTeX（第二层例外见 REQUIREMENTS §2.6）、重画图内文字，不采用。正文能用文字层时就用文字层原句。
 
-主场景是有文字层的数字论文 PDF。划区（哪一块是公式、图、表）在测试期走本机智谱 GLM-OCR，上线走 OCR API。两套只换适配器的地址和密钥，块协议相同。翻译从第一天就用插件已配置的大模型 API，上线同样只走这个 API。文字层字体判断是划区服务不可用时的兜底：拿不准就整段裁图，不把字母交给模型。兜底不是上线时的划区器。
+主场景是有文字层的数字论文 PDF。划区（哪一块是公式、图、表）在测试期走本机智谱 GLM-OCR，上线走 OCR API。两套只换适配器的地址和密钥，块协议相同。翻译从第一天就用插件已配置的大模型 API，上线同样只走这个 API。文字层字体判断是划区服务不可用时的兜底：拿不准就整段裁图，不把字母交给模型。这是过渡兜底，不是目标默认展示。兜底不是上线时的划区器。
 
 ## 1. 页面光栅 pageRaster
 
-第一版用这一张图做右栏裁切，也把它交给划区模型。裁切是默认手段，不是唯一合法手段。换手段时仍以这张图（或左栏同一页）为验收参照。
+这一张图交给划区模型，也是 png 回退那一支的裁图源（pageRaster 裁图，`surface="png"`），以及第三层占位旁的小缩略图来源。第一层已上线的高清重渲染不是从这张光栅裁出来的，也不是 `lib/pdf-formula-redraw.js`：真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`（约第 978 行）。行内那一小段在高清重渲染成功时同样是 redraw，失败时用这张光栅的 png。第一层的画面嵌在译文里。只有第三层占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。目标做法按运行时 1→2→3，换层只看框的把握；第三层占位默认关闭，见 REQUIREMENTS §2.6。换手段时仍以这张图（或原文栏同一页）为验收参照。
 
-- 用 pdf.js 把该页画到**离屏 canvas**，比例 `CROP_SCALE = 2`，与左栏缩放无关。
+- 用 pdf.js 把该页画到**离屏 canvas**，比例 `CROP_SCALE = 2`，与原文栏缩放无关。
 - 原点在画布左上，y 向下。`getViewport({ scale: CROP_SCALE })` 已经包含页面旋转。
 - 块的 `bbox` 是相对这张图的 `[x0, y0, x1, y1]`，每个数在 0 到 1。
-- 裁图把 bbox 乘上这张画布的像素宽高。左栏放大或缩小不改变右栏图片。
+- 裁图把 bbox 乘上这张画布的像素宽高。原文栏放大或缩小不改变右栏图片。
 - 云端或本机划区收到的是这张 PNG，不是模型自己再渲的一页。这样返回的 0–1 框和裁图用的是同一张图。
 
-左栏继续用现有 `renderView`：按 `zoom` 和 `devicePixelRatio` 画可见 canvas。可见 canvas 不作为裁图源。
+原文栏继续用现有 `renderView`：按 `zoom` 和 `devicePixelRatio` 画可见 canvas。可见 canvas 不作为裁图源。
 
 常量放在 `lib/pdf-blocks.js`：
 
@@ -33,7 +35,7 @@ export const CROP_SCALE = 2;
 
 ```text
 pdf/viewer.js（扩展页）
-  打开 PDF → 左栏立刻按现有逻辑渲染
+  打开 PDF → 原文栏立刻按现有逻辑渲染
   每页：pageRaster + 文字层 items + （可选）图像 XObject 框
   引擎产出 PageBlocks
   右栏按数组顺序画：译文段落，或 img
@@ -135,7 +137,11 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 
 每个 `pair` 至少包含源块 `sourceId`、送译文本 `text`、文字层原句 `sourceText`、`translation` 和状态。恢复时同时核对文件哈希、`sourceId` 与 `sourceText`；原句变化或公式占位符、引用编号不一致时，不展示不可信译文。批量翻译完成后，本地库写入按顺序执行，避免后到的早期批次覆盖同一页的完整记录。当前 Attention 的一次性迁移和剩余例外见 `STATUS.md`。
 
-视觉块是 `formula`、`figure`、`table`。进入右栏之前，适配器从这三类对象上删除 `latex`、`content`、`html`、`md`、`text`。校验函数发现这些键，删键并继续，不把它们渲染出来。
+视觉块是 `formula`、`figure`、`table`。进入右栏之前，适配器从这三类对象上删除 OCR 或划区 API 带来的 `latex`、`content`、`html`、`md`、`text`。校验函数发现这些键，删键并继续，不把它们渲染出来。公式块再按运行时 1→2→3 选择节点，换层只看框的把握。现在已上线的高清重渲染（`surface="redraw"`）和 pageRaster 的 png 裁图都算第一层。三层的节点形态：
+
+- 第一层：目标是按原字体、原位置重绘字符。做出来之前，`surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`（约第 978 行）：把该区域高清重新渲染。`withRasterCrop`（约第 1066–1081 行）先从 pageRaster 得到图并标 `surface="png"`，高清重渲染成功才改成 `surface="redraw"`。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支，静默、不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。框的把握过阈值用这一层。UI 以 Loom 规格为准。
+- 第二层：主展示是 KaTeX，加小记号，点小记号看原图对照。只有没过阈值、Aa 面板里的「用看图模型补全公式」（待实现）开着、并且字符核对通过才出现。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。和第三层占位开关互相独立。`latex`、`latexSource: "vlm"`、`verified: true` 要同时在，规则见 REQUIREMENTS §6。
+- 第三层：独立公式用写明位置的占位加一张小缩略图。只有上面两支都没采用、并且第三层占位开关开着才出现；开关关着就按现状显示。文案是目标状态，待实现：有编号「公式 (n) · 原文第 N 页」，没有编号「公式 · 原文第 N 页」，跨页「第 4–5 页」。点公式本体也跳转原文。没有框时只跳到页顶。只有这种占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。UI 以 Loom 规格为准。
 
 `header` 和 `footer` 在准备右栏数据时整块丢掉，规则复用 `isPageChromeItem` / `isPageChromeText`。适配器可以原样返回它们。
 
@@ -195,7 +201,7 @@ export function bboxToPercentRect(bbox) {
 
 然后 `cropCanvasToDataUrl(pageRasterCanvas, bboxToPercentRect(bbox))`。
 
-左栏高亮：`.pdf-page` 已是 `position: relative`。在该页节点内放一个 `.mirror-source-mark`，`left/top/width/height` 用 bbox 的百分比。同一时间只保留一个高亮。点击右栏带 `data-block-id` 的节点时，`scrollIntoView` 到 `[data-page]` 的那一页，再画这个标记。
+原文栏高亮：`.pdf-page` 已是 `position: relative`。在该页节点内放一个 `.mirror-source-mark`，`left/top/width/height` 用 bbox 的百分比。同一时间只保留一个高亮。点击右栏带 `data-block-id` 的节点时，`scrollIntoView` 到 `[data-page]` 的那一页，再画这个标记。公式点击见 REQUIREMENTS §2.6。
 
 ## 5. 文字从哪来
 
@@ -253,17 +259,19 @@ export function textLayerTrust(items) {
 | `title` | `h1.oi-pdf-h1`，文本为译文，未译时为原文 |
 | `heading` | `h2.oi-pdf-h2` |
 | `text` / `caption` | `p.oi-pdf-p`。byline 另加 `data-role="authors"` |
-| `formula` / `figure` / `table` | `p.oi-pdf-p` 内一个 `img`，`src` 为裁图 data URL，`alt` 为「公式」「图」「表」 |
-| 行内公式 | 不单独成块显示，插在句子的 token 位置 |
+| `formula` | 换层只看框的把握。第一层目标是按原字体、原位置重绘字符；做出来之前 `renderSharpVisualCrop` 的高清重渲染也算第一层，失败时静默退 png（V1-B1，见 REQUIREMENTS §2.6 术语表）。两个开关互相独立，都默认关闭。第二层开关（待实现，上线前界面上不显示）。框的把握过阈值用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX，加小记号。否则，第三层开关开着就是占位；关着就按现状显示。占位文案是目标状态，待实现（「公式 (n) · 原文第 N 页」，没有编号时「公式 · 原文第 N 页」，跨页「第 4–5 页」）。只有第三层占位不把原页裁图嵌在译文里。屏幕上的文字兜底仍是「（公式见左栏）」。UI 以 Loom 规格为准 |
+| `figure` | 裁得准就放裁图并配译后题注；裁不准写「图 2 · 原文第 3 页（点击查看）」并加小缩略图。UI 以 Loom 规格为准 |
+| `table` | 现在已发布的节点是裁图 `img` |
+| 行内公式 | 只走第一层，不走第二层的大模型。那一小段是高清重渲染或 pageRaster 的 png 裁图，嵌在句中。见 REQUIREMENTS §2.6「行内公式」。现在不单独成块，插在句子的 token 位置 |
 
-属性：`data-page`、`data-block-id`、`data-label`。视觉块没有 `data-latex`。
+属性：`data-page`、`data-block-id`、`data-label`。视觉块没有 `data-latex`。第二层例外见 REQUIREMENTS §2.6。
 
-未翻译时右栏先显示原文句子和裁图，左栏不必等翻译。点击「翻译」后只替换可译块的文本。`skipTranslate` 的块保持原文。
+未翻译时，已发布路径先显示原文句子和裁图；目标做法按运行时 1→2→3。原文栏不必等翻译。点击「翻译」后只替换可译块的文本。`skipTranslate` 的块保持原文。
 
 无文字层或乱码时，在该页通读顶部显示：
 
 ```text
-本页文字层不可用，正文来自识别结果，可能有误差。公式、图、表仍是原页截图。
+本页文字层不可用，正文来自识别结果，可能有误差。公式、图、表在已发布路径上仍是原页截图；目标做法按运行时 1→2→3。
 ```
 
 现有 `#noTextLayerHint` 的「无法提取阅读文本」留给遗留引擎。新引擎使用上面这一句，常量放在 `lib/pdf-blocks.js`，供测试引用。
@@ -296,7 +304,7 @@ export function textLayerTrust(items) {
 | `table` | `table`，丢弃 `content` |
 | `text` | `text`。标题、题注、页眉改由插件用现有启发式重标，不指望接口返回 `title` / `caption` |
 
-云端文档没有写明 `bbox_2d` 的原点。适配器默认原点左上。阶段 4 用一页已知公式的夹具核对：裁出来的图和左栏同一区域重合。若上下颠倒，只在适配器里翻 y，协议本身不变。
+云端文档没有写明 `bbox_2d` 的原点。适配器默认原点左上。阶段 4 用一页已知公式的夹具核对：裁出来的图和原文栏同一区域重合。若上下颠倒，只在适配器里翻 y，协议本身不变。
 
 本机 GLM-OCR 的原始字段以第一次成功响应为准，存成 `tests/fixtures/pdf-blocks/` 里的 JSON。在那份夹具进仓库之前，本机模式不算完成。不要凭记忆发明本地字段名。
 
@@ -367,15 +375,17 @@ Faithfulness to the source outranks smoother wording.
 
 ## 11. 导出
 
-`collectReadoutExportNodes` 遇到视觉块时输出 Markdown 图片或一行「见图」，内容来自 `img.alt` 与 data URL。公式块不再走 `formulaExportMarkdown`。正文里的 `⟦fN⟧` 在 Markdown 中换成对应图片。
+`collectReadoutExportNodes` 遇到视觉块时输出 Markdown 图片或一行「见图」，内容来自 `img.alt` 与 data URL。公式块不再走 `formulaExportMarkdown`。正文里的 `⟦fN⟧` 在 Markdown 中换成对应图片。实现是 `lib/pdf-blocks.js` 的 `visualBlockMarkdown`：有地址就出图片，否则出「见图」。这是已发布的导出。屏幕上的「（公式见左栏）」不是这条导出路径。
 
-`lib/pdf-latex.js` 和 `pdf/vendor/katex/` 在阶段 0–5 保留文件。新路径不调用 `recoverFormulaLatex` 和 `renderFormulaNode`。
+目标导出（目标状态，待实现）：独立公式在 MD/PDF 里写「（公式 (n) 见原文第 N 页）」，图写「（图 n 见原文第 N 页）」。只有第三层占位不把原页裁图嵌在译文里。第一层的区域渲染仍可以导出成图。UI 以 Loom 规格为准。见 REQUIREMENTS §2.6。
+
+`lib/pdf-latex.js` 和 `pdf/vendor/katex/` 在阶段 0–5 保留文件。新路径不调用 `recoverFormulaLatex` 和 `renderFormulaNode`。第二层例外见 REQUIREMENTS §2.6。
 
 ## 12. 验收时看什么
 
 自动：
 
-- 视觉块的对象上没有 `latex` / `content` / `html`。
+- 视觉块的对象上没有 `latex` / `content` / `html`。第二层例外见 REQUIREMENTS §2.6。
 - `rasterCropRect` 与第 4 节的 CTM 样例一致。
 - 可信文字层的句子等于文字项拼接，而不是厂商 `content`。
 - 乱码页 `textSource === "ocr"`。
@@ -383,13 +393,13 @@ Faithfulness to the source outranks smoother wording.
 - `polish` 缺省时，网页批次仍读 `settings.twoStepPolish`。
 - `features.pdf` 默认 false。
 
-目视只看扩展阅读器网页：左栏原文、右栏译文并排。不要用导出的 Markdown 或 PDF 判断公式是否对上。当前这一条还没有通过，记录在 `STATUS.md`。
+目视只看扩展阅读器网页：原文栏与右栏译文并排。不要用导出的 Markdown 或 PDF 判断公式是否对上。当前这一条还没有通过，记录在 `STATUS.md`。
 
-- 右栏公式与左栏同一内容；缩小左栏后公式仍然清楚。
+- 右栏公式与原文栏同一内容；缩小原文栏后公式仍然清楚。
 - 架构图内英文没有被换成中文。
 - 表的内容与原表一致，格子没有被译乱。
 - 抽查译文：数字、变量名、否定和限定与抽出的原文一致。
-- 点击右栏句子或图，左栏滚到该页并出现 `.mirror-source-mark`。阅读顺序顺着，双栏不串。
+- 点击右栏句子或图，原文栏滚到该页并出现 `.mirror-source-mark`。阅读顺序顺着，双栏不串。
 - 切到云端模式后，公式块仍然是原 PDF 的内容，不是 API 返回的字母。
 
 译文不设 BLEU 门槛。内容是否被改写，用上面的抽查判断。排版问题单独记，不靠改公式或改主张来修。

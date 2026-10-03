@@ -1,7 +1,7 @@
 # PDF 右栏 · 公式 / 图 / 表 排版（PDF-MD-FORMULA-LAYOUT）
 
 **任务来源：** 2026-09-23 Wisdom via Jone copy → Loom 出规格 → Forge → Cloud。  
-**挂接：** [`PDF-MD-READOUT.md`](./PDF-MD-READOUT.md)（通读产品权威）；通读皮肤数字仍见 [`PDF-RIGHT-PANE.md`](./PDF-RIGHT-PANE.md)。节奏数字（空隙、行内高度、密度）若与 `pdf/high-precision/FORMULA-RIGHT-PANE.md` 冲突，以那份 §2–§5 为准。  
+**挂接：** [`PDF-MD-READOUT.md`](./PDF-MD-READOUT.md)（通读产品权威）。节奏数字（空隙、行内高度、密度）若与 `pdf/high-precision/FORMULA-RIGHT-PANE.md` 冲突，以那份 §2–§5 为准。  
 **fixture：** `/workspace/oi-qa/fixtures/pdf/Attention_Is_All_You_Need.pdf`  
 **反例证图：** `oi-qa/pdf-lab-attention/p07-lr-formula.png`（行内整行糊裁 + 白底大块砸版）。
 
@@ -12,7 +12,7 @@
 | 项 | 锁定 |
 | --- | --- |
 | 产品路径 | 左 **pdf.js** + 右 **Markdown 通读**（非 bbox 镜像；非 BabelDOC 矢量回写整页） |
-| 公式展示 | **原件为准** → 默认 **页渲染裁切**（保准）；可靠 LaTeX + KaTeX 为可选增强，**不得**为「好看」编造 TeX |
+| 公式展示 | 当前已上线的第一层是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `pdf/high-precision/REQUIREMENTS.md` §2.6。高清重渲染本质上是区域渲染。目标是按原字体、原位置重绘字符。不得为「好看」编造 TeX |
 | 独立公式块 | 相对右栏正文列 **水平居中**；宽度 ≤ 通读列宽；上下空隙见 §3 |
 | 行内公式 | **句中基线对齐**；高度随正文字号；**禁止**整行大图砸版 |
 | 图 / 表 | 保持原件裁切；题注用 Soft Graphite **既有 token**（muted），**不改**网页 Soft Graphite / `tokens.css` |
@@ -46,7 +46,7 @@
 | `figure` / `table` | XObject / 大图区 / 表栅格 | `figure.oi-pdf-figure` |
 | `caption` | 「Figure / Table / 图 / 表」题注 | `figcaption.oi-pdf-caption` |
 
-数据槽建议：`{ role, cropUrl?, latex?, alt, page, bbox? }`。有可靠 `latex` 时可渲染 KaTeX，**仍须**满足 §3–§4 尺寸与对齐；不确定结构 → **只走裁切**，禁止幻觉 TeX。
+数据槽建议：`{ role, cropUrl?, latex?, alt, page, bbox? }`。当前已上线的第一层是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `pdf/high-precision/REQUIREMENTS.md` §2.6。尺寸与对齐仍须满足 §3–§4。不确定结构时不编造 TeX。
 
 ---
 
@@ -57,9 +57,9 @@
 | | 规格 |
 | --- | --- |
 | 水平 | **居中**于 `.readout` 内容列（Attention 类论文行间式默认居中） |
-| 宽度上限 | `max-width: 100%`（列宽即 `PDF-RIGHT-PANE` 的 `.readout`，约 `42rem`） |
-| 过宽 | **等比缩小**至列宽；勿横向撑破通读；缩小后墨迹高度仍 ≥ **14px**（否则改「（公式见左栏）」+ 聚焦左栏） |
-| 垂直空隙 | `margin-block: 12px 16px`（约 **0.8em / 1.05em** @ 15px 正文）；参考 Attention 原页：公式上下约一行呼吸，**不要**叠成两段正文间距 |
+| 宽度上限 | 现状不夹到列宽。目标见下一行 |
+| 过宽 | 现状（已上线）分主路径和回退路径。主路径没有墨迹下限，见 `pdf/viewer.js` 的 `matchedFormulaStyle`（约第 1449 行）：按原文栏这块框的高和宽来定。回退路径在主路径定不出尺寸时用 `displayFormulaWidthCss`（`lib/pdf-blocks.js` 约第 534 行）。这一支的宽度按 em 计算墨迹下限，取页宽占比和这条 em 下限里较大的一个，并且不把图缩到墨迹下限以下（同文件第 531–532 行注释："not shrunk below the ink floor"）。下限值来自 `displayFormulaMinEm`（`lib/pdf-formula-size.js` 第 121 行）和 `displayInkMinEm`（`lib/pdf-blocks.js` 第 482–487 行）。回退路径的宽度不夹到列宽，由 `tests/pdf-formula-size.test.mjs` 第 75–76 行锁定。裁图是 `max-width: none`（`pdf/viewer.css` 约第 473–477 行），超出部分在公式框内横向滚动。这是 #72 的实现。右栏纸面的横滚是 PR #90 做的，和公式框内的横滚（#72）是两件事。目标（待实现）：先等比缩小到列宽，但不低于硬门；到了硬门还放不下，就在框内横向滚动（F3-S4，见 `pdf/high-precision/REQUIREMENTS.md` §2.6 术语表）。硬门的数值跟着 F3 尺寸规则走，待定，实现时与 F3 一起定。实现时要改 `tests/pdf-formula-size.test.mjs` 第 75–76 行。不要改成占位来躲过宽 |
+| 垂直空隙 | 目标稿：`margin-block: 12px 16px`（约 **0.8em / 1.05em** @ 15px 正文）；参考 Attention 原页：公式上下约一行呼吸，**不要**叠成两段正文间距。线上是 10px/14px（`pdf/viewer.css` 第 398 行的 `margin: 10px 0 14px`） |
 | 与邻段 | 上一 `p` 的 `margin-bottom` 与本块上边距 **取大不叠加盲加**（实现可用相邻选择器消重，避免「段尾 14px + 公式上 12px」过空） |
 
 ### 3.2 线框（ASCII）
@@ -75,7 +75,7 @@
 | 下一段正文 …
 ```
 
-### 3.3 Token / CSS（可落地）
+### 3.3 Token / CSS（可落地）（目标稿，待实现）
 
 ```css
 .oi-pdf-display-math {
@@ -90,7 +90,7 @@
 .oi-pdf-display-math .oi-pdf-math-crop,
 .oi-pdf-display-math .katex-display {
   display: inline-block;
-  max-width: 100%;
+  max-width: 100%; /* 目标稿。现状是 max-width: none，见 §3.1 过宽行 */
   height: auto;
   vertical-align: middle;
   border-radius: 2px; /* 可选；勿 >4px */
@@ -137,7 +137,7 @@
 }
 ```
 
-**降级（仅当裁切失败）：** 段内插入「（公式见左栏）」链接/按钮，点击聚焦左栏对应页区；**不要**塞一整行糊图。行内高度改按墨迹 / inkShare，不再以 1.45em 当硬顶。
+**降级（仅当裁切失败）：** 行内文字兜底是目标状态，待实现：「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。**不要**塞一整行糊图。行内高度改按墨迹 / inkShare，不再以 1.45em 当硬顶。行内这一小段是第一层的区域渲染，嵌在句中。
 
 ---
 
@@ -197,9 +197,9 @@ Jone FYI：**内容精准优先，裁图宁可略松** — 松在 **公式墨迹
 
 | 情况 | 导出 |
 | --- | --- |
-| 有可靠 `latex` | 行内 `$...$`；独立 `$$...$$` |
-| 仅裁切 | `![公式](asset…)` 或「[公式]」；图 `![题注](…)` |
-| 降级占位 | `（公式见左栏）` |
+| 当前已发布 | 图片，或一行「见图」（`lib/pdf-blocks.js` 的 `visualBlockMarkdown`）。不是屏幕上的「（公式见左栏）」 |
+| 目标状态，待实现 | 独立公式「（公式 (n) 见原文第 N 页）」；图「（图 n 见原文第 N 页）」。见 `pdf/high-precision/REQUIREMENTS.md` §2.6 |
+| 有可靠 `latex` | 不在当前导出里写未经核对的 TeX。核对通过的第二层见 REQUIREMENTS §2.6 |
 
 导出是阅读序语义，**不是**版面引擎。
 

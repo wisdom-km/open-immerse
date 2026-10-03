@@ -2,7 +2,7 @@
 
 沉浸译实验室 PDF 的实现入口。需求正本是同目录的 `REQUIREMENTS.md`。`ARCHITECTURE.md` 写编码细节，`EXECUTION.md` 写阶段步骤。后两份与需求正本冲突时，先改后两份向需求正本对齐，再写代码。
 
-目标规格是 `pdf/PDF-MD-READOUT.md`：右栏使用原页裁图，公式画面不来自 LaTeX 渲染。当前默认设置仍可走遗留通读路径；已保存逐页配对的 PDF 优先用文字层块和本地库译文，旧整篇 `readout.md` 只作兼容回退。最新实现和未完成验收见 `STATUS.md`，迁移前的故障证据见 `CONTENT-AUDIT-2026-09-23.md`。
+目标规格是 `pdf/PDF-MD-READOUT.md`。当前已上线的公式画面是 `renderSharpVisualCrop` 的原页高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `REQUIREMENTS.md` §2.6 算第一层。目标仍是按原字体、原位置重绘字符。当前默认设置仍可走遗留通读路径；已保存逐页配对的 PDF 优先用文字层块和本地库译文，旧整篇 `readout.md` 只作兼容回退。最新实现和未完成验收见 `STATUS.md`，迁移前的故障证据见 `CONTENT-AUDIT-2026-09-23.md`。
 
 ## 一次只做一个阶段
 
@@ -42,7 +42,7 @@ node --test tests/*.test.mjs
 
 - 扩展仓：`D:\open-immerse`，MIT，零构建。改完到 `chrome://extensions` 重新加载，不要移除扩展。
 - 实验室开关：`lib/features.js` 的 `features.pdf` 默认 `false`。入口在设置 → 高级。
-- 阅读器：`pdf/viewer.html`、`pdf/viewer.js`。左栏 `#pages` 里的 pdf.js canvas。右栏 `#readout`。
+- 阅读器：`pdf/viewer.html`、`pdf/viewer.js`。原文栏 `#pages` 里的 pdf.js canvas。右栏 `#readout`。
 - 翻译：阅读器发 `OI_TRANSLATE_BATCH`，`background/service-worker.js` 的 `translateBatch`。密钥在 `chrome.storage.sync`。
 - 划区 sidecar 放在扩展仓外面，目录 `D:\pdf-layout-sidecar`。它听 `127.0.0.1:8765`。`7860` 是 GLM-OCR 网页，不是这个接口。认字模型在 `127.0.0.1:5002`。版面模型在 `D:\pdf-layout-models`，仓库名 `PaddlePaddle/PP-DocLayoutV3_safetensors`。`id2label` 在模型加载后从权重配置读取，不写进扩展仓。权重、PyTorch、vLLM 不进本仓库。
 - `tests/fixtures/Attention_Is_All_You_Need.pdf` 若在本地，不要 `git add`。手标样例只用小 JSON。
@@ -62,7 +62,7 @@ node --test tests/*.test.mjs
 | `cropCanvasToDataUrl` / `canvasCropSource` | `lib/pdf-mirror.js` | 按百分比矩形裁 canvas。百分比是 `{left,top,width,height}`，0–100，原点左上 |
 | `articleNodeSpec` | `lib/pdf-viewer.js` | 标题 `h1`、小节 `h2`、其余 `p` |
 
-`buildMirrorLayout`、`appendMirrorPage`、`percentRectToTextStyle` 继续留在镜像实验里。阅读器不要调用它们。Issue #40 关闭的是「译文贴进左栏原文框」。右栏插入原页裁图、左栏用已有的 `.mirror-source-mark` 高亮，是本目录的产品路径。
+`buildMirrorLayout`、`appendMirrorPage`、`percentRectToTextStyle` 继续留在镜像实验里。阅读器不要调用它们。Issue #40 关闭的是「译文贴进原文栏原文框」。右栏插入原页裁图、原文栏用已有的 `.mirror-source-mark` 高亮，是本目录的产品路径。
 
 ## 测试怎样锁着旧行为
 
@@ -81,7 +81,7 @@ node --test tests/*.test.mjs
 内容精准第一，排版第二。排版在不改内容的前提下尽量做到最高。
 
 - 译文跟送进模型的原文一致：不增主张、不漏句子、不改数字和变量名。公式、图、表跟用户打开的 PDF 是同一套内容。OCR 把 `i` 认成 `n`，或把 `n` 认成 `i`，这种字符串不上屏，也不进入翻译。
-- 公式、图、表的默认做法是 `pageRaster` 裁切。内嵌图原样取出、原页矢量原样搬移也可以。换手段时，右栏结果仍须与打开的 PDF 同一套内容；做不到就退回裁图。认成 LaTeX 再渲染、重画图内英文，不采用。
+- 公式、图、表：当前已上线的公式画面是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `REQUIREMENTS.md` §2.6 算第一层。目标是按原字体、原位置重绘字符。高清重渲染失败时静默退成 png，不加徽章（V1-B1，见 `REQUIREMENTS.md` §2.6 术语表），不算换层。换层只看框的把握。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。内嵌图原样取出也可以。换手段时，右栏结果仍须与打开的 PDF 同一套内容。重画图内英文，不采用。
 - 有文字层的数字 PDF，正文用文字层里的原句。这是主场景。扫描件少，只在没有可信文字层时才用 OCR 的正文，并在右栏标明可能有误差。
 - 划区测试用本机部署的智谱 GLM-OCR。`local-ocr` 与 `cloud-ocr` 从阶段 1 就写进引擎枚举。上线把模式切到 `cloud-ocr`，翻译继续走插件里已经配置的大模型 API。两套后端吐出同一份 `blocks-1`，右栏裁图代码不跟着改。
 - 送进 `OI_TRANSLATE_BATCH` 的字符串只有标题、小节、正文、题注，以及行内占位符 `⟦fN⟧`。数字和变量名原样保留。翻译用现有大模型 API，质量开关保持用户设置，不为了省事改成更弱的单程。
