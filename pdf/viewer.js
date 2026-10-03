@@ -141,8 +141,8 @@ import {
   capsuleLabel,
   capsulePlacement,
   capsuleSamplePages,
-  defaultCapsuleContentBudget,
   reserveCapsuleContent,
+  reserveDefaultCapsuleContent,
   stableCapsulePane,
   clearFadeScroll,
   contentPagesForScope,
@@ -2412,13 +2412,12 @@ function layoutCapsule({ keepAnchor = false } = {}) {
   const column = box.paneW + (box.scrollbar > 0 ? box.scrollbar : 0);
   const want = Math.min(36 * fontPx, column - 2 * measurePad);
   const defaultFull = !narrow && fontPx === 16 && measurePad === 40 && Math.abs(want - 576) < 1e-6;
-  const budget = defaultFull
-    ? defaultCapsuleContentBudget({
+  const shortContent = defaultFull
+    ? reserveDefaultCapsuleContent(widths.shortWidths, {
       visible: box.paneW,
       startMin: maxPage >= 100 ? CAPSULE_START_RELAXED : CAPSULE_START_BAND_MIN
     })
-    : Infinity;
-  const shortContent = reserveCapsuleContent(widths.shortWidths, budget);
+    : reserveCapsuleContent(widths.shortWidths);
   const fullContent = reserveCapsuleContent(widths.fullWidths);
   const place = capsulePlacement({
     paneW: box.paneW,

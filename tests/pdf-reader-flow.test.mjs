@@ -12,8 +12,10 @@ import {
   capsuleLabel,
   capsulePlacement,
   capsuleSamplePages,
+  CAPSULE_PAD_X_MIN,
   defaultCapsuleContentBudget,
   reserveCapsuleContent,
+  reserveDefaultCapsuleContent,
   stableCapsulePane,
   clearFadeScroll,
   contentPagesForScope,
@@ -233,9 +235,10 @@ test("capsule yields before it covers glyphs", () => {
   assert.equal(wide.mode, "float");
   assert.equal(wide.label, "short");
   assert.equal(wide.measure, 576);
-  assert.ok(wide.gap >= 12);
-  assert.ok(wide.end >= 8);
-  assert.ok(wide.start >= 24);
+  assert.ok(Math.abs(wide.gap - 12) < 0.05);
+  assert.equal(wide.padX, 7);
+  assert.ok(wide.start >= 49 && wide.start <= 56, `wide start ${wide.start}`);
+  assert.ok(wide.end >= 4);
   const one = capsulePlacement({
     paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW,
     shortW: 59.3, shortWMin: 53.3, padX: 11, padXMin: 8, maxPage: 9
@@ -328,7 +331,7 @@ test("capsule yields before it covers glyphs", () => {
   assert.match(capsuleRule, /white-space:\s*nowrap/);
   assert.doesNotMatch(capsuleRule, /max-content/);
   assert.match(tokens, /--oi-reader-capsule-pad-x:\s*11px/);
-  assert.match(tokens, /--oi-reader-capsule-pad-x-min:\s*8px/);
+  assert.match(tokens, /--oi-reader-capsule-pad-x-min:\s*7px/);
   assert.match(tokens, /--oi-reader-capsule-end-min:\s*8px/);
   assert.match(tokens, /--oi-reader-capsule-end-floor:\s*4px/);
   assert.match(css, /max\(\s*var\(--oi-reader-capsule-end-floor\)/);
@@ -344,27 +347,49 @@ test("capsule yields before it covers glyphs", () => {
   assert.doesNotMatch(paging, /--rf-capsule-w|max-content/);
 });
 
-test("capsule content covers every label that fits the default band, and stays one line", () => {
-  const budget = defaultCapsuleContentBudget({ visible: 701 });
-  assert.equal(budget, 44);
-  const labels = [30.4, 42.25, 43.688];
-  const content = reserveCapsuleContent(labels, budget);
-  for (const width of labels) assert.ok(width <= content, `${width} fits in ${content}`);
-  assert.ok(content <= Math.ceil(Math.max(...labels) - 1e-9) + 1);
-  assert.ok(content - Math.max(...labels) <= 1 + 1e-6);
-  const capped = reserveCapsuleContent([43.688, 46], budget);
-  assert.equal(capped, budget);
-  const place = capsulePlacement({
+test("capsule content covers every label, and pad drops to 7 only when 8 does not fit", () => {
+  assert.equal(defaultCapsuleContentBudget({ visible: 701, pad: 8 }), 44);
+  assert.equal(defaultCapsuleContentBudget({ visible: 701, pad: 7 }), 46);
+  const placeFor = (content) => capsulePlacement({
     paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW: 91,
-    shortW: capped + 22, shortWMin: capped + 16,
-    padX: 11, padXMin: 8, maxPage: 27
+    shortW: content + 22,
+    shortWMin: content + 2 * CAPSULE_PAD_X_MIN,
+    padX: 11,
+    padXMin: CAPSULE_PAD_X_MIN,
+    maxPage: 27
   });
-  assert.equal(place.measure, 576);
-  assert.ok(place.start >= 49 && place.start <= 56);
-  assert.ok(place.gap >= 12);
-  assert.ok(place.end >= 4);
-  assert.ok(place.padX >= 8);
-  assert.equal(place.capsuleW - 2 * place.padX, capped);
+  const covers = (widths, content) => {
+    for (const width of widths) assert.ok(width <= content + 1e-6, `${width} fits in ${content}`);
+    const ceil = Math.ceil(Math.max(...widths) - 1e-9);
+    assert.ok(content + 1e-6 >= ceil);
+    assert.ok(content <= ceil + 1 + 1e-6);
+  };
+  const wideLabels = [31.2, 40.5, 44.6];
+  const wideContent = reserveDefaultCapsuleContent(wideLabels, { visible: 701 });
+  covers(wideLabels, wideContent);
+  assert.ok(wideContent >= 45, `44.6 content ${wideContent}`);
+  const widePlace = placeFor(wideContent);
+  assert.equal(widePlace.padX, 7);
+  assert.equal(widePlace.measure, 576);
+  assert.ok(widePlace.start >= 49 && widePlace.start <= 56, `44.6 start ${widePlace.start}`);
+  assert.ok(Math.abs(widePlace.gap - 12) < 0.05);
+  assert.ok(widePlace.end >= 4);
+  assert.ok(widePlace.capsuleW - 2 * widePlace.padX + 1e-6 >= wideContent);
+  const fitLabels = [28.2, 43.688, 44];
+  const fitContent = reserveDefaultCapsuleContent(fitLabels, { visible: 701 });
+  covers(fitLabels, fitContent);
+  const fitPlace = placeFor(fitContent);
+  assert.equal(fitPlace.padX, 8, `≤44 pad ${fitPlace.padX}`);
+  assert.equal(fitPlace.measure, 576);
+  assert.ok(fitPlace.start >= 49 && fitPlace.start <= 56, `≤44 start ${fitPlace.start}`);
+  assert.ok(Math.abs(fitPlace.gap - 12) < 0.05);
+  assert.ok(fitPlace.end >= 4);
+  const pastLabels = [44.6, 47.2];
+  const pastContent = reserveDefaultCapsuleContent(pastLabels, { visible: 701 });
+  covers(pastLabels, pastContent);
+  const pastPlace = placeFor(pastContent);
+  assert.ok(pastPlace.capsuleW - 2 * pastPlace.padX + 1e-6 >= Math.max(...pastLabels));
+  assert.equal(reserveCapsuleContent([43.688, 46], 44), 46);
   const samples = capsuleSamplePages(27);
   assert.equal(samples.length, 27);
   assert.equal(samples[0], 1);
