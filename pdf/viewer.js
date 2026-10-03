@@ -134,10 +134,16 @@ import {
   CAPSULE_END_MIN,
   CAPSULE_PAD_X,
   CAPSULE_PAD_X_MIN,
+  CAPSULE_START_BAND_MIN,
   CAPSULE_START_FLOOR,
+  CAPSULE_START_RELAXED,
   applyReaderFontAction,
   capsuleLabel,
   capsulePlacement,
+  capsuleSamplePages,
+  defaultCapsuleContentBudget,
+  reserveCapsuleContent,
+  stableCapsulePane,
   clearFadeScroll,
   contentPagesForScope,
   defaultSplitRatio,
@@ -2327,6 +2333,18 @@ function restoreReaderAnchor(token) {
   updateReaderFade();
 }
 
+let cachedScrollbarWidth = null;
+
+function classicScrollbarWidth() {
+  if (cachedScrollbarWidth != null) return cachedScrollbarWidth;
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;top:-9999px;width:100px;height:100px;overflow:scroll;visibility:hidden;";
+  document.documentElement.append(probe);
+  cachedScrollbarWidth = Math.max(0, probe.offsetWidth - probe.clientWidth);
+  probe.remove();
+  return cachedScrollbarWidth;
+}
+
 function capsuleLabelWidths(maxPage) {
   const probe = document.createElement("span");
   probe.className = "rf-capsule-probe";
@@ -2337,24 +2355,35 @@ function capsuleLabelWidths(maxPage) {
     probe.style.letterSpacing = style.letterSpacing;
   }
   probe.style.fontVariantNumeric = "tabular-nums";
+  probe.style.whiteSpace = "nowrap";
+  probe.style.padding = "0";
   const padX = readerTokenPx("--oi-reader-capsule-pad-x", CAPSULE_PAD_X);
   const padXMin = readerTokenPx("--oi-reader-capsule-pad-x-min", CAPSULE_PAD_X_MIN);
   document.body.append(probe);
-  const measure = (text, pad) => {
-    probe.style.padding = `0 ${pad}px`;
+  const measure = (text) => {
     probe.textContent = text;
     const box = probe.getBoundingClientRect();
     return box.width > 0 ? box.width : probe.offsetWidth;
   };
-  const fullW = measure(capsuleLabel(maxPage), padX);
-  const shortLabel = capsuleLabel(maxPage, { short: true });
-  const shortW = measure(shortLabel, padX);
-  const shortWMin = measure(shortLabel, padXMin);
+  const digitWidths = {};
+  if (maxPage > 120) {
+    for (const digit of "0123456789") digitWidths[digit] = measure(digit);
+  }
+  const pages = capsuleSamplePages(maxPage, maxPage > 120 ? digitWidths : null);
+  const shortWidths = [];
+  const fullWidths = [];
+  for (const page of pages) {
+    shortWidths.push(measure(capsuleLabel(page, { short: true })));
+    fullWidths.push(measure(capsuleLabel(page)));
+  }
   probe.remove();
+  const measured = (list) => {
+    const widths = list.filter((n) => n > 0);
+    return widths.length ? widths : [1];
+  };
   return {
-    fullW: fullW || 1,
-    shortW: shortW || 1,
-    shortWMin: shortWMin || 1,
+    shortWidths: measured(shortWidths),
+    fullWidths: measured(fullWidths),
     padX,
     padXMin
   };
@@ -2371,15 +2400,34 @@ function layoutCapsule({ keepAnchor = false } = {}) {
   const had = pane.style.getPropertyValue("--rf-measure");
   const before = keepAnchor && had ? anchorBlock(pane) : null;
   const maxPage = Math.max(1, Number(pdfDoc?.numPages) || 0);
-  const widths = capsuleLabelWidths(maxPage);
-  const place = capsulePlacement({
-    paneW: pane.clientWidth,
+  const narrow = (window.innerWidth || 0) < 900;
+  const box = stableCapsulePane({
+    client: pane.clientWidth,
     scrollbar: measureScrollbarWidth(pane),
-    pad: readerMeasurePad(),
-    fontPx: readerPrefs.fontSize,
-    fullW: widths.fullW,
-    shortW: widths.shortW,
-    shortWMin: widths.shortWMin,
+    gutter: narrow ? 0 : classicScrollbarWidth()
+  });
+  const widths = capsuleLabelWidths(maxPage);
+  const fontPx = readerPrefs.fontSize;
+  const measurePad = readerMeasurePad();
+  const column = box.paneW + (box.scrollbar > 0 ? box.scrollbar : 0);
+  const want = Math.min(36 * fontPx, column - 2 * measurePad);
+  const defaultFull = !narrow && fontPx === 16 && measurePad === 40 && Math.abs(want - 576) < 1e-6;
+  const budget = defaultFull
+    ? defaultCapsuleContentBudget({
+      visible: box.paneW,
+      startMin: maxPage >= 100 ? CAPSULE_START_RELAXED : CAPSULE_START_BAND_MIN
+    })
+    : Infinity;
+  const shortContent = reserveCapsuleContent(widths.shortWidths, budget);
+  const fullContent = reserveCapsuleContent(widths.fullWidths);
+  const place = capsulePlacement({
+    paneW: box.paneW,
+    scrollbar: box.scrollbar,
+    pad: measurePad,
+    fontPx,
+    fullW: fullContent + 2 * widths.padX,
+    shortW: shortContent + 2 * widths.padX,
+    shortWMin: shortContent + 2 * widths.padXMin,
     padX: widths.padX,
     padXMin: widths.padXMin,
     maxPage,

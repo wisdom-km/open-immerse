@@ -290,6 +290,7 @@ body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   padding: var(--oi-reader-scroll-padding);
   overscroll-behavior: contain;
   scroll-behavior: auto;
@@ -1132,6 +1133,9 @@ button:disabled { opacity: 0.45; cursor: default; }
     border-left: 0;
     border-top: 1px solid var(--oi-reader-line);
   }
+  .pane-translate-scroll {
+    scrollbar-gutter: auto;
+  }
 }
 
 .rf-capsule-bar {
@@ -1173,6 +1177,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   font-size: var(--oi-reader-capsule-size);
   line-height: var(--oi-reader-capsule-height);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   pointer-events: auto;
   cursor: pointer;
 }

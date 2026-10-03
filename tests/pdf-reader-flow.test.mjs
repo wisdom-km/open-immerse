@@ -11,6 +11,10 @@ import {
   applyReaderFontAction,
   capsuleLabel,
   capsulePlacement,
+  capsuleSamplePages,
+  defaultCapsuleContentBudget,
+  reserveCapsuleContent,
+  stableCapsulePane,
   clearFadeScroll,
   contentPagesForScope,
   defaultSplitRatio,
@@ -321,6 +325,7 @@ test("capsule yields before it covers glyphs", () => {
   assert.match(capsuleRule, /min-width:\s*var\(--rf-capsule-w/);
   assert.match(capsuleRule, /max-width:\s*var\(--rf-capsule-w/);
   assert.match(capsuleRule, /justify-content:\s*center/);
+  assert.match(capsuleRule, /white-space:\s*nowrap/);
   assert.doesNotMatch(capsuleRule, /max-content/);
   assert.match(tokens, /--oi-reader-capsule-pad-x:\s*11px/);
   assert.match(tokens, /--oi-reader-capsule-pad-x-min:\s*8px/);
@@ -337,6 +342,70 @@ test("capsule yields before it covers glyphs", () => {
   const paging = viewer.slice(viewer.indexOf("function updatePageCapsule"), viewer.indexOf("function onPageCapsuleClick"));
   assert.match(paging, /textContent = capsuleLabel\(page/);
   assert.doesNotMatch(paging, /--rf-capsule-w|max-content/);
+});
+
+test("capsule content covers every label that fits the default band, and stays one line", () => {
+  const budget = defaultCapsuleContentBudget({ visible: 701 });
+  assert.equal(budget, 44);
+  const labels = [30.4, 42.25, 43.688];
+  const content = reserveCapsuleContent(labels, budget);
+  for (const width of labels) assert.ok(width <= content, `${width} fits in ${content}`);
+  assert.ok(content <= Math.ceil(Math.max(...labels) - 1e-9) + 1);
+  assert.ok(content - Math.max(...labels) <= 1 + 1e-6);
+  const capped = reserveCapsuleContent([43.688, 46], budget);
+  assert.equal(capped, budget);
+  const place = capsulePlacement({
+    paneW: 701, scrollbar: 15, pad: 40, fontPx: 16, fullW: 91,
+    shortW: capped + 22, shortWMin: capped + 16,
+    padX: 11, padXMin: 8, maxPage: 27
+  });
+  assert.equal(place.measure, 576);
+  assert.ok(place.start >= 49 && place.start <= 56);
+  assert.ok(place.gap >= 12);
+  assert.ok(place.end >= 4);
+  assert.ok(place.padX >= 8);
+  assert.equal(place.capsuleW - 2 * place.padX, capped);
+  const samples = capsuleSamplePages(27);
+  assert.equal(samples.length, 27);
+  assert.equal(samples[0], 1);
+  assert.equal(samples[26], 27);
+  const digits = { 0: 5, 1: 5, 2: 5, 3: 5, 4: 9, 5: 5, 6: 5, 7: 5, 8: 10, 9: 6 };
+  const wideDoc = capsuleSamplePages(417, digits);
+  assert.ok(wideDoc.includes(417));
+  assert.ok(wideDoc.includes(488));
+  const capsuleRule = css.match(/\.rf-page-capsule\s*\{[^}]*\}/)[0];
+  assert.match(capsuleRule, /white-space:\s*nowrap/);
+  assert.match(css, /\.pane-translate-scroll\s*\{[^}]*scrollbar-gutter:\s*stable/s);
+  assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.pane-translate-scroll\s*\{[^}]*scrollbar-gutter:\s*auto/);
+});
+
+test("capsule start and padding ignore whether the scrollbar is painted", () => {
+  const gutter = 15;
+  const open = stableCapsulePane({ client: 716, scrollbar: 0, gutter });
+  const translated = stableCapsulePane({ client: 701, scrollbar: 15, gutter });
+  assert.deepEqual(open, translated);
+  const stacked = stableCapsulePane({ client: 800, scrollbar: 0, gutter: 0 });
+  assert.equal(stacked.paneW, 800);
+  assert.equal(stacked.scrollbar, 0);
+  for (const maxPage of [15, 27]) {
+    const opts = {
+      pad: 40, fontPx: 16, fullW: 91, shortW: 66, shortWMin: 60,
+      padX: 11, padXMin: 8, maxPage
+    };
+    const bare = capsulePlacement({ ...open, ...opts });
+    const barred = capsulePlacement({ ...translated, ...opts });
+    assert.equal(bare.start, barred.start, `start at ${maxPage}`);
+    assert.equal(bare.padX, barred.padX, `pad at ${maxPage}`);
+    assert.ok(bare.start >= 49 && bare.start <= 56);
+    assert.equal(bare.padX, 8);
+  }
+  const largeOpts = { pad: 40, fontPx: 20, fullW: 91, shortW: 67, padX: 11, padXMin: 8, maxPage: 27 };
+  const largeBare = capsulePlacement({ ...open, ...largeOpts });
+  const largeBar = capsulePlacement({ ...translated, ...largeOpts });
+  assert.equal(largeBare.start, largeBar.start);
+  assert.equal(largeBare.padX, largeBar.padX);
+  assert.ok(largeBar.end >= 8);
+  assert.ok(largeBar.start >= 24);
 });
 
 test("split keeps a ratio and the translation column stays at least 540px", () => {
