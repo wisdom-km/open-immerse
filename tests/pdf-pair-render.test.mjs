@@ -18,7 +18,11 @@ installOwnedTmpGuard(PAIR_TMP_PREFIXES);
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const fixture = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
-const shotDir = "/opt/cursor/artifacts/screenshots";
+
+function explicitShotDir() {
+  const value = String(process.env.OI_PAIR_SHOTS_DIR || "").trim();
+  return value;
+}
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -309,14 +313,15 @@ function installProbe() {
 
 test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 300000 }, async (t) => {
   assert.equal(existsSync(fixture), true, "tests/fixtures/Attention_Is_All_You_Need.pdf is missing");
-  mkdirSync(shotDir, { recursive: true });
   const server = await serveRepo();
   const ownedDir = mkdtempSync(join(tmpdir(), "oi-pair-render-"));
   rememberOwnedTemp(ownedDir);
   const userDataDir = join(ownedDir, "profile");
   const scratchDir = join(ownedDir, "scratch");
+  const shotDir = explicitShotDir() || join(ownedDir, "shots");
   mkdirSync(userDataDir);
   mkdirSync(scratchDir);
+  mkdirSync(shotDir, { recursive: true });
   const handle = { child: null, cdp: null };
   t.after(async () => {
     try {
