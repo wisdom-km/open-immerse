@@ -526,6 +526,102 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "follow restored after the source pan");
     await send("Emulation.setTouchEmulationEnabled", { enabled: false });
 
+    await clickSelector("#followSwitch");
+    await frames(2);
+    const followOff = async (label) => {
+      const state = await evaluate(`(() => ({
+        follow: document.querySelector(".workspace")?.dataset.follow || "",
+        checked: document.getElementById("followSwitch")?.getAttribute("aria-checked") || "",
+        stored: localStorage.getItem("reader.follow")
+      }))()`);
+      assert.equal(state.follow, "off", `${label} follow stays off`);
+      assert.equal(state.checked, "false", `${label} switch stays off`);
+      assert.equal(state.stored, "0", `${label} stores 0`);
+    };
+    const scrollTranslationPage = async (page, paragraph) => evaluate(`(() => {
+      const selector = ${paragraph ? `'.rf-block.oi-pdf-p[data-label="text"][data-pair-id][data-src-page="${page}"]'` : `'.rf-block[data-pair-id][data-src-page="${page}"]'`};
+      const el = document.querySelector("#readerFlow " + selector);
+      const pane = document.getElementById("translateScroll");
+      if (!el || !pane) return null;
+      const paneBox = pane.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      const bar = pane.dataset.capsuleMode === "bar" ? 44 : 0;
+      const line = paneBox.top + bar + (paneBox.height - bar) * 0.3;
+      pane.scrollTop += box.top - line;
+      const placed = el.getBoundingClientRect();
+      const top = Math.max(placed.top, paneBox.top + 8);
+      const bottom = Math.min(placed.bottom, paneBox.bottom - 8);
+      return {
+        source: document.getElementById("pages").scrollTop,
+        x: Math.min(Math.max(placed.left + Math.min(24, placed.width / 3), paneBox.left + 12), paneBox.right - 12),
+        y: bottom > top ? (top + bottom) / 2 : placed.top + placed.height / 2
+      };
+    })()`);
+    const readPanes = () => evaluate(`(() => ({
+      pager: document.getElementById("pager")?.textContent || "",
+      capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
+      sourceLabel: document.getElementById("sourcePageLabel")?.textContent || "",
+      source: document.getElementById("pages").scrollTop
+    }))()`);
+    await followOff("switch");
+    await evaluate(`document.getElementById("pages").scrollTop = 0`);
+    await frames(3);
+    const parked = await scrollTranslationPage(1, false);
+    assert.ok(parked, "page 1 block");
+    await frames(4);
+    const atPage1 = await readPanes();
+    assert.equal(atPage1.capsule, "1", "capsule is page 1");
+    assert.equal(atPage1.pager, "1 / 15", "toolbar leaves the paged page for the capsule");
+    assert.match(atPage1.sourceLabel, /第 1\//, "source pane is page 1");
+    near(atPage1.source, parked.source, 1, "parking scroll stays");
+    const atFive = await scrollTranslationPage(5, true);
+    assert.ok(atFive, "page 5 paragraph");
+    await frames(4);
+    const atPage5 = await readPanes();
+    assert.equal(atPage5.capsule, "5", "capsule is page 5");
+    assert.equal(atPage5.pager, "5 / 15", "toolbar follows the translation capsule");
+    assert.match(atPage5.sourceLabel, /第 1\//, "source pane stays on page 1");
+    near(atPage5.source, parked.source, 1, "translation scroll leaves the source pane");
+    await followOff("capsule page");
+    await mouseClick(atFive.x, atFive.y);
+    await frames(3);
+    await followOff("paragraph click");
+    await clickSelector("#pageCapsule");
+    await frames(3);
+    await followOff("capsule click");
+    const sourceLine = await evaluate(`(() => {
+      const pages = document.getElementById("pages");
+      const pane = pages.getBoundingClientRect();
+      for (const node of document.querySelectorAll("#readerFlow [data-pair-id][data-src-rects]")) {
+        if (node.dataset.pairPart === "inline") continue;
+        const rect = JSON.parse(node.dataset.srcRects || "[]")[0];
+        if (!rect) continue;
+        const pageEl = document.querySelector('#pages .pdf-page[data-page="' + rect.p + '"]');
+        if (!pageEl) continue;
+        const page = pageEl.getBoundingClientRect();
+        const pt = window.__oi.pagePt(pageEl);
+        if (!pt?.width || !pt?.height) continue;
+        const x = page.left + ((rect.x + Math.min(24, rect.w / 3)) / pt.width) * page.width;
+        const y = page.top + ((rect.y + Math.min(8, rect.h / 3)) / pt.height) * page.height;
+        if (x < pane.left + 8 || x > pane.right - 8 || y < pane.top + 8 || y > pane.bottom - 36) continue;
+        return { x, y };
+      }
+      return null;
+    })()`);
+    assert.ok(sourceLine, "visible source line");
+    await mouseClick(sourceLine.x, sourceLine.y);
+    await frames(3);
+    await followOff("source click");
+    await sleep(1700);
+    const heldAfterJump = await evaluate(`document.getElementById("pages").scrollTop`);
+    await evaluate(`document.getElementById("translateScroll").scrollTop += 220`);
+    await frames(4);
+    near(await evaluate(`document.getElementById("pages").scrollTop`), heldAfterJump, 1, "translation scroll does not move a followed-off source");
+    await evaluate(`document.body.focus()`);
+    await keyTap("f", "KeyF", 70, { text: "f" });
+    await frames(2);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "follow restored after the off checks");
+
     const catalog = await evaluate(`(() => {
       const blocks = [...document.querySelectorAll("#readerFlow .rf-block[data-pair-id]")].map((el) => ({
         page: el.dataset.srcPage || el.dataset.page || "",
