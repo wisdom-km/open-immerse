@@ -10,6 +10,8 @@
 | --- | --- | --- |
 | 练习集 #18、#71、#78、#85、#116、#165 的旧标注与现行规则不一致 | 等你过目 | 先看 `docs/v1-m1-rulings.md` 的「2026-09-30 新裁定」和下面第二节第 6 条。点头之后才改 `labels/reviewed`。这一轮不改数据。 |
 | 第三层占位的上线门槛 | 等基线 | 第三层上线前要在练习集上报告各层占比。占位比例的上线门槛等基线出来后由产品方定。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。第三层占位开关：等上线门槛。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示（第一层的高清重渲染或 png 裁图）。规格见 `pdf/high-precision/REQUIREMENTS.md` §2.6 和 `EXECUTION.md` 阶段 6。 |
+| arXiv 源码模式 P0（只改文档） | 等你批准 PR | 你 2026-10-04 23:33 已批准 12 条建议。文档 PR 改了 REQUIREMENTS 第 34 行「只有 PDF」（新增 §2.7），新写 `docs/arxiv-source-mode.md`。这个 PR 批准合入后才开始 P1–P4；P5 接右栏等 Loom 规格。 |
+| 界面第二期计划里要你定的事 | 等你决定 | 见 `docs/ui-phase2-plan.md` 第三节：握把改成悬停才显示；第三层占位要不要提前默认打开（行内要不要也默认打开）；「多模态识别 → 矢量重画 → 裁图 → 占位」是不是运行时顺序。 |
 
 ## 二、需要你动手（标注）
 
@@ -89,6 +91,7 @@
 - 2026-10-04：已升级成块的 7 个公式（14px 档下标中位数 6.0–6.18px）不归 ② 管，单列推后。Wisdom 2026-10-04 批准。
 - 2026-10-04：③ 单变量和短式按 x-height 设下限。先推后。触发条件是真机上确实看着小。做法和触发条件是 Wisdom 2026-10-04 批准的方案。
 - 2026-10-04：`lib/pdf-text-layer.js` 里仍留着旧的行内盒高计算。同组有 `INLINE_INK_TARGET`（1.30）、`INLINE_INK_STRONG_LO`（1.25）、`INLINE_INK_STRONG_HI`（1.35）、`INLINE_INK_FLOOR`（1）、`INLINE_LINE_BOX_LO`（1.9）、`INLINE_LINE_BOX_HI`（2.2）、`INLINE_LINE_TOP_LO`（1.8）、`INLINE_LINE_TOP_HI`（2.1），以及 `inlineCropBoxEm`。`lib/pdf-formula-size.js` 第 8–12 行导入了 `INLINE_INK_STRONG_HI`、`INLINE_INK_TARGET`、`INLINE_LINE_BOX_HI`、`inlineCropBoxEm`、`inlineLineTopEm`，用在导出的 `inlinePaintBox` 和 `inlinePromotesToDisplay` 里。阅读器不调用这两个函数。`tests/pdf-formula-size.test.mjs` 调用它们；`tests/pdf-plaintext-formula.test.mjs` 仍锁定 1.25–1.35 和名义盒 1.95em。`pdf/viewer.css` 第 674 行注释仍写着墨迹进 1.25–1.35 带后行顶在 1.8–2.1em，第 685 行注释仍写着墨迹目标 1.30×、名义盒 1.95em。先记下，等做 ① 或 ② 时一并判断删除还是保留。现在不改代码和 CSS。
+- 2026-10-04：封存夹具 `tests/fixtures/prelabel-judgments.json`（PR #78 于 2026-09-29 加入）里引用的只有 held-out 条目的编号，没有发现 bbox 或强命中这类泄漏。你已决定：文件保持原样，不删不改，只记在这里。**任何人（含 agent）都不许打开这个文件**，搜索也要绕开它。GATE 2 判定完再决定怎么处理。
 
 ## 五、复核工具快捷键
 
@@ -97,6 +100,7 @@
 
 ## 六、已完成（最近）
 
+- 2026-10-04 23:33：你批准了 arXiv 源码模式的 12 条建议，并给了界面第二期的 7 条反馈。文档已写进 `pdf/high-precision/REQUIREMENTS.md` §2.7、`docs/arxiv-source-mode.md`、`docs/ui-phase2-plan.md`（文档 PR，待合入）。
 - 2026-10-04：PR #96 合入后，PR #97 补了全文点胶囊跳页后上一页/下一页按钮状态的测试（CAP1/CAP2，守护 `pdf/viewer.js` 中 `onPdfScroll` ignores 分支的 `updatePager`）。
 - 2026-09-30：#176 写成正式裁定。图注里 `κ = − 1` 是行内公式；斜体 `q`（`q-values`）和面板号 `d` 是正文。「保留为正文」指 `q` 和 `d`，不是 `κ`。复核稿与这条一致，不改数据。
 - 2026-09-30：2026-09-30 新裁定已写入 `docs/v1-m1-labels.md` 和 `docs/v1-m1-rulings.md`。#18、#71、#78、#85、#165 的复核稿仍是旧标注，改数据前等你过目。
@@ -112,9 +116,14 @@
 - **PR-2b**：跨页、跨栏的段落组（SY6，S-10 的跨页部分）。把上一页末尾和下一页开头拼成一组，跨页保存，按栏、按行给矩形，段落结束后再分页。现在每页单独排版、翻译、保存，做不到。多栏页的外接框会盖住栏间距，也记在这里。
 - **PR-3a**：原文区形态（分栏 / 迷你 / 隐藏 + 弹出；SW3–SW5，FL5）。断点 1200 / 900 / 600（小于 900 用原页加底部抽屉，900–1199 用下拉和「···」里的额外项）。完整键盘（j/k 移动，块上 Enter，F6 按视觉顺序，\、p、[、]；KB1–KB3 里这一轮没做的部分）。缩放条移进原文栏标题。
 - **PR-3b**：对照（CM1–CM2，t/o）。三层显示（占位、图占位、行内短裁图、第二层隐藏；FM3–FM14）。选择工具条（看原文 / 跳到原页 / 复制；TB1–TB3）。
-- **第二期**：术语、笔记、问 AI、改译文。术语的菜单项（g）这一轮不画。
+- **第二期**：术语、笔记、问 AI、改译文。术语的菜单项（g）这一轮不画。2026-10-04 的 7 条反馈已写成计划，见 `docs/ui-phase2-plan.md`（改译文这次没提，仍留在这里）。
 - 缩放条仍浮在原文栏上，不进 36px 标题。见 PR-3a。
 - 旧名字留着，不在这一轮改：`leftBaseBox`、`leftPageBox`、`--oi-pdf-left-w`、`leftPaneScroll`。新代码只用原文栏 / 译文栏。
 - 库存文章和旧的 `appendReadoutNode` 路径没有外接框，配不上对（S-9）。不补框。
 - `settings.pdfScroll.softPageFollow` 还在 `lib/storage.js` 里当作废弃字段归一化，设置页已经没有这一行。下一轮可以删字段。不把旧值迁到 `reader.follow`。
 - 没有外接框时，点原文只滚到页顶，标题闪「已到第 N 页」，不画框。
+
+## 八、以后的计划（已记下，这一轮不做）
+
+- **可复制源码 LaTeX（重要）**：arXiv 源码模式第一版不做（2026-10-04 你的第 12 条决定）。有了第零层以后很容易做：过了核对的公式可以复制作者原稿里的 LaTeX。排在 P6，做之前要改 REQUIREMENTS §2.3「可复制 LaTeX 不做」。见 `docs/arxiv-source-mode.md` 第 3 节。
+- arXiv 源码模式 P6 的其他项：用源码修结构（补被吞的标题和词、改错标的题注）、出版社 PDF 按题名反查 arXiv（默认关）、arXiv HTML 作备用来源。等 P1–P5 的数据再定。
