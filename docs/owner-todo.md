@@ -88,7 +88,7 @@
 - 2026-10-04：② 14px 档小下标偏小。要修，优先级 P2，排在 ① 后面。基线是主路径上的 30 个（14px 档，下标墨迹中位数低于 7px）。做法不变：只给该公式加大倍数，上限仍是 2.2em，不升级成块。现行 `lib/pdf-formula-size.js` 第 279 行的 `inlineCropRaises` 会把下标低于 7px 的公式升级成块。做 ② 时要同步改这条规则。已经升级的 7 个归单列的推后项。验收：修完后主路径里仍低于 7px 的，只能是被 2.2em 上限卡住的。按现在线性估算大约 4 个，是 DPO p5-b18、p17-b15、p19-b3、p19-b6。撑行和升级数不明显增加。口径要统一：验收和代码判定用同一种下标量法。现在实测是像素下标中位数，代码是 bbox 估算。做 ② 时先定下一种，并写进测试。Wisdom 2026-10-04 12:13 重新批准。
 - 2026-10-04：已升级成块的 7 个公式（14px 档下标中位数 6.0–6.18px）不归 ② 管，单列推后。Wisdom 2026-10-04 批准。
 - 2026-10-04：③ 单变量和短式按 x-height 设下限。先推后。触发条件是真机上确实看着小。做法和触发条件是 Wisdom 2026-10-04 批准的方案。
-- 2026-10-04：`lib/pdf-text-layer.js` 里仍留着旧的行内盒高计算。同组有 `INLINE_INK_TARGET`（1.30）、`INLINE_INK_STRONG_LO`（1.25）、`INLINE_INK_STRONG_HI`（1.35）、`INLINE_INK_FLOOR`（1）、`INLINE_LINE_BOX_LO`（1.9）、`INLINE_LINE_BOX_HI`（2.2）、`INLINE_LINE_TOP_LO`（1.8）、`INLINE_LINE_TOP_HI`（2.1），以及 `inlineCropBoxEm`。`lib/pdf-formula-size.js` 第 8–12 行导入了 `INLINE_INK_STRONG_HI`、`INLINE_INK_TARGET`、`INLINE_LINE_BOX_HI`、`inlineCropBoxEm`、`inlineLineTopEm`，用在导出的 `inlinePaintBox` 和 `inlinePromotesToDisplay` 里。阅读器不调用这两个函数。`tests/pdf-formula-size.test.mjs` 调用它们；`tests/pdf-plaintext-formula.test.mjs` 仍锁定 1.25–1.35 和名义盒 1.95em。`pdf/viewer.css` 第 663 行注释仍写着墨迹进 1.25–1.35 带后行顶在 1.8–2.1em，第 674 行注释仍写着墨迹目标 1.30×、名义盒 1.95em。先记下，等做 ① 或 ② 时一并判断删除还是保留。现在不改代码和 CSS。
+- 2026-10-04：`lib/pdf-text-layer.js` 里仍留着旧的行内盒高计算。同组有 `INLINE_INK_TARGET`（1.30）、`INLINE_INK_STRONG_LO`（1.25）、`INLINE_INK_STRONG_HI`（1.35）、`INLINE_INK_FLOOR`（1）、`INLINE_LINE_BOX_LO`（1.9）、`INLINE_LINE_BOX_HI`（2.2）、`INLINE_LINE_TOP_LO`（1.8）、`INLINE_LINE_TOP_HI`（2.1），以及 `inlineCropBoxEm`。`lib/pdf-formula-size.js` 第 8–12 行导入了 `INLINE_INK_STRONG_HI`、`INLINE_INK_TARGET`、`INLINE_LINE_BOX_HI`、`inlineCropBoxEm`、`inlineLineTopEm`，用在导出的 `inlinePaintBox` 和 `inlinePromotesToDisplay` 里。阅读器不调用这两个函数。`tests/pdf-formula-size.test.mjs` 调用它们；`tests/pdf-plaintext-formula.test.mjs` 仍锁定 1.25–1.35 和名义盒 1.95em。`pdf/viewer.css` 第 674 行注释仍写着墨迹进 1.25–1.35 带后行顶在 1.8–2.1em，第 685 行注释仍写着墨迹目标 1.30×、名义盒 1.95em。先记下，等做 ① 或 ② 时一并判断删除还是保留。现在不改代码和 CSS。
 
 ## 五、复核工具快捷键
 
@@ -105,3 +105,15 @@
 - 2026-09-29：PR #78（M1 语料与复核集）合入 main@7e10df3。
 - 2026-09-29：PR #79（审计补强）合入 main@9f69f92。全量测试的 encoder-N 过时期望已撤掉。
 - 2026-09-29：PR #81（待办清单进仓库 docs/owner-todo.md）合入 main@4904479。仓库那份会在下次改文档时同步成这份笔记的最新内容。
+
+## 七、阅读器界面第一期 · 延后（PR-2 记下，这一轮不做）
+
+- **PR-2b**：跨页、跨栏的段落组（SY6，S-10 的跨页部分）。把上一页末尾和下一页开头拼成一组，跨页保存，按栏、按行给矩形，段落结束后再分页。现在每页单独排版、翻译、保存，做不到。多栏页的外接框会盖住栏间距，也记在这里。
+- **PR-3a**：原文区形态（分栏 / 迷你 / 隐藏 + 弹出；SW3–SW5，FL5）。断点 1200 / 900 / 600（小于 900 用原页加底部抽屉，900–1199 用下拉和「···」里的额外项）。完整键盘（j/k 移动，块上 Enter，F6 按视觉顺序，\、p、[、]；KB1–KB3 里这一轮没做的部分）。缩放条移进原文栏标题。
+- **PR-3b**：对照（CM1–CM2，t/o）。三层显示（占位、图占位、行内短裁图、第二层隐藏；FM3–FM14）。选择工具条（看原文 / 跳到原页 / 复制；TB1–TB3）。
+- **第二期**：术语、笔记、问 AI、改译文。术语的菜单项（g）这一轮不画。
+- 缩放条仍浮在原文栏上，不进 36px 标题。见 PR-3a。
+- 旧名字留着，不在这一轮改：`leftBaseBox`、`leftPageBox`、`--oi-pdf-left-w`、`leftPaneScroll`。新代码只用原文栏 / 译文栏。
+- 库存文章和旧的 `appendReadoutNode` 路径没有外接框，配不上对（S-9）。不补框。
+- `settings.pdfScroll.softPageFollow` 还在 `lib/storage.js` 里当作废弃字段归一化，设置页已经没有这一行。下一轮可以删字段。不把旧值迁到 `reader.follow`。
+- 没有外接框时，点原文只滚到页顶，标题闪「已到第 N 页」，不画框。

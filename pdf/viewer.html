@@ -27,13 +27,26 @@
       <button type="button" id="retranslatePage" class="btn-secondary" disabled>重译本页</button>
       <button type="button" id="stopTranslate" class="btn-primary" hidden disabled>停止</button>
       <button type="button" id="restoreOriginal" class="btn-ghost" disabled>原文</button>
-      <button type="button" id="exportMd" class="btn-ghost btn-export" disabled>导出 MD</button>
-      <button type="button" id="exportPdf" class="btn-ghost btn-export" disabled>导出 PDF</button>
       <button type="button" id="prev" class="btn-ghost" disabled>上一页</button>
       <p id="pager" class="pager" aria-live="polite">0 / 0</p>
       <button type="button" id="next" class="btn-ghost" disabled>下一页</button>
       <span class="toolbar-rule" aria-hidden="true"></span>
       <button type="button" id="aaButton" class="btn-ghost aa-button" aria-haspopup="dialog" aria-expanded="false" aria-controls="aaPanel">Aa</button>
+      <div class="more-wrap">
+        <button type="button" id="moreButton" class="more-button hit-pad" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu" aria-label="更多">
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="3.25" cy="8" r="1.15" fill="currentColor"></circle>
+            <circle cx="8" cy="8" r="1.15" fill="currentColor"></circle>
+            <circle cx="12.75" cy="8" r="1.15" fill="currentColor"></circle>
+          </svg>
+        </button>
+        <div id="moreMenu" class="more-menu" role="menu" aria-label="更多" hidden>
+          <button type="button" id="swapPanes" class="more-item hit-pad" role="menuitemcheckbox" aria-checked="false" aria-keyshortcuts="s">互换两栏<span class="menu-key">s</span></button>
+          <div class="more-sep" role="separator"></div>
+          <button type="button" id="exportMd" class="more-item hit-pad btn-export" role="menuitem" disabled aria-disabled="true">导出 MD</button>
+          <button type="button" id="exportPdf" class="more-item hit-pad btn-export" role="menuitem" disabled aria-disabled="true">导出 PDF</button>
+        </div>
+      </div>
     </div>
   </header>
   <div id="aaPanel" class="aa-panel oi-reader" data-reader-theme="warm" hidden role="dialog" aria-label="阅读设置">
@@ -62,7 +75,17 @@
   </div>
   <p id="status" role="status">还没有打开 PDF。</p>
   <div class="workspace">
-    <section class="pane-pdf" id="pdfPane" aria-label="PDF">
+    <section class="pane-pdf" id="pdfPane" aria-label="原文栏">
+      <header class="source-head">
+        <span class="source-head-name">原文栏</span>
+        <span id="sourcePageLabel" class="source-head-page">第 0/0 页</span>
+        <span class="source-head-gap"></span>
+        <span id="sourceStatus" class="source-head-status"></span>
+        <button type="button" id="followSwitch" class="follow-switch hit-pad" role="switch" aria-checked="true" title="译文栏读到哪，原文栏就跟到哪（f）">
+          <span class="follow-box" aria-hidden="true"></span>
+          <span class="follow-label">跟随</span>
+        </button>
+      </header>
       <div id="pages" class="pages"></div>
       <div id="zoomChip" class="zoom-gutter" role="group" aria-label="缩放">
         <button type="button" id="zoomOut" class="zoom-gutter-btn" disabled>缩小</button>
@@ -70,7 +93,8 @@
         <button type="button" id="zoomIn" class="zoom-gutter-btn" disabled>放大</button>
       </div>
     </section>
-    <aside class="pane-translate" aria-label="译文">
+    <div class="split-handle" role="separator" aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0" aria-label="调整分栏"></div>
+    <aside class="pane-translate" aria-label="译文栏">
       <div id="reader" class="oi-reader" data-reader-theme="warm">
         <div id="translateScroll" class="pane-translate-scroll">
           <div id="capsuleBar" class="rf-capsule-bar">
@@ -84,7 +108,6 @@
         <div id="readerFade" class="rf-fade" aria-hidden="true" hidden></div>
       </div>
     </aside>
-    <div class="split-handle" role="separator" aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0" aria-label="调整分栏"></div>
   </div>
   <script src="./vendor/katex/katex.min.js"></script>
   <script type="module" src="viewer.js"></script>

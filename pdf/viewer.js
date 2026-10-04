@@ -66,10 +66,31 @@ import {
   alignScrollTop,
   createScrollSyncGate,
   createSyncOwner,
-  createWheelFlipGuard,
-  planPaneFollow,
-  readSoftPageFollow
+  createWheelFlipGuard
 } from "../lib/pdf-scroll.js";
+import {
+  appliedSourceSide,
+  blockAtAnchor,
+  buildBlockPairs,
+  createJumpLock,
+  decodeSrcRects,
+  encodeSrcRects,
+  followReducer,
+  isUnlockEvent,
+  menuNext,
+  pageArrivalText,
+  pairBoxStyle,
+  pairClickKept,
+  sourceAnchorScroll,
+  sourceFollowScroll,
+  sourceHit,
+  sourcePageLabel,
+  splitKeyStep,
+  splitPointerRatio,
+  structureRolePairs,
+  translationJumpScroll,
+  visualPaneOrder
+} from "../lib/pdf-pairing.js";
 import {
   pagesInTranslateScope,
   PDF_PAPER_GUTTER_X,
@@ -224,7 +245,16 @@ let session = createTranslateSession();
 let zoomChipCustom = false;
 let mirrorZoomChipCustom = false;
 let exporting = false;
-let softPageFollow = false;
+let followState = "on";
+let appliedSide = "";
+let currentPairId = "";
+let jumpPairId = "";
+let jumpPart = "";
+let arrivalText = "";
+let arrivalTimer = 0;
+let pairPress = null;
+let sourceHotTick = 0;
+const jumpLock = createJumpLock();
 let followGeneration = 0;
 const syncOwner = createSyncOwner();
 const wheelFlip = createWheelFlipGuard();
@@ -256,8 +286,14 @@ function init() {
     $("file").value = "";
     if (file) await openFile(file);
   });
-  $("prev").addEventListener("click", () => goPage(-1));
-  $("next").addEventListener("click", () => goPage(1));
+  $("prev").addEventListener("click", () => {
+    noteUserSourceInput();
+    goPage(-1);
+  });
+  $("next").addEventListener("click", () => {
+    noteUserSourceInput();
+    goPage(1);
+  });
   $("zoomOut").addEventListener("click", () => setZoom(nextZoom(zoom, -1)));
   $("zoomIn").addEventListener("click", () => setZoom(nextZoom(zoom, 1)));
   $("mirrorZoomOut")?.addEventListener("click", () => setMirrorZoom(nextZoom(mirrorZoom, -1)));
@@ -274,22 +310,29 @@ function init() {
   document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
   $("readerFlow")?.addEventListener("click", onReaderFlowClick);
-  $("readerFlow")?.addEventListener("pointerdown", (event) => {
-    const interactive = event.target.closest?.("button, a, input, textarea, select");
-    if (interactive) return;
-    $("readerFlow")?.focus({ preventScroll: true });
-  });
+  $("readerFlow")?.addEventListener("pointerdown", onFlowPointerDown);
+  $("readerFlow")?.addEventListener("pointerup", onFlowPointerUp);
   $("pageCapsule")?.addEventListener("click", onPageCapsuleClick);
+  $("followSwitch")?.addEventListener("click", toggleFollow);
+  $("sourceStatus")?.addEventListener("click", onSourceStatusClick);
   bindReaderChrome();
   bindPaperMetrics();
   bindPaneScroll();
-  bindPdfScrollSettings();
+  bindMoreMenu();
+  bindSourcePointer();
+  watchSourceAvailability();
   $("translatePage").addEventListener("click", () => startTranslate());
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("restoreOriginal").addEventListener("click", restoreOriginal);
-  $("exportMd").addEventListener("click", () => exportReadout("md"));
-  $("exportPdf").addEventListener("click", () => exportReadout("pdf"));
+  $("exportMd").addEventListener("click", () => {
+    closeMoreMenu(true);
+    exportReadout("md");
+  });
+  $("exportPdf").addEventListener("click", () => {
+    closeMoreMenu(true);
+    exportReadout("pdf");
+  });
   document.addEventListener("keydown", onKey);
   listenProgress();
 
@@ -336,6 +379,21 @@ function onKey(event) {
     event.preventDefault();
     return;
   }
+  if (event.key === "Escape" && closeMoreMenu(true)) {
+    event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && clearJumpMark()) {
+    event.preventDefault();
+    return;
+  }
+  if (onMenuKey(event)) return;
+  if (isUnlockEvent({ type: "keydown", key: event.key })) releaseJumpLock();
+  if (event.key === "Enter" && event.target?.classList?.contains("oi-pdf-inline-math")) {
+    event.preventDefault();
+    jumpTranslationToSource(event.target);
+    return;
+  }
   const shortcut = readerFontShortcut({
     key: event.key,
     metaKey: event.metaKey,
@@ -353,8 +411,31 @@ function onKey(event) {
   }
   if (eventTargetIsField(event.target) || event.target?.isContentEditable) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
-  if (event.key === "ArrowLeft") goPage(-1);
-  if (event.key === "ArrowRight") goPage(1);
+  const sourceScrollKey = event.key === "ArrowUp" || event.key === "ArrowDown"
+    || event.key === "PageUp" || event.key === "PageDown"
+    || event.key === "Home" || event.key === "End" || event.key === " ";
+  if (sourceScrollKey && focusInSource(event.target)) noteUserSourceInput();
+  if (readerPrefs.singleKey !== false && !event.shiftKey && !focusInOpenMenu() && !focusInAaPanel()) {
+    if (event.key === "f" || event.key === "F") {
+      event.preventDefault();
+      toggleFollow();
+      return;
+    }
+    if (event.key === "s" || event.key === "S") {
+      event.preventDefault();
+      toggleSourceSide();
+      return;
+    }
+  }
+  if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && event.target?.closest?.(".split-handle")) return;
+  if (event.key === "ArrowLeft") {
+    noteUserSourceInput();
+    goPage(-1);
+  }
+  if (event.key === "ArrowRight") {
+    noteUserSourceInput();
+    goPage(1);
+  }
   if (focusInReader(event.target)) return;
   if (event.key === "-" || event.key === "_") setZoom(nextZoom(zoom, -1));
   if (event.key === "+" || event.key === "=") setZoom(nextZoom(zoom, 1));
@@ -371,6 +452,26 @@ function eventTargetIsField(target) {
 function focusInReader(target) {
   if (!target || typeof target.closest !== "function") return false;
   return Boolean(target.closest(".oi-reader, .pane-translate, .aa-panel"));
+}
+
+function focusInSource(target) {
+  const pane = $("pdfPane");
+  if (!pane || !target) return false;
+  return target === pane || pane.contains(target);
+}
+
+function focusInOpenMenu() {
+  const menu = $("moreMenu");
+  if (!menu || menu.hidden) return false;
+  const active = document.activeElement;
+  return Boolean(active && (menu.contains(active) || active === $("moreButton")));
+}
+
+function focusInAaPanel() {
+  const panel = $("aaPanel");
+  if (!panel || panel.hidden) return false;
+  const active = document.activeElement;
+  return Boolean(active && panel.contains(active));
 }
 
 function detectReaderBlend() {
@@ -515,6 +616,11 @@ function loadReaderPrefs() {
   detectReaderBlend();
   applyReaderSurface();
   applyStoredSplitRatio();
+  followState = readerPrefs.follow === false ? "off" : "on";
+  const workspace = document.querySelector(".workspace");
+  if (workspace) workspace.dataset.follow = followState;
+  applySourceSide(false);
+  syncFollowControls();
 }
 
 function syncAaPanel() {
@@ -688,38 +794,23 @@ function bindPaneScroll() {
   const readout = translateScrollRoot();
   pdf.addEventListener("scroll", onPdfScroll, { passive: true });
   pdf.addEventListener("scrollend", onPdfScrollEnd, { passive: true });
-  pdf.addEventListener("pointerdown", () => takeDriver("pdf"), { passive: true });
+  pdf.addEventListener("pointerdown", onSourceSurfaceDown, { passive: true });
+  pdf.addEventListener("wheel", onPaneWheelUnlock, { passive: true });
+  pdf.addEventListener("touchstart", onSourceContentTouchStart, { passive: true });
+  pdf.addEventListener("touchmove", onSourceContentTouchMove, { passive: true });
+  pdf.addEventListener("touchend", onSourceContentTouchEnd, { passive: true });
+  pdf.addEventListener("touchcancel", onSourceContentTouchEnd, { passive: true });
   $("pdfPane").addEventListener("wheel", onPdfWheel, { passive: true });
   readout?.addEventListener("scroll", onTranslateScroll, { passive: true });
   readout?.addEventListener("scrollend", onReadoutScrollEnd, { passive: true });
   readout?.addEventListener("wheel", onReadoutWheel, { passive: true });
-  readout?.addEventListener("pointerdown", () => takeDriver("readout"), { passive: true });
+  readout?.addEventListener("pointerdown", onTranslationSurfaceDown, { passive: true });
+  readout?.addEventListener("touchstart", onTranslationTouchStart, { passive: true });
 }
 
 function takeDriver(side) {
   if (syncOwner.owner !== side) followGeneration += 1;
   syncOwner.claim(side);
-}
-
-function bindPdfScrollSettings() {
-  loadPdfScrollPrefs();
-  try {
-    chrome.storage?.onChanged?.addListener((changes, area) => {
-      if (area !== "sync" || !changes?.settings) return;
-      softPageFollow = readSoftPageFollow(changes.settings.newValue);
-    });
-  } catch {
-    /* opened outside the extension */
-  }
-}
-
-async function loadPdfScrollPrefs() {
-  try {
-    const res = await runtimeSend({ type: "OI_GET_SETTINGS" });
-    softPageFollow = readSoftPageFollow(res?.settings);
-  } catch {
-    softPageFollow = false;
-  }
 }
 
 function pdfScrollRoot() {
@@ -816,6 +907,10 @@ function syncSplitAria(workspace) {
 }
 
 function onSplitKey(event, workspace) {
+  const step = splitKeyStep({ key: event.key, shift: event.shiftKey, side: appliedSide === "end" ? "end" : "start" });
+  if (!step) return;
+  event.preventDefault();
+  event.stopPropagation();
   const width = workspace.getBoundingClientRect().width;
   if (width < 900) return;
   const splitW = splitColumnWidth(workspace);
@@ -823,16 +918,13 @@ function onSplitKey(event, workspace) {
   const current = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio")) || defaultSplitRatio(width);
   const layout = splitLayout({ width, ratio: current, splitW });
   let next = null;
-  if (event.key === "ArrowLeft") next = (layout.source - (event.shiftKey ? 64 : 16)) / available;
-  else if (event.key === "ArrowRight") next = (layout.source + (event.shiftKey ? 64 : 16)) / available;
-  else if (event.key === "Home") next = 0;
-  else if (event.key === "End") next = 1;
-  else if (event.key === "Enter") {
-    event.preventDefault();
+  if (step.to === "min") next = 0;
+  else if (step.to === "max") next = 1;
+  else if (step.to === "reset") {
     resetSplit(workspace);
     return;
-  } else return;
-  event.preventDefault();
+  } else if (Number.isFinite(step.delta)) next = (layout.source + step.delta) / available;
+  else return;
   paintSplitRatio(workspace, next);
   persistSplitRatio(workspace);
   syncZoomChip();
@@ -851,9 +943,13 @@ function applySplit(workspace, clientX) {
   const rect = workspace.getBoundingClientRect();
   if (rect.width < 900) return;
   const splitW = splitColumnWidth(workspace);
-  const available = Math.max(1, rect.width - splitW);
-  const pointer = clientX - rect.left - splitW / 2;
-  paintSplitRatio(workspace, pointer / available);
+  const ratio = splitPointerRatio({
+    clientX,
+    rect: { x: rect.x, width: rect.width, end: rect.x + rect.width },
+    splitW,
+    side: appliedSide === "end" ? "end" : "start"
+  });
+  paintSplitRatio(workspace, ratio);
   syncZoomChip();
   syncMirrorZoomChip();
   applyPaperMetrics();
@@ -1838,33 +1934,876 @@ function appendFixtureReadout(parent, layout, options = {}) {
 }
 
 function onReadoutBlockClick(event) {
-  const node = event.target.closest?.("[data-block-id]");
-  if (!node?.dataset?.blockId) return;
-  const page = Number(node.dataset.page);
-  const wrap = document.querySelector(`#pages .pdf-page[data-page="${page}"]`);
+  const node = pairNodeFromEvent(event);
+  if (!node) return;
+  const behavior = PANE_SYNC_BEHAVIOR;
+  if (behavior !== "auto") return;
   takeDriver("click");
-  if (pdfDoc && Number.isFinite(page) && page >= 1 && page !== pageNum) {
-    pageNum = page;
-    updatePager();
-    loadCurrentPageText();
-  }
-  if (wrap) wrap.scrollIntoView({ block: "start", behavior: PANE_SYNC_BEHAVIOR });
-  const layout = getPageLayout(page);
-  const block = (layout?.blocks || []).find((item) => item.id === node.dataset.blockId);
-  paintSourceMark(wrap, block?.bbox);
+  jumpTranslationToSource(node);
 }
 
-function paintSourceMark(wrap, bbox) {
-  document.querySelectorAll(".mirror-source-mark").forEach((el) => el.remove());
-  if (!wrap || !Array.isArray(bbox) || bbox.length < 4) return;
-  const [x0, y0, x1, y1] = bbox;
-  const mark = document.createElement("div");
-  mark.className = "mirror-source-mark";
-  mark.style.left = `${x0 * 100}%`;
-  mark.style.top = `${y0 * 100}%`;
-  mark.style.width = `${(x1 - x0) * 100}%`;
-  mark.style.height = `${(y1 - y0) * 100}%`;
-  wrap.append(mark);
+function cssEscape(value) {
+  if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
+  return String(value).replace(/"/g, "\\'");
+}
+
+function pairNodeFromEvent(event) {
+  if (pairControlBlocked(event)) return null;
+  const node = event.target?.closest?.("[data-pair-id]");
+  if (!node || node.closest("#pages")) return null;
+  return node;
+}
+
+function pairControlBlocked(event) {
+  const target = event?.target;
+  if (!target?.closest) return false;
+  if (target.closest("button, a, input, textarea, select, [role='button']")) return true;
+  const scroller = target.closest(".oi-pdf-math-scroll, .oi-pdf-inline-math.is-raised");
+  if (scroller && target === scroller && event.offsetY > scroller.clientHeight) return true;
+  return false;
+}
+
+function selectionIsCollapsed() {
+  const sel = window.getSelection?.();
+  return !sel || sel.isCollapsed;
+}
+
+function onFlowPointerDown(event) {
+  if (event.button != null && event.button !== 0) return;
+  const interactive = event.target.closest?.("button, a, input, textarea, select, [role='button']");
+  if (!interactive) $("readerFlow")?.focus({ preventScroll: true });
+  pairPress = { x: event.clientX, y: event.clientY };
+}
+
+function onFlowPointerUp(event) {
+  const press = pairPress;
+  pairPress = null;
+  if (!press) return;
+  if (!pairClickKept({
+    dx: event.clientX - press.x,
+    dy: event.clientY - press.y,
+    collapsed: selectionIsCollapsed(),
+    blocked: pairControlBlocked(event)
+  })) return;
+  onReadoutBlockClick(event);
+}
+
+function onFlowKey(event) {
+  if (event.key !== "Enter") return;
+  if (!event.target?.classList?.contains("oi-pdf-inline-math")) return;
+  event.preventDefault();
+  jumpTranslationToSource(event.target);
+}
+
+function jumpTranslationToSource(node) {
+  if (!node?.dataset?.pairId) return;
+  const part = node.dataset.pairPart === "inline" ? "inline" : "";
+  const rects = decodeSrcRects(node.dataset.srcRects);
+  const rect = rects[0];
+  if (!rect) {
+    const page = Number(node.dataset.page || node.dataset.srcPage);
+    if (page >= 1) revealSourcePage(page);
+    return;
+  }
+  const before = translateScrollRoot()?.scrollTop;
+  scrollSourceToRect(rect, part === "inline" ? 2 : 5);
+  if (translateScrollRoot() && Number.isFinite(before)) translateScrollRoot().scrollTop = before;
+  currentPairId = node.dataset.pairId;
+  jumpPairId = node.dataset.pairId;
+  jumpPart = part;
+  applyFollow({ type: "clickJump" });
+  armJumpLock();
+  paintPairChrome();
+  ensureSourcePage(Number(rect.p));
+}
+
+function revealSourcePage(page) {
+  const wrap = document.querySelector(`#pages .pdf-page[data-page="${page}"]`);
+  const pane = pdfScrollRoot();
+  if (wrap && pane) {
+    const top = alignScrollTop(pane, wrap);
+    if (Number.isFinite(top)) pane.scrollTop = Math.max(0, top);
+  }
+  arrivalText = pageArrivalText(page);
+  syncFollowControls();
+  clearTimeout(arrivalTimer);
+  arrivalTimer = setTimeout(() => {
+    arrivalText = "";
+    syncFollowControls();
+  }, JUMP_HOLD_MS());
+}
+
+function JUMP_HOLD_MS() {
+  return 1500;
+}
+
+function ensureSourcePage(page) {
+  if (!pdfDoc || !Number.isFinite(page) || page < 1 || page === pageNum) return;
+  if (currentScope() === "all") return;
+  pageNum = page;
+  updatePager();
+  loadCurrentPageText();
+}
+
+function scrollSourceToRect(rect) {
+  const pane = pdfScrollRoot();
+  const placed = rectInSource(rect);
+  if (!pane || !placed) return false;
+  const top = sourceAnchorScroll({
+    rectTop: placed.top,
+    clientHeight: pane.clientHeight,
+    scrollHeight: pane.scrollHeight
+  });
+  takeDriver("click");
+  pane.scrollTop = top;
+  noteSourcePage(false);
+  return true;
+}
+
+function revealClickedSource(rect) {
+  const pane = pdfScrollRoot();
+  const placed = rectInSource(rect);
+  if (!pane || !placed) return false;
+  const top = sourceFollowScroll({
+    rectTop: placed.top,
+    rectBottom: placed.bottom,
+    scrollTop: pane.scrollTop,
+    clientHeight: pane.clientHeight,
+    scrollHeight: pane.scrollHeight
+  });
+  if (top == null) return false;
+  takeDriver("click");
+  pane.scrollTop = top;
+  noteSourcePage(false);
+  return true;
+}
+
+function rectInSource(rect) {
+  const page = Number(rect?.p);
+  const wrap = pageViews[page - 1]?.wrap || document.querySelector(`#pages .pdf-page[data-page="${page}"]`);
+  const pane = pdfScrollRoot();
+  if (!wrap || !pane) return null;
+  const size = pagePointSize(page);
+  if (!size) return null;
+  const paneBox = pane.getBoundingClientRect();
+  const wrapBox = wrap.getBoundingClientRect();
+  const scaleY = wrapBox.height / size.height;
+  const scaleX = wrapBox.width / size.width;
+  const top = pane.scrollTop + (wrapBox.top - paneBox.top) + rect.y * scaleY;
+  return {
+    top,
+    bottom: top + rect.h * scaleY,
+    x: rect.x * scaleX,
+    y: rect.y * scaleY,
+    w: rect.w * scaleX,
+    h: rect.h * scaleY,
+    scaleX,
+    scaleY
+  };
+}
+
+function pagePointSize(page) {
+  const layout = getPageLayout(page);
+  const width = Number(layout?.pageWidth) || 0;
+  const height = Number(layout?.pageHeight) || 0;
+  if (width > 0 && height > 0) return { width, height };
+  const wrap = pageViews[page - 1]?.wrap;
+  const styled = parseFloat(wrap?.style?.width || "");
+  const parts = String(wrap?.style?.aspectRatio || "").split("/").map((part) => parseFloat(part.trim()));
+  const zoomScale = Number(zoom) > 0 ? Number(zoom) : 1;
+  if (styled > 0 && parts[0] > 0 && parts[1] > 0) {
+    return { width: styled / zoomScale, height: (styled * (parts[1] / parts[0])) / zoomScale };
+  }
+  return null;
+}
+
+function writeTranslationJump(node) {
+  const pane = translateScrollRoot();
+  const own = node?.classList?.contains("rf-block") || node?.classList?.contains("rf-untranslated");
+  const block = own ? node : node?.closest?.(".rf-block");
+  if (!pane || !block) return false;
+  const paneBox = pane.getBoundingClientRect();
+  const blockBox = block.getBoundingClientRect();
+  const blockTop = pane.scrollTop + (blockBox.top - paneBox.top);
+  let top = translationJumpScroll({
+    blockTopInContent: blockTop,
+    blockHeight: blockBox.height,
+    paneHeight: pane.clientHeight,
+    scrollHeight: pane.scrollHeight
+  });
+  pane.scrollTop = top;
+  const entries = anchorEntries();
+  const offset = anchorOffset(pane);
+  top = nudgeScrollToTarget(top, entries, offset, block.dataset.pairId || currentPairId);
+  pane.scrollTop = top;
+  updateReaderFade();
+  updatePageCapsule();
+  return true;
+}
+
+function nudgeScrollToTarget(proposed, entries, offset, targetId) {
+  const at = (value) => blockAtAnchorSafe(entries, value + offset);
+  if (!targetId) return proposed;
+  if (at(proposed)?.pairId === targetId) return proposed;
+  for (const delta of [1, -1]) {
+    if (at(proposed + delta)?.pairId === targetId) return proposed + delta;
+  }
+  return proposed;
+}
+
+function anchorOffset(pane) {
+  const box = pane.getBoundingClientRect();
+  return capsuleAnchorY(pane) - box.top;
+}
+
+function anchorEntries() {
+  const flow = readerFlowEl();
+  const pane = translateScrollRoot();
+  if (!flow || !pane) return [];
+  const paneBox = pane.getBoundingClientRect();
+  return [...flow.querySelectorAll(".rf-block[data-pair-id]")].map((el) => {
+    const box = el.getBoundingClientRect();
+    return {
+      pairId: el.dataset.pairId,
+      node: el,
+      top: pane.scrollTop + (box.top - paneBox.top),
+      bottom: pane.scrollTop + (box.bottom - paneBox.top)
+    };
+  });
+}
+
+function blockAtAnchorSafe(entries, line) {
+  return blockAtAnchor(entries, line);
+}
+
+function refreshPairCurrent() {
+  if (jumpLock.locked) return;
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  if (!pane || !flow) return;
+  const paneBox = pane.getBoundingClientRect();
+  const line = pane.scrollTop + anchorOffset(pane);
+  const entries = [...flow.querySelectorAll(".rf-block")].map((el) => {
+    const box = el.getBoundingClientRect();
+    return {
+      pairId: el.dataset.pairId || "",
+      top: pane.scrollTop + (box.top - paneBox.top),
+      bottom: pane.scrollTop + (box.bottom - paneBox.top)
+    };
+  });
+  const hit = blockAtAnchor(entries, line);
+  if (!hit?.pairId) {
+    const changed = Boolean(currentPairId) || Boolean(jumpPairId);
+    currentPairId = "";
+    if (jumpPairId) {
+      jumpPairId = "";
+      jumpPart = "";
+    }
+    if (changed) paintPairChrome();
+    syncFollowControls();
+    return;
+  }
+  const changed = hit.pairId !== currentPairId;
+  currentPairId = hit.pairId;
+  if (jumpPairId && jumpPairId !== currentPairId) {
+    jumpPairId = "";
+    jumpPart = "";
+    paintPairChrome();
+  } else if (changed) paintPairChrome();
+  if (followState === "on") followSourceToCurrent();
+  syncFollowControls();
+}
+
+function followSourceToCurrent() {
+  if (followState !== "on" || jumpLock.locked) return;
+  if (syncOwner.ignores("readout")) return;
+  const rect = firstRectFor(currentPairId);
+  const placed = rect ? rectInSource(rect) : null;
+  const pane = pdfScrollRoot();
+  if (!placed || !pane) return;
+  const top = sourceFollowScroll({
+    rectTop: placed.top,
+    rectBottom: placed.bottom,
+    scrollTop: pane.scrollTop,
+    clientHeight: pane.clientHeight,
+    scrollHeight: pane.scrollHeight
+  });
+  if (top == null || Math.abs(pane.scrollTop - top) < 1) return;
+  takeDriver("readout");
+  pane.scrollTop = top;
+  noteSourcePage(false);
+}
+
+function bringSourceToAnchor() {
+  const rect = firstRectFor(currentPairId);
+  if (!rect) return;
+  scrollSourceToRect(rect, 5);
+  paintPairChrome();
+}
+
+function firstRectFor(pairId) {
+  if (!pairId) return null;
+  const flow = readerFlowEl();
+  const node = flow?.querySelector(`[data-pair-id="${cssEscape(pairId)}"]`);
+  return decodeSrcRects(node?.dataset.srcRects)[0] || null;
+}
+
+function currentRectOutside() {
+  const rect = firstRectFor(currentPairId);
+  const placed = rect ? rectInSource(rect) : null;
+  const pane = pdfScrollRoot();
+  if (!placed || !pane) return false;
+  return sourceFollowScroll({
+    rectTop: placed.top,
+    rectBottom: placed.bottom,
+    scrollTop: pane.scrollTop,
+    clientHeight: pane.clientHeight,
+    scrollHeight: pane.scrollHeight
+  }) != null;
+}
+
+function paintPairChrome() {
+  document.querySelectorAll("#pages .pair-box").forEach((el) => el.remove());
+  const flow = readerFlowEl();
+  if (!flow) return;
+  flow.querySelectorAll(".is-pair-current, .is-pair-jump").forEach((el) => {
+    el.classList.remove("is-pair-current", "is-pair-jump");
+  });
+  if (currentPairId) {
+    flow.querySelectorAll(`[data-pair-id="${cssEscape(currentPairId)}"]`).forEach((el) => {
+      if (el.dataset.pairPart === "inline") return;
+      el.classList.add("is-pair-current");
+    });
+  }
+  const inlineJump = jumpPairId && jumpPart === "inline";
+  if (jumpPairId) {
+    const jumpNode = inlineJump
+      ? flow.querySelector(`[data-pair-id="${cssEscape(jumpPairId)}"][data-pair-part="inline"]`)
+      : flow.querySelector(`[data-pair-id="${cssEscape(jumpPairId)}"]:not([data-pair-part="inline"])`);
+    jumpNode?.classList.add("is-pair-jump");
+  }
+  if (currentPairId && (!jumpPairId || inlineJump)) {
+    drawPairBoxes(firstNodeRects(currentPairId), false, 5);
+  }
+  if (jumpPairId) {
+    const node = inlineJump
+      ? flow.querySelector(`[data-pair-id="${cssEscape(jumpPairId)}"][data-pair-part="inline"]`)
+      : flow.querySelector(`[data-pair-id="${cssEscape(jumpPairId)}"]`);
+    const outset = inlineJump ? 2 : 5;
+    drawPairBoxes(decodeSrcRects(node?.dataset.srcRects), true, outset);
+  }
+}
+
+function firstNodeRects(pairId) {
+  const flow = readerFlowEl();
+  const node = [...(flow?.querySelectorAll(`[data-pair-id="${cssEscape(pairId)}"]`) || [])]
+    .find((el) => el.dataset.pairPart !== "inline");
+  return decodeSrcRects(node?.dataset.srcRects);
+}
+
+function drawPairBoxes(rects, jump, outset) {
+  for (const rect of rects || []) {
+    const size = pagePointSize(rect.p);
+    const wrap = document.querySelector(`#pages .pdf-page[data-page="${rect.p}"]`);
+    const style = size ? pairBoxStyle(rect, size.width, size.height, outset) : null;
+    if (!wrap || !style) continue;
+    const box = document.createElement("div");
+    box.className = jump ? "pair-box is-jump" : "pair-box";
+    box.style.insetInlineStart = style.x;
+    box.style.insetBlockStart = style.y;
+    box.style.width = style.w;
+    box.style.height = style.h;
+    wrap.append(box);
+  }
+}
+
+function armJumpLock() {
+  jumpLock.lock();
+  syncJumpLock();
+  const wait = Math.max(0, jumpLock.until - Date.now());
+  setTimeout(() => {
+    if (!jumpLock.locked) syncJumpLock();
+  }, wait + 20);
+}
+
+function releaseJumpLock() {
+  if (!jumpLock.locked && !document.querySelector(".workspace")?.dataset.jumpLock) return;
+  jumpLock.unlock();
+  syncJumpLock();
+}
+
+function syncJumpLock() {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  if (jumpLock.locked) workspace.dataset.jumpLock = "1";
+  else delete workspace.dataset.jumpLock;
+}
+
+function clearJumpMark() {
+  if (!jumpPairId) return false;
+  jumpPairId = "";
+  jumpPart = "";
+  paintPairChrome();
+  return true;
+}
+
+function applyFollow(event) {
+  const result = followReducer(followState, event);
+  followState = result.state;
+  if (result.persist != null) {
+    readerPrefs = { ...readerPrefs, follow: result.persist === "1" };
+    persistReaderPrefs();
+  }
+  const workspace = document.querySelector(".workspace");
+  if (workspace) workspace.dataset.follow = followState;
+  syncFollowControls();
+}
+
+function toggleFollow() {
+  if (followState === "unavailable") return;
+  const prev = followState;
+  applyFollow({ type: "toggle" });
+  if (followState === "on" && prev !== "on") bringSourceToAnchor();
+}
+
+function noteUserSourceInput() {
+  releaseJumpLock();
+  applyFollow({ type: "userSourceScroll" });
+}
+
+function onSourceStatusClick(event) {
+  const action = event.target?.closest?.("button")?.dataset?.action;
+  if (action === "resume-follow") {
+    applyFollow({ type: "resume" });
+    if (followState === "on") bringSourceToAnchor();
+  } else if (action === "show-current") {
+    bringSourceToAnchor();
+  }
+}
+
+function syncFollowControls() {
+  const sw = $("followSwitch");
+  const enabled = followState === "on" || followState === "paused";
+  if (sw) {
+    sw.setAttribute("aria-checked", enabled ? "true" : "false");
+    sw.disabled = followState === "unavailable";
+    sw.title = followState === "unavailable"
+      ? "原文区已隐藏"
+      : "译文栏读到哪，原文栏就跟到哪（f）";
+  }
+  const slot = $("sourceStatus");
+  if (!slot) return;
+  slot.replaceChildren();
+  if (followState === "paused") {
+    slot.append(document.createTextNode("⏸ 跟随已暂停 · "));
+    const resume = document.createElement("button");
+    resume.type = "button";
+    resume.className = "source-status-btn hit-pad";
+    resume.dataset.action = "resume-follow";
+    resume.textContent = "恢复";
+    slot.append(resume);
+    return;
+  }
+  if (followState === "off" && currentRectOutside()) {
+    const show = document.createElement("button");
+    show.type = "button";
+    show.className = "source-status-btn hit-pad";
+    show.dataset.action = "show-current";
+    show.textContent = "↧ 当前段";
+    slot.append(show);
+    return;
+  }
+  if (arrivalText) slot.textContent = arrivalText;
+}
+
+function watchSourceAvailability() {
+  const pane = $("pdfPane");
+  const sync = () => {
+    const box = pane?.getBoundingClientRect();
+    applyFollow({
+      type: "sourceAvailable",
+      available: Boolean(box && box.width > 1 && box.height > 1),
+      stored: readerPrefs.follow === false ? "0" : "1"
+    });
+  };
+  if (typeof ResizeObserver === "function" && pane) new ResizeObserver(sync).observe(pane);
+  window.addEventListener("resize", () => {
+    applySourceSide(true);
+    sync();
+    paintPairChrome();
+  });
+  sync();
+}
+
+function bindSourcePointer() {
+  const pages = $("pages");
+  if (!pages) return;
+  pages.addEventListener("pointermove", onSourcePointerMoveEvent);
+  pages.addEventListener("click", onSourceClick);
+}
+
+function onSourceSurfaceDown(event) {
+  if (event.target === pdfScrollRoot()) noteUserSourceInput();
+  else takeDriver("pdf");
+  if (isUnlockEvent({ type: "pointerdown", onScrollSurface: event.target === pdfScrollRoot() })) {
+    releaseJumpLock();
+  }
+}
+
+function onTranslationSurfaceDown(event) {
+  takeDriver("readout");
+  if (isUnlockEvent({ type: "pointerdown", onScrollSurface: event.target === translateScrollRoot() })) {
+    releaseJumpLock();
+  }
+}
+
+function onTranslationTouchStart() {
+  releaseJumpLock();
+}
+
+function onPaneWheelUnlock() {
+  releaseJumpLock();
+}
+
+const SOURCE_TOUCH_PAN_PX = 8;
+let sourceTouch = null;
+
+function onSourceContentTouchStart(event) {
+  const touch = event.changedTouches?.[0];
+  if (!touch || sourceTouch) return;
+  sourceTouch = { id: touch.identifier, x: touch.clientX, y: touch.clientY, panned: false };
+  releaseJumpLock();
+}
+
+function onSourceContentTouchMove(event) {
+  if (!sourceTouch || sourceTouch.panned) return;
+  const touch = [...(event.changedTouches || [])].find((item) => item.identifier === sourceTouch.id);
+  if (!touch) return;
+  const distance = Math.hypot(touch.clientX - sourceTouch.x, touch.clientY - sourceTouch.y);
+  if (distance <= SOURCE_TOUCH_PAN_PX) return;
+  sourceTouch.panned = true;
+  noteUserSourceInput();
+}
+
+function onSourceContentTouchEnd(event) {
+  if (!sourceTouch) return;
+  const ended = [...(event.changedTouches || [])].some((item) => item.identifier === sourceTouch.id);
+  if (ended) sourceTouch = null;
+}
+
+function onSourcePointerMove() {
+  if (sourceHotTick) return;
+  sourceHotTick = requestAnimationFrame(() => {
+    sourceHotTick = 0;
+    const pages = $("pages");
+    if (!pages) return;
+    const hit = sourceHitAt(lastPointer);
+    pages.classList.toggle("is-pair-hot", Boolean(hit));
+  });
+}
+
+let lastPointer = null;
+function onSourcePointerMoveEvent(event) {
+  lastPointer = event;
+  onSourcePointerMove();
+}
+
+function sourceHitAt(event) {
+  if (!event) return null;
+  const pageEl = event.target?.closest?.(".pdf-page");
+  if (!pageEl) return null;
+  const page = Number(pageEl.dataset.page);
+  const size = pagePointSize(page);
+  if (!size) return null;
+  const box = pageEl.getBoundingClientRect();
+  const x = ((event.clientX - box.x) / box.width) * size.width;
+  const y = ((event.clientY - box.y) / box.height) * size.height;
+  return sourceHit(rectsOnPage(page), { x, y });
+}
+
+function rectsOnPage(page) {
+  const flow = readerFlowEl();
+  if (!flow) return [];
+  const out = [];
+  flow.querySelectorAll("[data-src-rects]").forEach((node) => {
+    for (const rect of decodeSrcRects(node.dataset.srcRects)) {
+      if (Number(rect.p) !== page) continue;
+      out.push({
+        ...rect,
+        pairId: node.dataset.pairId,
+        part: node.dataset.pairPart || "",
+        node
+      });
+    }
+  });
+  return out;
+}
+
+function onSourceClick(event) {
+  const pageEl = event.target?.closest?.(".pdf-page");
+  if (!pageEl || event.target?.closest?.("button, a, input, textarea, select")) return;
+  const page = Number(pageEl.dataset.page);
+  const hit = sourceHitAt(event);
+  if (!hit) {
+    if (!pageHasFlow(page)) focusUntranslated(page);
+    return;
+  }
+  const node = hit.node;
+  const block = node?.classList?.contains("rf-block") ? node : node?.closest?.(".rf-block") || node;
+  jumpPairId = hit.pairId;
+  jumpPart = hit.part === "inline" ? "inline" : "";
+  currentPairId = hit.pairId;
+  writeTranslationJump(block);
+  applyFollow({ type: "clickJump" });
+  armJumpLock();
+  paintPairChrome();
+  revealClickedSource(hit);
+}
+
+function pageHasFlow(page) {
+  return Boolean(readerFlowEl()?.querySelector(`.rf-block[data-src-page="${page}"], .rf-page[data-src-page="${page}"] .rf-block`));
+}
+
+function focusUntranslated(page) {
+  const row = readerFlowEl()?.querySelector(`.rf-untranslated[data-src-page="${page}"]`);
+  if (!row) return;
+  writeTranslationJump(row);
+  row.querySelector("[data-action='translate-page']")?.focus();
+}
+
+function stampFlowPairs(slot) {
+  const page = Number(slot?.dataset?.page || slot?.dataset?.srcPage);
+  const layout = getPageLayout(page);
+  const blocks = layout?.blocks || [];
+  const size = pagePointSize(page);
+  if (!slot || !size || !blocks.length) return;
+  const built = buildBlockPairs({
+    page,
+    blocks,
+    pageWidth: size.width,
+    pageHeight: size.height
+  });
+  const byId = new Map();
+  for (const spec of built.nodes) {
+    for (const id of spec.blockIds || []) byId.set(String(id), spec);
+  }
+  slot.querySelectorAll(".rf-block").forEach((el) => {
+    const spec = el.dataset.blockId ? byId.get(String(el.dataset.blockId)) : null;
+    if (spec?.pairId && spec.rects?.length) assignPair(el, spec);
+  });
+  const authors = built.nodes.find((spec) => spec.kind === "authors");
+  slot.querySelectorAll("[data-role='authors'], .oi-pdf-authors").forEach((el) => {
+    if (!el.dataset.pairId && authors?.pairId) assignPair(el, authors);
+  });
+  const record = titleStructure && titleStructure.docId === docId ? titleStructure : null;
+  if (record?.structure && record.page === page) {
+    const roles = structureRolePairs({
+      page,
+      blocks,
+      pageWidth: size.width,
+      pageHeight: size.height,
+      structure: record.structure
+    });
+    assignRole(slot, "h1", roles.find((role) => role.role === "title"));
+    assignRole(slot, "[data-role='authors'], .oi-pdf-authors", roles.find((role) => role.role === "authors"));
+    assignRole(slot, "[data-role='abstract_heading']", roles.find((role) => role.role === "abstract_heading"));
+    assignRole(slot, "[data-role='abstract_body']", roles.find((role) => role.role === "abstract_body"));
+  }
+  for (const spec of built.inlines) {
+    const span = slot.querySelector(`.oi-pdf-inline-math[data-block-id="${cssEscape(String(spec.blockId))}"]`);
+    if (!span) continue;
+    span.dataset.pairId = spec.pairId;
+    span.dataset.pairPart = "inline";
+    span.dataset.srcRects = encodeSrcRects(spec.rects);
+  }
+}
+
+function assignPair(el, spec) {
+  if (!el || !spec?.pairId || !spec.rects?.length) return;
+  el.dataset.pairId = spec.pairId;
+  el.dataset.srcRects = encodeSrcRects(spec.rects);
+}
+
+function assignRole(slot, selector, spec) {
+  const el = slot.querySelector(selector);
+  assignPair(el, spec);
+}
+
+function applySourceSide(anchor) {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
+  const applied = appliedSourceSide(width, readerPrefs.sourceSide);
+  workspace.dataset.sourceSide = applied;
+  const changed = applied !== appliedSide;
+  appliedSide = applied;
+  if (changed) reorderPanes(applied, anchor);
+  syncSwapCheck();
+  syncSwapItem();
+}
+
+function reorderPanes(side, anchor) {
+  const workspace = document.querySelector(".workspace");
+  const source = $("pdfPane");
+  const translation = document.querySelector(".pane-translate");
+  const split = document.querySelector(".split-handle");
+  if (!workspace || !source || !translation || !split) return;
+  const map = { source, translation, split };
+  const order = visualPaneOrder(side).map((name) => map[name]);
+  const token = anchor ? captureReaderAnchor() : null;
+  const sourcePane = $("pages");
+  const translationPane = $("translateScroll");
+  const saved = {
+    sourceTop: sourcePane?.scrollTop || 0,
+    sourceAcross: sourcePane?.scrollLeft || 0,
+    translationTop: translationPane?.scrollTop || 0,
+    translationAcross: translationPane?.scrollLeft || 0
+  };
+  for (const node of order) workspace.append(node);
+  if (sourcePane) {
+    sourcePane.scrollTop = saved.sourceTop;
+    sourcePane.scrollLeft = saved.sourceAcross;
+  }
+  if (translationPane) {
+    translationPane.scrollTop = saved.translationTop;
+    translationPane.scrollLeft = saved.translationAcross;
+  }
+  if (token) requestAnimationFrame(() => restoreReaderAnchor(token));
+}
+
+function toggleSourceSide() {
+  readerPrefs = { ...readerPrefs, sourceSide: readerPrefs.sourceSide === "end" ? "start" : "end" };
+  persistReaderPrefs();
+  applySourceSide(true);
+}
+
+function syncSwapCheck() {
+  const item = $("swapPanes");
+  if (!item) return;
+  const on = readerPrefs.sourceSide === "end";
+  item.setAttribute("aria-checked", on ? "true" : "false");
+}
+
+function syncSwapItem() {
+  const item = $("swapPanes");
+  const sep = document.querySelector("#moreMenu [role='separator']");
+  const narrow = (window.innerWidth || 0) < 900;
+  if (item) item.hidden = narrow;
+  if (sep) sep.hidden = narrow;
+}
+
+function bindMoreMenu() {
+  $("moreButton")?.addEventListener("click", () => {
+    if (moreMenuOpen()) closeMoreMenu(true);
+    else openMoreMenu();
+  });
+  $("swapPanes")?.addEventListener("click", () => {
+    toggleSourceSide();
+    closeMoreMenu(true);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    const menu = $("moreMenu");
+    const button = $("moreButton");
+    if (!moreMenuOpen()) return;
+    if (menu?.contains(event.target) || button?.contains(event.target)) return;
+    closeMoreMenu(false);
+  });
+  window.addEventListener("resize", syncSwapItem);
+  syncSwapItem();
+  syncSwapCheck();
+}
+
+function moreMenuOpen() {
+  const menu = $("moreMenu");
+  return Boolean(menu && !menu.hidden);
+}
+
+function openMoreMenu() {
+  const menu = $("moreMenu");
+  const button = $("moreButton");
+  if (!menu || !button) return;
+  syncSwapItem();
+  menu.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+  const items = menuEntries();
+  const index = menuNext(items.map(menuEntryState), -1, "Home");
+  items[index]?.focus();
+}
+
+function closeMoreMenu(focusButton) {
+  const menu = $("moreMenu");
+  if (!menu || menu.hidden) return false;
+  menu.hidden = true;
+  $("moreButton")?.setAttribute("aria-expanded", "false");
+  if (focusButton) $("moreButton")?.focus();
+  return true;
+}
+
+function menuEntries() {
+  return [...($("moreMenu")?.querySelectorAll("[role='menuitem'], [role='menuitemcheckbox'], [role='separator']") || [])];
+}
+
+function menuEntryState(el) {
+  return {
+    separator: el.getAttribute("role") === "separator",
+    disabled: el.disabled || el.getAttribute("aria-disabled") === "true",
+    hidden: el.hidden
+  };
+}
+
+function onMenuKey(event) {
+  if (!moreMenuOpen()) return false;
+  if (event.key === "Tab") {
+    closeMoreMenu(false);
+    return false;
+  }
+  const items = menuEntries();
+  const states = items.map(menuEntryState);
+  const index = items.indexOf(document.activeElement);
+  if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
+    event.preventDefault();
+    const next = menuNext(states, index, event.key);
+    if (next >= 0) items[next].focus();
+    return true;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    const current = items[index];
+    if (!current || menuEntryState(current).disabled || menuEntryState(current).separator) return true;
+    event.preventDefault();
+    current.click();
+    return true;
+  }
+  return false;
+}
+
+function updateSourcePageLabel(page) {
+  const el = $("sourcePageLabel");
+  if (!el) return;
+  const total = pdfDoc?.numPages || 0;
+  const shown = page || measureVisible() || pageNum || 0;
+  el.textContent = sourcePageLabel(shown, total);
+}
+
+function noteSourcePage(load) {
+  if (!pdfDoc || !pageViews.length) return;
+  const current = measureVisible();
+  updateSourcePageLabel(current);
+  if (currentScope() === "all") {
+    scheduleVisibleRenders();
+    syncFollowControls();
+    updatePager();
+    return;
+  }
+  if (current && current !== pageNum) {
+    pageNum = current;
+    updatePager();
+    renderArticle();
+    const readout = translateScrollRoot();
+    if (readout) readout.scrollTop = 0;
+    loadCurrentPageText();
+  }
+  scheduleVisibleRenders();
+  syncFollowControls();
 }
 
 function syncReadoutEmpty(hasArticle) {
@@ -2167,6 +3106,7 @@ function renderArticle() {
     if (pane) pane.scrollTop = keep;
     if (pane) pane.scrollLeft = keepLeft;
     restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
+    settlePairChrome();
     return;
   }
   const pages = pagesInTranslateScope(
@@ -2186,6 +3126,7 @@ function renderArticle() {
     syncReadoutEmpty(false);
     updateTranslateControls();
     if (pane) pane.scrollTop = keep;
+    settlePairChrome();
     return;
   }
   if (blockPages.length) {
@@ -2221,11 +3162,13 @@ function renderArticle() {
   if (!hasContent) {
     updateTranslateControls();
     if (pane) pane.scrollTop = keep;
+    settlePairChrome();
     return;
   }
   if (pane) pane.scrollTop = keep;
   if (pane) pane.scrollLeft = keepLeft;
   restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
+  settlePairChrome();
   updateTranslateControls();
 }
 
@@ -2494,9 +3437,17 @@ function finalizeReaderFlow() {
   }
   flow.replaceChildren(frag);
   flow.querySelectorAll(":scope > .rf-page").forEach((slot) => stampReaderPage(slot));
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => stampFlowPairs(slot));
   layoutCapsule();
   flow.querySelectorAll(":scope > .rf-page").forEach((slot) => refreshMatchedFormulas(slot));
   return wanted.size > 0;
+}
+
+function settlePairChrome() {
+  if (jumpLock.locked) paintPairChrome();
+  else refreshPairCurrent();
+  const marked = readerFlowEl()?.querySelector(".rf-block.is-pair-current");
+  if (currentPairId && marked?.dataset.pairId !== currentPairId) paintPairChrome();
 }
 
 function updatePageCapsule() {
@@ -2524,6 +3475,15 @@ function updatePageCapsule() {
   cap.textContent = capsuleLabel(page, { short });
   cap.setAttribute("aria-label", capsuleLabel(page));
   cap.dataset.srcPage = String(page);
+  syncToolbarFromCapsule();
+}
+
+function syncToolbarFromCapsule() {
+  if (!pdfDoc || currentScope() !== "all") return;
+  const shown = Number($("pageCapsule")?.dataset.srcPage);
+  if (!(shown >= 1) || shown === pageNum) return;
+  pageNum = shown;
+  updatePager();
 }
 
 function onPageCapsuleClick() {
@@ -2533,7 +3493,17 @@ function onPageCapsuleClick() {
     pageNum = page;
     updatePager();
   }
-  syncPdfToPage(page);
+  const wrap = pageViews[page - 1]?.wrap;
+  const pane = pdfScrollRoot();
+  if (wrap && pane) {
+    const top = alignScrollTop(pane, wrap);
+    if (Number.isFinite(top)) {
+      takeDriver("click");
+      pane.scrollTop = Math.max(0, top);
+    }
+  }
+  applyFollow({ type: "capsuleJump" });
+  updateSourcePageLabel(page);
 }
 
 function onReaderFlowClick(event) {
@@ -2547,7 +3517,6 @@ function onReaderFlowClick(event) {
     }
     return;
   }
-  onReadoutBlockClick(event);
 }
 
 function applyViewMode() {
@@ -2573,8 +3542,12 @@ function syncExportControls() {
     hasReadout: canExportReadout(currentReadoutNodes()),
     exporting
   });
-  $("exportMd").disabled = ui.mdDisabled;
-  $("exportPdf").disabled = ui.pdfDisabled;
+  for (const [id, off] of [["exportMd", ui.mdDisabled], ["exportPdf", ui.pdfDisabled]]) {
+    const btn = $(id);
+    if (!btn) continue;
+    btn.disabled = off;
+    btn.setAttribute("aria-disabled", off ? "true" : "false");
+  }
 }
 
 async function exportReadout(kind) {
@@ -2608,50 +3581,17 @@ function onTranslateScroll() {
   updatePageCapsule();
   updateReaderFade();
   if (!pdfDoc) return;
+  if (jumpLock.locked) return;
   if (syncOwner.ignores("readout")) return;
-  takeDriver("readout");
   if (translateScrollTick) return;
   const generation = followGeneration;
   readoutSyncGate.begin();
   translateScrollTick = requestAnimationFrame(() => {
     translateScrollTick = 0;
     try {
-      if (generation !== followGeneration || syncOwner.owner !== "readout") return;
-      const pane = translateScrollRoot();
-      if (!pane) return;
-      const rects = [...pane.querySelectorAll(".rf-block[data-src-page]")].map((el) => {
-        const box = el.getBoundingClientRect();
-        return { page: Number(el.dataset.srcPage), top: box.top, bottom: box.bottom };
-      });
-      const shown = Number($("pageCapsule")?.dataset.srcPage);
-      if (!rects.length) {
-        if (shown >= 1 && shown !== pageNum) {
-          pageNum = shown;
-          updatePager();
-        }
-        return;
-      }
-      const paneRect = pane.getBoundingClientRect();
-      const next = pageFromViewport(rects, paneRect.top, paneRect.bottom);
-      const fromPage = pageNum;
-      if (shown >= 1 && shown !== pageNum) {
-        pageNum = shown;
-        updatePager();
-      }
-      if (next === fromPage) return;
-      const plan = planPaneFollow({
-        softPageFollow,
-        owner: syncOwner.owner,
-        driver: "readout",
-        fromPage,
-        toPage: next
-      });
-      if (!plan.align || plan.behavior !== PANE_SYNC_BEHAVIOR) return;
-      pageNum = next;
-      updatePager();
-      loadCurrentPageText();
-      syncPdfToPage(next);
-      scheduleVisibleRenders();
+      if (generation !== followGeneration) return;
+      refreshPairCurrent();
+      followSourceToCurrent();
     } finally {
       if (readoutSyncGate.finish() === "release") releaseScrollDriver("readout");
     }
@@ -2664,6 +3604,7 @@ function onReadoutScrollEnd() {
 }
 
 function onReadoutWheel() {
+  releaseJumpLock();
   takeDriver("readout");
 }
 
@@ -2736,14 +3677,37 @@ function stopTranslateWork() {
   updateTranslateControls();
 }
 
+function revealTranslationPage(page) {
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  const node = flow?.querySelector(`.rf-block[data-src-page="${page}"], .rf-untranslated[data-src-page="${page}"]`);
+  if (!pane || !node) return false;
+  const paneBox = pane.getBoundingClientRect();
+  const box = node.getBoundingClientRect();
+  const bar = pane.dataset.capsuleMode === "bar" ? capsuleBarHeight() : 0;
+  const line = paneBox.top + bar + (paneBox.height - bar) * 0.3;
+  pane.scrollTop += box.top - line;
+  updatePageCapsule();
+  return true;
+}
+
 function setTranslateScope(value) {
   const scope = normalizePdfTranslateScope(value);
+  const previous = currentScope();
+  const keepPage = pageNum;
+  if (scope === previous) return;
   document.querySelectorAll(".scope-seg-btn").forEach((btn) => {
     btn.classList.toggle("is-on", btn.dataset.scope === scope);
   });
   renderArticle();
   const pane = translateScrollRoot();
-  if (pane) pane.scrollTop = 0;
+  if (scope === "all") {
+    if (!revealTranslationPage(keepPage) && pane) pane.scrollTop = 0;
+    if (pageNum !== keepPage) pageNum = keepPage;
+    updatePager();
+  } else if (pane) {
+    pane.scrollTop = 0;
+  }
   updateTranslateControls();
 }
 
@@ -3768,6 +4732,12 @@ function measureVisible() {
   return pageFromViewport(pageRects(), paneRect.top, paneRect.bottom);
 }
 
+function sourceNavPage() {
+  if (currentScope() !== "all") return pageNum;
+  const seen = measureVisible();
+  return seen >= 1 ? seen : pageNum;
+}
+
 function releaseScrollDriver(side) {
   if (side === "pdf") {
     if (syncOwner.owner === "pdf" || syncOwner.owner === "click") syncOwner.release(syncOwner.owner);
@@ -3778,7 +4748,11 @@ function releaseScrollDriver(side) {
 
 function onPdfScroll() {
   if (!pdfDoc) return;
-  if (syncOwner.ignores("pdf")) return;
+  if (syncOwner.ignores("pdf")) {
+    updateSourcePageLabel(measureVisible());
+    if (currentScope() === "all") updatePager();
+    return;
+  }
   takeDriver("pdf");
   if (scrollTick) return;
   const generation = followGeneration;
@@ -3801,6 +4775,7 @@ function onPdfScrollEnd() {
 
 function onPdfWheel(event) {
   if (!pdfDoc) return;
+  noteUserSourceInput();
   takeDriver("pdf");
   wheelFlip.beginGesture();
   const pane = pdfScrollRoot();
@@ -3821,54 +4796,27 @@ function onPdfWheel(event) {
 }
 
 function syncVisiblePage() {
-  if (!pdfDoc || !pageViews.length) return;
-  const current = measureVisible();
-  if (current !== pageNum) {
-    const fromPage = pageNum;
-    const plan = planPaneFollow({
-      softPageFollow,
-      owner: syncOwner.owner,
-      driver: "pdf",
-      fromPage,
-      toPage: current
-    });
-    pageNum = current;
-    updatePager();
-    loadCurrentPageText();
-    if (currentScope() !== "all") {
-      renderArticle();
-      const readout = translateScrollRoot();
-      if (readout) readout.scrollTop = 0;
-    }
-    if (plan.align && plan.behavior === PANE_SYNC_BEHAVIOR) syncReadoutToPage(current);
-  }
-  scheduleVisibleRenders();
+  noteSourcePage(false);
 }
 
 async function goPage(dir) {
   if (!pdfDoc) return;
-  const next = pageIndex(pageNum, pdfDoc.numPages, dir);
-  if (next === pageNum) return;
-  const fromPage = pageNum;
+  const inAll = currentScope() === "all";
+  const origin = inAll ? sourceNavPage() : pageNum;
+  const next = pageIndex(origin, pdfDoc.numPages, dir);
+  if (next === origin) return;
   takeDriver("pdf");
-  pageNum = next;
+  if (!inAll) pageNum = next;
   const view = pageViews[next - 1];
   view?.wrap.scrollIntoView({ block: "start", behavior: PANE_SYNC_BEHAVIOR });
   updatePager();
-  loadCurrentPageText();
-  if (currentScope() !== "all") {
-    renderArticle();
+  updateSourcePageLabel(inAll ? sourceNavPage() : next);
+  if (!inAll) {
     const readout = translateScrollRoot();
     if (readout) readout.scrollTop = 0;
+    renderArticle();
+    loadCurrentPageText();
   }
-  const plan = planPaneFollow({
-    softPageFollow,
-    owner: syncOwner.owner,
-    driver: "pdf",
-    fromPage,
-    toPage: next
-  });
-  if (plan.align && plan.behavior === PANE_SYNC_BEHAVIOR) syncReadoutToPage(next);
   await scheduleVisibleRenders();
 }
 
@@ -3994,12 +4942,13 @@ async function setZoom(next) {
   await scheduleVisibleRenders();
   syncZoomChip();
   syncZoomButtons();
+  paintPairChrome();
 }
 
 async function scheduleVisibleRenders() {
   if (!pdfDoc) return;
   const gen = ++renderGen;
-  const want = neighborPages(pageNum, pdfDoc.numPages, RENDER_RADIUS);
+  const want = neighborPages(sourceNavPage(), pdfDoc.numPages, RENDER_RADIUS);
   for (const n of want) {
     if (gen !== renderGen) return;
     const view = pageViews[n - 1];
@@ -4142,10 +5091,17 @@ async function loadCurrentPageText() {
 
 function updatePager() {
   const total = pdfDoc?.numPages || 0;
+  const nav = sourceNavPage();
   $("pager").textContent = pageLabel(pageNum, total);
+  if (currentScope() === "all") updateSourcePageLabel(measureVisible() || pageNum);
+  else updateSourcePageLabel(pageNum);
+  for (const id of ["translatePage", "retranslatePage"]) {
+    const button = $(id);
+    if (button) button.dataset.page = String(pageNum);
+  }
   $("zoomLabel").textContent = zoomLabel(zoom);
-  $("prev").disabled = !pdfDoc || pageNum <= 1;
-  $("next").disabled = !pdfDoc || pageNum >= total;
+  $("prev").disabled = !pdfDoc || nav <= 1;
+  $("next").disabled = !pdfDoc || nav >= total;
   syncZoomButtons();
 }
 

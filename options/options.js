@@ -64,7 +64,6 @@ async function init() {
   renderFeatures(el("featureList"), v1Features(), features);
   renderFeatures(el("laterList"), laterFeatures(), features);
   fillPdfLayout(cachedSettings.pdfLayout);
-  fillPdfScroll(cachedSettings.pdfScroll);
   syncPdfLayoutBox();
   el("laterList")?.addEventListener("change", syncPdfLayoutBox);
   renderProviderFields();
@@ -138,21 +137,9 @@ function readPdfLayout() {
   };
 }
 
-function fillPdfScroll(value) {
-  const input = el("pdfSoftPageFollow");
-  if (!input) return;
-  input.checked = value?.softPageFollow === true;
-}
-
-function readPdfScroll() {
-  return { softPageFollow: el("pdfSoftPageFollow")?.checked === true };
-}
-
 function syncPdfLayoutBox() {
   const on = Boolean(document.querySelector('[data-feat="pdf"]')?.checked);
-  const reading = el("pdfReadingBox");
   const box = el("pdfLayoutBox");
-  if (reading) reading.hidden = !on;
   if (box) box.hidden = !on;
 }
 
@@ -314,8 +301,7 @@ async function persist() {
     features: features,
     siteRules: siteRules,
     providers: cachedSettings.providers,
-    pdfLayout: readPdfLayout(),
-    pdfScroll: readPdfScroll()
+    pdfLayout: readPdfLayout()
   };
 
   await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: patch });

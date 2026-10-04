@@ -66,11 +66,22 @@ test("font steps stay on 14/15/16/17/18/20 and remember the chosen step", () => 
     fontSize: 20,
     theme: "green",
     singleKey: true,
-    splitRatio: null
+    splitRatio: null,
+    follow: true,
+    sourceSide: "start"
   });
   assert.equal(store["reader.fontSize"], "20");
   assert.equal(store["reader.theme"], "green");
-  assert.deepEqual(readReaderPrefs(store), { fontSize: 20, theme: "green", singleKey: true, splitRatio: null });
+  assert.equal(store["reader.follow"], "1");
+  assert.equal(store["reader.sourceSide"], "start");
+  assert.deepEqual(readReaderPrefs(store), {
+    fontSize: 20,
+    theme: "green",
+    singleKey: true,
+    splitRatio: null,
+    follow: true,
+    sourceSide: "start"
+  });
   store["reader.fontSize"] = "13";
   assert.equal(readReaderPrefs(store).fontSize, 16);
 });
@@ -473,8 +484,9 @@ test("split keeps a ratio and the translation column stays at least 540px", () =
   const paint = viewer.slice(viewer.indexOf("function paintSplitRatio"), viewer.indexOf("function persistSplitRatio"));
   assert.match(paint, /const safe = Number\.isFinite\(requested\) \? requested : defaultSplitRatio/);
   assert.match(paint, /ratio:\s*safe/);
-  assert.match(viewer, /else if \(event\.key === "Home"\) next = 0/);
-  assert.match(viewer, /else if \(event\.key === "End"\) next = 1/);
+  assert.match(viewer, /splitKeyStep\(\{ key: event\.key/);
+  assert.match(viewer, /step\.to === "min"\) next = 0/);
+  assert.match(viewer, /step\.to === "max"\) next = 1/);
   assert.match(html, /class="split-handle"[^>]*tabindex="0"/);
   assert.match(html, /role="separator"[^>]*aria-valuenow="/);
   assert.match(viewer, /--oi-split-ratio/);
@@ -536,6 +548,22 @@ test("approved reader tokens name the theme scopes and the latin subset", () => 
   assert.match(tokens, /--oi-reader-paragraph-gap:\s*calc\(1\.125 \* var\(--oi-reader-font-size\)\)/);
   assert.match(tokens, /--oi-reader-font-sans:/);
   assert.match(tokens, /--oi-reader-pair-bg-solid:/);
+  assert.match(tokens, /--oi-reader-pair-box-w:\s*1\.5px/);
+  assert.match(tokens, /--oi-reader-pair-box-radius:\s*4px/);
+  assert.match(tokens, /--oi-reader-pair-box-outset:\s*5px/);
+  assert.match(tokens, /--oi-reader-pair-jump-w:\s*2px/);
+  assert.match(tokens, /--oi-reader-pair-jump-radius:\s*5px/);
+  assert.match(tokens, /--oi-reader-pair-jump-inline-outset:\s*2px/);
+  assert.match(tokens, /--oi-reader-pair-jump-offset:\s*6px/);
+  assert.match(tokens, /--oi-reader-source-head-h:\s*36px/);
+  assert.match(tokens, /--oi-reader-source-head-size:\s*12px/);
+  assert.match(tokens, /--oi-reader-follow-box:\s*14px/);
+  assert.match(tokens, /--oi-reader-follow-radius:\s*4px/);
+  assert.match(tokens, /--oi-reader-menu-min-w:\s*200px/);
+  assert.match(tokens, /--oi-reader-menu-radius:\s*10px/);
+  assert.match(tokens, /--oi-reader-menu-item-h:\s*32px/);
+  assert.match(tokens, /--oi-reader-menu-item-pad-x:\s*12px/);
+  assert.match(tokens, /--oi-reader-menu-key-size:\s*12px/);
   assert.match(tokens, /font-family:\s*"OI Serif Latin"/);
   assert.doesNotMatch(tokens, /STSong/);
   assert.match(tokens, /\[data-reader-cjk="sans"\][\s\S]*--oi-reader-font:\s*var\(--oi-reader-font-sans\)/);
