@@ -1102,6 +1102,11 @@ button:disabled { opacity: 0.45; cursor: default; }
   cursor: pointer;
   white-space: nowrap;
 }
+/* 顶栏通用按钮规则（.toolbar button:not(.more-item)，30px）优先级更高，会把分段按钮撑出轨道、低于顶栏中线；这里把高度压回 24px（28px 轨道减上下各 2px 内边距）。 */
+.toolbar .scope-seg > .scope-seg-btn {
+  min-height: 24px;
+  height: 24px;
+}
 .scope-seg-btn:hover {
   color: var(--oi-reader-ink);
   background: transparent;

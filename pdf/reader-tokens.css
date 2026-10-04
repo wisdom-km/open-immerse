@@ -79,6 +79,7 @@
 
 .oi-reader-app,
 .oi-reader {
+  color-scheme: light;
   --oi-reader-warm-paper: #F6F3EC;
   --oi-reader-warm-surface: #FCFAF6;
   --oi-reader-warm-ink: #22201C;
@@ -357,7 +358,7 @@
   --oi-reader-caption-font: 400 14px/1.65 var(--oi-reader-font);
   --oi-reader-fade-h: 40px;
   --oi-reader-fade: linear-gradient(to bottom, transparent, var(--oi-reader-paper) 85%);
-  --oi-reader-topbar-h: 48px;
+  --oi-reader-topbar-h: 49px;
   --oi-reader-topbar-btn-h: 30px;
   --oi-reader-topbar-btn-pad-x: 9px;
   --oi-reader-topbar-btn-radius: 7px;
@@ -371,7 +372,7 @@
   --oi-reader-page-gap: 20px;
   --oi-reader-page-shadow: 0 0 0 0.5px rgba(40, 30, 10, 0.07), 0 1px 2px rgba(40, 30, 10, 0.05), 0 10px 30px -10px rgba(40, 30, 10, 0.16);
   --oi-reader-split-w: 8px;
-  --oi-reader-split-grip-opacity: 0.45;
+  --oi-reader-split-grip-opacity: 0;
   --oi-reader-source-min: 320px;
   --oi-reader-translate-min: 560px;
   --oi-reader-translate-min-mid: 540px;
