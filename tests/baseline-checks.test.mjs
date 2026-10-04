@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cacheMatches, formatTiming, renderReport, runChecks } from "../scripts/baseline-checks.mjs";
 import { PRELABEL_VERSION } from "../lib/prelabel.js";
+import { createOwnedTemp, installOwnedTmpGuard } from "./helpers/owned-tmp.mjs";
+
+installOwnedTmpGuard(["baseline-"]);
 
 test("the baseline cache key includes the PDF fingerprint and prelabel version", () => {
   const doc = { contentFingerprint: "abc" };
@@ -43,8 +45,8 @@ test("the tracked report has no timing columns", () => {
   assert.match(timing, /paper  5\.000  10\.000/);
 });
 
-test("a default run skips missing PDFs and does not rewrite the tracked baseline", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "baseline-"));
+test("a default run skips missing PDFs and does not rewrite the tracked baseline", async (t) => {
+  const dir = createOwnedTemp(t, "baseline-");
   const manifestPath = join(dir, "manifest.json");
   writeFileSync(manifestPath, JSON.stringify({
     documents: [{ id: "missing-paper", field: "ai", sourceType: "publisher-typeset", title: "Missing" }]

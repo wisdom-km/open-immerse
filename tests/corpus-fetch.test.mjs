@@ -1,16 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CHALLENGE_NOTE, classifyPayload, fetchCorpus, formatSummary } from "../scripts/corpus-fetch.mjs";
+import { createOwnedTemp, installOwnedTmpGuard } from "./helpers/owned-tmp.mjs";
+
+installOwnedTmpGuard(["corpus-fetch-"]);
 
 const FINGERPRINT = "a".repeat(64);
 const OTHER = "b".repeat(64);
 
-function manifest(documents) {
-  const dir = mkdtempSync(join(tmpdir(), "corpus-fetch-"));
+function manifest(t, documents) {
+  const dir = createOwnedTemp(t, "corpus-fetch-");
   const path = join(dir, "manifest.json");
   writeFileSync(path, JSON.stringify({ documents }));
   return { dir, path, pdfs: join(dir, "pdfs") };
@@ -27,7 +29,7 @@ test("HTML client challenges are classified without treating them as PDFs", () =
   assert.equal(classifyPayload(Buffer.from("nope")), "not-pdf");
 });
 
-test("a stub server challenge is reported and the next paper still runs", async () => {
+test("a stub server challenge is reported and the next paper still runs", async (t) => {
   const server = createServer((request, response) => {
     if (request.url.endsWith("/wall")) {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -39,7 +41,7 @@ test("a stub server challenge is reported and the next paper still runs", async 
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
-  const { dir, path, pdfs } = manifest([
+  const { dir, path, pdfs } = manifest(t, [
     doc("walled", `http://127.0.0.1:${port}/wall`),
     doc("fine", `http://127.0.0.1:${port}/fine`)
   ]);
@@ -62,9 +64,9 @@ test("a stub server challenge is reported and the next paper still runs", async 
   }
 });
 
-test("transient network errors are retried and then recorded", async () => {
+test("transient network errors are retried and then recorded", async (t) => {
   let calls = 0;
-  const { path, pdfs } = manifest([doc("flaky", "http://publisher.example/paper.pdf")]);
+  const { path, pdfs } = manifest(t, [doc("flaky", "http://publisher.example/paper.pdf")]);
   const outcome = await fetchCorpus({
     manifest: path,
     dir: pdfs,
@@ -84,8 +86,8 @@ test("transient network errors are retried and then recorded", async () => {
   assert.equal(outcome.results[0].status, "ok");
 });
 
-test("a fingerprint mismatch does not abort the rest of the corpus", async () => {
-  const { path, pdfs } = manifest([
+test("a fingerprint mismatch does not abort the rest of the corpus", async (t) => {
+  const { path, pdfs } = manifest(t, [
     doc("bad", "http://publisher.example/bad.pdf"),
     doc("good", "http://publisher.example/good.pdf")
   ]);
@@ -103,8 +105,8 @@ test("a fingerprint mismatch does not abort the rest of the corpus", async () =>
   assert.equal(outcome.ok, false);
 });
 
-test("--import copies a verified local PDF and rejects a challenge page", async () => {
-  const { dir, path, pdfs } = manifest([
+test("--import copies a verified local PDF and rejects a challenge page", async (t) => {
+  const { dir, path, pdfs } = manifest(t, [
     doc("local-ok", "http://publisher.example/nope.pdf"),
     doc("local-wall", "http://publisher.example/nope2.pdf"),
     doc("not-here", "http://publisher.example/nope3.pdf")
@@ -138,8 +140,8 @@ test("--import copies a verified local PDF and rejects a challenge page", async 
   assert.equal(outcome.ok, false);
 });
 
-test("--import stays successful when every provided file verifies", async () => {
-  const { dir, path, pdfs } = manifest([
+test("--import stays successful when every provided file verifies", async (t) => {
+  const { dir, path, pdfs } = manifest(t, [
     doc("local-ok", "http://publisher.example/nope.pdf"),
     doc("not-here", "http://publisher.example/nope3.pdf")
   ]);
@@ -161,8 +163,8 @@ test("--import stays successful when every provided file verifies", async () => 
   assert.equal(outcome.ok, true);
 });
 
-test("--import fails when a provided file does not match the fingerprint", async () => {
-  const { dir, path, pdfs } = manifest([
+test("--import fails when a provided file does not match the fingerprint", async (t) => {
+  const { dir, path, pdfs } = manifest(t, [
     doc("local-ok", "http://publisher.example/nope.pdf"),
     doc("local-bad", "http://publisher.example/nope2.pdf"),
     doc("not-here", "http://publisher.example/nope3.pdf")

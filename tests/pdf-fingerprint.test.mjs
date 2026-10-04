@@ -39,6 +39,103 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+const ATTENTION_FIXTURE = fileURLToPath(new URL("./fixtures/Attention_Is_All_You_Need.pdf", import.meta.url));
+const ATTENTION_SHA256 = "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697";
+const CAMBRIDGE_STAMP = "Downloaded from https://www.cambridge.org/core. IP address: 203.0.113.4, on 01 Jan 2000 at 12:15:41, subject to the Cambridge Core terms of use, available at";
+const STAMP_REPLACEMENT = Buffer.from("IP address: 10.255.255.1, on 01 Jan 2000 at 00:00:00");
+
+function replaceIpMarker(bytes) {
+  const stamped = Buffer.from(bytes);
+  const marker = Buffer.from("IP address: ");
+  const at = stamped.indexOf(marker);
+  assert.ok(at > 0, "IP address marker was not found");
+  const current = stamped.subarray(at, at + STAMP_REPLACEMENT.length);
+  assert.equal(current.length, STAMP_REPLACEMENT.length);
+  STAMP_REPLACEMENT.copy(stamped, at);
+  return stamped;
+}
+
+function loadClassicXref(pdf) {
+  const at = pdf.lastIndexOf("startxref");
+  assert.ok(at > 0, "Attention fixture has no startxref");
+  const prev = Number(/startxref\s+(\d+)/.exec(pdf.subarray(at, at + 40).toString("latin1"))[1]);
+  assert.equal(pdf.subarray(prev, prev + 4).toString("latin1"), "xref", "Attention fixture has no classic xref table");
+  let cursor = prev + 4;
+  while (pdf[cursor] === 0x0a || pdf[cursor] === 0x0d || pdf[cursor] === 0x20) cursor += 1;
+  const headerEnd = pdf.indexOf(0x0a, cursor);
+  const [subStart, subCount] = pdf.subarray(cursor, headerEnd).toString("latin1").trim().split(/\s+/).map(Number);
+  const entries = new Map();
+  let row = headerEnd + 1;
+  for (let index = 0; index < subCount; index += 1) {
+    const line = pdf.subarray(row, row + 20).toString("latin1");
+    if (line[17] === "n") entries.set(subStart + index, Number(line.slice(0, 10)));
+    row += 20;
+  }
+  const trailerAt = pdf.lastIndexOf("trailer");
+  const trailer = pdf.subarray(trailerAt, trailerAt + 400).toString("latin1");
+  const root = Number(/\/Root\s+(\d+)\s+0\s+R/.exec(trailer)[1]);
+  const size = Number(/\/Size\s+(\d+)/.exec(trailer)[1]);
+  return { entries, prev, root, size };
+}
+
+function objectText(pdf, offset) {
+  const text = pdf.subarray(offset, Math.min(pdf.length, offset + 8192)).toString("latin1");
+  const end = text.indexOf("endobj");
+  assert.ok(end > 0, "PDF object is missing endobj");
+  return text.slice(0, end);
+}
+
+function firstPage(pdf, xref, id, depth = 0) {
+  assert.ok(depth < 8, "page tree is too deep");
+  const body = objectText(pdf, xref.entries.get(id));
+  if (/\/Type\s*\/Page(?!s)/.test(body)) return { id, body };
+  const kids = /\/Kids\s*\[([^\]]*)\]/.exec(body);
+  assert.ok(kids, "page tree node has no kids");
+  const child = Number(/(\d+)\s+0\s+R/.exec(kids[1])[1]);
+  return firstPage(pdf, xref, child, depth + 1);
+}
+
+function pdfString(text) {
+  return text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+// Append one text showing to page 1. The Attention file's page resources
+// already include the standard /arXivStAmP font, so pdf.js can extract it.
+function appendPageText(pdf, text) {
+  const xref = loadClassicXref(pdf);
+  const catalog = objectText(pdf, xref.entries.get(xref.root));
+  const pagesId = Number(/\/Pages\s+(\d+)\s+0\s+R/.exec(catalog)[1]);
+  const page = firstPage(pdf, xref, pagesId);
+  const listed = /\/Contents\s*\[([^\]]*)\]/.exec(page.body);
+  const single = /\/Contents\s+(\d+)\s+0\s+R/.exec(page.body);
+  const contents = listed
+    ? [...listed[1].matchAll(/(\d+)\s+0\s+R/g)].map((match) => Number(match[1]))
+    : [Number(single[1])];
+  const streamId = xref.size;
+  const showing = Buffer.from(`BT\n/arXivStAmP 8 Tf\n36 18 Td\n(${pdfString(text)}) Tj\nET\n`, "latin1");
+  const streamObject = Buffer.concat([
+    Buffer.from(`${streamId} 0 obj\n<< /Length ${showing.length} >>\nstream\n`, "latin1"),
+    showing,
+    Buffer.from("endstream\nendobj\n", "latin1")
+  ]);
+  const rewritten = page.body.replace(
+    /\/Contents\s+(?:\[[^\]]*\]|\d+\s+0\s+R)/,
+    `/Contents [ ${[...contents, streamId].map((id) => `${id} 0 R`).join(" ")} ]`
+  );
+  const pageObject = Buffer.from(`${rewritten}endobj\n`, "latin1");
+  const streamAt = pdf.length;
+  const pageAt = streamAt + streamObject.length;
+  const xrefAt = pageAt + pageObject.length;
+  const subsection = (id, offset) => `${id} 1\n${String(offset).padStart(10, "0")} 00000 n \n`;
+  const xrefTable = Buffer.from(
+    `xref\n${subsection(page.id, pageAt)}${subsection(streamId, streamAt)}` +
+    `trailer\n<< /Size ${streamId + 1} /Prev ${xref.prev} /Root ${xref.root} 0 R >>\n` +
+    `startxref\n${xrefAt}\n%%EOF\n`,
+    "latin1"
+  );
+  return Buffer.concat([pdf, streamObject, pageObject, xrefTable]);
+}
+
 test("content fingerprint ignores Info and trailer ID", async () => {
   const first = pdfBytes({ title: "One", idHex: "00112233445566778899AABBCCDDEEFF" });
   const second = pdfBytes({ title: "Downloaded from Cambridge IP 1.2.3.4", idHex: "FFEEDDCCBBAA99887766554433221100" });
@@ -61,20 +158,26 @@ test("Cambridge page stamps that differ only by the clock hash the same", async 
   assert.notEqual(await contentFingerprint(first), await contentFingerprint(changed));
 });
 
-test("Cambridge download stamp does not change the fms content fingerprint", async () => {
-  const path = fileURLToPath(new URL("../corpus/pdfs/fms-2021-7.pdf", import.meta.url));
-  if (!existsSync(path)) return;
-  const original = readFileSync(path);
-  const stamped = Buffer.from(original);
-  const marker = Buffer.from("IP address: ");
-  const at = stamped.indexOf(marker);
-  assert.ok(at > 0);
-  const replacement = Buffer.from("IP address: 10.255.255.1, on 01 Jan 2000 at 00:00:00");
-  const current = stamped.subarray(at, at + replacement.length);
-  assert.equal(current.length, replacement.length);
-  replacement.copy(stamped, at);
+test("a Cambridge download stamp does not change the Attention content fingerprint", async (t) => {
+  assert.equal(existsSync(ATTENTION_FIXTURE), true, "tests/fixtures/Attention_Is_All_You_Need.pdf is missing");
+  const original = readFileSync(ATTENTION_FIXTURE);
+  assert.equal(sha256(original), ATTENTION_SHA256, "tests/fixtures/Attention_Is_All_You_Need.pdf sha256");
+  const baseline = await contentFingerprint(original);
+  const stamped = replaceIpMarker(appendPageText(original, CAMBRIDGE_STAMP));
   assert.notEqual(sha256(original), sha256(stamped));
-  assert.equal(await contentFingerprint(original), await contentFingerprint(stamped));
+  assert.equal(await contentFingerprint(stamped), baseline);
+  const changed = appendPageText(original, "x = 2");
+  assert.notEqual(await contentFingerprint(changed), baseline);
+
+  const fmsPath = fileURLToPath(new URL("../corpus/pdfs/fms-2021-7.pdf", import.meta.url));
+  if (!existsSync(fmsPath)) {
+    t.diagnostic("corpus/pdfs/fms-2021-7.pdf is missing; the Attention fixture covered the stamp check");
+    return;
+  }
+  const fms = readFileSync(fmsPath);
+  const fmsStamped = replaceIpMarker(fms);
+  assert.notEqual(sha256(fms), sha256(fmsStamped));
+  assert.equal(await contentFingerprint(fms), await contentFingerprint(fmsStamped));
 });
 
 test("pre-label drops a Cambridge download line and keeps the other glyphs", () => {
