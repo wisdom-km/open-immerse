@@ -77,23 +77,25 @@ CSS 贴片：
 | | 规格 |
 | --- | --- |
 | 容器 | `span` + `inline-block`；挂在宿主 `p` 内；**必须**有 `inlineOf` |
-| 基线 | `vertical-align: baseline`（光学可 `-0.12em～0`） |
-| 高度 | **墨迹**（不是裁图盒）≥ **1.0 ×** 右栏中文 `bodyFs`，强可读目标 **1.25～1.35 ×**（1.05～1.15 只作 parity 观测）。#62 行内白边（4–5px）在盒内，把盒钉在 `1.22em` 时墨迹只有约 0.6–0.9×。盒高 = `targetInk / inkShare`（名义墨迹 16px、行内 pad 4px → share 16/24 → 盒 **1.95em**，允许 ~1.9～2.2em）。墨迹进带后行顶收到 ~**1.8～2.1em**（名义 **1.85em**）。旧 `max-height: 1.45em` 会挡住这扇门，已撤 |
-| 禁止 | `display:block` / 独立 `figure` / 整行 `img`；外包 padding≥6px 的白底「小卡片」 |
+| 基线 | 回退路径是 `vertical-align: baseline`（光学可 `-0.12em～0`）。主路径是 `vertical-align: middle`（`viewer.css` 约第 698 行和第 709 行） |
+| 高度 | 主路径裁图固定放大 k=1.35（`INLINE_CROP_K`）。`pdf/viewer.js` 的 `matchedFormulaStyle` 调用 `readerFormulaStyle`，再调用 `lib/pdf-formula-size.js` 的 `readerFormulaCssSize`。留在行内的裁图都用这个倍数。估算高度（bbox 高 × k）超过 2.2em（`INLINE_LINE_BOX_EM`）、裁图宽过栏，或下标低于 7px（`SCRIPT_INK_MIN_PX`）时，升级成独立公式。对不上左栏框的回退路径实际是 1.4em（`INLINE_BODY_HARD_MAX`）。`pdf/viewer.js` 把 `--oi-pdf-inline-crop-em` 和 `--oi-pdf-inline-line-em` 写成这个值 |
+| 禁止 | `display:block` / 独立 `figure` / 整行 `img`；外包 padding≥6px 的白底「小卡片」。这里的 `display:block` 指留在行内的公式。按规则升级成独立公式的走独立公式路径，是 `display: block`，不算违反 |
 | 裁框 | 紧贴公式字形；**禁止**带上邻词、上一行 descender、下一行 ascender（反例 `oi-qa/pdf-lab-attention/p07-lr-formula.png`） |
+
+墨迹 ≥ 1.0× bodyFs（目标 1.25–1.35×、盒名义 1.95em）于 2026-10-04 测过、不采用，因为 16px 下 145 个行内公式的比值最小 0.62、中位 1.19，低于 1.0 的 19 个几乎都是盒高只有 1.1–1.9em、以小写高度的字形为主的单变量或短式，只放大不足部分会使撑行超过 2px 的从 8 个增加到 13 个，≥1.25× 要放大 74/121 并使这类撑行增加到 24 个，严格等于 1.0× 则要缩小 96/121，数字和做法见 [行内公式墨迹实测（2026-10-04）](./INLINE-INK-MEASURE-2026-10-04.md)。
 
 ```css
 .oi-pdf-inline-math {
   display: inline-block;
-  vertical-align: baseline;
+  vertical-align: baseline; /* 回退路径。主路径是 middle */
   margin: 0 0.2em;
   padding: 0;
   line-height: 1;
-  max-width: 100%;
+  max-width: 100%; /* 回退路径。主路径是 none，超宽升级成块 */
 }
 .oi-pdf-inline-math img {
   display: block;
-  height: var(--oi-pdf-inline-crop-em, 1.95em); /* 墨迹目标 ÷ inkShare，不是把 1.22 改成另一个常数 */
+  height: var(--oi-pdf-inline-crop-em, 1.95em); /* 1.95em 只是 CSS 默认值。现行代码走不到，以代码为准 */
   width: auto;
   max-width: none;
   object-fit: contain;
@@ -102,7 +104,9 @@ CSS 贴片：
 }
 ```
 
-现状：容器 `.oi-pdf-inline-math` 最宽 `max-width: 100%`，左右 `margin: 0 0.2em`，超宽在框内横滚。裁图 `max-width: none`。裁图宽过栏、墨迹高过 `INLINE_LINE_BOX_EM`（2.2em）、或下标低于 `SCRIPT_INK_MIN_PX`（7px）时，`readerFormulaCssSize` 把这一张升成独立公式。降级文案是目标状态，待实现：行内文字兜底「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。紧裁加缩放仍超高时宁缺勿砸版。具体 UI 以 Loom 规格为准。
+`1.95em` 是上面 `height` 的 CSS 默认值。现行阅读器走不到它：主路径的高度来自 `--oi-formula-h`，由 `readerFormulaCssSize` 按 k=1.35 算出；回退路径在 `pdf/viewer.js` 里把 `--oi-pdf-inline-crop-em` 写成 `1.4em`（`INLINE_BODY_HARD_MAX`）。尺寸以 `lib/pdf-formula-size.js` 和 `pdf/viewer.js` 为准。
+
+现状要分主路径和回退路径。主路径（实测约 83% 留在行内）在 `viewer.css` 约第 692–701 行：`max-width: none`，`overflow: visible`，`vertical-align: middle`。高度超过 `--oi-reader-inline-line-max`（2.2em）时，上下 margin 为负，各承担超出量的一半。估算高度（bbox 高 × k）超过 2.2em（`INLINE_LINE_BOX_EM`）、裁图宽过栏，或下标低于 `SCRIPT_INK_MIN_PX`（7px）时，`readerFormulaCssSize` 把它升级成独立块。回退路径的容器最宽 `max-width: 100%`，左右 `margin: 0 0.2em`，`vertical-align: baseline`，超宽在框内横滚。裁图 `max-width: none`。降级文案是目标状态，待实现：行内文字兜底「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。紧裁加缩放仍超高时宁缺勿砸版。具体 UI 以 Loom 规格为准。
 
 ---
 
@@ -142,7 +146,7 @@ CSS 贴片：
 | | 目标 |
 | --- | --- |
 | 独立公式视觉高 | 约为原文栏该式渲染高的 **0.9～1.1×**（通读列内）；勿放大成「海报块」 |
-| 行内公式 | 量测墨迹 **1.25～1.35×** 正文（硬门 ≥ **1.0×**）；盒按 inkShare 反推，名义 **1.95em**（行顶 ~1.8～2.1em）；仍嵌在句中 |
+| 行内公式 | 主路径裁图固定放大 k=1.35，估算高度（bbox 高 × k）超过 2.2em、宽过栏或下标低于 7px 时升级成独立公式；主路径 `max-width: none`、`vertical-align: middle`。回退路径实际 1.4em，`max-width: 100%`，超宽在框内横滚，`vertical-align: baseline`。仍嵌在句中。旧目标「墨迹 ≥ 1.0× 正文、目标 1.25–1.35×、盒名义 1.95em」于 2026-10-04 测过、不采用 |
 | 通读列 | 正文 **16px**，行高 **1.9**（`--oi-reader-font-size`、`--oi-reader-line-height`）；公式块间距见 §2–§3，**不要**再给公式加 panel padding |
 | 白边 | 裁切近白边 ≤ **6 CSS px**；略松保笔画，不松到邻行（精准优先） |
 | 深色底 | 允许纸白底随原件；**禁止**再包一层 elevated/card；描边最多 `1px var(--oi-line)` |
