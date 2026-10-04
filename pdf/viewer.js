@@ -36,8 +36,15 @@ import {
   forceRetranslateOutcome,
   neighborPages,
   nextZoom,
-  documentTranslatePlaceholder,
+  docStatusView,
   normalizePdfTranslateScope,
+  pageRunState,
+  psEmptyCopy,
+  psNoTextCopy,
+  psRunning,
+  psSkippedCopy,
+  qQueued,
+  translatedPageTotal,
   pdfOpenTranslateBlocker,
   pdfTranslateFailureCopy,
   wheelPageDelta,
@@ -184,7 +191,6 @@ import {
   readerThemeAriaLabel,
   splitLayout,
   themePaperRgb,
-  untranslatedLabel,
   writeReaderPrefs
 } from "../lib/pdf-reader-flow.js";
 import { canvasMeasure, detectCjkSerif } from "../lib/pdf-reader-cjk.js";
@@ -231,6 +237,9 @@ let sourceUrl = "";
 let docId = 0;
 let restoreGen = 0;
 let textGen = 0;
+let textLoadPage = 0;
+let navGen = 0;
+let navRevealPage = 0;
 let renderGen = 0;
 let pageItems = 0;
 let pageOriginals = [];
@@ -240,6 +249,8 @@ let forceReadoutHold = false;
 let pageViews = [];
 let scrollTick = 0;
 const pageCache = createPageCache();
+const pageStates = new Map();
+let docPhase = "idle";
 let libraryArticle = null;
 let libraryDoc = null;
 let titleStructure = null;
@@ -2124,7 +2135,7 @@ function pagePointSize(page) {
 
 function writeTranslationJump(node) {
   const pane = translateScrollRoot();
-  const own = node?.classList?.contains("rf-block") || node?.classList?.contains("rf-untranslated");
+  const own = node?.classList?.contains("rf-block") || node?.classList?.contains("rf-ps");
   const block = own ? node : node?.closest?.(".rf-block");
   if (!pane || !block) return false;
   const paneBox = pane.getBoundingClientRect();
@@ -2570,10 +2581,9 @@ function pageHasFlow(page) {
 }
 
 function focusUntranslated(page) {
-  const row = readerFlowEl()?.querySelector(`.rf-untranslated[data-src-page="${page}"]`);
+  const row = readerFlowEl()?.querySelector(`.rf-page[data-page="${page}"] > .rf-ps, .rf-q`);
   if (!row) return;
   writeTranslationJump(row);
-  row.querySelector("[data-action='translate-page']")?.focus();
 }
 
 function stampFlowPairs(slot) {
@@ -3096,85 +3106,212 @@ function restoreFormulaScrolls(root, saved) {
   });
 }
 
+function notePageState(page, patch) {
+  const key = Number(page);
+  if (!(key >= 1)) return;
+  const prev = pageStates.get(key) || { state: "queued", hasLayout: false, k: 0, m: 0, noText: false };
+  pageStates.set(key, { ...prev, ...patch });
+}
+
+function filledCount(results) {
+  return (results || []).filter((item) => String(item?.translation || "").trim()).length;
+}
+
+function pageFlowState(page) {
+  const stored = pageStates.get(page);
+  const layout = getPageLayout(page);
+  const hasBlocks = Boolean(layout && (showsBlockReadout(layout) || layout.blocks?.length));
+  if (!stored) return { state: "queued", hasLayout: hasBlocks, k: 0, m: 0, noText: false };
+  return { ...stored, hasLayout: Boolean(stored.hasLayout || hasBlocks) };
+}
+
+function pageTotals() {
+  const t = Number(pdfDoc?.numPages) || 0;
+  const rows = [];
+  for (let n = 1; n <= t; n += 1) rows.push({ state: pageStates.get(n)?.state || "queued" });
+  return { t, ...translatedPageTotal(rows) };
+}
+
+function refreshDocStatus() {
+  const el = $("docStatus");
+  if (!el) return;
+  const { n, t, needsRetry } = pageTotals();
+  const view = docStatusView({ n, t, needsRetry, phase: docPhase });
+  el.dataset.state = view.state || "idle";
+  const text = el.querySelector(".doc-text");
+  if (text) text.textContent = view.text;
+  const ring = el.querySelector(".val");
+  if (ring) {
+    const pct = t > 0 ? Math.max(0, Math.min(100, Math.round((n / t) * 100))) : 0;
+    ring.setAttribute("stroke-dasharray", `${pct} 100`);
+  }
+}
+
+function finishDocPhase({ aborted = false, error = false } = {}) {
+  const { n, t, needsRetry } = pageTotals();
+  if (aborted) docPhase = "stopped";
+  else if (!error && t > 0 && n === t && needsRetry === 0) docPhase = "done";
+  else docPhase = "idle";
+  refreshDocStatus();
+}
+
+function clearSlotPainted(page) {
+  const slot = readerFlowEl()?.querySelector(`:scope > .rf-page[data-page="${page}"]`);
+  if (slot) delete slot.dataset.painted;
+}
+
+function noteLayoutReady(page) {
+  const row = pageStates.get(page);
+  const terminal = row && ["running", "done", "partial", "failed", "skipped", "empty", "held"].includes(row.state);
+  if (terminal) notePageState(page, { hasLayout: true });
+  else notePageState(page, { state: "queued", hasLayout: true });
+  clearSlotPainted(page);
+}
+
+function capsulePage() {
+  const shown = Number($("pageCapsule")?.dataset.srcPage);
+  return shown >= 1 ? shown : pageNum;
+}
+
+function captureFlowAnchor() {
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  if (!pane || !flow) return null;
+  const paneTop = pane.getBoundingClientRect().top;
+  const block = [...flow.querySelectorAll(".rf-block")].find((el) => el.getBoundingClientRect().bottom > paneTop + 1);
+  if (!block) return null;
+  return {
+    top: block.getBoundingClientRect().top,
+    id: block.dataset.blockId || "",
+    pairId: block.dataset.pairId || "",
+    srcPage: block.dataset.srcPage || ""
+  };
+}
+
+function holdReadoutScroll(apply) {
+  const held = syncOwner.owner;
+  if (!held) takeDriver("pdf");
+  try {
+    apply();
+  } finally {
+    if (!held) releaseScrollDriver("pdf");
+  }
+}
+
+function restoreFlowAnchor(anchor) {
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  if (!pane || !flow || !anchor) return;
+  const esc = globalThis.CSS?.escape || ((value) => String(value).replace(/"/g, '\\"'));
+  let node = null;
+  if (anchor.id) node = flow.querySelector(`[data-block-id="${esc(anchor.id)}"]`);
+  if (!node && anchor.pairId) node = flow.querySelector(`[data-pair-id="${esc(anchor.pairId)}"]`);
+  if (!node && anchor.srcPage) node = flow.querySelector(`.rf-block[data-src-page="${esc(anchor.srcPage)}"]`);
+  if (!node) return;
+  const delta = node.getBoundingClientRect().top - anchor.top;
+  if (Math.abs(delta) > 0.5) holdReadoutScroll(() => { pane.scrollTop += delta; });
+}
+
+function pageStatusSpec(page, row) {
+  if (row.state === "running") return { kind: "running", text: psRunning(row.k || 0, row.m || 0), bar: true };
+  if (row.state === "layout") return { kind: "layout", text: "正在读取本页…" };
+  if (row.state === "queued") return { kind: "queued", text: "排队翻译" };
+  if (row.state === "skipped") return { kind: "skipped", text: psSkippedCopy() };
+  if (row.state === "empty") return { kind: "empty", text: row.noText ? psNoTextCopy() : psEmptyCopy() };
+  if (row.state === "failed") return { kind: "failed", text: `第 ${page} 页翻译失败`, warn: true };
+  if (row.state === "partial") return { kind: "partial", text: "有段落翻译失败", warn: true };
+  return null;
+}
+
+function syncPageStatus(slot, page, row) {
+  const spec = pageStatusSpec(page, row);
+  let ps = slot.querySelector(":scope > .rf-ps");
+  if (!spec) {
+    ps?.remove();
+    return null;
+  }
+  if (!ps) {
+    ps = document.createElement("div");
+    ps.className = "rf-ps";
+    slot.insertBefore(ps, slot.firstChild);
+  } else if (slot.firstChild !== ps) {
+    slot.insertBefore(ps, slot.firstChild);
+  }
+  ps.dataset.kind = spec.kind;
+  if (spec.warn) ps.dataset.tone = "warn";
+  else delete ps.dataset.tone;
+  let text = ps.querySelector(":scope > .rf-ps-text");
+  if (!text) {
+    text = document.createElement("span");
+    text.className = "rf-ps-text";
+    ps.append(text);
+  }
+  text.textContent = spec.text;
+  let bar = ps.querySelector(":scope > .rf-ps-bar");
+  if (spec.bar) {
+    if (!bar) {
+      bar = document.createElement("span");
+      bar.className = "rf-ps-bar";
+      bar.setAttribute("role", "progressbar");
+      bar.append(document.createElement("i"));
+      ps.append(bar);
+    }
+    const m = Math.max(0, Number(row.m) || 0);
+    const k = Math.max(0, Number(row.k) || 0);
+    bar.setAttribute("aria-label", `第 ${page} 页翻译进度`);
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", String(m));
+    bar.setAttribute("aria-valuenow", String(Math.min(k, m || k)));
+    const fill = bar.querySelector("i");
+    if (fill) fill.style.inlineSize = `${m > 0 ? (k / m) * 100 : 0}%`;
+  } else {
+    bar?.remove();
+  }
+  return ps;
+}
+
+function paintPageSlot(page) {
+  const row = pageFlowState(page);
+  const slot = ensurePaper(page);
+  if (!slot) return;
+  slot.dataset.page = String(page);
+  slot.dataset.srcPage = String(page);
+  slot.dataset.state = row.state;
+  if (row.state === "queued" && !row.hasLayout) {
+    if (slot.childNodes.length) slot.replaceChildren();
+    delete slot.dataset.painted;
+    return;
+  }
+  const stable = slot.dataset.painted === "1" && row.state !== "running" && row.state !== "layout";
+  if (stable) return;
+  const ps = syncPageStatus(slot, page, row);
+  [...slot.children].forEach((child) => {
+    if (child !== ps) child.remove();
+  });
+  const layout = getPageLayout(page);
+  const showBlocks = layout && showsBlockReadout(layout) && row.state !== "layout" && row.state !== "empty";
+  if (showBlocks) appendFixtureReadout(slot, layoutForReadout(layout));
+  else if (libraryArticle?.length && page === 1 && row.state !== "layout" && row.state !== "empty") {
+    renderStoredArticle(libraryArticle);
+  }
+}
+
 function renderArticle() {
   const pane = translateScrollRoot();
-  const keep = pane ? pane.scrollTop : 0;
+  const anchor = captureFlowAnchor();
   const keepLeft = pane ? pane.scrollLeft : 0;
   const formulaScrolls = captureFormulaScrolls(readerFlowEl());
-  const stack = paperStackEl();
-  if (stack) stack.replaceChildren();
-  if (libraryArticle?.length && scopeShowsPage(1)) {
-    renderStoredArticle(libraryArticle);
-    applyViewMode();
-    finalizeReaderFlow();
-    syncReadoutEmpty(true);
-    if (pane) pane.scrollTop = keep;
-    if (pane) pane.scrollLeft = keepLeft;
-    restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
-    settlePairChrome();
-    return;
-  }
-  const pages = pagesInTranslateScope(
-    collectArticlePages(pageCache, docId, pdfDoc?.numPages || 0),
-    currentScope(),
-    pageNum
-  );
   applyViewMode();
-  const blockPages = [];
   const total = pdfDoc?.numPages || 0;
-  for (let n = 1; n <= total; n += 1) {
-    const layout = getPageLayout(n);
-    if (showsBlockReadout(layout) && scopeShowsPage(n)) blockPages.push(layout);
-  }
-  if (!pages.length && !blockPages.length) {
-    finalizeReaderFlow();
-    syncReadoutEmpty(false);
-    updateTranslateControls();
-    if (pane) pane.scrollTop = keep;
-    settlePairChrome();
-    return;
-  }
-  if (blockPages.length) {
-    blockPages.forEach((layout) => {
-      const flow = ensurePaper(layout.page);
-      if (flow) appendFixtureReadout(flow, layoutForReadout(layout));
-    });
-  }
-  pages.forEach(({ page, blocks }) => {
-    if (blockPages.some((layout) => layout.page === page)) return;
-    const flow = readoutFlowForPage(getPageLayout(page), blocks)
-      .filter((item) => item?.translation || item?.latex);
-    if (!flow.length) return;
-    const flowRoot = ensurePaper(page);
-    if (!flowRoot) return;
-    flow.forEach((item) => {
-      appendReadoutNode(
-        {
-          translation: item.translation,
-          original: item.original,
-          role: item.role,
-          kind: item.kind,
-          latex: item.latex,
-          display: item.display,
-          page
-        },
-        flowRoot
-      );
-    });
-  });
+  for (let n = 1; n <= total; n += 1) paintPageSlot(n);
   const hasContent = finalizeReaderFlow();
   syncReadoutEmpty(hasContent);
-  if (!hasContent) {
-    updateTranslateControls();
-    if (pane) pane.scrollTop = keep;
-    settlePairChrome();
-    return;
-  }
-  if (pane) pane.scrollTop = keep;
+  restoreFlowAnchor(anchor);
   if (pane) pane.scrollLeft = keepLeft;
   restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
   settlePairChrome();
   updateTranslateControls();
+  refreshDocStatus();
 }
 
 function stampReaderPage(slot) {
@@ -3204,32 +3341,6 @@ function makePageBreak(page) {
   before.setAttribute("aria-hidden", "true");
   after.setAttribute("aria-hidden", "true");
   el.append(before, label, after);
-  return el;
-}
-
-function makeUntranslated(page) {
-  const el = document.createElement("div");
-  el.className = "rf-untranslated";
-  el.dataset.srcPage = String(page);
-  const label = document.createElement("span");
-  label.textContent = untranslatedLabel(page);
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "rf-untranslated-btn";
-  btn.dataset.action = "translate-page";
-  btn.dataset.srcPage = String(page);
-  btn.textContent = pdfTranslateBusy(session) ? "排队中" : "翻译本页";
-  btn.disabled = pdfTranslateBusy(session);
-  el.append(label, btn);
-  return el;
-}
-
-function makeTranslateProgress() {
-  const el = document.createElement("p");
-  el.className = "rf-translate-progress";
-  el.setAttribute("role", "status");
-  const total = pdfDoc?.numPages || 1;
-  el.textContent = documentTranslatePlaceholder(translatingPage || 1, total);
   return el;
 }
 
@@ -3403,7 +3514,8 @@ function layoutCapsule({ keepAnchor = false } = {}) {
   const next = `${place.mode}|${place.label}|${place.measure}px|${place.start == null ? "auto" : `${place.start}px`}`;
   if (before && prev !== next) {
     const line = capsuleAnchorY(pane);
-    pane.scrollTop += before.getBoundingClientRect().top - line;
+    const shift = before.getBoundingClientRect().top - line;
+    holdReadoutScroll(() => { pane.scrollTop += shift; });
   }
   updatePageCapsule();
   updateReaderFade();
@@ -3418,49 +3530,91 @@ function updateReaderFade() {
   fade.style.bottom = scrollbar > 0 ? `${scrollbar}px` : "0px";
 }
 
+function ensureRange(item) {
+  const flow = readerFlowEl();
+  let el = [...flow.querySelectorAll(":scope > .rf-q")].find((node) =>
+    node.dataset.from === String(item.from) && node.dataset.to === String(item.to) && node.dataset.state === (item.state || "queued")
+  );
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "rf-q";
+    el.setAttribute("role", "status");
+    const ring = document.createElement("span");
+    ring.className = "rf-q-ring";
+    ring.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    text.className = "rf-q-text";
+    el.append(ring, text);
+  }
+  el.dataset.from = String(item.from);
+  el.dataset.to = String(item.to);
+  el.dataset.state = item.state || "queued";
+  const text = el.querySelector(".rf-q-text");
+  if (text) text.textContent = qQueued(item.from, item.to);
+  return el;
+}
+
+function ensureBreak(item) {
+  const flow = readerFlowEl();
+  const key = String(item.page);
+  let el = flow.querySelector(`:scope > .rf-pagebreak[data-src-page="${key}"]`);
+  if (!el) el = makePageBreak(item.page);
+  el.dataset.state = item.state || "";
+  el.hidden = Boolean(item.hidden);
+  return el;
+}
+
+function orderFlowChildren(nodes) {
+  const flow = readerFlowEl();
+  const keep = new Set(nodes.filter(Boolean));
+  [...flow.children].forEach((child) => {
+    if (!keep.has(child)) child.remove();
+  });
+  let ref = flow.firstChild;
+  for (const node of nodes) {
+    if (!node) continue;
+    if (ref === node) {
+      ref = node.nextSibling;
+      continue;
+    }
+    flow.insertBefore(node, ref);
+  }
+}
+
 function finalizeReaderFlow() {
   const flow = readerFlowEl();
   if (!flow) return false;
-  const slots = new Map();
-  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => {
-    if (!slot.childNodes.length) {
-      slot.remove();
-      return;
-    }
-    slots.set(Number(slot.dataset.page), slot);
-  });
-  const slotMax = slots.size ? Math.max(...slots.keys()) : 0;
-  const total = Math.max(Number(pdfDoc?.numPages) || 0, slotMax);
-  const wanted = new Set(contentPagesForScope({
-    scope: currentScope(),
-    currentPage: pageNum,
-    pagesWithContent: [...slots.keys()]
-  }));
-  for (const [page, slot] of slots) {
-    if (!wanted.has(page)) {
-      slot.remove();
-      slots.delete(page);
-    }
+  const total = Number(pdfDoc?.numPages) || 0;
+  const pages = new Map();
+  for (let n = 1; n <= total; n += 1) {
+    const row = pageFlowState(n);
+    pages.set(n, { state: row.state, hasLayout: row.state === "queued" ? row.hasLayout : true });
   }
-  const translatingAll = pdfTranslateBusy(session) && currentScope() === "all";
-  const plan = planReaderFlow({
-    pageCount: total,
-    contentPages: [...wanted],
-    collapseUntranslated: translatingAll
-  });
-  const frag = document.createDocumentFragment();
+  const plan = planReaderFlow({ pageCount: total, pages });
+  const nodes = [];
   for (const item of plan) {
-    if (item.kind === "break") frag.append(makePageBreak(item.page));
-    else if (item.kind === "untranslated") frag.append(makeUntranslated(item.page));
-    else if (item.kind === "progress") frag.append(makeTranslateProgress());
-    else if (slots.get(item.page)) frag.append(slots.get(item.page));
+    if (item.kind === "range") nodes.push(ensureRange(item));
+    else if (item.kind === "break") nodes.push(ensureBreak(item));
+    else if (item.kind === "slot") {
+      const slot = ensurePaper(item.page);
+      if (!slot) continue;
+      slot.dataset.state = item.state || slot.dataset.state || "queued";
+      slot.hidden = Boolean(item.hidden);
+      nodes.push(slot);
+    }
   }
-  flow.replaceChildren(frag);
-  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => stampReaderPage(slot));
-  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => stampFlowPairs(slot));
+  orderFlowChildren(nodes);
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => {
+    if (slot.dataset.painted === "1") return;
+    stampReaderPage(slot);
+    stampFlowPairs(slot);
+    refreshMatchedFormulas(slot);
+    const row = pageFlowState(Number(slot.dataset.page));
+    const collapsed = row.state === "queued" && !row.hasLayout;
+    if (!collapsed && slot.dataset.state !== "running" && slot.dataset.state !== "layout") slot.dataset.painted = "1";
+  });
   layoutCapsule();
-  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => refreshMatchedFormulas(slot));
-  return wanted.size > 0;
+  return Boolean(flow.querySelector(".rf-block, .rf-ps, .rf-q"));
 }
 
 function settlePairChrome() {
@@ -3655,7 +3809,8 @@ function syncPdfToPage(page) {
 
 function syncReadoutToPage(page) {
   const pane = translateScrollRoot();
-  const node = readerFlowEl()?.querySelector(`.rf-block[data-src-page="${page}"], .rf-untranslated[data-src-page="${page}"]`);
+  const node = readerFlowEl()?.querySelector(`.rf-block[data-src-page="${page}"]`)
+    || readerFlowEl()?.querySelector(`.rf-page[data-page="${page}"] > .rf-ps`);
   return writeAnchorScroll(pane, node);
 }
 
@@ -3668,15 +3823,10 @@ function runtimeSend(message) {
 }
 
 function currentScope() {
-  const on = document.querySelector(".scope-seg-btn.is-on");
-  return normalizePdfTranslateScope(on?.dataset.scope);
+  return "all";
 }
 
-function onScopeClick(event) {
-  const btn = event.target.closest(".scope-seg-btn");
-  if (!btn || btn.disabled || pdfTranslateBusy(session)) return;
-  setTranslateScope(btn.dataset.scope);
-}
+function onScopeClick() {}
 
 function beginViewerSession() {
   if (session.aborted) session = createTranslateSession();
@@ -3692,50 +3842,44 @@ function isCurrentWork(work, gen, translatingDoc) {
 function stopTranslateWork() {
   abortTranslateSession(session);
   translatingPage = 0;
+  for (const [page, row] of pageStates) {
+    if (row.state === "running" || row.state === "layout") {
+      notePageState(page, { state: "queued", hasLayout: Boolean(row.hasLayout) });
+      clearSlotPainted(page);
+    }
+  }
+  docPhase = "stopped";
   setStatus(PDF_COPY.stopped);
   renderArticle();
   updateTranslateControls();
 }
 
 function revealTranslationPage(page) {
-  const pane = translateScrollRoot();
-  const flow = readerFlowEl();
-  const node = flow?.querySelector(`.rf-block[data-src-page="${page}"], .rf-untranslated[data-src-page="${page}"]`);
-  if (!pane || !node) return false;
-  const paneBox = pane.getBoundingClientRect();
-  const box = node.getBoundingClientRect();
-  const bar = pane.dataset.capsuleMode === "bar" ? capsuleBarHeight() : 0;
-  const line = paneBox.top + bar + (paneBox.height - bar) * 0.3;
-  pane.scrollTop += box.top - line;
-  updatePageCapsule();
-  return true;
+  const gen = navGen;
+  const apply = () => {
+    if (gen !== navGen) return false;
+    const pane = translateScrollRoot();
+    const flow = readerFlowEl();
+    const node = flow?.querySelector(`.rf-block[data-src-page="${page}"]`)
+      || flow?.querySelector(`.rf-page[data-page="${page}"] > .rf-ps`);
+    if (!pane || !node) return false;
+    const paneBox = pane.getBoundingClientRect();
+    const box = node.getBoundingClientRect();
+    if (box.width < 1 && box.height < 1) return false;
+    const bar = pane.dataset.capsuleMode === "bar" ? capsuleBarHeight() : 0;
+    const line = paneBox.top + bar + (paneBox.height - bar) * 0.3;
+    holdReadoutScroll(() => { pane.scrollTop += box.top - line; });
+    updatePageCapsule();
+    return true;
+  };
+  const moved = apply();
+  requestAnimationFrame(() => { apply(); });
+  return moved;
 }
 
-function setTranslateScope(value) {
-  const scope = normalizePdfTranslateScope(value);
-  const previous = currentScope();
-  const keepPage = pageNum;
-  if (scope === previous) return;
-  document.querySelectorAll(".scope-seg-btn").forEach((btn) => {
-    btn.classList.toggle("is-on", btn.dataset.scope === scope);
-  });
-  renderArticle();
-  const pane = translateScrollRoot();
-  if (scope === "all") {
-    if (!revealTranslationPage(keepPage) && pane) pane.scrollTop = 0;
-    if (pageNum !== keepPage) pageNum = keepPage;
-    updatePager();
-  } else if (pane) {
-    pane.scrollTop = 0;
-  }
-  updateTranslateControls();
-}
+function setTranslateScope() {}
 
-function setScopeEnabled(enabled) {
-  document.querySelectorAll(".scope-seg-btn").forEach((btn) => {
-    btn.disabled = !enabled;
-  });
-}
+function setScopeEnabled() {}
 
 function extensionRuntimeReady() {
   return typeof globalThis.chrome?.runtime?.sendMessage === "function";
@@ -3787,7 +3931,13 @@ async function readAutoTranslateEnabled() {
 async function maybeAutoTranslateDocument() {
   if (!pdfDoc || currentScope() !== "all" || pdfTranslateBusy(session)) return;
   const adopting = docId;
-  if (!(await readAutoTranslateEnabled())) return;
+  if (!(await readAutoTranslateEnabled())) {
+    if (adopting === docId && docPhase === "opening") {
+      docPhase = "idle";
+      refreshDocStatus();
+    }
+    return;
+  }
   if (adopting !== docId || !pdfDoc || currentScope() !== "all" || pdfTranslateBusy(session)) return;
   await startTranslate();
 }
@@ -3799,9 +3949,13 @@ async function startTranslate() {
   if (adopting !== docId) return;
   if (blocker) {
     setStatus(blocker, true);
+    if (docPhase === "opening" || docPhase === "running") docPhase = "idle";
+    refreshDocStatus();
     updateTranslateControls();
     return;
   }
+  docPhase = "running";
+  refreshDocStatus();
   if (currentScope() === "all") await translateWholeDocument();
   else await translateCurrentPage();
 }
@@ -4159,7 +4313,10 @@ async function translateWholeDocument() {
   try {
     const saved = await savedTranslationFor(pageNum);
     if (saved?.readout) {
+      notePageState(1, { state: "done", hasLayout: true });
+      clearSlotPainted(1);
       setStatus(PDF_COPY.doneDocument);
+      finishDocPhase();
       renderArticle();
       return;
     }
@@ -4182,6 +4339,13 @@ async function translateWholeDocument() {
       } else {
         setStatus(libraryHoldCopy(libraryDoc.pages, blocksByPage));
       }
+      for (const entry of libraryDoc.pages) {
+        const blocks = blocksByPage[entry.page] || null;
+        const skipped = Boolean(entry.skipped) || isSkipOnlyPage(blocks);
+        notePageState(entry.page, { state: skipped ? "skipped" : "done", hasLayout: true });
+        clearSlotPainted(entry.page);
+      }
+      finishDocPhase();
       renderArticle();
       return;
     }
@@ -4208,13 +4372,17 @@ async function translateWholeDocument() {
     translatingPage = 0;
     if (String(err?.message || err) === "runtime unavailable") {
       setStatus(pdfTranslateFailureCopy({ reason: "runtime" }), true);
+      finishDocPhase({ error: true });
       renderArticle();
       updateTranslateControls();
       return;
     }
   }
   if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) {
-    if (isCurrentWork(work, gen, translatingDoc)) updateTranslateControls();
+    if (isCurrentWork(work, gen, translatingDoc)) {
+      finishDocPhase({ aborted: work.aborted });
+      updateTranslateControls();
+    }
     return;
   }
   const saveTasks = [];
@@ -4226,15 +4394,45 @@ async function translateWholeDocument() {
     batchSize,
     send: runtimeSend,
     getPageOriginals: (page) => originalsForPage(page, gen, translatingDoc, work, batchSize),
+    pageSkipReason: (page) => (isSkipOnlyPage(getPageLayout(page)?.blocks) ? "skip-only" : "empty"),
+    onPageSkip({ page, reason }) {
+      if (!isCurrentWork(work, gen, translatingDoc)) return;
+      if (reason === "cached") notePageState(page, { state: "done", hasLayout: true });
+      else if (reason === "skip-only") notePageState(page, { state: "skipped", hasLayout: true });
+      else {
+        const layout = getPageLayout(page);
+        const noText = !(layout?.blocks?.length) && !(Number(layout?.itemCount) > 0);
+        notePageState(page, { state: "empty", hasLayout: Boolean(layout), noText });
+      }
+      clearSlotPainted(page);
+      refreshDocStatus();
+      renderArticle();
+    },
     onPageStart({ page, total: pageTotal }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       translatingPage = page;
+      const prev = pageStates.get(page);
+      notePageState(page, {
+        state: "running",
+        hasLayout: Boolean(prev?.hasLayout) || Boolean(getPageLayout(page)?.blocks?.length),
+        k: 0,
+        m: prev?.m || 0
+      });
+      clearSlotPainted(page);
+      docPhase = "running";
       if (!$("status").classList.contains("warn") && !$("status").classList.contains("error")) {
         setStatus(progressDocumentStatus(page, pageTotal));
       }
-      const progress = document.querySelector(".rf-translate-progress");
-      if (progress) progress.textContent = documentTranslatePlaceholder(page, pageTotal);
-      else renderArticle();
+      refreshDocStatus();
+      renderArticle();
+    },
+    onBatchStart({ total: blockTotal }) {
+      if (!isCurrentWork(work, gen, translatingDoc)) return;
+      const page = translatingPage;
+      const prev = pageStates.get(page);
+      notePageState(page, { state: "running", m: blockTotal, k: prev?.k || 0 });
+      clearSlotPainted(page);
+      renderArticle();
     },
     onPageResult({ page, results, res }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
@@ -4242,6 +4440,10 @@ async function translateWholeDocument() {
       const merged = pageResultsFromTranslation(layout, results);
       pageCache.set(translatingDoc, page, merged);
       if (page === pageNum) pageResults = merged;
+      const k = Math.max(pageStates.get(page)?.k || 0, filledCount(merged));
+      if (res?.ok === false || res?.error) notePageState(page, { state: pageRunState(merged), hasLayout: true, k });
+      else notePageState(page, { state: "running", hasLayout: true, k });
+      clearSlotPainted(page);
       renderArticle();
       if (res?.polishError) setStatus(PDF_COPY.polishFail, true);
     },
@@ -4252,20 +4454,34 @@ async function translateWholeDocument() {
       const merged = withStructureRows(layout, base);
       pageCache.set(translatingDoc, page, merged);
       if (page === pageNum) pageResults = merged;
+      const k = Math.max(pageStates.get(page)?.k || 0, filledCount(merged));
+      notePageState(page, { state: pageRunState(merged), hasLayout: true, k });
+      clearSlotPainted(page);
+      refreshDocStatus();
       renderArticle();
       saveTasks.push(rememberTranslation(page, merged).then(() => null, (error) => error));
     }
   });
   if (!isCurrentWork(work, gen, translatingDoc)) return;
   const { aborted, pages, error, missingField } = translatedDoc;
+  for (const entry of pages) {
+    if (entry.reason === "cached" || entry.reason === "skip-only" || entry.reason === "empty") continue;
+    if (entry.error || entry.results?.some((item) => item?.failed)) {
+      notePageState(entry.page, { state: pageRunState(entry.results), hasLayout: true });
+      clearSlotPainted(entry.page);
+    }
+  }
   renderArticle();
+  const totals = pageTotals();
   const any = pages.some((entry) => pageHasTranslation(entry.results) ||
     pageHasTranslation(pageCache.get(translatingDoc, entry.page)) ||
     (titleStructure?.page === entry.page && structureLanded(entry.page)));
+  const clean = !error && !aborted && any && totals.n === total && totals.needsRetry === 0;
   if (error) setStatus(pdfTranslateFailureCopy({ error, field: missingField, missingField }), true);
   else if (aborted) setStatus(PDF_COPY.stopped);
-  else if (!any) setStatus(pdfTranslateFailureCopy({ error: "没有返回译文" }), true);
+  else if (!clean) setStatus(pdfTranslateFailureCopy({ error: any ? "有页面没有译完" : "没有返回译文" }), true);
   else setStatus(PDF_COPY.doneDocument);
+  finishDocPhase({ aborted, error: Boolean(error) || totals.needsRetry > 0 || totals.n !== total });
   const saveErrors = await Promise.all(saveTasks);
   if (!error && !aborted && saveErrors.some(Boolean)) setStatus("译文已生成，但部分页面写入本地库失败。", true);
   translatingPage = 0;
@@ -4336,7 +4552,10 @@ function failForceRetranslate(work, prior, doc, page) {
   if (work === session) work.running = false;
   translatingPage = 0;
   forceReadoutHold = false;
+  notePageState(page, { state: "failed", hasLayout: Boolean(getPageLayout(page)?.blocks?.length) });
+  clearSlotPainted(page);
   restoreForceReadout(prior, doc, page);
+  finishDocPhase({ error: true });
   setStatus(PDF_COPY.retranslateFailed, true);
   updateTranslateControls();
 }
@@ -4346,13 +4565,14 @@ function abortForceRetranslate(work, prior, doc, page) {
   translatingPage = 0;
   forceReadoutHold = false;
   restoreForceReadout(prior, doc, page);
+  finishDocPhase({ aborted: true });
   setStatus(PDF_COPY.stopped);
   updateTranslateControls();
 }
 
 async function forceRetranslateCurrentPage() {
   if (!pdfDoc || pdfTranslateBusy(session)) return;
-  const sourceLayout = getPageLayout(pageNum);
+  const sourceLayout = getPageLayout(capsulePage());
   const units = liveOriginals(sourceLayout, unitsForForceRetranslate(sourceLayout));
   const titleCandidate = isTitlePageCandidate(pageNum, pageTextForStructure(sourceLayout?.blocks));
   if (isSkipOnlyPage(sourceLayout?.blocks)) {
@@ -4368,10 +4588,14 @@ async function forceRetranslateCurrentPage() {
   }
   const gen = restoreGen;
   const translatingDoc = docId;
-  const targetPage = pageNum;
+  const targetPage = capsulePage();
   const prior = snapshotForceReadout(translatingDoc, targetPage);
   const work = beginViewerSession();
   translatingPage = targetPage;
+  notePageState(targetPage, { state: "running", hasLayout: Boolean(sourceLayout?.blocks?.length), k: 0 });
+  clearSlotPainted(targetPage);
+  docPhase = "running";
+  renderArticle();
   forceReadoutHold = true;
   updateTranslateControls();
   setStatus(PDF_COPY.retranslateRunning);
@@ -4440,6 +4664,9 @@ async function forceRetranslateCurrentPage() {
       replaceLibraryPagePairs(libraryDoc, targetPage, pairs);
       pageCache.set(translatingDoc, targetPage, merged);
       pageResults = merged;
+      notePageState(targetPage, { state: pageRunState(merged), hasLayout: true });
+      clearSlotPainted(targetPage);
+      finishDocPhase();
       renderArticle();
       if (!work.aborted && isCurrentWork(work, gen, translatingDoc)) setStatus(PDF_COPY.retranslateDone);
     } catch {
@@ -4679,18 +4906,14 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
   return liveOriginals(layout, blocks);
 }
 
-/** 原文: current page only (clearPage). Does not clear the whole document. */
+/** 原文: view toggle only. Does not abort the session or clear the page cache. */
 function restoreOriginal() {
-  abortTranslateSession(session);
-  restoreGen += 1;
-  translatingPage = 0;
-  pageResults = [];
-  pageCache.clearPage(docId, pageNum);
-  renderArticle();
-  const copy = pageBlocksCopy(pageOriginals.length, pageItems);
-  setStatus(layoutNotice || copy);
-  syncNoTextLayerHint(pageItems <= 0);
-  updateTranslateControls();
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  const next = workspace.dataset.view === "src" ? "zh" : "src";
+  workspace.dataset.view = next;
+  const button = $("restoreOriginal");
+  if (button) button.setAttribute("aria-pressed", next === "src" ? "true" : "false");
 }
 
 async function openFile(file) {
@@ -4740,6 +4963,9 @@ async function adoptDoc(doc, title) {
   renderGen += 1;
   translatingPage = 0;
   pageCache.clear();
+  pageStates.clear();
+  docPhase = "opening";
+  notePageState(1, { state: "layout", hasLayout: false });
   libraryArticle = null;
   libraryDoc = null;
   titleStructure = null;
@@ -4894,22 +5120,39 @@ function syncVisiblePage() {
 
 async function goPage(dir) {
   if (!pdfDoc) return;
-  const inAll = currentScope() === "all";
-  const origin = inAll ? sourceNavPage() : pageNum;
+  const origin = sourceNavPage() || pageNum;
   const next = pageIndex(origin, pdfDoc.numPages, dir);
   if (next === origin) return;
+  const gen = ++navGen;
+  const bringTranslation = dir > 0 && capsulePage() === origin;
   takeDriver("pdf");
-  if (!inAll) pageNum = next;
   const view = pageViews[next - 1];
   view?.wrap.scrollIntoView({ block: "start", behavior: PANE_SYNC_BEHAVIOR });
   updatePager();
-  updateSourcePageLabel(inAll ? sourceNavPage() : next);
-  if (!inAll) {
-    const readout = translateScrollRoot();
-    if (readout) readout.scrollTop = 0;
-    renderArticle();
-    loadCurrentPageText();
+  updateSourcePageLabel(next);
+  if (bringTranslation && pageHasFlow(next)) {
+    pageNum = next;
+    updatePager();
+    revealTranslationPage(next);
+  } else if (!pageHasFlow(next)) {
+    if (bringTranslation) {
+      pageNum = next;
+      updatePager();
+      navRevealPage = next;
+    }
+    const row = pageStates.get(next);
+    if (!row || row.state === "queued") {
+      notePageState(next, { state: "layout", hasLayout: Boolean(getPageLayout(next)?.blocks?.length) });
+    }
+    await loadCurrentPageText(next);
+    if (gen !== navGen) return;
+    if (bringTranslation && navRevealPage === next) {
+      navRevealPage = 0;
+      revealTranslationPage(next);
+    }
   }
+  if (gen !== navGen) return;
+  settlePairChrome();
   await scheduleVisibleRenders();
 }
 
@@ -4983,6 +5226,7 @@ async function refreshFormulaCropsForDisplay() {
         block.imageUrl = sharp;
         block.surface = "redraw";
         changed = true;
+        clearSlotPainted(n);
       }
     }
     noteFormulaCropPlan(layout);
@@ -5081,9 +5325,10 @@ async function renderView(view) {
 
 function showOpenedLayout(layout, isStale) {
   if (!layout || isStale()) return false;
+  const laidPage = Number(layout.page) || textLoadPage || pageNum;
   pageItems = Number(layout.itemCount) || 0;
   pageOriginals = unitsForLayout(layout);
-  const cached = pageCache.get(docId, pageNum);
+  const cached = pageCache.get(docId, laidPage);
   pageResults = cached || [];
   const copy = isSkipOnlyPage(layout.blocks)
     ? PAGE_STATUS_BIBLIOGRAPHY
@@ -5094,14 +5339,21 @@ function showOpenedLayout(layout, isStale) {
     else setStatus(copy);
   }
   syncNoTextLayerHint(pageItems <= 0);
-  if (layout.kind === "blocks") renderArticle();
+  noteLayoutReady(laidPage);
+  if (layout.kind === "blocks" || layout.kind === "readout") renderArticle();
+  if (navRevealPage === laidPage) {
+    navRevealPage = 0;
+    revealTranslationPage(laidPage);
+  }
   return true;
 }
 
-async function loadCurrentPageText() {
+async function loadCurrentPageText(explicitPage) {
   if (!pdfDoc) return;
   const ticket = ++textGen;
-  const n = pageNum;
+  const requested = Number(explicitPage);
+  const n = requested >= 1 ? requested : pageNum;
+  textLoadPage = n;
   const translatingDoc = docId;
   const isStale = () => ticket !== textGen || translatingDoc !== docId;
   let mode = pdfEngineMode();
@@ -5241,7 +5493,7 @@ function updateTranslateControls() {
   $("retranslatePage").disabled = ui.retranslateDisabled;
   $("stopTranslate").hidden = ui.stopHidden;
   $("stopTranslate").disabled = ui.stopDisabled;
-  $("restoreOriginal").disabled = !pageHasTranslation(pageCache.get(docId, pageNum));
+  $("restoreOriginal").disabled = !pdfDoc;
   setScopeEnabled(ui.scopeEnabled);
   syncExportControls();
   syncMirrorZoomButtons();

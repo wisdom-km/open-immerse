@@ -36,7 +36,6 @@ import {
   splitLayout,
   stepReaderFontSize,
   themePaperRgb,
-  untranslatedLabel,
   writeReaderPrefs
 } from "../lib/pdf-reader-flow.js";
 
@@ -159,16 +158,36 @@ test("continuous flow replaces the paper stack and keeps the title mount", () =>
   assert.match(viewer, /readerFormulaCssSize/);
 });
 
-test("page markers are a capsule, in-flow breaks, and untranslated rows", () => {
-  const plan = planReaderFlow({ pageCount: 5, contentPages: [3, 5] });
-  assert.deepEqual(plan, [
-    { kind: "untranslated", page: 1 },
-    { kind: "untranslated", page: 2 },
-    { kind: "content", page: 3 },
-    { kind: "untranslated", page: 4 },
-    { kind: "break", page: 5 },
-    { kind: "content", page: 5 }
+test("page markers are a capsule, in-flow breaks, and one queued range", () => {
+  const pages = new Map([
+    [1, { state: "done", hasLayout: true }],
+    [2, { state: "running", hasLayout: true }],
+    [3, { state: "queued", hasLayout: false }],
+    [4, { state: "queued", hasLayout: false }],
+    [5, { state: "queued", hasLayout: true }]
   ]);
+  assert.deepEqual(planReaderFlow({ pageCount: 5, pages }), [
+    { kind: "slot", page: 1, hidden: false, state: "done" },
+    { kind: "break", page: 2, hidden: false, state: "running" },
+    { kind: "slot", page: 2, hidden: false, state: "running" },
+    { kind: "range", from: 3, to: 4, state: "queued" },
+    { kind: "break", page: 3, hidden: true, state: "queued" },
+    { kind: "slot", page: 3, hidden: true, state: "queued" },
+    { kind: "break", page: 4, hidden: true, state: "queued" },
+    { kind: "slot", page: 4, hidden: true, state: "queued" },
+    { kind: "break", page: 5, hidden: false, state: "queued" },
+    { kind: "slot", page: 5, hidden: false, state: "queued" }
+  ]);
+  const collapsed = planReaderFlow({
+    pageCount: 3,
+    pages: new Map([
+      [1, { state: "queued", hasLayout: false }],
+      [2, { state: "queued", hasLayout: false }],
+      [3, { state: "queued", hasLayout: false }]
+    ])
+  });
+  assert.equal(collapsed.filter((item) => item.kind === "range").length, 1);
+  assert.equal(collapsed.some((item) => item.kind === "untranslated"), false);
   assert.deepEqual(
     contentPagesForScope({ scope: "page", currentPage: 3, pagesWithContent: [1, 3, 4] }),
     [3]
@@ -178,16 +197,6 @@ test("page markers are a capsule, in-flow breaks, and untranslated rows", () => 
     [1, 3]
   );
   assert.equal(pageBreakLabel(4), "原文第 4 页");
-  assert.equal(untranslatedLabel(6), "原文第 6 页 · 未翻译");
-  assert.deepEqual(
-    planReaderFlow({ pageCount: 5, contentPages: [1], collapseUntranslated: true }),
-    [{ kind: "content", page: 1 }, { kind: "progress" }]
-  );
-  assert.equal(
-    planReaderFlow({ pageCount: 3, contentPages: [1], collapseUntranslated: true })
-      .some((item) => item.kind === "untranslated"),
-    false
-  );
   assert.equal(capsuleLabel(3), "原文第 3 页");
   assert.equal(capsuleLabel(3, { short: true }), "第 3 页");
   assert.equal(capsuleLabel(3, { short: true }) === capsuleLabel(3), false);
@@ -202,9 +211,12 @@ test("page markers are a capsule, in-flow breaks, and untranslated rows", () => 
   assert.match(html, /id="pageCapsule"/);
   assert.match(css, /\.rf-capsule-bar\s*\{[^}]*position:\s*sticky/s);
   assert.match(css, /\.rf-pagebreak/);
-  assert.match(css, /\.rf-untranslated/);
+  assert.match(css, /\.rf-q/);
+  assert.match(css, /\.rf-ps/);
+  assert.doesNotMatch(css, /\.rf-untranslated/);
   assert.match(viewer, /data-src-page|dataset\.srcPage/);
-  assert.match(viewer, /翻译本页/);
+  assert.doesNotMatch(viewer, /翻译本页/);
+  assert.doesNotMatch(viewer, /makeUntranslated|untranslatedLabel|rf-untranslated/);
 });
 
 test("multiply is the default blend and forced-colors keeps the original pixels", () => {
@@ -515,9 +527,12 @@ test("split keeps a ratio and the translation column stays at least 540px", () =
   assert.equal(formulaScrollLeft(kept, "3", "eq1"), 0);
   const render = viewer.slice(viewer.indexOf("function renderArticle"), viewer.indexOf("function stampReaderPage"));
   const captured = render.indexOf("captureFormulaScrolls");
-  const cleared = render.indexOf("stack.replaceChildren()");
-  assert.ok(captured >= 0 && cleared > captured);
-  assert.equal((render.match(/restoreFormulaScrolls\(readerFlowEl\(\), formulaScrolls\)/g) || []).length, 2);
+  const formulaRestored = render.indexOf("restoreFormulaScrolls(readerFlowEl(), formulaScrolls)");
+  assert.ok(captured >= 0 && formulaRestored > captured);
+  assert.equal(render.includes("replaceChildren"), false);
+  assert.match(render, /captureFlowAnchor/);
+  assert.match(render, /restoreFlowAnchor/);
+  assert.equal((render.match(/restoreFormulaScrolls\(readerFlowEl\(\), formulaScrolls\)/g) || []).length, 1);
 });
 
 test("fade shows only when more content sits below the fold", () => {

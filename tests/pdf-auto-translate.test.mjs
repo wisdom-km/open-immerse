@@ -214,19 +214,25 @@ function sleep(ms) {
 }
 
 const SNAPSHOT = `(() => JSON.stringify({
-  scope: document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || "",
+  segment: document.querySelector(".scope-seg") ? "yes" : "",
   pages: document.querySelectorAll("#pages .pdf-page").length,
   folds: document.querySelectorAll("#readerFlow .rf-untranslated").length,
+  ranges: document.querySelectorAll("#readerFlow .rf-q").length,
   untranslatedText: [...document.querySelectorAll("#readerFlow .rf-untranslated")].map((el) => el.textContent || "").join("\\n"),
-  progress: document.querySelector("#readerFlow .rf-translate-progress")?.textContent || "",
+  progress: document.querySelector("#readerFlow .rf-ps[data-kind='running'] .rf-ps-text")?.textContent || "",
+  bar: document.querySelector("#readerFlow .rf-ps-bar i")?.style.inlineSize || "",
   flowHasUntranslated: (document.getElementById("readerFlow")?.innerText || "").includes("未翻译"),
+  doc: document.querySelector("#docStatus .doc-text")?.textContent || "",
+  docState: document.querySelector("#docStatus")?.dataset.state || "",
+  page1: document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "",
   status: document.getElementById("status")?.textContent || "",
   label: (document.getElementById("translatePage")?.textContent || "").trim(),
   hidden: document.getElementById("translatePage")?.hidden === true,
   restore: (document.getElementById("restoreOriginal")?.textContent || "").trim(),
   retranslate: (document.getElementById("retranslatePage")?.textContent || "").trim(),
   batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
-  pairs: document.querySelectorAll("#readerFlow .rf-block[data-pair-id]").length
+  pairs: document.querySelectorAll("#readerFlow .rf-block[data-pair-id]").length,
+  view: document.querySelector(".workspace")?.dataset.view || ""
 }))()`;
 
 test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占位", { timeout: 480000 }, async (t) => {
@@ -295,6 +301,41 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   const openMode = async (mode) => {
     const viewer = `${origin}/pdf/viewer.html?oiAuto=${mode}&src=${encodeURIComponent(src)}`;
     await cdp.send("Page.navigate", { url: viewer }, sessionId);
+    if (mode === "runtime") {
+      await waitFor(`(() => {
+        const text = document.querySelector("#docStatus .doc-text")?.textContent || "";
+        const state = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+        const ready = text.includes("正在读取 PDF") || text.includes("已译 0 /");
+        return ready && (state === "layout" || state === "running") ? state : "";
+      })()`, "LD-01 顶栏与第 1 页", 2000);
+    }
+    if (mode === "fast") {
+      await evaluate(`(() => {
+        window.__oiDrift = { max: 0, samples: 0 };
+        const pane = document.getElementById("translateScroll");
+        let lastId = "";
+        let lastTop = 0;
+        const tick = () => {
+          if (!pane) return;
+          const paneTop = pane.getBoundingClientRect().top + 1;
+          const block = [...document.querySelectorAll("#readerFlow .rf-block")].find((el) => el.getBoundingClientRect().bottom > paneTop);
+          if (block) {
+            const id = block.dataset.blockId || block.dataset.pairId || "";
+            const top = block.getBoundingClientRect().top;
+            if (window.__oiArmDrift && id && id === lastId) {
+              const drift = Math.abs(top - lastTop);
+              if (drift > window.__oiDrift.max) window.__oiDrift.max = drift;
+              window.__oiDrift.samples += 1;
+            }
+            lastId = id;
+            lastTop = top;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+        return true;
+      })()`);
+    }
     await waitFor(`(() => {
       const pager = document.getElementById("pager")?.textContent || "";
       return /\\/\\s*15/.test(pager) ? pager : "";
@@ -310,9 +351,12 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     if (!data.status.includes("无法翻译") || !data.status.includes("扩展")) return "";
     return row;
   })()`, "runtime: 状态栏说明扩展不可用"));
-  assert.equal(runtime.scope, "all");
+  assert.equal(runtime.segment, "");
   assert.equal(runtime.pages, 15);
-  assert.equal(runtime.folds, 14);
+  assert.equal(runtime.folds, 0);
+  assert.equal(runtime.ranges, 1);
+  assert.equal(runtime.flowHasUntranslated, false);
+  assert.match(runtime.doc, /已译 0 \/ 15 页|正在读取 PDF/);
   assert.equal(runtime.batches, 0);
   assert.equal(runtime.label, "翻译");
   assert.equal(runtime.hidden, false);
@@ -325,23 +369,23 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   const off = JSON.parse(await waitFor(`(() => {
     const row = ${SNAPSHOT};
     const data = JSON.parse(row);
-    if (data.pages !== 15 || data.pairs < 1 || data.folds < 1 || data.batches !== 0) return "";
+    if (data.pages !== 15 || data.pairs < 1 || data.ranges < 1 || data.batches !== 0 || data.folds !== 0) return "";
     return row;
   })()`, "off: 页面已打开且没有自动开译"));
   await sleep(600);
   const offSettled = await read();
-  assert.equal(offSettled.scope, "all");
+  assert.equal(offSettled.segment, "");
   assert.equal(offSettled.batches, 0);
-  assert.ok(offSettled.folds > 0);
+  assert.equal(offSettled.folds, 0);
+  assert.ok(offSettled.ranges >= 1);
+  assert.equal(offSettled.flowHasUntranslated, false);
   assert.equal(offSettled.status.includes("无法翻译"), false);
   assert.equal(off.batches, 0);
-  await evaluate(`document.querySelector('[data-scope="page"]').click()`);
-  await waitFor(`document.querySelector(".scope-seg-btn.is-on")?.dataset.scope === "page" ? "page" : ""`, "off: 切到当前页");
   await sleep(600);
-  const pageScope = await read();
-  assert.equal(pageScope.scope, "page");
-  assert.equal(pageScope.batches, 0);
-  assert.equal(pageScope.progress, "");
+  const stayed = await read();
+  assert.equal(stayed.segment, "");
+  assert.equal(stayed.batches, 0);
+  assert.equal(stayed.progress, "");
 
   await openMode("missing");
   const missing = JSON.parse(await waitFor(`(() => {
@@ -351,7 +395,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     return row;
   })()`, "missing: 状态栏说明要填写密钥"));
   assert.equal(missing.batches, 0);
-  assert.equal(missing.scope, "all");
+  assert.equal(missing.segment, "");
   assert.match(missing.status, /引擎/);
   assert.equal(missing.label, "翻译");
 
@@ -363,7 +407,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     return row;
   })()`, "local: 状态栏说明本机服务没启动"));
   assert.equal(local.batches, 0);
-  assert.equal(local.scope, "all");
+  assert.equal(local.segment, "");
   assert.match(local.status, /127\.0\.0\.1:8765/);
   assert.equal(local.label, "翻译");
 
@@ -378,24 +422,71 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   const cacheSettled = await read();
   assert.equal(cached.batches, 0);
   assert.equal(cacheSettled.batches, 0);
-  assert.equal(cacheSettled.scope, "all");
+  assert.equal(cacheSettled.segment, "");
+  assert.equal(cacheSettled.page1, "done");
   assert.match(cacheSettled.status, /已沿用/);
+  assert.doesNotMatch(cacheSettled.doc, /全文已译/);
 
   await openMode("hang");
   const hang = JSON.parse(await waitFor(`(() => {
     const row = ${SNAPSHOT};
     const data = JSON.parse(row);
     if (data.batches < 1) return "";
-    if (!/正在翻译第 \\d+\\/15 页…/.test(data.progress)) return "";
+    if (!/正在翻译 · \\d+ \\/ \\d+ 段/.test(data.progress)) return "";
     if (data.folds !== 0 || data.flowHasUntranslated) return "";
+    if (!data.doc.includes("已译")) return "";
     return row;
-  })()`, "hang: 自动开始且右栏只有进度"));
-  assert.equal(hang.scope, "all");
+  })()`, "hang: 自动开始且右栏显示段进度"));
+  assert.equal(hang.segment, "");
   assert.equal(hang.folds, 0);
+  assert.equal(hang.ranges <= 1, true);
   assert.equal(hang.flowHasUntranslated, false);
   assert.equal(hang.untranslatedText, "");
-  assert.match(hang.progress, /^正在翻译第 \d+\/15 页…$/);
+  assert.match(hang.progress, /^正在翻译 · \d+ \/ \d+ 段$/);
+  assert.match(hang.bar, /%$/);
+  assert.match(hang.doc, /已译 \d+ \/ 15 页/);
+  assert.doesNotMatch(hang.doc, /全文已译/);
+  assert.equal(hang.page1, "running");
   assert.ok(hang.batches >= 1);
   assert.equal(hang.restore, "原文");
   assert.equal(hang.retranslate, "重译本页");
+
+  for (let i = 0; i < 3; i += 1) {
+    await evaluate(`document.getElementById("restoreOriginal").click()`);
+  }
+  const toggled = await read();
+  assert.equal(toggled.view, "src");
+  assert.equal(toggled.hidden, true, "原文切换不中止翻译");
+  assert.ok(toggled.batches >= hang.batches);
+  assert.equal(toggled.page1, "running");
+  assert.doesNotMatch(toggled.status, /已停止/);
+
+  const queuedBefore = await evaluate(`document.querySelector('#readerFlow .rf-page[data-page="2"]')?.dataset.state || ""`);
+  await evaluate(`document.getElementById("stopTranslate").click()`);
+  await waitFor(`document.getElementById("translatePage")?.hidden === false ? "idle" : ""`, "停止后主按钮回到翻译");
+  await evaluate(`document.getElementById("retranslatePage").click()`);
+  const retried = JSON.parse(await waitFor(`(() => {
+    const row = ${SNAPSHOT};
+    const data = JSON.parse(row);
+    if (data.page1 !== "running") return "";
+    return row;
+  })()`, "LD-08 重译胶囊页"));
+  assert.equal(retried.page1, "running");
+  const page2 = await evaluate(`document.querySelector('#readerFlow .rf-page[data-page="2"]')?.dataset.state || ""`);
+  assert.equal(page2, queuedBefore);
+
+  await openMode("fast");
+  await waitFor(`document.querySelector("#readerFlow .rf-block") ? "blocks" : ""`, "fast: 第 1 页已有段落");
+  await evaluate(`(() => {
+    document.getElementById("translateScroll").scrollTop = 280;
+    requestAnimationFrame(() => { window.__oiArmDrift = true; });
+    return true;
+  })()`);
+  const drift = JSON.parse(await waitFor(`(() => {
+    const probe = window.__oiDrift;
+    const batches = (window.__oiAuto && window.__oiAuto.batches || []).length;
+    if (!probe || batches < 2 || probe.samples < 4) return "";
+    return JSON.stringify(probe);
+  })()`, "LD-12 视口锚点", 90000));
+  assert.ok(drift.max <= 1, `viewport drift ${drift.max}px`);
 });

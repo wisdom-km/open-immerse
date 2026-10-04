@@ -880,8 +880,10 @@ test("page cache remembers a translated page and 原文 can drop it", () => {
   assert.equal(cache.get(1, 2)[0].translation, "第 2 页");
   cache.clear();
   assert.equal(cache.has(1, 2), false);
-  const restoreSrc = src.slice(src.indexOf("/** 原文: current page only"), src.indexOf("async function openFile"));
-  assert.match(restoreSrc, /pageCache\.clearPage\(docId, pageNum\)/);
+  const restoreSrc = src.slice(src.indexOf("/** 原文: view toggle only"), src.indexOf("async function openFile"));
+  assert.match(restoreSrc, /dataset\.view/);
+  assert.doesNotMatch(restoreSrc, /pageCache\.clearPage/);
+  assert.doesNotMatch(restoreSrc, /abortTranslateSession/);
   assert.equal(restoreSrc.includes("pageCache.clear()"), false);
 });
 
@@ -946,16 +948,17 @@ test("continuous scroll helpers pick the page in view and nearby canvases", () =
   const scopeFn = src.slice(src.indexOf("function setTranslateScope"), src.indexOf("function setScopeEnabled"));
   assert.equal(scopeFn.includes("startTranslate"), false);
   assert.equal(scopeFn.includes("maybeAutoTranslate"), false);
-  assert.match(src, /collapseUntranslated/);
-  assert.match(src, /rf-translate-progress/);
+  assert.doesNotMatch(src, /collapseUntranslated/);
+  assert.doesNotMatch(src, /rf-translate-progress/);
+  assert.match(src, /onPageSkip/);
   assert.equal(wheelPageDelta({ deltaY: 40, atTop: true, atBottom: true, overflow: false }), 1);
   assert.equal(wheelPageDelta({ deltaY: -40, atTop: true, atBottom: true, overflow: false }), -1);
   assert.equal(wheelPageDelta({ deltaY: 40, atTop: false, atBottom: true, overflow: true }), 0);
 });
 
-test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page stack", () => {
+test("viewer toolbar drops the scope segment and keeps one midline", () => {
+  const docStatus = html.indexOf('id="docStatus"');
   const pick = html.indexOf('id="pick"');
-  const scope = html.indexOf("scope-seg");
   const translate = html.indexOf('id="translatePage"');
   const stop = html.indexOf('id="stopTranslate"');
   const restore = html.indexOf('id="restoreOriginal"');
@@ -964,9 +967,9 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
   const prev = html.indexOf('id="prev"');
   const more = html.indexOf('id="moreButton"');
   assert.ok(
-    pick > 0 &&
-      pick < scope &&
-      scope < translate &&
+    docStatus > 0 &&
+      docStatus < pick &&
+      pick < translate &&
       translate < stop &&
       stop < restore &&
       restore < prev &&
@@ -974,21 +977,17 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
       more < exportMd &&
       exportMd < exportPdf
   );
-  assert.match(html, /class="scope-seg"[^>]*role="group"[^>]*aria-label="翻译范围"/);
-  assert.match(html, /class="scope-seg-btn"[^>]*data-scope="page"[^>]*>当前页</);
-  assert.match(html, /class="scope-seg-btn is-on"[^>]*data-scope="all"[^>]*>全文</);
-  assert.doesNotMatch(html, /class="scope-seg-btn is-on"[^>]*data-scope="page"/);
+  assert.doesNotMatch(html, /scope-seg/);
+  assert.doesNotMatch(html, />当前页</);
+  assert.doesNotMatch(html, /data-scope="page"/);
   assert.equal(html.includes("pdfTranslateScope"), false);
   assert.equal(html.includes("scope-field"), false);
   assert.match(html, /id="prev"[^>]*>上一页</);
   assert.match(html, /id="next"[^>]*>下一页</);
-  assert.match(css, /\.scope-seg\s*\{[^}]*display:\s*inline-flex[^}]*padding:\s*var\(--oi-reader-seg-pad\)[^}]*border:\s*0[^}]*border-radius:\s*var\(--oi-reader-seg-radius\)[^}]*background:\s*var\(--oi-reader-track\)/s);
-  assert.match(css, /\.scope-seg-btn\s*\{[^}]*min-height:\s*24px[^}]*padding:\s*0 12px[^}]*background:\s*transparent[^}]*color:\s*var\(--oi-reader-ink-2\)[^}]*font:\s*var\(--oi-reader-ui-weight\)\s*var\(--oi-reader-ui-size\)\/1\.2 var\(--oi-reader-ui-font\)/s);
-  assert.match(css, /\.scope-seg-btn:hover\s*\{[^}]*color:\s*var\(--oi-reader-ink\)/s);
-  assert.match(css, /\.scope-seg-btn\.is-on\s*\{[^}]*background:\s*var\(--oi-reader-thumb\)[^}]*box-shadow:\s*var\(--oi-reader-seg-thumb-shadow\)[^}]*font-weight:\s*500/s);
-  assert.match(css, /\.scope-seg-btn:focus-visible\s*\{[^}]*outline:\s*var\(--oi-reader-focus-width\) solid var\(--oi-reader-focus\)/s);
-  assert.match(css, /\.scope-seg-btn:disabled\s*\{[^}]*opacity:\s*1/s);
-  assert.equal(css.includes(".scope-seg.btn-primary"), false);
+  assert.match(css, /\.toolbar\s*\{[^}]*align-items:\s*center/s);
+  assert.match(css, /\.toolbar button:not\(\.more-item\)\s*\{[^}]*height:\s*var\(--oi-reader-topbar-btn-h\)/s);
+  assert.match(css, /\.doc-status\s*\{[^}]*height:\s*var\(--oi-reader-topbar-btn-h\)[^}]*min-width:\s*112px[^}]*font-size:\s*12px/s);
+  assert.doesNotMatch(css, /\.scope-seg\s*\{/);
   assert.match(src, /setScopeEnabled\(ui\.scopeEnabled\)/);
   assert.match(src, /pdfToolbarActionState/);
   assert.match(src, /pdfTranslateBusy/);
@@ -1012,7 +1011,8 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
   assert.match(goPageSrc, /scrollIntoView/);
   assert.equal(goPageSrc.includes("abortTranslateSession"), false);
   assert.match(src, /renderArticle\(\)/);
-  assert.match(src, /collectArticlePages\(pageCache/);
+  assert.doesNotMatch(src, /flow\.replaceChildren|stack\.replaceChildren/);
+  assert.match(src, /function currentScope\(\) \{\s*return "all";/);
 });
 
 test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", async () => {
@@ -1087,8 +1087,10 @@ test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", asy
   assert.match(src, /PDF_COPY\.exporting/);
   assert.match(src, /syncExportControls/);
   assert.doesNotMatch(src, /window\.print/);
-  const restoreSrc = src.slice(src.indexOf("/** 原文: current page only"), src.indexOf("async function openFile"));
-  assert.match(restoreSrc, /pageCache\.clearPage\(docId, pageNum\)/);
+  const restoreSrc = src.slice(src.indexOf("/** 原文: view toggle only"), src.indexOf("async function openFile"));
+  assert.match(restoreSrc, /dataset\.view/);
+  assert.doesNotMatch(restoreSrc, /pageCache\.clearPage/);
+  assert.doesNotMatch(restoreSrc, /abortTranslateSession/);
   assert.equal(restoreSrc.includes("pageCache.clear()"), false);
 });
 

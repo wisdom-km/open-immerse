@@ -121,7 +121,8 @@ test("right pane DOM contract is a continuous reader flow, not a 42rem column", 
   assert.match(ensure, /className = "rf-page readout md-readout"/);
   assert.match(ensure, /if \(!flow/);
   const cleared = src.slice(src.indexOf("function renderArticle"), src.indexOf("function stampReaderPage"));
-  assert.match(cleared, /stack\.replaceChildren\(\)/);
+  assert.match(cleared, /paintPageSlot/);
+  assert.doesNotMatch(cleared, /stack\.replaceChildren\(\)|flow\.replaceChildren\(/);
   assert.doesNotMatch(cleared, /--oi-pdf-stack-w/);
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*overflow:\s*auto/s);
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*scroll-behavior:\s*auto/s);
@@ -162,14 +163,15 @@ test("right pane horizontal scrollbar matches the left page: only when the paint
 });
 
 test("renderArticle saves and restores the right pane scrollLeft", () => {
-  const render = src.slice(src.indexOf("function renderArticle"), src.indexOf("function applyViewMode"));
+  const render = src.slice(src.indexOf("function renderArticle"), src.indexOf("function stampReaderPage"));
   const saved = render.indexOf("const keepLeft = pane ? pane.scrollLeft : 0;");
-  const reset = render.indexOf("stack.replaceChildren()");
-  assert.ok(saved >= 0 && reset > saved);
-  assert.match(render, /const keep = pane \? pane\.scrollTop : 0;\s*const keepLeft = pane \? pane\.scrollLeft : 0;/);
-  const restores = render.match(/if \(pane\) pane\.scrollTop = keep;\s*if \(pane\) pane\.scrollLeft = keepLeft;/g);
-  assert.equal(restores?.length, 2);
-  assert.ok(render.indexOf("captureFormulaScrolls") < render.indexOf("stack.replaceChildren()"));
+  const restored = render.indexOf("if (pane) pane.scrollLeft = keepLeft;");
+  assert.ok(saved >= 0 && restored > saved);
+  assert.match(render, /captureFlowAnchor/);
+  assert.match(render, /restoreFlowAnchor\(anchor\)/);
+  assert.equal(render.includes("pane.scrollTop = keep"), false);
+  assert.equal(render.includes("replaceChildren"), false);
+  assert.ok(render.indexOf("captureFormulaScrolls") < restored);
 });
 
 test("appending a paper raises --oi-pdf-stack-w only when the new paper is wider", () => {
