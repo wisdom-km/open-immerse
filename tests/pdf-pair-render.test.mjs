@@ -6,11 +6,15 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
+import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
+import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs";
+
+const PAIR_TMP_PREFIXES = ["oi-pair-render-", "com.google.Chrome.", ".com.google.Chrome."];
+installOwnedTmpGuard(PAIR_TMP_PREFIXES);
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const fixture = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
@@ -56,7 +60,7 @@ function serveRepo() {
   });
 }
 
-function launchChrome(userDataDir, scratch) {
+function launchChrome(userDataDir, scratchDir) {
   const child = spawn("google-chrome", [
     "--headless=new",
     "--disable-gpu",
@@ -70,7 +74,12 @@ function launchChrome(userDataDir, scratch) {
     "--no-default-browser-check"
   ], {
     detached: true,
-    env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
+    env: {
+      ...process.env,
+      TMPDIR: scratchDir,
+      TMP: scratchDir,
+      TEMP: scratchDir
+    },
     stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"]
   });
   child.stderr.on("data", () => {});
@@ -110,6 +119,11 @@ class PipeCdp {
     }
   }
 
+  dispose() {
+    for (const pending of this.pending.values()) clearTimeout(pending.timer);
+    this.pending.clear();
+  }
+
   send(method, params = {}, sessionId, timeoutMs = 20000) {
     const id = this.next++;
     const payload = { id, method, params };
@@ -128,50 +142,6 @@ class PipeCdp {
 
 function sleep(ms) {
   return new Promise((done) => setTimeout(done, ms));
-}
-
-function waitForExit(child, ms) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return new Promise((done) => {
-    const timer = setTimeout(done, ms);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      done();
-    });
-  });
-}
-
-async function cleanupChrome({ child, server, scratch }) {
-  try {
-    if (child && child.exitCode === null && child.signalCode === null) {
-      try {
-        process.kill(-child.pid, "SIGTERM");
-      } catch {
-        try { child.kill("SIGTERM"); } catch { /* already exited */ }
-      }
-      await waitForExit(child, 2000);
-      if (child.exitCode === null && child.signalCode === null) {
-        try {
-          process.kill(-child.pid, "SIGKILL");
-        } catch {
-          try { child.kill("SIGKILL"); } catch { /* already exited */ }
-        }
-        await waitForExit(child, 2000);
-      }
-    }
-  } catch (error) {
-    console.error("pair chrome stop failed:", error);
-  }
-  try {
-    if (server) await new Promise((done) => server.close(() => done()));
-  } catch (error) {
-    console.error("pair server close failed:", error);
-  }
-  try {
-    if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  } catch (error) {
-    console.error("pair profile cleanup failed:", error);
-  }
 }
 
 function decodePng(buf) {
@@ -337,21 +307,37 @@ function installProbe() {
   return true;
 }
 
-test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 300000 }, async () => {
+test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 300000 }, async (t) => {
   assert.equal(existsSync(fixture), true, "tests/fixtures/Attention_Is_All_You_Need.pdf is missing");
   mkdirSync(shotDir, { recursive: true });
   const server = await serveRepo();
-  const scratch = mkdtempSync(join(tmpdir(), "oi-pair-render-"));
-  const userDataDir = join(scratch, "profile");
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-pair-render-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
   mkdirSync(userDataDir);
-  let child = null;
-  try {
-    const address = server.address();
-    const origin = `http://127.0.0.1:${address.port}`;
-    const src = `${origin}/tests/fixtures/Attention_Is_All_You_Need.pdf`;
-    const viewer = `${origin}/pdf/viewer.html?src=${encodeURIComponent(src)}`;
-    child = launchChrome(userDataDir, scratch);
-    const cdp = new PipeCdp(child.stdio[3], child.stdio[4]);
+  mkdirSync(scratchDir);
+  const handle = { child: null, cdp: null };
+  t.after(async () => {
+    try {
+      handle.cdp?.dispose();
+    } finally {
+      await cleanupChrome({
+        t,
+        child: handle.child,
+        server,
+        ownedDir,
+        userDataDir
+      });
+    }
+  });
+  const address = server.address();
+  const origin = `http://127.0.0.1:${address.port}`;
+  const src = `${origin}/tests/fixtures/Attention_Is_All_You_Need.pdf`;
+  const viewer = `${origin}/pdf/viewer.html?src=${encodeURIComponent(src)}`;
+  handle.child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
+  handle.cdp = cdp;
     const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
     const send = (method, params, timeoutMs) => cdp.send(method, params, sessionId, timeoutMs);
@@ -1374,7 +1360,4 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     }))()`);
     assert.equal(storedOn.stored, "1", "FL3 reload keeps reader.follow 1");
     assert.equal(storedOn.follow, "on", "FL3 reload resumes on");
-  } finally {
-    await cleanupChrome({ child, server, scratch });
-  }
 });
