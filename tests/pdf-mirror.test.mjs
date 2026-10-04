@@ -433,7 +433,7 @@ test("viewer defaults to Markdown readout and does not wire bbox mirror pages", 
   assert.doesNotMatch(html, /id="mirrorPages"/);
   assert.match(html, /id="readerFlow"[^>]*class="reader-flow"/);
   assert.equal(html.includes('class="readout mirror-pages"'), false);
-  const workspaceHtml = html.slice(html.indexOf('class="pane-translate"'), html.indexOf("split-handle"));
+  const workspaceHtml = html.slice(html.indexOf('class="pane-translate"'), html.indexOf("viewer.js"));
   assert.doesNotMatch(workspaceHtml, /id="viewSeg"/);
   assert.match(workspaceHtml, /id="readerFlow"/);
   const toolbar = html.slice(html.indexOf('class="toolbar"'), html.indexOf('class="workspace"'));

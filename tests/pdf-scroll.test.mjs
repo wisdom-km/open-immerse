@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import { DEFAULT_SETTINGS } from "../lib/storage.js";
 import { wheelPageDelta } from "../lib/pdf-viewer.js";
+import { readReaderPrefs, writeReaderPrefs } from "../lib/pdf-reader-flow.js";
+import { followReducer } from "../lib/pdf-pairing.js";
 import {
   PANE_SYNC_BEHAVIOR,
   SYNC_OWNER_IDLE_MS,
@@ -15,9 +17,7 @@ import {
   createSyncOwner,
   createWheelFlipGuard,
   normalizePdfScroll,
-  leftPaneScroll,
-  planPaneFollow,
-  readSoftPageFollow
+  leftPaneScroll
 } from "../lib/pdf-scroll.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -27,15 +27,14 @@ const optionsHtml = readFileSync(join(root, "options/options.html"), "utf8");
 const optionsJs = readFileSync(join(root, "options/options.js"), "utf8");
 const storageSrc = readFileSync(join(root, "lib/storage.js"), "utf8");
 
-test("pdfScroll.softPageFollow defaults false and only boolean true turns it on", () => {
+test("reader.follow defaults on and legacy pdfScroll stays inert", () => {
+  assert.equal(readReaderPrefs({}).follow, true);
+  assert.equal(readReaderPrefs({ "reader.follow": "0" }).follow, false);
+  const store = {};
+  assert.equal(writeReaderPrefs(store, { follow: false }).follow, false);
+  assert.equal(store["reader.follow"], "0");
+  assert.equal(readReaderPrefs(store).follow, false);
   assert.equal(DEFAULT_SETTINGS.pdfScroll.softPageFollow, false);
-  assert.equal(readSoftPageFollow(undefined), false);
-  assert.equal(readSoftPageFollow({}), false);
-  assert.equal(readSoftPageFollow({ pdfScroll: {} }), false);
-  assert.equal(readSoftPageFollow({ pdfScroll: { softPageFollow: false } }), false);
-  assert.equal(readSoftPageFollow({ pdfScroll: { softPageFollow: "true" } }), false);
-  assert.equal(readSoftPageFollow({ pdfScroll: { softPageFollow: 1 } }), false);
-  assert.equal(readSoftPageFollow({ pdfScroll: { softPageFollow: true } }), true);
   assert.deepEqual(normalizePdfScroll(null), { softPageFollow: false });
   assert.deepEqual(normalizePdfScroll({ softPageFollow: true, extra: 1 }), { softPageFollow: true });
   assert.deepEqual(
@@ -44,6 +43,8 @@ test("pdfScroll.softPageFollow defaults false and only boolean true turns it on"
   );
   assert.match(storageSrc, /normalizePdfScroll/);
   assert.match(storageSrc, /pdfScroll/);
+  assert.match(storageSrc, /Deprecated/);
+  assert.doesNotMatch(viewerSrc, /readSoftPageFollow|planPaneFollow|softPageFollow/);
 });
 
 test("wheel page delta ignores horizontal gestures, overflow, and a latched gesture", () => {
@@ -137,32 +138,13 @@ test("sync owner ignores the follower echo, promotes the other pane, and clears 
   assert.equal(owner.owner, null);
 });
 
-test("page follow stays off by default and, when on, aligns only the driver's new page with auto", () => {
+test("block follow replaces page follow and still aligns with auto", () => {
   assert.equal(PANE_SYNC_BEHAVIOR, "auto");
-  assert.deepEqual(
-    planPaneFollow({ softPageFollow: false, owner: "pdf", driver: "pdf", fromPage: 1, toPage: 4 }),
-    { align: false, behavior: "auto" }
-  );
-  assert.equal(
-    planPaneFollow({ softPageFollow: true, owner: "pdf", driver: "pdf", fromPage: 2, toPage: 2 }).align,
-    false
-  );
-  assert.deepEqual(
-    planPaneFollow({ softPageFollow: true, owner: "pdf", driver: "pdf", fromPage: 2, toPage: 3 }),
-    { align: true, behavior: "auto" }
-  );
-  assert.equal(
-    planPaneFollow({ softPageFollow: true, owner: "pdf", driver: "readout", fromPage: 2, toPage: 5 }).align,
-    false
-  );
-  assert.equal(
-    planPaneFollow({ softPageFollow: true, owner: "readout", driver: "readout", fromPage: 1, toPage: 2 }).align,
-    true
-  );
-  assert.equal(
-    planPaneFollow({ softPageFollow: true, owner: "click", driver: "pdf", fromPage: 1, toPage: 2 }).align,
-    false
-  );
+  assert.equal(followReducer("on", { type: "userSourceScroll" }).state, "paused");
+  assert.equal(followReducer("on", { type: "userSourceScroll" }).persist, null);
+  assert.equal(followReducer("paused", { type: "resume" }).state, "on");
+  assert.equal(followReducer("off", { type: "toggle" }).persist, "1");
+  assert.equal(followReducer("on", { type: "toggle" }).persist, "0");
   const pane = {
     scrollTop: 40,
     getBoundingClientRect() {
@@ -187,56 +169,25 @@ test("same-frame scrollend still lets soft-follow align once", () => {
 
   let followed = 0;
   try {
-    const plan = planPaneFollow({
-      softPageFollow: true,
-      owner,
-      driver: "pdf",
-      fromPage: 1,
-      toPage: 2
-    });
-    assert.equal(plan.behavior, "auto");
-    if (plan.align && owner === "pdf") followed += 1;
-    assert.equal(
-      planPaneFollow({
-        softPageFollow: true,
-        owner,
-        driver: "pdf",
-        fromPage: 2,
-        toPage: 2
-      }).align,
-      false
-    );
-    assert.equal(
-      planPaneFollow({
-        softPageFollow: false,
-        owner,
-        driver: "pdf",
-        fromPage: 1,
-        toPage: 4
-      }).align,
-      false
-    );
+    assert.equal(PANE_SYNC_BEHAVIOR, "auto");
+    const step = followReducer("on", { type: "userSourceScroll" });
+    if (step.state === "paused" && step.persist == null && owner === "pdf") followed += 1;
+    assert.equal(followReducer("paused", { type: "userSourceScroll" }).state, "paused");
+    assert.equal(followReducer("off", { type: "userSourceScroll" }).state, "off");
   } finally {
     if (gate.finish() === "release") owner = null;
   }
   assert.equal(followed, 1);
   assert.equal(owner, null);
 
-  const right = createScrollSyncGate();
-  let rightOwner = "readout";
-  right.begin();
-  assert.equal(right.noteEnd(), "defer");
-  const rightPlan = planPaneFollow({
-    softPageFollow: true,
-    owner: rightOwner,
-    driver: "readout",
-    fromPage: 1,
-    toPage: 8
-  });
-  assert.equal(rightPlan.align, true);
-  assert.equal(rightPlan.behavior, "auto");
-  if (right.finish() === "release") rightOwner = null;
-  assert.equal(rightOwner, null);
+  const translationGate = createScrollSyncGate();
+  let translationOwner = "readout";
+  translationGate.begin();
+  assert.equal(translationGate.noteEnd(), "defer");
+  assert.equal(PANE_SYNC_BEHAVIOR, "auto");
+  assert.equal(followReducer("on", { type: "clickJump" }).state, "on");
+  if (translationGate.finish() === "release") translationOwner = null;
+  assert.equal(translationOwner, null);
 
   const switched = createScrollSyncGate();
   let active = "pdf";
@@ -262,7 +213,7 @@ test("viewer sync path has no smooth fight and no fixed 360ms lock", () => {
   assert.doesNotMatch(viewerSrc, /syncLock/);
   assert.doesNotMatch(viewerSrc, /behavior:\s*["']smooth["']/);
   assert.doesNotMatch(viewerSrc, /\b360\b/);
-  assert.match(viewerSrc, /planPaneFollow/);
+  assert.match(viewerSrc, /followReducer|sourceFollowScroll/);
   assert.match(viewerSrc, /PANE_SYNC_BEHAVIOR/);
   assert.match(viewerSrc, /scrollend/);
   assert.match(viewerSrc, /createScrollSyncGate/);
@@ -280,22 +231,25 @@ test("viewer sync path has no smooth fight and no fixed 360ms lock", () => {
   assert.doesNotMatch(readoutWheel, /preventDefault/);
   const click = viewerSrc.slice(
     viewerSrc.indexOf("function onReadoutBlockClick"),
-    viewerSrc.indexOf("function paintSourceMark")
+    viewerSrc.indexOf("function syncReadoutEmpty")
   );
-  assert.match(click, /behavior:\s*PANE_SYNC_BEHAVIOR/);
+  assert.match(click, /PANE_SYNC_BEHAVIOR|behavior:\s*"auto"/);
   assert.match(click, /takeDriver\("click"\)/);
-  assert.match(click, /mirror-source-mark|paintSourceMark/);
+  assert.match(click, /pair-box|is-pair-jump/);
+  assert.doesNotMatch(click, /mirror-source-mark|paintSourceMark/);
   const goPage = viewerSrc.slice(viewerSrc.indexOf("async function goPage"), viewerSrc.indexOf("function setMirrorZoom"));
   assert.match(goPage, /behavior:\s*PANE_SYNC_BEHAVIOR/);
-  assert.match(goPage, /planPaneFollow/);
+  assert.doesNotMatch(goPage, /planPaneFollow|syncReadoutToPage/);
   assert.doesNotMatch(goPage, /smooth/);
   const follow = viewerSrc.slice(
     viewerSrc.indexOf("function onTranslateScroll"),
     viewerSrc.indexOf("function runtimeSend")
   );
-  assert.match(follow, /driver:\s*"readout"/);
-  assert.match(follow, /plan\.behavior !== PANE_SYNC_BEHAVIOR/);
+  assert.match(follow, /followSourceToCurrent/);
+  assert.match(viewerSrc, /sourceFollowScroll/);
+  assert.match(viewerSrc, /followReducer/);
   assert.doesNotMatch(follow, /scrollIntoView/);
+  assert.doesNotMatch(follow, /planPaneFollow/);
   assert.match(viewerCss, /\.pages\s*\{[^}]*overscroll-behavior:\s*contain/s);
   assert.match(viewerCss, /\.pages\s*\{[^}]*scroll-behavior:\s*auto/s);
   const pagesRule = viewerCss.match(/\.pages\s*\{[^}]*\}/s)?.[0] ?? "";
@@ -306,25 +260,17 @@ test("viewer sync path has no smooth fight and no fixed 360ms lock", () => {
   assert.match(viewerCss, /\.pane-translate-scroll\s*\{[^}]*scroll-behavior:\s*auto/s);
 });
 
-test("options expose pdf soft follow above layout, default off, only with the PDF feature", () => {
+test("options no longer expose page follow; pdf layout stays with the PDF feature", () => {
   const features = optionsHtml.match(/id="panel-features"[\s\S]*?<\/section>/)[0];
   const advanced = optionsHtml.match(/id="panel-advanced"[\s\S]*?<\/section>/)[0];
-  assert.match(features, /id="pdfReadingBox"/);
-  assert.match(features, /id="pdfReadingBox"[\s\S]*id="pdfLayoutBox"/);
-  assert.match(features, /id="pdfSoftPageFollow"/);
-  assert.match(features, /左右栏换页跟随/);
-  assert.match(
-    features,
-    /默认关闭。开启后，滚动换页时另一侧对齐到同一页；跟手瞬时对齐，不会拖尾。/
-  );
-  assert.equal(features.includes('id="pdfSoftPageFollow" type="checkbox" checked'), false);
-  assert.match(features, /id="pdfReadingBox"[^>]*hidden/);
+  assert.doesNotMatch(features, /id="pdfSoftPageFollow"/);
+  assert.doesNotMatch(features, /左右栏换页跟随/);
+  assert.doesNotMatch(optionsHtml, /id="pdfSoftPageFollow"/);
+  assert.doesNotMatch(optionsJs, /pdfSoftPageFollow/);
+  assert.doesNotMatch(optionsJs, /readPdfScroll/);
+  assert.match(features, /id="pdfLayoutBox"/);
   assert.match(features, /id="pdfLayoutBox"[^>]*hidden/);
-  assert.doesNotMatch(advanced, /id="pdfLayoutBox"|id="pdfSoftPageFollow"|id="pdfReadingBox"/);
-  assert.match(optionsJs, /el\("pdfSoftPageFollow"\)\?\.checked === true/);
-  assert.match(optionsJs, /pdfScroll: readPdfScroll\(\)/);
-  assert.match(optionsJs, /input\.checked = value\?\.softPageFollow === true/);
-  assert.match(optionsJs, /reading\.hidden = !on/);
+  assert.doesNotMatch(advanced, /id="pdfLayoutBox"|id="pdfSoftPageFollow"/);
   assert.match(optionsJs, /box\.hidden = !on/);
   assert.match(optionsJs, /data-feat="pdf"/);
 });

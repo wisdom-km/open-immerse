@@ -134,7 +134,10 @@ test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", ()
   assert.equal(afterPaneHtml.includes("mirrorZoomChip"), false);
   assert.match(afterPaneHtml, /id="readerFlow"[^>]*class="reader-flow"/);
   assert.equal(afterPaneHtml.includes('id="zoomChip"'), false);
-  assert.ok(afterPaneHtml.includes("split-handle"));
+  const splitAt = html.indexOf('class="split-handle"');
+  const pdfAt = html.indexOf('class="pane-pdf"');
+  const translateAt = html.indexOf('class="pane-translate"');
+  assert.ok(pdfAt > 0 && splitAt > pdfAt && translateAt > splitAt);
   assert.equal(html.includes("split-gutter"), false);
   assert.equal(html.includes("zoom-stack"), false);
   assert.match(html, /class="split-handle"[^>]*role="separator"[^>]*aria-orientation="vertical"/);
@@ -153,6 +156,8 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.pdf-page canvas\[hidden\]\s*\{\s*display:\s*none/);
   assert.match(css, /\.workspace\s*\{[^}]*position:\s*relative[^}]*grid-template-columns:\s*minmax\(var\(--oi-source-min\),\s*var\(--oi-split\)\)\s*var\(--oi-reader-split-w\)\s*minmax\(var\(--oi-translate-min\),\s*1fr\)/s);
   assert.match(css, /grid-template-areas:\s*"pdf split translate"/);
+  assert.match(css, /\.workspace\[data-source-side="end"\]\s*\{[^}]*grid-template-columns:\s*minmax\(var\(--oi-translate-min\),\s*1fr\)\s*var\(--oi-reader-split-w\)\s*minmax\(var\(--oi-source-min\),\s*var\(--oi-split\)\)/s);
+  assert.match(css, /\.workspace\[data-source-side="end"\]\s*\{[^}]*grid-template-areas:\s*"translate split pdf"/s);
   assert.match(css, /\.pane-pdf\s*\{[^}]*grid-area:\s*pdf/s);
   assert.match(css, /\.split-handle\s*\{[^}]*grid-area:\s*split/s);
   assert.match(css, /\.pane-translate\s*\{[^}]*grid-area:\s*translate/s);
@@ -233,8 +238,9 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /id="translatePage"[^>]*disabled>翻译</);
   assert.match(html, /id="stopTranslate"[^>]*class="btn-primary"[^>]*hidden[^>]*disabled>停止</);
   assert.match(html, /id="restoreOriginal"[^>]*class="btn-ghost"[^>]*disabled>原文</);
-  assert.match(html, /id="exportMd"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 MD</);
-  assert.match(html, /id="exportPdf"[^>]*class="btn-ghost btn-export"[^>]*disabled>导出 PDF</);
+  assert.match(html, /id="moreMenu"[^>]*role="menu"/);
+  assert.match(html, /id="exportMd"[^>]*class="more-item hit-pad btn-export"[^>]*role="menuitem"[^>]*disabled[^>]*>导出 MD</);
+  assert.match(html, /id="exportPdf"[^>]*class="more-item hit-pad btn-export"[^>]*role="menuitem"[^>]*disabled[^>]*>导出 PDF</);
   assert.doesNotMatch(html, /id="viewSeg"/);
   assert.doesNotMatch(html, /data-view="mirror"/);
   assert.doesNotMatch(html, /id="mirrorPages"/);
@@ -935,15 +941,17 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
   const exportMd = html.indexOf('id="exportMd"');
   const exportPdf = html.indexOf('id="exportPdf"');
   const prev = html.indexOf('id="prev"');
+  const more = html.indexOf('id="moreButton"');
   assert.ok(
     pick > 0 &&
       pick < scope &&
       scope < translate &&
       translate < stop &&
       stop < restore &&
-      restore < exportMd &&
-      exportMd < exportPdf &&
-      exportPdf < prev
+      restore < prev &&
+      prev < more &&
+      more < exportMd &&
+      exportMd < exportPdf
   );
   assert.match(html, /class="scope-seg"[^>]*role="group"[^>]*aria-label="翻译范围"/);
   assert.match(html, /class="scope-seg-btn is-on"[^>]*data-scope="page"[^>]*>当前页</);
