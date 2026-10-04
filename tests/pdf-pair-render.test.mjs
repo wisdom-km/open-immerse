@@ -617,7 +617,9 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
         pager: document.getElementById("pager")?.textContent || "",
         capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
         target: document.getElementById("retranslatePage")?.dataset.page || "",
-        follow: document.querySelector(".workspace")?.dataset.follow || ""
+        follow: document.querySelector(".workspace")?.dataset.follow || "",
+        prev: document.getElementById("prev")?.disabled === true,
+        next: document.getElementById("next")?.disabled === true
       };
     })()`);
     const parkSourceAt4 = async () => {
@@ -644,6 +646,8 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       assert.equal(start.capsule, "3", `${label} capsule is page 3`);
       assert.equal(start.pager, "3 / 15", `${label} toolbar is the capsule page`);
       assert.equal(start.target, "3", `${label} retranslate target is the toolbar page`);
+      assert.equal(start.prev, false, `${label} prev is enabled on source page 4`);
+      assert.equal(start.next, false, `${label} next is enabled on source page 4`);
       for (let step = 1; step <= 4; step += 1) {
         if (mode === "click") await clickSelector("#next");
         else {
@@ -657,6 +661,8 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
         assert.equal(row.pager, "3 / 15", `${label} toolbar stays on the capsule`);
         assert.equal(row.capsule, "3", `${label} capsule stays`);
         assert.equal(row.target, "3", `${label} retranslate target stays`);
+        assert.equal(row.prev, false, `${label} prev stays enabled`);
+        assert.equal(row.next, 4 + step >= 15, `${label} next follows the source page`);
       }
     };
     await burstPages("click", "on", "follow on next");
@@ -677,6 +683,102 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     await keyTap("f", "KeyF", 70, { text: "f" });
     await frames(2);
     assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "follow restored after paging bursts");
+
+    const centerIn = async (selector) => evaluate(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      const box = el.getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    })()`);
+    const wheelUntil = async (point, read, goal, step) => {
+      let last = await read();
+      for (let i = 0; i < 48 && !goal(last); i += 1) {
+        await wheelAt(point.x, point.y, step(last));
+        await frames(2);
+        last = await read();
+      }
+      return last;
+    };
+    await evaluate(`document.activeElement?.blur()`);
+    await keyTap("f", "KeyF", 70, { text: "f" });
+    await frames(2);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "off", "F1 follow is off");
+    await evaluate(`document.querySelector('#pages .pdf-page[data-page="1"]').scrollIntoView({ block: "start", behavior: "auto" })`);
+    await evaluate(`document.getElementById("translateScroll").scrollTop = 0`);
+    await frames(4);
+    const parkedAt1 = await readNav();
+    assert.equal(parkedAt1.source, 1, "F1 source starts on page 1");
+    assert.equal(parkedAt1.capsule, "1", "F1 translation starts at the top");
+    assert.equal(parkedAt1.prev, true, "F1 prev is disabled on source page 1");
+    const translationWheel = await centerIn("#translateScroll");
+    const atCapsule4 = await wheelUntil(
+      translationWheel,
+      readNav,
+      (row) => row.capsule === "4",
+      (row) => (Number(row.capsule) > 4 ? -160 : 280)
+    );
+    assert.equal(atCapsule4.capsule, "4", "F1 capsule is page 4");
+    assert.equal(atCapsule4.pager, "4 / 15", "F1 toolbar follows the capsule");
+    assert.equal(atCapsule4.source, 1, "F1 source stays on page 1");
+    assert.equal(atCapsule4.prev, true, "F1 prev stays disabled while the source is on page 1");
+    const page4Point = await evaluate(`(() => {
+      const pane = document.getElementById("translateScroll").getBoundingClientRect();
+      const el = [...document.querySelectorAll('#readerFlow .rf-block[data-pair-id][data-src-page="4"]')].find((node) => {
+        const box = node.getBoundingClientRect();
+        return box.bottom > pane.top + 10 && box.top < pane.bottom - 10 && box.width > 16;
+      });
+      if (!el) return null;
+      const box = el.getBoundingClientRect();
+      const top = Math.max(box.top, pane.top + 8);
+      const bottom = Math.min(box.bottom, pane.bottom - 8);
+      return { x: Math.min(Math.max(box.left + 28, pane.left + 12), pane.right - 12), y: (top + bottom) / 2 };
+    })()`);
+    assert.ok(page4Point, "F1a page 4 block");
+    await mouseClick(page4Point.x, page4Point.y);
+    await frames(4);
+    const jumped = await readNav();
+    assert.equal(jumped.source, 4, "F1a source follows the block to page 4");
+    assert.equal(jumped.prev, false, "F1a prev is enabled");
+    assert.equal(jumped.pager, "4 / 15", "F1a toolbar stays on the capsule");
+    await clickSelector("#prev");
+    await frames(4);
+    assert.equal((await readNav()).source, 3, "F1a prev goes to source page 3");
+    await evaluate(`document.querySelector('#pages .pdf-page[data-page="1"]').scrollIntoView({ block: "start", behavior: "auto" })`);
+    await frames(4);
+    const backTo1 = await readNav();
+    assert.equal(backTo1.source, 1, "F1b source returns to page 1");
+    assert.equal(backTo1.capsule, "4", "F1b capsule stays on page 4");
+    assert.equal(backTo1.prev, true, "F1b prev is disabled on source page 1");
+    await evaluate(`document.activeElement?.blur()`);
+    await keyTap("f", "KeyF", 70, { text: "f" });
+    await frames(4);
+    const followed = await readNav();
+    assert.equal(followed.follow, "on", "F1b follow turns on");
+    assert.equal(followed.source, 4, "F1b follow brings the source to page 4");
+    assert.equal(followed.prev, false, "F1b prev is enabled");
+    await clickSelector("#prev");
+    await frames(4);
+    assert.equal((await readNav()).source, 3, "F1b prev goes to source page 3");
+    let lastPage = await readNav();
+    for (let i = 0; i < 20 && lastPage.source < 15; i += 1) {
+      await clickSelector("#next");
+      await frames(2);
+      lastPage = await readNav();
+    }
+    assert.equal(lastPage.source, 15, "F1c source reaches page 15");
+    assert.equal(lastPage.next, true, "F1c next is disabled on the last page");
+    const sourceWheel = await centerIn("#pages");
+    const backTo12 = await wheelUntil(
+      sourceWheel,
+      readNav,
+      (row) => row.source === 12,
+      (row) => (row.source > 12 ? -280 : 280)
+    );
+    assert.equal(backTo12.source, 12, "F1c wheel returns the source to page 12");
+    assert.equal(backTo12.next, false, "F1c next is enabled");
+    await evaluate(`document.activeElement?.blur()`);
+    await keyTap("f", "KeyF", 70, { text: "f" });
+    await frames(2);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "follow restored after F1");
 
     await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
     const centerOf = async (selector) => evaluate(`(() => {
@@ -722,29 +824,34 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.jumpLock || ""`), "1", "T3 jump lock is armed");
     const translationTouch = await evaluate(`(() => {
       const pane = document.getElementById("translateScroll");
-      const flow = document.getElementById("readerFlow");
       const paneBox = pane.getBoundingClientRect();
-      const flowBox = flow.getBoundingClientRect();
-      const candidates = [
-        { x: flowBox.left - 16, y: paneBox.top + paneBox.height / 2 },
-        { x: Math.min(flowBox.right + 16, window.innerWidth - 24), y: paneBox.top + paneBox.height / 2 }
-      ];
-      for (const point of candidates) {
-        if (point.x < 8 || point.x > window.innerWidth - 8) continue;
-        const el = document.elementFromPoint(point.x, point.y);
-        if (!el || !pane.contains(el)) continue;
-        if (el.closest(".rf-block, button, a, input, textarea")) continue;
-        return point;
-      }
-      return null;
+      const el = [...document.querySelectorAll("#readerFlow .rf-block[data-pair-id]")].find((node) => {
+        const box = node.getBoundingClientRect();
+        return box.bottom > paneBox.top + 16 && box.top < paneBox.bottom - 16 && box.width > 20 && box.height > 12;
+      });
+      if (!el) return null;
+      const box = el.getBoundingClientRect();
+      const x = Math.min(Math.max(box.left + 24, paneBox.left + 12), paneBox.right - 12);
+      const top = Math.max(box.top, paneBox.top + 8);
+      const bottom = Math.min(box.bottom, paneBox.bottom - 8);
+      const y = (top + bottom) / 2;
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || hit === pane || !pane.contains(hit)) return null;
+      if (hit.closest("button, a, input, textarea")) return null;
+      return { x, y };
     })()`);
-    assert.ok(translationTouch, "T3 finds an empty spot in the translation pane");
+    assert.ok(translationTouch, "T3 touch point is a translation block");
     const translationHit = await hitPane(translationTouch.x, translationTouch.y);
     assert.equal(translationHit.translation, true, "T3 touch point is in the translation pane");
     assert.equal(translationHit.source, false, "T3 touch point is not in the source pane");
     const followBeforeTouch = await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`);
-    await touchAt(translationTouch.x, translationTouch.y);
-    await sleep(80);
+    await evaluate(`((x, y) => {
+      const el = document.elementFromPoint(x, y);
+      el.dispatchEvent(new Event("touchstart", { bubbles: true, cancelable: true }));
+      return el === document.getElementById("translateScroll");
+    })(${translationTouch.x}, ${translationTouch.y})`);
+    const touchOnly = await evaluate(`((x, y) => document.elementFromPoint(x, y) !== document.getElementById("translateScroll"))(${translationTouch.x}, ${translationTouch.y})`);
+    assert.equal(touchOnly, true, "T3 touchstart target is not the scroll surface");
     assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.jumpLock || ""`), "", "T3 translation touch unlocks");
     assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), followBeforeTouch, "T3 translation touch does not pause");
     await armJump();
