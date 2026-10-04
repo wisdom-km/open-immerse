@@ -805,6 +805,7 @@ function bindPaneScroll() {
   readout?.addEventListener("scrollend", onReadoutScrollEnd, { passive: true });
   readout?.addEventListener("wheel", onReadoutWheel, { passive: true });
   readout?.addEventListener("pointerdown", onTranslationSurfaceDown, { passive: true });
+  readout?.addEventListener("touchstart", onTranslationTouchStart, { passive: true });
 }
 
 function takeDriver(side) {
@@ -2454,6 +2455,10 @@ function onTranslationSurfaceDown(event) {
   if (isUnlockEvent({ type: "pointerdown", onScrollSurface: event.target === translateScrollRoot() })) {
     releaseJumpLock();
   }
+}
+
+function onTranslationTouchStart() {
+  releaseJumpLock();
 }
 
 function onPaneWheelUnlock() {
