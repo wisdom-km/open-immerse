@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,16 @@ const fixture = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
 function explicitShotDir() {
   const value = String(process.env.OI_PAIR_SHOTS_DIR || "").trim();
   return value;
+}
+
+function assertDirectoryWritable(dir) {
+  mkdirSync(dir, { recursive: true });
+  const probe = join(dir, `.oi-pair-write-${process.pid}`);
+  try {
+    writeFileSync(probe, "x");
+  } finally {
+    rmSync(probe, { force: true });
+  }
 }
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -313,16 +323,7 @@ function installProbe() {
 
 test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 300000 }, async (t) => {
   assert.equal(existsSync(fixture), true, "tests/fixtures/Attention_Is_All_You_Need.pdf is missing");
-  const server = await serveRepo();
-  const ownedDir = mkdtempSync(join(tmpdir(), "oi-pair-render-"));
-  rememberOwnedTemp(ownedDir);
-  const userDataDir = join(ownedDir, "profile");
-  const scratchDir = join(ownedDir, "scratch");
-  const shotDir = explicitShotDir() || join(ownedDir, "shots");
-  mkdirSync(userDataDir);
-  mkdirSync(scratchDir);
-  mkdirSync(shotDir, { recursive: true });
-  const handle = { child: null, cdp: null };
+  const handle = { child: null, cdp: null, server: null, ownedDir: null, userDataDir: null };
   t.after(async () => {
     try {
       handle.cdp?.dispose();
@@ -330,12 +331,28 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       await cleanupChrome({
         t,
         child: handle.child,
-        server,
-        ownedDir,
-        userDataDir
+        server: handle.server,
+        ownedDir: handle.ownedDir,
+        userDataDir: handle.userDataDir
       });
     }
   });
+  const requestedShots = explicitShotDir();
+  if (requestedShots) assertDirectoryWritable(requestedShots);
+  handle.server = await serveRepo();
+  const server = handle.server;
+  handle.ownedDir = mkdtempSync(join(tmpdir(), "oi-pair-render-"));
+  const ownedDir = handle.ownedDir;
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  handle.userDataDir = userDataDir;
+  const scratchDir = join(ownedDir, "scratch");
+  const downloadDir = join(ownedDir, "downloads");
+  const shotDir = requestedShots || join(ownedDir, "shots");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  mkdirSync(downloadDir);
+  if (!requestedShots) mkdirSync(shotDir, { recursive: true });
   const address = server.address();
   const origin = `http://127.0.0.1:${address.port}`;
   const src = `${origin}/tests/fixtures/Attention_Is_All_You_Need.pdf`;
@@ -348,6 +365,12 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     const send = (method, params, timeoutMs) => cdp.send(method, params, sessionId, timeoutMs);
     await send("Page.enable");
     await send("Runtime.enable");
+    await cdp.send("Browser.setDownloadBehavior", {
+      behavior: "allow",
+      downloadPath: downloadDir,
+      eventsEnabled: true
+    });
+    await send("Page.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir });
     await send("Emulation.setDeviceMetricsOverride", {
       width: 1440,
       height: 900,
@@ -430,8 +453,11 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       return point;
     };
     const shot = async (name) => {
+      const dir = explicitShotDir() || join(ownedDir, "shots");
+      mkdirSync(dir, { recursive: true });
       const { data } = await send("Page.captureScreenshot", { format: "png", fromSurface: true });
-      writeFileSync(join(shotDir, `${name}.png`), Buffer.from(data, "base64"));
+      writeFileSync(join(dir, `${name}.png`), Buffer.from(data, "base64"));
+      return dir;
     };
     const near = (actual, expected, slop, label) => {
       assert.ok(Math.abs(actual - expected) <= slop, `${label}: ${actual} vs ${expected} ±${slop}`);
@@ -520,6 +546,34 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.ok(pageChange.id, "page 2 anchor has a pair");
     assert.equal(pageChange.current, true, "page change highlights the anchor block");
 
+    await clickSelector("#prev");
+    await waitFor(`document.querySelector('#readerFlow [data-src-page="1"][data-pair-id]') ? "p1" : ""`, "R3b page 1", 40000);
+    await evaluate(`document.getElementById("translateScroll").scrollTop = 320`);
+    await frames(3);
+    await clickSelector("#next");
+    await waitFor(`document.querySelector('#readerFlow [data-src-page="2"][data-pair-id]') ? "p2" : ""`, "R3b page 2 again", 40000);
+    await frames(4);
+    const pageReturn = await evaluate(`(() => {
+      const pane = document.getElementById("translateScroll");
+      const paneBox = pane.getBoundingClientRect();
+      const bar = pane.dataset.capsuleMode === "bar" ? 44 : 0;
+      const line = pane.scrollTop + bar + (paneBox.height - bar) * 0.3;
+      const blocks = [...document.querySelectorAll("#readerFlow .rf-block")].map((el) => {
+        const box = el.getBoundingClientRect();
+        return {
+          id: el.dataset.pairId || "",
+          top: pane.scrollTop + (box.top - paneBox.top),
+          bottom: pane.scrollTop + (box.bottom - paneBox.top),
+          current: el.classList.contains("is-pair-current")
+        };
+      }).filter((item) => item.bottom > item.top);
+      let hit = blocks.find((item) => item.top <= line && item.bottom >= line);
+      if (!hit) hit = blocks.find((item) => item.top > line) || blocks[blocks.length - 1] || null;
+      return { id: hit?.id || "", current: Boolean(hit?.current) };
+    })()`);
+    assert.ok(pageReturn.id, "R3b anchor has a pair");
+    assert.equal(pageReturn.current, true, "R3b highlights the anchor block on return");
+
     for (let page = 3; page <= 5; page += 1) {
       await clickSelector("#next");
       await waitFor(`document.querySelector('#readerFlow [data-src-page="${page}"][data-pair-id]') ? "p${page}" : ""`, `page ${page} pairs`, 40000);
@@ -529,10 +583,100 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       const pages = new Set([...document.querySelectorAll("#readerFlow .rf-block[data-pair-id]")].map((el) => el.dataset.srcPage || el.dataset.page));
       return ["1", "2", "3", "4", "5"].every((page) => pages.has(page)) ? "ready" : "";
     })()`, "全文 pages 1-5", 20000);
+    const stayedOnPage = await evaluate(`(() => ({
+      capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
+      pager: document.getElementById("pager")?.textContent || "",
+      target: document.getElementById("retranslatePage")?.dataset.page || ""
+    }))()`);
+    assert.equal(stayedOnPage.capsule, "5", "全文 keeps the capsule on page 5");
+    assert.equal(stayedOnPage.pager, "5 / 15", "全文 keeps the toolbar on page 5");
+    assert.equal(stayedOnPage.target, "5", "全文 keeps retranslate on page 5");
     await evaluate(`document.body.focus()`);
     await keyTap("f", "KeyF", 70, { text: "f" });
     await frames(3);
     assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "resume follow after paging");
+
+    const readNav = () => evaluate(`(() => {
+      const pages = document.getElementById("pages");
+      const pane = pages.getBoundingClientRect();
+      const mid = (pane.top + pane.bottom) / 2;
+      let source = 0;
+      let best = Infinity;
+      for (const el of document.querySelectorAll("#pages .pdf-page")) {
+        const box = el.getBoundingClientRect();
+        if (box.height < 1) continue;
+        const dist = Math.abs((box.top + box.bottom) / 2 - mid);
+        if (dist < best) {
+          best = dist;
+          source = Number(el.dataset.page) || 0;
+        }
+      }
+      return {
+        source,
+        label: document.getElementById("sourcePageLabel")?.textContent || "",
+        pager: document.getElementById("pager")?.textContent || "",
+        capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
+        target: document.getElementById("retranslatePage")?.dataset.page || "",
+        follow: document.querySelector(".workspace")?.dataset.follow || ""
+      };
+    })()`);
+    const parkSourceAt4 = async () => {
+      await evaluate(`(() => {
+        const el = document.querySelector('#readerFlow .rf-block[data-pair-id][data-src-page="3"]');
+        const pane = document.getElementById("translateScroll");
+        const paneBox = pane.getBoundingClientRect();
+        const box = el.getBoundingClientRect();
+        const bar = pane.dataset.capsuleMode === "bar" ? 44 : 0;
+        const line = paneBox.top + bar + (paneBox.height - bar) * 0.3;
+        pane.scrollTop += box.top - line;
+      })()`);
+      await frames(4);
+      await evaluate(`document.querySelector('#pages .pdf-page[data-page="4"]').scrollIntoView({ block: "start", behavior: "auto" })`);
+      await frames(4);
+      await sleep(200);
+    };
+    const burstPages = async (mode, follow, label) => {
+      await parkSourceAt4();
+      const start = await readNav();
+      assert.equal(start.follow, follow, `${label} follow starts ${follow}`);
+      assert.equal(start.source, 4, `${label} starts on source page 4`);
+      assert.equal(start.label, "第 4/15 页", `${label} source label starts on page 4`);
+      assert.equal(start.capsule, "3", `${label} capsule is page 3`);
+      assert.equal(start.pager, "3 / 15", `${label} toolbar is the capsule page`);
+      assert.equal(start.target, "3", `${label} retranslate target is the toolbar page`);
+      for (let step = 1; step <= 4; step += 1) {
+        if (mode === "click") await clickSelector("#next");
+        else {
+          await evaluate(`document.activeElement?.blur()`);
+          await keyTap("ArrowRight", "ArrowRight", 39);
+        }
+        await sleep(500);
+        const row = await readNav();
+        assert.equal(row.source, 4 + step, `${label} source advances to ${4 + step}`);
+        assert.equal(row.label, `第 ${4 + step}/15 页`, `${label} source label advances to ${4 + step}`);
+        assert.equal(row.pager, "3 / 15", `${label} toolbar stays on the capsule`);
+        assert.equal(row.capsule, "3", `${label} capsule stays`);
+        assert.equal(row.target, "3", `${label} retranslate target stays`);
+      }
+    };
+    await burstPages("click", "on", "follow on next");
+    await evaluate(`document.activeElement?.blur()`);
+    await keyTap("f", "KeyF", 70, { text: "f" });
+    await frames(2);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "follow on before the arrow burst");
+    await burstPages("key", "on", "follow on arrow");
+    await evaluate(`document.activeElement?.blur()`);
+    await keyTap("f", "KeyF", 70, { text: "f" });
+    await frames(2);
+    await keyTap("f", "KeyF", 70, { text: "f" });
+    await frames(2);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "off", "follow off before the second paging burst");
+    await burstPages("click", "off", "follow off next");
+    await burstPages("key", "off", "follow off arrow");
+    await evaluate(`document.activeElement?.blur()`);
+    await keyTap("f", "KeyF", 70, { text: "f" });
+    await frames(2);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "follow restored after paging bursts");
 
     await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
     const centerOf = async (selector) => evaluate(`(() => {
@@ -540,10 +684,91 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       const box = el.getBoundingClientRect();
       return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
     })()`);
-    const translationTouch = await centerOf("#translateScroll");
+    const armJump = async () => {
+      const point = await evaluate(`(() => {
+        const paneEl = document.getElementById("translateScroll");
+        const pane = paneEl.getBoundingClientRect();
+        const el = document.querySelector('#readerFlow .rf-block.oi-pdf-p[data-label="text"][data-pair-id][data-src-page="3"]')
+          || document.querySelector('#readerFlow .rf-block.oi-pdf-p[data-label="text"][data-pair-id]');
+        if (!el) {
+          const labels = [...document.querySelectorAll("#readerFlow .rf-block")].slice(0, 8).map((node) => node.dataset.label + "@" + (node.dataset.srcPage || ""));
+          return { missing: labels.join(",") };
+        }
+        const box0 = el.getBoundingClientRect();
+        const bar = paneEl.dataset.capsuleMode === "bar" ? 44 : 0;
+        const line = pane.top + bar + (pane.height - bar) * 0.45;
+        paneEl.scrollTop += box0.top - line;
+        const box = el.getBoundingClientRect();
+        const top = Math.max(box.top, pane.top + 8);
+        const bottom = Math.min(box.bottom, pane.bottom - 8);
+        if (bottom - top < 8) return { short: bottom - top };
+        return {
+          x: Math.min(Math.max(box.left + 24, pane.left + 12), pane.right - 12),
+          y: (top + bottom) / 2
+        };
+      })()`);
+      assert.ok(point?.x, `visible paragraph for the jump lock ${JSON.stringify(point)}`);
+      await mouseClick(point.x, point.y);
+      await frames(2);
+    };
+    const hitPane = async (x, y) => evaluate(`(() => {
+      const el = document.elementFromPoint(${x}, ${y});
+      return {
+        translation: Boolean(el && el.closest(".pane-translate")),
+        source: Boolean(el && el.closest("#pages"))
+      };
+    })()`);
+    await armJump();
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.jumpLock || ""`), "1", "T3 jump lock is armed");
+    const translationTouch = await evaluate(`(() => {
+      const pane = document.getElementById("translateScroll");
+      const flow = document.getElementById("readerFlow");
+      const paneBox = pane.getBoundingClientRect();
+      const flowBox = flow.getBoundingClientRect();
+      const candidates = [
+        { x: flowBox.left - 16, y: paneBox.top + paneBox.height / 2 },
+        { x: Math.min(flowBox.right + 16, window.innerWidth - 24), y: paneBox.top + paneBox.height / 2 }
+      ];
+      for (const point of candidates) {
+        if (point.x < 8 || point.x > window.innerWidth - 8) continue;
+        const el = document.elementFromPoint(point.x, point.y);
+        if (!el || !pane.contains(el)) continue;
+        if (el.closest(".rf-block, button, a, input, textarea")) continue;
+        return point;
+      }
+      return null;
+    })()`);
+    assert.ok(translationTouch, "T3 finds an empty spot in the translation pane");
+    const translationHit = await hitPane(translationTouch.x, translationTouch.y);
+    assert.equal(translationHit.translation, true, "T3 touch point is in the translation pane");
+    assert.equal(translationHit.source, false, "T3 touch point is not in the source pane");
+    const followBeforeTouch = await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`);
     await touchAt(translationTouch.x, translationTouch.y);
     await sleep(80);
-    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "touch on the translation pane does not pause");
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.jumpLock || ""`), "", "T3 translation touch unlocks");
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), followBeforeTouch, "T3 translation touch does not pause");
+    await armJump();
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.jumpLock || ""`), "1", "T4 jump lock is armed");
+    const sourceTap = await evaluate(`(() => {
+      const pages = document.getElementById("pages");
+      const pane = pages.getBoundingClientRect();
+      const pageEl = [...pages.querySelectorAll(".pdf-page")].find((el) => {
+        const box = el.getBoundingClientRect();
+        return box.bottom > pane.top + 40 && box.top < pane.bottom - 40;
+      });
+      const box = pageEl.getBoundingClientRect();
+      return {
+        x: Math.min(Math.max(box.left + 3, pane.left + 4), pane.right - 4),
+        y: Math.min(Math.max(box.top + 36, pane.top + 24), pane.bottom - 24)
+      };
+    })()`);
+    const sourceHit = await hitPane(sourceTap.x, sourceTap.y);
+    assert.equal(sourceHit.source, true, "T4 tap point is in the source pane");
+    assert.equal(sourceHit.translation, false, "T4 tap point is not in the translation pane");
+    await touchAt(sourceTap.x, sourceTap.y);
+    await sleep(80);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), followBeforeTouch, "T4 source tap does not pause");
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.jumpLock || ""`), "", "T4 source tap unlocks");
     const switchTouch = await centerOf("#followSwitch");
     await touchAt(switchTouch.x, switchTouch.y);
     await sleep(80);
@@ -1404,6 +1629,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     menuOpen = await evaluate(`document.getElementById("moreMenu")?.hidden === false`);
     if (!menuOpen) await clickSelector("#moreButton");
     await shot("more-menu");
+    assert.equal(existsSync(join(shotDir, "more-menu.png")), true, "screenshot uses the selected shot directory");
     const menuOrder = await evaluate(`(() => [...document.querySelectorAll("#moreMenu [role='menuitem'], #moreMenu [role='menuitemcheckbox'], #moreMenu [role='separator']")].filter((el) => !el.hidden).map((el) => (el.getAttribute("role") === "separator" ? "separator" : el.textContent.replace(/\\s+/g, " ").trim())))()`);
     assert.deepEqual(menuOrder, ["互换两栏s", "separator", "导出 MD", "导出 PDF"]);
     const menuItem = await evaluate(`(() => {
@@ -1416,6 +1642,8 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(menuItem.padEnd, "12px", "menu item end padding");
     await clickSelector("#exportMd");
     await frames(2);
+    await sleep(400);
+    assert.ok(readdirSync(downloadDir).length >= 1, "export saved into the test download dir");
     assert.equal(await evaluate(`document.getElementById("moreMenu")?.hidden === true`), true, "export closes the menu");
     assert.equal(await menuFocus(), "moreButton", "export returns to 更多");
     await keyTap("Enter", "Enter", 13);
@@ -1642,9 +1870,19 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     const beforeField = await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`);
     await keyTap("f", "KeyF", 70, { text: "f" });
     assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), beforeField, "KB1 ignores fields");
-    await evaluate(`document.body.focus()`);
+    await evaluate(`document.activeElement?.blur()`);
+    assert.equal(await evaluate(`document.activeElement === document.body`), true, "R2 focus is body");
+    const beforeMods = await evaluate(`(() => ({
+      follow: document.querySelector(".workspace")?.dataset.follow || "",
+      side: document.querySelector(".workspace")?.dataset.sourceSide || ""
+    }))()`);
     await keyTap("f", "KeyF", 70, { text: "f", modifiers: 2 });
-    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), beforeField, "KB1 ignores ctrl");
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), beforeMods.follow, "R2-Ctrl ignores ctrl");
+    await keyTap("f", "KeyF", 70, { text: "f", modifiers: 1 });
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), beforeMods.follow, "R2-Alt ignores alt");
+    await keyTap("s", "KeyS", 83, { text: "s", modifiers: 4 });
+    await frames(2);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.sourceSide || ""`), beforeMods.side, "R2-Meta ignores meta");
     await evaluate(`document.activeElement?.blur()`);
     assert.equal(await evaluate(`document.getElementById("aaPanel")?.hidden === true`), true, "shift shortcut panel closed");
     assert.equal(await evaluate(`document.activeElement === document.body`), true, "shift shortcut focus is body");
@@ -1805,4 +2043,18 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     }))()`);
     assert.equal(storedOn.stored, "1", "FL3 reload keeps reader.follow 1");
     assert.equal(storedOn.follow, "on", "FL3 reload resumes on");
+
+    const shotProbe = join(ownedDir, "shot2");
+    mkdirSync(shotProbe);
+    const previousShot = process.env.OI_PAIR_SHOTS_DIR;
+    process.env.OI_PAIR_SHOTS_DIR = shotProbe;
+    try {
+      const written = await shot("shot2");
+      assert.equal(written, shotProbe, "SHOT2 reads OI_PAIR_SHOTS_DIR");
+      assert.equal(existsSync(join(shotProbe, "shot2.png")), true, "SHOT2 writes into OI_PAIR_SHOTS_DIR");
+      assert.equal(existsSync(join(shotDir, "shot2.png")), false, "SHOT2 does not write into the default shot dir");
+    } finally {
+      if (previousShot == null) delete process.env.OI_PAIR_SHOTS_DIR;
+      else process.env.OI_PAIR_SHOTS_DIR = previousShot;
+    }
 });
