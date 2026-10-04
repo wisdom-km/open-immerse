@@ -114,35 +114,68 @@
 | | 规格 |
 | --- | --- |
 | 显示 | `inline-block`（或等价行内）；**禁止**把行内公式做成块级 `figure` / 整行 `img` |
-| 基线 | `vertical-align: baseline`；数学字形可光学微调 `-0.12em ~ 0`，禁止顶对齐大块 |
-| 高度 | 量测墨迹 **1.25～1.35 ×** 正文字号（硬门 ≥ **1.0×**）。盒高 = 目标墨迹 / inkShare（名义 **1.95em**，允许 ~1.9～2.2em；墨迹进带后行顶 ~1.8～2.1em）。旧盒 `1.22em`、行顶 `1.45em` 已撤：白边在盒内，不能只把 1.22 改成另一个数 |
+| 基线 | `vertical-align: baseline` 只对回退路径成立（光学可微调 `-0.12em ~ 0`）。主路径是 `vertical-align: middle`。禁止顶对齐大块 |
+| 高度 | 量测墨迹 **1.25～1.35 ×** 正文字号（硬门 ≥ **1.0×**）。盒高 = 目标墨迹 / inkShare（名义 **1.95em**，允许 ~1.9～2.2em；墨迹进带后行顶 ~1.8～2.1em）。旧盒 `1.22em`、行顶 `1.45em` 已撤：白边在盒内，不能只把 1.22 改成另一个数。（注，2026-10-04：行内墨迹 ≥ 1.0×、目标 1.25–1.35×、盒名义 1.95em 已测过、不采用，现行是固定 k=1.35，见 [INLINE-INK-MEASURE-2026-10-04.md](./high-precision/INLINE-INK-MEASURE-2026-10-04.md) 和 [FRP](./high-precision/FORMULA-RIGHT-PANE.md)。） |
 | 缩放 | 裁切原图若过高 → **先紧裁再等比缩小** 落入上列；不得用放大白边撑开行距 |
 | 水平 | 左右内边距 ≤ **2px**（CSS）；与邻字间距跟正文，勿额外 `margin-inline: 8px+` |
 | 禁止 | 裁进邻词（反例里的 `n`）、上一行 descender、下一行 ascender；禁止「半句上、大白块、半句下」三截版 |
 
+下面只列主要属性，完整规则以 `viewer.css` 为准。这里省略了 `::-webkit-scrollbar`（约第 651 行）、`.is-promoted`（约第 655 行）和已升级成块的 `.is-matched.is-raised`（约第 711 行）。主路径和回退路径分开。
+
 ```css
+/* 回退路径。基础容器 .oi-pdf-inline-math 约第 637–649 行，没有 .pane-translate 前缀。 */
 .oi-pdf-inline-math {
   display: inline-block;
   vertical-align: baseline;
-  margin: 0 1px;
+  margin: 0 0.2em;
   padding: 0;
   line-height: 1;
-}
-.oi-pdf-inline-math .oi-pdf-math-crop {
-  display: block;
-  height: var(--oi-pdf-inline-crop-em, 1.95em); /* 墨迹目标 / inkShare */
-  width: auto;
+  white-space: nowrap;
   max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* 第 647 行 */
+  background: transparent;
+  box-shadow: none;
+}
+/* 阅读页约第 662 行：.pane-translate .readout.md-readout .oi-pdf-inline-math:has(.oi-pdf-math-crop) 把 overflow-y 改成 visible，高度用 --oi-pdf-inline-line-em。viewer.js 第 1706–1707 行把 --oi-pdf-inline-crop-em 和 --oi-pdf-inline-line-em 都设成 1.4em。 */
+.pane-translate .readout.md-readout .oi-pdf-inline-math .oi-pdf-math-crop {
+  display: block;
+  height: var(--oi-pdf-inline-crop-em, 1.95em); /* 1.95em 只是 CSS 默认值。现行代码走不到，以代码为准 */
+  margin-top: calc(var(--oi-pdf-inline-line-em, 1.85em) - var(--oi-pdf-inline-crop-em, 1.95em)); /* 第 676 行。两个变量都是 1.4em 时，结果是 0 */
+  width: auto;
+  max-width: none;
   object-fit: contain;
   object-position: left center;
   border: none;
   box-shadow: none;
-  border-radius: 1px;
-  background: #fff;    /* 纸色随原件；勿再外包深色 card */
+  border-radius: 0;
+  background: transparent;
+}
+
+/* 主路径，留在行内。约第 692–710 行。--oi-reader-inline-line-max 是 2.2em（pdf/reader-tokens.css 第 379 行）。左右 margin 仍是 0.2em。底色、圆角、描边沿用回退裁图：透明底、border-radius: 0、无描边。 */
+.pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched:has(.oi-pdf-math-crop) {
+  display: inline-block;
+  height: auto;
+  max-height: none;
+  max-width: none;
+  overflow: visible;
+  vertical-align: middle;
+  margin-top: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
+  margin-bottom: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
+}
+.pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched .oi-pdf-math-crop {
+  display: inline-block;
+  height: var(--oi-formula-h);
+  width: auto;
+  max-height: none;
+  max-width: none;
+  margin-top: 0;
+  vertical-align: middle;
 }
 ```
 
-**降级（仅当裁切失败）：** 行内文字兜底是目标状态，待实现：「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。**不要**塞一整行糊图。行内高度改按墨迹 / inkShare，不再以 1.45em 当硬顶。行内这一小段是第一层的区域渲染，嵌在句中。
+**降级（仅当裁切失败）：** 行内文字兜底是目标状态，待实现：「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。**不要**塞一整行糊图。行内高度改按墨迹 / inkShare，不再以 1.45em 当硬顶。（注，2026-10-04：行内墨迹 ≥ 1.0×、目标 1.25–1.35×、盒名义 1.95em 已测过、不采用，现行是固定 k=1.35，见 [INLINE-INK-MEASURE-2026-10-04.md](./high-precision/INLINE-INK-MEASURE-2026-10-04.md) 和 [FRP](./high-precision/FORMULA-RIGHT-PANE.md)。）行内这一小段是第一层的区域渲染，嵌在句中。
 
 ---
 
