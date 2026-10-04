@@ -61,9 +61,12 @@ test("Cambridge page stamps that differ only by the clock hash the same", async 
   assert.notEqual(await contentFingerprint(first), await contentFingerprint(changed));
 });
 
-test("Cambridge download stamp does not change the fms content fingerprint", async () => {
+test("Cambridge download stamp does not change the fms content fingerprint", async (t) => {
   const path = fileURLToPath(new URL("../corpus/pdfs/fms-2021-7.pdf", import.meta.url));
-  if (!existsSync(path)) return;
+  if (!existsSync(path)) {
+    t.skip("corpus/pdfs/fms-2021-7.pdf is missing");
+    return;
+  }
   const original = readFileSync(path);
   const stamped = Buffer.from(original);
   const marker = Buffer.from("IP address: ");
