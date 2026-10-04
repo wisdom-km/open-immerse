@@ -22,7 +22,7 @@
 ## 1. 产品事实
 
 - 译文跟抽出的原文一致：不增主张、不漏句子、不改数字和变量名。
-- 公式、图、表跟打开的 PDF 是同一套内容。当前已上线的公式画面是第一层：`renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`），或 pageRaster 的 png 裁图。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。按 `pdf/high-precision/REQUIREMENTS.md` §2.6，高清重渲染本质上仍是区域渲染。目标是按原字体、原位置重绘字符。高清重渲染失败时静默退成 png，不加徽章（V1-B1，见 `pdf/high-precision/REQUIREMENTS.md` §2.6 术语表），不算换层。公式的运行时顺序、各步判据和两个开关的规则以 `pdf/high-precision/REQUIREMENTS.md` §2.6「运行时顺序」为准（2026-10-05 改：第零层 → 多模态 → 矢量重绘 → 裁图 → 占位），本文不重复。内嵌图原样取出也可以。换手段时，右栏这一块仍须与原文栏同一区域的内容一致。重画图内英文，不采用。
+- 公式、图、表跟打开的 PDF 是同一套内容。当前已上线的公式画面是第一层：`renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`），或 pageRaster 的 png 裁图。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。按 `pdf/high-precision/REQUIREMENTS.md` §2.6，高清重渲染本质上仍是区域渲染。目标是按原字体、原位置重绘字符。高清重渲染失败时静默退成 png，不加徽章（V1-B1，见 `pdf/high-precision/REQUIREMENTS.md` §2.6 术语表），不算换层。公式的运行时顺序、各步判据和两个开关的规则以 `pdf/high-precision/REQUIREMENTS.md` §2.6「运行时顺序」为准（第零层 arXiv 源码 → 多模态 → OCR API → 自研算法 → 矢量重绘 → 裁图 → 占位；2026-10-05 01:12 Wisdom 定），本文不重复。内嵌图原样取出也可以。换手段时，右栏这一块仍须与原文栏同一区域的内容一致。重画图内英文，不采用。
 - OCR 认错的字母不上屏，也不得送进翻译。把 `i` 认成 `n`，或把 `n` 认成 `i`，都算失败。
 - 有文字层的正文用文字层原句。这是主场景。没有可信文字层时，正文才用识别结果，并在右栏标明可能有误差。公式、图、表仍是原页裁图。划区框内的字母不进正文。文字层兜底时，一行里除去公式函数名后没有普通句子，就整行裁图，不把 `softmax` 送去翻译。
 - 译文只出现在右栏。
