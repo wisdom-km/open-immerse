@@ -8,6 +8,7 @@ import { clearFadeScroll } from "../lib/pdf-reader-flow.js";
 import { readReaderPrefs, writeReaderPrefs } from "../lib/pdf-reader-flow.js";
 import {
   PAIR_ANCHOR,
+  PAIR_BG_SPREAD,
   appliedSourceSide,
   blockAtAnchor,
   buildBlockPairs,
@@ -321,6 +322,18 @@ test("source follow target and translation jump land on the spec lines", () => {
     blockTopInPane: shortTop
   });
   assert.equal(tall, direct);
+  assert.equal(PAIR_BG_SPREAD, 12);
+  const spreadHeight = 516;
+  const spread = translationJumpScroll({
+    blockTopInContent: shortTop,
+    blockHeight: spreadHeight,
+    paneHeight: pane,
+    scrollHeight: 6000
+  });
+  const onAnchor = shortTop - PAIR_ANCHOR * pane;
+  const withOutset = shortTop - (pane - 40 - (spreadHeight + 12));
+  assert.notEqual(spread, onAnchor);
+  assert.equal(spread, withOutset);
 
   const entries = [
     { pairId: "a", top: 0, bottom: 50 },
