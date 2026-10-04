@@ -1,6 +1,6 @@
 # 公式呈现：行内 / 独占，以及裁框
 
-本轮只改进右栏怎么放公式。笔画仍来自当前打开的 PDF。当前已上线的是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `REQUIREMENTS.md` §2.6 算第一层。目标是按原字体、原位置重绘字符。高清重渲染失败时静默退成 png，不加徽章（V1-B1，见 `REQUIREMENTS.md` §2.6 术语表），不算换层。OCR 字母和 OCR 返回的 LaTeX 仍不上屏。不嵌入 BabelDOC / pdf2zh。第 5 页矩阵句的中文译文不在本轮。
+本轮只改进右栏怎么放公式。笔画仍来自当前打开的 PDF。当前已上线的是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `REQUIREMENTS.md` §2.6 算第一层。目标是按原字体、原位置重绘字符。高清重渲染失败时静默退成 png，不加徽章（V1-B1，见 `REQUIREMENTS.md` §2.6 术语表），不算换层。OCR 字母和 OCR 返回的 LaTeX 仍不上屏。例外：OCR API 层核对通过的结果可以上屏（01:12 顺序；细节待确认）。不嵌入 BabelDOC / pdf2zh。第 5 页矩阵句的中文译文不在本轮。
 
 可借鉴的只有想法：公式保持原页字形，版面节奏靠近论文；裁图可以略松，但只为了下标和括号。
 
