@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createReviewServer } from "../scripts/label-review.mjs";
+import { createOwnedTemp, installOwnedTmpGuard } from "./helpers/owned-tmp.mjs";
 
-test("thirty sequential PDF opens leave no pending request", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "review-pdf-"));
+installOwnedTmpGuard(["review-pdf-"]);
+
+test("thirty sequential PDF opens leave no pending request", async (t) => {
+  const dir = createOwnedTemp(t, "review-pdf-");
   const payload = Buffer.alloc(256 * 1024, 7);
   payload.write("%PDF-1.4\n");
   writeFileSync(join(dir, "sample.pdf"), payload);
