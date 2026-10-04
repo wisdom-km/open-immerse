@@ -84,10 +84,10 @@
 - 2026-10-03：非默认档的起始侧：1440/20 是 29，1100/16 和 1100/20 是 28，都高于底线 24，但低于默认档的 49。刚打开、PDF 还没加载时胶囊不显示，用的是默认宽度，非默认档的版心会多 6px（空栏里看不出来）。
 - 2026-10-03：导出时，含行内公式图片的段落会丢正文。需要单独开 issue。
 - 2026-10-03：#92 合入后公式文档的现状曾经过时，已在 #93 更新。以后改公式代码时要同步这几份：`pdf/high-precision/FORMULA-ELEGANCE.md`、`pdf/high-precision/FORMULA-RIGHT-PANE.md`、`pdf/high-precision/REQUIREMENTS.md`、`pdf/high-precision/ARCHITECTURE.md`、`pdf/high-precision/EXECUTION.md`、`pdf/high-precision/STATUS.md`、`pdf/PDF-MD-FORMULA-LAYOUT.md`、`open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md`。
-- 2026-10-04：① 裁图混入相邻行碎片。要修，优先级 P1。并入已定的「行内公式（裁图路径）测试指标」计划，对应 M2 不越界。做法是用 PDF 文字层里相邻行的字符框去掉别行字形，不靠像素猜。先跑 main 的基线，再改代码。开工前提是 Wisdom 确认 6 条练习集标注修正（#165、#71、#78、#18、#85、#116）。验收：带碎片的裁图从约 43% 降到 5% 以下，公式自身的帽子和撇号不误删（M1 不降），撑行不增加。实测见 `pdf/high-precision/INLINE-INK-MEASURE-2026-10-04.md`。
-- 2026-10-04：② 14px 档小下标偏小。要修，优先级 P2，排在 ① 后面。只把该公式的放大倍数加大，让下标至少 7px，上限仍是 2.2em，不批量升级成独立块。验收：14px 下标低于 7px 的从 37 个降到个位数，撑行和升级数不明显增加。
-- 2026-10-04：③ 单变量和短式按 x-height 设下限。先推后。触发条件是真机上确实看着小。
-- 2026-10-04：`lib/pdf-text-layer.js` 里仍留着 `INLINE_INK_TARGET`（1.30）和 `inlineCropBoxEm`，测试仍锁定 1.25–1.35 和名义盒 1.95em。阅读器不走这条路。先记下，等做 ① 或 ② 时一并判断删除还是保留。现在不改代码。
+- 2026-10-04：① 裁图混入相邻行碎片。要修，优先级 P1。并入已定的「行内公式（裁图路径）测试指标」计划，对应 M2 不越界。做法是用 PDF 文字层里相邻行的字符框去掉别行字形，不靠像素猜。先跑 main 的基线，再改代码。开工前提是 Wisdom 确认 6 条练习集标注修正（#165、#71、#78、#18、#85、#116）。验收：带碎片的裁图从约 43% 降到 5% 以下，公式自身的帽子和撇号不误删（M1 不降），撑行不增加。实测见 `pdf/high-precision/INLINE-INK-MEASURE-2026-10-04.md`。做法和验收是 Wisdom 2026-10-04 批准的方案。
+- 2026-10-04：② 14px 档小下标偏小。要修，优先级 P2，排在 ① 后面。只把该公式的放大倍数加大，让下标至少 7px，上限仍是 2.2em，不批量升级成独立块。验收：口径是每个公式下标墨迹的中位数低于 7px。基线是 14px 档 37 个，其中主路径 30 个、已经升级成块的 7 个；若按最小值计是 55 个。做到个位数，撑行和升级数不明显增加。做法和验收是 Wisdom 2026-10-04 批准的方案。
+- 2026-10-04：③ 单变量和短式按 x-height 设下限。先推后。触发条件是真机上确实看着小。做法和触发条件是 Wisdom 2026-10-04 批准的方案。
+- 2026-10-04：`lib/pdf-text-layer.js` 里仍留着旧的行内盒高计算。同组有 `INLINE_INK_TARGET`（1.30）、`INLINE_INK_STRONG_LO`（1.25）、`INLINE_INK_STRONG_HI`（1.35）、`INLINE_INK_FLOOR`（1）、`INLINE_LINE_BOX_LO`（1.9）、`INLINE_LINE_BOX_HI`（2.2）、`INLINE_LINE_TOP_LO`（1.8）、`INLINE_LINE_TOP_HI`（2.1），以及 `inlineCropBoxEm`。`lib/pdf-formula-size.js` 第 8–12 行导入了 `INLINE_INK_STRONG_HI`、`INLINE_INK_TARGET`、`INLINE_LINE_BOX_HI`、`inlineCropBoxEm`、`inlineLineTopEm`，用在导出的 `inlinePaintBox` 和 `inlinePromotesToDisplay` 里。阅读器不调用这两个函数。`tests/pdf-formula-size.test.mjs` 调用它们；`tests/pdf-plaintext-formula.test.mjs` 仍锁定 1.25–1.35 和名义盒 1.95em。`pdf/viewer.css` 第 663 行注释仍写着墨迹进 1.25–1.35 带后行顶在 1.8–2.1em，第 674 行注释仍写着墨迹目标 1.30×、名义盒 1.95em。先记下，等做 ① 或 ② 时一并判断删除还是保留。现在不改代码和 CSS。
 
 ## 五、复核工具快捷键
 

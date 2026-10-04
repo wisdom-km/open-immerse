@@ -114,7 +114,7 @@
 | | 规格 |
 | --- | --- |
 | 显示 | `inline-block`（或等价行内）；**禁止**把行内公式做成块级 `figure` / 整行 `img` |
-| 基线 | `vertical-align: baseline`；数学字形可光学微调 `-0.12em ~ 0`，禁止顶对齐大块 |
+| 基线 | `vertical-align: baseline` 只对回退路径成立（光学可微调 `-0.12em ~ 0`）。主路径是 `vertical-align: middle`。禁止顶对齐大块 |
 | 高度 | 量测墨迹 **1.25～1.35 ×** 正文字号（硬门 ≥ **1.0×**）。盒高 = 目标墨迹 / inkShare（名义 **1.95em**，允许 ~1.9～2.2em；墨迹进带后行顶 ~1.8～2.1em）。旧盒 `1.22em`、行顶 `1.45em` 已撤：白边在盒内，不能只把 1.22 改成另一个数。（注，2026-10-04：行内墨迹 ≥ 1.0×、目标 1.25–1.35×、盒名义 1.95em 已测过、不采用，现行是固定 k=1.35，见 [INLINE-INK-MEASURE-2026-10-04.md](./high-precision/INLINE-INK-MEASURE-2026-10-04.md) 和 [FRP](./high-precision/FORMULA-RIGHT-PANE.md)。） |
 | 缩放 | 裁切原图若过高 → **先紧裁再等比缩小** 落入上列；不得用放大白边撑开行距 |
 | 水平 | 左右内边距 ≤ **2px**（CSS）；与邻字间距跟正文，勿额外 `margin-inline: 8px+` |
@@ -123,14 +123,14 @@
 ```css
 .oi-pdf-inline-math {
   display: inline-block;
-  vertical-align: baseline;
+  vertical-align: baseline; /* 回退路径。主路径是 middle */
   margin: 0 1px;
   padding: 0;
   line-height: 1;
 }
 .oi-pdf-inline-math .oi-pdf-math-crop {
   display: block;
-  height: var(--oi-pdf-inline-crop-em, 1.95em); /* 墨迹目标 / inkShare */
+  height: var(--oi-pdf-inline-crop-em, 1.95em); /* 1.95em 只是 CSS 默认值。现行代码走不到，以代码为准 */
   width: auto;
   max-width: 100%;
   object-fit: contain;
@@ -142,7 +142,7 @@
 }
 ```
 
-**降级（仅当裁切失败）：** 行内文字兜底是目标状态，待实现：「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。**不要**塞一整行糊图。行内高度改按墨迹 / inkShare，不再以 1.45em 当硬顶。行内这一小段是第一层的区域渲染，嵌在句中。
+**降级（仅当裁切失败）：** 行内文字兜底是目标状态，待实现：「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。**不要**塞一整行糊图。行内高度改按墨迹 / inkShare，不再以 1.45em 当硬顶。（注，2026-10-04：行内墨迹 ≥ 1.0×、目标 1.25–1.35×、盒名义 1.95em 已测过、不采用，现行是固定 k=1.35，见 [INLINE-INK-MEASURE-2026-10-04.md](./high-precision/INLINE-INK-MEASURE-2026-10-04.md) 和 [FRP](./high-precision/FORMULA-RIGHT-PANE.md)。）行内这一小段是第一层的区域渲染，嵌在句中。
 
 ---
 
