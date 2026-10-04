@@ -120,25 +120,55 @@
 | 水平 | 左右内边距 ≤ **2px**（CSS）；与邻字间距跟正文，勿额外 `margin-inline: 8px+` |
 | 禁止 | 裁进邻词（反例里的 `n`）、上一行 descender、下一行 ascender；禁止「半句上、大白块、半句下」三截版 |
 
+下面按 `viewer.css` 的现行值写。主路径和回退路径分开。
+
 ```css
+/* 回退路径。容器约 L637–649，裁图约 L672–685。阅读页约 L662 把 overflow-y 改成 visible，并设高度为 --oi-pdf-inline-line-em（缺省 1.85em）。 */
 .oi-pdf-inline-math {
   display: inline-block;
-  vertical-align: baseline; /* 回退路径。主路径是 middle */
-  margin: 0 1px;
+  vertical-align: baseline;
+  margin: 0 0.2em;
   padding: 0;
   line-height: 1;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: transparent;
+  box-shadow: none;
 }
 .oi-pdf-inline-math .oi-pdf-math-crop {
   display: block;
   height: var(--oi-pdf-inline-crop-em, 1.95em); /* 1.95em 只是 CSS 默认值。现行代码走不到，以代码为准 */
   width: auto;
-  max-width: 100%;
+  max-width: none;
   object-fit: contain;
   object-position: left center;
   border: none;
   box-shadow: none;
-  border-radius: 1px;
-  background: #fff;    /* 纸色随原件；勿再外包深色 card */
+  border-radius: 0;
+  background: transparent;
+}
+
+/* 主路径，留在行内。容器约 L692–701，裁图约 L702–710。左右 margin 仍是上面的 0.2em。底色、圆角、描边沿用回退裁图：透明底、border-radius: 0、无描边。 */
+.oi-pdf-inline-math.is-matched {
+  display: inline-block;
+  height: auto;
+  max-height: none;
+  max-width: none;
+  overflow: visible;
+  vertical-align: middle;
+  margin-top: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
+  margin-bottom: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
+}
+.oi-pdf-inline-math.is-matched .oi-pdf-math-crop {
+  display: inline-block;
+  height: var(--oi-formula-h);
+  width: auto;
+  max-height: none;
+  max-width: none;
+  margin-top: 0;
+  vertical-align: middle;
 }
 ```
 

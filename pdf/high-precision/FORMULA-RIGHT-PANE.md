@@ -79,7 +79,7 @@ CSS 贴片：
 | 容器 | `span` + `inline-block`；挂在宿主 `p` 内；**必须**有 `inlineOf` |
 | 基线 | 回退路径是 `vertical-align: baseline`（光学可 `-0.12em～0`）。主路径是 `vertical-align: middle`（`viewer.css` 约第 698 行和第 709 行） |
 | 高度 | 主路径裁图固定放大 k=1.35（`INLINE_CROP_K`）。`pdf/viewer.js` 的 `matchedFormulaStyle` 调用 `readerFormulaStyle`，再调用 `lib/pdf-formula-size.js` 的 `readerFormulaCssSize`。留在行内的裁图都用这个倍数。估算高度（bbox 高 × k）超过 2.2em（`INLINE_LINE_BOX_EM`）、裁图宽过栏，或下标低于 7px（`SCRIPT_INK_MIN_PX`）时，升级成独立公式。对不上左栏框的回退路径实际是 1.4em（`INLINE_BODY_HARD_MAX`）。`pdf/viewer.js` 把 `--oi-pdf-inline-crop-em` 和 `--oi-pdf-inline-line-em` 写成这个值 |
-| 禁止 | `display:block` / 独立 `figure` / 整行 `img`；外包 padding≥6px 的白底「小卡片」 |
+| 禁止 | `display:block` / 独立 `figure` / 整行 `img`；外包 padding≥6px 的白底「小卡片」。这里的 `display:block` 指留在行内的公式。按规则升级成独立公式的走独立公式路径，是 `display: block`，不算违反 |
 | 裁框 | 紧贴公式字形；**禁止**带上邻词、上一行 descender、下一行 ascender（反例 `oi-qa/pdf-lab-attention/p07-lr-formula.png`） |
 
 墨迹 ≥ 1.0× bodyFs（目标 1.25–1.35×、盒名义 1.95em）于 2026-10-04 测过、不采用，因为 16px 下 145 个行内公式的比值最小 0.62、中位 1.19，低于 1.0 的 19 个几乎都是盒高只有 1.1–1.9em、以小写高度的字形为主的单变量或短式，只放大不足部分会使撑行超过 2px 的从 8 个增加到 13 个，≥1.25× 要放大 74/121 并使这类撑行增加到 24 个，严格等于 1.0× 则要缩小 96/121，数字和做法见 [行内公式墨迹实测（2026-10-04）](./INLINE-INK-MEASURE-2026-10-04.md)。
