@@ -2052,6 +2052,24 @@ function scrollSourceToRect(rect) {
   return true;
 }
 
+function revealClickedSource(rect) {
+  const pane = pdfScrollRoot();
+  const placed = rectInSource(rect);
+  if (!pane || !placed) return false;
+  const top = sourceFollowScroll({
+    rectTop: placed.top,
+    rectBottom: placed.bottom,
+    scrollTop: pane.scrollTop,
+    clientHeight: pane.clientHeight,
+    scrollHeight: pane.scrollHeight
+  });
+  if (top == null) return false;
+  takeDriver("click");
+  pane.scrollTop = top;
+  noteSourcePage(false);
+  return true;
+}
+
 function rectInSource(rect) {
   const page = Number(rect?.p);
   const wrap = pageViews[page - 1]?.wrap || document.querySelector(`#pages .pdf-page[data-page="${page}"]`);
@@ -2527,7 +2545,7 @@ function onSourceClick(event) {
   applyFollow({ type: "clickJump" });
   armJumpLock();
   paintPairChrome();
-  if (followState === "on") scrollSourceToRect(hit, jumpPart === "inline" ? 2 : 5);
+  revealClickedSource(hit);
 }
 
 function pageHasFlow(page) {

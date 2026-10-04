@@ -404,7 +404,8 @@ test("pairing module and its names avoid physical side words", () => {
     "drawPairBoxes", "applyFollow", "toggleFollow", "noteUserSourceInput", "syncFollowControls",
     "onSourceClick", "stampFlowPairs", "applySourceSide", "reorderPanes", "toggleSourceSide",
     "bindMoreMenu", "onMenuKey", "onSplitKey", "applySplit", "noteSourcePage",
-    "onSourceContentTouchStart", "onSourceContentTouchMove", "onSourceContentTouchEnd"
+    "onSourceContentTouchStart", "onSourceContentTouchMove", "onSourceContentTouchEnd",
+    "revealClickedSource"
   ];
   for (const name of names) {
     const body = functionBody(viewer, name).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");

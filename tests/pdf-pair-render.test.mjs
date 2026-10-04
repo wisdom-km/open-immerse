@@ -1015,6 +1015,79 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
         assert.ok(landed.visualBottom <= landed.fadeTop + 8, `${selector} clears the fade`);
       }
     };
+    const visibleSource = await evaluate(`(() => {
+      const pages = document.getElementById("pages");
+      const pane = pages.getBoundingClientRect();
+      let best = null;
+      for (const node of document.querySelectorAll("#readerFlow [data-pair-id][data-src-rects]")) {
+        if (node.dataset.pairPart === "inline") continue;
+        const rect = JSON.parse(node.dataset.srcRects || "[]")[0];
+        if (!rect) continue;
+        const pageEl = document.querySelector('#pages .pdf-page[data-page="' + rect.p + '"]');
+        if (!pageEl) continue;
+        const page = pageEl.getBoundingClientRect();
+        const pt = window.__oi.pagePt(pageEl);
+        if (!pt?.width || !pt?.height) continue;
+        const top = page.top + (rect.y / pt.height) * page.height;
+        const height = (rect.h / pt.height) * page.height;
+        const bottom = top + height;
+        const x = page.left + ((rect.x + rect.w / 2) / pt.width) * page.width;
+        if (top < pane.top + 2 || bottom > pane.bottom - 2) continue;
+        if (x < pane.left + 4 || x > pane.right - 4) continue;
+        const ratio = (top - pane.top) / pane.height;
+        if (ratio < 0.6) continue;
+        const y = Math.min(pane.bottom - 4, top + Math.min(8, height / 3));
+        if (!best || ratio > best.ratio) best = { x, y, ratio, source: pages.scrollTop, id: node.dataset.pairId };
+      }
+      return best;
+    })()`);
+    assert.ok(visibleSource, "S-6 visible source hit");
+    assert.ok(visibleSource.ratio > 0.6, "S-6 hit sits below the 30% line");
+    await mouseClick(visibleSource.x, visibleSource.y);
+    await frames(3);
+    const keptSource = await evaluate(`(() => ({
+      source: document.getElementById("pages").scrollTop,
+      current: document.querySelector("#readerFlow .is-pair-current, #readerFlow .is-pair-jump")?.dataset.pairId || ""
+    }))()`);
+    near(keptSource.source, visibleSource.source, 1, "S-6 visible source click keeps the source pane");
+    assert.equal(keptSource.current, visibleSource.id, "S-6 visible source click jumps the translation");
+    const clipped = await evaluate(`(() => {
+      const pages = document.getElementById("pages");
+      const pane = pages.getBoundingClientRect();
+      const node = document.querySelector('[data-oi-probe="paragraph"]');
+      const rect = JSON.parse(node.dataset.srcRects || "[]")[0];
+      const pageEl = document.querySelector('#pages .pdf-page[data-page="' + rect.p + '"]');
+      const page = pageEl.getBoundingClientRect();
+      const pt = window.__oi.pagePt(pageEl);
+      const top = page.top + (rect.y / pt.height) * page.height;
+      pages.scrollTop += top - (pane.bottom - 6);
+      return true;
+    })()`);
+    assert.equal(clipped, true, "S-6 clip setup");
+    await frames(2);
+    const clippedPoint = await evaluate(`(() => {
+      const pages = document.getElementById("pages");
+      const pane = pages.getBoundingClientRect();
+      const node = document.querySelector('[data-oi-probe="paragraph"]');
+      const rect = JSON.parse(node.dataset.srcRects || "[]")[0];
+      const pageEl = document.querySelector('#pages .pdf-page[data-page="' + rect.p + '"]');
+      const page = pageEl.getBoundingClientRect();
+      const pt = window.__oi.pagePt(pageEl);
+      const top = page.top + (rect.y / pt.height) * page.height;
+      const bottom = page.top + ((rect.y + rect.h) / pt.height) * page.height;
+      return {
+        x: page.left + ((rect.x + rect.w / 2) / pt.width) * page.width,
+        y: Math.min(pane.bottom - 3, Math.max(pane.top + 3, top + 2)),
+        source: pages.scrollTop,
+        id: node.dataset.pairId,
+        hangs: bottom > pane.bottom + 1
+      };
+    })()`);
+    assert.equal(clippedPoint.hangs, true, "S-6 paragraph hangs outside the source pane");
+    await mouseClick(clippedPoint.x, clippedPoint.y);
+    await frames(3);
+    const revealed = await evaluate(`document.getElementById("pages").scrollTop`);
+    assert.ok(Math.abs(revealed - clippedPoint.source) > 20, `S-6 offscreen source click scrolls (${clippedPoint.source} -> ${revealed})`);
     await sourceClick('[data-oi-probe="paragraph"]');
 
     const miss = await evaluate(`(() => {
