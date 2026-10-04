@@ -4703,6 +4703,12 @@ function measureVisible() {
   return pageFromViewport(pageRects(), paneRect.top, paneRect.bottom);
 }
 
+function sourceNavPage() {
+  if (currentScope() !== "all") return pageNum;
+  const seen = measureVisible();
+  return seen >= 1 ? seen : pageNum;
+}
+
 function releaseScrollDriver(side) {
   if (side === "pdf") {
     if (syncOwner.owner === "pdf" || syncOwner.owner === "click") syncOwner.release(syncOwner.owner);
@@ -4713,7 +4719,10 @@ function releaseScrollDriver(side) {
 
 function onPdfScroll() {
   if (!pdfDoc) return;
-  if (syncOwner.ignores("pdf")) return;
+  if (syncOwner.ignores("pdf")) {
+    updateSourcePageLabel(measureVisible());
+    return;
+  }
   takeDriver("pdf");
   if (scrollTick) return;
   const generation = followGeneration;
@@ -4762,20 +4771,20 @@ function syncVisiblePage() {
 
 async function goPage(dir) {
   if (!pdfDoc) return;
-  const next = pageIndex(pageNum, pdfDoc.numPages, dir);
-  if (next === pageNum) return;
+  const inAll = currentScope() === "all";
+  const origin = inAll ? sourceNavPage() : pageNum;
+  const next = pageIndex(origin, pdfDoc.numPages, dir);
+  if (next === origin) return;
   takeDriver("pdf");
-  pageNum = next;
+  if (!inAll) pageNum = next;
   const view = pageViews[next - 1];
   view?.wrap.scrollIntoView({ block: "start", behavior: PANE_SYNC_BEHAVIOR });
   updatePager();
-  updateSourcePageLabel(next);
-  if (currentScope() !== "all") {
+  updateSourcePageLabel(inAll ? sourceNavPage() : next);
+  if (!inAll) {
     const readout = translateScrollRoot();
     if (readout) readout.scrollTop = 0;
     renderArticle();
-    loadCurrentPageText();
-  } else if (!getPageLayout(next)) {
     loadCurrentPageText();
   }
   await scheduleVisibleRenders();
@@ -4909,7 +4918,7 @@ async function setZoom(next) {
 async function scheduleVisibleRenders() {
   if (!pdfDoc) return;
   const gen = ++renderGen;
-  const want = neighborPages(pageNum, pdfDoc.numPages, RENDER_RADIUS);
+  const want = neighborPages(sourceNavPage(), pdfDoc.numPages, RENDER_RADIUS);
   for (const n of want) {
     if (gen !== renderGen) return;
     const view = pageViews[n - 1];
@@ -5052,12 +5061,17 @@ async function loadCurrentPageText() {
 
 function updatePager() {
   const total = pdfDoc?.numPages || 0;
+  const nav = sourceNavPage();
   $("pager").textContent = pageLabel(pageNum, total);
   if (currentScope() === "all") updateSourcePageLabel(measureVisible() || pageNum);
   else updateSourcePageLabel(pageNum);
+  for (const id of ["translatePage", "retranslatePage"]) {
+    const button = $(id);
+    if (button) button.dataset.page = String(pageNum);
+  }
   $("zoomLabel").textContent = zoomLabel(zoom);
-  $("prev").disabled = !pdfDoc || pageNum <= 1;
-  $("next").disabled = !pdfDoc || pageNum >= total;
+  $("prev").disabled = !pdfDoc || nav <= 1;
+  $("next").disabled = !pdfDoc || nav >= total;
   syncZoomButtons();
 }
 
