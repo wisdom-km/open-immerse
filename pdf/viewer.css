@@ -1776,6 +1776,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   display: flex;
   align-items: center;
   width: 100%;
+  min-height: var(--oi-reader-menu-item-h);
   height: var(--oi-reader-menu-item-h);
   padding: 0 var(--oi-reader-menu-item-pad-x);
   border: 0;

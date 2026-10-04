@@ -3440,6 +3440,8 @@ function finalizeReaderFlow() {
 function settlePairChrome() {
   if (jumpLock.locked) paintPairChrome();
   else refreshPairCurrent();
+  const marked = readerFlowEl()?.querySelector(".rf-block.is-pair-current");
+  if (currentPairId && marked?.dataset.pairId !== currentPairId) paintPairChrome();
 }
 
 function updatePageCapsule() {
