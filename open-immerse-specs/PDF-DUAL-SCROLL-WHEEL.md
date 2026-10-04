@@ -1,5 +1,7 @@
 # PDF 左右栏 · 滚轮 / 滚动体验（PDF-DUAL-SCROLL-WHEEL）
 
+> **已被块级跟随取代（SPEC rev 3.2，S-3 / S-15 / C11 / C12）。** 本文 §0 第 1 条和 §2 的页级跟随、以及「跟随默认关」，不再是现行行为。现行是块级跟随：译文栏 30% 线上的块带动原文栏，默认开。页级 `softPageFollow` 已退出设置页。滚轮手感（禁止 smooth、单侧驱动、contain、不 preventDefault）仍然有效。
+
 **来源：** 2026-09-23 Wisdom（四类全修）via Forge / Jone copy → Loom。  
 **基线：** main tip `87d4beffff3dafd7eb835fe29443277e57b9ce08`（已含 #53 formula rhythm）。  
 **摸底：** `pdf-scroll-survey-87d4beff`（基线审计，未入库）。  
