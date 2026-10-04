@@ -193,9 +193,9 @@ test("followReducer covers on, off, paused, and unavailable", () => {
       toggle: ["on", "1"],
       userSourceScroll: ["off", null],
       resume: ["off", null],
-      clickJump: ["on", null],
-      capsuleJump: ["on", null],
-      sourceModeChange: ["on", null]
+      clickJump: ["off", null],
+      capsuleJump: ["off", null],
+      sourceModeChange: ["off", null]
     },
     paused: {
       toggle: ["on", null],
