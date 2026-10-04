@@ -88,12 +88,23 @@
 - 2026-10-04：② 14px 档小下标偏小。要修，优先级 P2，排在 ① 后面。基线是主路径上的 30 个（14px 档，下标墨迹中位数低于 7px）。做法不变：只给该公式加大倍数，上限仍是 2.2em，不升级成块。现行 `lib/pdf-formula-size.js` 第 279 行的 `inlineCropRaises` 会把下标低于 7px 的公式升级成块。做 ② 时要同步改这条规则。已经升级的 7 个归单列的推后项。验收：修完后主路径里仍低于 7px 的，只能是被 2.2em 上限卡住的。按现在线性估算大约 4 个，是 DPO p5-b18、p17-b15、p19-b3、p19-b6。撑行和升级数不明显增加。口径要统一：验收和代码判定用同一种下标量法。现在实测是像素下标中位数，代码是 bbox 估算。做 ② 时先定下一种，并写进测试。Wisdom 2026-10-04 12:13 重新批准。
 - 2026-10-04：已升级成块的 7 个公式（14px 档下标中位数 6.0–6.18px）不归 ② 管，单列推后。Wisdom 2026-10-04 批准。
 - 2026-10-04：③ 单变量和短式按 x-height 设下限。先推后。触发条件是真机上确实看着小。做法和触发条件是 Wisdom 2026-10-04 批准的方案。
-- 2026-10-04：`lib/pdf-text-layer.js` 里仍留着旧的行内盒高计算。同组有 `INLINE_INK_TARGET`（1.30）、`INLINE_INK_STRONG_LO`（1.25）、`INLINE_INK_STRONG_HI`（1.35）、`INLINE_INK_FLOOR`（1）、`INLINE_LINE_BOX_LO`（1.9）、`INLINE_LINE_BOX_HI`（2.2）、`INLINE_LINE_TOP_LO`（1.8）、`INLINE_LINE_TOP_HI`（2.1），以及 `inlineCropBoxEm`。`lib/pdf-formula-size.js` 第 8–12 行导入了 `INLINE_INK_STRONG_HI`、`INLINE_INK_TARGET`、`INLINE_LINE_BOX_HI`、`inlineCropBoxEm`、`inlineLineTopEm`，用在导出的 `inlinePaintBox` 和 `inlinePromotesToDisplay` 里。阅读器不调用这两个函数。`tests/pdf-formula-size.test.mjs` 调用它们；`tests/pdf-plaintext-formula.test.mjs` 仍锁定 1.25–1.35 和名义盒 1.95em。`pdf/viewer.css` 第 663 行注释仍写着墨迹进 1.25–1.35 带后行顶在 1.8–2.1em，第 674 行注释仍写着墨迹目标 1.30×、名义盒 1.95em。先记下，等做 ① 或 ② 时一并判断删除还是保留。现在不改代码和 CSS。
+- 2026-10-04：`lib/pdf-text-layer.js` 里仍留着旧的行内盒高计算。同组有 `INLINE_INK_TARGET`（1.30）、`INLINE_INK_STRONG_LO`（1.25）、`INLINE_INK_STRONG_HI`（1.35）、`INLINE_INK_FLOOR`（1）、`INLINE_LINE_BOX_LO`（1.9）、`INLINE_LINE_BOX_HI`（2.2）、`INLINE_LINE_TOP_LO`（1.8）、`INLINE_LINE_TOP_HI`（2.1），以及 `inlineCropBoxEm`。`lib/pdf-formula-size.js` 第 8–12 行导入了 `INLINE_INK_STRONG_HI`、`INLINE_INK_TARGET`、`INLINE_LINE_BOX_HI`、`inlineCropBoxEm`、`inlineLineTopEm`，用在导出的 `inlinePaintBox` 和 `inlinePromotesToDisplay` 里。阅读器不调用这两个函数。`tests/pdf-formula-size.test.mjs` 调用它们；`tests/pdf-plaintext-formula.test.mjs` 仍锁定 1.25–1.35 和名义盒 1.95em。`pdf/viewer.css` 第 674 行注释仍写着墨迹进 1.25–1.35 带后行顶在 1.8–2.1em，第 685 行注释仍写着墨迹目标 1.30×、名义盒 1.95em。先记下，等做 ① 或 ② 时一并判断删除还是保留。现在不改代码和 CSS。
 
 ## 五、复核工具快捷键
 
 - `m` 合并，`d` 标成行间，`i` 标成行内，`e` 切换是否带公式编号，`s` 拆分
 - Shift 加选，Enter 确认，Shift+Enter 或「保存本页」保存
+
+## 六、已完成（最近）
+
+- 2026-09-30：#176 写成正式裁定。图注里 `κ = − 1` 是行内公式；斜体 `q`（`q-values`）和面板号 `d` 是正文。「保留为正文」指 `q` 和 `d`，不是 `κ`。复核稿与这条一致，不改数据。
+- 2026-09-30：2026-09-30 新裁定已写入 `docs/v1-m1-labels.md` 和 `docs/v1-m1-rulings.md`。#18、#71、#78、#85、#165 的复核稿仍是旧标注，改数据前等你过目。
+- 2026-09-30：PR #83 按你的决定关闭，没有合并，也没有改写历史。held-out 抽样时整页排除 qe533 p13。已告知 Anvil。
+- 2026-09-30：M2 基线在 main@0da64c6 上量完（Anvil，只测量）。A3 完全相等 12.9%，平均 Jaccard 0.52；empty SVG 为 0；A4 低置信 99.3%（复核队列本来就偏向低置信，不是准确率）。723 条未复核条目未被打开。报告在 Forge 电脑 /workspace/oi-qa/m2-baseline-0da64c6/。
+- 2026-09-30：PR #82（Attention 退化最小修复，取代 #80）合入 main@0da64c6，已核对与 tip 6498396 内容一致。修了：p6 的 10000·2π 留在正文；p7 的 β₁/β₂/ε 拆成三个行内框、式 (3) 保持行间；p10 参考文献与 [1] 分开；p4 脚注以 4 开头。PR #80 仍开着，仅作参考，不合并。
+- 2026-09-29：PR #78（M1 语料与复核集）合入 main@7e10df3。
+- 2026-09-29：PR #79（审计补强）合入 main@9f69f92。全量测试的 encoder-N 过时期望已撤掉。
+- 2026-09-29：PR #81（待办清单进仓库 docs/owner-todo.md）合入 main@4904479。仓库那份会在下次改文档时同步成这份笔记的最新内容。
 
 ## 七、阅读器界面第一期 · 延后（PR-2 记下，这一轮不做）
 
@@ -106,14 +117,3 @@
 - 库存文章和旧的 `appendReadoutNode` 路径没有外接框，配不上对（S-9）。不补框。
 - `settings.pdfScroll.softPageFollow` 还在 `lib/storage.js` 里当作废弃字段归一化，设置页已经没有这一行。下一轮可以删字段。不把旧值迁到 `reader.follow`。
 - 没有外接框时，点原文只滚到页顶，标题闪「已到第 N 页」，不画框。
-
-## 六、已完成（最近）
-
-- 2026-09-30：#176 写成正式裁定。图注里 `κ = − 1` 是行内公式；斜体 `q`（`q-values`）和面板号 `d` 是正文。「保留为正文」指 `q` 和 `d`，不是 `κ`。复核稿与这条一致，不改数据。
-- 2026-09-30：2026-09-30 新裁定已写入 `docs/v1-m1-labels.md` 和 `docs/v1-m1-rulings.md`。#18、#71、#78、#85、#165 的复核稿仍是旧标注，改数据前等你过目。
-- 2026-09-30：PR #83 按你的决定关闭，没有合并，也没有改写历史。held-out 抽样时整页排除 qe533 p13。已告知 Anvil。
-- 2026-09-30：M2 基线在 main@0da64c6 上量完（Anvil，只测量）。A3 完全相等 12.9%，平均 Jaccard 0.52；empty SVG 为 0；A4 低置信 99.3%（复核队列本来就偏向低置信，不是准确率）。723 条未复核条目未被打开。报告在 Forge 电脑 /workspace/oi-qa/m2-baseline-0da64c6/。
-- 2026-09-30：PR #82（Attention 退化最小修复，取代 #80）合入 main@0da64c6，已核对与 tip 6498396 内容一致。修了：p6 的 10000·2π 留在正文；p7 的 β₁/β₂/ε 拆成三个行内框、式 (3) 保持行间；p10 参考文献与 [1] 分开；p4 脚注以 4 开头。PR #80 仍开着，仅作参考，不合并。
-- 2026-09-29：PR #78（M1 语料与复核集）合入 main@7e10df3。
-- 2026-09-29：PR #79（审计补强）合入 main@9f69f92。全量测试的 encoder-N 过时期望已撤掉。
-- 2026-09-29：PR #81（待办清单进仓库 docs/owner-todo.md）合入 main@4904479。仓库那份会在下次改文档时同步成这份笔记的最新内容。
