@@ -19,6 +19,29 @@ installOwnedTmpGuard(PAIR_TMP_PREFIXES);
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const fixture = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
 
+async function assertOpenedOnFullDocument(evaluate) {
+  const opened = await evaluate(`(() => ({
+    scope: document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || "",
+    folds: document.querySelectorAll("#readerFlow .rf-untranslated").length,
+    pages: document.querySelectorAll("#pages .pdf-page").length,
+    label: (document.getElementById("translatePage")?.textContent || "").trim(),
+    hidden: document.getElementById("translatePage")?.hidden === true,
+    busy: (document.getElementById("status")?.textContent || "").includes("翻译中")
+  }))()`);
+  assert.equal(opened.scope, "all", "打开即默认全文");
+  assert.equal(opened.pages, 15, "Attention v7 is 15 pages");
+  assert.equal(opened.folds, 14, "其余 14 页在全文范围里标成未翻译");
+  assert.equal(opened.label, "翻译", "打开不自动开译");
+  assert.equal(opened.hidden, false, "翻译仍是主按钮");
+  assert.equal(opened.busy, false, "打开不进入翻译进度");
+  return opened;
+}
+
+async function useCurrentPageScope(clickSelector, waitFor) {
+  await clickSelector('[data-scope="page"]');
+  await waitFor(`document.querySelector(".scope-seg-btn.is-on")?.dataset.scope === "page" ? "page" : ""`, "切回当前页");
+}
+
 function explicitShotDir() {
   const value = String(process.env.OI_PAIR_SHOTS_DIR || "").trim();
   return value;
@@ -471,6 +494,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     })()`, "Attention PDF open");
     await evaluate(`(${installProbe.toString()})()`);
     await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
+    await assertOpenedOnFullDocument(evaluate);
 
     const fresh = await evaluate(`(() => ({
       follow: document.querySelector(".workspace")?.dataset.follow || "",
@@ -510,6 +534,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(turnedOn.follow, "on", "f turns follow on");
     assert.equal(turnedOn.stored, "1", "toggle on stores 1");
 
+    await useCurrentPageScope(clickSelector, waitFor);
     await clickSelector("#next");
     await waitFor(`document.querySelector('#readerFlow [data-src-page="2"][data-pair-id]') ? "p2" : ""`, "page 2 pairs", 40000);
     await clickSelector("#prev");
@@ -1804,6 +1829,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     }))()`);
     assert.equal(keptSwap.stored, "end", "reload keeps the stored swap");
     assert.equal(keptSwap.side, "end", "reload applies the stored swap");
+    await useCurrentPageScope(clickSelector, waitFor);
     for (let page = 2; page <= 5; page += 1) {
       await clickSelector("#next");
       await waitFor(`document.querySelector('#readerFlow [data-src-page="${page}"][data-pair-id]') ? "p${page}" : ""`, `reloaded page ${page}`, 40000);
@@ -2310,6 +2336,7 @@ async function openAttentionPair(t) {
     return state;
   };
   const showAllThrough = async (lastPage) => {
+    await useCurrentPageScope(clickSelector, waitFor);
     for (let page = 2; page <= lastPage; page += 1) {
       await clickSelector("#next");
       await waitFor(
@@ -2344,6 +2371,7 @@ async function openAttentionPair(t) {
     return /\\/\\s*15/.test(pager) && next && !next.disabled ? pager : "";
   })()`, "Attention PDF open");
   await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
+  await assertOpenedOnFullDocument(evaluate);
   return { evaluate, waitFor, clickSelector, frames, readNav, waitNav, setFollow, showAllThrough, parkSource };
 }
 

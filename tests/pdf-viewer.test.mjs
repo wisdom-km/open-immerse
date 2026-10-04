@@ -36,6 +36,7 @@ import {
   looksLikePdfUrl,
   neighborPages,
   nextZoom,
+  DEFAULT_PDF_TRANSLATE_SCOPE,
   normalizePdfTranslateScope,
   pageBlocksCopy,
   pageCacheKey,
@@ -924,9 +925,12 @@ test("continuous scroll helpers pick the page in view and nearby canvases", () =
   assert.equal(readoutPageSelector(4), '[data-page="4"]');
   assert.equal(shouldSyncReadout(40, 40, 80), false);
   assert.equal(shouldSyncReadout(200, 40, 80), true);
+  assert.equal(DEFAULT_PDF_TRANSLATE_SCOPE, "all");
   assert.equal(normalizePdfTranslateScope("all"), "all");
   assert.equal(normalizePdfTranslateScope("document"), "all");
-  assert.equal(normalizePdfTranslateScope(""), "page");
+  assert.equal(normalizePdfTranslateScope("page"), "page");
+  assert.equal(normalizePdfTranslateScope(""), "all");
+  assert.equal(normalizePdfTranslateScope("nope"), "all");
   assert.equal(wheelPageDelta({ deltaY: 40, atTop: true, atBottom: true, overflow: false }), 1);
   assert.equal(wheelPageDelta({ deltaY: -40, atTop: true, atBottom: true, overflow: false }), -1);
   assert.equal(wheelPageDelta({ deltaY: 40, atTop: false, atBottom: true, overflow: true }), 0);
@@ -954,8 +958,9 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
       exportMd < exportPdf
   );
   assert.match(html, /class="scope-seg"[^>]*role="group"[^>]*aria-label="翻译范围"/);
-  assert.match(html, /class="scope-seg-btn is-on"[^>]*data-scope="page"[^>]*>当前页</);
-  assert.match(html, /class="scope-seg-btn"[^>]*data-scope="all"[^>]*>全文</);
+  assert.match(html, /class="scope-seg-btn"[^>]*data-scope="page"[^>]*>当前页</);
+  assert.match(html, /class="scope-seg-btn is-on"[^>]*data-scope="all"[^>]*>全文</);
+  assert.doesNotMatch(html, /class="scope-seg-btn is-on"[^>]*data-scope="page"/);
   assert.equal(html.includes("pdfTranslateScope"), false);
   assert.equal(html.includes("scope-field"), false);
   assert.match(html, /id="prev"[^>]*>上一页</);

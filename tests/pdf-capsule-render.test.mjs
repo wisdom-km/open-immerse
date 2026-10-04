@@ -212,6 +212,11 @@ test("Attention arXiv v7 capsules stay inside the content box on every page", { 
     const next = document.getElementById("next");
     return /\\/\\s*15/.test(pager) && next && !next.disabled ? pager : "";
   })()`, "Attention PDF open");
+  await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
+  const openedFull = await evaluate(`document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || ""`);
+  assert.equal(openedFull, "all", "打开即默认全文");
+  await evaluate(`document.querySelector('[data-scope="page"]').click()`);
+  await waitFor(`document.querySelector(".scope-seg-btn.is-on")?.dataset.scope === "page" ? "page" : ""`, "当前页 for capsule walk");
 
   const measureExpr = `(() => {
     const cap = document.getElementById("pageCapsule");
