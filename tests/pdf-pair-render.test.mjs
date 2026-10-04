@@ -2165,3 +2165,243 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       else process.env.OI_PAIR_SHOTS_DIR = previousShot;
     }
 });
+
+// Full-text capsule clicks assign scrollTop while the click driver owns the
+// pane, so onPdfScroll takes the ignores("pdf") branch and never reaches
+// noteSourcePage. That branch has to call updatePager, or prev/next stay
+// latched to the page the source just left.
+async function openAttentionPair(t) {
+  assert.equal(existsSync(fixture), true, "tests/fixtures/Attention_Is_All_You_Need.pdf is missing");
+  const handle = { child: null, cdp: null, server: null, ownedDir: null, userDataDir: null };
+  t.after(async () => {
+    try {
+      handle.cdp?.dispose();
+    } finally {
+      await cleanupChrome({
+        t,
+        child: handle.child,
+        server: handle.server,
+        ownedDir: handle.ownedDir,
+        userDataDir: handle.userDataDir
+      });
+    }
+  });
+  handle.server = await serveRepo();
+  handle.ownedDir = mkdtempSync(join(tmpdir(), "oi-pair-render-"));
+  rememberOwnedTemp(handle.ownedDir);
+  const userDataDir = join(handle.ownedDir, "profile");
+  handle.userDataDir = userDataDir;
+  const scratchDir = join(handle.ownedDir, "scratch");
+  const downloadDir = join(handle.ownedDir, "downloads");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  mkdirSync(downloadDir);
+  const address = handle.server.address();
+  const origin = `http://127.0.0.1:${address.port}`;
+  const src = `${origin}/tests/fixtures/Attention_Is_All_You_Need.pdf`;
+  const viewer = `${origin}/pdf/viewer.html?src=${encodeURIComponent(src)}`;
+  handle.child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
+  handle.cdp = cdp;
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const send = (method, params, timeoutMs) => cdp.send(method, params, sessionId, timeoutMs);
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await cdp.send("Browser.setDownloadBehavior", {
+    behavior: "allow",
+    downloadPath: downloadDir,
+    eventsEnabled: true
+  });
+  await send("Page.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir });
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: 1440,
+    height: 900,
+    deviceScaleFactor: 1,
+    mobile: false
+  });
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true
+    });
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails;
+      throw new Error(detail.exception?.description || detail.text || JSON.stringify(detail));
+    }
+    return result.result?.value;
+  };
+  const waitFor = async (expression, label, timeoutMs = 30000) => {
+    const started = Date.now();
+    let last = null;
+    while (Date.now() - started < timeoutMs) {
+      last = await evaluate(expression);
+      if (last) return last;
+      await sleep(150);
+    }
+    const status = await evaluate(`document.getElementById("status")?.textContent || ""`).catch(() => "");
+    throw new Error(`${label} timed out. status=${status} last=${JSON.stringify(last)}`);
+  };
+  const frames = (n = 2) => evaluate(`new Promise((done) => {
+    let left = ${n};
+    const step = () => { left -= 1; if (left <= 0) done(true); else requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  })`);
+  const clickSelector = async (selector) => {
+    const point = await evaluate(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return null;
+      const box = el.getBoundingClientRect();
+      if (box.width < 1 || box.height < 1) return null;
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    })()`);
+    assert.ok(point, selector);
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
+    return point;
+  };
+  const readNav = () => evaluate(`(() => {
+    const pages = document.getElementById("pages");
+    const pane = pages.getBoundingClientRect();
+    const mid = (pane.top + pane.bottom) / 2;
+    let source = 0;
+    let best = Infinity;
+    for (const el of document.querySelectorAll("#pages .pdf-page")) {
+      const box = el.getBoundingClientRect();
+      if (box.height < 1) continue;
+      const dist = Math.abs((box.top + box.bottom) / 2 - mid);
+      if (dist < best) {
+        best = dist;
+        source = Number(el.dataset.page) || 0;
+      }
+    }
+    return {
+      source,
+      label: document.getElementById("sourcePageLabel")?.textContent || "",
+      capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
+      follow: document.querySelector(".workspace")?.dataset.follow || "",
+      scope: document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || "",
+      prev: document.getElementById("prev")?.disabled === true,
+      next: document.getElementById("next")?.disabled === true
+    };
+  })()`);
+  const waitNav = async (goal, label, timeoutMs = 8000) => {
+    const started = Date.now();
+    let last = null;
+    while (Date.now() - started < timeoutMs) {
+      last = await readNav();
+      if (goal(last)) return last;
+      await sleep(100);
+    }
+    throw new Error(`${label} timed out. last=${JSON.stringify(last)}`);
+  };
+  const setFollow = async (want) => {
+    let state = "";
+    for (let i = 0; i < 3; i += 1) {
+      state = await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`);
+      if (state === want) return state;
+      await clickSelector("#followSwitch");
+      await frames(3);
+    }
+    state = await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`);
+    assert.equal(state, want, `follow becomes ${want}`);
+    return state;
+  };
+  const showAllThrough = async (lastPage) => {
+    for (let page = 2; page <= lastPage; page += 1) {
+      await clickSelector("#next");
+      await waitFor(
+        `document.querySelector('#readerFlow [data-src-page="${page}"][data-pair-id]') ? "p${page}" : ""`,
+        `page ${page} pairs`,
+        40000
+      );
+    }
+    await clickSelector('[data-scope="all"]');
+    const wanted = JSON.stringify(Array.from({ length: lastPage }, (_, index) => String(index + 1)));
+    await waitFor(`(() => {
+      const have = new Set([...document.querySelectorAll("#readerFlow .rf-block[data-pair-id]")].map((el) => el.dataset.srcPage || el.dataset.page));
+      return ${wanted}.every((page) => have.has(page)) ? "ready" : "";
+    })()`, `全文 pages 1-${lastPage}`, 20000);
+  };
+  const parkSource = async (page) => {
+    const parked = await evaluate(`(() => {
+      const wrap = document.querySelector('#pages .pdf-page[data-page="${page}"]');
+      if (!wrap) return false;
+      wrap.scrollIntoView({ block: "start", behavior: "auto" });
+      return true;
+    })()`);
+    assert.equal(parked, true, `source page ${page} exists`);
+    await frames(4);
+    await sleep(200);
+  };
+
+  await send("Page.navigate", { url: viewer });
+  await waitFor(`(() => {
+    const pager = document.getElementById("pager")?.textContent || "";
+    const next = document.getElementById("next");
+    return /\\/\\s*15/.test(pager) && next && !next.disabled ? pager : "";
+  })()`, "Attention PDF open");
+  await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
+  return { evaluate, waitFor, clickSelector, frames, readNav, waitNav, setFollow, showAllThrough, parkSource };
+}
+
+test("CAP1 全文跟随关：原文在第 1 页时点胶囊第 4 页，上一页恢复可用", { timeout: 300000 }, async (t) => {
+  const { clickSelector, frames, waitNav, setFollow, showAllThrough, parkSource } = await openAttentionPair(t);
+  await setFollow("off");
+  await showAllThrough(4);
+  await setFollow("off");
+  await parkSource(1);
+  const parked = await waitNav(
+    (row) => row.scope === "all" && row.follow === "off" && row.source === 1 && row.prev === true && row.capsule === "4",
+    "CAP1 parked on page 1 with capsule 4"
+  );
+  assert.equal(parked.source, 1, "CAP1 source starts on page 1");
+  assert.equal(parked.prev, true, "CAP1 #prev.disabled === true on page 1");
+  assert.equal(parked.capsule, "4", "CAP1 capsule is page 4");
+  assert.equal(parked.follow, "off", "CAP1 follow is off");
+  await clickSelector("#pageCapsule");
+  await frames(4);
+  const jumped = await waitNav(
+    (row) => row.source === 4 && row.prev === false && row.follow === "off",
+    "CAP1 capsule jump enables prev"
+  );
+  assert.equal(jumped.source, 4, "CAP1 source is page 4");
+  assert.equal(jumped.prev, false, "CAP1 #prev.disabled === false after the capsule");
+  assert.equal(jumped.capsule, "4", "CAP1 capsule stays on page 4");
+  assert.equal(jumped.follow, "off", "CAP1 follow stays off");
+  await clickSelector("#prev");
+  await frames(4);
+  const stepped = await waitNav((row) => row.source === 3, "CAP1 prev reaches page 3");
+  assert.equal(stepped.source, 3, "CAP1 #prev goes to source page 3");
+});
+
+test("CAP2 全文跟随开：原文在第 15 页时点胶囊第 5 页，下一页恢复可用", { timeout: 300000 }, async (t) => {
+  const { clickSelector, frames, waitNav, setFollow, showAllThrough, parkSource } = await openAttentionPair(t);
+  await showAllThrough(5);
+  await setFollow("on");
+  await parkSource(15);
+  const parked = await waitNav(
+    (row) => row.scope === "all" && row.follow === "on" && row.source === 15 && row.next === true && row.capsule === "5",
+    "CAP2 parked on page 15 with capsule 5"
+  );
+  assert.equal(parked.source, 15, "CAP2 source starts on page 15");
+  assert.equal(parked.next, true, "CAP2 #next.disabled === true on page 15");
+  assert.equal(parked.capsule, "5", "CAP2 capsule is page 5");
+  assert.equal(parked.follow, "on", "CAP2 follow is on");
+  await clickSelector("#pageCapsule");
+  await frames(4);
+  const jumped = await waitNav(
+    (row) => row.source === 5 && row.next === false && row.follow === "on",
+    "CAP2 capsule jump enables next"
+  );
+  assert.equal(jumped.source, 5, "CAP2 source is page 5");
+  assert.equal(jumped.next, false, "CAP2 #next.disabled === false after the capsule");
+  assert.equal(jumped.capsule, "5", "CAP2 capsule stays on page 5");
+  assert.equal(jumped.follow, "on", "CAP2 follow stays on");
+  await clickSelector("#next");
+  await frames(4);
+  const stepped = await waitNav((row) => row.source === 6, "CAP2 next reaches page 6");
+  assert.equal(stepped.source, 6, "CAP2 #next goes to source page 6");
+});
