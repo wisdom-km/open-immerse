@@ -61,6 +61,6 @@
 | 文字层正文 + 右栏原页裁图 + 只译自然语言 | 把译文贴进原文栏 bbox（#40 closed） |
 | 按 `pdf/high-precision/EXECUTION.md` 分阶段接上本文 | 没到切换运行路径的阶段就改 `pdf/viewer.js` |
 | Attention 验收 | 回归网页 content/Options |
-| 测试期本机智谱 GLM-OCR，上线 OCR API | 用 OCR 字母代替原页公式画面。当前已发布的是区域渲染，按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。例外：OCR API 层核对通过的结果可以上屏（01:12 顺序；细节待确认） |
+| 测试期本机智谱 GLM-OCR，上线 OCR API | 用 OCR 字母代替原页公式画面。当前已发布的是区域渲染，按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。例外：OCR API 层核对通过的结果可以上屏（据 01:12 顺序推论；细节待确认） |
 
 `pdf/viewer.js` 在切换默认路径之前可以仍走遗留渲染。那不是本文的展示手段。当前已发布的右栏公式画面是区域渲染，按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。目标是按原字体、原位置重绘字符。
