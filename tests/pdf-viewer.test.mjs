@@ -37,7 +37,10 @@ import {
   neighborPages,
   nextZoom,
   DEFAULT_PDF_TRANSLATE_SCOPE,
+  documentTranslatePlaceholder,
   normalizePdfTranslateScope,
+  pdfOpenTranslateBlocker,
+  pdfTranslateFailureCopy,
   pageBlocksCopy,
   pageCacheKey,
   pageFromViewport,
@@ -931,6 +934,20 @@ test("continuous scroll helpers pick the page in view and nearby canvases", () =
   assert.equal(normalizePdfTranslateScope("page"), "page");
   assert.equal(normalizePdfTranslateScope(""), "all");
   assert.equal(normalizePdfTranslateScope("nope"), "all");
+  assert.equal(documentTranslatePlaceholder(3, 15), "正在翻译第 3/15 页…");
+  assert.match(pdfTranslateFailureCopy({ reason: "runtime" }), /无法翻译/);
+  assert.match(pdfTranslateFailureCopy({ reason: "runtime" }), /扩展/);
+  assert.match(pdfTranslateFailureCopy({ reason: "missing-field", field: "API Key" }), /API Key/);
+  assert.match(pdfTranslateFailureCopy({ reason: "missing-field", field: "API Key" }), /设置 → 引擎/);
+  assert.match(pdfOpenTranslateBlocker({ layoutMode: "local-ocr", localServiceUp: false }), /本机服务没启动/);
+  assert.equal(pdfOpenTranslateBlocker({ runtimeReady: true, missingField: "", layoutMode: "text-layer" }), "");
+  const adopt = src.slice(src.indexOf("async function adoptDoc"), src.indexOf("function shortTitle"));
+  assert.match(adopt, /maybeAutoTranslateDocument\(/);
+  const scopeFn = src.slice(src.indexOf("function setTranslateScope"), src.indexOf("function setScopeEnabled"));
+  assert.equal(scopeFn.includes("startTranslate"), false);
+  assert.equal(scopeFn.includes("maybeAutoTranslate"), false);
+  assert.match(src, /collapseUntranslated/);
+  assert.match(src, /rf-translate-progress/);
   assert.equal(wheelPageDelta({ deltaY: 40, atTop: true, atBottom: true, overflow: false }), 1);
   assert.equal(wheelPageDelta({ deltaY: -40, atTop: true, atBottom: true, overflow: false }), -1);
   assert.equal(wheelPageDelta({ deltaY: 40, atTop: false, atBottom: true, overflow: true }), 0);
@@ -1173,6 +1190,29 @@ test("translateDocumentPages walks pages via OI_TRANSLATE_BATCH and honors stop"
   assert.deepEqual(all[1], ["Page 2 one.", "Page 2 two."]);
   assert.equal(all.some((texts) => texts.includes("Page 1 one.") && texts.includes("Page 2 one.")), false);
   assert.equal(full.get(4, 2)[1].translation, "译:Page 2 two.");
+});
+
+test("translateDocumentPages does not resend pages already complete in the cache", async () => {
+  const cache = createPageCache();
+  cache.set(7, 1, [{ original: "A", translation: "甲", role: "paragraph" }]);
+  cache.set(7, 2, [{ original: "B", translation: "乙", role: "paragraph" }]);
+  const sent = [];
+  const out = await translateDocumentPages({
+    cache,
+    docId: 7,
+    numPages: 2,
+    getPageOriginals: async () => ["should-not-send"],
+    send: async (msg) => {
+      sent.push(msg);
+      return { ok: true, translations: msg.texts.map((text) => `译:${text}`) };
+    }
+  });
+  assert.equal(sent.length, 0);
+  assert.equal(out.ok, true);
+  assert.equal(out.pages.length, 2);
+  assert.equal(out.pages.every((entry) => entry.skipped === true), true);
+  assert.equal(cache.get(7, 1)[0].translation, "甲");
+  assert.equal(cache.get(7, 2)[0].translation, "乙");
 });
 
 test("two-step draft progress replaces in place and keeps heading role", async () => {

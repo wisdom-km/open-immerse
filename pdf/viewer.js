@@ -36,7 +36,10 @@ import {
   forceRetranslateOutcome,
   neighborPages,
   nextZoom,
+  documentTranslatePlaceholder,
   normalizePdfTranslateScope,
+  pdfOpenTranslateBlocker,
+  pdfTranslateFailureCopy,
   wheelPageDelta,
   pageBlocksCopy,
   pageFromViewport,
@@ -197,6 +200,8 @@ import {
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { getProvider, missingRequiredField } from "../lib/providers.js";
+import { normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
   applyStructureTranslations,
   authorBylineGridOk,
@@ -3219,6 +3224,15 @@ function makeUntranslated(page) {
   return el;
 }
 
+function makeTranslateProgress() {
+  const el = document.createElement("p");
+  el.className = "rf-translate-progress";
+  el.setAttribute("role", "status");
+  const total = pdfDoc?.numPages || 1;
+  el.textContent = documentTranslatePlaceholder(translatingPage || 1, total);
+  return el;
+}
+
 function readerMeasurePad() {
   const width = window.innerWidth || 0;
   if (width < 600) return 16;
@@ -3428,11 +3442,17 @@ function finalizeReaderFlow() {
       slots.delete(page);
     }
   }
-  const plan = planReaderFlow({ pageCount: total, contentPages: [...wanted] });
+  const translatingAll = pdfTranslateBusy(session) && currentScope() === "all";
+  const plan = planReaderFlow({
+    pageCount: total,
+    contentPages: [...wanted],
+    collapseUntranslated: translatingAll
+  });
   const frag = document.createDocumentFragment();
   for (const item of plan) {
     if (item.kind === "break") frag.append(makePageBreak(item.page));
     else if (item.kind === "untranslated") frag.append(makeUntranslated(item.page));
+    else if (item.kind === "progress") frag.append(makeTranslateProgress());
     else if (slots.get(item.page)) frag.append(slots.get(item.page));
   }
   flow.replaceChildren(frag);
@@ -3717,7 +3737,71 @@ function setScopeEnabled(enabled) {
   });
 }
 
+function extensionRuntimeReady() {
+  return typeof globalThis.chrome?.runtime?.sendMessage === "function";
+}
+
+async function probeLocalService(baseUrl) {
+  const root = String(baseUrl || "http://127.0.0.1:8765").replace(/\/$/, "");
+  try {
+    await fetch(root, { method: "GET", signal: AbortSignal.timeout(1200) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function translatePreflight() {
+  if (!extensionRuntimeReady()) return pdfTranslateFailureCopy({ reason: "runtime" });
+  let settings = {};
+  try {
+    const res = await runtimeSend({ type: "OI_GET_SETTINGS" });
+    settings = res?.settings || {};
+  } catch (err) {
+    return pdfTranslateFailureCopy({ error: String(err?.message || err) });
+  }
+  cachedPdfLayout = normalizePdfLayout(settings.pdfLayout);
+  const providerId = settings.provider || "mymemory";
+  const missing = missingRequiredField(getProvider(providerId), settings.providers?.[providerId] || {});
+  const layoutMode = pdfEngineMode();
+  let localServiceUp = true;
+  if (layoutMode === "local-ocr") localServiceUp = await probeLocalService(cachedPdfLayout?.localBaseUrl);
+  return pdfOpenTranslateBlocker({
+    runtimeReady: true,
+    missingField: missing?.label || "",
+    layoutMode,
+    localServiceUp
+  });
+}
+
+async function readAutoTranslateEnabled() {
+  if (!extensionRuntimeReady()) return true;
+  try {
+    const res = await runtimeSend({ type: "OI_GET_SETTINGS" });
+    return normalizePdfAutoTranslate(res?.settings?.pdfAutoTranslate);
+  } catch {
+    return true;
+  }
+}
+
+async function maybeAutoTranslateDocument() {
+  if (!pdfDoc || currentScope() !== "all" || pdfTranslateBusy(session)) return;
+  const adopting = docId;
+  if (!(await readAutoTranslateEnabled())) return;
+  if (adopting !== docId || !pdfDoc || currentScope() !== "all" || pdfTranslateBusy(session)) return;
+  await startTranslate();
+}
+
 async function startTranslate() {
+  if (pdfTranslateBusy(session)) return;
+  const adopting = docId;
+  const blocker = await translatePreflight();
+  if (adopting !== docId) return;
+  if (blocker) {
+    setStatus(blocker, true);
+    updateTranslateControls();
+    return;
+  }
   if (currentScope() === "all") await translateWholeDocument();
   else await translateCurrentPage();
 }
@@ -4010,7 +4094,7 @@ async function translateCurrentPage() {
     work.running = false;
     translatingPage = 0;
     if (String(err?.message || err) === "runtime unavailable") {
-      setStatus(PDF_COPY.runtimeUnavailable, true);
+      setStatus(pdfTranslateFailureCopy({ reason: "runtime" }), true);
       renderArticle();
       updateTranslateControls();
       return;
@@ -4056,8 +4140,9 @@ async function translateCurrentPage() {
   pageResults = merged;
   renderArticle();
   if (aborted) setStatus(PDF_COPY.stopped);
-  else if (!results.some((item) => item.translation) && !structureLanded(targetPage)) setStatus(PDF_COPY.error, true);
-  else setStatus(PDF_COPY.done);
+  else if (!results.some((item) => item.translation) && !structureLanded(targetPage)) {
+    setStatus(pdfTranslateFailureCopy({ error: "没有返回译文" }), true);
+  } else setStatus(PDF_COPY.done);
   translatingPage = 0;
   if (!aborted) {
     try {
@@ -4122,7 +4207,7 @@ async function translateWholeDocument() {
     work.running = false;
     translatingPage = 0;
     if (String(err?.message || err) === "runtime unavailable") {
-      setStatus(PDF_COPY.runtimeUnavailable, true);
+      setStatus(pdfTranslateFailureCopy({ reason: "runtime" }), true);
       renderArticle();
       updateTranslateControls();
       return;
@@ -4133,7 +4218,7 @@ async function translateWholeDocument() {
     return;
   }
   const saveTasks = [];
-  const { aborted, pages } = await translateDocumentPages({
+  const translatedDoc = await translateDocumentPages({
     session: work,
     cache: pageCache,
     docId: translatingDoc,
@@ -4144,7 +4229,12 @@ async function translateWholeDocument() {
     onPageStart({ page, total: pageTotal }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       translatingPage = page;
-      if (!$("status").classList.contains("warn")) setStatus(progressDocumentStatus(page, pageTotal));
+      if (!$("status").classList.contains("warn") && !$("status").classList.contains("error")) {
+        setStatus(progressDocumentStatus(page, pageTotal));
+      }
+      const progress = document.querySelector(".rf-translate-progress");
+      if (progress) progress.textContent = documentTranslatePlaceholder(page, pageTotal);
+      else renderArticle();
     },
     onPageResult({ page, results, res }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
@@ -4167,15 +4257,17 @@ async function translateWholeDocument() {
     }
   });
   if (!isCurrentWork(work, gen, translatingDoc)) return;
+  const { aborted, pages, error, missingField } = translatedDoc;
   renderArticle();
   const any = pages.some((entry) => pageHasTranslation(entry.results) ||
     pageHasTranslation(pageCache.get(translatingDoc, entry.page)) ||
     (titleStructure?.page === entry.page && structureLanded(entry.page)));
-  if (aborted) setStatus(PDF_COPY.stopped);
-  else if (!any) setStatus(PDF_COPY.error, true);
+  if (error) setStatus(pdfTranslateFailureCopy({ error, field: missingField, missingField }), true);
+  else if (aborted) setStatus(PDF_COPY.stopped);
+  else if (!any) setStatus(pdfTranslateFailureCopy({ error: "没有返回译文" }), true);
   else setStatus(PDF_COPY.doneDocument);
   const saveErrors = await Promise.all(saveTasks);
-  if (!aborted && saveErrors.some(Boolean)) setStatus("译文已生成，但部分页面写入本地库失败。", true);
+  if (!error && !aborted && saveErrors.some(Boolean)) setStatus("译文已生成，但部分页面写入本地库失败。", true);
   translatingPage = 0;
   updateTranslateControls();
 }
@@ -4669,6 +4761,7 @@ async function adoptDoc(doc, title) {
   setStatus("原页已打开，正在读取文字层…");
   await loadCurrentPageText();
   syncZoomChip();
+  await maybeAutoTranslateDocument();
 }
 
 function shortTitle(value) {

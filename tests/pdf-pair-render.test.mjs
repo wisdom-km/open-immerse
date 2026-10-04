@@ -19,21 +19,30 @@ installOwnedTmpGuard(PAIR_TMP_PREFIXES);
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const fixture = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
 
-async function assertOpenedOnFullDocument(evaluate) {
-  const opened = await evaluate(`(() => ({
-    scope: document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || "",
-    folds: document.querySelectorAll("#readerFlow .rf-untranslated").length,
-    pages: document.querySelectorAll("#pages .pdf-page").length,
-    label: (document.getElementById("translatePage")?.textContent || "").trim(),
-    hidden: document.getElementById("translatePage")?.hidden === true,
-    busy: (document.getElementById("status")?.textContent || "").includes("翻译中")
-  }))()`);
+async function assertOpenedOnFullDocument(evaluate, waitFor) {
+  const raw = await waitFor(`(() => {
+    const status = document.getElementById("status")?.textContent || "";
+    if (!status.includes("无法翻译") || !status.includes("扩展")) return "";
+    return JSON.stringify({
+      scope: document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || "",
+      folds: document.querySelectorAll("#readerFlow .rf-untranslated").length,
+      pages: document.querySelectorAll("#pages .pdf-page").length,
+      label: (document.getElementById("translatePage")?.textContent || "").trim(),
+      hidden: document.getElementById("translatePage")?.hidden === true,
+      restore: (document.getElementById("restoreOriginal")?.textContent || "").trim(),
+      retranslate: (document.getElementById("retranslatePage")?.textContent || "").trim(),
+      status
+    });
+  })()`, "打开后说明运行环境不可用");
+  const opened = JSON.parse(raw);
   assert.equal(opened.scope, "all", "打开即默认全文");
   assert.equal(opened.pages, 15, "Attention v7 is 15 pages");
-  assert.equal(opened.folds, 14, "其余 14 页在全文范围里标成未翻译");
-  assert.equal(opened.label, "翻译", "打开不自动开译");
-  assert.equal(opened.hidden, false, "翻译仍是主按钮");
-  assert.equal(opened.busy, false, "打开不进入翻译进度");
+  assert.equal(opened.folds, 14, "运行环境不可用时翻译没有开始，其余页仍是未翻译");
+  assert.equal(opened.label, "翻译", "失败后主按钮回到翻译");
+  assert.equal(opened.hidden, false, "失败后不留在停止");
+  assert.equal(opened.restore, "原文");
+  assert.equal(opened.retranslate, "重译本页");
+  assert.match(opened.status, /chrome:\/\/extensions/);
   return opened;
 }
 
@@ -494,7 +503,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     })()`, "Attention PDF open");
     await evaluate(`(${installProbe.toString()})()`);
     await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
-    await assertOpenedOnFullDocument(evaluate);
+    await assertOpenedOnFullDocument(evaluate, waitFor);
 
     const fresh = await evaluate(`(() => ({
       follow: document.querySelector(".workspace")?.dataset.follow || "",
@@ -1531,11 +1540,13 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
         const height = (rect.h / pt.height) * page.height;
         const bottom = top + height;
         const x = page.left + ((rect.x + rect.w / 2) / pt.width) * page.width;
-        if (top < pane.top + 2 || bottom > pane.bottom - 2) continue;
-        if (x < pane.left + 4 || x > pane.right - 4) continue;
+        const visibleBottom = pane.top + pages.clientHeight;
+        const visibleRight = pane.left + pages.clientWidth;
+        if (top < pane.top + 2 || bottom > visibleBottom - 2) continue;
+        if (x < pane.left + 4 || x > visibleRight - 4) continue;
         const ratio = (top - pane.top) / pane.height;
         if (ratio < 0.6) continue;
-        const y = Math.min(pane.bottom - 4, top + Math.min(8, height / 3));
+        const y = Math.min(visibleBottom - 4, top + Math.min(8, height / 3));
         if (!best || ratio > best.ratio) best = { x, y, ratio, source: pages.scrollTop, id: node.dataset.pairId };
       }
       return best;
@@ -2371,7 +2382,7 @@ async function openAttentionPair(t) {
     return /\\/\\s*15/.test(pager) && next && !next.disabled ? pager : "";
   })()`, "Attention PDF open");
   await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
-  await assertOpenedOnFullDocument(evaluate);
+  await assertOpenedOnFullDocument(evaluate, waitFor);
   return { evaluate, waitFor, clickSelector, frames, readNav, waitNav, setFollow, showAllThrough, parkSource };
 }
 

@@ -1250,6 +1250,14 @@ button:disabled { opacity: 0.45; cursor: default; }
   flex: 1 1 auto;
   border-top: var(--oi-reader-break-rule);
 }
+.rf-translate-progress {
+  margin: var(--oi-reader-fold-margin);
+  color: var(--oi-reader-muted);
+  font-family: var(--oi-reader-ui-font, var(--oi-font));
+  font-size: var(--oi-reader-fold-size);
+  line-height: var(--oi-reader-fold-line);
+  letter-spacing: var(--oi-reader-break-tracking);
+}
 .rf-untranslated {
   display: flex;
   align-items: center;

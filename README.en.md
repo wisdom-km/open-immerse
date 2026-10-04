@@ -159,7 +159,7 @@ No layout-preserving Office or scanned files here. Convert to plain text first. 
 Target: text-layer body text plus content-accurate original-page display (crops by default). The right pane stays a **Markdown reading-flow** in reading order. Formula images do not come from LaTeX rendering. The spec is `pdf/PDF-MD-READOUT.md`. The reader runtime switches by the phases in `pdf/high-precision/EXECUTION.md`.
 
 - Left pane: pdf.js continuous scroll; zoom applies only to the original page
-- Top bar: Open PDF → `当前页 | 全文` (current page / full document; opening defaults to 全文, switching does **not** start a job) → Translate / Stop → Original → export MD / PDF
+- Top bar: Open PDF → `当前页 | 全文` (current page / full document; opening defaults to 全文 and starts that translation. Settings → 功能 → PDF has **打开 PDF 时自动翻译全文**, on by default. Switching scope does **not** start a job) → Translate / Stop → Original → export MD / PDF
 - Full document walks pages with `OI_TRANSLATE_BATCH`. Progress is `翻译中 · k/n`. Jobs can be stopped. After stop or completion the primary button returns to **翻译**; Chinese already produced stays
 - **Original clears the current page only**, not other translated pages
 - Right pane is a **Markdown reading-flow**: extract title + body in reading order, translate, scroll as a document. Translations appear only in the right pane — they are **not** pasted into the left pane

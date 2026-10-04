@@ -179,6 +179,15 @@ test("page markers are a capsule, in-flow breaks, and untranslated rows", () => 
   );
   assert.equal(pageBreakLabel(4), "原文第 4 页");
   assert.equal(untranslatedLabel(6), "原文第 6 页 · 未翻译");
+  assert.deepEqual(
+    planReaderFlow({ pageCount: 5, contentPages: [1], collapseUntranslated: true }),
+    [{ kind: "content", page: 1 }, { kind: "progress" }]
+  );
+  assert.equal(
+    planReaderFlow({ pageCount: 3, contentPages: [1], collapseUntranslated: true })
+      .some((item) => item.kind === "untranslated"),
+    false
+  );
   assert.equal(capsuleLabel(3), "原文第 3 页");
   assert.equal(capsuleLabel(3, { short: true }), "第 3 页");
   assert.equal(capsuleLabel(3, { short: true }) === capsuleLabel(3), false);
