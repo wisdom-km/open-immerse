@@ -325,8 +325,14 @@ function init() {
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("restoreOriginal").addEventListener("click", restoreOriginal);
-  $("exportMd").addEventListener("click", () => exportReadout("md"));
-  $("exportPdf").addEventListener("click", () => exportReadout("pdf"));
+  $("exportMd").addEventListener("click", () => {
+    closeMoreMenu(true);
+    exportReadout("md");
+  });
+  $("exportPdf").addEventListener("click", () => {
+    closeMoreMenu(true);
+    exportReadout("pdf");
+  });
   document.addEventListener("keydown", onKey);
   listenProgress();
 
@@ -409,7 +415,7 @@ function onKey(event) {
     || event.key === "PageUp" || event.key === "PageDown"
     || event.key === "Home" || event.key === "End" || event.key === " ";
   if (sourceScrollKey && focusInSource(event.target)) noteUserSourceInput();
-  if (readerPrefs.singleKey !== false && !focusInOpenMenu() && !focusInAaPanel()) {
+  if (readerPrefs.singleKey !== false && !event.shiftKey && !focusInOpenMenu() && !focusInAaPanel()) {
     if (event.key === "f" || event.key === "F") {
       event.preventDefault();
       toggleFollow();
@@ -421,6 +427,7 @@ function onKey(event) {
       return;
     }
   }
+  if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && event.target?.closest?.(".split-handle")) return;
   if (event.key === "ArrowLeft") {
     noteUserSourceInput();
     goPage(-1);
@@ -899,6 +906,10 @@ function syncSplitAria(workspace) {
 }
 
 function onSplitKey(event, workspace) {
+  const step = splitKeyStep({ key: event.key, shift: event.shiftKey, side: appliedSide === "end" ? "end" : "start" });
+  if (!step) return;
+  event.preventDefault();
+  event.stopPropagation();
   const width = workspace.getBoundingClientRect().width;
   if (width < 900) return;
   const splitW = splitColumnWidth(workspace);
@@ -906,17 +917,13 @@ function onSplitKey(event, workspace) {
   const current = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio")) || defaultSplitRatio(width);
   const layout = splitLayout({ width, ratio: current, splitW });
   let next = null;
-  const step = splitKeyStep({ key: event.key, shift: event.shiftKey, side: appliedSide === "end" ? "end" : "start" });
-  if (!step) return;
   if (step.to === "min") next = 0;
   else if (step.to === "max") next = 1;
   else if (step.to === "reset") {
-    event.preventDefault();
     resetSplit(workspace);
     return;
   } else if (Number.isFinite(step.delta)) next = (layout.source + step.delta) / available;
   else return;
-  event.preventDefault();
   paintSplitRatio(workspace, next);
   persistSplitRatio(workspace);
   syncZoomChip();
@@ -3093,6 +3100,7 @@ function renderArticle() {
     if (pane) pane.scrollTop = keep;
     if (pane) pane.scrollLeft = keepLeft;
     restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
+    settlePairChrome();
     return;
   }
   const pages = pagesInTranslateScope(
@@ -3112,6 +3120,7 @@ function renderArticle() {
     syncReadoutEmpty(false);
     updateTranslateControls();
     if (pane) pane.scrollTop = keep;
+    settlePairChrome();
     return;
   }
   if (blockPages.length) {
@@ -3147,11 +3156,13 @@ function renderArticle() {
   if (!hasContent) {
     updateTranslateControls();
     if (pane) pane.scrollTop = keep;
+    settlePairChrome();
     return;
   }
   if (pane) pane.scrollTop = keep;
   if (pane) pane.scrollLeft = keepLeft;
   restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
+  settlePairChrome();
   updateTranslateControls();
 }
 
@@ -3423,9 +3434,12 @@ function finalizeReaderFlow() {
   flow.querySelectorAll(":scope > .rf-page").forEach((slot) => stampFlowPairs(slot));
   layoutCapsule();
   flow.querySelectorAll(":scope > .rf-page").forEach((slot) => refreshMatchedFormulas(slot));
+  return wanted.size > 0;
+}
+
+function settlePairChrome() {
   if (jumpLock.locked) paintPairChrome();
   else refreshPairCurrent();
-  return wanted.size > 0;
 }
 
 function updatePageCapsule() {
@@ -4755,9 +4769,9 @@ async function goPage(dir) {
   updatePager();
   updateSourcePageLabel(next);
   if (currentScope() !== "all") {
-    renderArticle();
     const readout = translateScrollRoot();
     if (readout) readout.scrollTop = 0;
+    renderArticle();
     loadCurrentPageText();
   } else if (!getPageLayout(next)) {
     loadCurrentPageText();

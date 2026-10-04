@@ -417,7 +417,7 @@ test("pairing module and its names avoid physical side words", () => {
     "drawPairBoxes", "applyFollow", "toggleFollow", "noteUserSourceInput", "syncFollowControls",
     "onSourceClick", "stampFlowPairs", "applySourceSide", "reorderPanes", "toggleSourceSide",
     "bindMoreMenu", "onMenuKey", "onSplitKey", "applySplit", "noteSourcePage",
-    "syncToolbarFromCapsule",
+    "syncToolbarFromCapsule", "settlePairChrome",
     "onSourceContentTouchStart", "onSourceContentTouchMove", "onSourceContentTouchEnd",
     "revealClickedSource"
   ];

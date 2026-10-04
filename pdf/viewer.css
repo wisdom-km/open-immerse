@@ -1029,7 +1029,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   color: var(--oi-reader-muted);
   opacity: 1;
 }
-.toolbar button {
+.toolbar button:not(.more-item) {
   min-height: var(--oi-reader-topbar-btn-h);
   height: var(--oi-reader-topbar-btn-h);
   padding: 0 var(--oi-reader-topbar-btn-pad-x);

@@ -1056,8 +1056,8 @@ test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", asy
   assert.equal(stopFn.includes("restoreOriginal"), false);
   assert.equal(stopFn.includes("clearPage"), false);
   assert.match(src, /\$\("stopTranslate"\)\.addEventListener\("click", stopTranslateWork\)/);
-  assert.match(src, /\$\("exportMd"\)\.addEventListener\("click", \(\) => exportReadout\("md"\)\)/);
-  assert.match(src, /\$\("exportPdf"\)\.addEventListener\("click", \(\) => exportReadout\("pdf"\)\)/);
+  assert.match(src, /\$\("exportMd"\)\.addEventListener\("click", \(\) => \{\s*closeMoreMenu\(true\);\s*exportReadout\("md"\);\s*\}\)/);
+  assert.match(src, /\$\("exportPdf"\)\.addEventListener\("click", \(\) => \{\s*closeMoreMenu\(true\);\s*exportReadout\("pdf"\);\s*\}\)/);
   assert.match(src, /function exportReadout/);
   assert.match(src, /downloadBlob/);
   assert.match(src, /articleBlocksToMarkdown/);
