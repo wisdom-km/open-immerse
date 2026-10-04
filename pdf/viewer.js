@@ -2791,6 +2791,7 @@ function noteSourcePage(load) {
   if (currentScope() === "all") {
     scheduleVisibleRenders();
     syncFollowControls();
+    updatePager();
     return;
   }
   if (current && current !== pageNum) {
@@ -4749,6 +4750,7 @@ function onPdfScroll() {
   if (!pdfDoc) return;
   if (syncOwner.ignores("pdf")) {
     updateSourcePageLabel(measureVisible());
+    if (currentScope() === "all") updatePager();
     return;
   }
   takeDriver("pdf");
