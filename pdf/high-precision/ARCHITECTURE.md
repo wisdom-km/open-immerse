@@ -1,6 +1,6 @@
 # 架构合同（blocks-1）
 
-公式右栏的目标做法是运行时 1→2→3（REQUIREMENTS §2.6）。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的原页高清重渲染（`surface="redraw"`）也算第一层，本质上是区域渲染。失败时静默退成 pageRaster 的 png，不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。层与层之间只看框的把握。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。UI 以 Loom 规格为准。
+公式右栏的目标做法是运行时 0→1→2→3：第零层是 arXiv 作者源码（REQUIREMENTS §2.7，默认关，每个公式核对通过才用），没采用时按 1→2→3（REQUIREMENTS §2.6）。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的原页高清重渲染（`surface="redraw"`）也算第一层，本质上是区域渲染。失败时静默退成 pageRaster 的 png，不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。层与层之间只看框的把握。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。UI 以 Loom 规格为准。
 
 实现高精度 PDF 时通读本文。阶段步骤在 `EXECUTION.md`。产品基准是同目录的 `REQUIREMENTS.md`。本文与需求正本冲突时，改本文。
 
@@ -8,13 +8,13 @@
 
 内容精准指两件事。译文跟抽出的原文一致，不增、不漏、不改主张，数字和变量名原样保留。公式、图、表跟用户打开的 PDF 是同一套内容。OCR 把 `i` 认成 `n`，或把 `n` 认成 `i`，都不得上屏，也不得送进翻译模型。
 
-展示手段不锁死。目标做法是运行时 1→2→3，换层只看框的把握。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的原页高清重渲染也算第一层，本质上是区域渲染。失败时静默退成 pageRaster 的 png，不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，这一层的主展示就是 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。内嵌图像原样取出也可以。新手段先过同一条验收：右栏这一块与原文栏同一区域的内容一致。把识别结果渲染成 LaTeX（第二层例外见 REQUIREMENTS §2.6）、重画图内文字，不采用。正文能用文字层时就用文字层原句。
+展示手段不锁死。目标做法是运行时 0→1→2→3。第零层（REQUIREMENTS §2.7）用 arXiv 作者源码，默认关，每个公式核对通过才用；没采用时按 1→2→3，换层只看框的把握。第一层的目标是按原字体、原位置重绘字符；做出来之前，`renderSharpVisualCrop` 的原页高清重渲染也算第一层，本质上是区域渲染。失败时静默退成 pageRaster 的 png，不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，这一层的主展示就是 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。内嵌图像原样取出也可以。新手段先过同一条验收：右栏这一块与原文栏同一区域的内容一致。把识别结果渲染成 LaTeX（第二层例外见 REQUIREMENTS §2.6；第零层用作者源码，不是识别结果，见 §2.7）、重画图内文字，不采用。正文能用文字层时就用文字层原句。
 
 主场景是有文字层的数字论文 PDF。划区（哪一块是公式、图、表）在测试期走本机智谱 GLM-OCR，上线走 OCR API。两套只换适配器的地址和密钥，块协议相同。翻译从第一天就用插件已配置的大模型 API，上线同样只走这个 API。文字层字体判断是划区服务不可用时的兜底：拿不准就整段裁图，不把字母交给模型。这是过渡兜底，不是目标默认展示。兜底不是上线时的划区器。
 
 ## 1. 页面光栅 pageRaster
 
-这一张图交给划区模型，也是 png 回退那一支的裁图源（pageRaster 裁图，`surface="png"`），以及第三层占位旁的小缩略图来源。第一层已上线的高清重渲染不是从这张光栅裁出来的，也不是 `lib/pdf-formula-redraw.js`：真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`。行内那一小段在高清重渲染成功时同样是 redraw，失败时用这张光栅的 png。第一层的画面嵌在译文里。只有第三层占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。目标做法按运行时 1→2→3，换层只看框的把握；第三层占位默认关闭，见 REQUIREMENTS §2.6。换手段时仍以这张图（或原文栏同一页）为验收参照。
+这一张图交给划区模型，也是 png 回退那一支的裁图源（pageRaster 裁图，`surface="png"`），以及第三层占位旁的小缩略图来源。第一层已上线的高清重渲染不是从这张光栅裁出来的，也不是 `lib/pdf-formula-redraw.js`：真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`。行内那一小段在高清重渲染成功时同样是 redraw，失败时用这张光栅的 png。第一层的画面嵌在译文里。只有第三层占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。目标做法按运行时 0→1→2→3（第零层见 REQUIREMENTS §2.7），1→2→3 之间换层只看框的把握；第三层占位默认关闭，见 REQUIREMENTS §2.6。换手段时仍以这张图（或原文栏同一页）为验收参照。
 
 - 用 pdf.js 把该页画到**离屏 canvas**，比例 `CROP_SCALE = 2`，与原文栏缩放无关。
 - 原点在画布左上，y 向下。`getViewport({ scale: CROP_SCALE })` 已经包含页面旋转。
@@ -40,6 +40,7 @@ pdf/viewer.js（扩展页）
   引擎产出 PageBlocks
   右栏按数组顺序画：译文段落，或 img
   可译文本 → OI_TRANSLATE_BATCH（只走 service worker）
+  第零层（默认关，用户点了才发）→ OI_ARXIV_SOURCE（暂定名）：service worker 下载 arXiv 源码包、解包、存 IndexedDB，只回传源码文本
   划区 HTTP 从 viewer.js 直接 fetch，不把整页 base64 塞进 runtime.sendMessage
 
 lib/pdf-blocks.js          协议、校验、百分比矩形、占位符
@@ -49,6 +50,8 @@ lib/pdf-layout-client.js   本机 / 云端请求（阶段 4 新建）
 
 D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成第 8 节的信封
 ```
+
+第零层（REQUIREMENTS §2.7）的联网、解包和缓存放在 `background/`，守住 README「网络与缓存只在 `background/`」；解析、对齐、核对是 `lib/` 里的纯函数。设计见 `docs/arxiv-source-mode.md`。
 
 `manifest.json` 的 `host_permissions` 已是 `<all_urls>`。不要为 `127.0.0.1` 再加权限。未填写的基址不要发请求。
 
@@ -137,11 +140,13 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 
 每个 `pair` 至少包含源块 `sourceId`、送译文本 `text`、文字层原句 `sourceText`、`translation` 和状态。恢复时同时核对文件哈希、`sourceId` 与 `sourceText`；原句变化或公式占位符、引用编号不一致时，不展示不可信译文。批量翻译完成后，本地库写入按顺序执行，避免后到的早期批次覆盖同一页的完整记录。当前 Attention 的一次性迁移和剩余例外见 `STATUS.md`。
 
-视觉块是 `formula`、`figure`、`table`。进入右栏之前，适配器从这三类对象上删除 OCR 或划区 API 带来的 `latex`、`content`、`html`、`md`、`text`。校验函数发现这些键，删键并继续，不把它们渲染出来。公式块再按运行时 1→2→3 选择节点，换层只看框的把握。现在已上线的高清重渲染（`surface="redraw"`）和 pageRaster 的 png 裁图都算第一层。三层的节点形态：
+视觉块是 `formula`、`figure`、`table`。进入右栏之前，适配器从这三类对象上删除 OCR 或划区 API 带来的 `latex`、`content`、`html`、`md`、`text`。校验函数发现这些键，删键并继续，不把它们渲染出来。公式块再按运行时 0→1→2→3 选择节点：先看第零层（REQUIREMENTS §2.7），没采用时按 1→2→3，换层只看框的把握。现在已上线的高清重渲染（`surface="redraw"`）和 pageRaster 的 png 裁图都算第一层。各层的节点形态：
+
+- 第零层（REQUIREMENTS §2.7，默认关）：主展示是 KaTeX，渲染作者源码里的 LaTeX。单个公式不加小记号，状态栏写一句总的。只有这个公式通过位置、字符、编号核对并且 KaTeX 能渲染时才出现，否则交给下面三层。`latex`、`latexSource: "arxiv-src"`、`verified: true` 要同时在，缺一则整组丢弃，规则见 REQUIREMENTS §6。点公式本体跳回原文，用对齐到的 PDF 块的 `page + bbox`。
 
 - 第一层：目标是按原字体、原位置重绘字符。做出来之前，`surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`：把该区域高清重新渲染。`withRasterCrop` 先从 pageRaster 得到图并标 `surface="png"`，高清重渲染成功才改成 `surface="redraw"`。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支，静默、不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。框的把握过阈值用这一层。UI 以 Loom 规格为准。
 - 第二层：主展示是 KaTeX，加小记号，点小记号看原图对照。只有没过阈值、Aa 面板里的「用看图模型补全公式」（待实现）开着、并且字符核对通过才出现。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。和第三层占位开关互相独立。`latex`、`latexSource: "vlm"`、`verified: true` 要同时在，规则见 REQUIREMENTS §6。
-- 第三层：独立公式用写明位置的占位加一张小缩略图。只有上面两支都没采用、并且第三层占位开关开着才出现；开关关着就按现状显示。文案是目标状态，待实现：有编号「公式 (n) · 原文第 N 页」，没有编号「公式 · 原文第 N 页」，跨页「第 4–5 页」。点公式本体也跳转原文。没有框时只跳到页顶。只有这种占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。UI 以 Loom 规格为准。
+- 第三层：独立公式用写明位置的占位加一张小缩略图。只有第零层、第一层、第二层都没采用、并且第三层占位开关开着才出现；开关关着就按现状显示。文案是目标状态，待实现：有编号「公式 (n) · 原文第 N 页」，没有编号「公式 · 原文第 N 页」，跨页「第 4–5 页」。点公式本体也跳转原文。没有框时只跳到页顶。只有这种占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。UI 以 Loom 规格为准。
 
 `header` 和 `footer` 在准备右栏数据时整块丢掉，规则复用 `isPageChromeItem` / `isPageChromeText`。适配器可以原样返回它们。
 
@@ -259,19 +264,19 @@ export function textLayerTrust(items) {
 | `title` | `h1.oi-pdf-h1`，文本为译文，未译时为原文 |
 | `heading` | `h2.oi-pdf-h2` |
 | `text` / `caption` | `p.oi-pdf-p`。byline 另加 `data-role="authors"` |
-| `formula` | 换层只看框的把握。第一层目标是按原字体、原位置重绘字符；做出来之前 `renderSharpVisualCrop` 的高清重渲染也算第一层，失败时静默退 png（V1-B1，见 REQUIREMENTS §2.6 术语表）。两个开关互相独立，都默认关闭。第二层开关（待实现，上线前界面上不显示）。框的把握过阈值用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX，加小记号。否则，第三层开关开着就是占位；关着就按现状显示。占位文案是目标状态，待实现（「公式 (n) · 原文第 N 页」，没有编号时「公式 · 原文第 N 页」，跨页「第 4–5 页」）。只有第三层占位不把原页裁图嵌在译文里。屏幕上的文字兜底仍是「（公式见左栏）」。UI 以 Loom 规格为准 |
+| `formula` | 先看第零层（REQUIREMENTS §2.7）：开着且核对通过就用作者源码的 KaTeX，不加小记号。没采用时按下面走，换层只看框的把握。第一层目标是按原字体、原位置重绘字符；做出来之前 `renderSharpVisualCrop` 的高清重渲染也算第一层，失败时静默退 png（V1-B1，见 REQUIREMENTS §2.6 术语表）。两个开关互相独立，都默认关闭。第二层开关（待实现，上线前界面上不显示）。框的把握过阈值用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX，加小记号。否则，第三层开关开着就是占位；关着就按现状显示。占位文案是目标状态，待实现（「公式 (n) · 原文第 N 页」，没有编号时「公式 · 原文第 N 页」，跨页「第 4–5 页」）。只有第三层占位不把原页裁图嵌在译文里。屏幕上的文字兜底仍是「（公式见左栏）」。UI 以 Loom 规格为准 |
 | `figure` | 裁得准就放裁图并配译后题注；裁不准写「图 2 · 原文第 3 页（点击查看）」并加小缩略图。UI 以 Loom 规格为准 |
 | `table` | 现在已发布的节点是裁图 `img` |
-| 行内公式 | 只走第一层，不走第二层的大模型。那一小段是高清重渲染或 pageRaster 的 png 裁图，嵌在句中。见 REQUIREMENTS §2.6「行内公式」。现在不单独成块，插在句子的 token 位置 |
+| 行内公式 | 第零层开着且核对通过时用作者源码的 KaTeX（REQUIREMENTS §2.7）。否则只走第一层，不走第二层的大模型。那一小段是高清重渲染或 pageRaster 的 png 裁图，嵌在句中。见 REQUIREMENTS §2.6「行内公式」。现在不单独成块，插在句子的 token 位置 |
 
-属性：`data-page`、`data-block-id`、`data-label`。视觉块没有 `data-latex`。第二层例外见 REQUIREMENTS §2.6。
+属性：`data-page`、`data-block-id`、`data-label`。视觉块没有 `data-latex`。第二层例外见 REQUIREMENTS §2.6，第零层例外见 REQUIREMENTS §2.7。
 
-未翻译时，已发布路径先显示原文句子和裁图；目标做法按运行时 1→2→3。原文栏不必等翻译。点击「翻译」后只替换可译块的文本。`skipTranslate` 的块保持原文。
+未翻译时，已发布路径先显示原文句子和裁图；目标做法按运行时 0→1→2→3（第零层见 REQUIREMENTS §2.7）。原文栏不必等翻译。点击「翻译」后只替换可译块的文本。`skipTranslate` 的块保持原文。
 
 无文字层或乱码时，在该页通读顶部显示：
 
 ```text
-本页文字层不可用，正文来自识别结果，可能有误差。公式、图、表在已发布路径上仍是原页截图；目标做法按运行时 1→2→3。
+本页文字层不可用，正文来自识别结果，可能有误差。公式、图、表在已发布路径上仍是原页截图；目标做法按运行时 0→1→2→3。
 ```
 
 现有 `#noTextLayerHint` 的「无法提取阅读文本」留给遗留引擎。新引擎使用上面这一句，常量放在 `lib/pdf-blocks.js`，供测试引用。
@@ -373,19 +378,21 @@ Faithfulness to the source outranks smoother wording.
 
 阶段 4 起：划区结果按 PDF 字节的 SHA-256（`crypto.subtle`）、页码、`mode`、`PROTOCOL` 放在 `chrome.storage.local`。只存 JSON，不存 PNG。裁图每次从 pageRaster 现切。`storage.sync` 只放设置和密钥。
 
+第零层（REQUIREMENTS §2.7）：源码文本按「arXiv 编号 + 版本」放在扩展自己的 IndexedDB，由 `background/` 读写；对齐结果按「编号 + 版本 + PDF SHA-256」另存。只存文本，不存图片，设置里能清除，不写进本地库服务。
+
 ## 11. 导出
 
 `collectReadoutExportNodes` 遇到视觉块时输出 Markdown 图片或一行「见图」，内容来自 `img.alt` 与 data URL。公式块不再走 `formulaExportMarkdown`。正文里的 `⟦fN⟧` 在 Markdown 中换成对应图片。实现是 `lib/pdf-blocks.js` 的 `visualBlockMarkdown`：有地址就出图片，否则出「见图」。这是已发布的导出。屏幕上的「（公式见左栏）」不是这条导出路径。
 
 目标导出（目标状态，待实现）：独立公式在 MD/PDF 里写「（公式 (n) 见原文第 N 页）」，图写「（图 n 见原文第 N 页）」。只有第三层占位不把原页裁图嵌在译文里。第一层的区域渲染仍可以导出成图。UI 以 Loom 规格为准。见 REQUIREMENTS §2.6。
 
-`lib/pdf-latex.js` 和 `pdf/vendor/katex/` 在阶段 0–5 保留文件。新路径不调用 `recoverFormulaLatex` 和 `renderFormulaNode`。第二层例外见 REQUIREMENTS §2.6。
+`lib/pdf-latex.js` 和 `pdf/vendor/katex/` 在阶段 0–5 保留文件。新路径不调用 `recoverFormulaLatex` 和 `renderFormulaNode`。第二层例外见 REQUIREMENTS §2.6；第零层（REQUIREMENTS §2.7）上线时用 KaTeX 渲染核对过的作者源码。
 
 ## 12. 验收时看什么
 
 自动：
 
-- 视觉块的对象上没有 `latex` / `content` / `html`。第二层例外见 REQUIREMENTS §2.6。
+- 视觉块的对象上没有 `latex` / `content` / `html`。第二层例外见 REQUIREMENTS §2.6，第零层例外见 REQUIREMENTS §2.7（`latexSource: "arxiv-src"`）。
 - `rasterCropRect` 与第 4 节的 CTM 样例一致。
 - 可信文字层的句子等于文字项拼接，而不是厂商 `content`。
 - 乱码页 `textSource === "ocr"`。
