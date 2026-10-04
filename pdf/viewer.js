@@ -3671,14 +3671,37 @@ function stopTranslateWork() {
   updateTranslateControls();
 }
 
+function revealTranslationPage(page) {
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  const node = flow?.querySelector(`.rf-block[data-src-page="${page}"], .rf-untranslated[data-src-page="${page}"]`);
+  if (!pane || !node) return false;
+  const paneBox = pane.getBoundingClientRect();
+  const box = node.getBoundingClientRect();
+  const bar = pane.dataset.capsuleMode === "bar" ? capsuleBarHeight() : 0;
+  const line = paneBox.top + bar + (paneBox.height - bar) * 0.3;
+  pane.scrollTop += box.top - line;
+  updatePageCapsule();
+  return true;
+}
+
 function setTranslateScope(value) {
   const scope = normalizePdfTranslateScope(value);
+  const previous = currentScope();
+  const keepPage = pageNum;
+  if (scope === previous) return;
   document.querySelectorAll(".scope-seg-btn").forEach((btn) => {
     btn.classList.toggle("is-on", btn.dataset.scope === scope);
   });
   renderArticle();
   const pane = translateScrollRoot();
-  if (pane) pane.scrollTop = 0;
+  if (scope === "all") {
+    if (!revealTranslationPage(keepPage) && pane) pane.scrollTop = 0;
+    if (pageNum !== keepPage) pageNum = keepPage;
+    updatePager();
+  } else if (pane) {
+    pane.scrollTop = 0;
+  }
   updateTranslateControls();
 }
 
