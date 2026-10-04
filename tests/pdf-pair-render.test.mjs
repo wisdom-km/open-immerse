@@ -404,6 +404,19 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       const step = () => { left -= 1; if (left <= 0) done(true); else requestAnimationFrame(step); };
       requestAnimationFrame(step);
     })`);
+    const touchAt = async (x, y, move) => {
+      await send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x, y, id: 1 }]
+      });
+      if (move) {
+        await send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x: move.x, y: move.y, id: 1 }]
+        });
+      }
+      await send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
     const clickSelector = async (selector) => {
       const point = await evaluate(`(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
@@ -484,6 +497,34 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     await keyTap("f", "KeyF", 70, { text: "f" });
     await frames(3);
     assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "resume follow after paging");
+
+    await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+    const centerOf = async (selector) => evaluate(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      const box = el.getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    })()`);
+    const translationTouch = await centerOf("#translateScroll");
+    await touchAt(translationTouch.x, translationTouch.y);
+    await sleep(80);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "touch on the translation pane does not pause");
+    const switchTouch = await centerOf("#followSwitch");
+    await touchAt(switchTouch.x, switchTouch.y);
+    await sleep(80);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "off", "touch on the follow switch turns it off");
+    await evaluate(`document.body.focus()`);
+    await keyTap("f", "KeyF", 70, { text: "f" });
+    await frames(2);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "follow restored after the switch tap");
+    const sourceTouch = await centerOf("#pages");
+    await touchAt(sourceTouch.x, sourceTouch.y, { x: sourceTouch.x, y: sourceTouch.y + 48 });
+    await sleep(80);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "paused", "touch pan on the source content pauses");
+    await evaluate(`document.body.focus()`);
+    await keyTap("f", "KeyF", 70, { text: "f" });
+    await frames(2);
+    assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), "on", "follow restored after the source pan");
+    await send("Emulation.setTouchEmulationEnabled", { enabled: false });
 
     const catalog = await evaluate(`(() => {
       const blocks = [...document.querySelectorAll("#readerFlow .rf-block[data-pair-id]")].map((el) => ({

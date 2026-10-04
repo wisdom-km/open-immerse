@@ -789,14 +789,14 @@ function bindPaneScroll() {
   pdf.addEventListener("scrollend", onPdfScrollEnd, { passive: true });
   pdf.addEventListener("pointerdown", onSourceSurfaceDown, { passive: true });
   pdf.addEventListener("wheel", onPaneWheelUnlock, { passive: true });
-  pdf.addEventListener("touchstart", onPaneTouchUnlock, { passive: true });
+  pdf.addEventListener("touchstart", onSourceContentTouchStart, { passive: true });
+  pdf.addEventListener("touchmove", onSourceContentTouchMove, { passive: true });
+  pdf.addEventListener("touchend", onSourceContentTouchEnd, { passive: true });
+  pdf.addEventListener("touchcancel", onSourceContentTouchEnd, { passive: true });
   $("pdfPane").addEventListener("wheel", onPdfWheel, { passive: true });
-  $("pdfPane").addEventListener("touchstart", onPaneTouchUnlock, { passive: true });
-  $("pdfPane").addEventListener("touchmove", onPaneTouchUnlock, { passive: true });
   readout?.addEventListener("scroll", onTranslateScroll, { passive: true });
   readout?.addEventListener("scrollend", onReadoutScrollEnd, { passive: true });
   readout?.addEventListener("wheel", onReadoutWheel, { passive: true });
-  readout?.addEventListener("touchstart", onPaneTouchUnlock, { passive: true });
   readout?.addEventListener("pointerdown", onTranslationSurfaceDown, { passive: true });
 }
 
@@ -2435,8 +2435,30 @@ function onPaneWheelUnlock() {
   releaseJumpLock();
 }
 
-function onPaneTouchUnlock() {
+const SOURCE_TOUCH_PAN_PX = 8;
+let sourceTouch = null;
+
+function onSourceContentTouchStart(event) {
+  const touch = event.changedTouches?.[0];
+  if (!touch || sourceTouch) return;
+  sourceTouch = { id: touch.identifier, x: touch.clientX, y: touch.clientY, panned: false };
+  releaseJumpLock();
+}
+
+function onSourceContentTouchMove(event) {
+  if (!sourceTouch || sourceTouch.panned) return;
+  const touch = [...(event.changedTouches || [])].find((item) => item.identifier === sourceTouch.id);
+  if (!touch) return;
+  const distance = Math.hypot(touch.clientX - sourceTouch.x, touch.clientY - sourceTouch.y);
+  if (distance <= SOURCE_TOUCH_PAN_PX) return;
+  sourceTouch.panned = true;
   noteUserSourceInput();
+}
+
+function onSourceContentTouchEnd(event) {
+  if (!sourceTouch) return;
+  const ended = [...(event.changedTouches || [])].some((item) => item.identifier === sourceTouch.id);
+  if (ended) sourceTouch = null;
 }
 
 function onSourcePointerMove() {
