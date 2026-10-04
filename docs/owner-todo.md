@@ -84,6 +84,9 @@
 - 2026-10-03：非默认档的起始侧：1440/20 是 29，1100/16 和 1100/20 是 28，都高于底线 24，但低于默认档的 49。刚打开、PDF 还没加载时胶囊不显示，用的是默认宽度，非默认档的版心会多 6px（空栏里看不出来）。
 - 2026-10-03：导出时，含行内公式图片的段落会丢正文。需要单独开 issue。
 - 2026-10-03：#92 合入后公式文档的现状曾经过时，已在 #93 更新。以后改公式代码时要同步这几份：`pdf/high-precision/FORMULA-ELEGANCE.md`、`pdf/high-precision/FORMULA-RIGHT-PANE.md`、`pdf/high-precision/REQUIREMENTS.md`、`pdf/high-precision/ARCHITECTURE.md`、`pdf/high-precision/EXECUTION.md`、`pdf/high-precision/STATUS.md`、`pdf/PDF-MD-FORMULA-LAYOUT.md`、`open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md`。
+- 2026-10-04：① 裁图混入相邻行碎片。要修，优先级 P1。并入已定的「行内公式（裁图路径）测试指标」计划，对应 M2 不越界。做法是用 PDF 文字层里相邻行的字符框去掉别行字形，不靠像素猜。先跑 main 的基线，再改代码。开工前提是 Wisdom 确认 6 条练习集标注修正（#165、#71、#78、#18、#85、#116）。验收：带碎片的裁图从约 43% 降到 5% 以下，公式自身的帽子和撇号不误删（M1 不降），撑行不增加。实测见 `pdf/high-precision/INLINE-INK-MEASURE-2026-10-04.md`。
+- 2026-10-04：② 14px 档小下标偏小。要修，优先级 P2，排在 ① 后面。只把该公式的放大倍数加大，让下标至少 7px，上限仍是 2.2em，不批量升级成独立块。验收：14px 下标低于 7px 的从 37 个降到个位数，撑行和升级数不明显增加。
+- 2026-10-04：③ 单变量和短式按 x-height 设下限。先推后。触发条件是真机上确实看着小。
 
 ## 五、复核工具快捷键
 
