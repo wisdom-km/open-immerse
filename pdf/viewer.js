@@ -2776,17 +2776,18 @@ function noteSourcePage(load) {
   if (!pdfDoc || !pageViews.length) return;
   const current = measureVisible();
   updateSourcePageLabel(current);
+  if (currentScope() === "all") {
+    scheduleVisibleRenders();
+    syncFollowControls();
+    return;
+  }
   if (current && current !== pageNum) {
     pageNum = current;
     updatePager();
-    if (currentScope() !== "all") {
-      renderArticle();
-      const readout = translateScrollRoot();
-      if (readout) readout.scrollTop = 0;
-      loadCurrentPageText();
-    } else if (load !== false && !getPageLayout(current)) {
-      loadCurrentPageText();
-    }
+    renderArticle();
+    const readout = translateScrollRoot();
+    if (readout) readout.scrollTop = 0;
+    loadCurrentPageText();
   }
   scheduleVisibleRenders();
   syncFollowControls();
@@ -3452,6 +3453,15 @@ function updatePageCapsule() {
   cap.textContent = capsuleLabel(page, { short });
   cap.setAttribute("aria-label", capsuleLabel(page));
   cap.dataset.srcPage = String(page);
+  syncToolbarFromCapsule();
+}
+
+function syncToolbarFromCapsule() {
+  if (!pdfDoc || currentScope() !== "all") return;
+  const shown = Number($("pageCapsule")?.dataset.srcPage);
+  if (!(shown >= 1) || shown === pageNum) return;
+  pageNum = shown;
+  updatePager();
 }
 
 function onPageCapsuleClick() {
@@ -5027,7 +5037,8 @@ async function loadCurrentPageText() {
 function updatePager() {
   const total = pdfDoc?.numPages || 0;
   $("pager").textContent = pageLabel(pageNum, total);
-  updateSourcePageLabel(pageNum);
+  if (currentScope() === "all") updateSourcePageLabel(measureVisible() || pageNum);
+  else updateSourcePageLabel(pageNum);
   $("zoomLabel").textContent = zoomLabel(zoom);
   $("prev").disabled = !pdfDoc || pageNum <= 1;
   $("next").disabled = !pdfDoc || pageNum >= total;
