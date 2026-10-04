@@ -3,7 +3,7 @@
 - 日期：2026-10-04（北京时间）
 - 状态：2026-10-04 23:33 Wisdom 逐条同意建议（他贴回 12 个问题和选项原文，回复「这12条我都同意你的建议」）；23:52 确认整体分工。本文是 P0，只改文档。规则正本是 `pdf/high-precision/REQUIREMENTS.md` §2.7，本文和它冲突时以 REQUIREMENTS 为准。
 - 哪些是已确认的、哪些是实现初始值：见第 6 节的两列。正文里写的限速、超时、上限、门槛等数字，凡是不在第 6 节第一列的，都是初始值或建议，待确认。
-- 合入规矩：每期一个 PR，由 Anvil 用 Attention 实测、Wisdom 批准后才合入。
+- 合入规矩：每期一个 PR（建议）；每个 PR 由 Anvil 用 Attention 实测、Wisdom 批准后才合入（23:52 已确认）。
 - 基于：main@66b335b。原型和原始数据不在仓库里，在共享盒子上的 `/workspace/oi-qa/arxiv-src-plan/`（`PROPOSAL.md` 加脚本和输出）。
 - 测试夹具：`tests/fixtures/Attention_Is_All_You_Need.pdf`（arXiv v7，sha256 `bdfaa68d…df697`，gitignored）。
 
@@ -174,7 +174,7 @@ Attention v7 的解析数字（P3 测试要锁住）：独立公式 5、行内�
 
 ---
 
-## 3. 分期（每期一个 PR）
+## 3. 分期（每期一个 PR（建议））
 
 测试统一用 Attention v7 PDF 夹具。源码包也做成 gitignored 的本地夹具（决定 10），**永不提交**：
 
