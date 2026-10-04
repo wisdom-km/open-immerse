@@ -484,7 +484,43 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(turnedOn.follow, "on", "f turns follow on");
     assert.equal(turnedOn.stored, "1", "toggle on stores 1");
 
-    for (let page = 2; page <= 5; page += 1) {
+    await clickSelector("#next");
+    await waitFor(`document.querySelector('#readerFlow [data-src-page="2"][data-pair-id]') ? "p2" : ""`, "page 2 pairs", 40000);
+    await clickSelector("#prev");
+    await waitFor(`document.querySelector('#readerFlow [data-src-page="1"][data-pair-id]') ? "p1" : ""`, "page 1 pairs again", 40000);
+    await evaluate(`document.getElementById("translateScroll").scrollTop = 320`);
+    await frames(3);
+    assert.ok(await evaluate(`document.getElementById("translateScroll").scrollTop`) > 40, "当前页 translation scrolled before next");
+    await clickSelector("#next");
+    await waitFor(`document.querySelector('#readerFlow [data-src-page="2"][data-pair-id]') ? "p2" : ""`, "page 2 pairs after scroll", 40000);
+    await frames(4);
+    const pageChange = await evaluate(`(() => {
+      const pane = document.getElementById("translateScroll");
+      const paneBox = pane.getBoundingClientRect();
+      const bar = pane.dataset.capsuleMode === "bar" ? 44 : 0;
+      const line = pane.scrollTop + bar + (paneBox.height - bar) * 0.3;
+      const blocks = [...document.querySelectorAll("#readerFlow .rf-block")].map((el) => {
+        const box = el.getBoundingClientRect();
+        return {
+          id: el.dataset.pairId || "",
+          top: pane.scrollTop + (box.top - paneBox.top),
+          bottom: pane.scrollTop + (box.bottom - paneBox.top),
+          current: el.classList.contains("is-pair-current")
+        };
+      }).filter((item) => item.bottom > item.top);
+      let hit = blocks.find((item) => item.top <= line && item.bottom >= line);
+      if (!hit) hit = blocks.find((item) => item.top > line) || blocks[blocks.length - 1] || null;
+      return {
+        id: hit?.id || "",
+        current: Boolean(hit?.current),
+        pager: document.getElementById("pager")?.textContent || ""
+      };
+    })()`);
+    assert.equal(pageChange.pager, "2 / 15", "next page pager");
+    assert.ok(pageChange.id, "page 2 anchor has a pair");
+    assert.equal(pageChange.current, true, "page change highlights the anchor block");
+
+    for (let page = 3; page <= 5; page += 1) {
       await clickSelector("#next");
       await waitFor(`document.querySelector('#readerFlow [data-src-page="${page}"][data-pair-id]') ? "p${page}" : ""`, `page ${page} pairs`, 40000);
     }
@@ -1370,6 +1406,22 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     await shot("more-menu");
     const menuOrder = await evaluate(`(() => [...document.querySelectorAll("#moreMenu [role='menuitem'], #moreMenu [role='menuitemcheckbox'], #moreMenu [role='separator']")].filter((el) => !el.hidden).map((el) => (el.getAttribute("role") === "separator" ? "separator" : el.textContent.replace(/\\s+/g, " ").trim())))()`);
     assert.deepEqual(menuOrder, ["互换两栏s", "separator", "导出 MD", "导出 PDF"]);
+    const menuItem = await evaluate(`(() => {
+      const el = document.getElementById("swapPanes");
+      const style = getComputedStyle(el);
+      return { h: el.getBoundingClientRect().height, pad: style.paddingLeft, padEnd: style.paddingRight };
+    })()`);
+    near(menuItem.h, 32, 0.5, "menu item height");
+    assert.equal(menuItem.pad, "12px", "menu item padding");
+    assert.equal(menuItem.padEnd, "12px", "menu item end padding");
+    await clickSelector("#exportMd");
+    await frames(2);
+    assert.equal(await evaluate(`document.getElementById("moreMenu")?.hidden === true`), true, "export closes the menu");
+    assert.equal(await menuFocus(), "moreButton", "export returns to 更多");
+    await keyTap("Enter", "Enter", 13);
+    await frames(2);
+    menuOpen = await evaluate(`document.getElementById("moreMenu")?.hidden === false`);
+    if (!menuOpen) await clickSelector("#moreButton");
     await keyTap(" ", "Space", 32);
     await frames(3);
     const swapped = await evaluate(`(() => {
@@ -1499,11 +1551,27 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     split = await splitMeasure();
     near(split.source, expectSource(split.width, 0.5), 8, "SW2 double click");
     const beforeArrow = split.source;
+    await evaluate(`document.activeElement?.blur()`);
+    if (await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`) !== "on") {
+      await keyTap("f", "KeyF", 70, { text: "f" });
+      await frames(2);
+    }
+    const beforeSplitKey = await evaluate(`(() => ({
+      pager: document.getElementById("pager")?.textContent || "",
+      follow: document.querySelector(".workspace")?.dataset.follow || ""
+    }))()`);
+    assert.equal(beforeSplitKey.follow, "on", "follow is on before the splitter arrow");
     await evaluate(`document.querySelector(".split-handle").focus()`);
     await keyTap("ArrowLeft", "ArrowLeft", 37);
-    await frames(1);
+    await frames(2);
     split = await splitMeasure();
     near(split.source, beforeArrow + 16, 2, "SW2 end-side ArrowLeft widens source");
+    const afterSplitKey = await evaluate(`(() => ({
+      pager: document.getElementById("pager")?.textContent || "",
+      follow: document.querySelector(".workspace")?.dataset.follow || ""
+    }))()`);
+    assert.equal(afterSplitKey.pager, beforeSplitKey.pager, "splitter arrow does not turn the page");
+    assert.equal(afterSplitKey.follow, "on", "splitter arrow does not pause follow");
     await keyTap("ArrowRight", "ArrowRight", 39, { modifiers: 8 });
     await frames(1);
     split = await splitMeasure();
@@ -1577,6 +1645,22 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     await evaluate(`document.body.focus()`);
     await keyTap("f", "KeyF", 70, { text: "f", modifiers: 2 });
     assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.follow || ""`), beforeField, "KB1 ignores ctrl");
+    await evaluate(`document.activeElement?.blur()`);
+    assert.equal(await evaluate(`document.getElementById("aaPanel")?.hidden === true`), true, "shift shortcut panel closed");
+    assert.equal(await evaluate(`document.activeElement === document.body`), true, "shift shortcut focus is body");
+    const beforeShift = await evaluate(`(() => ({
+      follow: document.querySelector(".workspace")?.dataset.follow || "",
+      side: document.querySelector(".workspace")?.dataset.sourceSide || ""
+    }))()`);
+    await keyTap("F", "KeyF", 70, { text: "F", modifiers: 8 });
+    await keyTap("S", "KeyS", 83, { text: "S", modifiers: 8 });
+    await frames(2);
+    const afterShift = await evaluate(`(() => ({
+      follow: document.querySelector(".workspace")?.dataset.follow || "",
+      side: document.querySelector(".workspace")?.dataset.sourceSide || ""
+    }))()`);
+    assert.equal(afterShift.follow, beforeShift.follow, "Shift+F does not toggle follow");
+    assert.equal(afterShift.side, beforeShift.side, "Shift+S does not swap panes");
     await clickSelector("#aaButton");
     await clickSelector("#aaSingleKey");
     await keyTap("Escape", "Escape", 27);
