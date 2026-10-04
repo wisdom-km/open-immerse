@@ -120,10 +120,10 @@
 | 水平 | 左右内边距 ≤ **2px**（CSS）；与邻字间距跟正文，勿额外 `margin-inline: 8px+` |
 | 禁止 | 裁进邻词（反例里的 `n`）、上一行 descender、下一行 ascender；禁止「半句上、大白块、半句下」三截版 |
 
-下面按 `viewer.css` 的现行值写。主路径和回退路径分开。
+下面只列主要属性，完整规则以 `viewer.css` 为准。这里省略了 `::-webkit-scrollbar`（约第 651 行）、`.is-promoted`（约第 655 行）和已升级成块的 `.is-matched.is-raised`（约第 711 行）。主路径和回退路径分开。
 
 ```css
-/* 回退路径。容器约 L637–649，裁图约 L672–685。阅读页约 L662 把 overflow-y 改成 visible，并设高度为 --oi-pdf-inline-line-em（缺省 1.85em）。 */
+/* 回退路径。基础容器 .oi-pdf-inline-math 约第 637–649 行，没有 .pane-translate 前缀。 */
 .oi-pdf-inline-math {
   display: inline-block;
   vertical-align: baseline;
@@ -134,12 +134,15 @@
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
+  scrollbar-width: none; /* 第 647 行 */
   background: transparent;
   box-shadow: none;
 }
-.oi-pdf-inline-math .oi-pdf-math-crop {
+/* 阅读页约第 662 行：.pane-translate .readout.md-readout .oi-pdf-inline-math:has(.oi-pdf-math-crop) 把 overflow-y 改成 visible，高度用 --oi-pdf-inline-line-em。viewer.js 第 1706–1707 行把 --oi-pdf-inline-crop-em 和 --oi-pdf-inline-line-em 都设成 1.4em。 */
+.pane-translate .readout.md-readout .oi-pdf-inline-math .oi-pdf-math-crop {
   display: block;
   height: var(--oi-pdf-inline-crop-em, 1.95em); /* 1.95em 只是 CSS 默认值。现行代码走不到，以代码为准 */
+  margin-top: calc(var(--oi-pdf-inline-line-em, 1.85em) - var(--oi-pdf-inline-crop-em, 1.95em)); /* 第 676 行。两个变量都是 1.4em 时，结果是 0 */
   width: auto;
   max-width: none;
   object-fit: contain;
@@ -150,8 +153,8 @@
   background: transparent;
 }
 
-/* 主路径，留在行内。容器约 L692–701，裁图约 L702–710。左右 margin 仍是上面的 0.2em。底色、圆角、描边沿用回退裁图：透明底、border-radius: 0、无描边。 */
-.oi-pdf-inline-math.is-matched {
+/* 主路径，留在行内。约第 692–710 行。--oi-reader-inline-line-max 是 2.2em（pdf/reader-tokens.css 第 379 行）。左右 margin 仍是 0.2em。底色、圆角、描边沿用回退裁图：透明底、border-radius: 0、无描边。 */
+.pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched:has(.oi-pdf-math-crop) {
   display: inline-block;
   height: auto;
   max-height: none;
@@ -161,7 +164,7 @@
   margin-top: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
   margin-bottom: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
 }
-.oi-pdf-inline-math.is-matched .oi-pdf-math-crop {
+.pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched .oi-pdf-math-crop {
   display: inline-block;
   height: var(--oi-formula-h);
   width: auto;
