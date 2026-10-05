@@ -174,7 +174,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.zoom-gutter\s*\{[^}]*right:\s*max\(12px, calc\(var\(--oi-scrollbar-gutter\) \+ 4px\)\)/);
   const zoomGutterCss = css.slice(css.indexOf(".zoom-gutter {"), css.indexOf(".zoom-gutter-btn {"));
   assert.match(zoomGutterCss, /position:\s*absolute/);
-  assert.match(zoomGutterCss, /--oi-scrollbar-gutter:\s*14px/);
+  assert.match(zoomGutterCss, /--oi-scrollbar-gutter:\s*10px/);
   assert.match(zoomGutterCss, /right:\s*max\(12px, calc\(var\(--oi-scrollbar-gutter\) \+ 4px\)\)/);
   assert.match(zoomGutterCss, /bottom:\s*12px/);
   assert.match(zoomGutterCss, /left:\s*auto/);
@@ -204,11 +204,12 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.equal(css.includes(".zoom-stack"), false);
   assert.match(css, /\.workspace\.is-splitting\s*\{[^}]*cursor:\s*col-resize[^}]*user-select:\s*none/s);
   assert.match(css, /\.workspace\.is-splitting \.pane-pdf,\s*\.workspace\.is-splitting \.pane-translate\s*\{[^}]*pointer-events:\s*none/s);
-  assert.match(css, /\.split-handle\s*\{[^}]*top:\s*0[^}]*bottom:\s*0[^}]*width:\s*12px[^}]*z-index:\s*1[^}]*cursor:\s*col-resize[^}]*background:\s*transparent/s);
+  assert.match(css, /\.split-handle\s*\{[^}]*top:\s*0[^}]*bottom:\s*0[^}]*width:\s*var\(--oi-reader-split-hit\)[^}]*z-index:\s*1[^}]*cursor:\s*col-resize[^}]*background:\s*transparent/s);
   assert.match(css, /\.split-handle::before\s*\{[^}]*width:\s*var\(--oi-reader-split-w\)[^}]*background:\s*var\(--oi-reader-well\)/s);
-  assert.match(css, /\.split-handle::after\s*\{[^}]*width:\s*2px[^}]*height:\s*24px[^}]*opacity:\s*var\(--oi-reader-split-grip-opacity\)/s);
-  assert.match(css, /\.split-handle:hover::after,\s*\.split-handle:focus-visible::after\s*\{[^}]*var\(--oi-reader-ink-2\)/s);
-  assert.match(css, /\.workspace\.is-splitting \.split-handle::before\s*\{[^}]*var\(--oi-reader-focus\)/s);
+  assert.match(css, /\.split-handle::after\s*\{[^}]*width:\s*var\(--oi-reader-split-grip-w\)[^}]*height:\s*var\(--oi-reader-split-grip-h\)[^}]*opacity:\s*var\(--oi-reader-split-grip-opacity\)/s);
+  assert.match(css, /\.split-handle:hover::after\s*\{[^}]*var\(--oi-reader-split-grip-opacity-hover\)[^}]*var\(--oi-reader-split-grip-delay\)/s);
+  assert.match(css, /\.workspace\.is-splitting \.split-handle::before\s*\{[^}]*border:\s*0[^}]*var\(--oi-reader-split-line-drag\)/s);
+  assert.doesNotMatch(css, /\.split-handle::before\s*\{[^}]*border-inline-end:\s*1px/s);
   assert.match(css, /\.pane-translate\s*\{[^}]*border-left:\s*0/s);
   assert.match(css, /@media \(max-width:\s*899px\)[\s\S]*\.split-handle\s*\{[^}]*display:\s*none/);
   assert.equal(/\.zoom-gutter\s*\{[^}]*cursor:\s*col-resize/s.test(css), false);
@@ -409,7 +410,7 @@ test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.match(src, /function applyMirrorZoom/);
   assert.match(src, /--oi-mirror-zoom/);
   assert.match(src, /translateScrollRoot/);
-  assert.match(html, /id="translateScroll"[^>]*class="pane-translate-scroll"/);
+  assert.match(html, /id="translateScroll"[^>]*class="pane-translate-scroll oi-sb"/);
   assert.match(tokensCss, /--oi-paper:\s*#ffffff/);
   assert.match(tokensCss, /--oi-mirror-ink:\s*#1a1a1a/);
   assert.match(tokensCss, /--oi-mirror-caption:\s*#4a4a4a/);
