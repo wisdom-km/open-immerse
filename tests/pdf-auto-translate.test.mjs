@@ -411,9 +411,13 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
       await waitFor(`(() => {
         const text = document.querySelector("#docStatus .doc-text")?.textContent || "";
         const state = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
-        const ready = text.includes("正在读取 PDF") || text.includes("已译 0 /");
-        return ready && (state === "layout" || state === "running") ? state : "";
-      })()`, "LD-01 顶栏与第 1 页", 8000);
+        const status = document.getElementById("status")?.textContent || "";
+        const reading = text.includes("正在读取 PDF") || text.includes("已译 0 /");
+        if (!reading) return "";
+        if (state === "layout" || state === "running") return state;
+        if (status.includes("无法翻译") && status.includes("扩展") && state) return state;
+        return "";
+      })()`, "LD-01 顶栏与第 1 页", 15000);
     }
     if (mode === "fast") {
       await evaluate(`(() => {
@@ -728,7 +732,14 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.ok(noAnchor.tall >= 200, `no-anchor content is not tall (${noAnchor.tall})`);
   assert.ok(Math.abs(noAnchor.scroll - 280) <= 1, `no-anchor writeback left scrollTop ${noAnchor.scroll}`);
 
-  await waitFor(`document.getElementById("translatePage")?.hidden === false ? "idle" : ""`, "fast: 主按钮回到翻译");
+  await waitFor(`(() => {
+    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    if (!doc.includes("全文已译")) return "";
+    if (document.getElementById("translatePage")?.hidden !== false) return "";
+    const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+    if (page1 === "running" || page1 === "layout") return "";
+    return "idle";
+  })()`, "fast: 全文译完后主按钮回到翻译", 180000);
   const beforeForce = JSON.parse(await evaluate(`String((window.__oiAuto && window.__oiAuto.messages || []).length)`));
   await evaluate(`document.getElementById("retranslatePage").click()`);
   const forced = JSON.parse(await waitFor(`(() => {

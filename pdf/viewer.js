@@ -4059,12 +4059,15 @@ async function readAutoTranslateEnabled() {
   }
 }
 
+function documentTranslateSuperseded() {
+  if (!forceReadoutHold && !pdfTranslateBusy(session)) return false;
+  if (forceReadoutHold) autoAfterForce = true;
+  return true;
+}
+
 async function maybeAutoTranslateDocument() {
   if (!pdfDoc) return;
-  if (pdfTranslateBusy(session)) {
-    if (forceReadoutHold) autoAfterForce = true;
-    return;
-  }
+  if (documentTranslateSuperseded()) return;
   const adopting = docId;
   if (!(await readAutoTranslateEnabled())) {
     if (adopting === docId && docPhase === "opening") {
@@ -4073,15 +4076,19 @@ async function maybeAutoTranslateDocument() {
     }
     return;
   }
-  if (adopting !== docId || !pdfDoc || pdfTranslateBusy(session)) return;
+  if (adopting !== docId || !pdfDoc || documentTranslateSuperseded()) return;
   await startTranslate();
 }
 
 async function startTranslate() {
-  if (pdfTranslateBusy(session)) return;
+  if (pdfTranslateBusy(session) || forceReadoutHold) {
+    if (forceReadoutHold) autoAfterForce = true;
+    return;
+  }
   const adopting = docId;
   const blocker = await translatePreflight();
   if (adopting !== docId) return;
+  if (documentTranslateSuperseded()) return;
   if (blocker) {
     setStatus(blocker, true);
     if (docPhase === "opening" || docPhase === "running") docPhase = "idle";
@@ -4541,10 +4548,11 @@ function demoteUnpaintedDonePages() {
 }
 
 async function translateWholeDocument() {
-  if (!pdfDoc || pdfTranslateBusy(session)) return;
+  if (!pdfDoc || documentTranslateSuperseded()) return;
   translatePaused = false;
   try {
     const saved = await savedTranslationFor(pageNum);
+    if (documentTranslateSuperseded()) return;
     if ((saved?.readout || libraryArticle) && !libraryDoc?.pages?.length) {
       notePageState(1, { state: "done", hasLayout: true });
       clearSlotPainted(1);
@@ -4575,6 +4583,7 @@ async function translateWholeDocument() {
         }
       }
       const hole = await adoptLibraryPages();
+      if (documentTranslateSuperseded()) return;
       renderArticle();
       const bare = demoteUnpaintedDonePages();
       if (bare) renderArticle();
@@ -4587,6 +4596,7 @@ async function translateWholeDocument() {
   } catch {
     noteLibraryUnavailable();
   }
+  if (documentTranslateSuperseded()) return;
   const gen = restoreGen;
   const translatingDoc = docId;
   const total = pdfDoc.numPages;
@@ -4869,13 +4879,13 @@ async function forceRetranslateCurrentPage() {
   const translatingDoc = docId;
   const targetPage = capsulePage();
   const prior = snapshotForceReadout(translatingDoc, targetPage);
+  forceReadoutHold = true;
   const work = beginViewerSession();
   translatingPage = targetPage;
   notePageState(targetPage, { state: "running", hasLayout: Boolean(sourceLayout?.blocks?.length), k: 0 });
   clearSlotPainted(targetPage);
   docPhase = "running";
   renderArticle();
-  forceReadoutHold = true;
   updateTranslateControls();
   setStatus(PDF_COPY.retranslateRunning);
   const left = () => {
