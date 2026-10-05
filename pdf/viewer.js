@@ -41,6 +41,7 @@ import {
   libraryPageRunState,
   libraryCoversLiveBlocks,
   shouldPaintPageBody,
+  shouldStampPagePainted,
   pageRunState,
   runTitleStructureBatch,
   translationLanded,
@@ -3884,8 +3885,11 @@ function finalizeReaderFlow() {
     refreshMatchedFormulas(slot);
     const row = pageFlowState(Number(slot.dataset.page));
     const collapsed = row.state === "queued" && !row.hasLayout;
-    // Queued slots stay unstamped so a later idle reveal or a finished page can paint.
-    if (!collapsed && slot.dataset.state !== "running" && slot.dataset.state !== "layout" && slot.dataset.state !== "queued") {
+    if (shouldStampPagePainted({
+      state: row.state,
+      collapsed,
+      hasLandedBody: Boolean(slot.querySelector(".rf-block"))
+    })) {
       slot.dataset.painted = "1";
     }
   });

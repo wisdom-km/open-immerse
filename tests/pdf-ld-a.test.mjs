@@ -12,6 +12,7 @@ import {
   libraryCoversLiveBlocks,
   libraryPageRunState,
   shouldPaintPageBody,
+  shouldStampPagePainted,
   pageRunState,
   pageNeedsBypass,
   runTitleStructureBatch,
@@ -267,6 +268,19 @@ test("queued and running pages do not paint until a translation has settled", ()
   assert.equal(shouldPaintPageBody({ state: "skipped", hasSettled: false }), true);
   assert.equal(shouldPaintPageBody({ state: "layout", hasSettled: true }), false);
   assert.equal(shouldPaintPageBody({ state: "empty", hasSettled: false }), false);
+});
+
+test("landed pair nodes stay painted while an empty queued page can still fill in", () => {
+  assert.equal(shouldStampPagePainted({ state: "queued", hasLandedBody: true }), true);
+  assert.equal(shouldStampPagePainted({ state: "done", hasLandedBody: true }), true);
+  assert.equal(shouldStampPagePainted({ state: "skipped", hasLandedBody: false }), true);
+  assert.equal(shouldStampPagePainted({ state: "queued", hasLandedBody: false }), false);
+  assert.equal(shouldStampPagePainted({ state: "queued", collapsed: true, hasLandedBody: false }), false);
+  assert.equal(shouldStampPagePainted({ state: "running", hasLandedBody: true }), false);
+  assert.equal(shouldStampPagePainted({ state: "layout", hasLandedBody: true }), false);
+  const stamp = viewer.slice(viewer.indexOf("function finalizeReaderFlow"), viewer.indexOf("function settlePairChrome"));
+  assert.match(stamp, /shouldStampPagePainted\(/);
+  assert.match(stamp, /querySelector\("\.rf-block"\)/);
 });
 
 test("preparePage translates the current hole before later pages are prepared", async () => {
