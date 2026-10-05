@@ -208,8 +208,8 @@ test("Attention arXiv v7 capsules stay inside the content box on every page", { 
   };
 
   await waitFor(`(() => {
-    const pager = document.getElementById("pager")?.textContent || "";
-    const next = document.getElementById("next");
+    const pager = document.getElementById("sourcePageLabel")?.textContent || "";
+    const next = document.getElementById("sourceNext");
     return /\\/\\s*15/.test(pager) && next && !next.disabled ? pager : "";
   })()`, "Attention PDF open");
   await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
@@ -254,7 +254,7 @@ test("Attention arXiv v7 capsules stay inside the content box on every page", { 
     return row && Number(row.page) === 1 ? row : null;
   })()`, "capsule for page 1"));
   for (let page = 2; page <= 15; page += 1) {
-    await evaluate(`document.getElementById("next").click()`);
+    await evaluate(`document.getElementById("sourceNext").click()`);
     pages.push(await waitFor(`(() => {
       const row = ${measureExpr};
       return row && Number(row.page) === ${page} ? row : null;

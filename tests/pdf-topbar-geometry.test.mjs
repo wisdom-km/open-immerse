@@ -308,13 +308,14 @@ test("toolbar controls share the y=24 centerline across themes and widths", { ti
   };
 
   await waitFor(`(() => {
-    const pager = document.getElementById("pager")?.textContent || "";
+    const pager = document.getElementById("sourcePageLabel")?.textContent || "";
     const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
-    return /\\/\\s*15/.test(pager) && /已译|全文已译/.test(doc) ? pager + "|" + doc : "";
+    const bar = document.querySelector(".toolbar");
+    return /\\/\\s*15/.test(pager) && /已译|全文已译/.test(doc) && !bar.querySelector("#pager, #prev, #next") ? pager + "|" + doc : "";
   })()`, "Attention PDF open");
 
   await evaluate(`(() => {
-    const actions = document.querySelector(".toolbar-actions");
+    const actions = document.querySelector(".tb-group[data-grp='settings']");
     const fake = document.createElement("button");
     fake.type = "button";
     fake.className = "btn-ghost";
@@ -461,6 +462,218 @@ test("toolbar controls share the y=24 centerline across themes and widths", { ti
         height: row.height,
         baseline: row.baseline
       })))}`);
+      const ring = await evaluate(`(() => {
+        const status = document.getElementById("docStatus");
+        const svg = status.querySelector(".doc-ring");
+        const barEl = document.querySelector(".toolbar");
+        const host = status.getBoundingClientRect();
+        const barBox = barEl.getBoundingClientRect();
+        const style = getComputedStyle(status);
+        const svgStyle = getComputedStyle(svg);
+        const box = svgStyle.display === "none" ? null : svg.getBoundingClientRect();
+        const mark = getComputedStyle(status, "::before");
+        const markW = parseFloat(mark.width) || 0;
+        const markH = parseFloat(mark.height) || 0;
+        const usingMark = !box;
+        return {
+          clipped: style.overflowX !== "visible" || style.overflowY !== "visible",
+          inside: usingMark
+            ? markW >= 13 && markH >= 13
+            : box.top >= host.top - 0.5 && box.bottom <= host.bottom + 0.5 && box.left >= host.left - 0.5 && box.right <= host.right + 0.5,
+          inBar: usingMark
+            ? true
+            : box.top >= barBox.top - 0.5 && box.bottom <= barBox.bottom + 0.5,
+          w: usingMark ? markW : box.width,
+          h: usingMark ? markH : box.height
+        };
+      })()`);
+      assert.equal(ring.clipped, false, `${label} status clips the ring`);
+      assert.equal(ring.inside, true, `${label} ring leaves the status slot`);
+      assert.equal(ring.inBar, true, `${label} ring leaves the toolbar`);
+      assert.ok(ring.w >= 13 && ring.h >= 13, `${label} ring ${ring.w}x${ring.h}`);
+    }
+  }
+
+  const spacing = await evaluate(`(() => {
+    const bar = document.querySelector(".toolbar");
+    const selector = ${JSON.stringify(CONTROL_SELECTOR)};
+    const controls = [...bar.querySelectorAll(selector)].filter((el) => {
+      if (el.getAttribute("aria-hidden") === "true") return false;
+      if (el.closest("[hidden]")) return false;
+      const ancestor = el.parentElement && el.parentElement.closest(selector);
+      if (ancestor && bar.contains(ancestor)) return false;
+      const style = getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= 1 && rect.height >= 1;
+    }).map((el) => {
+      const rect = el.getBoundingClientRect();
+      return { id: el.id || el.textContent.trim().slice(0, 8), left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+    }).sort((a, b) => a.left - b.left);
+    const rules = [...bar.querySelectorAll(".toolbar-rule")].filter((el) => getComputedStyle(el).display !== "none").map((el) => {
+      const rect = el.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, width: rect.width };
+    });
+    const gaps = [];
+    for (let i = 0; i < controls.length - 1; i += 1) {
+      const a = controls[i];
+      const b = controls[i + 1];
+      const rule = rules.find((item) => item.left >= a.right - 0.5 && item.right <= b.left + 0.5);
+      gaps.push({
+        from: a.id,
+        to: b.id,
+        gap: b.left - a.right,
+        rule: rule ? { before: rule.left - a.right, width: rule.width, after: b.left - rule.right } : null
+      });
+    }
+    const barBox = bar.getBoundingClientRect();
+    return {
+      gaps,
+      overflow: bar.scrollWidth - bar.clientWidth,
+      height: barBox.height,
+      padStart: getComputedStyle(bar).paddingLeft,
+      padEnd: getComputedStyle(bar).paddingRight
+    };
+  })()`);
+  assert.equal(spacing.padStart, "9px");
+  assert.equal(spacing.padEnd, "12px");
+  assert.ok(spacing.overflow <= 1, `toolbar overflow ${spacing.overflow}`);
+  for (const row of spacing.gaps) {
+    if (row.rule) {
+      assert.ok(Math.abs(row.rule.before - 6) <= 0.6, `${row.from}→rule ${row.rule.before}`);
+      assert.ok(Math.abs(row.rule.width - 1) <= 0.6, `${row.from} rule width ${row.rule.width}`);
+      assert.ok(Math.abs(row.rule.after - 6) <= 0.6, `rule→${row.to} ${row.rule.after}`);
+    } else {
+      const near = Math.abs(row.gap - 2) <= 0.6;
+      const zone = row.gap >= 16 - 0.6;
+      assert.ok(near || zone, `${row.from}→${row.to} gap ${row.gap} is not 2 or ≥16`);
+    }
+  }
+
+  const locked = await evaluate(`(() => {
+    const button = document.getElementById("translatePage");
+    const neighbor = document.getElementById("translateMenuButton");
+    const read = () => neighbor.getBoundingClientRect().left;
+    const origin = read();
+    const labels = ["翻译全文", "停止", "继续翻译", "翻译"];
+    const shifts = labels.map((label) => {
+      button.textContent = label;
+      return { label, dx: Math.abs(read() - origin), width: button.getBoundingClientRect().width };
+    });
+    return shifts;
+  })()`);
+  for (const row of locked) {
+    assert.ok(row.dx <= 0.5, `${row.label} moved the chevron by ${row.dx}`);
+    assert.ok(row.width >= 86 - 0.5, `${row.label} width ${row.width} < 86`);
+  }
+
+  await evaluate(`document.activeElement?.blur()`);
+  const viewCycle = await evaluate(`(() => {
+    const workspace = document.querySelector(".workspace");
+    const blocks = document.querySelectorAll("#readerFlow .rf-block").length;
+    const fire = (key) => document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    const seen = [workspace.dataset.view || "zh"];
+    for (let i = 0; i < 3; i += 1) {
+      fire("t");
+      seen.push(workspace.dataset.view || "");
+    }
+    return { seen, blocks, after: document.querySelectorAll("#readerFlow .rf-block").length };
+  })()`);
+  assert.deepEqual(viewCycle.seen, ["zh", "bi", "src", "zh"]);
+  assert.equal(viewCycle.after, viewCycle.blocks);
+  assert.ok(viewCycle.blocks > 0, "view cycle kept the reader flow");
+
+  const paged = await evaluate(`(async () => {
+    const label = () => document.getElementById("sourcePageLabel").textContent;
+    const fire = (key) => document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    const before = label();
+    fire("]");
+    await new Promise((done) => setTimeout(done, 250));
+    const next = label();
+    fire("[");
+    await new Promise((done) => setTimeout(done, 250));
+    return { before, next, back: label(), prevDisabled: document.getElementById("sourcePrev").disabled };
+  })()`);
+  assert.match(paged.before, /^1 \//);
+  assert.match(paged.next, /^2 \//);
+  assert.match(paged.back, /^1 \//);
+  assert.equal(paged.prevDisabled, true);
+
+  for (const width of [1440, 1280, 1100, 900, 600]) {
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+      width,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false
+    }, sessionId);
+    const band = await evaluate(`(() => new Promise((done) => {
+      window.dispatchEvent(new Event("resize"));
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const bar = document.querySelector(".toolbar");
+        const style = getComputedStyle(bar);
+        const shown = (id) => {
+          const el = document.getElementById(id);
+          if (!el || el.closest("[hidden]")) return false;
+          for (let node = el; node; node = node.parentElement) {
+            const css = getComputedStyle(node);
+            if (css.display === "none" || css.visibility === "hidden") return false;
+          }
+          const box = el.getBoundingClientRect();
+          return box.width >= 1 && box.height >= 1;
+        };
+        done({
+          band: bar.dataset.band,
+          height: bar.getBoundingClientRect().height,
+          overflow: bar.scrollWidth - bar.clientWidth,
+          wrap: style.flexWrap,
+          retranslate: shown("retranslatePage"),
+          notes: shown("notesButton"),
+          aa: shown("aaButton"),
+          more: shown("moreButton"),
+          translate: shown("translatePage"),
+          toc: shown("tocButton"),
+          viewParent: document.getElementById("viewSeg")?.parentElement?.id || "",
+          narrow: shown("sourceModeNarrow"),
+          menu: shown("sourceModeMenu"),
+          segment: shown("sourceModeSeg") === false ? false : getComputedStyle(document.getElementById("sourceModeSeg")).display !== "none",
+          swapHidden: document.getElementById("swapPanes").hidden,
+          notesMenu: document.getElementById("menuNotes").hidden === false,
+          noteKey: document.querySelector("#menuNotes .menu-key")?.textContent || ""
+        });
+      }));
+    }))()`);
+    assert.equal(band.height, 48, `${width} toolbar height ${band.height}`);
+    assert.equal(band.wrap, "nowrap", `${width} toolbar wrapped`);
+    assert.ok(band.overflow <= 1, `${width} overflow ${band.overflow}`);
+    assert.equal(band.toc, true, `${width} ≡ collapsed`);
+    assert.equal(band.translate, true, `${width} primary collapsed`);
+    assert.equal(band.more, true, `${width} ··· collapsed`);
+    assert.equal(band.noteKey, "m");
+    if (width >= 1200) {
+      assert.equal(band.band, "wide");
+      assert.equal(band.retranslate, true);
+      assert.equal(band.notes, true);
+      assert.equal(band.aa, true);
+      assert.equal(band.viewParent, "tbZoneCenter");
+      assert.equal(band.segment, true);
+      assert.equal(band.swapHidden, false);
+      assert.equal(band.notesMenu, false);
+    } else if (width >= 900) {
+      assert.equal(band.band, "mid");
+      assert.equal(band.retranslate, false);
+      assert.equal(band.notes, false);
+      assert.equal(band.aa, false);
+      assert.equal(band.viewParent, "tbZoneCenter");
+      assert.equal(band.menu, true);
+      assert.equal(band.swapHidden, false);
+      assert.equal(band.notesMenu, true);
+    } else {
+      assert.equal(band.band, "narrow");
+      assert.equal(band.retranslate, false);
+      assert.equal(band.viewParent, "tbSubbar");
+      assert.equal(band.narrow, true);
+      assert.equal(band.swapHidden, true);
+      assert.equal(band.notesMenu, true);
     }
   }
 });

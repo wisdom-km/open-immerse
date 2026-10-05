@@ -27,7 +27,7 @@ test("重译本页 is a Soft Graphite secondary button beside 翻译", () => {
   const translate = html.indexOf('id="translatePage"');
   const again = html.indexOf('id="retranslatePage"');
   const stop = html.indexOf('id="stopTranslate"');
-  assert.ok(translate > 0 && translate < again && again < stop);
+  assert.ok(translate > 0 && translate < stop && stop < again);
   assert.match(html, /id="retranslatePage"[^>]*class="btn-secondary"[^>]*disabled>重译本页</);
   assert.equal(html.includes('id="retranslatePage" class="btn-primary"'), false);
   const rule = css.slice(css.indexOf("#retranslatePage.btn-secondary {"), css.indexOf(".btn-ghost {"));

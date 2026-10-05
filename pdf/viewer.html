@@ -11,48 +11,109 @@
   <link rel="stylesheet" href="viewer.css" />
 </head>
 <body class="oi-reader-app" data-reader-theme="warm">
-  <header class="toolbar">
-    <div class="title-row">
-      <div class="mark" aria-hidden="true"><span></span><span></span></div>
-      <h1>PDF 阅读</h1>
-    </div>
-    <div class="toolbar-actions">
-      <div id="docStatus" class="doc-status" data-tb="status" data-state="idle">
-        <svg class="doc-ring" viewBox="0 0 14 14" aria-hidden="true">
-          <circle cx="7" cy="7" r="5.5" class="trk"></circle>
-          <circle cx="7" cy="7" r="5.5" class="val" pathLength="100" stroke-dasharray="0 100"></circle>
-        </svg>
-        <span class="doc-text" aria-hidden="true"></span>
-        <span class="sr-only" role="status" aria-live="polite"></span>
-      </div>
-      <button type="button" id="pick" class="btn-secondary" data-tb="text">打开 PDF</button>
-      <input id="file" class="file-input" type="file" accept="application/pdf,.pdf" tabindex="-1" aria-hidden="true" />
-      <button type="button" id="translatePage" class="btn-primary" data-tb="text" disabled>翻译</button>
-      <button type="button" id="retranslatePage" class="btn-secondary" data-tb="text" disabled>重译本页</button>
-      <button type="button" id="stopTranslate" class="btn-primary" data-tb="text" hidden disabled>停止</button>
-      <button type="button" id="restoreOriginal" class="btn-ghost" data-tb="text" disabled>原文</button>
-      <button type="button" id="prev" class="btn-ghost" data-tb="text" disabled>上一页</button>
-      <p id="pager" class="pager" data-tb="status" aria-live="polite">0 / 0</p>
-      <button type="button" id="next" class="btn-ghost" data-tb="text" disabled>下一页</button>
-      <span class="toolbar-rule" aria-hidden="true"></span>
-      <button type="button" id="aaButton" class="btn-ghost aa-button" data-tb="icon" aria-haspopup="dialog" aria-expanded="false" aria-controls="aaPanel">Aa</button>
-      <div class="more-wrap">
-        <button type="button" id="moreButton" class="more-button hit-pad" data-tb="icon" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu" aria-label="更多">
+  <header class="toolbar" data-tb-zones data-band="wide" data-has-doc="0">
+    <div class="tb-zone tb-zone-left" data-zone="left">
+      <div class="tb-group" data-grp="identity">
+        <button type="button" id="tocButton" class="btn-ghost tb-icon" data-tb="icon" aria-label="目录" title="目录 · Shift+T">
           <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="3.25" cy="8" r="1.15" fill="currentColor"></circle>
-            <circle cx="8" cy="8" r="1.15" fill="currentColor"></circle>
-            <circle cx="12.75" cy="8" r="1.15" fill="currentColor"></circle>
+            <path d="M2.5 4h11M2.5 8h11M2.5 12h11" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"></path>
           </svg>
         </button>
-        <div id="moreMenu" class="more-menu" role="menu" aria-label="更多" hidden>
-          <button type="button" id="swapPanes" class="more-item hit-pad" role="menuitemcheckbox" aria-checked="false" aria-keyshortcuts="s">互换两栏<span class="menu-key">s</span></button>
-          <div class="more-sep" role="separator"></div>
-          <button type="button" id="exportMd" class="more-item hit-pad btn-export" role="menuitem" disabled aria-disabled="true">导出 MD</button>
-          <button type="button" id="exportPdf" class="more-item hit-pad btn-export" role="menuitem" disabled aria-disabled="true">导出 PDF</button>
+        <h1 id="docTitle" class="tb-title" data-tb="text">PDF 阅读</h1>
+      </div>
+    </div>
+    <div id="tbZoneCenter" class="tb-zone tb-zone-center" data-zone="center">
+      <span id="viewSegAnchor" hidden></span>
+      <div id="viewSeg" class="view-seg" role="radiogroup" aria-label="视图">
+        <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-view="zh" aria-checked="true">译文</button>
+        <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-view="bi" aria-checked="false">对照</button>
+        <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-view="src" aria-checked="false">原文</button>
+      </div>
+      <div id="sourceModeSeg" class="source-mode-seg" data-collapse="wide-only">
+        <span class="source-mode-kicker">原页</span>
+        <div class="view-seg" role="radiogroup" aria-label="原页" title="即将推出">
+          <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-source-mode="side" aria-checked="true" title="即将推出">并排</button>
+          <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-source-mode="float" aria-checked="false" title="即将推出">小窗</button>
+          <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-source-mode="hide" aria-checked="false" title="即将推出">隐藏</button>
+        </div>
+      </div>
+      <button type="button" id="sourceModeMenu" class="btn-ghost source-mode-fallback" data-tb="text" data-collapse="mid-only" title="即将推出">并排</button>
+      <button type="button" id="sourceModeNarrow" class="btn-ghost source-mode-fallback" data-tb="text" data-collapse="narrow-only" title="即将推出">原页</button>
+    </div>
+    <div class="tb-zone tb-zone-right toolbar-actions" data-zone="right">
+      <div class="tb-group" data-grp="translate">
+        <div id="docStatus" class="doc-status" data-tb="status" data-state="idle">
+          <svg class="doc-ring" viewBox="0 0 14 14" aria-hidden="true">
+            <circle cx="7" cy="7" r="5.5" class="trk"></circle>
+            <circle cx="7" cy="7" r="5.5" class="val" pathLength="100" stroke-dasharray="0 100"></circle>
+          </svg>
+          <span class="doc-text" aria-hidden="true"></span>
+          <span class="sr-only" role="status" aria-live="polite"></span>
+        </div>
+        <button type="button" id="pick" class="btn-secondary" data-tb="text">打开 PDF</button>
+        <input id="file" class="file-input" type="file" accept="application/pdf,.pdf" tabindex="-1" aria-hidden="true" />
+        <div class="tb-primary-slot">
+          <button type="button" id="translatePage" class="btn-primary tb-primary" data-tb="text" disabled>翻译</button>
+          <button type="button" id="stopTranslate" class="btn-primary tb-primary" data-tb="text" hidden disabled>停止</button>
+        </div>
+        <div class="more-wrap">
+          <button type="button" id="translateMenuButton" class="btn-ghost tb-icon" data-tb="icon" aria-haspopup="menu" aria-expanded="false" aria-controls="translateMenu" aria-label="翻译选项">
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4 6.5 8 10.5 12 6.5" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </button>
+          <div id="translateMenu" class="more-menu" role="menu" aria-label="翻译" hidden>
+            <button type="button" id="translateMenuRetranslate" class="more-item hit-pad" role="menuitem" disabled>重译本页</button>
+          </div>
+        </div>
+      </div>
+      <span class="toolbar-rule" data-rule="retranslate" aria-hidden="true"></span>
+      <div class="tb-group" data-grp="retranslate" data-collapse="wide-only">
+        <button type="button" id="retranslatePage" class="btn-secondary" data-tb="text" disabled>重译本页</button>
+      </div>
+      <span class="toolbar-rule" data-rule="panels" aria-hidden="true"></span>
+      <div class="tb-group" data-grp="panels" data-collapse="wide-only">
+        <button type="button" id="notesButton" class="btn-ghost tb-panel" data-tb="text" title="笔记 · m">
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h6.2L12.5 5v8.5h-8.5v-11Z" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"></path><path d="M9.8 2.6V5H12" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"></path></svg>
+          <span class="doc-text">笔记</span>
+        </button>
+        <button type="button" id="askButton" class="btn-ghost tb-panel" data-tb="text" title="问 AI · a">
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10v6.2H8.2L5 13v-2.3H3V4.5Z" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"></path></svg>
+          <span class="doc-text">问 AI</span>
+        </button>
+        <button type="button" id="libraryButton" class="btn-ghost tb-panel" data-tb="text" title="文献库 · l">
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.2h3.2v9.6H3V3.2Zm4.4 0H12v9.6H7.4V3.2Z" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"></path></svg>
+          <span class="doc-text">文献库</span>
+        </button>
+      </div>
+      <span class="toolbar-rule" data-rule="settings" aria-hidden="true"></span>
+      <div class="tb-group" data-grp="settings">
+        <button type="button" id="aaButton" class="btn-ghost aa-button" data-tb="icon" data-collapse="wide-only" aria-haspopup="dialog" aria-expanded="false" aria-controls="aaPanel">Aa</button>
+        <div class="more-wrap">
+          <button type="button" id="moreButton" class="more-button hit-pad" data-tb="icon" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu" aria-label="更多">
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="3.25" cy="8" r="1.15" fill="currentColor"></circle>
+              <circle cx="8" cy="8" r="1.15" fill="currentColor"></circle>
+              <circle cx="12.75" cy="8" r="1.15" fill="currentColor"></circle>
+            </svg>
+          </button>
+          <div id="moreMenu" class="more-menu" role="menu" aria-label="更多" hidden>
+            <button type="button" id="swapPanes" class="more-item hit-pad" role="menuitemcheckbox" aria-checked="false" aria-keyshortcuts="s">互换两栏<span class="menu-key">s</span></button>
+            <button type="button" id="glossaryItem" class="more-item hit-pad" role="menuitem" aria-keyshortcuts="g">术语<span class="menu-key">g</span></button>
+            <button type="button" id="menuNotes" class="more-item hit-pad" role="menuitem" hidden>笔记<span class="menu-key">m</span></button>
+            <button type="button" id="menuAsk" class="more-item hit-pad" role="menuitem" hidden>问 AI<span class="menu-key">a</span></button>
+            <button type="button" id="menuLibrary" class="more-item hit-pad" role="menuitem" hidden>文献库<span class="menu-key">l</span></button>
+            <button type="button" id="menuAa" class="more-item hit-pad" role="menuitem" hidden>Aa阅读设置<span class="menu-key">Aa</span></button>
+            <div class="more-sep" role="separator"></div>
+            <button type="button" id="openPdfItem" class="more-item hit-pad" role="menuitem">打开 PDF…</button>
+            <button type="button" id="exportMd" class="more-item hit-pad btn-export" role="menuitem" disabled aria-disabled="true">导出 MD</button>
+            <button type="button" id="exportPdf" class="more-item hit-pad btn-export" role="menuitem" disabled aria-disabled="true">导出 PDF</button>
+          </div>
         </div>
       </div>
     </div>
   </header>
+  <div id="tbSubbar" class="tb-subbar" hidden></div>
   <div id="aaPanel" class="aa-panel oi-reader" data-reader-theme="warm" hidden role="dialog" aria-label="阅读设置">
     <div class="aa-group">
       <div class="aa-font-row">
@@ -78,13 +139,17 @@
     </div>
   </div>
   <p id="status" role="status">还没有打开 PDF。</p>
-  <div class="workspace">
+  <div class="workspace" data-view="zh">
     <section class="pane-pdf" id="pdfPane" aria-label="原文栏">
       <header class="source-head">
         <span class="source-head-name">原文栏</span>
-        <span id="sourcePageLabel" class="source-head-page">第 0/0 页</span>
-        <span class="source-head-gap"></span>
         <span id="sourceStatus" class="source-head-status"></span>
+        <span class="source-head-gap"></span>
+        <div id="sourcePager" class="source-pager" role="group" aria-label="翻页">
+          <button type="button" id="sourcePrev" class="source-pager-btn hit-pad" aria-label="上一页" title="上一页 · [" disabled>‹</button>
+          <span id="sourcePageLabel" class="source-pager-value" aria-live="polite">0 / 0</span>
+          <button type="button" id="sourceNext" class="source-pager-btn hit-pad" aria-label="下一页" title="下一页 · ]" disabled>›</button>
+        </div>
         <button type="button" id="followSwitch" class="follow-switch hit-pad" role="switch" aria-checked="true" title="译文栏读到哪，原文栏就跟到哪（f）">
           <span class="follow-box" aria-hidden="true"></span>
           <span class="follow-label">跟随</span>
@@ -113,6 +178,7 @@
       </div>
     </aside>
   </div>
+  <div id="tbToast" class="tb-toast" role="status" hidden>即将推出</div>
   <script src="./vendor/katex/katex.min.js"></script>
   <script type="module" src="viewer.js"></script>
 </body>

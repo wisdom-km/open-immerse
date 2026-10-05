@@ -363,6 +363,16 @@
   --oi-reader-topbar-btn-h: 30px;
   --oi-reader-topbar-btn-pad-x: 9px;
   --oi-reader-topbar-btn-radius: 7px;
+  --oi-reader-topbar-gap-group: 2px;
+  --oi-reader-topbar-rule-h: 16px;
+  --oi-reader-topbar-rule-pad: 6px;
+  --oi-reader-topbar-gap-zone: 16px;
+  --oi-reader-topbar-pad-inline-start: 9px;
+  --oi-reader-topbar-pad-inline-end: 12px;
+  --oi-reader-topbar-primary-min: 86px;
+  --oi-reader-topbar-subbar-h: 44px;
+  --oi-reader-source-pager-btn: 24px;
+  --oi-reader-source-pager-min: 52px;
   --oi-reader-icon-size: 16px;
   --oi-reader-icon-stroke: 1.35;
   --oi-reader-page-gap: 20px;

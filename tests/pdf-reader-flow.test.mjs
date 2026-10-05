@@ -141,7 +141,7 @@ test("continuous flow replaces the paper stack and keeps the title mount", () =>
   assert.match(html, /id="readerFlow"[^>]*class="reader-flow"/);
   assert.match(html, /class="oi-reader"[^>]*data-reader-theme="warm"/);
   assert.doesNotMatch(html, /id="paperStack"/);
-  assert.doesNotMatch(html, /id="viewSeg"/);
+  assert.match(html, /id="viewSeg"/);
   assert.doesNotMatch(html, /id="mirrorPages"/);
   assert.doesNotMatch(html, /class="readout-paper"/);
   assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*var\(--rf-measure,\s*min\(var\(--oi-reader-measure\)/s);
@@ -247,7 +247,8 @@ test("Aa panel exposes font steps and background radios, and hides the tier-2 sw
   assert.match(html, /id="aaFontHint"[^>]*hidden/);
   assert.match(html, /装上思源宋体会自动换成宋体。重启浏览器后生效/);
   assert.match(html, /class="aa-font-hint-link"/);
-  assert.doesNotMatch(html, /⇄|术语/);
+  assert.doesNotMatch(html, /⇄/);
+  assert.match(html, /id="glossaryItem"[^>]*>术语/);
 });
 
 test("capsule yields before it covers glyphs", () => {

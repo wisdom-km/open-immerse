@@ -30,7 +30,7 @@ async function assertOpenedOnFullDocument(evaluate, waitFor) {
       pages: document.querySelectorAll("#pages .pdf-page").length,
       label: (document.getElementById("translatePage")?.textContent || "").trim(),
       hidden: document.getElementById("translatePage")?.hidden === true,
-      restore: (document.getElementById("restoreOriginal")?.textContent || "").trim(),
+      restore: (document.querySelector('#viewSeg [data-view="src"]')?.textContent || "").trim(),
       retranslate: (document.getElementById("retranslatePage")?.textContent || "").trim(),
       doc: document.querySelector("#docStatus .doc-text")?.textContent || "",
       status
@@ -498,8 +498,8 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
 
     await send("Page.navigate", { url: viewer });
     await waitFor(`(() => {
-      const pager = document.getElementById("pager")?.textContent || "";
-      const next = document.getElementById("next");
+      const pager = document.getElementById("sourcePageLabel")?.textContent || "";
+      const next = document.getElementById("sourceNext");
       return /\\/\\s*15/.test(pager) && next && !next.disabled ? pager : "";
     })()`, "Attention PDF open");
     await evaluate(`(${installProbe.toString()})()`);
@@ -520,7 +520,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(turnedOff, "off", "FL1 toggle off");
     await send("Page.reload", { ignoreCache: true });
     await waitFor(`(() => {
-      const pager = document.getElementById("pager")?.textContent || "";
+      const pager = document.getElementById("sourcePageLabel")?.textContent || "";
       return /\\/\\s*15/.test(pager) ? pager : "";
     })()`, "reload after follow off");
     await evaluate(`(${installProbe.toString()})()`);
@@ -545,14 +545,14 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(turnedOn.stored, "1", "toggle on stores 1");
 
     await useCurrentPageScope(clickSelector, waitFor);
-    await clickSelector("#next");
+    await clickSelector("#sourceNext");
     await waitFor(`document.querySelector('#readerFlow [data-src-page="2"][data-pair-id]') ? "p2" : ""`, "page 2 pairs", 40000);
-    await clickSelector("#prev");
+    await clickSelector("#sourcePrev");
     await waitFor(`document.querySelector('#readerFlow [data-src-page="1"][data-pair-id]') ? "p1" : ""`, "page 1 pairs again", 40000);
     await evaluate(`document.getElementById("translateScroll").scrollTop = 320`);
     await frames(3);
     assert.ok(await evaluate(`document.getElementById("translateScroll").scrollTop`) > 40, "当前页 translation scrolled before next");
-    await clickSelector("#next");
+    await clickSelector("#sourceNext");
     await waitFor(`document.querySelector('#readerFlow [data-src-page="2"][data-pair-id]') ? "p2" : ""`, "page 2 pairs after scroll", 40000);
     await frames(4);
     const pageChange = await evaluate(`(() => {
@@ -574,24 +574,24 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       return {
         id: hit?.id || "",
         current: Boolean(hit?.current),
-        pager: document.getElementById("pager")?.textContent || ""
+        pager: document.getElementById("sourcePageLabel")?.textContent || ""
       };
     })()`);
     assert.ok(pageChange.id, "page 2 anchor has a pair");
     assert.equal(pageChange.current, true, "page change highlights the anchor block");
     const stayed = await evaluate(`(() => ({
       scroll: document.getElementById("translateScroll").scrollTop,
-      pager: document.getElementById("pager")?.textContent || "",
+      pager: document.getElementById("sourcePageLabel")?.textContent || "",
       capsule: document.getElementById("pageCapsule")?.dataset.srcPage || ""
     }))()`);
     assert.ok(stayed.scroll > 40, "已载入的页再翻页时译文不滚回顶部");
-    assert.equal(stayed.pager, `${stayed.capsule} / 15`, "toolbar stays on the capsule");
+    assert.equal(stayed.pager, `${stayed.capsule} / 15`, "source pager matches the landed page");
 
-    await clickSelector("#prev");
+    await clickSelector("#sourcePrev");
     await waitFor(`document.querySelector('#readerFlow [data-src-page="1"][data-pair-id]') ? "p1" : ""`, "R3b page 1", 40000);
     await evaluate(`document.getElementById("translateScroll").scrollTop = 320`);
     await frames(3);
-    await clickSelector("#next");
+    await clickSelector("#sourceNext");
     await waitFor(`document.querySelector('#readerFlow [data-src-page="2"][data-pair-id]') ? "p2" : ""`, "R3b page 2 again", 40000);
     await frames(4);
     const pageReturn = await evaluate(`(() => {
@@ -616,7 +616,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(pageReturn.current, true, "R3b highlights the anchor block on return");
 
     for (let page = 3; page <= 5; page += 1) {
-      await clickSelector("#next");
+      await clickSelector("#sourceNext");
       await waitFor(`document.querySelector('#readerFlow [data-src-page="${page}"][data-pair-id]') ? "p${page}" : ""`, `page ${page} pairs`, 40000);
     }
     await waitFor(`(() => {
@@ -625,11 +625,11 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     })()`, "全文 pages 1-5", 20000);
     const stayedOnPage = await evaluate(`(() => ({
       capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
-      pager: document.getElementById("pager")?.textContent || "",
+      pager: document.getElementById("sourcePageLabel")?.textContent || "",
       target: document.getElementById("retranslatePage")?.dataset.page || ""
     }))()`);
     assert.equal(stayedOnPage.capsule, "5", "全文 keeps the capsule on page 5");
-    assert.equal(stayedOnPage.pager, "5 / 15", "全文 keeps the toolbar on page 5");
+    assert.equal(stayedOnPage.pager, "5 / 15", "source pager stays on page 5");
     assert.equal(stayedOnPage.target, "5", "全文 keeps retranslate on page 5");
     await evaluate(`document.body.focus()`);
     await keyTap("f", "KeyF", 70, { text: "f" });
@@ -654,12 +654,12 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       return {
         source,
         label: document.getElementById("sourcePageLabel")?.textContent || "",
-        pager: document.getElementById("pager")?.textContent || "",
+        pager: document.getElementById("sourcePageLabel")?.textContent || "",
         capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
         target: document.getElementById("retranslatePage")?.dataset.page || "",
         follow: document.querySelector(".workspace")?.dataset.follow || "",
-        prev: document.getElementById("prev")?.disabled === true,
-        next: document.getElementById("next")?.disabled === true
+        prev: document.getElementById("sourcePrev")?.disabled === true,
+        next: document.getElementById("sourceNext")?.disabled === true
       };
     })()`);
     const parkSourceAt4 = async () => {
@@ -682,14 +682,14 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       const start = await readNav();
       assert.equal(start.follow, follow, `${label} follow starts ${follow}`);
       assert.equal(start.source, 4, `${label} starts on source page 4`);
-      assert.equal(start.label, "第 4/15 页", `${label} source label starts on page 4`);
+      assert.equal(start.label, "4 / 15", `${label} source pager starts on page 4`);
       assert.equal(start.capsule, "3", `${label} capsule is page 3`);
-      assert.equal(start.pager, "3 / 15", `${label} toolbar is the capsule page`);
+      assert.equal(start.pager, "4 / 15", `${label} source pager is the source page`);
       assert.equal(start.target, "3", `${label} retranslate target is the toolbar page`);
       assert.equal(start.prev, false, `${label} prev is enabled on source page 4`);
       assert.equal(start.next, false, `${label} next is enabled on source page 4`);
       for (let step = 1; step <= 4; step += 1) {
-        if (mode === "click") await clickSelector("#next");
+        if (mode === "click") await clickSelector("#sourceNext");
         else {
           await evaluate(`document.activeElement?.blur()`);
           await keyTap("ArrowRight", "ArrowRight", 39);
@@ -697,8 +697,8 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
         await sleep(500);
         const row = await readNav();
         assert.equal(row.source, 4 + step, `${label} source advances to ${4 + step}`);
-        assert.equal(row.label, `第 ${4 + step}/15 页`, `${label} source label advances to ${4 + step}`);
-        assert.equal(row.pager, "3 / 15", `${label} toolbar stays on the capsule`);
+        assert.equal(row.label, `${4 + step} / 15`, `${label} source pager advances to ${4 + step}`);
+        assert.equal(row.pager, `${4 + step} / 15`, `${label} source pager follows the source page`);
         assert.equal(row.capsule, "3", `${label} capsule stays`);
         assert.equal(row.target, "3", `${label} retranslate target stays`);
         assert.equal(row.prev, false, `${label} prev stays enabled`);
@@ -757,7 +757,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       (row) => (Number(row.capsule) > 4 ? -160 : 280)
     );
     assert.equal(atCapsule4.capsule, "4", "F1 capsule is page 4");
-    assert.equal(atCapsule4.pager, "4 / 15", "F1 toolbar follows the capsule");
+    assert.equal(atCapsule4.label, "1 / 15", "F1 source pager stays on page 1");
     assert.equal(atCapsule4.source, 1, "F1 source stays on page 1");
     assert.equal(atCapsule4.prev, true, "F1 prev stays disabled while the source is on page 1");
     const page4Point = await evaluate(`(() => {
@@ -778,8 +778,8 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     const jumped = await readNav();
     assert.equal(jumped.source, 4, "F1a source follows the block to page 4");
     assert.equal(jumped.prev, false, "F1a prev is enabled");
-    assert.equal(jumped.pager, "4 / 15", "F1a toolbar stays on the capsule");
-    await clickSelector("#prev");
+    assert.equal(jumped.label, "4 / 15", "F1a source pager follows the source to page 4");
+    await clickSelector("#sourcePrev");
     await frames(4);
     assert.equal((await readNav()).source, 3, "F1a prev goes to source page 3");
     await evaluate(`document.querySelector('#pages .pdf-page[data-page="1"]').scrollIntoView({ block: "start", behavior: "auto" })`);
@@ -795,12 +795,12 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(followed.follow, "on", "F1b follow turns on");
     assert.equal(followed.source, 4, "F1b follow brings the source to page 4");
     assert.equal(followed.prev, false, "F1b prev is enabled");
-    await clickSelector("#prev");
+    await clickSelector("#sourcePrev");
     await frames(4);
     assert.equal((await readNav()).source, 3, "F1b prev goes to source page 3");
     let lastPage = await readNav();
     for (let i = 0; i < 20 && lastPage.source < 15; i += 1) {
-      await clickSelector("#next");
+      await clickSelector("#sourceNext");
       await frames(2);
       lastPage = await readNav();
     }
@@ -966,7 +966,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       };
     })()`);
     const readPanes = () => evaluate(`(() => ({
-      pager: document.getElementById("pager")?.textContent || "",
+      pager: document.getElementById("sourcePageLabel")?.textContent || "",
       capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
       sourceLabel: document.getElementById("sourcePageLabel")?.textContent || "",
       source: document.getElementById("pages").scrollTop
@@ -979,16 +979,16 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     await frames(4);
     const atPage1 = await readPanes();
     assert.equal(atPage1.capsule, "1", "capsule is page 1");
-    assert.equal(atPage1.pager, "1 / 15", "toolbar leaves the paged page for the capsule");
-    assert.match(atPage1.sourceLabel, /第 1\//, "source pane is page 1");
+    assert.equal(atPage1.pager, "1 / 15", "source pager is page 1");
+    assert.match(atPage1.sourceLabel, /^1 \//, "source pane is page 1");
     near(atPage1.source, parked.source, 1, "parking scroll stays");
     const atFive = await scrollTranslationPage(5, true);
     assert.ok(atFive, "page 5 paragraph");
     await frames(4);
     const atPage5 = await readPanes();
     assert.equal(atPage5.capsule, "5", "capsule is page 5");
-    assert.equal(atPage5.pager, "5 / 15", "toolbar follows the translation capsule");
-    assert.match(atPage5.sourceLabel, /第 1\//, "source pane stays on page 1");
+    assert.equal(atPage5.pager, "1 / 15", "source pager stays on page 1");
+    assert.match(atPage5.sourceLabel, /^1 \//, "source pane stays on page 1");
     near(atPage5.source, parked.source, 1, "translation scroll leaves the source pane");
     await followOff("capsule page");
     await mouseClick(atFive.x, atFive.y);
@@ -1760,7 +1760,12 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(await menuFocus(), "swapPanes", "menu keyboard opens on 互换两栏");
     await keyTap("ArrowDown", "ArrowDown", 40);
     await frames(1);
-    assert.equal(await menuFocus(), "exportMd", "menu ArrowDown skips the separator");
+    assert.equal(await menuFocus(), "glossaryItem", "menu ArrowDown moves to 术语");
+    await keyTap("ArrowDown", "ArrowDown", 40);
+    await frames(1);
+    assert.equal(await menuFocus(), "openPdfItem", "menu ArrowDown skips the separator");
+    await keyTap("ArrowDown", "ArrowDown", 40);
+    assert.equal(await menuFocus(), "exportMd", "menu ArrowDown reaches 导出 MD");
     await keyTap("ArrowDown", "ArrowDown", 40);
     assert.equal(await menuFocus(), "exportPdf", "menu ArrowDown reaches 导出 PDF");
     await keyTap("ArrowUp", "ArrowUp", 38);
@@ -1780,7 +1785,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     await shot("more-menu");
     assert.equal(existsSync(join(shotDir, "more-menu.png")), true, "screenshot uses the selected shot directory");
     const menuOrder = await evaluate(`(() => [...document.querySelectorAll("#moreMenu [role='menuitem'], #moreMenu [role='menuitemcheckbox'], #moreMenu [role='separator']")].filter((el) => !el.hidden).map((el) => (el.getAttribute("role") === "separator" ? "separator" : el.textContent.replace(/\\s+/g, " ").trim())))()`);
-    assert.deepEqual(menuOrder, ["互换两栏s", "separator", "导出 MD", "导出 PDF"]);
+    assert.deepEqual(menuOrder, ["互换两栏s", "术语g", "separator", "打开 PDF…", "导出 MD", "导出 PDF"]);
     const menuItem = await evaluate(`(() => {
       const el = document.getElementById("swapPanes");
       const style = getComputedStyle(el);
@@ -1835,7 +1840,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     await runSy5("swapped SY5");
     await send("Page.reload", { ignoreCache: true });
     await waitFor(`(() => {
-      const pager = document.getElementById("pager")?.textContent || "";
+      const pager = document.getElementById("sourcePageLabel")?.textContent || "";
       return /\\/\\s*15/.test(pager) ? pager : "";
     })()`, "reload keeps swap");
     await evaluate(`(${installProbe.toString()})()`);
@@ -1848,7 +1853,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(keptSwap.side, "end", "reload applies the stored swap");
     await useCurrentPageScope(clickSelector, waitFor);
     for (let page = 2; page <= 5; page += 1) {
-      await clickSelector("#next");
+      await clickSelector("#sourceNext");
       await waitFor(`document.querySelector('#readerFlow [data-src-page="${page}"][data-pair-id]') ? "p${page}" : ""`, `reloaded page ${page}`, 40000);
     }
     await waitFor(`(() => {
@@ -1934,7 +1939,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       await frames(2);
     }
     const beforeSplitKey = await evaluate(`(() => ({
-      pager: document.getElementById("pager")?.textContent || "",
+      pager: document.getElementById("sourcePageLabel")?.textContent || "",
       follow: document.querySelector(".workspace")?.dataset.follow || ""
     }))()`);
     assert.equal(beforeSplitKey.follow, "on", "follow is on before the splitter arrow");
@@ -1944,7 +1949,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     split = await splitMeasure();
     near(split.source, beforeArrow + 16, 2, "SW2 end-side ArrowLeft widens source");
     const afterSplitKey = await evaluate(`(() => ({
-      pager: document.getElementById("pager")?.textContent || "",
+      pager: document.getElementById("sourcePageLabel")?.textContent || "",
       follow: document.querySelector(".workspace")?.dataset.follow || ""
     }))()`);
     assert.equal(afterSplitKey.pager, beforeSplitKey.pager, "splitter arrow does not turn the page");
@@ -2099,12 +2104,22 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     await send("Emulation.setDeviceMetricsOverride", { width: 899, height: 900, deviceScaleFactor: 1, mobile: false });
     await sleep(200);
     await clickSelector("#moreButton");
-    const narrow = await evaluate(`(() => ({
-      hidden: document.getElementById("swapPanes")?.hidden === true,
-      text: document.querySelector(".toolbar")?.textContent || ""
-    }))()`);
+    const narrow = await evaluate(`(() => {
+      const bar = document.querySelector(".toolbar");
+      const visible = [...bar.querySelectorAll("button, h1")].filter((el) => {
+        if (el.closest("#moreMenu, #translateMenu, [hidden]")) return false;
+        const style = getComputedStyle(el);
+        return style.display !== "none" && style.visibility !== "hidden";
+      }).map((el) => (el.textContent || "").replace(/\\s+/g, ""));
+      return {
+        hidden: document.getElementById("swapPanes")?.hidden === true,
+        glossary: document.getElementById("glossaryItem")?.hidden === false,
+        visible: visible.join("|")
+      };
+    })()`);
     assert.equal(narrow.hidden, true, "VS8 899 hides 互换两栏");
-    assert.equal(narrow.text.includes("术语"), false, "VS8 no 术语");
+    assert.equal(narrow.glossary, true, "VS8 术语 stays in the menu");
+    assert.equal(narrow.visible.includes("术语"), false, "VS8 术语 is not a toolbar button");
     await keyTap("Escape", "Escape", 27);
     const sideBefore = await evaluate(`localStorage.getItem("reader.sourceSide")`);
     await evaluate(`document.body.focus()`);
@@ -2180,7 +2195,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
 
     await send("Page.reload", { ignoreCache: true });
     await waitFor(`(() => {
-      const pager = document.getElementById("pager")?.textContent || "";
+      const pager = document.getElementById("sourcePageLabel")?.textContent || "";
       return /\\/\\s*15/.test(pager) ? pager : "";
     })()`, "FL3 reload");
     const storedOn = await evaluate(`(() => ({
@@ -2321,8 +2336,8 @@ async function openAttentionPair(t) {
       label: document.getElementById("sourcePageLabel")?.textContent || "",
       capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
       follow: document.querySelector(".workspace")?.dataset.follow || "",
-      prev: document.getElementById("prev")?.disabled === true,
-      next: document.getElementById("next")?.disabled === true
+      prev: document.getElementById("sourcePrev")?.disabled === true,
+      next: document.getElementById("sourceNext")?.disabled === true
     };
   })()`);
   const waitNav = async (goal, label, timeoutMs = 8000) => {
@@ -2350,7 +2365,7 @@ async function openAttentionPair(t) {
   const showAllThrough = async (lastPage) => {
     await useCurrentPageScope(clickSelector, waitFor);
     for (let page = 2; page <= lastPage; page += 1) {
-      await clickSelector("#next");
+      await clickSelector("#sourceNext");
       await waitFor(
         `document.querySelector('#readerFlow [data-src-page="${page}"][data-pair-id]') ? "p${page}" : ""`,
         `page ${page} pairs`,
@@ -2377,8 +2392,8 @@ async function openAttentionPair(t) {
 
   await send("Page.navigate", { url: viewer });
   await waitFor(`(() => {
-    const pager = document.getElementById("pager")?.textContent || "";
-    const next = document.getElementById("next");
+    const pager = document.getElementById("sourcePageLabel")?.textContent || "";
+    const next = document.getElementById("sourceNext");
     return /\\/\\s*15/.test(pager) && next && !next.disabled ? pager : "";
   })()`, "Attention PDF open");
   await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
@@ -2410,7 +2425,7 @@ test("CAP1 全文跟随关：原文在第 1 页时点胶囊第 4 页，上一页
   assert.equal(jumped.prev, false, "CAP1 #prev.disabled === false after the capsule");
   assert.equal(jumped.capsule, "4", "CAP1 capsule stays on page 4");
   assert.equal(jumped.follow, "off", "CAP1 follow stays off");
-  await clickSelector("#prev");
+  await clickSelector("#sourcePrev");
   await frames(4);
   const stepped = await waitNav((row) => row.source === 3, "CAP1 prev reaches page 3");
   assert.equal(stepped.source, 3, "CAP1 #prev goes to source page 3");
@@ -2439,7 +2454,7 @@ test("CAP2 全文跟随开：原文在第 15 页时点胶囊第 5 页，下一�
   assert.equal(jumped.next, false, "CAP2 #next.disabled === false after the capsule");
   assert.equal(jumped.capsule, "5", "CAP2 capsule stays on page 5");
   assert.equal(jumped.follow, "on", "CAP2 follow stays on");
-  await clickSelector("#next");
+  await clickSelector("#sourceNext");
   await frames(4);
   const stepped = await waitNav((row) => row.source === 6, "CAP2 next reaches page 6");
   assert.equal(stepped.source, 6, "CAP2 #next goes to source page 6");
