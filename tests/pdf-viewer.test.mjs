@@ -36,9 +36,7 @@ import {
   looksLikePdfUrl,
   neighborPages,
   nextZoom,
-  DEFAULT_PDF_TRANSLATE_SCOPE,
   documentTranslatePlaceholder,
-  normalizePdfTranslateScope,
   pdfOpenTranslateBlocker,
   pdfTranslateFailureCopy,
   pageBlocksCopy,
@@ -277,7 +275,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*padding:\s*var\(--oi-reader-scroll-padding\)/s);
   assert.doesNotMatch(css, /max-width:\s*42rem/);
   assert.match(css, /\.pane-translate \.readout\.is-mirror\s*\{[^}]*max-width:\s*none/s);
-  assert.match(css, /\.view-seg\s*\{/);
+  assert.doesNotMatch(css, /\.view-seg\s*\{/);
   assert.match(css, /\.pane-translate \.mirror-pages\s*\{[^}]*max-width:\s*none/s);
   assert.match(css, /\.mirror-page\s*\{[^}]*position:\s*relative/s);
   assert.match(css, /\.mirror-page\s*\{[^}]*--oi-text:\s*var\(--oi-mirror-ink\)/s);
@@ -930,12 +928,6 @@ test("continuous scroll helpers pick the page in view and nearby canvases", () =
   assert.equal(readoutPageSelector(4), '[data-page="4"]');
   assert.equal(shouldSyncReadout(40, 40, 80), false);
   assert.equal(shouldSyncReadout(200, 40, 80), true);
-  assert.equal(DEFAULT_PDF_TRANSLATE_SCOPE, "all");
-  assert.equal(normalizePdfTranslateScope("all"), "all");
-  assert.equal(normalizePdfTranslateScope("document"), "all");
-  assert.equal(normalizePdfTranslateScope("page"), "page");
-  assert.equal(normalizePdfTranslateScope(""), "all");
-  assert.equal(normalizePdfTranslateScope("nope"), "all");
   assert.equal(documentTranslatePlaceholder(3, 15), "正在翻译第 3/15 页…");
   assert.match(pdfTranslateFailureCopy({ reason: "runtime" }), /无法翻译/);
   assert.match(pdfTranslateFailureCopy({ reason: "runtime" }), /扩展/);
@@ -1021,16 +1013,12 @@ test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", asy
   assert.equal(busyUi.stopHidden, false);
   assert.equal(busyUi.translateDisabled, true);
   assert.equal(busyUi.stopDisabled, false);
-  assert.equal(busyUi.scopeEnabled, false);
   const settledUi = pdfToolbarActionState({ busy: false, hasDoc: true, canTranslate: true });
   assert.equal(settledUi.primary, "translate");
   assert.equal(settledUi.translateHidden, false);
   assert.equal(settledUi.stopHidden, true);
   assert.equal(settledUi.translateDisabled, false);
   assert.equal(settledUi.stopDisabled, true);
-  assert.equal(settledUi.scopeEnabled, true);
-  assert.equal(pdfToolbarActionState({ busy: false, hasDoc: false, canTranslate: false }).scopeEnabled, false);
-
   const live = createTranslateSession();
   live.running = true;
   live.inflight = { requestId: "pdf-0" };

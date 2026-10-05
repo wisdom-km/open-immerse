@@ -128,7 +128,9 @@ test("重译本页 bypasses library early-returns; 翻译 still short-circuits",
   assert.ok(remember > 0 && replace > remember && done > replace);
   assert.match(viewer, /\$\("retranslatePage"\)\.addEventListener\("click", \(\) => forceRetranslateCurrentPage\(\)\)/);
   assert.match(viewer, /\$\("translatePage"\)\.addEventListener\("click", \(\) => startTranslate\(\)\)/);
-  assert.match(viewer, /canRetranslate: pageOriginals\.length > 0/);
+  assert.match(viewer, /canRetranslate: retranslatePageOpen\(\)/);
+  assert.match(force, /bypassCache: true/);
+  assert.match(viewer, /row\?\.state === "failed" \|\| row\?\.state === "partial"/);
   assert.match(viewer, /\$\("retranslatePage"\)\.disabled = ui\.retranslateDisabled/);
   assert.match(viewer, /if \(forceReadoutHold\) return;/);
 });

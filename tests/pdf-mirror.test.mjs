@@ -450,7 +450,7 @@ test("viewer defaults to Markdown readout and does not wire bbox mirror pages", 
   assert.match(html, /class="split-handle"/);
   assert.match(css, /\.zoom-gutter\s*\{/);
   assert.match(css, /\.split-handle\s*\{/);
-  assert.match(css, /\.view-seg\s*\{/);
+  assert.doesNotMatch(css, /\.view-seg\s*\{/);
   assert.match(html, /<p id="emptyRead" class="empty-read">点击翻译<\/p>/);
 });
 

@@ -40,6 +40,7 @@ import {
   docStatusView,
   libraryPageRunState,
   pageRunState,
+  runTitleStructureBatch,
   psEmptyCopy,
   psNoTextCopy,
   psRunning,
@@ -176,7 +177,6 @@ import {
   reserveDefaultCapsuleContent,
   stableCapsulePane,
   clearFadeScroll,
-  contentPagesForScope,
   defaultSplitRatio,
   formulaScrollLeft,
   indexFormulaScrolls,
@@ -323,7 +323,6 @@ function init() {
     refreshFormulaCropsForDisplay();
   });
   watchFormulaRasterRatio();
-  document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
   $("readerFlow")?.addEventListener("click", onReaderFlowClick);
   $("readerFlow")?.addEventListener("pointerdown", onFlowPointerDown);
   $("readerFlow")?.addEventListener("pointerup", onFlowPointerUp);
@@ -1857,10 +1856,45 @@ function unitsForLayout(layout) {
   return translatableReadoutUnits(layout?.blocks);
 }
 
+function hanText(value) {
+  return /[\u4e00-\u9fff]/.test(String(value || ""));
+}
+
+function libraryEntry(page) {
+  return (libraryDoc?.pages || []).find((item) => Number(item.page) === Number(page)) || null;
+}
+
+function blocksFromLibraryPairs(page, pairs) {
+  return (pairs || []).filter((item) => hanText(item?.translation)).map((pair, index) => ({
+    id: String(pair.id || pair.sourceId || `lib-${page}-${index}`),
+    ...(pair.sourceId ? { sourceId: String(pair.sourceId) } : {}),
+    label: "text",
+    text: String(pair.text || pair.sourceText || ""),
+    sourceText: String(pair.sourceText || pair.text || ""),
+    translation: String(pair.translation || "")
+  }));
+}
+
+function slotHasHan(slot) {
+  if (!slot) return false;
+  return [...slot.querySelectorAll(".rf-zh, .oi-pdf-p, h1, h2, h3, p")].some((el) => hanText(el.textContent));
+}
+
 function layoutForReadout(layout) {
   const cached = pageCache.get(docId, layout.page);
-  if (!Array.isArray(cached)) return layout;
-  return { ...layout, blocks: applyBlockTranslations(layout.blocks, cached) };
+  const stored = libraryEntry(layout.page)?.pairs || cached;
+  let blocks = layout.blocks || [];
+  if (Array.isArray(cached) && cached.length) {
+    const units = unitsForLayout(layout);
+    const merged = applySavedPairs(units, cached);
+    const rows = merged.some((unit) => hanText(unit.translation)) ? merged : cached;
+    blocks = applyBlockTranslations(layout.blocks, rows);
+  }
+  if (!blocks.some((block) => hanText(block.translation))) {
+    const fallback = blocksFromLibraryPairs(layout.page, stored);
+    if (fallback.length) return { ...layout, blocks: fallback, textSource: "library" };
+  }
+  return { ...layout, blocks };
 }
 
 function appendFixtureReadout(parent, layout, options = {}) {
@@ -3316,22 +3350,47 @@ function paintPageSlot(page) {
   if (showBlocks) appendFixtureReadout(slot, layoutForReadout(layout));
   else if (libraryArticle?.length && page === 1 && row.state !== "layout" && row.state !== "empty") {
     renderStoredArticle(libraryArticle);
+  } else if (row.state === "done" || row.state === "partial") {
+    const stored = blocksFromLibraryPairs(page, libraryEntry(page)?.pairs || pageCache.get(docId, page));
+    if (stored.length) appendFixtureReadout(slot, { page, kind: "blocks", blocks: stored, textSource: "library" });
   }
+  if ((row.state === "done" || row.state === "partial") && !slotHasHan(slot)) delete slot.dataset.painted;
+}
+
+function markTitleFailure() {
+  const flow = readerFlowEl();
+  if (!flow) return;
+  const record = titleStructure;
+  const failedPage = record?.failed && record.docId === docId ? String(record.page || "") : "";
+  flow.querySelectorAll(":scope > .rf-page").forEach((slot) => {
+    if (failedPage && slot.dataset.page === failedPage) slot.dataset.titleFailed = "1";
+    else delete slot.dataset.titleFailed;
+  });
 }
 
 function renderArticle() {
   const pane = translateScrollRoot();
+  const flow = readerFlowEl();
   const anchor = captureFlowAnchor();
+  const keptTop = pane ? pane.scrollTop : 0;
   const keepLeft = pane ? pane.scrollLeft : 0;
-  const formulaScrolls = captureFormulaScrolls(readerFlowEl());
+  const pin = flow && flow.offsetHeight > 0 ? flow.offsetHeight : 0;
+  if (flow && pin) flow.style.minHeight = `${pin}px`;
+  const formulaScrolls = captureFormulaScrolls(flow);
   applyViewMode();
   const total = pdfDoc?.numPages || 0;
   for (let n = 1; n <= total; n += 1) paintPageSlot(n);
   const hasContent = finalizeReaderFlow();
   syncReadoutEmpty(hasContent);
+  if (flow) flow.style.minHeight = "";
   restoreFlowAnchor(anchor);
+  if (pane && keptTop > 0 && pane.scrollTop < 1 && pane.scrollHeight - pane.clientHeight >= keptTop - 1) {
+    holdReadoutScroll(() => { pane.scrollTop = keptTop; });
+    restoreFlowAnchor(anchor);
+  }
   if (pane) pane.scrollLeft = keepLeft;
   restoreFormulaScrolls(readerFlowEl(), formulaScrolls);
+  markTitleFailure();
   settlePairChrome();
   updateTranslateControls();
   refreshDocStatus();
@@ -3719,14 +3778,7 @@ function onReaderFlowClick(event) {
 function applyViewMode() {
   viewMode = "readout";
   if ($("mirrorPages")) $("mirrorPages").hidden = true;
-  if ($("viewSeg")) $("viewSeg").hidden = true;
   if ($("mirrorHint")) $("mirrorHint").hidden = true;
-}
-
-function onViewSegClick(event) {
-  const btn = event.target.closest(".view-seg-btn");
-  if (!btn) return;
-  applyViewMode();
 }
 
 function currentReadoutNodes() {
@@ -4156,7 +4208,7 @@ function liveOriginals(layout, units) {
   return (units || []).filter((unit) => !unit?.id || keep.has(unit.id));
 }
 
-async function translateTitleStructure(work, gen, translatingDoc, batchSize) {
+async function translateTitleStructure(work, gen, translatingDoc, batchSize, options = {}) {
   const record = titleStructure;
   if (!record || record.status !== "ok" || record.docId !== translatingDoc || record.slotsDone) return;
   record.slotsDone = true;
@@ -4166,31 +4218,33 @@ async function translateTitleStructure(work, gen, translatingDoc, batchSize) {
     record.failed = false;
     return;
   }
-  const outcome = await translatePageBlocks(slots.map((item) => ({
-    text: item.text,
-    original: item.text,
-    role: "paragraph"
-  })), {
-    send: runtimeSend,
-    session: work,
-    batchSize,
-    preserveSession: true,
-    onBatchResult({ results: next }) {
-      if (!isCurrentWork(work, gen, translatingDoc)) return;
-      record.structure = applyStructureTranslations(record.source, slots, next.map((row) => row.translation));
-      renderArticle();
-    }
+  await runTitleStructureBatch(record, async () => {
+    const outcome = await translatePageBlocks(slots.map((item) => ({
+      text: item.text,
+      original: item.text,
+      role: "paragraph"
+    })), {
+      send: runtimeSend,
+      session: work,
+      batchSize,
+      preserveSession: true,
+      bypassCache: options.bypassCache === true,
+      onBatchResult({ results: next }) {
+        if (!isCurrentWork(work, gen, translatingDoc)) return;
+        record.structure = applyStructureTranslations(record.source, slots, next.map((row) => row.translation));
+        renderArticle();
+      }
+    });
+    if (!isCurrentWork(work, gen, translatingDoc)) return outcome;
+    const results = outcome?.results || [];
+    record.structure = applyStructureTranslations(
+      record.source,
+      slots,
+      results.map((row) => row.translation)
+    );
+    renderArticle();
+    return outcome;
   });
-  if (!isCurrentWork(work, gen, translatingDoc)) return;
-  const results = outcome?.results || [];
-  record.failed = Boolean(outcome?.error) || results.some((row) => row?.failed === true);
-  record.structure = applyStructureTranslations(
-    record.source,
-    slots,
-    results.map((row) => row.translation)
-  );
-  record.translated = true;
-  renderArticle();
 }
 
 function structureLanded(page) {
@@ -4324,28 +4378,40 @@ async function translateCurrentPage() {
 }
 
 function adoptLibraryPages() {
+  const listed = (libraryDoc?.pages || []).map((item) => Number(item?.page)).filter((n) => n >= 1);
+  const total = Math.max(Number(pdfDoc?.numPages) || 0, ...listed, 0);
   let hole = false;
-  for (const entry of libraryDoc?.pages || []) {
-    const page = Number(entry?.page);
-    if (!(page >= 1)) continue;
+  for (let page = 1; page <= total; page += 1) {
+    const entry = libraryEntry(page);
     const layout = getPageLayout(page);
     const blocks = layout?.blocks || null;
     const cached = pageCache.get(docId, page);
+    const prior = pageStates.get(page);
     const state = libraryPageRunState({
-      pairs: entry.pairs,
+      pairs: entry?.pairs,
       cached,
-      skipped: Boolean(entry.skipped) || isSkipOnlyPage(blocks),
+      skipped: Boolean(entry?.skipped) || isSkipOnlyPage(blocks),
       empty: Array.isArray(blocks)
         && !translatableBlocks(blocks).length
         && !isTitlePageCandidate(page, pageTextForStructure(blocks))
     });
     if (state === "queued") {
+      if (prior?.state === "done" || prior?.state === "skipped" || prior?.state === "empty" || prior?.state === "partial") {
+        continue;
+      }
       hole = true;
       continue;
     }
-    if (state === "done" && pageHasTranslation(entry.pairs) && !pageHasTranslation(cached)) {
-      const filled = (entry.pairs || []).filter((item) => String(item?.translation || "").trim());
-      if (filled.length) pageCache.set(docId, page, filled);
+    if (state === "done") {
+      const filled = blocksFromLibraryPairs(page, entry?.pairs || cached);
+      if (!filled.length) {
+        hole = true;
+        continue;
+      }
+      if (!pageHasTranslation(cached)) pageCache.set(docId, page, filled);
+      notePageState(page, { state: "done", hasLayout: true });
+      clearSlotPainted(page);
+      continue;
     }
     const noText = state === "empty" && !blocks?.length && !(Number(layout?.itemCount) > 0);
     notePageState(page, { state, hasLayout: true, noText });
@@ -4354,38 +4420,58 @@ function adoptLibraryPages() {
   return hole;
 }
 
+function demoteUnpaintedDonePages() {
+  let hole = false;
+  for (const [page, row] of pageStates) {
+    if (row.state !== "done") continue;
+    const slot = readerFlowEl()?.querySelector(`:scope > .rf-page[data-page="${page}"]`);
+    if (slotHasHan(slot)) continue;
+    pageCache.clearPage(docId, page);
+    notePageState(page, { state: "queued", hasLayout: false });
+    clearSlotPainted(page);
+    hole = true;
+  }
+  return hole;
+}
+
 async function translateWholeDocument() {
   if (!pdfDoc || pdfTranslateBusy(session)) return;
   try {
     const saved = await savedTranslationFor(pageNum);
-    if (saved?.readout) {
+    if ((saved?.readout || libraryArticle) && !libraryDoc?.pages?.length) {
       notePageState(1, { state: "done", hasLayout: true });
       clearSlotPainted(1);
-      setStatus(PDF_COPY.doneDocument);
-      finishDocPhase();
-      renderArticle();
-      return;
+      if (libraryArticle?.length && !pageHasTranslation(pageCache.get(docId, 1))) {
+        const text = libraryArticle.map((block) => block.text || "").filter(Boolean).join("\n");
+        if (hanText(text)) pageCache.set(docId, 1, [{ original: text, translation: text, role: "paragraph" }]);
+      }
     }
-    if (libraryDoc?.pages?.length) {
+    if (libraryDoc?.pages?.length || libraryArticle) {
       const blocksByPage = {};
-      for (const entry of libraryDoc.pages) {
+      for (const entry of libraryDoc?.pages || []) {
         const layout = getPageLayout(entry.page);
         if (layout?.blocks) blocksByPage[entry.page] = layout.blocks;
       }
       const currentBlocks = getPageLayout(pageNum)?.blocks || null;
       if (currentBlocks) blocksByPage[pageNum] = currentBlocks;
-      const current = pageSoftStatus({
-        saved: selectSavedTranslation(libraryDoc, pageNum, currentBlocks),
-        blocks: currentBlocks,
-        done: PDF_COPY.done
-      });
-      if (current.kind === "bibliography") {
-        setStatus(current.copy);
-        rememberSkipHole(pageNum, currentBlocks);
-      } else {
-        setStatus(libraryHoldCopy(libraryDoc.pages, blocksByPage));
+      if (libraryDoc?.pages?.length) {
+        const current = pageSoftStatus({
+          saved: selectSavedTranslation(libraryDoc, pageNum, currentBlocks),
+          blocks: currentBlocks,
+          done: PDF_COPY.done
+        });
+        if (current.kind === "bibliography") {
+          setStatus(current.copy);
+          rememberSkipHole(pageNum, currentBlocks);
+        } else {
+          setStatus(libraryHoldCopy(libraryDoc.pages, blocksByPage));
+        }
       }
-      if (!adoptLibraryPages()) {
+      const hole = adoptLibraryPages();
+      renderArticle();
+      const bare = demoteUnpaintedDonePages();
+      if (bare) renderArticle();
+      if (!hole && !bare) {
         finishDocPhase();
         renderArticle();
         return;
@@ -4393,10 +4479,6 @@ async function translateWholeDocument() {
     }
   } catch {
     noteLibraryUnavailable();
-  }
-  if (libraryArticle) {
-    setStatus(PDF_COPY.doneDocument);
-    return;
   }
   const gen = restoreGen;
   const translatingDoc = docId;
@@ -4441,7 +4523,10 @@ async function translateWholeDocument() {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       if (reason !== "cached" && titleStructureFailed(page)) {
         const merged = withStructureRows(getPageLayout(page), []);
-        notePageState(page, { state: pageRunState(merged), hasLayout: true });
+        notePageState(page, {
+          state: pageRunState(merged, { expected: Number(pageStates.get(page)?.m) || 0 }),
+          hasLayout: true
+        });
         clearSlotPainted(page);
         refreshDocStatus();
         renderArticle();
@@ -4491,8 +4576,13 @@ async function translateWholeDocument() {
       pageCache.set(translatingDoc, page, merged);
       if (page === pageNum) pageResults = merged;
       const k = Math.max(pageStates.get(page)?.k || 0, filledCount(merged));
-      if (res?.ok === false || res?.error) notePageState(page, { state: pageRunState(merged), hasLayout: true, k });
-      else notePageState(page, { state: "running", hasLayout: true, k });
+      if (res?.ok === false || res?.error) {
+        notePageState(page, {
+          state: pageRunState(merged, { expected: Number(pageStates.get(page)?.m) || 0 }),
+          hasLayout: true,
+          k
+        });
+      } else notePageState(page, { state: "running", hasLayout: true, k });
       clearSlotPainted(page);
       renderArticle();
       if (res?.polishError) setStatus(PDF_COPY.polishFail, true);
@@ -4504,12 +4594,31 @@ async function translateWholeDocument() {
       const merged = withStructureRows(layout, base);
       pageCache.set(translatingDoc, page, merged);
       if (page === pageNum) pageResults = merged;
-      const k = Math.max(pageStates.get(page)?.k || 0, filledCount(merged));
-      notePageState(page, { state: pageRunState(merged), hasLayout: true, k });
-      clearSlotPainted(page);
+      const expected = Number(pageStates.get(page)?.m) || merged.length;
+      const k = (merged || []).filter((item) => hanText(item?.translation)).length;
+      notePageState(page, { state: pageRunState(merged, { expected }), hasLayout: true, k });
+      const slot = readerFlowEl()?.querySelector(`:scope > .rf-page[data-page="${page}"]`);
+      if (slot && slotHasHan(slot)) {
+        slot.querySelector(":scope > .rf-ps")?.remove();
+        slot.dataset.painted = "1";
+      } else clearSlotPainted(page);
       refreshDocStatus();
       renderArticle();
       saveTasks.push(rememberTranslation(page, merged).then(() => null, (error) => error));
+    },
+    onPageError({ page, results }) {
+      if (!isCurrentWork(work, gen, translatingDoc)) return;
+      const layout = getPageLayout(page);
+      const base = layout?.kind === "blocks" ? results : mergeReadoutTranslations(layout?.blocks || results, results);
+      const merged = withStructureRows(layout, base);
+      pageCache.set(translatingDoc, page, merged);
+      if (page === pageNum) pageResults = merged;
+      const expected = Number(pageStates.get(page)?.m) || 0;
+      const k = (merged || []).filter((item) => hanText(item?.translation)).length;
+      notePageState(page, { state: pageRunState(merged, { expected }), hasLayout: true, k });
+      clearSlotPainted(page);
+      refreshDocStatus();
+      renderArticle();
     }
   });
   if (!isCurrentWork(work, gen, translatingDoc)) return;
@@ -4518,7 +4627,8 @@ async function translateWholeDocument() {
     if (entry.reason === "cached" || entry.reason === "skip-only" || entry.reason === "empty") continue;
     const merged = withStructureRows(getPageLayout(entry.page), entry.results);
     if (entry.error || merged?.some((item) => item?.failed)) {
-      notePageState(entry.page, { state: pageRunState(merged), hasLayout: true });
+      const expected = Number(pageStates.get(entry.page)?.m) || 0;
+      notePageState(entry.page, { state: pageRunState(merged, { expected }), hasLayout: true });
       clearSlotPainted(entry.page);
     }
   }
@@ -4678,12 +4788,13 @@ async function forceRetranslateCurrentPage() {
     if (left()) return;
     const pageUnits = liveOriginals(sourceLayout, unitsForForceRetranslate(sourceLayout));
     armTitleRetranslate(translatingDoc, targetPage);
-    await translateTitleStructure(work, gen, translatingDoc, batchSize);
+    await translateTitleStructure(work, gen, translatingDoc, batchSize, { bypassCache: true });
     if (left()) return;
     const translated = await translatePageBlocks(pageUnits, {
       send: runtimeSend,
       session: work,
       batchSize,
+      bypassCache: true,
       onBatchStart() {
         if (!isCurrentWork(work, gen, translatingDoc) || work.aborted) return;
         setStatus(PDF_COPY.retranslateRunning);
@@ -5545,12 +5656,22 @@ function setHasDoc(has) {
   updateTranslateControls();
 }
 
+function retranslatePageOpen() {
+  const page = capsulePage();
+  const row = pageStates.get(page);
+  if (row?.state === "failed" || row?.state === "partial") return true;
+  const layout = getPageLayout(page);
+  if (translatableBlocks(layout?.blocks || []).length) return true;
+  if (isTitlePageCandidate(page, pageTextForStructure(layout?.blocks))) return true;
+  return page === pageNum && pageOriginals.length > 0;
+}
+
 function updateTranslateControls() {
   const ui = pdfToolbarActionState({
     busy: pdfTranslateBusy(session),
     hasDoc: Boolean(pdfDoc),
     canTranslate: Boolean(pdfDoc),
-    canRetranslate: pageOriginals.length > 0
+    canRetranslate: retranslatePageOpen()
   });
   $("translatePage").disabled = ui.translateDisabled;
   $("translatePage").hidden = ui.translateHidden;

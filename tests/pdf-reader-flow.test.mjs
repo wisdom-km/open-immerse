@@ -18,7 +18,6 @@ import {
   reserveDefaultCapsuleContent,
   stableCapsulePane,
   clearFadeScroll,
-  contentPagesForScope,
   defaultSplitRatio,
   formulaScrollLeft,
   indexFormulaScrolls,
@@ -188,14 +187,6 @@ test("page markers are a capsule, in-flow breaks, and one queued range", () => {
   });
   assert.equal(collapsed.filter((item) => item.kind === "range").length, 1);
   assert.equal(collapsed.some((item) => item.kind === "untranslated"), false);
-  assert.deepEqual(
-    contentPagesForScope({ scope: "page", currentPage: 3, pagesWithContent: [1, 3, 4] }),
-    [3]
-  );
-  assert.deepEqual(
-    contentPagesForScope({ scope: "all", currentPage: 3, pagesWithContent: [1, 3] }),
-    [1, 3]
-  );
   assert.equal(pageBreakLabel(4), "原文第 4 页");
   assert.equal(capsuleLabel(3), "原文第 3 页");
   assert.equal(capsuleLabel(3, { short: true }), "第 3 页");

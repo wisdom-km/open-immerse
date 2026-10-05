@@ -128,7 +128,8 @@ async function handleMessage(message, sender) {
       const batchOpts = {
         onProgress: (progress) => emitTranslateProgress(sender, message.requestId, progress),
         polish: message.polish,
-        promptAddendum: message.promptAddendum
+        promptAddendum: message.promptAddendum,
+        bypassCache: message.bypassCache === true
       };
       const translations = await translateBatch(message.texts || [], batchOpts);
       return {
@@ -234,7 +235,7 @@ async function translateBatch(texts, options = {}) {
   const results = new Array(texts.length);
   texts.forEach((text, index) => {
     const key = cacheKey(settings.provider, settings.sourceLang, settings.targetLang, text, providerSettings);
-    if (cache.has(key)) results[index] = readCachedTranslation(key, text, settings.targetLang);
+    if (!options.bypassCache && cache.has(key)) results[index] = readCachedTranslation(key, text, settings.targetLang);
     else pending.push({ text, index, key });
   });
   const size = Math.max(1, Number(settings.batchSize) || 8);

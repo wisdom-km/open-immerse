@@ -66,7 +66,7 @@ test("SW cache version includes title-calque bust and guards cache hits", () => 
   assert.match(swSource, /isThinkingEnabled/);
   assert.match(swSource, /const think = isThinkingEnabled\(settings\) \? "think" : "fast"/);
   assert.match(swSource, /function readCachedTranslation\(key, text, targetLang\) \{\n  const \[guarded\] = guardZhTranslations\(\[text\], \[cache\.get\(key\)\], targetLang\);/);
-  assert.match(swSource, /if \(cache\.has\(key\)\) results\[index\] = readCachedTranslation\(key, text, settings\.targetLang\);/);
+  assert.match(swSource, /if \(!options\.bypassCache && cache\.has\(key\)\) results\[index\] = readCachedTranslation\(key, text, settings\.targetLang\);/);
   assert.match(
     swSource,
     /const guarded = guardZhTranslations\(\n      chunk\.map\(\(c\) => c\.text\),\n      translated,\n      settings\.targetLang\n    \);/
@@ -263,6 +263,48 @@ test("single-shot translateBatch does not emit draft progress", async () => {
     const out = await sw.translateBatch(["Hello"], { onProgress: (p) => progress.push(p) });
     assert.deepEqual(out, ["你好"]);
     assert.deepEqual(progress, []);
+  } finally {
+    globalThis.fetch = prevFetch;
+  }
+});
+
+test("bypassCache skips the memory cache and calls the provider again", async () => {
+  stubChrome(async () => {});
+  chrome.storage.sync.get = async () => ({
+    settings: {
+      provider: "openai",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      twoStepPolish: false,
+      batchSize: 8,
+      settingsVersion: 7,
+      articleScopeMigrated: true,
+      providers: {
+        openai: { apiKey: "sk-test", baseUrl: "https://api.example.com/v1", model: "test-model", prompt: "" }
+      }
+    }
+  });
+  let calls = 0;
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { choices: [{ message: { content: calls === 1 ? "1. 第一次" : "1. 重译" } }] };
+      }
+    };
+  };
+  try {
+    const sw = await import(`../background/service-worker.js?bypass=${Date.now()}`);
+    const first = await sw.translateBatch(["Force this sentence."]);
+    const cached = await sw.translateBatch(["Force this sentence."]);
+    const fresh = await sw.translateBatch(["Force this sentence."], { bypassCache: true });
+    assert.deepEqual(first, ["第一次"]);
+    assert.deepEqual(cached, ["第一次"]);
+    assert.deepEqual(fresh, ["重译"]);
+    assert.equal(calls, 2);
   } finally {
     globalThis.fetch = prevFetch;
   }

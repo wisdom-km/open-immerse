@@ -48,7 +48,7 @@ const STUB = `(() => {
       : { mode: "" },
     batchSize: 8
   };
-  window.__oiAuto = { mode, batches: [] };
+  window.__oiAuto = { mode, batches: [], texts: [] };
   const origFetch = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const url = typeof input === "string" ? input : (input && input.url) || "";
@@ -56,14 +56,30 @@ const STUB = `(() => {
       if (mode === "cache") {
         return new Response(JSON.stringify({
           pageCount: 15,
-          pages: [{
-            page: 1,
-            pairs: [{
-              sourceId: "cached-sentence",
-              text: "Cached sentence that is not on the page.",
-              translation: "这是库里已经存好的一句译文。"
-            }]
-          }]
+          pages: [
+            {
+              page: 1,
+              pairs: [{
+                sourceId: "cached-sentence",
+                text: "Cached sentence that is not on the page.",
+                translation: "这是库里已经存好的一句译文。"
+              }]
+            },
+            {
+              page: 2,
+              pairs: [{
+                text: "Stored page two sentence.",
+                translation: "第二页库译文。"
+              }]
+            },
+            {
+              page: 5,
+              pairs: [{
+                text: "Stored page five sentence.",
+                translation: "第五页库译文。"
+              }]
+            }
+          ]
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response("missing", { status: 404 });
@@ -84,7 +100,16 @@ const STUB = `(() => {
         if (type === "OI_PDF_STRUCTURE") return Promise.resolve({ ok: false });
         if (type === "OI_TRANSLATE_BATCH") {
           window.__oiAuto.batches.push((message.texts || []).length);
+          window.__oiAuto.texts.push(...(message.texts || []));
           if (mode === "hang") return new Promise(() => {});
+          if (mode === "bothfail") return Promise.resolve({ ok: false, error: "500" });
+          if (mode === "short") {
+            const texts = message.texts || [];
+            return Promise.resolve({
+              ok: true,
+              translations: texts.map((text, index) => (index === texts.length - 1 ? "" : "译:" + text))
+            });
+          }
           return Promise.resolve({
             ok: true,
             translations: (message.texts || []).map((text) => "译:" + text)
@@ -413,19 +438,36 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
 
   await openMode("cache");
   const cached = JSON.parse(await waitFor(`(() => {
-    const row = ${SNAPSHOT};
-    const data = JSON.parse(row);
-    if (!data.status.includes("已沿用")) return "";
-    return row;
-  })()`, "cache: 沿用本地库"));
-  await sleep(800);
-  const cacheSettled = await read();
-  assert.equal(cached.batches, 0);
-  assert.equal(cacheSettled.batches, 0);
-  assert.equal(cacheSettled.segment, "");
-  assert.equal(cacheSettled.page1, "done");
-  assert.match(cacheSettled.status, /已沿用/);
-  assert.doesNotMatch(cacheSettled.doc, /全文已译/);
+    const zh2 = document.querySelector('#readerFlow .rf-page[data-page="2"] .rf-zh');
+    const zh5 = document.querySelector('#readerFlow .rf-page[data-page="5"] .rf-zh');
+    if (!zh2 || !zh5) return "";
+    if (!(zh2.textContent || "").includes("第二页库译文")) return "";
+    if (!(zh5.textContent || "").includes("第五页库译文")) return "";
+    return JSON.stringify({
+      page1: document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "",
+      page2: document.querySelector('#readerFlow .rf-page[data-page="2"]')?.dataset.state || "",
+      page3: document.querySelector('#readerFlow .rf-page[data-page="3"]')?.dataset.state || "",
+      page5: document.querySelector('#readerFlow .rf-page[data-page="5"]')?.dataset.state || "",
+      doc: document.querySelector("#docStatus .doc-text")?.textContent || "",
+      batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
+      texts: (window.__oiAuto && window.__oiAuto.texts || []).join("\\n")
+    });
+  })()`, "cache: 库命中页画出译文，缺页继续译"));
+  assert.equal(cached.page1, "done");
+  assert.equal(cached.page2, "done");
+  assert.equal(cached.page5, "done");
+  assert.notEqual(cached.page3, "done");
+  assert.doesNotMatch(cached.doc, /全文已译/);
+  assert.equal(cached.texts.includes("Stored page two sentence"), false);
+  assert.equal(cached.texts.includes("Stored page five sentence"), false);
+  const cacheMoved = JSON.parse(await waitFor(`(() => {
+    const batches = (window.__oiAuto && window.__oiAuto.batches || []).length;
+    const page3 = document.querySelector('#readerFlow .rf-page[data-page="3"]')?.dataset.state || "";
+    if (batches < 1 && page3 !== "running") return "";
+    return JSON.stringify({ batches, page3, doc: document.querySelector("#docStatus .doc-text")?.textContent || "" });
+  })()`, "cache: 缺页进入翻译"));
+  assert.ok(cacheMoved.batches >= 1 || cacheMoved.page3 === "running");
+  assert.doesNotMatch(cacheMoved.doc, /全文已译/);
 
   await openMode("hang");
   const hang = JSON.parse(await waitFor(`(() => {
@@ -492,18 +534,30 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
 
   const ready = JSON.parse(await waitFor(`(() => {
     const block = [...document.querySelectorAll("#readerFlow .rf-block")].find((el) => (el.querySelector(".rf-zh")?.textContent || "").includes("译:"));
-    if (!block || !block.querySelector(".rf-src")) return "";
+    const title = document.querySelector("#readerFlow h1 .rf-zh");
+    const caption = document.querySelector('#readerFlow [data-label="caption"] .rf-zh');
+    if (!block || !block.querySelector(".rf-src") || !title || !caption) return "";
+    if (!(title.textContent || "").includes("译:")) return "";
+    if (!(caption.textContent || "").includes("译:")) return "";
     return JSON.stringify({
       id: block.dataset.blockId || "",
       pair: block.dataset.pairId || "",
       zh: block.querySelector(".rf-zh").textContent.slice(0, 80),
       src: block.querySelector(".rf-src").textContent.slice(0, 80),
+      title: title.textContent.slice(0, 80),
+      caption: caption.textContent.slice(0, 80),
+      titleSrc: document.querySelector("#readerFlow h1 .rf-src")?.textContent.slice(0, 80) || "",
+      captionSrc: document.querySelector('#readerFlow [data-label="caption"] .rf-src')?.textContent.slice(0, 80) || "",
       batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
       status: document.getElementById("status")?.textContent || ""
     });
-  })()`, "原文: 段里同时有中文和原文"));
+  })()`, "原文: 段、标题和题注里同时有中文和原文"));
   assert.match(ready.zh, /译:/);
+  assert.match(ready.title, /译:/);
+  assert.match(ready.caption, /译:/);
   assert.equal(ready.src.includes("译:"), false);
+  assert.equal(ready.titleSrc.includes("译:"), false);
+  assert.equal(ready.captionSrc.includes("译:"), false);
   await evaluate(`document.getElementById("restoreOriginal").click()`);
   const srcView = JSON.parse(await evaluate(`(() => {
     const block = document.querySelector("#readerFlow .rf-block[data-block-id=\\"${ready.id}\\"]")
@@ -513,11 +567,21 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     const button = document.getElementById("restoreOriginal");
     const box = button.getBoundingClientRect();
     const visual = document.querySelector("#readerFlow .oi-pdf-display-math img, #readerFlow .oi-pdf-figure img, #readerFlow .oi-pdf-table img");
+    const titleZh = document.querySelector("#readerFlow h1 .rf-zh");
+    const titleSrc = document.querySelector("#readerFlow h1 .rf-src");
+    const capZh = document.querySelector('#readerFlow [data-label="caption"] .rf-zh');
+    const capSrc = document.querySelector('#readerFlow [data-label="caption"] .rf-src');
     return JSON.stringify({
       view: document.querySelector(".workspace")?.dataset.view || "",
       pressed: button.getAttribute("aria-pressed"),
       zhDisplay: getComputedStyle(zh).display,
       srcDisplay: getComputedStyle(src).display,
+      titleZhDisplay: titleZh ? getComputedStyle(titleZh).display : "",
+      titleSrcDisplay: titleSrc ? getComputedStyle(titleSrc).display : "",
+      capZhDisplay: capZh ? getComputedStyle(capZh).display : "",
+      capSrcDisplay: capSrc ? getComputedStyle(capSrc).display : "",
+      titleVisible: (document.querySelector("#readerFlow h1")?.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 80),
+      capVisible: (document.querySelector('#readerFlow [data-label="caption"]')?.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 80),
       visible: (block.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 180),
       srcText: (src.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 80),
       pair: block.dataset.pairId || "",
@@ -532,6 +596,12 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.equal(srcView.zhDisplay, "none");
   assert.notEqual(srcView.srcDisplay, "none");
   assert.equal(srcView.visible.includes("译:"), false);
+  assert.equal(srcView.titleZhDisplay, "none");
+  assert.notEqual(srcView.titleSrcDisplay, "none");
+  assert.equal(srcView.capZhDisplay, "none");
+  assert.notEqual(srcView.capSrcDisplay, "none");
+  assert.equal(srcView.titleVisible.includes("译:"), false);
+  assert.equal(srcView.capVisible.includes("译:"), false);
   assert.equal(srcView.visible.includes(srcView.srcText.slice(0, 24)), true);
   assert.equal(srcView.pair, ready.pair);
   assert.equal(srcView.height, 30);
@@ -555,4 +625,35 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.notEqual(zhView.zhDisplay, "none");
   assert.equal(zhView.srcDisplay, "none");
   assert.match(zhView.visible, /译:/);
+
+  await openMode("bothfail");
+  const failed = JSON.parse(await waitFor(`(() => {
+    const state = (n) => document.querySelector('#readerFlow .rf-page[data-page="' + n + '"]')?.dataset.state || "";
+    const titleFailed = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.titleFailed || "";
+    if (state(1) !== "failed" || state(2) !== "failed" || state(3) !== "failed") return "";
+    if (titleFailed !== "1") return "";
+    if (state(4) === "running" || state(4) === "done" || state(4) === "partial") return "";
+    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    if (!doc.includes("已译 0")) return "";
+    if (doc.includes("全文已译")) return "";
+    if (document.getElementById("retranslatePage")?.disabled) return "";
+    return JSON.stringify({
+      page1: state(1),
+      page2: state(2),
+      page3: state(3),
+      page4: state(4),
+      titleFailed,
+      doc,
+      status: document.getElementById("status")?.textContent || "",
+      retranslateDisabled: document.getElementById("retranslatePage")?.disabled === true
+    });
+  })()`, "bothfail: 无中文是失败，连续三页才停", 180000));
+  assert.equal(failed.page1, "failed");
+  assert.equal(failed.page2, "failed");
+  assert.equal(failed.page3, "failed");
+  assert.equal(failed.titleFailed, "1");
+  assert.equal(failed.page4 === "queued" || failed.page4 === "", true);
+  assert.match(failed.doc, /已译 0/);
+  assert.doesNotMatch(failed.doc, /全文已译/);
+  assert.equal(failed.retranslateDisabled, false);
 });

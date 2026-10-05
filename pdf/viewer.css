@@ -57,6 +57,7 @@ body {
   font-size: var(--oi-reader-pager-size);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 #status {
   margin: 0;
@@ -299,6 +300,7 @@ body {
   padding: var(--oi-reader-scroll-padding);
   overscroll-behavior: contain;
   scroll-behavior: auto;
+  overflow-anchor: none;
   background: transparent;
   position: relative;
 }
@@ -791,33 +793,6 @@ body {
   width: 100%;
   margin: 0;
   color: var(--oi-mirror-ink);
-}
-.view-seg {
-  display: inline-flex;
-  align-items: stretch;
-  margin: 0 0 10px;
-  padding: 2px;
-  gap: 0;
-  border: 1px solid var(--oi-reader-line);
-  border-radius: 8px;
-  background: var(--oi-reader-track);
-}
-.view-seg-btn {
-  box-sizing: border-box;
-  min-height: 28px;
-  padding: 0 10px;
-  margin: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--oi-reader-muted);
-  font: 500 var(--oi-reader-zoom-size)/1.2 var(--oi-reader-ui-font);
-  cursor: pointer;
-}
-.view-seg-btn.is-on {
-  background: var(--oi-reader-thumb);
-  color: var(--oi-reader-ink);
-  font-weight: 600;
 }
 .mirror-caption {
   margin: 0 0 4px;

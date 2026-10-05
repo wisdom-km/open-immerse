@@ -11,6 +11,7 @@ import {
   docStatusView,
   libraryPageRunState,
   pageRunState,
+  runTitleStructureBatch,
   psEmptyCopy,
   psNoTextCopy,
   psRunning,
@@ -39,6 +40,14 @@ test("LD-a copy, queued ranges, and toolbar totals", () => {
   assert.equal(pageRunState([{ translation: "", failed: true }]), "failed");
   assert.equal(pageRunState([{ translation: "甲", failed: true }, { translation: "" }]), "partial");
   assert.equal(pageRunState([{ translation: "" }]), "empty");
+  assert.equal(pageRunState([
+    { translation: "Attention Is All You Need", failed: true, role: "title" },
+    { translation: "", failed: true, role: "paragraph" }
+  ]), "failed");
+  assert.equal(translatedPageTotal([{ state: "failed" }]).n, 0);
+  const eleven = Array.from({ length: 11 }, () => ({ translation: "甲", role: "paragraph" }));
+  assert.equal(pageRunState(eleven, { expected: 12 }), "partial");
+  assert.equal(pageRunState(eleven, { expected: 11 }), "done");
   const mixed = translatedPageTotal([
     { state: "done" },
     { state: "partial" },
@@ -154,9 +163,17 @@ test("title structure batch failure is not done and cannot light 全文已译", 
   const totals = translatedPageTotal([{ state }]);
   assert.equal(totals.needsRetry, 1);
   assert.notEqual(docStatusView({ n: totals.n, t: 1, needsRetry: totals.needsRetry, phase: "idle" }).text, "全文已译");
-  const titleFn = viewer.slice(viewer.indexOf("async function translateTitleStructure"), viewer.indexOf("function structureLanded"));
-  assert.match(titleFn, /record\.failed/);
-  assert.match(titleFn, /outcome\?\.error|row\?\.failed/);
+  const thrown = { failed: false, translated: false };
+  const blew = await runTitleStructureBatch(thrown, async () => {
+    throw new Error("title batch exploded");
+  });
+  assert.equal(thrown.failed, true);
+  assert.equal(thrown.translated, true);
+  assert.equal(blew.thrown, true);
+  const missed = { failed: false, translated: false };
+  await runTitleStructureBatch(missed, async () => ({ ok: false, error: "500", results: [{ failed: true, translation: "" }] }));
+  assert.equal(missed.failed, true);
+  assert.match(viewer, /runTitleStructureBatch\(/);
   assert.match(viewer, /combinePageResults\(/);
 });
 
@@ -191,9 +208,76 @@ test("library pages without a stored translation stay queued", () => {
   ]);
   assert.equal(totals.n, 1);
   assert.notEqual(docStatusView({ n: totals.n, t: 3, needsRetry: totals.needsRetry, phase: "idle" }).text, "全文已译");
-  const whole = viewer.slice(viewer.indexOf("function adoptLibraryPages"), viewer.indexOf("async function translateWholeDocument"));
+  assert.equal(libraryPageRunState({ pairs: [{ translation: "Attention", role: "paragraph" }] }), "queued");
+  const whole = viewer.slice(viewer.indexOf("function adoptLibraryPages"), viewer.indexOf("function demoteUnpaintedDonePages"));
+  assert.match(whole, /pdfDoc\?\.numPages/);
   assert.match(whole, /libraryPageRunState\(/);
   assert.equal(whole.includes('skipped ? "skipped" : "done"'), false);
-  const caller = viewer.slice(viewer.indexOf("if (libraryDoc?.pages?.length)"), viewer.indexOf("if (libraryArticle)"));
-  assert.match(caller, /adoptLibraryPages\(\)/);
+  assert.equal(viewer.includes("if (libraryArticle) {\n    setStatus(PDF_COPY.doneDocument);\n    return;"), false);
+});
+
+test("one failed page stays failed and the next page still translates", async () => {
+  const sent = [];
+  const errors = [];
+  const done = [];
+  const result = await translateDocumentPages({
+    numPages: 4,
+    docId: 1,
+    cache: createPageCache(),
+    session: createTranslateSession(),
+    getPageOriginals: async (page) => [{ original: `Sentence on page ${page}.` }],
+    send: async (message) => {
+      sent.push(message.texts[0]);
+      if (String(message.texts[0]).includes("page 2")) return { ok: false, error: "down" };
+      return { ok: true, translations: ["译好了"] };
+    },
+    onPageDone: (info) => done.push(info.page),
+    onPageError: (info) => errors.push(info.page)
+  });
+  assert.deepEqual(sent.map((text) => text.includes("page") ? Number(text.match(/page (\d+)/)[1]) : 0), [1, 2, 3, 4]);
+  assert.deepEqual(errors, [2]);
+  assert.deepEqual(done, [1, 3, 4]);
+  assert.equal(result.error, "");
+  assert.equal(result.aborted, false);
+});
+
+test("three consecutive whole-page failures pause the document", async () => {
+  const errors = [];
+  const result = await translateDocumentPages({
+    numPages: 5,
+    docId: 1,
+    cache: createPageCache(),
+    session: createTranslateSession(),
+    getPageOriginals: async (page) => [{ original: `Sentence on page ${page}.` }],
+    send: async () => ({ ok: false, error: "down" }),
+    onPageError: (info) => errors.push(info.page)
+  });
+  assert.deepEqual(errors, [1, 2, 3]);
+  assert.equal(result.pages.length, 3);
+  assert.equal(result.error, "down");
+  assert.equal(pageRunState(result.pages[0].results), "failed");
+  const totals = translatedPageTotal(result.pages.map(() => ({ state: "failed" })));
+  assert.equal(totals.n, 0);
+  assert.notEqual(docStatusView({ n: totals.n, t: 5, needsRetry: totals.needsRetry, phase: "idle" }).text, "全文已译");
+});
+
+test("force retranslate asks the batch sender to bypass the memory cache", async () => {
+  const messages = [];
+  await translatePageBlocks([{ original: "Hello there." }], {
+    bypassCache: true,
+    send: async (message) => {
+      messages.push(message);
+      return { ok: true, translations: ["你好"] };
+    }
+  });
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].bypassCache, true);
+  const plain = [];
+  await translatePageBlocks([{ original: "Hello there." }], {
+    send: async (message) => {
+      plain.push(message);
+      return { ok: true, translations: ["你好"] };
+    }
+  });
+  assert.equal(plain[0].bypassCache, undefined);
 });
