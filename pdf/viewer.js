@@ -291,6 +291,7 @@ let viewMode = "readout";
 let mirrorZoom = DEFAULT_ZOOM;
 let readerPrefs = readReaderPrefs(null);
 let readerBlend = readerImageBlend({ supportsMultiply: true, forcedColors: false });
+let toolbarSnapFrame = 0;
 
 init();
 
@@ -305,7 +306,63 @@ function workerSrc() {
   return new URL("./vendor/pdf.worker.min.mjs", import.meta.url).href;
 }
 
+function toolbarWidthTargets(bar) {
+  return [...bar.querySelectorAll("button, [data-tb='text'], [data-tb='status']")].filter((el) => {
+    if (el.closest(".more-menu")) return false;
+    if (el.dataset.tb === "icon") return false;
+    if (el.matches(".more-item")) return false;
+    return true;
+  });
+}
+
+function wholeToolbarPx(value) {
+  if (!Number.isFinite(value) || value < 1) return 0;
+  return Math.ceil(value - 1e-3);
+}
+
+// 带文字的顶栏控件在挂载、字体 loadingdone、文案变化后把宽度向上取整，
+// 这样 DPR1 下 left/width 是整数。图标按钮宽度由 CSS 锁在 30。
+function snapToolbarControlWidths() {
+  const bar = document.querySelector(".toolbar");
+  if (!bar) return;
+  for (const el of toolbarWidthTargets(bar)) {
+    if (el.closest("[hidden]")) continue;
+    const prevWidth = el.style.width;
+    const prevFlex = el.style.flex;
+    el.style.flex = "0 0 auto";
+    el.style.width = "max-content";
+    const snapped = wholeToolbarPx(el.getBoundingClientRect().width);
+    el.style.flex = prevFlex;
+    el.style.width = snapped ? `${snapped}px` : prevWidth;
+  }
+  document.documentElement.dataset.tbSnap = String(Number(document.documentElement.dataset.tbSnap || 0) + 1);
+}
+
+function scheduleToolbarSnap() {
+  cancelAnimationFrame(toolbarSnapFrame);
+  toolbarSnapFrame = requestAnimationFrame(() => snapToolbarControlWidths());
+}
+
+function bindToolbarGeometry() {
+  const bar = document.querySelector(".toolbar");
+  if (!bar || bar.dataset.tbBound) return;
+  bar.dataset.tbBound = "1";
+  snapToolbarControlWidths();
+  document.fonts?.ready?.then(() => scheduleToolbarSnap()).catch(() => {});
+  document.fonts?.addEventListener?.("loadingdone", scheduleToolbarSnap);
+  window.addEventListener("resize", scheduleToolbarSnap);
+  const observer = new MutationObserver(scheduleToolbarSnap);
+  observer.observe(bar, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["hidden"]
+  });
+}
+
 function init() {
+  bindToolbarGeometry();
   $("pick").addEventListener("click", () => $("file").click());
   $("file").addEventListener("change", async () => {
     const file = $("file").files?.[0];

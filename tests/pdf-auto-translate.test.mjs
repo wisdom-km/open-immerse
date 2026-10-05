@@ -526,7 +526,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     const ink = pager.querySelector(".pager-ink");
     const pick = document.getElementById("pick");
     const barBox = bar.getBoundingClientRect();
-    const mid = barBox.top + (barBox.height - 1) / 2;
+    const mid = barBox.top + barBox.height / 2;
     const box = pager.getBoundingClientRect();
     const pickBox = pick.getBoundingClientRect();
     const style = getComputedStyle(pager);
@@ -539,7 +539,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
       pickMid: Math.abs((pickBox.top + pickBox.height / 2) - mid)
     });
   })()`));
-  assert.equal(toolbar.barH, 49);
+  assert.equal(toolbar.barH, 48);
   assert.equal(toolbar.lineHeight, "12px");
   assert.equal(toolbar.inkTop, "-1.5px");
   assert.ok(toolbar.boxMid <= 0.5, `pager box mid ${toolbar.boxMid}`);

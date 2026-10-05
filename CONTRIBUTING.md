@@ -23,6 +23,23 @@
 node --test tests/*.test.mjs
 ```
 
+顶栏几何（需要本机夹具 `tests/fixtures/Attention_Is_All_You_Need.pdf`，不要把 PDF 提交进仓库）：
+
+```bash
+node --test tests/pdf-topbar-geometry.test.mjs
+```
+
+## 顶栏新按钮
+
+栏高 48，光学中线 y=24。底部分割线是 `box-shadow: inset 0 -1px 0 var(--oi-reader-line)`，不占布局。不要把 `border-bottom` 写回去，也不要把 `--oi-reader-topbar-h` 改成 49。
+
+新控件上栏前过这 4 条。`tests/pdf-topbar-geometry.test.mjs` 会遍历 `.toolbar` 下所有可见控件，不维护 id 名单；塞进顶栏的按钮会自动被量到。
+
+1. 归类型：`data-tb="icon"`（30×30 图标）、`data-tb="text"`（图标+文字或纯文字，高 30）或 `data-tb="status"`（状态槽，高 30）。相对顶栏的 top 是 9。
+2. 盒子中线在 y=24 ± 0.5。DPR 1 下 left、top、width、height 都是整数。带文字的控件在挂载时、以及 `document.fonts` 的 `loadingdone` 时，把宽度向上取整。
+3. 同一类型、同一字号、同一光学修正（例如页码 `.pager-ink` 的 `-1.5px`）的文字，alphabetic baseline 相差不超过 0.5px。
+4. 焦点框（2px 线 + 2px offset）不被 `overflow` 裁切，并且完整落在视口里。
+
 ## 新增翻译引擎
 
 1. 在 `providers` 对象中增加 `{ id, name, kind, fields, translate }`。
