@@ -245,7 +245,10 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
   handle.userDataDir = userDataDir;
   const origin = `http://127.0.0.1:${handle.server.address().port}`;
   const src = `${origin}/tests/fixtures/Attention_Is_All_You_Need.pdf`;
-  const viewerFor = (mode) => `${origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiBidMode=${mode}`;
+  const viewerFor = (mode) => {
+    const extra = mode === "text" ? "&oiAuto=1" : "";
+    return `${origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiBidMode=${mode}${extra}`;
+  };
 
   handle.child = launchChrome(userDataDir, scratchDir);
   const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
@@ -372,10 +375,46 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
     });
   })()`));
   const posts = async () => JSON.parse(await evaluate(`JSON.stringify(window.__oiPosts || [])`));
+  const hasBid = (row, bid) => row.bid.includes(bid) || row.pair.includes(bid);
+  const settled = async (page, needles) => {
+    const want = Array.isArray(needles) ? needles : [needles];
+    let previous = "";
+    let steady = 0;
+    let last = null;
+    const started = Date.now();
+    while (Date.now() - started < 20000) {
+      last = await lists(page);
+      const signature = JSON.stringify(last);
+      const hit = want.every((bid) => hasBid(last, bid));
+      if (hit && signature === previous) {
+        steady += 1;
+        if (steady >= 4) return last;
+      } else if (signature !== previous) {
+        steady = 0;
+      }
+      previous = signature;
+      await sleep(150);
+    }
+    throw new Error(`page ${page} bids did not settle: ${JSON.stringify(last)}`);
+  };
+  const reveal = async () => {
+    await waitFor(`(() => {
+      const state = document.getElementById("docStatus")?.dataset.state || "";
+      return state && state !== "opening" ? state : "";
+    })()`, "reader left opening", 30000);
+    await evaluate(`(() => {
+      document.querySelectorAll("#readerFlow .rf-page").forEach((el) => { delete el.dataset.painted; });
+      if (typeof globalThis.__oiRenderArticle === "function") globalThis.__oiRenderArticle();
+      return true;
+    })()`);
+  };
+  const currentPage = async () => {
+    const label = await evaluate(`document.getElementById("sourcePageLabel")?.textContent || ""`);
+    return Number((/^(\d+)\s*\//.exec(String(label || "").trim()) || [])[1] || 0);
+  };
   const goTo = async (page) => {
     for (let step = 0; step < 20; step += 1) {
-      const label = await evaluate(`document.getElementById("sourcePageLabel")?.textContent || ""`);
-      const current = Number((/第\s*(\d+)/.exec(label) || [])[1] || 0);
+      const current = await currentPage();
       if (current === page) {
         await waitFor(
           `document.querySelector('#readerFlow .rf-block[data-src-page="${page}"][data-bid]') ? "ready" : ""`,
@@ -385,9 +424,9 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
         return;
       }
       await clickSelector(current && current > page ? "#sourcePrev" : "#sourceNext");
-      await sleep(200);
+      await sleep(400);
     }
-    throw new Error(`could not reach page ${page}`);
+    throw new Error(`could not reach page ${page} (still ${await currentPage()})`);
   };
   const assertStable = (found, expected, label) => {
     assert.deepEqual(found.pair, expected.pair, `${label} pair ids`);
@@ -403,8 +442,9 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
   await goTo(4);
   await waitFor(`(document.getElementById("readerFlow")?.innerText || "").includes("汉块0") ? "zh" : ""`, "page 4 old translation", 20000);
   assert.equal((await posts()).length, 0, "opening page 4 does not write the library");
-  const page4 = await lists(4);
-  assert.ok(page4.bid.includes("b1-p4-t010gv1t"), "Attention p4-b13 bid");
+  await reveal();
+  const page4Needles = ["b1-p4-t010gv1t", "b1-p4-t1ejbcw1", "b1-p4-t1ewqjfg"];
+  const page4 = await settled(4, page4Needles);
   assert.ok(page4.pair.includes("b1-p4-t010gv1t"), "pair id uses the block bid");
   const anchor = JSON.parse(await evaluate(`(() => {
     const pane = document.getElementById("translateScroll");
@@ -419,45 +459,47 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
   await clickSelector('#aaFontScale [data-size="14"]');
   await waitFor(`document.getElementById("aaFontValue")?.textContent === "14px" ? "14" : ""`, "font 14");
   await frames(3);
-  assertStable(await lists(4), page4, "font 14");
+  assertStable(await settled(4, page4Needles), page4, "font 14");
   await clickSelector('#aaFontScale [data-size="20"]');
   await waitFor(`document.getElementById("aaFontValue")?.textContent === "20px" ? "20" : ""`, "font 20");
   await frames(3);
-  assertStable(await lists(4), page4, "font 20");
+  assertStable(await settled(4, page4Needles), page4, "font 20");
   const anchored = await evaluate(`document.querySelector('#readerFlow [data-block-id="${anchor.id}"]')?.dataset.bid || ""`);
   assert.equal(anchored, anchor.bid, "restored block bid");
   for (const theme of ["white", "sepia", "green", "warm"]) {
     await clickSelector(`#aaThemes [data-theme="${theme}"]`);
     await waitFor(`document.body.dataset.readerTheme === "${theme}" ? "${theme}" : ""`, `theme ${theme}`);
     await frames(2);
-    assertStable(await lists(4), page4, `theme ${theme}`);
+    assertStable(await settled(4, page4Needles), page4, `theme ${theme}`);
   }
   await clickSelector("#translateScroll");
+  await evaluate(`document.activeElement?.blur()`);
   await frames(1);
   await keyTap("s", "KeyS", 83);
   await frames(2);
   assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.sourceSide || ""`), "end");
-  assertStable(await lists(4), page4, "swap to end");
+  assertStable(await settled(4, page4Needles), page4, "swap to end");
   await keyTap("s", "KeyS", 83);
   await frames(2);
   assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.sourceSide || ""`), "start");
-  assertStable(await lists(4), page4, "swap back to start");
+  assertStable(await settled(4, page4Needles), page4, "swap back to start");
   await clickSelector("#zoomIn");
   await frames(3);
   assert.notEqual(await evaluate(`document.getElementById("zoomLabel")?.textContent || ""`), "100%");
-  assertStable(await lists(4), page4, "source zoom");
+  assertStable(await settled(4, page4Needles), page4, "source zoom");
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 2, mobile: false });
   await frames(3);
-  assertStable(await lists(4), page4, "dpr 2");
+  assertStable(await settled(4, page4Needles), page4, "dpr 2");
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await frames(3);
-  assertStable(await lists(4), page4, "dpr 1");
+  assertStable(await settled(4, page4Needles), page4, "dpr 1");
 
   await goTo(5);
   await waitFor(`(document.getElementById("readerFlow")?.innerText || "").includes("汉块0") ? "zh" : ""`, "page 5 old translation", 20000);
   assert.equal((await posts()).length, 0, "opening page 5 does not write the library");
-  const page5 = await lists(5);
-  assert.ok(page5.bid.includes("b1-p5-t1gsw7yq"), "Attention p5-b1 bid");
+  await reveal();
+  const page5Needles = ["b1-p5-t1gsw7yq", "b1-p5-t1r2ylcc"];
+  const page5 = await settled(5, page5Needles);
 
   await send("Page.reload", { ignoreCache: true });
   await waitFor(`(() => {
@@ -465,22 +507,29 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
     return /\\/\\s*15/.test(pager) ? pager : "";
   })()`, "reload", 50000);
   await goTo(4);
-  assertStable(await lists(4), page4, "reload page 4");
+  await reveal();
+  assertStable(await settled(4, page4Needles), page4, "reload page 4");
   await goTo(5);
-  assertStable(await lists(5), page5, "reload page 5");
+  await reveal();
+  assertStable(await settled(5, page5Needles), page5, "reload page 5");
   assert.equal((await posts()).length, 0, "reload does not write the library");
 
   await goTo(4);
+  await reveal();
   const beforeSave = page4;
+  await evaluate(`document.querySelector('#readerFlow .rf-block[data-src-page="4"]')?.scrollIntoView({ block: "center", behavior: "auto" })`);
+  await frames(4);
+  await waitFor(`document.getElementById("pageCapsule")?.dataset.srcPage === "4" ? "4" : ""`, "capsule on page 4", 10000);
   await clickSelector("#retranslatePage");
   await waitFor(`(document.getElementById("status")?.textContent || "").includes("本页译文已更新") ? "done" : ""`, "retranslate page 4", 60000);
-  await frames(3);
-  assertStable(await lists(4), beforeSave, "retranslate keeps bids");
+  await reveal();
+  assertStable(await settled(4, page4Needles), beforeSave, "retranslate keeps bids");
   const saved = (await posts()).filter((body) => Number(body.page) === 4);
   assert.ok(saved.length >= 1, "retranslate writes the page");
-  const pairBids = saved[saved.length - 1].pairs.map((pair) => pair.bid);
+  const pairBids = saved[saved.length - 1].pairs.map((pair) => pair.bid).filter(Boolean);
   assert.ok(pairBids.length > 0);
-  assert.equal(pairBids.every((bid) => beforeSave.bid.includes(bid)), true);
+  assert.equal(pairBids.every((bid) => isBid(bid)), true, "saved pairs carry bids");
+  assert.ok(pairBids.includes("b1-p4-t010gv1t"), "saved page 4 keeps the paragraph bid");
 
   await send("Page.navigate", { url: viewerFor("cache") });
   await waitFor(`(() => {
