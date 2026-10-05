@@ -34,8 +34,11 @@ const MIME = {
 };
 
 const STUB = `(() => {
-  const mode = new URLSearchParams(location.search).get("oiAuto") || "";
+  const params = new URLSearchParams(location.search);
+  const mode = params.get("oiAuto") || "";
   if (!mode || mode === "runtime") return;
+  const lang = params.get("oiLang") || (mode === "en" ? "en" : mode === "ja" ? "ja" : "zh-CN");
+  const delayMs = Number(params.get("oiDelay") || 0);
   const settings = {
     provider: mode === "missing" ? "openai" : "mymemory",
     providers: {
@@ -43,16 +46,24 @@ const STUB = `(() => {
       openai: { apiKey: "" }
     },
     pdfAutoTranslate: mode !== "off",
+    targetLang: lang,
     pdfLayout: mode === "local"
       ? { mode: "local-ocr", localBaseUrl: "http://127.0.0.1:8765" }
       : { mode: "" },
     batchSize: 8
   };
-  window.__oiAuto = { mode, batches: [], texts: [], messages: [], page3AtFirstBatch: null };
+  window.__oiAuto = { mode, lang, batches: [], texts: [], messages: [], page3AtFirstBatch: null, clickedDuringOpen: false };
+  const libraryText = lang === "en"
+    ? "Stored English translation for this page."
+    : lang === "ja"
+      ? "ちゅういりょくのやく"
+      : "这是库里已经存好的一句译文。";
   const origFetch = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const url = typeof input === "string" ? input : (input && input.url) || "";
     if (url.includes("/v1/library/")) {
+      const wait = (mode === "openRace" ? 80 : 0) + (delayMs > 0 ? Math.random() * delayMs : 0);
+      if (wait > 0) await new Promise((done) => setTimeout(done, wait));
       if (mode === "cache") {
         return new Response(JSON.stringify({
           pageCount: 15,
@@ -103,6 +114,20 @@ const STUB = `(() => {
           readout: "这是库里的通读稿，只有开头这一段旧译文。\\n\\n后面的页还没有逐页译文，重新打开要继续译。"
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (mode === "cacheAll") {
+        const pages = [];
+        for (let page = 1; page <= 15; page += 1) {
+          if (page === 11 || page === 12) continue;
+          const pairs = page === 1
+            ? [{ text: "Abstract", translation: libraryText }]
+            : [{ text: "Stored sentence for page " + page + ".", translation: libraryText }];
+          pages.push({ page, pairs });
+        }
+        return new Response(JSON.stringify({ pageCount: 15, pages }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
       return new Response("missing", { status: 404 });
     }
     if (mode === "local" && url.includes("127.0.0.1:8765")) {
@@ -129,10 +154,26 @@ const STUB = `(() => {
           window.__oiAuto.messages.push({ bypassCache: message.bypassCache === true, texts });
           if (mode === "hang") return new Promise(() => {});
           if (mode === "bothfail") return Promise.resolve({ ok: false, error: "500" });
+          const index = window.__oiAuto.batches.length - 1;
+          if (mode === "retryTitle" && index === 0) return Promise.resolve({ ok: false, error: "500" });
+          if (mode === "retryBody" && index === 1) return Promise.resolve({ ok: false, error: "500" });
+          if (mode === "retryBoth" && index < 2) return Promise.resolve({ ok: false, error: "500" });
           if (mode === "short") {
             return Promise.resolve({
               ok: true,
               translations: texts.map((text, index) => (index === texts.length - 1 ? "" : "译:" + text))
+            });
+          }
+          if (lang === "en") {
+            return Promise.resolve({
+              ok: true,
+              translations: texts.map(() => "Rendered English translation for the reader.")
+            });
+          }
+          if (lang === "ja") {
+            return Promise.resolve({
+              ok: true,
+              translations: texts.map(() => "ちゅういりょくのやく")
             });
           }
           const pad = mode === "fast" ? " " + "译文补长以撑起右栏。".repeat(40) : "";
@@ -152,6 +193,18 @@ const STUB = `(() => {
       }
     }
   };
+  if (mode === "openRace") {
+    const timer = setInterval(() => {
+      const phase = document.querySelector("#docStatus")?.dataset.state || "";
+      const button = document.getElementById("retranslatePage");
+      if (phase === "opening" && button && !button.disabled) {
+        clearInterval(timer);
+        window.__oiAuto.clickedDuringOpen = true;
+        button.click();
+      }
+    }, 5);
+    setTimeout(() => clearInterval(timer), 20000);
+  }
 })();`;
 
 function serveRepo() {
@@ -349,8 +402,10 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     throw new Error(`${label} timed out. status=${status} last=${JSON.stringify(last)}`);
   };
 
-  const openMode = async (mode) => {
-    const viewer = `${origin}/pdf/viewer.html?oiAuto=${mode}&src=${encodeURIComponent(src)}`;
+  const openMode = async (mode, extra = {}) => {
+    const lang = extra.lang ? `&oiLang=${encodeURIComponent(extra.lang)}` : "";
+    const delay = process.env.OI_AUTO_DELAY ? `&oiDelay=${encodeURIComponent(process.env.OI_AUTO_DELAY)}` : "";
+    const viewer = `${origin}/pdf/viewer.html?oiAuto=${mode}${lang}${delay}&src=${encodeURIComponent(src)}`;
     await cdp.send("Page.navigate", { url: viewer }, sessionId);
     if (mode === "runtime") {
       await waitFor(`(() => {
@@ -654,6 +709,24 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     return JSON.stringify({ scroll: pane.scrollTop });
   })()`));
   assert.ok(Math.abs(collapsed.scroll - 280) <= 1, `writeback left scrollTop ${collapsed.scroll}`);
+  const noAnchor = JSON.parse(await evaluate(`(() => {
+    const pane = document.getElementById("translateScroll");
+    document.querySelectorAll("#readerFlow .rf-block").forEach((el) => {
+      el.classList.remove("rf-block");
+      delete el.dataset.blockId;
+      delete el.dataset.pairId;
+    });
+    pane.scrollTop = 280;
+    window.__oiForceScrollCollapse = true;
+    window.__oiRenderArticle();
+    window.__oiForceScrollCollapse = false;
+    return JSON.stringify({
+      scroll: pane.scrollTop,
+      tall: pane.scrollHeight - pane.clientHeight
+    });
+  })()`));
+  assert.ok(noAnchor.tall >= 200, `no-anchor content is not tall (${noAnchor.tall})`);
+  assert.ok(Math.abs(noAnchor.scroll - 280) <= 1, `no-anchor writeback left scrollTop ${noAnchor.scroll}`);
 
   await waitFor(`document.getElementById("translatePage")?.hidden === false ? "idle" : ""`, "fast: 主按钮回到翻译");
   const beforeForce = JSON.parse(await evaluate(`String((window.__oiAuto && window.__oiAuto.messages || []).length)`));
@@ -804,4 +877,155 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.equal(failed.translateHidden, false);
   assert.doesNotMatch(failed.queue, /排队翻译/);
   assert.match(failed.queue, /已暂停/);
+  const emptyState = JSON.parse(await evaluate(`(() => {
+    const capsule = document.getElementById("pageCapsule");
+    capsule.dataset.srcPage = "8";
+    window.__oiNoteState(8, "failed");
+    const failedOn = document.getElementById("retranslatePage")?.disabled === true;
+    window.__oiNoteState(8, "partial");
+    const partialOn = document.getElementById("retranslatePage")?.disabled === true;
+    capsule.dataset.srcPage = "1";
+    window.__oiNoteState(1, "failed");
+    return JSON.stringify({ failedOn, partialOn });
+  })()`));
+  assert.equal(emptyState.failedOn, false, "failed page with no blocks can retranslate");
+  assert.equal(emptyState.partialOn, false, "partial page with no blocks can retranslate");
+
+  async function resumeFailed(mode) {
+    await openMode(mode);
+    const stalled = JSON.parse(await waitFor(`(() => {
+      const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+      if (document.getElementById("translatePage")?.hidden !== false) return "";
+      if (page1 !== "partial" && page1 !== "failed") return "";
+      const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+      if (doc.includes("全文已译")) return "";
+      const title = window.__oiTitleState ? window.__oiTitleState() : null;
+      return JSON.stringify({
+        page1,
+        doc,
+        status: document.getElementById("status")?.textContent || "",
+        slotsDone: title ? title.slotsDone === true : null,
+        titleFailed: title ? title.failed === true : null,
+        count: (window.__oiAuto && window.__oiAuto.messages || []).length
+      });
+    })()`, mode + ": 失败批次留下未完成的第 1 页", 180000));
+    const before = stalled.count;
+    await evaluate(`document.getElementById("translatePage").click()`);
+    const resumed = JSON.parse(await waitFor(`(() => {
+      const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+      const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+      if (page1 !== "done" || !doc.includes("全文已译")) return "";
+      const title = window.__oiTitleState ? window.__oiTitleState() : null;
+      return JSON.stringify({
+        page1,
+        doc,
+        slotsDone: title ? title.slotsDone === true : null,
+        messages: window.__oiAuto.messages
+      });
+    })()`, mode + ": 点翻译后全文已译", 180000));
+    return { stalled, resumed, before };
+  }
+
+  const titleRetry = await resumeFailed("retryTitle");
+  assert.equal(titleRetry.stalled.slotsDone, false);
+  assert.equal(titleRetry.stalled.titleFailed, true);
+  assert.doesNotMatch(titleRetry.stalled.status, /模型和密钥/);
+  assert.match(titleRetry.stalled.status, /点「翻译」/);
+  assert.equal(titleRetry.resumed.page1, "done");
+  assert.match(titleRetry.resumed.doc, /全文已译/);
+  assert.equal(titleRetry.resumed.slotsDone, true);
+  const titleAgain = titleRetry.resumed.messages.slice(titleRetry.before);
+  const titleFirst = titleRetry.resumed.messages[0];
+  assert.ok(titleAgain.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(titleFirst.texts)), "失败的标题批要带 bypassCache 重发");
+
+  const bodyRetry = await resumeFailed("retryBody");
+  assert.equal(bodyRetry.stalled.slotsDone, true);
+  assert.equal(bodyRetry.resumed.slotsDone, true);
+  assert.equal(bodyRetry.resumed.page1, "done");
+  assert.match(bodyRetry.resumed.doc, /全文已译/);
+  const bodyAgain = bodyRetry.resumed.messages.slice(bodyRetry.before);
+  const bodyFirst = bodyRetry.resumed.messages[1];
+  assert.ok(bodyAgain.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(bodyFirst.texts)), "失败的正文批要带 bypassCache 重发");
+
+  const bothRetry = await resumeFailed("retryBoth");
+  assert.equal(bothRetry.stalled.slotsDone, false);
+  assert.equal(bothRetry.resumed.page1, "done");
+  assert.match(bothRetry.resumed.doc, /全文已译/);
+  assert.equal(bothRetry.resumed.slotsDone, true);
+  const bothAgain = bothRetry.resumed.messages.slice(bothRetry.before);
+  const bothHead = bothRetry.resumed.messages.slice(0, 2);
+  for (const failedBatch of bothHead) {
+    assert.ok(bothAgain.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(failedBatch.texts)), "两批失败都要重发");
+  }
+
+  async function fullLibraryHit(lang) {
+    await openMode("cacheAll", lang ? { lang } : {});
+    return JSON.parse(await waitFor(`(() => {
+      const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+      if (!doc.includes("全文已译")) return "";
+      const batches = (window.__oiAuto && window.__oiAuto.batches || []).length;
+      const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+      const pages = [...document.querySelectorAll("#readerFlow .rf-page")].map((slot) => slot.dataset.state || "");
+      return JSON.stringify({ doc, batches, page1, pages });
+    })()`, "cacheAll " + (lang || "zh") + ": 库全命中不再发批", 120000));
+  }
+  const hitZh = await fullLibraryHit("");
+  assert.equal(hitZh.batches, 0);
+  assert.equal(hitZh.page1, "done");
+  assert.ok(hitZh.pages.every((state) => state === "done" || state === "skipped" || state === "empty"));
+  const hitEn = await fullLibraryHit("en");
+  assert.equal(hitEn.batches, 0, "en 库全命中仍是 0 批");
+  assert.equal(hitEn.page1, "done");
+  const hitJa = await fullLibraryHit("ja");
+  assert.equal(hitJa.batches, 0, "ja 库全命中仍是 0 批");
+  assert.equal(hitJa.page1, "done");
+
+  await openMode("en");
+  const english = JSON.parse(await waitFor(`(() => {
+    const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+    const zh = document.querySelector('#readerFlow .rf-page[data-page="1"] .rf-zh')?.textContent || "";
+    if (page1 !== "done" || !zh.includes("Rendered English translation")) return "";
+    return JSON.stringify({ page1, zh: zh.slice(0, 80) });
+  })()`, "en: 英文译文能让第 1 页 done", 120000));
+  assert.equal(english.page1, "done");
+  assert.match(english.zh, /Rendered English translation/);
+
+  await openMode("ja");
+  const kana = JSON.parse(await waitFor(`(() => {
+    const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+    const zh = document.querySelector('#readerFlow .rf-page[data-page="1"] .rf-zh')?.textContent || "";
+    if (page1 !== "done" || !zh.includes("ちゅういりょくのやく")) return "";
+    return JSON.stringify({ page1, zh: zh.slice(0, 80) });
+  })()`, "ja: 假名译文能让第 1 页 done", 120000));
+  assert.equal(kana.page1, "done");
+  assert.match(kana.zh, /ちゅういりょくのやく/);
+
+  await openMode("fast");
+  await waitFor(`document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state === "done" ? "done" : ""`, "切换目标前第 1 页已是中文 done");
+  const switched = JSON.parse(await evaluate(`(() => {
+    window.__oiSetTarget("en");
+    return JSON.stringify({
+      page1: document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || ""
+    });
+  })()`));
+  assert.notEqual(switched.page1, "done", "目标改成英文后，汉字译文不再算落地");
+
+  await openMode("openRace");
+  const raced = JSON.parse(await waitFor(`(() => {
+    if (!window.__oiAuto || window.__oiAuto.clickedDuringOpen !== true) return "";
+    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+    if (!doc.includes("全文已译")) return "";
+    if (page1 === "running" || page1 === "layout") return "";
+    return JSON.stringify({
+      doc,
+      page1,
+      batches: window.__oiAuto.batches.length,
+      clicked: window.__oiAuto.clickedDuringOpen
+    });
+  })()`, "打开时重译结束后仍自动全文", 180000));
+  assert.equal(raced.clicked, true);
+  assert.match(raced.doc, /全文已译/);
+  assert.notEqual(raced.page1, "running");
+  assert.ok(raced.batches >= 2);
 });

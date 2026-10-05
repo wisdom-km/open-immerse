@@ -159,7 +159,7 @@ No layout-preserving Office or scanned files here. Convert to plain text first. 
 Target: text-layer body text plus content-accurate original-page display (crops by default). The right pane stays a **Markdown reading-flow** in reading order. Formula images do not come from LaTeX rendering. The spec is `pdf/PDF-MD-READOUT.md`. The reader runtime switches by the phases in `pdf/high-precision/EXECUTION.md`.
 
 - Left pane: pdf.js continuous scroll; zoom applies only to the original page
-- Top bar: translated n / t pages → Open PDF → Translate / Stop → Retranslate page → Original → Previous → page number → Next → Aa. Export MD / PDF lives in the **···** menu, not on the bar. Opening starts a full-document translation. Settings → 功能 → PDF has **打开 PDF 时自动翻译全文**, on by default. Original only switches the view; it does not abort the job or clear the cache.
+- Top bar: translated n / t pages → Open PDF → Translate → Retranslate page → Stop (shown only while a job is running) → Original → Previous → page number → Next → Aa. Export MD / PDF lives in the **···** menu, not on the bar. Opening starts a full-document translation. Settings → 功能 → PDF has **打开 PDF 时自动翻译全文**, on by default. Original only switches the view; it does not abort the job or clear the cache.
 - Full document walks pages with `OI_TRANSLATE_BATCH`. In-page progress is `正在翻译 · k / m 段`. Jobs can be stopped. After stop or completion the primary button returns to **翻译**; Chinese already produced stays
 - **Original only switches the view**, and does not abort translation or clear the cache
 - Right pane is a **Markdown reading-flow**: extract title + body in reading order, translate, scroll as a document. Translations appear only in the right pane — they are **not** pasted into the left pane
@@ -301,7 +301,7 @@ Conventions: [CONTRIBUTING.md](CONTRIBUTING.md) (Chinese). Short version:
 - One intent per PR. Do not commit keys, `.env`, or zip artifacts
 - `content/` owns the DOM. Network and cache stay in `background/`
 - Popup “翻译此页” follows this tab’s `OI_PING.inflight` (`html.oi-active`). Do not use the global `enabled` flag as page state. Stop uses `OI_STOP`/`abort()`; “恢复原文” uses `OI_RESTORE`
-- Do not mix PDF scope (current page / full document) with webpage scan rules
+- The PDF reader has no current-page / full-document scope switch. Do not add one back, and do not mix that with webpage scan rules.
 - Webpage scan: `article` takes the main column only; `page` also takes readable sidebar blocks and short TOC/nav labels, and uses a heuristic for an article H1 in the header. Do not ban every `closest('header')`
 
 ### Add an engine

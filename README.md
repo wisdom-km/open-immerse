@@ -155,7 +155,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 目标：文字层正文 + 原页内容精准展示（默认裁图）。右栏仍是 **Markdown 通读**，按阅读顺序排译文。公式画面不来自 LaTeX 渲染。规格见 `pdf/PDF-MD-READOUT.md`。阅读器运行路径按 `pdf/high-precision/EXECUTION.md` 分阶段接上。
 
 - 左栏：pdf.js 连续滚动；缩放只作用于原页
-- 顶栏：已译 n / t 页 → 打开 PDF → 翻译 / 停止 → 重译本页 → 原文 → 上一页 → 页码 → 下一页 → Aa。导出 MD / PDF 在「···」菜单里，不是顶栏按钮。打开后自动翻译全文。设置 → 功能 → PDF 里可关「打开 PDF 时自动翻译全文」
+- 顶栏：已译 n / t 页 → 打开 PDF → 翻译 → 重译本页 → 停止（只在翻译进行时显示）→ 原文 → 上一页 → 页码 → 下一页 → Aa。导出 MD / PDF 在「···」菜单里，不是顶栏按钮。打开后自动翻译全文。设置 → 功能 → PDF 里可关「打开 PDF 时自动翻译全文」
 - 全文按页 `OI_TRANSLATE_BATCH`，页内进度「正在翻译 · k / m 段」，可停；停或译完主按钮立刻回「翻译」，已译中文保留
 - **原文只切换视图**，不中止翻译，也不清缓存
 - 右栏走 **Markdown 通读流**：按阅读顺序抽出标题 + 正文再翻译，连续滚动；译文只出现在右栏，**不是**把译文贴进左栏
@@ -297,7 +297,7 @@ node --test tests/*.test.mjs
 - 一个 PR 一件事；不要提交 Key、`.env`、zip
 - `content/` 只动 DOM；网络与缓存只在 `background/`
 - 弹层「翻译此页」只表示本页是否在译：以当前页 `OI_PING.inflight`（`html.oi-active`）为准，不要用全局 `enabled` 冒充本页状态。「停止」走 `OI_STOP`/`abort()`；「恢复原文」才 `OI_RESTORE`
-- PDF 范围（当前页 / 全文）不要和网页扫描逻辑混改
+- PDF 阅读器没有「当前页 / 全文」分段，不要加回去，也不要和网页扫描逻辑混改
 - 网页扫描：`article` 只收主栏；`page` 另收侧栏可读段，并用启发式收 header 里的文章 H1，禁止 `closest('header')` 一刀切
 
 ### 新增引擎

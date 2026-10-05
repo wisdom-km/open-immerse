@@ -11,7 +11,10 @@ import {
   docStatusView,
   libraryPageRunState,
   pageRunState,
+  pageNeedsBypass,
   runTitleStructureBatch,
+  translationLanded,
+  translationUnchangedOk,
   psEmptyCopy,
   psNoTextCopy,
   psRunning,
@@ -312,4 +315,73 @@ test("force retranslate asks the batch sender to bypass the memory cache", async
     }
   });
   assert.equal(plain[0].bypassCache, undefined);
+});
+
+test("latin targets ignore digits and Han, and keep short unchanged segments", () => {
+  const source = "Attention is all you need";
+  assert.equal(translationLanded("123", "hello", "en"), false);
+  assert.equal(translationLanded("...", "hello", "de"), false);
+  assert.equal(translationLanded("注意力就是你所需要的一切", source, "en"), false);
+  assert.equal(translationLanded("Attention is everything you need", source, "fr"), true);
+  assert.equal(translationUnchangedOk("BLEU", "BLEU"), true);
+  assert.equal(translationUnchangedOk("GPT-4", "GPT-4"), true);
+  assert.equal(translationUnchangedOk("α + β", "α + β"), true);
+  assert.equal(translationUnchangedOk(source, source), false);
+  assert.equal(pageRunState([{ original: "BLEU", translation: "BLEU", role: "paragraph" }], { targetLang: "en" }), "done");
+  assert.equal(pageRunState([{ original: "Transformer", translation: "Transformer", role: "paragraph" }], { targetLang: "en" }), "done");
+  assert.equal(pageRunState([
+    { original: "BLEU", translation: "BLEU", role: "paragraph" },
+    { original: source, translation: "Attention is everything you need", role: "paragraph" }
+  ], { targetLang: "en" }), "done");
+  assert.equal(pageRunState([{ original: source, translation: source, role: "paragraph" }], { targetLang: "en" }), "failed");
+  assert.equal(pageRunState([{ original: "hello", translation: "123", role: "paragraph" }], { targetLang: "en" }), "failed");
+  assert.equal(pageRunState([{ original: "hello", translation: "你好", role: "paragraph" }], { targetLang: "en" }), "failed");
+  assert.equal(pageRunState([{ original: "123", translation: "123", role: "paragraph" }], { targetLang: "en" }), "done");
+});
+
+test("three pages that echo the source pause and are not saved", async () => {
+  const saved = [];
+  const errors = [];
+  const sentence = "The dominant sequence transduction models are based on complex recurrent networks.";
+  const result = await translateDocumentPages({
+    numPages: 4,
+    targetLang: "en",
+    docId: 1,
+    cache: createPageCache(),
+    session: createTranslateSession(),
+    getPageOriginals: async (page) => [{ original: `${sentence} Page ${page}.` }],
+    send: async (message) => ({ ok: true, translations: message.texts.slice() }),
+    onPageDone: (info) => saved.push(info.page),
+    onPageError: (info) => errors.push(info.page)
+  });
+  assert.deepEqual(errors, [1, 2, 3]);
+  assert.deepEqual(saved, []);
+  assert.equal(result.paused, true);
+  assert.equal(result.pages.length, 3);
+});
+
+test("a failed page is retried with bypassCache", async () => {
+  const messages = [];
+  let fail = true;
+  const cache = createPageCache();
+  const run = () => translateDocumentPages({
+    numPages: 1,
+    docId: 1,
+    cache,
+    session: createTranslateSession(),
+    getPageOriginals: async () => [{ original: "Hello there." }],
+    send: async (message) => {
+      messages.push(message);
+      if (fail) return { ok: false, error: "500" };
+      return { ok: true, translations: ["你好"] };
+    }
+  });
+  const first = await run();
+  assert.equal(first.pages[0].results[0].failed, true);
+  assert.equal(messages[0].bypassCache, undefined);
+  assert.equal(pageNeedsBypass(cache.get(1, 1), "zh-CN"), true);
+  fail = false;
+  await run();
+  assert.equal(messages[1].bypassCache, true);
+  assert.equal(pageNeedsBypass([{ original: "Hello", translation: "" }], "zh-CN"), false);
 });

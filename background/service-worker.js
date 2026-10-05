@@ -291,7 +291,7 @@ async function translateBatch(texts, options = {}) {
     chunk.forEach((item, j) => {
       const value = guarded[j] || "";
       results[item.index] = value;
-      remember(item.key, value);
+      remember(item.key, value, item.text);
     });
   }
   return guardZhTranslations(texts, results, settings.targetLang);
@@ -307,12 +307,18 @@ function cacheKey(provider, from, to, text, settings) {
 
 function readCachedTranslation(key, text, targetLang) {
   const [guarded] = guardZhTranslations([text], [cache.get(key)], targetLang);
-  if (guarded !== cache.get(key)) remember(key, guarded);
+  if (guarded !== cache.get(key)) remember(key, guarded, text);
   return guarded;
 }
 
-function remember(key, value) {
-  cache.set(key, value);
+function remember(key, value, source = "") {
+  const text = String(value || "").trim();
+  const fold = (item) => String(item || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!text || (source && fold(text) === fold(source))) {
+    cache.delete(key);
+    return;
+  }
+  cache.set(key, text);
   if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
 }
 

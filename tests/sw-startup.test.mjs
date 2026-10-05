@@ -71,7 +71,7 @@ test("SW cache version includes title-calque bust and guards cache hits", () => 
     swSource,
     /const guarded = guardZhTranslations\(\n      chunk\.map\(\(c\) => c\.text\),\n      translated,\n      settings\.targetLang\n    \);/
   );
-  assert.match(swSource, /remember\(item\.key, value\);/);
+  assert.match(swSource, /remember\(item\.key, value, item\.text\);/);
   assert.match(swSource, /return guardZhTranslations\(texts, results, settings\.targetLang\);/);
   assert.match(swSource, /export \{ translateBatch, resolveBatchPolish, CACHE_VER, cache as translationCache \};/);
   assert.match(swSource, /OI_TRANSLATE_PROGRESS/);
@@ -305,6 +305,48 @@ test("bypassCache skips the memory cache and calls the provider again", async ()
     assert.deepEqual(cached, ["第一次"]);
     assert.deepEqual(fresh, ["重译"]);
     assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = prevFetch;
+  }
+});
+
+test("empty and same-as-source translations are not stored in the memory cache", async () => {
+  stubChrome(async () => {});
+  chrome.storage.sync.get = async () => ({
+    settings: {
+      provider: "openai",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      twoStepPolish: false,
+      batchSize: 8,
+      settingsVersion: 7,
+      articleScopeMigrated: true,
+      providers: {
+        openai: { apiKey: "sk-test", baseUrl: "https://api.example.com/v1", model: "test-model", prompt: "" }
+      }
+    }
+  });
+  let calls = 0;
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    calls += 1;
+    const content = calls === 1 ? "1. " : calls === 2 ? "1. Hello there." : "1. 你好";
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { choices: [{ message: { content } }] };
+      }
+    };
+  };
+  try {
+    const sw = await import(`../background/service-worker.js?empty=${Date.now()}`);
+    await sw.translateBatch(["Hello there."]);
+    await sw.translateBatch(["Hello there."]);
+    const third = await sw.translateBatch(["Hello there."]);
+    assert.equal(calls, 3);
+    assert.deepEqual(third, ["你好"]);
+    assert.equal(sw.translationCache.has([...sw.translationCache.keys()].find((key) => String(key).endsWith("|Hello there.")) || ""), true);
   } finally {
     globalThis.fetch = prevFetch;
   }
