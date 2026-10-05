@@ -115,6 +115,49 @@ test("same-page duplicate text gets base and base-2", () => {
   assert.equal(second.id, "other");
 });
 
+test("collision suffixes follow reading order when the array is shuffled", () => {
+  const upper = {
+    id: "upper",
+    label: "text",
+    sourceText: "Summary A",
+    text: "Summary A",
+    bbox: [0.18, 0.12, 0.46, 0.16]
+  };
+  const lower = {
+    id: "lower",
+    label: "text",
+    sourceText: "Summary A",
+    text: "Summary A",
+    bbox: [0.18, 0.42, 0.46, 0.46]
+  };
+  const reading = assignBids(21, [upper, lower]);
+  const shuffled = assignBids(21, [lower, upper]);
+  const bidOf = (rows, id) => rows.find((row) => row.id === id).bid;
+  assert.equal(bidOf(shuffled, "upper"), bidOf(reading, "upper"));
+  assert.equal(bidOf(shuffled, "lower"), bidOf(reading, "lower"));
+  assert.equal(/-[2-9]$/.test(bidOf(reading, "upper")), false);
+  assert.match(bidOf(reading, "lower"), /-2$/);
+  assert.deepEqual(shuffled.map((row) => row.id), ["lower", "upper"]);
+  const bare = { id: "bare", label: "text", sourceText: "post", text: "post" };
+  const other = { id: "other", label: "text", sourceText: "post", text: "post" };
+  const passed = assignBids(21, [bare, other]);
+  assert.match(passed[1].bid, /-2$/);
+});
+
+test("formula bid keeps the layout bbox after an ink trim", () => {
+  const layout = [0.3514490784313726, 0.5792976515151516, 0.8325989470588235, 0.6269472626262627];
+  const trimmed = [0.3562091503267974, 0.5839646464646465, 0.8284313725490197, 0.6205808080808081];
+  const block = { id: "p4-b7", label: "formula", bbox: layout };
+  assert.equal(assignBids(4, [block])[0].bid, "b1-p4-m0ihblz1");
+  assert.equal(assignBids(4, [{ ...block, bbox: trimmed, layoutBbox: layout }])[0].bid, "b1-p4-m0ihblz1");
+  assert.equal(assignBids(4, [{ ...block, bbox: trimmed }])[0].bid, "b1-p4-m021wtet");
+  const crop = viewerSrc.slice(
+    viewerSrc.indexOf("function imageForVisualBlock"),
+    viewerSrc.indexOf("function cropFormulaImage")
+  );
+  assert.ok(crop.indexOf("layoutBbox") >= 0 && crop.indexOf("layoutBbox") < crop.indexOf("formulaInkBbox"));
+});
+
 test("bids ignore translation, order, sourceIndex, and text bbox; a letter changes them", () => {
   const block = {
     id: "p4-b13",
@@ -422,9 +465,32 @@ test("Attention and DPO text-layer bids match the locked reference", { timeout: 
   assert.equal(new Set(dpoBids).size, 509);
   assert.equal(findBlock(dpo, "p2-b8").block.bid, "b1-p2-t1hmmsbz");
   assert.equal(findBlock(dpo, "p3-b1").block.bid, "b1-p3-t1n7kik7");
-  const collisions = collisionBids(dpoBlocks);
-  if (collisions.length) {
-    t.diagnostic(`DPO same-page bid suffixes (${collisions.length}): ${collisions.join(", ")}`);
+  const byBase = new Map();
+  for (const block of dpoBlocks) {
+    const base = String(block.bid).replace(/-(?:[2-9]|[1-9]\d+)$/, "");
+    if (!byBase.has(base)) byBase.set(base, []);
+    byBase.get(base).push(block);
   }
+  const dupes = [...byBase.entries()].filter(([, blocks]) => blocks.length > 1)
+    .map(([base, blocks]) => ({
+      base,
+      n: blocks.length,
+      head: bidText(blocks[0].sourceText || blocks[0].text).slice(0, 40)
+    }));
+  assert.deepEqual(dupes, [
+    { base: "b1-p6-t0p0a5vm", n: 2, head: "yπrefyxexp1" },
+    { base: "b1-p18-t1kh4gv6", n: 2, head: "βrxy" },
+    { base: "b1-p18-t0xupwgh", n: 2, head: "whichcompletestheproof" },
+    { base: "b1-p21-t0vpxjr3", n: 3, head: "post" },
+    { base: "b1-p21-t1goer1q", n: 4, head: "summarya" },
+    { base: "b1-p21-t1gef5cr", n: 4, head: "summaryb" },
+    { base: "b1-p21-t0all1n6", n: 2, head: "firstprovideaonesentencecomparisonofthet" }
+  ]);
+  for (const [base, blocks] of byBase) {
+    if (blocks.length < 2) continue;
+    const head = bidText(blocks[0].sourceText || blocks[0].text);
+    assert.equal(blocks.every((block) => bidText(block.sourceText || block.text) === head), true, base);
+  }
+  assert.equal(collisionBids(dpoBlocks).length, 12);
   assert.equal(bidText("⟦f1⟧ Attention").includes("f1"), false);
 });

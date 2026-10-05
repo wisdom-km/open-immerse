@@ -1752,7 +1752,14 @@ function imageForVisualBlock(raster, block) {
     const drawn = redrawFormulaGlyphs(raster?.canvas, block.glyphBoxes, block.bbox);
     if (drawn) return drawn;
   }
-  if (block?.label === "formula") block.bbox = formulaInkBbox(raster?.canvas, block);
+  if (block?.label === "formula") {
+    // Crop ink is a raster measurement. setPageLayout hashes the layout-stage
+    // 0–1 box frozen here, never the trimmed box or a DOM rect.
+    if (!Array.isArray(block.layoutBbox) && Array.isArray(block.bbox)) {
+      block.layoutBbox = block.bbox.slice(0, 4);
+    }
+    block.bbox = formulaInkBbox(raster?.canvas, block);
+  }
   return cropFormulaImage(raster?.canvas, block);
 }
 

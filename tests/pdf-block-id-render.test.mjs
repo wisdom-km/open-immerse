@@ -444,8 +444,14 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
   assert.equal((await posts()).length, 0, "opening page 4 does not write the library");
   await reveal();
   const page4Needles = ["b1-p4-t010gv1t", "b1-p4-t1ejbcw1", "b1-p4-t1ewqjfg"];
+  const TEXT_LAYER_FORMULA = "b1-p4-m0ihblz1";
   const page4 = await settled(4, page4Needles);
+  const formulaBlockId = await evaluate(`document.querySelector('#readerFlow figure[data-label="formula"][data-bid="${TEXT_LAYER_FORMULA}"]')?.dataset.blockId || ""`);
+  assert.ok(formulaBlockId, "display formula keeps the text-layer bid");
+  const formulaBid = () => evaluate(`document.querySelector('#readerFlow figure[data-block-id="${formulaBlockId}"]')?.dataset.bid || ""`);
+  assert.equal(await formulaBid(), TEXT_LAYER_FORMULA, "text-layer formula bid");
   assert.ok(page4.pair.includes("b1-p4-t010gv1t"), "pair id uses the block bid");
+  assert.ok(page4.pair.includes(TEXT_LAYER_FORMULA) || page4.bid.includes(TEXT_LAYER_FORMULA), "formula bid is on the page");
   const anchor = JSON.parse(await evaluate(`(() => {
     const pane = document.getElementById("translateScroll");
     const top = pane.getBoundingClientRect().top;
@@ -483,15 +489,34 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
   await frames(2);
   assert.equal(await evaluate(`document.querySelector(".workspace")?.dataset.sourceSide || ""`), "start");
   assertStable(await settled(4, page4Needles), page4, "swap back to start");
+  const expectZoom = async (label) => {
+    await waitFor(
+      `document.getElementById("zoomLabel")?.textContent === ${JSON.stringify(label)} ? "z" : ""`,
+      `zoom ${label}`,
+      15000
+    );
+    await frames(3);
+    assert.equal(await formulaBid(), TEXT_LAYER_FORMULA, `formula bid at zoom ${label}`);
+  };
+  await clickSelector("#zoomOut");
+  await expectZoom("75%");
+  assertStable(await settled(4, page4Needles), page4, "zoom 0.75");
   await clickSelector("#zoomIn");
-  await frames(3);
-  assert.notEqual(await evaluate(`document.getElementById("zoomLabel")?.textContent || ""`), "100%");
-  assertStable(await settled(4, page4Needles), page4, "source zoom");
+  await expectZoom("100%");
+  await clickSelector("#zoomIn");
+  await clickSelector("#zoomIn");
+  await expectZoom("150%");
+  assertStable(await settled(4, page4Needles), page4, "zoom 1.5");
+  await clickSelector("#zoomOut");
+  await clickSelector("#zoomOut");
+  await expectZoom("100%");
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 2, mobile: false });
   await frames(3);
+  assert.equal(await formulaBid(), TEXT_LAYER_FORMULA, "formula bid at dpr 2");
   assertStable(await settled(4, page4Needles), page4, "dpr 2");
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await frames(3);
+  assert.equal(await formulaBid(), TEXT_LAYER_FORMULA, "formula bid at dpr 1");
   assertStable(await settled(4, page4Needles), page4, "dpr 1");
 
   await goTo(5);
