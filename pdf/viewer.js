@@ -39,6 +39,7 @@ import {
   combinePageResults,
   docStatusView,
   libraryPageRunState,
+  libraryCoversLiveBlocks,
   pageRunState,
   runTitleStructureBatch,
   translationLanded,
@@ -259,6 +260,7 @@ let docPhase = "idle";
 let pdfTargetLang = "zh-CN";
 let translatePaused = false;
 let autoAfterForce = false;
+let forceRetranslatePending = false;
 let libraryArticle = null;
 let libraryDoc = null;
 let titleStructure = null;
@@ -344,7 +346,13 @@ function init() {
   bindSourcePointer();
   watchSourceAvailability();
   $("translatePage").addEventListener("click", () => startTranslate());
-  $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
+  $("retranslatePage").addEventListener("click", () => {
+    if (pdfTranslateBusy(session) || forceReadoutHold) {
+      forceRetranslatePending = true;
+      return;
+    }
+    void forceRetranslateCurrentPage();
+  });
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("restoreOriginal").addEventListener("click", restoreOriginal);
   $("exportMd").addEventListener("click", () => {
@@ -1889,6 +1897,11 @@ function publishViewerTestHooks() {
     notePageState(page, { state: String(state || ""), hasLayout: false });
     updateTranslateControls();
   };
+  globalThis.__oiLiveBlocks = (page) => translatableBlocks(getPageLayout(Number(page))?.blocks || []).map((block) => ({
+    id: String(block.id || ""),
+    sourceId: String(block.sourceId || ""),
+    text: String(block.text || "")
+  }));
 }
 
 function landedText(translation, source = "") {
@@ -3985,6 +3998,13 @@ function stopTranslateWork() {
   setStatus(PDF_COPY.stopped);
   renderArticle();
   updateTranslateControls();
+  resumePendingRetranslate();
+}
+
+function resumePendingRetranslate() {
+  if (!forceRetranslatePending) return;
+  if (!pdfDoc || pdfTranslateBusy(session) || forceReadoutHold) return;
+  void forceRetranslateCurrentPage();
 }
 
 function revealTranslationPage(page) {
@@ -4282,8 +4302,15 @@ async function ensureTitleStructure(page, layout, options = {}) {
 function liveOriginals(layout, units) {
   const record = titleStructure;
   if (!record || record.status !== "ok" || record.docId !== docId || record.page !== layout?.page) return units || [];
-  const keep = new Set(blocksOutsideStructure(layout?.blocks || [], record.source || record.structure).map((block) => block.id));
-  return (units || []).filter((unit) => !unit?.id || keep.has(unit.id));
+  const outside = new Set(blocksOutsideStructure(layout?.blocks || [], record.source || record.structure).map((block) => block.id));
+  const slotText = new Set(structureTranslateSlots(record.source).map((slot) => String(slot.text || "").replace(/\s+/g, " ").trim()));
+  return (units || []).filter((unit) => {
+    if (!unit?.id || outside.has(unit.id)) return true;
+    const text = String(unit.text || unit.original || "").replace(/\s+/g, " ").trim();
+    // The structure slot already translates an exact match. A block that only
+    // sits inside a longer slot (abstract paragraph, footnote) is stored on its own.
+    return Boolean(text) && !slotText.has(text);
+  });
 }
 
 async function translateTitleStructure(work, gen, translatingDoc, batchSize, options = {}) {
@@ -4487,7 +4514,7 @@ async function adoptLibraryPages() {
     const cached = pageCache.get(docId, page);
     const prior = pageStates.get(page);
     let skipped = Boolean(entry?.skipped) || isSkipOnlyPage(blocks);
-    if (!entry && !skipped && !layout) {
+    if (!layout && !skipped) {
       try {
         layout = await ingestPageLayout(page, () => stamp !== docId);
       } catch {
@@ -4495,33 +4522,55 @@ async function adoptLibraryPages() {
       }
       if (stamp !== docId) return true;
       blocks = layout?.blocks || null;
-      skipped = isSkipOnlyPage(blocks);
+      skipped = Boolean(entry?.skipped) || isSkipOnlyPage(blocks);
+    }
+    if (!skipped && !Array.isArray(blocks)) {
+      hole = true;
+      notePageState(page, { state: "queued", hasLayout: false });
+      clearSlotPainted(page);
+      if (!entry && page >= lastListed) break;
+      continue;
     }
     const state = libraryPageRunState({
       pairs: entry?.pairs,
       cached,
       targetLang: pdfTargetLang,
       skipped,
+      blocks,
       empty: Array.isArray(blocks)
         && !translatableBlocks(blocks).length
         && !isTitlePageCandidate(page, pageTextForStructure(blocks))
     });
     if (state === "queued") {
-      if (prior?.state === "done" || prior?.state === "skipped" || prior?.state === "empty" || prior?.state === "partial") {
-        continue;
+      const live = translatableBlocks(blocks || []).length;
+      const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
+      if (viewerUnderTest() && entry && pairCount < live) {
+        const gap = globalThis.__oiLibraryGap || [];
+        gap.push({ page, pairs: pairCount, live });
+        globalThis.__oiLibraryGap = gap;
       }
+      if (prior?.state === "done" || prior?.state === "partial") pageCache.clearPage(docId, page);
+      else if (cached && !libraryCoversLiveBlocks(cached, blocks, pdfTargetLang)) pageCache.clearPage(docId, page);
+      notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
+      clearSlotPainted(page);
+      if (prior?.state === "skipped" || prior?.state === "empty") continue;
       hole = true;
-      if (page >= lastListed) break;
+      if (!entry && page >= lastListed) break;
       continue;
     }
     if (state === "done") {
-      const filled = blocksFromLibraryPairs(page, entry?.pairs || cached);
-      if (!filled.length) {
+      const units = unitsForLayout(layout || { kind: "blocks", blocks: blocks || [], page });
+      const filled = units.length
+        ? applySavedPairs(units, entry?.pairs || cached || [])
+        : blocksFromLibraryPairs(page, entry?.pairs || cached);
+      if (!filled.length || (Array.isArray(blocks) && !libraryCoversLiveBlocks(entry?.pairs || cached, blocks, pdfTargetLang))) {
         hole = true;
-        if (page >= lastListed) break;
+        notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
+        clearSlotPainted(page);
+        if (!entry && page >= lastListed) break;
         continue;
       }
-      if (!pageTranslationComplete(cached, pdfTargetLang)) pageCache.set(docId, page, filled);
+      pageCache.set(docId, page, filled);
       notePageState(page, { state: "done", hasLayout: true });
       clearSlotPainted(page);
       continue;
@@ -4590,6 +4639,7 @@ async function translateWholeDocument() {
       if (!hole && !bare) {
         finishDocPhase();
         renderArticle();
+        resumePendingRetranslate();
         return;
       }
     }
@@ -4768,11 +4818,15 @@ async function translateWholeDocument() {
   else setStatus(PDF_COPY.doneDocument);
   finishDocPhase({ aborted, error: Boolean(error) || totals.needsRetry > 0 || totals.n !== total });
   const saveErrors = await Promise.all(saveTasks);
+  // A retranslate click during the save wait takes a new session. Do not
+  // clear its page or start another job over the batches it just sent.
+  if (!isCurrentWork(work, gen, translatingDoc) || forceReadoutHold || forceRetranslatePending) return;
   if (!paused && !error && !aborted && totals.needsRetry === 0 && saveErrors.some(Boolean)) {
     setStatus("译文已生成，但部分页面写入本地库失败。", true);
   }
   translatingPage = 0;
   updateTranslateControls();
+  resumePendingRetranslate();
 }
 
 function snapshotForceReadout(doc, page) {
@@ -4860,7 +4914,11 @@ function abortForceRetranslate(work, prior, doc, page) {
 }
 
 async function forceRetranslateCurrentPage() {
-  if (!pdfDoc || pdfTranslateBusy(session)) return;
+  if (!pdfDoc || pdfTranslateBusy(session) || forceReadoutHold) {
+    if (pdfDoc) forceRetranslatePending = true;
+    return;
+  }
+  forceRetranslatePending = false;
   const sourceLayout = getPageLayout(capsulePage());
   const units = liveOriginals(sourceLayout, unitsForForceRetranslate(sourceLayout));
   const titleCandidate = isTitlePageCandidate(pageNum, pageTextForStructure(sourceLayout?.blocks));
@@ -4879,6 +4937,10 @@ async function forceRetranslateCurrentPage() {
   const translatingDoc = docId;
   const targetPage = capsulePage();
   const prior = snapshotForceReadout(translatingDoc, targetPage);
+  // Drop the document job's session so its next batch cannot land in this
+  // retranslate, and so its save-wait tail cannot clear translatingPage.
+  abortTranslateSession(session);
+  session = createTranslateSession();
   forceReadoutHold = true;
   const work = beginViewerSession();
   translatingPage = targetPage;
@@ -4988,6 +5050,7 @@ async function forceRetranslateCurrentPage() {
     if (work === session) work.running = false;
     if (translatingPage === targetPage) translatingPage = 0;
     updateTranslateControls();
+    resumePendingRetranslate();
     if (resumeAuto) void maybeAutoTranslateDocument();
   }
 }

@@ -52,7 +52,8 @@ const STUB = `(() => {
       : { mode: "" },
     batchSize: 8
   };
-  window.__oiAuto = { mode, lang, batches: [], texts: [], messages: [], page3AtFirstBatch: null, clickedDuringOpen: false };
+  if (mode === "echo") sessionStorage.removeItem("oiSavedLib");
+  window.__oiAuto = { mode, lang, batches: [], texts: [], messages: [], page3AtFirstBatch: null, clickedDuringOpen: false, saved: [] };
   const libraryText = lang === "en"
     ? "Stored English translation for this page."
     : lang === "ja"
@@ -64,6 +65,25 @@ const STUB = `(() => {
     if (url.includes("/v1/library/")) {
       const wait = (mode === "openRace" ? 80 : 0) + (delayMs > 0 ? Math.random() * delayMs : 0);
       if (wait > 0) await new Promise((done) => setTimeout(done, wait));
+      if (init && String(init.method || "").toUpperCase() === "POST") {
+        let body = {};
+        try { body = JSON.parse(init.body || "{}"); } catch { body = {}; }
+        const prev = JSON.parse(sessionStorage.getItem("oiSavedLib") || "[]");
+        const page = Number(body.page) || 0;
+        const pages = prev.filter((item) => Number(item.page) !== page);
+        if (page) pages.push({ page, pairs: body.pairs || [], skipped: body.skipped === true });
+        sessionStorage.setItem("oiSavedLib", JSON.stringify(pages));
+        window.__oiAuto.saved = pages;
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (mode === "replay" || mode === "polluted") {
+        const key = mode === "polluted" ? "oiPolluted" : "oiRecorded";
+        const pages = JSON.parse(sessionStorage.getItem(key) || "[]");
+        return new Response(JSON.stringify({ pageCount: 15, pages }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
       if (mode === "cache") {
         return new Response(JSON.stringify({
           pageCount: 15,
@@ -143,7 +163,33 @@ const STUB = `(() => {
       sendMessage(message) {
         const type = message && message.type;
         if (type === "OI_GET_SETTINGS") return Promise.resolve({ settings });
-        if (type === "OI_PDF_STRUCTURE") return Promise.resolve({ ok: false });
+        if (type === "OI_PDF_STRUCTURE") {
+          if (mode === "struct") {
+            return Promise.resolve({
+              ok: true,
+              raw: JSON.stringify({
+                version: 1,
+                title: "Attention Is All You Need",
+                authors: [
+                  { name: "Ashish Vaswani", affiliation: "Google Brain", email: "avaswani@google.com" },
+                  { name: "Noam Shazeer", affiliation: "Google Brain", email: "noam@google.com" },
+                  { name: "Niki Parmar", affiliation: "Google Research", email: "nikip@google.com" },
+                  { name: "Jakob Uszkoreit", affiliation: "Google Research", email: "usz@google.com" },
+                  { name: "Llion Jones", affiliation: "Google Research", email: "llion@google.com" },
+                  { name: "Aidan N. Gomez", affiliation: "University of Toronto", email: "aidan@cs.toronto.edu" },
+                  { name: "Łukasz Kaiser", affiliation: "Google Brain", email: "lukaszkaiser@google.com" },
+                  { name: "Illia Polosukhin", affiliation: "Google Research", email: "illia.polosukhin@gmail.com" }
+                ],
+                abstract: {
+                  heading: "Abstract",
+                  body: "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks."
+                },
+                rest: [{ role: "other", text: "Equal contribution." }]
+              })
+            });
+          }
+          return Promise.resolve({ ok: false });
+        }
         if (type === "OI_TRANSLATE_BATCH") {
           if (window.__oiAuto.page3AtFirstBatch == null) {
             window.__oiAuto.page3AtFirstBatch = document.querySelector('#readerFlow .rf-page[data-page="3"]')?.dataset.state || "";
@@ -154,6 +200,7 @@ const STUB = `(() => {
           window.__oiAuto.messages.push({ bypassCache: message.bypassCache === true, texts });
           if (mode === "hang") return new Promise(() => {});
           if (mode === "bothfail") return Promise.resolve({ ok: false, error: "500" });
+          if (mode === "echo") return Promise.resolve({ ok: true, translations: texts.slice() });
           const index = window.__oiAuto.batches.length - 1;
           if (mode === "retryTitle" && index === 0) return Promise.resolve({ ok: false, error: "500" });
           if (mode === "retryBody" && index === 1) return Promise.resolve({ ok: false, error: "500" });
@@ -542,26 +589,23 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
 
   await openMode("cache");
   const cached = JSON.parse(await waitFor(`(() => {
-    const zh2 = document.querySelector('#readerFlow .rf-page[data-page="2"] .rf-zh');
-    const zh5 = document.querySelector('#readerFlow .rf-page[data-page="5"] .rf-zh');
-    if (!zh2 || !zh5) return "";
-    if (!(zh2.textContent || "").includes("第二页库译文")) return "";
-    if (!(zh5.textContent || "").includes("第五页库译文")) return "";
     if (!window.__oiAuto || window.__oiAuto.page3AtFirstBatch == null) return "";
+    const gap = (window.__oiLibraryGap || []).find((item) => item.page === 2 && item.pairs < item.live);
+    if (!gap) return "";
     return JSON.stringify({
       page1: document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "",
       page2: document.querySelector('#readerFlow .rf-page[data-page="2"]')?.dataset.state || "",
-      page3: window.__oiAuto && window.__oiAuto.page3AtFirstBatch,
+      page3: window.__oiAuto.page3AtFirstBatch,
       page5: document.querySelector('#readerFlow .rf-page[data-page="5"]')?.dataset.state || "",
       bare: (window.__oiDoneWithoutTranslation || []).join(","),
       doc: document.querySelector("#docStatus .doc-text")?.textContent || "",
       batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
-      texts: (window.__oiAuto && window.__oiAuto.texts || []).join("\\n")
+      texts: (window.__oiAuto && window.__oiAuto.texts || []).join("\\n"),
+      pairs: gap.pairs,
+      live: gap.live
     });
-  })()`, "cache: 库命中页画出译文，缺页继续译"));
-  assert.equal(cached.page1, "done");
-  assert.equal(cached.page2, "done");
-  assert.equal(cached.page5, "done");
+  })()`, "cache: 对不上活块的库页进队，缺页继续译"));
+  assert.ok(cached.pairs < cached.live, "库对 < 活块须进队");
   assert.notEqual(cached.page3, "done");
   assert.equal(cached.bare, "");
   assert.doesNotMatch(cached.doc, /全文已译/);
@@ -587,12 +631,12 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
       zh: slot.querySelector(".rf-zh")?.textContent || ""
     });
   })()`));
-  assert.ok(stripped.state !== "done" || stripped.zh.includes("第二页库译文"), "没有译文不能维持 done");
+  assert.ok(stripped.state !== "done" || stripped.zh.includes("译:"), "没有译文不能维持 done");
 
   await openMode("cacheHead");
   const head = JSON.parse(await waitFor(`(() => {
-    const zh2 = document.querySelector('#readerFlow .rf-page[data-page="2"] .rf-zh');
-    if (!zh2 || !(zh2.textContent || "").includes("第二页库译文")) return "";
+    const gap = (window.__oiLibraryGap || []).find((item) => item.page === 2 && item.pairs < item.live);
+    if (!gap) return "";
     if (!window.__oiAuto || window.__oiAuto.page3AtFirstBatch == null) return "";
     return JSON.stringify({
       page3: window.__oiAuto.page3AtFirstBatch,
@@ -651,12 +695,12 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   const queuedBefore = await evaluate(`document.querySelector('#readerFlow .rf-page[data-page="2"]')?.dataset.state || ""`);
   await evaluate(`document.getElementById("stopTranslate").click()`);
   await waitFor(`document.getElementById("translatePage")?.hidden === false ? "idle" : ""`, "停止后主按钮回到翻译");
-  await evaluate(`document.getElementById("retranslatePage").click()`);
   const retried = JSON.parse(await waitFor(`(() => {
-    const row = ${SNAPSHOT};
-    const data = JSON.parse(row);
-    if (data.page1 !== "running") return "";
-    return row;
+    const state = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+    if (state === "running") return ${SNAPSHOT};
+    const button = document.getElementById("retranslatePage");
+    if (button && !button.disabled) button.click();
+    return "";
   })()`, "LD-08 重译胶囊页"));
   assert.equal(retried.page1, "running");
   const page2 = await evaluate(`document.querySelector('#readerFlow .rf-page[data-page="2"]')?.dataset.state || ""`);
@@ -740,12 +784,31 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     if (page1 === "running" || page1 === "layout") return "";
     return "idle";
   })()`, "fast: 全文译完后主按钮回到翻译", 180000);
-  const beforeForce = JSON.parse(await evaluate(`String((window.__oiAuto && window.__oiAuto.messages || []).length)`));
-  await evaluate(`document.getElementById("retranslatePage").click()`);
+  await evaluate(`sessionStorage.setItem("oiRecorded", sessionStorage.getItem("oiSavedLib") || "[]")`);
+  await evaluate(`(() => {
+    window.__oiAuto.retranslateAt = (window.__oiAuto.messages || []).length;
+    document.getElementById("retranslatePage").click();
+    return true;
+  })()`);
   const forced = JSON.parse(await waitFor(`(() => {
-    const messages = (window.__oiAuto && window.__oiAuto.messages || []).slice(${beforeForce});
-    if (messages.length < 2 || messages.some((item) => item.bypassCache !== true)) return "";
-    return JSON.stringify(messages.map((item) => ({ bypassCache: item.bypassCache, n: item.texts.length, head: String(item.texts[0] || "").slice(0, 40) })));
+    const state = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+    const all = (window.__oiAuto && window.__oiAuto.messages) || [];
+    let start = window.__oiAuto.retranslateAt || 0;
+    if (state !== "running" && state !== "layout" && start >= all.length) {
+      const button = document.getElementById("retranslatePage");
+      if (button && !button.disabled) {
+        window.__oiAuto.retranslateAt = all.length;
+        start = all.length;
+        button.click();
+      }
+    }
+    const head = [];
+    for (const item of all.slice(start)) {
+      if (item.bypassCache !== true) break;
+      head.push(item);
+    }
+    if (head.length < 2) return "";
+    return JSON.stringify(head.map((item) => ({ bypassCache: item.bypassCache, n: item.texts.length, head: String(item.texts[0] || "").slice(0, 40) })));
   })()`, "重译的标题批次和正文批次都带 bypassCache"));
   assert.ok(forced.length >= 1);
   assert.ok(forced.every((item) => item.bypassCache === true));
@@ -973,23 +1036,102 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     await openMode("cacheAll", lang ? { lang } : {});
     return JSON.parse(await waitFor(`(() => {
       const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
-      if (!doc.includes("全文已译")) return "";
-      const batches = (window.__oiAuto && window.__oiAuto.batches || []).length;
       const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+      const gap = (window.__oiLibraryGap || []).find((item) => item.page === 1 && item.pairs < item.live);
+      if (doc.includes("全文已译") && !gap) return "";
+      if (page1 !== "done" || !doc.includes("全文已译")) return "";
+      const batches = (window.__oiAuto && window.__oiAuto.batches || []).length;
       const pages = [...document.querySelectorAll("#readerFlow .rf-page")].map((slot) => slot.dataset.state || "");
-      return JSON.stringify({ doc, batches, page1, pages });
-    })()`, "cacheAll " + (lang || "zh") + ": 库全命中不再发批", 120000));
+      const abstract = [...document.querySelectorAll('#readerFlow .rf-page[data-page="1"] .rf-zh')].map((el) => el.textContent || "").join("\\n");
+      return JSON.stringify({ doc, batches, page1, pages, gap: gap || null, abstract: abstract.slice(0, 180) });
+    })()`, "cacheAll " + (lang || "zh") + ": 库对少于活块须进队", 180000));
   }
   const hitZh = await fullLibraryHit("");
-  assert.equal(hitZh.batches, 0);
+  assert.ok(hitZh.gap && hitZh.gap.pairs < hitZh.gap.live, "库对 < 活块须进队");
+  assert.ok(hitZh.batches > 0);
   assert.equal(hitZh.page1, "done");
-  assert.ok(hitZh.pages.every((state) => state === "done" || state === "skipped" || state === "empty"));
+  assert.match(hitZh.doc, /全文已译/);
+  assert.match(hitZh.abstract, /译:/);
   const hitEn = await fullLibraryHit("en");
-  assert.equal(hitEn.batches, 0, "en 库全命中仍是 0 批");
+  assert.ok(hitEn.gap && hitEn.gap.pairs < hitEn.gap.live, "en 库对 < 活块须进队");
+  assert.ok(hitEn.batches > 0);
   assert.equal(hitEn.page1, "done");
+  assert.match(hitEn.abstract, /Rendered English translation/);
   const hitJa = await fullLibraryHit("ja");
-  assert.equal(hitJa.batches, 0, "ja 库全命中仍是 0 批");
+  assert.ok(hitJa.gap && hitJa.gap.pairs < hitJa.gap.live, "ja 库对 < 活块须进队");
+  assert.ok(hitJa.batches > 0);
   assert.equal(hitJa.page1, "done");
+  assert.match(hitJa.abstract, /ちゅういりょくのやく/);
+
+  async function replayWrittenLibrary(lang, mark) {
+    await openMode("replay", lang ? { lang } : {});
+    return JSON.parse(await waitFor(`(() => {
+      const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+      const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+      const rows = [...document.querySelectorAll('#readerFlow .rf-page[data-page="1"] .rf-block')];
+      const abstract = rows.find((el) => (el.querySelector(".rf-src")?.textContent || "").includes("dominant sequence"));
+      const zh = abstract?.querySelector(".rf-zh")?.textContent || "";
+      if (doc.includes("全文已译") && abstract && !zh.includes(${JSON.stringify(mark)})) return "";
+      if (page1 !== "done" || !doc.includes("全文已译") || !zh.includes(${JSON.stringify(mark)})) return "";
+      return JSON.stringify({
+        page1,
+        doc,
+        zh: zh.slice(0, 120),
+        batches: (window.__oiAuto && window.__oiAuto.batches || []).length
+      });
+    })()`, "replay " + (lang || "zh") + ": 本版写入的库重开后摘要有译文", 180000));
+  }
+  const replayZh = await replayWrittenLibrary("", "译:");
+  assert.equal(replayZh.page1, "done");
+  assert.match(replayZh.doc, /全文已译/);
+  assert.match(replayZh.zh, /译:/);
+
+  await openMode("echo");
+  const echoed = JSON.parse(await waitFor(`(() => {
+    const status = document.getElementById("status")?.textContent || "";
+    if (!status.includes("连续 3 页翻译失败，已暂停")) return "";
+    const saved = JSON.parse(sessionStorage.getItem("oiSavedLib") || "[]");
+    const blocks = window.__oiLiveBlocks ? window.__oiLiveBlocks(1) : [];
+    return JSON.stringify({
+      status,
+      saved: saved.map((item) => item.page),
+      blocks
+    });
+  })()`, "echo: 长段原样回显后暂停且不写库", 180000));
+  assert.deepEqual(echoed.saved.filter((page) => page <= 3), []);
+  assert.ok(echoed.blocks.length > 1);
+  await evaluate(`(() => {
+    const blocks = window.__oiLiveBlocks(1);
+    const pages = [1, 2, 3].map((page) => ({
+      page,
+      pairs: (page === 1 ? blocks : [{ text: "Stored sentence for page " + page + " that is long enough to be a real paragraph.", sourceId: "p" + page }]).map((block) => ({
+        text: block.text,
+        sourceId: block.sourceId || "",
+        translation: block.text
+      }))
+    }));
+    sessionStorage.setItem("oiPolluted", JSON.stringify(pages));
+    return true;
+  })()`);
+  await openMode("polluted");
+  const washed = JSON.parse(await waitFor(`(() => {
+    const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    const rows = [...document.querySelectorAll('#readerFlow .rf-page[data-page="1"] .rf-block')];
+    const abstract = rows.find((el) => (el.querySelector(".rf-src")?.textContent || "").includes("dominant sequence"));
+    const zh = abstract?.querySelector(".rf-zh")?.textContent || "";
+    if (doc.includes("全文已译") && (!abstract || !zh.includes("译:"))) return "";
+    if (!abstract || !zh.includes("译:") || page1 !== "done") return "";
+    return JSON.stringify({
+      page1,
+      doc,
+      zh: zh.slice(0, 80),
+      batches: (window.__oiAuto && window.__oiAuto.batches || []).length
+    });
+  })()`, "polluted: 译文等于原文的库不能直接 done", 180000));
+  assert.equal(washed.page1, "done");
+  assert.match(washed.zh, /译:/);
+  assert.ok(washed.batches > 0, "污染库要进队补译");
 
   await openMode("en");
   const english = JSON.parse(await waitFor(`(() => {
@@ -1000,6 +1142,15 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   })()`, "en: 英文译文能让第 1 页 done", 120000));
   assert.equal(english.page1, "done");
   assert.match(english.zh, /Rendered English translation/);
+  await waitFor(`(() => {
+    const pages = JSON.parse(sessionStorage.getItem("oiSavedLib") || "[]");
+    const page1 = pages.find((item) => Number(item.page) === 1);
+    return JSON.stringify(page1 || {}).includes("Rendered English translation") ? "saved" : "";
+  })()`, "en: 第 1 页已写入库");
+  await evaluate(`sessionStorage.setItem("oiRecorded", sessionStorage.getItem("oiSavedLib") || "[]")`);
+  const replayEn = await replayWrittenLibrary("en", "Rendered English translation");
+  assert.equal(replayEn.page1, "done");
+  assert.match(replayEn.zh, /Rendered English translation/);
 
   await openMode("ja");
   const kana = JSON.parse(await waitFor(`(() => {
@@ -1010,6 +1161,15 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   })()`, "ja: 假名译文能让第 1 页 done", 120000));
   assert.equal(kana.page1, "done");
   assert.match(kana.zh, /ちゅういりょくのやく/);
+  await waitFor(`(() => {
+    const pages = JSON.parse(sessionStorage.getItem("oiSavedLib") || "[]");
+    const page1 = pages.find((item) => Number(item.page) === 1);
+    return JSON.stringify(page1 || {}).includes("ちゅういりょくのやく") ? "saved" : "";
+  })()`, "ja: 第 1 页已写入库");
+  await evaluate(`sessionStorage.setItem("oiRecorded", sessionStorage.getItem("oiSavedLib") || "[]")`);
+  const replayJa = await replayWrittenLibrary("ja", "ちゅういりょくのやく");
+  assert.equal(replayJa.page1, "done");
+  assert.match(replayJa.zh, /ちゅういりょくのやく/);
 
   await openMode("fast");
   await waitFor(`document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state === "done" ? "done" : ""`, "切换目标前第 1 页已是中文 done");
@@ -1020,6 +1180,37 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     });
   })()`));
   assert.notEqual(switched.page1, "done", "目标改成英文后，汉字译文不再算落地");
+
+  await openMode("struct");
+  await waitFor(`(() => {
+    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    if (!doc.includes("全文已译")) return "";
+    if (document.getElementById("retranslatePage")?.disabled) return "";
+    return "done";
+  })()`, "struct: 结构批先译完", 180000);
+  await evaluate(`(() => {
+    window.__oiAuto.retranslateAt = (window.__oiAuto.messages || []).length;
+    document.getElementById("retranslatePage").click();
+    return true;
+  })()`);
+  const structAgain = JSON.parse(await waitFor(`(() => {
+    const all = (window.__oiAuto && window.__oiAuto.messages) || [];
+    const start = window.__oiAuto.retranslateAt || 0;
+    const state = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+    if (state !== "running" && state !== "layout" && start >= all.length) {
+      const button = document.getElementById("retranslatePage");
+      if (button && !button.disabled) {
+        window.__oiAuto.retranslateAt = all.length;
+        button.click();
+        return "";
+      }
+    }
+    const title = all.slice(window.__oiAuto.retranslateAt || 0).find((item) => String(item.texts?.[0] || "").includes("Attention Is All You Need"));
+    if (!title || title.bypassCache !== true) return "";
+    return JSON.stringify({ bypassCache: title.bypassCache, head: String(title.texts[0] || "").slice(0, 80) });
+  })()`, "struct: 重译标题批必须带 bypassCache", 180000));
+  assert.equal(structAgain.bypassCache, true);
+  assert.match(structAgain.head, /Attention Is All You Need/);
 
   await openMode("openRace");
   const raced = JSON.parse(await waitFor(`(() => {

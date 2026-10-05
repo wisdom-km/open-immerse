@@ -160,6 +160,7 @@ Target: text-layer body text plus content-accurate original-page display (crops 
 
 - Left pane: pdf.js continuous scroll; zoom applies only to the original page
 - Top bar: translated n / t pages → Open PDF → Translate → Retranslate page → Stop (shown only while a job is running) → Original → Previous → page number → Next → Aa. Export MD / PDF lives in the **···** menu, not on the bar. Opening starts a full-document translation. Settings → 功能 → PDF has **打开 PDF 时自动翻译全文**, on by default. Original only switches the view; it does not abort the job or clear the cache.
+- Reopen checks the library against the live text-layer blocks. A page is done only when every block has its own settled translation. Fewer pairs than live blocks, or a long pair echoed from the source, queues that page and must not light **全文已译**. The abstract and its footnote are stored separately. A short unchanged token (≤3 words, or no letters) still counts as already in the target language.
 - Full document walks pages with `OI_TRANSLATE_BATCH`. In-page progress is `正在翻译 · k / m 段`. Jobs can be stopped. After stop or completion the primary button returns to **翻译**; Chinese already produced stays
 - **Original only switches the view**, and does not abort translation or clear the cache
 - Right pane is a **Markdown reading-flow**: extract title + body in reading order, translate, scroll as a document. Translations appear only in the right pane — they are **not** pasted into the left pane

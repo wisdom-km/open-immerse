@@ -9,6 +9,7 @@ import {
   createPageCache,
   createTranslateSession,
   docStatusView,
+  libraryCoversLiveBlocks,
   libraryPageRunState,
   pageRunState,
   pageNeedsBypass,
@@ -315,6 +316,47 @@ test("force retranslate asks the batch sender to bypass the memory cache", async
     }
   });
   assert.equal(plain[0].bypassCache, undefined);
+});
+
+test("library pairs that do not cover live blocks stay queued", () => {
+  const abstract = "The dominant sequence transduction models are based on complex recurrent networks.";
+  const note = "* Equal contribution. Work performed while at Google Brain.";
+  const blocks = [
+    { label: "text", text: abstract, sourceId: "p1-abstract" },
+    { label: "text", text: note, sourceId: "p1-note" }
+  ];
+  const merged = [{ text: `${abstract} ${note}`, translation: "摘要和脚注被合成了一条。", role: "paragraph" }];
+  assert.equal(merged.length < blocks.length, true);
+  assert.equal(libraryCoversLiveBlocks(merged, blocks, "zh-CN"), false);
+  assert.equal(libraryPageRunState({ pairs: merged, blocks, targetLang: "zh-CN" }), "queued", "库对 < 活块须进队");
+  const split = [
+    { text: abstract, sourceId: "p1-abstract", translation: "主要的序列转换模型基于复杂的循环网络。" },
+    { text: note, sourceId: "p1-note", translation: "同等贡献。工作完成于谷歌大脑。" }
+  ];
+  assert.equal(libraryCoversLiveBlocks(split, blocks, "zh-CN"), true);
+  assert.equal(libraryPageRunState({ pairs: split, blocks, targetLang: "zh-CN" }), "done");
+  const echoed = split.map((pair) => ({ ...pair, translation: pair.text }));
+  assert.equal(libraryCoversLiveBlocks(echoed, blocks, "zh-CN"), false);
+  assert.equal(libraryPageRunState({ pairs: echoed, blocks, targetLang: "zh-CN" }), "queued");
+  assert.equal(libraryPageRunState({ pairs: echoed, blocks, targetLang: "en" }), "queued");
+  const short = [{ label: "text", text: "BLEU", sourceId: "bleu" }];
+  assert.equal(libraryPageRunState({
+    pairs: [{ text: "BLEU", sourceId: "bleu", translation: "BLEU" }],
+    blocks: short,
+    targetLang: "en"
+  }), "done");
+});
+
+test("long echoes fail the page even when a short token is unchanged", () => {
+  const source = "The dominant sequence transduction models are based on complex recurrent networks.";
+  assert.equal(pageRunState([
+    { original: "BLEU", translation: "BLEU", role: "paragraph" },
+    { original: source, translation: source, role: "paragraph" }
+  ], { targetLang: "en" }), "failed");
+  assert.equal(pageRunState([
+    { original: "BLEU", translation: "BLEU", role: "paragraph" },
+    { original: source, translation: "主要的序列转换模型基于复杂的循环网络。", role: "paragraph" }
+  ], { targetLang: "zh-CN" }), "done");
 });
 
 test("latin targets ignore digits and Han, and keep short unchanged segments", () => {
