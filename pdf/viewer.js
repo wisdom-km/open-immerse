@@ -197,6 +197,7 @@ import {
   readerFontShortcut,
   readerImageBlend,
   readerThemeAriaLabel,
+  splitAriaModel,
   splitLayout,
   themePaperRgb,
   writeReaderPrefs
@@ -405,6 +406,7 @@ function init() {
   $("mirrorZoomOut")?.addEventListener("click", () => setMirrorZoom(nextZoom(mirrorZoom, -1)));
   $("mirrorZoomIn")?.addEventListener("click", () => setMirrorZoom(nextZoom(mirrorZoom, 1)));
   bindSplitResize();
+  bindAutoHideScrollbars();
   initZoomChip();
   initMirrorZoomChip();
   readMirrorZoom().then((saved) => {
@@ -971,10 +973,7 @@ function applyStoredSplitRatio() {
   const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
   const ratio = readerPrefs.splitRatio == null ? defaultSplitRatio(width) : readerPrefs.splitRatio;
   workspace.style.setProperty("--oi-split-ratio", String(ratio));
-  const handle = workspace.querySelector(".split-handle");
-  if (handle && ratio > 0 && ratio < 1) {
-    handle.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
-  }
+  writeSplitAria(workspace, ratio);
 }
 
 function startSplitDrag(event, workspace, handle) {
@@ -1003,13 +1002,14 @@ function paintSplitRatio(workspace, ratio) {
   const safe = Number.isFinite(requested) ? requested : defaultSplitRatio(width);
   if (!(rect.width > 0)) {
     const held = requested > 0 && requested < 1 ? requested : defaultSplitRatio(width);
-    workspace.style.setProperty("--oi-split-ratio", String(Math.round(held * 10000) / 10000));
+    const rounded = Math.round(held * 10000) / 10000;
+    workspace.style.setProperty("--oi-split-ratio", String(rounded));
+    writeSplitAria(workspace, rounded);
     return;
   }
   const layout = splitLayout({ width, ratio: safe, splitW: splitColumnWidth(workspace) });
   workspace.style.setProperty("--oi-split-ratio", String(layout.ratio));
-  const handle = workspace.querySelector(".split-handle");
-  if (handle) handle.setAttribute("aria-valuenow", String(Math.round(layout.ratio * 100)));
+  writeSplitAria(workspace, layout.ratio);
 }
 
 function persistSplitRatio(workspace) {
@@ -1029,14 +1029,53 @@ function resetSplit(workspace) {
   layoutCapsule({ keepAnchor: true });
 }
 
+function writeSplitAria(workspace, ratio) {
+  const handle = workspace?.querySelector(".split-handle");
+  if (!handle) return;
+  const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
+  const model = splitAriaModel({
+    width,
+    ratio,
+    splitW: splitColumnWidth(workspace)
+  });
+  handle.setAttribute("aria-valuemin", String(model.valuemin));
+  handle.setAttribute("aria-valuemax", String(model.valuemax));
+  handle.setAttribute("aria-valuenow", String(model.valuenow));
+  handle.setAttribute("aria-valuetext", model.valuetext);
+  const bubble = handle.querySelector(".split-bubble");
+  if (bubble) bubble.textContent = model.bubble;
+}
+
 function syncSplitAria(workspace) {
-  const handle = workspace.querySelector(".split-handle");
   const pdf = workspace.querySelector(".pane-pdf");
-  if (!handle || !pdf) return;
+  if (!pdf) return;
   const splitW = splitColumnWidth(workspace);
   const available = Math.max(1, workspace.clientWidth - splitW);
-  const ratio = pdf.getBoundingClientRect().width / available;
-  if (ratio > 0 && ratio < 1) handle.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+  const measured = pdf.getBoundingClientRect().width / available;
+  const stored = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+  const ratio = measured > 0 && measured < 1 ? measured : stored;
+  writeSplitAria(workspace, ratio);
+}
+
+function scrollbarHideDelayMs() {
+  const raw = getComputedStyle(document.body).getPropertyValue("--oi-reader-scrollbar-hide-delay");
+  const ms = parseFloat(raw);
+  return Number.isFinite(ms) && ms >= 0 ? ms : 1200;
+}
+
+function bindAutoHideScrollbars(root = document) {
+  for (const el of root.querySelectorAll(".oi-sb")) {
+    if (el.dataset.oiSbBound === "1") continue;
+    el.dataset.oiSbBound = "1";
+    let timer = 0;
+    el.addEventListener("scroll", () => {
+      el.dataset.scrolling = "";
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        delete el.dataset.scrolling;
+      }, scrollbarHideDelayMs());
+    }, { passive: true });
+  }
 }
 
 function onSplitKey(event, workspace) {

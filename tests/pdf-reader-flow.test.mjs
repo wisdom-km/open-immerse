@@ -32,6 +32,7 @@ import {
   readerFontShortcut,
   readerImageBlend,
   readerThemeAriaLabel,
+  splitAriaModel,
   splitLayout,
   stepReaderFontSize,
   themePaperRgb,
@@ -525,6 +526,69 @@ test("split keeps a ratio and the translation column stays at least 540px", () =
   assert.match(render, /captureFlowAnchor/);
   assert.match(render, /restoreFlowAnchor/);
   assert.equal((render.match(/restoreFormulaScrolls\(readerFlowEl\(\), formulaScrolls\)/g) || []).length, 1);
+});
+
+test("splitter aria and the drag bubble follow the clamped source share", () => {
+  const wide = splitAriaModel({ width: 1440, ratio: 0.5 });
+  assert.equal(wide.valuemin, 22.3);
+  assert.equal(wide.valuemax, 60.9);
+  assert.equal(wide.valuenow, 50);
+  assert.equal(wide.valuetext, "原文栏 50%");
+  assert.equal(wide.bubble, wide.valuetext);
+  const mid = splitAriaModel({ width: 1100, ratio: 0.4 });
+  assert.equal(mid.valuemin, 29.3);
+  assert.equal(mid.valuemax, 50.5);
+  assert.equal(mid.valuetext, `原文栏 ${mid.valuenow}%`);
+  assert.match(html, /aria-controls="pdfPane"/);
+  assert.match(html, /aria-valuetext="原文栏 50%"/);
+  assert.match(html, /class="split-bubble"/);
+  assert.doesNotMatch(html, /aria-valuemin="0"/);
+  assert.doesNotMatch(html, /aria-valuemax="100"/);
+  assert.match(viewer, /function writeSplitAria/);
+  assert.match(viewer, /splitAriaModel/);
+  assert.match(viewer, /aria-valuetext/);
+  assert.match(css, /\.workspace\.is-splitting \.split-bubble\s*\{[^}]*visibility:\s*visible/s);
+  assert.match(css, /\.split-bubble\s*\{[^}]*font:\s*500 12px\/1\.3 var\(--oi-reader-ui-font\)/s);
+});
+
+test("reader scrollbars are thin, transparent, and not an inherited scrollbar-color", () => {
+  assert.match(tokens, /color-scheme:\s*light/);
+  assert.match(tokens, /--oi-reader-split-grip-opacity:\s*0;/);
+  assert.match(tokens, /--oi-reader-split-grip-w:\s*4px/);
+  assert.match(tokens, /--oi-reader-split-grip-h:\s*28px/);
+  assert.match(tokens, /--oi-reader-split-grip-radius:\s*2px/);
+  assert.match(tokens, /--oi-reader-split-grip-delay:\s*120ms/);
+  assert.match(tokens, /--oi-reader-split-grip-fade:\s*150ms/);
+  assert.match(tokens, /--oi-reader-scrollbar-size:\s*10px/);
+  assert.match(tokens, /--oi-reader-scrollbar-hide-delay:\s*1200ms/);
+  assert.match(tokens, /--oi-reader-scrollbar-thumb:\s*color-mix\(in srgb, var\(--oi-reader-ink\) 32%, transparent\)/);
+  assert.equal(tokens.includes("scrollbar-color"), false);
+  assert.equal(globalTokens.includes("scrollbar-color"), false);
+  assert.match(html, /id="pages"[^>]*class="pages oi-sb"/);
+  assert.match(html, /id="aaPanel"[^>]*class="[^"]*\boi-sb\b/);
+  assert.match(css, /#pages\s*\{[^}]*scrollbar-gutter:\s*stable/s);
+  assert.match(css, /@media not \(forced-colors:\s*active\)/);
+  assert.match(css, /\.oi-sb::-webkit-scrollbar-track,\s*\.oi-sb::-webkit-scrollbar-corner\s*\{[^}]*background:\s*transparent/s);
+  assert.match(css, /\.oi-sb\[data-scrolling\]::-webkit-scrollbar-thumb/);
+  assert.match(viewer, /dataset\.scrolling/);
+  assert.match(viewer, /scrollbarHideDelayMs/);
+  assert.match(viewer, /bindAutoHideScrollbars/);
+  const parts = css.split("scrollbar-color");
+  assert.equal(parts.length, 3);
+  let cursor = "";
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    cursor += parts[i];
+    const supportsAt = cursor.lastIndexOf("@supports not selector(::-webkit-scrollbar)");
+    assert.ok(supportsAt >= 0);
+    const between = cursor.slice(supportsAt);
+    const open = (between.match(/\{/g) || []).length;
+    const close = (between.match(/\}/g) || []).length;
+    assert.ok(open > close, "scrollbar-color stays inside @supports");
+    cursor += "scrollbar-color";
+  }
+  assert.match(css, /\.oi-pdf-math-scroll\s*\{[^}]*scrollbar-width:\s*none/s);
+  assert.match(css, /\.split-handle::before\s*\{[^}]*border:\s*0/s);
+  assert.match(css, /\.workspace\.is-splitting \.split-handle::before\s*\{[^}]*border:\s*0[^}]*var\(--oi-reader-split-line-drag\)/s);
 });
 
 test("fade shows only when more content sits below the fold", () => {

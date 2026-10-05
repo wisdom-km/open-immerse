@@ -114,7 +114,7 @@
     </div>
   </header>
   <div id="tbSubbar" class="tb-subbar" hidden></div>
-  <div id="aaPanel" class="aa-panel oi-reader" data-reader-theme="warm" hidden role="dialog" aria-label="阅读设置">
+  <div id="aaPanel" class="aa-panel oi-reader oi-sb" data-reader-theme="warm" hidden role="dialog" aria-label="阅读设置">
     <div class="aa-group">
       <div class="aa-font-row">
         <span class="aa-label" id="aaFontLabel">字号</span>
@@ -155,17 +155,17 @@
           <span class="follow-label">跟随</span>
         </button>
       </header>
-      <div id="pages" class="pages"></div>
+      <div id="pages" class="pages oi-sb"></div>
       <div id="zoomChip" class="zoom-gutter" role="group" aria-label="缩放">
         <button type="button" id="zoomOut" class="zoom-gutter-btn" disabled>缩小</button>
         <p id="zoomLabel" class="zoom-gutter-label">100%</p>
         <button type="button" id="zoomIn" class="zoom-gutter-btn" disabled>放大</button>
       </div>
     </section>
-    <div class="split-handle" role="separator" aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0" aria-label="调整分栏"></div>
+    <div class="split-handle" role="separator" aria-orientation="vertical" aria-controls="pdfPane" aria-valuemin="22.3" aria-valuemax="60.9" aria-valuenow="50" aria-valuetext="原文栏 50%" tabindex="0" aria-label="调整分栏"><span class="split-bubble" aria-hidden="true">原文栏 50%</span></div>
     <aside class="pane-translate" aria-label="译文栏">
       <div id="reader" class="oi-reader" data-reader-theme="warm">
-        <div id="translateScroll" class="pane-translate-scroll">
+        <div id="translateScroll" class="pane-translate-scroll oi-sb">
           <div id="capsuleBar" class="rf-capsule-bar">
             <button type="button" id="pageCapsule" class="rf-page-capsule" hidden></button>
           </div>
