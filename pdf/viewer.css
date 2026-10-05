@@ -1407,9 +1407,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 }
 [hidden] { display: none !important; }
 
-@media (max-width: 1199px) {
-  .workspace { --oi-translate-min: var(--oi-reader-translate-min-mid); }
-}
 @media (max-width: 899px) {
   .workspace,
   .workspace[data-source-side="end"] {

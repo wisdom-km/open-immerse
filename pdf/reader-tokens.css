@@ -402,8 +402,7 @@
   --oi-reader-scrollbar-thumb-on-dark-hover: rgba(255, 255, 255, 0.55);
   --oi-reader-scrollbar-thumb-on-dark-active: rgba(255, 255, 255, 0.68);
   --oi-reader-source-min: 320px;
-  --oi-reader-translate-min: 560px;
-  --oi-reader-translate-min-mid: 540px;
+  --oi-reader-translate-min: 618px;
   --oi-reader-formula-fade: 8px;
   --oi-reader-inline-line-max: 2.2em;
   --oi-reader-mark-border: 2px solid var(--oi-reader-focus);

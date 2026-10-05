@@ -1909,7 +1909,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     const expectSource = (width, ratio) => {
       const gap = 8;
       const available = width - gap;
-      const tMin = width >= 1200 ? 560 : 540;
+      const tMin = 618;
       const maxSource = available - tMin;
       const minSource = Math.min(320, maxSource);
       const preferred = ratio * available;
@@ -1924,7 +1924,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     await keyTap("End", "End", 35);
     await frames(2);
     split = await splitMeasure();
-    near(split.source, split.width - split.splitW - 560, 2, "SW2 max source");
+    near(split.source, split.width - split.splitW - 618, 2, "SW2 max source");
     await send("Input.dispatchMouseEvent", { type: "mousePressed", x: split.x, y: split.y, button: "left", clickCount: 1 });
     await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: split.x, y: split.y, button: "left", clickCount: 1 });
     await send("Input.dispatchMouseEvent", { type: "mousePressed", x: split.x, y: split.y, button: "left", clickCount: 2 });
