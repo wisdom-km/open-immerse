@@ -2398,7 +2398,7 @@ function jumpTranslationToSource(node) {
     if (!rect) {
       const page = Number(node.dataset.page || node.dataset.srcPage);
       if (page >= 1) revealSourcePage(page);
-      syncSourcePopChrome();
+      syncSourcePopChrome(page, false);
       return;
     }
     const before = translateScrollRoot()?.scrollTop;
@@ -2410,7 +2410,7 @@ function jumpTranslationToSource(node) {
     applyFollow({ type: "clickJump" });
     armJumpLock();
     paintPairChrome();
-    syncSourcePopChrome();
+    syncSourcePopChrome(undefined, Boolean(document.querySelector("#pages .pair-box.is-jump")));
   };
   if (presented === "ready") run();
   else requestAnimationFrame(() => requestAnimationFrame(run));
@@ -3193,6 +3193,8 @@ function currentSourceMode() {
 }
 
 function sideSlotOpen() {
+  const flagged = document.querySelector("#notesButton[data-open='true'], #askButton[data-open='true'], #libraryButton[data-open='true'], [data-side-panel][data-open='true']");
+  if (flagged) return true;
   const slot = document.querySelector("[data-side-slot]");
   if (!slot || slot.hidden) return false;
   if (slot.dataset.open === "false") return false;
@@ -3487,7 +3489,10 @@ function openSourcePop(trigger) {
   const workspace = document.querySelector(".workspace");
   if (workspace) workspace.dataset.sourcePop = "open";
   placeSourcePop(sourcePopPlace(readerWidth()));
-  syncSourcePopChrome();
+  if (!document.querySelector("#pages canvas")) {
+    const title = $("sourcePopTitle");
+    if (title) title.textContent = "正在定位…";
+  } else syncSourcePopChrome(undefined, false);
   $("sourcePopClose")?.focus();
   scheduleVisibleRenders();
   syncSourceFollowAvailability();
@@ -3519,13 +3524,18 @@ function syncSourceFollowAvailability() {
   });
 }
 
-function syncSourcePopChrome(page) {
+function syncSourcePopChrome(page, located) {
   const title = $("sourcePopTitle");
   if (!title || !sourcePopOpen()) return;
   const n = Number.isFinite(Number(page)) && Number(page) >= 1
     ? Number(page)
     : Number($("pageCapsule")?.dataset.srcPage) || pageNum || 0;
-  title.textContent = n >= 1 ? `原文第 ${n} 页 · 已定位` : "原文";
+  if (!(n >= 1)) {
+    title.textContent = "原文";
+    return;
+  }
+  const boxed = located === true || (located == null && Boolean(document.querySelector("#pages .pair-box.is-jump")));
+  title.textContent = boxed ? `原文第 ${n} 页 · 已定位` : `原文第 ${n} 页`;
 }
 
 function toggleSourcePopFull() {
@@ -3572,7 +3582,7 @@ function jumpCurrentToSource() {
   const page = Number($("pageCapsule")?.dataset.srcPage) || pageNum;
   const run = () => {
     if (page >= 1) revealSourcePage(page);
-    syncSourcePopChrome(page);
+    syncSourcePopChrome(page, false);
   };
   if (presented === "ready") run();
   else requestAnimationFrame(() => requestAnimationFrame(run));
@@ -3591,7 +3601,7 @@ function onSourcePageButton() {
       if (node?.dataset?.pairId) jumpTranslationToSource(node);
       else if (page >= 1) {
         revealSourcePage(page);
-        syncSourcePopChrome(page);
+        syncSourcePopChrome(page, false);
       }
     }));
     return;

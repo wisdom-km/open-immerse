@@ -95,8 +95,26 @@ test("SM-04 hidden jumps open the popup; paging keys stop", () => {
   assert.equal(sourcePagingAllowed("mini"), true);
   const jump = viewer.slice(viewer.indexOf("function jumpTranslationToSource"), viewer.indexOf("function revealSourcePage"));
   assert.match(jump, /presentSourceForJump/);
+  assert.match(jump, /paintPairChrome\(\)/);
+  assert.match(jump, /#pages \.pair-box\.is-jump/);
+  assert.match(jump, /syncSourcePopChrome\(page, false\)/);
+  const formulaKey = viewer.slice(viewer.indexOf("function onFlowKey"), viewer.indexOf("function jumpTranslationToSource"));
+  assert.match(formulaKey, /oi-pdf-inline-math/);
+  assert.match(formulaKey, /jumpTranslationToSource/);
+  const readout = viewer.slice(viewer.indexOf("function onReadoutBlockClick"), viewer.indexOf("function cssEscape"));
+  assert.match(readout, /jumpTranslationToSource/);
+  const capsule = viewer.slice(viewer.indexOf("function onPageCapsuleClick"), viewer.indexOf("function revealCapsulePage"));
+  assert.match(capsule, /presentSourceForJump/);
+  assert.match(viewer, /function jumpCurrentToSource/);
   assert.match(viewer, /function presentSourceForJump/);
   assert.match(viewer, /function openSourcePop/);
+  const chrome = viewer.slice(viewer.indexOf("function syncSourcePopChrome"), viewer.indexOf("function toggleSourcePopFull"));
+  assert.match(chrome, /原文第 \$\{n\} 页 · 已定位/);
+  assert.match(chrome, /: `原文第 \$\{n\} 页`/);
+  assert.match(viewer, /正在定位…/);
+  assert.equal(viewer.includes("placeholderProduct"), false);
+  assert.equal(viewer.includes("reader.figurePlaceholder"), false);
+  assert.equal(html.includes("data-placeholder"), false);
   assert.match(html, /id="sourcePop"/);
   assert.match(html, /固定为小窗/);
   assert.match(html, /id="sourcePopClose"/);
@@ -141,7 +159,11 @@ test("SM-06 side slot blocks backslash with the notes toast; absent slot does no
   assert.match(html, /id="sideSlot"/);
   assert.match(html, /data-side-slot hidden/);
   assert.match(viewer, /\[data-side-slot\]/);
+  assert.match(viewer, /#notesButton\[data-open='true'\]/);
   assert.match(viewer, /SIDE_SLOT_TOAST/);
+  const panels = viewer.slice(viewer.indexOf("function bindViewChrome"), viewer.indexOf("function readerWidth"));
+  assert.match(panels, /notesButton/);
+  assert.match(panels, /showSoonToast/);
   const lib = readFileSync(join(root, "lib/pdf-source-mode.js"), "utf8");
   assert.match(lib, /请先关闭笔记 \/ 问 AI \/ 文献库面板/);
 });
@@ -164,6 +186,14 @@ test("SM-07 backslash, paging, p, and F6 include the popup", () => {
 });
 
 test("SM-08 keeps the view toggle, divider, and T_min", () => {
+  assert.match(html, /data-tb-zones/);
+  const center = html.slice(html.indexOf('data-zone="center"'), html.indexOf('data-zone="right"'));
+  assert.match(center, /id="viewSeg"/);
+  assert.match(center, /id="sourceModeSeg"/);
+  assert.match(center, /id="sourceModeMenu"/);
+  assert.match(center, /id="sourceModeNarrow"/);
+  assert.match(center, /class="source-mode-kicker">原页</);
+  assert.equal((html.match(/data-zone="/g) || []).length, 3);
   assert.match(html, /id="viewSeg"/);
   assert.match(html, /data-view="zh"/);
   assert.match(html, /data-view="bi"/);
