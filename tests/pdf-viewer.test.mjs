@@ -36,7 +36,9 @@ import {
   looksLikePdfUrl,
   neighborPages,
   nextZoom,
-  normalizePdfTranslateScope,
+  documentTranslatePlaceholder,
+  pdfOpenTranslateBlocker,
+  pdfTranslateFailureCopy,
   pageBlocksCopy,
   pageCacheKey,
   pageFromViewport,
@@ -273,7 +275,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*padding:\s*var\(--oi-reader-scroll-padding\)/s);
   assert.doesNotMatch(css, /max-width:\s*42rem/);
   assert.match(css, /\.pane-translate \.readout\.is-mirror\s*\{[^}]*max-width:\s*none/s);
-  assert.match(css, /\.view-seg\s*\{/);
+  assert.doesNotMatch(css, /\.view-seg\s*\{/);
   assert.match(css, /\.pane-translate \.mirror-pages\s*\{[^}]*max-width:\s*none/s);
   assert.match(css, /\.mirror-page\s*\{[^}]*position:\s*relative/s);
   assert.match(css, /\.mirror-page\s*\{[^}]*--oi-text:\s*var\(--oi-mirror-ink\)/s);
@@ -324,9 +326,9 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.emptyPage, "本页没有可翻译的文字。");
   assert.equal(PDF_COPY.done, "本页已翻译。");
   assert.equal(PDF_COPY.doneDocument, "全文已翻译。");
-  assert.equal(PDF_COPY.scopeLabel, "范围");
-  assert.equal(PDF_COPY.scopePage, "当前页");
-  assert.equal(PDF_COPY.scopeDocument, "全文");
+  assert.equal(PDF_COPY.scopeLabel, undefined);
+  assert.equal(PDF_COPY.scopePage, undefined);
+  assert.equal(PDF_COPY.scopeDocument, undefined);
   assert.equal(PDF_COPY.stopped, "已停止。");
   assert.equal(PDF_COPY.exportMd, "导出 MD");
   assert.equal(PDF_COPY.exportPdf, "导出 PDF");
@@ -876,8 +878,10 @@ test("page cache remembers a translated page and 原文 can drop it", () => {
   assert.equal(cache.get(1, 2)[0].translation, "第 2 页");
   cache.clear();
   assert.equal(cache.has(1, 2), false);
-  const restoreSrc = src.slice(src.indexOf("/** 原文: current page only"), src.indexOf("async function openFile"));
-  assert.match(restoreSrc, /pageCache\.clearPage\(docId, pageNum\)/);
+  const restoreSrc = src.slice(src.indexOf("/** 原文: view toggle only"), src.indexOf("async function openFile"));
+  assert.match(restoreSrc, /dataset\.view/);
+  assert.doesNotMatch(restoreSrc, /pageCache\.clearPage/);
+  assert.doesNotMatch(restoreSrc, /abortTranslateSession/);
   assert.equal(restoreSrc.includes("pageCache.clear()"), false);
 });
 
@@ -924,17 +928,26 @@ test("continuous scroll helpers pick the page in view and nearby canvases", () =
   assert.equal(readoutPageSelector(4), '[data-page="4"]');
   assert.equal(shouldSyncReadout(40, 40, 80), false);
   assert.equal(shouldSyncReadout(200, 40, 80), true);
-  assert.equal(normalizePdfTranslateScope("all"), "all");
-  assert.equal(normalizePdfTranslateScope("document"), "all");
-  assert.equal(normalizePdfTranslateScope(""), "page");
+  assert.equal(documentTranslatePlaceholder(3, 15), "正在翻译第 3/15 页…");
+  assert.match(pdfTranslateFailureCopy({ reason: "runtime" }), /无法翻译/);
+  assert.match(pdfTranslateFailureCopy({ reason: "runtime" }), /扩展/);
+  assert.match(pdfTranslateFailureCopy({ reason: "missing-field", field: "API Key" }), /API Key/);
+  assert.match(pdfTranslateFailureCopy({ reason: "missing-field", field: "API Key" }), /设置 → 引擎/);
+  assert.match(pdfOpenTranslateBlocker({ layoutMode: "local-ocr", localServiceUp: false }), /本机服务没启动/);
+  assert.equal(pdfOpenTranslateBlocker({ runtimeReady: true, missingField: "", layoutMode: "text-layer" }), "");
+  const adopt = src.slice(src.indexOf("async function adoptDoc"), src.indexOf("function shortTitle"));
+  assert.match(adopt, /maybeAutoTranslateDocument\(/);
+  assert.doesNotMatch(src, /collapseUntranslated/);
+  assert.doesNotMatch(src, /rf-translate-progress/);
+  assert.match(src, /onPageSkip/);
   assert.equal(wheelPageDelta({ deltaY: 40, atTop: true, atBottom: true, overflow: false }), 1);
   assert.equal(wheelPageDelta({ deltaY: -40, atTop: true, atBottom: true, overflow: false }), -1);
   assert.equal(wheelPageDelta({ deltaY: 40, atTop: false, atBottom: true, overflow: true }), 0);
 });
 
-test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page stack", () => {
+test("viewer toolbar drops the scope segment and keeps one midline", () => {
+  const docStatus = html.indexOf('id="docStatus"');
   const pick = html.indexOf('id="pick"');
-  const scope = html.indexOf("scope-seg");
   const translate = html.indexOf('id="translatePage"');
   const stop = html.indexOf('id="stopTranslate"');
   const restore = html.indexOf('id="restoreOriginal"');
@@ -943,9 +956,9 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
   const prev = html.indexOf('id="prev"');
   const more = html.indexOf('id="moreButton"');
   assert.ok(
-    pick > 0 &&
-      pick < scope &&
-      scope < translate &&
+    docStatus > 0 &&
+      docStatus < pick &&
+      pick < translate &&
       translate < stop &&
       stop < restore &&
       restore < prev &&
@@ -953,21 +966,18 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
       more < exportMd &&
       exportMd < exportPdf
   );
-  assert.match(html, /class="scope-seg"[^>]*role="group"[^>]*aria-label="翻译范围"/);
-  assert.match(html, /class="scope-seg-btn is-on"[^>]*data-scope="page"[^>]*>当前页</);
-  assert.match(html, /class="scope-seg-btn"[^>]*data-scope="all"[^>]*>全文</);
+  assert.doesNotMatch(html, /scope-seg/);
+  assert.doesNotMatch(html, />当前页</);
+  assert.doesNotMatch(html, /data-scope="page"/);
   assert.equal(html.includes("pdfTranslateScope"), false);
   assert.equal(html.includes("scope-field"), false);
   assert.match(html, /id="prev"[^>]*>上一页</);
   assert.match(html, /id="next"[^>]*>下一页</);
-  assert.match(css, /\.scope-seg\s*\{[^}]*display:\s*inline-flex[^}]*padding:\s*var\(--oi-reader-seg-pad\)[^}]*border:\s*0[^}]*border-radius:\s*var\(--oi-reader-seg-radius\)[^}]*background:\s*var\(--oi-reader-track\)/s);
-  assert.match(css, /\.scope-seg-btn\s*\{[^}]*min-height:\s*24px[^}]*padding:\s*0 12px[^}]*background:\s*transparent[^}]*color:\s*var\(--oi-reader-ink-2\)[^}]*font:\s*var\(--oi-reader-ui-weight\)\s*var\(--oi-reader-ui-size\)\/1\.2 var\(--oi-reader-ui-font\)/s);
-  assert.match(css, /\.scope-seg-btn:hover\s*\{[^}]*color:\s*var\(--oi-reader-ink\)/s);
-  assert.match(css, /\.scope-seg-btn\.is-on\s*\{[^}]*background:\s*var\(--oi-reader-thumb\)[^}]*box-shadow:\s*var\(--oi-reader-seg-thumb-shadow\)[^}]*font-weight:\s*500/s);
-  assert.match(css, /\.scope-seg-btn:focus-visible\s*\{[^}]*outline:\s*var\(--oi-reader-focus-width\) solid var\(--oi-reader-focus\)/s);
-  assert.match(css, /\.scope-seg-btn:disabled\s*\{[^}]*opacity:\s*1/s);
-  assert.equal(css.includes(".scope-seg.btn-primary"), false);
-  assert.match(src, /setScopeEnabled\(ui\.scopeEnabled\)/);
+  assert.match(css, /\.toolbar\s*\{[^}]*align-items:\s*center/s);
+  assert.match(css, /\.toolbar button:not\(\.more-item\)\s*\{[^}]*height:\s*var\(--oi-reader-topbar-btn-h\)/s);
+  assert.match(css, /\.doc-status\s*\{[^}]*height:\s*var\(--oi-reader-topbar-btn-h\)[^}]*min-width:\s*112px[^}]*font-size:\s*12px/s);
+  assert.doesNotMatch(css, /\.scope-seg\s*\{/);
+  assert.equal(src.includes("setScopeEnabled("), false);
   assert.match(src, /pdfToolbarActionState/);
   assert.match(src, /pdfTranslateBusy/);
   assert.match(css, /\.pages\s*\{[^}]*flex-direction:\s*column/s);
@@ -975,22 +985,23 @@ test("viewer toolbar exposes 当前页/全文 and left pane is a continuous page
   assert.match(src, /onPdfScroll/);
   assert.match(src, /onPdfWheel/);
   assert.match(src, /wheelPageDelta/);
-  assert.match(src, /onScopeClick/);
-  assert.match(src, /setTranslateScope/);
-  const scopeClickSrc = src.slice(src.indexOf("function onScopeClick"), src.indexOf("function setTranslateScope"));
-  assert.equal(scopeClickSrc.includes("startTranslate"), false);
+  assert.equal(src.includes("onScopeClick"), false);
+  assert.equal(src.includes("setTranslateScope"), false);
+  assert.equal(src.includes("function currentScope"), false);
   assert.match(src, /scrollIntoView/);
   assert.match(src, /syncReadoutToPage/);
   assert.match(src, /dataset\.page/);
   assert.match(src, /translateWholeDocument/);
-  assert.match(src, /currentScope\(\) === "all"/);
+  assert.equal(src.includes("currentScope("), false);
   assert.equal(src.includes('id="page"'), false);
   assert.equal(html.includes('id="page"'), false);
   const goPageSrc = src.slice(src.indexOf("async function goPage"), src.indexOf("async function setZoom"));
   assert.match(goPageSrc, /scrollIntoView/);
   assert.equal(goPageSrc.includes("abortTranslateSession"), false);
   assert.match(src, /renderArticle\(\)/);
-  assert.match(src, /collectArticlePages\(pageCache/);
+  assert.doesNotMatch(src, /flow\.replaceChildren|stack\.replaceChildren/);
+  assert.match(css, /\[data-view="src"\] \.rf-zh/);
+  assert.match(css, /#restoreOriginal\[aria-pressed="true"\]/);
 });
 
 test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", async () => {
@@ -1002,16 +1013,12 @@ test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", asy
   assert.equal(busyUi.stopHidden, false);
   assert.equal(busyUi.translateDisabled, true);
   assert.equal(busyUi.stopDisabled, false);
-  assert.equal(busyUi.scopeEnabled, false);
   const settledUi = pdfToolbarActionState({ busy: false, hasDoc: true, canTranslate: true });
   assert.equal(settledUi.primary, "translate");
   assert.equal(settledUi.translateHidden, false);
   assert.equal(settledUi.stopHidden, true);
   assert.equal(settledUi.translateDisabled, false);
   assert.equal(settledUi.stopDisabled, true);
-  assert.equal(settledUi.scopeEnabled, true);
-  assert.equal(pdfToolbarActionState({ busy: false, hasDoc: false, canTranslate: false }).scopeEnabled, false);
-
   const live = createTranslateSession();
   live.running = true;
   live.inflight = { requestId: "pdf-0" };
@@ -1048,7 +1055,7 @@ test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", asy
   assert.equal(out.results[1].translation, "");
 
   assert.match(src, /function stopTranslateWork/);
-  const stopFn = src.slice(src.indexOf("function stopTranslateWork"), src.indexOf("function setTranslateScope"));
+  const stopFn = src.slice(src.indexOf("function stopTranslateWork"), src.indexOf("function revealTranslationPage"));
   assert.match(stopFn, /abortTranslateSession\(session\)/);
   assert.match(stopFn, /updateTranslateControls/);
   assert.match(stopFn, /PDF_COPY\.stopped/);
@@ -1065,8 +1072,10 @@ test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", asy
   assert.match(src, /PDF_COPY\.exporting/);
   assert.match(src, /syncExportControls/);
   assert.doesNotMatch(src, /window\.print/);
-  const restoreSrc = src.slice(src.indexOf("/** 原文: current page only"), src.indexOf("async function openFile"));
-  assert.match(restoreSrc, /pageCache\.clearPage\(docId, pageNum\)/);
+  const restoreSrc = src.slice(src.indexOf("/** 原文: view toggle only"), src.indexOf("async function openFile"));
+  assert.match(restoreSrc, /dataset\.view/);
+  assert.doesNotMatch(restoreSrc, /pageCache\.clearPage/);
+  assert.doesNotMatch(restoreSrc, /abortTranslateSession/);
   assert.equal(restoreSrc.includes("pageCache.clear()"), false);
 });
 
@@ -1168,6 +1177,29 @@ test("translateDocumentPages walks pages via OI_TRANSLATE_BATCH and honors stop"
   assert.deepEqual(all[1], ["Page 2 one.", "Page 2 two."]);
   assert.equal(all.some((texts) => texts.includes("Page 1 one.") && texts.includes("Page 2 one.")), false);
   assert.equal(full.get(4, 2)[1].translation, "译:Page 2 two.");
+});
+
+test("translateDocumentPages does not resend pages already complete in the cache", async () => {
+  const cache = createPageCache();
+  cache.set(7, 1, [{ original: "A", translation: "甲", role: "paragraph" }]);
+  cache.set(7, 2, [{ original: "B", translation: "乙", role: "paragraph" }]);
+  const sent = [];
+  const out = await translateDocumentPages({
+    cache,
+    docId: 7,
+    numPages: 2,
+    getPageOriginals: async () => ["should-not-send"],
+    send: async (msg) => {
+      sent.push(msg);
+      return { ok: true, translations: msg.texts.map((text) => `译:${text}`) };
+    }
+  });
+  assert.equal(sent.length, 0);
+  assert.equal(out.ok, true);
+  assert.equal(out.pages.length, 2);
+  assert.equal(out.pages.every((entry) => entry.skipped === true), true);
+  assert.equal(cache.get(7, 1)[0].translation, "甲");
+  assert.equal(cache.get(7, 2)[0].translation, "乙");
 });
 
 test("two-step draft progress replaces in place and keeps heading role", async () => {

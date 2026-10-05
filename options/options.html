@@ -87,6 +87,12 @@
           <label class="check"><input id="autoOnNewPages" type="checkbox" /> 打开网页时自动翻译（默认关闭，需点右下角「翻译」）</label>
           <label>自动翻译站点（一行一个域名，仅这些站进页就翻）<textarea id="siteRules" placeholder="nytimes.com"></textarea></label>
           <div id="pdfLayoutBox" hidden>
+            <h3>PDF</h3>
+            <label class="check">
+              <input id="pdfAutoTranslate" type="checkbox" checked />
+              打开 PDF 时自动翻译全文
+            </label>
+            <p class="hint">默认开。关掉后，打开 PDF 不会自动开始，需要再点「翻译」。</p>
             <h3>PDF 划区</h3>
             <label>模式
               <select id="pdfLayoutMode">

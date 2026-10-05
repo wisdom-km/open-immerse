@@ -19,6 +19,39 @@ installOwnedTmpGuard(PAIR_TMP_PREFIXES);
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const fixture = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
 
+async function assertOpenedOnFullDocument(evaluate, waitFor) {
+  const raw = await waitFor(`(() => {
+    const status = document.getElementById("status")?.textContent || "";
+    if (!status.includes("无法翻译") || !status.includes("扩展")) return "";
+    return JSON.stringify({
+      folds: document.querySelectorAll("#readerFlow .rf-untranslated").length,
+      ranges: document.querySelectorAll("#readerFlow .rf-q").length,
+      untranslated: (document.getElementById("readerFlow")?.innerText || "").includes("未翻译"),
+      pages: document.querySelectorAll("#pages .pdf-page").length,
+      label: (document.getElementById("translatePage")?.textContent || "").trim(),
+      hidden: document.getElementById("translatePage")?.hidden === true,
+      restore: (document.getElementById("restoreOriginal")?.textContent || "").trim(),
+      retranslate: (document.getElementById("retranslatePage")?.textContent || "").trim(),
+      doc: document.querySelector("#docStatus .doc-text")?.textContent || "",
+      status
+    });
+  })()`, "打开后说明运行环境不可用");
+  const opened = JSON.parse(raw);
+  assert.equal(opened.pages, 15, "Attention v7 is 15 pages");
+  assert.equal(opened.folds, 0, "不再渲染未翻译行");
+  assert.equal(opened.ranges, 1, "没有版面的排队页收成一行");
+  assert.equal(opened.untranslated, false, "不出现未翻译");
+  assert.match(opened.doc, /已译 0 \/ 15 页|正在读取 PDF/);
+  assert.equal(opened.label, "翻译", "失败后主按钮回到翻译");
+  assert.equal(opened.hidden, false, "失败后不留在停止");
+  assert.equal(opened.restore, "原文");
+  assert.equal(opened.retranslate, "重译本页");
+  assert.match(opened.status, /chrome:\/\/extensions/);
+  return opened;
+}
+
+async function useCurrentPageScope() {}
+
 function explicitShotDir() {
   const value = String(process.env.OI_PAIR_SHOTS_DIR || "").trim();
   return value;
@@ -471,6 +504,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     })()`, "Attention PDF open");
     await evaluate(`(${installProbe.toString()})()`);
     await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
+    await assertOpenedOnFullDocument(evaluate, waitFor);
 
     const fresh = await evaluate(`(() => ({
       follow: document.querySelector(".workspace")?.dataset.follow || "",
@@ -510,6 +544,7 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(turnedOn.follow, "on", "f turns follow on");
     assert.equal(turnedOn.stored, "1", "toggle on stores 1");
 
+    await useCurrentPageScope(clickSelector, waitFor);
     await clickSelector("#next");
     await waitFor(`document.querySelector('#readerFlow [data-src-page="2"][data-pair-id]') ? "p2" : ""`, "page 2 pairs", 40000);
     await clickSelector("#prev");
@@ -542,9 +577,15 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
         pager: document.getElementById("pager")?.textContent || ""
       };
     })()`);
-    assert.equal(pageChange.pager, "2 / 15", "next page pager");
     assert.ok(pageChange.id, "page 2 anchor has a pair");
     assert.equal(pageChange.current, true, "page change highlights the anchor block");
+    const stayed = await evaluate(`(() => ({
+      scroll: document.getElementById("translateScroll").scrollTop,
+      pager: document.getElementById("pager")?.textContent || "",
+      capsule: document.getElementById("pageCapsule")?.dataset.srcPage || ""
+    }))()`);
+    assert.ok(stayed.scroll > 40, "已载入的页再翻页时译文不滚回顶部");
+    assert.equal(stayed.pager, `${stayed.capsule} / 15`, "toolbar stays on the capsule");
 
     await clickSelector("#prev");
     await waitFor(`document.querySelector('#readerFlow [data-src-page="1"][data-pair-id]') ? "p1" : ""`, "R3b page 1", 40000);
@@ -578,7 +619,6 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       await clickSelector("#next");
       await waitFor(`document.querySelector('#readerFlow [data-src-page="${page}"][data-pair-id]') ? "p${page}" : ""`, `page ${page} pairs`, 40000);
     }
-    await clickSelector('[data-scope="all"]');
     await waitFor(`(() => {
       const pages = new Set([...document.querySelectorAll("#readerFlow .rf-block[data-pair-id]")].map((el) => el.dataset.srcPage || el.dataset.page));
       return ["1", "2", "3", "4", "5"].every((page) => pages.has(page)) ? "ready" : "";
@@ -1318,10 +1358,10 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
         window.__oiMark = el;
         return {
           trans: document.getElementById("translateScroll").scrollTop,
-          scope: document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || ""
+          pages: document.querySelectorAll("#readerFlow .rf-page").length
         };
       })()`);
-      assert.equal(marker.scope, "all", `${label} scope`);
+      assert.equal(marker.pages, 15, `${label} 全文页槽还在`);
       const point = await evaluate(`(() => {
         const el = document.getElementById("pages");
         const box = el.getBoundingClientRect();
@@ -1506,11 +1546,13 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
         const height = (rect.h / pt.height) * page.height;
         const bottom = top + height;
         const x = page.left + ((rect.x + rect.w / 2) / pt.width) * page.width;
-        if (top < pane.top + 2 || bottom > pane.bottom - 2) continue;
-        if (x < pane.left + 4 || x > pane.right - 4) continue;
+        const visibleBottom = pane.top + pages.clientHeight;
+        const visibleRight = pane.left + pages.clientWidth;
+        if (top < pane.top + 2 || bottom > visibleBottom - 2) continue;
+        if (x < pane.left + 4 || x > visibleRight - 4) continue;
         const ratio = (top - pane.top) / pane.height;
         if (ratio < 0.6) continue;
-        const y = Math.min(pane.bottom - 4, top + Math.min(8, height / 3));
+        const y = Math.min(visibleBottom - 4, top + Math.min(8, height / 3));
         if (!best || ratio > best.ratio) best = { x, y, ratio, source: pages.scrollTop, id: node.dataset.pairId };
       }
       return best;
@@ -1804,11 +1846,11 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     }))()`);
     assert.equal(keptSwap.stored, "end", "reload keeps the stored swap");
     assert.equal(keptSwap.side, "end", "reload applies the stored swap");
+    await useCurrentPageScope(clickSelector, waitFor);
     for (let page = 2; page <= 5; page += 1) {
       await clickSelector("#next");
       await waitFor(`document.querySelector('#readerFlow [data-src-page="${page}"][data-pair-id]') ? "p${page}" : ""`, `reloaded page ${page}`, 40000);
     }
-    await clickSelector('[data-scope="all"]');
     await waitFor(`(() => {
       const pages = new Set([...document.querySelectorAll("#readerFlow .rf-block[data-pair-id]")].map((el) => el.dataset.srcPage || el.dataset.page));
       return ["1", "2", "3", "4", "5"].every((page) => pages.has(page)) ? "ready" : "";
@@ -2083,8 +2125,6 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       await frames(2);
     }
 
-    await clickSelector('[data-scope="page"]');
-    await frames(3);
     const pageNode = await evaluate(`(() => {
       const el = document.querySelector("#readerFlow .rf-block[data-pair-id]");
       window.__oiPage = el;
@@ -2104,14 +2144,13 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     const pageSwapped = await evaluate(`(() => ({
       old: window.__oiPage?.isConnected === true,
       page: document.querySelector("#readerFlow .rf-block")?.dataset.srcPage || "",
-      scope: document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || ""
+      pages: document.querySelectorAll("#readerFlow .rf-page").length
     }))()`);
-    assert.equal(pageSwapped.scope, "page", "当前页 scope");
-    assert.equal(pageSwapped.old, false, "当前页 replaces the flow");
-    assert.equal(pageSwapped.page, String(pageTarget), "当前页 follows the source page");
+    assert.equal(pageSwapped.pages, 15, "全文仍铺开全部页槽");
+    assert.equal(pageSwapped.old, true, "原文滚动保留已有译文节点");
+    assert.equal(pageSwapped.page, pageNode, "第一块仍是原来的页");
 
-    await clickSelector('[data-scope="all"]');
-    await waitFor(`document.querySelector('#readerFlow [data-src-page="5"][data-pair-id]') ? "back" : ""`, "return to 全文");
+    await waitFor(`document.querySelector('#readerFlow [data-src-page="5"][data-pair-id]') ? "back" : ""`, "全文仍留着第 5 页");
     const resumePoint = await evaluate(`(() => {
       const el = document.getElementById("pages");
       const box = el.getBoundingClientRect();
@@ -2282,7 +2321,6 @@ async function openAttentionPair(t) {
       label: document.getElementById("sourcePageLabel")?.textContent || "",
       capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
       follow: document.querySelector(".workspace")?.dataset.follow || "",
-      scope: document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || "",
       prev: document.getElementById("prev")?.disabled === true,
       next: document.getElementById("next")?.disabled === true
     };
@@ -2310,6 +2348,7 @@ async function openAttentionPair(t) {
     return state;
   };
   const showAllThrough = async (lastPage) => {
+    await useCurrentPageScope(clickSelector, waitFor);
     for (let page = 2; page <= lastPage; page += 1) {
       await clickSelector("#next");
       await waitFor(
@@ -2318,7 +2357,6 @@ async function openAttentionPair(t) {
         40000
       );
     }
-    await clickSelector('[data-scope="all"]');
     const wanted = JSON.stringify(Array.from({ length: lastPage }, (_, index) => String(index + 1)));
     await waitFor(`(() => {
       const have = new Set([...document.querySelectorAll("#readerFlow .rf-block[data-pair-id]")].map((el) => el.dataset.srcPage || el.dataset.page));
@@ -2344,6 +2382,7 @@ async function openAttentionPair(t) {
     return /\\/\\s*15/.test(pager) && next && !next.disabled ? pager : "";
   })()`, "Attention PDF open");
   await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
+  await assertOpenedOnFullDocument(evaluate, waitFor);
   return { evaluate, waitFor, clickSelector, frames, readNav, waitNav, setFollow, showAllThrough, parkSource };
 }
 
@@ -2354,7 +2393,7 @@ test("CAP1 全文跟随关：原文在第 1 页时点胶囊第 4 页，上一页
   await setFollow("off");
   await parkSource(1);
   const parked = await waitNav(
-    (row) => row.scope === "all" && row.follow === "off" && row.source === 1 && row.prev === true && row.capsule === "4",
+    (row) => row.follow === "off" && row.source === 1 && row.prev === true && row.capsule === "4",
     "CAP1 parked on page 1 with capsule 4"
   );
   assert.equal(parked.source, 1, "CAP1 source starts on page 1");
@@ -2383,7 +2422,7 @@ test("CAP2 全文跟随开：原文在第 15 页时点胶囊第 5 页，下一�
   await setFollow("on");
   await parkSource(15);
   const parked = await waitNav(
-    (row) => row.scope === "all" && row.follow === "on" && row.source === 15 && row.next === true && row.capsule === "5",
+    (row) => row.follow === "on" && row.source === 15 && row.next === true && row.capsule === "5",
     "CAP2 parked on page 15 with capsule 5"
   );
   assert.equal(parked.source, 15, "CAP2 source starts on page 15");

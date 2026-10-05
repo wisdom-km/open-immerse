@@ -58,8 +58,9 @@ const articleSettings = { translateScope: "article", skipCode: true };
 test("default translateScope stays article; PDF viewer copy is untouched", () => {
   assert.equal(DEFAULT_SETTINGS.translateScope, "article");
   const pdfHtml = readFileSync(join(root, "pdf/viewer.html"), "utf8");
-  assert.match(pdfHtml, />当前页</);
-  assert.match(pdfHtml, />全文</);
+  assert.doesNotMatch(pdfHtml, /scope-seg/);
+  assert.doesNotMatch(pdfHtml, />当前页</);
+  assert.match(pdfHtml, /id="docStatus"/);
   assert.doesNotMatch(pdfHtml, /仍跳过顶栏导航/);
 });
 

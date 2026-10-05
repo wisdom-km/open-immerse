@@ -9,7 +9,7 @@ import {
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
-import { normalizeBodyGlossGap, normalizeBodyGlossStackGap } from "../lib/storage.js";
+import { normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 
 function el(id) {
   return document.getElementById(id);
@@ -60,6 +60,7 @@ async function init() {
   el("bodyGlossStackGap").value = String(normalizeBodyGlossStackGap(cachedSettings.bodyGlossStackGap));
   el("skipCode").checked = Boolean(cachedSettings.skipCode);
   el("autoOnNewPages").checked = Boolean(cachedSettings.autoOnNewPages);
+  if (el("pdfAutoTranslate")) el("pdfAutoTranslate").checked = normalizePdfAutoTranslate(cachedSettings.pdfAutoTranslate);
   el("siteRules").value = (cachedSettings.siteRules || []).map((r) => r.host).join("\n");
   renderFeatures(el("featureList"), v1Features(), features);
   renderFeatures(el("laterList"), laterFeatures(), features);
@@ -295,6 +296,7 @@ async function persist() {
     bodyGlossStackGap: normalizeBodyGlossStackGap(el("bodyGlossStackGap").value),
     skipCode: el("skipCode").checked,
     autoOnNewPages: el("autoOnNewPages").checked,
+    pdfAutoTranslate: el("pdfAutoTranslate") ? el("pdfAutoTranslate").checked : true,
     hoverEnabled: Boolean(features.hover),
     showFab: features.fab !== false,
     subtitleEnabled: Boolean(features.youtube || features.x),

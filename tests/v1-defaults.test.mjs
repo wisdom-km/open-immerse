@@ -13,7 +13,8 @@ import {
   SETTINGS_VERSION,
   migrateSettings,
   normalizeBodyGlossGap,
-  normalizeBodyGlossStackGap
+  normalizeBodyGlossStackGap,
+  normalizePdfAutoTranslate
 } from "../lib/storage.js";
 import {
   CHROME_CLASS_RE,
@@ -66,6 +67,10 @@ test("default translateScope is article and settingsVersion is 8", () => {
   assert.equal(DEFAULT_SETTINGS.bodyGlossStackGap, BODY_GLOSS_STACK_GAP_DEFAULT);
   assert.equal(DEFAULT_SETTINGS.bodyGlossStackGap, 0.25);
   assert.equal(DEFAULT_SETTINGS.showFab, true);
+  assert.equal(DEFAULT_SETTINGS.pdfAutoTranslate, true);
+  assert.equal(normalizePdfAutoTranslate(undefined), true);
+  assert.equal(normalizePdfAutoTranslate(false), false);
+  assert.equal(normalizePdfAutoTranslate("false"), false);
   assert.equal(normalizeBodyGlossGap(undefined), 0.35);
   assert.equal(normalizeBodyGlossGap(0.1), BODY_GLOSS_GAP_MIN);
   assert.equal(normalizeBodyGlossGap(9), BODY_GLOSS_GAP_MAX);

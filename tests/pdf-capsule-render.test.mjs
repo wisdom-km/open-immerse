@@ -212,6 +212,9 @@ test("Attention arXiv v7 capsules stay inside the content box on every page", { 
     const next = document.getElementById("next");
     return /\\/\\s*15/.test(pager) && next && !next.disabled ? pager : "";
   })()`, "Attention PDF open");
+  await waitFor(`document.querySelector("#readerFlow .rf-block[data-pair-id]") ? "p1" : ""`, "page 1 pairs");
+  const openedFull = await evaluate(`String(document.querySelectorAll("#readerFlow .rf-page").length)`);
+  assert.equal(openedFull, "15", "打开即铺开全文页槽");
 
   const measureExpr = `(() => {
     const cap = document.getElementById("pageCapsule");
