@@ -144,6 +144,7 @@ import {
   translatableBlocks,
   visualAlt
 } from "../lib/pdf-blocks.js";
+import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
@@ -1629,7 +1630,10 @@ function getPageLayout(page) {
 }
 
 function setPageLayout(page, layout) {
-  if (layout) noteFormulaCropPlan(layout);
+  if (layout) {
+    stampLayoutBids(page, layout);
+    noteFormulaCropPlan(layout);
+  }
   layoutCache.set(layoutKey(page), layout);
 }
 
@@ -1748,7 +1752,14 @@ function imageForVisualBlock(raster, block) {
     const drawn = redrawFormulaGlyphs(raster?.canvas, block.glyphBoxes, block.bbox);
     if (drawn) return drawn;
   }
-  if (block?.label === "formula") block.bbox = formulaInkBbox(raster?.canvas, block);
+  if (block?.label === "formula") {
+    // Crop ink is a raster measurement. setPageLayout hashes the layout-stage
+    // 0–1 box frozen here, never the trimmed box or a DOM rect.
+    if (!Array.isArray(block.layoutBbox) && Array.isArray(block.bbox)) {
+      block.layoutBbox = block.bbox.slice(0, 4);
+    }
+    block.bbox = formulaInkBbox(raster?.canvas, block);
+  }
   return cropFormulaImage(raster?.canvas, block);
 }
 
@@ -2031,6 +2042,7 @@ function captionNode(block, page, layout) {
   node.className = "oi-pdf-caption";
   node.dataset.page = String(page);
   node.dataset.blockId = String(block.id || "");
+  if (block.bid) node.dataset.bid = String(block.bid);
   node.dataset.label = "caption";
   fillBlockText(node, block, layout);
   return node;
@@ -2099,6 +2111,7 @@ function unitsForLayout(layout) {
     return translatableBlocks(layout.blocks).map((block) => ({
       id: block.id,
       sourceId: block.sourceId,
+      ...(block.bid ? { bid: block.bid } : {}),
       text: block.text,
       sourceText: block.sourceText || block.text,
       original: block.text,
@@ -2161,6 +2174,7 @@ function blocksFromLibraryPairs(page, pairs) {
   return (pairs || []).filter((item) => settledText(item?.translation, item?.text || item?.sourceText || item?.original || "")).map((pair, index) => ({
     id: String(pair.id || pair.sourceId || `lib-${page}-${index}`),
     ...(pair.sourceId ? { sourceId: String(pair.sourceId) } : {}),
+    ...(pair.bid ? { bid: String(pair.bid) } : {}),
     label: "text",
     text: String(pair.text || pair.sourceText || ""),
     sourceText: String(pair.sourceText || pair.text || ""),
@@ -2257,6 +2271,7 @@ function appendFixtureReadout(parent, layout, options = {}) {
       node.className = plan.className;
       node.dataset.page = String(page);
       node.dataset.blockId = String(visual.id || "");
+      if (visual.bid) node.dataset.bid = String(visual.bid);
       node.dataset.label = String(visual.label || "");
       const capNode = caption ? captionNode(caption, page, layout) : null;
       if (capNode && caption && blocks.indexOf(caption) < blocks.indexOf(visual)) node.append(capNode);
@@ -2279,6 +2294,7 @@ function appendFixtureReadout(parent, layout, options = {}) {
     if (plan.role) node.dataset.role = plan.role;
     node.dataset.page = String(page);
     node.dataset.blockId = String(block.id || "");
+    if (block.bid) node.dataset.bid = String(block.bid);
     node.dataset.label = String(block.label || "");
     if (block.translationStatus) node.dataset.translationStatus = block.translationStatus;
     if (plan.image) appendCropOrNotice(node, block, plan.imageClass, page);
@@ -2975,16 +2991,30 @@ function stampFlowPairs(slot) {
     pageHeight: size.height
   });
   const byId = new Map();
+  const blockById = new Map();
+  const blockByBid = new Map();
+  for (const block of blocks) {
+    if (block?.id) blockById.set(String(block.id), block);
+    if (block?.bid) blockByBid.set(String(block.bid), block);
+  }
   for (const spec of built.nodes) {
-    for (const id of spec.blockIds || []) byId.set(String(id), spec);
+    for (const id of spec.blockIds || []) byId.set(`id:${id}`, spec);
+    for (const bid of spec.memberBids || []) byId.set(`bid:${bid}`, spec);
   }
   slot.querySelectorAll(".rf-block").forEach((el) => {
-    const spec = el.dataset.blockId ? byId.get(String(el.dataset.blockId)) : null;
+    const own = (el.dataset.blockId && blockById.get(String(el.dataset.blockId)))
+      || (el.dataset.bid && blockByBid.get(String(el.dataset.bid)))
+      || null;
+    if (own?.bid) el.dataset.bid = String(own.bid);
+    const spec = (el.dataset.blockId && byId.get(`id:${el.dataset.blockId}`))
+      || (el.dataset.bid && byId.get(`bid:${el.dataset.bid}`))
+      || null;
     if (spec?.pairId && spec.rects?.length) assignPair(el, spec);
   });
   const authors = built.nodes.find((spec) => spec.kind === "authors");
   slot.querySelectorAll("[data-role='authors'], .oi-pdf-authors").forEach((el) => {
     if (!el.dataset.pairId && authors?.pairId) assignPair(el, authors);
+    if (!el.dataset.bid && authors?.memberBids?.[0]) el.dataset.bid = String(authors.memberBids[0]);
   });
   const record = titleStructure && titleStructure.docId === docId ? titleStructure : null;
   if (record?.structure && record.page === page) {
@@ -3013,6 +3043,7 @@ function assignPair(el, spec) {
   if (!el || !spec?.pairId || !spec.rects?.length) return;
   el.dataset.pairId = spec.pairId;
   el.dataset.srcRects = encodeSrcRects(spec.rects);
+  if (!el.dataset.bid && spec.memberBids?.[0]) el.dataset.bid = String(spec.memberBids[0]);
 }
 
 function assignRole(slot, selector, spec) {
