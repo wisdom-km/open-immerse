@@ -17,6 +17,8 @@ import {
   psRunning,
   psSkippedCopy,
   qQueued,
+  qPaused,
+  canRetranslatePage,
   translatedPageTotal,
   translateDocumentPages,
   translatePageBlocks
@@ -33,6 +35,8 @@ test("LD-a copy, queued ranges, and toolbar totals", () => {
   assert.equal(psRunning(3, 0).includes("0 / 0"), false);
   assert.equal(qQueued(7, 15), "第 7–15 页 · 排队翻译（9 页）");
   assert.equal(qQueued(4, 4), "第 4 页 · 排队翻译");
+  assert.equal(qPaused(4, 15), "第 4–15 页 · 连续 3 页翻译失败，已暂停（12 页）");
+  assert.equal(qPaused(4, 4), "第 4 页 · 连续 3 页翻译失败，已暂停");
   assert.equal(psSkippedCopy(), "参考文献 · 保留原文");
   assert.equal(psEmptyCopy(), "本页没有可翻译的文字");
   assert.equal(psNoTextCopy(), "本页没有文字层");
@@ -195,6 +199,32 @@ test("body batch failure is not done and cannot light 全文已译", async () =>
   assert.notEqual(docStatusView({ n: totals.n, t: 1, needsRetry: totals.needsRetry, phase: "idle" }).text, "全文已译");
 });
 
+test("page state follows the target language, not Han alone", () => {
+  const source = "Attention is all you need";
+  const cases = [
+    ["zh-CN", "注意力就是你所需要的一切"],
+    ["en", "Attention is everything you need"],
+    ["de", "Aufmerksamkeit ist alles, was Sie brauchen"],
+    ["ko", "당신에게 필요한 것은 주의력뿐입니다"],
+    ["ja", "ちゅういりょくさえあればいい"]
+  ];
+  for (const [targetLang, good] of cases) {
+    assert.equal(pageRunState([{ original: source, translation: good, role: "paragraph" }], { targetLang }), "done", targetLang);
+    assert.equal(pageRunState([{ original: source, translation: "", role: "paragraph" }], { targetLang }), "failed", `${targetLang} empty`);
+    assert.equal(pageRunState([{ original: source, translation: source, role: "paragraph" }], { targetLang }), "failed", `${targetLang} same`);
+    assert.equal(libraryPageRunState({
+      pairs: [{ text: source, translation: good, role: "paragraph" }],
+      targetLang
+    }), "done", `${targetLang} library`);
+    assert.equal(libraryPageRunState({
+      pairs: [{ text: source, translation: source, role: "paragraph" }],
+      targetLang
+    }), "queued", `${targetLang} library same`);
+  }
+  assert.equal(pageRunState([{ original: source, translation: "Attention is everything you need", role: "paragraph" }], { targetLang: "zh-CN" }), "failed");
+  assert.equal(libraryPageRunState({ pairs: [{ translation: "Attention", role: "paragraph" }], targetLang: "zh-CN" }), "queued");
+});
+
 test("library pages without a stored translation stay queued", () => {
   assert.equal(libraryPageRunState({ pairs: [{ translation: "你好", role: "paragraph" }] }), "done");
   assert.equal(libraryPageRunState({ pairs: [], cached: [{ translation: "甲", role: "paragraph" }] }), "done");
@@ -239,6 +269,7 @@ test("one failed page stays failed and the next page still translates", async ()
   assert.deepEqual(done, [1, 3, 4]);
   assert.equal(result.error, "");
   assert.equal(result.aborted, false);
+  assert.equal(result.paused, false);
 });
 
 test("three consecutive whole-page failures pause the document", async () => {
@@ -255,6 +286,7 @@ test("three consecutive whole-page failures pause the document", async () => {
   assert.deepEqual(errors, [1, 2, 3]);
   assert.equal(result.pages.length, 3);
   assert.equal(result.error, "down");
+  assert.equal(result.paused, true);
   assert.equal(pageRunState(result.pages[0].results), "failed");
   const totals = translatedPageTotal(result.pages.map(() => ({ state: "failed" })));
   assert.equal(totals.n, 0);

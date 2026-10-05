@@ -7,7 +7,8 @@ import {
   PDF_COPY,
   blocksForForceRetranslate,
   forceRetranslateOutcome,
-  pdfToolbarActionState
+  pdfToolbarActionState,
+  canRetranslatePage
 } from "../lib/pdf-viewer.js";
 import { replaceLibraryPagePairs, selectSavedTranslation } from "../lib/pdf-library.js";
 
@@ -130,7 +131,10 @@ test("重译本页 bypasses library early-returns; 翻译 still short-circuits",
   assert.match(viewer, /\$\("translatePage"\)\.addEventListener\("click", \(\) => startTranslate\(\)\)/);
   assert.match(viewer, /canRetranslate: retranslatePageOpen\(\)/);
   assert.match(force, /bypassCache: true/);
-  assert.match(viewer, /row\?\.state === "failed" \|\| row\?\.state === "partial"/);
+  assert.equal(canRetranslatePage({ state: "failed", translatableCount: 0, titleCandidate: false, originals: 0 }), true);
+  assert.equal(canRetranslatePage({ state: "partial", translatableCount: 0, titleCandidate: false, originals: 0 }), true);
+  assert.equal(canRetranslatePage({ state: "done", translatableCount: 0, titleCandidate: false, originals: 0 }), false);
+  assert.equal(canRetranslatePage({ state: "queued", translatableCount: 2, titleCandidate: false, originals: 0 }), true);
   assert.match(viewer, /\$\("retranslatePage"\)\.disabled = ui\.retranslateDisabled/);
   assert.match(viewer, /if \(forceReadoutHold\) return;/);
 });

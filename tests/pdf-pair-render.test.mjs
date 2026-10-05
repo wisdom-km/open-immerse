@@ -24,7 +24,6 @@ async function assertOpenedOnFullDocument(evaluate, waitFor) {
     const status = document.getElementById("status")?.textContent || "";
     if (!status.includes("无法翻译") || !status.includes("扩展")) return "";
     return JSON.stringify({
-      scope: document.querySelector(".scope-seg") ? "segment" : "all",
       folds: document.querySelectorAll("#readerFlow .rf-untranslated").length,
       ranges: document.querySelectorAll("#readerFlow .rf-q").length,
       untranslated: (document.getElementById("readerFlow")?.innerText || "").includes("未翻译"),
@@ -38,7 +37,6 @@ async function assertOpenedOnFullDocument(evaluate, waitFor) {
     });
   })()`, "打开后说明运行环境不可用");
   const opened = JSON.parse(raw);
-  assert.equal(opened.scope, "all", "打开即默认全文");
   assert.equal(opened.pages, 15, "Attention v7 is 15 pages");
   assert.equal(opened.folds, 0, "不再渲染未翻译行");
   assert.equal(opened.ranges, 1, "没有版面的排队页收成一行");
@@ -1360,10 +1358,10 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
         window.__oiMark = el;
         return {
           trans: document.getElementById("translateScroll").scrollTop,
-          scope: document.querySelector(".scope-seg") ? (document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || "") : "all"
+          pages: document.querySelectorAll("#readerFlow .rf-page").length
         };
       })()`);
-      assert.equal(marker.scope, "all", `${label} scope`);
+      assert.equal(marker.pages, 15, `${label} 全文页槽还在`);
       const point = await evaluate(`(() => {
         const el = document.getElementById("pages");
         const box = el.getBoundingClientRect();
@@ -2146,9 +2144,9 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     const pageSwapped = await evaluate(`(() => ({
       old: window.__oiPage?.isConnected === true,
       page: document.querySelector("#readerFlow .rf-block")?.dataset.srcPage || "",
-      scope: document.querySelector(".scope-seg") ? "segment" : "all"
+      pages: document.querySelectorAll("#readerFlow .rf-page").length
     }))()`);
-    assert.equal(pageSwapped.scope, "all", "没有当前页分段");
+    assert.equal(pageSwapped.pages, 15, "全文仍铺开全部页槽");
     assert.equal(pageSwapped.old, true, "原文滚动保留已有译文节点");
     assert.equal(pageSwapped.page, pageNode, "第一块仍是原来的页");
 
@@ -2323,7 +2321,6 @@ async function openAttentionPair(t) {
       label: document.getElementById("sourcePageLabel")?.textContent || "",
       capsule: document.getElementById("pageCapsule")?.dataset.srcPage || "",
       follow: document.querySelector(".workspace")?.dataset.follow || "",
-      scope: document.querySelector(".scope-seg") ? (document.querySelector(".scope-seg-btn.is-on")?.dataset.scope || "") : "all",
       prev: document.getElementById("prev")?.disabled === true,
       next: document.getElementById("next")?.disabled === true
     };
@@ -2396,7 +2393,7 @@ test("CAP1 全文跟随关：原文在第 1 页时点胶囊第 4 页，上一页
   await setFollow("off");
   await parkSource(1);
   const parked = await waitNav(
-    (row) => row.scope === "all" && row.follow === "off" && row.source === 1 && row.prev === true && row.capsule === "4",
+    (row) => row.follow === "off" && row.source === 1 && row.prev === true && row.capsule === "4",
     "CAP1 parked on page 1 with capsule 4"
   );
   assert.equal(parked.source, 1, "CAP1 source starts on page 1");
@@ -2425,7 +2422,7 @@ test("CAP2 全文跟随开：原文在第 15 页时点胶囊第 5 页，下一�
   await setFollow("on");
   await parkSource(15);
   const parked = await waitNav(
-    (row) => row.scope === "all" && row.follow === "on" && row.source === 15 && row.next === true && row.capsule === "5",
+    (row) => row.follow === "on" && row.source === 15 && row.next === true && row.capsule === "5",
     "CAP2 parked on page 15 with capsule 5"
   );
   assert.equal(parked.source, 15, "CAP2 source starts on page 15");

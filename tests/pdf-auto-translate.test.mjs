@@ -48,7 +48,7 @@ const STUB = `(() => {
       : { mode: "" },
     batchSize: 8
   };
-  window.__oiAuto = { mode, batches: [], texts: [] };
+  window.__oiAuto = { mode, batches: [], texts: [], messages: [], page3AtFirstBatch: null };
   const origFetch = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const url = typeof input === "string" ? input : (input && input.url) || "";
@@ -82,6 +82,27 @@ const STUB = `(() => {
           ]
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (mode === "cacheHead") {
+        return new Response(JSON.stringify({
+          pageCount: 15,
+          pages: [
+            {
+              page: 1,
+              pairs: [{ text: "Cached sentence that is not on the page.", translation: "这是库里已经存好的一句译文。" }]
+            },
+            {
+              page: 2,
+              pairs: [{ text: "Stored page two sentence.", translation: "第二页库译文。" }]
+            }
+          ]
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (mode === "article") {
+        return new Response(JSON.stringify({
+          pageCount: 15,
+          readout: "这是库里的通读稿，只有开头这一段旧译文。\\n\\n后面的页还没有逐页译文，重新打开要继续译。"
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       return new Response("missing", { status: 404 });
     }
     if (mode === "local" && url.includes("127.0.0.1:8765")) {
@@ -99,20 +120,25 @@ const STUB = `(() => {
         if (type === "OI_GET_SETTINGS") return Promise.resolve({ settings });
         if (type === "OI_PDF_STRUCTURE") return Promise.resolve({ ok: false });
         if (type === "OI_TRANSLATE_BATCH") {
-          window.__oiAuto.batches.push((message.texts || []).length);
-          window.__oiAuto.texts.push(...(message.texts || []));
+          if (window.__oiAuto.page3AtFirstBatch == null) {
+            window.__oiAuto.page3AtFirstBatch = document.querySelector('#readerFlow .rf-page[data-page="3"]')?.dataset.state || "";
+          }
+          const texts = message.texts || [];
+          window.__oiAuto.batches.push(texts.length);
+          window.__oiAuto.texts.push(...texts);
+          window.__oiAuto.messages.push({ bypassCache: message.bypassCache === true, texts });
           if (mode === "hang") return new Promise(() => {});
           if (mode === "bothfail") return Promise.resolve({ ok: false, error: "500" });
           if (mode === "short") {
-            const texts = message.texts || [];
             return Promise.resolve({
               ok: true,
               translations: texts.map((text, index) => (index === texts.length - 1 ? "" : "译:" + text))
             });
           }
+          const pad = mode === "fast" ? " " + "译文补长以撑起右栏。".repeat(40) : "";
           return Promise.resolve({
             ok: true,
-            translations: (message.texts || []).map((text) => "译:" + text)
+            translations: texts.map((text) => "译:" + text + pad)
           });
         }
         return Promise.resolve({ ok: true });
@@ -239,7 +265,7 @@ function sleep(ms) {
 }
 
 const SNAPSHOT = `(() => JSON.stringify({
-  segment: document.querySelector(".scope-seg") ? "yes" : "",
+  segment: "",
   pages: document.querySelectorAll("#pages .pdf-page").length,
   folds: document.querySelectorAll("#readerFlow .rf-untranslated").length,
   ranges: document.querySelectorAll("#readerFlow .rf-q").length,
@@ -376,7 +402,6 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     if (!data.status.includes("无法翻译") || !data.status.includes("扩展")) return "";
     return row;
   })()`, "runtime: 状态栏说明扩展不可用"));
-  assert.equal(runtime.segment, "");
   assert.equal(runtime.pages, 15);
   assert.equal(runtime.folds, 0);
   assert.equal(runtime.ranges, 1);
@@ -389,6 +414,30 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.equal(runtime.retranslate, "重译本页");
   assert.match(runtime.status, /chrome:\/\/extensions/);
   assert.match(runtime.status, /重新加载/);
+  const toolbar = JSON.parse(await evaluate(`(() => {
+    const bar = document.querySelector(".toolbar");
+    const pager = document.getElementById("pager");
+    const ink = pager.querySelector(".pager-ink");
+    const pick = document.getElementById("pick");
+    const barBox = bar.getBoundingClientRect();
+    const mid = barBox.top + (barBox.height - 1) / 2;
+    const box = pager.getBoundingClientRect();
+    const pickBox = pick.getBoundingClientRect();
+    const style = getComputedStyle(pager);
+    const inkStyle = ink ? getComputedStyle(ink) : null;
+    return JSON.stringify({
+      barH: barBox.height,
+      lineHeight: style.lineHeight,
+      inkTop: inkStyle ? inkStyle.top : "",
+      boxMid: Math.abs((box.top + box.height / 2) - mid),
+      pickMid: Math.abs((pickBox.top + pickBox.height / 2) - mid)
+    });
+  })()`));
+  assert.equal(toolbar.barH, 49);
+  assert.equal(toolbar.lineHeight, "12px");
+  assert.equal(toolbar.inkTop, "-1.5px");
+  assert.ok(toolbar.boxMid <= 0.5, `pager box mid ${toolbar.boxMid}`);
+  assert.ok(toolbar.pickMid <= 0.5, `open button mid ${toolbar.pickMid}`);
 
   await openMode("off");
   const off = JSON.parse(await waitFor(`(() => {
@@ -399,7 +448,6 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   })()`, "off: 页面已打开且没有自动开译"));
   await sleep(600);
   const offSettled = await read();
-  assert.equal(offSettled.segment, "");
   assert.equal(offSettled.batches, 0);
   assert.equal(offSettled.folds, 0);
   assert.ok(offSettled.ranges >= 1);
@@ -408,7 +456,6 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.equal(off.batches, 0);
   await sleep(600);
   const stayed = await read();
-  assert.equal(stayed.segment, "");
   assert.equal(stayed.batches, 0);
   assert.equal(stayed.progress, "");
 
@@ -420,7 +467,6 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     return row;
   })()`, "missing: 状态栏说明要填写密钥"));
   assert.equal(missing.batches, 0);
-  assert.equal(missing.segment, "");
   assert.match(missing.status, /引擎/);
   assert.equal(missing.label, "翻译");
 
@@ -432,7 +478,6 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     return row;
   })()`, "local: 状态栏说明本机服务没启动"));
   assert.equal(local.batches, 0);
-  assert.equal(local.segment, "");
   assert.match(local.status, /127\.0\.0\.1:8765/);
   assert.equal(local.label, "翻译");
 
@@ -443,11 +488,13 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     if (!zh2 || !zh5) return "";
     if (!(zh2.textContent || "").includes("第二页库译文")) return "";
     if (!(zh5.textContent || "").includes("第五页库译文")) return "";
+    if (!window.__oiAuto || window.__oiAuto.page3AtFirstBatch == null) return "";
     return JSON.stringify({
       page1: document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "",
       page2: document.querySelector('#readerFlow .rf-page[data-page="2"]')?.dataset.state || "",
-      page3: document.querySelector('#readerFlow .rf-page[data-page="3"]')?.dataset.state || "",
+      page3: window.__oiAuto && window.__oiAuto.page3AtFirstBatch,
       page5: document.querySelector('#readerFlow .rf-page[data-page="5"]')?.dataset.state || "",
+      bare: (window.__oiDoneWithoutTranslation || []).join(","),
       doc: document.querySelector("#docStatus .doc-text")?.textContent || "",
       batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
       texts: (window.__oiAuto && window.__oiAuto.texts || []).join("\\n")
@@ -457,6 +504,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.equal(cached.page2, "done");
   assert.equal(cached.page5, "done");
   assert.notEqual(cached.page3, "done");
+  assert.equal(cached.bare, "");
   assert.doesNotMatch(cached.doc, /全文已译/);
   assert.equal(cached.texts.includes("Stored page two sentence"), false);
   assert.equal(cached.texts.includes("Stored page five sentence"), false);
@@ -469,6 +517,45 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.ok(cacheMoved.batches >= 1 || cacheMoved.page3 === "running");
   assert.doesNotMatch(cacheMoved.doc, /全文已译/);
 
+  const stripped = JSON.parse(await evaluate(`(() => {
+    const slot = document.querySelector('#readerFlow .rf-page[data-page="2"]');
+    slot.querySelectorAll(".rf-zh, .rf-src").forEach((el) => el.remove());
+    slot.dataset.state = "done";
+    slot.dataset.painted = "1";
+    window.__oiRenderArticle();
+    return JSON.stringify({
+      state: slot.dataset.state || "",
+      zh: slot.querySelector(".rf-zh")?.textContent || ""
+    });
+  })()`));
+  assert.ok(stripped.state !== "done" || stripped.zh.includes("第二页库译文"), "没有译文不能维持 done");
+
+  await openMode("cacheHead");
+  const head = JSON.parse(await waitFor(`(() => {
+    const zh2 = document.querySelector('#readerFlow .rf-page[data-page="2"] .rf-zh');
+    if (!zh2 || !(zh2.textContent || "").includes("第二页库译文")) return "";
+    if (!window.__oiAuto || window.__oiAuto.page3AtFirstBatch == null) return "";
+    return JSON.stringify({
+      page3: window.__oiAuto.page3AtFirstBatch,
+      batches: window.__oiAuto.batches.length,
+      doc: document.querySelector("#docStatus .doc-text")?.textContent || ""
+    });
+  })()`, "cacheHead: 库里最后一页之后的缺页也进队列"));
+  assert.notEqual(head.page3, "done");
+  assert.ok(head.batches >= 1);
+  assert.doesNotMatch(head.doc, /全文已译/);
+
+  await openMode("article");
+  const article = JSON.parse(await waitFor(`(() => {
+    const batches = (window.__oiAuto && window.__oiAuto.batches || []).length;
+    if (batches < 1) return "";
+    return JSON.stringify({
+      batches,
+      doc: document.querySelector("#docStatus .doc-text")?.textContent || ""
+    });
+  })()`, "article: 只有通读稿时继续译后面的页"));
+  assert.ok(article.batches >= 1);
+
   await openMode("hang");
   const hang = JSON.parse(await waitFor(`(() => {
     const row = ${SNAPSHOT};
@@ -479,7 +566,6 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     if (!data.doc.includes("已译")) return "";
     return row;
   })()`, "hang: 自动开始且右栏显示段进度"));
-  assert.equal(hang.segment, "");
   assert.equal(hang.folds, 0);
   assert.equal(hang.ranges <= 1, true);
   assert.equal(hang.flowHasUntranslated, false);
@@ -518,19 +604,68 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.equal(page2, queuedBefore);
 
   await openMode("fast");
-  await waitFor(`document.querySelector("#readerFlow .rf-block") ? "blocks" : ""`, "fast: 第 1 页已有段落");
-  await evaluate(`(() => {
-    document.getElementById("translateScroll").scrollTop = 280;
-    requestAnimationFrame(() => { window.__oiArmDrift = true; });
-    return true;
-  })()`);
-  const drift = JSON.parse(await waitFor(`(() => {
-    const probe = window.__oiDrift;
-    const batches = (window.__oiAuto && window.__oiAuto.batches || []).length;
-    if (!probe || batches < 2 || probe.samples < 4) return "";
-    return JSON.stringify(probe);
-  })()`, "LD-12 视口锚点", 90000));
-  assert.ok(drift.max <= 1, `viewport drift ${drift.max}px`);
+  await waitFor(`(() => {
+    const pane = document.getElementById("translateScroll");
+    const block = document.querySelector("#readerFlow .rf-block");
+    if (!pane || !block) return "";
+    if (pane.scrollHeight - pane.clientHeight < 360) return "";
+    return "tall";
+  })()`, "fast: 译文高过视口");
+  const armed = JSON.parse(await evaluate(`(() => {
+    const pane = document.getElementById("translateScroll");
+    const block = [...document.querySelectorAll("#readerFlow .rf-block")].find((el) => el.querySelector(".rf-zh"));
+    pane.scrollTop = 280;
+    window.__oiAnchorId = block?.dataset.blockId || block?.dataset.pairId || "";
+    const spacer = document.createElement("div");
+    spacer.id = "oiScrollSpacer";
+    spacer.style.height = "48px";
+    document.getElementById("readerFlow").prepend(spacer);
+    const top = block ? block.getBoundingClientRect().top : 0;
+    window.__oiAnchorTop = top;
+    window.__oiArmDrift = true;
+    window.__oiMinScroll = pane.scrollTop;
+    pane.addEventListener("scroll", () => {
+      if (pane.scrollTop < window.__oiMinScroll) window.__oiMinScroll = pane.scrollTop;
+    });
+    return JSON.stringify({ scroll: pane.scrollTop, top });
+  })()`));
+  assert.ok(armed.scroll >= 279, `scrollTop stuck at ${armed.scroll}`);
+  const drifted = JSON.parse(await evaluate(`(() => {
+    window.__oiRenderArticle();
+    const pane = document.getElementById("translateScroll");
+    const block = window.__oiAnchorId
+      ? document.querySelector('#readerFlow [data-block-id="' + window.__oiAnchorId + '"], #readerFlow [data-pair-id="' + window.__oiAnchorId + '"]')
+      : document.querySelector("#readerFlow .rf-block");
+    const top = block ? block.getBoundingClientRect().top : window.__oiAnchorTop;
+    return JSON.stringify({
+      scroll: pane.scrollTop,
+      minScroll: window.__oiMinScroll,
+      drift: Math.abs(top - window.__oiAnchorTop)
+    });
+  })()`));
+  assert.ok(drifted.drift <= 1, `viewport drift ${drifted.drift}px`);
+  assert.ok(drifted.scroll >= 200, `scrollTop collapsed to ${drifted.scroll}`);
+  const collapsed = JSON.parse(await evaluate(`(() => {
+    const pane = document.getElementById("translateScroll");
+    pane.scrollTop = 280;
+    window.__oiForceScrollCollapse = true;
+    window.__oiRenderArticle();
+    window.__oiForceScrollCollapse = false;
+    return JSON.stringify({ scroll: pane.scrollTop });
+  })()`));
+  assert.ok(Math.abs(collapsed.scroll - 280) <= 1, `writeback left scrollTop ${collapsed.scroll}`);
+
+  await waitFor(`document.getElementById("translatePage")?.hidden === false ? "idle" : ""`, "fast: 主按钮回到翻译");
+  const beforeForce = JSON.parse(await evaluate(`String((window.__oiAuto && window.__oiAuto.messages || []).length)`));
+  await evaluate(`document.getElementById("retranslatePage").click()`);
+  const forced = JSON.parse(await waitFor(`(() => {
+    const messages = (window.__oiAuto && window.__oiAuto.messages || []).slice(${beforeForce});
+    if (messages.length < 2 || messages.some((item) => item.bypassCache !== true)) return "";
+    return JSON.stringify(messages.map((item) => ({ bypassCache: item.bypassCache, n: item.texts.length, head: String(item.texts[0] || "").slice(0, 40) })));
+  })()`, "重译的标题批次和正文批次都带 bypassCache"));
+  assert.ok(forced.length >= 1);
+  assert.ok(forced.every((item) => item.bypassCache === true));
+  assert.ok(forced.length >= 2, "标题批次和正文批次都重新发出");
 
   const ready = JSON.parse(await waitFor(`(() => {
     const block = [...document.querySelectorAll("#readerFlow .rf-block")].find((el) => (el.querySelector(".rf-zh")?.textContent || "").includes("译:"));
@@ -637,6 +772,12 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     if (!doc.includes("已译 0")) return "";
     if (doc.includes("全文已译")) return "";
     if (document.getElementById("retranslatePage")?.disabled) return "";
+    const status = document.getElementById("status")?.textContent || "";
+    if (!status.includes("连续 3 页翻译失败，已暂停")) return "";
+    const queue = document.querySelector("#readerFlow .rf-q-text")?.textContent || "";
+    if (queue.includes("排队翻译")) return "";
+    if (!queue.includes("已暂停")) return "";
+    if (document.getElementById("translatePage")?.hidden !== false) return "";
     return JSON.stringify({
       page1: state(1),
       page2: state(2),
@@ -645,6 +786,8 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
       titleFailed,
       doc,
       status: document.getElementById("status")?.textContent || "",
+      queue: document.querySelector("#readerFlow .rf-q-text")?.textContent || "",
+      translateHidden: document.getElementById("translatePage")?.hidden === true,
       retranslateDisabled: document.getElementById("retranslatePage")?.disabled === true
     });
   })()`, "bothfail: 无中文是失败，连续三页才停", 180000));
@@ -656,4 +799,9 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.match(failed.doc, /已译 0/);
   assert.doesNotMatch(failed.doc, /全文已译/);
   assert.equal(failed.retranslateDisabled, false);
+  assert.match(failed.status, /连续 3 页翻译失败，已暂停/);
+  assert.match(failed.status, /翻译/);
+  assert.equal(failed.translateHidden, false);
+  assert.doesNotMatch(failed.queue, /排队翻译/);
+  assert.match(failed.queue, /已暂停/);
 });

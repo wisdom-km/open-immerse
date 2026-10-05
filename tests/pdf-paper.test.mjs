@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   PDF_PAPER_GUTTER_X,
-  pagesInTranslateScope,
   paperAvailWidth,
   paperCssPx,
   basePageBox,
@@ -53,13 +52,6 @@ test("paper width tracks the left page and clamps to the right pane", () => {
   assert.equal(paperCssPx(612), "612px");
   assert.equal(paperCssPx(792.126), "792.13px");
   assert.equal(paperCssPx(0), "0px");
-});
-
-test("translate scope is one paper for the current page and one paper per page for the document", () => {
-  const pages = [{ page: 1 }, { page: 2 }, { page: 3 }];
-  assert.deepEqual(pagesInTranslateScope(pages, "all", 2), pages);
-  assert.deepEqual(pagesInTranslateScope(pages, "page", 2), [{ page: 2 }]);
-  assert.deepEqual(pagesInTranslateScope(pages, "page", 9), []);
 });
 
 test("right pane DOM contract is a continuous reader flow, not a 42rem column", () => {
@@ -127,7 +119,6 @@ test("right pane DOM contract is a continuous reader flow, not a 42rem column", 
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*overflow:\s*auto/s);
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*scroll-behavior:\s*auto/s);
   assert.doesNotMatch(src, /behavior:\s*["']smooth["']/);
-  assert.equal(src.includes("pagesInTranslateScope"), false);
   assert.match(src, /appendCropOrNotice/);
   assert.doesNotMatch(
     src.slice(src.indexOf("function appendFixtureReadout"), src.indexOf("function onReadoutBlockClick")),
