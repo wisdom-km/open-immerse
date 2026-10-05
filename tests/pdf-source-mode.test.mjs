@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readReaderPrefs, SPLIT_TRANSLATE_MIN, SPLIT_TRANSLATE_MIN_MID, writeReaderPrefs } from "../lib/pdf-reader-flow.js";
+import { readReaderPrefs, SPLIT_TRANSLATE_MIN, writeReaderPrefs } from "../lib/pdf-reader-flow.js";
 import {
   MINI_WIDTH_DEFAULT,
   MINI_WIDTH_MAX,
@@ -205,8 +205,7 @@ test("SM-08 keeps the view toggle, divider, and T_min", () => {
   assert.equal(html.includes('data-source-mode="hide"'), false);
   assert.match(css, /\.workspace\[data-source-mode="hidden"\][\s\S]*grid-template-areas:\s*"translate"/);
   assert.match(css, /\.split-handle::before\s*\{[^}]*border:\s*0/s);
-  assert.equal(SPLIT_TRANSLATE_MIN, 560);
-  assert.equal(SPLIT_TRANSLATE_MIN_MID, 540);
+  assert.equal(SPLIT_TRANSLATE_MIN, 618);
   assert.match(tokens, /color-scheme:\s*dark/);
   assert.equal(viewer.includes("即将推出"), true);
   const soon = viewer.slice(viewer.indexOf("function bindViewChrome"), viewer.indexOf("function readerWidth"));

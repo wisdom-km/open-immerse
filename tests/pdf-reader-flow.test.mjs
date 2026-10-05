@@ -34,6 +34,7 @@ import {
   readerThemeAriaLabel,
   splitAriaModel,
   splitLayout,
+  splitTranslateMin,
   stepReaderFontSize,
   themePaperRgb,
   writeReaderPrefs
@@ -468,16 +469,34 @@ test("capsule start and padding ignore whether the scrollbar is painted", () => 
   assert.ok(largeBar.start >= 24);
 });
 
-test("split keeps a ratio and the translation column stays at least 540px", () => {
+test("split keeps a ratio and the translation column stays at least 618px", () => {
   assert.equal(defaultSplitRatio(1440), 0.5);
   assert.equal(defaultSplitRatio(1100), 0.4);
+  assert.equal(splitTranslateMin(1440), 618);
+  assert.equal(splitTranslateMin(1100), 618);
+  assert.equal(splitTranslateMin(946), 618);
   const wide = splitLayout({ width: 1440, ratio: 0.5 });
-  assert.ok(wide.translate >= 540);
+  assert.ok(wide.translate >= 618);
   assert.ok(Math.abs(wide.source - 716) < 1);
+  const half = splitLayout({ width: 1244, ratio: 0.5 });
+  assert.ok(Math.abs(half.translate - 618) < 0.2);
+  assert.ok(Math.abs(half.source - half.translate) < 0.2);
+  const halfClamp = splitLayout({ width: 1200, ratio: 0.5 });
+  assert.ok(Math.abs(halfClamp.translate - 618) < 0.2);
+  assert.ok(halfClamp.source >= 320);
   const mid = splitLayout({ width: 1100, ratio: 0.4 });
-  assert.ok(mid.translate >= 540);
+  assert.ok(mid.translate >= 618);
+  const forty = splitLayout({ width: 1038, ratio: 0.4 });
+  assert.ok(Math.abs(forty.translate - 618) < 0.2);
+  assert.ok(Math.abs(forty.source - (1038 - 8) * 0.4) < 0.2);
+  const fortyClamp = splitLayout({ width: 1037, ratio: 0.4 });
+  assert.ok(Math.abs(fortyClamp.translate - 618) < 0.2);
+  assert.ok(fortyClamp.source < (1037 - 8) * 0.4);
+  const sideFloor = splitLayout({ width: 946, ratio: 0.4 });
+  assert.ok(Math.abs(sideFloor.source - 320) < 0.2);
+  assert.ok(Math.abs(sideFloor.translate - 618) < 0.2);
   const dragged = splitLayout({ width: 1100, ratio: 0.6 });
-  assert.ok(dragged.translate >= 540);
+  assert.ok(Math.abs(dragged.translate - 618) < 0.2);
   assert.ok(dragged.source >= 320);
   const saved = {};
   writeReaderPrefs(saved, { splitRatio: wide.ratio });
@@ -486,16 +505,24 @@ test("split keeps a ratio and the translation column stays at least 540px", () =
   const home = splitLayout({ width: 1440, ratio: 0 });
   assert.equal(home.source, 320);
   const end = splitLayout({ width: 1440, ratio: 1 });
-  assert.ok(Math.abs(end.translate - 560) < 0.2);
+  assert.ok(Math.abs(end.translate - 618) < 0.2);
   const endMid = splitLayout({ width: 1100, ratio: 1 });
-  assert.ok(Math.abs(endMid.translate - 540) < 0.2);
+  assert.ok(Math.abs(endMid.translate - 618) < 0.2);
   const stored = {};
-  writeReaderPrefs(stored, { splitRatio: 0.6 });
+  writeReaderPrefs(stored, { splitRatio: 0.55 });
   const restored = splitLayout({ width: 1440, ratio: readReaderPrefs(stored).splitRatio });
-  assert.ok(Math.abs(restored.ratio - 0.6) < 0.001);
+  assert.ok(Math.abs(restored.ratio - 0.55) < 0.001);
   const restoredNarrow = splitLayout({ width: 1100, ratio: readReaderPrefs(stored).splitRatio });
-  assert.ok(restoredNarrow.translate >= 540);
+  assert.ok(Math.abs(restoredNarrow.translate - 618) < 0.2);
   assert.ok(restoredNarrow.source >= 320);
+  const overWide = splitLayout({ width: 1440, ratio: 0.6 });
+  assert.ok(Math.abs(overWide.translate - 618) < 0.2);
+  assert.match(tokens, /--oi-reader-translate-min:\s*618px;/);
+  assert.equal(tokens.includes("translate-min-mid"), false);
+  assert.equal(tokens.includes("560px"), false);
+  assert.equal(tokens.includes("540px"), false);
+  assert.equal(css.includes("translate-min-mid"), false);
+  assert.match(css, /\.workspace\[data-source-mode="mini"\]\s*\{[^}]*grid-template-columns:\s*var\(--oi-mini-width\)\s*var\(--oi-reader-split-w\)\s*minmax\(0,\s*1fr\)/s);
   const initStart = viewer.indexOf("function init()");
   const init = viewer.slice(initStart, initStart + 2800);
   assert.ok(init.indexOf("bindSplitResize()") >= 0);
@@ -540,15 +567,17 @@ test("split keeps a ratio and the translation column stays at least 540px", () =
 test("splitter aria and the drag bubble follow the clamped source share", () => {
   const wide = splitAriaModel({ width: 1440, ratio: 0.5 });
   assert.equal(wide.valuemin, 22.3);
-  assert.equal(wide.valuemax, 60.9);
+  assert.equal(wide.valuemax, 56.8);
   assert.equal(wide.valuenow, 50);
   assert.equal(wide.valuetext, "原文栏 50%");
   assert.equal(wide.bubble, wide.valuetext);
   const mid = splitAriaModel({ width: 1100, ratio: 0.4 });
   assert.equal(mid.valuemin, 29.3);
-  assert.equal(mid.valuemax, 50.5);
+  assert.equal(mid.valuemax, 43.4);
   assert.equal(mid.valuetext, `原文栏 ${mid.valuenow}%`);
   assert.match(html, /aria-controls="pdfPane"/);
+  assert.match(html, /aria-valuemin="22.3"/);
+  assert.match(html, /aria-valuemax="56.8"/);
   assert.match(html, /aria-valuetext="原文栏 50%"/);
   assert.match(html, /class="split-bubble"/);
   assert.doesNotMatch(html, /aria-valuemin="0"/);
