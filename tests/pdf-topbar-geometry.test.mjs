@@ -613,9 +613,13 @@ test("toolbar controls share the y=24 centerline across themes and widths", { ti
         const style = getComputedStyle(bar);
         const shown = (id) => {
           const el = document.getElementById(id);
-          if (!el) return false;
-          const css = getComputedStyle(el);
-          return css.display !== "none" && css.visibility !== "hidden" && !el.closest("[hidden]");
+          if (!el || el.closest("[hidden]")) return false;
+          for (let node = el; node; node = node.parentElement) {
+            const css = getComputedStyle(node);
+            if (css.display === "none" || css.visibility === "hidden") return false;
+          }
+          const box = el.getBoundingClientRect();
+          return box.width >= 1 && box.height >= 1;
         };
         done({
           band: bar.dataset.band,

@@ -70,6 +70,7 @@ body {
   font-size: var(--oi-reader-ui-size);
   font-weight: var(--oi-reader-ui-weight);
   line-height: 1.4;
+  padding-top: calc((var(--oi-reader-topbar-btn-h) - 1.4 * var(--oi-reader-ui-size)) / 2);
   color: var(--oi-reader-ink);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1184,6 +1185,9 @@ button:disabled { opacity: 0.45; cursor: default; }
 .toolbar button:focus-visible {
   outline: var(--oi-reader-focus-width) solid var(--oi-reader-focus);
   outline-offset: var(--oi-reader-focus-offset);
+}
+.toolbar button.tb-panel {
+  padding-inline-start: 27px;
 }
 .toolbar .btn-primary,
 .toolbar #stopTranslate.btn-primary {
