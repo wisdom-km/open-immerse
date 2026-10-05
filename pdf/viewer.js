@@ -36,8 +36,9 @@ import {
   forceRetranslateOutcome,
   neighborPages,
   nextZoom,
+  combinePageResults,
   docStatusView,
-  normalizePdfTranslateScope,
+  libraryPageRunState,
   pageRunState,
   psEmptyCopy,
   psNoTextCopy,
@@ -102,7 +103,6 @@ import {
   visualPaneOrder
 } from "../lib/pdf-pairing.js";
 import {
-  pagesInTranslateScope,
   PDF_PAPER_GUTTER_X,
   basePageBox,
   paperAvailWidth,
@@ -323,7 +323,6 @@ function init() {
     refreshFormulaCropsForDisplay();
   });
   watchFormulaRasterRatio();
-  document.querySelector(".scope-seg")?.addEventListener("click", onScopeClick);
   document.querySelector(".view-seg")?.addEventListener("click", onViewSegClick);
   $("readerFlow")?.addEventListener("click", onReaderFlowClick);
   $("readerFlow")?.addEventListener("pointerdown", onFlowPointerDown);
@@ -1786,6 +1785,16 @@ function captionNode(block, page, layout) {
 }
 
 function fillBlockText(node, block, layout) {
+  const zh = document.createElement("span");
+  zh.className = "rf-zh";
+  const src = document.createElement("span");
+  src.className = "rf-src";
+  writeBlockPieces(zh, block, layout);
+  writeBlockPieces(src, { ...block, translation: "", translationStatus: "" }, layout);
+  node.append(zh, src);
+}
+
+function writeBlockPieces(node, block, layout) {
   const lead = blockSoftLead(block);
   if (lead) node.append(document.createTextNode(lead));
   const pieces = blockRenderPieces(block, layout.blocks || []);
@@ -1857,7 +1866,9 @@ function layoutForReadout(layout) {
 function appendFixtureReadout(parent, layout, options = {}) {
   const record = titleStructure && titleStructure.docId === docId ? titleStructure : null;
   if (!options.skipStructure && record?.status === "ok" && record.page === layout.page && record.structure) {
+    const before = parent.childElementCount;
     renderPdfStructure(record.structure, parent);
+    bilingualizeStructure(parent, before, record.source || null);
     const rest = blocksOutsideStructure(layout.blocks, record.source || record.structure);
     appendFixtureReadout(parent, { ...layout, blocks: rest }, { skipStructure: true });
     return;
@@ -1949,6 +1960,41 @@ function appendFixtureReadout(parent, layout, options = {}) {
   }
 }
 
+function splitBilingual(node, sourceText) {
+  if (!node || node.querySelector(":scope > .rf-zh, :scope > .rf-src")) return;
+  const srcText = String(sourceText || "");
+  if (!srcText.trim()) return;
+  const zhText = node.textContent || "";
+  node.replaceChildren();
+  const zh = document.createElement("span");
+  zh.className = "rf-zh";
+  zh.textContent = zhText;
+  const src = document.createElement("span");
+  src.className = "rf-src";
+  src.textContent = srcText;
+  node.append(zh, src);
+}
+
+function bilingualizeStructure(parent, start, source) {
+  if (!parent || !source) return;
+  const added = [...parent.children].slice(start);
+  const heading = added.find((el) => el.dataset?.role === "abstract_heading");
+  const body = added.find((el) => el.dataset?.role === "abstract_body");
+  splitBilingual(added.find((el) => el.tagName === "H1"), source.title);
+  splitBilingual(heading, source.abstract?.heading);
+  splitBilingual(body, source.abstract?.body);
+  const restSource = (source.rest || []).filter((entry) => entry?.role !== "other");
+  const extras = added.filter((el) => (el.tagName === "H2" || el.tagName === "P") && el !== heading && el !== body);
+  extras.forEach((el, index) => splitBilingual(el, restSource[index]?.text));
+  const notes = added.find((el) => el.classList?.contains("oi-pdf-footnotes"));
+  const noteSource = (source.rest || []).filter((entry) => entry?.role === "other");
+  if (notes) {
+    [...notes.querySelectorAll(".oi-pdf-footnote")].forEach((el, index) => {
+      splitBilingual(el, noteSource[index]?.text);
+    });
+  }
+}
+
 function onReadoutBlockClick(event) {
   const node = pairNodeFromEvent(event);
   if (!node) return;
@@ -2030,7 +2076,6 @@ function jumpTranslationToSource(node) {
   applyFollow({ type: "clickJump" });
   armJumpLock();
   paintPairChrome();
-  ensureSourcePage(Number(rect.p));
 }
 
 function revealSourcePage(page) {
@@ -2051,14 +2096,6 @@ function revealSourcePage(page) {
 
 function JUMP_HOLD_MS() {
   return 1500;
-}
-
-function ensureSourcePage(page) {
-  if (!pdfDoc || !Number.isFinite(page) || page < 1 || page === pageNum) return;
-  if (currentScope() === "all") return;
-  pageNum = page;
-  updatePager();
-  loadCurrentPageText();
 }
 
 function scrollSourceToRect(rect) {
@@ -2625,11 +2662,11 @@ function stampFlowPairs(slot) {
     assignRole(slot, "[data-role='abstract_body']", roles.find((role) => role.role === "abstract_body"));
   }
   for (const spec of built.inlines) {
-    const span = slot.querySelector(`.oi-pdf-inline-math[data-block-id="${cssEscape(String(spec.blockId))}"]`);
-    if (!span) continue;
-    span.dataset.pairId = spec.pairId;
-    span.dataset.pairPart = "inline";
-    span.dataset.srcRects = encodeSrcRects(spec.rects);
+    slot.querySelectorAll(`.oi-pdf-inline-math[data-block-id="${cssEscape(String(spec.blockId))}"]`).forEach((span) => {
+      span.dataset.pairId = spec.pairId;
+      span.dataset.pairPart = "inline";
+      span.dataset.srcRects = encodeSrcRects(spec.rects);
+    });
   }
 }
 
@@ -2799,26 +2836,13 @@ function updateSourcePageLabel(page) {
   el.textContent = sourcePageLabel(shown, total);
 }
 
-function noteSourcePage(load) {
+function noteSourcePage() {
   if (!pdfDoc || !pageViews.length) return;
   const current = measureVisible();
   updateSourcePageLabel(current);
-  if (currentScope() === "all") {
-    scheduleVisibleRenders();
-    syncFollowControls();
-    updatePager();
-    return;
-  }
-  if (current && current !== pageNum) {
-    pageNum = current;
-    updatePager();
-    renderArticle();
-    const readout = translateScrollRoot();
-    if (readout) readout.scrollTop = 0;
-    loadCurrentPageText();
-  }
   scheduleVisibleRenders();
   syncFollowControls();
+  updatePager();
 }
 
 function syncReadoutEmpty(hasArticle) {
@@ -2837,10 +2861,6 @@ function readerFlowEl() {
 
 function paperStackEl() {
   return readerFlowEl();
-}
-
-function scopeShowsPage(page) {
-  return pagesInTranslateScope([{ page }], currentScope(), pageNum).length > 0;
 }
 
 /** CSS box of `#pages .pdf-page` (viewport = MediaBox/CropBox × left zoom). Not canvas bitmap pixels. */
@@ -3213,7 +3233,10 @@ function restoreFlowAnchor(anchor) {
 }
 
 function pageStatusSpec(page, row) {
-  if (row.state === "running") return { kind: "running", text: psRunning(row.k || 0, row.m || 0), bar: true };
+  if (row.state === "running") {
+    const m = Number(row.m) || 0;
+    return { kind: "running", text: psRunning(row.k || 0, m), bar: m > 0 };
+  }
   if (row.state === "layout") return { kind: "layout", text: "正在读取本页…" };
   if (row.state === "queued") return { kind: "queued", text: "排队翻译" };
   if (row.state === "skipped") return { kind: "skipped", text: psSkippedCopy() };
@@ -3653,7 +3676,7 @@ function updatePageCapsule() {
 }
 
 function syncToolbarFromCapsule() {
-  if (!pdfDoc || currentScope() !== "all") return;
+  if (!pdfDoc) return;
   const shown = Number($("pageCapsule")?.dataset.srcPage);
   if (!(shown >= 1) || shown === pageNum) return;
   pageNum = shown;
@@ -3822,12 +3845,6 @@ function runtimeSend(message) {
   return send(message);
 }
 
-function currentScope() {
-  return "all";
-}
-
-function onScopeClick() {}
-
 function beginViewerSession() {
   if (session.aborted) session = createTranslateSession();
   session.running = true;
@@ -3877,10 +3894,6 @@ function revealTranslationPage(page) {
   return moved;
 }
 
-function setTranslateScope() {}
-
-function setScopeEnabled() {}
-
 function extensionRuntimeReady() {
   return typeof globalThis.chrome?.runtime?.sendMessage === "function";
 }
@@ -3929,7 +3942,7 @@ async function readAutoTranslateEnabled() {
 }
 
 async function maybeAutoTranslateDocument() {
-  if (!pdfDoc || currentScope() !== "all" || pdfTranslateBusy(session)) return;
+  if (!pdfDoc || pdfTranslateBusy(session)) return;
   const adopting = docId;
   if (!(await readAutoTranslateEnabled())) {
     if (adopting === docId && docPhase === "opening") {
@@ -3938,7 +3951,7 @@ async function maybeAutoTranslateDocument() {
     }
     return;
   }
-  if (adopting !== docId || !pdfDoc || currentScope() !== "all" || pdfTranslateBusy(session)) return;
+  if (adopting !== docId || !pdfDoc || pdfTranslateBusy(session)) return;
   await startTranslate();
 }
 
@@ -3956,8 +3969,7 @@ async function startTranslate() {
   }
   docPhase = "running";
   refreshDocStatus();
-  if (currentScope() === "all") await translateWholeDocument();
-  else await translateCurrentPage();
+  await translateWholeDocument();
 }
 
 async function resolveBatchSize() {
@@ -4151,9 +4163,10 @@ async function translateTitleStructure(work, gen, translatingDoc, batchSize) {
   const slots = structureTranslateSlots(record.source);
   if (!slots.length) {
     record.translated = true;
+    record.failed = false;
     return;
   }
-  const { results } = await translatePageBlocks(slots.map((item) => ({
+  const outcome = await translatePageBlocks(slots.map((item) => ({
     text: item.text,
     original: item.text,
     role: "paragraph"
@@ -4169,10 +4182,12 @@ async function translateTitleStructure(work, gen, translatingDoc, batchSize) {
     }
   });
   if (!isCurrentWork(work, gen, translatingDoc)) return;
+  const results = outcome?.results || [];
+  record.failed = Boolean(outcome?.error) || results.some((row) => row?.failed === true);
   record.structure = applyStructureTranslations(
     record.source,
     slots,
-    (results || []).map((row) => row.translation)
+    results.map((row) => row.translation)
   );
   record.translated = true;
   renderArticle();
@@ -4180,7 +4195,7 @@ async function translateTitleStructure(work, gen, translatingDoc, batchSize) {
 
 function structureLanded(page) {
   const record = titleStructure;
-  if (!record?.translated || record.docId !== docId || record.page !== page) return false;
+  if (!record?.translated || record.failed || record.docId !== docId || record.page !== page) return false;
   return structureTranslationRows(record.source, record.structure).some((row) => String(row.translation || "").trim());
 }
 
@@ -4308,6 +4323,37 @@ async function translateCurrentPage() {
   updateTranslateControls();
 }
 
+function adoptLibraryPages() {
+  let hole = false;
+  for (const entry of libraryDoc?.pages || []) {
+    const page = Number(entry?.page);
+    if (!(page >= 1)) continue;
+    const layout = getPageLayout(page);
+    const blocks = layout?.blocks || null;
+    const cached = pageCache.get(docId, page);
+    const state = libraryPageRunState({
+      pairs: entry.pairs,
+      cached,
+      skipped: Boolean(entry.skipped) || isSkipOnlyPage(blocks),
+      empty: Array.isArray(blocks)
+        && !translatableBlocks(blocks).length
+        && !isTitlePageCandidate(page, pageTextForStructure(blocks))
+    });
+    if (state === "queued") {
+      hole = true;
+      continue;
+    }
+    if (state === "done" && pageHasTranslation(entry.pairs) && !pageHasTranslation(cached)) {
+      const filled = (entry.pairs || []).filter((item) => String(item?.translation || "").trim());
+      if (filled.length) pageCache.set(docId, page, filled);
+    }
+    const noText = state === "empty" && !blocks?.length && !(Number(layout?.itemCount) > 0);
+    notePageState(page, { state, hasLayout: true, noText });
+    clearSlotPainted(page);
+  }
+  return hole;
+}
+
 async function translateWholeDocument() {
   if (!pdfDoc || pdfTranslateBusy(session)) return;
   try {
@@ -4339,15 +4385,11 @@ async function translateWholeDocument() {
       } else {
         setStatus(libraryHoldCopy(libraryDoc.pages, blocksByPage));
       }
-      for (const entry of libraryDoc.pages) {
-        const blocks = blocksByPage[entry.page] || null;
-        const skipped = Boolean(entry.skipped) || isSkipOnlyPage(blocks);
-        notePageState(entry.page, { state: skipped ? "skipped" : "done", hasLayout: true });
-        clearSlotPainted(entry.page);
+      if (!adoptLibraryPages()) {
+        finishDocPhase();
+        renderArticle();
+        return;
       }
-      finishDocPhase();
-      renderArticle();
-      return;
     }
   } catch {
     noteLibraryUnavailable();
@@ -4397,6 +4439,14 @@ async function translateWholeDocument() {
     pageSkipReason: (page) => (isSkipOnlyPage(getPageLayout(page)?.blocks) ? "skip-only" : "empty"),
     onPageSkip({ page, reason }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
+      if (reason !== "cached" && titleStructureFailed(page)) {
+        const merged = withStructureRows(getPageLayout(page), []);
+        notePageState(page, { state: pageRunState(merged), hasLayout: true });
+        clearSlotPainted(page);
+        refreshDocStatus();
+        renderArticle();
+        return;
+      }
       if (reason === "cached") notePageState(page, { state: "done", hasLayout: true });
       else if (reason === "skip-only") notePageState(page, { state: "skipped", hasLayout: true });
       else {
@@ -4430,7 +4480,7 @@ async function translateWholeDocument() {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       const page = translatingPage;
       const prev = pageStates.get(page);
-      notePageState(page, { state: "running", m: blockTotal, k: prev?.k || 0 });
+      notePageState(page, { state: "running", m: Math.max(blockTotal, prev?.m || 0), k: prev?.k || 0 });
       clearSlotPainted(page);
       renderArticle();
     },
@@ -4466,8 +4516,9 @@ async function translateWholeDocument() {
   const { aborted, pages, error, missingField } = translatedDoc;
   for (const entry of pages) {
     if (entry.reason === "cached" || entry.reason === "skip-only" || entry.reason === "empty") continue;
-    if (entry.error || entry.results?.some((item) => item?.failed)) {
-      notePageState(entry.page, { state: pageRunState(entry.results), hasLayout: true });
+    const merged = withStructureRows(getPageLayout(entry.page), entry.results);
+    if (entry.error || merged?.some((item) => item?.failed)) {
+      notePageState(entry.page, { state: pageRunState(merged), hasLayout: true });
       clearSlotPainted(entry.page);
     }
   }
@@ -4684,11 +4735,17 @@ async function forceRetranslateCurrentPage() {
   }
 }
 
+function titleStructureFailed(page) {
+  const record = titleStructure;
+  return Boolean(record?.failed && record.docId === docId && record.page === page);
+}
+
 function withStructureRows(layout, merged) {
   const record = titleStructure;
-  if (!record?.translated || record.docId !== docId || record.page !== layout?.page) return merged;
+  if (!record || record.docId !== docId || record.page !== layout?.page) return merged;
+  if (!record.translated && !record.failed) return merged;
   const rows = structureTranslationRows(record.source, record.structure);
-  return rows.length ? [...rows, ...(merged || [])] : merged;
+  return combinePageResults(rows, merged, Boolean(record.failed));
 }
 
 function pageResultsFromTranslation(layout, results) {
@@ -4894,6 +4951,18 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
   if (work) {
     await ensureTitleStructure(n, layout);
     if (isStale()) return [];
+    const record = titleStructure && titleStructure.docId === translatingDoc && titleStructure.page === n && titleStructure.status === "ok"
+      ? titleStructure
+      : null;
+    const slotCount = record ? structureTranslateSlots(record.source).length : 0;
+    const bodyCount = liveOriginals(layout, unitsForLayout(layout)).length;
+    const known = slotCount + bodyCount;
+    if (known > 0) {
+      const prev = pageStates.get(n);
+      notePageState(n, { state: "running", hasLayout: true, m: Math.max(known, prev?.m || 0), k: prev?.k || 0 });
+      clearSlotPainted(n);
+      renderArticle();
+    }
     await translateTitleStructure(work, gen, translatingDoc, batchSize);
     if (isStale()) return [];
     $("status")?.classList.remove("warn");
@@ -5052,7 +5121,6 @@ function measureVisible() {
 }
 
 function sourceNavPage() {
-  if (currentScope() !== "all") return pageNum;
   const seen = measureVisible();
   return seen >= 1 ? seen : pageNum;
 }
@@ -5069,7 +5137,7 @@ function onPdfScroll() {
   if (!pdfDoc) return;
   if (syncOwner.ignores("pdf")) {
     updateSourcePageLabel(measureVisible());
-    if (currentScope() === "all") updatePager();
+    updatePager();
     return;
   }
   takeDriver("pdf");
@@ -5438,8 +5506,7 @@ function updatePager() {
   const total = pdfDoc?.numPages || 0;
   const nav = sourceNavPage();
   $("pager").textContent = pageLabel(pageNum, total);
-  if (currentScope() === "all") updateSourcePageLabel(measureVisible() || pageNum);
-  else updateSourcePageLabel(pageNum);
+  updateSourcePageLabel(measureVisible() || pageNum);
   for (const id of ["translatePage", "retranslatePage"]) {
     const button = $(id);
     if (button) button.dataset.page = String(pageNum);
@@ -5479,13 +5546,10 @@ function setHasDoc(has) {
 }
 
 function updateTranslateControls() {
-  const scope = currentScope();
-  const hasBlocks = pageOriginals.length > 0;
-  const canTranslate = scope === "all" ? Boolean(pdfDoc) : hasBlocks;
   const ui = pdfToolbarActionState({
     busy: pdfTranslateBusy(session),
     hasDoc: Boolean(pdfDoc),
-    canTranslate,
+    canTranslate: Boolean(pdfDoc),
     canRetranslate: pageOriginals.length > 0
   });
   $("translatePage").disabled = ui.translateDisabled;
@@ -5494,7 +5558,6 @@ function updateTranslateControls() {
   $("stopTranslate").hidden = ui.stopHidden;
   $("stopTranslate").disabled = ui.stopDisabled;
   $("restoreOriginal").disabled = !pdfDoc;
-  setScopeEnabled(ui.scopeEnabled);
   syncExportControls();
   syncMirrorZoomButtons();
 }

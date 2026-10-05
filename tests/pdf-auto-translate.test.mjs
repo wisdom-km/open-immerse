@@ -489,4 +489,70 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     return JSON.stringify(probe);
   })()`, "LD-12 视口锚点", 90000));
   assert.ok(drift.max <= 1, `viewport drift ${drift.max}px`);
+
+  const ready = JSON.parse(await waitFor(`(() => {
+    const block = [...document.querySelectorAll("#readerFlow .rf-block")].find((el) => (el.querySelector(".rf-zh")?.textContent || "").includes("译:"));
+    if (!block || !block.querySelector(".rf-src")) return "";
+    return JSON.stringify({
+      id: block.dataset.blockId || "",
+      pair: block.dataset.pairId || "",
+      zh: block.querySelector(".rf-zh").textContent.slice(0, 80),
+      src: block.querySelector(".rf-src").textContent.slice(0, 80),
+      batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
+      status: document.getElementById("status")?.textContent || ""
+    });
+  })()`, "原文: 段里同时有中文和原文"));
+  assert.match(ready.zh, /译:/);
+  assert.equal(ready.src.includes("译:"), false);
+  await evaluate(`document.getElementById("restoreOriginal").click()`);
+  const srcView = JSON.parse(await evaluate(`(() => {
+    const block = document.querySelector("#readerFlow .rf-block[data-block-id=\\"${ready.id}\\"]")
+      || [...document.querySelectorAll("#readerFlow .rf-block")].find((el) => (el.querySelector(".rf-zh")?.textContent || "").includes("译:"));
+    const zh = block.querySelector(".rf-zh");
+    const src = block.querySelector(".rf-src");
+    const button = document.getElementById("restoreOriginal");
+    const box = button.getBoundingClientRect();
+    const visual = document.querySelector("#readerFlow .oi-pdf-display-math img, #readerFlow .oi-pdf-figure img, #readerFlow .oi-pdf-table img");
+    return JSON.stringify({
+      view: document.querySelector(".workspace")?.dataset.view || "",
+      pressed: button.getAttribute("aria-pressed"),
+      zhDisplay: getComputedStyle(zh).display,
+      srcDisplay: getComputedStyle(src).display,
+      visible: (block.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 180),
+      srcText: (src.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 80),
+      pair: block.dataset.pairId || "",
+      height: box.height,
+      visual: visual ? getComputedStyle(visual).display : "",
+      batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
+      status: document.getElementById("status")?.textContent || ""
+    });
+  })()`));
+  assert.equal(srcView.view, "src");
+  assert.equal(srcView.pressed, "true");
+  assert.equal(srcView.zhDisplay, "none");
+  assert.notEqual(srcView.srcDisplay, "none");
+  assert.equal(srcView.visible.includes("译:"), false);
+  assert.equal(srcView.visible.includes(srcView.srcText.slice(0, 24)), true);
+  assert.equal(srcView.pair, ready.pair);
+  assert.equal(srcView.height, 30);
+  if (srcView.visual) assert.notEqual(srcView.visual, "none");
+  assert.equal(srcView.status.includes("已停止"), ready.status.includes("已停止"));
+  await evaluate(`document.getElementById("restoreOriginal").click()`);
+  const zhView = JSON.parse(await evaluate(`(() => {
+    const block = [...document.querySelectorAll("#readerFlow .rf-block")].find((el) => (el.querySelector(".rf-zh")?.textContent || "").includes("译:"));
+    const zh = block.querySelector(".rf-zh");
+    const src = block.querySelector(".rf-src");
+    return JSON.stringify({
+      view: document.querySelector(".workspace")?.dataset.view || "",
+      pressed: document.getElementById("restoreOriginal").getAttribute("aria-pressed"),
+      zhDisplay: getComputedStyle(zh).display,
+      srcDisplay: getComputedStyle(src).display,
+      visible: (block.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 180)
+    });
+  })()`));
+  assert.equal(zhView.view, "zh");
+  assert.equal(zhView.pressed, "false");
+  assert.notEqual(zhView.zhDisplay, "none");
+  assert.equal(zhView.srcDisplay, "none");
+  assert.match(zhView.visible, /译:/);
 });

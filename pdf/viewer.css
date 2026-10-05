@@ -1082,6 +1082,12 @@ button:disabled { opacity: 0.45; cursor: default; }
   font-weight: 400;
   color: var(--oi-reader-muted);
 }
+.toolbar #restoreOriginal[aria-pressed="true"] {
+  background: var(--oi-reader-hover);
+  color: var(--oi-reader-ink);
+}
+.workspace[data-view="src"] .rf-zh { display: none; }
+.workspace:not([data-view="src"]) .rf-src { display: none; }
 .doc-status {
   display: inline-flex;
   align-items: center;

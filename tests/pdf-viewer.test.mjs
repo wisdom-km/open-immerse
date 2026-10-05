@@ -328,9 +328,9 @@ test("M2 copy covers empty / loading / error / no text layer / progress", () => 
   assert.equal(PDF_COPY.emptyPage, "本页没有可翻译的文字。");
   assert.equal(PDF_COPY.done, "本页已翻译。");
   assert.equal(PDF_COPY.doneDocument, "全文已翻译。");
-  assert.equal(PDF_COPY.scopeLabel, "范围");
-  assert.equal(PDF_COPY.scopePage, "当前页");
-  assert.equal(PDF_COPY.scopeDocument, "全文");
+  assert.equal(PDF_COPY.scopeLabel, undefined);
+  assert.equal(PDF_COPY.scopePage, undefined);
+  assert.equal(PDF_COPY.scopeDocument, undefined);
   assert.equal(PDF_COPY.stopped, "已停止。");
   assert.equal(PDF_COPY.exportMd, "导出 MD");
   assert.equal(PDF_COPY.exportPdf, "导出 PDF");
@@ -945,9 +945,6 @@ test("continuous scroll helpers pick the page in view and nearby canvases", () =
   assert.equal(pdfOpenTranslateBlocker({ runtimeReady: true, missingField: "", layoutMode: "text-layer" }), "");
   const adopt = src.slice(src.indexOf("async function adoptDoc"), src.indexOf("function shortTitle"));
   assert.match(adopt, /maybeAutoTranslateDocument\(/);
-  const scopeFn = src.slice(src.indexOf("function setTranslateScope"), src.indexOf("function setScopeEnabled"));
-  assert.equal(scopeFn.includes("startTranslate"), false);
-  assert.equal(scopeFn.includes("maybeAutoTranslate"), false);
   assert.doesNotMatch(src, /collapseUntranslated/);
   assert.doesNotMatch(src, /rf-translate-progress/);
   assert.match(src, /onPageSkip/);
@@ -988,7 +985,7 @@ test("viewer toolbar drops the scope segment and keeps one midline", () => {
   assert.match(css, /\.toolbar button:not\(\.more-item\)\s*\{[^}]*height:\s*var\(--oi-reader-topbar-btn-h\)/s);
   assert.match(css, /\.doc-status\s*\{[^}]*height:\s*var\(--oi-reader-topbar-btn-h\)[^}]*min-width:\s*112px[^}]*font-size:\s*12px/s);
   assert.doesNotMatch(css, /\.scope-seg\s*\{/);
-  assert.match(src, /setScopeEnabled\(ui\.scopeEnabled\)/);
+  assert.equal(src.includes("setScopeEnabled("), false);
   assert.match(src, /pdfToolbarActionState/);
   assert.match(src, /pdfTranslateBusy/);
   assert.match(css, /\.pages\s*\{[^}]*flex-direction:\s*column/s);
@@ -996,15 +993,14 @@ test("viewer toolbar drops the scope segment and keeps one midline", () => {
   assert.match(src, /onPdfScroll/);
   assert.match(src, /onPdfWheel/);
   assert.match(src, /wheelPageDelta/);
-  assert.match(src, /onScopeClick/);
-  assert.match(src, /setTranslateScope/);
-  const scopeClickSrc = src.slice(src.indexOf("function onScopeClick"), src.indexOf("function setTranslateScope"));
-  assert.equal(scopeClickSrc.includes("startTranslate"), false);
+  assert.equal(src.includes("onScopeClick"), false);
+  assert.equal(src.includes("setTranslateScope"), false);
+  assert.equal(src.includes("function currentScope"), false);
   assert.match(src, /scrollIntoView/);
   assert.match(src, /syncReadoutToPage/);
   assert.match(src, /dataset\.page/);
   assert.match(src, /translateWholeDocument/);
-  assert.match(src, /currentScope\(\) === "all"/);
+  assert.equal(src.includes("currentScope("), false);
   assert.equal(src.includes('id="page"'), false);
   assert.equal(html.includes('id="page"'), false);
   const goPageSrc = src.slice(src.indexOf("async function goPage"), src.indexOf("async function setZoom"));
@@ -1012,7 +1008,8 @@ test("viewer toolbar drops the scope segment and keeps one midline", () => {
   assert.equal(goPageSrc.includes("abortTranslateSession"), false);
   assert.match(src, /renderArticle\(\)/);
   assert.doesNotMatch(src, /flow\.replaceChildren|stack\.replaceChildren/);
-  assert.match(src, /function currentScope\(\) \{\s*return "all";/);
+  assert.match(css, /\[data-view="src"\] \.rf-zh/);
+  assert.match(css, /#restoreOriginal\[aria-pressed="true"\]/);
 });
 
 test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", async () => {
@@ -1070,7 +1067,7 @@ test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", asy
   assert.equal(out.results[1].translation, "");
 
   assert.match(src, /function stopTranslateWork/);
-  const stopFn = src.slice(src.indexOf("function stopTranslateWork"), src.indexOf("function setTranslateScope"));
+  const stopFn = src.slice(src.indexOf("function stopTranslateWork"), src.indexOf("function revealTranslationPage"));
   assert.match(stopFn, /abortTranslateSession\(session\)/);
   assert.match(stopFn, /updateTranslateControls/);
   assert.match(stopFn, /PDF_COPY\.stopped/);

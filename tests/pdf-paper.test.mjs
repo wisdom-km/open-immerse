@@ -127,7 +127,7 @@ test("right pane DOM contract is a continuous reader flow, not a 42rem column", 
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*overflow:\s*auto/s);
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*scroll-behavior:\s*auto/s);
   assert.doesNotMatch(src, /behavior:\s*["']smooth["']/);
-  assert.match(src, /pagesInTranslateScope/);
+  assert.equal(src.includes("pagesInTranslateScope"), false);
   assert.match(src, /appendCropOrNotice/);
   assert.doesNotMatch(
     src.slice(src.indexOf("function appendFixtureReadout"), src.indexOf("function onReadoutBlockClick")),

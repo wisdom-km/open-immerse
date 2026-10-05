@@ -155,7 +155,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 目标：文字层正文 + 原页内容精准展示（默认裁图）。右栏仍是 **Markdown 通读**，按阅读顺序排译文。公式画面不来自 LaTeX 渲染。规格见 `pdf/PDF-MD-READOUT.md`。阅读器运行路径按 `pdf/high-precision/EXECUTION.md` 分阶段接上。
 
 - 左栏：pdf.js 连续滚动；缩放只作用于原页
-- 顶栏：打开 PDF → 已译 n / t 页 → 翻译 / 停止 → 原文 → 导出 MD / PDF。打开后自动翻译全文。设置 → 功能 → PDF 里可关「打开 PDF 时自动翻译全文」
+- 顶栏：已译 n / t 页 → 打开 PDF → 翻译 / 停止 → 原文 → 导出 MD / PDF。打开后自动翻译全文。设置 → 功能 → PDF 里可关「打开 PDF 时自动翻译全文」
 - 全文按页 `OI_TRANSLATE_BATCH`，页内进度「正在翻译 · k / m 段」，可停；停或译完主按钮立刻回「翻译」，已译中文保留
 - **原文只切换视图**，不中止翻译，也不清缓存
 - 右栏走 **Markdown 通读流**：按阅读顺序抽出标题 + 正文再翻译，连续滚动；译文只出现在右栏，**不是**把译文贴进左栏

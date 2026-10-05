@@ -5,9 +5,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { planReaderFlow } from "../lib/pdf-reader-flow.js";
 import {
+  combinePageResults,
   createPageCache,
   createTranslateSession,
   docStatusView,
+  libraryPageRunState,
   pageRunState,
   psEmptyCopy,
   psNoTextCopy,
@@ -26,6 +28,8 @@ const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
 
 test("LD-a copy, queued ranges, and toolbar totals", () => {
   assert.equal(psRunning(2, 9), "正在翻译 · 2 / 9 段");
+  assert.equal(psRunning(0, 0), "正在翻译…");
+  assert.equal(psRunning(3, 0).includes("0 / 0"), false);
   assert.equal(qQueued(7, 15), "第 7–15 页 · 排队翻译（9 页）");
   assert.equal(qQueued(4, 4), "第 4 页 · 排队翻译");
   assert.equal(psSkippedCopy(), "参考文献 · 保留原文");
@@ -118,7 +122,11 @@ test("B1 B4 and the scope segment are gone from the reader", () => {
   const flowSrc = viewer.slice(viewer.indexOf("function finalizeReaderFlow"), viewer.indexOf("function settlePairChrome"));
   assert.doesNotMatch(flowSrc, /replaceChildren/);
   assert.match(flowSrc, /orderFlowChildren/);
-  assert.match(viewer, /function currentScope\(\) \{\s*return "all";/);
+  assert.equal(viewer.includes("function currentScope"), false);
+  assert.equal(viewer.includes("function onScopeClick"), false);
+  assert.equal(viewer.includes("function setTranslateScope"), false);
+  assert.equal(viewer.includes("function setScopeEnabled"), false);
+  assert.equal(viewer.includes("setScopeEnabled("), false);
   assert.match(viewer, /onPageSkip/);
   assert.match(viewer, /capsulePage\(\)/);
   assert.doesNotMatch(viewer, /makeUntranslated|untranslatedLabel|rf-untranslated|rf-translate-progress/);
@@ -128,4 +136,64 @@ test("B1 B4 and the scope segment are gone from the reader", () => {
   assert.match(css, /\.rf-q/);
   assert.match(css, /\.doc-status\s*\{[^}]*height:\s*var\(--oi-reader-topbar-btn-h\)/s);
   assert.match(viewer, /参考文献 · 保留原文|psSkippedCopy\(\)/);
+});
+
+test("title structure batch failure is not done and cannot light 全文已译", async () => {
+  const title = await translatePageBlocks(
+    ["Attention Is All You Need", "Abstract", "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks."],
+    { send: async () => ({ ok: false, error: "500" }) }
+  );
+  assert.equal(title.results.every((row) => row.failed === true), true);
+  const body = await translatePageBlocks(
+    ["We propose a new simple network architecture, the Transformer."],
+    { send: async (message) => ({ ok: true, translations: (message.texts || []).map((text) => `译:${text}`) }) }
+  );
+  const merged = combinePageResults(title.results, body.results, true);
+  const state = pageRunState(merged);
+  assert.equal(state, "partial");
+  const totals = translatedPageTotal([{ state }]);
+  assert.equal(totals.needsRetry, 1);
+  assert.notEqual(docStatusView({ n: totals.n, t: 1, needsRetry: totals.needsRetry, phase: "idle" }).text, "全文已译");
+  const titleFn = viewer.slice(viewer.indexOf("async function translateTitleStructure"), viewer.indexOf("function structureLanded"));
+  assert.match(titleFn, /record\.failed/);
+  assert.match(titleFn, /outcome\?\.error|row\?\.failed/);
+  assert.match(viewer, /combinePageResults\(/);
+});
+
+test("body batch failure is not done and cannot light 全文已译", async () => {
+  const title = await translatePageBlocks(
+    ["Attention Is All You Need", "Abstract", "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks."],
+    { send: async (message) => ({ ok: true, translations: (message.texts || []).map((text) => `译:${text}`) }) }
+  );
+  const body = await translatePageBlocks(
+    ["We propose a new simple network architecture, the Transformer."],
+    { send: async () => ({ ok: false, error: "500" }) }
+  );
+  assert.equal(body.results[0].failed, true);
+  const merged = combinePageResults(title.results, body.results, false);
+  const state = pageRunState(merged);
+  assert.equal(state, "partial");
+  const totals = translatedPageTotal([{ state }]);
+  assert.equal(totals.needsRetry, 1);
+  assert.notEqual(docStatusView({ n: totals.n, t: 1, needsRetry: totals.needsRetry, phase: "idle" }).text, "全文已译");
+});
+
+test("library pages without a stored translation stay queued", () => {
+  assert.equal(libraryPageRunState({ pairs: [{ translation: "你好", role: "paragraph" }] }), "done");
+  assert.equal(libraryPageRunState({ pairs: [], cached: [{ translation: "甲", role: "paragraph" }] }), "done");
+  assert.equal(libraryPageRunState({ pairs: [{ translation: "", role: "paragraph" }] }), "queued");
+  assert.equal(libraryPageRunState({ pairs: [], skipped: true }), "skipped");
+  assert.equal(libraryPageRunState({ pairs: [], empty: true }), "empty");
+  const totals = translatedPageTotal([
+    { state: libraryPageRunState({ pairs: [{ translation: "甲", role: "paragraph" }] }) },
+    { state: libraryPageRunState({ pairs: [] }) },
+    { state: libraryPageRunState({ pairs: [] }) }
+  ]);
+  assert.equal(totals.n, 1);
+  assert.notEqual(docStatusView({ n: totals.n, t: 3, needsRetry: totals.needsRetry, phase: "idle" }).text, "全文已译");
+  const whole = viewer.slice(viewer.indexOf("function adoptLibraryPages"), viewer.indexOf("async function translateWholeDocument"));
+  assert.match(whole, /libraryPageRunState\(/);
+  assert.equal(whole.includes('skipped ? "skipped" : "done"'), false);
+  const caller = viewer.slice(viewer.indexOf("if (libraryDoc?.pages?.length)"), viewer.indexOf("if (libraryArticle)"));
+  assert.match(caller, /adoptLibraryPages\(\)/);
 });
