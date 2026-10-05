@@ -358,7 +358,8 @@
   --oi-reader-caption-font: 400 14px/1.65 var(--oi-reader-font);
   --oi-reader-fade-h: 40px;
   --oi-reader-fade: linear-gradient(to bottom, transparent, var(--oi-reader-paper) 85%);
-  --oi-reader-topbar-h: 49px;
+  /* 栏高 48，光学中线 y=24。1px 底线用 inset 阴影，不占布局。不要改回 49。 */
+  --oi-reader-topbar-h: 48px;
   --oi-reader-topbar-btn-h: 30px;
   --oi-reader-topbar-btn-pad-x: 9px;
   --oi-reader-topbar-btn-radius: 7px;

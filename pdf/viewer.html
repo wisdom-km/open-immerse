@@ -17,7 +17,7 @@
       <h1>PDF 阅读</h1>
     </div>
     <div class="toolbar-actions">
-      <div id="docStatus" class="doc-status" data-state="idle">
+      <div id="docStatus" class="doc-status" data-tb="status" data-state="idle">
         <svg class="doc-ring" viewBox="0 0 14 14" aria-hidden="true">
           <circle cx="7" cy="7" r="5.5" class="trk"></circle>
           <circle cx="7" cy="7" r="5.5" class="val" pathLength="100" stroke-dasharray="0 100"></circle>
@@ -25,19 +25,19 @@
         <span class="doc-text" aria-hidden="true"></span>
         <span class="sr-only" role="status" aria-live="polite"></span>
       </div>
-      <button type="button" id="pick" class="btn-secondary">打开 PDF</button>
+      <button type="button" id="pick" class="btn-secondary" data-tb="text">打开 PDF</button>
       <input id="file" class="file-input" type="file" accept="application/pdf,.pdf" tabindex="-1" aria-hidden="true" />
-      <button type="button" id="translatePage" class="btn-primary" disabled>翻译</button>
-      <button type="button" id="retranslatePage" class="btn-secondary" disabled>重译本页</button>
-      <button type="button" id="stopTranslate" class="btn-primary" hidden disabled>停止</button>
-      <button type="button" id="restoreOriginal" class="btn-ghost" disabled>原文</button>
-      <button type="button" id="prev" class="btn-ghost" disabled>上一页</button>
-      <p id="pager" class="pager" aria-live="polite">0 / 0</p>
-      <button type="button" id="next" class="btn-ghost" disabled>下一页</button>
+      <button type="button" id="translatePage" class="btn-primary" data-tb="text" disabled>翻译</button>
+      <button type="button" id="retranslatePage" class="btn-secondary" data-tb="text" disabled>重译本页</button>
+      <button type="button" id="stopTranslate" class="btn-primary" data-tb="text" hidden disabled>停止</button>
+      <button type="button" id="restoreOriginal" class="btn-ghost" data-tb="text" disabled>原文</button>
+      <button type="button" id="prev" class="btn-ghost" data-tb="text" disabled>上一页</button>
+      <p id="pager" class="pager" data-tb="status" aria-live="polite">0 / 0</p>
+      <button type="button" id="next" class="btn-ghost" data-tb="text" disabled>下一页</button>
       <span class="toolbar-rule" aria-hidden="true"></span>
-      <button type="button" id="aaButton" class="btn-ghost aa-button" aria-haspopup="dialog" aria-expanded="false" aria-controls="aaPanel">Aa</button>
+      <button type="button" id="aaButton" class="btn-ghost aa-button" data-tb="icon" aria-haspopup="dialog" aria-expanded="false" aria-controls="aaPanel">Aa</button>
       <div class="more-wrap">
-        <button type="button" id="moreButton" class="more-button hit-pad" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu" aria-label="更多">
+        <button type="button" id="moreButton" class="more-button hit-pad" data-tb="icon" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu" aria-label="更多">
           <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
             <circle cx="3.25" cy="8" r="1.15" fill="currentColor"></circle>
             <circle cx="8" cy="8" r="1.15" fill="currentColor"></circle>
