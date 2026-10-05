@@ -292,6 +292,7 @@ let mirrorZoom = DEFAULT_ZOOM;
 let readerPrefs = readReaderPrefs(null);
 let readerBlend = readerImageBlend({ supportsMultiply: true, forcedColors: false });
 let toolbarSnapFrame = 0;
+const READER_VIEWS = ["zh", "bi", "src"];
 
 init();
 
@@ -2977,7 +2978,6 @@ function bindMoreMenu() {
   syncSwapCheck();
 }
 
-const READER_VIEWS = ["zh", "bi", "src"];
 let toastTimer = 0;
 
 function showSoonToast() {
