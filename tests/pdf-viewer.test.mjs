@@ -1009,6 +1009,10 @@ test("viewer toolbar drops the scope segment and keeps one midline", () => {
   assert.doesNotMatch(src, /flow\.replaceChildren|stack\.replaceChildren/);
   assert.match(css, /\[data-view="src"\] \.rf-zh/);
   assert.match(css, /\.view-seg-btn\[aria-checked="true"\]::before/);
+  assert.match(css, /\.view-seg-btn\s*\{[^}]*isolation:\s*isolate/);
+  assert.match(css, /\.view-seg-btn::before\s*\{[^}]*z-index:\s*-1/);
+  assert.match(css, /\.sr-only\s*\{[^}]*clip:\s*rect\(0 0 0 0\)/);
+  assert.match(css, /\.toolbar button\.btn-primary\s*,[^}]*background:\s*var\(--oi-reader-track\)/);
 });
 
 test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", async () => {

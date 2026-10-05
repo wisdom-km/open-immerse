@@ -159,11 +159,13 @@ body {
 }
 .view-seg-btn {
   position: relative;
+  isolation: isolate;
   background: transparent;
 }
 .view-seg-btn::before {
   content: "";
   position: absolute;
+  z-index: -1;
   inset: 2px 0;
   border-radius: 6px;
   background: transparent;
@@ -1189,18 +1191,18 @@ button:disabled { opacity: 0.45; cursor: default; }
 .toolbar button.tb-panel {
   padding-inline-start: 27px;
 }
-.toolbar .btn-primary,
+.toolbar button.btn-primary,
 .toolbar #stopTranslate.btn-primary {
   background: var(--oi-reader-track);
   color: var(--oi-reader-ink);
   font-weight: 500;
 }
-.toolbar .btn-primary:hover:not(:disabled),
+.toolbar button.btn-primary:hover:not(:disabled),
 .toolbar #stopTranslate.btn-primary:hover:not(:disabled) {
   background: var(--oi-reader-track);
   color: var(--oi-reader-ink);
 }
-.toolbar .btn-primary:disabled {
+.toolbar button.btn-primary:disabled {
   background: var(--oi-reader-track);
   color: var(--oi-reader-disabled);
 }
@@ -1218,6 +1220,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .workspace[data-view="src"] .rf-zh { display: none; }
 .workspace:not([data-view="src"]) .rf-src { display: none; }
 .doc-status {
+  position: relative;
   display: inline-flex;
   align-items: center;
   align-self: center;
@@ -1232,6 +1235,17 @@ button:disabled { opacity: 0.45; cursor: default; }
   font-variant-numeric: tabular-nums;
   line-height: var(--oi-reader-topbar-btn-h);
   white-space: nowrap;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 .doc-status .doc-ring {
   display: block;
