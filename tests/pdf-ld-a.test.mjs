@@ -11,6 +11,8 @@ import {
   docStatusView,
   libraryCoversLiveBlocks,
   libraryPageRunState,
+  shouldPaintPageBody,
+  shouldStampPagePainted,
   pageRunState,
   pageNeedsBypass,
   runTitleStructureBatch,
@@ -246,8 +248,73 @@ test("library pages without a stored translation stay queued", () => {
   const whole = viewer.slice(viewer.indexOf("function adoptLibraryPages"), viewer.indexOf("function demoteUnpaintedDonePages"));
   assert.match(whole, /pdfDoc\?\.numPages/);
   assert.match(whole, /libraryPageRunState\(/);
+  assert.match(whole, /renderArticle\(/);
   assert.equal(whole.includes('skipped ? "skipped" : "done"'), false);
+  assert.match(viewer, /prepareLibraryPage/);
+  const prep = viewer.slice(viewer.indexOf("const prepareLibraryPage"), viewer.indexOf("let translatedDoc"));
+  assert.equal(prep.includes("documentTranslateSuperseded"), false);
+  assert.match(viewer, /shouldPaintPageBody\(/);
+  assert.match(viewer, /adoptLibraryPages\(\{ onlyPage: page \}\)/);
   assert.equal(viewer.includes("if (libraryArticle) {\n    setStatus(PDF_COPY.doneDocument);\n    return;"), false);
+});
+
+test("queued and running pages do not paint until a translation has settled", () => {
+  assert.equal(shouldPaintPageBody({ state: "queued", hasSettled: false }), false);
+  assert.equal(shouldPaintPageBody({ state: "running", hasSettled: false }), false);
+  assert.equal(shouldPaintPageBody({ state: "queued", hasSettled: false, revealSource: true }), true);
+  assert.equal(shouldPaintPageBody({ state: "queued", hasSettled: true }), true);
+  assert.equal(shouldPaintPageBody({ state: "running", hasSettled: true }), true);
+  assert.equal(shouldPaintPageBody({ state: "done", hasSettled: true }), true);
+  assert.equal(shouldPaintPageBody({ state: "skipped", hasSettled: false }), true);
+  assert.equal(shouldPaintPageBody({ state: "layout", hasSettled: true }), false);
+  assert.equal(shouldPaintPageBody({ state: "empty", hasSettled: false }), false);
+});
+
+test("landed pair nodes stay painted while an empty queued page can still fill in", () => {
+  assert.equal(shouldStampPagePainted({ state: "queued", hasLandedBody: true }), true);
+  assert.equal(shouldStampPagePainted({ state: "done", hasLandedBody: true }), true);
+  assert.equal(shouldStampPagePainted({ state: "skipped", hasLandedBody: false }), true);
+  assert.equal(shouldStampPagePainted({ state: "queued", hasLandedBody: false }), false);
+  assert.equal(shouldStampPagePainted({ state: "queued", collapsed: true, hasLandedBody: false }), false);
+  assert.equal(shouldStampPagePainted({ state: "running", hasLandedBody: true }), false);
+  assert.equal(shouldStampPagePainted({ state: "layout", hasLandedBody: true }), false);
+  const stamp = viewer.slice(viewer.indexOf("function finalizeReaderFlow"), viewer.indexOf("function settlePairChrome"));
+  assert.match(stamp, /shouldStampPagePainted\(/);
+  assert.match(stamp, /querySelector\("\.rf-block"\)/);
+});
+
+test("preparePage translates the current hole before later pages are prepared", async () => {
+  const log = [];
+  const result = await translateDocumentPages({
+    numPages: 3,
+    docId: 1,
+    cache: createPageCache(),
+    session: createTranslateSession(),
+    preparePage: async (page) => {
+      log.push(`prep:${page}`);
+      return page === 2 ? "skip" : "translate";
+    },
+    getPageOriginals: async (page) => {
+      log.push(`orig:${page}`);
+      return [{ original: `Sentence on page ${page}.` }];
+    },
+    send: async (message) => {
+      log.push(`send:${message.texts[0]}`);
+      return { ok: true, translations: ["译好了"] };
+    }
+  });
+  assert.deepEqual(log, [
+    "prep:1",
+    "orig:1",
+    "send:Sentence on page 1.",
+    "prep:2",
+    "prep:3",
+    "orig:3",
+    "send:Sentence on page 3."
+  ]);
+  assert.equal(result.pages[1].reason, "cached");
+  assert.equal(result.pages[1].skipped, true);
+  assert.equal(result.paused, false);
 });
 
 test("one failed page stays failed and the next page still translates", async () => {
