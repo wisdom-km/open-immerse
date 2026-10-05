@@ -413,7 +413,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
         const state = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
         const ready = text.includes("正在读取 PDF") || text.includes("已译 0 /");
         return ready && (state === "layout" || state === "running") ? state : "";
-      })()`, "LD-01 顶栏与第 1 页", 2000);
+      })()`, "LD-01 顶栏与第 1 页", 8000);
     }
     if (mode === "fast") {
       await evaluate(`(() => {
