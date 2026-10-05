@@ -101,7 +101,8 @@ test("source-uncertain on a translatable block stays pending-review", () => {
   assert.match(status.copy, /有待核对的段落/);
   assert.match(blockSoftLead(restored[0]), /旧译文未沿用/);
   assert.equal(libraryHoldCopy([saved]), LIBRARY_HOLD_PENDING);
-  assert.match(libraryHoldCopy([saved]), /待核对段落不会自动重新翻译/);
+  assert.match(libraryHoldCopy([saved]), /待核对段落将自动补译/);
+  assert.equal(String(libraryHoldCopy([saved])).includes("不会自动重新翻译"), false);
   assert.equal(libraryHoldCopy([saved], { 5: matrixBlocks }), LIBRARY_HOLD_PENDING);
 });
 

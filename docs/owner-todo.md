@@ -142,6 +142,6 @@
 
 据 2026-10-05 Anvil #99 复验 / Wisdom 批准推后。#99（`bbbf76b`）合入时这几条算低风险，先记在这里，后续再改实现。不读封存数据，也不打开隔离目录。
 
-- **L-1 全新 profile 首次库命中慢**：#99 @`bbbf76b` 后，`adoptLibraryPages` 在没有版面时逐页 `ingestPageLayout`。全新 Chrome profile 第一次打开已有库译文的文档，大约 6 分钟才显示「全文已译」（这段时间 0 次 LLM）；同一个 profile 第二次打开，或冷启后再开，大约 3 秒。后续评估要不要预计算版面、并行 ingest，或在首次打开时提示「正在核对本地库版面…」。
+- **L-1 全新 profile 首次库命中慢**：#99 @`bbbf76b` 后，`adoptLibraryPages` 在没有版面时逐页 `ingestPageLayout`。全新 Chrome profile 第一次打开已有库译文的文档，大约 6 分钟才显示「全文已译」（这段时间 0 次 LLM）；同一个 profile 第二次打开，或冷启后再开，大约 3 秒。流水线已缓解：某一页判定为洞后就开译，采用过程中刷新顶栏，不必等整本 ingest 完。预计算版面和并行 ingest 仍未做。
 - **M13 测试缺口**：库 layout/fixture 兜底的两条 `if(false&&)` 改坏之后，相关 5 个测试文件和全量 `node --test tests/*.test.mjs` 仍然全绿。要补上能杀死这个突变的测试。
-- **污染库重开初期状态栏文案**：`lib/pdf-library.js` 的 `LIBRARY_HOLD_PENDING` 是「本地库已有逐页记录；待核对段落不会自动重新翻译。」污染库重开的初期，状态栏用这句，但实际会自动重译，文案和表现不一致。
+- **污染库重开初期状态栏文案**（已改）：`LIBRARY_HOLD_PENDING` 现为「本地库有逐页记录；待核对段落将自动补译。」不再写「不会自动重新翻译」。

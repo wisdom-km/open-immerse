@@ -589,8 +589,8 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
 
   await openMode("cache");
   const cached = JSON.parse(await waitFor(`(() => {
-    if (!window.__oiAuto || window.__oiAuto.page3AtFirstBatch == null) return "";
     const gap = (window.__oiLibraryGap || []).find((item) => item.page === 2 && item.pairs < item.live);
+    if (!window.__oiAuto || window.__oiAuto.page3AtFirstBatch == null) return "";
     if (!gap) return "";
     return JSON.stringify({
       page1: document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "",
@@ -1122,16 +1122,44 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     const zh = abstract?.querySelector(".rf-zh")?.textContent || "";
     if (doc.includes("全文已译") && (!abstract || !zh.includes("译:"))) return "";
     if (!abstract || !zh.includes("译:") || page1 !== "done") return "";
+    const timeline = (window.__oiAuto && window.__oiAuto.timeline) || [];
+    const progressive = timeline.some((row) => {
+      const pages = row.pages || [];
+      const head = pages.find((item) => item.page === 1 && item.state === "done" && /译:|[\\u4e00-\\u9fff]/.test(item.zh || ""));
+      const later = pages.some((item) => item.page > 1 && item.state !== "done" && item.state !== "skipped" && item.state !== "empty");
+      return Boolean(head && later);
+    });
+    const echoed = timeline.some((row) => (row.pages || []).some((item) => (item.state === "queued" || item.state === "running") && item.echo));
+    const falseHold = timeline.some((row) => String(row.status || "").includes("不会自动重新翻译"));
+    const counts = [];
+    for (const row of timeline) {
+      const matched = String(row.doc || "").match(/已译\\s+(\\d+)/);
+      if (matched) counts.push(Number(matched[1]));
+      else if (String(row.doc || "").includes("全文已译")) counts.push(15);
+    }
+    const grew = counts.some((count, index) => index > 0 && count > counts[index - 1]);
+    const bypass = ((window.__oiAuto && window.__oiAuto.messages) || []).some((item) => item.bypassCache === true);
     return JSON.stringify({
       page1,
       doc,
       zh: zh.slice(0, 80),
-      batches: (window.__oiAuto && window.__oiAuto.batches || []).length
+      batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
+      progressive,
+      echoed,
+      falseHold,
+      grew,
+      bypass,
+      counts: counts.slice(0, 24)
     });
   })()`, "polluted: 译文等于原文的库不能直接 done", 180000));
   assert.equal(washed.page1, "done");
   assert.match(washed.zh, /译:/);
   assert.ok(washed.batches > 0, "污染库要进队补译");
+  assert.equal(washed.progressive, true, "第 1 页中文出现时后面的页还没全部完成");
+  assert.equal(washed.echoed, false, "排队或翻译中的页不能把英文原文画进译文");
+  assert.equal(washed.falseHold, false);
+  assert.equal(washed.grew, true, "顶栏已译数要随页增加");
+  assert.equal(washed.bypass, false, "补译不走重译本页的 bypass");
 
   await openMode("en");
   const english = JSON.parse(await waitFor(`(() => {
