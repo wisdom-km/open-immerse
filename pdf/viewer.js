@@ -346,13 +346,7 @@ function init() {
   bindSourcePointer();
   watchSourceAvailability();
   $("translatePage").addEventListener("click", () => startTranslate());
-  $("retranslatePage").addEventListener("click", () => {
-    if (pdfTranslateBusy(session) || forceReadoutHold) {
-      forceRetranslatePending = true;
-      return;
-    }
-    void forceRetranslateCurrentPage();
-  });
+  $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("restoreOriginal").addEventListener("click", restoreOriginal);
   $("exportMd").addEventListener("click", () => {
