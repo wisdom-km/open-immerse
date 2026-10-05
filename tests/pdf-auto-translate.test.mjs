@@ -379,7 +379,7 @@ const SNAPSHOT = `(() => JSON.stringify({
   status: document.getElementById("status")?.textContent || "",
   label: (document.getElementById("translatePage")?.textContent || "").trim(),
   hidden: document.getElementById("translatePage")?.hidden === true,
-  restore: (document.getElementById("restoreOriginal")?.textContent || "").trim(),
+  restore: (document.querySelector('#viewSeg [data-view="src"]')?.textContent || "").trim(),
   retranslate: (document.getElementById("retranslatePage")?.textContent || "").trim(),
   batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
   pairs: document.querySelectorAll("#readerFlow .rf-block[data-pair-id]").length,
@@ -494,7 +494,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
       })()`);
     }
     await waitFor(`(() => {
-      const pager = document.getElementById("pager")?.textContent || "";
+      const pager = document.getElementById("sourcePageLabel")?.textContent || "";
       return /\\/\\s*15/.test(pager) ? pager : "";
     })()`, `${mode}: Attention PDF open`);
   };
@@ -522,28 +522,32 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.match(runtime.status, /重新加载/);
   const toolbar = JSON.parse(await evaluate(`(() => {
     const bar = document.querySelector(".toolbar");
-    const pager = document.getElementById("pager");
-    const ink = pager.querySelector(".pager-ink");
-    const pick = document.getElementById("pick");
     const barBox = bar.getBoundingClientRect();
-    const mid = barBox.top + barBox.height / 2;
-    const box = pager.getBoundingClientRect();
-    const pickBox = pick.getBoundingClientRect();
-    const style = getComputedStyle(pager);
-    const inkStyle = ink ? getComputedStyle(ink) : null;
+    const label = document.getElementById("sourcePageLabel");
+    const prev = document.getElementById("sourcePrev").getBoundingClientRect();
+    const next = document.getElementById("sourceNext").getBoundingClientRect();
+    const head = document.querySelector(".source-head").getBoundingClientRect();
     return JSON.stringify({
       barH: barBox.height,
-      lineHeight: style.lineHeight,
-      inkTop: inkStyle ? inkStyle.top : "",
-      boxMid: Math.abs((box.top + box.height / 2) - mid),
-      pickMid: Math.abs((pickBox.top + pickBox.height / 2) - mid)
+      headH: head.height,
+      pagerInToolbar: Boolean(bar.querySelector("#pager, #prev, #next")),
+      pickHidden: getComputedStyle(document.getElementById("pick")).display === "none",
+      label: label.textContent || "",
+      prev: prev.width,
+      next: next.width,
+      value: label.getBoundingClientRect().width,
+      inHead: Boolean(label.closest(".source-head"))
     });
   })()`));
   assert.equal(toolbar.barH, 48);
-  assert.equal(toolbar.lineHeight, "12px");
-  assert.equal(toolbar.inkTop, "-1.5px");
-  assert.ok(toolbar.boxMid <= 0.5, `pager box mid ${toolbar.boxMid}`);
-  assert.ok(toolbar.pickMid <= 0.5, `open button mid ${toolbar.pickMid}`);
+  assert.equal(toolbar.headH, 36);
+  assert.equal(toolbar.pagerInToolbar, false);
+  assert.equal(toolbar.pickHidden, true);
+  assert.match(toolbar.label, /\/\s*15/);
+  assert.equal(toolbar.prev, 24);
+  assert.equal(toolbar.next, 24);
+  assert.ok(toolbar.value >= 52);
+  assert.equal(toolbar.inHead, true);
 
   await openMode("off");
   const off = JSON.parse(await waitFor(`(() => {
@@ -682,9 +686,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.equal(hang.restore, "原文");
   assert.equal(hang.retranslate, "重译本页");
 
-  for (let i = 0; i < 3; i += 1) {
-    await evaluate(`document.getElementById("restoreOriginal").click()`);
-  }
+  await evaluate(`document.querySelector('#viewSeg [data-view="src"]').click()`);
   const toggled = await read();
   assert.equal(toggled.view, "src");
   assert.equal(toggled.hidden, true, "原文切换不中止翻译");
@@ -840,13 +842,13 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.equal(ready.src.includes("译:"), false);
   assert.equal(ready.titleSrc.includes("译:"), false);
   assert.equal(ready.captionSrc.includes("译:"), false);
-  await evaluate(`document.getElementById("restoreOriginal").click()`);
+  await evaluate(`document.querySelector('#viewSeg [data-view="src"]').click()`);
   const srcView = JSON.parse(await evaluate(`(() => {
     const block = document.querySelector("#readerFlow .rf-block[data-block-id=\\"${ready.id}\\"]")
       || [...document.querySelectorAll("#readerFlow .rf-block")].find((el) => (el.querySelector(".rf-zh")?.textContent || "").includes("译:"));
     const zh = block.querySelector(".rf-zh");
     const src = block.querySelector(".rf-src");
-    const button = document.getElementById("restoreOriginal");
+    const button = document.querySelector('#viewSeg [data-view="src"]');
     const box = button.getBoundingClientRect();
     const visual = document.querySelector("#readerFlow .oi-pdf-display-math img, #readerFlow .oi-pdf-figure img, #readerFlow .oi-pdf-table img");
     const titleZh = document.querySelector("#readerFlow h1 .rf-zh");
@@ -855,7 +857,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     const capSrc = document.querySelector('#readerFlow [data-label="caption"] .rf-src');
     return JSON.stringify({
       view: document.querySelector(".workspace")?.dataset.view || "",
-      pressed: button.getAttribute("aria-pressed"),
+      pressed: button.getAttribute("aria-checked"),
       zhDisplay: getComputedStyle(zh).display,
       srcDisplay: getComputedStyle(src).display,
       titleZhDisplay: titleZh ? getComputedStyle(titleZh).display : "",
@@ -889,14 +891,14 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.equal(srcView.height, 30);
   if (srcView.visual) assert.notEqual(srcView.visual, "none");
   assert.equal(srcView.status.includes("已停止"), ready.status.includes("已停止"));
-  await evaluate(`document.getElementById("restoreOriginal").click()`);
+  await evaluate(`document.querySelector('#viewSeg [data-view="zh"]').click()`);
   const zhView = JSON.parse(await evaluate(`(() => {
     const block = [...document.querySelectorAll("#readerFlow .rf-block")].find((el) => (el.querySelector(".rf-zh")?.textContent || "").includes("译:"));
     const zh = block.querySelector(".rf-zh");
     const src = block.querySelector(".rf-src");
     return JSON.stringify({
       view: document.querySelector(".workspace")?.dataset.view || "",
-      pressed: document.getElementById("restoreOriginal").getAttribute("aria-pressed"),
+      pressed: document.querySelector('#viewSeg [data-view="src"]').getAttribute("aria-checked"),
       zhDisplay: getComputedStyle(zh).display,
       srcDisplay: getComputedStyle(src).display,
       visible: (block.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 180)

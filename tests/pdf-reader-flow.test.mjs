@@ -141,7 +141,7 @@ test("continuous flow replaces the paper stack and keeps the title mount", () =>
   assert.match(html, /id="readerFlow"[^>]*class="reader-flow"/);
   assert.match(html, /class="oi-reader"[^>]*data-reader-theme="warm"/);
   assert.doesNotMatch(html, /id="paperStack"/);
-  assert.doesNotMatch(html, /id="viewSeg"/);
+  assert.match(html, /id="viewSeg"/);
   assert.doesNotMatch(html, /id="mirrorPages"/);
   assert.doesNotMatch(html, /class="readout-paper"/);
   assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*var\(--rf-measure,\s*min\(var\(--oi-reader-measure\)/s);

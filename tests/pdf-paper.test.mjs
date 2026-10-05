@@ -104,7 +104,7 @@ test("right pane DOM contract is a continuous reader flow, not a 42rem column", 
   assert.ok(pageBox.indexOf("style.width") < pageBox.indexOf("offsetWidth"));
   assert.doesNotMatch(pageBox, /canvas/);
   assert.doesNotMatch(html, /id="mirrorPages"/);
-  assert.doesNotMatch(html, /id="viewSeg"/);
+  assert.match(html, /id="viewSeg"/);
   assert.doesNotMatch(src, /\$\("mirrorPages"\)\.hidden = false/);
   assert.doesNotMatch(src, /appendMirrorPage|buildMirrorLayout/);
   assert.doesNotMatch(css, /--oi-paper:\s*#/);

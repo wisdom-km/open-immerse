@@ -97,12 +97,12 @@ import {
   isUnlockEvent,
   menuNext,
   pageArrivalText,
+  readerToolbarChrome,
   pairBoxStyle,
   pairClickKept,
   sourceAnchorScroll,
   sourceFollowScroll,
   sourceHit,
-  sourcePageLabel,
   splitKeyStep,
   splitPointerRatio,
   structureRolePairs,
@@ -311,6 +311,8 @@ function toolbarWidthTargets(bar) {
     if (el.closest(".more-menu")) return false;
     if (el.dataset.tb === "icon") return false;
     if (el.matches(".more-item")) return false;
+    if (el.classList.contains("tb-primary")) return false;
+    if (el.classList.contains("tb-title")) return false;
     return true;
   });
 }
@@ -325,8 +327,15 @@ function wholeToolbarPx(value) {
 function snapToolbarControlWidths() {
   const bar = document.querySelector(".toolbar");
   if (!bar) return;
+  const title = bar.querySelector(".tb-title");
+  if (title) {
+    title.style.width = "";
+    title.style.flex = "1 1 auto";
+  }
   for (const el of toolbarWidthTargets(bar)) {
     if (el.closest("[hidden]")) continue;
+    const style = getComputedStyle(el);
+    if (style.display === "none") continue;
     const prevWidth = el.style.width;
     const prevFlex = el.style.flex;
     el.style.flex = "0 0 auto";
@@ -334,6 +343,11 @@ function snapToolbarControlWidths() {
     const snapped = wholeToolbarPx(el.getBoundingClientRect().width);
     el.style.flex = prevFlex;
     el.style.width = snapped ? `${snapped}px` : prevWidth;
+  }
+  if (title && getComputedStyle(title).display !== "none") {
+    const snapped = Math.floor(title.getBoundingClientRect().width + 1e-3);
+    title.style.flex = "0 0 auto";
+    title.style.width = `${Math.max(0, snapped)}px`;
   }
   document.documentElement.dataset.tbSnap = String(Number(document.documentElement.dataset.tbSnap || 0) + 1);
 }
@@ -363,17 +377,23 @@ function bindToolbarGeometry() {
 
 function init() {
   bindToolbarGeometry();
+  bindViewChrome();
+  applyToolbarBand();
   $("pick").addEventListener("click", () => $("file").click());
+  $("openPdfItem")?.addEventListener("click", () => {
+    closeMoreMenu(true);
+    $("file").click();
+  });
   $("file").addEventListener("change", async () => {
     const file = $("file").files?.[0];
     $("file").value = "";
     if (file) await openFile(file);
   });
-  $("prev").addEventListener("click", () => {
+  $("sourcePrev")?.addEventListener("click", () => {
     noteUserSourceInput();
     goPage(-1);
   });
-  $("next").addEventListener("click", () => {
+  $("sourceNext")?.addEventListener("click", () => {
     noteUserSourceInput();
     goPage(1);
   });
@@ -404,8 +424,11 @@ function init() {
   watchSourceAvailability();
   $("translatePage").addEventListener("click", () => startTranslate());
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
+  $("translateMenuRetranslate")?.addEventListener("click", () => {
+    closeTranslateMenu(true);
+    forceRetranslateCurrentPage();
+  });
   $("stopTranslate").addEventListener("click", stopTranslateWork);
-  $("restoreOriginal").addEventListener("click", restoreOriginal);
   $("exportMd").addEventListener("click", () => {
     closeMoreMenu(true);
     exportReadout("md");
@@ -464,6 +487,10 @@ function onKey(event) {
     event.preventDefault();
     return;
   }
+  if (event.key === "Escape" && closeTranslateMenu(true)) {
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape" && clearJumpMark()) {
     event.preventDefault();
     return;
@@ -497,6 +524,23 @@ function onKey(event) {
     || event.key === "Home" || event.key === "End" || event.key === " ";
   if (sourceScrollKey && focusInSource(event.target)) noteUserSourceInput();
   if (readerPrefs.singleKey !== false && !event.shiftKey && !focusInOpenMenu() && !focusInAaPanel()) {
+    if (event.key === "t") {
+      event.preventDefault();
+      cycleReaderView();
+      return;
+    }
+    if (event.key === "[") {
+      event.preventDefault();
+      noteUserSourceInput();
+      goPage(-1);
+      return;
+    }
+    if (event.key === "]") {
+      event.preventDefault();
+      noteUserSourceInput();
+      goPage(1);
+      return;
+    }
     if (event.key === "f" || event.key === "F") {
       event.preventDefault();
       toggleFollow();
@@ -542,10 +586,15 @@ function focusInSource(target) {
 }
 
 function focusInOpenMenu() {
-  const menu = $("moreMenu");
-  if (!menu || menu.hidden) return false;
   const active = document.activeElement;
-  return Boolean(active && (menu.contains(active) || active === $("moreButton")));
+  const menus = [
+    [$("moreMenu"), $("moreButton")],
+    [$("translateMenu"), $("translateMenuButton")]
+  ];
+  return menus.some(([menu, button]) => {
+    if (!menu || menu.hidden) return false;
+    return Boolean(active && (menu.contains(active) || active === button));
+  });
 }
 
 function focusInAaPanel() {
@@ -2883,11 +2932,7 @@ function syncSwapCheck() {
 }
 
 function syncSwapItem() {
-  const item = $("swapPanes");
-  const sep = document.querySelector("#moreMenu [role='separator']");
-  const narrow = (window.innerWidth || 0) < 900;
-  if (item) item.hidden = narrow;
-  if (sep) sep.hidden = narrow;
+  applyToolbarBand();
 }
 
 function bindMoreMenu() {
@@ -2895,20 +2940,150 @@ function bindMoreMenu() {
     if (moreMenuOpen()) closeMoreMenu(true);
     else openMoreMenu();
   });
+  $("translateMenuButton")?.addEventListener("click", () => {
+    if (translateMenuOpen()) closeTranslateMenu(true);
+    else openTranslateMenu();
+  });
   $("swapPanes")?.addEventListener("click", () => {
     toggleSourceSide();
     closeMoreMenu(true);
   });
+  $("glossaryItem")?.addEventListener("click", () => {
+    closeMoreMenu(true);
+    showSoonToast();
+  });
+  for (const id of ["menuNotes", "menuAsk", "menuLibrary"]) {
+    $(id)?.addEventListener("click", () => {
+      closeMoreMenu(true);
+      showSoonToast();
+    });
+  }
+  $("menuAa")?.addEventListener("click", () => {
+    closeMoreMenu(false);
+    openAaPanel();
+  });
   document.addEventListener("pointerdown", (event) => {
     const menu = $("moreMenu");
     const button = $("moreButton");
-    if (!moreMenuOpen()) return;
-    if (menu?.contains(event.target) || button?.contains(event.target)) return;
-    closeMoreMenu(false);
+    if (moreMenuOpen() && !menu?.contains(event.target) && !button?.contains(event.target)) closeMoreMenu(false);
+    const translateMenu = $("translateMenu");
+    const translateButton = $("translateMenuButton");
+    if (translateMenuOpen() && !translateMenu?.contains(event.target) && !translateButton?.contains(event.target)) {
+      closeTranslateMenu(false);
+    }
   });
-  window.addEventListener("resize", syncSwapItem);
-  syncSwapItem();
+  window.addEventListener("resize", applyToolbarBand);
+  applyToolbarBand();
   syncSwapCheck();
+}
+
+const READER_VIEWS = ["zh", "bi", "src"];
+let toastTimer = 0;
+
+function showSoonToast() {
+  const el = $("tbToast");
+  if (!el) return;
+  el.hidden = false;
+  el.textContent = "即将推出";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.hidden = true;
+  }, 1600);
+}
+
+function setDocTitle(title) {
+  const el = $("docTitle");
+  if (!el) return;
+  const text = title ? shortTitle(title) : PDF_COPY.title;
+  el.textContent = text;
+  el.title = text;
+}
+
+function setReaderView(next) {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  const view = READER_VIEWS.includes(next) ? next : "zh";
+  workspace.dataset.view = view;
+  for (const button of document.querySelectorAll("#viewSeg [data-view]")) {
+    button.setAttribute("aria-checked", button.dataset.view === view ? "true" : "false");
+  }
+}
+
+function cycleReaderView() {
+  const current = document.querySelector(".workspace")?.dataset.view || "zh";
+  const index = Math.max(0, READER_VIEWS.indexOf(current));
+  setReaderView(READER_VIEWS[(index + 1) % READER_VIEWS.length]);
+}
+
+function bindViewChrome() {
+  $("viewSeg")?.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-view]");
+    if (!button || !$("viewSeg")?.contains(button)) return;
+    setReaderView(button.dataset.view);
+  });
+  $("sourceModeSeg")?.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-source-mode]");
+    if (!button) return;
+    event.preventDefault();
+    showSoonToast();
+  });
+  for (const id of ["tocButton", "notesButton", "askButton", "libraryButton", "sourceModeMenu", "sourceModeNarrow"]) {
+    $(id)?.addEventListener("click", () => showSoonToast());
+  }
+  setReaderView(document.querySelector(".workspace")?.dataset.view || "zh");
+}
+
+function placeViewSegment(inSubbar) {
+  const seg = $("viewSeg");
+  const sub = $("tbSubbar");
+  const anchor = $("viewSegAnchor");
+  if (!seg || !sub || !anchor) return;
+  if (inSubbar) {
+    sub.append(seg);
+    sub.hidden = false;
+  } else {
+    anchor.after(seg);
+    sub.hidden = true;
+  }
+}
+
+function applyToolbarBand() {
+  const bar = document.querySelector(".toolbar");
+  if (!bar) return;
+  const chrome = readerToolbarChrome(window.innerWidth || 0);
+  bar.dataset.band = chrome.band;
+  const swap = $("swapPanes");
+  if (swap) swap.hidden = !chrome.swapInMenu;
+  for (const id of ["menuNotes", "menuAsk", "menuLibrary", "menuAa"]) {
+    const el = $(id);
+    if (el) el.hidden = !chrome.collapsedInMenu;
+  }
+  placeViewSegment(chrome.viewInSubbar);
+  refreshDocStatus();
+  scheduleToolbarSnap();
+}
+
+function translateMenuOpen() {
+  const menu = $("translateMenu");
+  return Boolean(menu && !menu.hidden);
+}
+
+function openTranslateMenu() {
+  const menu = $("translateMenu");
+  const button = $("translateMenuButton");
+  if (!menu || !button) return;
+  closeMoreMenu(false);
+  menu.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+}
+
+function closeTranslateMenu(focusButton) {
+  const menu = $("translateMenu");
+  if (!menu || menu.hidden) return false;
+  menu.hidden = true;
+  $("translateMenuButton")?.setAttribute("aria-expanded", "false");
+  if (focusButton) $("translateMenuButton")?.focus();
+  return true;
 }
 
 function moreMenuOpen() {
@@ -2920,6 +3095,7 @@ function openMoreMenu() {
   const menu = $("moreMenu");
   const button = $("moreButton");
   if (!menu || !button) return;
+  closeTranslateMenu(false);
   syncSwapItem();
   menu.hidden = false;
   button.setAttribute("aria-expanded", "true");
@@ -2979,7 +3155,13 @@ function updateSourcePageLabel(page) {
   if (!el) return;
   const total = pdfDoc?.numPages || 0;
   const shown = page || measureVisible() || pageNum || 0;
-  el.textContent = sourcePageLabel(shown, total);
+  if (!(total >= 1)) {
+    el.textContent = pageLabel(0, 0);
+    return;
+  }
+  const n = Number(shown);
+  const safe = Number.isFinite(n) && n >= 1 ? Math.min(total, Math.floor(n)) : 1;
+  el.textContent = pageLabel(safe, total);
 }
 
 function noteSourcePage() {
@@ -3304,8 +3486,11 @@ function refreshDocStatus() {
   const { n, t, needsRetry } = pageTotals();
   const view = docStatusView({ n, t, needsRetry, phase: docPhase });
   el.dataset.state = view.state || "idle";
+  const compact = document.querySelector(".toolbar")?.dataset.band !== "wide";
   const text = el.querySelector(".doc-text");
-  if (text) text.textContent = view.text;
+  if (text) text.textContent = compact && t > 0 ? `${n}/${t}` : view.text;
+  const live = el.querySelector(".sr-only");
+  if (live) live.textContent = view.text;
   const ring = el.querySelector(".val");
   if (ring) {
     const pct = t > 0 ? Math.max(0, Math.min(100, Math.round((n / t) * 100))) : 0;
@@ -5351,9 +5536,7 @@ function restoreOriginal() {
   const workspace = document.querySelector(".workspace");
   if (!workspace) return;
   const next = workspace.dataset.view === "src" ? "zh" : "src";
-  workspace.dataset.view = next;
-  const button = $("restoreOriginal");
-  if (button) button.setAttribute("aria-pressed", next === "src" ? "true" : "false");
+  setReaderView(next);
 }
 
 async function openFile(file) {
@@ -5419,7 +5602,10 @@ async function adoptDoc(doc, title) {
   pdfScrollRoot().scrollTop = 0;
   translateScrollRoot().scrollTop = 0;
   renderArticle();
-  if (title) document.title = `${PDF_COPY.title} · ${shortTitle(title)}`;
+  if (title) {
+    document.title = `${PDF_COPY.title} · ${shortTitle(title)}`;
+    setDocTitle(title);
+  }
   setHasDoc(true);
   await buildPages();
   updatePager();
@@ -5873,30 +6059,19 @@ async function loadCurrentPageText(explicitPage) {
   updateTranslateControls();
 }
 
-function setPagerLabel(text) {
-  const pager = $("pager");
-  if (!pager) return;
-  let ink = pager.querySelector(":scope > .pager-ink");
-  if (!ink) {
-    ink = document.createElement("span");
-    ink.className = "pager-ink";
-    pager.replaceChildren(ink);
-  }
-  ink.textContent = text;
-}
-
 function updatePager() {
   const total = pdfDoc?.numPages || 0;
   const nav = sourceNavPage();
-  setPagerLabel(pageLabel(pageNum, total));
   updateSourcePageLabel(measureVisible() || pageNum);
   for (const id of ["translatePage", "retranslatePage"]) {
     const button = $(id);
     if (button) button.dataset.page = String(pageNum);
   }
   $("zoomLabel").textContent = zoomLabel(zoom);
-  $("prev").disabled = !pdfDoc || nav <= 1;
-  $("next").disabled = !pdfDoc || nav >= total;
+  const prev = $("sourcePrev");
+  const next = $("sourceNext");
+  if (prev) prev.disabled = !pdfDoc || nav <= 1;
+  if (next) next.disabled = !pdfDoc || nav >= total;
   syncZoomButtons();
 }
 
@@ -5911,10 +6086,12 @@ function syncNoTextLayerHint(showLegacy) {
 }
 
 function setHasDoc(has) {
+  const bar = document.querySelector(".toolbar");
+  if (bar) bar.dataset.hasDoc = has ? "1" : "0";
   if (!has) {
     $("pages").replaceChildren();
     pageViews = [];
-    setPagerLabel(pageLabel(0, 0));
+    setDocTitle("");
     $("zoomLabel").textContent = zoomLabel(DEFAULT_ZOOM);
     syncNoTextLayerHint(false);
     pageItems = 0;
@@ -5950,9 +6127,10 @@ function updateTranslateControls() {
   $("translatePage").disabled = ui.translateDisabled;
   $("translatePage").hidden = ui.translateHidden;
   $("retranslatePage").disabled = ui.retranslateDisabled;
+  const menuRetranslate = $("translateMenuRetranslate");
+  if (menuRetranslate) menuRetranslate.disabled = ui.retranslateDisabled;
   $("stopTranslate").hidden = ui.stopHidden;
   $("stopTranslate").disabled = ui.stopDisabled;
-  $("restoreOriginal").disabled = !pdfDoc;
   syncExportControls();
   syncMirrorZoomButtons();
 }

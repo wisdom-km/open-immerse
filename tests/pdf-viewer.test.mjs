@@ -105,13 +105,14 @@ test("open PDF button uses a visually hidden file input Chromium can activate", 
 
 test("M1 viewer is an extension-owned pdf.js page, not Chrome PDF injection", () => {
   assert.match(html, /<title>PDF 阅读<\/title>/);
-  assert.match(html, /<h1>PDF 阅读<\/h1>/);
-  assert.match(html, /class="mark"/);
+  assert.match(html, /id="docTitle"[^>]*>PDF 阅读</);
+  assert.match(html, /id="tocButton"/);
+  assert.doesNotMatch(html, /class="mark"/);
   assert.match(html, /ui\/tokens\.css/);
   assert.match(html, /id="file"[^>]*accept="application\/pdf,\.pdf"/);
   assert.match(html, /id="pick"[^>]*>打开 PDF</);
-  assert.match(html, /id="prev"[^>]*>上一页</);
-  assert.match(html, /id="next"[^>]*>下一页</);
+  assert.match(html, /id="sourcePrev"[^>]*aria-label="上一页"/);
+  assert.match(html, /id="sourceNext"[^>]*aria-label="下一页"/);
   assert.match(html, /id="zoomOut"/);
   assert.match(html, /id="zoomIn"/);
   const toolbarHtml = html.slice(html.indexOf('class="toolbar"'), html.indexOf('class="workspace"'));
@@ -239,11 +240,12 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /点击翻译/);
   assert.match(html, /id="translatePage"[^>]*disabled>翻译</);
   assert.match(html, /id="stopTranslate"[^>]*class="btn-primary"[^>]*hidden[^>]*disabled>停止</);
-  assert.match(html, /id="restoreOriginal"[^>]*class="btn-ghost"[^>]*disabled>原文</);
+  assert.match(html, /id="viewSeg"[\s\S]*data-view="zh"[\s\S]*data-view="bi"[\s\S]*data-view="src"/);
+  assert.doesNotMatch(html, /id="restoreOriginal"/);
   assert.match(html, /id="moreMenu"[^>]*role="menu"/);
   assert.match(html, /id="exportMd"[^>]*class="more-item hit-pad btn-export"[^>]*role="menuitem"[^>]*disabled[^>]*>导出 MD</);
   assert.match(html, /id="exportPdf"[^>]*class="more-item hit-pad btn-export"[^>]*role="menuitem"[^>]*disabled[^>]*>导出 PDF</);
-  assert.doesNotMatch(html, /id="viewSeg"/);
+  assert.match(html, /id="viewSeg"/);
   assert.doesNotMatch(html, /data-view="mirror"/);
   assert.doesNotMatch(html, /id="mirrorPages"/);
   assert.doesNotMatch(html, /id="mirrorHint"/);
@@ -275,7 +277,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(css, /\.pane-translate-scroll\s*\{[^}]*padding:\s*var\(--oi-reader-scroll-padding\)/s);
   assert.doesNotMatch(css, /max-width:\s*42rem/);
   assert.match(css, /\.pane-translate \.readout\.is-mirror\s*\{[^}]*max-width:\s*none/s);
-  assert.doesNotMatch(css, /\.view-seg\s*\{/);
+  assert.match(css, /\.view-seg\s*\{/);
   assert.match(css, /\.pane-translate \.mirror-pages\s*\{[^}]*max-width:\s*none/s);
   assert.match(css, /\.mirror-page\s*\{[^}]*position:\s*relative/s);
   assert.match(css, /\.mirror-page\s*\{[^}]*--oi-text:\s*var\(--oi-mirror-ink\)/s);
@@ -946,33 +948,38 @@ test("continuous scroll helpers pick the page in view and nearby canvases", () =
 });
 
 test("viewer toolbar drops the scope segment and keeps one midline", () => {
+  const view = html.indexOf('id="viewSeg"');
   const docStatus = html.indexOf('id="docStatus"');
   const pick = html.indexOf('id="pick"');
   const translate = html.indexOf('id="translatePage"');
   const stop = html.indexOf('id="stopTranslate"');
-  const restore = html.indexOf('id="restoreOriginal"');
+  const again = html.indexOf('id="retranslatePage"');
   const exportMd = html.indexOf('id="exportMd"');
   const exportPdf = html.indexOf('id="exportPdf"');
-  const prev = html.indexOf('id="prev"');
   const more = html.indexOf('id="moreButton"');
+  const toolbarHtml = html.slice(html.indexOf('class="toolbar"'), html.indexOf('class="workspace"'));
   assert.ok(
-    docStatus > 0 &&
+    view > 0 &&
+      view < docStatus &&
       docStatus < pick &&
       pick < translate &&
       translate < stop &&
-      stop < restore &&
-      restore < prev &&
-      prev < more &&
+      stop < again &&
+      again < more &&
       more < exportMd &&
       exportMd < exportPdf
   );
+  assert.equal(toolbarHtml.includes('id="prev"'), false);
+  assert.equal(toolbarHtml.includes('id="next"'), false);
+  assert.equal(toolbarHtml.includes('id="pager"'), false);
+  assert.match(html, /id="sourcePager"/);
   assert.doesNotMatch(html, /scope-seg/);
   assert.doesNotMatch(html, />当前页</);
   assert.doesNotMatch(html, /data-scope="page"/);
   assert.equal(html.includes("pdfTranslateScope"), false);
   assert.equal(html.includes("scope-field"), false);
-  assert.match(html, /id="prev"[^>]*>上一页</);
-  assert.match(html, /id="next"[^>]*>下一页</);
+  assert.match(html, /id="sourcePrev"[^>]*aria-label="上一页"/);
+  assert.match(html, /id="sourceNext"[^>]*aria-label="下一页"/);
   assert.match(css, /\.toolbar\s*\{[^}]*align-items:\s*center/s);
   assert.match(css, /\.toolbar button:not\(\.more-item\)\s*\{[^}]*height:\s*var\(--oi-reader-topbar-btn-h\)/s);
   assert.match(css, /\.doc-status\s*\{[^}]*height:\s*var\(--oi-reader-topbar-btn-h\)[^}]*min-width:\s*112px[^}]*font-size:\s*12px/s);
@@ -1001,7 +1008,7 @@ test("viewer toolbar drops the scope segment and keeps one midline", () => {
   assert.match(src, /renderArticle\(\)/);
   assert.doesNotMatch(src, /flow\.replaceChildren|stack\.replaceChildren/);
   assert.match(css, /\[data-view="src"\] \.rf-zh/);
-  assert.match(css, /#restoreOriginal\[aria-pressed="true"\]/);
+  assert.match(css, /\.view-seg-btn\[aria-checked="true"\]::before/);
 });
 
 test("toolbar primary is 停止 only while busy; abort/settle shows 翻译", async () => {

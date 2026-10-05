@@ -397,8 +397,11 @@ test("split pointer ratio mirrors arrows and menuNext skips separators", () => {
   assert.equal(menuNext(items, 3, "ArrowDown"), 3);
   assert.equal(menuNext(items, 0, "Home"), 0);
   assert.equal(menuNext(items, 0, "End"), 3);
-  assert.equal(moreMenuModel(1440).map((item) => item.id).join(","), "swap,sep,exportMd,exportPdf");
+  assert.equal(moreMenuModel(1440).map((item) => item.id).join(","), "swap,glossary,sep,openPdf,exportMd,exportPdf");
+  assert.equal(moreMenuModel(1100).map((item) => item.id).join(","), "swap,glossary,notes,ask,library,aa,sep,openPdf,exportMd,exportPdf");
   assert.equal(moreMenuModel(899).some((item) => item.id === "swap"), false);
+  assert.equal(moreMenuModel(899).some((item) => item.id === "notes"), true);
+  assert.equal(moreMenuModel(600).some((item) => item.id === "glossary"), true);
   const box = pairBoxStyle({ p: 1, x: 61.2, y: 79.2, w: 122.4, h: 39.6 }, 612, 792, 5);
   assert.equal(box.x, "calc(10% - 5px)");
   assert.equal(box.y, "calc(10% - 5px)");
