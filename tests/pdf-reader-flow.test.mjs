@@ -67,19 +67,28 @@ test("font steps stay on 14/15/16/17/18/20 and remember the chosen step", () => 
     singleKey: true,
     splitRatio: null,
     follow: true,
-    sourceSide: "start"
+    sourceSide: "start",
+    sourceMode: null,
+    miniWidth: 360,
+    miniCollapsed: false
   });
   assert.equal(store["reader.fontSize"], "20");
   assert.equal(store["reader.theme"], "green");
   assert.equal(store["reader.follow"], "1");
   assert.equal(store["reader.sourceSide"], "start");
+  assert.equal(store["reader.sourceMode"], "");
+  assert.equal(store["reader.miniWidth"], "360");
+  assert.equal(store["reader.miniCollapsed"], "0");
   assert.deepEqual(readReaderPrefs(store), {
     fontSize: 20,
     theme: "green",
     singleKey: true,
     splitRatio: null,
     follow: true,
-    sourceSide: "start"
+    sourceSide: "start",
+    sourceMode: null,
+    miniWidth: 360,
+    miniCollapsed: false
   });
   store["reader.fontSize"] = "13";
   assert.equal(readReaderPrefs(store).fontSize, 16);

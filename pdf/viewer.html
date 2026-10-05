@@ -31,14 +31,21 @@
       </div>
       <div id="sourceModeSeg" class="source-mode-seg" data-collapse="wide-only">
         <span class="source-mode-kicker">原页</span>
-        <div class="view-seg" role="radiogroup" aria-label="原页" title="即将推出">
-          <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-source-mode="side" aria-checked="true" title="即将推出">并排</button>
-          <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-source-mode="float" aria-checked="false" title="即将推出">小窗</button>
-          <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-source-mode="hide" aria-checked="false" title="即将推出">隐藏</button>
+        <div class="view-seg" role="radiogroup" aria-label="原文区模式">
+          <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-source-mode="side" aria-checked="true">并排</button>
+          <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-source-mode="mini" aria-checked="false">小窗</button>
+          <button type="button" class="view-seg-btn" role="radio" data-tb="text" data-source-mode="hidden" aria-checked="false">隐藏</button>
         </div>
       </div>
-      <button type="button" id="sourceModeMenu" class="btn-ghost source-mode-fallback" data-tb="text" data-collapse="mid-only" title="即将推出">并排</button>
-      <button type="button" id="sourceModeNarrow" class="btn-ghost source-mode-fallback" data-tb="text" data-collapse="narrow-only" title="即将推出">原页</button>
+      <div id="sourceModeMenuWrap" class="more-wrap source-mode-fallback" data-collapse="mid-only">
+        <button type="button" id="sourceModeMenu" class="btn-ghost" data-tb="text" aria-haspopup="menu" aria-expanded="false" aria-controls="sourceModeList">原文：并排 ▾</button>
+        <div id="sourceModeList" class="more-menu" role="menu" aria-label="原文区模式" hidden>
+          <button type="button" class="more-item" role="menuitemradio" data-source-mode="side" aria-checked="true">并排</button>
+          <button type="button" class="more-item" role="menuitemradio" data-source-mode="mini" aria-checked="false">小窗</button>
+          <button type="button" class="more-item" role="menuitemradio" data-source-mode="hidden" aria-checked="false">隐藏</button>
+        </div>
+      </div>
+      <button type="button" id="sourceModeNarrow" class="btn-ghost source-mode-fallback" data-tb="text" data-collapse="narrow-only">原页</button>
     </div>
     <div class="tb-zone tb-zone-right toolbar-actions" data-zone="right">
       <div class="tb-group" data-grp="translate">
@@ -139,7 +146,7 @@
     </div>
   </div>
   <p id="status" role="status">还没有打开 PDF。</p>
-  <div class="workspace" data-view="zh">
+  <div class="workspace" data-view="zh" data-source-mode="side" data-mini-collapsed="false">
     <section class="pane-pdf" id="pdfPane" aria-label="原文栏">
       <header class="source-head">
         <span class="source-head-name">原文栏</span>
@@ -154,6 +161,9 @@
           <span class="follow-box" aria-hidden="true"></span>
           <span class="follow-label">跟随</span>
         </button>
+        <button type="button" id="sourceToSide" class="source-mode-btn hit-pad" hidden aria-label="回到并排" title="回到并排">⤢</button>
+        <button type="button" id="sourceCollapse" class="source-mode-btn hit-pad" hidden aria-label="收起小窗" title="收起小窗">⟨</button>
+        <button type="button" id="sourceRail" class="source-rail hit-pad" hidden>原文 · 第 0 页</button>
       </header>
       <div id="pages" class="pages oi-sb"></div>
       <div id="zoomChip" class="zoom-gutter" role="group" aria-label="缩放">
@@ -178,6 +188,17 @@
       </div>
     </aside>
   </div>
+  <div id="sourcePop" class="source-pop" hidden role="dialog" aria-label="原文" data-place="side" data-side="start" data-full="0">
+    <header class="source-pop-head">
+      <span id="sourcePopTitle">原文第 0 页 · 已定位</span>
+      <span class="source-head-gap"></span>
+      <button type="button" id="sourcePopPin" class="source-mode-btn hit-pad">固定为小窗</button>
+      <button type="button" id="sourcePopFull" class="source-mode-btn hit-pad" aria-label="全高" title="全高">⤢</button>
+      <button type="button" id="sourcePopClose" class="source-mode-btn hit-pad" aria-label="关闭" title="关闭">×</button>
+    </header>
+    <div id="sourcePopBody" class="source-pop-body"></div>
+  </div>
+  <div id="sideSlot" data-side-slot hidden aria-hidden="true"></div>
   <div id="tbToast" class="tb-toast" role="status" hidden>即将推出</div>
   <script src="./vendor/katex/katex.min.js"></script>
   <script type="module" src="viewer.js"></script>

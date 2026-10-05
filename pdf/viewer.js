@@ -202,6 +202,22 @@ import {
   themePaperRgb,
   writeReaderPrefs
 } from "../lib/pdf-reader-flow.js";
+import {
+  MINI_RAIL_PX,
+  MINI_WIDTH_DEFAULT,
+  SIDE_SLOT_TOAST,
+  SOURCE_MODE_NARROW_HINT,
+  cycleSourceMode,
+  effectiveSourceMode,
+  f6RegionIds,
+  miniWidthFromPointer,
+  normalizeMiniWidth,
+  normalizeSourceMode,
+  sourceModeChoices,
+  sourceModeMenuLabel,
+  sourcePagingAllowed,
+  sourcePopPlace
+} from "../lib/pdf-source-mode.js";
 import { canvasMeasure, detectCjkSerif } from "../lib/pdf-reader-cjk.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
@@ -293,6 +309,8 @@ let translateScrollTick = 0;
 let viewMode = "readout";
 let mirrorZoom = DEFAULT_ZOOM;
 let readerPrefs = readReaderPrefs(null);
+let sourcePopTrigger = null;
+let sourcePopSwipeY = 0;
 let readerBlend = readerImageBlend({ supportsMultiply: true, forcedColors: false });
 let toolbarSnapFrame = 0;
 const READER_VIEWS = ["zh", "bi", "src"];
@@ -496,11 +514,28 @@ function onKey(event) {
     event.preventDefault();
     return;
   }
+  if (event.key === "Escape" && closeSourceModeMenu(true)) {
+    event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && closeSourcePop(true)) {
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape" && clearJumpMark()) {
     event.preventDefault();
     return;
   }
   if (onMenuKey(event)) return;
+  if (onSourceModeMenuKey(event)) return;
+  if (event.key === "F6" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    event.preventDefault();
+    closeMoreMenu(false);
+    closeTranslateMenu(false);
+    closeSourceModeMenu(false);
+    cycleF6(event.shiftKey);
+    return;
+  }
   if (isUnlockEvent({ type: "keydown", key: event.key })) releaseJumpLock();
   if (event.key === "Enter" && event.target?.classList?.contains("oi-pdf-inline-math")) {
     event.preventDefault();
@@ -536,14 +571,26 @@ function onKey(event) {
     }
     if (event.key === "[") {
       event.preventDefault();
+      if (!sourcePagingAllowed(currentSourceMode())) return;
       noteUserSourceInput();
       goPage(-1);
       return;
     }
     if (event.key === "]") {
       event.preventDefault();
+      if (!sourcePagingAllowed(currentSourceMode())) return;
       noteUserSourceInput();
       goPage(1);
+      return;
+    }
+    if (event.key === "\\") {
+      event.preventDefault();
+      if (!focusInOpenMenu()) cycleSourceModeFromKey();
+      return;
+    }
+    if (event.key === "p" || event.key === "P") {
+      event.preventDefault();
+      jumpCurrentToSource();
       return;
     }
     if (event.key === "f" || event.key === "F") {
@@ -594,7 +641,8 @@ function focusInOpenMenu() {
   const active = document.activeElement;
   const menus = [
     [$("moreMenu"), $("moreButton")],
-    [$("translateMenu"), $("translateMenuButton")]
+    [$("translateMenu"), $("translateMenuButton")],
+    [$("sourceModeList"), $("sourceModeMenu")]
   ];
   return menus.some(([menu, button]) => {
     if (!menu || menu.hidden) return false;
@@ -755,6 +803,7 @@ function loadReaderPrefs() {
   const workspace = document.querySelector(".workspace");
   if (workspace) workspace.dataset.follow = followState;
   applySourceSide(false);
+  applySourceLayout(false);
   syncFollowControls();
 }
 
@@ -978,6 +1027,8 @@ function applyStoredSplitRatio() {
 
 function startSplitDrag(event, workspace, handle) {
   if (event.button !== 0) return;
+  const mode = workspace.dataset.sourceMode || "side";
+  if (mode === "hidden" || (mode === "mini" && workspace.dataset.miniCollapsed === "true")) return;
   event.preventDefault();
   handle.setPointerCapture(event.pointerId);
   workspace.classList.add("is-splitting");
@@ -987,7 +1038,8 @@ function startSplitDrag(event, workspace, handle) {
     handle.removeEventListener("pointermove", onMove);
     handle.removeEventListener("pointerup", onUp);
     handle.removeEventListener("pointercancel", onUp);
-    persistSplitRatio(workspace);
+    if (workspace.dataset.sourceMode === "mini") persistMiniWidth(workspace);
+    else persistSplitRatio(workspace);
   };
   handle.addEventListener("pointermove", onMove);
   handle.addEventListener("pointerup", onUp);
@@ -1020,6 +1072,16 @@ function persistSplitRatio(workspace) {
 }
 
 function resetSplit(workspace) {
+  if (workspace?.dataset.sourceMode === "mini") {
+    readerPrefs = { ...readerPrefs, miniWidth: MINI_WIDTH_DEFAULT };
+    persistReaderPrefs();
+    paintMiniWidth(workspace, MINI_WIDTH_DEFAULT);
+    syncZoomChip();
+    syncMirrorZoomChip();
+    applyPaperMetrics();
+    layoutCapsule({ keepAnchor: true });
+    return;
+  }
   const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
   paintSplitRatio(workspace, defaultSplitRatio(width));
   persistSplitRatio(workspace);
@@ -1083,6 +1145,23 @@ function onSplitKey(event, workspace) {
   if (!step) return;
   event.preventDefault();
   event.stopPropagation();
+  if (workspace.dataset.sourceMode === "mini") {
+    if (workspace.dataset.miniCollapsed === "true") return;
+    let next = normalizeMiniWidth(readerPrefs.miniWidth);
+    if (step.to === "min") next = 300;
+    else if (step.to === "max") next = 480;
+    else if (step.to === "reset") next = MINI_WIDTH_DEFAULT;
+    else if (Number.isFinite(step.delta)) next = normalizeMiniWidth(next + step.delta);
+    else return;
+    readerPrefs = { ...readerPrefs, miniWidth: next };
+    persistReaderPrefs();
+    paintMiniWidth(workspace, next);
+    syncZoomChip();
+    syncMirrorZoomChip();
+    applyPaperMetrics();
+    layoutCapsule({ keepAnchor: true });
+    return;
+  }
   const width = workspace.getBoundingClientRect().width;
   if (width < 900) return;
   const splitW = splitColumnWidth(workspace);
@@ -1112,6 +1191,21 @@ function splitColumnWidth(workspace) {
 }
 
 function applySplit(workspace, clientX) {
+  if (workspace?.dataset.sourceMode === "mini") {
+    if (workspace.dataset.miniCollapsed === "true") return;
+    const rect = workspace.getBoundingClientRect();
+    const width = miniWidthFromPointer({
+      clientX,
+      rect: { x: rect.x, width: rect.width, end: rect.x + rect.width },
+      side: appliedSide === "end" ? "end" : "start"
+    });
+    paintMiniWidth(workspace, width);
+    syncZoomChip();
+    syncMirrorZoomChip();
+    applyPaperMetrics();
+    layoutCapsule({ keepAnchor: true });
+    return;
+  }
   const rect = workspace.getBoundingClientRect();
   if (rect.width < 900) return;
   const splitW = splitColumnWidth(workspace);
@@ -2296,23 +2390,30 @@ function onFlowKey(event) {
 
 function jumpTranslationToSource(node) {
   if (!node?.dataset?.pairId) return;
-  const part = node.dataset.pairPart === "inline" ? "inline" : "";
-  const rects = decodeSrcRects(node.dataset.srcRects);
-  const rect = rects[0];
-  if (!rect) {
-    const page = Number(node.dataset.page || node.dataset.srcPage);
-    if (page >= 1) revealSourcePage(page);
-    return;
-  }
-  const before = translateScrollRoot()?.scrollTop;
-  scrollSourceToRect(rect, part === "inline" ? 2 : 5);
-  if (translateScrollRoot() && Number.isFinite(before)) translateScrollRoot().scrollTop = before;
-  currentPairId = node.dataset.pairId;
-  jumpPairId = node.dataset.pairId;
-  jumpPart = part;
-  applyFollow({ type: "clickJump" });
-  armJumpLock();
-  paintPairChrome();
+  const presented = presentSourceForJump(node);
+  const run = () => {
+    const part = node.dataset.pairPart === "inline" ? "inline" : "";
+    const rects = decodeSrcRects(node.dataset.srcRects);
+    const rect = rects[0];
+    if (!rect) {
+      const page = Number(node.dataset.page || node.dataset.srcPage);
+      if (page >= 1) revealSourcePage(page);
+      syncSourcePopChrome();
+      return;
+    }
+    const before = translateScrollRoot()?.scrollTop;
+    scrollSourceToRect(rect, part === "inline" ? 2 : 5);
+    if (translateScrollRoot() && Number.isFinite(before)) translateScrollRoot().scrollTop = before;
+    currentPairId = node.dataset.pairId;
+    jumpPairId = node.dataset.pairId;
+    jumpPart = part;
+    applyFollow({ type: "clickJump" });
+    armJumpLock();
+    paintPairChrome();
+    syncSourcePopChrome();
+  };
+  if (presented === "ready") run();
+  else requestAnimationFrame(() => requestAnimationFrame(run));
 }
 
 function revealSourcePage(page) {
@@ -2719,6 +2820,7 @@ function watchSourceAvailability() {
   if (typeof ResizeObserver === "function" && pane) new ResizeObserver(sync).observe(pane);
   window.addEventListener("resize", () => {
     applySourceSide(true);
+    applySourceLayout(false);
     sync();
     paintPairChrome();
   });
@@ -2937,6 +3039,7 @@ function reorderPanes(side, anchor) {
   const translation = document.querySelector(".pane-translate");
   const split = document.querySelector(".split-handle");
   if (!workspace || !source || !translation || !split) return;
+  if (source.parentElement !== workspace) return;
   const map = { source, translation, split };
   const order = visualPaneOrder(side).map((name) => map[name]);
   const token = anchor ? captureReaderAnchor() : null;
@@ -3013,6 +3116,11 @@ function bindMoreMenu() {
     if (translateMenuOpen() && !translateMenu?.contains(event.target) && !translateButton?.contains(event.target)) {
       closeTranslateMenu(false);
     }
+    const sourceMenu = $("sourceModeList");
+    const sourceButton = $("sourceModeMenu");
+    if (sourceModeMenuOpen() && !sourceMenu?.contains(event.target) && !sourceButton?.contains(event.target)) {
+      closeSourceModeMenu(false);
+    }
   });
   window.addEventListener("resize", applyToolbarBand);
   applyToolbarBand();
@@ -3021,15 +3129,19 @@ function bindMoreMenu() {
 
 let toastTimer = 0;
 
-function showSoonToast() {
+function showToast(text) {
   const el = $("tbToast");
   if (!el) return;
   el.hidden = false;
-  el.textContent = "即将推出";
+  el.textContent = text || "即将推出";
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     el.hidden = true;
   }, 1600);
+}
+
+function showSoonToast() {
+  showToast("即将推出");
 }
 
 function setDocTitle(title) {
@@ -3062,16 +3174,472 @@ function bindViewChrome() {
     if (!button || !$("viewSeg")?.contains(button)) return;
     setReaderView(button.dataset.view);
   });
-  $("sourceModeSeg")?.addEventListener("click", (event) => {
-    const button = event.target.closest?.("[data-source-mode]");
-    if (!button) return;
-    event.preventDefault();
-    showSoonToast();
-  });
-  for (const id of ["tocButton", "notesButton", "askButton", "libraryButton", "sourceModeMenu", "sourceModeNarrow"]) {
+  bindSourceModeChrome();
+  for (const id of ["tocButton", "notesButton", "askButton", "libraryButton"]) {
     $(id)?.addEventListener("click", () => showSoonToast());
   }
   setReaderView(document.querySelector(".workspace")?.dataset.view || "zh");
+}
+
+function readerWidth() {
+  return window.innerWidth || document.documentElement?.clientWidth || 1200;
+}
+
+function currentSourceMode() {
+  return document.querySelector(".workspace")?.dataset.sourceMode || effectiveSourceMode({
+    width: readerWidth(),
+    stored: readerPrefs.sourceMode
+  });
+}
+
+function sideSlotOpen() {
+  const slot = document.querySelector("[data-side-slot]");
+  if (!slot || slot.hidden) return false;
+  if (slot.dataset.open === "false") return false;
+  return slot.dataset.open === "true" || slot.getAttribute("aria-hidden") === "false";
+}
+
+function sourcePopOpen() {
+  const pop = $("sourcePop");
+  return Boolean(pop && !pop.hidden);
+}
+
+function bindSourceModeChrome() {
+  $("sourceModeSeg")?.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-source-mode]");
+    if (!button || !$("sourceModeSeg")?.contains(button)) return;
+    commitSourceMode(button.dataset.sourceMode);
+  });
+  $("sourceModeSeg")?.addEventListener("keydown", onSourceModeSegKey);
+  $("sourceModeMenu")?.addEventListener("click", () => {
+    if (sourceModeMenuOpen()) closeSourceModeMenu(true);
+    else openSourceModeMenu();
+  });
+  $("sourceModeList")?.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-source-mode]");
+    if (!button) return;
+    if (button.disabled || button.getAttribute("aria-disabled") === "true") {
+      showToast(button.title || SOURCE_MODE_NARROW_HINT);
+      return;
+    }
+    commitSourceMode(button.dataset.sourceMode);
+    closeSourceModeMenu(true);
+  });
+  $("sourceModeNarrow")?.addEventListener("click", onSourcePageButton);
+  $("sourceToSide")?.addEventListener("click", () => commitSourceMode("side"));
+  $("sourceCollapse")?.addEventListener("click", () => setMiniCollapsed(true));
+  $("sourceRail")?.addEventListener("click", () => setMiniCollapsed(false));
+  $("sourcePopPin")?.addEventListener("click", pinSourcePop);
+  $("sourcePopFull")?.addEventListener("click", toggleSourcePopFull);
+  $("sourcePopClose")?.addEventListener("click", () => closeSourcePop(true));
+  const head = document.querySelector(".source-pop-head");
+  head?.addEventListener("touchstart", (event) => {
+    sourcePopSwipeY = event.touches?.[0]?.clientY || 0;
+  }, { passive: true });
+  head?.addEventListener("touchend", (event) => {
+    const y = event.changedTouches?.[0]?.clientY || 0;
+    if (y - sourcePopSwipeY > 48) closeSourcePop(true);
+  }, { passive: true });
+  const pages = $("pages");
+  if (pages && pages.tabIndex < 0) pages.tabIndex = -1;
+}
+
+function onSourceModeSegKey(event) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  const buttons = [...($("sourceModeSeg")?.querySelectorAll("[data-source-mode]") || [])];
+  const enabled = buttons.filter((button) => !button.disabled && button.getAttribute("aria-disabled") !== "true");
+  if (!enabled.length) return;
+  event.preventDefault();
+  const current = enabled.findIndex((button) => button.getAttribute("aria-checked") === "true");
+  const delta = event.key === "ArrowRight" ? 1 : -1;
+  const next = enabled[(current + delta + enabled.length) % enabled.length];
+  commitSourceMode(next.dataset.sourceMode);
+  next.focus();
+}
+
+function sourceModeMenuOpen() {
+  const menu = $("sourceModeList");
+  return Boolean(menu && !menu.hidden);
+}
+
+function openSourceModeMenu() {
+  const menu = $("sourceModeList");
+  const button = $("sourceModeMenu");
+  if (!menu || !button) return;
+  closeMoreMenu(false);
+  closeTranslateMenu(false);
+  syncSourceModeControls();
+  menu.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+  const current = menu.querySelector("[aria-checked='true']") || menu.querySelector("[data-source-mode]");
+  current?.focus();
+}
+
+function closeSourceModeMenu(focusButton) {
+  const menu = $("sourceModeList");
+  if (!menu || menu.hidden) return false;
+  menu.hidden = true;
+  $("sourceModeMenu")?.setAttribute("aria-expanded", "false");
+  if (focusButton) $("sourceModeMenu")?.focus();
+  return true;
+}
+
+function onSourceModeMenuKey(event) {
+  if (!sourceModeMenuOpen()) return false;
+  const items = [...($("sourceModeList")?.querySelectorAll("[data-source-mode]") || [])];
+  const enabled = items.filter((item) => !item.disabled && item.getAttribute("aria-disabled") !== "true");
+  if (event.key === "Escape") return false;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
+    event.preventDefault();
+    if (!enabled.length) return true;
+    const index = enabled.indexOf(document.activeElement);
+    let next = 0;
+    if (event.key === "End") next = enabled.length - 1;
+    else if (event.key === "ArrowDown") next = index < 0 ? 0 : Math.min(enabled.length - 1, index + 1);
+    else if (event.key === "ArrowUp") next = index < 0 ? enabled.length - 1 : Math.max(0, index - 1);
+    enabled[next]?.focus();
+    return true;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    const button = document.activeElement?.closest?.("[data-source-mode]");
+    if (button && $("sourceModeList")?.contains(button)) {
+      event.preventDefault();
+      commitSourceMode(button.dataset.sourceMode);
+      closeSourceModeMenu(true);
+      return true;
+    }
+  }
+  return false;
+}
+
+function commitSourceMode(mode) {
+  const next = normalizeSourceMode(mode);
+  if (!next) return;
+  const choices = sourceModeChoices(readerWidth());
+  if (!choices.includes(next)) {
+    showToast(SOURCE_MODE_NARROW_HINT);
+    return;
+  }
+  readerPrefs = { ...readerPrefs, sourceMode: next };
+  persistReaderPrefs();
+  if (sourcePopOpen() && next !== "hidden") closeSourcePop(false);
+  applySourceLayout(true);
+  applyFollow({ type: "sourceModeChange" });
+}
+
+function setMiniCollapsed(collapsed) {
+  readerPrefs = { ...readerPrefs, sourceMode: "mini", miniCollapsed: Boolean(collapsed) };
+  persistReaderPrefs();
+  applySourceLayout(true);
+  applyFollow({ type: "sourceModeChange" });
+}
+
+function cycleSourceModeFromKey() {
+  const result = cycleSourceMode({
+    width: readerWidth(),
+    current: currentSourceMode(),
+    sideSlotOpen: sideSlotOpen()
+  });
+  if (result.blocked) {
+    if (result.toast) showToast(result.toast || SIDE_SLOT_TOAST);
+    return;
+  }
+  commitSourceMode(result.mode);
+}
+
+function applySourceLayout(anchor) {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  const width = readerWidth();
+  const mode = effectiveSourceMode({ width, stored: readerPrefs.sourceMode });
+  const prev = workspace.dataset.sourceMode || "";
+  const changed = Boolean(prev) && prev !== mode;
+  const token = anchor || changed ? captureReaderAnchor() : null;
+  workspace.dataset.sourceMode = mode;
+  const collapsed = mode === "mini" && readerPrefs.miniCollapsed === true;
+  workspace.dataset.miniCollapsed = collapsed ? "true" : "false";
+  const px = collapsed ? MINI_RAIL_PX : normalizeMiniWidth(readerPrefs.miniWidth);
+  workspace.style.setProperty("--oi-mini-width", `${px}px`);
+  if (mode === "mini" && !collapsed) paintMiniWidth(workspace, px);
+  else if (mode === "side") {
+    const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+    writeSplitAria(workspace, Number.isFinite(ratio) ? ratio : defaultSplitRatio(width));
+  }
+  const handle = workspace.querySelector(".split-handle");
+  if (handle) {
+    const draggable = mode === "side" || (mode === "mini" && !collapsed);
+    handle.tabIndex = draggable ? 0 : -1;
+    handle.setAttribute("aria-hidden", draggable ? "false" : "true");
+  }
+  if (mode !== "hidden" && sourcePopOpen()) closeSourcePop(false);
+  else if (sourcePopOpen()) placeSourcePop(sourcePopPlace(width));
+  syncSourceModeControls();
+  if (changed) applyFollow({ type: "sourceModeChange" });
+  syncSourceFollowAvailability();
+  if (token) {
+    requestAnimationFrame(() => {
+      layoutCapsule({ keepAnchor: true });
+      restoreReaderAnchor(token);
+      requestAnimationFrame(() => restoreReaderAnchor(token));
+    });
+  }
+}
+
+function syncSourceModeControls() {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  const width = readerWidth();
+  const mode = workspace.dataset.sourceMode || "side";
+  const choices = sourceModeChoices(width);
+  const collapsed = workspace.dataset.miniCollapsed === "true";
+  for (const button of document.querySelectorAll("#sourceModeSeg [data-source-mode], #sourceModeList [data-source-mode]")) {
+    const on = button.dataset.sourceMode === mode;
+    button.setAttribute("aria-checked", on ? "true" : "false");
+    const allowed = choices.includes(button.dataset.sourceMode);
+    const block = !allowed && !on;
+    button.disabled = block;
+    button.setAttribute("aria-disabled", block ? "true" : "false");
+    button.title = block ? SOURCE_MODE_NARROW_HINT : sourceModeMenuLabel(button.dataset.sourceMode).replace(/^原文：/, "");
+  }
+  const menu = $("sourceModeMenu");
+  if (menu) menu.textContent = `${sourceModeMenuLabel(mode)} ▾`;
+  const toSide = $("sourceToSide");
+  const collapse = $("sourceCollapse");
+  const rail = $("sourceRail");
+  if (toSide) toSide.hidden = !(mode === "mini" && !collapsed && choices.includes("side"));
+  if (collapse) collapse.hidden = !(mode === "mini" && !collapsed);
+  if (rail) rail.hidden = !(mode === "mini" && collapsed);
+  const pin = $("sourcePopPin");
+  if (pin) {
+    const canPin = choices.includes("mini");
+    pin.disabled = !canPin;
+    pin.title = canPin ? "固定为小窗" : SOURCE_MODE_NARROW_HINT;
+  }
+  const full = $("sourcePopFull");
+  if (full) full.hidden = sourcePopPlace(width) !== "bottom";
+}
+
+function paintMiniWidth(workspace, width) {
+  const next = normalizeMiniWidth(width);
+  workspace.style.setProperty("--oi-mini-width", `${next}px`);
+  const handle = workspace.querySelector(".split-handle");
+  if (!handle || workspace.dataset.miniCollapsed === "true") return;
+  handle.setAttribute("aria-valuemin", "300");
+  handle.setAttribute("aria-valuemax", "480");
+  handle.setAttribute("aria-valuenow", String(next));
+  handle.setAttribute("aria-valuetext", `原文栏 ${next}px`);
+  const bubble = handle.querySelector(".split-bubble");
+  if (bubble) bubble.textContent = `原文栏 ${next}px`;
+}
+
+function persistMiniWidth(workspace) {
+  const raw = parseFloat(workspace.style.getPropertyValue("--oi-mini-width"));
+  const width = normalizeMiniWidth(raw);
+  readerPrefs = { ...readerPrefs, miniWidth: width };
+  persistReaderPrefs();
+}
+
+function captureSourceScroll() {
+  const pane = $("pages");
+  return {
+    top: pane?.scrollTop || 0,
+    left: pane?.scrollLeft || 0
+  };
+}
+
+function restoreSourceScroll(saved) {
+  const pane = $("pages");
+  if (!pane || !saved) return;
+  pane.scrollTop = saved.top;
+  pane.scrollLeft = saved.left;
+}
+
+function placeSourceInWorkspace() {
+  const workspace = document.querySelector(".workspace");
+  const source = $("pdfPane");
+  const split = workspace?.querySelector(":scope > .split-handle") || document.querySelector(".split-handle");
+  if (!workspace || !source || !split) return;
+  const side = workspace.dataset.sourceSide === "end" ? "end" : "start";
+  if (side === "end") split.after(source);
+  else split.before(source);
+}
+
+function placeSourcePop(place) {
+  const pop = $("sourcePop");
+  const workspace = document.querySelector(".workspace");
+  if (!pop) return;
+  pop.dataset.place = place === "bottom" ? "bottom" : "side";
+  pop.dataset.side = workspace?.dataset.sourceSide === "end" ? "end" : "start";
+  if (pop.dataset.place !== "bottom") pop.dataset.full = "0";
+}
+
+function openSourcePop(trigger) {
+  const pop = $("sourcePop");
+  const body = $("sourcePopBody");
+  const pane = $("pdfPane");
+  if (!pop || !body || !pane) return false;
+  if (!pop.hidden && pane.parentElement === body) return true;
+  sourcePopTrigger = trigger && trigger.nodeType === 1 ? trigger : null;
+  const saved = captureSourceScroll();
+  body.append(pane);
+  restoreSourceScroll(saved);
+  pop.hidden = false;
+  const workspace = document.querySelector(".workspace");
+  if (workspace) workspace.dataset.sourcePop = "open";
+  placeSourcePop(sourcePopPlace(readerWidth()));
+  syncSourcePopChrome();
+  $("sourcePopClose")?.focus();
+  scheduleVisibleRenders();
+  syncSourceFollowAvailability();
+  return true;
+}
+
+function closeSourcePop(restoreFocus) {
+  const pop = $("sourcePop");
+  if (!pop || pop.hidden) return false;
+  const saved = captureSourceScroll();
+  placeSourceInWorkspace();
+  restoreSourceScroll(saved);
+  pop.hidden = true;
+  const workspace = document.querySelector(".workspace");
+  if (workspace) delete workspace.dataset.sourcePop;
+  const trigger = sourcePopTrigger;
+  sourcePopTrigger = null;
+  if (restoreFocus && trigger?.isConnected) trigger.focus();
+  syncSourceFollowAvailability();
+  return true;
+}
+
+function syncSourceFollowAvailability() {
+  const mode = currentSourceMode();
+  applyFollow({
+    type: "sourceAvailable",
+    available: mode !== "hidden" || sourcePopOpen(),
+    stored: readerPrefs.follow === false ? "0" : "1"
+  });
+}
+
+function syncSourcePopChrome(page) {
+  const title = $("sourcePopTitle");
+  if (!title || !sourcePopOpen()) return;
+  const n = Number.isFinite(Number(page)) && Number(page) >= 1
+    ? Number(page)
+    : Number($("pageCapsule")?.dataset.srcPage) || pageNum || 0;
+  title.textContent = n >= 1 ? `原文第 ${n} 页 · 已定位` : "原文";
+}
+
+function toggleSourcePopFull() {
+  const pop = $("sourcePop");
+  if (!pop || pop.dataset.place !== "bottom") return;
+  pop.dataset.full = pop.dataset.full === "1" ? "0" : "1";
+}
+
+function pinSourcePop() {
+  if (!sourceModeChoices(readerWidth()).includes("mini")) {
+    showToast(SOURCE_MODE_NARROW_HINT);
+    return;
+  }
+  readerPrefs = { ...readerPrefs, sourceMode: "mini", miniCollapsed: false };
+  persistReaderPrefs();
+  closeSourcePop(false);
+  applySourceLayout(true);
+  applyFollow({ type: "sourceModeChange" });
+}
+
+function presentSourceForJump(trigger) {
+  const mode = currentSourceMode();
+  if (mode === "hidden") {
+    openSourcePop(trigger);
+    return "pop";
+  }
+  const workspace = document.querySelector(".workspace");
+  if (mode === "mini" && workspace?.dataset.miniCollapsed === "true") {
+    setMiniCollapsed(false);
+    return "expand";
+  }
+  return "ready";
+}
+
+function jumpCurrentToSource() {
+  const flow = readerFlowEl();
+  const node = flow?.querySelector(".is-pair-current[data-pair-id]") || anchorBlock(translateScrollRoot());
+  if (node?.dataset?.pairId) {
+    jumpTranslationToSource(node);
+    return;
+  }
+  const trigger = document.activeElement;
+  const presented = presentSourceForJump(trigger);
+  const page = Number($("pageCapsule")?.dataset.srcPage) || pageNum;
+  const run = () => {
+    if (page >= 1) revealSourcePage(page);
+    syncSourcePopChrome(page);
+  };
+  if (presented === "ready") run();
+  else requestAnimationFrame(() => requestAnimationFrame(run));
+}
+
+function onSourcePageButton() {
+  if (sourcePopOpen()) {
+    closeSourcePop(true);
+    return;
+  }
+  const presented = presentSourceForJump($("sourceModeNarrow"));
+  if (presented === "pop") {
+    const page = Number($("pageCapsule")?.dataset.srcPage) || pageNum;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const node = readerFlowEl()?.querySelector(".is-pair-current[data-pair-id]") || anchorBlock(translateScrollRoot());
+      if (node?.dataset?.pairId) jumpTranslationToSource(node);
+      else if (page >= 1) {
+        revealSourcePage(page);
+        syncSourcePopChrome(page);
+      }
+    }));
+    return;
+  }
+  jumpCurrentToSource();
+}
+
+function cycleF6(backward) {
+  const workspace = document.querySelector(".workspace");
+  const ids = f6RegionIds({
+    mode: workspace?.dataset.sourceMode || "side",
+    popOpen: sourcePopOpen(),
+    side: workspace?.dataset.sourceSide === "end" ? "end" : "start",
+    sideSlotOpen: sideSlotOpen()
+  });
+  const current = f6CurrentRegion(ids);
+  const step = backward ? -1 : 1;
+  const next = (current + step + ids.length) % ids.length;
+  focusF6Region(ids[next]);
+}
+
+function f6CurrentRegion(ids) {
+  const active = document.activeElement;
+  const map = {
+    toolbar: document.querySelector(".toolbar"),
+    source: $("pdfPane"),
+    translation: document.querySelector(".pane-translate"),
+    popup: $("sourcePop"),
+    sideSlot: document.querySelector("[data-side-slot]")
+  };
+  for (let i = 0; i < ids.length; i += 1) {
+    const host = map[ids[i]];
+    if (host && (host === active || host.contains(active))) return i;
+  }
+  return -1;
+}
+
+function focusF6Region(id) {
+  const target = {
+    toolbar: () => $("tocButton"),
+    source: () => $("pages") || $("pdfPane"),
+    translation: () => $("readerFlow"),
+    popup: () => $("sourcePopClose") || $("sourcePop"),
+    sideSlot: () => document.querySelector("[data-side-slot]")
+  }[id]?.();
+  if (!target) return;
+  if (target.tabIndex < 0 && target.id !== "sourcePopClose") target.tabIndex = -1;
+  target.focus();
 }
 
 function placeViewSegment(inSubbar) {
@@ -3100,6 +3668,7 @@ function applyToolbarBand() {
     if (el) el.hidden = !chrome.collapsedInMenu;
   }
   placeViewSegment(chrome.viewInSubbar);
+  applySourceLayout(false);
   refreshDocStatus();
   scheduleToolbarSnap();
 }
@@ -3114,6 +3683,7 @@ function openTranslateMenu() {
   const button = $("translateMenuButton");
   if (!menu || !button) return;
   closeMoreMenu(false);
+  closeSourceModeMenu(false);
   menu.hidden = false;
   button.setAttribute("aria-expanded", "true");
 }
@@ -3137,6 +3707,7 @@ function openMoreMenu() {
   const button = $("moreButton");
   if (!menu || !button) return;
   closeTranslateMenu(false);
+  closeSourceModeMenu(false);
   syncSwapItem();
   menu.hidden = false;
   button.setAttribute("aria-expanded", "true");
@@ -3193,16 +3764,22 @@ function onMenuKey(event) {
 
 function updateSourcePageLabel(page) {
   const el = $("sourcePageLabel");
-  if (!el) return;
   const total = pdfDoc?.numPages || 0;
   const shown = page || measureVisible() || pageNum || 0;
-  if (!(total >= 1)) {
-    el.textContent = pageLabel(0, 0);
-    return;
-  }
   const n = Number(shown);
-  const safe = Number.isFinite(n) && n >= 1 ? Math.min(total, Math.floor(n)) : 1;
-  el.textContent = pageLabel(safe, total);
+  const safe = !(total >= 1)
+    ? 0
+    : (Number.isFinite(n) && n >= 1 ? Math.min(total, Math.floor(n)) : 1);
+  if (el) {
+    if (!(total >= 1)) el.textContent = pageLabel(0, 0);
+    else el.textContent = pageLabel(safe, total);
+  }
+  const rail = $("sourceRail");
+  if (rail) {
+    rail.textContent = safe >= 1 ? `原文 · 第 ${safe} 页` : "原文";
+    rail.setAttribute("aria-label", safe >= 1 ? `展开原文，第 ${safe} 页` : "展开原文");
+  }
+  syncSourcePopChrome(safe);
 }
 
 function noteSourcePage() {
@@ -4167,6 +4744,13 @@ function syncToolbarFromCapsule() {
 function onPageCapsuleClick() {
   const page = Number($("pageCapsule")?.dataset.srcPage);
   if (!Number.isFinite(page) || page < 1) return;
+  const presented = presentSourceForJump($("pageCapsule"));
+  const run = () => revealCapsulePage(page);
+  if (presented === "ready") run();
+  else requestAnimationFrame(() => requestAnimationFrame(run));
+}
+
+function revealCapsulePage(page) {
   if (page !== pageNum) {
     pageNum = page;
     updatePager();
@@ -4182,6 +4766,7 @@ function onPageCapsuleClick() {
   }
   applyFollow({ type: "capsuleJump" });
   updateSourcePageLabel(page);
+  syncSourcePopChrome();
 }
 
 function onReaderFlowClick(event) {
