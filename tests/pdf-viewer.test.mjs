@@ -239,7 +239,7 @@ test("split layout is left/right by default and stacks below 900px", () => {
   assert.match(html, /class="pane-translate"/);
   assert.match(html, /点击翻译/);
   assert.match(html, /id="translatePage"[^>]*disabled>翻译</);
-  assert.match(html, /id="stopTranslate"[^>]*class="btn-primary"[^>]*hidden[^>]*disabled>停止</);
+  assert.match(html, /id="stopTranslate"[^>]*class="btn-primary tb-primary"[^>]*hidden[^>]*disabled>停止</);
   assert.match(html, /id="viewSeg"[\s\S]*data-view="zh"[\s\S]*data-view="bi"[\s\S]*data-view="src"/);
   assert.doesNotMatch(html, /id="restoreOriginal"/);
   assert.match(html, /id="moreMenu"[^>]*role="menu"/);
