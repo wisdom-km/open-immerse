@@ -112,6 +112,19 @@ import {
   visualPaneOrder
 } from "../lib/pdf-pairing.js";
 import {
+  SEL_EDGE_INSET,
+  blockWantsSrcFold,
+  blocksMeetingSelection,
+  createSrcFoldMemory,
+  nextSelCollapse,
+  placeSelToolbar,
+  registerSelAction,
+  selAction,
+  selScrollDismissed,
+  selToolbarModel,
+  unionRect
+} from "../lib/pdf-sel-toolbar.js";
+import {
   PDF_PAPER_GUTTER_X,
   basePageBox,
   paperAvailWidth,
@@ -296,6 +309,12 @@ let appliedSide = "";
 let currentPairId = "";
 let jumpPairId = "";
 let jumpPart = "";
+let peekPairId = "";
+let selCtx = null;
+let selScrollBase = 0;
+let selRestoring = false;
+let seeSourceKey = "";
+const srcFoldMemory = createSrcFoldMemory(typeof sessionStorage === "undefined" ? null : sessionStorage);
 let arrivalText = "";
 let arrivalTimer = 0;
 let pairPress = null;
@@ -446,6 +465,7 @@ function init() {
   bindMoreMenu();
   bindSourcePointer();
   watchSourceAvailability();
+  bindSelToolbar();
   $("translatePage").addEventListener("click", () => startTranslate());
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("translateMenuRetranslate")?.addEventListener("click", () => {
@@ -519,6 +539,18 @@ function onKey(event) {
     event.preventDefault();
     return;
   }
+  if (event.key === "Escape" && closeSelMenu()) {
+    event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && closeSelToolbar({ restore: true, dismissPeek: true })) {
+    event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && dismissSeeSource()) {
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape" && closeSourcePop(true)) {
     event.preventDefault();
     return;
@@ -529,6 +561,12 @@ function onKey(event) {
   }
   if (onMenuKey(event)) return;
   if (onSourceModeMenuKey(event)) return;
+  if (event.key === "F10" && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (!eventTargetIsField(event.target) && !event.target?.isContentEditable && openSelToolbarFromSelection({ focus: true })) {
+      event.preventDefault();
+      return;
+    }
+  }
   if (event.key === "F6" && !event.metaKey && !event.ctrlKey && !event.altKey) {
     event.preventDefault();
     closeMoreMenu(false);
@@ -591,7 +629,17 @@ function onKey(event) {
     }
     if (event.key === "p" || event.key === "P") {
       event.preventDefault();
-      jumpCurrentToSource();
+      if (!jumpSelectionIfLive()) jumpCurrentToSource();
+      return;
+    }
+    if (event.key === "o") {
+      const here = event.target?.closest?.(".oi-sel-toolbar, .oi-sel-menu, .aa-panel")
+        || document.activeElement?.closest?.(".oi-sel-toolbar, .oi-sel-menu, .aa-panel");
+      if (here) return;
+      const pane = event.target?.closest?.(".pane-translate") || document.activeElement?.closest?.(".pane-translate");
+      if (!pane) return;
+      event.preventDefault();
+      toggleFocusedSrcFold(event.target);
       return;
     }
     if (event.key === "f" || event.key === "F") {
@@ -2182,13 +2230,20 @@ function blocksFromLibraryPairs(page, pairs) {
   }));
 }
 
+function readoutTextWithoutFold(el) {
+  if (!el?.querySelector?.(".rf-src-fold")) return el?.textContent || "";
+  const clone = el.cloneNode(true);
+  clone.querySelectorAll(".rf-src-fold").forEach((node) => node.remove());
+  return clone.textContent || "";
+}
+
 function slotHasTranslation(slot) {
   if (!slot) return false;
   const nodes = [...slot.querySelectorAll(".rf-zh")];
   if (nodes.length) {
     return nodes.some((el) => settledText(el.textContent, el.parentElement?.querySelector(".rf-src")?.textContent || ""));
   }
-  return [...slot.querySelectorAll(".oi-pdf-p, h1, h2, h3")].some((el) => settledText(el.textContent, ""));
+  return [...slot.querySelectorAll(".oi-pdf-p, h1, h2, h3")].some((el) => settledText(readoutTextWithoutFold(el), ""));
 }
 
 function layoutForReadout(layout) {
@@ -2406,6 +2461,7 @@ function onFlowKey(event) {
 
 function jumpTranslationToSource(node) {
   if (!node?.dataset?.pairId) return;
+  dismissSeeSource();
   const presented = presentSourceForJump(node);
   const run = () => {
     const part = node.dataset.pairPart === "inline" ? "inline" : "";
@@ -2699,6 +2755,11 @@ function paintPairChrome() {
     const outset = inlineJump ? 2 : 5;
     drawPairBoxes(decodeSrcRects(node?.dataset.srcRects), true, outset);
   }
+  if (peekPairId) {
+    const peekNode = flow.querySelector(`[data-pair-id="${cssEscape(peekPairId)}"]:not([data-pair-part="inline"])`)
+      || flow.querySelector(`[data-pair-id="${cssEscape(peekPairId)}"]`);
+    paintSourceHighlight({ rects: decodeSrcRects(peekNode?.dataset.srcRects), mode: "peek", outset: 5 });
+  }
 }
 
 function firstNodeRects(pairId) {
@@ -2709,13 +2770,18 @@ function firstNodeRects(pairId) {
 }
 
 function drawPairBoxes(rects, jump, outset) {
+  paintSourceHighlight({ rects, mode: jump ? "jump" : "passive", outset });
+}
+
+function paintSourceHighlight({ rects, mode, outset } = {}) {
   for (const rect of rects || []) {
     const size = pagePointSize(rect.p);
     const wrap = document.querySelector(`#pages .pdf-page[data-page="${rect.p}"]`);
     const style = size ? pairBoxStyle(rect, size.width, size.height, outset) : null;
     if (!wrap || !style) continue;
     const box = document.createElement("div");
-    box.className = jump ? "pair-box is-jump" : "pair-box";
+    const kind = mode === "jump" ? "is-jump" : mode === "peek" ? "is-peek" : "";
+    box.className = kind ? `pair-box ${kind}` : "pair-box";
     box.style.insetInlineStart = style.x;
     box.style.insetBlockStart = style.y;
     box.style.width = style.w;
@@ -2958,6 +3024,7 @@ function onSourceClick(event) {
   }
   const node = hit.node;
   const block = node?.classList?.contains("rf-block") ? node : node?.closest?.(".rf-block") || node;
+  dismissSeeSource();
   jumpPairId = hit.pairId;
   jumpPart = hit.part === "inline" ? "inline" : "";
   currentPairId = hit.pairId;
@@ -3519,6 +3586,7 @@ function openSourcePop(trigger) {
   pop.hidden = false;
   const workspace = document.querySelector(".workspace");
   if (workspace) workspace.dataset.sourcePop = "open";
+  raiseFloatingChrome("pop");
   placeSourcePop(sourcePopPlace(readerWidth()));
   if (!document.querySelector("#pages canvas")) {
     const title = $("sourcePopTitle");
@@ -3617,6 +3685,615 @@ function jumpCurrentToSource() {
   };
   if (presented === "ready") run();
   else requestAnimationFrame(() => requestAnimationFrame(run));
+}
+
+function bindSelToolbar() {
+  registerSelAction({ id: "see-source", run: (ctx) => seeSourceForSelection(ctx) });
+  registerSelAction({ id: "jump-source", run: (ctx) => jumpSourceForSelection(ctx) });
+  registerSelAction({ id: "copy", run: (ctx) => copySelectionText(ctx) });
+  document.addEventListener("mouseup", onSelGestureEnd);
+  document.addEventListener("touchend", onSelGestureEnd);
+  document.addEventListener("keyup", onSelGestureEnd);
+  document.addEventListener("selectionchange", onSelSelectionChange);
+  document.addEventListener("pointerdown", onSelPointerDown);
+}
+
+function onSelGestureEnd(event) {
+  if (event.type === "mouseup" && event.button !== 0) return;
+  if (event.type === "keyup") {
+    const key = event.key || "";
+    const selectionKey = key === "Shift" || key.startsWith("Arrow") || key === "Home" || key === "End"
+      || key === "PageUp" || key === "PageDown";
+    if (!selectionKey) return;
+  } else if (event.target?.closest?.("button, a, input, textarea, select, .oi-sel-toolbar, .oi-sel-menu, .oi-src-strip")) {
+    return;
+  }
+  const ctx = readSelContext();
+  if (!ctx) return;
+  showSelToolbar(ctx);
+}
+
+function onSelSelectionChange() {
+  if (selRestoring) return;
+  if (readSelContext()) return;
+  const active = document.activeElement;
+  if (active?.closest?.(".oi-sel-toolbar, .oi-sel-menu")) return;
+  closeSelToolbar({ restore: false });
+}
+
+function onSelPointerDown(event) {
+  const menu = document.querySelector(".oi-sel-menu");
+  const more = document.querySelector(".oi-sel-toolbar [data-sel-action='more']");
+  if (!menu || menu.hidden) return;
+  if (menu.contains(event.target) || more?.contains(event.target)) return;
+  closeSelMenu();
+}
+
+function openSelToolbarFromSelection(options) {
+  const ctx = readSelContext();
+  if (!ctx) return false;
+  showSelToolbar(ctx, options);
+  return true;
+}
+
+function jumpSelectionIfLive() {
+  const ctx = readSelContext();
+  if (!ctx) return false;
+  jumpSourceForSelection(ctx);
+  return true;
+}
+
+function showSelToolbar(ctx, { focus = false } = {}) {
+  if (!ctx) return;
+  if (seeSourceKey && seeSourceKey !== ctx.key) dismissSeeSource();
+  selCtx = ctx;
+  selScrollBase = translateScrollRoot()?.scrollTop || 0;
+  const bar = ensureSelToolbar();
+  const collapsed = [];
+  bar.hidden = false;
+  renderSelToolbar(ctx, collapsed);
+  const root = translateScrollRoot();
+  let guard = 0;
+  while (root && bar.offsetWidth > root.clientWidth - SEL_EDGE_INSET * 2 && guard < 4) {
+    const ids = [...bar.querySelectorAll(":scope > .oi-sel-btn")]
+      .map((btn) => btn.dataset.selAction)
+      .filter((id) => id && id !== "more");
+    const next = nextSelCollapse(ids);
+    if (!next) break;
+    collapsed.push(next);
+    renderSelToolbar(ctx, collapsed);
+    guard += 1;
+  }
+  positionSelToolbar(ctx);
+  raiseFloatingChrome("sel");
+  armSelTabStops();
+  if (focus) focusFirstSelButton();
+}
+
+function ensureSelToolbar() {
+  let bar = document.querySelector(".oi-sel-toolbar");
+  if (bar) return bar;
+  bar = document.createElement("div");
+  bar.className = "oi-sel-toolbar";
+  bar.setAttribute("role", "toolbar");
+  bar.setAttribute("aria-label", "选区工具条");
+  bar.hidden = true;
+  bar.addEventListener("mousedown", keepSelPointer);
+  bar.addEventListener("click", onSelToolbarClick);
+  bar.addEventListener("keydown", onSelToolbarRoving);
+  const menu = document.createElement("div");
+  menu.className = "oi-sel-menu";
+  menu.id = "oiSelMenu";
+  menu.setAttribute("role", "menu");
+  menu.hidden = true;
+  menu.addEventListener("mousedown", keepSelPointer);
+  menu.addEventListener("click", onSelMenuClick);
+  menu.addEventListener("keydown", onSelMenuKey);
+  bar.append(menu);
+  translateScrollRoot()?.append(bar);
+  return bar;
+}
+
+function keepSelPointer(event) {
+  if (event.button != null && event.button !== 0) return;
+  event.preventDefault();
+}
+
+function renderSelToolbar(ctx, collapsedIds) {
+  const bar = ensureSelToolbar();
+  const menu = bar.querySelector(".oi-sel-menu");
+  const model = selToolbarModel(ctx, { collapsedIds });
+  [...bar.children].forEach((el) => {
+    if (el !== menu) el.remove();
+  });
+  for (const item of model.buttons) bar.insertBefore(selToolbarButton(item), menu);
+  menu.replaceChildren();
+  for (const item of model.menu) menu.append(selMenuButton(item));
+  const more = bar.querySelector("[data-sel-action='more']");
+  if (more) more.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
+}
+
+function selToolbarButton(item) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "oi-sel-btn";
+  btn.dataset.selAction = item.id;
+  btn.textContent = item.label;
+  btn.tabIndex = -1;
+  if (item.ariaLabel) btn.setAttribute("aria-label", item.ariaLabel);
+  if (item.id === "more") {
+    btn.setAttribute("aria-haspopup", "menu");
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-controls", "oiSelMenu");
+  }
+  if (item.disabled) {
+    btn.disabled = true;
+    btn.title = item.title || "这段没有配对";
+  }
+  if (item.keyshortcuts) btn.setAttribute("aria-keyshortcuts", item.keyshortcuts);
+  return btn;
+}
+
+function selMenuButton(item) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.setAttribute("role", "menuitem");
+  btn.dataset.selAction = item.id;
+  btn.tabIndex = -1;
+  if (item.id === "copy") {
+    btn.append(document.createTextNode(item.label));
+    const key = document.createElement("span");
+    key.className = "k";
+    key.textContent = "⌘C";
+    btn.append(key);
+  } else btn.textContent = item.label;
+  if (item.keyshortcuts) btn.setAttribute("aria-keyshortcuts", item.keyshortcuts);
+  return btn;
+}
+
+function positionSelToolbar(ctx) {
+  const root = translateScrollRoot();
+  const bar = document.querySelector(".oi-sel-toolbar");
+  if (!root || !bar || bar.hidden || !ctx?.anchor) return;
+  const place = placeSelToolbar({
+    anchor: ctx.anchor,
+    toolbar: { width: bar.offsetWidth, height: bar.offsetHeight },
+    root: { width: root.clientWidth, height: root.clientHeight }
+  });
+  bar.dataset.placement = place.placement;
+  bar.style.top = `${Math.round(place.top + root.scrollTop)}px`;
+  bar.style.insetInlineStart = `${Math.round(place.inlineStart + root.scrollLeft)}px`;
+}
+
+function armSelTabStops() {
+  const buttons = selToolbarButtons();
+  const enabled = buttons.filter((btn) => !btn.disabled);
+  buttons.forEach((btn) => {
+    btn.tabIndex = enabled.length && btn === enabled[0] ? 0 : -1;
+  });
+}
+
+function focusFirstSelButton() {
+  const buttons = selToolbarButtons();
+  const enabled = buttons.filter((btn) => !btn.disabled);
+  if (!enabled[0]) return;
+  buttons.forEach((btn) => {
+    btn.tabIndex = btn === enabled[0] ? 0 : -1;
+  });
+  enabled[0].focus();
+}
+
+function selToolbarButtons() {
+  return [...document.querySelectorAll(".oi-sel-toolbar > .oi-sel-btn")];
+}
+
+function onSelToolbarRoving(event) {
+  if (event.target?.closest?.(".oi-sel-menu")) return;
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  const buttons = selToolbarButtons();
+  const enabled = buttons.filter((btn) => !btn.disabled);
+  if (!enabled.length) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const index = enabled.indexOf(document.activeElement);
+  const delta = event.key === "ArrowRight" ? 1 : -1;
+  const next = enabled[(index + delta + enabled.length) % enabled.length];
+  buttons.forEach((btn) => {
+    btn.tabIndex = btn === next ? 0 : -1;
+  });
+  next.focus();
+}
+
+function onSelToolbarClick(event) {
+  const btn = event.target?.closest?.("[data-sel-action]");
+  if (!btn || btn.disabled || btn.closest(".oi-sel-menu")) return;
+  if (btn.dataset.selAction === "more") {
+    if (selMenuOpen()) closeSelMenu();
+    else openSelMenu();
+    return;
+  }
+  btn.focus({ preventScroll: true });
+  invokeSelAction(btn.dataset.selAction);
+}
+
+function onSelMenuClick(event) {
+  const btn = event.target?.closest?.("[data-sel-action]");
+  if (!btn) return;
+  event.stopPropagation();
+  closeSelMenu();
+  invokeSelAction(btn.dataset.selAction);
+}
+
+function onSelMenuKey(event) {
+  const items = [...event.currentTarget.querySelectorAll("[role='menuitem']")];
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!items.length) return;
+    const index = items.indexOf(document.activeElement);
+    let next = 0;
+    if (event.key === "End") next = items.length - 1;
+    else if (event.key === "ArrowDown") next = index < 0 ? 0 : Math.min(items.length - 1, index + 1);
+    else if (event.key === "ArrowUp") next = index < 0 ? items.length - 1 : Math.max(0, index - 1);
+    items[next]?.focus();
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSelMenu();
+    return;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    event.stopPropagation();
+    document.activeElement?.click();
+  }
+}
+
+function invokeSelAction(id) {
+  const action = selAction(id);
+  if (!action || !selCtx) return;
+  Promise.resolve(action.run(selCtx)).catch(() => {});
+}
+
+function selMenuOpen() {
+  const menu = document.querySelector(".oi-sel-menu");
+  return Boolean(menu && !menu.hidden);
+}
+
+function openSelMenu() {
+  const menu = document.querySelector(".oi-sel-menu");
+  const more = document.querySelector(".oi-sel-toolbar [data-sel-action='more']");
+  if (!menu || !more) return;
+  menu.hidden = false;
+  more.setAttribute("aria-expanded", "true");
+  menu.querySelector("[role='menuitem']")?.focus();
+}
+
+function closeSelMenu() {
+  const menu = document.querySelector(".oi-sel-menu");
+  if (!menu || menu.hidden) return false;
+  menu.hidden = true;
+  const more = document.querySelector(".oi-sel-toolbar [data-sel-action='more']");
+  more?.setAttribute("aria-expanded", "false");
+  if (document.activeElement?.closest?.(".oi-sel-menu")) more?.focus();
+  return true;
+}
+
+function closeSelToolbar({ restore = false, dismissPeek = false } = {}) {
+  const bar = document.querySelector(".oi-sel-toolbar");
+  if (!bar || bar.hidden) return false;
+  closeSelMenu();
+  bar.hidden = true;
+  bar.classList.remove("is-front");
+  if (dismissPeek) dismissSeeSource();
+  if (restore) restoreSelRange();
+  return true;
+}
+
+function restoreSelRange() {
+  const range = selCtx?.range;
+  if (!range) return;
+  selRestoring = true;
+  try {
+    const sel = window.getSelection?.();
+    if (!sel) return;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch {
+    /* the live range died with a re-render */
+  } finally {
+    selRestoring = false;
+  }
+}
+
+function selToolbarOpen() {
+  const bar = document.querySelector(".oi-sel-toolbar");
+  return Boolean(bar && !bar.hidden);
+}
+
+function noteSelToolbarScroll() {
+  if (!selToolbarOpen()) return;
+  const pane = translateScrollRoot();
+  if (selScrollDismissed(selScrollBase, pane?.scrollTop || 0)) closeSelToolbar({ restore: false });
+}
+
+function raiseFloatingChrome(which) {
+  const pop = $("sourcePop");
+  const bar = document.querySelector(".oi-sel-toolbar");
+  const sel = which === "sel";
+  pop?.classList.toggle("is-front", !sel && sourcePopOpen());
+  bar?.classList.toggle("is-front", sel);
+}
+
+function readSelContext() {
+  const sel = window.getSelection?.();
+  if (!sel || sel.isCollapsed || sel.rangeCount < 1) return null;
+  const range = sel.getRangeAt(0);
+  const flow = readerFlowEl();
+  const root = translateScrollRoot();
+  if (!flow || !root) return null;
+  const node = range.commonAncestorContainer;
+  const el = node?.nodeType === 1 ? node : node?.parentElement;
+  if (!el || !root.contains(el) || el.closest?.(".oi-sel-toolbar, .oi-sel-menu")) return null;
+  const blocks = [...flow.querySelectorAll(".rf-block")].map((block) => {
+    const box = block.getBoundingClientRect();
+    return {
+      bid: block.dataset.bid || "",
+      pairId: block.dataset.pairId || "",
+      srcPage: Number(block.dataset.srcPage || block.dataset.page) || 0,
+      box: { x: box.left, y: box.top, width: box.width, height: box.height },
+      node: block
+    };
+  });
+  const rawRects = [...range.getClientRects()].filter((rect) => rect.width > 0 || rect.height > 0);
+  const rects = rawRects.map((rect) => ({ x: rect.left, y: rect.top, width: rect.width, height: rect.height }));
+  let hits = blocksMeetingSelection(blocks, rects);
+  if (!hits.length) {
+    const host = el.closest?.(".rf-block");
+    const bid = host?.dataset?.bid || "";
+    if (bid) hits = blocks.filter((block) => block.bid === bid && block.node === host);
+  }
+  if (!hits.length) return null;
+  const view = document.querySelector(".workspace")?.dataset.view || "zh";
+  const text = selectedTranslationText(range, hits, view);
+  if (!String(text || "").trim()) return null;
+  const union = unionRect(rects.length ? rects : [clientBox(range.getBoundingClientRect())]);
+  const rootBox = root.getBoundingClientRect();
+  const rtl = getComputedStyle(root).direction === "rtl";
+  const startEdge = rtl ? rootBox.right - root.clientLeft : rootBox.left + root.clientLeft;
+  const anchor = {
+    x: rtl ? startEdge - (union.x + union.width) : union.x - startEdge,
+    y: union.y - (rootBox.top + root.clientTop),
+    width: union.width,
+    height: union.height
+  };
+  const bids = hits.map((hit) => hit.bid);
+  return {
+    bids,
+    pairIds: hits.map((hit) => hit.pairId || ""),
+    srcPage: hits[0].srcPage,
+    text,
+    range: range.cloneRange(),
+    anchor,
+    key: `${bids.join("|")}::${text}`
+  };
+}
+
+function clientBox(rect) {
+  return { x: rect?.left || 0, y: rect?.top || 0, width: rect?.width || 0, height: rect?.height || 0 };
+}
+
+function selectedTranslationText(range, hits, view) {
+  if (view === "src") return range.toString();
+  const parts = [];
+  for (const hit of hits) {
+    const zh = hit.node.querySelector(".rf-zh");
+    const piece = zh ? textWithin(range, zh) : "";
+    if (piece) parts.push(piece);
+  }
+  const joined = parts.join("").trim();
+  return joined || range.toString();
+}
+
+function textWithin(range, node) {
+  if (!node) return "";
+  try {
+    if (typeof range.intersectsNode === "function" && !range.intersectsNode(node)) return "";
+  } catch {
+    return "";
+  }
+  const sub = document.createRange();
+  sub.selectNodeContents(node);
+  if (range.compareBoundaryPoints(Range.END_TO_START, sub) >= 0) return "";
+  if (range.compareBoundaryPoints(Range.START_TO_END, sub) <= 0) return "";
+  const startAfter = range.compareBoundaryPoints(Range.START_TO_START, sub) > 0;
+  const endBefore = range.compareBoundaryPoints(Range.END_TO_END, sub) < 0;
+  const piece = document.createRange();
+  try {
+    piece.setStart(startAfter ? range.startContainer : sub.startContainer, startAfter ? range.startOffset : sub.startOffset);
+    piece.setEnd(endBefore ? range.endContainer : sub.endContainer, endBefore ? range.endOffset : sub.endOffset);
+    return piece.toString();
+  } catch {
+    return "";
+  }
+}
+
+/* 看原文：原地瞄一眼，不改跟随，hidden 不弹出。跳到原页：把原文栏带到这段并恢复跟随。 */
+function seeSourceForSelection(ctx) {
+  const block = selStartBlock(ctx);
+  if (!block?.dataset?.pairId) return;
+  const pane = translateScrollRoot();
+  const beforeTop = pane?.scrollTop;
+  dismissSeeSource();
+  const rects = decodeSrcRects(block.dataset.srcRects);
+  peekPairId = block.dataset.pairId;
+  if (rects[0]) scrollSourcePeek(rects[0]);
+  if (pane && Number.isFinite(beforeTop)) pane.scrollTop = beforeTop;
+  armJumpLock();
+  paintPairChrome();
+  const view = document.querySelector(".workspace")?.dataset.view || "zh";
+  if (view === "bi") expandSrcFold(block, { highlight: true });
+  else insertInlineSource(block, sourceTextOf(block));
+  seeSourceKey = ctx?.key || "";
+}
+
+function jumpSourceForSelection(ctx) {
+  const block = selStartBlock(ctx);
+  if (!block?.dataset?.pairId) return;
+  jumpTranslationToSource(block);
+}
+
+function selStartBlock(ctx) {
+  const bid = ctx?.bids?.[0] || "";
+  if (!bid) return null;
+  return readerFlowEl()?.querySelector(`.rf-block[data-bid="${cssEscape(bid)}"]`) || null;
+}
+
+function scrollSourcePeek(rect) {
+  const pane = pdfScrollRoot();
+  const placed = rect ? rectInSource(rect) : null;
+  if (!pane || !placed || !(pane.clientHeight > 1)) return false;
+  const top = sourceFollowScroll({
+    rectTop: placed.top,
+    rectBottom: placed.bottom,
+    scrollTop: pane.scrollTop,
+    clientHeight: pane.clientHeight,
+    scrollHeight: pane.scrollHeight
+  });
+  if (top == null) return false;
+  takeDriver("click");
+  pane.scrollTop = top;
+  noteSourcePage(false);
+  return true;
+}
+
+function sourceTextOf(block) {
+  return block?.querySelector(".rf-src")?.textContent || "";
+}
+
+function insertInlineSource(block, text) {
+  document.querySelectorAll(".oi-src-strip").forEach((el) => el.remove());
+  const strip = document.createElement("div");
+  strip.className = "oi-src-strip";
+  strip.setAttribute("aria-live", "polite");
+  const live = document.createElement("span");
+  live.className = "sr-only";
+  live.textContent = "已显示原文";
+  const label = document.createElement("span");
+  label.className = "oi-src-strip-k";
+  label.textContent = "原文 ·";
+  const body = document.createElement("span");
+  body.className = "oi-src-strip-text";
+  body.textContent = String(text || "");
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "oi-src-strip-x";
+  close.setAttribute("aria-label", "关闭原文");
+  close.textContent = "×";
+  close.addEventListener("click", () => dismissSeeSource());
+  strip.append(live, label, body, close);
+  block.after(strip);
+}
+
+function dismissSeeSource() {
+  const strips = document.querySelectorAll(".oi-src-strip");
+  const marks = document.querySelectorAll(".rf-src-fold-panel.is-see-source");
+  const had = strips.length > 0 || marks.length > 0 || Boolean(peekPairId);
+  strips.forEach((el) => el.remove());
+  marks.forEach((el) => el.classList.remove("is-see-source"));
+  seeSourceKey = "";
+  if (peekPairId) {
+    peekPairId = "";
+    paintPairChrome();
+  }
+  return had;
+}
+
+async function copySelectionText(ctx) {
+  const text = String(ctx?.text || "");
+  if (!text) return;
+  let ok = false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    try {
+      ok = document.execCommand("copy");
+    } catch {
+      ok = false;
+    }
+  }
+  if (!ok) return;
+  showToast("已复制");
+  closeSelToolbar({ restore: false });
+}
+
+function mountSrcFolds(slot) {
+  if (!slot) return;
+  slot.querySelectorAll(".rf-block").forEach((block) => {
+    if (block.querySelector(":scope > .rf-src-fold")) return;
+    const src = block.querySelector(":scope > .rf-src");
+    if (!blockWantsSrcFold({ label: block.dataset.label || "", sourceText: src?.textContent || "" })) return;
+    const fold = document.createElement("div");
+    fold.className = "rf-src-fold";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "rf-src-fold-toggle";
+    const panel = document.createElement("div");
+    panel.className = "rf-src-fold-panel";
+    panel.append(src);
+    fold.append(btn, panel);
+    block.append(fold);
+    setSrcFoldOpen(fold, srcFoldMemory.has(block.dataset.bid));
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const open = srcFoldMemory.toggle(block.dataset.bid);
+      setSrcFoldOpen(fold, open);
+    });
+  });
+}
+
+function setSrcFoldOpen(fold, open) {
+  if (!fold) return;
+  fold.dataset.open = open ? "true" : "false";
+  const btn = fold.querySelector(".rf-src-fold-toggle");
+  if (btn) {
+    btn.textContent = open ? "▾ 原文 · 收起（o）" : "▸ 原文";
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  if (!open) fold.querySelector(".rf-src-fold-panel")?.classList.remove("is-see-source");
+}
+
+function expandSrcFold(block, { highlight = false } = {}) {
+  const fold = block?.querySelector?.(":scope > .rf-src-fold");
+  if (!fold) return;
+  srcFoldMemory.expand(block.dataset.bid);
+  setSrcFoldOpen(fold, true);
+  fold.querySelector(".rf-src-fold-panel")?.classList.toggle("is-see-source", Boolean(highlight));
+}
+
+function toggleFocusedSrcFold(from) {
+  const active = from?.nodeType === 1 ? from : document.activeElement;
+  const flow = readerFlowEl();
+  let block = active?.closest?.(".rf-block");
+  if (!block) block = flow?.querySelector(".rf-block.is-pair-current") || anchorBlock(translateScrollRoot());
+  const fold = block?.querySelector?.(":scope > .rf-src-fold");
+  if (!fold || !block?.dataset?.bid) return;
+  const open = srcFoldMemory.toggle(block.dataset.bid);
+  setSrcFoldOpen(fold, open);
 }
 
 function onSourcePageButton() {
@@ -4724,6 +5401,7 @@ function finalizeReaderFlow() {
     if (slot.dataset.painted === "1") return;
     stampReaderPage(slot);
     stampFlowPairs(slot);
+    mountSrcFolds(slot);
     refreshMatchedFormulas(slot);
     const row = pageFlowState(Number(slot.dataset.page));
     const collapsed = row.state === "queued" && !row.hasLayout;
@@ -4875,6 +5553,7 @@ async function exportReadout(kind) {
 }
 
 function onTranslateScroll() {
+  noteSelToolbarScroll();
   updatePageCapsule();
   updateReaderFade();
   if (!pdfDoc) return;
