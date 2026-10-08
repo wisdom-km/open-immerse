@@ -2133,14 +2133,40 @@ function visualCropNotice(block, page) {
   const n = Number(page) || 0;
   if ((block?.label === "figure" || block?.label === "table") && n >= 1) {
     const kind = block.label === "table" ? "表" : "图";
-    const notice = document.createElement("span");
+    const notice = document.createElement("button");
+    notice.type = "button";
     notice.className = "oi-pdf-asset-fallback";
+    notice.dataset.page = String(n);
     notice.textContent = `${kind}见原文第 ${n} 页（点击查看）`;
+    notice.setAttribute("aria-label", `${kind}见原文第 ${n} 页`);
+    notice.addEventListener("click", (event) => {
+      event.preventDefault();
+      jumpAssetFallback(notice);
+    });
     return notice;
   }
   return document.createTextNode(block?.label === "formula"
     ? PDF_COPY.formulaFallback
     : `（${visualAlt(block?.label)}裁图失败，请查看左栏原页）`);
+}
+
+function jumpAssetFallback(notice) {
+  const page = Number(notice?.dataset?.page);
+  if (!(page >= 1)) return;
+  const host = notice.closest?.("[data-pair-id]");
+  if (host?.dataset?.pairId) jumpTranslationToSource(host);
+  else {
+    dismissSeeSource();
+    const presented = presentSourceForJump(notice);
+    const run = () => {
+      revealSourcePage(page);
+      syncSourcePopChrome(page, false);
+    };
+    if (presented === "ready") run();
+    else requestAnimationFrame(() => requestAnimationFrame(run));
+  }
+  if (followState === "off") applyFollow({ type: "toggle" });
+  else if (followState === "paused") applyFollow({ type: "resume" });
 }
 
 function captionNode(block, page, layout) {

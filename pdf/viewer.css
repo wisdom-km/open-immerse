@@ -1060,9 +1060,14 @@ body {
   display: inline-block;
   margin: 12px auto;
   padding: 10px 14px;
+  min-height: 0;
   color: var(--oi-paper-muted);
+  background: transparent;
   border: 1px dashed var(--oi-line, #d9d0c1);
   border-radius: 8px;
+  font: inherit;
+  font-weight: 400;
+  line-height: inherit;
   cursor: pointer;
 }
 .pane-translate .readout.is-mirror {

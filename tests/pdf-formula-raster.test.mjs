@@ -669,6 +669,29 @@ test("figure redraw origin follows the bbox, and an empty crop is not shown", ()
   assert.match(notice, /block\.label === "table" \? "表" : "图"/);
   assert.match(notice, /见原文第 \$\{n\} 页（点击查看）/);
   assert.match(notice, /oi-pdf-asset-fallback/);
+  assert.match(notice, /createElement\("button"\)/);
+  assert.match(notice, /notice\.type = "button"/);
+  assert.match(notice, /dataset\.page = String\(n\)/);
+  assert.match(notice, /setAttribute\("aria-label", `\$\{kind\}见原文第 \$\{n\} 页`\)/);
+  assert.match(notice, /jumpAssetFallback\(notice\)/);
+  const jump = viewerSrc.slice(
+    viewerSrc.indexOf("function jumpAssetFallback"),
+    viewerSrc.indexOf("function captionNode")
+  );
+  assert.match(jump, /Number\(notice\?\.dataset\?\.page\)/);
+  assert.match(jump, /closest\?\.\("\[data-pair-id\]"\)/);
+  assert.match(jump, /jumpTranslationToSource\(host\)/);
+  assert.match(jump, /presentSourceForJump\(notice\)/);
+  assert.match(jump, /revealSourcePage\(page\)/);
+  assert.match(jump, /followState === "off"/);
+  assert.match(jump, /applyFollow\(\{ type: "toggle" \}\)/);
+  assert.match(jump, /followState === "paused"/);
+  assert.match(jump, /applyFollow\(\{ type: "resume" \}\)/);
+  const blocked = viewerSrc.slice(
+    viewerSrc.indexOf("function pairControlBlocked"),
+    viewerSrc.indexOf("function selectionIsCollapsed")
+  );
+  assert.match(blocked, /closest\("button, a, input, textarea, select, \[role='button'\]"\)/);
   const figure = [0.31617, 0.08591, 0.68382, 0.503];
   assert.equal(acceptVisualRedraw(0.05, 0.36), false);
   assert.equal(acceptVisualRedraw(0.36, 0.36), true);
