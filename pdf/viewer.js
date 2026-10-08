@@ -3559,7 +3559,10 @@ function applySourceLayout(anchor) {
     handle.setAttribute("aria-hidden", draggable ? "false" : "true");
   }
   if (mode !== "hidden" && sourcePopOpen()) closeSourcePop(false);
-  else if (sourcePopOpen()) placeSourcePop(sourcePopPlace(width));
+  else if (sourcePopOpen()) {
+    placeSourcePop(sourcePopPlace(width));
+    if (bottomSheetOpen()) closeSelToolbar({ restore: false });
+  }
   syncSourceModeControls();
   if (changed) {
     applyDefaultSourceZoom(mode);
@@ -3679,6 +3682,7 @@ function openSourcePop(trigger) {
   if (workspace) workspace.dataset.sourcePop = "open";
   raiseFloatingChrome("pop");
   placeSourcePop(sourcePopPlace(readerWidth()));
+  if (bottomSheetOpen()) closeSelToolbar({ restore: false });
   if (!document.querySelector("#pages canvas")) {
     const title = $("sourcePopTitle");
     if (title) title.textContent = "正在定位…";
@@ -3838,8 +3842,17 @@ function jumpSelectionIfLive() {
   return true;
 }
 
+function bottomSheetOpen() {
+  const pop = $("sourcePop");
+  return Boolean(pop && !pop.hidden && pop.dataset.place === "bottom");
+}
+
 function showSelToolbar(ctx, { focus = false } = {}) {
   if (!ctx) return;
+  if (bottomSheetOpen()) {
+    closeSelToolbar({ restore: false });
+    return;
+  }
   const bar = ensureSelToolbar();
   if (!focus && !bar.hidden && selCtx?.key === ctx.key) {
     positionSelToolbar(ctx);
@@ -4006,12 +4019,13 @@ function onSelToolbarRoving(event) {
 function onSelToolbarClick(event) {
   const btn = event.target?.closest?.("[data-sel-action]");
   if (!btn || btn.disabled || btn.closest(".oi-sel-menu")) return;
+  const fromKeyboard = event.detail === 0;
   if (btn.dataset.selAction === "more") {
     if (selMenuOpen()) closeSelMenu();
-    else openSelMenu();
+    else openSelMenu(fromKeyboard);
     return;
   }
-  btn.focus({ preventScroll: true });
+  if (fromKeyboard) btn.focus({ preventScroll: true });
   invokeSelAction(btn.dataset.selAction);
 }
 
@@ -4066,13 +4080,13 @@ function selMenuOpen() {
   return Boolean(menu && !menu.hidden);
 }
 
-function openSelMenu() {
+function openSelMenu(focusItem = true) {
   const menu = document.querySelector(".oi-sel-menu");
   const more = document.querySelector(".oi-sel-toolbar [data-sel-action='more']");
   if (!menu || !more) return;
   menu.hidden = false;
   more.setAttribute("aria-expanded", "true");
-  menu.querySelector("[role='menuitem']")?.focus();
+  if (focusItem) menu.querySelector("[role='menuitem']")?.focus();
 }
 
 function closeSelMenu() {

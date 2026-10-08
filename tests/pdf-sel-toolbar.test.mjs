@@ -148,7 +148,8 @@ test("SEL-04 / SEL-05 toolbar chrome is fixed tooltip colors and grows on coarse
   assert.match(css, /\.oi-src-strip-x\s*\{[^}]*width:\s*24px/);
   assert.match(css, /\.oi-src-strip-x\s*\{[^}]*height:\s*24px/);
   assert.match(css, /\.oi-src-strip-x\s*\{[^}]*min-height:\s*24px/);
-  assert.match(css, /\.oi-sel-btn\s*\{[^}]*font:\s*400 13px\/1 var\(--oi-reader-ui-font\)/);
+  assert.match(css, /\.oi-sel-btn\s*\{[^}]*font:\s*500 13px\/32px var\(--oi-reader-ui-font\)/);
+  assert.match(css, /\.oi-sel-menu \[role="menuitem"\]\s*\{[^}]*font:\s*500 13px\/32px var\(--oi-reader-ui-font\)/);
   assert.match(css, /\.oi-sel-btn:hover:not\(:disabled\)\s*\{[^}]*background:\s*#444444/);
   assert.match(css, /color-mix\(in srgb, var\(--oi-reader-tooltip-fg\) 38%, transparent\)/);
   assert.match(css, /@media \(pointer:\s*coarse\)\s*\{[^}]*\.oi-sel-toolbar\s*\{[^}]*height:\s*48px/);
@@ -193,7 +194,18 @@ test("SEL-07 / SEL-19 keyboard opens the toolbar, roves, and escape restores the
   assert.match(menuKey, /ArrowUp/);
   assert.match(menuKey, /closeSelMenu/);
   assert.match(css, /\.oi-sel-btn:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-reader-focus\)/);
-  assert.match(css, /outline-offset:\s*2px/);
+  assert.match(css, /\.oi-sel-btn:focus-visible\s*\{[^}]*outline-offset:\s*2px/);
+  assert.match(css, /\.oi-sel-menu \[role="menuitem"\]:focus-visible\s*\{[^}]*outline-offset:\s*-2px/);
+  assert.match(css, /\.oi-sel-menu \.k\s*\{[^}]*font-size:\s*11px/);
+  assert.match(css, /\.oi-sel-menu \.k\s*\{[^}]*opacity:\s*0?\.55/);
+  const click = functionBody(viewer, "onSelToolbarClick");
+  assert.match(click, /event\.detail === 0/);
+  assert.match(click, /const fromKeyboard = event\.detail === 0/);
+  assert.match(click, /if \(fromKeyboard\) btn\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(click, /openSelMenu\(fromKeyboard\)/);
+  const openMenu = functionBody(viewer, "openSelMenu");
+  assert.match(openMenu, /focusItem = true/);
+  assert.match(openMenu, /if \(focusItem\) menu\.querySelector\("\[role='menuitem'\]"\)\?\.focus\(\)/);
   assert.match(viewer, /setAttribute\("role", "toolbar"\)/);
   assert.match(viewer, /setAttribute\("role", "menu"\)/);
   assert.match(viewer, /aria-haspopup", "menu"/);
@@ -234,7 +246,10 @@ test("SEL-09 / SEL-10 / SEL-12 see-source peeks with a lock and an inline strip,
   assert.match(strip, /关闭原文/);
   assert.match(strip, /dismissSeeSource/);
   assert.match(css, /\.oi-src-strip\s*\{[^}]*margin-top:\s*-8px/);
+  assert.match(css, /\.rf-block\.is-pair-current \+ \.oi-src-strip\s*\{[^}]*margin-top:\s*8px/);
   assert.match(css, /\.oi-src-strip\s*\{[^}]*margin-bottom:\s*16px/);
+  assert.match(css, /\.oi-src-strip\s*\{[^}]*padding:\s*4px 0 4px 12px/);
+  assert.match(css, /\.oi-src-strip-text\s*\{[^}]*text-align:\s*start/);
   assert.match(css, /\.oi-src-strip\s*\{[^}]*border-inline-start:\s*2px solid var\(--oi-reader-pair\)/);
   assert.match(css, /\.oi-src-strip-k\s*\{[^}]*13px\/1\.6 var\(--oi-reader-ui-font\)/);
   assert.match(css, /\.oi-src-strip-text\s*\{[^}]*14px\/1\.6 var\(--oi-reader-latin\)/);
@@ -362,7 +377,14 @@ test("SEL-17 swapped panes still use the shared jump and peek paths", () => {
 test("SEL-20 structure matches the selection toolbar mock: three actions, inline strip, dark chrome", () => {
   assert.match(css, /\.oi-sel-toolbar\s*\{/);
   assert.match(css, /\.oi-sel-btn\s*\{/);
+  assert.match(css, /\.oi-sel-menu\s*\{[^}]*top:\s*calc\(100% \+ 6px\)/);
+  assert.match(css, /\.oi-sel-toolbar\[data-placement="above"\] \.oi-sel-menu\s*\{[^}]*top:\s*auto/);
+  assert.match(css, /\.oi-sel-toolbar\[data-placement="above"\] \.oi-sel-menu\s*\{[^}]*bottom:\s*calc\(100% \+ 6px\)/);
   assert.match(css, /\.oi-sel-menu\s*\{[^}]*background:\s*var\(--oi-reader-tooltip-bg\)/);
+  assert.match(functionBody(viewer, "showSelToolbar"), /bottomSheetOpen\(\)/);
+  assert.match(functionBody(viewer, "bottomSheetOpen"), /dataset\.place === "bottom"/);
+  assert.match(functionBody(viewer, "openSourcePop"), /if \(bottomSheetOpen\(\)\) closeSelToolbar\(\{ restore: false \}\)/);
+  assert.match(functionBody(viewer, "applySourceLayout"), /if \(bottomSheetOpen\(\)\) closeSelToolbar\(\{ restore: false \}\)/);
   assert.match(css, /\.oi-src-strip\s*\{/);
   assert.match(css, /\.rf-src-fold\s*\{/);
   assert.match(viewer, /data-sel-action/);
