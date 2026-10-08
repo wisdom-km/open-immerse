@@ -9,6 +9,7 @@ import {
 import {
   DEFAULT_ZOOM,
   PDF_COPY,
+  defaultSourceZoom,
   clampZoom,
   ZOOM_CHIP_DRAG_THRESHOLD_PX,
   ZOOM_CHIP_GUTTER_FALLBACK,
@@ -151,6 +152,7 @@ import {
   blockRenderPieces,
   cropBlockCanvas,
   cropBlockImage,
+  rasterCropRect,
   isTranslatableBlock,
   isVisualBlock,
   preparePageBlocks,
@@ -235,13 +237,16 @@ import {
 import { canvasMeasure, detectCjkSerif } from "../lib/pdf-reader-cjk.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
+  acceptVisualRedraw,
   assetLayoutCapPx,
   createFormulaRasterCache,
   fitSnappedFormulaCss,
   formulaDevicePixels,
   formulaRasterCacheKey,
   formulaRasterPlan,
+  imageInkRatio,
   isSourceRedrawBlock,
+  pageCropLooksEmpty,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
@@ -272,6 +277,7 @@ GlobalWorkerOptions.workerSrc = workerSrc();
 let pdfDoc = null;
 let pageNum = 1;
 let zoom = DEFAULT_ZOOM;
+let sourceZoomTouched = false;
 let sourceUrl = "";
 let docId = 0;
 let restoreGen = 0;
@@ -439,8 +445,14 @@ function init() {
     noteUserSourceInput();
     goPage(1);
   });
-  $("zoomOut").addEventListener("click", () => setZoom(nextZoom(zoom, -1)));
-  $("zoomIn").addEventListener("click", () => setZoom(nextZoom(zoom, 1)));
+  $("zoomOut").addEventListener("click", () => {
+    sourceZoomTouched = true;
+    setZoom(nextZoom(zoom, -1));
+  });
+  $("zoomIn").addEventListener("click", () => {
+    sourceZoomTouched = true;
+    setZoom(nextZoom(zoom, 1));
+  });
   $("mirrorZoomOut")?.addEventListener("click", () => setMirrorZoom(nextZoom(mirrorZoom, -1)));
   $("mirrorZoomIn")?.addEventListener("click", () => setMirrorZoom(nextZoom(mirrorZoom, 1)));
   bindSplitResize();
@@ -498,10 +510,9 @@ function init() {
 function listenProgress() {
   try {
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-      if (message?.type === "OI_TRANSLATE_PROGRESS") {
-        applyPageProgress(message);
-        sendResponse({ ok: true });
-      }
+      if (message?.type !== "OI_TRANSLATE_PROGRESS") return;
+      applyPageProgress(message);
+      sendResponse({ ok: true });
       return true;
     });
   } catch {
@@ -663,8 +674,14 @@ function onKey(event) {
     goPage(1);
   }
   if (focusInReader(event.target)) return;
-  if (event.key === "-" || event.key === "_") setZoom(nextZoom(zoom, -1));
-  if (event.key === "+" || event.key === "=") setZoom(nextZoom(zoom, 1));
+  if (event.key === "-" || event.key === "_") {
+    sourceZoomTouched = true;
+    setZoom(nextZoom(zoom, -1));
+  }
+  if (event.key === "+" || event.key === "=") {
+    sourceZoomTouched = true;
+    setZoom(nextZoom(zoom, 1));
+  }
 }
 
 function eventTargetIsField(target) {
@@ -1938,14 +1955,8 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
   try {
     if (plan.pixelWidth < 1 || plan.pixelHeight < 1 || !(plan.multiplier > 0)) return "";
     const full = page.getViewport({ scale: plan.scale });
-    const rasterW = Number(raster?.pixelWidth) || 0;
-    const rasterH = Number(raster?.pixelHeight) || 0;
-    const originX = formula
-      ? Number(block.bbox[0]) || 0
-      : (rasterW > 0 ? (plan.offsetX / plan.multiplier) / rasterW : 0);
-    const originY = formula
-      ? Number(block.bbox[1]) || 0
-      : (rasterH > 0 ? (plan.offsetY / plan.multiplier) / rasterH : 0);
+    const originX = Number(block.bbox[0]) || 0;
+    const originY = Number(block.bbox[1]) || 0;
     const viewport = page.getViewport({
       scale: plan.scale,
       offsetX: -originX * full.width,
@@ -1959,6 +1970,11 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     await page.render({ canvasContext: context, viewport }).promise;
     if (formula) compositeWhitePaper(context, canvas);
     paintFormulaMask(canvas, block.bbox, block);
+    if (!formula && !redrawKeepsInk(context, canvas, raster, block)) {
+      canvas.width = 0;
+      canvas.height = 0;
+      return "";
+    }
     const url = canvas.toDataURL("image/png");
     canvas.width = 0;
     canvas.height = 0;
@@ -1974,11 +1990,42 @@ async function renderSharpFormulaCrop(page, raster, block, pageNumber) {
   return renderSharpVisualCrop(page, raster, block, pageNumber);
 }
 
+function rasterRegionInk(canvas, bbox) {
+  if (!canvas || typeof canvas.getContext !== "function" || !Array.isArray(bbox)) return null;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || typeof ctx.getImageData !== "function") return null;
+  const rect = rasterCropRect(bbox, canvas.width, canvas.height);
+  const sw = Math.min(rect.sw, Math.max(0, canvas.width - rect.sx));
+  const sh = Math.min(rect.sh, Math.max(0, canvas.height - rect.sy));
+  if (sw < 1 || sh < 1) return null;
+  try {
+    return imageInkRatio(ctx.getImageData(rect.sx, rect.sy, sw, sh));
+  } catch {
+    return null;
+  }
+}
+
+function redrawKeepsInk(context, canvas, raster, block) {
+  let redrawInk = null;
+  try {
+    if (context && typeof context.getImageData === "function") {
+      redrawInk = imageInkRatio(context.getImageData(0, 0, canvas.width, canvas.height));
+    }
+  } catch {
+    redrawInk = null;
+  }
+  return acceptVisualRedraw(redrawInk, rasterRegionInk(raster?.canvas, block?.bbox));
+}
+
 async function withRasterCrop(raster, page, block, pageNumber) {
   if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
   const next = { ...block };
   next.imageUrl = imageForVisualBlock(raster, next);
   if (next.imageUrl) next.surface = "png";
+  if ((next.label === "figure" || next.label === "table") && next.imageUrl && pageCropLooksEmpty(rasterRegionInk(raster?.canvas, next.bbox), next.bbox)) {
+    next.imageUrl = "";
+    delete next.surface;
+  }
   if ((next.label === "figure" || next.label === "table") && raster) {
     const cap = assetLayoutCapPx(
       next.bbox,
@@ -2079,10 +2126,21 @@ function appendCropOrNotice(node, block, imageClass, page) {
     node.append(img);
     return;
   }
-  const notice = block.label === "formula"
+  node.append(visualCropNotice(block, page));
+}
+
+function visualCropNotice(block, page) {
+  const n = Number(page) || 0;
+  if ((block?.label === "figure" || block?.label === "table") && n >= 1) {
+    const kind = block.label === "table" ? "表" : "图";
+    const notice = document.createElement("span");
+    notice.className = "oi-pdf-asset-fallback";
+    notice.textContent = `${kind}见原文第 ${n} 页（点击查看）`;
+    return notice;
+  }
+  return document.createTextNode(block?.label === "formula"
     ? PDF_COPY.formulaFallback
-    : `（${visualAlt(block.label)}裁图失败，请查看左栏原页）`;
-  node.append(document.createTextNode(notice));
+    : `（${visualAlt(block?.label)}裁图失败，请查看左栏原页）`);
 }
 
 function captionNode(block, page, layout) {
@@ -3474,7 +3532,10 @@ function applySourceLayout(anchor) {
   if (mode !== "hidden" && sourcePopOpen()) closeSourcePop(false);
   else if (sourcePopOpen()) placeSourcePop(sourcePopPlace(width));
   syncSourceModeControls();
-  if (changed) applyFollow({ type: "sourceModeChange" });
+  if (changed) {
+    applyDefaultSourceZoom(mode);
+    applyFollow({ type: "sourceModeChange" });
+  }
   syncSourceFollowAvailability();
   if (token) {
     requestAnimationFrame(() => {
@@ -7043,7 +7104,8 @@ async function adoptDoc(doc, title) {
   abortTranslateSession(session);
   pdfDoc = doc;
   pageNum = 1;
-  zoom = DEFAULT_ZOOM;
+  sourceZoomTouched = false;
+  zoom = defaultSourceZoom(currentSourceMode());
   docId += 1;
   restoreGen += 1;
   textGen += 1;
@@ -7352,6 +7414,12 @@ function syncMirrorZoomButtons() {
   const ui = zoomButtonState({ hasDoc: Boolean(pdfDoc), zoom: mirrorZoom });
   $("mirrorZoomOut").disabled = ui.outDisabled;
   $("mirrorZoomIn").disabled = ui.inDisabled;
+}
+
+function applyDefaultSourceZoom(mode) {
+  const next = defaultSourceZoom(mode, { touched: sourceZoomTouched, current: zoom });
+  if (!pdfDoc || next === zoom) return;
+  setZoom(next);
 }
 
 async function setZoom(next) {

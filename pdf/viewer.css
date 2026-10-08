@@ -1056,6 +1056,15 @@ body {
 .oi-pdf-figure > .oi-pdf-caption:first-child {
   margin: 0 0 6px;
 }
+.oi-pdf-asset-fallback {
+  display: inline-block;
+  margin: 12px auto;
+  padding: 10px 14px;
+  color: var(--oi-paper-muted);
+  border: 1px dashed var(--oi-line, #d9d0c1);
+  border-radius: 8px;
+  cursor: pointer;
+}
 .pane-translate .readout.is-mirror {
   max-width: none;
   width: 100%;

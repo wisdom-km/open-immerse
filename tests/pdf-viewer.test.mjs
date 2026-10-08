@@ -7,7 +7,9 @@ import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 
 import {
   DEFAULT_ZOOM,
+  MINI_SOURCE_ZOOM,
   PDF_COPY,
+  defaultSourceZoom,
   PDF_CANVAS_MAX_DIM,
   ZOOM_CHIP_DRAG_THRESHOLD_PX,
   ZOOM_CHIP_GUTTER_FALLBACK,
@@ -402,6 +404,19 @@ test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.equal(nextZoom(steps.at(-1), 1), 5);
   assert.equal(zoomLabel(1), "100%");
   assert.equal(zoomLabel(2.25), "225%");
+  assert.equal(MINI_SOURCE_ZOOM, 0.75);
+  assert.equal(zoomLabel(MINI_SOURCE_ZOOM), "75%");
+  assert.equal(defaultSourceZoom("mini"), 0.75);
+  assert.equal(defaultSourceZoom("side"), DEFAULT_ZOOM);
+  assert.equal(defaultSourceZoom("hidden"), DEFAULT_ZOOM);
+  assert.equal(defaultSourceZoom("mini", { touched: true, current: 1.5 }), 1.5);
+  assert.equal(defaultSourceZoom("side", { touched: true, current: 0.75 }), 0.75);
+  assert.match(src, /sourceZoomTouched = false/);
+  assert.match(src, /zoom = defaultSourceZoom\(currentSourceMode\(\)\)/);
+  assert.match(src, /function applyDefaultSourceZoom/);
+  const zoomOut = src.slice(src.indexOf('$("zoomOut").addEventListener'), src.indexOf('$("zoomIn").addEventListener'));
+  assert.match(zoomOut, /sourceZoomTouched = true/);
+  assert.doesNotMatch(src, /pdfSourceZoom|sourceZoomStorage/);
   assert.equal(PAPER_STACK_WIDTH, "max(100%, var(--oi-pdf-stack-w, 0px))");
   assert.doesNotMatch(css, /\.paper-stack\s*\{/);
   assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*var\(--rf-measure,\s*min\(var\(--oi-reader-measure\)/s);
@@ -1229,6 +1244,10 @@ test("two-step draft progress replaces in place and keeps heading role", async (
   assert.equal(articleNodeSpec(draft[0]).tag, "h1");
   assert.equal(articleNodeSpec({ translation: "摘要", role: "heading" }).tag, "h2");
   assert.match(src, /OI_TRANSLATE_PROGRESS/);
+  const progress = src.slice(src.indexOf("function listenProgress"), src.indexOf("function applyPageProgress"));
+  assert.match(progress, /message\?\.type !== "OI_TRANSLATE_PROGRESS"\) return/);
+  assert.match(progress, /sendResponse\(\{ ok: true \}\);\s*return true;/);
+  assert.doesNotMatch(progress, /\}\s*return true;\s*\}\);/);
   assert.match(src, /applyDraftTranslations/);
   assert.match(src, /applyPageProgress/);
   assert.match(src, /PDF_COPY\.polishing/);

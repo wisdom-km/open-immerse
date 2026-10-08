@@ -15,10 +15,9 @@ let running = false;
 let inflight = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type === "OI_TRANSLATE_PROGRESS") {
-    applyDocumentProgress(message);
-    sendResponse({ ok: true });
-  }
+  if (message?.type !== "OI_TRANSLATE_PROGRESS") return;
+  applyDocumentProgress(message);
+  sendResponse({ ok: true });
   return true;
 });
 
