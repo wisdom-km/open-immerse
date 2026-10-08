@@ -3705,6 +3705,10 @@ function onSelGestureEnd(event) {
     const selectionKey = key === "Shift" || key.startsWith("Arrow") || key === "Home" || key === "End"
       || key === "PageUp" || key === "PageDown";
     if (!selectionKey) return;
+    // Shift+F10 and roving keyup land here after focus has moved. Rebuilding would drop it.
+    const inChrome = event.target?.closest?.(".oi-sel-toolbar, .oi-sel-menu")
+      || document.activeElement?.closest?.(".oi-sel-toolbar, .oi-sel-menu");
+    if (inChrome) return;
   } else if (event.target?.closest?.("button, a, input, textarea, select, .oi-sel-toolbar, .oi-sel-menu, .oi-src-strip")) {
     return;
   }
@@ -3745,10 +3749,14 @@ function jumpSelectionIfLive() {
 
 function showSelToolbar(ctx, { focus = false } = {}) {
   if (!ctx) return;
+  const bar = ensureSelToolbar();
+  if (!focus && !bar.hidden && selCtx?.key === ctx.key) {
+    positionSelToolbar(ctx);
+    return;
+  }
   if (seeSourceKey && seeSourceKey !== ctx.key) dismissSeeSource();
   selCtx = ctx;
   selScrollBase = translateScrollRoot()?.scrollTop || 0;
-  const bar = ensureSelToolbar();
   const collapsed = [];
   bar.hidden = false;
   renderSelToolbar(ctx, collapsed);
@@ -4148,6 +4156,9 @@ function jumpSourceForSelection(ctx) {
   const block = selStartBlock(ctx);
   if (!block?.dataset?.pairId) return;
   jumpTranslationToSource(block);
+  // Paragraph click leaves follow off. Toolbar 跳到原页 and a live p turn it on.
+  if (followState === "off") applyFollow({ type: "toggle" });
+  else if (followState === "paused") applyFollow({ type: "resume" });
 }
 
 function selStartBlock(ctx) {

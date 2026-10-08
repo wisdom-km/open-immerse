@@ -141,7 +141,13 @@ test("SEL-04 / SEL-05 toolbar chrome is fixed tooltip colors and grows on coarse
   assert.match(css, /\.oi-sel-toolbar\s*\{[^}]*background:\s*var\(--oi-reader-tooltip-bg\)/);
   assert.match(css, /\.oi-sel-toolbar\s*\{[^}]*color:\s*var\(--oi-reader-tooltip-fg\)/);
   assert.match(css, /\.oi-sel-btn\s*\{[^}]*height:\s*32px/);
+  assert.match(css, /\.oi-sel-btn\s*\{[^}]*min-height:\s*32px/);
   assert.match(css, /\.oi-sel-btn\s*\{[^}]*padding:\s*0 10px/);
+  assert.match(css, /\.oi-sel-menu \[role="menuitem"\]\s*\{[^}]*height:\s*32px/);
+  assert.match(css, /\.oi-sel-menu \[role="menuitem"\]\s*\{[^}]*min-height:\s*32px/);
+  assert.match(css, /\.oi-src-strip-x\s*\{[^}]*width:\s*24px/);
+  assert.match(css, /\.oi-src-strip-x\s*\{[^}]*height:\s*24px/);
+  assert.match(css, /\.oi-src-strip-x\s*\{[^}]*min-height:\s*24px/);
   assert.match(css, /\.oi-sel-btn\s*\{[^}]*font:\s*400 13px\/1 var\(--oi-reader-ui-font\)/);
   assert.match(css, /\.oi-sel-btn:hover:not\(:disabled\)\s*\{[^}]*background:\s*#444444/);
   assert.match(css, /color-mix\(in srgb, var\(--oi-reader-tooltip-fg\) 38%, transparent\)/);
@@ -172,6 +178,12 @@ test("SEL-07 / SEL-19 keyboard opens the toolbar, roves, and escape restores the
   const escMenu = onKey.indexOf("closeSelMenu()");
   const escBar = onKey.indexOf("closeSelToolbar({ restore: true, dismissPeek: true })");
   assert.ok(escMenu > 0 && escBar > escMenu);
+  const gesture = functionBody(viewer, "onSelGestureEnd");
+  assert.match(gesture, /event\.target\?\.closest\?\.\("\.oi-sel-toolbar, \.oi-sel-menu"\)/);
+  assert.match(gesture, /document\.activeElement\?\.closest\?\.\("\.oi-sel-toolbar, \.oi-sel-menu"\)/);
+  assert.match(gesture, /if \(inChrome\) return/);
+  const show = functionBody(viewer, "showSelToolbar");
+  assert.match(show, /!focus && !bar\.hidden && selCtx\?\.key === ctx\.key/);
   const rove = functionBody(viewer, "onSelToolbarRoving");
   assert.match(rove, /ArrowRight/);
   assert.match(rove, /ArrowLeft/);
@@ -270,6 +282,7 @@ test("SEL-11 compare view expands the source fold and o toggles it without Shift
   assert.match(label, /▾ 原文 · 收起（o）/);
   assert.match(label, /▸ 原文/);
   assert.match(css, /\.workspace\[data-view="bi"\] \.rf-src-fold-toggle\s*\{[^}]*height:\s*24px/);
+  assert.match(css, /\.workspace\[data-view="bi"\] \.rf-src-fold-toggle\s*\{[^}]*min-height:\s*24px/);
   assert.match(css, /\.workspace\[data-view="bi"\] \.rf-src-fold\[data-open="true"\] \.rf-src\s*\{[^}]*display:\s*block/);
   assert.match(css, /\.rf-src-fold-panel\.is-see-source\s*\{[^}]*background:\s*var\(--oi-reader-pair-bg\)/);
   assert.match(css, /\.workspace:not\(\[data-view="src"\]\) \.rf-src\s*\{[^}]*display:\s*none/);
@@ -331,6 +344,10 @@ test("SEL-16 p jumps the live selection and otherwise keeps the current-block ju
   const jumpSel = functionBody(viewer, "jumpSourceForSelection");
   assert.match(jumpSel, /selStartBlock/);
   assert.match(jumpSel, /jumpTranslationToSource\(block\)/);
+  assert.match(jumpSel, /followState === "off"/);
+  assert.match(jumpSel, /applyFollow\(\{ type: "toggle" \}\)/);
+  assert.match(jumpSel, /followState === "paused"/);
+  assert.match(jumpSel, /applyFollow\(\{ type: "resume" \}\)/);
   assert.match(viewer, /function jumpCurrentToSource/);
 });
 
