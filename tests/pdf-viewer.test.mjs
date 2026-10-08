@@ -8,6 +8,9 @@ import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import {
   DEFAULT_ZOOM,
   PDF_COPY,
+  defaultSourceZoom,
+  fitWidthZoom,
+  formatZoomPercent,
   PDF_CANVAS_MAX_DIM,
   ZOOM_CHIP_DRAG_THRESHOLD_PX,
   ZOOM_CHIP_GUTTER_FALLBACK,
@@ -402,6 +405,37 @@ test("zoom has a minimum floor and page helpers stay in range", () => {
   assert.equal(nextZoom(steps.at(-1), 1), 5);
   assert.equal(zoomLabel(1), "100%");
   assert.equal(zoomLabel(2.25), "225%");
+  assert.equal(fitWidthZoom(612, 306), 0.5);
+  assert.equal(formatZoomPercent(0.5), "50%");
+  assert.equal(fitWidthZoom(595.28, 280), 280 / 595.28);
+  assert.equal(formatZoomPercent(280 / 595.28), "47%");
+  assert.equal(fitWidthZoom(792, 306), 306 / 792);
+  assert.ok(fitWidthZoom(792, 306) < ZOOM_MIN);
+  assert.equal(fitWidthZoom(1000, 400), 0.4);
+  assert.equal(fitWidthZoom(200, 480), 2.4);
+  assert.equal(fitWidthZoom(50, 4000), ZOOM_MAX);
+  assert.equal(fitWidthZoom(0, 300), null);
+  assert.equal(fitWidthZoom(612, 0), null);
+  assert.equal(defaultSourceZoom("mini", { pageWidth: 612, innerWidth: 306 }), 0.5);
+  assert.equal(defaultSourceZoom("mini", { pageWidth: 595.28, innerWidth: 280 }), 280 / 595.28);
+  assert.equal(defaultSourceZoom("mini", { pageWidth: 792, innerWidth: 306 }), 306 / 792);
+  assert.equal(defaultSourceZoom("mini"), DEFAULT_ZOOM);
+  assert.equal(defaultSourceZoom("side"), DEFAULT_ZOOM);
+  assert.equal(defaultSourceZoom("hidden"), DEFAULT_ZOOM);
+  assert.equal(defaultSourceZoom("side", { pageWidth: 612, innerWidth: 306 }), DEFAULT_ZOOM);
+  assert.equal(defaultSourceZoom("mini", { touched: true, current: 1.5, pageWidth: 612, innerWidth: 306 }), 1.5);
+  assert.equal(defaultSourceZoom("side", { touched: true, current: 0.75 }), 0.75);
+  assert.equal(defaultSourceZoom("mini", { touched: true, current: 0.4 }), ZOOM_MIN);
+  assert.equal(zoomButtonState({ hasDoc: true, zoom: 0.4 }).outDisabled, true);
+  assert.equal(zoomButtonState({ hasDoc: true, zoom: 0.53 }).outDisabled, false);
+  assert.equal(libSrc.includes("MINI_SOURCE_ZOOM"), false);
+  assert.match(src, /sourceZoomTouched = false/);
+  assert.match(src, /zoom = defaultSourceZoom\(currentSourceMode\(\), \{/);
+  assert.match(src, /function syncMiniFitZoom/);
+  assert.match(src, /function applyDefaultSourceZoom/);
+  const zoomOut = src.slice(src.indexOf('$("zoomOut").addEventListener'), src.indexOf('$("zoomIn").addEventListener'));
+  assert.match(zoomOut, /sourceZoomTouched = true/);
+  assert.doesNotMatch(src, /pdfSourceZoom|sourceZoomStorage/);
   assert.equal(PAPER_STACK_WIDTH, "max(100%, var(--oi-pdf-stack-w, 0px))");
   assert.doesNotMatch(css, /\.paper-stack\s*\{/);
   assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*var\(--rf-measure,\s*min\(var\(--oi-reader-measure\)/s);
@@ -460,7 +494,7 @@ test("PDF page width follows zoom instead of capping at the pane", () => {
   assert.equal(PDF_CANVAS_MAX_DIM, 8192);
   assert.equal(canvasOutputScale(1000, 800, 2), 2);
   assert.equal(canvasOutputScale(9000, 800, 2), 8192 / 9000);
-  assert.match(src, /\$\("zoomLabel"\)\.textContent = zoomLabel\(zoom\)/);
+  assert.match(src, /\$\("zoomLabel"\)\.textContent = formatZoomPercent\(zoom\)/);
   assert.match(src, /const scale = clampZoom\(next\)/);
   assert.match(src, /function syncZoomButtons/);
   assert.match(src, /zoomButtonState/);
@@ -1229,6 +1263,10 @@ test("two-step draft progress replaces in place and keeps heading role", async (
   assert.equal(articleNodeSpec(draft[0]).tag, "h1");
   assert.equal(articleNodeSpec({ translation: "摘要", role: "heading" }).tag, "h2");
   assert.match(src, /OI_TRANSLATE_PROGRESS/);
+  const progress = src.slice(src.indexOf("function listenProgress"), src.indexOf("function applyPageProgress"));
+  assert.match(progress, /message\?\.type !== "OI_TRANSLATE_PROGRESS"\) return/);
+  assert.match(progress, /sendResponse\(\{ ok: true \}\);\s*return true;/);
+  assert.doesNotMatch(progress, /\}\s*return true;\s*\}\);/);
   assert.match(src, /applyDraftTranslations/);
   assert.match(src, /applyPageProgress/);
   assert.match(src, /PDF_COPY\.polishing/);

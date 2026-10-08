@@ -122,6 +122,10 @@ test("documents two-step applies draft progress then replaces in place", () => {
   assert.match(src, /DOCUMENTS_COPY\.polishing/);
   assert.match(src, /DOCUMENTS_COPY\.polishFail/);
   assert.match(src, /applyDocumentProgress/);
+  const listener = src.slice(src.indexOf("chrome.runtime.onMessage.addListener"), src.indexOf("function applyDocumentProgress"));
+  assert.match(listener, /message\?\.type !== "OI_TRANSLATE_PROGRESS"\) return/);
+  assert.match(listener, /sendResponse\(\{ ok: true \}\);\s*return true;/);
+  assert.doesNotMatch(listener, /\}\s*return true;\s*\}\);/);
   assert.match(src, /message\.phase !== "draft"/);
   assert.match(src, /if \(pairIndex < pairs\.length\) pairs\[pairIndex\] = pair;/);
   assert.match(src, /res\.polishError/);

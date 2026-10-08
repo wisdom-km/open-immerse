@@ -11,6 +11,16 @@ const PRIMARY_STOP = "停止";
 init();
 
 async function init() {
+  const openOptions = () => chrome.runtime.openOptionsPage();
+  $("engineLink").addEventListener("click", (ev) => {
+    ev.preventDefault();
+    openOptions();
+  });
+  $("goSetup").addEventListener("click", openOptions);
+  $("openOptions").addEventListener("click", openOptions);
+  $("openLearning").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "learning" }));
+  $("openDocs").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "documents" }));
+
   fillSelect($("sourceLang"), LANGUAGE_OPTIONS.map((l) => ({ value: l.code, label: l.label })));
   fillSelect($("targetLang"), LANGUAGE_OPTIONS.filter((l) => l.code !== "auto").map((l) => ({ value: l.code, label: l.label })));
 
@@ -63,16 +73,6 @@ async function init() {
       })
     );
   }
-
-  const openOptions = () => chrome.runtime.openOptionsPage();
-  $("engineLink").addEventListener("click", (ev) => {
-    ev.preventDefault();
-    openOptions();
-  });
-  $("goSetup").addEventListener("click", openOptions);
-  $("openOptions").addEventListener("click", openOptions);
-  $("openLearning").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "learning" }));
-  $("openDocs").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "documents" }));
 
   const pdfOn = featureOn(settings, "pdf");
   $("openPdfPage").hidden = !pdfOn;

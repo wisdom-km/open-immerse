@@ -9,6 +9,9 @@ import {
 import {
   DEFAULT_ZOOM,
   PDF_COPY,
+  defaultSourceZoom,
+  fitWidthZoom,
+  formatZoomPercent,
   clampZoom,
   ZOOM_CHIP_DRAG_THRESHOLD_PX,
   ZOOM_CHIP_GUTTER_FALLBACK,
@@ -151,6 +154,7 @@ import {
   blockRenderPieces,
   cropBlockCanvas,
   cropBlockImage,
+  rasterCropRect,
   isTranslatableBlock,
   isVisualBlock,
   preparePageBlocks,
@@ -235,13 +239,16 @@ import {
 import { canvasMeasure, detectCjkSerif } from "../lib/pdf-reader-cjk.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
+  acceptVisualRedraw,
   assetLayoutCapPx,
   createFormulaRasterCache,
   fitSnappedFormulaCss,
   formulaDevicePixels,
   formulaRasterCacheKey,
   formulaRasterPlan,
+  imageInkRatio,
   isSourceRedrawBlock,
+  pageCropLooksEmpty,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
@@ -272,6 +279,8 @@ GlobalWorkerOptions.workerSrc = workerSrc();
 let pdfDoc = null;
 let pageNum = 1;
 let zoom = DEFAULT_ZOOM;
+let pdfPageWidth = 0;
+let sourceZoomTouched = false;
 let sourceUrl = "";
 let docId = 0;
 let restoreGen = 0;
@@ -439,8 +448,14 @@ function init() {
     noteUserSourceInput();
     goPage(1);
   });
-  $("zoomOut").addEventListener("click", () => setZoom(nextZoom(zoom, -1)));
-  $("zoomIn").addEventListener("click", () => setZoom(nextZoom(zoom, 1)));
+  $("zoomOut").addEventListener("click", () => {
+    sourceZoomTouched = true;
+    setZoom(nextZoom(zoom, -1));
+  });
+  $("zoomIn").addEventListener("click", () => {
+    sourceZoomTouched = true;
+    setZoom(nextZoom(zoom, 1));
+  });
   $("mirrorZoomOut")?.addEventListener("click", () => setMirrorZoom(nextZoom(mirrorZoom, -1)));
   $("mirrorZoomIn")?.addEventListener("click", () => setMirrorZoom(nextZoom(mirrorZoom, 1)));
   bindSplitResize();
@@ -498,10 +513,9 @@ function init() {
 function listenProgress() {
   try {
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-      if (message?.type === "OI_TRANSLATE_PROGRESS") {
-        applyPageProgress(message);
-        sendResponse({ ok: true });
-      }
+      if (message?.type !== "OI_TRANSLATE_PROGRESS") return;
+      applyPageProgress(message);
+      sendResponse({ ok: true });
       return true;
     });
   } catch {
@@ -663,8 +677,14 @@ function onKey(event) {
     goPage(1);
   }
   if (focusInReader(event.target)) return;
-  if (event.key === "-" || event.key === "_") setZoom(nextZoom(zoom, -1));
-  if (event.key === "+" || event.key === "=") setZoom(nextZoom(zoom, 1));
+  if (event.key === "-" || event.key === "_") {
+    sourceZoomTouched = true;
+    setZoom(nextZoom(zoom, -1));
+  }
+  if (event.key === "+" || event.key === "=") {
+    sourceZoomTouched = true;
+    setZoom(nextZoom(zoom, 1));
+  }
 }
 
 function eventTargetIsField(target) {
@@ -1938,14 +1958,8 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
   try {
     if (plan.pixelWidth < 1 || plan.pixelHeight < 1 || !(plan.multiplier > 0)) return "";
     const full = page.getViewport({ scale: plan.scale });
-    const rasterW = Number(raster?.pixelWidth) || 0;
-    const rasterH = Number(raster?.pixelHeight) || 0;
-    const originX = formula
-      ? Number(block.bbox[0]) || 0
-      : (rasterW > 0 ? (plan.offsetX / plan.multiplier) / rasterW : 0);
-    const originY = formula
-      ? Number(block.bbox[1]) || 0
-      : (rasterH > 0 ? (plan.offsetY / plan.multiplier) / rasterH : 0);
+    const originX = Number(block.bbox[0]) || 0;
+    const originY = Number(block.bbox[1]) || 0;
     const viewport = page.getViewport({
       scale: plan.scale,
       offsetX: -originX * full.width,
@@ -1959,6 +1973,11 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     await page.render({ canvasContext: context, viewport }).promise;
     if (formula) compositeWhitePaper(context, canvas);
     paintFormulaMask(canvas, block.bbox, block);
+    if (!formula && !redrawKeepsInk(context, canvas, raster, block)) {
+      canvas.width = 0;
+      canvas.height = 0;
+      return "";
+    }
     const url = canvas.toDataURL("image/png");
     canvas.width = 0;
     canvas.height = 0;
@@ -1974,11 +1993,42 @@ async function renderSharpFormulaCrop(page, raster, block, pageNumber) {
   return renderSharpVisualCrop(page, raster, block, pageNumber);
 }
 
+function rasterRegionInk(canvas, bbox) {
+  if (!canvas || typeof canvas.getContext !== "function" || !Array.isArray(bbox)) return null;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || typeof ctx.getImageData !== "function") return null;
+  const rect = rasterCropRect(bbox, canvas.width, canvas.height);
+  const sw = Math.min(rect.sw, Math.max(0, canvas.width - rect.sx));
+  const sh = Math.min(rect.sh, Math.max(0, canvas.height - rect.sy));
+  if (sw < 1 || sh < 1) return null;
+  try {
+    return imageInkRatio(ctx.getImageData(rect.sx, rect.sy, sw, sh));
+  } catch {
+    return null;
+  }
+}
+
+function redrawKeepsInk(context, canvas, raster, block) {
+  let redrawInk = null;
+  try {
+    if (context && typeof context.getImageData === "function") {
+      redrawInk = imageInkRatio(context.getImageData(0, 0, canvas.width, canvas.height));
+    }
+  } catch {
+    redrawInk = null;
+  }
+  return acceptVisualRedraw(redrawInk, rasterRegionInk(raster?.canvas, block?.bbox));
+}
+
 async function withRasterCrop(raster, page, block, pageNumber) {
   if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
   const next = { ...block };
   next.imageUrl = imageForVisualBlock(raster, next);
   if (next.imageUrl) next.surface = "png";
+  if ((next.label === "figure" || next.label === "table") && next.imageUrl && pageCropLooksEmpty(rasterRegionInk(raster?.canvas, next.bbox), next.bbox)) {
+    next.imageUrl = "";
+    delete next.surface;
+  }
   if ((next.label === "figure" || next.label === "table") && raster) {
     const cap = assetLayoutCapPx(
       next.bbox,
@@ -2079,10 +2129,47 @@ function appendCropOrNotice(node, block, imageClass, page) {
     node.append(img);
     return;
   }
-  const notice = block.label === "formula"
+  node.append(visualCropNotice(block, page));
+}
+
+function visualCropNotice(block, page) {
+  const n = Number(page) || 0;
+  if ((block?.label === "figure" || block?.label === "table") && n >= 1) {
+    const kind = block.label === "table" ? "表" : "图";
+    const notice = document.createElement("button");
+    notice.type = "button";
+    notice.className = "oi-pdf-asset-fallback";
+    notice.dataset.page = String(n);
+    notice.textContent = `${kind}见原文第 ${n} 页（点击查看）`;
+    notice.setAttribute("aria-label", `${kind}见原文第 ${n} 页`);
+    notice.addEventListener("click", (event) => {
+      event.preventDefault();
+      jumpAssetFallback(notice);
+    });
+    return notice;
+  }
+  return document.createTextNode(block?.label === "formula"
     ? PDF_COPY.formulaFallback
-    : `（${visualAlt(block.label)}裁图失败，请查看左栏原页）`;
-  node.append(document.createTextNode(notice));
+    : `（${visualAlt(block?.label)}裁图失败，请查看左栏原页）`);
+}
+
+function jumpAssetFallback(notice) {
+  const page = Number(notice?.dataset?.page);
+  if (!(page >= 1)) return;
+  const host = notice.closest?.("[data-pair-id]");
+  if (host?.dataset?.pairId) jumpTranslationToSource(host);
+  else {
+    dismissSeeSource();
+    const presented = presentSourceForJump(notice);
+    const run = () => {
+      revealSourcePage(page);
+      syncSourcePopChrome(page, false);
+    };
+    if (presented === "ready") run();
+    else requestAnimationFrame(() => requestAnimationFrame(run));
+  }
+  if (followState === "off") applyFollow({ type: "toggle" });
+  else if (followState === "paused") applyFollow({ type: "resume" });
 }
 
 function captionNode(block, page, layout) {
@@ -3474,7 +3561,10 @@ function applySourceLayout(anchor) {
   if (mode !== "hidden" && sourcePopOpen()) closeSourcePop(false);
   else if (sourcePopOpen()) placeSourcePop(sourcePopPlace(width));
   syncSourceModeControls();
-  if (changed) applyFollow({ type: "sourceModeChange" });
+  if (changed) {
+    applyDefaultSourceZoom(mode);
+    applyFollow({ type: "sourceModeChange" });
+  }
   syncSourceFollowAvailability();
   if (token) {
     requestAnimationFrame(() => {
@@ -3530,6 +3620,7 @@ function paintMiniWidth(workspace, width) {
   handle.setAttribute("aria-valuetext", `原文栏 ${next}px`);
   const bubble = handle.querySelector(".split-bubble");
   if (bubble) bubble.textContent = `原文栏 ${next}px`;
+  syncMiniFitZoom();
 }
 
 function persistMiniWidth(workspace) {
@@ -7043,7 +7134,13 @@ async function adoptDoc(doc, title) {
   abortTranslateSession(session);
   pdfDoc = doc;
   pageNum = 1;
-  zoom = DEFAULT_ZOOM;
+  sourceZoomTouched = false;
+  const first = await doc.getPage(1);
+  pdfPageWidth = first.getViewport({ scale: 1 }).width;
+  zoom = defaultSourceZoom(currentSourceMode(), {
+    pageWidth: pdfPageWidth,
+    innerWidth: miniPagesInnerWidth()
+  });
   docId += 1;
   restoreGen += 1;
   textGen += 1;
@@ -7072,6 +7169,11 @@ async function adoptDoc(doc, title) {
   }
   setHasDoc(true);
   await buildPages();
+  if (!syncMiniFitZoom()) {
+    requestAnimationFrame(() => {
+      if (!syncMiniFitZoom()) requestAnimationFrame(() => syncMiniFitZoom());
+    });
+  }
   updatePager();
   await scheduleVisibleRenders();
   setStatus("原页已打开，正在读取文字层…");
@@ -7094,8 +7196,11 @@ async function buildPages() {
   const container = $("pages");
   container.replaceChildren();
   pageViews = [];
+  let widest = 0;
   for (let n = 1; n <= pdfDoc.numPages; n++) {
     const page = await pdfDoc.getPage(n);
+    const baseWidth = page.getViewport({ scale: 1 }).width;
+    if (baseWidth > widest) widest = baseWidth;
     const viewport = page.getViewport({ scale: zoom });
     const wrap = document.createElement("div");
     wrap.className = "pdf-page";
@@ -7114,6 +7219,7 @@ async function buildPages() {
       renderTask: null
     });
   }
+  if (widest > 0) pdfPageWidth = widest;
   applyPaperMetrics();
 }
 
@@ -7354,14 +7460,57 @@ function syncMirrorZoomButtons() {
   $("mirrorZoomIn").disabled = ui.inDisabled;
 }
 
+function miniPagesInnerWidth() {
+  const pages = $("pages");
+  if (!pages) return 0;
+  const width = pages.clientWidth;
+  return width > 0 ? width : 0;
+}
+
+function syncMiniFitZoom() {
+  if (!pdfDoc || sourceZoomTouched) return false;
+  if (currentSourceMode() !== "mini") return false;
+  const workspace = document.querySelector(".workspace");
+  if (!workspace || workspace.dataset.miniCollapsed === "true") return false;
+  const fit = fitWidthZoom(pdfPageWidth, miniPagesInnerWidth());
+  if (fit == null) return false;
+  applyZoom(fit);
+  return true;
+}
+
+function applyDefaultSourceZoom(mode) {
+  if (!pdfDoc) return;
+  if (sourceZoomTouched) {
+    const kept = defaultSourceZoom(mode, { touched: true, current: zoom });
+    if (kept !== zoom) applyZoom(kept);
+    return;
+  }
+  if (mode === "mini") {
+    syncMiniFitZoom();
+    return;
+  }
+  const next = defaultSourceZoom(mode);
+  if (next !== zoom) applyZoom(next);
+}
+
 async function setZoom(next) {
   const scale = clampZoom(next);
-  if (!pdfDoc || scale === zoom) {
+  return applyZoom(scale);
+}
+
+async function applyZoom(scale) {
+  const next = Number(scale);
+  if (!pdfDoc || !Number.isFinite(next) || !(next > 0)) {
     syncZoomButtons();
     return;
   }
-  zoom = scale;
-  $("zoomLabel").textContent = zoomLabel(zoom);
+  if (Math.abs(next - zoom) < 1e-6) {
+    $("zoomLabel").textContent = formatZoomPercent(zoom);
+    syncZoomButtons();
+    return;
+  }
+  zoom = next;
+  $("zoomLabel").textContent = formatZoomPercent(zoom);
   await layoutPages();
   applyPaperMetrics();
   refreshFormulaCropsForDisplay();
@@ -7538,7 +7687,7 @@ function updatePager() {
     const button = $(id);
     if (button) button.dataset.page = String(pageNum);
   }
-  $("zoomLabel").textContent = zoomLabel(zoom);
+  $("zoomLabel").textContent = formatZoomPercent(zoom);
   const prev = $("sourcePrev");
   const next = $("sourceNext");
   if (prev) prev.disabled = !pdfDoc || nav <= 1;
@@ -7563,7 +7712,8 @@ function setHasDoc(has) {
     $("pages").replaceChildren();
     pageViews = [];
     setDocTitle("");
-    $("zoomLabel").textContent = zoomLabel(DEFAULT_ZOOM);
+    $("zoomLabel").textContent = formatZoomPercent(DEFAULT_ZOOM);
+    pdfPageWidth = 0;
     syncNoTextLayerHint(false);
     pageItems = 0;
     pageOriginals = [];

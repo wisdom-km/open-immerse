@@ -201,6 +201,20 @@ test("popup PDF entries stay hidden unless features.pdf is on", () => {
   assert.match(html, /id="pdfEntry" hidden/);
 });
 
+test("popup footer links bind before the active-tab ping", () => {
+  const js = readFileSync(join(root, "popup/popup.js"), "utf8");
+  const init = js.slice(js.indexOf("async function init"), js.indexOf("function setPrimaryBusy"));
+  const ping = init.indexOf("await syncPrimary");
+  assert.ok(ping > 0);
+  for (const id of ["openOptions", "openLearning", "openDocs"]) {
+    const at = init.indexOf(`$("${id}").addEventListener`);
+    assert.ok(at >= 0 && at < ping, id);
+  }
+  assert.match(init, /openOptionsPage/);
+  assert.match(init, /OI_OPEN_PAGE", page: "learning"/);
+  assert.match(init, /OI_OPEN_PAGE", page: "documents"/);
+});
+
 test("popup primary is 翻译此页→停止; restore is separate; no progress chrome", () => {
   const js = readFileSync(join(root, "popup/popup.js"), "utf8");
   const html = readFileSync(join(root, "popup/popup.html"), "utf8");

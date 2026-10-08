@@ -17,9 +17,12 @@ import {
   formulaInkMeasureOptions,
   formulaInkPadPx,
   formulaRasterCacheKey,
+  acceptVisualRedraw,
   formulaRasterPlan,
   formulaRegionWindow,
+  imageInkRatio,
   isSourceRedrawBlock,
+  pageCropLooksEmpty,
   scaleCovering,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
@@ -642,4 +645,68 @@ test("mirror zoom and device pixel ratio replan formula crops", () => {
   assert.match(refresh, /renderSharpFormulaCrop/);
   assert.match(refresh, /formulaCropPlanKeyNow/);
   assert.doesNotMatch(refresh, /FORMULA_CROP_PAD|displayInkMinEm|inlineCropBoxEm/);
+});
+
+test("figure redraw origin follows the bbox, and an empty crop is not shown", () => {
+  const sharp = viewerSrc.slice(
+    viewerSrc.indexOf("async function renderSharpVisualCrop"),
+    viewerSrc.indexOf("async function renderSharpFormulaCrop")
+  );
+  assert.match(sharp, /originX = Number\(block\.bbox\[0\]\) \|\| 0/);
+  assert.match(sharp, /originY = Number\(block\.bbox\[1\]\) \|\| 0/);
+  assert.match(sharp, /offsetX: -originX \* full\.width/);
+  assert.doesNotMatch(sharp, /plan\.offsetX \/ plan\.multiplier/);
+  assert.match(sharp, /redrawKeepsInk/);
+  const crop = viewerSrc.slice(
+    viewerSrc.indexOf("async function withRasterCrop"),
+    viewerSrc.indexOf("async function cropLayoutBlocks")
+  );
+  assert.match(crop, /pageCropLooksEmpty/);
+  const notice = viewerSrc.slice(
+    viewerSrc.indexOf("function visualCropNotice"),
+    viewerSrc.indexOf("function captionNode")
+  );
+  assert.match(notice, /block\.label === "table" \? "表" : "图"/);
+  assert.match(notice, /见原文第 \$\{n\} 页（点击查看）/);
+  assert.match(notice, /oi-pdf-asset-fallback/);
+  assert.match(notice, /createElement\("button"\)/);
+  assert.match(notice, /notice\.type = "button"/);
+  assert.match(notice, /dataset\.page = String\(n\)/);
+  assert.match(notice, /setAttribute\("aria-label", `\$\{kind\}见原文第 \$\{n\} 页`\)/);
+  assert.match(notice, /jumpAssetFallback\(notice\)/);
+  const jump = viewerSrc.slice(
+    viewerSrc.indexOf("function jumpAssetFallback"),
+    viewerSrc.indexOf("function captionNode")
+  );
+  assert.match(jump, /Number\(notice\?\.dataset\?\.page\)/);
+  assert.match(jump, /closest\?\.\("\[data-pair-id\]"\)/);
+  assert.match(jump, /jumpTranslationToSource\(host\)/);
+  assert.match(jump, /presentSourceForJump\(notice\)/);
+  assert.match(jump, /revealSourcePage\(page\)/);
+  assert.match(jump, /followState === "off"/);
+  assert.match(jump, /applyFollow\(\{ type: "toggle" \}\)/);
+  assert.match(jump, /followState === "paused"/);
+  assert.match(jump, /applyFollow\(\{ type: "resume" \}\)/);
+  const blocked = viewerSrc.slice(
+    viewerSrc.indexOf("function pairControlBlocked"),
+    viewerSrc.indexOf("function selectionIsCollapsed")
+  );
+  assert.match(blocked, /closest\("button, a, input, textarea, select, \[role='button'\]"\)/);
+  const figure = [0.31617, 0.08591, 0.68382, 0.503];
+  assert.equal(acceptVisualRedraw(0.05, 0.36), false);
+  assert.equal(acceptVisualRedraw(0.36, 0.36), true);
+  assert.equal(acceptVisualRedraw(0.2, 0.36), true);
+  assert.equal(acceptVisualRedraw(null, 0.36), true);
+  assert.equal(acceptVisualRedraw(0.001, null), false);
+  assert.equal(pageCropLooksEmpty(0.005, figure), true);
+  assert.equal(pageCropLooksEmpty(0.36, figure), false);
+  assert.equal(pageCropLooksEmpty(0.005, [0.1, 0.1, 0.15, 0.16]), false);
+  const white = { data: new Uint8ClampedArray(16).fill(255), width: 2, height: 2 };
+  const inked = { data: new Uint8ClampedArray(16), width: 2, height: 2 };
+  inked.data[0] = 10;
+  inked.data[1] = 10;
+  inked.data[2] = 10;
+  inked.data[3] = 255;
+  assert.equal(imageInkRatio(white), 0);
+  assert.ok(imageInkRatio(inked) > 0);
 });
