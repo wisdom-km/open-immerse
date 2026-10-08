@@ -10,6 +10,8 @@ import {
   DEFAULT_ZOOM,
   PDF_COPY,
   defaultSourceZoom,
+  fitWidthZoom,
+  formatZoomPercent,
   clampZoom,
   ZOOM_CHIP_DRAG_THRESHOLD_PX,
   ZOOM_CHIP_GUTTER_FALLBACK,
@@ -277,6 +279,7 @@ GlobalWorkerOptions.workerSrc = workerSrc();
 let pdfDoc = null;
 let pageNum = 1;
 let zoom = DEFAULT_ZOOM;
+let pdfPageWidth = 0;
 let sourceZoomTouched = false;
 let sourceUrl = "";
 let docId = 0;
@@ -3617,6 +3620,7 @@ function paintMiniWidth(workspace, width) {
   handle.setAttribute("aria-valuetext", `原文栏 ${next}px`);
   const bubble = handle.querySelector(".split-bubble");
   if (bubble) bubble.textContent = `原文栏 ${next}px`;
+  syncMiniFitZoom();
 }
 
 function persistMiniWidth(workspace) {
@@ -7131,7 +7135,12 @@ async function adoptDoc(doc, title) {
   pdfDoc = doc;
   pageNum = 1;
   sourceZoomTouched = false;
-  zoom = defaultSourceZoom(currentSourceMode());
+  const first = await doc.getPage(1);
+  pdfPageWidth = first.getViewport({ scale: 1 }).width;
+  zoom = defaultSourceZoom(currentSourceMode(), {
+    pageWidth: pdfPageWidth,
+    innerWidth: miniPagesInnerWidth()
+  });
   docId += 1;
   restoreGen += 1;
   textGen += 1;
@@ -7160,6 +7169,11 @@ async function adoptDoc(doc, title) {
   }
   setHasDoc(true);
   await buildPages();
+  if (!syncMiniFitZoom()) {
+    requestAnimationFrame(() => {
+      if (!syncMiniFitZoom()) requestAnimationFrame(() => syncMiniFitZoom());
+    });
+  }
   updatePager();
   await scheduleVisibleRenders();
   setStatus("原页已打开，正在读取文字层…");
@@ -7182,8 +7196,11 @@ async function buildPages() {
   const container = $("pages");
   container.replaceChildren();
   pageViews = [];
+  let widest = 0;
   for (let n = 1; n <= pdfDoc.numPages; n++) {
     const page = await pdfDoc.getPage(n);
+    const baseWidth = page.getViewport({ scale: 1 }).width;
+    if (baseWidth > widest) widest = baseWidth;
     const viewport = page.getViewport({ scale: zoom });
     const wrap = document.createElement("div");
     wrap.className = "pdf-page";
@@ -7202,6 +7219,7 @@ async function buildPages() {
       renderTask: null
     });
   }
+  if (widest > 0) pdfPageWidth = widest;
   applyPaperMetrics();
 }
 
@@ -7442,20 +7460,57 @@ function syncMirrorZoomButtons() {
   $("mirrorZoomIn").disabled = ui.inDisabled;
 }
 
+function miniPagesInnerWidth() {
+  const pages = $("pages");
+  if (!pages) return 0;
+  const width = pages.clientWidth;
+  return width > 0 ? width : 0;
+}
+
+function syncMiniFitZoom() {
+  if (!pdfDoc || sourceZoomTouched) return false;
+  if (currentSourceMode() !== "mini") return false;
+  const workspace = document.querySelector(".workspace");
+  if (!workspace || workspace.dataset.miniCollapsed === "true") return false;
+  const fit = fitWidthZoom(pdfPageWidth, miniPagesInnerWidth());
+  if (fit == null) return false;
+  applyZoom(fit);
+  return true;
+}
+
 function applyDefaultSourceZoom(mode) {
-  const next = defaultSourceZoom(mode, { touched: sourceZoomTouched, current: zoom });
-  if (!pdfDoc || next === zoom) return;
-  setZoom(next);
+  if (!pdfDoc) return;
+  if (sourceZoomTouched) {
+    const kept = defaultSourceZoom(mode, { touched: true, current: zoom });
+    if (kept !== zoom) applyZoom(kept);
+    return;
+  }
+  if (mode === "mini") {
+    syncMiniFitZoom();
+    return;
+  }
+  const next = defaultSourceZoom(mode);
+  if (next !== zoom) applyZoom(next);
 }
 
 async function setZoom(next) {
   const scale = clampZoom(next);
-  if (!pdfDoc || scale === zoom) {
+  return applyZoom(scale);
+}
+
+async function applyZoom(scale) {
+  const next = Number(scale);
+  if (!pdfDoc || !Number.isFinite(next) || !(next > 0)) {
     syncZoomButtons();
     return;
   }
-  zoom = scale;
-  $("zoomLabel").textContent = zoomLabel(zoom);
+  if (Math.abs(next - zoom) < 1e-6) {
+    $("zoomLabel").textContent = formatZoomPercent(zoom);
+    syncZoomButtons();
+    return;
+  }
+  zoom = next;
+  $("zoomLabel").textContent = formatZoomPercent(zoom);
   await layoutPages();
   applyPaperMetrics();
   refreshFormulaCropsForDisplay();
@@ -7632,7 +7687,7 @@ function updatePager() {
     const button = $(id);
     if (button) button.dataset.page = String(pageNum);
   }
-  $("zoomLabel").textContent = zoomLabel(zoom);
+  $("zoomLabel").textContent = formatZoomPercent(zoom);
   const prev = $("sourcePrev");
   const next = $("sourceNext");
   if (prev) prev.disabled = !pdfDoc || nav <= 1;
@@ -7657,7 +7712,8 @@ function setHasDoc(has) {
     $("pages").replaceChildren();
     pageViews = [];
     setDocTitle("");
-    $("zoomLabel").textContent = zoomLabel(DEFAULT_ZOOM);
+    $("zoomLabel").textContent = formatZoomPercent(DEFAULT_ZOOM);
+    pdfPageWidth = 0;
     syncNoTextLayerHint(false);
     pageItems = 0;
     pageOriginals = [];
