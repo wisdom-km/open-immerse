@@ -1090,17 +1090,24 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
 
   await openMode("echo");
   const echoed = JSON.parse(await waitFor(`(() => {
-    const status = document.getElementById("status")?.textContent || "";
-    if (!status.includes("连续 3 页翻译失败，已暂停")) return "";
+    const docEl = document.querySelector("#docStatus");
+    const doc = docEl?.querySelector(".doc-text")?.textContent || "";
+    const pages = [...document.querySelectorAll("#readerFlow .rf-page")];
+    if (docEl?.dataset.state !== "done" || !pages.length) return "";
+    if (pages.some((el) => !["done", "skipped", "empty"].includes(el.dataset.state || ""))) return "";
     const saved = JSON.parse(sessionStorage.getItem("oiSavedLib") || "[]");
     const blocks = window.__oiLiveBlocks ? window.__oiLiveBlocks(1) : [];
+    const zh = [...document.querySelectorAll('#readerFlow .rf-page[data-page="1"] .rf-zh')].map((el) => el.textContent || "").join("\\n");
+    if (!zh.includes("dominant sequence")) return "";
     return JSON.stringify({
-      status,
+      doc,
       saved: saved.map((item) => item.page),
-      blocks
+      blocks,
+      zh: zh.slice(0, 160)
     });
-  })()`, "echo: 长段原样回显后暂停且不写库", 180000));
-  assert.deepEqual(echoed.saved.filter((page) => page <= 3), []);
+  })()`, "echo: 回声算译完并写入，第二次不必再译", 180000));
+  assert.ok(echoed.saved.includes(1), JSON.stringify(echoed.saved));
+  assert.match(echoed.zh, /dominant sequence/);
   assert.ok(echoed.blocks.length > 1);
   await evaluate(`(() => {
     const blocks = window.__oiLiveBlocks(1);
@@ -1118,12 +1125,13 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   await openMode("polluted");
   const washed = JSON.parse(await waitFor(`(() => {
     const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
-    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    const docEl = document.querySelector("#docStatus");
+    const doc = docEl?.querySelector(".doc-text")?.textContent || "";
     const rows = [...document.querySelectorAll('#readerFlow .rf-page[data-page="1"] .rf-block')];
     const abstract = rows.find((el) => (el.querySelector(".rf-src")?.textContent || "").includes("dominant sequence"));
     const zh = abstract?.querySelector(".rf-zh")?.textContent || "";
-    if (doc.includes("全文已译") && (!abstract || !zh.includes("译:"))) return "";
-    if (!abstract || !zh.includes("译:") || page1 !== "done") return "";
+    if (docEl?.dataset.state === "done" && (!abstract || !zh.includes("dominant sequence") || zh.includes("译:"))) return "";
+    if (docEl?.dataset.state !== "done" || !abstract || !zh.includes("dominant sequence") || zh.includes("译:") || page1 !== "done") return "";
     const timeline = (window.__oiAuto && window.__oiAuto.timeline) || [];
     const progressive = timeline.some((row) => {
       const pages = row.pages || [];
@@ -1153,14 +1161,12 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
       bypass,
       counts: counts.slice(0, 24)
     });
-  })()`, "polluted: 译文等于原文的库不能直接 done", 180000));
+  })()`, "polluted: 回声库直接沿用，不再整页重试", 180000));
   assert.equal(washed.page1, "done");
-  assert.match(washed.zh, /译:/);
-  assert.ok(washed.batches > 0, "污染库要进队补译");
-  assert.equal(washed.progressive, true, "第 1 页中文出现时后面的页还没全部完成");
+  assert.match(washed.zh, /dominant sequence/);
+  assert.equal(washed.zh.includes("译:"), false);
   assert.equal(washed.echoed, false, "排队或翻译中的页不能把英文原文画进译文");
   assert.equal(washed.falseHold, false);
-  assert.equal(washed.grew, true, "顶栏已译数要随页增加");
   assert.equal(washed.bypass, false, "补译不走重译本页的 bypass");
 
   await openMode("en");

@@ -64,6 +64,8 @@ import {
   pageFromViewport,
   pageHasTranslation,
   pageTranslationComplete,
+  unitsNeedingTranslation,
+  mergeTranslationRows,
   pageIndex,
   pageLabel,
   progressDocumentStatus,
@@ -152,6 +154,7 @@ import {
   displayCropColumnFraction,
   displayFormulaWidthCss,
   blockRenderPieces,
+  retainCaptionFormulas,
   cropBlockCanvas,
   cropBlockImage,
   rasterCropRect,
@@ -251,7 +254,7 @@ import {
   pageCropLooksEmpty,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import { getProvider, missingRequiredField } from "../lib/providers.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -300,6 +303,7 @@ const pageCache = createPageCache();
 const pageStates = new Map();
 let docPhase = "idle";
 let pdfTargetLang = "zh-CN";
+let pdfProvider = "";
 let translatePaused = false;
 let autoAfterForce = false;
 let forceRetranslatePending = false;
@@ -1704,6 +1708,17 @@ function setPageLayout(page, layout) {
     noteFormulaCropPlan(layout);
   }
   layoutCache.set(layoutKey(page), layout);
+  if (viewerUnderTest() && layout?.blocks) {
+    const bucket = globalThis.__oiLayouts || (globalThis.__oiLayouts = {});
+    bucket[page] = translatableBlocks(layout.blocks).map((block) => ({
+      id: String(block.id || ""),
+      bid: String(block.bid || ""),
+      sourceId: String(block.sourceId || ""),
+      text: String(block.text || ""),
+      sourceText: String(block.sourceText || block.text || ""),
+      label: String(block.label || "")
+    }));
+  }
 }
 
 function appendReadoutNode(input, parent) {
@@ -2154,6 +2169,17 @@ function visualCropNotice(block, page) {
     : `（${visualAlt(block?.label)}裁图失败，请查看左栏原页）`);
 }
 
+function orphanVisualNotice(block, page) {
+  const table = /^(?:Table\s*|表\s*)\d+\s*[:：.]/i.test(block?.text || "");
+  const notice = visualCropNotice({ label: table ? "table" : "figure" }, page);
+  if (notice?.classList?.contains("oi-pdf-asset-fallback")) {
+    notice.textContent = PDF_READOUT_COPY.figurePlaceholder;
+    const n = Number(page) || 0;
+    if (n >= 1) notice.setAttribute("aria-label", `${table ? "表" : "图"}见原文第 ${n} 页`);
+  }
+  return notice;
+}
+
 function jumpAssetFallback(notice) {
   const page = Number(notice?.dataset?.page);
   if (!(page >= 1)) return;
@@ -2180,7 +2206,7 @@ function captionNode(block, page, layout) {
   node.dataset.blockId = String(block.id || "");
   if (block.bid) node.dataset.bid = String(block.bid);
   node.dataset.label = "caption";
-  fillBlockText(node, block, layout);
+  fillBlockText(node, retainCaptionFormulas(block), layout);
   return node;
 }
 
@@ -2300,6 +2326,22 @@ function settledText(translation, source = "") {
 function rememberTargetLang(settings) {
   const code = String(settings?.targetLang || "").trim();
   if (code) pdfTargetLang = code;
+  const provider = String(settings?.provider || "").trim();
+  if (provider) pdfProvider = provider;
+}
+
+function savedPairSettings() {
+  return { targetLang: pdfTargetLang, provider: pdfProvider };
+}
+
+/** Keep settled reuse and provider failures. A library echo is a fresh hole, not a bypass. */
+function cacheableReuse(units) {
+  return (units || []).map((unit) => {
+    const source = unit?.original || unit?.text || unit?.sourceText || "";
+    if (settledText(unit?.translation, source) || unit?.failed === true) return unit;
+    if (!String(unit?.translation || "").trim()) return unit;
+    return { ...unit, translation: "" };
+  });
 }
 
 function libraryEntry(page) {
@@ -2340,7 +2382,7 @@ function layoutForReadout(layout) {
   let blocks = layout.blocks || [];
   if (Array.isArray(cached) && cached.length) {
     const units = unitsForLayout(layout);
-    const merged = applySavedPairs(units, cached);
+    const merged = applySavedPairs(units, cached, savedPairSettings());
     const rows = merged.some((unit) => settledText(unit.translation, unit.original || unit.text || unit.sourceText || "")) ? merged : cached;
     blocks = applyBlockTranslations(layout.blocks, rows);
   }
@@ -2405,7 +2447,10 @@ function appendFixtureReadout(parent, layout, options = {}) {
     }
     const paired = block.label === "caption" ? blocks.find((item) => item.id === block.captionFor) : null;
     const visual = (block.label === "figure" || block.label === "table") ? block : paired;
-    if (visual && (block.label === "figure" || block.label === "table" || block.label === "caption")) {
+    if (visual && used.has(visual.id)) {
+      if (block.label !== "caption") continue;
+      // A second caption must not paint the same figure again.
+    } else if (visual && (block.label === "figure" || block.label === "table" || block.label === "caption")) {
       const caption = blocks.find((item) => item.captionFor === visual.id);
       used.add(visual.id);
       if (caption) used.add(caption.id);
@@ -2423,13 +2468,8 @@ function appendFixtureReadout(parent, layout, options = {}) {
       parent.append(node);
       continue;
     }
-    if (block.label === "caption" && !hasFigure) {
-      const slot = document.createElement("p");
-      slot.className = "oi-pdf-p";
-      slot.dataset.page = String(page);
-      slot.dataset.label = "figure";
-      slot.textContent = PDF_READOUT_COPY.figurePlaceholder;
-      parent.append(slot);
+    if (block.label === "caption" && !hasFigure && !block.captionFor) {
+      parent.append(orphanVisualNotice(block, page));
     }
     const plan = blockReadoutPlan(block);
     const node = document.createElement(plan.tag);
@@ -5095,23 +5135,25 @@ function syncPageStatus(slot, page, row) {
 
 function pageHasSettledReadout(page) {
   const cached = pageCache.get(docId, page);
-  if (Array.isArray(cached) && cached.some((item) => settledText(
+  // An echo is done for the page, but it is still the source text. Opening the
+  // body while the page is queued or running would paint that English as the translation.
+  if (Array.isArray(cached) && cached.some((item) => landedText(
     item?.translation,
     item?.original || item?.text || item?.sourceText || ""
   ))) return true;
   return structureLanded(page);
 }
 
-/** Drop unsettled prose so translation||text cannot paint library English. */
+/** Drop unsettled prose and source echoes so translation||text cannot paint library English. */
 function settledOnlyReadout(layout) {
   const painted = layoutForReadout(layout);
   const blocks = (painted.blocks || []).filter((block) => {
     const label = block?.label;
     if (label === "formula" || label === "figure" || label === "table") return true;
     if (block?.skipTranslate === true || block?.translationStatus === "skipped") return false;
-    return settledText(block?.translation, block?.text || block?.sourceText || "");
+    return landedText(block?.translation, block?.text || block?.sourceText || "");
   });
-  const settled = blocks.some((block) => settledText(block?.translation, block?.text || block?.sourceText || ""));
+  const settled = blocks.some((block) => landedText(block?.translation, block?.text || block?.sourceText || ""));
   return { ...painted, blocks: settled ? blocks : [], settled };
 }
 
@@ -5131,7 +5173,11 @@ function paintPageSlot(page) {
     delete slot.dataset.painted;
     return;
   }
-  const stable = slot.dataset.painted === "1" && row.state !== "running" && row.state !== "layout";
+  if ((row.state === "done" || row.state === "partial") && !slotHasTranslation(slot)) {
+    delete slot.dataset.painted;
+  }
+  const bareTerminal = (row.state === "skipped" || row.state === "empty") && !slot.querySelector(".rf-block");
+  const stable = slot.dataset.painted === "1" && row.state !== "running" && row.state !== "layout" && !bareTerminal;
   if (stable) return;
   const ps = syncPageStatus(slot, page, row);
   [...slot.children].forEach((child) => {
@@ -5538,10 +5584,12 @@ function finalizeReaderFlow() {
     refreshMatchedFormulas(slot);
     const row = pageFlowState(Number(slot.dataset.page));
     const collapsed = row.state === "queued" && !row.hasLayout;
-    if (shouldStampPagePainted({
+    const hasBlocks = Boolean(slot.querySelector(".rf-block"));
+    const waitingForSource = (row.state === "skipped" || row.state === "empty") && !hasBlocks;
+    if (!waitingForSource && shouldStampPagePainted({
       state: row.state,
       collapsed,
-      hasLandedBody: Boolean(slot.querySelector(".rf-block"))
+      hasLandedBody: hasBlocks
     })) {
       slot.dataset.painted = "1";
     }
@@ -5915,11 +5963,16 @@ async function resolveBatchSize() {
 function rememberTranslation(page, results) {
   const rawLayout = getPageLayout(page);
   const layout = cacheableLayout(rawLayout);
-  const pairs = pairsFromResults(results);
-  const skipOnly = isSkipOnlyPage(rawLayout?.blocks);
+  const blocks = rawLayout?.blocks || [];
+  const verified = pairsVerifiedForLibrary(results, blocks, savedPairSettings());
+  const skipOnly = isSkipOnlyPage(blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
-  if (!pairs.length && !skipOnly) return Promise.resolve();
-  if (!pairs.length && existing && (existing.pairs?.length || existing.skipped)) return Promise.resolve();
+  if (!verified.length && !skipOnly) return Promise.resolve();
+  if (!verified.length && existing && (existing.pairs?.length || existing.skipped)) return Promise.resolve();
+  const pairs = verified.length
+    ? mergeLibraryPairs(existing?.pairs, verified, blocks, pdfTargetLang)
+    : [];
+  if (pairs.length) replaceLibraryPagePairs(libraryDoc, page, pairs);
   // Capture this document before queuing: the user may open another PDF while
   // earlier pages are still being saved.
   const bytes = pdfBytes;
@@ -6173,7 +6226,7 @@ async function translateCurrentPage() {
     const openedBlocks = getPageLayout(pageNum)?.blocks ?? null;
     if (saved?.pairs?.length) {
       const prepared = bindSavedPairs(saved, pageOriginals);
-      const merged = applySavedPairs(pageOriginals, prepared.pairs);
+      const merged = applySavedPairs(pageOriginals, prepared.pairs, savedPairSettings());
       pageCache.set(docId, pageNum, merged);
       pageResults = merged;
       renderArticle();
@@ -6285,6 +6338,37 @@ async function translateCurrentPage() {
   updateTranslateControls();
 }
 
+function seedLibraryProgress() {
+  const pages = libraryDoc?.pages || [];
+  if (!pages.length || !pdfDoc) return false;
+  let changed = false;
+  for (const entry of pages) {
+    const page = Number(entry?.page);
+    if (!(page >= 1) || page > pdfDoc.numPages) continue;
+    const prior = pageStates.get(page);
+    if (prior?.hasLayout && prior.state && prior.state !== "layout" && prior.state !== "queued") continue;
+    const blocks = getPageLayout(page)?.blocks || null;
+    const state = libraryPageRunState({
+      pairs: entry?.pairs,
+      cached: pageCache.get(docId, page),
+      targetLang: pdfTargetLang,
+      provider: pdfProvider,
+      skipped: Boolean(entry?.skipped),
+      blocks,
+      empty: Array.isArray(blocks)
+        && !translatableBlocks(blocks).length
+        && !isTitlePageCandidate(page, pageTextForStructure(blocks))
+    });
+    if (state === "queued") continue;
+    const hasLayout = Boolean(blocks?.length);
+    if (prior?.state === state && Boolean(prior?.hasLayout) === hasLayout) continue;
+    notePageState(page, { state, hasLayout });
+    changed = true;
+  }
+  if (changed) refreshDocStatus();
+  return changed;
+}
+
 async function adoptLibraryPages(options = {}) {
   const onlyPage = Number(options.onlyPage) || 0;
   const stamp = docId;
@@ -6297,6 +6381,7 @@ async function adoptLibraryPages(options = {}) {
   const publish = () => {
     if (stamp === docId) renderArticle();
   };
+  if (seedLibraryProgress() && stamp === docId) renderArticle();
   for (let page = start; page <= end; page += 1) {
     if (stamp !== docId) return true;
     const entry = libraryEntry(page);
@@ -6305,9 +6390,17 @@ async function adoptLibraryPages(options = {}) {
     const cached = pageCache.get(docId, page);
     const prior = pageStates.get(page);
     let skipped = Boolean(entry?.skipped) || isSkipOnlyPage(blocks);
-    if (!layout && !skipped) {
+    if (!layout) {
       try {
-        layout = await ingestPageLayout(page, () => stamp !== docId);
+        if (entry?.skipped) {
+          notePageState(page, { state: "skipped" });
+          layout = await ingestSkippedSourceLayout(page, () => stamp !== docId);
+          if (layout && !isSkipOnlyPage(layout.blocks)) {
+            layout = await ingestPageLayout(page, () => stamp !== docId);
+          }
+        } else {
+          layout = await ingestPageLayout(page, () => stamp !== docId);
+        }
       } catch {
         layout = null;
       }
@@ -6327,6 +6420,7 @@ async function adoptLibraryPages(options = {}) {
       pairs: entry?.pairs,
       cached,
       targetLang: pdfTargetLang,
+      provider: pdfProvider,
       skipped,
       blocks,
       empty: Array.isArray(blocks)
@@ -6334,6 +6428,12 @@ async function adoptLibraryPages(options = {}) {
         && !isTitlePageCandidate(page, pageTextForStructure(blocks))
     });
     if (state === "queued") {
+      if (entry?.skipped || isSkipOnlyPage(blocks)) {
+        notePageState(page, { state: "skipped", hasLayout: Boolean(blocks?.length) });
+        clearSlotPainted(page);
+        publish();
+        continue;
+      }
       const live = translatableBlocks(blocks || []).length;
       const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
       if (viewerUnderTest() && entry && pairCount < live) {
@@ -6342,21 +6442,21 @@ async function adoptLibraryPages(options = {}) {
         globalThis.__oiLibraryGap = gap;
       }
       if (prior?.state === "done" || prior?.state === "partial") pageCache.clearPage(docId, page);
-      else if (cached && !libraryCoversLiveBlocks(cached, blocks, pdfTargetLang)) pageCache.clearPage(docId, page);
+      else if (cached && !libraryCoversLiveBlocks(cached, blocks, pdfTargetLang, pdfProvider)) pageCache.clearPage(docId, page);
       notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
       clearSlotPainted(page);
       publish();
-      if (prior?.state === "skipped" || prior?.state === "empty") continue;
       hole = true;
       if (!entry && page >= lastListed) break;
       continue;
     }
-    if (state === "done") {
+    if (state === "done" || state === "partial") {
       const units = unitsForLayout(layout || { kind: "blocks", blocks: blocks || [], page });
       const filled = units.length
-        ? applySavedPairs(units, entry?.pairs || cached || [])
+        ? applySavedPairs(units, entry?.pairs || cached || [], savedPairSettings())
         : blocksFromLibraryPairs(page, entry?.pairs || cached);
-      if (!filled.length || (Array.isArray(blocks) && !libraryCoversLiveBlocks(entry?.pairs || cached, blocks, pdfTargetLang))) {
+      const covers = !Array.isArray(blocks) || libraryCoversLiveBlocks(entry?.pairs || cached, blocks, pdfTargetLang, pdfProvider);
+      if (state === "done" && (!filled.length || !covers)) {
         hole = true;
         notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
         clearSlotPainted(page);
@@ -6364,10 +6464,20 @@ async function adoptLibraryPages(options = {}) {
         if (!entry && page >= lastListed) break;
         continue;
       }
-      pageCache.set(docId, page, filled);
-      notePageState(page, { state: "done", hasLayout: true });
+      if (filled.length) pageCache.set(docId, page, cacheableReuse(filled));
+      notePageState(page, { state, hasLayout: true });
       clearSlotPainted(page);
       publish();
+      if (state === "partial") {
+        const live = translatableBlocks(blocks || []).length;
+        const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
+        if (viewerUnderTest() && entry && pairCount < live) {
+          const gap = globalThis.__oiLibraryGap || [];
+          gap.push({ page, pairs: pairCount, live });
+          globalThis.__oiLibraryGap = gap;
+        }
+        hole = true;
+      }
       continue;
     }
     const noText = state === "empty" && !blocks?.length && !(Number(layout?.itemCount) > 0);
@@ -6382,8 +6492,13 @@ function demoteUnpaintedDonePages() {
   let hole = false;
   for (const [page, row] of pageStates) {
     if (row.state !== "done") continue;
+    if (libraryEntry(page)?.skipped || isSkipOnlyPage(getPageLayout(page)?.blocks)) {
+      notePageState(page, { state: "skipped", hasLayout: Boolean(getPageLayout(page)?.blocks?.length) });
+      clearSlotPainted(page);
+      continue;
+    }
     const slot = readerFlowEl()?.querySelector(`:scope > .rf-page[data-page="${page}"]`);
-    if (slotHasTranslation(slot)) continue;
+    if (!slot || slotHasTranslation(slot)) continue;
     pageCache.clearPage(docId, page);
     notePageState(page, { state: "queued", hasLayout: false });
     clearSlotPainted(page);
@@ -6472,7 +6587,16 @@ async function translateWholeDocument() {
     targetLang: pdfTargetLang,
     send: runtimeSend,
     getPageOriginals: (page) => originalsForPage(page, gen, translatingDoc, work, batchSize),
-    pageSkipReason: (page) => (isSkipOnlyPage(getPageLayout(page)?.blocks) ? "skip-only" : "empty"),
+    pageSkipReason: (page) => {
+      if (titleStructureFailed(page)) return "empty";
+      const cached = pageCache.get(translatingDoc, page);
+      // getPageOriginals already returned nothing to send. A settled body or a
+      // landed title is done; stale failed rows must not turn that into an empty page.
+      if (pageTranslationComplete(cached, pdfTargetLang) ||
+          pageHasTranslation(cached, pdfTargetLang) ||
+          structureLanded(page)) return "cached";
+      return isSkipOnlyPage(getPageLayout(page)?.blocks) ? "skip-only" : "empty";
+    },
     onPageSkip({ page, reason }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       if (reason !== "cached" && titleStructureFailed(page)) {
@@ -6486,15 +6610,31 @@ async function translateWholeDocument() {
         renderArticle();
         return;
       }
-      if (reason === "cached") notePageState(page, { state: "done", hasLayout: true });
+      if (reason === "cached") {
+        const prior = pageStates.get(page);
+        const keepSkip = prior?.state === "skipped" || prior?.state === "held"
+          || libraryEntry(page)?.skipped
+          || isSkipOnlyPage(getPageLayout(page)?.blocks);
+        if (keepSkip) {
+          notePageState(page, {
+            state: "skipped",
+            hasLayout: Boolean(getPageLayout(page)?.blocks?.length) || Boolean(prior?.hasLayout)
+          });
+        } else notePageState(page, { state: "done", hasLayout: true });
+      }
       else if (reason === "skip-only") {
         notePageState(page, { state: "skipped", hasLayout: true });
         saveTasks.push(rememberTranslation(page, []).then(() => null, (error) => error));
       }
       else {
         const layout = getPageLayout(page);
-        const noText = !(layout?.blocks?.length) && !(Number(layout?.itemCount) > 0);
-        notePageState(page, { state: "empty", hasLayout: Boolean(layout), noText });
+        const blocks = layout?.blocks || [];
+        if (libraryEntry(page)?.skipped || isSkipOnlyPage(blocks)) {
+          notePageState(page, { state: "skipped", hasLayout: blocks.length > 0 });
+        } else {
+          const noText = !blocks.length && !(Number(layout?.itemCount) > 0);
+          notePageState(page, { state: "empty", hasLayout: Boolean(layout), noText });
+        }
       }
       clearSlotPainted(page);
       refreshDocStatus();
@@ -6504,10 +6644,11 @@ async function translateWholeDocument() {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       translatingPage = page;
       const prev = pageStates.get(page);
+      const hold = prev?.state === "partial";
       notePageState(page, {
-        state: "running",
+        state: hold ? "partial" : "running",
         hasLayout: Boolean(prev?.hasLayout) || Boolean(getPageLayout(page)?.blocks?.length),
-        k: 0,
+        k: hold ? (prev?.k || 0) : 0,
         m: prev?.m || 0
       });
       clearSlotPainted(page);
@@ -6522,7 +6663,12 @@ async function translateWholeDocument() {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       const page = translatingPage;
       const prev = pageStates.get(page);
-      notePageState(page, { state: "running", m: Math.max(blockTotal, prev?.m || 0), k: prev?.k || 0 });
+      const hold = prev?.state === "partial";
+      notePageState(page, {
+        state: hold ? "partial" : "running",
+        m: Math.max(blockTotal, prev?.m || 0),
+        k: prev?.k || 0
+      });
       clearSlotPainted(page);
       renderArticle();
     },
@@ -6539,7 +6685,14 @@ async function translateWholeDocument() {
           hasLayout: true,
           k
         });
-      } else notePageState(page, { state: "running", hasLayout: true, k });
+      } else {
+        const prev = pageStates.get(page);
+        notePageState(page, {
+          state: prev?.state === "partial" ? "partial" : "running",
+          hasLayout: true,
+          k
+        });
+      }
       clearSlotPainted(page);
       renderArticle();
       if (res?.polishError) setStatus(PDF_COPY.polishFail, true);
@@ -6585,7 +6738,9 @@ async function translateWholeDocument() {
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
     await adoptLibraryPages({ onlyPage: page });
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
-    return (pageStates.get(page)?.state || "queued") === "done" ? "skip" : "translate";
+    const state = pageStates.get(page)?.state || "queued";
+    if (state === "done" || state === "skipped" || state === "empty" || state === "held") return "skip";
+    return "translate";
   } : undefined;
   let translatedDoc = await translateDocumentPages({
     ...pageJob,
@@ -6999,6 +7154,35 @@ async function ingestVendorLayout(n, mode, isStale) {
   return layout;
 }
 
+/** A page the library already skipped: same text blocks as a full ingest, without the page raster. */
+async function ingestSkippedSourceLayout(n, isStale) {
+  const page = await pdfDoc.getPage(n);
+  if (isStale()) return null;
+  const viewport = page.getViewport({ scale: 1 });
+  const content = await page.getTextContent();
+  if (isStale()) return null;
+  let images = null;
+  try {
+    const ops = await page.getOperatorList();
+    images = { fnArray: ops.fnArray, argsArray: ops.argsArray };
+  } catch {
+    images = null;
+  }
+  if (isStale()) return null;
+  attachFontRealNames(content.items, page.commonObjs);
+  const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
+  if (!isSkipOnlyPage(built.blocks)) return { ...built, kind: "blocks", blocks: built.blocks || [] };
+  const layout = stampBodyFont({
+    ...built,
+    kind: "blocks",
+    protocol: built.protocol || PROTOCOL,
+    blocks: built.blocks,
+    itemCount: extractPageItems(content).length
+  }, content.items, viewport);
+  setPageLayout(n, layout);
+  return layout;
+}
+
 async function ingestTextLayerLayout(n, isStale) {
   const page = await pdfDoc.getPage(n);
   if (isStale()) return null;
@@ -7101,7 +7285,13 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
     const known = slotCount + bodyCount;
     if (known > 0) {
       const prev = pageStates.get(n);
-      notePageState(n, { state: "running", hasLayout: true, m: Math.max(known, prev?.m || 0), k: prev?.k || 0 });
+      const hold = prev?.state === "partial";
+      notePageState(n, {
+        state: hold ? "partial" : "running",
+        hasLayout: true,
+        m: Math.max(known, prev?.m || 0),
+        k: prev?.k || 0
+      });
       clearSlotPainted(n);
       renderArticle();
     }
@@ -7112,9 +7302,22 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
   const blocks = unitsForLayout(layout);
   if (n === pageNum) pageOriginals = blocks;
   const cached = pageCache.get(translatingDoc, n);
-  pageResults = pageHasTranslation(cached, pdfTargetLang) ? cached : emptyPageResults(layout);
-  if (!pageHasTranslation(cached, pdfTargetLang)) pageCache.set(translatingDoc, n, pageResults);
-  return liveOriginals(layout, blocks);
+  const saved = libraryEntry(n)?.pairs;
+  const filled = applySavedPairs(
+    liveOriginals(layout, blocks),
+    (Array.isArray(cached) && cached.length ? cached : saved) || [],
+    savedPairSettings()
+  );
+  const pending = unitsNeedingTranslation(filled, pdfTargetLang);
+  if (filled.length && pending.length < filled.length) {
+    const kept = mergeTranslationRows(Array.isArray(cached) ? cached : [], cacheableReuse(filled));
+    pageCache.set(translatingDoc, n, kept);
+    pageResults = kept;
+  } else {
+    pageResults = pageHasTranslation(cached, pdfTargetLang) ? cached : emptyPageResults(layout);
+    if (!pageHasTranslation(cached, pdfTargetLang)) pageCache.set(translatingDoc, n, pageResults);
+  }
+  return pending;
 }
 
 /** 原文: view toggle only. Does not abort the session or clear the page cache. */
@@ -7179,6 +7382,7 @@ async function adoptDoc(doc, title) {
   translatingPage = 0;
   pageCache.clear();
   pageStates.clear();
+  if (viewerUnderTest()) globalThis.__oiLayouts = {};
   docPhase = "opening";
   notePageState(1, { state: "layout", hasLayout: false });
   libraryArticle = null;
@@ -7650,12 +7854,13 @@ async function loadCurrentPageText(explicitPage) {
       }
       if (saved?.pairs && !isStale()) {
         const prepared = bindSavedPairs(saved, unitsForLayout(quick));
-        const merged = applySavedPairs(unitsForLayout(quick), prepared.pairs);
+        const merged = applySavedPairs(unitsForLayout(quick), prepared.pairs, savedPairSettings());
         const quickBlocks = quick.blocks || [];
-        if (libraryCoversLiveBlocks(prepared.pairs, quickBlocks, pdfTargetLang) ||
-            libraryCoversLiveBlocks(merged, quickBlocks, pdfTargetLang)) {
+        if (libraryCoversLiveBlocks(prepared.pairs, quickBlocks, pdfTargetLang, pdfProvider) ||
+            libraryCoversLiveBlocks(merged, quickBlocks, pdfTargetLang, pdfProvider)) {
           pageResults = merged;
           pageCache.set(docId, n, merged);
+          notePageState(n, { state: "done", hasLayout: true });
         }
         if (!pdfTranslateBusy(session)) {
           setStatus(savedPageStatus(prepared, merged, quick.blocks || []));
@@ -7689,11 +7894,12 @@ async function loadCurrentPageText(explicitPage) {
     } else if (saved?.pairs && !isStale()) {
       const blocks = layout.blocks || [];
       const prepared = bindSavedPairs(saved, unitsForLayout(layout));
-      const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs);
-      if (libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang) ||
-          libraryCoversLiveBlocks(merged, blocks, pdfTargetLang)) {
+      const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs, savedPairSettings());
+      if (libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang, pdfProvider) ||
+          libraryCoversLiveBlocks(merged, blocks, pdfTargetLang, pdfProvider)) {
         pageResults = merged;
         pageCache.set(docId, n, merged);
+        notePageState(n, { state: "done", hasLayout: true });
       }
       setStatus(savedPageStatus(prepared, merged, blocks));
       rememberSkipHole(n, blocks);
