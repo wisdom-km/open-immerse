@@ -1063,7 +1063,7 @@ body {
   min-height: 0;
   color: var(--oi-paper-muted);
   background: transparent;
-  border: 1px dashed var(--oi-line, #d9d0c1);
+  border: 1px dashed var(--oi-reader-line-strong);
   border-radius: 8px;
   font: inherit;
   font-weight: 400;
@@ -2329,7 +2329,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   border-radius: 6px;
   background: transparent;
   color: var(--oi-reader-tooltip-fg);
-  font: 400 13px/1 var(--oi-reader-ui-font);
+  font: 500 13px/32px var(--oi-reader-ui-font);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -2356,6 +2356,10 @@ button:disabled { opacity: 0.45; cursor: default; }
   color: var(--oi-reader-tooltip-fg);
   box-shadow: var(--oi-reader-popover-shadow);
 }
+.oi-sel-toolbar[data-placement="above"] .oi-sel-menu {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
 .oi-sel-menu[hidden] { display: none !important; }
 .oi-sel-menu [role="menuitem"] {
   display: flex;
@@ -2369,7 +2373,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   border-radius: 6px;
   background: transparent;
   color: inherit;
-  font: 400 13px/1 var(--oi-reader-ui-font);
+  font: 500 13px/32px var(--oi-reader-ui-font);
   text-align: start;
   white-space: nowrap;
   cursor: pointer;
@@ -2378,12 +2382,13 @@ button:disabled { opacity: 0.45; cursor: default; }
 .oi-sel-menu [role="menuitem"]:focus-visible { background: #444444; }
 .oi-sel-menu [role="menuitem"]:focus-visible {
   outline: 2px solid var(--oi-reader-focus);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 .oi-sel-menu .k {
   margin-inline-start: auto;
   padding-inline-start: 16px;
-  opacity: 0.72;
+  font-size: 11px;
+  opacity: 0.55;
 }
 .oi-src-strip {
   display: flex;
@@ -2391,9 +2396,12 @@ button:disabled { opacity: 0.45; cursor: default; }
   gap: 8px;
   margin-top: -8px;
   margin-bottom: 16px;
-  padding: 2px 0 2px 10px;
+  padding: 4px 0 4px 12px;
   border-inline-start: 2px solid var(--oi-reader-pair);
   color: var(--oi-reader-ink-2);
+}
+.rf-block.is-pair-current + .oi-src-strip {
+  margin-top: 8px;
 }
 .oi-src-strip-k {
   flex: 0 0 auto;
@@ -2403,6 +2411,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   flex: 1 1 auto;
   min-width: 0;
   font: 400 14px/1.6 var(--oi-reader-latin);
+  text-align: start;
 }
 .oi-src-strip-x {
   flex: 0 0 auto;

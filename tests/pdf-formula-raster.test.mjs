@@ -710,3 +710,32 @@ test("figure redraw origin follows the bbox, and an empty crop is not shown", ()
   assert.equal(imageInkRatio(white), 0);
   assert.ok(imageInkRatio(inked) > 0);
 });
+
+test("figure placeholder dashed border stays visible on all four reader themes", () => {
+  const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
+  const tokens = readFileSync(join(root, "pdf/reader-tokens.css"), "utf8");
+  assert.match(css, /\.oi-pdf-asset-fallback\s*\{[^}]*border:\s*1px dashed var\(--oi-reader-line-strong\)/);
+  assert.doesNotMatch(css, /\.oi-pdf-asset-fallback\s*\{[^}]*var\(--oi-line[,)]/);
+  const hexOf = (name) => {
+    const match = tokens.match(new RegExp(`${name}:\\s*(#[0-9A-Fa-f]{6})`));
+    assert.ok(match, name);
+    return match[1];
+  };
+  for (const theme of ["warm", "white", "sepia", "green"]) {
+    const paper = hexOf(`--oi-reader-${theme}-paper`);
+    const line = hexOf(`--oi-reader-${theme}-line-strong`);
+    const ratio = contrast(paper, line);
+    assert.ok(ratio >= 3, `${theme} ${paper} on ${line} contrast ${ratio.toFixed(2)}`);
+  }
+});
+
+function contrast(paper, ink) {
+  const channel = (hex, index) => {
+    const value = parseInt(hex.slice(1 + index, 3 + index), 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const lum = (hex) => 0.2126 * channel(hex, 0) + 0.7152 * channel(hex, 2) + 0.0722 * channel(hex, 4);
+  const hi = Math.max(lum(paper), lum(ink));
+  const lo = Math.min(lum(paper), lum(ink));
+  return (hi + 0.05) / (lo + 0.05);
+}
