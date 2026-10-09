@@ -12,6 +12,7 @@ import {
   LAYOUT_FALLBACK_STATUS,
   fetchCloudEnvelope,
   fetchLocalEnvelope,
+  LAYOUT_RETRY_DELAYS_MS,
   layoutCacheKey,
   cacheableLayout,
   resolveLayoutMode,
@@ -193,6 +194,54 @@ test("empty mode stays on the text layer, and cloud with no key does not fetch",
   assert.equal(stored.blocks[0].surface, undefined);
   assert.equal(stored.blocks[0].assetCapPx, undefined);
   assert.match(layoutCacheKey({ hash: "abc", page: 1, mode: "local-ocr" }), /abc:1:local-ocr:blocks-1/);
+});
+
+test("a 502 is retried with capped backoff and a 4xx is not", async () => {
+  const sleeps = [];
+  let calls = 0;
+  const envelope = await fetchLocalEnvelope({
+    page: 7,
+    imageBase64: "abc",
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls < 3) return { ok: false, status: 502, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ layoutDetails: [], vendor: "glm-ocr" }) };
+    },
+    sleep: async (ms) => { sleeps.push(ms); }
+  });
+  assert.equal(calls, 3);
+  assert.deepEqual(sleeps, LAYOUT_RETRY_DELAYS_MS.slice(0, 2));
+  assert.equal(envelope.vendor, "glm-ocr");
+
+  let rejected = 0;
+  const slept = [];
+  await assert.rejects(
+    () => fetchLocalEnvelope({
+      fetchImpl: async () => {
+        rejected += 1;
+        return { ok: false, status: 400, json: async () => ({}) };
+      },
+      sleep: async (ms) => { slept.push(ms); }
+    }),
+    /HTTP 400/
+  );
+  assert.equal(rejected, 1);
+  assert.deepEqual(slept, []);
+
+  let exhausted = 0;
+  const backoff = [];
+  await assert.rejects(
+    () => fetchLocalEnvelope({
+      fetchImpl: async () => {
+        exhausted += 1;
+        return { ok: false, status: 503, json: async () => ({}) };
+      },
+      sleep: async (ms) => { backoff.push(ms); }
+    }),
+    /HTTP 503/
+  );
+  assert.equal(exhausted, LAYOUT_RETRY_DELAYS_MS.length + 1);
+  assert.deepEqual(backoff, LAYOUT_RETRY_DELAYS_MS);
 });
 
 test("viewer falls back to the text layer and crops both modes with one function", () => {

@@ -179,12 +179,17 @@ function assess(snapshot) {
   return misses;
 }
 
-function stubSource(cache) {
+function stubSource(cache, options = {}) {
+  const delay = options.delay ?? LAYOUT_DELAY_MS;
+  const fails = options.fails ?? 0;
+  const gate = options.gate ?? 0;
   return `(() => {
   const params = new URLSearchParams(location.search);
   const mode = params.get("oiAuto") || "";
   if (!mode) return;
   const scene = params.get("oiScene") || "";
+  if (sessionStorage.getItem("oiLayoutFails") == null) sessionStorage.setItem("oiLayoutFails", "${fails}");
+  if (sessionStorage.getItem("oiLayoutGate") == null) sessionStorage.setItem("oiLayoutGate", "${gate}");
   const settings = {
     provider: "mymemory",
     providers: { mymemory: { email: "" } },
@@ -194,8 +199,8 @@ function stubSource(cache) {
     batchSize: 8
   };
   const listeners = [];
-  window.__oiAuto = { scene, batches: [], messages: [], saved: [], layouts: [] };
-  window.__oiLayoutDelay = ${LAYOUT_DELAY_MS};
+  window.__oiAuto = { scene, batches: [], messages: [], saved: [], layouts: [], layoutAttempts: [], layoutOk: 0 };
+  window.__oiLayoutDelay = ${delay};
   window.__oiLayoutStore = ${JSON.stringify(cache)};
   const storageKey = "oiSaved:" + scene;
   const origFetch = window.fetch.bind(window);
@@ -254,14 +259,29 @@ function stubSource(cache) {
       let body = {};
       try { body = JSON.parse((init && init.body) || "{}"); } catch { body = {}; }
       const page = Number(body.page) || 0;
+      const left = Number(sessionStorage.getItem("oiLayoutFails") || "0");
+      if (left > 0) {
+        sessionStorage.setItem("oiLayoutFails", String(left - 1));
+        window.__oiAuto.layouts.push(page);
+        window.__oiAuto.layoutAttempts.push({ page, status: 502, at: Date.now() });
+        return new Response("bad gateway", { status: 502 });
+      }
+      const gate = Number(sessionStorage.getItem("oiLayoutGate") || "0");
+      if (gate && window.__oiAuto.layoutOk >= gate) {
+        window.__oiAuto.layouts.push(page);
+        window.__oiAuto.layoutAttempts.push({ page, status: 0, at: Date.now() });
+        await new Promise(() => {});
+      }
       window.__oiAuto.layouts.push(page);
       const started = Date.now();
       while (true) {
         const budget = Number(window.__oiLayoutDelay);
-        const want = Number.isFinite(budget) ? budget : ${LAYOUT_DELAY_MS};
+        const want = Number.isFinite(budget) ? budget : ${delay};
         if (Date.now() - started >= want) break;
         await new Promise((resolve) => setTimeout(resolve, 40));
       }
+      window.__oiAuto.layoutOk += 1;
+      window.__oiAuto.layoutAttempts.push({ page, status: 200, at: Date.now() });
       return new Response(JSON.stringify({ layoutDetails: [] }), {
         status: 200,
         headers: { "content-type": "application/json" }
@@ -456,7 +476,8 @@ const READ = `(() => {
     messages: (window.__oiAuto && window.__oiAuto.messages) || [],
     library: (window.__oiAuto && window.__oiAuto.library) || [],
     saved: (window.__oiAuto && window.__oiAuto.saved) || [],
-    layouts: (window.__oiAuto && window.__oiAuto.layouts) || []
+    layouts: (window.__oiAuto && window.__oiAuto.layouts) || [],
+    layoutAttempts: (window.__oiAuto && window.__oiAuto.layoutAttempts) || []
   });
 })()`;
 
@@ -616,3 +637,182 @@ test("旧库页数据在慢速划区下恢复图，二次打开不再请求", { 
     progress: samples
   }));
 });
+
+test("502 会退避重试，写回过的页中断后不再请求，公式槽重映射", { timeout: 420000 }, async (t) => {
+  const version = await currentLayoutVersion();
+  const paper = await loadOldPaper();
+  const host = await formulaHost(paper);
+  assert.ok(host, "no single-slot formula block with a stable source");
+  const library = libraryFor(paper);
+  const page = library.pages.find((entry) => entry.page === host.page);
+  const pair = page.pairs.find((item) => item.sourceId === host.sourceId);
+  assert.ok(pair, "formula pair missing");
+  pair.text = String(pair.text).replace(/⟦f(\d+)⟧/g, (_, n) => `⟦f${Number(n) + 5}⟧`);
+  pair.translation = `槽译${pair.text}`;
+  const fixtures = new Map([["dpo-interrupt", library]]);
+  const server = await serveRepo(fixtures);
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-layout-rev-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(child.stdio[3], child.stdio[4]);
+  t.after(async () => {
+    try { cdp.dispose(); } finally {
+      await cleanupChrome({ t, child, server, ownedDir, userDataDir });
+    }
+  });
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const send = (method, params) => cdp.send(method, params, sessionId);
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: stubSource(cacheFor(paper), { delay: 0, fails: 3, gate: 4 })
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails;
+      throw new Error(detail.exception?.description || detail.text || JSON.stringify(detail));
+    }
+    return result.result?.value;
+  };
+  const snapshot = async () => JSON.parse(await evaluate(READ));
+  const src = `${origin}/tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf`;
+  const viewer = `${origin}/pdf/viewer.html?oiAuto=stale&oiScene=dpo-interrupt&src=${encodeURIComponent(src)}`;
+  await send("Page.navigate", { url: viewer });
+
+  let mid = null;
+  const midBy = Date.now() + 180000;
+  while (Date.now() < midBy) {
+    try { mid = await snapshot(); } catch { await sleep(200); continue; }
+    const attempts = mid.layoutAttempts || [];
+    const held = attempts.some((item) => item.status === 0);
+    const failures = attempts.filter((item) => item.status === 502);
+    if (held && failures.length >= 3 && (mid.saved || []).length >= 3) break;
+    await sleep(200);
+  }
+  assert.ok(mid, "no snapshot");
+  const attempts = mid.layoutAttempts || [];
+  const failures = attempts.filter((item) => item.status === 502);
+  assert.equal(failures.length, 3, JSON.stringify(attempts.slice(0, 6)));
+  assert.equal(new Set(failures.map((item) => item.page)).size, 1);
+  const retried = attempts.find((item) => item.status === 200 && item.page === failures[0].page);
+  assert.ok(retried, "502 page never succeeded");
+  assert.ok(failures[1].at - failures[0].at >= 450, `backoff ${failures[1].at - failures[0].at}`);
+  assert.ok(failures[2].at - failures[1].at >= 900, `backoff ${failures[2].at - failures[1].at}`);
+  assert.ok(retried.at - failures[2].at >= 1800, `backoff ${retried.at - failures[2].at}`);
+  const completed = (mid.saved || []).filter((item) => item.layoutVersion === version).map((item) => item.page);
+  assert.ok(completed.length >= 3, `saved ${JSON.stringify(mid.saved)}`);
+
+  await evaluate(`sessionStorage.setItem("oiLayoutFails","0"); sessionStorage.setItem("oiLayoutGate","0"); true`);
+  await send("Page.navigate", { url: "about:blank" });
+  await sleep(400);
+  await send("Page.navigate", { url: viewer });
+
+  let again = null;
+  let have = new Set();
+  const againBy = Date.now() + 180000;
+  while (Date.now() < againBy) {
+    try { again = await snapshot(); } catch { await sleep(300); continue; }
+    have = new Set(completed);
+    for (const item of again.library || []) {
+      if (item.layoutVersion === version) have.add(item.page);
+    }
+    for (const item of again.saved || []) {
+      if (item.layoutVersion === version) have.add(item.page);
+    }
+    if (have.size >= 27) break;
+    await sleep(300);
+  }
+  assert.ok(again, "reopen produced no snapshot");
+  for (const pageNo of completed) {
+    assert.equal((again.layouts || []).includes(pageNo), false, `completed page ${pageNo} was requested again ${JSON.stringify(again.layouts)}`);
+  }
+  assert.ok((again.layouts || []).length > 0, "unfinished pages were abandoned");
+  assert.equal(have.size, 27, `versions ${JSON.stringify([...have].sort((a, b) => a - b))}`);
+
+  const formula = JSON.parse(await evaluate(`(() => {
+    const body = document.getElementById("readerFlow")?.innerText || "";
+    const bid = document.querySelector('#readerFlow [data-bid="${host.bid}"]');
+    const node = bid?.querySelector(".rf-zh") || [...document.querySelectorAll("#readerFlow .rf-zh")].find((el) => (el.textContent || "").includes("槽译"));
+    const text = node ? node.textContent || "" : "";
+    return JSON.stringify({
+      text,
+      math: node ? node.querySelectorAll(".oi-pdf-inline-math").length : 0,
+      lead: text.includes("公式槽待对齐"),
+      inBody: body.includes("槽译"),
+      bidText: bid ? (bid.innerText || "").slice(0, 240) : ""
+    });
+  })()`));
+  assert.equal(formula.lead, false, JSON.stringify(formula));
+  assert.match(formula.text, /槽译|译:/, JSON.stringify(formula));
+  assert.ok(formula.math >= 1, JSON.stringify(formula));
+
+  await send("Page.navigate", { url: "about:blank" });
+  await sleep(300);
+  await send("Page.navigate", { url: viewer });
+  let quiet = null;
+  const quietBy = Date.now() + 60000;
+  while (Date.now() < quietBy) {
+    try { quiet = await snapshot(); } catch { await sleep(200); continue; }
+    const figures = quiet.visuals.some((item) => item.page === 7 && item.label === "figure")
+      && quiet.visuals.some((item) => item.page === 23 && item.label === "figure");
+    if (counted(quiet.doc, 27) === 27 && figures) break;
+    await sleep(200);
+  }
+  assert.equal(quiet.layouts.length, 0, `third open layouts ${JSON.stringify(quiet.layouts)}`);
+  assert.equal(quiet.batches, 0, `third open batches ${quiet.batches}`);
+  t.diagnostic(JSON.stringify({
+    completed,
+    firstLayoutRequests: (mid.layouts || []).length,
+    reopenLayoutRequests: (again.layouts || []).length,
+    reopenTranslationRequests: again.batches,
+    thirdLayoutRequests: quiet.layouts.length,
+    thirdTranslationRequests: quiet.batches,
+    formulaPage: host.page
+  }));
+});
+
+async function formulaHost(paper) {
+  const { textLayerToBlocks } = await import("../lib/pdf-text-layer.js");
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(dpoPath)),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  try {
+    for (const entry of paper.pages) {
+      if (isSkipOnlyPage(entry.blocks)) continue;
+      const oldBlock = (entry.blocks || []).find((block) => (
+        block.label === "text" && block.bid && block.sourceId &&
+        (String(block.text).match(/⟦f\d+⟧/g) || []).length === 1
+      ));
+      if (!oldBlock) continue;
+      const pdfPage = await doc.getPage(entry.page);
+      const content = await pdfPage.getTextContent();
+      const viewport = pdfPage.getViewport({ scale: 1 });
+      const ops = await pdfPage.getOperatorList();
+      const built = stampLayoutBids(entry.page, textLayerToBlocks({
+        items: content.items,
+        viewport,
+        images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+        page: entry.page
+      }));
+      const live = built.blocks.find((block) => block.sourceId === oldBlock.sourceId || block.bid === oldBlock.bid);
+      if (!live) continue;
+      const liveCount = (String(live.text).match(/⟦f\d+⟧/g) || []).length;
+      const sameSource = String(live.sourceText || live.text) === String(oldBlock.sourceText || oldBlock.text);
+      if (liveCount === 1 && sameSource) {
+        return { page: entry.page, sourceId: oldBlock.sourceId, bid: live.bid || oldBlock.bid };
+      }
+    }
+  } finally {
+    await doc.destroy();
+  }
+  return null;
+}

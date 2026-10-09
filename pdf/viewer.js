@@ -6053,6 +6053,23 @@ async function layoutVersionNow() {
 }
 
 /** Write a freshly built layout back so the next open does not recompute it. */
+function libraryLayoutNeedsWrite(page) {
+  const raw = getPageLayout(page);
+  const version = String(raw?.layoutVersion || "");
+  if (!version || !raw?.blocks?.length) return false;
+  const entry = libraryEntry(page);
+  if (!entry) return false;
+  const storedBlocks = entry.layout?.blocks;
+  const hasLayout = Array.isArray(storedBlocks) && storedBlocks.length > 0;
+  const hasVersion = Boolean(entry.layoutVersion || entry.layout?.layoutVersion);
+  if (!hasLayout && !hasVersion) return false;
+  return !storedLayoutCurrent(entry, version);
+}
+
+function persistDisplayedLayout(page) {
+  if (!libraryLayoutNeedsWrite(page)) return Promise.resolve();
+  return persistPageLayout(page);
+}
 function persistPageLayout(page) {
   const raw = getPageLayout(page);
   const version = String(raw?.layoutVersion || "");
@@ -6957,29 +6974,34 @@ async function translateWholeDocument() {
     preserveSession: libraryPass,
     preparePage: prepareLibraryPage
   });
-  if (libraryPass && isCurrentWork(work, gen, translatingDoc) && !translatedDoc.aborted && !translatedDoc.paused && !work.aborted) {
+  if (libraryPass && isCurrentWork(work, gen, translatingDoc) && !translatedDoc.aborted && !work.aborted) {
     renderArticle();
-    let stillQueued = false;
-    for (let page = 1; page <= total; page += 1) {
-      if ((pageStates.get(page)?.state || "") === "queued") stillQueued = true;
+    if (!translatedDoc.paused) {
+      let stillQueued = false;
+      for (let page = 1; page <= total; page += 1) {
+        if ((pageStates.get(page)?.state || "") === "queued") stillQueued = true;
+      }
+      if (stillQueued) {
+        const again = await translateDocumentPages({
+          ...pageJob,
+          preserveSession: true,
+          includePage: (page) => (pageStates.get(page)?.state || "") === "queued"
+        });
+        translatedDoc = {
+          ok: translatedDoc.ok && again.ok,
+          aborted: translatedDoc.aborted || again.aborted,
+          paused: translatedDoc.paused || again.paused,
+          error: translatedDoc.error || again.error,
+          missingField: translatedDoc.missingField || again.missingField,
+          pages: translatedDoc.pages.concat(again.pages)
+        };
+      }
     }
-    if (stillQueued) {
-      const again = await translateDocumentPages({
-        ...pageJob,
-        preserveSession: true,
-        includePage: (page) => (pageStates.get(page)?.state || "") === "queued"
-      });
-      translatedDoc = {
-        ok: translatedDoc.ok && again.ok,
-        aborted: translatedDoc.aborted || again.aborted,
-        paused: translatedDoc.paused || again.paused,
-        error: translatedDoc.error || again.error,
-        missingField: translatedDoc.missingField || again.missingField,
-        pages: translatedDoc.pages.concat(again.pages)
-      };
-    }
-    if (!translatedDoc.aborted && !translatedDoc.paused && !work.aborted) {
+    // A translation pause must not abandon layout. Skip pages and any page
+    // whose sidecar call failed still get a recompute, then an immediate write-back.
+    if (!translatedDoc.aborted && !work.aborted) {
       await reconcileLockedSkipLayouts(() => !isCurrentWork(work, gen, translatingDoc));
+      await retryPendingVendorLayouts(() => !isCurrentWork(work, gen, translatingDoc));
     }
   }
   if (libraryPass && work === session && !forceReadoutHold) work.running = false;
@@ -7269,6 +7291,29 @@ function emptyPageResults(layout) {
     : mergeReadoutTranslations(layout?.blocks || [], []);
 }
 
+/** Pages still waiting on the sidecar, including ones skipped by a translation pause. */
+async function retryPendingVendorLayouts(isStale) {
+  const mode = pdfEngineMode();
+  if (mode !== "local-ocr" && mode !== "cloud-ocr") return;
+  const version = await layoutVersionNow();
+  const total = pdfDoc?.numPages || 0;
+  for (let page = 1; page <= total; page += 1) {
+    if (isStale()) return;
+    const entry = libraryEntry(page);
+    const storedBlocks = entry?.layout?.blocks;
+    const hasStored = (Array.isArray(storedBlocks) && storedBlocks.length > 0) ||
+      Boolean(entry?.layoutVersion || entry?.layout?.layoutVersion);
+    const stale = Boolean(entry && hasStored && version && !storedLayoutCurrent(entry, version));
+    if (!stale && !vendorLayoutPending.has(page)) continue;
+    try {
+      const laid = await ingestPageLayout(page, isStale);
+      if (laid) vendorLayoutPending.delete(page);
+    } catch {
+      /* this page can be tried on the next open; keep going */
+    }
+  }
+}
+
 async function ingestPageLayout(n, isStale) {
   if (!isStale()) layoutNotice = "";
   await loadPdfLayout();
@@ -7306,6 +7351,25 @@ async function writeStoredLayout(key, page) {
   }
 }
 
+const vendorLayoutPending = new Set();
+let vendorLayoutChain = Promise.resolve();
+const vendorLayoutInflight = new Map();
+
+/** One sidecar POST at a time. A second caller for the same page shares the first. */
+function runVendorLayoutHttp(page, task) {
+  const key = Number(page) || 0;
+  const existing = vendorLayoutInflight.get(key);
+  if (existing) return existing;
+  const job = vendorLayoutChain.then(task, task);
+  vendorLayoutInflight.set(key, job);
+  vendorLayoutChain = job.then(() => {
+    vendorLayoutInflight.delete(key);
+  }, () => {
+    vendorLayoutInflight.delete(key);
+  });
+  return job;
+}
+
 async function ingestVendorLayout(n, mode, isStale) {
   const settings = cachedPdfLayout || normalizePdfLayout(null);
   if (mode === "cloud-ocr" && !shouldFetchCloud(settings)) {
@@ -7330,20 +7394,20 @@ async function ingestVendorLayout(n, mode, isStale) {
   let recomputed = false;
   if (!mapped) {
     try {
-      const envelope = mode === "cloud-ocr"
-        ? await fetchCloudEnvelope({
+      const envelope = await runVendorLayoutHttp(n, () => (mode === "cloud-ocr"
+        ? fetchCloudEnvelope({
             baseUrl: settings.cloudBaseUrl,
             apiKey: settings.cloudApiKey,
             model: settings.cloudModel,
             pngDataUrl: png
           })
-        : await fetchLocalEnvelope({
+        : fetchLocalEnvelope({
             baseUrl: settings.localBaseUrl,
             page: n,
             imageBase64: png.replace(/^data:image\/png;base64,/, ""),
             pixelWidth: raster.pixelWidth,
             pixelHeight: raster.pixelHeight
-          });
+          })));
       let images = null;
       try {
         const ops = await page.getOperatorList();
@@ -7356,8 +7420,10 @@ async function ingestVendorLayout(n, mode, isStale) {
       if (version) mapped.layoutVersion = version;
       await writeStoredLayout(key, mapped);
       recomputed = true;
+      vendorLayoutPending.delete(n);
     } catch (err) {
       if (!isStale() && err?.code !== "empty-key") layoutNotice = LAYOUT_FALLBACK_STATUS;
+      if (err?.code !== "empty-key") vendorLayoutPending.add(n);
       return null;
     }
   }
@@ -7437,6 +7503,7 @@ async function ingestTextLayerLayout(n, isStale) {
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
   setPageLayout(n, layout);
+  persistDisplayedLayout(n).catch(() => {});
   return layout;
 }
 

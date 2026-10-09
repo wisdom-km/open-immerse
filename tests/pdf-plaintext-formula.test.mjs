@@ -409,3 +409,62 @@ test("live extra ⟦f1⟧ remaps onto Unicode h_{t−1} and keeps the Chinese se
   assert.doesNotMatch(keptText, /hidden states/);
   assert.equal(kept.some((piece) => piece.type === "image"), false);
 });
+
+test("a reused translation remaps formula slots onto the new block", () => {
+  const live = {
+    id: "p5",
+    sourceId: "p5-s1",
+    label: "text",
+    text: "the loss ⟦f3⟧ remains",
+    sourceText: "the loss x^2 remains",
+    placeholders: [{ token: "⟦f3⟧", blockId: "f" }]
+  };
+  const restored = applySavedPairs([live], [{
+    sourceId: "p5-s1",
+    text: "the loss ⟦f1⟧ remains",
+    sourceText: live.sourceText,
+    translation: "损失⟦f7⟧还在",
+    status: "verified"
+  }])[0];
+  assert.equal(restored.translation, "损失⟦f3⟧还在");
+  assert.equal(restored.failed, undefined);
+  assert.equal(blockTranslationIntegrity(restored).valid, true);
+  assert.equal(blockSoftLead(restored), "");
+  const pieces = blockRenderPieces(restored, [
+    restored,
+    { id: "f", label: "formula", imageUrl: "data:image/png;base64,crop" }
+  ]);
+  assert.equal(pieces.filter((piece) => piece.type === "image").length, 1);
+  assert.equal(pieces.find((piece) => piece.type === "image").blockId, "f");
+  assert.doesNotMatch(pieces.map((piece) => piece.text || "").join(""), /待对齐/);
+
+  const conflict = applySavedPairs([{
+    id: "p19",
+    sourceId: "p19-s1",
+    label: "text",
+    text: "see ⟦f1⟧ and ⟦f2⟧",
+    sourceText: "see ALPHA and BETA",
+    placeholders: [
+      { token: "⟦f1⟧", blockId: "fa" },
+      { token: "⟦f2⟧", blockId: "fb" }
+    ]
+  }], [{
+    sourceId: "p19-s1",
+    text: "see ⟦f9⟧ and BETA",
+    sourceText: "see ALPHA and BETA",
+    translation: "见⟦f9⟧和乙",
+    status: "verified"
+  }])[0];
+  assert.equal(conflict.translation, "");
+  assert.equal(conflict.failed, true);
+  assert.equal(conflict.translationStatus, undefined);
+  assert.equal(blockSoftLead(conflict), "");
+  const keptPieces = blockRenderPieces(conflict, [
+    conflict,
+    { id: "fa", label: "formula", imageUrl: "data:image/png;base64,a" },
+    { id: "fb", label: "formula", imageUrl: "data:image/png;base64,b" }
+  ]);
+  assert.equal(keptPieces.filter((piece) => piece.type === "image").length, 2);
+  assert.doesNotMatch(keptPieces.map((piece) => piece.text || "").join(""), /待对齐/);
+  assert.match(keptPieces.map((piece) => piece.text || "").join(""), /see/);
+});
