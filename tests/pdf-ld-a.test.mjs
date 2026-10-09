@@ -217,7 +217,7 @@ test("page state follows the target language, not Han alone", () => {
   for (const [targetLang, good] of cases) {
     assert.equal(pageRunState([{ original: source, translation: good, role: "paragraph" }], { targetLang }), "done", targetLang);
     assert.equal(pageRunState([{ original: source, translation: "", role: "paragraph" }], { targetLang }), "failed", `${targetLang} empty`);
-    assert.equal(pageRunState([{ original: source, translation: source, role: "paragraph" }], { targetLang }), "failed", `${targetLang} same`);
+    assert.equal(pageRunState([{ original: source, translation: source, role: "paragraph" }], { targetLang }), "done", `${targetLang} echo`);
     assert.equal(libraryPageRunState({
       pairs: [{ text: source, translation: good, role: "paragraph" }],
       targetLang
@@ -225,7 +225,7 @@ test("page state follows the target language, not Han alone", () => {
     assert.equal(libraryPageRunState({
       pairs: [{ text: source, translation: source, role: "paragraph" }],
       targetLang
-    }), "queued", `${targetLang} library same`);
+    }), "done", `${targetLang} library echo`);
   }
   assert.equal(pageRunState([{ original: source, translation: "Attention is everything you need", role: "paragraph" }], { targetLang: "zh-CN" }), "failed");
   assert.equal(libraryPageRunState({ pairs: [{ translation: "Attention", role: "paragraph" }], targetLang: "zh-CN" }), "queued");
@@ -403,9 +403,14 @@ test("library pairs that do not cover live blocks stay queued", () => {
   assert.equal(libraryCoversLiveBlocks(split, blocks, "zh-CN"), true);
   assert.equal(libraryPageRunState({ pairs: split, blocks, targetLang: "zh-CN" }), "done");
   const echoed = split.map((pair) => ({ ...pair, translation: pair.text }));
-  assert.equal(libraryCoversLiveBlocks(echoed, blocks, "zh-CN"), false);
-  assert.equal(libraryPageRunState({ pairs: echoed, blocks, targetLang: "zh-CN" }), "queued");
-  assert.equal(libraryPageRunState({ pairs: echoed, blocks, targetLang: "en" }), "queued");
+  assert.equal(libraryCoversLiveBlocks(echoed, blocks, "zh-CN"), true);
+  assert.equal(libraryPageRunState({ pairs: echoed, blocks, targetLang: "zh-CN" }), "done");
+  assert.equal(libraryPageRunState({ pairs: echoed, blocks, targetLang: "en" }), "done");
+  assert.equal(libraryPageRunState({
+    pairs: split.map((pair) => ({ ...pair, translation: "" })),
+    blocks,
+    targetLang: "zh-CN"
+  }), "queued");
   const short = [{ label: "text", text: "BLEU", sourceId: "bleu" }];
   assert.equal(libraryPageRunState({
     pairs: [{ text: "BLEU", sourceId: "bleu", translation: "BLEU" }],
@@ -414,11 +419,17 @@ test("library pairs that do not cover live blocks stay queued", () => {
   }), "done");
 });
 
-test("long echoes fail the page even when a short token is unchanged", () => {
+test("an echo of the source finishes the page, and an empty result does not", () => {
   const source = "The dominant sequence transduction models are based on complex recurrent networks.";
   assert.equal(pageRunState([
     { original: "BLEU", translation: "BLEU", role: "paragraph" },
     { original: source, translation: source, role: "paragraph" }
+  ], { targetLang: "en" }), "done");
+  assert.equal(pageRunState([
+    { original: source, translation: "", role: "paragraph" }
+  ], { targetLang: "en" }), "failed");
+  assert.equal(pageRunState([
+    { original: source, translation: source, failed: true, role: "paragraph" }
   ], { targetLang: "en" }), "failed");
   assert.equal(pageRunState([
     { original: "BLEU", translation: "BLEU", role: "paragraph" },
@@ -442,13 +453,13 @@ test("latin targets ignore digits and Han, and keep short unchanged segments", (
     { original: "BLEU", translation: "BLEU", role: "paragraph" },
     { original: source, translation: "Attention is everything you need", role: "paragraph" }
   ], { targetLang: "en" }), "done");
-  assert.equal(pageRunState([{ original: source, translation: source, role: "paragraph" }], { targetLang: "en" }), "failed");
+  assert.equal(pageRunState([{ original: source, translation: source, role: "paragraph" }], { targetLang: "en" }), "done");
   assert.equal(pageRunState([{ original: "hello", translation: "123", role: "paragraph" }], { targetLang: "en" }), "failed");
   assert.equal(pageRunState([{ original: "hello", translation: "你好", role: "paragraph" }], { targetLang: "en" }), "failed");
   assert.equal(pageRunState([{ original: "123", translation: "123", role: "paragraph" }], { targetLang: "en" }), "done");
 });
 
-test("three pages that echo the source pause and are not saved", async () => {
+test("three pages that echo the source are done and saved", async () => {
   const saved = [];
   const errors = [];
   const sentence = "The dominant sequence transduction models are based on complex recurrent networks.";
@@ -463,10 +474,11 @@ test("three pages that echo the source pause and are not saved", async () => {
     onPageDone: (info) => saved.push(info.page),
     onPageError: (info) => errors.push(info.page)
   });
-  assert.deepEqual(errors, [1, 2, 3]);
-  assert.deepEqual(saved, []);
-  assert.equal(result.paused, true);
-  assert.equal(result.pages.length, 3);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(saved, [1, 2, 3, 4]);
+  assert.equal(result.paused, false);
+  assert.equal(result.pages.length, 4);
+  assert.equal(result.pages.every((entry) => entry.results[0].translation === entry.results[0].original), true);
 });
 
 test("a failed page is retried with bypassCache", async () => {

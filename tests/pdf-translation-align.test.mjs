@@ -28,6 +28,14 @@ const attentionPath = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf")
 const MAIN_V2 = "d06b9fb5ec653524fcaf7bfc4126b275441ca0ab";
 const SETTINGS = { targetLang: "zh-CN", provider: "mymemory" };
 const WATCH = ["b1-p20-t1ho201s", "b1-p20-t0kcfxuw", "b1-p27-t1dwp43s"];
+const ECHO_ONLY = [
+  "b1-p20-t1gvf53f",
+  "b1-p20-t1wim4k9",
+  "b1-p20-t1vpeb8d",
+  "b1-p20-t0t2kdy1",
+  "b1-p20-t1r7vjbx",
+  "b1-p27-t1j3zjzu"
+];
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -69,6 +77,23 @@ function pairFrom(block, translation) {
     targetLang: SETTINGS.targetLang,
     provider: SETTINGS.provider
   };
+}
+
+function keepEchoOnly(library) {
+  const bids = new Set(ECHO_ONLY);
+  for (const page of library.pages || []) {
+    const rest = [];
+    const echoed = new Map();
+    for (const pair of page.pairs || []) {
+      if (!bids.has(pair.bid)) {
+        rest.push(pair);
+        continue;
+      }
+      if (!echoed.has(pair.bid)) echoed.set(pair.bid, { ...pair, translation: pair.text });
+    }
+    page.pairs = [...rest, ...echoed.values()];
+  }
+  return library;
 }
 
 function libraryFor(pages) {
@@ -215,7 +240,9 @@ const STUB = `(() => {
     }
     return copy;
   }
+  const echoBids = new Set(${JSON.stringify(ECHO_ONLY)});
   function fresh(item) {
+    if (echoBids.has(item.bid)) return String(item.text || "");
     const text = String(item.text || "");
     const source = String(item.sourceText || text);
     const tokens = [...text.matchAll(/⟦f\\d+⟧/g)].map((match) => match[0]);
@@ -423,12 +450,27 @@ const READ = `(() => {
   })).filter((row) => row.bid && row.zh);
   const pages = [...document.querySelectorAll("#readerFlow .rf-page")].map((el) => ({
     page: Number(el.dataset.page) || 0,
-    state: el.dataset.state || ""
+    state: el.dataset.state || "",
+    ps: el.querySelector(":scope > .rf-ps .rf-ps-text")?.textContent || "",
+    blocks: el.querySelectorAll(":scope > .rf-block").length,
+    src: [...el.querySelectorAll(":scope .rf-src")].map((node) => node.textContent || "").join(" ").replace(/\\s+/g, " ").slice(0, 120)
   }));
+  const trail = (window.__oiAuto && window.__oiAuto.timeline) || [];
+  const skipTrail = {};
+  for (const page of [11, 12, 13, 14]) {
+    const hits = [];
+    for (const row of trail) {
+      const item = (row.pages || []).find((entry) => entry.page === page);
+      if (!item) continue;
+      if (!hits.length || hits[hits.length - 1] !== item.state) hits.push(item.state);
+    }
+    skipTrail[page] = hits.slice(0, 6);
+  }
   return JSON.stringify({
     doc: document.querySelector("#docStatus .doc-text")?.textContent || "",
     state: document.querySelector("#docStatus")?.dataset.state || "",
     status: document.getElementById("status")?.textContent || "",
+    skipTrail,
     pages,
     shown,
     batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
@@ -444,7 +486,12 @@ test("打开阅读器时译文按 bid 回写，旧缓存第二次打开不再请
   const mainLayer = (await historicalLayer(MAIN_V2)).textLayerToBlocks;
   const dpoMain = (await loadLayouts(dpoPath, mainLayer)).map((entry) => ({ ...entry, scene: "main" }));
   const attention = (await loadLayouts(attentionPath, mainLayer)).map((entry) => ({ ...entry, scene: "attention" }));
-  fixtures.set("main", libraryFor(dpoMain));
+  fixtures.set("main", keepEchoOnly(libraryFor(dpoMain)));
+  for (const page of [22, 23]) {
+    const entry = dpoMain.find((item) => item.page === page);
+    assert.equal(isSkipOnlyPage(entry.previous.blocks), false, `main p${page} is not a reference page`);
+    assert.equal(isSkipOnlyPage(entry.next.blocks), false, `current p${page} is not a reference page`);
+  }
   fixtures.set("tip", { pageCount: dpoMain.length, pages: [] });
   fixtures.set("attention", libraryFor(attention));
 
@@ -508,7 +555,10 @@ test("打开阅读器时译文按 bid 回写，旧缓存第二次打开不再请
       if (terminal && last.state === "done") {
         await sleep(500);
         const again = JSON.parse(await evaluate(READ));
-        if (again.state === "done" && JSON.stringify(again.saved) === JSON.stringify(last.saved)) return again;
+        if (again.state === "done" && JSON.stringify(again.saved) === JSON.stringify(last.saved)) {
+          again.elapsed = Date.now() - started;
+          return again;
+        }
         last = again;
         continue;
       }
@@ -538,6 +588,27 @@ test("打开阅读器时译文按 bid 回写，旧缓存第二次打开不再请
   }
   assert.equal(main.pages.filter((row) => row.page === 20 || row.page === 27).every((row) => row.state === "done"), true);
   assert.equal(main.shown.some((row) => row.zh.includes("不该出现")), false);
+  for (const bid of ECHO_ONLY) {
+    assert.equal(sentBids(main).includes(bid), false, `${bid} echo is kept, not re-requested`);
+    const row = main.shown.find((item) => item.bid === bid);
+    assert.ok(row && visibleText(row.zh), `${bid} echo stays on screen`);
+  }
+  for (const page of [12, 13, 14]) {
+    const row = main.pages.find((item) => item.page === page);
+    assert.equal(row.state, "skipped", `p${page} state ${row.state}`);
+    assert.equal(row.ps, "参考文献 · 保留原文");
+    assert.equal(row.blocks, 13, `p${page} blocks ${row.blocks}`);
+    assert.match(row.src, /\[\d+\]/);
+    const trail = main.skipTrail[page] || [];
+    assert.equal(trail.includes("empty") || trail.includes("running"), false, `p${page} trail ${JSON.stringify(trail)}`);
+    assert.equal(trail.includes("skipped"), true, `p${page} trail ${JSON.stringify(trail)}`);
+  }
+  for (const page of [22, 23]) {
+    const row = main.pages.find((item) => item.page === page);
+    assert.notEqual(row.state, "skipped", `p${page} is an appendix, not a reference page`);
+    assert.equal(row.ps.includes("参考文献"), false, row.ps);
+    assert.ok(row.blocks > 0, `p${page} still has blocks`);
+  }
 
   const reopened = await openScene("main", "Direct_Preference_Optimization_2305.18290.pdf");
   const reopenMisses = assess(reopened);
@@ -552,6 +623,10 @@ test("打开阅读器时译文按 bid 回写，旧缓存第二次打开不再请
     const row = reopened.shown.find((item) => item.bid === bid);
     assert.ok(row && visibleText(row.zh), `${bid} still displayed after reopen`);
   }
+  for (const bid of ECHO_ONLY) {
+    assert.equal(sentBids(reopened).includes(bid), false, `${bid} echo is not requested on reopen`);
+  }
+  assert.equal(reopened.pages.filter((row) => row.page === 20 || row.page === 27).every((row) => row.state === "done"), true);
 
   const laidOut = JSON.parse(await evaluate("JSON.stringify(window.__oiLayouts || {})"));
   const tipPages = [];
@@ -608,11 +683,35 @@ test("打开阅读器时译文按 bid 回写，旧缓存第二次打开不再请
   const skipped = new Set(paper.pages.filter((row) => row.state === "skipped").map((row) => row.page));
   for (const page of skippedOnMain) {
     assert.equal(skipped.has(page), true, `page ${page} stays skipped`);
+    const row = paper.pages.find((item) => item.page === page);
+    assert.equal(row.ps, "参考文献 · 保留原文");
+    assert.ok(row.blocks > 0, `attention p${page} blocks`);
+    const trail = paper.skipTrail[page] || [];
+    assert.equal(trail.includes("empty") || trail.includes("running"), false, `attention p${page} trail ${JSON.stringify(trail)}`);
+    assert.equal(trail.includes("skipped"), true, `attention p${page} trail ${JSON.stringify(trail)}`);
   }
   t.diagnostic(JSON.stringify({
-    main: { requests: main.batches, blocks: sentBids(main).length, misalignment: mainMisses.length, pages: [...new Set(main.messages.flatMap((message) => message.items.map((item) => item.bid)))].length },
-    reopen: { requests: reopened.batches, misalignment: reopenMisses.length },
-    tip: { requests: tip.batches, misalignment: tipMisses.length },
-    attention: { requests: paper.batches, misalignment: attentionMisses.length, pages: paper.pages.length }
+    main: {
+      requests: main.batches,
+      blocks: sentBids(main).length,
+      misalignment: mainMisses.length,
+      elapsedMs: main.elapsed,
+      skip: [12, 13, 14].map((page) => {
+        const row = main.pages.find((item) => item.page === page);
+        return { page, state: row.state, blocks: row.blocks };
+      })
+    },
+    reopen: { requests: reopened.batches, misalignment: reopenMisses.length, elapsedMs: reopened.elapsed },
+    tip: { requests: tip.batches, misalignment: tipMisses.length, elapsedMs: tip.elapsed },
+    attention: {
+      requests: paper.batches,
+      misalignment: attentionMisses.length,
+      pages: paper.pages.length,
+      elapsedMs: paper.elapsed,
+      skip: [...skippedOnMain].map((page) => {
+        const row = paper.pages.find((item) => item.page === page);
+        return { page, state: row.state, blocks: row.blocks };
+      })
+    }
   }));
 });

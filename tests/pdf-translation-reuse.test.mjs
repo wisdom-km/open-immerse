@@ -223,6 +223,12 @@ test("source reuse hash is 128-bit and an echo does not hide a later translation
   ], SETTINGS);
   assert.equal(headed[0].translation, "D.3 人类研究细节");
   assert.equal(unitsNeedingTranslation(headed, SETTINGS.targetLang).length, 0);
+  const codeOnly = applySavedPairs([unit], [{ ...unit, translation: text, targetLang: "zh-CN", provider: "mymemory" }], SETTINGS);
+  assert.equal(codeOnly[0].translation, text);
+  assert.equal(unitsNeedingTranslation(codeOnly, SETTINGS.targetLang).length, 0);
+  const failedEcho = { ...unit, translation: text, failed: true };
+  assert.equal(unitsNeedingTranslation([failedEcho], SETTINGS.targetLang).length, 1);
+  assert.equal(unitsNeedingTranslation([{ ...unit, translation: "" }], SETTINGS.targetLang).length, 1);
 });
 
 test("a legacy translation with no engine is reused only for its target language", () => {
