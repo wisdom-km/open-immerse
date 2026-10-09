@@ -64,6 +64,8 @@ import {
   pageFromViewport,
   pageHasTranslation,
   pageTranslationComplete,
+  unitsNeedingTranslation,
+  mergeTranslationRows,
   pageIndex,
   pageLabel,
   progressDocumentStatus,
@@ -301,6 +303,7 @@ const pageCache = createPageCache();
 const pageStates = new Map();
 let docPhase = "idle";
 let pdfTargetLang = "zh-CN";
+let pdfProvider = "";
 let translatePaused = false;
 let autoAfterForce = false;
 let forceRetranslatePending = false;
@@ -2312,6 +2315,22 @@ function settledText(translation, source = "") {
 function rememberTargetLang(settings) {
   const code = String(settings?.targetLang || "").trim();
   if (code) pdfTargetLang = code;
+  const provider = String(settings?.provider || "").trim();
+  if (provider) pdfProvider = provider;
+}
+
+function savedPairSettings() {
+  return { targetLang: pdfTargetLang, provider: pdfProvider };
+}
+
+/** Keep settled reuse and provider failures. A library echo is a fresh hole, not a bypass. */
+function cacheableReuse(units) {
+  return (units || []).map((unit) => {
+    const source = unit?.original || unit?.text || unit?.sourceText || "";
+    if (settledText(unit?.translation, source) || unit?.failed === true) return unit;
+    if (!String(unit?.translation || "").trim()) return unit;
+    return { ...unit, translation: "" };
+  });
 }
 
 function libraryEntry(page) {
@@ -2352,7 +2371,7 @@ function layoutForReadout(layout) {
   let blocks = layout.blocks || [];
   if (Array.isArray(cached) && cached.length) {
     const units = unitsForLayout(layout);
-    const merged = applySavedPairs(units, cached);
+    const merged = applySavedPairs(units, cached, savedPairSettings());
     const rows = merged.some((unit) => settledText(unit.translation, unit.original || unit.text || unit.sourceText || "")) ? merged : cached;
     blocks = applyBlockTranslations(layout.blocks, rows);
   }
@@ -5925,7 +5944,7 @@ async function resolveBatchSize() {
 function rememberTranslation(page, results) {
   const rawLayout = getPageLayout(page);
   const layout = cacheableLayout(rawLayout);
-  const pairs = pairsFromResults(results);
+  const pairs = pairsFromResults(results, savedPairSettings());
   const skipOnly = isSkipOnlyPage(rawLayout?.blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
   if (!pairs.length && !skipOnly) return Promise.resolve();
@@ -6183,7 +6202,7 @@ async function translateCurrentPage() {
     const openedBlocks = getPageLayout(pageNum)?.blocks ?? null;
     if (saved?.pairs?.length) {
       const prepared = bindSavedPairs(saved, pageOriginals);
-      const merged = applySavedPairs(pageOriginals, prepared.pairs);
+      const merged = applySavedPairs(pageOriginals, prepared.pairs, savedPairSettings());
       pageCache.set(docId, pageNum, merged);
       pageResults = merged;
       renderArticle();
@@ -6337,6 +6356,7 @@ async function adoptLibraryPages(options = {}) {
       pairs: entry?.pairs,
       cached,
       targetLang: pdfTargetLang,
+      provider: pdfProvider,
       skipped,
       blocks,
       empty: Array.isArray(blocks)
@@ -6352,7 +6372,7 @@ async function adoptLibraryPages(options = {}) {
         globalThis.__oiLibraryGap = gap;
       }
       if (prior?.state === "done" || prior?.state === "partial") pageCache.clearPage(docId, page);
-      else if (cached && !libraryCoversLiveBlocks(cached, blocks, pdfTargetLang)) pageCache.clearPage(docId, page);
+      else if (cached && !libraryCoversLiveBlocks(cached, blocks, pdfTargetLang, pdfProvider)) pageCache.clearPage(docId, page);
       notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
       clearSlotPainted(page);
       publish();
@@ -6361,12 +6381,13 @@ async function adoptLibraryPages(options = {}) {
       if (!entry && page >= lastListed) break;
       continue;
     }
-    if (state === "done") {
+    if (state === "done" || state === "partial") {
       const units = unitsForLayout(layout || { kind: "blocks", blocks: blocks || [], page });
       const filled = units.length
-        ? applySavedPairs(units, entry?.pairs || cached || [])
+        ? applySavedPairs(units, entry?.pairs || cached || [], savedPairSettings())
         : blocksFromLibraryPairs(page, entry?.pairs || cached);
-      if (!filled.length || (Array.isArray(blocks) && !libraryCoversLiveBlocks(entry?.pairs || cached, blocks, pdfTargetLang))) {
+      const covers = !Array.isArray(blocks) || libraryCoversLiveBlocks(entry?.pairs || cached, blocks, pdfTargetLang, pdfProvider);
+      if (state === "done" && (!filled.length || !covers)) {
         hole = true;
         notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
         clearSlotPainted(page);
@@ -6374,10 +6395,20 @@ async function adoptLibraryPages(options = {}) {
         if (!entry && page >= lastListed) break;
         continue;
       }
-      pageCache.set(docId, page, filled);
-      notePageState(page, { state: "done", hasLayout: true });
+      if (filled.length) pageCache.set(docId, page, cacheableReuse(filled));
+      notePageState(page, { state, hasLayout: true });
       clearSlotPainted(page);
       publish();
+      if (state === "partial") {
+        const live = translatableBlocks(blocks || []).length;
+        const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
+        if (viewerUnderTest() && entry && pairCount < live) {
+          const gap = globalThis.__oiLibraryGap || [];
+          gap.push({ page, pairs: pairCount, live });
+          globalThis.__oiLibraryGap = gap;
+        }
+        hole = true;
+      }
       continue;
     }
     const noText = state === "empty" && !blocks?.length && !(Number(layout?.itemCount) > 0);
@@ -6482,7 +6513,16 @@ async function translateWholeDocument() {
     targetLang: pdfTargetLang,
     send: runtimeSend,
     getPageOriginals: (page) => originalsForPage(page, gen, translatingDoc, work, batchSize),
-    pageSkipReason: (page) => (isSkipOnlyPage(getPageLayout(page)?.blocks) ? "skip-only" : "empty"),
+    pageSkipReason: (page) => {
+      if (titleStructureFailed(page)) return "empty";
+      const cached = pageCache.get(translatingDoc, page);
+      // getPageOriginals already returned nothing to send. A settled body or a
+      // landed title is done; stale failed rows must not turn that into an empty page.
+      if (pageTranslationComplete(cached, pdfTargetLang) ||
+          pageHasTranslation(cached, pdfTargetLang) ||
+          structureLanded(page)) return "cached";
+      return isSkipOnlyPage(getPageLayout(page)?.blocks) ? "skip-only" : "empty";
+    },
     onPageSkip({ page, reason }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       if (reason !== "cached" && titleStructureFailed(page)) {
@@ -6514,10 +6554,11 @@ async function translateWholeDocument() {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       translatingPage = page;
       const prev = pageStates.get(page);
+      const hold = prev?.state === "partial";
       notePageState(page, {
-        state: "running",
+        state: hold ? "partial" : "running",
         hasLayout: Boolean(prev?.hasLayout) || Boolean(getPageLayout(page)?.blocks?.length),
-        k: 0,
+        k: hold ? (prev?.k || 0) : 0,
         m: prev?.m || 0
       });
       clearSlotPainted(page);
@@ -6532,7 +6573,12 @@ async function translateWholeDocument() {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       const page = translatingPage;
       const prev = pageStates.get(page);
-      notePageState(page, { state: "running", m: Math.max(blockTotal, prev?.m || 0), k: prev?.k || 0 });
+      const hold = prev?.state === "partial";
+      notePageState(page, {
+        state: hold ? "partial" : "running",
+        m: Math.max(blockTotal, prev?.m || 0),
+        k: prev?.k || 0
+      });
       clearSlotPainted(page);
       renderArticle();
     },
@@ -6549,7 +6595,14 @@ async function translateWholeDocument() {
           hasLayout: true,
           k
         });
-      } else notePageState(page, { state: "running", hasLayout: true, k });
+      } else {
+        const prev = pageStates.get(page);
+        notePageState(page, {
+          state: prev?.state === "partial" ? "partial" : "running",
+          hasLayout: true,
+          k
+        });
+      }
       clearSlotPainted(page);
       renderArticle();
       if (res?.polishError) setStatus(PDF_COPY.polishFail, true);
@@ -7111,7 +7164,13 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
     const known = slotCount + bodyCount;
     if (known > 0) {
       const prev = pageStates.get(n);
-      notePageState(n, { state: "running", hasLayout: true, m: Math.max(known, prev?.m || 0), k: prev?.k || 0 });
+      const hold = prev?.state === "partial";
+      notePageState(n, {
+        state: hold ? "partial" : "running",
+        hasLayout: true,
+        m: Math.max(known, prev?.m || 0),
+        k: prev?.k || 0
+      });
       clearSlotPainted(n);
       renderArticle();
     }
@@ -7122,9 +7181,22 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
   const blocks = unitsForLayout(layout);
   if (n === pageNum) pageOriginals = blocks;
   const cached = pageCache.get(translatingDoc, n);
-  pageResults = pageHasTranslation(cached, pdfTargetLang) ? cached : emptyPageResults(layout);
-  if (!pageHasTranslation(cached, pdfTargetLang)) pageCache.set(translatingDoc, n, pageResults);
-  return liveOriginals(layout, blocks);
+  const saved = libraryEntry(n)?.pairs;
+  const filled = applySavedPairs(
+    liveOriginals(layout, blocks),
+    (Array.isArray(cached) && cached.length ? cached : saved) || [],
+    savedPairSettings()
+  );
+  const pending = unitsNeedingTranslation(filled, pdfTargetLang);
+  if (filled.length && pending.length < filled.length) {
+    const kept = mergeTranslationRows(Array.isArray(cached) ? cached : [], cacheableReuse(filled));
+    pageCache.set(translatingDoc, n, kept);
+    pageResults = kept;
+  } else {
+    pageResults = pageHasTranslation(cached, pdfTargetLang) ? cached : emptyPageResults(layout);
+    if (!pageHasTranslation(cached, pdfTargetLang)) pageCache.set(translatingDoc, n, pageResults);
+  }
+  return pending;
 }
 
 /** 原文: view toggle only. Does not abort the session or clear the page cache. */
@@ -7660,10 +7732,10 @@ async function loadCurrentPageText(explicitPage) {
       }
       if (saved?.pairs && !isStale()) {
         const prepared = bindSavedPairs(saved, unitsForLayout(quick));
-        const merged = applySavedPairs(unitsForLayout(quick), prepared.pairs);
+        const merged = applySavedPairs(unitsForLayout(quick), prepared.pairs, savedPairSettings());
         const quickBlocks = quick.blocks || [];
-        if (libraryCoversLiveBlocks(prepared.pairs, quickBlocks, pdfTargetLang) ||
-            libraryCoversLiveBlocks(merged, quickBlocks, pdfTargetLang)) {
+        if (libraryCoversLiveBlocks(prepared.pairs, quickBlocks, pdfTargetLang, pdfProvider) ||
+            libraryCoversLiveBlocks(merged, quickBlocks, pdfTargetLang, pdfProvider)) {
           pageResults = merged;
           pageCache.set(docId, n, merged);
         }
@@ -7699,9 +7771,9 @@ async function loadCurrentPageText(explicitPage) {
     } else if (saved?.pairs && !isStale()) {
       const blocks = layout.blocks || [];
       const prepared = bindSavedPairs(saved, unitsForLayout(layout));
-      const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs);
-      if (libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang) ||
-          libraryCoversLiveBlocks(merged, blocks, pdfTargetLang)) {
+      const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs, savedPairSettings());
+      if (libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang, pdfProvider) ||
+          libraryCoversLiveBlocks(merged, blocks, pdfTargetLang, pdfProvider)) {
         pageResults = merged;
         pageCache.set(docId, n, merged);
       }
