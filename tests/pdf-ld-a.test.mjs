@@ -69,6 +69,8 @@ test("LD-a copy, queued ranges, and toolbar totals", () => {
   assert.equal(mixed.n, 4);
   assert.equal(mixed.needsRetry, 2);
   assert.equal(docStatusView({ n: 0, t: 15, phase: "opening" }).text, "正在读取 PDF…");
+  assert.equal(docStatusView({ n: 24, t: 27, phase: "opening" }).text, "已译 24 / 27 页");
+  assert.equal(docStatusView({ n: 27, t: 27, phase: "opening" }).text, "已译 27 / 27 页");
   assert.equal(docStatusView({ n: 4, t: 15, needsRetry: 1, phase: "running" }).text, "已译 4 / 15 页");
   assert.notEqual(docStatusView({ n: 15, t: 15, needsRetry: 1, phase: "idle" }).text, "全文已译");
   assert.notEqual(docStatusView({ n: 15, t: 15, needsRetry: 0, phase: "running" }).text, "全文已译");
