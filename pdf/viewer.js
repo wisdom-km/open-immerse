@@ -2154,6 +2154,17 @@ function visualCropNotice(block, page) {
     : `（${visualAlt(block?.label)}裁图失败，请查看左栏原页）`);
 }
 
+function orphanVisualNotice(block, page) {
+  const table = /^(?:Table\s*|表\s*)\d+\s*[:：.]/i.test(block?.text || "");
+  const notice = visualCropNotice({ label: table ? "table" : "figure" }, page);
+  if (notice?.classList?.contains("oi-pdf-asset-fallback")) {
+    notice.textContent = PDF_READOUT_COPY.figurePlaceholder;
+    const n = Number(page) || 0;
+    if (n >= 1) notice.setAttribute("aria-label", `${table ? "表" : "图"}见原文第 ${n} 页`);
+  }
+  return notice;
+}
+
 function jumpAssetFallback(notice) {
   const page = Number(notice?.dataset?.page);
   if (!(page >= 1)) return;
@@ -2423,13 +2434,8 @@ function appendFixtureReadout(parent, layout, options = {}) {
       parent.append(node);
       continue;
     }
-    if (block.label === "caption" && !hasFigure) {
-      const slot = document.createElement("p");
-      slot.className = "oi-pdf-p";
-      slot.dataset.page = String(page);
-      slot.dataset.label = "figure";
-      slot.textContent = PDF_READOUT_COPY.figurePlaceholder;
-      parent.append(slot);
+    if (block.label === "caption" && !hasFigure && !block.captionFor) {
+      parent.append(orphanVisualNotice(block, page));
     }
     const plan = blockReadoutPlan(block);
     const node = document.createElement(plan.tag);
