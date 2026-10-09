@@ -183,6 +183,8 @@ function stubSource(cache, options = {}) {
   const delay = options.delay ?? LAYOUT_DELAY_MS;
   const fails = options.fails ?? 0;
   const gate = options.gate ?? 0;
+  const noBoxes = JSON.stringify(options.noBoxes || []);
+  const hang = options.hang ? "true" : "false";
   return `(() => {
   const params = new URLSearchParams(location.search);
   const mode = params.get("oiAuto") || "";
@@ -199,7 +201,7 @@ function stubSource(cache, options = {}) {
     batchSize: 8
   };
   const listeners = [];
-  window.__oiAuto = { scene, batches: [], messages: [], saved: [], layouts: [], layoutAttempts: [], layoutOk: 0 };
+  window.__oiAuto = { scene, batches: [], messages: [], saved: [], layouts: [], layoutAttempts: [], layoutOk: 0, aborted: [] };
   window.__oiLayoutDelay = ${delay};
   window.__oiLayoutStore = ${JSON.stringify(cache)};
   const storageKey = "oiSaved:" + scene;
@@ -259,6 +261,30 @@ function stubSource(cache, options = {}) {
       let body = {};
       try { body = JSON.parse((init && init.body) || "{}"); } catch { body = {}; }
       const page = Number(body.page) || 0;
+      const signal = init && init.signal;
+      const noBoxes = new Set(${noBoxes});
+      if (noBoxes.has(page)) {
+        window.__oiAuto.layouts.push(page);
+        window.__oiAuto.layoutAttempts.push({ page, status: 502, at: Date.now(), body: "no-boxes" });
+        return new Response("layout returned no boxes", { status: 502 });
+      }
+      if (${hang}) {
+        window.__oiAuto.layouts.push(page);
+        window.__oiAuto.layoutAttempts.push({ page, status: 0, at: Date.now() });
+        await new Promise((resolve, reject) => {
+          if (signal && signal.aborted) {
+            window.__oiAuto.aborted.push(page);
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+          }
+          const onAbort = () => {
+            window.__oiAuto.aborted.push(page);
+            reject(new DOMException("Aborted", "AbortError"));
+          };
+          if (signal) signal.addEventListener("abort", onAbort, { once: true });
+        });
+        return new Response(JSON.stringify({ layoutDetails: [] }), { status: 200 });
+      }
       const left = Number(sessionStorage.getItem("oiLayoutFails") || "0");
       if (left > 0) {
         sessionStorage.setItem("oiLayoutFails", String(left - 1));
@@ -270,7 +296,19 @@ function stubSource(cache, options = {}) {
       if (gate && window.__oiAuto.layoutOk >= gate) {
         window.__oiAuto.layouts.push(page);
         window.__oiAuto.layoutAttempts.push({ page, status: 0, at: Date.now() });
-        await new Promise(() => {});
+        await new Promise((resolve, reject) => {
+          if (signal && signal.aborted) {
+            window.__oiAuto.aborted.push(page);
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+          }
+          if (signal) {
+            signal.addEventListener("abort", () => {
+              window.__oiAuto.aborted.push(page);
+              reject(new DOMException("Aborted", "AbortError"));
+            }, { once: true });
+          }
+        });
       }
       window.__oiAuto.layouts.push(page);
       const started = Date.now();
@@ -477,7 +515,9 @@ const READ = `(() => {
     library: (window.__oiAuto && window.__oiAuto.library) || [],
     saved: (window.__oiAuto && window.__oiAuto.saved) || [],
     layouts: (window.__oiAuto && window.__oiAuto.layouts) || [],
-    layoutAttempts: (window.__oiAuto && window.__oiAuto.layoutAttempts) || []
+    layoutAttempts: (window.__oiAuto && window.__oiAuto.layoutAttempts) || [],
+    aborted: (window.__oiAuto && window.__oiAuto.aborted) || [],
+    paint: window.__oiPaint || []
   });
 })()`;
 
@@ -778,6 +818,63 @@ test("502 会退避重试，写回过的页中断后不再请求，公式槽重�
   }));
 });
 
+async function loadCurrentPaper() {
+  const { textLayerToBlocks } = await import("../lib/pdf-text-layer.js");
+  const bytes = readFileSync(dpoPath);
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  const doc = await getDocument({ data: new Uint8Array(bytes), verbosity: 0, isOffscreenCanvasSupported: false }).promise;
+  const pages = [];
+  try {
+    for (let number = 1; number <= doc.numPages; number += 1) {
+      const pdfPage = await doc.getPage(number);
+      const content = await pdfPage.getTextContent();
+      const viewport = pdfPage.getViewport({ scale: 1 });
+      const ops = await pdfPage.getOperatorList();
+      const built = stampLayoutBids(number, textLayerToBlocks({
+        items: content.items,
+        viewport,
+        images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+        page: number
+      }));
+      pages.push({ page: number, blocks: built.blocks, layout: built });
+    }
+  } finally {
+    await doc.destroy();
+  }
+  return { hash, pageCount: pages.length, pages };
+}
+
+function currentLibrary(paper, version) {
+  return {
+    pageCount: paper.pageCount,
+    pages: paper.pages.map((entry) => {
+      const skip = isSkipOnlyPage(entry.blocks);
+      const layout = cacheableLayout({ ...entry.layout, page: entry.page, blocks: entry.blocks, layoutVersion: version });
+      layout.layoutVersion = version;
+      return {
+        page: entry.page,
+        pairs: skip ? [] : translatableBlocks(entry.blocks).map(pairFrom),
+        layout,
+        layoutVersion: version,
+        ...(skip ? { skipped: true } : {})
+      };
+    })
+  };
+}
+
+function misalignedHosts(paper) {
+  const want = [[5, 1], [18, 2], [19, 1], [20, 1]];
+  const chosen = [];
+  for (const [page, count] of want) {
+    const entry = paper.pages.find((item) => item.page === page);
+    const blocks = (entry?.blocks || []).filter((block) => (
+      block.label === "text" && block.bid && (String(block.text).match(/⟦f\d+⟧/g) || []).length >= 2
+    ));
+    chosen.push(...blocks.slice(0, count));
+  }
+  return chosen;
+}
+
 async function formulaHost(paper) {
   const { textLayerToBlocks } = await import("../lib/pdf-text-layer.js");
   const doc = await getDocument({
@@ -816,3 +913,235 @@ async function formulaHost(paper) {
   }
   return null;
 }
+
+test("no-boxes 不重试，回退标记下次升级，错槽重译，重开不闪旧版", { timeout: 420000 }, async (t) => {
+  const version = await currentLayoutVersion();
+  const paper = await loadCurrentPaper();
+  assert.equal(paper.pageCount, 27);
+  const page7 = paper.pages.find((entry) => entry.page === 7);
+  assert.equal(page7.blocks.some((block) => block.label === "figure"), true);
+  const hosts = misalignedHosts(paper);
+  assert.equal(hosts.length, 5, hosts.map((block) => block.bid).join(","));
+  const library = currentLibrary(paper, version);
+  const page4 = library.pages.find((entry) => entry.page === 4);
+  page4.layout.fallback = { source: "text-layer", reason: "http-502" };
+  const page12 = library.pages.find((entry) => entry.page === 12);
+  delete page12.layout.layoutVersion;
+  delete page12.layoutVersion;
+  for (const block of hosts) {
+    const row = library.pages.find((entry) => entry.page === Number(String(block.bid).match(/p(\d+)/)?.[1]) || block.page);
+    const pair = library.pages.flatMap((entry) => entry.pairs || []).find((item) => item.bid === block.bid);
+    assert.ok(pair, block.bid);
+    pair.translation = `见⟦f99⟧${block.bid}`;
+    void row;
+  }
+  const fixtures = new Map([["dpo-fallback", library]]);
+  const server = await serveRepo(fixtures);
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-layout-rev-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(child.stdio[3], child.stdio[4]);
+  t.after(async () => {
+    try { cdp.dispose(); } finally {
+      await cleanupChrome({ t, child, server, ownedDir, userDataDir });
+    }
+  });
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const send = (method, params) => cdp.send(method, params, sessionId);
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: stubSource({}, { delay: 0, noBoxes: [12] })
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails;
+      throw new Error(detail.exception?.description || detail.text || JSON.stringify(detail));
+    }
+    return result.result?.value;
+  };
+  const snapshot = async () => JSON.parse(await evaluate(READ));
+  const src = `${origin}/tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf`;
+  const viewer = `${origin}/pdf/viewer.html?oiAuto=stale&oiScene=dpo-fallback&src=${encodeURIComponent(src)}`;
+  await send("Page.navigate", { url: viewer });
+
+  let firstPaint = null;
+  let opened = null;
+  const openBy = Date.now() + 180000;
+  while (Date.now() < openBy) {
+    try { opened = await snapshot(); } catch { await sleep(250); continue; }
+    if (!firstPaint) {
+      firstPaint = (opened.paint || []).find((item) => item.page === 7) || null;
+    }
+    const attempts12 = (opened.layoutAttempts || []).filter((item) => item.page === 12);
+    const saved4 = (opened.saved || []).find((item) => item.page === 4 && item.layoutVersion === version && !item.layout?.fallback);
+    const saved12 = (opened.saved || []).find((item) => item.page === 12 && item.layout?.fallback?.reason === "no-boxes");
+    const shown = new Set((opened.messages || []).flatMap((message) => (message.items || []).map((item) => item.bid)));
+    const queued = hosts.every((block) => shown.has(block.bid));
+    const storedZh = hosts.every((block) => (opened.saved || []).some((page) => (
+      (page.pairs || []).some((pair) => pair.bid === block.bid && String(pair.translation || "").includes("译:"))
+    )));
+    if (attempts12.length === 1 && saved4 && saved12 && queued && storedZh && counted(opened.doc, 27) === 27) break;
+    await sleep(300);
+  }
+  assert.ok(opened, "no snapshot");
+  assert.ok(firstPaint && firstPaint.visuals > 0, `page 7 first paint ${JSON.stringify(firstPaint)}`);
+  assert.equal((opened.paint || []).find((item) => item.page === 7).visuals > 0, true);
+  const attempts12 = (opened.layoutAttempts || []).filter((item) => item.page === 12);
+  assert.equal(attempts12.length, 1, JSON.stringify(opened.layoutAttempts));
+  assert.equal(attempts12[0].body, "no-boxes");
+  const saved4 = (opened.saved || []).find((item) => item.page === 4);
+  assert.equal(saved4?.layoutVersion, version);
+  assert.equal(saved4?.layout?.fallback, undefined);
+  const saved12 = (opened.saved || []).find((item) => item.page === 12);
+  assert.equal(saved12?.layout?.fallback?.reason, "no-boxes");
+  assert.equal(saved12?.layout?.fallback?.source, "text-layer");
+  const requested = new Set((opened.messages || []).flatMap((message) => (message.items || []).map((item) => item.bid)));
+  for (const block of hosts) assert.equal(requested.has(block.bid), true, block.bid);
+  const formula = JSON.parse(await evaluate(`(() => {
+    const hosts = ${JSON.stringify(hosts.map((block) => ({
+      bid: block.bid,
+      tokens: (String(block.text).match(/\u27e6f\d+\u27e7/g) || []).length
+    })))};
+    return JSON.stringify(hosts.map((host) => {
+      const node = document.querySelector('#readerFlow [data-bid="' + host.bid + '"]');
+      const zh = node ? [...node.querySelectorAll(".rf-zh")].map((el) => el.textContent || "").join("").trim() : "";
+      return {
+        bid: host.bid,
+        zh,
+        math: node ? node.querySelectorAll(".rf-zh .oi-pdf-inline-math").length : 0,
+        tokens: host.tokens,
+        lead: (node?.innerText || "").includes("公式槽待对齐")
+      };
+    }));
+  })()`));
+  for (const row of formula) {
+    assert.equal(row.lead, false, JSON.stringify(row));
+    assert.match(row.zh, /译:/, JSON.stringify(row));
+    assert.equal(/^见⟦/.test(row.zh), false, JSON.stringify(row));
+    assert.equal(row.math, row.tokens, JSON.stringify(row));
+  }
+  const firstLayouts = (opened.layouts || []).length;
+  const firstBatches = opened.batches;
+  let settledKey = "";
+  let quiet = 0;
+  const settleBy = Date.now() + 20000;
+  while (quiet < 4 && Date.now() < settleBy) {
+    const snap = await snapshot();
+    const busy = (snap.pages || []).some((page) => page.state === "running" || page.state === "queued" || page.state === "layout");
+    const key = JSON.stringify(snap.saved || []);
+    if (!busy && key && key === settledKey) quiet += 1;
+    else quiet = 0;
+    settledKey = key;
+    opened = snap;
+    await sleep(300);
+  }
+
+  await send("Page.navigate", { url: "about:blank" });
+  await sleep(400);
+  await send("Page.navigate", { url: viewer });
+  let again = null;
+  let reopenPaint = null;
+  const againBy = Date.now() + 90000;
+  while (Date.now() < againBy) {
+    try { again = await snapshot(); } catch { await sleep(200); continue; }
+    if (!reopenPaint) reopenPaint = (again.paint || []).find((item) => item.page === 7) || null;
+    const figure = (again.visuals || []).some((item) => item.page === 7 && item.label === "figure");
+    if (counted(again.doc, 27) === 27 && figure && again.layouts.length === 0 && again.batches === 0) break;
+    await sleep(200);
+  }
+  assert.equal(counted(again?.doc, 27), 27, again?.doc);
+  assert.equal(again.layouts.length, 0, `reopen layouts ${JSON.stringify(again.layouts)}`);
+  assert.equal(again.batches, 0, JSON.stringify({
+    batches: again.batches,
+    messages: (again.messages || []).map((message) => (message.items || []).map((item) => item.bid || item.text || "").slice(0, 4))
+  }));
+  assert.ok(reopenPaint && reopenPaint.visuals > 0, `reopen page 7 ${JSON.stringify(reopenPaint)}`);
+  t.diagnostic(JSON.stringify({
+    firstLayouts,
+    firstBatches,
+    reopenLayouts: again.layouts.length,
+    reopenBatches: again.batches,
+    noBoxesAttempts: attempts12.length,
+    hosts: hosts.map((block) => block.bid)
+  }));
+});
+
+test("关闭页面会取消进行中的划区请求", { timeout: 240000 }, async (t) => {
+  const version = await currentLayoutVersion();
+  const paper = await loadCurrentPaper();
+  const library = currentLibrary(paper, version);
+  const page2 = library.pages.find((entry) => entry.page === 2);
+  delete page2.layout.layoutVersion;
+  delete page2.layoutVersion;
+  const fixtures = new Map([["dpo-abort", library]]);
+  const server = await serveRepo(fixtures);
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-layout-rev-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(child.stdio[3], child.stdio[4]);
+  t.after(async () => {
+    try { cdp.dispose(); } finally {
+      await cleanupChrome({ t, child, server, ownedDir, userDataDir });
+    }
+  });
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const send = (method, params) => cdp.send(method, params, sessionId);
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: stubSource({}, { delay: 0, hang: true })
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails;
+      throw new Error(detail.exception?.description || detail.text || JSON.stringify(detail));
+    }
+    return result.result?.value;
+  };
+  const src = `${origin}/tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf`;
+  const viewer = `${origin}/pdf/viewer.html?oiAuto=stale&oiScene=dpo-abort&src=${encodeURIComponent(src)}`;
+  await send("Page.navigate", { url: viewer });
+  let started = null;
+  const startBy = Date.now() + 180000;
+  while (Date.now() < startBy) {
+    try {
+      started = JSON.parse(await evaluate(READ));
+    } catch {
+      await sleep(250);
+      continue;
+    }
+    if ((started.layouts || []).length >= 1) break;
+    await sleep(200);
+  }
+  assert.ok((started?.layouts || []).length >= 1, "layout request never started");
+  const hung = started.layouts[0];
+  await evaluate(`window.dispatchEvent(new Event("pagehide"))`);
+  let after = null;
+  const abortBy = Date.now() + 5000;
+  while (Date.now() < abortBy) {
+    try { after = JSON.parse(await evaluate(READ)); } catch { await sleep(100); continue; }
+    if ((after.aborted || []).includes(hung)) break;
+    await sleep(100);
+  }
+  assert.ok((after?.aborted || []).includes(hung), JSON.stringify(after?.aborted));
+  const inflight = after.layouts.length;
+  await sleep(600);
+  const later = JSON.parse(await evaluate(READ));
+  const extras = later.layouts.slice(inflight);
+  assert.equal(extras.some((page) => page !== hung), false, `orphan layouts ${JSON.stringify(later.layouts)}`);
+});

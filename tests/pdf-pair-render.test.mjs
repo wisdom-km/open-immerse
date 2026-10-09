@@ -2193,10 +2193,13 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
     assert.equal(arrived.follow, "on", "PG1 capsule resumes follow");
     near(arrived.delta, 0, 8, "PG1 source page top");
 
+    await evaluate(`window.__oiReloadMark = "fl3"`);
     await send("Page.reload", { ignoreCache: true });
     await waitFor(`(() => {
+      if (window.__oiReloadMark === "fl3") return "";
       const pager = document.getElementById("sourcePageLabel")?.textContent || "";
-      return /\\/\\s*15/.test(pager) ? pager : "";
+      const follow = document.querySelector(".workspace")?.dataset.follow || "";
+      return /\\/\\s*15/.test(pager) && follow ? "ready" : "";
     })()`, "FL3 reload");
     const storedOn = await evaluate(`(() => ({
       stored: localStorage.getItem("reader.follow"),

@@ -16,7 +16,9 @@ import {
   layoutCacheKey,
   cacheableLayout,
   resolveLayoutMode,
-  shouldFetchCloud
+  shouldFetchCloud,
+  storedLayoutCurrent,
+  storedLayoutDisplayable
 } from "../lib/pdf-layout-client.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -242,6 +244,45 @@ test("a 502 is retried with capped backoff and a 4xx is not", async () => {
   );
   assert.equal(exhausted, LAYOUT_RETRY_DELAYS_MS.length + 1);
   assert.deepEqual(backoff, LAYOUT_RETRY_DELAYS_MS);
+
+  let noBoxes = 0;
+  const noBoxSleeps = [];
+  let noBoxError = null;
+  try {
+    await fetchLocalEnvelope({
+      page: 12,
+      fetchImpl: async () => {
+        noBoxes += 1;
+        return { ok: false, status: 502, text: async () => JSON.stringify({ error: "layout returned no boxes" }) };
+      },
+      sleep: async (ms) => { noBoxSleeps.push(ms); }
+    });
+  } catch (error) {
+    noBoxError = error;
+  }
+  assert.equal(noBoxError?.code, "no-boxes");
+  assert.equal(noBoxError?.status, 502);
+  assert.equal(noBoxes, 1);
+  assert.deepEqual(noBoxSleeps, []);
+
+  const version = "source-v3:abc";
+  const blocks = [{ id: "a", label: "text", text: "Hi" }];
+  const transient = cacheableLayout({
+    page: 4,
+    blocks,
+    layoutVersion: version,
+    fallback: { source: "text-layer", reason: "http-502" }
+  });
+  assert.deepEqual(transient.fallback, { source: "text-layer", reason: "http-502" });
+  assert.equal(storedLayoutCurrent({ layout: transient, layoutVersion: version }, version), null);
+  assert.equal(storedLayoutDisplayable({ layout: transient, layoutVersion: version }, version).blocks.length, 1);
+  const emptyVendor = cacheableLayout({
+    page: 12,
+    blocks,
+    layoutVersion: version,
+    fallback: { source: "text-layer", reason: "no-boxes" }
+  });
+  assert.equal(storedLayoutCurrent({ layout: emptyVendor, layoutVersion: version }, version).blocks.length, 1);
 });
 
 test("viewer falls back to the text layer and crops both modes with one function", () => {
@@ -255,6 +296,10 @@ test("viewer falls back to the text layer and crops both modes with one function
   assert.match(viewerSrc, /if \(layoutNotice\) setStatus\(layoutNotice\)/);
   assert.equal(LAYOUT_FALLBACK_STATUS, "划区服务不可用，已使用文字层");
   assert.equal(LAYOUT_EMPTY_KEY_STATUS, "云端密钥为空，已使用文字层");
+  assert.match(viewerSrc, /pagehide/);
+  assert.match(viewerSrc, /abortInflightLayouts/);
+  assert.match(viewerSrc, /AbortController/);
+  assert.match(viewerSrc, /code === "no-boxes"/);
   assert.match(viewerSrc, /cropBlockImage/);
   assert.match(viewerSrc, /OI_ENSURE_GLMOCR/);
   assert.match(viewerSrc, /LAYOUT_STARTING_STATUS/);

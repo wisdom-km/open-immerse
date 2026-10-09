@@ -4,7 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { blockReadoutPlan, blockRenderPieces, blockTranslationIntegrity, displayCropWidthCss, displayInkMinEm, DISPLAY_CROP_MIN_HEIGHT_EM, DISPLAY_INK_PREFER, remapLiveExtraPlaceholders } from "../lib/pdf-blocks.js";
-import { applySavedPairs, blockSoftLead } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, mergeLibraryPairs, pairsWithoutUnalignedSlots } from "../lib/pdf-library.js";
+import { libraryPageRunState } from "../lib/pdf-viewer.js";
 import { formatPlaintextRelation, plaintextRelationParts, plaintextRelationsIn } from "../lib/pdf-plaintext-formula.js";
 import {
   FORMULA_INK_PAD_PX,
@@ -486,4 +487,46 @@ test("a reused translation remaps formula slots onto the new block", () => {
   assert.equal(keptPieces.filter((piece) => piece.type === "image").length, 2);
   assert.doesNotMatch(keptPieces.map((piece) => piece.text || "").join(""), /待对齐/);
   assert.match(keptPieces.map((piece) => piece.text || "").join(""), /see/);
+
+  const misaligned = {
+    bid: "b-mis",
+    sourceId: "p18-s1",
+    label: "text",
+    text: "see ⟦f1⟧ and ⟦f2⟧",
+    sourceText: "see ALPHA and BETA"
+  };
+  const stalePair = {
+    bid: misaligned.bid,
+    sourceId: misaligned.sourceId,
+    text: "see ⟦f9⟧ and BETA",
+    sourceText: misaligned.sourceText,
+    translation: "见⟦f9⟧和乙",
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  };
+  assert.equal(libraryPageRunState({
+    pairs: [stalePair],
+    blocks: [misaligned],
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  }), "queued");
+  const fresh = {
+    bid: misaligned.bid,
+    text: misaligned.text,
+    sourceText: misaligned.sourceText,
+    translation: "见甲⟦f1⟧和乙⟦f2⟧",
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  };
+  const stored = mergeLibraryPairs(pairsWithoutUnalignedSlots([stalePair], [misaligned], {
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  }), [fresh], [misaligned], "zh-CN");
+  assert.equal(stored[0].translation, fresh.translation);
+  assert.equal(libraryPageRunState({
+    pairs: stored,
+    blocks: [misaligned],
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  }), "done");
 });

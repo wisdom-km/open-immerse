@@ -336,7 +336,7 @@ test("viewer soft status no longer treats a bare migrated hole as pending-review
   assert.equal(viewer.includes("待核对段落不会自动重新翻译"), false);
   assert.match(viewer, /libraryHoldCopy\(/);
   assert.match(viewer, /rememberSkipHole\(/);
-  assert.equal((viewer.match(/bindSavedPairs\(/g) || []).length, 4);
+  assert.equal((viewer.match(/bindSavedPairs\(/g) || []).length, 5);
   const currentFn = viewer.slice(
     viewer.indexOf("async function translateCurrentPage"),
     viewer.indexOf("async function translateWholeDocument")
@@ -346,7 +346,7 @@ test("viewer soft status no longer treats a bare migrated hole as pending-review
     viewer.indexOf("async function loadCurrentPageText"),
     viewer.indexOf("function updatePager")
   );
-  assert.equal((loadFn.match(/bindSavedPairs\(/g) || []).length, 2);
+  assert.equal((loadFn.match(/bindSavedPairs\(/g) || []).length, 3);
   assert.match(viewer, /isSkipOnlyPage\(/);
   const whole = viewer.slice(viewer.indexOf("async function translateWholeDocument"));
   const current = viewer.slice(
