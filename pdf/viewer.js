@@ -254,7 +254,7 @@ import {
   pageCropLooksEmpty,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import { getProvider, missingRequiredField } from "../lib/providers.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -1708,6 +1708,17 @@ function setPageLayout(page, layout) {
     noteFormulaCropPlan(layout);
   }
   layoutCache.set(layoutKey(page), layout);
+  if (viewerUnderTest() && layout?.blocks) {
+    const bucket = globalThis.__oiLayouts || (globalThis.__oiLayouts = {});
+    bucket[page] = translatableBlocks(layout.blocks).map((block) => ({
+      id: String(block.id || ""),
+      bid: String(block.bid || ""),
+      sourceId: String(block.sourceId || ""),
+      text: String(block.text || ""),
+      sourceText: String(block.sourceText || block.text || ""),
+      label: String(block.label || "")
+    }));
+  }
 }
 
 function appendReadoutNode(input, parent) {
@@ -5947,11 +5958,15 @@ async function resolveBatchSize() {
 function rememberTranslation(page, results) {
   const rawLayout = getPageLayout(page);
   const layout = cacheableLayout(rawLayout);
-  const pairs = pairsFromResults(results, savedPairSettings());
-  const skipOnly = isSkipOnlyPage(rawLayout?.blocks);
+  const blocks = rawLayout?.blocks || [];
+  const verified = pairsVerifiedForLibrary(results, blocks, savedPairSettings());
+  const skipOnly = isSkipOnlyPage(blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
-  if (!pairs.length && !skipOnly) return Promise.resolve();
-  if (!pairs.length && existing && (existing.pairs?.length || existing.skipped)) return Promise.resolve();
+  if (!verified.length && !skipOnly) return Promise.resolve();
+  if (!verified.length && existing && (existing.pairs?.length || existing.skipped)) return Promise.resolve();
+  const pairs = verified.length
+    ? mergeLibraryPairs(existing?.pairs, verified, blocks, pdfTargetLang)
+    : [];
   if (pairs.length) replaceLibraryPagePairs(libraryDoc, page, pairs);
   // Capture this document before queuing: the user may open another PDF while
   // earlier pages are still being saved.
@@ -6400,6 +6415,10 @@ async function adoptLibraryPages(options = {}) {
         && !isTitlePageCandidate(page, pageTextForStructure(blocks))
     });
     if (state === "queued") {
+      if (prior?.state === "skipped" || prior?.state === "empty" || entry?.skipped) {
+        notePageState(page, { state: prior?.state === "empty" ? "empty" : "skipped", hasLayout: Boolean(blocks?.length) || Boolean(prior?.hasLayout) });
+        continue;
+      }
       const live = translatableBlocks(blocks || []).length;
       const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
       if (viewerUnderTest() && entry && pairCount < live) {
@@ -6412,7 +6431,6 @@ async function adoptLibraryPages(options = {}) {
       notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
       clearSlotPainted(page);
       publish();
-      if (prior?.state === "skipped" || prior?.state === "empty") continue;
       hole = true;
       if (!entry && page >= lastListed) break;
       continue;
@@ -6684,7 +6702,9 @@ async function translateWholeDocument() {
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
     await adoptLibraryPages({ onlyPage: page });
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
-    return (pageStates.get(page)?.state || "queued") === "done" ? "skip" : "translate";
+    const state = pageStates.get(page)?.state || "queued";
+    if (state === "done" || state === "skipped" || state === "empty" || state === "held") return "skip";
+    return "translate";
   } : undefined;
   let translatedDoc = await translateDocumentPages({
     ...pageJob,
@@ -7297,6 +7317,7 @@ async function adoptDoc(doc, title) {
   translatingPage = 0;
   pageCache.clear();
   pageStates.clear();
+  if (viewerUnderTest()) globalThis.__oiLayouts = {};
   docPhase = "opening";
   notePageState(1, { state: "layout", hasLayout: false });
   libraryArticle = null;

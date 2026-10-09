@@ -8,17 +8,21 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
-import { translatableBlocks } from "../lib/pdf-blocks.js";
+import { applyBlockTranslations, translatableBlocks } from "../lib/pdf-blocks.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
-import { applySavedPairs, pairsFromResults, sourceReuseHash } from "../lib/pdf-library.js";
+import { applySavedPairs, mergeLibraryPairs, pairsFromResults, pairsVerifiedForLibrary, sourceReuseHash } from "../lib/pdf-library.js";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import {
+  applyDraftTranslations,
   createPageCache,
+  createTranslateSession,
   docStatusView,
   libraryPageRunState,
   translateDocumentPages,
+  translatePageBlocks,
   translatedPageTotal,
   mergeTranslationRows,
+  translationsByBid,
   unitsNeedingTranslation
 } from "../lib/pdf-viewer.js";
 
@@ -264,6 +268,77 @@ test("a colliding bid does not keep the first write", () => {
   const restored = applySavedPairs([unit], [other, right], SETTINGS);
   assert.equal(restored[0].translation, "返回损失和奖励");
   assert.notEqual(restored[0].translationStatus, "source-uncertain");
+});
+
+test("a partial page applies translations by bid, never by page order", async () => {
+  const blocks = [
+    { id: "p9-b1", bid: "b1-p9-t0a1v38l", label: "text", text: "Body paragraph that was already translated.", sourceText: "Body paragraph that was already translated." },
+    { id: "p9-b2", bid: "b1-p9-t6section", label: "heading", text: "6.3 Generalization", sourceText: "6.3 Generalization" },
+    { id: "p9-b3", bid: "b1-p9-tother", label: "text", text: "Another settled paragraph.", sourceText: "Another settled paragraph." }
+  ];
+  const kept = "正文旧译";
+  const other = "另一段旧译";
+  const prior = blocks.map((block, index) => ({
+    ...block,
+    original: block.text,
+    role: block.label,
+    translation: index === 1 ? "" : (index === 0 ? kept : other)
+  }));
+  const heading = "6.3 泛化到新的输入分布";
+  const shuffled = [
+    { bid: "b1-p9-tnot-on-this-page", translation: "不该贴到任何块" },
+    { bid: "b1-p9-t6section", translation: heading }
+  ];
+  const sent = [];
+  const cache = createPageCache();
+  cache.set(1, 9, prior);
+  const session = createTranslateSession();
+  const out = await translatePageBlocks([prior[1]], {
+    session,
+    send: async (message) => {
+      sent.push(message);
+      session.inflight = { requestId: message.requestId, slice: message.texts, sliceStart: 0, items: message.items };
+      const draft = applyDraftTranslations(session, {
+        phase: "draft",
+        requestId: message.requestId,
+        translations: shuffled
+      }, prior);
+      assert.equal(draft[0].translation, kept);
+      assert.equal(draft[2].translation, other);
+      assert.equal(draft[1].translation, heading);
+      return { ok: true, translations: shuffled };
+    }
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].items[0].bid, "b1-p9-t6section");
+  assert.equal(out.results[0].bid, "b1-p9-t6section");
+  assert.equal(out.results[0].translation, heading);
+  const merged = mergeTranslationRows(prior, out.results);
+  assert.equal(merged[0].translation, kept);
+  assert.equal(merged[1].translation, heading);
+  assert.equal(merged[2].translation, other);
+  const painted = applyBlockTranslations(blocks, merged);
+  assert.equal(painted[0].translation, kept);
+  assert.equal(painted[1].translation, heading);
+  assert.equal(painted.find((block) => block.bid === "b1-p9-t0a1v38l").translation, kept);
+  const unordered = applyBlockTranslations(blocks, [{ translation: heading }]);
+  assert.equal(unordered[0].translation, undefined);
+  assert.equal(unordered[1].translation, undefined);
+  const bound = translationsByBid({ translations: shuffled }, sent[0].items);
+  assert.equal(bound.get("b1-p9-t6section"), heading);
+  assert.equal(bound.has("b1-p9-tnot-on-this-page"), false);
+  cache.set(1, 9, merged);
+  const again = mergeTranslationRows(cache.get(1, 9), [
+    { bid: "b1-p9-t6section", text: blocks[1].text, sourceText: blocks[1].sourceText, translation: "另一句不该覆盖", role: "heading" }
+  ]);
+  assert.equal(again[1].translation, heading);
+  const verified = pairsVerifiedForLibrary(merged, blocks, SETTINGS);
+  const stored = mergeLibraryPairs([
+    { bid: "b1-p9-t0a1v38l", text: blocks[0].text, sourceText: blocks[0].sourceText, translation: kept, targetLang: "zh-CN" }
+  ], verified, blocks);
+  assert.equal(stored.find((pair) => pair.bid === "b1-p9-t0a1v38l").translation, kept);
+  assert.equal(stored.find((pair) => pair.bid === "b1-p9-t6section").translation, heading);
+  assert.equal(stored.some((pair) => pair.translation === "不该贴到任何块"), false);
 });
 
 test("opening a document seeds progress before the layout ingest", () => {
