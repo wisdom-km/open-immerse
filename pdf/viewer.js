@@ -7696,11 +7696,14 @@ async function goPage(dir) {
   view?.wrap.scrollIntoView({ block: "start", behavior: PANE_SYNC_BEHAVIOR });
   updatePager();
   updateSourcePageLabel(next);
-  if (bringTranslation && pageHasFlow(next)) {
+  // Library pairs can paint a page before its layout exists. That flow has no
+  // bids yet, so the page still needs its text layer or sidecar layout.
+  const laid = Boolean(getPageLayout(next)?.blocks?.length);
+  if (bringTranslation && pageHasFlow(next) && laid) {
     pageNum = next;
     updatePager();
     revealTranslationPage(next);
-  } else if (!pageHasFlow(next)) {
+  } else if (!pageHasFlow(next) || !laid) {
     if (bringTranslation) {
       pageNum = next;
       updatePager();
