@@ -152,6 +152,7 @@ import {
   displayCropColumnFraction,
   displayFormulaWidthCss,
   blockRenderPieces,
+  retainCaptionFormulas,
   cropBlockCanvas,
   cropBlockImage,
   rasterCropRect,
@@ -2191,7 +2192,7 @@ function captionNode(block, page, layout) {
   node.dataset.blockId = String(block.id || "");
   if (block.bid) node.dataset.bid = String(block.bid);
   node.dataset.label = "caption";
-  fillBlockText(node, block, layout);
+  fillBlockText(node, retainCaptionFormulas(block), layout);
   return node;
 }
 
@@ -2416,7 +2417,10 @@ function appendFixtureReadout(parent, layout, options = {}) {
     }
     const paired = block.label === "caption" ? blocks.find((item) => item.id === block.captionFor) : null;
     const visual = (block.label === "figure" || block.label === "table") ? block : paired;
-    if (visual && (block.label === "figure" || block.label === "table" || block.label === "caption")) {
+    if (visual && used.has(visual.id)) {
+      if (block.label !== "caption") continue;
+      // A second caption must not paint the same figure again.
+    } else if (visual && (block.label === "figure" || block.label === "table" || block.label === "caption")) {
       const caption = blocks.find((item) => item.captionFor === visual.id);
       used.add(visual.id);
       if (caption) used.add(caption.id);
