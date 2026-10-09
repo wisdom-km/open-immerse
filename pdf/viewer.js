@@ -172,12 +172,14 @@ import {
   LAYOUT_FALLBACK_STATUS,
   LAYOUT_STARTING_STATUS,
   cacheableLayout,
+  currentLayoutVersion,
   fetchCloudEnvelope,
   fetchLocalEnvelope,
   layoutCacheKey,
   normalizePdfLayout,
   resolveLayoutMode,
-  shouldFetchCloud
+  shouldFetchCloud,
+  storedLayoutCurrent
 } from "../lib/pdf-layout-client.js";
 import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import {
@@ -2383,17 +2385,25 @@ function slotHasTranslation(slot) {
 
 function layoutForReadout(layout) {
   const cached = pageCache.get(docId, layout.page);
-  const stored = libraryEntry(layout.page)?.pairs || cached;
+  const libraryPairs = libraryEntry(layout.page)?.pairs || [];
   let blocks = layout.blocks || [];
-  if (Array.isArray(cached) && cached.length) {
-    const units = unitsForLayout(layout);
-    const merged = applySavedPairs(units, cached, savedPairSettings());
-    const rows = merged.some((unit) => settledText(unit.translation, unit.original || unit.text || unit.sourceText || "")) ? merged : cached;
-    blocks = applyBlockTranslations(layout.blocks, rows);
-  }
+  const paintRows = (rows) => {
+    if (!rows?.length || !blocks.length) return false;
+    const merged = applySavedPairs(unitsForLayout(layout), rows, savedPairSettings());
+    if (!merged.some((unit) => settledText(unit.translation, unit.original || unit.text || unit.sourceText || ""))) return false;
+    blocks = applyBlockTranslations(layout.blocks, merged);
+    return true;
+  };
+  // Saved pairs land on the live blocks. They must not replace the block list,
+  // or a pre-recovery library page hides the figures the new layout just built.
+  if (!paintRows(Array.isArray(cached) && cached.length ? cached : null)) paintRows(libraryPairs);
   if (!blocks.some((block) => settledText(block.translation, block.text || block.sourceText || ""))) {
-    const fallback = blocksFromLibraryPairs(layout.page, stored);
-    if (fallback.length) return { ...layout, blocks: fallback, textSource: "library" };
+    const fallback = blocksFromLibraryPairs(layout.page, libraryPairs.length ? libraryPairs : cached);
+    if (fallback.length) {
+      const visuals = (layout.blocks || []).filter((block) => block.label === "figure" || block.label === "table");
+      if (!visuals.length) return { ...layout, blocks: fallback, textSource: "library" };
+      return { ...layout, blocks: [...visuals, ...fallback] };
+    }
   }
   return { ...layout, blocks };
 }
@@ -6007,13 +6017,17 @@ function rememberTranslation(page, results) {
       page,
       pairs,
       layout,
+      ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
       sourceBase64,
       ...(skipped ? { skipped: true } : {})
     });
     librarySourceSent.add(hash);
-    if (skipped && libraryDoc && Array.isArray(libraryDoc.pages) &&
-        !libraryDoc.pages.some((item) => item.page === page)) {
-      libraryDoc.pages.push({ page, pairs: [], skipped: true });
+    const savedPage = libraryDoc?.pages?.find((item) => item.page === page);
+    if (savedPage && layout) {
+      savedPage.layout = layout;
+      if (layout.layoutVersion) savedPage.layoutVersion = layout.layoutVersion;
+    } else if (skipped && libraryDoc && Array.isArray(libraryDoc.pages)) {
+      libraryDoc.pages.push({ page, pairs: [], skipped: true, ...(layout ? { layout, layoutVersion: layout.layoutVersion } : {}) });
     }
   });
 }
@@ -6022,6 +6036,55 @@ function rememberSkipHole(page, blocks) {
   if (!isSkipOnlyPage(blocks)) return;
   if (libraryDoc?.pages?.some((item) => item.page === page)) return;
   rememberTranslation(page, []).catch(() => {});
+}
+
+const COUNTED_PAGE_STATES = new Set(["done", "partial", "skipped", "empty", "held"]);
+
+function countedPageState(state) {
+  return COUNTED_PAGE_STATES.has(state || "");
+}
+
+async function layoutVersionNow() {
+  try {
+    return await currentLayoutVersion();
+  } catch {
+    return "";
+  }
+}
+
+/** Write a freshly built layout back so the next open does not recompute it. */
+function persistPageLayout(page) {
+  const raw = getPageLayout(page);
+  const version = String(raw?.layoutVersion || "");
+  if (!version || !raw?.blocks?.length) return Promise.resolve();
+  const layout = cacheableLayout(raw);
+  const entry = libraryEntry(page);
+  const pairs = Array.isArray(entry?.pairs) ? entry.pairs : [];
+  const skipped = Boolean(entry?.skipped) || (isSkipOnlyPage(raw.blocks) && !pairs.length);
+  if (entry) {
+    entry.layout = layout;
+    entry.layoutVersion = version;
+    if (skipped) entry.skipped = true;
+  } else if (libraryDoc && Array.isArray(libraryDoc.pages)) {
+    libraryDoc.pages.push({ page, pairs, layout, layoutVersion: version, ...(skipped ? { skipped: true } : {}) });
+  }
+  const bytes = pdfBytes;
+  const title = document.title;
+  const pageCount = pdfDoc?.numPages || 0;
+  return enqueueLibraryWrite(async () => {
+    const hash = await pdfByteHash(bytes);
+    if (!hash || hash === "nohash") return;
+    await saveLibraryPage({
+      hash,
+      title,
+      pageCount,
+      page,
+      pairs,
+      layout,
+      layoutVersion: version,
+      ...(skipped ? { skipped: true } : {})
+    });
+  });
 }
 
 function persistPagePairs(saved) {
@@ -6042,6 +6105,7 @@ function persistPagePairs(saved) {
       page,
       pairs: saved.pairs,
       ...(layout ? { layout } : {}),
+      ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
       ...(saved.skipped ? { skipped: true } : {})
     });
   });
@@ -6554,6 +6618,15 @@ async function adoptLibraryPages(options = {}) {
         publish();
         continue;
       }
+      // A page that already counted stays counted while changed blocks are filled.
+      if (countedPageState(prior?.state)) {
+        notePageState(page, { state: "partial", hasLayout: Boolean(blocks?.length) });
+        clearSlotPainted(page);
+        publish();
+        hole = true;
+        if (!entry && page >= lastListed) break;
+        continue;
+      }
       const live = translatableBlocks(blocks || []).length;
       const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
       if (viewerUnderTest() && entry && pairCount < live) {
@@ -6577,6 +6650,15 @@ async function adoptLibraryPages(options = {}) {
         : blocksFromLibraryPairs(page, entry?.pairs || cached);
       const covers = !Array.isArray(blocks) || libraryCoversLiveBlocks(entry?.pairs || cached, blocks, pdfTargetLang, pdfProvider);
       if (state === "done" && (!filled.length || !covers)) {
+        if (countedPageState(prior?.state)) {
+          if (filled.length) pageCache.set(docId, page, cacheableReuse(filled));
+          notePageState(page, { state: "partial", hasLayout: Boolean(blocks?.length) });
+          clearSlotPainted(page);
+          publish();
+          hole = true;
+          if (!entry && page >= lastListed) break;
+          continue;
+        }
         hole = true;
         notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
         clearSlotPainted(page);
@@ -6774,7 +6856,7 @@ async function translateWholeDocument() {
       }
       translatingPage = page;
       const prev = pageStates.get(page);
-      const hold = prev?.state === "partial";
+      const hold = countedPageState(prev?.state);
       notePageState(page, {
         state: hold ? "partial" : "running",
         hasLayout: Boolean(prev?.hasLayout) || Boolean(getPageLayout(page)?.blocks?.length),
@@ -7242,7 +7324,12 @@ async function ingestVendorLayout(n, mode, isStale) {
   const png = raster.canvas.toDataURL("image/png");
   const hash = await pdfByteHash();
   const key = layoutCacheKey({ hash, page: n, mode });
-  let mapped = await readStoredLayout(key);
+  const version = await layoutVersionNow();
+  // A source-v3 entry with no revision, or an older revision, is not the current
+  // block structure. Library page layouts follow the same rule.
+  let mapped = storedLayoutCurrent(await readStoredLayout(key), version)
+    || storedLayoutCurrent(libraryEntry(n), version);
+  let recomputed = false;
   if (!mapped) {
     try {
       const envelope = mode === "cloud-ocr"
@@ -7268,7 +7355,9 @@ async function ingestVendorLayout(n, mode, isStale) {
       }
       attachFontRealNames(content.items, page.commonObjs);
       mapped = vendorLayoutToBlocks(envelope, { items: content.items, viewport, images, page: n });
+      if (version) mapped.layoutVersion = version;
       await writeStoredLayout(key, mapped);
+      recomputed = true;
     } catch (err) {
       if (!isStale() && err?.code !== "empty-key") layoutNotice = LAYOUT_FALLBACK_STATUS;
       return null;
@@ -7280,10 +7369,12 @@ async function ingestVendorLayout(n, mode, isStale) {
   const layout = stampBodyFont({
     ...mapped,
     kind: "blocks",
+    ...(version ? { layoutVersion: version } : {}),
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
   setPageLayout(n, layout);
+  if (recomputed) persistPageLayout(n).catch(() => {});
   return layout;
 }
 
@@ -7305,10 +7396,12 @@ async function ingestSkippedSourceLayout(n, isStale) {
   attachFontRealNames(content.items, page.commonObjs);
   const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
   if (!isSkipOnlyPage(built.blocks)) return { ...built, kind: "blocks", blocks: built.blocks || [] };
+  const version = await layoutVersionNow();
   const layout = stampBodyFont({
     ...built,
     kind: "blocks",
     protocol: built.protocol || PROTOCOL,
+    ...(version ? { layoutVersion: version } : {}),
     blocks: built.blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
@@ -7336,10 +7429,12 @@ async function ingestTextLayerLayout(n, isStale) {
   if (isStale()) return null;
   const blocks = await cropLayoutBlocks(raster, page, built.blocks, n, isStale);
   if (!blocks || isStale()) return null;
+  const version = await layoutVersionNow();
   const layout = stampBodyFont({
     ...built,
     kind: "blocks",
     protocol: built.protocol || PROTOCOL,
+    ...(version ? { layoutVersion: version } : {}),
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
@@ -7419,7 +7514,7 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
     const known = slotCount + bodyCount;
     if (known > 0) {
       const prev = pageStates.get(n);
-      const hold = prev?.state === "partial";
+      const hold = countedPageState(prev?.state);
       notePageState(n, {
         state: hold ? "partial" : "running",
         hasLayout: true,
