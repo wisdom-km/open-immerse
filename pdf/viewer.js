@@ -573,6 +573,7 @@ function onKey(event) {
     event.preventDefault();
     return;
   }
+  if (enterSelMenuFromPointer(event)) return;
   if (onMenuKey(event)) return;
   if (onSourceModeMenuKey(event)) return;
   if (event.key === "F10" && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
@@ -4035,6 +4036,22 @@ function onSelMenuClick(event) {
   event.stopPropagation();
   closeSelMenu();
   invokeSelAction(btn.dataset.selAction);
+}
+
+function enterSelMenuFromPointer(event) {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
+  const key = event.key;
+  const toEnd = key === "ArrowUp" || key === "End";
+  const toStart = key === "ArrowDown" || key === "Home";
+  if (!toEnd && !toStart) return false;
+  if (!selMenuOpen()) return false;
+  if (eventTargetIsField(event.target) || event.target?.isContentEditable) return false;
+  if (event.target?.closest?.(".oi-sel-menu") || document.activeElement?.closest?.(".oi-sel-menu")) return false;
+  const items = [...document.querySelectorAll(".oi-sel-menu [role='menuitem']")];
+  if (!items.length) return false;
+  event.preventDefault();
+  items[toEnd ? items.length - 1 : 0].focus({ preventScroll: true });
+  return true;
 }
 
 function onSelMenuKey(event) {

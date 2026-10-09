@@ -193,6 +193,16 @@ test("SEL-07 / SEL-19 keyboard opens the toolbar, roves, and escape restores the
   assert.match(menuKey, /ArrowDown/);
   assert.match(menuKey, /ArrowUp/);
   assert.match(menuKey, /closeSelMenu/);
+  const enterMenu = functionBody(viewer, "enterSelMenuFromPointer");
+  assert.match(onKey, /if \(enterSelMenuFromPointer\(event\)\) return;/);
+  assert.match(enterMenu, /selMenuOpen\(\)/);
+  assert.match(enterMenu, /ArrowDown/);
+  assert.match(enterMenu, /ArrowUp/);
+  assert.match(enterMenu, /Home/);
+  assert.match(enterMenu, /End/);
+  assert.match(enterMenu, /closest\?\.\("\.oi-sel-menu"\)/);
+  assert.match(enterMenu, /preventDefault\(\)/);
+  assert.match(enterMenu, /focus\(\{ preventScroll: true \}\)/);
   assert.match(css, /\.oi-sel-btn:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-reader-focus\)/);
   assert.match(css, /\.oi-sel-btn:focus-visible\s*\{[^}]*outline-offset:\s*2px/);
   assert.match(css, /\.oi-sel-menu \[role="menuitem"\]:focus-visible\s*\{[^}]*outline-offset:\s*-2px/);

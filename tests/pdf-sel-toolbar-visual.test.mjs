@@ -535,6 +535,63 @@ test("SEL-20 polish holds in headless Chrome on Attention and DPO", { timeout: 3
   assert.ok(Math.abs(Number(menuGeo.hintOpacity) - 0.55) < 0.02, JSON.stringify(menuGeo));
   assert.equal(menuGeo.itemWeight, "500", JSON.stringify(menuGeo));
   assert.equal(menuGeo.itemH, 32, JSON.stringify(menuGeo));
+  const menuEntry = async (key, code, vk) => {
+    await keyTap(key, code, vk);
+    return evaluate(`(() => {
+      const menu = document.querySelector(".oi-sel-menu");
+      const bar = document.querySelector(".oi-sel-toolbar");
+      const items = [...(menu?.querySelectorAll("[role='menuitem']") || [])];
+      const active = document.activeElement;
+      return {
+        menuOpen: Boolean(menu && !menu.hidden),
+        barOpen: Boolean(bar && !bar.hidden),
+        index: items.indexOf(active),
+        last: Math.max(0, items.length - 1),
+        role: active?.getAttribute?.("role") || "",
+        focusVisible: Boolean(active?.matches?.(":focus-visible"))
+      };
+    })()`);
+  };
+  const downEntry = await menuEntry("ArrowDown", "ArrowDown", 40);
+  assert.equal(downEntry.menuOpen, true, JSON.stringify(downEntry));
+  assert.equal(downEntry.barOpen, true, JSON.stringify(downEntry));
+  assert.equal(downEntry.role, "menuitem", JSON.stringify(downEntry));
+  assert.equal(downEntry.index, 0, JSON.stringify(downEntry));
+  assert.equal(downEntry.focusVisible, true, JSON.stringify(downEntry));
+  await keyTap("Escape", "Escape", 27);
+  const menuEsc = await evaluate(`(() => {
+    const menu = document.querySelector(".oi-sel-menu");
+    const bar = document.querySelector(".oi-sel-toolbar");
+    return {
+      menuOpen: Boolean(menu && !menu.hidden),
+      barOpen: Boolean(bar && !bar.hidden),
+      action: document.activeElement?.dataset?.selAction || ""
+    };
+  })()`);
+  assert.equal(menuEsc.menuOpen, false, JSON.stringify(menuEsc));
+  assert.equal(menuEsc.barOpen, true, JSON.stringify(menuEsc));
+  assert.equal(menuEsc.action, "more", JSON.stringify(menuEsc));
+  const moreUp = await buttonPoint("more");
+  assert.ok(moreUp, "more button missing before ArrowUp");
+  await clickAt(moreUp.x, moreUp.y);
+  const upBefore = await evaluate(`(() => {
+    const item = document.querySelector(".oi-sel-menu [role='menuitem']");
+    return {
+      menuOpen: document.querySelector(".oi-sel-menu")?.hidden === false,
+      itemFocus: Boolean(item?.matches(":focus-visible")),
+      activeRole: document.activeElement?.getAttribute?.("role") || ""
+    };
+  })()`);
+  assert.equal(upBefore.menuOpen, true, JSON.stringify(upBefore));
+  assert.equal(upBefore.itemFocus, false, JSON.stringify(upBefore));
+  assert.notEqual(upBefore.activeRole, "menuitem", JSON.stringify(upBefore));
+  const upEntry = await menuEntry("ArrowUp", "ArrowUp", 38);
+  assert.equal(upEntry.menuOpen, true, JSON.stringify(upEntry));
+  assert.equal(upEntry.barOpen, true, JSON.stringify(upEntry));
+  assert.equal(upEntry.role, "menuitem", JSON.stringify(upEntry));
+  assert.equal(upEntry.index, upEntry.last, JSON.stringify(upEntry));
+  assert.equal(upEntry.focusVisible, true, JSON.stringify(upEntry));
+  await keyTap("Escape", "Escape", 27);
   await evaluate(`(() => {
     document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
     return true;
