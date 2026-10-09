@@ -426,6 +426,25 @@ test("a reused translation remaps formula slots onto the new block", () => {
     translation: "损失⟦f7⟧还在",
     status: "verified"
   }])[0];
+  const widened = applySavedPairs([{
+    id: "p16",
+    sourceId: "p16-s1",
+    bid: "b1-p16-t0h4uryx",
+    label: "text",
+    text: "for all ⟦f3⟧. This completes the derivation.",
+    sourceText: "for all x ∈ D. This completes the derivation."
+  }], [{
+    sourceId: "p16-s1",
+    bid: "b1-p16-t0h4uryx",
+    text: "for all x ⟦f10⟧. This completes the derivation.",
+    sourceText: "for all x ∈ D. This completes the derivation.",
+    translation: "旧译16f9493bea44e8cd1e54dbc3bb277d0a⟦f10⟧",
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  }], { targetLang: "zh-CN", provider: "mymemory" })[0];
+  assert.equal(widened.translation, "旧译16f9493bea44e8cd1e54dbc3bb277d0a⟦f3⟧");
+  assert.equal(widened.failed, undefined);
+
   assert.equal(restored.translation, "损失⟦f3⟧还在");
   assert.equal(restored.failed, undefined);
   assert.equal(blockTranslationIntegrity(restored).valid, true);
