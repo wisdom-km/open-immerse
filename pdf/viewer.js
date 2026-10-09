@@ -2387,20 +2387,16 @@ function layoutForReadout(layout) {
   const cached = pageCache.get(docId, layout.page);
   const libraryPairs = libraryEntry(layout.page)?.pairs || [];
   let blocks = layout.blocks || [];
-  const mergedRows = (rows) => {
-    if (!rows?.length || !blocks.length) return null;
-    const merged = applySavedPairs(unitsForLayout(layout), rows, savedPairSettings());
+  const saved = (Array.isArray(cached) && cached.length) ? cached : libraryPairs;
+  if (saved.length && blocks.length) {
+    const merged = applySavedPairs(unitsForLayout(layout), saved, savedPairSettings());
     const settled = merged.some((unit) => settledText(unit.translation, unit.original || unit.text || unit.sourceText || ""));
-    return { merged, settled };
-  };
-  const fromCache = mergedRows(Array.isArray(cached) && cached.length ? cached : null);
-  const fromLibrary = fromCache?.settled ? null : mergedRows(libraryPairs);
-  // Saved pairs land on the live blocks. They must not replace the block list,
-  // or a pre-recovery library page hides the figures the new layout just built.
-  // Rows that do not settle for the current language are still applied: leaving
-  // the source in the translation slot makes it look landed after a language switch.
-  const chosen = fromCache?.settled ? fromCache : (fromLibrary?.settled ? fromLibrary : (fromCache || fromLibrary));
-  if (chosen?.merged?.length) blocks = applyBlockTranslations(layout.blocks, chosen.merged);
+    // Saved pairs land on the live blocks. They must not replace the block list,
+    // or a pre-recovery library page hides the figures the new layout just built.
+    // Rows that do not settle for the current language still keep their text:
+    // the merged pass blanks them, and the source would then count as landed.
+    blocks = applyBlockTranslations(layout.blocks, settled ? merged : saved);
+  }
   if (!blocks.some((block) => settledText(block.translation, block.text || block.sourceText || ""))) {
     const fallback = blocksFromLibraryPairs(layout.page, libraryPairs.length ? libraryPairs : cached);
     if (fallback.length) {
