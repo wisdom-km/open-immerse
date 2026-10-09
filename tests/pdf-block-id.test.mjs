@@ -240,13 +240,13 @@ test("applySavedPairs matches bid, then sourceId, then text", () => {
   assert.equal(textOnly[0].translation, "注意力");
 });
 
-test("layout cache key stays on source-v2 and the viewer stamps bids in one place", () => {
+test("layout cache key stays on source-v3 and the viewer stamps bids in one place", () => {
   assert.equal(
     layoutCacheKey({ hash: "abc", page: 4, mode: "text-layer" }),
-    "oi-pdf-layout:abc:4:text-layer:blocks-1:source-v2"
+    "oi-pdf-layout:abc:4:text-layer:blocks-1:source-v3"
   );
-  assert.match(layoutSrc, /source-v2/);
-  assert.equal(layoutSrc.includes("source-v3"), false);
+  assert.match(layoutSrc, /source-v3/);
+  assert.equal(layoutSrc.includes("source-v2"), false);
   assert.match(viewerSrc, /stampLayoutBids\(page, layout\)/);
   assert.match(viewerSrc, /dataset\.bid/);
   assert.match(viewerLibSrc, /if \(item\.bid\) extra\.bid = item\.bid/);
@@ -459,10 +459,10 @@ test("Attention and DPO text-layer bids match the locked reference", { timeout: 
   const dpo = await loadDocument(dpoPath);
   assert.equal(dpo.length, 27);
   const dpoBlocks = dpo.flatMap((page) => page.blocks);
-  assert.equal(dpoBlocks.length, 474);
+  assert.equal(dpoBlocks.length, 468);
   const dpoBids = dpoBlocks.map((block) => block.bid);
   assert.equal(dpoBids.every((bid) => isBid(bid)), true);
-  assert.equal(new Set(dpoBids).size, 474);
+  assert.equal(new Set(dpoBids).size, 468);
   assert.equal(findBlock(dpo, "p2-b8").block.bid, "b1-p2-t1hmmsbz");
   assert.equal(findBlock(dpo, "p3-b1").block.bid, "b1-p3-t1n7kik7");
   const byBase = new Map();

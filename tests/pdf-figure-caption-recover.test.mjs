@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import { PDF_MIRROR_OPS, vectorRectsFromOperatorList } from "../lib/pdf-mirror.js";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
-import { translatableBlocks } from "../lib/pdf-blocks.js";
+import { blockRenderPieces, retainCaptionFormulas, translatableBlocks } from "../lib/pdf-blocks.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dpoPath = join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf");
@@ -150,6 +150,23 @@ test("table cells above a narrow caption stay out of the body column", () => {
   assert.equal(text.includes(PLACEHOLDER), false);
 });
 
+test("a translated caption keeps a dropped inline formula token", () => {
+  const block = {
+    id: "cap",
+    label: "caption",
+    text: "Figure 4: Best of N baseline for N ⟦f1⟧. Performance plateaus.",
+    sourceText: "Figure 4: Best of N baseline for N = {1,4,16,64,128}. Performance plateaus.",
+    translation: "图 4： 的 N 选优基线",
+    placeholders: [{ token: "⟦f1⟧", blockId: "f1" }]
+  };
+  const kept = retainCaptionFormulas(block);
+  assert.match(kept.translation, /⟦f1⟧/);
+  const pieces = blockRenderPieces(kept, [kept, { id: "f1", label: "formula", imageUrl: "data:image/png;base64,crop" }]);
+  assert.equal(pieces.some((piece) => piece.type === "image" && piece.blockId === "f1"), true);
+  assert.match(pieces.map((piece) => piece.text || "").join(""), /图 4：/);
+  assert.equal(retainCaptionFormulas({ ...block, label: "text" }).translation, block.translation);
+});
+
 test("an unmatched caption placeholder is the clickable fallback, not a bare paragraph", () => {
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   assert.match(viewer, /function orphanVisualNotice\(block, page\)/);
@@ -229,6 +246,51 @@ test("DPO chart and table pages keep a real visual and drop in-figure text", { t
   assert.match(prose(pages.get(25)), /^Table 8:/m);
   assert.match(prose(pages.get(10)), /We find that with both prompts/);
   assert.match(prose(pages.get(9)), /6\.3 Generalization to a new input distribution/);
+  const page23 = pages.get(23);
+  const figure = page23.blocks.find((block) => block.label === "figure");
+  const table = page23.blocks.find((block) => block.label === "table");
+  assert.equal(page23.blocks.filter((block) => block.label === "figure").length, 1);
+  assert.equal(page23.blocks.filter((block) => block.label === "table").length, 1);
+  const figureCaption = page23.blocks.find((block) => block.captionFor === figure.id);
+  const tableCaption = page23.blocks.find((block) => block.captionFor === table.id);
+  assert.ok(page23.blocks.indexOf(figureCaption) > page23.blocks.indexOf(figure));
+  assert.ok(page23.blocks.indexOf(tableCaption) > page23.blocks.indexOf(table));
+  assert.match(figureCaption.text, /⟦f1⟧/);
+  assert.match(figureCaption.sourceText, /\{1,4,16,64,128\}/);
+  assert.match(tableCaption.text, /^Table 4:/);
+  assert.equal(new Set(page23.blocks.map((block) => block.id)).size, page23.blocks.length);
+});
+
+test("appendix table captions each own the region above them", { timeout: 120000 }, async () => {
+  assert.equal(existsSync(dpoPath), true);
+  const pages = await loadPages(dpoPath, [24, 26]);
+  const expect = {
+    24: ["Table 5:", "Table 6:"],
+    26: ["Table 9:", "Table 10:"]
+  };
+  for (const [number, labels] of Object.entries(expect)) {
+    const page = pages.get(Number(number));
+    assert.equal(page.sourceAudit.missing.length, 0, `page ${number}`);
+    assert.equal(page.sourceAudit.duplicates.length, 0, `page ${number}`);
+    const captions = labels.map((label) => page.blocks.find((block) => (block.text || "").startsWith(label)));
+    assert.equal(captions.every(Boolean), true, `page ${number} captions`);
+    const visuals = captions.map((caption) => page.blocks.find((block) => block.id === caption.captionFor));
+    assert.equal(new Set(visuals.map((block) => block?.id)).size, labels.length, `page ${number} shared visual`);
+    visuals.forEach((visual, index) => {
+      assert.equal(visual.label, "table");
+      assert.ok(visual.bbox[3] <= captions[index].bbox[1] + 0.02, `${labels[index]} sits under its table`);
+      assert.ok(page.blocks.indexOf(captions[index]) > page.blocks.indexOf(visual));
+    });
+    const text = prose(page);
+    for (const label of labels) assert.match(text, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(page.blocks.filter((block) => block.label === "table").length, labels.length);
+  }
+  assert.equal(prose(pages.get(24)).includes("Fiber Gourmet"), false);
+  assert.equal(prose(pages.get(24)).includes("about to propose"), false);
+  assert.equal(prose(pages.get(26)).includes("Pearl Harbor"), false);
+  assert.equal(prose(pages.get(26)).includes("what is 7 plus 2"), false);
+  assert.match(prose(pages.get(24)), /model generations/);
+  assert.match(prose(pages.get(26)), /coalition of the willing/);
 });
 
 test("Attention figures keep their locked regions", { timeout: 120000 }, async () => {
