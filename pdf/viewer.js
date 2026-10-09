@@ -5160,6 +5160,9 @@ function paintPageSlot(page) {
     delete slot.dataset.painted;
     return;
   }
+  if ((row.state === "done" || row.state === "partial") && !slotHasTranslation(slot)) {
+    delete slot.dataset.painted;
+  }
   const stable = slot.dataset.painted === "1" && row.state !== "running" && row.state !== "layout";
   if (stable) return;
   const ps = syncPageStatus(slot, page, row);
@@ -5949,6 +5952,7 @@ function rememberTranslation(page, results) {
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
   if (!pairs.length && !skipOnly) return Promise.resolve();
   if (!pairs.length && existing && (existing.pairs?.length || existing.skipped)) return Promise.resolve();
+  if (pairs.length) replaceLibraryPagePairs(libraryDoc, page, pairs);
   // Capture this document before queuing: the user may open another PDF while
   // earlier pages are still being saved.
   const bytes = pdfBytes;
@@ -6314,6 +6318,37 @@ async function translateCurrentPage() {
   updateTranslateControls();
 }
 
+function seedLibraryProgress() {
+  const pages = libraryDoc?.pages || [];
+  if (!pages.length || !pdfDoc) return false;
+  let changed = false;
+  for (const entry of pages) {
+    const page = Number(entry?.page);
+    if (!(page >= 1) || page > pdfDoc.numPages) continue;
+    const prior = pageStates.get(page);
+    if (prior?.hasLayout && prior.state && prior.state !== "layout" && prior.state !== "queued") continue;
+    const blocks = getPageLayout(page)?.blocks || null;
+    const state = libraryPageRunState({
+      pairs: entry?.pairs,
+      cached: pageCache.get(docId, page),
+      targetLang: pdfTargetLang,
+      provider: pdfProvider,
+      skipped: Boolean(entry?.skipped),
+      blocks,
+      empty: Array.isArray(blocks)
+        && !translatableBlocks(blocks).length
+        && !isTitlePageCandidate(page, pageTextForStructure(blocks))
+    });
+    if (state === "queued") continue;
+    const hasLayout = Boolean(blocks?.length);
+    if (prior?.state === state && Boolean(prior?.hasLayout) === hasLayout) continue;
+    notePageState(page, { state, hasLayout });
+    changed = true;
+  }
+  if (changed) refreshDocStatus();
+  return changed;
+}
+
 async function adoptLibraryPages(options = {}) {
   const onlyPage = Number(options.onlyPage) || 0;
   const stamp = docId;
@@ -6326,6 +6361,7 @@ async function adoptLibraryPages(options = {}) {
   const publish = () => {
     if (stamp === docId) renderArticle();
   };
+  if (seedLibraryProgress() && stamp === docId) renderArticle();
   for (let page = start; page <= end; page += 1) {
     if (stamp !== docId) return true;
     const entry = libraryEntry(page);
@@ -6424,7 +6460,7 @@ function demoteUnpaintedDonePages() {
   for (const [page, row] of pageStates) {
     if (row.state !== "done") continue;
     const slot = readerFlowEl()?.querySelector(`:scope > .rf-page[data-page="${page}"]`);
-    if (slotHasTranslation(slot)) continue;
+    if (!slot || slotHasTranslation(slot)) continue;
     pageCache.clearPage(docId, page);
     notePageState(page, { state: "queued", hasLayout: false });
     clearSlotPainted(page);

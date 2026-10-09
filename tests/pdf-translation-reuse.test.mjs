@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import { translatableBlocks } from "../lib/pdf-blocks.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
-import { applySavedPairs, sourceReuseHash } from "../lib/pdf-library.js";
+import { applySavedPairs, pairsFromResults, sourceReuseHash } from "../lib/pdf-library.js";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import {
   createPageCache,
@@ -27,6 +27,8 @@ const dpoPath = join(root, "tests/fixtures/Direct_Preference_Optimization_2305.1
 const SETTINGS = { targetLang: "zh-CN", provider: "mymemory" };
 const SOURCE_V2 = "797df2f";
 const MAIN_V2 = "d06b9fb5ec653524fcaf7bfc4126b275441ca0ab";
+const TIP_V3 = "6bfa659";
+const WATCH = new Set(["b1-p20-t1ho201s", "b1-p20-t0kcfxuw", "b1-p27-t1dwp43s"]);
 
 GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
 
@@ -47,17 +49,31 @@ function unitsFor(blocks) {
   }));
 }
 
-function pairsFor(blocks) {
-  return translatableBlocks(blocks).map((block) => ({
+function pairFrom(block, translation) {
+  return {
     id: block.id,
     sourceId: block.sourceId,
     ...(block.bid ? { bid: block.bid } : {}),
     text: block.text,
     sourceText: block.sourceText || block.text,
-    translation: translationFor(block.text),
+    translation,
     targetLang: SETTINGS.targetLang,
     provider: SETTINGS.provider
-  }));
+  };
+}
+
+function pairsFor(blocks) {
+  return translatableBlocks(blocks).map((block) => pairFrom(block, translationFor(block.text)));
+}
+
+/** An earlier write of the source itself, same bid and sourceId as the real translation. */
+function echoedFirst(blocks) {
+  const echoes = [];
+  for (const block of translatableBlocks(blocks)) {
+    if (!WATCH.has(block.bid)) continue;
+    echoes.push(pairFrom(block, block.text));
+  }
+  return [...echoes, ...pairsFor(blocks)];
 }
 
 function historicalLayer(commit) {
@@ -182,19 +198,114 @@ test("a successful retry clears the failed flag on the reused row", () => {
   assert.equal(retried.failed, undefined);
 });
 
-test("source-v2 translations reopen on source-v3 without resending unchanged blocks", { timeout: 180000 }, async () => {
+test("source reuse hash is 128-bit and an echo does not hide a later translation", () => {
+  const hash = sourceReuseHash("def dpo_loss(pi_logps, ref_logps)");
+  assert.equal(hash.length, 32);
+  assert.equal(sourceReuseHash(""), "");
+  assert.notEqual(hash, sourceReuseHash("return losses, rewards"));
+  const text = "def dpo_loss(pi_logps, ref_logps, yw_idxs, yl_idxs, beta): preferred indices in [0, B-1]";
+  const unit = { id: "code", bid: "b1-p20-t1ho201s", sourceId: "p20-s1", text, sourceText: text };
+  const restored = applySavedPairs([unit], [
+    { ...unit, translation: text },
+    { ...unit, translation: "DPO 损失函数" }
+  ], SETTINGS);
+  assert.equal(restored[0].translation, "DPO 损失函数");
+  assert.equal(unitsNeedingTranslation(restored, SETTINGS.targetLang).length, 0);
+  const heading = "D.3 Human study details";
+  const head = { id: "h", bid: "b1-p27-t1dwp43s", sourceId: "p27-s1", text: heading, sourceText: heading };
+  const headed = applySavedPairs([head], [
+    { ...head, translation: heading },
+    { ...head, translation: "D.3 人类研究细节" }
+  ], SETTINGS);
+  assert.equal(headed[0].translation, "D.3 人类研究细节");
+  assert.equal(unitsNeedingTranslation(headed, SETTINGS.targetLang).length, 0);
+});
+
+test("a legacy translation with no engine is reused only for its target language", () => {
+  const unit = {
+    id: "a",
+    sourceId: "p1-s1",
+    text: "Attention is all you need",
+    sourceText: "Attention is all you need"
+  };
+  const legacy = { text: unit.text, sourceText: unit.sourceText, translation: "注意力就是你所需要的一切" };
+  assert.equal(applySavedPairs([unit], [legacy], SETTINGS)[0].translation, legacy.translation);
+  assert.equal(applySavedPairs([unit], [legacy], { targetLang: "en", provider: "mymemory" })[0].translation, "");
+  const recorded = { ...legacy, targetLang: "zh-CN" };
+  assert.equal(applySavedPairs([unit], [recorded], SETTINGS)[0].translation, legacy.translation);
+});
+
+test("a colliding bid does not keep the first write", () => {
+  const text = "return losses, rewards";
+  const unit = { id: "live", bid: "b1-p20-t0kcfxuw", sourceId: "p20-s", text, sourceText: text };
+  const echoed = applySavedPairs([unit], [
+    { ...unit, translation: text },
+    { ...unit, translation: "返回损失和奖励" }
+  ], SETTINGS);
+  assert.equal(echoed[0].translation, "返回损失和奖励");
+  const other = {
+    bid: unit.bid,
+    sourceId: unit.sourceId,
+    text: "A different sentence about the same identifier.",
+    sourceText: "A different sentence about the same identifier.",
+    translation: "另一句",
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  };
+  const right = {
+    bid: unit.bid,
+    sourceId: "p20-s-new",
+    text,
+    sourceText: text,
+    translation: "返回损失和奖励",
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  };
+  const restored = applySavedPairs([unit], [other, right], SETTINGS);
+  assert.equal(restored[0].translation, "返回损失和奖励");
+  assert.notEqual(restored[0].translationStatus, "source-uncertain");
+});
+
+test("opening a document seeds progress before the layout ingest", () => {
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const whole = viewer.slice(viewer.indexOf("async function adoptLibraryPages"), viewer.indexOf("function demoteUnpaintedDonePages"));
+  const seedAt = whole.indexOf("seedLibraryProgress(");
+  const awaitAt = whole.indexOf("await ingestPageLayout");
+  assert.ok(seedAt >= 0 && awaitAt > seedAt, "library progress is counted before a page waits on layout");
+  assert.match(viewer, /replaceLibraryPagePairs\(libraryDoc, page, pairs\)/);
+});
+
+test("source-v2 translations reopen on source-v3 without resending unchanged blocks", { timeout: 240000 }, async () => {
   assert.equal(readFileSync(dpoPath).byteLength > 0, true);
   const prLayer = (await historicalLayer(SOURCE_V2)).textLayerToBlocks;
   const mainLayer = (await historicalLayer(MAIN_V2)).textLayerToBlocks;
+  const tipLayer = (await historicalLayer(TIP_V3)).textLayerToBlocks;
   const opened = {};
-  for (const [name, layer] of [["source-v2", prLayer], ["main-v2", mainLayer]]) {
+  for (const [name, layer] of [["source-v2", prLayer], ["main-v2", mainLayer], ["tip-v3", tipLayer]]) {
     const pages = await loadLayouts(layer);
     const cache = createPageCache();
     const states = [];
     const pendingByPage = new Map();
+    const seeded = [];
+    const seedStarted = performance.now();
+    for (const entry of pages) {
+      const stored = translatableBlocks(entry.previous.blocks);
+      seeded.push({
+        state: libraryPageRunState({
+          pairs: pairsFor(entry.previous.blocks),
+          targetLang: SETTINGS.targetLang,
+          provider: SETTINGS.provider,
+          skipped: !stored.length
+        })
+      });
+    }
+    const seedMs = performance.now() - seedStarted;
+    const seededTotals = translatedPageTotal(seeded);
+    assert.equal(seededTotals.n, pages.length, `${name} shows ${pages.length}/${pages.length} before layout`);
+    assert.ok(seedMs < 100, `${name} reached ${pages.length}/${pages.length} in ${seedMs}ms`);
     for (const entry of pages) {
       const units = unitsFor(entry.next.blocks);
-      const pairs = pairsFor(entry.previous.blocks);
+      const pairs = echoedFirst(entry.previous.blocks);
       const filled = applySavedPairs(units, pairs, SETTINGS);
       const state = libraryPageRunState({
         pairs,
@@ -210,11 +321,16 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
         const live = units.find((item) => item.id === unit.id);
         assert.equal(unit.bid, live.bid, `${name} p${entry.page} keeps the live bid`);
         if (unit.translation) assert.equal(unit.translation, translationFor(unit.text));
+        if (WATCH.has(unit.bid)) {
+          assert.equal(unit.translation, translationFor(unit.text), `${name} ${unit.bid} keeps its translation`);
+          assert.equal(unitsNeedingTranslation([unit], SETTINGS.targetLang).length, 0, unit.bid);
+        }
       }
     }
     const totals = translatedPageTotal(states);
-    const progress = docStatusView({ n: totals.n, t: pages.length, needsRetry: totals.needsRetry, phase: "idle" });
+    const progress = docStatusView({ n: seededTotals.n, t: pages.length, needsRetry: 0, phase: "running" });
     assert.equal(totals.n, pages.length, `${name} progress stays ${pages.length}/${pages.length}`);
+    assert.equal(seededTotals.needsRetry, 0, `${name} library count is not a retry`);
     assert.match(progress.text, new RegExp(`${pages.length} / ${pages.length}`));
     const unchanged = cache.get(1, 2).find((unit) => unit.translation);
     assert.equal(unchanged.translation, translationFor(unchanged.text));
@@ -239,14 +355,40 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
     const kept = cache.get(1, 2).find((unit) => unit.id === unchanged.id);
     assert.equal(kept.translation, unchanged.translation);
     const partialPage = states.find((row) => row.state === "partial");
-    assert.ok(partialPage, `${name} has a page with a changed block`);
-    const mixed = cache.get(1, partialPage.page);
-    assert.equal(mixed.some((unit) => String(unit.translation || "").startsWith("旧译")), true);
-    assert.equal(mixed.some((unit) => unit.translation === "新译一块"), true);
-    opened[name] = { requested, pages: states.filter((row) => row.state === "partial").map((row) => row.page) };
+    if (requested > 0) {
+      assert.ok(partialPage, `${name} has a page with a changed block`);
+      const mixed = cache.get(1, partialPage.page);
+      assert.equal(mixed.some((unit) => String(unit.translation || "").startsWith("旧译")), true);
+      assert.equal(mixed.some((unit) => unit.translation === "新译一块"), true);
+    } else {
+      assert.equal(partialPage, undefined, `${name} is already complete`);
+    }
+    let second = 0;
+    for (const entry of pages) {
+      const written = pairsFromResults(cache.get(1, entry.page), SETTINGS);
+      const echoes = echoedFirst(entry.previous.blocks).filter((pair) => pair.translation === pair.text);
+      const again = applySavedPairs(unitsFor(entry.next.blocks), [...echoes, ...written], SETTINGS);
+      second += unitsNeedingTranslation(again, SETTINGS.targetLang).length;
+      for (const unit of again) {
+        if (!WATCH.has(unit.bid)) continue;
+        assert.equal(unit.translation, translationFor(unit.text), `${name} second open ${unit.bid}`);
+      }
+    }
+    assert.equal(second, 0, `${name} second open sends 0 requests`);
+    opened[name] = {
+      requested,
+      seedMs,
+      second,
+      pages: states.filter((row) => row.state === "partial").map((row) => row.page)
+    };
   }
   assert.equal(opened["source-v2"].requested, 2);
   assert.deepEqual(opened["source-v2"].pages, [24, 26]);
   assert.equal(opened["main-v2"].requested, 6);
   assert.deepEqual(opened["main-v2"].pages, [9, 10, 24, 26]);
+  assert.equal(opened["tip-v3"].requested, 0);
+  assert.deepEqual(opened["tip-v3"].pages, []);
+  assert.equal(opened["source-v2"].second, 0);
+  assert.equal(opened["main-v2"].second, 0);
+  assert.equal(opened["tip-v3"].second, 0);
 });
