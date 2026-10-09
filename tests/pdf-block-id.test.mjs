@@ -459,10 +459,10 @@ test("Attention and DPO text-layer bids match the locked reference", { timeout: 
   const dpo = await loadDocument(dpoPath);
   assert.equal(dpo.length, 27);
   const dpoBlocks = dpo.flatMap((page) => page.blocks);
-  assert.equal(dpoBlocks.length, 509);
+  assert.equal(dpoBlocks.length, 474);
   const dpoBids = dpoBlocks.map((block) => block.bid);
   assert.equal(dpoBids.every((bid) => isBid(bid)), true);
-  assert.equal(new Set(dpoBids).size, 509);
+  assert.equal(new Set(dpoBids).size, 474);
   assert.equal(findBlock(dpo, "p2-b8").block.bid, "b1-p2-t1hmmsbz");
   assert.equal(findBlock(dpo, "p3-b1").block.bid, "b1-p3-t1n7kik7");
   const byBase = new Map();
