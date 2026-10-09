@@ -6564,6 +6564,14 @@ async function adoptLibraryPages(options = {}) {
   const publish = () => {
     if (stamp === docId) renderArticle();
   };
+  const noteLibraryGap = (page, blocks, entry) => {
+    const live = translatableBlocks(blocks || []).length;
+    const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
+    if (!viewerUnderTest() || !entry || pairCount >= live) return;
+    const gap = globalThis.__oiLibraryGap || [];
+    gap.push({ page, pairs: pairCount, live });
+    globalThis.__oiLibraryGap = gap;
+  };
   if (seedLibraryProgress() && stamp === docId) renderArticle();
   if (await seedLegacySkipPages() && stamp === docId) renderArticle();
   for (let page = start; page <= end; page += 1) {
@@ -6620,6 +6628,7 @@ async function adoptLibraryPages(options = {}) {
       }
       // A page that already counted stays counted while changed blocks are filled.
       if (countedPageState(prior?.state)) {
+        noteLibraryGap(page, blocks, entry);
         notePageState(page, { state: "partial", hasLayout: Boolean(blocks?.length) });
         clearSlotPainted(page);
         publish();
@@ -6627,13 +6636,7 @@ async function adoptLibraryPages(options = {}) {
         if (!entry && page >= lastListed) break;
         continue;
       }
-      const live = translatableBlocks(blocks || []).length;
-      const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
-      if (viewerUnderTest() && entry && pairCount < live) {
-        const gap = globalThis.__oiLibraryGap || [];
-        gap.push({ page, pairs: pairCount, live });
-        globalThis.__oiLibraryGap = gap;
-      }
+      noteLibraryGap(page, blocks, entry);
       if (prior?.state === "done" || prior?.state === "partial") pageCache.clearPage(docId, page);
       else if (cached && !libraryCoversLiveBlocks(cached, blocks, pdfTargetLang, pdfProvider)) pageCache.clearPage(docId, page);
       notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
@@ -6651,6 +6654,7 @@ async function adoptLibraryPages(options = {}) {
       const covers = !Array.isArray(blocks) || libraryCoversLiveBlocks(entry?.pairs || cached, blocks, pdfTargetLang, pdfProvider);
       if (state === "done" && (!filled.length || !covers)) {
         if (countedPageState(prior?.state)) {
+          noteLibraryGap(page, blocks, entry);
           if (filled.length) pageCache.set(docId, page, cacheableReuse(filled));
           notePageState(page, { state: "partial", hasLayout: Boolean(blocks?.length) });
           clearSlotPainted(page);
@@ -6671,13 +6675,7 @@ async function adoptLibraryPages(options = {}) {
       clearSlotPainted(page);
       publish();
       if (state === "partial") {
-        const live = translatableBlocks(blocks || []).length;
-        const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
-        if (viewerUnderTest() && entry && pairCount < live) {
-          const gap = globalThis.__oiLibraryGap || [];
-          gap.push({ page, pairs: pairCount, live });
-          globalThis.__oiLibraryGap = gap;
-        }
+        noteLibraryGap(page, blocks, entry);
         hole = true;
       }
       continue;
