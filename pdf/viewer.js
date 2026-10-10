@@ -894,6 +894,7 @@ function refreshReaderFontCap() {
   lastShownFont = readerShownFont();
   if (!changed) return;
   layoutCapsule({ keepAnchor: true });
+  applyPaperMetrics();
   restoreFontAnchor(anchor);
 }
 
@@ -2111,7 +2112,7 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
     paperHeight: paper.heightBase > 0 ? paper.heightBase : leftHeight,
     mirrorZoom: 1,
     devicePixelRatio: Math.max(1, Number(window.devicePixelRatio) || 1),
-    readerFontPx: readerPrefs.fontSize,
+    readerFontPx: readerShownFont(),
     sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
     columnPx: readerColumnPx()
   };
@@ -2288,6 +2289,13 @@ function formulaPageFraction(block) {
   return Math.min(1, fraction);
 }
 
+/** Readability floor and inline line cap follow the size on screen, not the stored setting. */
+function readerFormulaFloor(page) {
+  const layout = getPageLayout(page);
+  const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
+  return formulaReadabilityFloor(readerShownFont(), bodyPt);
+}
+
 function mountDisplayMath(node, block, img, page) {
   const row = document.createElement("div");
   row.className = "oi-pdf-math-row";
@@ -2304,10 +2312,9 @@ function mountDisplayMath(node, block, img, page) {
   } else {
     const pageFraction = formulaPageFraction(block);
     const layout = getPageLayout(page);
-    const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
     const width = pageFraction ? displayFormulaWidthCss(pageFraction, 0, {
       pageWidthPt: Number(layout?.pageWidth) || 0,
-      floor: formulaReadabilityFloor(readerPrefs.fontSize, bodyPt)
+      floor: readerFormulaFloor(page)
     }) : "";
     if (width) row.style.setProperty("--oi-formula-w", width);
   }
@@ -2343,10 +2350,9 @@ function appendCropOrNotice(node, block, imageClass, page) {
     const pageFraction = displayCropColumnFraction(block);
     if (pageFraction) {
       const layout = getPageLayout(page ?? node.dataset.page);
-      const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
       img.style.width = displayFormulaWidthCss(pageFraction, Number(block.bbox[3]) - Number(block.bbox[1]), {
         pageWidthPt: Number(layout?.pageWidth) || 0,
-        floor: formulaReadabilityFloor(readerPrefs.fontSize, bodyPt)
+        floor: readerFormulaFloor(page ?? node.dataset.page)
       });
     }
     node.append(img);
@@ -5011,7 +5017,7 @@ function readerFormulaStyle(block, page, inline, columnPx) {
   const inkPt = fracH * pageH;
   const column = columnPx > 0 ? columnPx : readerColumnPx();
   const sized = readerFormulaCssSize({
-    bodyFontPx: readerPrefs.fontSize,
+    bodyFontPx: readerShownFont(),
     sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
     inkPt,
     widthPt: fracW * pageW,
@@ -5059,6 +5065,33 @@ function refreshMatchedFormulas(paper) {
   });
 }
 
+function refreshFallbackFormulaWidths(paper) {
+  const page = paper.dataset.page;
+  const layout = getPageLayout(page);
+  const blocks = layout?.blocks || [];
+  const pageWidthPt = Number(layout?.pageWidth) || 0;
+  const floor = readerFormulaFloor(page);
+  const blockFor = (node) => {
+    const id = node.closest?.("[data-block-id]")?.dataset?.blockId;
+    if (!id) return null;
+    return blocks.find((item) => item.id === id) || null;
+  };
+  paper.querySelectorAll(".oi-pdf-math-row:not(.is-matched)").forEach((row) => {
+    const pageFraction = formulaPageFraction(blockFor(row));
+    const width = pageFraction ? displayFormulaWidthCss(pageFraction, 0, { pageWidthPt, floor }) : "";
+    if (width) row.style.setProperty("--oi-formula-w", width);
+  });
+  paper.querySelectorAll("img.oi-pdf-math-crop, img.oi-pdf-asset-crop").forEach((img) => {
+    if (img.closest(".oi-pdf-math-row, .oi-pdf-inline-math")) return;
+    const block = blockFor(img);
+    const pageFraction = displayCropColumnFraction(block);
+    if (!pageFraction) return;
+    const heightFrac = Number(block.bbox[3]) - Number(block.bbox[1]);
+    const width = displayFormulaWidthCss(pageFraction, heightFrac, { pageWidthPt, floor });
+    if (width) img.style.width = width;
+  });
+}
+
 function applyPaperMetrics() {
   const flow = readerFlowEl();
   if (!flow) return;
@@ -5066,6 +5099,7 @@ function applyPaperMetrics() {
     const left = leftBaseBox(slot.dataset.page);
     if (left?.width > 0) slot.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
     refreshMatchedFormulas(slot);
+    refreshFallbackFormulaWidths(slot);
   });
   refreshFormulaCropsForDisplay();
 }
@@ -8294,7 +8328,7 @@ function formulaCropPlanKeyNow() {
   const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
   const left = Number(zoom) > 0 ? Number(zoom) : 1;
   const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0);
-  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}|${readerPrefs.fontSize}`;
+  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}|${readerShownFont()}`;
 }
 
 function noteFormulaCropPlan(layout) {
