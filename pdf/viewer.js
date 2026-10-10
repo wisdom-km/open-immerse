@@ -2368,11 +2368,12 @@ function mountDisplayMath(node, block, img, page) {
 }
 
 function appendCropOrNotice(node, block, imageClass, page) {
+  const shownPage = page ?? node.dataset.page;
   const img = cropImage(block);
   if (img) {
     img.className = imageClass || "oi-pdf-math-crop";
     if (block.label === "formula") {
-      mountDisplayMath(node, block, img, page ?? node.dataset.page);
+      mountDisplayMath(node, block, img, shownPage);
       return;
     }
     if ((block.label === "figure" || block.label === "table") && block.surface === "redraw" && block.assetCapPx > 0) {
@@ -2381,16 +2382,86 @@ function appendCropOrNotice(node, block, imageClass, page) {
     }
     const pageFraction = displayCropColumnFraction(block);
     if (pageFraction) {
-      const layout = getPageLayout(page ?? node.dataset.page);
+      const layout = getPageLayout(shownPage);
       img.style.width = displayFormulaWidthCss(pageFraction, Number(block.bbox[3]) - Number(block.bbox[1]), {
         pageWidthPt: Number(layout?.pageWidth) || 0,
         floor: readerFormulaFloor(page ?? node.dataset.page)
       });
     }
+    if (block.label === "figure" || block.label === "table") noteAssetPaint("image", block, shownPage);
     node.append(img);
     return;
   }
-  node.append(visualCropNotice(block, page));
+  if (visualCropStillPending(block, shownPage)) {
+    node.append(visualCropPendingBox(block, shownPage));
+    return;
+  }
+  const notice = visualCropNotice(block, shownPage);
+  if (notice?.classList?.contains("oi-pdf-asset-fallback")) noteAssetPaint("fallback", block, shownPage);
+  node.append(notice);
+}
+
+const visualCropPendingPages = new Set();
+
+function armStoredVisualCrops(page, layout) {
+  if (layoutNeedsVisualCrops(layout)) visualCropPendingPages.add(Number(page));
+}
+
+function visualCropStillPending(block, page) {
+  const n = Number(page) || 0;
+  if (!(n >= 1) || !visualCropPendingPages.has(n) || block?.visualCropFailed === true) return false;
+  return block?.label === "figure" || block?.label === "table";
+}
+
+function noteAssetPaint(kind, block, page, extra = null) {
+  if (!viewerUnderTest()) return;
+  const log = globalThis.__oiAssetPaint || (globalThis.__oiAssetPaint = []);
+  log.push({
+    kind,
+    page: Number(page) || 0,
+    label: String(block?.label || ""),
+    id: String(block?.id || ""),
+    ...(extra && typeof extra === "object" ? extra : {})
+  });
+}
+
+/** Neutral hold at the crop's page size while a stored page is still rasterizing. */
+function visualCropPendingBox(block, page) {
+  const n = Number(page) || 0;
+  const hold = document.createElement("span");
+  hold.className = "oi-pdf-asset-pending";
+  hold.setAttribute("role", "status");
+  hold.setAttribute("aria-busy", "true");
+  const kind = block?.label === "table" ? "表" : "图";
+  hold.setAttribute("aria-label", `${kind}正在载入`);
+  const layout = getPageLayout(n);
+  const bbox = block?.bbox;
+  const pageW = Number(layout?.pageWidth) || 0;
+  const pageH = Number(layout?.pageHeight) || 0;
+  let aspect = "";
+  let width = "";
+  if (Array.isArray(bbox) && bbox.length >= 4 && pageW > 0 && pageH > 0) {
+    const fracW = Number(bbox[2]) - Number(bbox[0]);
+    const fracH = Number(bbox[3]) - Number(bbox[1]);
+    if (fracW > 0 && fracH > 0) {
+      const widthPx = Math.round(fracW * pageW * 100) / 100;
+      const heightPx = Math.round(fracH * pageH * 100) / 100;
+      width = `min(100%, ${widthPx}px)`;
+      aspect = `${widthPx} / ${heightPx}`;
+      hold.style.setProperty("width", width);
+      hold.style.setProperty("aspect-ratio", aspect);
+    }
+  }
+  noteAssetPaint("pending", block, n, { aspect, width });
+  return hold;
+}
+
+function markVisualCropsFailed(layout) {
+  for (const block of layout?.blocks || []) {
+    if ((block?.label === "figure" || block?.label === "table") && Array.isArray(block.bbox) && !block.imageUrl) {
+      block.visualCropFailed = true;
+    }
+  }
 }
 
 function visualCropNotice(block, page) {
@@ -6472,7 +6543,9 @@ function installDisplayableLibraryLayouts(version = knownLayoutVersion) {
     const stored = storedLayoutDisplayable(entry, version);
     if (!stored?.blocks?.length) continue;
     if (getPageLayout(page)?.blocks?.length) continue;
-    setPageLayout(page, layoutFromStored(page, stored));
+    const laid = layoutFromStored(page, stored);
+    setPageLayout(page, laid);
+    armStoredVisualCrops(page, laid);
     if (isSkipOnlyPage(stored.blocks)) skipLocked.add(page);
     changed = true;
   }
@@ -6933,7 +7006,7 @@ function installKnownSkipLayout(page, stored) {
   if (!isSkipOnlyPage(blocks)) return false;
   skipLocked.add(page);
   if (isSkipOnlyPage(getPageLayout(page)?.blocks)) return false;
-  setPageLayout(page, {
+  const laid = {
     kind: "blocks",
     protocol: stored.protocol || PROTOCOL,
     page: Number(page),
@@ -6941,7 +7014,9 @@ function installKnownSkipLayout(page, stored) {
     sourceAudit: stored.sourceAudit || null,
     blocks,
     itemCount: Number(stored.itemCount) || blocks.length
-  });
+  };
+  setPageLayout(page, laid);
+  armStoredVisualCrops(page, laid);
   return true;
 }
 
@@ -8284,7 +8359,9 @@ async function adoptDoc(doc, title) {
   if (viewerUnderTest()) {
     globalThis.__oiLayouts = {};
     globalThis.__oiPaint = [];
+    globalThis.__oiAssetPaint = [];
   }
+  visualCropPendingPages.clear();
   abortInflightLayouts();
   vendorLayoutPending.clear();
   vendorLayoutReason.clear();
@@ -8958,6 +9035,13 @@ async function hydrateMissingVisualCrops(isStale = () => false) {
         paint();
         return changed;
       }
+      const viewport = page.getViewport({ scale: 1 });
+      if (!(Number(layout.pageWidth) > 0) || !(Number(layout.pageHeight) > 0)) {
+        layout.pageWidth = viewport.width;
+        layout.pageHeight = viewport.height;
+        clearSlotPainted(n);
+        if (!stale()) renderArticle();
+      }
       const raster = await renderPageRaster(page);
       if (stale()) {
         paint();
@@ -8975,10 +9059,17 @@ async function hydrateMissingVisualCrops(isStale = () => false) {
       if (!blocks) continue;
       layout.blocks = blocks;
       delete layout.formulaPlanKey;
+      markVisualCropsFailed(layout);
+      visualCropPendingPages.delete(n);
       clearSlotPainted(n);
       changed = true;
       if (item.asset) paint();
     } catch {
+      const failedLayout = getPageLayout(n);
+      markVisualCropsFailed(failedLayout);
+      visualCropPendingPages.delete(n);
+      clearSlotPainted(n);
+      changed = true;
       continue;
     }
   }
@@ -9000,7 +9091,9 @@ async function primeKnownPages() {
     const libraryChanged = seedLibraryProgress();
     const legacyChanged = await seedLegacySkipPages();
     if (stale()) return;
-    if (libraryChanged || legacyChanged) renderArticle();
+    const sized = await stampPendingVisualPages(stale);
+    if (stale()) return;
+    if (libraryChanged || legacyChanged || sized) renderArticle();
     // Stored library layouts have no image bytes. Hydrate after they land;
     // an earlier pass sees an empty cache and returns without scheduling.
     hydrateMissingVisualCrops(stale).catch(() => {});
@@ -9009,6 +9102,32 @@ async function primeKnownPages() {
   // Layout paints first. Pairs land when the probe resolves.
   if (libraryDoc) await seed();
   else ensureLibraryDocument().then(() => seed()).catch(() => {});
+}
+
+/** Page box for a stored crop, before the slow page raster. The pending hold uses it. */
+async function stampPendingVisualPages(isStale) {
+  if (!pdfDoc || !visualCropPendingPages.size) return false;
+  let stamped = false;
+  for (const n of [...visualCropPendingPages]) {
+    if (isStale()) return stamped;
+    const layout = getPageLayout(n);
+    if (!layout) {
+      visualCropPendingPages.delete(n);
+      continue;
+    }
+    if (Number(layout.pageWidth) > 0 && Number(layout.pageHeight) > 0) continue;
+    try {
+      const page = await pdfDoc.getPage(n);
+      if (isStale()) return stamped;
+      const viewport = page.getViewport({ scale: 1 });
+      layout.pageWidth = viewport.width;
+      layout.pageHeight = viewport.height;
+      stamped = true;
+    } catch {
+      /* hydrate marks a real crop failure */
+    }
+  }
+  return stamped;
 }
 
 async function loadCurrentPageText(explicitPage) {
