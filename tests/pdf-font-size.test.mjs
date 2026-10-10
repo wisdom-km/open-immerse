@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readerFormulaCssSize } from "../lib/pdf-formula-size.js";
+import { formulaReadabilityFloor, readerFormulaCssSize } from "../lib/pdf-formula-size.js";
 import {
   READER_CAPSULE_SLOT_PX,
   READER_CPL_MIN,
@@ -219,7 +219,39 @@ test("FS-14 display formula width is the #114 width and does not gain a font sca
   assert.doesNotMatch(tokens, /--oi-reader-display-scale/);
   assert.doesNotMatch(css, /--oi-reader-display-scale/);
   assert.doesNotMatch(viewer, /--oi-reader-display-scale/);
-  assert.match(viewer, /formulaReadabilityFloor\(readerPrefs\.fontSize, bodyPt\)/);
+  assert.match(viewer, /formulaReadabilityFloor\(readerShownFont\(\), bodyPt\)/);
+  assert.doesNotMatch(viewer, /formulaReadabilityFloor\(readerPrefs\.fontSize/);
+});
+
+test("a setting of 32 capped at 20 uses the 20px formula floor", () => {
+  const shown = effectiveReaderFontSize(32, 20);
+  assert.equal(shown, 20);
+  const bodyPt = 10;
+  assert.equal(formulaReadabilityFloor(shown, bodyPt), formulaReadabilityFloor(20, bodyPt));
+  assert.equal(formulaReadabilityFloor(20, bodyPt), 0.96);
+  assert.equal(formulaReadabilityFloor(32, bodyPt), 1);
+  const wide = { sourceBodyPt: bodyPt, inkPt: 40, widthPt: 640, columnPx: 400 };
+  const capped = readerFormulaCssSize({ ...wide, bodyFontPx: shown });
+  assert.equal(capped.k, readerFormulaCssSize({ ...wide, bodyFontPx: 20 }).k);
+  assert.equal(capped.k, formulaReadabilityFloor(20, bodyPt));
+  assert.equal(readerFormulaCssSize({ ...wide, bodyFontPx: 32 }).k, 1);
+  const inline = { sourceBodyPt: bodyPt, inkPt: 50, widthPt: 40, columnPx: 800, inline: true };
+  assert.equal(
+    readerFormulaCssSize({ ...inline, bodyFontPx: shown }).raised,
+    readerFormulaCssSize({ ...inline, bodyFontPx: 20 }).raised
+  );
+  assert.equal(readerFormulaCssSize({ ...inline, bodyFontPx: 20 }).raised, true);
+  assert.equal(readerFormulaCssSize({ ...inline, bodyFontPx: 32 }).raised, false);
+  assert.match(viewer, /readerFontPx: readerShownFont\(\)/);
+  assert.match(viewer, /bodyFontPx: readerShownFont\(\)/);
+  assert.match(viewer, /floor: readerFormulaFloor\(/);
+  const refresh = viewer.slice(viewer.indexOf("function refreshReaderFontCap"), viewer.indexOf("const CJK_CACHE_KEY"));
+  assert.match(refresh, /applyPaperMetrics\(\)/);
+  const apply = viewer.slice(viewer.indexOf("function applyPaperMetrics"), viewer.indexOf("function bindPaperMetrics"));
+  assert.match(apply, /refreshMatchedFormulas/);
+  assert.match(apply, /refreshFallbackFormulaWidths/);
+  const planKey = viewer.slice(viewer.indexOf("function formulaCropPlanKeyNow"), viewer.indexOf("function noteFormulaCropPlan"));
+  assert.match(planKey, /readerShownFont\(\)/);
 });
 
 test("FS-15 and FS-16 inline crops and KaTeX stay on em", () => {
