@@ -11,7 +11,10 @@ import {
   looksLikeFormulaItem,
   stripFontSubsetPrefix
 } from "../lib/pdf-mirror.js";
+import { stampLayoutBids } from "../lib/pdf-block-id.js";
+import { blockRenderPieces } from "../lib/pdf-blocks.js";
 import { sameLineFormulaSpans, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -146,4 +149,92 @@ test("DDPM page 2 inline formulas are whole units when real font names are prese
     return left < 140 && right > 480 && right - left > 350;
   });
   assert.equal(equation.length, 1);
+});
+
+test("a script-sized ref stays inside the inline fraction and prose still ends it", () => {
+  const line = [
+    { str: "r", x: 10, y: 100, width: 6, height: 10, fontRealName: "CMR10" },
+    { str: "(", x: 16, y: 100, width: 4, height: 10, fontRealName: "CMR10" },
+    { str: "x, y", x: 20, y: 100, width: 16, height: 10, fontRealName: "CMR10" },
+    { str: ") =", x: 36, y: 100, width: 12, height: 10, fontRealName: "CMR10" },
+    { str: "β", x: 50, y: 100, width: 8, height: 10, fontRealName: "CMR10" },
+    { str: "log", x: 60, y: 100, width: 16, height: 10, fontRealName: "CMR10" },
+    { str: "π", x: 78, y: 104, width: 7, height: 7, fontRealName: "CMMI7" },
+    { str: "π", x: 80, y: 96, width: 7, height: 7, fontRealName: "CMMI7" },
+    { str: "ref", x: 84, y: 94, width: 12, height: 5, fontRealName: "CMR10" },
+    { str: "(", x: 86, y: 104, width: 4, height: 7, fontRealName: "CMR7" },
+    { str: "y", x: 90, y: 104, width: 5, height: 7, fontRealName: "CMR7" },
+    { str: "|", x: 95, y: 104, width: 3, height: 7, fontRealName: "CMR7" },
+    { str: "x", x: 98, y: 104, width: 5, height: 7, fontRealName: "CMR7" },
+    { str: ")", x: 103, y: 104, width: 4, height: 7, fontRealName: "CMR7" },
+    { str: " for some model", x: 130, y: 100, width: 80, height: 10, fontRealName: "NimbusRomNo9L-Regu" }
+  ];
+  const spans = sameLineFormulaSpans(line);
+  assert.equal(spans.length, 1);
+  const text = line.slice(spans[0][0], spans[0][1] + 1).map((item) => item.str).join("");
+  assert.match(text, /ref/);
+  assert.match(text, /y\|x/);
+  assert.doesNotMatch(text, /for some model/);
+  const prose = [
+    { str: "=", x: 0, y: 100, width: 8, height: 10, fontRealName: "CMR10" },
+    { str: "β", x: 10, y: 100, width: 8, height: 10, fontRealName: "CMR10" },
+    { str: "reference", x: 20, y: 100, width: 40, height: 10, fontRealName: "NimbusRomNo9L-Regu" }
+  ];
+  const stopped = sameLineFormulaSpans(prose);
+  const stoppedText = stopped.length ? prose.slice(stopped[0][0], stopped[0][1] + 1).map((item) => item.str).join("") : "";
+  assert.doesNotMatch(stoppedText, /reference/);
+});
+
+test("DPO reward formula on pages 18 and 19 is one inline unit", async () => {
+  const pdfPath = join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf");
+  assert.equal(readFileSync(pdfPath).byteLength > 1000, true);
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(pdfPath)),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  const fragment = /ref['′]?\(\(yy|\(yy\|/;
+  const bySuffix = new Map();
+  try {
+    for (const number of [5, 18, 19]) {
+      const pdfPage = await doc.getPage(number);
+      const content = await pdfPage.getTextContent();
+      const viewport = pdfPage.getViewport({ scale: 1 });
+      const ops = await pdfPage.getOperatorList();
+      const built = stampLayoutBids(number, textLayerToBlocks({
+        items: content.items,
+        viewport,
+        images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+        page: number
+      }));
+      for (const block of built.blocks) {
+        const suffix = String(block.bid || "").split("-").pop();
+        bySuffix.set(`${number}:${suffix}`, { block, blocks: built.blocks });
+      }
+    }
+  } finally {
+    await doc.destroy();
+  }
+  const host = (page, suffix) => {
+    const found = bySuffix.get(`${page}:${suffix}`);
+    assert.ok(found, `${page} ${suffix}`);
+    const pieces = blockRenderPieces(found.block, found.blocks);
+    const shown = pieces.filter((piece) => piece.type === "text").map((piece) => piece.text).join("");
+    return { text: String(found.block.text || ""), shown };
+  };
+  for (const [page, suffix] of [[18, "t1ip4wvs"], [18, "t06ip39c"], [19, "t1v9ih0t"]]) {
+    const row = host(page, suffix);
+    assert.match(row.text, /for some model/, row.text);
+    assert.match(row.text, /⟦f\d+⟧/, row.text);
+    assert.doesNotMatch(row.text, fragment, row.text);
+    assert.doesNotMatch(row.shown, fragment, row.shown);
+    assert.equal(/^ref['′]?$/.test(row.shown.trim()), false, row.shown);
+  }
+  const page5 = host(5, "t1am9nkw");
+  assert.match(page5.text, /DPO outline/);
+  assert.match(page5.text, /π_\{ref\}/);
+  assert.match(page5.text, /Appendix B/);
+  assert.doesNotMatch(page5.text, fragment);
+  assert.doesNotMatch(page5.shown, fragment);
 });
