@@ -195,6 +195,7 @@ import {
 } from "../lib/pdf-formula-size.js";
 import {
   READER_FONT_SIZES,
+  READER_FONT_TICKS,
   READER_THEME_LABELS,
   CAPSULE_END_BAND,
   CAPSULE_END_MIN,
@@ -204,6 +205,7 @@ import {
   CAPSULE_START_FLOOR,
   CAPSULE_START_RELAXED,
   applyReaderFontAction,
+  applyReaderFontSliderAction,
   capsuleLabel,
   capsulePlacement,
   capsuleSamplePages,
@@ -220,11 +222,20 @@ import {
   planReaderFlow,
   precompositeMultiplyPixels,
   readReaderPrefs,
+  readerFontAnchorTop,
+  readerFontBand,
+  readerFontCapHint,
+  readerFontRatio,
   readerFontShortcut,
+  readerFontSizeFromRatio,
+  readerFontValueText,
+  readerInlineCropEm,
+  readerLayoutFontCap,
   readerImageBlend,
   readerThemeAriaLabel,
   splitAriaModel,
   splitLayout,
+  syncReaderFontStorage,
   themePaperRgb,
   writeReaderPrefs
 } from "../lib/pdf-reader-flow.js";
@@ -798,14 +809,15 @@ function applyReaderImageBlend(img) {
 
 function commitReaderFont(next) {
   if (next === readerPrefs.fontSize) return;
-  const anchor = captureReaderAnchor();
+  const anchor = captureFontAnchor();
   readerPrefs = { ...readerPrefs, fontSize: next };
   persistReaderPrefs();
   applyReaderSurface();
   renderArticle();
   layoutCapsule();
   applyPaperMetrics();
-  restoreReaderAnchor(anchor);
+  restoreFontAnchor(anchor);
+  requestAnimationFrame(() => restoreFontAnchor(anchor));
 }
 
 function applyReaderFontStep(action) {
@@ -832,14 +844,57 @@ function readerThemeRoots() {
   return [document.body, readerRootEl(), $("aaPanel")].filter(Boolean);
 }
 
+function readerShownFont() {
+  return Math.min(readerPrefs.fontSize, liveReaderFontCap());
+}
+
+function liveReaderFontCap() {
+  const pane = document.querySelector(".pane-translate");
+  const column = pane?.clientWidth || 0;
+  if (!(column > 0)) return READER_FONT_SIZES[READER_FONT_SIZES.length - 1];
+  const windowWidth = window.innerWidth || column;
+  const inBar = translateScrollRoot()?.dataset.capsuleMode === "bar" || windowWidth < 900;
+  return readerLayoutFontCap({ windowWidth, columnPx: column, capsuleInBar: inBar });
+}
+
+function readerHasBody() {
+  const flow = readerFlowEl();
+  return Boolean(flow?.querySelector(".rf-block, .oi-pdf-p, .oi-pdf-h1, .oi-pdf-h2, .oi-pdf-h3"));
+}
+
+function readerFontControlsDisabled() {
+  if (!pdfDoc) return true;
+  if (readerHasBody()) return false;
+  return pdfTranslateBusy(session);
+}
+
 function applyReaderSurface() {
-  const size = `${readerPrefs.fontSize}px`;
+  const shown = readerShownFont();
+  const size = `${shown}px`;
+  const band = readerFontBand(shown);
   for (const el of readerThemeRoots()) {
     el.dataset.readerTheme = readerPrefs.theme;
+    el.dataset.readerFsBand = band;
     el.style.setProperty("--oi-reader-font-size", size);
     el.style.setProperty("--oi-pdf-body-fs", size);
+    el.style.setProperty("--oi-reader-fs-num", String(shown));
+    if (readerInlineCropEm(shown) === 1.8) el.style.setProperty("--oi-pdf-inline-crop-em", "1.8em");
+    else el.style.removeProperty("--oi-pdf-inline-crop-em");
   }
   syncAaPanel();
+}
+
+let lastShownFont = 0;
+
+function refreshReaderFontCap() {
+  const next = readerShownFont();
+  const changed = lastShownFont > 0 && next !== lastShownFont;
+  const anchor = changed ? captureFontAnchor() : null;
+  applyReaderSurface();
+  lastShownFont = readerShownFont();
+  if (!changed) return;
+  layoutCapsule({ keepAnchor: true });
+  restoreFontAnchor(anchor);
 }
 
 const CJK_CACHE_KEY = "oi.reader.cjk";
@@ -879,6 +934,8 @@ function initCjkMode() {
 function loadReaderPrefs() {
   try {
     readerPrefs = readReaderPrefs(localStorage);
+    const snapped = syncReaderFontStorage(localStorage);
+    if (snapped !== readerPrefs.fontSize) readerPrefs = { ...readerPrefs, fontSize: snapped };
   } catch {
     readerPrefs = readReaderPrefs(null);
   }
@@ -894,19 +951,53 @@ function loadReaderPrefs() {
 }
 
 function syncAaPanel() {
-  const value = $("aaFontValue");
-  if (value) value.textContent = `${readerPrefs.fontSize}px`;
-  const down = $("aaFontDown");
-  const up = $("aaFontUp");
-  const reset = $("aaFontDefault");
-  if (down) down.disabled = readerPrefs.fontSize <= READER_FONT_SIZES[0];
-  if (up) up.disabled = readerPrefs.fontSize >= READER_FONT_SIZES[READER_FONT_SIZES.length - 1];
-  if (reset) reset.disabled = readerPrefs.fontSize === 16;
-  document.querySelectorAll("#aaFontScale [data-size]").forEach((tick) => {
-    const on = Number(tick.dataset.size) === readerPrefs.fontSize;
-    tick.setAttribute("aria-checked", on ? "true" : "false");
-    tick.tabIndex = on ? 0 : -1;
+  const setting = readerPrefs.fontSize;
+  const shown = readerShownFont();
+  const capped = shown < setting;
+  const hasBody = readerHasBody();
+  const mode = currentSourceMode();
+  const hint = readerFontCapHint({
+    cap: liveReaderFontCap(),
+    setting,
+    mode,
+    hasBody
   });
+  const value = $("aaFontValue");
+  if (value) {
+    value.replaceChildren();
+    value.append(document.createTextNode(`${setting} px`));
+    if (capped && hasBody) {
+      const mark = document.createElement("span");
+      mark.className = "aa-font-capped";
+      mark.textContent = ` → ${shown}`;
+      value.append(mark);
+    }
+  }
+  const reset = $("aaFontDefault");
+  if (reset) reset.disabled = setting === 16;
+  const slider = $("aaFontScale");
+  const disabled = readerFontControlsDisabled();
+  const group = $("aaFontGroup");
+  if (group) group.setAttribute("aria-disabled", disabled ? "true" : "false");
+  if (slider) {
+    const ratio = readerFontRatio(setting);
+    slider.setAttribute("aria-valuenow", String(setting));
+    slider.setAttribute("aria-valuetext", hint ? hint.valuetext : readerFontValueText(setting));
+    slider.setAttribute("aria-disabled", disabled ? "true" : "false");
+    slider.tabIndex = disabled ? -1 : 0;
+    const fill = $("aaFontFill");
+    const thumb = $("aaFontThumb");
+    if (fill) fill.style.width = `${ratio * 100}%`;
+    if (thumb) thumb.style.left = `${ratio * 100}%`;
+  }
+  const cap = $("aaFontCap");
+  const capText = $("aaFontCapText");
+  const hide = $("aaFontHideSource");
+  if (cap && capText) {
+    cap.hidden = !hint;
+    capText.textContent = hint ? hint.text : "";
+    if (hide) hide.hidden = !hint?.hideSource;
+  }
   document.querySelectorAll("#aaThemes [data-theme]").forEach((swatch) => {
     const on = swatch.dataset.theme === readerPrefs.theme;
     swatch.setAttribute("aria-checked", on ? "true" : "false");
@@ -919,29 +1010,27 @@ function syncAaPanel() {
 }
 
 function buildAaScale() {
-  const scale = $("aaFontScale");
-  if (!scale || scale.childElementCount) return;
-  for (const size of READER_FONT_SIZES) {
-    const tick = document.createElement("button");
-    tick.type = "button";
-    tick.className = "aa-tick";
+  const ticks = $("aaFontTicks");
+  if (!ticks || ticks.childElementCount) return;
+  const last = READER_FONT_SIZES.length - 1;
+  for (const size of READER_FONT_TICKS) {
+    const index = READER_FONT_SIZES.indexOf(size);
+    const tick = document.createElement("span");
+    tick.className = "aa-slider-tick";
     tick.dataset.size = String(size);
-    tick.setAttribute("role", "radio");
-    tick.setAttribute("aria-checked", size === readerPrefs.fontSize ? "true" : "false");
-    tick.tabIndex = size === readerPrefs.fontSize ? 0 : -1;
-    const mark = document.createElement("span");
-    mark.className = "aa-tick-mark";
+    tick.style.left = `${(index / last) * 100}%`;
+    const mark = document.createElement("i");
     mark.setAttribute("aria-hidden", "true");
     const num = document.createElement("span");
     num.textContent = String(size);
     tick.append(mark, num);
     if (size === 16) {
-      const note = document.createElement("span");
-      note.className = "aa-tick-note";
-      note.textContent = "默认";
-      tick.append(note);
+      const dot = document.createElement("span");
+      dot.className = "aa-slider-default";
+      dot.setAttribute("aria-hidden", "true");
+      tick.append(dot);
     }
-    scale.append(tick);
+    ticks.append(tick);
   }
 }
 
@@ -993,14 +1082,109 @@ function closeAaPanel() {
 }
 
 function onAaFontScaleKey(event) {
-  const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
-  if (!keys.includes(event.key)) return;
+  const actions = {
+    ArrowLeft: "decrease",
+    ArrowDown: "decrease",
+    ArrowRight: "increase",
+    ArrowUp: "increase",
+    Home: "min",
+    End: "max",
+    PageUp: "tick-up",
+    PageDown: "tick-down"
+  };
+  const action = actions[event.key];
+  if (!action || readerFontControlsDisabled()) return;
   event.preventDefault();
-  const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
-  const index = READER_FONT_SIZES.indexOf(readerPrefs.fontSize);
-  const next = READER_FONT_SIZES[Math.min(READER_FONT_SIZES.length - 1, Math.max(0, index + delta))];
-  commitReaderFont(next);
-  $("aaFontScale")?.querySelector(`[data-size="${next}"]`)?.focus();
+  commitReaderFont(applyReaderFontSliderAction(readerPrefs.fontSize, action));
+}
+
+let fontDragFrame = 0;
+let fontDragSize = null;
+
+function queueReaderFont(size) {
+  fontDragSize = size;
+  if (fontDragFrame) return;
+  fontDragFrame = requestAnimationFrame(() => {
+    fontDragFrame = 0;
+    const next = fontDragSize;
+    fontDragSize = null;
+    if (next == null) return;
+    commitReaderFont(next);
+  });
+}
+
+function sliderFontRatio(event) {
+  const track = $("aaFontScale")?.querySelector(".aa-slider-track");
+  if (!track) return 0;
+  const box = track.getBoundingClientRect();
+  const width = box.width || 1;
+  return (event.clientX - box.left) / width;
+}
+
+function placeFontTip(ratio) {
+  const tip = $("aaFontTip");
+  const slider = $("aaFontScale");
+  const track = slider?.querySelector(".aa-slider-track");
+  if (!tip || !slider || !track) return;
+  const size = readerFontSizeFromRatio(ratio);
+  tip.hidden = false;
+  tip.textContent = String(size);
+  const box = track.getBoundingClientRect();
+  const host = slider.getBoundingClientRect();
+  const x = box.left + Math.min(1, Math.max(0, ratio)) * box.width - host.left;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${box.top - host.top - 6}px`;
+}
+
+function onAaFontPointerDown(event) {
+  const slider = $("aaFontScale");
+  if (!slider || readerFontControlsDisabled()) return;
+  if (event.button != null && event.button !== 0) return;
+  event.preventDefault();
+  slider.focus();
+  slider.classList.add("is-dragging");
+  slider.setPointerCapture?.(event.pointerId);
+  queueReaderFont(readerFontSizeFromRatio(sliderFontRatio(event)));
+}
+
+function onAaFontPointerMove(event) {
+  const slider = $("aaFontScale");
+  if (!slider || readerFontControlsDisabled()) return;
+  const ratio = sliderFontRatio(event);
+  if (slider.classList.contains("is-dragging")) {
+    queueReaderFont(readerFontSizeFromRatio(ratio));
+    return;
+  }
+  if (event.pointerType === "mouse") placeFontTip(ratio);
+}
+
+function onAaFontPointerUp(event) {
+  const slider = $("aaFontScale");
+  if (!slider?.classList.contains("is-dragging")) return;
+  slider.classList.remove("is-dragging");
+  if (slider.hasPointerCapture?.(event.pointerId)) slider.releasePointerCapture(event.pointerId);
+  const ratio = sliderFontRatio(event);
+  queueReaderFont(readerFontSizeFromRatio(ratio));
+}
+
+function hideFontTip() {
+  const tip = $("aaFontTip");
+  if (tip) tip.hidden = true;
+}
+
+function bindFontCapObserver() {
+  const pane = document.querySelector(".pane-translate");
+  let timer = 0;
+  const schedule = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      timer = 0;
+      refreshReaderFontCap();
+    }, 150);
+  };
+  if (pane && typeof ResizeObserver === "function") new ResizeObserver(schedule).observe(pane);
+  else window.addEventListener("resize", schedule);
+  requestAnimationFrame(() => refreshReaderFontCap());
 }
 
 function onAaThemeKey(event) {
@@ -1026,19 +1210,20 @@ function bindReaderChrome() {
     if (panel.hidden) openAaPanel();
     else closeAaPanel();
   });
-  $("aaFontDown")?.addEventListener("click", () => applyReaderFontStep("decrease"));
-  $("aaFontUp")?.addEventListener("click", () => applyReaderFontStep("increase"));
   $("aaFontDefault")?.addEventListener("click", () => {
     commitReaderFont(16);
   });
-  $("aaFontScale")?.addEventListener("click", (event) => {
-    const tick = event.target.closest?.("[data-size]");
-    if (!tick) return;
-    const size = Number(tick.dataset.size);
-    if (!READER_FONT_SIZES.includes(size)) return;
-    commitReaderFont(size);
+  $("aaFontHideSource")?.addEventListener("click", () => {
+    commitSourceMode("hidden");
   });
-  $("aaFontScale")?.addEventListener("keydown", onAaFontScaleKey);
+  const slider = $("aaFontScale");
+  slider?.addEventListener("keydown", onAaFontScaleKey);
+  slider?.addEventListener("pointerdown", onAaFontPointerDown);
+  slider?.addEventListener("pointermove", onAaFontPointerMove);
+  slider?.addEventListener("pointerup", onAaFontPointerUp);
+  slider?.addEventListener("pointercancel", onAaFontPointerUp);
+  slider?.addEventListener("pointerleave", hideFontTip);
+  bindFontCapObserver();
   $("aaThemes")?.addEventListener("click", (event) => {
     const swatch = event.target.closest?.("[data-theme]");
     if (!swatch) return;
@@ -5401,6 +5586,43 @@ function captureReaderAnchor() {
   return { page: block.dataset.srcPage || "", id: block.dataset.blockId || "" };
 }
 
+function captureFontAnchor() {
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  if (!pane || !flow) return null;
+  const paneTop = pane.getBoundingClientRect().top;
+  const blocks = [...flow.querySelectorAll(".rf-block[data-src-page]")];
+  const block = blocks.find((el) => el.getBoundingClientRect().bottom > paneTop + 1);
+  if (!block) return null;
+  const box = block.getBoundingClientRect();
+  const height = box.height || 1;
+  return {
+    page: block.dataset.srcPage || "",
+    id: block.dataset.blockId || "",
+    ratio: (paneTop - box.top) / height
+  };
+}
+
+function restoreFontAnchor(token) {
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  if (!pane || !flow || !token) return;
+  const esc = globalThis.CSS?.escape || ((value) => String(value).replace(/"/g, '\\"'));
+  const node = token.id
+    ? flow.querySelector(`[data-block-id="${esc(token.id)}"]`)
+    : flow.querySelector(`.rf-block[data-src-page="${esc(token.page)}"]`);
+  if (!node) return;
+  const paneTop = pane.getBoundingClientRect().top;
+  const box = node.getBoundingClientRect();
+  const target = readerFontAnchorTop({
+    blockTop: box.top,
+    blockHeight: box.height,
+    ratio: token.ratio
+  });
+  pane.scrollTop += target - paneTop;
+  updateReaderFade();
+}
+
 function restoreReaderAnchor(token) {
   const pane = translateScrollRoot();
   const flow = readerFlowEl();
@@ -5490,7 +5712,7 @@ function layoutCapsule({ keepAnchor = false } = {}) {
     gutter: narrow ? 0 : classicScrollbarWidth()
   });
   const widths = capsuleLabelWidths(maxPage);
-  const fontPx = readerPrefs.fontSize;
+  const fontPx = readerShownFont();
   const measurePad = readerMeasurePad();
   const column = box.paneW + (box.scrollbar > 0 ? box.scrollbar : 0);
   const want = Math.min(36 * fontPx, column - 2 * measurePad);

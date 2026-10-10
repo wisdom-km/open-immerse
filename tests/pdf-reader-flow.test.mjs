@@ -47,18 +47,18 @@ const tokens = readFileSync(join(root, "pdf/reader-tokens.css"), "utf8");
 const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
 const globalTokens = readFileSync(join(root, "ui/tokens.css"), "utf8");
 
-test("font steps stay on 14/15/16/17/18/20 and remember the chosen step", () => {
-  assert.deepEqual([...READER_FONT_SIZES], [14, 15, 16, 17, 18, 20]);
+test("font steps run 14 through 40 and remember the chosen step", () => {
+  assert.deepEqual([...READER_FONT_SIZES], [14, 15, 16, 17, 18, 19, 20, 22, 24, 26, 28, 32, 36, 40]);
   assert.equal(READER_FONT_DEFAULT, 16);
   assert.equal(normalizeReaderFontSize(undefined), 16);
   assert.equal(normalizeReaderFontSize("15"), 15);
-  assert.equal(normalizeReaderFontSize(13), 16);
-  assert.equal(normalizeReaderFontSize(19), 16);
+  assert.equal(normalizeReaderFontSize(13), 14);
+  assert.equal(normalizeReaderFontSize(19), 19);
   assert.equal(stepReaderFontSize(16, -1), 15);
   assert.equal(stepReaderFontSize(14, -1), 14);
-  assert.equal(stepReaderFontSize(18, 1), 20);
-  assert.equal(stepReaderFontSize(20, 1), 20);
-  assert.equal(applyReaderFontAction(20, "decrease"), 18);
+  assert.equal(stepReaderFontSize(18, 1), 19);
+  assert.equal(stepReaderFontSize(20, 1), 22);
+  assert.equal(applyReaderFontAction(20, "decrease"), 19);
   assert.equal(applyReaderFontAction(14, "increase"), 15);
   assert.equal(applyReaderFontAction(20, "reset"), 16);
   const store = {};
@@ -92,7 +92,7 @@ test("font steps stay on 14/15/16/17/18/20 and remember the chosen step", () => 
     miniCollapsed: false
   });
   store["reader.fontSize"] = "13";
-  assert.equal(readReaderPrefs(store).fontSize, 16);
+  assert.equal(readReaderPrefs(store).fontSize, 14);
 });
 
 test("reader font keys ignore fields, editing, and modifier chords", () => {
@@ -246,7 +246,7 @@ test("multiply is the default blend and forced-colors keeps the original pixels"
 test("Aa panel exposes font steps and background radios, and hides the tier-2 switch", () => {
   assert.match(html, /id="aaButton"/);
   assert.match(html, /id="aaPanel"/);
-  assert.match(html, /id="aaFontScale"[^>]*role="radiogroup"/);
+  assert.match(html, /id="aaFontScale"[^>]*role="slider"/);
   assert.match(html, /id="aaThemes"[^>]*role="radiogroup"[^>]*aria-label="阅读背景"/);
   assert.match(html, /id="aaSingleKey"[^>]*role="switch"/);
   assert.match(viewer, /aria-label", readerThemeAriaLabel/);
@@ -660,10 +660,10 @@ test("approved reader tokens name the theme scopes and the latin subset", () => 
       assert.match(tokens, new RegExp(`--oi-reader-${name}:\\s*var\\(--oi-reader-${theme}-${name}\\)`));
     }
   }
-  assert.match(tokens, /--oi-reader-line-height:\s*1\.9/);
+  assert.match(tokens, /--oi-reader-line-height:\s*clamp\(1\.5,\s*calc\(1\.9 - 0\.025 \* \(var\(--oi-reader-fs-num\) - 16\)\),\s*1\.9\)/);
   assert.match(tokens, /--oi-reader-measure:\s*36em/);
   assert.match(tokens, /--oi-reader-h3-size:\s*calc\(1\.0625 \* var\(--oi-reader-font-size\)\)/);
-  assert.match(tokens, /--oi-reader-paragraph-gap:\s*calc\(1\.125 \* var\(--oi-reader-font-size\)\)/);
+  assert.match(tokens, /--oi-reader-paragraph-gap:\s*clamp\(0\.75em,\s*calc\(\(1\.125 - 0\.02 \* \(var\(--oi-reader-fs-num\) - 16\)\) \* 1em\),\s*1\.125em\)/);
   assert.match(tokens, /--oi-reader-font-sans:/);
   assert.match(tokens, /--oi-reader-pair-bg-solid:/);
   assert.match(tokens, /--oi-reader-pair-box-w:\s*1\.5px/);
