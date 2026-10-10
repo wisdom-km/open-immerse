@@ -387,6 +387,15 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
     for (const entry of pages) {
       const units = unitsFor(entry.next.blocks);
       const pairs = echoedFirst(entry.previous.blocks);
+      const storedBySource = new Map();
+      for (const block of translatableBlocks(entry.previous.blocks)) {
+        const key = sourceReuseHash(block.sourceText || block.text);
+        if (!key) continue;
+        const translation = translationFor(block.text);
+        const prior = storedBySource.get(key);
+        if (prior == null) storedBySource.set(key, translation);
+        else if (prior !== translation) storedBySource.set(key, "");
+      }
       const filled = applySavedPairs(units, pairs, SETTINGS);
       const state = libraryPageRunState({
         pairs,
@@ -401,7 +410,14 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
       for (const unit of filled) {
         const live = units.find((item) => item.id === unit.id);
         assert.equal(unit.bid, live.bid, `${name} p${entry.page} keeps the live bid`);
-        if (unit.translation) assert.equal(unit.translation, translationFor(unit.text));
+        if (unit.translation) {
+          const key = sourceReuseHash(unit.sourceText || unit.text);
+          const stored = key ? storedBySource.get(key) : "";
+          // Same source sentence: the stored translation stays, even when a
+          // subscript moved into an existing formula crop and the display text changed.
+          if (stored) assert.equal(unit.translation, stored, `${name} p${entry.page} ${unit.bid}`);
+          else assert.equal(unit.translation, translationFor(unit.text), `${name} p${entry.page} ${unit.bid}`);
+        }
         if (WATCH.has(unit.bid)) {
           assert.equal(unit.translation, translationFor(unit.text), `${name} ${unit.bid} keeps its translation`);
           assert.equal(unitsNeedingTranslation([unit], SETTINGS.targetLang).length, 0, unit.bid);
