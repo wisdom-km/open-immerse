@@ -8,17 +8,14 @@ import { FORMULA_CROP_PAD, equationKeepFraction } from "../lib/pdf-text-layer.js
 import {
   INLINE_SIDE_GAP_EM,
   FORMULA_FIT_SLACK,
-  SCRIPT_INK_MIN_PX,
   SCRIPT_INK_TARGET_PX,
   SCRIPT_SHARE_DEFAULT,
   SCRIPT_SHARE_HIGH,
   SCRIPT_SHARE_LOW,
   SCRIPT_SHARE_SAFETY,
-  DISPLAY_INK_PAINT,
   UNIFORM_SCALE_TOL,
   displayFormulaMinEm,
   matchedDisplayCssSize,
-  INLINE_BODY_HARD_MAX,
   inlineFormulaCssSize,
   inlinePaintBox,
   displayFormulaColumnPx,
@@ -43,8 +40,7 @@ test("F3-S2 uniform scale stays inside 0.02 when only one axis is set", () => {
   assert.equal(uniformScaleOk(100, 40, 200, 100), false);
 });
 
-test("F3-S3 script ink uses the 7px hard gate and promotes a tall inline", () => {
-  assert.equal(SCRIPT_INK_MIN_PX, 7);
+test("F3-S3 script ink paints toward 8px and promotes a tall inline", () => {
   assert.equal(SCRIPT_INK_TARGET_PX, 8);
   const cssH = 7 / 0.25;
   assert.ok(scriptInkPx(cssH, 0.25) >= 7);
@@ -70,57 +66,55 @@ test("F3-S3 script ink uses the 7px hard gate and promotes a tall inline", () =>
   assert.ok(inflated.box > 2.2);
 });
 
-test("F3-S1 display paint stays capped at 2.5em and the live box matches the page", () => {
-  assert.equal(DISPLAY_INK_PAINT, 1.45);
+test("F3-S1 fallback width is page points at the readability floor", () => {
   assert.equal(DISPLAY_BODY_HARD_MAX, 2.5);
   const em = displayFormulaMinEm(0.5, 0.2);
   assert.equal(em, DISPLAY_BODY_HARD_MAX);
   assert.ok(em <= DISPLAY_BODY_HARD_MAX);
   const low = displayFormulaMinEm(0.22, 0.05);
   assert.ok(low <= DISPLAY_BODY_HARD_MAX);
-  assert.ok(low * 0.22 <= DISPLAY_BODY_HARD_MAX);
-  const css = displayFormulaWidthCss(0.48, 0.04, 8);
-  // F3-S4: native page width, shrink to the column, never below 0.75×.
-  assert.match(css, /^max\(calc\(var\(--oi-pdf-left-w, var\(--oi-pdf-paper-w, 1px\)\) \* 0\.36\), min\(100%, calc\(var\(--oi-pdf-left-w/);
-  assert.match(css, /\* 0\.48\)/);
-  assert.doesNotMatch(css, /em|paper-h-base/);
   const pageWidth = 612;
   const pageHeight = 792;
-  const paperHeight = 764.47;
+  const css = displayFormulaWidthCss(0.48, 0.04, { pageWidthPt: pageWidth, floor: FORMULA_SHRINK_FLOOR });
+  assert.equal(css, "max(220.32px, min(100%, 293.76px))");
+  assert.doesNotMatch(css, /em|oi-pdf-left-w|paper-h-base/);
+  const xHeight = displayFormulaWidthCss(0.48, 0.04, {
+    pageWidthPt: pageWidth,
+    floor: formulaReadabilityFloor(20, 10)
+  });
+  assert.equal(xHeight, "max(282.0096px, min(100%, 293.76px))");
+  assert.equal(displayFormulaWidthCss(0.48, 0.04, 8), "");
   const bbox = [0.26, 0.4, 0.74, 0.44];
-  const matched = matchedDisplayCssSize({ bbox, pageWidth, pageHeight, paperHeight });
-  assert.ok(Math.abs(matched.cssHeight - 0.04 * paperHeight) < 1e-6);
-  assert.ok(Math.abs(matched.cssWidth / matched.cssHeight - (0.48 * pageWidth) / (0.04 * pageHeight)) < 1e-6);
-  const exploded = displayFormulaWidthCss(0.9, 0.015, displayFormulaMinEm(0.22, null));
-  assert.match(exploded, /\* 0\.675\)/);
-  assert.doesNotMatch(exploded, /em|0\.015|paper-h-base/);
-  const tiny = displayFormulaWidthCss(0.9, 1e-8, 2.5);
+  const matched = matchedDisplayCssSize({ bbox, pageWidth, pageHeight, paperHeight: 400 });
+  assert.ok(Math.abs(matched.cssHeight - 0.04 * pageHeight) < 1e-6);
+  assert.ok(Math.abs(matched.cssWidth - 0.48 * pageWidth) < 1e-6);
+  const exploded = displayFormulaWidthCss(0.9, 0.015, { pageWidthPt: pageWidth, floor: 0.5 });
+  assert.equal(exploded, "max(413.1px, min(100%, 550.8px))");
+  assert.doesNotMatch(exploded, /em|0\.015|oi-pdf-left-w/);
+  const tiny = displayFormulaWidthCss(0.9, 1e-8, { pageWidthPt: pageWidth, floor: 0.75 });
   assert.equal(tiny, exploded);
   assert.doesNotMatch(tiny, /1e-8|0\.00000001/);
 });
 
-test("inline formulas stay on the bbox and cap at 1.4 body without one", () => {
-  assert.equal(INLINE_BODY_HARD_MAX, 1.4);
+test("inline formulas match the page point size and have no font-scaled fallback", () => {
   const pageWidth = 612;
   const pageHeight = 792;
-  const paperHeight = 792;
   const bbox = [0.2, 0.4, 0.28, 0.412];
-  const matched = inlineFormulaCssSize({ bbox, pageWidth, pageHeight, paperHeight, bodyFontPx: 9.56 });
+  const matched = inlineFormulaCssSize({ bbox, pageWidth, pageHeight, paperHeight: 400, bodyFontPx: 9.56 });
   assert.equal(matched.source, "bbox");
-  assert.ok(Math.abs(matched.cssHeight - 0.012 * paperHeight) < 1e-6);
+  assert.ok(Math.abs(matched.cssHeight - 0.012 * pageHeight) < 1e-6);
+  assert.ok(Math.abs(matched.cssWidth - 0.08 * pageWidth) < 1e-6);
   assert.ok(matched.cssHeight < 9.56 * 2.2);
   const tall = inlineFormulaCssSize({
     bbox: [0.1, 0.4, 0.7, 0.457],
     pageWidth,
     pageHeight,
-    paperHeight,
+    paperHeight: 400,
     bodyFontPx: 9.56
   });
   assert.equal(tall.source, "bbox");
   assert.ok(tall.cssHeight > 9.56 * 2.5);
-  const capped = inlineFormulaCssSize({ bodyFontPx: 9.56 });
-  assert.equal(capped.source, "cap");
-  assert.ok(Math.abs(capped.cssHeight - 9.56 * 1.4) < 1e-9);
+  assert.equal(inlineFormulaCssSize({ bodyFontPx: 9.56 }), null);
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
   assert.match(viewer, /oi-pdf-inline-math/);
@@ -130,6 +124,7 @@ test("inline formulas stay on the bbox and cap at 1.4 body without one", () => {
   const pageStamp = paragraph.indexOf("node.dataset.page = String(page)");
   const fillAt = paragraph.indexOf("fillBlockText(node, block, layout)");
   assert.ok(pageStamp >= 0 && fillAt > pageStamp);
+  assert.doesNotMatch(viewer, /INLINE_BODY_HARD_MAX|SCRIPT_INK_MIN_PX|DISPLAY_INK_PAINT/);
   assert.doesNotMatch(viewer, /classList\.add\("is-promoted"\)/);
   assert.match(css, /\.oi-pdf-inline-math\.is-matched:has\(\.oi-pdf-math-crop\)\s*\{[^}]*display:\s*inline-block/s);
   assert.match(css, /\.oi-pdf-inline-math\.is-matched \.oi-pdf-math-crop\s*\{[^}]*height:\s*var\(--oi-formula-h\)/s);
