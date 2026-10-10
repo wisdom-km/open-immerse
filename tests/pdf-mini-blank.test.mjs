@@ -83,6 +83,7 @@ function instrumentViewer(source) {
   return `${injected}
 globalThis.__oiPdfViews = () => ({
   zoom,
+  fit: fitWidthZoom(pdfPageWidth, miniPagesInnerWidth()),
   applies: globalThis.__oiZoomApplies || 0,
   pages: pageViews.map((view) => ({
     num: view.num,
@@ -232,7 +233,7 @@ function scrollExpr(page) {
   })()`;
 }
 
-function dragExpr(target) {
+function dragExpr(target, { release = true } = {}) {
   return `(() => {
     const workspace = document.querySelector(".workspace");
     const handle = document.querySelector(".split-handle");
@@ -262,9 +263,37 @@ function dragExpr(target) {
     for (let i = 1; i <= steps; i += 1) {
       fire("pointermove", current + (target - current) * (i / steps), 1);
     }
-    fire("pointerup", target, 0);
+    if (${release ? "true" : "false"}) fire("pointerup", target, 0);
     const mini = parseFloat(workspace.style.getPropertyValue("--oi-mini-width")) || 0;
-    return { from: current, to: mini, target, applies: (globalThis.__oiZoomApplies || 0) - before };
+    return {
+      from: current,
+      to: mini,
+      target,
+      at: globalThis.__oiZoomApplies || 0,
+      applies: (globalThis.__oiZoomApplies || 0) - before
+    };
+  })()`;
+}
+
+function releaseExpr() {
+  return `(() => {
+    const workspace = document.querySelector(".workspace");
+    const handle = document.querySelector(".split-handle");
+    const rect = workspace.getBoundingClientRect();
+    const width = parseFloat(workspace.style.getPropertyValue("--oi-mini-width")) || 360;
+    const before = globalThis.__oiZoomApplies || 0;
+    handle.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      clientX: rect.x + width,
+      clientY: rect.y + 48
+    }));
+    return { to: width, applies: (globalThis.__oiZoomApplies || 0) - before };
   })()`;
 }
 
@@ -399,9 +428,9 @@ test("mini divider drags do not blank pages outside the render radius", { timeou
   assert.equal(await evaluate(scrollExpr(FAR_PAGE)), true);
   const settled = await waitFor(painted(FAR_PAGE), "far page after drags");
   assert.equal(settled.mini, originMini);
-  assert.ok(Math.abs(settled.zoom - originZoom) < 1e-6, `zoom ${settled.zoom} did not return to ${originZoom}`);
-  const fit = fitWidthZoom(baseWidth, settled.clientWidth);
-  assert.ok(Math.abs(settled.zoom - fit) < 1e-6, `zoom ${settled.zoom} is not the fit ${fit}`);
+  assert.equal(settled.zoom, originZoom);
+  assert.equal(settled.zoom, settled.fit);
+  assert.equal(settled.zoom, fitWidthZoom(baseWidth, settled.clientWidth));
   const stuck = settled.pages.filter((item) => item.hidden && item.renderedScale === settled.zoom);
   assert.deepEqual(stuck, [], `blank pages ${JSON.stringify(stuck)}`);
 
@@ -419,24 +448,51 @@ test("mini divider drags do not blank pages outside the render radius", { timeou
   assert.equal(midRow.hidden, false);
   assert.equal(midRow.renderedScale, middle.zoom);
 
-  const nudged = await evaluate(dragExpr(originMini + 2));
-  assert.equal(nudged.to, originMini + 2);
-  assert.equal(nudged.applies, 0, `1% slack still called applyZoom ${nudged.applies} times`);
+  const slackWidth = originMini + 2;
+  const held = await evaluate(dragExpr(slackWidth, { release: false }));
+  assert.equal(held.to, slackWidth);
+  assert.equal(held.applies, 0);
+  await sleep(220);
+  const during = await evaluate(`(globalThis.__oiZoomApplies || 0) - ${held.at}`);
+  assert.equal(during, 0, `applyZoom ran during a sub-percent drag (${during})`);
+  const released = await evaluate(releaseExpr());
+  assert.equal(released.applies, 1, `pointerup exact snap called applyZoom ${released.applies} times`);
+  const nudgedFit = await waitFor(`(() => {
+    const snap = ${SNAPSHOT};
+    if (!snap || snap.mini !== ${slackWidth} || snap.zoom !== snap.fit) return null;
+    const row = (snap.pages || []).find((item) => item.num === ${mid});
+    if (!row || row.hidden || row.renderedScale !== snap.zoom) return null;
+    return snap;
+  })()`, "exact fit after 2px release");
+  assert.equal(nudgedFit.zoom, nudgedFit.fit);
+  assert.equal(nudgedFit.zoom, fitWidthZoom(baseWidth, nudgedFit.clientWidth));
 
   const widened = await evaluate(dragExpr(originMini >= 420 ? 320 : 460));
   assert.ok(widened.applies >= 1 && widened.applies <= 2);
   const fitted = await waitFor(`(() => {
     const snap = ${SNAPSHOT};
-    if (!snap) return null;
+    if (!snap || snap.zoom !== snap.fit) return null;
     const row = (snap.pages || []).find((item) => item.num === ${mid});
     if (!row || row.hidden) return null;
     return snap;
   })()`, "refit after widen");
-  const nextFit = fitWidthZoom(baseWidth, fitted.clientWidth);
-  assert.ok(Math.abs(fitted.zoom - nextFit) <= 0.01, `fit drift ${fitted.zoom} vs ${nextFit}`);
+  assert.equal(fitted.zoom, fitted.fit);
+  assert.equal(fitted.zoom, fitWidthZoom(baseWidth, fitted.clientWidth));
   const wrap = await evaluate(`document.querySelector('.pdf-page[data-page="${mid}"]')?.getBoundingClientRect().width || 0`);
   assert.ok(wrap <= fitted.clientWidth + 0.75, `wrap ${wrap} exceeds column ${fitted.clientWidth}`);
   assert.ok(fitted.clientWidth - wrap < 1.25, `wrap ${wrap} does not fill ${fitted.clientWidth}`);
+
+  await evaluate(`window.dispatchEvent(new Event("resize"))`);
+  await sleep(220);
+  const resized = await waitFor(`(() => {
+    const snap = ${SNAPSHOT};
+    if (!snap || snap.zoom !== snap.fit) return null;
+    const row = (snap.pages || []).find((item) => item.num === ${mid});
+    if (!row || row.hidden || row.renderedScale !== snap.zoom) return null;
+    return snap;
+  })()`, "exact fit after resize settles");
+  assert.equal(resized.zoom, resized.fit);
+  assert.equal(resized.label, fitted.label);
 
   await evaluate(`document.getElementById("zoomIn").click()`);
   const chosen = await waitFor(`(() => {

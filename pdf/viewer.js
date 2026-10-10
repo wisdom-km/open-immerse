@@ -1098,7 +1098,10 @@ function bindSplitResize() {
   handle.addEventListener("pointerdown", (event) => startSplitDrag(event, workspace, handle));
   handle.addEventListener("dblclick", () => resetSplit(workspace));
   handle.addEventListener("keydown", (event) => onSplitKey(event, workspace));
-  window.addEventListener("resize", () => syncSplitAria(workspace));
+  window.addEventListener("resize", () => {
+    syncSplitAria(workspace);
+    scheduleMiniFitSettle();
+  });
 }
 
 /** Apply the stored fraction after prefs load. CSS minmax keeps the minimum widths. */
@@ -8192,12 +8195,18 @@ let miniFitDragging = false;
 let miniFitTimer = 0;
 let miniFitMidDragApplied = false;
 
+let miniFitSettleTimer = 0;
+
 function beginMiniFitDrag() {
   miniFitDragging = true;
   miniFitMidDragApplied = false;
   if (miniFitTimer) {
     clearTimeout(miniFitTimer);
     miniFitTimer = 0;
+  }
+  if (miniFitSettleTimer) {
+    clearTimeout(miniFitSettleTimer);
+    miniFitSettleTimer = 0;
   }
 }
 
@@ -8209,7 +8218,18 @@ function endMiniFitDrag() {
   const wasDragging = miniFitDragging;
   miniFitDragging = false;
   miniFitMidDragApplied = false;
-  if (wasDragging) syncMiniFitZoom();
+  if (!wasDragging) return;
+  syncMiniFitZoom();
+  scheduleMiniFitSettle();
+}
+
+function scheduleMiniFitSettle() {
+  if (miniFitSettleTimer) clearTimeout(miniFitSettleTimer);
+  miniFitSettleTimer = setTimeout(() => {
+    miniFitSettleTimer = 0;
+    if (miniFitDragging) return;
+    syncMiniFitZoom();
+  }, 150);
 }
 
 function syncMiniFitZoom() {
@@ -8225,22 +8245,23 @@ function syncMiniFitZoom() {
         miniFitTimer = 0;
         if (!miniFitDragging || miniFitMidDragApplied) return;
         miniFitMidDragApplied = true;
-        commitMiniFitZoom();
+        commitMiniFitZoom({ exact: false });
       }, 150);
     }
     return true;
   }
-  return commitMiniFitZoom();
+  return commitMiniFitZoom({ exact: true });
 }
 
-function commitMiniFitZoom() {
+function commitMiniFitZoom({ exact = false } = {}) {
   if (!pdfDoc || sourceZoomTouched) return false;
   if (currentSourceMode() !== "mini") return false;
   const workspace = document.querySelector(".workspace");
   if (!workspace || workspace.dataset.miniCollapsed === "true") return false;
   const fit = fitWidthZoom(pdfPageWidth, miniPagesInnerWidth());
   if (fit == null) return false;
-  if (Math.abs(fit - zoom) <= 0.01) return true;
+  if (Math.abs(fit - zoom) < 1e-6) return true;
+  if (!exact && Math.abs(fit - zoom) <= 0.01) return true;
   applyZoom(fit);
   return true;
 }
