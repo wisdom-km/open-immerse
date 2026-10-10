@@ -241,9 +241,10 @@ test("DPO reward formula on pages 18 and 19 is one inline unit", async () => {
   const fragment = /ref['′]?\(\(yy|\(yy\|/;
   const bySuffix = new Map();
   try {
-    for (const number of [5, 18, 19]) {
+    for (let number = 1; number <= 19; number += 1) {
       const pdfPage = await doc.getPage(number);
       const content = await pdfPage.getTextContent();
+      attachFontRealNames(content.items, pdfPage.commonObjs);
       const viewport = pdfPage.getViewport({ scale: 1 });
       const ops = await pdfPage.getOperatorList();
       const built = stampLayoutBids(number, textLayerToBlocks({
@@ -252,6 +253,7 @@ test("DPO reward formula on pages 18 and 19 is one inline unit", async () => {
         images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
         page: number
       }));
+      if (![5, 18, 19].includes(number)) continue;
       for (const block of built.blocks) {
         const suffix = String(block.bid || "").split("-").pop();
         bySuffix.set(`${number}:${suffix}`, { block, blocks: built.blocks });
@@ -277,7 +279,7 @@ test("DPO reward formula on pages 18 and 19 is one inline unit", async () => {
   }
   const page5 = host(5, "t1am9nkw");
   assert.match(page5.text, /DPO outline/);
-  assert.match(page5.text, /π_\{ref\}/);
+  assert.match(page5.text, /⟦f\d+⟧/);
   assert.match(page5.text, /Appendix B/);
   assert.doesNotMatch(page5.text, fragment);
   assert.doesNotMatch(page5.shown, fragment);
@@ -298,6 +300,9 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
     for (let number = 1; number <= doc.numPages; number += 1) {
       const pdfPage = await doc.getPage(number);
       const content = await pdfPage.getTextContent();
+      // The viewer names fonts before layout. Shared fonts resolve once earlier
+      // pages have been read, which is the order a document open uses.
+      attachFontRealNames(content.items, pdfPage.commonObjs);
       const viewport = pdfPage.getViewport({ scale: 1 });
       const ops = await pdfPage.getOperatorList();
       const built = stampLayoutBids(number, textLayerToBlocks({

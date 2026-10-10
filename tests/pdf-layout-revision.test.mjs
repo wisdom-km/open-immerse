@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { translatableBlocks } from "../lib/pdf-blocks.js";
+import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import { cacheableLayout, currentLayoutVersion, layoutCacheKey, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { isSkipOnlyPage, sourceReuseHash } from "../lib/pdf-library.js";
 import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
@@ -871,6 +872,9 @@ async function loadCurrentPaper() {
     for (let number = 1; number <= doc.numPages; number += 1) {
       const pdfPage = await doc.getPage(number);
       const content = await pdfPage.getTextContent();
+      // The viewer names fonts before textLayerToBlocks. A library built
+      // without those names disagrees on source text after a vendor recompute.
+      attachFontRealNames(content.items, pdfPage.commonObjs);
       const viewport = pdfPage.getViewport({ scale: 1 });
       const ops = await pdfPage.getOperatorList();
       const built = stampLayoutBids(number, textLayerToBlocks({
@@ -935,6 +939,7 @@ async function formulaHost(paper) {
       if (!oldBlock) continue;
       const pdfPage = await doc.getPage(entry.page);
       const content = await pdfPage.getTextContent();
+      attachFontRealNames(content.items, pdfPage.commonObjs);
       const viewport = pdfPage.getViewport({ scale: 1 });
       const ops = await pdfPage.getOperatorList();
       const built = stampLayoutBids(entry.page, textLayerToBlocks({
