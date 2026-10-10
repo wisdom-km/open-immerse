@@ -303,6 +303,7 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
       // The viewer names fonts before layout. Shared fonts resolve once earlier
       // pages have been read, which is the order a document open uses.
       attachFontRealNames(content.items, pdfPage.commonObjs);
+      if (number === 5) assert.ok(content.items.some((item) => item.fontRealName), "page 5 font names");
       const viewport = pdfPage.getViewport({ scale: 1 });
       const ops = await pdfPage.getOperatorList();
       const built = stampLayoutBids(number, textLayerToBlocks({
