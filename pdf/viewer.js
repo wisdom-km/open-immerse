@@ -65,6 +65,7 @@ import {
   pageHasTranslation,
   pageTranslationComplete,
   unitsNeedingTranslation,
+  claimTranslationUnits,
   mergeTranslationRows,
   pageIndex,
   pageLabel,
@@ -6850,6 +6851,7 @@ async function translateWholeDocument() {
     return;
   }
   const saveTasks = [];
+  const sentSource = new Map();
   const pageJob = {
     session: work,
     cache: pageCache,
@@ -6858,7 +6860,12 @@ async function translateWholeDocument() {
     batchSize,
     targetLang: pdfTargetLang,
     send: runtimeSend,
-    getPageOriginals: (page) => originalsForPage(page, gen, translatingDoc, work, batchSize),
+    getPageOriginals: async (page) => {
+      const units = await originalsForPage(page, gen, translatingDoc, work, batchSize);
+      // One open, one request per block. A later layout pass must not send a
+      // block whose source was already submitted in this session.
+      return claimTranslationUnits(units, sentSource);
+    },
     pageSkipReason: (page) => {
       if (titleStructureFailed(page)) return "empty";
       const cached = pageCache.get(translatingDoc, page);
@@ -7062,9 +7069,14 @@ async function translateWholeDocument() {
         if (!isCurrentWork(work, gen, translatingDoc)) break;
         const blocks = getPageLayout(page)?.blocks || null;
         if (!blocks || isSkipOnlyPage(blocks)) continue;
-        const covered = libraryCoversLiveBlocks(libraryEntry(page)?.pairs || [], blocks, pdfTargetLang, pdfProvider);
-        if (covered) continue;
-        pageCache.clearPage(translatingDoc, page);
+        const covered = libraryPageRunState({
+          pairs: libraryEntry(page)?.pairs || [],
+          cached: pageCache.get(translatingDoc, page),
+          blocks,
+          targetLang: pdfTargetLang,
+          provider: pdfProvider
+        });
+        if (covered === "done" || covered === "skipped" || covered === "empty") continue;
         const prior = pageStates.get(page);
         notePageState(page, {
           state: countedPageState(prior?.state) ? "partial" : "queued",

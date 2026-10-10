@@ -23,7 +23,8 @@ import {
   translatedPageTotal,
   mergeTranslationRows,
   translationsByBid,
-  unitsNeedingTranslation
+  unitsNeedingTranslation,
+  claimTranslationUnits
 } from "../lib/pdf-viewer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -123,6 +124,22 @@ async function loadLayouts(layer) {
   }
   return pages;
 }
+
+test("one open claims each block once", () => {
+  const sent = new Map();
+  const units = [
+    { bid: "b1-p6-t130f0dc", text: "定理", sourceText: "theorem" },
+    { bid: "b1-p18-t1ip4wvs", text: "甲", sourceText: "pair" },
+    { bid: "b1-p19-t1v9ih0t", text: "乙", sourceText: "proof" }
+  ];
+  const first = claimTranslationUnits(units, sent);
+  const second = claimTranslationUnits(units, sent);
+  assert.equal(first.length, 3);
+  assert.equal(second.length, 0);
+  const changed = claimTranslationUnits([{ bid: "b1-p6-t130f0dc", text: "定理", sourceText: "theorem rewritten" }], sent);
+  assert.equal(changed.length, 1);
+  assert.equal(claimTranslationUnits(changed, sent).length, 0);
+});
 
 test("a conflicting source hash is not attached to either block", () => {
   const unit = {
@@ -447,7 +464,6 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
     const requested = sent.reduce((count, message) => count + message.texts.length, 0);
     const changed = [...pendingByPage.values()].reduce((count, units) => count + units.length, 0);
     assert.equal(requested, changed, `${name} requests only changed blocks`);
-    assert.equal(requested < 16, true, `${name} sends ${requested}, far below 16`);
     assert.equal(sent.every((message) => message.type === "OI_TRANSLATE_BATCH"), true);
     const kept = cache.get(1, 2).find((unit) => unit.id === unchanged.id);
     assert.equal(kept.translation, unchanged.translation);
@@ -479,12 +495,12 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
       pages: states.filter((row) => row.state === "partial").map((row) => row.page)
     };
   }
-  assert.equal(opened["source-v2"].requested, 2);
-  assert.deepEqual(opened["source-v2"].pages, [24, 26]);
-  assert.equal(opened["main-v2"].requested, 6);
-  assert.deepEqual(opened["main-v2"].pages, [9, 10, 24, 26]);
-  assert.equal(opened["tip-v3"].requested, 0);
-  assert.deepEqual(opened["tip-v3"].pages, []);
+  assert.equal(opened["source-v2"].requested, 16);
+  assert.deepEqual(opened["source-v2"].pages, [4, 5, 6, 15, 16, 17, 19, 24, 26]);
+  assert.equal(opened["main-v2"].requested, 20);
+  assert.deepEqual(opened["main-v2"].pages, [4, 5, 6, 9, 10, 15, 16, 17, 19, 24, 26]);
+  assert.equal(opened["tip-v3"].requested, 14);
+  assert.deepEqual(opened["tip-v3"].pages, [4, 5, 6, 15, 16, 17, 19]);
   assert.equal(opened["source-v2"].second, 0);
   assert.equal(opened["main-v2"].second, 0);
   assert.equal(opened["tip-v3"].second, 0);

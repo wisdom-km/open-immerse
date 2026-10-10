@@ -459,10 +459,10 @@ test("Attention and DPO text-layer bids match the locked reference", { timeout: 
   const dpo = await loadDocument(dpoPath);
   assert.equal(dpo.length, 27);
   const dpoBlocks = dpo.flatMap((page) => page.blocks);
-  assert.equal(dpoBlocks.length, 468);
+  assert.equal(dpoBlocks.length, 400);
   const dpoBids = dpoBlocks.map((block) => block.bid);
   assert.equal(dpoBids.every((bid) => isBid(bid)), true);
-  assert.equal(new Set(dpoBids).size, 468);
+  assert.equal(new Set(dpoBids).size, 400);
   assert.equal(findBlock(dpo, "p2-b8").block.bid, "b1-p2-t1hmmsbz");
   assert.equal(findBlock(dpo, "p3-b1").block.bid, "b1-p3-t1n7kik7");
   const byBase = new Map();
@@ -478,8 +478,6 @@ test("Attention and DPO text-layer bids match the locked reference", { timeout: 
       head: bidText(blocks[0].sourceText || blocks[0].text).slice(0, 40)
     }));
   assert.deepEqual(dupes, [
-    { base: "b1-p6-t0p0a5vm", n: 2, head: "yπrefyxexp1" },
-    { base: "b1-p18-t1kh4gv6", n: 2, head: "βrxy" },
     { base: "b1-p18-t0xupwgh", n: 2, head: "whichcompletestheproof" },
     { base: "b1-p21-t0vpxjr3", n: 3, head: "post" },
     { base: "b1-p21-t1goer1q", n: 4, head: "summarya" },
@@ -491,6 +489,6 @@ test("Attention and DPO text-layer bids match the locked reference", { timeout: 
     const head = bidText(blocks[0].sourceText || blocks[0].text);
     assert.equal(blocks.every((block) => bidText(block.sourceText || block.text) === head), true, base);
   }
-  assert.equal(collisionBids(dpoBlocks).length, 12);
+  assert.equal(collisionBids(dpoBlocks).length, 10);
   assert.equal(bidText("⟦f1⟧ Attention").includes("f1"), false);
 });

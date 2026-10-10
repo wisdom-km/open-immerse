@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "url";
@@ -12,8 +13,8 @@ import {
   stripFontSubsetPrefix
 } from "../lib/pdf-mirror.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
-import { blockRenderPieces } from "../lib/pdf-blocks.js";
-import { sameLineFormulaSpans, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { CROP_SCALE, blockRenderPieces } from "../lib/pdf-blocks.js";
+import { measureFormulaCrop, sameLineFormulaSpans, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -176,6 +177,48 @@ test("a script-sized ref stays inside the inline fraction and prose still ends i
   assert.match(text, /ref/);
   assert.match(text, /y\|x/);
   assert.doesNotMatch(text, /for some model/);
+  const withTail = line.map((item) => ({ ...item }));
+  const refAt = withTail.findIndex((item) => item.str === "ref");
+  withTail.splice(refAt + 1, 0,
+    { str: "θ", x: 90, y: 98, width: 5, height: 5, fontRealName: "CMR7" },
+    { str: "r", x: 95, y: 90, width: 4, height: 5, fontRealName: "CMR7" }
+  );
+  for (const item of withTail) {
+    if (item.str === "(" || item.str === "y" || item.str === "|" || item.str === "x" || item.str === ")") {
+      if (item.x < 120) item.x += 16;
+    }
+  }
+  const tailed = sameLineFormulaSpans(withTail);
+  assert.equal(tailed.length, 1);
+  const tailedText = withTail.slice(tailed[0][0], tailed[0][1] + 1).map((item) => item.str).join("");
+  assert.match(tailedText, /refθr/);
+  assert.match(tailedText, /y\|x/);
+  assert.doesNotMatch(tailedText, /for some model/);
+  const bodySized = [
+    { str: "−", x: 0, y: 100, width: 8, height: 10, fontRealName: "CMR10" },
+    { str: "β", x: 10, y: 100, width: 8, height: 10, fontRealName: "CMR10" },
+    { str: "log", x: 20, y: 100, width: 16, height: 10, fontRealName: "CMR10" },
+    { str: "π", x: 40, y: 96, width: 8, height: 10, fontRealName: "CMMI10" },
+    { str: "π", x: 42, y: 106, width: 8, height: 10, fontRealName: "CMMI10" },
+    { str: "ref", x: 48, y: 92, width: 12, height: 7, fontRealName: "CMR7" },
+    { str: "θ", x: 52, y: 108, width: 6, height: 7, fontRealName: "CMR7" },
+    { str: "(", x: 58, y: 106, width: 4, height: 10, fontRealName: "CMR10" },
+    { str: "(", x: 60, y: 96, width: 4, height: 10, fontRealName: "CMR10" },
+    { str: "y", x: 66, y: 106, width: 6, height: 10, fontRealName: "CMR10" },
+    { str: "y", x: 68, y: 96, width: 6, height: 10, fontRealName: "CMR10" },
+    { str: "|", x: 76, y: 106, width: 3, height: 10, fontRealName: "CMR10" },
+    { str: "|", x: 78, y: 96, width: 3, height: 10, fontRealName: "CMR10" },
+    { str: "x", x: 84, y: 106, width: 6, height: 10, fontRealName: "CMR10" },
+    { str: "x", x: 86, y: 96, width: 6, height: 10, fontRealName: "CMR10" },
+    { str: ")", x: 94, y: 106, width: 4, height: 10, fontRealName: "CMR10" },
+    { str: ")", x: 96, y: 96, width: 4, height: 10, fontRealName: "CMR10" }
+  ];
+  const bodySpans = sameLineFormulaSpans(bodySized);
+  assert.equal(bodySpans.length, 1);
+  const bodyText = bodySized.slice(bodySpans[0][0], bodySpans[0][1] + 1).map((item) => item.str).join("");
+  assert.match(bodyText, /refθ/);
+  assert.match(bodyText, /yy\|\|xx/);
+  assert.equal(bodySpans[0][1], bodySized.length - 1);
   const prose = [
     { str: "=", x: 0, y: 100, width: 8, height: 10, fontRealName: "CMR10" },
     { str: "β", x: 10, y: 100, width: 8, height: 10, fontRealName: "CMR10" },
@@ -238,4 +281,92 @@ test("DPO reward formula on pages 18 and 19 is one inline unit", async () => {
   assert.match(page5.text, /Appendix B/);
   assert.doesNotMatch(page5.text, fragment);
   assert.doesNotMatch(page5.shown, fragment);
+});
+
+test("DPO display crops cover every glyph and leave no formula fragment", async () => {
+  const pdfPath = join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf");
+  const { createCanvas } = createRequire(import.meta.url)("@napi-rs/canvas");
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const orphan = /(?:^|\n)\s*ref['′*∗]?\s*(?:\n|$)|\(yy\||yy\|\||\(y\|x\)\/\(y\|x\)|公式见左栏|ref['′*∗θr]{0,4}\(\(/;
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(pdfPath)),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  const watched = new Map();
+  try {
+    for (let number = 1; number <= doc.numPages; number += 1) {
+      const pdfPage = await doc.getPage(number);
+      const content = await pdfPage.getTextContent();
+      const viewport = pdfPage.getViewport({ scale: 1 });
+      const ops = await pdfPage.getOperatorList();
+      const built = stampLayoutBids(number, textLayerToBlocks({
+        items: content.items,
+        viewport,
+        images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+        page: number
+      }));
+      const scale = 2;
+      const width = Math.ceil(viewport.width * scale);
+      const height = Math.ceil(viewport.height * scale);
+      const canvas = createCanvas(width, height);
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      await pdfPage.render({ canvasContext: context, viewport: pdfPage.getViewport({ scale }) }).promise;
+      const image = context.getImageData(0, 0, width, height);
+      for (const block of built.blocks) {
+        const suffix = String(block.bid || "").split("-").pop();
+        if (["t053qgiy", "t0hivfc4", "t1xmh68y", "t060sodo", "m0rrcjic", "m1ubksbr", "m0payg9u"].includes(suffix)) {
+          watched.set(`${number}:${suffix}`, block);
+        }
+        if (number === 5 && block.label === "formula" && block.display !== false) {
+          watched.set("5:display", block);
+        }
+        const shown = blockRenderPieces(block, built.blocks)
+          .filter((piece) => piece.type === "text")
+          .map((piece) => piece.text)
+          .join("");
+        const text = `${block.text || ""}\n${shown}`;
+        assert.equal(orphan.test(text), false, `${block.bid} ${text.slice(0, 180)}`);
+        if (block.label !== "formula" || !Array.isArray(block.bbox)) continue;
+        const sw = (block.bbox[2] - block.bbox[0]) * viewport.width * CROP_SCALE;
+        const sh = (block.bbox[3] - block.bbox[1]) * viewport.height * CROP_SCALE;
+        assert.ok(sw >= 24 && sh >= 12, `${block.bid} crop ${sw.toFixed(1)}×${sh.toFixed(1)}`);
+        if (block.display === false) continue;
+        const measured = measureFormulaCrop(block.bbox, image, {
+          inline: false,
+          protect: block.formulaInkProtect === true,
+          maskBoxes: block.maskBoxes,
+          glyphBoxes: block.glyphBoxes
+        });
+        const crop = measured.bbox || block.bbox;
+        for (const glyph of block.glyphBoxes || []) {
+          const dx = Math.max(0, crop[0] - glyph[0], glyph[2] - crop[2]);
+          const dy = Math.max(0, crop[1] - glyph[1], glyph[3] - crop[3]);
+          assert.ok(Math.max(dx, dy) <= 0.004, `${block.bid} crop misses a glyph by ${Math.max(dx, dy)}`);
+        }
+      }
+    }
+  } finally {
+    await doc.destroy();
+  }
+  for (const suffix of ["t053qgiy", "t0hivfc4", "t1xmh68y"]) {
+    const block = [...watched.values()].find((item) => String(item.bid).endsWith(suffix));
+    assert.ok(block, suffix);
+    assert.doesNotMatch(String(block.text || ""), /refθ?\(\(|yy\|\|/);
+  }
+  const sft = watched.get("3:t060sodo");
+  assert.ok(sft);
+  assert.match(sft.text, /^SFT:/);
+  const wide = watched.get("18:m0rrcjic");
+  const chain = watched.get("19:m1ubksbr");
+  assert.equal(wide?.display, true);
+  assert.equal(chain?.display, true);
+  assert.ok(wide.bbox[2] >= 0.8, `p18 derivation right ${wide.bbox[2]}`);
+  assert.ok(chain.bbox[2] >= 0.8, `p19 derivation right ${chain.bbox[2]}`);
+  assert.equal(watched.has("5:m0payg9u"), false);
+  const gradient = watched.get("5:display");
+  assert.ok(gradient);
+  assert.ok(gradient.bbox[2] >= 0.75, `p5 gradient right ${gradient.bbox[2]}`);
 });
