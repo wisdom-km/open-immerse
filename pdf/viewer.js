@@ -1098,7 +1098,10 @@ function bindSplitResize() {
   handle.addEventListener("pointerdown", (event) => startSplitDrag(event, workspace, handle));
   handle.addEventListener("dblclick", () => resetSplit(workspace));
   handle.addEventListener("keydown", (event) => onSplitKey(event, workspace));
-  window.addEventListener("resize", () => syncSplitAria(workspace));
+  window.addEventListener("resize", () => {
+    syncSplitAria(workspace);
+    scheduleMiniFitSettle();
+  });
 }
 
 /** Apply the stored fraction after prefs load. CSS minmax keeps the minimum widths. */
@@ -1124,12 +1127,14 @@ function startSplitDrag(event, workspace, handle) {
     handle.removeEventListener("pointermove", onMove);
     handle.removeEventListener("pointerup", onUp);
     handle.removeEventListener("pointercancel", onUp);
+    if (mode === "mini") endMiniFitDrag();
     if (workspace.dataset.sourceMode === "mini") persistMiniWidth(workspace);
     else persistSplitRatio(workspace);
   };
   handle.addEventListener("pointermove", onMove);
   handle.addEventListener("pointerup", onUp);
   handle.addEventListener("pointercancel", onUp);
+  if (mode === "mini") beginMiniFitDrag();
   applySplit(workspace, event.clientX);
 }
 
@@ -7943,7 +7948,10 @@ async function layoutPages() {
     const viewport = page.getViewport({ scale: zoom });
     view.wrap.style.width = `${Math.floor(viewport.width)}px`;
     view.wrap.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
-    if (view.renderedScale !== zoom) view.canvas.hidden = true;
+    if (view.renderedScale !== zoom) {
+      view.canvas.hidden = true;
+      view.renderedScale = 0;
+    }
   }
 }
 
@@ -8183,6 +8191,47 @@ function miniPagesInnerWidth() {
   return width > 0 ? width : 0;
 }
 
+let miniFitDragging = false;
+let miniFitTimer = 0;
+let miniFitMidDragApplied = false;
+
+let miniFitSettleTimer = 0;
+
+function beginMiniFitDrag() {
+  miniFitDragging = true;
+  miniFitMidDragApplied = false;
+  if (miniFitTimer) {
+    clearTimeout(miniFitTimer);
+    miniFitTimer = 0;
+  }
+  if (miniFitSettleTimer) {
+    clearTimeout(miniFitSettleTimer);
+    miniFitSettleTimer = 0;
+  }
+}
+
+function endMiniFitDrag() {
+  if (miniFitTimer) {
+    clearTimeout(miniFitTimer);
+    miniFitTimer = 0;
+  }
+  const wasDragging = miniFitDragging;
+  miniFitDragging = false;
+  miniFitMidDragApplied = false;
+  if (!wasDragging) return;
+  syncMiniFitZoom();
+  scheduleMiniFitSettle();
+}
+
+function scheduleMiniFitSettle() {
+  if (miniFitSettleTimer) clearTimeout(miniFitSettleTimer);
+  miniFitSettleTimer = setTimeout(() => {
+    miniFitSettleTimer = 0;
+    if (miniFitDragging) return;
+    syncMiniFitZoom();
+  }, 150);
+}
+
 function syncMiniFitZoom() {
   if (!pdfDoc || sourceZoomTouched) return false;
   if (currentSourceMode() !== "mini") return false;
@@ -8190,6 +8239,29 @@ function syncMiniFitZoom() {
   if (!workspace || workspace.dataset.miniCollapsed === "true") return false;
   const fit = fitWidthZoom(pdfPageWidth, miniPagesInnerWidth());
   if (fit == null) return false;
+  if (miniFitDragging) {
+    if (!miniFitMidDragApplied && !miniFitTimer) {
+      miniFitTimer = setTimeout(() => {
+        miniFitTimer = 0;
+        if (!miniFitDragging || miniFitMidDragApplied) return;
+        miniFitMidDragApplied = true;
+        commitMiniFitZoom({ exact: false });
+      }, 150);
+    }
+    return true;
+  }
+  return commitMiniFitZoom({ exact: true });
+}
+
+function commitMiniFitZoom({ exact = false } = {}) {
+  if (!pdfDoc || sourceZoomTouched) return false;
+  if (currentSourceMode() !== "mini") return false;
+  const workspace = document.querySelector(".workspace");
+  if (!workspace || workspace.dataset.miniCollapsed === "true") return false;
+  const fit = fitWidthZoom(pdfPageWidth, miniPagesInnerWidth());
+  if (fit == null) return false;
+  if (Math.abs(fit - zoom) < 1e-6) return true;
+  if (!exact && Math.abs(fit - zoom) <= 0.01) return true;
   applyZoom(fit);
   return true;
 }
@@ -8249,7 +8321,10 @@ async function scheduleVisibleRenders() {
 
 async function renderView(view) {
   if (!pdfDoc || !view) return;
-  if (view.renderedScale === zoom && view.canvas.width) return;
+  if (view.renderedScale === zoom && view.canvas.width) {
+    view.canvas.hidden = false;
+    return;
+  }
   const page = await pdfDoc.getPage(view.num);
   const viewport = page.getViewport({ scale: zoom });
   const canvas = view.canvas;
