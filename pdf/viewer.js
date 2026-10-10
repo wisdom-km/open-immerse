@@ -6862,8 +6862,9 @@ async function translateWholeDocument() {
     send: runtimeSend,
     getPageOriginals: async (page) => {
       const units = await originalsForPage(page, gen, translatingDoc, work, batchSize);
-      // One open, one request per block. A later layout pass must not send a
-      // block whose source was already submitted in this session.
+      // One open, one request per submitted text. A later layout pass skips a
+      // block already sent with this source and display, and still sends a
+      // display that changed when formula slots moved.
       return claimTranslationUnits(units, sentSource);
     },
     pageSkipReason: (page) => {

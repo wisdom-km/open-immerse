@@ -139,6 +139,14 @@ test("one open claims each block once", () => {
   const changed = claimTranslationUnits([{ bid: "b1-p6-t130f0dc", text: "定理", sourceText: "theorem rewritten" }], sent);
   assert.equal(changed.length, 1);
   assert.equal(claimTranslationUnits(changed, sent).length, 0);
+  const display = claimTranslationUnits([{
+    bid: "b1-p6-t130f0dc",
+    text: "定理 ⟦f1⟧",
+    original: "定理 ⟦f1⟧",
+    sourceText: "theorem rewritten"
+  }], sent);
+  assert.equal(display.length, 1);
+  assert.equal(claimTranslationUnits(display, sent).length, 0);
 });
 
 test("a conflicting source hash is not attached to either block", () => {
