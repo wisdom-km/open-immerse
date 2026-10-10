@@ -926,6 +926,29 @@ body {
   max-width: none;
   max-height: none;
 }
+/* Display crops scale into the column. A fixed height plus the bitmap's
+   natural width paints past a 576px column and clips the right edge.
+   eqKeep still hides a trailing equation number: the image is the full
+   formula, the clip is the visible fraction, and both stop at the column. */
+.oi-pdf-display-math .oi-pdf-math-scroll {
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+.oi-pdf-display-math .oi-pdf-math-clip {
+  max-width: 100%;
+  width: min(100%, calc(var(--oi-formula-w, 100%) * var(--oi-eq-keep, 1)));
+}
+.oi-pdf-display-math .oi-pdf-math-row.is-matched .oi-pdf-math-clip {
+  width: min(100%, calc(var(--oi-formula-h) * var(--oi-formula-ar, 1) * var(--oi-eq-keep, 1)));
+  max-width: 100%;
+}
+.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop,
+.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-row.is-matched .oi-pdf-math-crop {
+  width: calc(100% / var(--oi-eq-keep, 1));
+  height: auto;
+  max-width: none;
+  max-height: none;
+}
 .oi-pdf-inline-math {
   display: inline-block;
   vertical-align: baseline;

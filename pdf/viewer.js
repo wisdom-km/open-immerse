@@ -4833,7 +4833,9 @@ function readerFormulaStyle(block, page, inline, columnPx) {
   const snapped = snappedFormulaBox(sized, limit) || sized;
   const height = snapped.cssHeight || sized.cssHeight;
   const width = snapped.cssWidth > 0 ? snapped.cssWidth : sized.cssWidth;
-  if (!(height > 0)) return null;
+  // A broken paper metric once produced a 33554432px box and a blank image.
+  if (!(height > 0) || height > 16384) return null;
+  if (width > 16384) return null;
   return {
     height: paperCssPx(height),
     aspect: width > 0 ? String(Math.round((width / height) * 10000) / 10000) : "1",

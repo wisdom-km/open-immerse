@@ -79,7 +79,7 @@ test("F3-S1 display paint stays capped at 2.5em and the live box matches the pag
   assert.ok(low <= DISPLAY_BODY_HARD_MAX);
   assert.ok(low * 0.22 <= DISPLAY_BODY_HARD_MAX);
   const css = displayFormulaWidthCss(0.48, 0.04, 8);
-  assert.match(css, /^max\(calc\(var\(--oi-pdf-left-w/);
+  assert.match(css, /^min\(100%, max\(calc\(var\(--oi-pdf-left-w/);
   assert.match(css, /2\.5em/);
   assert.doesNotMatch(css, /8em/);
   const pageWidth = 612;
@@ -92,6 +92,9 @@ test("F3-S1 display paint stays capped at 2.5em and the live box matches the pag
   const exploded = displayFormulaWidthCss(0.9, 0.015, displayFormulaMinEm(0.22, null));
   assert.match(exploded, /2\.5em/);
   assert.doesNotMatch(exploded, /(?<![0-9.])[3-9](?:\.\d+)?em/);
+  const tiny = displayFormulaWidthCss(0.9, 1e-8, 2.5);
+  assert.match(tiny, /^min\(100%, calc\(var\(--oi-pdf-left-w/);
+  assert.doesNotMatch(tiny, /1e-8|0\.00000001/);
 });
 
 test("inline formulas stay on the bbox and cap at 1.4 body without one", () => {

@@ -326,7 +326,12 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
           watched.set(`${number}:${suffix}`, block);
         }
         if (number === 5 && block.label === "formula" && block.display !== false) {
-          watched.set("5:display", block);
+          const prev = watched.get("5:display");
+          const width = block.bbox[2] - block.bbox[0];
+          if (!prev || width > prev.bbox[2] - prev.bbox[0]) watched.set("5:display", block);
+        }
+        if (number === 5 && block.label !== "formula") {
+          assert.doesNotMatch(String(block.text || ""), /ofy[wl]/, `${block.bid} duplicated underbrace subscript`);
         }
         const shown = blockRenderPieces(block, built.blocks)
           .filter((piece) => piece.type === "text")
@@ -373,5 +378,8 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
   assert.equal(watched.has("5:m0payg9u"), false);
   const gradient = watched.get("5:display");
   assert.ok(gradient);
-  assert.ok(gradient.bbox[2] >= 0.75, `p5 gradient right ${gradient.bbox[2]}`);
+  assert.ok(gradient.bbox[2] >= 0.8, `p5 gradient reaches the closing brackets ${gradient.bbox[2]}`);
+  assert.ok(gradient.bbox[2] - gradient.bbox[0] >= 0.55, "p5 gradient is one crop");
+  assert.ok(gradient.glyphBoxes.some((box) => box[0] > 0.64 && box[0] < 0.72), "middle nabla is in the crop");
+  assert.ok(gradient.glyphBoxes.some((box) => box[2] > 0.78), "closing brackets are in the crop");
 });
