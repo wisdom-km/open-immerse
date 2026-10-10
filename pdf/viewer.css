@@ -630,7 +630,13 @@ body {
   left: auto;
   top: auto;
   max-width: 100%;
+  min-width: 0;
   overflow: visible;
+}
+.reader-flow .oi-pdf-math-row,
+.reader-flow .oi-pdf-math-scroll {
+  min-width: 0;
+  max-width: 100%;
 }
 .reader-flow .rf-block {
   overflow: visible;
@@ -726,6 +732,16 @@ body {
   text-align: justify;
   text-indent: 0;
   color: var(--oi-reader-ink);
+}
+.reader-flow .rf-zh,
+.reader-flow .rf-src,
+.reader-flow .oi-pdf-p,
+.reader-flow .oi-pdf-footnote,
+.reader-flow .oi-pdf-h1,
+.reader-flow .oi-pdf-h2,
+.reader-flow .oi-pdf-h3,
+.reader-flow .oi-pdf-h4 {
+  overflow-wrap: anywhere;
 }
 .reader-flow .oi-pdf-p + .oi-pdf-p {
   margin-top: var(--oi-reader-paragraph-gap);
