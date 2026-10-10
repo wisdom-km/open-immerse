@@ -14,7 +14,7 @@
 | 产品路径 | 左 **pdf.js** + 右 **Markdown 通读**（非 bbox 镜像；非 BabelDOC 矢量回写整页） |
 | 公式展示 | 当前已上线的第一层是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `pdf/high-precision/REQUIREMENTS.md` §2.6。高清重渲染本质上是区域渲染。目标是按原字体、原位置重绘字符。不得为「好看」编造 TeX |
 | 独立公式块 | 相对右栏正文列 **水平居中**；宽度 ≤ 通读列宽；上下空隙见 §3 |
-| 行内公式 | **句中基线对齐**；高度随正文字号；**禁止**整行大图砸版 |
+| 行内公式 | **句中基线对齐**；高度是 1 CSS px 每 PDF pt，不随阅读字号缩放；**禁止**整行大图砸版 |
 | 图 / 表 | 保持原件裁切；题注用 Soft Graphite **既有 token**（muted），**不改**网页 Soft Graphite / `tokens.css` |
 | 表面 | **无**卡片、阴影、厚边框；裁切白边受控（§5） |
 | 本单范围 | 只动 PDF 右栏 readout 内公式/图/表呈现；**勿**回归网页 bilingual / Options |
@@ -57,8 +57,8 @@
 | | 规格 |
 | --- | --- |
 | 水平 | **居中**于 `.readout` 内容列（Attention 类论文行间式默认居中） |
-| 宽度上限 | 主路径已上线：公式相对正文的缩放倍数默认 1.4×、最低 1.0×。先缩到栏宽，到最低倍数还放不下才横滚。回退路径不夹到列宽。见下一行 |
-| 过宽 | 现状（已上线）分主路径和回退路径。主路径：`pdf/viewer.js` 的 `matchedFormulaStyle` 调用 `readerFormulaStyle`，再调用 `lib/pdf-formula-size.js` 的 `readerFormulaCssSize`。公式相对正文的缩放倍数默认 `DISPLAY_INK_PREFER` **1.4×**、最低 `DISPLAY_INK_HARD` **1.0×**。先缩到栏宽，到了最低倍数还放不下，才在公式框内横向滚动（F3-S4，见 `pdf/high-precision/REQUIREMENTS.md` §2.6 术语表）。`tests/pdf-formula-size.test.mjs` 锁定。不要改成占位来躲过宽。回退路径：`matchedFormulaStyle` 定不出尺寸时，`mountDisplayMath` 用 `lib/pdf-blocks.js` 的 `displayFormulaWidthCss`。这一支不缩到栏宽，宽度取页宽占比和 em 墨迹下限里较大的一个。函数注释是 "not shrunk below the ink floor"。下限来自 `displayFormulaMinEm` 和 `displayInkMinEm`。裁图是 `max-width: none`（`.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop`），超出部分在公式框内横向滚动。右栏纸面的横滚是 PR #90 做的，和公式框内的横滚是两件事 |
+| 宽度上限 | 主路径已上线：原大是 1 CSS px 每 PDF pt，不随阅读字号缩放。先缩到栏宽，收到下限 `min(1, max(0.75, 阅读字号的 x 高 / 正文 pt))` 还放不下才横滚。页宽已知时回退路径用同一条下限。见下一行 |
+| 过宽 | 现状（已上线）分主路径和回退路径。主路径：`pdf/viewer.js` 的 `matchedFormulaStyle` 调用 `readerFormulaStyle`，再调用 `lib/pdf-formula-size.js` 的 `readerFormulaCssSize`。原大是 1 CSS px 每 PDF pt（`FORMULA_NATIVE_SCALE` = 1），不随阅读字号缩放。比栏宽宽时等比收到下限 `min(1, max(0.75, 阅读字号的 x 高 / 正文 pt))`（x 高取 `BODY_X_HEIGHT_RATIO` 0.48），收到下限后仍放不下，才在公式框内横向滚动（F3-S4，见 `pdf/high-precision/REQUIREMENTS.md` §2.6 术语表）。`tests/pdf-formula-size.test.mjs` 锁定。不要改成占位来躲过宽。回退路径：`matchedFormulaStyle` 定不出尺寸时，`mountDisplayMath` 用 `lib/pdf-blocks.js` 的 `displayFormulaWidthCss`。页宽已知时走同一条下限；缺页宽则返回空串。裁图是 `max-width: none`（`.pane-translate .readout.md-readout .oi-pdf-display-math .oi-pdf-math-crop`），超出部分在公式框内横向滚动。右栏纸面的横滚是 PR #90 做的，和公式框内的横滚是两件事 |
 | 垂直空隙 | 阅读页（`.reader-flow`）已上线：`margin: var(--oi-reader-display-margin)`，即 `0.875em 0 1.125em`。正文默认字号 16px，所以是 14px / 18px。`.reader-flow` 外，`.oi-pdf-display-math` 才是 `margin: 10px 0 14px`。参考 Attention 原页：公式上下约一行呼吸 |
 | 与邻段 | 上一 `p` 的 `margin-bottom` 与本块上边距 **取大不叠加盲加**（实现可用相邻选择器消重，避免「段尾 14px + 公式上 12px」过空） |
 
@@ -115,7 +115,7 @@
 | --- | --- |
 | 显示 | `inline-block`（或等价行内）；**禁止**把行内公式做成块级 `figure` / 整行 `img` |
 | 基线 | `vertical-align: baseline` 只对回退路径成立（光学可微调 `-0.12em ~ 0`）。主路径是 `vertical-align: middle`。禁止顶对齐大块 |
-| 高度 | 量测墨迹 **1.25～1.35 ×** 正文字号（硬门 ≥ **1.0×**）。盒高 = 目标墨迹 / inkShare（名义 **1.95em**，允许 ~1.9～2.2em；墨迹进带后行顶 ~1.8～2.1em）。旧盒 `1.22em`、行顶 `1.45em` 已撤：白边在盒内，不能只把 1.22 改成另一个数。（注，2026-10-04：行内墨迹 ≥ 1.0×、目标 1.25–1.35×、盒名义 1.95em 已测过、不采用，现行是固定 k=1.35，见 [INLINE-INK-MEASURE-2026-10-04.md](./high-precision/INLINE-INK-MEASURE-2026-10-04.md) 和 [FRP](./high-precision/FORMULA-RIGHT-PANE.md)。） |
+| 高度 | 原大是 1 CSS px 每 PDF pt，不随阅读字号缩放。高于 2.2em 或宽过栏时升级成独立公式，再收到下限 `min(1, max(0.75, 阅读字号的 x 高 / 正文 pt))`，放不下就在公式框内滚动。旧盒 `1.22em`、行顶 `1.45em` 已撤。（注，2026-10-04：行内墨迹 ≥ 1.0×、目标 1.25–1.35×、盒名义 1.95em 已测过、不采用，见 [INLINE-INK-MEASURE-2026-10-04.md](./high-precision/INLINE-INK-MEASURE-2026-10-04.md) 和 [FRP](./high-precision/FORMULA-RIGHT-PANE.md)。） |
 | 缩放 | 裁切原图若过高 → **先紧裁再等比缩小** 落入上列；不得用放大白边撑开行距 |
 | 水平 | 左右内边距 ≤ **2px**（CSS）；与邻字间距跟正文，勿额外 `margin-inline: 8px+` |
 | 禁止 | 裁进邻词（反例里的 `n`）、上一行 descender、下一行 ascender；禁止「半句上、大白块、半句下」三截版 |
@@ -138,11 +138,11 @@
   background: transparent;
   box-shadow: none;
 }
-/* 阅读页约第 662 行：.pane-translate .readout.md-readout .oi-pdf-inline-math:has(.oi-pdf-math-crop) 把 overflow-y 改成 visible，高度用 --oi-pdf-inline-line-em。viewer.js 第 1706–1707 行把 --oi-pdf-inline-crop-em 和 --oi-pdf-inline-line-em 都设成 1.4em。 */
+/* 对上页框时高度是 --oi-formula-h（1 CSS px 每 PDF pt），不随阅读字号缩放。下面的 1.95em 只是没对上页框时的 CSS 缺省。 */
 .pane-translate .readout.md-readout .oi-pdf-inline-math .oi-pdf-math-crop {
   display: block;
   height: var(--oi-pdf-inline-crop-em, 1.95em); /* 1.95em 只是 CSS 默认值。现行代码走不到，以代码为准 */
-  margin-top: calc(var(--oi-pdf-inline-line-em, 1.85em) - var(--oi-pdf-inline-crop-em, 1.95em)); /* 第 676 行。两个变量都是 1.4em 时，结果是 0 */
+  margin-top: calc(var(--oi-pdf-inline-line-em, 1.85em) - var(--oi-pdf-inline-crop-em, 1.95em)); /* 缺省差值。对上页框时不用这两个 em */
   width: auto;
   max-width: none;
   object-fit: contain;
@@ -175,7 +175,7 @@
 }
 ```
 
-**降级（仅当裁切失败）：** 行内文字兜底是目标状态，待实现：「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。**不要**塞一整行糊图。行内高度改按墨迹 / inkShare，不再以 1.45em 当硬顶。（注，2026-10-04：行内墨迹 ≥ 1.0×、目标 1.25–1.35×、盒名义 1.95em 已测过、不采用，现行是固定 k=1.35，见 [INLINE-INK-MEASURE-2026-10-04.md](./high-precision/INLINE-INK-MEASURE-2026-10-04.md) 和 [FRP](./high-precision/FORMULA-RIGHT-PANE.md)。）行内这一小段是第一层的区域渲染，嵌在句中。
+**降级（仅当裁切失败）：** 行内文字兜底是目标状态，待实现：「〔公式 · 原文第 N 页〕」。屏幕上现在仍是「（公式见左栏）」。**不要**塞一整行糊图。行内高度是 1 CSS px 每 PDF pt，不随阅读字号缩放。（注，2026-10-04：行内墨迹 ≥ 1.0×、目标 1.25–1.35×、盒名义 1.95em 已测过、不采用，见 [INLINE-INK-MEASURE-2026-10-04.md](./high-precision/INLINE-INK-MEASURE-2026-10-04.md) 和 [FRP](./high-precision/FORMULA-RIGHT-PANE.md)。）行内这一小段是第一层的区域渲染，嵌在句中。
 
 ---
 
