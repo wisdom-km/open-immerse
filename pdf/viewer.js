@@ -2323,6 +2323,16 @@ function viewerUnderTest() {
 function publishViewerTestHooks() {
   if (!viewerUnderTest()) return;
   globalThis.__oiRenderArticle = () => renderArticle();
+  globalThis.__oiOpenPage = async (page) => {
+    const n = Number(page);
+    if (!(n >= 1) || !pdfDoc) return 0;
+    pageNum = n;
+    updatePager();
+    updateSourcePageLabel(n);
+    await loadCurrentPageText(n);
+    renderArticle();
+    return getPageLayout(n)?.blocks?.length || 0;
+  };
   globalThis.__oiTitleState = () => {
     const record = titleStructure;
     if (!record || record.docId !== docId) return null;
