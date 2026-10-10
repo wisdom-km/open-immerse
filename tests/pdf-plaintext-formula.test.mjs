@@ -4,7 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { blockReadoutPlan, blockRenderPieces, blockTranslationIntegrity, displayCropWidthCss, displayInkMinEm, DISPLAY_CROP_MIN_HEIGHT_EM, DISPLAY_INK_PREFER, remapLiveExtraPlaceholders } from "../lib/pdf-blocks.js";
-import { applySavedPairs, blockSoftLead } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, mergeLibraryPairs, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, savedPairNeedsRetranslate } from "../lib/pdf-library.js";
+import { libraryPageRunState, unitsNeedingTranslation } from "../lib/pdf-viewer.js";
 import { formatPlaintextRelation, plaintextRelationParts, plaintextRelationsIn } from "../lib/pdf-plaintext-formula.js";
 import {
   FORMULA_INK_PAD_PX,
@@ -408,4 +409,147 @@ test("live extra ⟦f1⟧ remaps onto Unicode h_{t−1} and keeps the Chinese se
   assert.match(keptText, /隐藏状态h_t，前一隐藏状态h_\{t−1\}/);
   assert.doesNotMatch(keptText, /hidden states/);
   assert.equal(kept.some((piece) => piece.type === "image"), false);
+});
+
+test("a reused translation remaps formula slots onto the new block", () => {
+  const live = {
+    id: "p5",
+    sourceId: "p5-s1",
+    label: "text",
+    text: "the loss ⟦f3⟧ remains",
+    sourceText: "the loss x^2 remains",
+    placeholders: [{ token: "⟦f3⟧", blockId: "f" }]
+  };
+  const restored = applySavedPairs([live], [{
+    sourceId: "p5-s1",
+    text: "the loss ⟦f1⟧ remains",
+    sourceText: live.sourceText,
+    translation: "损失⟦f7⟧还在",
+    status: "verified"
+  }])[0];
+  const widened = applySavedPairs([{
+    id: "p16",
+    sourceId: "p16-s1",
+    bid: "b1-p16-t0h4uryx",
+    label: "text",
+    text: "for all ⟦f3⟧. This completes the derivation.",
+    sourceText: "for all x ∈ D. This completes the derivation."
+  }], [{
+    sourceId: "p16-s1",
+    bid: "b1-p16-t0h4uryx",
+    text: "for all x ⟦f10⟧. This completes the derivation.",
+    sourceText: "for all x ∈ D. This completes the derivation.",
+    translation: "旧译16f9493bea44e8cd1e54dbc3bb277d0a⟦f10⟧",
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  }], { targetLang: "zh-CN", provider: "mymemory" })[0];
+  assert.equal(widened.translation, "旧译16f9493bea44e8cd1e54dbc3bb277d0a⟦f3⟧");
+  assert.equal(widened.failed, undefined);
+
+  assert.equal(restored.translation, "损失⟦f3⟧还在");
+  assert.equal(restored.failed, undefined);
+  assert.equal(blockTranslationIntegrity(restored).valid, true);
+  assert.equal(blockSoftLead(restored), "");
+  const pieces = blockRenderPieces(restored, [
+    restored,
+    { id: "f", label: "formula", imageUrl: "data:image/png;base64,crop" }
+  ]);
+  assert.equal(pieces.filter((piece) => piece.type === "image").length, 1);
+  assert.equal(pieces.find((piece) => piece.type === "image").blockId, "f");
+  assert.doesNotMatch(pieces.map((piece) => piece.text || "").join(""), /待对齐/);
+
+  const conflict = applySavedPairs([{
+    id: "p19",
+    sourceId: "p19-s1",
+    label: "text",
+    text: "see ⟦f1⟧ and ⟦f2⟧",
+    sourceText: "see ALPHA and BETA",
+    placeholders: [
+      { token: "⟦f1⟧", blockId: "fa" },
+      { token: "⟦f2⟧", blockId: "fb" }
+    ]
+  }], [{
+    sourceId: "p19-s1",
+    text: "see ⟦f9⟧ and BETA",
+    sourceText: "see ALPHA and BETA",
+    translation: "见⟦f9⟧和乙",
+    status: "verified"
+  }])[0];
+  assert.equal(conflict.translation, "见⟦f1⟧和乙⟦f2⟧");
+  assert.equal(conflict.failed, true);
+  assert.equal(conflict.translationStatus, "retranslate");
+  assert.equal(blockSoftLead(conflict), "");
+  const keptPieces = blockRenderPieces(conflict, [
+    conflict,
+    { id: "fa", label: "formula", imageUrl: "data:image/png;base64,a" },
+    { id: "fb", label: "formula", imageUrl: "data:image/png;base64,b" }
+  ]);
+  assert.equal(keptPieces.filter((piece) => piece.type === "image").length, 2);
+  assert.doesNotMatch(keptPieces.map((piece) => piece.text || "").join(""), /待对齐/);
+  assert.match(keptPieces.map((piece) => piece.text || "").join(""), /见/);
+  assert.notEqual(keptPieces.map((piece) => piece.text || "").join("").trim(), "");
+
+  const misaligned = {
+    bid: "b-mis",
+    sourceId: "p18-s1",
+    label: "text",
+    text: "see ⟦f1⟧ and ⟦f2⟧",
+    sourceText: "see ALPHA and BETA"
+  };
+  const stalePair = {
+    bid: misaligned.bid,
+    sourceId: misaligned.sourceId,
+    text: "see ⟦f9⟧ and BETA",
+    sourceText: misaligned.sourceText,
+    translation: "见⟦f9⟧和乙",
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  };
+  const rewritten = pairsWithLiveFormulaSlots([stalePair], [misaligned])[0];
+  assert.equal(rewritten.translation, "见⟦f1⟧和乙⟦f2⟧");
+  assert.equal(savedPairNeedsRetranslate(misaligned, rewritten), false);
+  const shown = applySavedPairs([misaligned], [stalePair], {
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  })[0];
+  assert.equal(shown.translation, "见⟦f1⟧和乙⟦f2⟧");
+  assert.equal(unitsNeedingTranslation([shown], "zh-CN").length, 1);
+  const shownAgain = applySavedPairs([misaligned], [shown], {
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  })[0];
+  assert.equal(shownAgain.translationStatus, "retranslate");
+  assert.equal(unitsNeedingTranslation([shownAgain], "zh-CN").length, 1);
+  assert.equal(libraryPageRunState({
+    pairs: [stalePair],
+    cached: [shown],
+    blocks: [misaligned],
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  }), "queued");
+  assert.equal(libraryPageRunState({
+    pairs: [stalePair],
+    blocks: [misaligned],
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  }), "queued");
+  const fresh = {
+    bid: misaligned.bid,
+    text: misaligned.text,
+    sourceText: misaligned.sourceText,
+    translation: "见甲⟦f1⟧和乙⟦f2⟧",
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  };
+  const stored = mergeLibraryPairs(pairsWithoutUnalignedSlots([stalePair], [misaligned], {
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  }), [fresh], [misaligned], "zh-CN");
+  assert.equal(stored[0].translation, fresh.translation);
+  assert.equal(libraryPageRunState({
+    pairs: stored,
+    blocks: [misaligned],
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  }), "done");
 });

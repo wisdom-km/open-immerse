@@ -170,14 +170,19 @@ import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
   LAYOUT_EMPTY_KEY_STATUS,
   LAYOUT_FALLBACK_STATUS,
+  LAYOUT_NO_BOXES_STATUS,
   LAYOUT_STARTING_STATUS,
   cacheableLayout,
+  currentLayoutVersion,
   fetchCloudEnvelope,
   fetchLocalEnvelope,
   layoutCacheKey,
+  layoutFallbackOf,
   normalizePdfLayout,
   resolveLayoutMode,
-  shouldFetchCloud
+  shouldFetchCloud,
+  storedLayoutCurrent,
+  storedLayoutDisplayable
 } from "../lib/pdf-layout-client.js";
 import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import {
@@ -254,7 +259,7 @@ import {
   pageCropLooksEmpty,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import { getProvider, missingRequiredField } from "../lib/providers.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -313,6 +318,11 @@ let titleStructure = null;
 const librarySourceSent = new Set();
 const enqueueLibraryWrite = createLibraryWriteQueue();
 const layoutCache = new Map();
+// Pages the library or a previous layout cache already marked skip-only.
+// They count as done before the new layout, and must not take a layout slot
+// ahead of a page that still needs translation.
+const skipLocked = new Set();
+let legacySkipSeeded = false;
 let session = createTranslateSession();
 let zoomChipCustom = false;
 let mirrorZoomChipCustom = false;
@@ -501,6 +511,8 @@ function init() {
     exportReadout("pdf");
   });
   document.addEventListener("keydown", onKey);
+  window.addEventListener("pagehide", abortInflightLayouts);
+  window.addEventListener("beforeunload", abortInflightLayouts);
   listenProgress();
 
   const src = readViewerSrc(location.search);
@@ -2036,7 +2048,7 @@ function redrawKeepsInk(context, canvas, raster, block) {
   return acceptVisualRedraw(redrawInk, rasterRegionInk(raster?.canvas, block?.bbox));
 }
 
-async function withRasterCrop(raster, page, block, pageNumber) {
+async function withRasterCrop(raster, page, block, pageNumber, options = {}) {
   if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
   const next = { ...block };
   next.imageUrl = imageForVisualBlock(raster, next);
@@ -2053,7 +2065,7 @@ async function withRasterCrop(raster, page, block, pageNumber) {
     );
     if (cap > 0) next.assetCapPx = cap;
   }
-  if (isSourceRedrawBlock(next) && next.imageUrl) {
+  if (options.sharp !== false && isSourceRedrawBlock(next) && next.imageUrl) {
     const sharp = await renderSharpVisualCrop(page, raster, next, pageNumber);
     if (sharp) {
       next.imageUrl = sharp;
@@ -2063,11 +2075,11 @@ async function withRasterCrop(raster, page, block, pageNumber) {
   return next;
 }
 
-async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale) {
+async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, options = {}) {
   const cropped = [];
   for (const block of blocks || []) {
     if (isStale()) return null;
-    cropped.push(await withRasterCrop(raster, page, block, pageNumber));
+    cropped.push(await withRasterCrop(raster, page, block, pageNumber, options));
   }
   return cropped;
 }
@@ -2216,16 +2228,20 @@ function fillBlockText(node, block, layout) {
   const src = document.createElement("span");
   src.className = "rf-src";
   writeBlockPieces(zh, block, layout);
-  writeBlockPieces(src, { ...block, translation: "", translationStatus: "" }, layout);
+  writeBlockPieces(src, { ...block, translation: "", translationStatus: "", failed: false }, layout);
   node.append(zh, src);
 }
 
 function writeBlockPieces(node, block, layout) {
   const lead = blockSoftLead(block);
   if (lead) node.append(document.createTextNode(lead));
-  const pieces = blockRenderPieces(block, layout.blocks || []);
+  // A failed empty translation is not done, but the paragraph still has to
+  // show. Use the source sentence and its formula crops rather than an empty box.
+  const pending = block?.failed === true && !String(block.translation || "").trim();
+  const pieces = blockRenderPieces(pending ? { ...block, translation: "", failed: false } : block, layout.blocks || []);
   if (!pieces.length) {
-    node.append(document.createTextNode(String(block.translation || block.text || "")));
+    const fallback = String((pending ? block.text : block.translation) || block.text || "");
+    if (fallback) node.append(document.createTextNode(fallback));
     return;
   }
   pieces.forEach((piece) => {
@@ -2378,17 +2394,27 @@ function slotHasTranslation(slot) {
 
 function layoutForReadout(layout) {
   const cached = pageCache.get(docId, layout.page);
-  const stored = libraryEntry(layout.page)?.pairs || cached;
+  const libraryPairs = libraryEntry(layout.page)?.pairs || [];
   let blocks = layout.blocks || [];
-  if (Array.isArray(cached) && cached.length) {
-    const units = unitsForLayout(layout);
-    const merged = applySavedPairs(units, cached, savedPairSettings());
-    const rows = merged.some((unit) => settledText(unit.translation, unit.original || unit.text || unit.sourceText || "")) ? merged : cached;
-    blocks = applyBlockTranslations(layout.blocks, rows);
+  const saved = (Array.isArray(cached) && cached.length) ? cached : libraryPairs;
+  if (saved.length && blocks.length) {
+    const merged = applySavedPairs(unitsForLayout(layout), saved, savedPairSettings());
+    const settled = merged.some((unit) => settledText(unit.translation, unit.original || unit.text || unit.sourceText || ""));
+    const retry = merged.some((unit) => unit.failed === true && !String(unit.translation || "").trim());
+    // Saved pairs land on the live blocks. They must not replace the block list,
+    // or a pre-recovery library page hides the figures the new layout just built.
+    // Rows that do not settle for the current language still keep their text:
+    // the merged pass blanks them, and the source would then count as landed.
+    // A formula slot that cannot be lined up still paints the translation, or the source.
+    blocks = applyBlockTranslations(layout.blocks, (settled || retry) ? merged : saved);
   }
   if (!blocks.some((block) => settledText(block.translation, block.text || block.sourceText || ""))) {
-    const fallback = blocksFromLibraryPairs(layout.page, stored);
-    if (fallback.length) return { ...layout, blocks: fallback, textSource: "library" };
+    const fallback = blocksFromLibraryPairs(layout.page, libraryPairs.length ? libraryPairs : cached);
+    if (fallback.length) {
+      const visuals = (layout.blocks || []).filter((block) => block.label === "figure" || block.label === "table");
+      if (!visuals.length) return { ...layout, blocks: fallback, textSource: "library" };
+      return { ...layout, blocks: [...visuals, ...fallback] };
+    }
   }
   return { ...layout, blocks };
 }
@@ -5021,6 +5047,11 @@ function clearSlotPainted(page) {
 }
 
 function noteLayoutReady(page) {
+  if (skipLocked.has(page)) {
+    notePageState(page, { state: "skipped", hasLayout: true });
+    clearSlotPainted(page);
+    return;
+  }
   const row = pageStates.get(page);
   const terminal = row && ["running", "done", "partial", "failed", "skipped", "empty", "held"].includes(row.state);
   if (terminal) notePageState(page, { hasLayout: true });
@@ -5193,7 +5224,10 @@ function paintPageSlot(page) {
   if (showBlocks) {
     const narrow = (row.state === "queued" || row.state === "running") && !revealSource;
     const readout = narrow ? settledOnlyReadout(layout) : layoutForReadout(layout);
-    if (!narrow || readout.settled || structureLanded(page)) appendFixtureReadout(slot, readout);
+    if (!narrow || readout.settled || structureLanded(page)) {
+      appendFixtureReadout(slot, readout);
+      if (viewerUnderTest()) notePaintSample(page, readout);
+    }
   } else if (libraryArticle?.length && page === 1 && row.state !== "layout" && row.state !== "empty" && row.state !== "queued") {
     renderStoredArticle(libraryArticle);
   } else if (row.state === "done" || row.state === "partial") {
@@ -5964,13 +5998,17 @@ function rememberTranslation(page, results) {
   const rawLayout = getPageLayout(page);
   const layout = cacheableLayout(rawLayout);
   const blocks = rawLayout?.blocks || [];
-  const verified = pairsVerifiedForLibrary(results, blocks, savedPairSettings());
+  const verified = pairsWithLiveFormulaSlots(
+    pairsVerifiedForLibrary(results, blocks, savedPairSettings()),
+    blocks
+  );
   const skipOnly = isSkipOnlyPage(blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
   if (!verified.length && !skipOnly) return Promise.resolve();
   if (!verified.length && existing && (existing.pairs?.length || existing.skipped)) return Promise.resolve();
+  const keptPairs = pairsWithoutUnalignedSlots(existing?.pairs, blocks, savedPairSettings());
   const pairs = verified.length
-    ? mergeLibraryPairs(existing?.pairs, verified, blocks, pdfTargetLang)
+    ? mergeLibraryPairs(keptPairs, verified, blocks, pdfTargetLang)
     : [];
   if (pairs.length) replaceLibraryPagePairs(libraryDoc, page, pairs);
   // Capture this document before queuing: the user may open another PDF while
@@ -5997,13 +6035,17 @@ function rememberTranslation(page, results) {
       page,
       pairs,
       layout,
+      ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
       sourceBase64,
       ...(skipped ? { skipped: true } : {})
     });
     librarySourceSent.add(hash);
-    if (skipped && libraryDoc && Array.isArray(libraryDoc.pages) &&
-        !libraryDoc.pages.some((item) => item.page === page)) {
-      libraryDoc.pages.push({ page, pairs: [], skipped: true });
+    const savedPage = libraryDoc?.pages?.find((item) => item.page === page);
+    if (savedPage && layout) {
+      savedPage.layout = layout;
+      if (layout.layoutVersion) savedPage.layoutVersion = layout.layoutVersion;
+    } else if (skipped && libraryDoc && Array.isArray(libraryDoc.pages)) {
+      libraryDoc.pages.push({ page, pairs: [], skipped: true, ...(layout ? { layout, layoutVersion: layout.layoutVersion } : {}) });
     }
   });
 }
@@ -6012,6 +6054,108 @@ function rememberSkipHole(page, blocks) {
   if (!isSkipOnlyPage(blocks)) return;
   if (libraryDoc?.pages?.some((item) => item.page === page)) return;
   rememberTranslation(page, []).catch(() => {});
+}
+
+const COUNTED_PAGE_STATES = new Set(["done", "partial", "skipped", "empty", "held"]);
+
+function countedPageState(state) {
+  return COUNTED_PAGE_STATES.has(state || "");
+}
+
+let knownLayoutVersion = "";
+
+async function layoutVersionNow() {
+  try {
+    const version = await currentLayoutVersion();
+    if (version) knownLayoutVersion = version;
+    return knownLayoutVersion;
+  } catch {
+    return knownLayoutVersion;
+  }
+}
+
+function layoutFromStored(page, stored) {
+  const fallback = layoutFallbackOf(stored);
+  return {
+    kind: "blocks",
+    protocol: stored.protocol || PROTOCOL,
+    page: Number(page),
+    textSource: stored.textSource || "text-layer",
+    sourceAudit: stored.sourceAudit || null,
+    ...(stored.layoutVersion ? { layoutVersion: String(stored.layoutVersion) } : {}),
+    ...(fallback ? { fallback } : {}),
+    blocks: stored.blocks,
+    itemCount: Number(stored.itemCount) || stored.blocks.length
+  };
+}
+
+/** Paint the library's current blocks before any pair-only or text-layer stand-in. */
+function installDisplayableLibraryLayouts(version = knownLayoutVersion) {
+  if (!version || !libraryDoc?.pages?.length) return false;
+  let changed = false;
+  for (const entry of libraryDoc.pages) {
+    const page = Number(entry?.page);
+    if (!(page >= 1)) continue;
+    const stored = storedLayoutDisplayable(entry, version);
+    if (!stored?.blocks?.length) continue;
+    if (getPageLayout(page)?.blocks?.length) continue;
+    setPageLayout(page, layoutFromStored(page, stored));
+    if (isSkipOnlyPage(stored.blocks)) skipLocked.add(page);
+    changed = true;
+  }
+  return changed;
+}
+
+/** Write a freshly built layout back so the next open does not recompute it. */
+function libraryLayoutNeedsWrite(page) {
+  const raw = getPageLayout(page);
+  const version = String(raw?.layoutVersion || "");
+  if (!version || !raw?.blocks?.length) return false;
+  const entry = libraryEntry(page);
+  if (!entry) return false;
+  const storedBlocks = entry.layout?.blocks;
+  const hasLayout = Array.isArray(storedBlocks) && storedBlocks.length > 0;
+  const hasVersion = Boolean(entry.layoutVersion || entry.layout?.layoutVersion);
+  if (!hasLayout && !hasVersion) return false;
+  return !storedLayoutCurrent(entry, version);
+}
+
+function persistDisplayedLayout(page) {
+  if (!libraryLayoutNeedsWrite(page)) return Promise.resolve();
+  return persistPageLayout(page);
+}
+function persistPageLayout(page) {
+  const raw = getPageLayout(page);
+  const version = String(raw?.layoutVersion || "");
+  if (!version || !raw?.blocks?.length) return Promise.resolve();
+  const layout = cacheableLayout(raw);
+  const entry = libraryEntry(page);
+  const pairs = Array.isArray(entry?.pairs) ? entry.pairs : [];
+  const skipped = Boolean(entry?.skipped) || (isSkipOnlyPage(raw.blocks) && !pairs.length);
+  if (entry) {
+    entry.layout = layout;
+    entry.layoutVersion = version;
+    if (skipped) entry.skipped = true;
+  } else if (libraryDoc && Array.isArray(libraryDoc.pages)) {
+    libraryDoc.pages.push({ page, pairs, layout, layoutVersion: version, ...(skipped ? { skipped: true } : {}) });
+  }
+  const bytes = pdfBytes;
+  const title = document.title;
+  const pageCount = pdfDoc?.numPages || 0;
+  return enqueueLibraryWrite(async () => {
+    const hash = await pdfByteHash(bytes);
+    if (!hash || hash === "nohash") return;
+    await saveLibraryPage({
+      hash,
+      title,
+      pageCount,
+      page,
+      pairs,
+      layout,
+      layoutVersion: version,
+      ...(skipped ? { skipped: true } : {})
+    });
+  });
 }
 
 function persistPagePairs(saved) {
@@ -6032,6 +6176,7 @@ function persistPagePairs(saved) {
       page,
       pairs: saved.pairs,
       ...(layout ? { layout } : {}),
+      ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
       ...(saved.skipped ? { skipped: true } : {})
     });
   });
@@ -6338,35 +6483,145 @@ async function translateCurrentPage() {
   updateTranslateControls();
 }
 
+function pageMarkedSkip(entry, blocks) {
+  return Boolean(entry?.skipped) || isSkipOnlyPage(blocks) || isSkipOnlyPage(entry?.layout?.blocks);
+}
+
+/** Previous layout cache. The live key stays source-v3; this only recognizes an old skip. */
+function legacyLayoutCacheKey(args) {
+  return layoutCacheKey(args).replace(/:source-v3$/, ":source-v2");
+}
+
+function installKnownSkipLayout(page, stored) {
+  const blocks = stored?.blocks;
+  if (!isSkipOnlyPage(blocks)) return false;
+  skipLocked.add(page);
+  if (isSkipOnlyPage(getPageLayout(page)?.blocks)) return false;
+  setPageLayout(page, {
+    kind: "blocks",
+    protocol: stored.protocol || PROTOCOL,
+    page: Number(page),
+    textSource: stored.textSource || "text-layer",
+    sourceAudit: stored.sourceAudit || null,
+    blocks,
+    itemCount: Number(stored.itemCount) || blocks.length
+  });
+  return true;
+}
+
+async function readStoredLayouts(keys) {
+  try {
+    if (!keys?.length || typeof globalThis.chrome?.storage?.local?.get !== "function") return {};
+    const bag = await globalThis.chrome.storage.local.get(keys);
+    return bag && typeof bag === "object" ? bag : {};
+  } catch {
+    return {};
+  }
+}
+
 function seedLibraryProgress() {
   const pages = libraryDoc?.pages || [];
   if (!pages.length || !pdfDoc) return false;
-  let changed = false;
+  const installed = installDisplayableLibraryLayouts();
+  let changed = installed;
   for (const entry of pages) {
     const page = Number(entry?.page);
     if (!(page >= 1) || page > pdfDoc.numPages) continue;
     const prior = pageStates.get(page);
+    if (skipLocked.has(page) && prior?.state === "skipped") continue;
     if (prior?.hasLayout && prior.state && prior.state !== "layout" && prior.state !== "queued") continue;
     const blocks = getPageLayout(page)?.blocks || null;
+    const skipped = pageMarkedSkip(entry, blocks);
+    if (isSkipOnlyPage(entry?.layout?.blocks)) installKnownSkipLayout(page, entry.layout);
     const state = libraryPageRunState({
       pairs: entry?.pairs,
       cached: pageCache.get(docId, page),
       targetLang: pdfTargetLang,
       provider: pdfProvider,
-      skipped: Boolean(entry?.skipped),
-      blocks,
+      skipped,
+      blocks: getPageLayout(page)?.blocks || blocks,
       empty: Array.isArray(blocks)
         && !translatableBlocks(blocks).length
         && !isTitlePageCandidate(page, pageTextForStructure(blocks))
     });
     if (state === "queued") continue;
-    const hasLayout = Boolean(blocks?.length);
+    if (state === "skipped") skipLocked.add(page);
+    const hasLayout = Boolean((getPageLayout(page)?.blocks || blocks)?.length);
     if (prior?.state === state && Boolean(prior?.hasLayout) === hasLayout) continue;
     notePageState(page, { state, hasLayout });
     changed = true;
   }
   if (changed) refreshDocStatus();
   return changed;
+}
+
+/**
+ * Count skip-only pages before any new layout request.
+ * The old source-v2 cache and a library skip flag are enough: the page keeps
+ * its original blocks and the skip label, and the sidecar runs only after
+ * pages that still need translation have taken the layout slots.
+ */
+async function seedLegacySkipPages() {
+  if (legacySkipSeeded || !pdfDoc) return false;
+  const stamp = docId;
+  await loadPdfLayout();
+  if (stamp !== docId) return false;
+  const hash = await pdfByteHash();
+  const mode = pdfEngineMode();
+  const total = pdfDoc.numPages;
+  const keys = [];
+  for (let page = 1; page <= total; page += 1) {
+    if (hash && hash !== "nohash") keys.push(legacyLayoutCacheKey({ hash, page, mode }));
+  }
+  const bag = await readStoredLayouts(keys);
+  if (stamp !== docId) return false;
+  legacySkipSeeded = true;
+  let changed = false;
+  for (let page = 1; page <= total; page += 1) {
+    if (stamp !== docId) return changed;
+    const entry = libraryEntry(page);
+    const cached = hash && hash !== "nohash" ? bag[legacyLayoutCacheKey({ hash, page, mode })] : null;
+    const marked = pageMarkedSkip(entry, cached?.blocks) || skipLocked.has(page);
+    if (!marked) continue;
+    if (isSkipOnlyPage(cached?.blocks)) installKnownSkipLayout(page, cached);
+    else if (isSkipOnlyPage(entry?.layout?.blocks)) installKnownSkipLayout(page, entry.layout);
+    skipLocked.add(page);
+    if (!isSkipOnlyPage(getPageLayout(page)?.blocks)) {
+      try {
+        await ingestSkippedSourceLayout(page, () => stamp !== docId);
+      } catch {
+        /* the skip still counts; reconcile can fill the blocks later */
+      }
+    }
+    if (stamp !== docId) return changed;
+    const hasLayout = Boolean(getPageLayout(page)?.blocks?.length);
+    const prior = pageStates.get(page);
+    if (prior?.state === "skipped" && Boolean(prior?.hasLayout) === hasLayout) continue;
+    notePageState(page, { state: "skipped", hasLayout });
+    changed = true;
+  }
+  if (changed) refreshDocStatus();
+  return changed;
+}
+
+/** New layout may replace skip blocks. It must not take the page out of the done count. */
+async function reconcileLockedSkipLayouts(isStale) {
+  const pages = [...skipLocked].sort((a, b) => a - b);
+  for (const page of pages) {
+    if (isStale()) return;
+    const previous = getPageLayout(page);
+    let laid = null;
+    try {
+      laid = await ingestPageLayout(page, isStale);
+    } catch {
+      laid = null;
+    }
+    if (isStale()) return;
+    if (!(laid && isSkipOnlyPage(laid.blocks)) && previous) setPageLayout(page, previous);
+    notePageState(page, { state: "skipped", hasLayout: Boolean(getPageLayout(page)?.blocks?.length) });
+    clearSlotPainted(page);
+    renderArticle();
+  }
 }
 
 async function adoptLibraryPages(options = {}) {
@@ -6381,7 +6636,16 @@ async function adoptLibraryPages(options = {}) {
   const publish = () => {
     if (stamp === docId) renderArticle();
   };
+  const noteLibraryGap = (page, blocks, entry) => {
+    const live = translatableBlocks(blocks || []).length;
+    const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
+    if (!viewerUnderTest() || !entry || pairCount >= live) return;
+    const gap = globalThis.__oiLibraryGap || [];
+    gap.push({ page, pairs: pairCount, live });
+    globalThis.__oiLibraryGap = gap;
+  };
   if (seedLibraryProgress() && stamp === docId) renderArticle();
+  if (await seedLegacySkipPages() && stamp === docId) renderArticle();
   for (let page = start; page <= end; page += 1) {
     if (stamp !== docId) return true;
     const entry = libraryEntry(page);
@@ -6389,24 +6653,24 @@ async function adoptLibraryPages(options = {}) {
     let blocks = layout?.blocks || null;
     const cached = pageCache.get(docId, page);
     const prior = pageStates.get(page);
-    let skipped = Boolean(entry?.skipped) || isSkipOnlyPage(blocks);
+    let skipped = pageMarkedSkip(entry, blocks) || skipLocked.has(page);
+    if (skipped) {
+      // Already done. Do not take a layout slot ahead of pages that still need translation.
+      skipLocked.add(page);
+      notePageState(page, { state: "skipped", hasLayout: Boolean(blocks?.length) });
+      clearSlotPainted(page);
+      publish();
+      continue;
+    }
     if (!layout) {
       try {
-        if (entry?.skipped) {
-          notePageState(page, { state: "skipped" });
-          layout = await ingestSkippedSourceLayout(page, () => stamp !== docId);
-          if (layout && !isSkipOnlyPage(layout.blocks)) {
-            layout = await ingestPageLayout(page, () => stamp !== docId);
-          }
-        } else {
-          layout = await ingestPageLayout(page, () => stamp !== docId);
-        }
+        layout = await ingestPageLayout(page, () => stamp !== docId);
       } catch {
         layout = null;
       }
       if (stamp !== docId) return true;
       blocks = layout?.blocks || null;
-      skipped = Boolean(entry?.skipped) || isSkipOnlyPage(blocks);
+      skipped = pageMarkedSkip(entry, blocks) || skipLocked.has(page);
     }
     if (!skipped && !Array.isArray(blocks)) {
       hole = true;
@@ -6434,13 +6698,17 @@ async function adoptLibraryPages(options = {}) {
         publish();
         continue;
       }
-      const live = translatableBlocks(blocks || []).length;
-      const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
-      if (viewerUnderTest() && entry && pairCount < live) {
-        const gap = globalThis.__oiLibraryGap || [];
-        gap.push({ page, pairs: pairCount, live });
-        globalThis.__oiLibraryGap = gap;
+      // A page that already counted stays counted while changed blocks are filled.
+      if (countedPageState(prior?.state)) {
+        noteLibraryGap(page, blocks, entry);
+        notePageState(page, { state: "partial", hasLayout: Boolean(blocks?.length) });
+        clearSlotPainted(page);
+        publish();
+        hole = true;
+        if (!entry && page >= lastListed) break;
+        continue;
       }
+      noteLibraryGap(page, blocks, entry);
       if (prior?.state === "done" || prior?.state === "partial") pageCache.clearPage(docId, page);
       else if (cached && !libraryCoversLiveBlocks(cached, blocks, pdfTargetLang, pdfProvider)) pageCache.clearPage(docId, page);
       notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
@@ -6457,6 +6725,16 @@ async function adoptLibraryPages(options = {}) {
         : blocksFromLibraryPairs(page, entry?.pairs || cached);
       const covers = !Array.isArray(blocks) || libraryCoversLiveBlocks(entry?.pairs || cached, blocks, pdfTargetLang, pdfProvider);
       if (state === "done" && (!filled.length || !covers)) {
+        if (countedPageState(prior?.state)) {
+          noteLibraryGap(page, blocks, entry);
+          if (filled.length) pageCache.set(docId, page, cacheableReuse(filled));
+          notePageState(page, { state: "partial", hasLayout: Boolean(blocks?.length) });
+          clearSlotPainted(page);
+          publish();
+          hole = true;
+          if (!entry && page >= lastListed) break;
+          continue;
+        }
         hole = true;
         notePageState(page, { state: "queued", hasLayout: Boolean(blocks?.length) });
         clearSlotPainted(page);
@@ -6469,13 +6747,7 @@ async function adoptLibraryPages(options = {}) {
       clearSlotPainted(page);
       publish();
       if (state === "partial") {
-        const live = translatableBlocks(blocks || []).length;
-        const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
-        if (viewerUnderTest() && entry && pairCount < live) {
-          const gap = globalThis.__oiLibraryGap || [];
-          gap.push({ page, pairs: pairCount, live });
-          globalThis.__oiLibraryGap = gap;
-        }
+        noteLibraryGap(page, blocks, entry);
         hole = true;
       }
       continue;
@@ -6613,8 +6885,10 @@ async function translateWholeDocument() {
       if (reason === "cached") {
         const prior = pageStates.get(page);
         const keepSkip = prior?.state === "skipped" || prior?.state === "held"
+          || skipLocked.has(page)
           || libraryEntry(page)?.skipped
-          || isSkipOnlyPage(getPageLayout(page)?.blocks);
+          || isSkipOnlyPage(getPageLayout(page)?.blocks)
+          || isSkipOnlyPage(libraryEntry(page)?.layout?.blocks);
         if (keepSkip) {
           notePageState(page, {
             state: "skipped",
@@ -6629,7 +6903,8 @@ async function translateWholeDocument() {
       else {
         const layout = getPageLayout(page);
         const blocks = layout?.blocks || [];
-        if (libraryEntry(page)?.skipped || isSkipOnlyPage(blocks)) {
+        if (skipLocked.has(page) || libraryEntry(page)?.skipped || isSkipOnlyPage(blocks) || isSkipOnlyPage(libraryEntry(page)?.layout?.blocks)) {
+          skipLocked.add(page);
           notePageState(page, { state: "skipped", hasLayout: blocks.length > 0 });
         } else {
           const noText = !blocks.length && !(Number(layout?.itemCount) > 0);
@@ -6642,9 +6917,16 @@ async function translateWholeDocument() {
     },
     onPageStart({ page, total: pageTotal }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
+      if (skipLocked.has(page)) {
+        notePageState(page, { state: "skipped", hasLayout: Boolean(getPageLayout(page)?.blocks?.length) });
+        clearSlotPainted(page);
+        refreshDocStatus();
+        renderArticle();
+        return;
+      }
       translatingPage = page;
       const prev = pageStates.get(page);
-      const hold = prev?.state === "partial";
+      const hold = countedPageState(prev?.state);
       notePageState(page, {
         state: hold ? "partial" : "running",
         hasLayout: Boolean(prev?.hasLayout) || Boolean(getPageLayout(page)?.blocks?.length),
@@ -6747,26 +7029,65 @@ async function translateWholeDocument() {
     preserveSession: libraryPass,
     preparePage: prepareLibraryPage
   });
-  if (libraryPass && isCurrentWork(work, gen, translatingDoc) && !translatedDoc.aborted && !translatedDoc.paused && !work.aborted) {
+  if (libraryPass && isCurrentWork(work, gen, translatingDoc) && !translatedDoc.aborted && !work.aborted) {
     renderArticle();
-    let stillQueued = false;
-    for (let page = 1; page <= total; page += 1) {
-      if ((pageStates.get(page)?.state || "") === "queued") stillQueued = true;
+    if (!translatedDoc.paused) {
+      let stillQueued = false;
+      for (let page = 1; page <= total; page += 1) {
+        if ((pageStates.get(page)?.state || "") === "queued") stillQueued = true;
+      }
+      if (stillQueued) {
+        const again = await translateDocumentPages({
+          ...pageJob,
+          preserveSession: true,
+          includePage: (page) => (pageStates.get(page)?.state || "") === "queued"
+        });
+        translatedDoc = {
+          ok: translatedDoc.ok && again.ok,
+          aborted: translatedDoc.aborted || again.aborted,
+          paused: translatedDoc.paused || again.paused,
+          error: translatedDoc.error || again.error,
+          missingField: translatedDoc.missingField || again.missingField,
+          pages: translatedDoc.pages.concat(again.pages)
+        };
+      }
     }
-    if (stillQueued) {
-      const again = await translateDocumentPages({
-        ...pageJob,
-        preserveSession: true,
-        includePage: (page) => (pageStates.get(page)?.state || "") === "queued"
-      });
-      translatedDoc = {
-        ok: translatedDoc.ok && again.ok,
-        aborted: translatedDoc.aborted || again.aborted,
-        paused: translatedDoc.paused || again.paused,
-        error: translatedDoc.error || again.error,
-        missingField: translatedDoc.missingField || again.missingField,
-        pages: translatedDoc.pages.concat(again.pages)
-      };
+    // A translation pause must not abandon layout. Skip pages and any page
+    // whose sidecar call failed still get a recompute, then an immediate write-back.
+    if (!translatedDoc.aborted && !work.aborted) {
+      await reconcileLockedSkipLayouts(() => !isCurrentWork(work, gen, translatingDoc));
+      const upgraded = await retryPendingVendorLayouts(() => !isCurrentWork(work, gen, translatingDoc));
+      const needs = [];
+      for (const page of upgraded || []) {
+        if (!isCurrentWork(work, gen, translatingDoc)) break;
+        const blocks = getPageLayout(page)?.blocks || null;
+        if (!blocks || isSkipOnlyPage(blocks)) continue;
+        const covered = libraryCoversLiveBlocks(libraryEntry(page)?.pairs || [], blocks, pdfTargetLang, pdfProvider);
+        if (covered) continue;
+        pageCache.clearPage(translatingDoc, page);
+        const prior = pageStates.get(page);
+        notePageState(page, {
+          state: countedPageState(prior?.state) ? "partial" : "queued",
+          hasLayout: true
+        });
+        clearSlotPainted(page);
+        needs.push(page);
+      }
+      if (needs.length && !translatedDoc.paused && isCurrentWork(work, gen, translatingDoc) && !work.aborted) {
+        const filled = await translateDocumentPages({
+          ...pageJob,
+          preserveSession: true,
+          includePage: (page) => needs.includes(page)
+        });
+        translatedDoc = {
+          ok: translatedDoc.ok && filled.ok,
+          aborted: translatedDoc.aborted || filled.aborted,
+          paused: translatedDoc.paused || filled.paused,
+          error: translatedDoc.error || filled.error,
+          missingField: translatedDoc.missingField || filled.missingField,
+          pages: translatedDoc.pages.concat(filled.pages)
+        };
+      }
     }
   }
   if (libraryPass && work === session && !forceReadoutHold) work.running = false;
@@ -7056,6 +7377,34 @@ function emptyPageResults(layout) {
     : mergeReadoutTranslations(layout?.blocks || [], []);
 }
 
+/** Pages still waiting on the sidecar, including ones skipped by a translation pause. */
+async function retryPendingVendorLayouts(isStale) {
+  const upgraded = [];
+  const mode = pdfEngineMode();
+  if (mode !== "local-ocr" && mode !== "cloud-ocr") return upgraded;
+  const version = await layoutVersionNow();
+  const total = pdfDoc?.numPages || 0;
+  for (let page = 1; page <= total; page += 1) {
+    if (isStale()) return upgraded;
+    const entry = libraryEntry(page);
+    const storedBlocks = entry?.layout?.blocks;
+    const hasStored = (Array.isArray(storedBlocks) && storedBlocks.length > 0) ||
+      Boolean(entry?.layoutVersion || entry?.layout?.layoutVersion);
+    const stale = Boolean(entry && hasStored && version && !storedLayoutCurrent(entry, version));
+    if (!stale && !vendorLayoutPending.has(page)) continue;
+    try {
+      const laid = await ingestPageLayout(page, isStale);
+      if (laid) {
+        vendorLayoutPending.delete(page);
+        upgraded.push(page);
+      }
+    } catch {
+      /* this page can be tried on the next open; keep going */
+    }
+  }
+  return upgraded;
+}
+
 async function ingestPageLayout(n, isStale) {
   if (!isStale()) layoutNotice = "";
   await loadPdfLayout();
@@ -7064,8 +7413,16 @@ async function ingestPageLayout(n, isStale) {
   if (mode === "fixture" && n === 1) return ingestFixtureLayout(n, isStale);
   if (mode === "local-ocr" || mode === "cloud-ocr") {
     const laid = await ingestVendorLayout(n, mode, isStale);
-    if (laid) return laid;
-    return ingestTextLayerLayout(n, isStale);
+    if (laid) {
+      vendorLayoutReason.delete(n);
+      return laid;
+    }
+    const reason = vendorLayoutReason.get(n) || "";
+    vendorLayoutReason.delete(n);
+    if (reason === "aborted") return null;
+    if (!reason) return null;
+    if (reason === "empty-key") return ingestTextLayerLayout(n, isStale);
+    return ingestTextLayerLayout(n, isStale, { fallback: { source: "text-layer", reason } });
   }
   return ingestTextLayerLayout(n, isStale);
 }
@@ -7093,10 +7450,60 @@ async function writeStoredLayout(key, page) {
   }
 }
 
+const vendorLayoutPending = new Set();
+const vendorLayoutReason = new Map();
+let vendorLayoutChain = Promise.resolve();
+const vendorLayoutInflight = new Map();
+let layoutAbort = new AbortController();
+let layoutEpoch = 0;
+
+function abortError() {
+  const error = new Error("layout aborted");
+  error.name = "AbortError";
+  error.code = "aborted";
+  return error;
+}
+
+/** Drop in-flight layout POSTs. The sidecar is one request at a time; a closed tab must not keep it. */
+function abortInflightLayouts() {
+  layoutEpoch += 1;
+  try {
+    layoutAbort.abort();
+  } catch {
+    /* already aborted */
+  }
+  layoutAbort = new AbortController();
+  vendorLayoutInflight.clear();
+  vendorLayoutChain = Promise.resolve();
+}
+
+/** One sidecar POST at a time. A second caller for the same page shares the first. */
+function runVendorLayoutHttp(page, task) {
+  const key = Number(page) || 0;
+  const existing = vendorLayoutInflight.get(key);
+  if (existing) return existing;
+  const epoch = layoutEpoch;
+  const signal = layoutAbort.signal;
+  const run = () => {
+    if (epoch !== layoutEpoch || signal.aborted) throw abortError();
+    return task(signal);
+  };
+  const job = vendorLayoutChain.then(run, run);
+  vendorLayoutInflight.set(key, job);
+  const settled = job.then(() => {
+    if (vendorLayoutInflight.get(key) === job) vendorLayoutInflight.delete(key);
+  }, () => {
+    if (vendorLayoutInflight.get(key) === job) vendorLayoutInflight.delete(key);
+  });
+  if (epoch === layoutEpoch) vendorLayoutChain = settled;
+  return job;
+}
+
 async function ingestVendorLayout(n, mode, isStale) {
   const settings = cachedPdfLayout || normalizePdfLayout(null);
   if (mode === "cloud-ocr" && !shouldFetchCloud(settings)) {
     if (!isStale()) layoutNotice = LAYOUT_EMPTY_KEY_STATUS;
+    vendorLayoutReason.set(n, "empty-key");
     return null;
   }
   const page = await pdfDoc.getPage(n);
@@ -7109,23 +7516,30 @@ async function ingestVendorLayout(n, mode, isStale) {
   const png = raster.canvas.toDataURL("image/png");
   const hash = await pdfByteHash();
   const key = layoutCacheKey({ hash, page: n, mode });
-  let mapped = await readStoredLayout(key);
+  const version = await layoutVersionNow();
+  // A source-v3 entry with no revision, or an older revision, is not the current
+  // block structure. Library page layouts follow the same rule.
+  let mapped = storedLayoutCurrent(await readStoredLayout(key), version)
+    || storedLayoutCurrent(libraryEntry(n), version);
+  let recomputed = false;
   if (!mapped) {
     try {
-      const envelope = mode === "cloud-ocr"
-        ? await fetchCloudEnvelope({
+      const envelope = await runVendorLayoutHttp(n, (signal) => (mode === "cloud-ocr"
+        ? fetchCloudEnvelope({
             baseUrl: settings.cloudBaseUrl,
             apiKey: settings.cloudApiKey,
             model: settings.cloudModel,
-            pngDataUrl: png
+            pngDataUrl: png,
+            signal
           })
-        : await fetchLocalEnvelope({
+        : fetchLocalEnvelope({
             baseUrl: settings.localBaseUrl,
             page: n,
             imageBase64: png.replace(/^data:image\/png;base64,/, ""),
             pixelWidth: raster.pixelWidth,
-            pixelHeight: raster.pixelHeight
-          });
+            pixelHeight: raster.pixelHeight,
+            signal
+          })));
       let images = null;
       try {
         const ops = await page.getOperatorList();
@@ -7135,9 +7549,31 @@ async function ingestVendorLayout(n, mode, isStale) {
       }
       attachFontRealNames(content.items, page.commonObjs);
       mapped = vendorLayoutToBlocks(envelope, { items: content.items, viewport, images, page: n });
+      if (version) mapped.layoutVersion = version;
       await writeStoredLayout(key, mapped);
+      recomputed = true;
+      vendorLayoutPending.delete(n);
     } catch (err) {
-      if (!isStale() && err?.code !== "empty-key") layoutNotice = LAYOUT_FALLBACK_STATUS;
+      if (err?.name === "AbortError" || err?.code === "aborted") {
+        vendorLayoutReason.set(n, "aborted");
+        vendorLayoutPending.delete(n);
+        return null;
+      }
+      if (err?.code === "no-boxes") {
+        vendorLayoutReason.set(n, "no-boxes");
+        vendorLayoutPending.delete(n);
+        if (!isStale()) layoutNotice = LAYOUT_NO_BOXES_STATUS;
+        return null;
+      }
+      if (err?.code === "empty-key") {
+        vendorLayoutReason.set(n, "empty-key");
+        if (!isStale()) layoutNotice = LAYOUT_EMPTY_KEY_STATUS;
+        return null;
+      }
+      if (!isStale()) layoutNotice = LAYOUT_FALLBACK_STATUS;
+      const status = Number(err?.status) || 0;
+      vendorLayoutReason.set(n, status ? `http-${status}` : "network");
+      vendorLayoutPending.add(n);
       return null;
     }
   }
@@ -7147,10 +7583,12 @@ async function ingestVendorLayout(n, mode, isStale) {
   const layout = stampBodyFont({
     ...mapped,
     kind: "blocks",
+    ...(version ? { layoutVersion: version } : {}),
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
   setPageLayout(n, layout);
+  if (recomputed) persistPageLayout(n).catch(() => {});
   return layout;
 }
 
@@ -7172,10 +7610,12 @@ async function ingestSkippedSourceLayout(n, isStale) {
   attachFontRealNames(content.items, page.commonObjs);
   const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
   if (!isSkipOnlyPage(built.blocks)) return { ...built, kind: "blocks", blocks: built.blocks || [] };
+  const version = await layoutVersionNow();
   const layout = stampBodyFont({
     ...built,
     kind: "blocks",
     protocol: built.protocol || PROTOCOL,
+    ...(version ? { layoutVersion: version } : {}),
     blocks: built.blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
@@ -7183,7 +7623,7 @@ async function ingestSkippedSourceLayout(n, isStale) {
   return layout;
 }
 
-async function ingestTextLayerLayout(n, isStale) {
+async function ingestTextLayerLayout(n, isStale, options = {}) {
   const page = await pdfDoc.getPage(n);
   if (isStale()) return null;
   const viewport = page.getViewport({ scale: 1 });
@@ -7203,14 +7643,22 @@ async function ingestTextLayerLayout(n, isStale) {
   if (isStale()) return null;
   const blocks = await cropLayoutBlocks(raster, page, built.blocks, n, isStale);
   if (!blocks || isStale()) return null;
+  const version = await layoutVersionNow();
+  const fallback = options.fallback?.reason
+    ? { source: String(options.fallback.source || "text-layer"), reason: String(options.fallback.reason) }
+    : null;
   const layout = stampBodyFont({
     ...built,
     kind: "blocks",
     protocol: built.protocol || PROTOCOL,
+    ...(version ? { layoutVersion: version } : {}),
+    ...(fallback ? { fallback } : {}),
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
   setPageLayout(n, layout);
+  if (fallback) persistPageLayout(n).catch(() => {});
+  else if (options.persist !== false) persistDisplayedLayout(n).catch(() => {});
   return layout;
 }
 
@@ -7271,6 +7719,7 @@ async function ingestReadoutLayout(n, isStale) {
 }
 
 async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
+  if (skipLocked.has(n)) return [];
   const isStale = () => gen !== restoreGen || translatingDoc !== docId;
   const layout = getPageLayout(n) || (await ingestPageLayout(n, isStale));
   if (!layout || isStale()) return [];
@@ -7285,7 +7734,7 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
     const known = slotCount + bodyCount;
     if (known > 0) {
       const prev = pageStates.get(n);
-      const hold = prev?.state === "partial";
+      const hold = countedPageState(prev?.state);
       notePageState(n, {
         state: hold ? "partial" : "running",
         hasLayout: true,
@@ -7382,7 +7831,15 @@ async function adoptDoc(doc, title) {
   translatingPage = 0;
   pageCache.clear();
   pageStates.clear();
-  if (viewerUnderTest()) globalThis.__oiLayouts = {};
+  skipLocked.clear();
+  legacySkipSeeded = false;
+  if (viewerUnderTest()) {
+    globalThis.__oiLayouts = {};
+    globalThis.__oiPaint = [];
+  }
+  abortInflightLayouts();
+  vendorLayoutPending.clear();
+  vendorLayoutReason.clear();
   docPhase = "opening";
   notePageState(1, { state: "layout", hasLayout: false });
   libraryArticle = null;
@@ -7560,11 +8017,14 @@ async function goPage(dir) {
   view?.wrap.scrollIntoView({ block: "start", behavior: PANE_SYNC_BEHAVIOR });
   updatePager();
   updateSourcePageLabel(next);
-  if (bringTranslation && pageHasFlow(next)) {
+  // Library pairs can paint a page before its layout exists. That flow has no
+  // bids yet, so the page still needs its text layer or sidecar layout.
+  const laid = Boolean(getPageLayout(next)?.blocks?.length);
+  if (bringTranslation && pageHasFlow(next) && laid) {
     pageNum = next;
     updatePager();
     revealTranslationPage(next);
-  } else if (!pageHasFlow(next)) {
+  } else if (!pageHasFlow(next) || !laid) {
     if (bringTranslation) {
       pageNum = next;
       updatePager();
@@ -7796,6 +8256,15 @@ async function renderView(view) {
   }
 }
 
+function notePaintSample(page, readout) {
+  const visuals = (readout?.blocks || []).filter((block) => block.label === "figure" || block.label === "table").length;
+  const blocks = (readout?.blocks || []).length;
+  const log = globalThis.__oiPaint || (globalThis.__oiPaint = []);
+  const last = log[log.length - 1];
+  if (last && last.page === page && last.visuals === visuals && last.blocks === blocks) return;
+  log.push({ page, visuals, blocks });
+}
+
 function showOpenedLayout(layout, isStale) {
   if (!layout || isStale()) return false;
   const laidPage = Number(layout.page) || textLoadPage || pageNum;
@@ -7821,6 +8290,111 @@ function showOpenedLayout(layout, isStale) {
   return true;
 }
 
+/** A stored text-layer fallback stays on screen while the vendor layout is tried again. */
+async function upgradeStoredFallback(n, mode, isStale) {
+  const laid = await ingestVendorLayout(n, mode, isStale);
+  vendorLayoutReason.delete(n);
+  if (!laid || isStale()) return;
+  showOpenedLayout(laid, isStale);
+  const saved = libraryEntry(n);
+  if (saved?.pairs) {
+    const merged = applySavedPairs(unitsForLayout(laid), saved.pairs, savedPairSettings());
+    pageCache.set(docId, n, merged);
+    if (n === pageNum || n === textLoadPage) pageResults = merged;
+  }
+  renderArticle();
+}
+
+function layoutNeedsVisualCrops(layout) {
+  return (layout?.blocks || []).some((block) => (
+    isVisualBlock(block) && Array.isArray(block.bbox) && !block.imageUrl
+  ));
+}
+
+let visualCropToken = 0;
+
+/** Stored layouts keep bboxes and drop image bytes. Rebuild the same page-raster crops a fresh compute starts from. */
+async function hydrateMissingVisualCrops(isStale = () => false) {
+  if (!pdfDoc) return false;
+  const token = ++visualCropToken;
+  const stale = () => isStale() || token !== visualCropToken;
+  const total = Number(pdfDoc.numPages) || 0;
+  const order = [];
+  for (let n = 1; n <= total; n += 1) {
+    const layout = getPageLayout(n);
+    if (!layoutNeedsVisualCrops(layout)) continue;
+    const asset = (layout.blocks || []).some((block) => block.label === "figure" || block.label === "table");
+    order.push({ n, asset });
+  }
+  order.sort((a, b) => Number(b.asset) - Number(a.asset) || a.n - b.n);
+  let changed = false;
+  const paint = () => {
+    if (changed && !stale()) renderArticle();
+  };
+  for (const item of order) {
+    if (stale()) {
+      paint();
+      return changed;
+    }
+    const n = item.n;
+    const layout = getPageLayout(n);
+    if (!layoutNeedsVisualCrops(layout)) continue;
+    let page = null;
+    try {
+      page = await pdfDoc.getPage(n);
+      if (stale()) {
+        paint();
+        return changed;
+      }
+      const raster = await renderPageRaster(page);
+      if (stale()) {
+        paint();
+        return changed;
+      }
+      const blocks = await cropLayoutBlocks(raster, page, layout.blocks, n, stale, { sharp: false });
+      if (raster.canvas) {
+        raster.canvas.width = 0;
+        raster.canvas.height = 0;
+      }
+      if (stale()) {
+        paint();
+        return changed;
+      }
+      if (!blocks) continue;
+      layout.blocks = blocks;
+      delete layout.formulaPlanKey;
+      clearSlotPainted(n);
+      changed = true;
+      if (item.asset) paint();
+    } catch {
+      continue;
+    }
+  }
+  paint();
+  if (changed && !stale()) refreshFormulaCropsForDisplay();
+  return changed;
+}
+
+async function primeKnownPages() {
+  if (!pdfDoc) return;
+  const stamp = docId;
+  const stale = () => docId !== stamp;
+  await loadPdfLayout();
+  try {
+    await savedTranslationFor(pageNum);
+  } catch {
+    noteLibraryUnavailable();
+  }
+  if (stale()) return;
+  await layoutVersionNow();
+  if (stale()) return;
+  const libraryChanged = seedLibraryProgress();
+  const legacyChanged = await seedLegacySkipPages();
+  if (stale()) return;
+  if (libraryChanged || legacyChanged) renderArticle();
+  hydrateMissingVisualCrops(stale).catch(() => {});
+}
+
 async function loadCurrentPageText(explicitPage) {
   if (!pdfDoc) return;
   const ticket = ++textGen;
@@ -7829,6 +8403,48 @@ async function loadCurrentPageText(explicitPage) {
   textLoadPage = n;
   const translatingDoc = docId;
   const isStale = () => ticket !== textGen || translatingDoc !== docId;
+  await primeKnownPages();
+  if (isStale()) return;
+  const version = knownLayoutVersion || await layoutVersionNow();
+  const openedStored = getPageLayout(n);
+  if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version)) {
+    if (!showOpenedLayout(openedStored, isStale)) return;
+    const saved = await savedTranslationFor(n).catch(() => null);
+    if (isStale()) return;
+    if (saved?.pairs) {
+      const prepared = bindSavedPairs(saved, unitsForLayout(openedStored));
+      const merged = applySavedPairs(unitsForLayout(openedStored), prepared.pairs, savedPairSettings());
+      const blocks = openedStored.blocks || [];
+      pageResults = merged;
+      pageCache.set(docId, n, merged);
+      const covers = libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang, pdfProvider) ||
+        libraryCoversLiveBlocks(merged, blocks, pdfTargetLang, pdfProvider);
+      const skipped = skipLocked.has(n) || isSkipOnlyPage(blocks);
+      notePageState(n, { state: skipped ? "skipped" : (covers ? "done" : "partial"), hasLayout: true });
+      if (!pdfTranslateBusy(session)) setStatus(savedPageStatus(prepared, merged, blocks));
+      rememberSkipHole(n, blocks);
+    } else if (skipLocked.has(n) || isSkipOnlyPage(openedStored.blocks)) {
+      notePageState(n, { state: "skipped", hasLayout: true });
+    }
+    clearSlotPainted(n);
+    refreshDocStatus();
+    renderArticle();
+    updateTranslateControls();
+    if (!storedLayoutCurrent(openedStored, version) && (pdfEngineMode() === "local-ocr" || pdfEngineMode() === "cloud-ocr")) {
+      upgradeStoredFallback(n, pdfEngineMode(), isStale).catch(() => {});
+    }
+    return;
+  }
+  if (skipLocked.has(n)) {
+    const known = getPageLayout(n);
+    if (known) showOpenedLayout(known, isStale);
+    notePageState(n, { state: "skipped", hasLayout: Boolean(known?.blocks?.length) });
+    clearSlotPainted(n);
+    refreshDocStatus();
+    renderArticle();
+    updateTranslateControls();
+    return;
+  }
   let mode = pdfEngineMode();
   let preloadedSaved = null;
   if (mode === "legacy") {
@@ -7842,7 +8458,7 @@ async function loadCurrentPageText(explicitPage) {
     : Promise.resolve(null);
   try {
     if (wantsVendor) {
-      const quick = await ingestTextLayerLayout(n, isStale);
+      const quick = await ingestTextLayerLayout(n, isStale, { persist: false });
       if (!showOpenedLayout(quick, isStale)) return;
       await ensuring;
       const saved = preloadedSaved || await savedTranslationFor(n).catch(() => null);
@@ -7862,6 +8478,7 @@ async function loadCurrentPageText(explicitPage) {
           pageCache.set(docId, n, merged);
           notePageState(n, { state: "done", hasLayout: true });
         }
+        persistDisplayedLayout(n).catch(() => {});
         if (!pdfTranslateBusy(session)) {
           setStatus(savedPageStatus(prepared, merged, quick.blocks || []));
           rememberSkipHole(n, quick.blocks);
@@ -7874,6 +8491,14 @@ async function loadCurrentPageText(explicitPage) {
       updateTranslateControls();
       const laid = await ingestVendorLayout(n, mode, isStale);
       if (!laid || isStale()) {
+        const reason = vendorLayoutReason.get(n) || "";
+        vendorLayoutReason.delete(n);
+        if (reason && reason !== "aborted" && quick && !isStale()) {
+          quick.fallback = { source: "text-layer", reason };
+          quick.layoutVersion = quick.layoutVersion || knownLayoutVersion;
+          setPageLayout(n, quick);
+          persistPageLayout(n).catch(() => {});
+        }
         if (!isStale() && layoutNotice && !pdfTranslateBusy(session)) setStatus(layoutNotice);
         return;
       }

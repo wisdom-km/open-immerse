@@ -14,7 +14,7 @@ import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { isTranslatableBlock } from "../lib/pdf-blocks.js";
 import { assignBids, isBid, stampLayoutBids } from "../lib/pdf-block-id.js";
-import { layoutCacheKey } from "../lib/pdf-layout-client.js";
+import { currentLayoutVersion, layoutCacheKey } from "../lib/pdf-layout-client.js";
 import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
 import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs";
 
@@ -214,6 +214,7 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
     protocol: "blocks-1",
     page: 1,
     textSource: "ocr",
+    layoutVersion: await currentLayoutVersion(),
     blocks: cacheBlocks
   };
   const cacheKey = layoutCacheKey({ hash: ATTENTION_SHA, page: 1, mode: "local-ocr" });
