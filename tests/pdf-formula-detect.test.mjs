@@ -325,6 +325,9 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
         if (["t053qgiy", "t0hivfc4", "t1xmh68y", "t060sodo", "m0rrcjic", "m1ubksbr", "m0payg9u"].includes(suffix)) {
           watched.set(`${number}:${suffix}`, block);
         }
+        if (/t0h4uryx|t0xupwgh/.test(String(block.bid || ""))) {
+          watched.set(`${number}:${block.bid}`, block);
+        }
         if (number === 5 && block.label === "formula" && block.display !== false) {
           const list = watched.get("5:displays") || [];
           list.push(block);
@@ -392,4 +395,17 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
   assert.ok(gradient.bbox[2] - gradient.bbox[0] >= 0.55, "p5 gradient is one crop");
   assert.ok(gradient.glyphBoxes.some((box) => box[0] > 0.64 && box[0] < 0.72), "middle nabla is in the crop");
   assert.ok(gradient.glyphBoxes.some((box) => box[2] > 0.78), "closing brackets are in the crop");
+  const derivation = watched.get("16:b1-p16-t0h4uryx");
+  assert.ok(derivation, "p16 t0h4uryx");
+  assert.equal(derivation.label, "text");
+  assert.equal(derivation.sourceText, "for all x ∈ D. This completes the derivation.");
+  assert.equal(derivation.text, "for all ⟦f3⟧. This completes the derivation.");
+  const proofs = ["b1-p18-t0xupwgh", "b1-p18-t0xupwgh-2"].map((bid) => watched.get(`18:${bid}`));
+  assert.equal(proofs.length, 2);
+  for (const block of proofs) {
+    assert.ok(block, "p18 which completes the proof");
+    assert.equal(block.label, "text");
+    assert.equal(block.sourceText, "which completes the proof.");
+    assert.equal(block.text, "which completes the proof.");
+  }
 });
