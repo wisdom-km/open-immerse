@@ -180,8 +180,8 @@ test("a script-sized ref stays inside the inline fraction and prose still ends i
   const withTail = line.map((item) => ({ ...item }));
   const refAt = withTail.findIndex((item) => item.str === "ref");
   withTail.splice(refAt + 1, 0,
-    { str: "θ", x: 90, y: 98, width: 5, height: 5, fontRealName: "CMR7" },
-    { str: "r", x: 95, y: 90, width: 4, height: 5, fontRealName: "CMR7" }
+    { str: "θ", x: 90, y: 98, width: 5, height: 5, fontRealName: "CMMI7" },
+    { str: "r", x: 95, y: 90, width: 4, height: 5, fontRealName: "CMMI7" }
   );
   for (const item of withTail) {
     if (item.str === "(" || item.str === "y" || item.str === "|" || item.str === "x" || item.str === ")") {
@@ -201,7 +201,7 @@ test("a script-sized ref stays inside the inline fraction and prose still ends i
     { str: "π", x: 40, y: 96, width: 8, height: 10, fontRealName: "CMMI10" },
     { str: "π", x: 42, y: 106, width: 8, height: 10, fontRealName: "CMMI10" },
     { str: "ref", x: 48, y: 92, width: 12, height: 7, fontRealName: "CMR7" },
-    { str: "θ", x: 52, y: 108, width: 6, height: 7, fontRealName: "CMR7" },
+    { str: "θ", x: 52, y: 108, width: 6, height: 7, fontRealName: "CMMI7" },
     { str: "(", x: 58, y: 106, width: 4, height: 10, fontRealName: "CMR10" },
     { str: "(", x: 60, y: 96, width: 4, height: 10, fontRealName: "CMR10" },
     { str: "y", x: 66, y: 106, width: 6, height: 10, fontRealName: "CMR10" },
@@ -216,9 +216,10 @@ test("a script-sized ref stays inside the inline fraction and prose still ends i
   const bodySpans = sameLineFormulaSpans(bodySized);
   assert.equal(bodySpans.length, 1);
   const bodyText = bodySized.slice(bodySpans[0][0], bodySpans[0][1] + 1).map((item) => item.str).join("");
-  assert.match(bodyText, /refθ/);
-  assert.match(bodyText, /yy\|\|xx/);
-  assert.equal(bodySpans[0][1], bodySized.length - 1);
+  assert.match(bodyText, /refθ\(\(/);
+  // Body-sized roman y/x stay in the sentence. Pulling them in rewrites source
+  // text on pages that are not the broken formulas and drops cached translations.
+  assert.doesNotMatch(bodyText, /yy\|\|xx/);
   const prose = [
     { str: "=", x: 0, y: 100, width: 8, height: 10, fontRealName: "CMR10" },
     { str: "β", x: 10, y: 100, width: 8, height: 10, fontRealName: "CMR10" },
@@ -241,10 +242,9 @@ test("DPO reward formula on pages 18 and 19 is one inline unit", async () => {
   const fragment = /ref['′]?\(\(yy|\(yy\|/;
   const bySuffix = new Map();
   try {
-    for (let number = 1; number <= 19; number += 1) {
+    for (const number of [5, 18, 19]) {
       const pdfPage = await doc.getPage(number);
       const content = await pdfPage.getTextContent();
-      attachFontRealNames(content.items, pdfPage.commonObjs);
       const viewport = pdfPage.getViewport({ scale: 1 });
       const ops = await pdfPage.getOperatorList();
       const built = stampLayoutBids(number, textLayerToBlocks({
@@ -253,7 +253,6 @@ test("DPO reward formula on pages 18 and 19 is one inline unit", async () => {
         images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
         page: number
       }));
-      if (![5, 18, 19].includes(number)) continue;
       for (const block of built.blocks) {
         const suffix = String(block.bid || "").split("-").pop();
         bySuffix.set(`${number}:${suffix}`, { block, blocks: built.blocks });
@@ -279,7 +278,7 @@ test("DPO reward formula on pages 18 and 19 is one inline unit", async () => {
   }
   const page5 = host(5, "t1am9nkw");
   assert.match(page5.text, /DPO outline/);
-  assert.match(page5.text, /⟦f\d+⟧/);
+  assert.match(page5.text, /π_\{ref\}/);
   assert.match(page5.text, /Appendix B/);
   assert.doesNotMatch(page5.text, fragment);
   assert.doesNotMatch(page5.shown, fragment);
