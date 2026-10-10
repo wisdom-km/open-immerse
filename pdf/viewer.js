@@ -65,6 +65,7 @@ import {
   pageHasTranslation,
   pageTranslationComplete,
   unitsNeedingTranslation,
+  claimTranslationUnits,
   mergeTranslationRows,
   pageIndex,
   pageLabel,
@@ -186,10 +187,9 @@ import {
 } from "../lib/pdf-layout-client.js";
 import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import {
-  INLINE_BODY_HARD_MAX,
   READER_SOURCE_BODY_PT,
   displayFormulaColumnPx,
-  displayFormulaMinEm,
+  formulaReadabilityFloor,
   formulaScriptPt,
   readerFormulaCssSize
 } from "../lib/pdf-formula-size.js";
@@ -2118,9 +2118,12 @@ function mountDisplayMath(node, block, img, page) {
     row.style.setProperty("--oi-formula-ar", matched.aspect);
   } else {
     const pageFraction = formulaPageFraction(block);
-    const bboxH = Array.isArray(block?.bbox) ? Number(block.bbox[3]) - Number(block.bbox[1]) : 0;
-    const minEm = displayFormulaMinEm(block?.inkShare, block?.scriptShare);
-    const width = pageFraction ? displayFormulaWidthCss(pageFraction, bboxH, minEm) : "";
+    const layout = getPageLayout(page);
+    const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
+    const width = pageFraction ? displayFormulaWidthCss(pageFraction, 0, {
+      pageWidthPt: Number(layout?.pageWidth) || 0,
+      floor: formulaReadabilityFloor(readerPrefs.fontSize, bodyPt)
+    }) : "";
     if (width) row.style.setProperty("--oi-formula-w", width);
   }
   const keep = Number(block?.eqKeep);
@@ -2153,7 +2156,14 @@ function appendCropOrNotice(node, block, imageClass, page) {
       img.style.setProperty("height", "auto");
     }
     const pageFraction = displayCropColumnFraction(block);
-    if (pageFraction) img.style.width = displayFormulaWidthCss(pageFraction, Number(block.bbox[3]) - Number(block.bbox[1]));
+    if (pageFraction) {
+      const layout = getPageLayout(page ?? node.dataset.page);
+      const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
+      img.style.width = displayFormulaWidthCss(pageFraction, Number(block.bbox[3]) - Number(block.bbox[1]), {
+        pageWidthPt: Number(layout?.pageWidth) || 0,
+        floor: formulaReadabilityFloor(readerPrefs.fontSize, bodyPt)
+      });
+    }
     node.append(img);
     return;
   }
@@ -2265,9 +2275,6 @@ function writeBlockPieces(node, block, layout) {
       if (matched.raised) span.classList.add("is-raised");
       span.style.setProperty("--oi-formula-h", matched.height);
       span.style.setProperty("--oi-formula-ar", matched.aspect);
-    } else {
-      span.style.setProperty("--oi-pdf-inline-crop-em", `${INLINE_BODY_HARD_MAX}em`);
-      span.style.setProperty("--oi-pdf-inline-line-em", `${INLINE_BODY_HARD_MAX}em`);
     }
     if (img) {
       img.className = "oi-pdf-math-crop";
@@ -4832,7 +4839,9 @@ function readerFormulaStyle(block, page, inline, columnPx) {
   const snapped = snappedFormulaBox(sized, limit) || sized;
   const height = snapped.cssHeight || sized.cssHeight;
   const width = snapped.cssWidth > 0 ? snapped.cssWidth : sized.cssWidth;
-  if (!(height > 0)) return null;
+  // A broken paper metric once produced a 33554432px box and a blank image.
+  if (!(height > 0) || height > 16384) return null;
+  if (width > 16384) return null;
   return {
     height: paperCssPx(height),
     aspect: width > 0 ? String(Math.round((width / height) * 10000) / 10000) : "1",
@@ -6850,6 +6859,7 @@ async function translateWholeDocument() {
     return;
   }
   const saveTasks = [];
+  const sentSource = new Map();
   const pageJob = {
     session: work,
     cache: pageCache,
@@ -6858,7 +6868,13 @@ async function translateWholeDocument() {
     batchSize,
     targetLang: pdfTargetLang,
     send: runtimeSend,
-    getPageOriginals: (page) => originalsForPage(page, gen, translatingDoc, work, batchSize),
+    getPageOriginals: async (page) => {
+      const units = await originalsForPage(page, gen, translatingDoc, work, batchSize);
+      // One open, one request per submitted text. A later layout pass skips a
+      // block already sent with this source and display, and still sends a
+      // display that changed when formula slots moved.
+      return claimTranslationUnits(units, sentSource);
+    },
     pageSkipReason: (page) => {
       if (titleStructureFailed(page)) return "empty";
       const cached = pageCache.get(translatingDoc, page);
@@ -7062,9 +7078,14 @@ async function translateWholeDocument() {
         if (!isCurrentWork(work, gen, translatingDoc)) break;
         const blocks = getPageLayout(page)?.blocks || null;
         if (!blocks || isSkipOnlyPage(blocks)) continue;
-        const covered = libraryCoversLiveBlocks(libraryEntry(page)?.pairs || [], blocks, pdfTargetLang, pdfProvider);
-        if (covered) continue;
-        pageCache.clearPage(translatingDoc, page);
+        const covered = libraryPageRunState({
+          pairs: libraryEntry(page)?.pairs || [],
+          cached: pageCache.get(translatingDoc, page),
+          blocks,
+          targetLang: pdfTargetLang,
+          provider: pdfProvider
+        });
+        if (covered === "done" || covered === "skipped" || covered === "empty") continue;
         const prior = pageStates.get(page);
         notePageState(page, {
           state: countedPageState(prior?.state) ? "partial" : "queued",

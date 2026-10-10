@@ -72,10 +72,20 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     paperHeight
   });
   const aspect = (0.48 * pageWidth) / (0.04 * pageHeight);
-  assert.ok(Math.abs(size.cssHeight - 0.04 * paperHeight) < 1e-6);
-  assert.ok(Math.abs(size.cssWidth - 0.48 * paperWidth) < 1e-6);
-  assert.ok(size.cssHeight < 15 * 2.5);
+  assert.ok(Math.abs(size.cssHeight - 0.04 * pageHeight) < 1e-6);
+  assert.ok(Math.abs(size.cssWidth - 0.48 * pageWidth) < 1e-6);
   assert.ok(Math.abs(size.cssWidth / size.cssHeight - aspect) < 1e-6);
+  const pane = formulaDisplayCssSize({
+    block: { label: "formula", display: true, bbox, scriptShare: 0.8 },
+    pageWidth,
+    pageHeight,
+    leftWidth: 200,
+    paperWidth: 180,
+    paperHeight: 400,
+    mirrorZoom: 3
+  });
+  assert.ok(Math.abs(pane.cssWidth - size.cssWidth) < 1e-6);
+  assert.ok(Math.abs(pane.cssHeight - size.cssHeight) < 1e-6);
   const atTwo = formulaRasterPlan({
     bbox,
     pageWidth,
@@ -111,7 +121,8 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
   assert.equal(sharp.scale % CROP_SCALE, 0);
   assert.ok(sharp.pixelWidth / zoomed.cssWidth >= 2);
   assert.ok(sharp.pixelHeight / zoomed.cssHeight >= 2);
-  assert.ok(Math.abs(zoomed.cssWidth - size.cssWidth * 2) < 1e-6);
+  assert.ok(Math.abs(zoomed.cssWidth - size.cssWidth) < 1e-6);
+  assert.ok(Math.abs(zoomed.cssHeight - size.cssHeight) < 1e-6);
 
   const atOne = formulaRasterPlan({
     bbox,
@@ -141,7 +152,8 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     cssHeight: short.cssHeight,
     devicePixelRatio: 2
   });
-  assert.ok(Math.abs(short.cssHeight - 0.01 * paperHeight) < 1e-6);
+  assert.ok(Math.abs(short.cssHeight - 0.01 * pageHeight) < 1e-6);
+  assert.ok(Math.abs(short.cssWidth - 0.48 * pageWidth) < 1e-6);
   assert.equal(shortPlan.capped, false);
   assert.equal(shortPlan.scale % CROP_SCALE, 0);
   assert.ok(shortPlan.pixelWidth > 0);
@@ -171,7 +183,7 @@ test("missing display size and a bad devicePixelRatio stay on the page raster", 
   assert.equal(odd.devicePixelRatio, 1);
 });
 
-test("inline CSS box keeps the em height and does not squash a wide crop", () => {
+test("inline CSS box stays at page points and does not squash a wide crop", () => {
   const wide = [0.1, 0.5, 0.7, 0.52];
   const size = formulaDisplayCssSize({
     block: { label: "formula", display: false, inlineOf: "p1", bbox: wide, inkShare: 16 / 24 },
@@ -195,7 +207,8 @@ test("inline CSS box keeps the em height and does not squash a wide crop", () =>
     paperHeight,
     mirrorZoom: 2
   });
-  assert.ok(Math.abs(zoomed.cssWidth - size.cssWidth * 2) < 1e-6);
+  assert.ok(Math.abs(zoomed.cssWidth - size.cssWidth) < 1e-6);
+  assert.ok(Math.abs(zoomed.cssHeight - size.cssHeight) < 1e-6);
   const narrow = formulaDisplayCssSize({
     block: { label: "formula", display: false, inlineOf: "p1", bbox: [0.4, 0.5, 0.46, 0.52] },
     pageWidth,

@@ -911,7 +911,7 @@ body {
   width: var(--oi-formula-w, max-content);
   height: auto;
   max-width: none;
-  max-height: 2.5em;
+  max-height: none;
   min-height: 0;
   object-fit: contain;
   vertical-align: baseline;

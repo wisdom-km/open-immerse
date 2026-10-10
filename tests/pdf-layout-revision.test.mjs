@@ -1,6 +1,12 @@
 // A library page, or a source-v3 layout cache, used to be final even when it
 // was built before figure recovery. A missing or old revision must recompute
 // in the background, keep translations, and make the next open send nothing.
+// The sidecar accepts one layout POST at a time. Translation can already read
+// 27/27 while that queue is still walking stale pages, so a count taken then
+// (9, then 16, then 23 on the same library) is how far the queue had drained.
+// storedLayoutCurrent compares the saved revision to the source hash. It does
+// not flap. After every page is written back with the current version, the
+// next open selects no pages.
 // Local gitignored fixture:
 //   tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf
 import test from "node:test";
@@ -16,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { translatableBlocks } from "../lib/pdf-blocks.js";
+import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import { cacheableLayout, currentLayoutVersion, layoutCacheKey, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { isSkipOnlyPage, sourceReuseHash } from "../lib/pdf-library.js";
 import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
@@ -56,6 +63,43 @@ test("a layout revision matches only the current algorithm", async () => {
   const stored = cacheableLayout({ page: 7, blocks, layoutVersion: version });
   assert.equal(stored.layoutVersion, version);
   assert.equal("layoutVersion" in cacheableLayout({ page: 7, blocks }), false);
+});
+
+test("同一份库的重算次数是串行队列进度，写回后再次打开为 0", async () => {
+  const version = await currentLayoutVersion();
+  assert.equal(await currentLayoutVersion(), version);
+  const blocks = [{ id: "a", label: "text", text: "Hi" }];
+  const pages = Array.from({ length: 27 }, (_, index) => {
+    const page = index + 1;
+    const layoutVersion = page === 23 ? "source-v3:old" : "";
+    return {
+      page,
+      layout: { blocks, ...(layoutVersion ? { layoutVersion } : {}) },
+      ...(layoutVersion ? { layoutVersion } : {})
+    };
+  });
+  const stalePages = () => pages
+    .filter((entry) => !storedLayoutCurrent(entry, version))
+    .map((entry) => entry.page);
+  const queue = stalePages();
+  assert.equal(queue.length, 27);
+  assert.deepEqual(queue.slice(0, 9).length, 9);
+  assert.deepEqual(queue.slice(0, 16).length, 16);
+  assert.deepEqual(queue.slice(0, 23).length, 23);
+  assert.deepEqual(new Set(queue).size, queue.length);
+  for (const page of queue.slice(0, 9)) {
+    const entry = pages[page - 1];
+    entry.layout = { blocks, layoutVersion: version };
+    entry.layoutVersion = version;
+  }
+  assert.deepEqual(stalePages(), queue.slice(9));
+  for (const entry of pages) {
+    entry.layout = { blocks, layoutVersion: version };
+    entry.layoutVersion = version;
+  }
+  assert.deepEqual(stalePages(), []);
+  assert.equal(storedLayoutCurrent(pages[0], version).blocks.length, 1);
+  assert.equal(storedLayoutCurrent({ ...pages[6], layoutVersion: version, layout: pages[6].layout }, version).blocks.length, 1);
 });
 
 function oldTextLayer() {
@@ -828,6 +872,9 @@ async function loadCurrentPaper() {
     for (let number = 1; number <= doc.numPages; number += 1) {
       const pdfPage = await doc.getPage(number);
       const content = await pdfPage.getTextContent();
+      // The viewer names fonts before textLayerToBlocks. A library built
+      // without those names disagrees on source text after a vendor recompute.
+      attachFontRealNames(content.items, pdfPage.commonObjs);
       const viewport = pdfPage.getViewport({ scale: 1 });
       const ops = await pdfPage.getOperatorList();
       const built = stampLayoutBids(number, textLayerToBlocks({
@@ -892,6 +939,7 @@ async function formulaHost(paper) {
       if (!oldBlock) continue;
       const pdfPage = await doc.getPage(entry.page);
       const content = await pdfPage.getTextContent();
+      attachFontRealNames(content.items, pdfPage.commonObjs);
       const viewport = pdfPage.getViewport({ scale: 1 });
       const ops = await pdfPage.getOperatorList();
       const built = stampLayoutBids(entry.page, textLayerToBlocks({
@@ -913,6 +961,61 @@ async function formulaHost(paper) {
   }
   return null;
 }
+
+test("当前版本的库再次打开不再划区", { timeout: 240000 }, async (t) => {
+  const version = await currentLayoutVersion();
+  const paper = await loadCurrentPaper();
+  assert.equal(paper.pageCount, 27);
+  const library = currentLibrary(paper, version);
+  for (const entry of library.pages) {
+    assert.equal(storedLayoutCurrent(entry, version)?.blocks?.length > 0, true, `page ${entry.page}`);
+  }
+  const fixtures = new Map([["dpo-current", library]]);
+  const server = await serveRepo(fixtures);
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-layout-rev-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(child.stdio[3], child.stdio[4]);
+  t.after(async () => {
+    try { cdp.dispose(); } finally {
+      await cleanupChrome({ t, child, server, ownedDir, userDataDir });
+    }
+  });
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const send = (method, params) => cdp.send(method, params, sessionId);
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: stubSource({}, { delay: 0 }) });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails;
+      throw new Error(detail.exception?.description || detail.text || JSON.stringify(detail));
+    }
+    return result.result?.value;
+  };
+  const snapshot = async () => JSON.parse(await evaluate(READ));
+  const src = `${origin}/tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf`;
+  const viewer = `${origin}/pdf/viewer.html?oiAuto=stale&oiScene=dpo-current&src=${encodeURIComponent(src)}`;
+  await send("Page.navigate", { url: viewer });
+  let opened = null;
+  const openBy = Date.now() + 180000;
+  while (Date.now() < openBy) {
+    try { opened = await snapshot(); } catch { await sleep(250); continue; }
+    if (counted(opened.doc, 27) === 27) break;
+    await sleep(250);
+  }
+  assert.equal(counted(opened?.doc, 27), 27, opened?.doc);
+  await sleep(1500);
+  opened = await snapshot();
+  assert.deepEqual(opened.layouts, [], `current library requested ${JSON.stringify(opened.layouts)}`);
+});
 
 test("no-boxes 不重试，回退标记下次升级，错槽重译，重开不闪旧版", { timeout: 420000 }, async (t) => {
   const version = await currentLayoutVersion();

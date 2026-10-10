@@ -80,20 +80,22 @@ test("low trust keeps the 15px CSS fallback", () => {
   assert.equal(untrusted.source, "fallback");
 });
 
-test("display fallback cannot stretch a low ink share past 2.5 body", () => {
+test("display em helper stays within 2.5 body and fallback width is page points", () => {
   assert.equal(DISPLAY_BODY_HARD_MAX, 2.5);
   const low = displayFormulaMinEm(0.22, 0.05);
   assert.ok(low <= 2.5);
   assert.ok(low < 4);
-  const css = displayFormulaWidthCss(0.9, 0.015, 8);
-  assert.match(css, /2\.5em/);
-  assert.doesNotMatch(css, /(?<![0-9.])8em/);
+  const css = displayFormulaWidthCss(0.9, 0.015, { pageWidthPt: 612, floor: 0.75 });
+  assert.equal(css, "max(413.1px, min(100%, 550.8px))");
+  assert.doesNotMatch(css, /em|0\.015|oi-pdf-left-w/);
+  const xHeight = displayFormulaWidthCss(0.9, 0.015, { pageWidthPt: 612, floor: 0.96 });
+  assert.equal(xHeight, "max(528.768px, min(100%, 550.8px))");
   const pageWidth = 612;
   const pageHeight = 792;
-  const paperHeight = pageHeight;
   const bbox = [0.12, 0.42, 0.88, 0.47];
-  const matched = matchedDisplayCssSize({ bbox, pageWidth, pageHeight, paperHeight });
+  const matched = matchedDisplayCssSize({ bbox, pageWidth, pageHeight, paperHeight: 400 });
   assert.ok(Math.abs(matched.cssHeight - 0.05 * pageHeight) < 1e-6);
+  assert.ok(Math.abs(matched.cssWidth - 0.76 * pageWidth) < 1e-6);
   assert.ok(Math.abs(matched.aspect - ((0.76 * pageWidth) / (0.05 * pageHeight))) < 1e-6);
 });
 
@@ -113,8 +115,9 @@ test("viewer maps body font and matches formula height without dropping the redr
   assert.match(css, /\.oi-pdf-math-row\.is-matched \.oi-pdf-math-crop\s*\{[^}]*height:\s*var\(--oi-formula-h\)/s);
   assert.match(css, /\.oi-pdf-math-row\.is-matched \.oi-pdf-math-crop\s*\{[^}]*width:\s*auto/s);
   assert.match(css, /\.oi-pdf-math-row\.is-matched \.oi-pdf-math-crop\s*\{[^}]*max-height:\s*none/s);
-  assert.match(css, /\.oi-pdf-math-scroll \.oi-pdf-math-crop\s*\{[^}]*max-height:\s*2\.5em/s);
+  assert.match(css, /\.oi-pdf-math-scroll \.oi-pdf-math-crop\s*\{[^}]*max-height:\s*none/s);
+  assert.doesNotMatch(css, /\.oi-pdf-math-scroll \.oi-pdf-math-crop\s*\{[^}]*max-height:\s*2\.5em/s);
   assert.doesNotMatch(css, /\.paper-stack\s*\{[^}]*zoom:/s);
   assert.match(css, /\.reader-flow\s*\{[^}]*width:\s*var\(--rf-measure,\s*min\(var\(--oi-reader-measure\)/s);
-  assert.equal(readFileSync(join(root, "lib/pdf-formula-size.js"), "utf8").includes("SCRIPT_INK_MIN_PX = 7"), true);
+  assert.equal(readFileSync(join(root, "lib/pdf-formula-size.js"), "utf8").includes("SCRIPT_INK_MIN_PX"), false);
 });
