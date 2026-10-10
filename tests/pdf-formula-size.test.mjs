@@ -23,9 +23,10 @@ import {
   inlinePaintBox,
   displayFormulaColumnPx,
   readerFormulaCssSize,
-  INLINE_CROP_K,
-  DISPLAY_INK_PREFER,
-  DISPLAY_INK_HARD,
+  formulaReadabilityFloor,
+  FORMULA_NATIVE_SCALE,
+  FORMULA_SHRINK_FLOOR,
+  BODY_X_HEIGHT_RATIO,
   inlinePromotesToDisplay,
   scriptInkPx,
   scriptMinEm,
@@ -79,9 +80,10 @@ test("F3-S1 display paint stays capped at 2.5em and the live box matches the pag
   assert.ok(low <= DISPLAY_BODY_HARD_MAX);
   assert.ok(low * 0.22 <= DISPLAY_BODY_HARD_MAX);
   const css = displayFormulaWidthCss(0.48, 0.04, 8);
-  assert.match(css, /^min\(100%, max\(calc\(var\(--oi-pdf-left-w/);
-  assert.match(css, /2\.5em/);
-  assert.doesNotMatch(css, /8em/);
+  // F3-S4: native page width, shrink to the column, never below 0.75×.
+  assert.match(css, /^max\(calc\(var\(--oi-pdf-left-w, var\(--oi-pdf-paper-w, 1px\)\) \* 0\.36\), min\(100%, calc\(var\(--oi-pdf-left-w/);
+  assert.match(css, /\* 0\.48\)/);
+  assert.doesNotMatch(css, /em|paper-h-base/);
   const pageWidth = 612;
   const pageHeight = 792;
   const paperHeight = 764.47;
@@ -90,10 +92,10 @@ test("F3-S1 display paint stays capped at 2.5em and the live box matches the pag
   assert.ok(Math.abs(matched.cssHeight - 0.04 * paperHeight) < 1e-6);
   assert.ok(Math.abs(matched.cssWidth / matched.cssHeight - (0.48 * pageWidth) / (0.04 * pageHeight)) < 1e-6);
   const exploded = displayFormulaWidthCss(0.9, 0.015, displayFormulaMinEm(0.22, null));
-  assert.match(exploded, /2\.5em/);
-  assert.doesNotMatch(exploded, /(?<![0-9.])[3-9](?:\.\d+)?em/);
+  assert.match(exploded, /\* 0\.675\)/);
+  assert.doesNotMatch(exploded, /em|0\.015|paper-h-base/);
   const tiny = displayFormulaWidthCss(0.9, 1e-8, 2.5);
-  assert.match(tiny, /^min\(100%, calc\(var\(--oi-pdf-left-w/);
+  assert.equal(tiny, exploded);
   assert.doesNotMatch(tiny, /1e-8|0\.00000001/);
 });
 
@@ -134,26 +136,32 @@ test("inline formulas stay on the bbox and cap at 1.4 body without one", () => {
   assert.match(css, /\.oi-pdf-inline-math\s*\{[^}]*display:\s*inline-block/s);
 });
 
-test("reader formula size follows the font step and raises a 14px subscript", () => {
+test("reader formula size stays at the page glyph and ignores the font step", () => {
+  assert.equal(FORMULA_NATIVE_SCALE, 1);
+  assert.equal(BODY_X_HEIGHT_RATIO, 0.48);
+  assert.equal(formulaReadabilityFloor(15, 10), FORMULA_SHRINK_FLOOR);
+  assert.ok(formulaReadabilityFloor(20, 10) > FORMULA_SHRINK_FLOOR);
+  assert.equal(formulaReadabilityFloor(20, 10), 0.96);
+  const inkPt = 62 / 2.24;
   const eq = readerFormulaCssSize({
     bodyFontPx: 16,
     sourceBodyPt: 10,
-    inkPt: 62 / 2.24,
+    inkPt,
     widthPt: 173,
     columnPx: 800
   });
-  assert.equal(eq.k, DISPLAY_INK_PREFER);
-  assert.ok(Math.abs(eq.cssHeight - 62) < 0.05);
-  assert.ok(Math.abs(eq.cssWidth - 173 * 2.24) < 0.5);
-  assert.ok(eq.inkPx >= 16);
+  assert.equal(eq.k, FORMULA_NATIVE_SCALE);
+  assert.ok(Math.abs(eq.cssHeight - inkPt) < 0.05);
+  assert.ok(Math.abs(eq.cssWidth - 173) < 0.05);
   const larger = readerFormulaCssSize({
     bodyFontPx: 20,
     sourceBodyPt: 10,
-    inkPt: 62 / 2.24,
+    inkPt,
     widthPt: 173,
     columnPx: 800
   });
-  assert.ok(Math.abs(larger.cssHeight / eq.cssHeight - 20 / 16) < 0.01);
+  assert.equal(larger.cssHeight, eq.cssHeight);
+  assert.equal(larger.cssWidth, eq.cssWidth);
   const cramped = readerFormulaCssSize({
     bodyFontPx: 16,
     sourceBodyPt: 10,
@@ -161,35 +169,17 @@ test("reader formula size follows the font step and raises a 14px subscript", ()
     widthPt: 400,
     columnPx: 200
   });
-  assert.ok(cramped.k >= DISPLAY_INK_HARD);
-  assert.ok(cramped.k < DISPLAY_INK_PREFER);
+  assert.equal(cramped.k, formulaReadabilityFloor(16, 10));
   assert.equal(cramped.scrolls, true);
-  assert.ok(cramped.inkPx >= 16 - 1e-6);
+  assert.ok(cramped.cssWidth > 200);
   const attention = { inkPt: 13.98, scriptPt: 3.54, widthPt: 40, sourceBodyPt: 10, inline: true, columnPx: 800 };
-  for (const font of [15, 16, 17, 18, 20]) {
+  for (const font of [14, 15, 16, 17, 18, 20]) {
     const box = readerFormulaCssSize({ ...attention, bodyFontPx: font });
-    assert.equal(box.k, INLINE_CROP_K);
+    assert.equal(box.k, FORMULA_NATIVE_SCALE);
     assert.equal(box.raised, false);
-    assert.ok(Math.abs(box.cssHeight - 13.98 * (font / 10) * INLINE_CROP_K) < 0.2);
+    assert.ok(Math.abs(box.cssHeight - 13.98) < 0.05);
+    assert.ok(Math.abs(box.scriptPx - 3.54) < 0.05);
   }
-  const at16 = readerFormulaCssSize({ ...attention, bodyFontPx: 16 });
-  const at20 = readerFormulaCssSize({ ...attention, bodyFontPx: 20 });
-  assert.ok(Math.abs(at16.inkPx - 30.2) < 0.15);
-  assert.ok(Math.abs(at16.scriptPx - 7.65) < 0.1);
-  assert.ok(at16.cssHeight <= 35.2 + 0.05);
-  assert.ok(at20.cssHeight > at16.cssHeight);
-  const at14 = readerFormulaCssSize({ ...attention, bodyFontPx: 14 });
-  assert.equal(at14.raised, true);
-  assert.equal(at14.k, 1.45);
-  assert.ok(Math.abs(at14.inkPx - 28.4) < 0.15);
-  const tall = readerFormulaCssSize({
-    bodyFontPx: 14,
-    sourceBodyPt: 10,
-    inkPt: 20,
-    widthPt: 30,
-    inline: true
-  });
-  assert.equal(tall.raised, true);
 });
 
 test("inline promotion ignores the font step and never scales a staying crop below k", () => {
@@ -200,8 +190,8 @@ test("inline promotion ignores the font step and never scales a staying crop bel
   );
   assert.doesNotMatch(body, /font\s*<=\s*14/);
   assert.doesNotMatch(body, /font\s*<\s*15/);
-  const inlineBranch = body.slice(body.indexOf("if (inline && !raise)"), body.indexOf("const prefer"));
-  assert.match(inlineBranch, /k:\s*INLINE_CROP_K/);
+  const inlineBranch = body.slice(body.indexOf("if (inline && !raise)"), body.indexOf("const floor"));
+  assert.match(inlineBranch, /k:\s*FORMULA_NATIVE_SCALE/);
   assert.doesNotMatch(inlineBranch, /DISPLAY_INK_HARD|column \/|fit/);
   const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
   assert.doesNotMatch(
@@ -220,14 +210,15 @@ test("inline promotion ignores the font step and never scales a staying crop bel
     const tall = readerFormulaCssSize({
       bodyFontPx: font,
       sourceBodyPt: 10,
-      inkPt: 22.22,
+      inkPt: 80,
       widthPt: 40,
       columnPx: 800,
       inline: true
     });
-    assert.equal(tall.raised, true, `font ${font} should raise a 3em crop`);
-    assert.ok(tall.k >= DISPLAY_INK_HARD);
-    const tinyScript = readerFormulaCssSize({
+    assert.equal(tall.raised, true, `font ${font} should raise a crop taller than the line`);
+    assert.equal(tall.k, FORMULA_NATIVE_SCALE);
+    assert.ok(Math.abs(tall.cssHeight - 80) < 0.05);
+    const subscript = readerFormulaCssSize({
       bodyFontPx: font,
       sourceBodyPt: 10,
       inkPt: 13.98,
@@ -236,12 +227,8 @@ test("inline promotion ignores the font step and never scales a staying crop bel
       columnPx: 800,
       inline: true
     });
-    const scriptAtK = 3.54 * (font / 10) * INLINE_CROP_K;
-    if (scriptAtK < 7) assert.equal(tinyScript.raised, true);
-    else {
-      assert.equal(tinyScript.raised, false);
-      assert.equal(tinyScript.k, INLINE_CROP_K);
-    }
+    assert.equal(subscript.raised, false, `font ${font} keeps a native subscript inline`);
+    assert.equal(subscript.k, FORMULA_NATIVE_SCALE);
   }
   const wide = readerFormulaCssSize({
     bodyFontPx: 20,
@@ -251,9 +238,9 @@ test("inline promotion ignores the font step and never scales a staying crop bel
     columnPx: 586,
     inline: true
   });
-  assert.equal(wide.raised, true);
-  assert.ok(wide.cssWidth <= 586 + 0.6);
-  assert.ok(wide.k >= DISPLAY_INK_HARD);
+  assert.equal(wide.raised, false);
+  assert.equal(wide.k, FORMULA_NATIVE_SCALE);
+  assert.ok(Math.abs(wide.cssWidth - 230) < 0.05);
   const stay = readerFormulaCssSize({
     bodyFontPx: 16,
     sourceBodyPt: 10,
@@ -264,12 +251,14 @@ test("inline promotion ignores the font step and never scales a staying crop bel
     inline: true
   });
   assert.equal(stay.raised, true);
-  assert.notEqual(stay.k, INLINE_CROP_K * 0.73);
+  assert.equal(stay.k, formulaReadabilityFloor(16, 10));
+  assert.equal(stay.scrolls, true);
+  assert.ok(stay.cssWidth > 80);
 });
 
-test("a display formula wider than the column shrinks from 1.4× before it scrolls", () => {
-  const widthPt = 543 / (1.4 * 1.4);
-  for (const [font, column] of [[14, 481], [16, 520], [20, 560]]) {
+test("a display formula wider than the column shrinks to the readability floor before it scrolls", () => {
+  const widthPt = 640;
+  for (const font of [14, 16, 20]) {
     const open = readerFormulaCssSize({
       bodyFontPx: font,
       sourceBodyPt: 10,
@@ -277,36 +266,49 @@ test("a display formula wider than the column shrinks from 1.4× before it scrol
       widthPt,
       columnPx: 2000
     });
-    assert.equal(open.k, DISPLAY_INK_PREFER);
+    assert.equal(open.k, FORMULA_NATIVE_SCALE);
     assert.equal(open.scrolls, false);
-    const fitted = readerFormulaCssSize({
-      bodyFontPx: font,
-      sourceBodyPt: 10,
-      inkPt: 40,
-      widthPt,
-      columnPx: column
-    });
-    assert.ok(fitted.k < DISPLAY_INK_PREFER);
-    assert.ok(fitted.k >= DISPLAY_INK_HARD);
-    assert.ok(fitted.cssWidth <= column + 0.6);
-    assert.equal(fitted.scrolls, false);
+    assert.ok(Math.abs(open.cssWidth - widthPt) < 0.05);
+    assert.ok(Math.abs(open.cssHeight - 40) < 0.05);
   }
+  const fitted = readerFormulaCssSize({
+    bodyFontPx: 15,
+    sourceBodyPt: 10,
+    inkPt: 40,
+    widthPt,
+    columnPx: 560
+  });
+  assert.ok(fitted.k < FORMULA_NATIVE_SCALE);
+  assert.ok(fitted.k >= formulaReadabilityFloor(15, 10));
+  assert.ok(fitted.cssWidth <= 560 + 0.6);
+  assert.equal(fitted.scrolls, false);
   const overflow = readerFormulaCssSize({
+    bodyFontPx: 15,
+    sourceBodyPt: 10,
+    inkPt: 40,
+    widthPt,
+    columnPx: 280
+  });
+  assert.equal(overflow.k, FORMULA_SHRINK_FLOOR);
+  assert.equal(overflow.scrolls, true);
+  assert.ok(overflow.cssWidth > 280);
+  const xHeight = readerFormulaCssSize({
     bodyFontPx: 20,
     sourceBodyPt: 10,
     inkPt: 40,
     widthPt,
     columnPx: 400
   });
-  assert.equal(overflow.k, DISPLAY_INK_HARD);
-  assert.equal(overflow.scrolls, true);
-  assert.ok(overflow.cssWidth > 400);
+  assert.equal(xHeight.k, formulaReadabilityFloor(20, 10));
+  assert.ok(xHeight.k > FORMULA_SHRINK_FLOOR);
+  assert.equal(xHeight.scrolls, true);
+  assert.ok(Math.abs(xHeight.cssHeight - 40 * xHeight.k) < 0.05);
 });
 
 test("a display formula still above 1.0× fits the live box with rounding slack", () => {
   assert.equal(FORMULA_FIT_SLACK, 2);
   const column = 466;
-  const widthPt = 470 / (DISPLAY_INK_PREFER * 1.6);
+  const widthPt = 500;
   const fitted = readerFormulaCssSize({
     bodyFontPx: 16,
     sourceBodyPt: 10,
@@ -314,7 +316,8 @@ test("a display formula still above 1.0× fits the live box with rounding slack"
     widthPt,
     columnPx: column
   });
-  assert.ok(fitted.k > DISPLAY_INK_HARD);
+  assert.ok(fitted.k > formulaReadabilityFloor(16, 10));
+  assert.ok(fitted.k < FORMULA_NATIVE_SCALE);
   assert.ok(fitted.cssWidth <= column - FORMULA_FIT_SLACK + 0.05);
   assert.equal(fitted.scrolls, false);
   assert.equal(displayFormulaColumnPx({ flowPx: 490, eqNumPx: 20, gapPx: 4 }), 466);

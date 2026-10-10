@@ -86,8 +86,8 @@ test("display fallback cannot stretch a low ink share past 2.5 body", () => {
   assert.ok(low <= 2.5);
   assert.ok(low < 4);
   const css = displayFormulaWidthCss(0.9, 0.015, 8);
-  assert.match(css, /2\.5em/);
-  assert.doesNotMatch(css, /(?<![0-9.])8em/);
+  assert.match(css, /\* 0\.675\)/);
+  assert.doesNotMatch(css, /em|0\.015/);
   const pageWidth = 612;
   const pageHeight = 792;
   const paperHeight = pageHeight;

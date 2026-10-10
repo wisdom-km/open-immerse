@@ -326,9 +326,9 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
           watched.set(`${number}:${suffix}`, block);
         }
         if (number === 5 && block.label === "formula" && block.display !== false) {
-          const prev = watched.get("5:display");
-          const width = block.bbox[2] - block.bbox[0];
-          if (!prev || width > prev.bbox[2] - prev.bbox[0]) watched.set("5:display", block);
+          const list = watched.get("5:displays") || [];
+          list.push(block);
+          watched.set("5:displays", list);
         }
         if (number === 5 && block.label !== "formula") {
           assert.doesNotMatch(String(block.text || ""), /ofy[wl]/, `${block.bid} duplicated underbrace subscript`);
@@ -376,7 +376,17 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
   assert.ok(wide.bbox[2] >= 0.8, `p18 derivation right ${wide.bbox[2]}`);
   assert.ok(chain.bbox[2] >= 0.8, `p19 derivation right ${chain.bbox[2]}`);
   assert.equal(watched.has("5:m0payg9u"), false);
-  const gradient = watched.get("5:display");
+  const displays = watched.get("5:displays") || [];
+  assert.ok(displays.length >= 1, "page 5 has a display formula");
+  for (const block of displays) {
+    const glyphRight = (block.glyphBoxes || []).reduce((max, box) => Math.max(max, box[2]), 0);
+    assert.ok(block.bbox[2] + 0.004 >= glyphRight, `${block.bid} right edge ${block.bbox[2]} misses ${glyphRight}`);
+  }
+  const gradient = displays.reduce((widest, block) => {
+    const width = block.bbox[2] - block.bbox[0];
+    const prev = widest ? widest.bbox[2] - widest.bbox[0] : -1;
+    return width > prev ? block : widest;
+  }, null);
   assert.ok(gradient);
   assert.ok(gradient.bbox[2] >= 0.8, `p5 gradient reaches the closing brackets ${gradient.bbox[2]}`);
   assert.ok(gradient.bbox[2] - gradient.bbox[0] >= 0.55, "p5 gradient is one crop");
