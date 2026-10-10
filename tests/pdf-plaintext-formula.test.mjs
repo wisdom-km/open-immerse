@@ -4,8 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { blockReadoutPlan, blockRenderPieces, blockTranslationIntegrity, displayCropWidthCss, displayInkMinEm, DISPLAY_CROP_MIN_HEIGHT_EM, DISPLAY_INK_PREFER, remapLiveExtraPlaceholders } from "../lib/pdf-blocks.js";
-import { applySavedPairs, blockSoftLead, mergeLibraryPairs, pairsWithoutUnalignedSlots } from "../lib/pdf-library.js";
-import { libraryPageRunState } from "../lib/pdf-viewer.js";
+import { applySavedPairs, blockSoftLead, mergeLibraryPairs, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, savedPairNeedsRetranslate } from "../lib/pdf-library.js";
+import { libraryPageRunState, unitsNeedingTranslation } from "../lib/pdf-viewer.js";
 import { formatPlaintextRelation, plaintextRelationParts, plaintextRelationsIn } from "../lib/pdf-plaintext-formula.js";
 import {
   FORMULA_INK_PAD_PX,
@@ -475,9 +475,9 @@ test("a reused translation remaps formula slots onto the new block", () => {
     translation: "见⟦f9⟧和乙",
     status: "verified"
   }])[0];
-  assert.equal(conflict.translation, "");
+  assert.equal(conflict.translation, "见⟦f1⟧和乙⟦f2⟧");
   assert.equal(conflict.failed, true);
-  assert.equal(conflict.translationStatus, undefined);
+  assert.equal(conflict.translationStatus, "retranslate");
   assert.equal(blockSoftLead(conflict), "");
   const keptPieces = blockRenderPieces(conflict, [
     conflict,
@@ -486,7 +486,8 @@ test("a reused translation remaps formula slots onto the new block", () => {
   ]);
   assert.equal(keptPieces.filter((piece) => piece.type === "image").length, 2);
   assert.doesNotMatch(keptPieces.map((piece) => piece.text || "").join(""), /待对齐/);
-  assert.match(keptPieces.map((piece) => piece.text || "").join(""), /see/);
+  assert.match(keptPieces.map((piece) => piece.text || "").join(""), /见/);
+  assert.notEqual(keptPieces.map((piece) => piece.text || "").join("").trim(), "");
 
   const misaligned = {
     bid: "b-mis",
@@ -504,6 +505,28 @@ test("a reused translation remaps formula slots onto the new block", () => {
     targetLang: "zh-CN",
     provider: "mymemory"
   };
+  const rewritten = pairsWithLiveFormulaSlots([stalePair], [misaligned])[0];
+  assert.equal(rewritten.translation, "见⟦f1⟧和乙⟦f2⟧");
+  assert.equal(savedPairNeedsRetranslate(misaligned, rewritten), false);
+  const shown = applySavedPairs([misaligned], [stalePair], {
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  })[0];
+  assert.equal(shown.translation, "见⟦f1⟧和乙⟦f2⟧");
+  assert.equal(unitsNeedingTranslation([shown], "zh-CN").length, 1);
+  const shownAgain = applySavedPairs([misaligned], [shown], {
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  })[0];
+  assert.equal(shownAgain.translationStatus, "retranslate");
+  assert.equal(unitsNeedingTranslation([shownAgain], "zh-CN").length, 1);
+  assert.equal(libraryPageRunState({
+    pairs: [stalePair],
+    cached: [shown],
+    blocks: [misaligned],
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  }), "queued");
   assert.equal(libraryPageRunState({
     pairs: [stalePair],
     blocks: [misaligned],

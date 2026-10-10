@@ -1145,3 +1145,156 @@ test("关闭页面会取消进行中的划区请求", { timeout: 240000 }, async
   const extras = later.layouts.slice(inflight);
   assert.equal(extras.some((page) => page !== hung), false, `orphan layouts ${JSON.stringify(later.layouts)}`);
 });
+
+test("错槽译文仍画出公式，写回后二次打开不再请求，重开补上图裁区", { timeout: 420000 }, async (t) => {
+  const version = await currentLayoutVersion();
+  const paper = await loadCurrentPaper();
+  const suffixes = ["t1am9nkw", "t1ip4wvs", "t06ip39c", "t1v9ih0t"];
+  const hosts = [];
+  for (const suffix of suffixes) {
+    const block = paper.pages.flatMap((entry) => entry.blocks).find((item) => String(item.bid || "").endsWith(suffix));
+    assert.ok(block, suffix);
+    hosts.push(block);
+  }
+  for (const page of [7, 23, 24, 25]) {
+    const visuals = paper.pages.find((entry) => entry.page === page).blocks.filter((block) => (
+      block.label === "figure" || block.label === "table"
+    ));
+    assert.ok(visuals.length > 0, `p${page} visuals`);
+  }
+  const library = currentLibrary(paper, version);
+  const page24 = library.pages.find((entry) => entry.page === 24);
+  page24.layout.fallback = { source: "text-layer", reason: "http-502" };
+  for (const block of hosts) {
+    const pair = library.pages.flatMap((entry) => entry.pairs || []).find((item) => item.bid === block.bid);
+    assert.ok(pair, block.bid);
+    pair.translation = `中文⟦f99⟧${block.bid}`;
+  }
+  const fixtures = new Map([["dpo-slots", library]]);
+  const server = await serveRepo(fixtures);
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-layout-rev-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(child.stdio[3], child.stdio[4]);
+  t.after(async () => {
+    try { cdp.dispose(); } finally {
+      await cleanupChrome({ t, child, server, ownedDir, userDataDir });
+    }
+  });
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const send = (method, params) => cdp.send(method, params, sessionId);
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: stubSource({}, { delay: 0 }) });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails;
+      throw new Error(detail.exception?.description || detail.text || JSON.stringify(detail));
+    }
+    return result.result?.value;
+  };
+  const snapshot = async () => JSON.parse(await evaluate(READ));
+  const src = `${origin}/tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf`;
+  const viewer = `${origin}/pdf/viewer.html?oiAuto=slots&oiScene=dpo-slots&src=${encodeURIComponent(src)}`;
+  const hostProbe = `(() => {
+    const hosts = ${JSON.stringify(hosts.map((block) => block.bid))};
+    return JSON.stringify(hosts.map((bid) => {
+      const node = document.querySelector('#readerFlow [data-bid="' + bid + '"]');
+      if (!node) return { bid, missing: true };
+      const zh = [...node.querySelectorAll(".rf-zh")].map((el) => el.textContent || "").join("").trim();
+      return {
+        bid,
+        zh,
+        height: node.getBoundingClientRect().height,
+        math: node.querySelectorAll(".rf-zh .oi-pdf-inline-math").length
+      };
+    }));
+  })()`;
+  const cropProbe = `(() => JSON.stringify([7, 23, 24, 25].map((page) => {
+    const nodes = [...document.querySelectorAll('#readerFlow [data-page="' + page + '"][data-label="figure"], #readerFlow [data-page="' + page + '"][data-label="table"]')];
+    return {
+      page,
+      count: nodes.length,
+      imgs: nodes.filter((node) => node.querySelector("img")).length,
+      placeholders: nodes.filter((node) => node.querySelector(".oi-pdf-asset-fallback")).length
+    };
+  })))()`;
+
+  await send("Page.navigate", { url: viewer });
+  let opened = null;
+  const openBy = Date.now() + 240000;
+  while (Date.now() < openBy) {
+    try { opened = await snapshot(); } catch { await sleep(300); continue; }
+    const requested = new Set((opened.messages || []).flatMap((message) => (message.items || []).map((item) => item.bid)));
+    const queued = hosts.every((block) => requested.has(block.bid));
+    const storedZh = hosts.every((block) => (opened.saved || []).some((page) => (
+      (page.pairs || []).some((pair) => pair.bid === block.bid && String(pair.translation || "").includes("译:"))
+    )));
+    const attempts24 = (opened.layoutAttempts || []).filter((item) => item.page === 24);
+    const saved24 = (opened.saved || []).find((item) => item.page === 24 && item.layoutVersion === version && !item.layout?.fallback);
+    if (queued && storedZh && attempts24.length === 1 && saved24) break;
+    await sleep(400);
+  }
+  assert.ok(opened, "no snapshot");
+  const attempts24 = (opened.layoutAttempts || []).filter((item) => item.page === 24);
+  assert.equal(attempts24.length, 1, JSON.stringify(opened.layoutAttempts));
+  assert.equal((opened.layouts || []).filter((page) => page !== 24).length, 0, JSON.stringify(opened.layouts));
+  const requested = new Set((opened.messages || []).flatMap((message) => (message.items || []).map((item) => item.bid)));
+  for (const block of hosts) assert.equal(requested.has(block.bid), true, block.bid);
+  const firstShown = JSON.parse(await evaluate(hostProbe));
+  for (const row of firstShown) {
+    assert.equal(row.missing, undefined, JSON.stringify(row));
+    assert.ok(row.zh.length > 0, JSON.stringify(row));
+    assert.ok(row.height > 0, JSON.stringify(row));
+    assert.ok(row.math > 0, JSON.stringify(row));
+    assert.match(row.zh, /译:/, JSON.stringify(row));
+  }
+  const firstBatches = opened.batches;
+
+  await send("Page.navigate", { url: "about:blank" });
+  await sleep(400);
+  await send("Page.navigate", { url: viewer });
+  let again = null;
+  let crops = null;
+  const againBy = Date.now() + 180000;
+  while (Date.now() < againBy) {
+    try { again = await snapshot(); } catch { await sleep(300); continue; }
+    crops = JSON.parse(await evaluate(cropProbe));
+    const cropsReady = crops.every((row) => row.count > 0 && row.imgs === row.count && row.placeholders === 0);
+    if (counted(again.doc, 27) === 27 && again.layouts.length === 0 && again.batches === 0 && cropsReady) break;
+    await sleep(400);
+  }
+  assert.equal(again.layouts.length, 0, `reopen layouts ${JSON.stringify(again.layouts)}`);
+  assert.equal(again.batches, 0, JSON.stringify({
+    batches: again.batches,
+    messages: (again.messages || []).map((message) => (message.items || []).map((item) => item.bid || "").slice(0, 4))
+  }));
+  const secondShown = JSON.parse(await evaluate(hostProbe));
+  for (const row of secondShown) {
+    assert.equal(row.missing, undefined, JSON.stringify(row));
+    assert.ok(row.zh.length > 0, JSON.stringify(row));
+    assert.ok(row.height > 0, JSON.stringify(row));
+    assert.ok(row.math > 0, JSON.stringify(row));
+    assert.match(row.zh, /译:/, JSON.stringify(row));
+  }
+  crops = JSON.parse(await evaluate(cropProbe));
+  for (const row of crops) {
+    assert.ok(row.count > 0, JSON.stringify(row));
+    assert.equal(row.imgs, row.count, JSON.stringify(row));
+    assert.equal(row.placeholders, 0, JSON.stringify(row));
+  }
+  t.diagnostic(JSON.stringify({
+    firstBatches,
+    reopenLayouts: again.layouts.length,
+    reopenBatches: again.batches,
+    hosts: hosts.map((block) => block.bid),
+    crops
+  }));
+});

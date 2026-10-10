@@ -259,7 +259,7 @@ import {
   pageCropLooksEmpty,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import { getProvider, missingRequiredField } from "../lib/providers.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -2048,7 +2048,7 @@ function redrawKeepsInk(context, canvas, raster, block) {
   return acceptVisualRedraw(redrawInk, rasterRegionInk(raster?.canvas, block?.bbox));
 }
 
-async function withRasterCrop(raster, page, block, pageNumber) {
+async function withRasterCrop(raster, page, block, pageNumber, options = {}) {
   if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
   const next = { ...block };
   next.imageUrl = imageForVisualBlock(raster, next);
@@ -2065,7 +2065,7 @@ async function withRasterCrop(raster, page, block, pageNumber) {
     );
     if (cap > 0) next.assetCapPx = cap;
   }
-  if (isSourceRedrawBlock(next) && next.imageUrl) {
+  if (options.sharp !== false && isSourceRedrawBlock(next) && next.imageUrl) {
     const sharp = await renderSharpVisualCrop(page, raster, next, pageNumber);
     if (sharp) {
       next.imageUrl = sharp;
@@ -2075,11 +2075,11 @@ async function withRasterCrop(raster, page, block, pageNumber) {
   return next;
 }
 
-async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale) {
+async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, options = {}) {
   const cropped = [];
   for (const block of blocks || []) {
     if (isStale()) return null;
-    cropped.push(await withRasterCrop(raster, page, block, pageNumber));
+    cropped.push(await withRasterCrop(raster, page, block, pageNumber, options));
   }
   return cropped;
 }
@@ -2235,13 +2235,13 @@ function fillBlockText(node, block, layout) {
 function writeBlockPieces(node, block, layout) {
   const lead = blockSoftLead(block);
   if (lead) node.append(document.createTextNode(lead));
-  // A slot that must be translated again is not done. Painting the source
-  // here would leave English in the translation pane.
+  // A failed empty translation is not done, but the paragraph still has to
+  // show. Use the source sentence and its formula crops rather than an empty box.
   const pending = block?.failed === true && !String(block.translation || "").trim();
-  const pieces = pending ? [] : blockRenderPieces(block, layout.blocks || []);
+  const pieces = blockRenderPieces(pending ? { ...block, translation: "", failed: false } : block, layout.blocks || []);
   if (!pieces.length) {
-    if (pending) return;
-    node.append(document.createTextNode(String(block.translation || block.text || "")));
+    const fallback = String((pending ? block.text : block.translation) || block.text || "");
+    if (fallback) node.append(document.createTextNode(fallback));
     return;
   }
   pieces.forEach((piece) => {
@@ -2405,7 +2405,7 @@ function layoutForReadout(layout) {
     // or a pre-recovery library page hides the figures the new layout just built.
     // Rows that do not settle for the current language still keep their text:
     // the merged pass blanks them, and the source would then count as landed.
-    // A formula slot that cannot be lined up stays blank until it is retranslated.
+    // A formula slot that cannot be lined up still paints the translation, or the source.
     blocks = applyBlockTranslations(layout.blocks, (settled || retry) ? merged : saved);
   }
   if (!blocks.some((block) => settledText(block.translation, block.text || block.sourceText || ""))) {
@@ -5998,7 +5998,10 @@ function rememberTranslation(page, results) {
   const rawLayout = getPageLayout(page);
   const layout = cacheableLayout(rawLayout);
   const blocks = rawLayout?.blocks || [];
-  const verified = pairsVerifiedForLibrary(results, blocks, savedPairSettings());
+  const verified = pairsWithLiveFormulaSlots(
+    pairsVerifiedForLibrary(results, blocks, savedPairSettings()),
+    blocks
+  );
   const skipOnly = isSkipOnlyPage(blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
   if (!verified.length && !skipOnly) return Promise.resolve();
@@ -8302,18 +8305,94 @@ async function upgradeStoredFallback(n, mode, isStale) {
   renderArticle();
 }
 
+function layoutNeedsVisualCrops(layout) {
+  return (layout?.blocks || []).some((block) => (
+    isVisualBlock(block) && Array.isArray(block.bbox) && !block.imageUrl
+  ));
+}
+
+let visualCropToken = 0;
+
+/** Stored layouts keep bboxes and drop image bytes. Rebuild the same page-raster crops a fresh compute starts from. */
+async function hydrateMissingVisualCrops(isStale = () => false) {
+  if (!pdfDoc) return false;
+  const token = ++visualCropToken;
+  const stale = () => isStale() || token !== visualCropToken;
+  const total = Number(pdfDoc.numPages) || 0;
+  const order = [];
+  for (let n = 1; n <= total; n += 1) {
+    const layout = getPageLayout(n);
+    if (!layoutNeedsVisualCrops(layout)) continue;
+    const asset = (layout.blocks || []).some((block) => block.label === "figure" || block.label === "table");
+    order.push({ n, asset });
+  }
+  order.sort((a, b) => Number(b.asset) - Number(a.asset) || a.n - b.n);
+  let changed = false;
+  const paint = () => {
+    if (changed && !stale()) renderArticle();
+  };
+  for (const item of order) {
+    if (stale()) {
+      paint();
+      return changed;
+    }
+    const n = item.n;
+    const layout = getPageLayout(n);
+    if (!layoutNeedsVisualCrops(layout)) continue;
+    let page = null;
+    try {
+      page = await pdfDoc.getPage(n);
+      if (stale()) {
+        paint();
+        return changed;
+      }
+      const raster = await renderPageRaster(page);
+      if (stale()) {
+        paint();
+        return changed;
+      }
+      const blocks = await cropLayoutBlocks(raster, page, layout.blocks, n, stale, { sharp: false });
+      if (raster.canvas) {
+        raster.canvas.width = 0;
+        raster.canvas.height = 0;
+      }
+      if (stale()) {
+        paint();
+        return changed;
+      }
+      if (!blocks) continue;
+      layout.blocks = blocks;
+      delete layout.formulaPlanKey;
+      clearSlotPainted(n);
+      changed = true;
+      if (item.asset) paint();
+    } catch {
+      continue;
+    }
+  }
+  paint();
+  if (changed && !stale()) refreshFormulaCropsForDisplay();
+  return changed;
+}
+
 async function primeKnownPages() {
   if (!pdfDoc) return;
+  const stamp = docId;
+  const stale = () => docId !== stamp;
   await loadPdfLayout();
   try {
     await savedTranslationFor(pageNum);
   } catch {
     noteLibraryUnavailable();
   }
+  if (stale()) return;
   await layoutVersionNow();
+  if (stale()) return;
   const libraryChanged = seedLibraryProgress();
   const legacyChanged = await seedLegacySkipPages();
+  if (stale()) return;
   if (libraryChanged || legacyChanged) renderArticle();
+  hydrateMissingVisualCrops(stale).catch(() => {});
 }
 
 async function loadCurrentPageText(explicitPage) {
