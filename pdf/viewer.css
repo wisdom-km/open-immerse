@@ -1058,7 +1058,7 @@ body {
 }
 .oi-pdf-asset-pending {
   display: block;
-  margin: 12px auto;
+  margin: 0 auto;
   max-width: 100%;
   background: color-mix(in srgb, var(--oi-paper-muted) 14%, transparent);
   border: none;

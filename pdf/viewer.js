@@ -2207,7 +2207,12 @@ function noteAssetPaint(kind, block, page, extra = null) {
   });
 }
 
-/** Neutral hold at the crop's page size while a stored page is still rasterizing. */
+/**
+ * Neutral hold while a stored page is still rasterizing.
+ * Size comes from visualDisplayCssSize, the same crop-pixel width and
+ * aspect the figure image uses, then min(100%, that width) so the column
+ * cap matches max-width: 100% on the bitmap.
+ */
 function visualCropPendingBox(block, page) {
   const n = Number(page) || 0;
   const hold = document.createElement("span");
@@ -2217,17 +2222,21 @@ function visualCropPendingBox(block, page) {
   const kind = block?.label === "table" ? "表" : "图";
   hold.setAttribute("aria-label", `${kind}正在载入`);
   const layout = getPageLayout(n);
-  const bbox = block?.bbox;
   const pageW = Number(layout?.pageWidth) || 0;
   const pageH = Number(layout?.pageHeight) || 0;
   let aspect = "";
   let width = "";
-  if (Array.isArray(bbox) && bbox.length >= 4 && pageW > 0 && pageH > 0) {
-    const fracW = Number(bbox[2]) - Number(bbox[0]);
-    const fracH = Number(bbox[3]) - Number(bbox[1]);
-    if (fracW > 0 && fracH > 0) {
-      const widthPx = Math.round(fracW * pageW * 100) / 100;
-      const heightPx = Math.round(fracH * pageH * 100) / 100;
+  if (pageW > 0 && pageH > 0) {
+    const sized = visualDisplayCssSize({
+      block,
+      pageWidth: pageW,
+      pageHeight: pageH,
+      rasterWidth: Math.max(1, Math.floor(pageW * CROP_SCALE)),
+      rasterHeight: Math.max(1, Math.floor(pageH * CROP_SCALE))
+    });
+    const widthPx = Number(sized?.layoutCapPx) || 0;
+    const heightPx = Number(sized?.cssHeight) || 0;
+    if (widthPx > 0 && heightPx > 0) {
       width = `min(100%, ${widthPx}px)`;
       aspect = `${widthPx} / ${heightPx}`;
       hold.style.setProperty("width", width);

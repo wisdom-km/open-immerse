@@ -14,7 +14,8 @@ import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs
 import { cacheableLayout, currentLayoutVersion } from "../lib/pdf-layout-client.js";
 import { isSkipOnlyPage, sourceReuseHash } from "../lib/pdf-library.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
-import { translatableBlocks } from "../lib/pdf-blocks.js";
+import { CROP_SCALE, translatableBlocks } from "../lib/pdf-blocks.js";
+import { assetDisplayCssSize } from "../lib/pdf-formula-raster.js";
 
 const PREFIXES = ["oi-asset-pending-", "com.google.Chrome.", ".com.google.Chrome."];
 installOwnedTmpGuard(PREFIXES);
@@ -44,6 +45,8 @@ test("a stored figure waits in its own box and the fallback button waits for a f
   assert.match(hold, /oi-pdf-asset-pending/);
   assert.match(hold, /aria-busy/);
   assert.match(hold, /aspect-ratio/);
+  assert.match(hold, /visualDisplayCssSize/);
+  assert.match(hold, /CROP_SCALE/);
   assert.doesNotMatch(hold, /见原文|createElement\("button"\)/);
   assert.match(viewer, /visualCropStillPending\(block, shownPage\)/);
   assert.match(viewer, /armStoredVisualCrops\(page, laid\)/);
@@ -111,13 +114,19 @@ async function dpoLibrary() {
       for (const block of built.blocks) {
         if (block.label !== "figure" && block.label !== "table") continue;
         if (!Array.isArray(block.bbox) || block.bbox.length < 4) continue;
-        const fracW = Number(block.bbox[2]) - Number(block.bbox[0]);
-        const fracH = Number(block.bbox[3]) - Number(block.bbox[1]);
+        const sized = assetDisplayCssSize({
+          block,
+          pageWidth: viewport.width,
+          pageHeight: viewport.height,
+          rasterWidth: Math.max(1, Math.floor(viewport.width * CROP_SCALE)),
+          rasterHeight: Math.max(1, Math.floor(viewport.height * CROP_SCALE))
+        });
         visuals.push({
           page: number,
           id: String(block.id || ""),
           label: block.label,
-          aspect: (fracW * viewport.width) / (fracH * viewport.height)
+          cap: sized.layoutCapPx,
+          cssHeight: sized.cssHeight
         });
       }
     }
@@ -276,6 +285,42 @@ test("reopening DPO figures holds the crop box and does not flash the page butto
         if (url.includes("127.0.0.1:8765")) return new Response("ok", { status: 200 });
         return origFetch(input, init);
       };
+      globalThis.__oiAssetSlot = [];
+      const slotSeen = new Set();
+      const slotHooked = new WeakSet();
+      const measureSlot = (node, phase) => {
+        const host = node.closest("[data-block-id]");
+        if (!host || !host.isConnected) return;
+        const page = Number(host.dataset.page) || 0;
+        const id = host.dataset.blockId || "";
+        const height = host.getBoundingClientRect().height;
+        const key = phase + ":" + page + ":" + id + ":" + height.toFixed(2);
+        if (slotSeen.has(key)) return;
+        slotSeen.add(key);
+        globalThis.__oiAssetSlot.push({ phase, page, id, height });
+      };
+      const scanSlots = () => {
+        document.querySelectorAll("#readerFlow .oi-pdf-asset-pending").forEach((node) => {
+          requestAnimationFrame(() => measureSlot(node, "pending"));
+        });
+        document.querySelectorAll("#readerFlow .oi-pdf-asset-crop").forEach((img) => {
+          const take = () => requestAnimationFrame(() => measureSlot(img, "image"));
+          if (img.complete && img.naturalWidth > 0) take();
+          else if (!slotHooked.has(img)) {
+            slotHooked.add(img);
+            img.addEventListener("load", take, { once: true });
+          }
+        });
+      };
+      const armSlots = () => {
+        const root = document.documentElement;
+        if (!root || root.dataset.oiSlotWatch) return;
+        root.dataset.oiSlotWatch = "1";
+        new MutationObserver(scanSlots).observe(root, { childList: true, subtree: true });
+        scanSlots();
+      };
+      armSlots();
+      document.addEventListener("DOMContentLoaded", armSlots);
       globalThis.chrome = {
         storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
         runtime: {
@@ -311,6 +356,7 @@ test("reopening DPO figures holds the crop box and does not flash the page butto
     const buttons = [...document.querySelectorAll("#readerFlow .oi-pdf-asset-fallback")].map((node) => node.textContent || "");
     return {
       log,
+      slots: globalThis.__oiAssetSlot || [],
       buttons,
       pending: document.querySelectorAll("#readerFlow .oi-pdf-asset-pending").length,
       phase: document.getElementById("docStatus")?.dataset.state || "",
@@ -333,7 +379,12 @@ test("reopening DPO figures holds the crop box and does not flash the page butto
     const held = built.visuals.every((item) => log.some((row) => (
       row.page === item.page && row.id === item.id && row.kind === "pending" && row.aspect
     )));
-    if (covered && held) break;
+    const slots = snap?.slots || [];
+    const sized = built.visuals.every((item) => (
+      slots.some((row) => row.page === item.page && row.id === item.id && row.phase === "pending") &&
+      slots.some((row) => row.page === item.page && row.id === item.id && row.phase === "image")
+    ));
+    if (covered && held && sized) break;
     await sleep(200);
   }
   assert.ok(snap, "reader did not report asset paints");
@@ -343,10 +394,14 @@ test("reopening DPO figures holds the crop box and does not flash the page butto
     assert.equal(rows[0].kind, "pending", JSON.stringify(rows));
     assert.equal(rows.some((row) => row.kind === "fallback"), false, JSON.stringify(rows));
     assert.equal(rows.some((row) => row.kind === "image"), true, JSON.stringify(rows));
-    const [width, height] = String(rows[0].aspect).split("/").map((part) => Number(part.trim()));
-    assert.ok(width > 0 && height > 0, rows[0].aspect);
-    assert.ok(Math.abs(width / height - item.aspect) / item.aspect < 0.02, `${rows[0].aspect} vs ${item.aspect}`);
-    assert.match(rows[0].width, /^min\(100%, \d/);
+    assert.equal(rows[0].width, `min(100%, ${item.cap}px)`, JSON.stringify(rows[0]));
+    assert.equal(rows[0].aspect, `${item.cap} / ${item.cssHeight}`, JSON.stringify(rows[0]));
+    const slots = (snap.slots || []).filter((row) => row.page === item.page && row.id === item.id);
+    const before = slots.filter((row) => row.phase === "pending").at(-1)?.height;
+    const after = slots.filter((row) => row.phase === "image").at(-1)?.height;
+    assert.equal(typeof before, "number", JSON.stringify(slots));
+    assert.equal(typeof after, "number", JSON.stringify(slots));
+    assert.ok(Math.abs(before - after) <= 1, `page ${item.page} ${item.id} slot ${before} -> ${after}`);
   }
   assert.equal((snap.buttons || []).some((text) => text.includes("见原文")), false, JSON.stringify(snap.buttons));
 });
