@@ -5707,17 +5707,16 @@ function finishFontAnchor(anchor) {
   if (root) root.dataset.oiFontAnchor = "run";
   restoreFontAnchor(anchor);
   requestAnimationFrame(() => {
-    if (serial !== fontAnchorSerial) return;
     restoreFontAnchor(anchor);
-    if (!anchor && root) root.dataset.oiFontAnchor = "idle";
+    if (serial !== fontAnchorSerial || anchor) return;
+    if (root) root.dataset.oiFontAnchor = "idle";
   });
   clearTimeout(fontAnchorTimer);
-  fontAnchorTimer = 0;
   if (!anchor) return;
   fontAnchorTimer = setTimeout(() => {
     fontAnchorTimer = 0;
-    if (serial !== fontAnchorSerial) return;
     restoreFontAnchor(anchor);
+    if (serial !== fontAnchorSerial) return;
     if (root) root.dataset.oiFontAnchor = "idle";
   }, 180);
 }
@@ -8214,11 +8213,11 @@ async function adoptDoc(doc, title) {
   beginPageNav();
   try {
     await loadCurrentPageText();
-    syncZoomChip();
-    await maybeAutoTranslateDocument();
   } finally {
     endPageNav();
   }
+  syncZoomChip();
+  await maybeAutoTranslateDocument();
 }
 
 function shortTitle(value) {

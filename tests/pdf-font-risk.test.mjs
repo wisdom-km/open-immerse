@@ -422,27 +422,21 @@ describe("Aa font-size risk checks on DPO", () => {
     });
     await send("Page.navigate", { url: `${origin}/pdf/viewer.html?src=${encodeURIComponent(`${origin}/${pdfRel}`)}` });
     await waitForLayout({ page: 1, timeout: 120000 });
-    const pageCount = await handle.evaluate(`document.querySelectorAll("#pages .pdf-page").length`);
-    assert.ok(pageCount > 1, "DPO did not paint page 1");
-    for (let page = 2; page <= pageCount; page += 1) {
-      let advanced = false;
-      for (let attempt = 0; attempt < 3 && !advanced; attempt += 1) {
-        const label = await handle.evaluate(`document.getElementById("sourcePageLabel")?.textContent || ""`);
-        if (String(label).startsWith(`${page} /`)) {
-          advanced = true;
-          break;
-        }
-        const clicked = await handle.evaluate(`(() => {
-          const next = document.getElementById("sourceNext");
-          if (!next || next.disabled) return false;
-          next.click();
-          return true;
-        })()`);
-        assert.equal(clicked, true, `stuck before page ${page}`);
-        const afterLabel = await handle.evaluate(`document.getElementById("sourcePageLabel")?.textContent || ""`);
-        advanced = String(afterLabel).startsWith(`${page} /`);
-      }
-      assert.equal(advanced, true, `stuck before page ${page}`);
+    const ready = await handle.evaluate(`(() => {
+      const flow = document.getElementById("readerFlow");
+      const pages = document.querySelectorAll("#pages .pdf-page").length;
+      const painted = flow ? flow.querySelectorAll(".rf-page[data-page='1'] > *").length : 0;
+      return { pages, painted };
+    })()`);
+    assert.ok(ready?.painted > 0, "DPO did not paint page 1");
+    for (let page = 2; page <= ready.pages; page += 1) {
+      const clicked = await handle.evaluate(`(() => {
+        const next = document.getElementById("sourceNext");
+        if (!next || next.disabled) return false;
+        next.click();
+        return true;
+      })()`);
+      assert.equal(clicked, true, `stuck before page ${page}`);
       await waitForLayout({ page, timeout: 120000 });
     }
   }, { timeout: 1800000 });
