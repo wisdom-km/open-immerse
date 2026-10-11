@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { formulaReadabilityFloor } from "../lib/pdf-formula-size.js";
+import { READER_FONT_SIZES, readerLayoutFontCap } from "../lib/pdf-reader-flow.js";
 import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
 import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs";
 
@@ -133,11 +134,215 @@ class PipeCdp {
   }
 }
 
-function sleep(ms) {
-  return new Promise((done) => setTimeout(done, ms));
+const handle = { child: null, cdp: null, server: null, ownedDir: null, userDataDir: null, evaluate: null, send: null };
+
+function expectedShownFont(sample) {
+  const setting = Number(sample.setting);
+  const max = READER_FONT_SIZES[READER_FONT_SIZES.length - 1];
+  if (!(Number(sample.pane) > 0)) return Math.min(setting, max);
+  const cap = readerLayoutFontCap({
+    windowWidth: Number(sample.windowWidth) || Number(sample.pane),
+    columnPx: Number(sample.pane),
+    capsuleInBar: sample.capsule === "bar" || Number(sample.windowWidth) < 900
+  });
+  return Math.min(setting, cap);
 }
 
-const handle = { child: null, cdp: null, server: null, ownedDir: null, userDataDir: null, evaluate: null, send: null };
+function layoutProbe({ blockPage = "", blockId = "" } = {}) {
+  const nodeExpr = blockId
+    ? `document.querySelector(${JSON.stringify(`#readerFlow .rf-block[data-src-page="${blockPage}"][data-block-id="${blockId}"]`)})`
+    : "null";
+  return `(() => {
+    const flow = document.getElementById("readerFlow");
+    const paneEl = document.querySelector(".pane-translate");
+    const pane = paneEl ? paneEl.clientWidth : 0;
+    const scroll = document.getElementById("translateScroll") || paneEl;
+    const crops = [...(flow ? flow.querySelectorAll("img.oi-pdf-math-crop, img.oi-pdf-asset-crop") : [])]
+      .filter((img) => img.getClientRects().length > 0);
+    const pending = crops.filter((img) => !img.complete || !(img.naturalWidth > 0)).length;
+    const imgSig = crops.map((img) => {
+      const src = img.currentSrc || img.src || "";
+      let hash = src.length;
+      for (let i = 0; i < src.length; i += 17) hash = (hash + src.charCodeAt(i)) | 0;
+      return hash + ":" + img.naturalWidth + ":" + Math.round(img.getBoundingClientRect().width);
+    }).join("|");
+    const slots = [...(flow ? flow.querySelectorAll(":scope > .rf-page") : [])];
+    const pages = slots.map((slot) => ({
+      page: slot.dataset.page || "",
+      painted: slot.dataset.painted || "",
+      state: slot.dataset.state || "",
+      blocks: slot.querySelectorAll(".rf-block").length,
+      ids: [...slot.querySelectorAll(".rf-block")].map((node) => node.dataset.blockId || "").join(",")
+    }));
+    const column = flow ? flow.getBoundingClientRect().width : 0;
+    const shown = flow ? parseFloat(getComputedStyle(flow).fontSize) : 0;
+    const setting = document.getElementById("aaFontScale")?.getAttribute("aria-valuenow") || "";
+    const inlineRows = [];
+    if (flow) {
+      for (const span of flow.querySelectorAll(".oi-pdf-inline-math")) {
+        const img = span.querySelector("img");
+        if (!img || !(img.naturalWidth > 0)) continue;
+        const box = img.getBoundingClientRect();
+        const frame = span.getBoundingClientRect();
+        if (!(box.width > 1)) continue;
+        inlineRows.push({
+          id: span.dataset.blockId || "",
+          page: span.closest("[data-src-page]")?.dataset.srcPage || span.dataset.page || "",
+          w: box.width,
+          frame: frame.width,
+          nat: img.naturalWidth,
+          raised: span.classList.contains("is-raised")
+        });
+      }
+    }
+    let scrollMax = 0;
+    if (flow) {
+      for (const scroller of flow.querySelectorAll(".oi-pdf-math-scroll")) {
+        scrollMax = Math.max(scrollMax, scroller.getBoundingClientRect().width);
+      }
+    }
+    const displayRows = [];
+    if (flow) {
+      for (const row of flow.querySelectorAll(".oi-pdf-math-row.is-matched")) {
+        const img = row.querySelector("img");
+        const scroller = row.querySelector(".oi-pdf-math-scroll");
+        const widthPt = Number(row.dataset.widthPt);
+        const bodyPt = Number(row.dataset.bodyPt);
+        if (!img || !(widthPt > 0) || !(bodyPt > 0) || !(img.getBoundingClientRect().width > 1)) continue;
+        displayRows.push({
+          id: row.closest("[data-block-id]")?.dataset.blockId || "",
+          page: row.closest("[data-src-page]")?.dataset.srcPage || "",
+          widthPt,
+          bodyPt,
+          img: img.getBoundingClientRect().width,
+          scrollW: scroller ? scroller.scrollWidth : 0,
+          clientW: scroller ? scroller.clientWidth : 0,
+          frame: scroller ? scroller.getBoundingClientRect().width : 0
+        });
+      }
+    }
+    displayRows.sort((a, b) => b.widthPt - a.widthPt);
+    const paneBox = scroll ? scroll.getBoundingClientRect() : null;
+    const node = ${nodeExpr};
+    let block = null;
+    if (paneBox && node) {
+      const box = node.getBoundingClientRect();
+      block = {
+        top: box.top - paneBox.top,
+        bottom: box.bottom - paneBox.top,
+        intersects: box.bottom > paneBox.top + 0.5 && box.top < paneBox.bottom - 0.5,
+        sig: Math.round(box.top) + ":" + Math.round(box.bottom) + ":" + Math.round(box.height)
+      };
+    }
+    const pageSig = pages.map((item) => item.page + ":" + item.painted + ":" + item.state + ":" + item.blocks + ":" + item.ids).join(";");
+    const top = displayRows[0] || null;
+    const topSig = top
+      ? [top.page, top.id, Math.round(top.img), Math.round(top.widthPt * 100), Math.round(top.clientW), Math.round(top.scrollW)].join(":")
+      : "";
+    const root = document.documentElement;
+    const sig = [
+      document.getElementById("sourcePageLabel")?.textContent || "",
+      Math.round(shown * 100),
+      document.fonts?.status || "loaded",
+      root.dataset.oiFormulaCrop || "idle",
+      root.dataset.oiFontAnchor || "idle",
+      root.dataset.oiPageNav || "idle",
+      pending,
+      imgSig,
+      pageSig,
+      inlineRows.length,
+      Math.round(column),
+      Math.round(scrollMax),
+      topSig,
+      block ? block.sig : ""
+    ].join("~");
+    return {
+      windowWidth: window.innerWidth || pane,
+      pane,
+      capsule: (scroll && scroll.dataset.capsuleMode) || "",
+      setting: Number(setting),
+      settingText: setting,
+      shown,
+      fonts: document.fonts?.status || "loaded",
+      crop: root.dataset.oiFormulaCrop || "idle",
+      anchor: root.dataset.oiFontAnchor || "idle",
+      nav: root.dataset.oiPageNav || "idle",
+      pending,
+      pages,
+      label: document.getElementById("sourcePageLabel")?.textContent || "",
+      column,
+      scrollMax,
+      inlineRows,
+      mode: document.querySelector(".workspace")?.dataset.sourceMode || "",
+      top,
+      block,
+      sig
+    };
+  })()`;
+}
+
+function slotReady(slot) {
+  return Boolean(slot)
+    && slot.painted === "1"
+    && slot.state !== "layout"
+    && slot.state !== "running"
+    && slot.blocks > 0;
+}
+
+function layoutReady(sample, { page = 0, allPages = false, blockId = "" } = {}) {
+  if (!sample) return false;
+  if (sample.fonts !== "loaded") return false;
+  if (sample.crop !== "idle" || sample.anchor !== "idle" || sample.nav !== "idle") return false;
+  if (sample.pending !== 0) return false;
+  if (!(sample.pane > 0)) return false;
+  if (Math.abs(sample.shown - expectedShownFont(sample)) > 0.01) return false;
+  if (allPages && !(sample.pages || []).every(slotReady)) return false;
+  if (page) {
+    if (!String(sample.label).startsWith(`${page} /`)) return false;
+    if (!slotReady((sample.pages || []).find((item) => Number(item.page) === page))) return false;
+  }
+  if (blockId && !sample.block) return false;
+  return true;
+}
+
+function layoutDetail(sample) {
+  if (!sample) return "no sample";
+  const target = (sample.pages || []).find((item) => String(sample.label || "").startsWith(`${item.page} /`));
+  return JSON.stringify({
+    label: sample.label,
+    shown: sample.shown,
+    expected: expectedShownFont(sample),
+    fonts: sample.fonts,
+    crop: sample.crop,
+    anchor: sample.anchor,
+    nav: sample.nav,
+    pending: sample.pending,
+    pane: sample.pane,
+    page: target ? { page: target.page, painted: target.painted, state: target.state, blocks: target.blocks } : null
+  });
+}
+
+async function animationFrame() {
+  await handle.evaluate(`new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  })`, 5000);
+}
+
+async function waitForLayout({ page = 0, allPages = false, blockPage = "", blockId = "", timeout = 120000 } = {}) {
+  const started = Date.now();
+  let last = "";
+  let quiet = 0;
+  let sample = null;
+  while (Date.now() - started < timeout) {
+    sample = await handle.evaluate(layoutProbe({ blockPage, blockId }));
+    if (layoutReady(sample, { page, allPages, blockId }) && sample.sig === last) quiet += 1;
+    else quiet = 0;
+    last = sample?.sig || "";
+    if (layoutReady(sample, { page, allPages, blockId }) && quiet >= 3) return sample;
+    await animationFrame();
+  }
+  throw new Error(page ? `page ${page} did not paint (${layoutDetail(sample)})` : `layout did not settle (${layoutDetail(sample)})`);
+}
 
 describe("Aa font-size risk checks on DPO", () => {
   before(async () => {
@@ -184,8 +389,8 @@ describe("Aa font-size risk checks on DPO", () => {
         };
       })();`
     });
-    handle.evaluate = async (expression) => {
-      const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, 60000);
+    handle.evaluate = async (expression, timeoutMs = 60000) => {
+      const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, timeoutMs);
       if (result.exceptionDetails) {
         const detail = result.exceptionDetails;
         throw new Error(detail.exception?.description || detail.text || JSON.stringify(detail));
@@ -197,43 +402,31 @@ describe("Aa font-size risk checks on DPO", () => {
       width: 1440, height: 900, deviceScaleFactor: 1, mobile: false
     });
     await send("Page.navigate", { url: `${origin}/pdf/viewer.html?src=${encodeURIComponent(`${origin}/${pdfRel}`)}` });
-    const opened = Date.now();
-    let ready = null;
-    while (Date.now() - opened < 60000) {
-      ready = await handle.evaluate(`(() => {
-        const flow = document.getElementById("readerFlow");
-        const pages = document.querySelectorAll("#pages .pdf-page").length;
-        const painted = flow ? flow.querySelectorAll(".rf-page[data-page='1'] > *").length : 0;
-        const next = document.getElementById("sourceNext");
-        return { pages, painted, next: Boolean(next && !next.disabled) };
-      })()`);
-      if (ready?.painted > 0 && ready.pages > 1 && ready.next) break;
-      await sleep(250);
-    }
-    assert.ok(ready?.painted > 0, "DPO did not paint page 1");
-    for (let page = 2; page <= ready.pages; page += 1) {
-      const clicked = await handle.evaluate(`(() => {
-        const next = document.getElementById("sourceNext");
-        if (!next || next.disabled) return false;
-        next.click();
-        return true;
-      })()`);
-      assert.equal(clicked, true, `stuck before page ${page}`);
-      const step = Date.now();
-      let last = -1;
-      let stable = 0;
-      while (Date.now() - step < 20000) {
-        const n = await handle.evaluate(`document.querySelectorAll('#readerFlow .rf-page[data-page="${page}"] .rf-block').length`);
-        if (n > 0 && n === last) {
-          stable += 1;
-          if (stable >= 2) break;
-        } else stable = 0;
-        last = n;
-        await sleep(180);
+    await waitForLayout({ page: 1, timeout: 120000 });
+    const pageCount = await handle.evaluate(`document.querySelectorAll("#pages .pdf-page").length`);
+    assert.ok(pageCount > 1, "DPO did not paint page 1");
+    for (let page = 2; page <= pageCount; page += 1) {
+      let advanced = false;
+      for (let attempt = 0; attempt < 3 && !advanced; attempt += 1) {
+        const label = await handle.evaluate(`document.getElementById("sourcePageLabel")?.textContent || ""`);
+        if (String(label).startsWith(`${page} /`)) {
+          advanced = true;
+          break;
+        }
+        const clicked = await handle.evaluate(`(() => {
+          const next = document.getElementById("sourceNext");
+          if (!next || next.disabled) return false;
+          next.click();
+          return true;
+        })()`);
+        assert.equal(clicked, true, `stuck before page ${page}`);
+        const afterLabel = await handle.evaluate(`document.getElementById("sourcePageLabel")?.textContent || ""`);
+        advanced = String(afterLabel).startsWith(`${page} /`);
       }
-      assert.ok(last > 0, `page ${page} did not paint`);
+      assert.equal(advanced, true, `stuck before page ${page}`);
+      await waitForLayout({ page, timeout: 120000 });
     }
-  }, { timeout: 180000 });
+  }, { timeout: 1800000 });
 
   after(async (t) => {
     try {
@@ -250,33 +443,14 @@ describe("Aa font-size risk checks on DPO", () => {
   });
 
   test("font 40 keeps every DPO inline formula box inside the column at its bitmap size", async () => {
-    const data = await handle.evaluate(`(() => {
-      const flow = document.getElementById("readerFlow");
-      const column = flow.getBoundingClientRect().width;
-      const shown = parseFloat(getComputedStyle(flow).fontSize);
-      const setting = document.getElementById("aaFontScale")?.getAttribute("aria-valuenow") || "";
-      const rows = [];
-      for (const span of flow.querySelectorAll(".oi-pdf-inline-math")) {
-        const img = span.querySelector("img");
-        if (!img || !(img.naturalWidth > 0)) continue;
-        const box = img.getBoundingClientRect();
-        const frame = span.getBoundingClientRect();
-        if (!(box.width > 1)) continue;
-        rows.push({
-          id: span.dataset.blockId || "",
-          page: span.closest("[data-src-page]")?.dataset.srcPage || span.dataset.page || "",
-          w: box.width,
-          frame: frame.width,
-          nat: img.naturalWidth,
-          raised: span.classList.contains("is-raised")
-        });
-      }
-      let scrollMax = 0;
-      for (const scroll of flow.querySelectorAll(".oi-pdf-math-scroll")) {
-        scrollMax = Math.max(scrollMax, scroll.getBoundingClientRect().width);
-      }
-      return { column, shown, setting, rows, scrollMax };
-    })()`);
+    const settled = await waitForLayout({ allPages: true });
+    const data = {
+      column: settled.column,
+      shown: settled.shown,
+      setting: settled.settingText,
+      rows: settled.inlineRows,
+      scrollMax: settled.scrollMax
+    };
     assert.equal(data.setting, "40");
     assert.ok(data.column >= 520 && data.column <= 640, `column ${data.column}`);
     assert.ok(data.shown >= 28, `shown font ${data.shown}`);
@@ -308,7 +482,7 @@ describe("Aa font-size risk checks on DPO", () => {
     const ids = ["p5-b1", "p5-b5", "p5-b9", "p5-b21", "p5-b22"];
     for (const id of ids) {
       await setFont(32);
-      await sleep(220);
+      await waitForLayout({ allPages: true, blockPage: "5", blockId: id });
       const before = await handle.evaluate(`(() => {
         const pane = document.getElementById("translateScroll");
         const el = document.querySelector('#readerFlow .rf-block[data-src-page="5"][data-block-id="${id}"]');
@@ -328,19 +502,14 @@ describe("Aa font-size risk checks on DPO", () => {
       assert.ok(before?.id, `missing anchor for ${id}`);
       assert.equal(before.page, "5");
       await setFont(16);
-      await sleep(500);
-      const after = await handle.evaluate(`(() => {
-        const pane = document.getElementById("translateScroll");
-        const paneBox = pane.getBoundingClientRect();
-        const node = document.querySelector('#readerFlow .rf-block[data-src-page="${before.page}"][data-block-id="${before.id}"]');
-        if (!node) return { missing: true };
-        const box = node.getBoundingClientRect();
-        return {
-          top: box.top - paneBox.top,
-          bottom: box.bottom - paneBox.top,
-          intersects: box.bottom > paneBox.top + 0.5 && box.top < paneBox.bottom - 0.5
-        };
-      })()`);
+      const settled = await waitForLayout({
+        allPages: true,
+        blockPage: before.page,
+        blockId: before.id
+      });
+      const after = settled.block
+        ? { top: settled.block.top, bottom: settled.block.bottom, intersects: settled.block.intersects }
+        : { missing: true };
       assert.equal(after.missing, undefined);
       assert.equal(after.intersects, true, `p5 ${before.id} left the viewport after 32→16 (top ${after.top}, bottom ${after.bottom})`);
     }
@@ -351,43 +520,7 @@ describe("Aa font-size risk checks on DPO", () => {
       width: 320, height: 800, deviceScaleFactor: 1, mobile: false
     });
     await handle.evaluate(`window.dispatchEvent(new Event("resize"))`);
-    let sample = null;
-    const started = Date.now();
-    while (Date.now() - started < 4000) {
-      sample = await handle.evaluate(`(() => {
-        const flow = document.getElementById("readerFlow");
-        const shown = parseFloat(getComputedStyle(flow).fontSize);
-        const setting = Number(document.getElementById("aaFontScale")?.getAttribute("aria-valuenow"));
-        const rows = [];
-        for (const row of flow.querySelectorAll(".oi-pdf-math-row.is-matched")) {
-          const img = row.querySelector("img");
-          const scroll = row.querySelector(".oi-pdf-math-scroll");
-          const widthPt = Number(row.dataset.widthPt);
-          const bodyPt = Number(row.dataset.bodyPt);
-          if (!img || !(widthPt > 0) || !(bodyPt > 0) || !(img.getBoundingClientRect().width > 1)) continue;
-          rows.push({
-            id: row.closest("[data-block-id]")?.dataset.blockId || "",
-            page: row.closest("[data-src-page]")?.dataset.srcPage || "",
-            widthPt,
-            bodyPt,
-            img: img.getBoundingClientRect().width,
-            scrollW: scroll ? scroll.scrollWidth : 0,
-            clientW: scroll ? scroll.clientWidth : 0,
-            frame: scroll ? scroll.getBoundingClientRect().width : 0
-          });
-        }
-        rows.sort((a, b) => b.widthPt - a.widthPt);
-        return {
-          shown,
-          setting,
-          mode: document.querySelector(".workspace")?.dataset.sourceMode || "",
-          column: flow.getBoundingClientRect().width,
-          top: rows[0] || null
-        };
-      })()`);
-      if (sample?.top && sample.top.scrollW > sample.top.clientW + 1) break;
-      await sleep(200);
-    }
+    const sample = await waitForLayout({ allPages: true });
     assert.ok(sample?.top, `no matched display formula (mode ${sample?.mode}, column ${sample?.column}, shown ${sample?.shown})`);
     const row = sample.top;
     const expected = formulaReadabilityFloor(sample.shown, row.bodyPt);

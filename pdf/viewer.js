@@ -306,6 +306,7 @@ let restoreGen = 0;
 let textGen = 0;
 let textLoadPage = 0;
 let navGen = 0;
+let pageNavDepth = 0;
 let navRevealPage = 0;
 let renderGen = 0;
 let pageItems = 0;
@@ -5656,6 +5657,7 @@ function captureFontAnchor() {
 }
 
 let fontAnchorTimer = 0;
+let fontAnchorSerial = 0;
 
 function readerBlockNode(flow, token) {
   const esc = globalThis.CSS?.escape || ((value) => String(value).replace(/"/g, '\\"'));
@@ -5700,13 +5702,23 @@ function restoreFontAnchor(token) {
 }
 
 function finishFontAnchor(anchor) {
+  const serial = ++fontAnchorSerial;
+  const root = document.documentElement;
+  if (root) root.dataset.oiFontAnchor = "run";
   restoreFontAnchor(anchor);
-  requestAnimationFrame(() => restoreFontAnchor(anchor));
+  requestAnimationFrame(() => {
+    if (serial !== fontAnchorSerial) return;
+    restoreFontAnchor(anchor);
+    if (!anchor && root) root.dataset.oiFontAnchor = "idle";
+  });
   clearTimeout(fontAnchorTimer);
+  fontAnchorTimer = 0;
   if (!anchor) return;
   fontAnchorTimer = setTimeout(() => {
     fontAnchorTimer = 0;
+    if (serial !== fontAnchorSerial) return;
     restoreFontAnchor(anchor);
+    if (root) root.dataset.oiFontAnchor = "idle";
   }, 180);
 }
 
@@ -8199,9 +8211,14 @@ async function adoptDoc(doc, title) {
   updatePager();
   await scheduleVisibleRenders();
   setStatus("原页已打开，正在读取文字层…");
-  await loadCurrentPageText();
-  syncZoomChip();
-  await maybeAutoTranslateDocument();
+  beginPageNav();
+  try {
+    await loadCurrentPageText();
+    syncZoomChip();
+    await maybeAutoTranslateDocument();
+  } finally {
+    endPageNav();
+  }
 }
 
 function shortTitle(value) {
@@ -8338,12 +8355,24 @@ function syncVisiblePage() {
   noteSourcePage(false);
 }
 
+function beginPageNav() {
+  pageNavDepth += 1;
+  if (document.documentElement) document.documentElement.dataset.oiPageNav = "run";
+}
+
+function endPageNav() {
+  pageNavDepth = Math.max(0, pageNavDepth - 1);
+  if (pageNavDepth === 0 && document.documentElement) document.documentElement.dataset.oiPageNav = "idle";
+}
+
 async function goPage(dir) {
   if (!pdfDoc) return;
   const origin = sourceNavPage() || pageNum;
   const next = pageIndex(origin, pdfDoc.numPages, dir);
   if (next === origin) return;
   const gen = ++navGen;
+  beginPageNav();
+  try {
   const bringTranslation = dir > 0 && capsulePage() === origin;
   takeDriver("pdf");
   const view = pageViews[next - 1];
@@ -8377,6 +8406,9 @@ async function goPage(dir) {
   if (gen !== navGen) return;
   settlePairChrome();
   await scheduleVisibleRenders();
+  } finally {
+    endPageNav();
+  }
 }
 
 function formulaCropPlanKeyNow() {
@@ -8420,41 +8452,47 @@ async function refreshFormulaCropsForDisplay() {
   if (!pdfDoc) return;
   const key = formulaCropPlanKeyNow();
   const gen = ++formulaCropGen;
-  const total = Number(pdfDoc.numPages) || 0;
-  let changed = false;
-  for (let n = 1; n <= total; n += 1) {
-    if (gen !== formulaCropGen) return;
-    const layout = getPageLayout(n);
-    if (!layout?.blocks?.length || layout.formulaPlanKey === key) continue;
-    if (!layout.blocks.some((block) => isSourceRedrawBlock(block) && block.imageUrl)) {
-      noteFormulaCropPlan(layout);
-      continue;
-    }
-    let page = null;
-    try {
-      page = await pdfDoc.getPage(n);
-    } catch {
-      continue;
-    }
-    if (gen !== formulaCropGen) return;
-    const raster = {
-      pixelWidth: layout.pixelWidth,
-      pixelHeight: layout.pixelHeight
-    };
-    for (const block of layout.blocks) {
+  const root = document.documentElement;
+  if (root) root.dataset.oiFormulaCrop = "run";
+  try {
+    const total = Number(pdfDoc.numPages) || 0;
+    let changed = false;
+    for (let n = 1; n <= total; n += 1) {
       if (gen !== formulaCropGen) return;
-      if (!isSourceRedrawBlock(block) || !block.imageUrl) continue;
-      const sharp = await renderSharpFormulaCrop(page, raster, block, n);
-      if (sharp && sharp !== block.imageUrl) {
-        block.imageUrl = sharp;
-        block.surface = "redraw";
-        changed = true;
-        clearSlotPainted(n);
+      const layout = getPageLayout(n);
+      if (!layout?.blocks?.length || layout.formulaPlanKey === key) continue;
+      if (!layout.blocks.some((block) => isSourceRedrawBlock(block) && block.imageUrl)) {
+        noteFormulaCropPlan(layout);
+        continue;
       }
+      let page = null;
+      try {
+        page = await pdfDoc.getPage(n);
+      } catch {
+        continue;
+      }
+      if (gen !== formulaCropGen) return;
+      const raster = {
+        pixelWidth: layout.pixelWidth,
+        pixelHeight: layout.pixelHeight
+      };
+      for (const block of layout.blocks) {
+        if (gen !== formulaCropGen) return;
+        if (!isSourceRedrawBlock(block) || !block.imageUrl) continue;
+        const sharp = await renderSharpFormulaCrop(page, raster, block, n);
+        if (sharp && sharp !== block.imageUrl) {
+          block.imageUrl = sharp;
+          block.surface = "redraw";
+          changed = true;
+          clearSlotPainted(n);
+        }
+      }
+      noteFormulaCropPlan(layout);
     }
-    noteFormulaCropPlan(layout);
+    if (changed && gen === formulaCropGen) renderArticle();
+  } finally {
+    if (gen === formulaCropGen && root) root.dataset.oiFormulaCrop = "idle";
   }
-  if (changed && gen === formulaCropGen) renderArticle();
 }
 
 function setMirrorZoom(next) {
