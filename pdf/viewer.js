@@ -2123,6 +2123,16 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
   };
 }
 
+// pdf.js 4.10.38 continues a display render only on requestAnimationFrame.
+// If no frame arrives, page.render() never settles and open / goPage stay
+// there. The vendored build forces that flag off (pdf/vendor/pdf.min.mjs),
+// so later chunks run as microtasks. RenderTask hides the internal task
+// behind a private field, so this cannot be switched from here.
+// window.requestAnimationFrame is not replaced.
+function renderPdfPage(page, params) {
+  return page.render(params);
+}
+
 /**
  * Redraw one formula, figure, or table bbox when the CROP_SCALE crop is
  * softer than the CSS box. The page raster stays as it is; a miss keeps
@@ -2189,7 +2199,7 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     canvas.height = plan.pixelHeight;
     const context = formula ? formulaDrawContext(canvas) : canvas.getContext("2d", { alpha: false });
     if (!context) return "";
-    await drawPdfPage(() => page.render({ canvasContext: context, viewport }).promise);
+    await renderPdfPage(page, { canvasContext: context, viewport }).promise;
     if (formula) compositeWhitePaper(context, canvas);
     paintFormulaMask(canvas, block.bbox, block);
     if (!formula && !redrawKeepsInk(context, canvas, raster, block)) {
@@ -8003,80 +8013,13 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
   return layout;
 }
 
-// pdf.js continues a display render on requestAnimationFrame. When the
-// browser stops delivering frames, that promise never settles and goPage
-// stays inside the text-layer raster. Keep the real frame callback, and if
-// none arrives, run the same continuation from a short timer.
-const RENDER_FRAME_FALLBACK_MS = 50;
-let renderFrameDepth = 0;
-let savedRequestAnimationFrame = null;
-let savedCancelAnimationFrame = null;
-const renderFrameTimers = new Map();
-
-function renderFrameRequest(callback) {
-  let settled = false;
-  let handle = 0;
-  const timer = setTimeout(() => {
-    if (settled) return;
-    settled = true;
-    renderFrameTimers.delete(handle);
-    callback(performance.now());
-  }, RENDER_FRAME_FALLBACK_MS);
-  handle = savedRequestAnimationFrame((time) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    renderFrameTimers.delete(handle);
-    callback(time);
-  });
-  renderFrameTimers.set(handle, timer);
-  return handle;
-}
-
-function renderFrameCancel(handle) {
-  const timer = renderFrameTimers.get(handle);
-  if (timer) clearTimeout(timer);
-  renderFrameTimers.delete(handle);
-  if (savedCancelAnimationFrame) savedCancelAnimationFrame(handle);
-}
-
-function beginRenderFrames() {
-  if (renderFrameDepth === 0) {
-    savedRequestAnimationFrame = window.requestAnimationFrame.bind(window);
-    savedCancelAnimationFrame = window.cancelAnimationFrame.bind(window);
-    window.requestAnimationFrame = renderFrameRequest;
-    window.cancelAnimationFrame = renderFrameCancel;
-  }
-  renderFrameDepth += 1;
-}
-
-function endRenderFrames() {
-  renderFrameDepth = Math.max(0, renderFrameDepth - 1);
-  if (renderFrameDepth !== 0) return;
-  for (const timer of renderFrameTimers.values()) clearTimeout(timer);
-  renderFrameTimers.clear();
-  if (savedRequestAnimationFrame) window.requestAnimationFrame = savedRequestAnimationFrame;
-  if (savedCancelAnimationFrame) window.cancelAnimationFrame = savedCancelAnimationFrame;
-  savedRequestAnimationFrame = null;
-  savedCancelAnimationFrame = null;
-}
-
-async function drawPdfPage(start) {
-  beginRenderFrames();
-  try {
-    return await start();
-  } finally {
-    endRenderFrames();
-  }
-}
-
 async function renderPageRaster(page) {
   const viewport = page.getViewport({ scale: CROP_SCALE });
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.floor(viewport.width));
   canvas.height = Math.max(1, Math.floor(viewport.height));
   const context = formulaDrawContext(canvas);
-  await drawPdfPage(() => page.render({ canvasContext: context, viewport }).promise);
+  await renderPdfPage(page, { canvasContext: context, viewport }).promise;
   compositeWhitePaper(context, canvas);
   return { canvas, pixelWidth: canvas.width, pixelHeight: canvas.height };
 }
@@ -8730,7 +8673,10 @@ async function scheduleVisibleRenders() {
 async function renderView(view) {
   if (!pdfDoc || !view) return;
   const serial = (view.renderSerial = (view.renderSerial || 0) + 1);
-  if (view.renderedScale === zoom && view.canvas.width) {
+  // A round trip of the mini divider can land back on this zoom while the
+  // previous render is still drawing. Returning here used to bump the serial
+  // and leave that render running, so the canvas kept the other scale.
+  if (view.renderedScale === zoom && view.canvas.width && !view.renderTask) {
     view.canvas.hidden = false;
     return;
   }
@@ -8760,11 +8706,9 @@ async function renderView(view) {
   const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
   let task = null;
   try {
-    await drawPdfPage(() => {
-      task = page.render({ canvasContext: context, viewport, transform });
-      view.renderTask = task;
-      return task.promise;
-    });
+    task = renderPdfPage(page, { canvasContext: context, viewport, transform });
+    view.renderTask = task;
+    await task.promise;
     if (task && view.renderTask === task) view.renderTask = null;
     if (serial !== view.renderSerial) return;
     canvas.hidden = false;

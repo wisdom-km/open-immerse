@@ -81,6 +81,56 @@ function instrumentViewer(source) {
   if (at < 0) throw new Error("applyZoom signature missing");
   const injected = `${source.slice(0, at + needle.length)}\n  globalThis.__oiZoomApplies = (globalThis.__oiZoomApplies || 0) + 1;${source.slice(at + needle.length)}`;
   return `${injected}
+globalThis.__oiStaleRender = async () => {
+  const view = pageViews[0];
+  const page = await pdfDoc.getPage(view.num);
+  const wrong = page.getViewport({ scale: zoom * 1.25 });
+  const outputScale = canvasOutputScale(wrong.width, wrong.height, window.devicePixelRatio || 1);
+  view.canvas.width = Math.max(1, Math.floor(wrong.width * outputScale));
+  view.canvas.height = Math.max(1, Math.floor(wrong.height * outputScale));
+  let cancelled = false;
+  view.renderTask = {
+    cancel() { cancelled = true; },
+    promise: new Promise(() => {})
+  };
+  view.renderedScale = zoom;
+  const before = view.canvas.width;
+  await renderView(view);
+  const fit = page.getViewport({ scale: zoom });
+  const expectScale = canvasOutputScale(fit.width, fit.height, window.devicePixelRatio || 1);
+  return {
+    before,
+    after: view.canvas.width,
+    expected: Math.max(1, Math.floor(fit.width * expectScale)),
+    renderedScale: view.renderedScale,
+    zoom,
+    hidden: view.canvas.hidden === true,
+    cancelled
+  };
+};
+globalThis.__oiRafStallRender = async () => {
+  const native = window.requestAnimationFrame;
+  let calls = 0;
+  window.requestAnimationFrame = () => {
+    calls += 1;
+    return 0;
+  };
+  const started = performance.now();
+  try {
+    const page = await pdfDoc.getPage(1);
+    const viewport = page.getViewport({ scale: 0.5 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(viewport.width));
+    canvas.height = Math.max(1, Math.ceil(viewport.height));
+    await page.render({
+      canvasContext: canvas.getContext("2d", { alpha: false }),
+      viewport
+    }).promise;
+    return { ms: Math.round(performance.now() - started), calls, width: canvas.width };
+  } finally {
+    window.requestAnimationFrame = native;
+  }
+};
 globalThis.__oiPdfViews = () => ({
   zoom,
   fit: fitWidthZoom(pdfPageWidth, miniPagesInnerWidth()),
@@ -404,6 +454,15 @@ test("mini divider drags do not blank pages outside the render radius", { timeou
   })()`;
 
   const home = await waitFor(painted(HOME_PAGE), "page 1 painted");
+  const race = await evaluate("globalThis.__oiStaleRender()");
+  assert.notEqual(race.after, race.before, "in-flight render left the previous bitmap");
+  assert.equal(race.after, race.expected);
+  assert.equal(race.renderedScale, race.zoom);
+  assert.equal(race.hidden, false);
+  assert.equal(race.cancelled, true);
+  const stalled = await evaluate("globalThis.__oiRafStallRender()");
+  assert.equal(stalled.calls, 0, "display render still scheduled an animation frame");
+  assert.ok(stalled.width > 0 && stalled.ms < 5000, JSON.stringify(stalled));
   assert.equal(await evaluate(scrollExpr(FAR_PAGE)), true);
   const far = await waitFor(painted(FAR_PAGE), "far page painted");
   const homeRow = far.pages.find((item) => item.num === HOME_PAGE);
