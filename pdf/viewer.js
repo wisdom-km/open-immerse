@@ -8404,10 +8404,11 @@ async function goPage(dir) {
   }
   if (gen !== navGen) return;
   settlePairChrome();
-  await scheduleVisibleRenders();
   } finally {
     endPageNav();
   }
+  if (gen !== navGen) return;
+  await scheduleVisibleRenders();
 }
 
 function formulaCropPlanKeyNow() {
