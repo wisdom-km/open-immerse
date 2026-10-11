@@ -138,6 +138,8 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 
 本地库按 PDF 文件 SHA-256 查找。`GET /v1/library/document?hash=...` 读取逐页记录；`POST /v1/library/page` 保存页、`pairs`、版面和首次打开的原 PDF。SQLite 是索引，仓外 `files/{hash}/page-NNN.json` 保存逐页数据，`source.pdf` 与 `readout.md` 分别是原件和旧格式兼容文件。阅读器优先用逐页 `pairs`，只在没有逐页记录时回退旧整篇 `readout.md`；已入库文档不自动重新翻译。
 
+存储替换方案已批准（2026-10-11，路线图第 8 步，见 `docs/ui-phase2-plan.md` 第 4 节）：论文、版面、译文、笔记改存 Chrome IndexedDB，设置留在 `chrome.storage`，不用 SQLite。上面这段是当前代码，本步落地前仍然有效。
+
 每个 `pair` 至少包含源块 `sourceId`、送译文本 `text`、文字层原句 `sourceText`、`translation` 和状态。恢复时同时核对文件哈希、`sourceId` 与 `sourceText`；原句变化或公式占位符、引用编号不一致时，不展示不可信译文。批量翻译完成后，本地库写入按顺序执行，避免后到的早期批次覆盖同一页的完整记录。当前 Attention 的一次性迁移和剩余例外见 `STATUS.md`。
 
 视觉块是 `formula`、`figure`、`table`。进入右栏之前，适配器从这三类对象上删除 OCR 或划区 API 带来的 `latex`、`content`、`html`、`md`、`text`。校验函数发现这些键，删键并继续，不把它们渲染出来。公式块再按 REQUIREMENTS §2.6「运行时顺序」选择节点：第零层 → 第二层多模态 → OCR API 层 → 第一层自研算法 → 第一层矢量重绘 → 第一层原页裁图 → 第三层占位，每一步没过自己的自动判据就交给下一步；用户没接多模态 API 或第二层开关关着时，交给 OCR API 层；OCR API 也没接或开关关着时，交给自研算法（推论，由 01:12 顺序推出）。多模态是公式主路径；第一层（自建识别和矢量重绘）按现状冻结，只作兜底，不再优化；练习集各层占比基线不再做（2026-10-05 00:48 Wisdom 定）。矢量重绘还没实现的部分做不做，待 Wisdom 确认。现在已上线的高清重渲染（`surface="redraw"`）和 pageRaster 的 png 裁图都算第一层的原页裁图。各层的节点形态（按层号列，不是运行时顺序）：
