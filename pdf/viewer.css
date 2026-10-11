@@ -991,6 +991,13 @@ body {
   border-radius: 0;
   background: transparent;
 }
+.pane-translate .readout.md-readout .oi-pdf-inline-math:not(.is-matched):not(.is-promoted) .oi-pdf-math-crop {
+  /* An em height stretches a short crop sideways: 213×13 at 1.8em / 28px is 826px. */
+  height: auto;
+  width: auto;
+  max-width: 100%;
+  margin-top: 0;
+}
 .pane-translate .readout.md-readout .oi-pdf-inline-math.is-promoted .oi-pdf-math-crop {
   height: auto;
   width: var(--oi-formula-w, max-content);
@@ -1001,8 +1008,9 @@ body {
   display: inline-block;
   height: auto;
   max-height: none;
-  max-width: none;
-  overflow: visible;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
   vertical-align: middle;
   margin-top: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
   margin-bottom: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);

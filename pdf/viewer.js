@@ -816,8 +816,7 @@ function commitReaderFont(next) {
   renderArticle();
   layoutCapsule();
   applyPaperMetrics();
-  restoreFontAnchor(anchor);
-  requestAnimationFrame(() => restoreFontAnchor(anchor));
+  finishFontAnchor(anchor);
 }
 
 function applyReaderFontStep(action) {
@@ -895,7 +894,7 @@ function refreshReaderFontCap() {
   if (!changed) return;
   layoutCapsule({ keepAnchor: true });
   applyPaperMetrics();
-  restoreFontAnchor(anchor);
+  finishFontAnchor(anchor);
 }
 
 const CJK_CACHE_KEY = "oi.reader.cjk";
@@ -2314,6 +2313,7 @@ function mountDisplayMath(node, block, img, page) {
     row.classList.add("is-matched");
     row.style.setProperty("--oi-formula-h", matched.height);
     row.style.setProperty("--oi-formula-ar", matched.aspect);
+    stampDisplayFormulaScale(row, matched, page);
   } else {
     const pageFraction = formulaPageFraction(block);
     const layout = getPageLayout(page);
@@ -5020,12 +5020,13 @@ function readerFormulaStyle(block, page, inline, columnPx) {
   const fracH = Number(bbox[3]) - Number(bbox[1]);
   if (!(fracW > 0) || !(fracH > 0)) return null;
   const inkPt = fracH * pageH;
+  const widthPt = fracW * pageW;
   const column = columnPx > 0 ? columnPx : readerColumnPx();
   const sized = readerFormulaCssSize({
     bodyFontPx: readerShownFont(),
     sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
     inkPt,
-    widthPt: fracW * pageW,
+    widthPt,
     scriptPt: formulaScriptPt(block, inkPt),
     columnPx: column,
     inline
@@ -5041,8 +5042,19 @@ function readerFormulaStyle(block, page, inline, columnPx) {
   return {
     height: paperCssPx(height),
     aspect: width > 0 ? String(Math.round((width / height) * 10000) / 10000) : "1",
-    raised: Boolean(sized.raised)
+    raised: Boolean(sized.raised),
+    k: sized.k,
+    widthPt
   };
+}
+
+function stampDisplayFormulaScale(row, matched, page) {
+  if (!row || !matched) return;
+  const layout = getPageLayout(page);
+  const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
+  if (matched.k > 0) row.dataset.formulaK = String(matched.k);
+  if (matched.widthPt > 0) row.dataset.widthPt = String(Math.round(matched.widthPt * 100) / 100);
+  row.dataset.bodyPt = String(bodyPt);
 }
 
 function matchedFormulaStyle(block, page) {
@@ -5059,6 +5071,7 @@ function refreshMatchedFormulas(paper) {
     if (!matched) return;
     row.style.setProperty("--oi-formula-h", matched.height);
     row.style.setProperty("--oi-formula-ar", matched.aspect);
+    stampDisplayFormulaScale(row, matched, paper.dataset.page);
   });
   paper.querySelectorAll(".oi-pdf-inline-math.is-matched").forEach((span) => {
     const block = (layout?.blocks || []).find((item) => item.id === span.dataset.blockId);
@@ -5642,24 +5655,59 @@ function captureFontAnchor() {
   };
 }
 
+let fontAnchorTimer = 0;
+
+function readerBlockNode(flow, token) {
+  const esc = globalThis.CSS?.escape || ((value) => String(value).replace(/"/g, '\\"'));
+  if (token?.id) {
+    const nodes = [...flow.querySelectorAll(`[data-block-id="${esc(token.id)}"]`)];
+    const blocks = nodes.filter((node) => node.classList.contains("rf-block"));
+    const onPage = token.page
+      ? blocks.filter((node) => node.dataset.srcPage === String(token.page) || node.dataset.page === String(token.page))
+      : blocks;
+    const pool = onPage.length ? onPage : blocks;
+    const visible = pool.find((node) => node.getClientRects().length);
+    if (visible) return visible;
+    if (pool[0]) return pool[0];
+  }
+  if (token?.page) return flow.querySelector(`.rf-block[data-src-page="${esc(token.page)}"]`);
+  return null;
+}
+
 function restoreFontAnchor(token) {
   const pane = translateScrollRoot();
   const flow = readerFlowEl();
   if (!pane || !flow || !token) return;
-  const esc = globalThis.CSS?.escape || ((value) => String(value).replace(/"/g, '\\"'));
-  const node = token.id
-    ? flow.querySelector(`[data-block-id="${esc(token.id)}"]`)
-    : flow.querySelector(`.rf-block[data-src-page="${esc(token.page)}"]`);
+  const node = readerBlockNode(flow, token);
   if (!node) return;
-  const paneTop = pane.getBoundingClientRect().top;
+  const paneBox = pane.getBoundingClientRect();
   const box = node.getBoundingClientRect();
   const target = readerFontAnchorTop({
     blockTop: box.top,
     blockHeight: box.height,
     ratio: token.ratio
   });
-  pane.scrollTop += target - paneTop;
+  let delta = target - paneBox.top;
+  const slice = Math.min(16, box.height || 0);
+  if (slice > 0) {
+    const nextBottom = box.bottom - delta;
+    const nextTop = box.top - delta;
+    if (nextBottom < paneBox.top + slice) delta -= paneBox.top + slice - nextBottom;
+    else if (nextTop > paneBox.bottom - slice) delta += nextTop - (paneBox.bottom - slice);
+  }
+  if (Math.abs(delta) > 0.5) pane.scrollTop += delta;
   updateReaderFade();
+}
+
+function finishFontAnchor(anchor) {
+  restoreFontAnchor(anchor);
+  requestAnimationFrame(() => restoreFontAnchor(anchor));
+  clearTimeout(fontAnchorTimer);
+  if (!anchor) return;
+  fontAnchorTimer = setTimeout(() => {
+    fontAnchorTimer = 0;
+    restoreFontAnchor(anchor);
+  }, 180);
 }
 
 function restoreReaderAnchor(token) {
