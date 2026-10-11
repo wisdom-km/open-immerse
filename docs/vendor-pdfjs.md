@@ -10,4 +10,4 @@ PR #116 修改了 vendored 的 `pdf.min.mjs`，在 `PDFPageProxy.render` 里把 
 
 原因：浏览器不送帧时（后台标签页、高负载），`page.render()` 的 promise 不会结束，打开 PDF 和翻页都会卡住。
 
-如果以后升级 pdf.js，必须重新打上这处补丁，并跑 `tests/pdf-mini-blank.test.mjs` 里「rAF 永远不出帧时 page.render() 仍能结束」那条测试。
+如果以后升级 pdf.js，必须重新打上这处补丁，并跑 `tests/pdf-mini-blank.test.mjs` 里的 `mini divider drags do not blank pages outside the render radius`。这条用例通过 `__oiRafStallRender()` 断言 rAF 调用次数为 0，并且 5 秒内结束。这条断言也要等 #116 合入后才会出现在 main 上。
