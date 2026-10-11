@@ -153,6 +153,15 @@ function layoutProbe({ blockPage = "", blockId = "" } = {}) {
     ? `document.querySelector(${JSON.stringify(`#readerFlow .rf-block[data-src-page="${blockPage}"][data-block-id="${blockId}"]`)})`
     : "null";
   return `(() => {
+    const root = document.documentElement;
+    if (!root) {
+      return {
+        windowWidth: 0, pane: 0, capsule: "", setting: 0, settingText: "", shown: 0,
+        fonts: "loading", crop: "run", anchor: "run", nav: "run", pending: 1, pages: [],
+        label: "", column: 0, scrollMax: 0, inlineRows: [], mode: "", top: null, block: null,
+        sig: "no-doc"
+      };
+    }
     const flow = document.getElementById("readerFlow");
     const paneEl = document.querySelector(".pane-translate");
     const pane = paneEl ? paneEl.clientWidth : 0;
@@ -239,7 +248,6 @@ function layoutProbe({ blockPage = "", blockId = "" } = {}) {
     const topSig = top
       ? [top.page, top.id, Math.round(top.img), Math.round(top.widthPt * 100), Math.round(top.clientW), Math.round(top.scrollW)].join(":")
       : "";
-    const root = document.documentElement;
     const sig = [
       document.getElementById("sourcePageLabel")?.textContent || "",
       Math.round(shown * 100),
@@ -333,15 +341,26 @@ async function waitForLayout({ page = 0, allPages = false, blockPage = "", block
   let last = "";
   let quiet = 0;
   let sample = null;
+  let failed = "";
   while (Date.now() - started < timeout) {
-    sample = await handle.evaluate(layoutProbe({ blockPage, blockId }));
+    try {
+      sample = await handle.evaluate(layoutProbe({ blockPage, blockId }));
+      failed = "";
+    } catch (error) {
+      quiet = 0;
+      last = "";
+      failed = error instanceof Error ? error.message : String(error);
+      try { await animationFrame(); } catch { /* context is still changing */ }
+      continue;
+    }
     if (layoutReady(sample, { page, allPages, blockId }) && sample.sig === last) quiet += 1;
     else quiet = 0;
     last = sample?.sig || "";
     if (layoutReady(sample, { page, allPages, blockId }) && quiet >= 3) return sample;
-    await animationFrame();
+    try { await animationFrame(); } catch { /* context is still changing */ }
   }
-  throw new Error(page ? `page ${page} did not paint (${layoutDetail(sample)})` : `layout did not settle (${layoutDetail(sample)})`);
+  const detail = failed ? `${failed}; ${layoutDetail(sample)}` : layoutDetail(sample);
+  throw new Error(page ? `page ${page} did not paint (${detail})` : `layout did not settle (${detail})`);
 }
 
 describe("Aa font-size risk checks on DPO", () => {
