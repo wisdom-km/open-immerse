@@ -2189,7 +2189,9 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     canvas.height = plan.pixelHeight;
     const context = formula ? formulaDrawContext(canvas) : canvas.getContext("2d", { alpha: false });
     if (!context) return "";
+    navTrace("sharp:draw:in", { n: pageNumber, w: canvas.width, h: canvas.height });
     await page.render({ canvasContext: context, viewport }).promise;
+    navTrace("sharp:draw:out", { n: pageNumber });
     if (formula) compositeWhitePaper(context, canvas);
     paintFormulaMask(canvas, block.bbox, block);
     if (!formula && !redrawKeepsInk(context, canvas, raster, block)) {
@@ -7965,26 +7967,39 @@ async function ingestSkippedSourceLayout(n, isStale) {
 }
 
 async function ingestTextLayerLayout(n, isStale, options = {}) {
+  navTrace("ingest:getPage:in", { n });
   const page = await pdfDoc.getPage(n);
+  navTrace("ingest:getPage:out", { n });
   if (isStale()) return null;
   const viewport = page.getViewport({ scale: 1 });
+  navTrace("ingest:text:in", { n });
   const content = await page.getTextContent();
+  navTrace("ingest:text:out", { n, items: content?.items?.length || 0 });
   if (isStale()) return null;
   let images = null;
   try {
+    navTrace("ingest:ops:in", { n });
     const ops = await page.getOperatorList();
+    navTrace("ingest:ops:out", { n, fn: ops?.fnArray?.length || 0 });
     images = { fnArray: ops.fnArray, argsArray: ops.argsArray };
-  } catch {
+  } catch (error) {
+    navTrace("ingest:ops:err", { n, name: error?.name || "Error" });
     images = null;
   }
   if (isStale()) return null;
   attachFontRealNames(content.items, page.commonObjs);
   const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
+  navTrace("ingest:raster:in", { n });
   const raster = await renderPageRaster(page);
+  navTrace("ingest:raster:out", { n });
   if (isStale()) return null;
+  navTrace("ingest:crop:in", { n, blocks: built.blocks?.length || 0 });
   const blocks = await cropLayoutBlocks(raster, page, built.blocks, n, isStale);
+  navTrace("ingest:crop:out", { n, blocks: blocks?.length || 0 });
   if (!blocks || isStale()) return null;
+  navTrace("ingest:version:in", { n });
   const version = await layoutVersionNow();
+  navTrace("ingest:version:out", { n });
   const fallback = options.fallback?.reason
     ? { source: String(options.fallback.source || "text-layer"), reason: String(options.fallback.reason) }
     : null;
@@ -8009,7 +8024,9 @@ async function renderPageRaster(page) {
   canvas.width = Math.max(1, Math.floor(viewport.width));
   canvas.height = Math.max(1, Math.floor(viewport.height));
   const context = formulaDrawContext(canvas);
+  navTrace("raster:draw:in", { n: page?.pageNumber || 0, w: canvas.width, h: canvas.height });
   await page.render({ canvasContext: context, viewport }).promise;
+  navTrace("raster:draw:out", { n: page?.pageNumber || 0 });
   compositeWhitePaper(context, canvas);
   return { canvas, pixelWidth: canvas.width, pixelHeight: canvas.height };
 }
@@ -8354,6 +8371,22 @@ function syncVisiblePage() {
   noteSourcePage(false);
 }
 
+function navTrace(step, extra) {
+  const sink = globalThis.__oiNavTrace;
+  if (!Array.isArray(sink)) return;
+  const row = {
+    t: Date.now(),
+    step,
+    nav: navGen,
+    text: textGen,
+    render: renderGen,
+    page: textLoadPage || pageNum
+  };
+  if (extra) Object.assign(row, extra);
+  sink.push(row);
+  if (sink.length > 800) sink.splice(0, sink.length - 500);
+}
+
 function beginPageNav() {
   pageNavDepth += 1;
   if (document.documentElement) document.documentElement.dataset.oiPageNav = "run";
@@ -8371,6 +8404,7 @@ async function goPage(dir) {
   if (next === origin) return;
   const gen = ++navGen;
   beginPageNav();
+  navTrace("go:in", { gen, next, dir });
   try {
   const bringTranslation = dir > 0 && capsulePage() === origin;
   takeDriver("pdf");
@@ -8395,17 +8429,28 @@ async function goPage(dir) {
     if (!row || row.state === "queued") {
       notePageState(next, { state: "layout", hasLayout: Boolean(getPageLayout(next)?.blocks?.length) });
     }
+    navTrace("text:in", { gen, next, state: pageStates.get(next)?.state || "" });
     await loadCurrentPageText(next);
-    if (gen !== navGen) return;
+    navTrace("text:out", { gen, next });
+    if (gen !== navGen) {
+      navTrace("go:stale", { gen, next, at: "text" });
+      return;
+    }
     if (bringTranslation && navRevealPage === next) {
       navRevealPage = 0;
       revealTranslationPage(next);
     }
   }
-  if (gen !== navGen) return;
+  if (gen !== navGen) {
+    navTrace("go:stale", { gen, next, at: "render" });
+    return;
+  }
   settlePairChrome();
+  navTrace("render:in", { gen, next });
   await scheduleVisibleRenders();
+  navTrace("render:out", { gen, next });
   } finally {
+    navTrace("go:finally", { gen, next, depth: pageNavDepth });
     endPageNav();
   }
 }
@@ -8653,20 +8698,29 @@ async function scheduleVisibleRenders() {
   if (!pdfDoc) return;
   const gen = ++renderGen;
   const want = neighborPages(sourceNavPage(), pdfDoc.numPages, RENDER_RADIUS);
+  navTrace("sched:in", { gen, want: want.join(",") });
   for (const n of want) {
-    if (gen !== renderGen) return;
+    if (gen !== renderGen) {
+      navTrace("sched:stale", { gen, n });
+      return;
+    }
     const view = pageViews[n - 1];
     if (view) await renderView(view);
   }
+  navTrace("sched:out", { gen });
 }
 
 async function renderView(view) {
   if (!pdfDoc || !view) return;
+  navTrace("view:in", { num: view.num, task: view.renderTask ? 1 : 0, drawn: view.renderedScale === zoom && view.canvas.width ? 1 : 0 });
   if (view.renderedScale === zoom && view.canvas.width) {
     view.canvas.hidden = false;
+    navTrace("view:skip", { num: view.num });
     return;
   }
+  navTrace("view:getPage:in", { num: view.num });
   const page = await pdfDoc.getPage(view.num);
+  navTrace("view:getPage:out", { num: view.num });
   const viewport = page.getViewport({ scale: zoom });
   const canvas = view.canvas;
   const context = canvas.getContext("2d", { alpha: false });
@@ -8676,6 +8730,7 @@ async function renderView(view) {
   if (view.renderTask) {
     const pending = view.renderTask;
     view.renderTask = null;
+    navTrace("view:cancel:in", { num: view.num });
     try {
       pending.cancel();
     } catch {
@@ -8687,14 +8742,20 @@ async function renderView(view) {
       pending.promise.catch(() => {}),
       new Promise((resolve) => setTimeout(resolve, 1000))
     ]);
+    navTrace("view:cancel:out", { num: view.num });
+  } else {
+    navTrace("view:cancel:skip", { num: view.num });
   }
   const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
+  navTrace("view:draw:in", { num: view.num, w: canvas.width, h: canvas.height });
   view.renderTask = page.render({ canvasContext: context, viewport, transform });
   try {
     await view.renderTask.promise;
+    navTrace("view:draw:out", { num: view.num });
     canvas.hidden = false;
     view.renderedScale = zoom;
   } catch (err) {
+    navTrace("view:draw:err", { num: view.num, name: err?.name || "Error" });
     if (err?.name === "RenderingCancelledException") return;
     setStatus(PDF_COPY.error, true);
   }
@@ -8726,6 +8787,7 @@ function showOpenedLayout(layout, isStale) {
   }
   syncNoTextLayerHint(pageItems <= 0);
   noteLayoutReady(laidPage);
+  navTrace("layout-shown", { n: laidPage, blocks: layout.blocks?.length || 0, kind: layout.kind || "" });
   if (layout.kind === "blocks" || layout.kind === "readout") renderArticle();
   if (navRevealPage === laidPage) {
     navRevealPage = 0;
@@ -8785,12 +8847,16 @@ async function hydrateMissingVisualCrops(isStale = () => false) {
     if (!layoutNeedsVisualCrops(layout)) continue;
     let page = null;
     try {
+      navTrace("hydrate:getPage:in", { n });
       page = await pdfDoc.getPage(n);
+      navTrace("hydrate:getPage:out", { n });
       if (stale()) {
         paint();
         return changed;
       }
+      navTrace("hydrate:raster:in", { n });
       const raster = await renderPageRaster(page);
+      navTrace("hydrate:raster:out", { n });
       if (stale()) {
         paint();
         return changed;
@@ -8823,17 +8889,26 @@ async function primeKnownPages() {
   if (!pdfDoc) return;
   const stamp = docId;
   const stale = () => docId !== stamp;
+  navTrace("prime:layout:in");
   await loadPdfLayout();
+  navTrace("prime:layout:out");
   try {
+    navTrace("prime:saved:in", { n: pageNum });
     await savedTranslationFor(pageNum);
-  } catch {
+    navTrace("prime:saved:out", { n: pageNum });
+  } catch (error) {
+    navTrace("prime:saved:err", { n: pageNum, name: error?.name || "Error" });
     noteLibraryUnavailable();
   }
   if (stale()) return;
+  navTrace("prime:version:in");
   await layoutVersionNow();
+  navTrace("prime:version:out");
   if (stale()) return;
   const libraryChanged = seedLibraryProgress();
+  navTrace("prime:legacy:in");
   const legacyChanged = await seedLegacySkipPages();
+  navTrace("prime:legacy:out");
   if (stale()) return;
   if (libraryChanged || legacyChanged) renderArticle();
   hydrateMissingVisualCrops(stale).catch(() => {});
@@ -8847,13 +8922,19 @@ async function loadCurrentPageText(explicitPage) {
   textLoadPage = n;
   const translatingDoc = docId;
   const isStale = () => ticket !== textGen || translatingDoc !== docId;
+  navTrace("load:in", { n, ticket });
   await primeKnownPages();
+  navTrace("load:prime:out", { n, ticket });
   if (isStale()) return;
+  navTrace("load:version:in", { n, ticket, known: knownLayoutVersion ? 1 : 0 });
   const version = knownLayoutVersion || await layoutVersionNow();
+  navTrace("load:version:out", { n, ticket });
   const openedStored = getPageLayout(n);
   if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version)) {
     if (!showOpenedLayout(openedStored, isStale)) return;
+    navTrace("load:saved:in", { n, ticket, via: "stored" });
     const saved = await savedTranslationFor(n).catch(() => null);
+    navTrace("load:saved:out", { n, ticket, via: "stored" });
     if (isStale()) return;
     if (saved?.pairs) {
       const prepared = bindSavedPairs(saved, unitsForLayout(openedStored));
@@ -8892,7 +8973,9 @@ async function loadCurrentPageText(explicitPage) {
   let mode = pdfEngineMode();
   let preloadedSaved = null;
   if (mode === "legacy") {
+    navTrace("load:saved:in", { n, ticket, via: "legacy" });
     preloadedSaved = await savedTranslationFor(n).catch(() => null);
+    navTrace("load:saved:out", { n, ticket, via: "legacy" });
     if (isStale()) return;
     if (libraryDoc?.pages?.length) mode = "text-layer";
   }
@@ -8902,7 +8985,9 @@ async function loadCurrentPageText(explicitPage) {
     : Promise.resolve(null);
   try {
     if (wantsVendor) {
+      navTrace("load:ingest:in", { n, ticket, mode });
       const quick = await ingestTextLayerLayout(n, isStale, { persist: false });
+      navTrace("load:ingest:out", { n, ticket, mode });
       if (!showOpenedLayout(quick, isStale)) return;
       await ensuring;
       const saved = preloadedSaved || await savedTranslationFor(n).catch(() => null);
@@ -8951,12 +9036,18 @@ async function loadCurrentPageText(explicitPage) {
       updateTranslateControls();
       return;
     }
+    navTrace("load:ingest:in", { n, ticket, mode });
     const layout = mode === "text-layer" && pdfEngineMode() === "legacy"
       ? await ingestTextLayerLayout(n, isStale)
       : await ingestPageLayout(n, isStale);
+    navTrace("load:ingest:out", { n, ticket, mode });
     if (!showOpenedLayout(layout, isStale)) return;
+    navTrace("load:ensure:in", { n, ticket });
     await ensuring;
+    navTrace("load:ensure:out", { n, ticket });
+    navTrace("load:saved:in", { n, ticket, via: "after-ingest" });
     const saved = preloadedSaved || await savedTranslationFor(n).catch(() => null);
+    navTrace("load:saved:out", { n, ticket, via: "after-ingest" });
     if (saved?.readout && !isStale()) {
       setStatus(PDF_COPY.doneDocument);
       renderArticle();
