@@ -2125,9 +2125,9 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
 
 // pdf.js 4.10.38 continues a display render only on requestAnimationFrame.
 // If no frame arrives, page.render() never settles and open / goPage stay
-// there. The vendored build forces that flag off (pdf/vendor/pdf.min.mjs),
-// so later chunks run as microtasks. RenderTask hides the internal task
-// behind a private field, so this cannot be switched from here.
+// there. The vendored build forces that flag off and continues each slice
+// on a 0ms timer (pdf/vendor/pdf.min.mjs). RenderTask hides the internal
+// task behind a private field, so this cannot be switched from here.
 // window.requestAnimationFrame is not replaced.
 function renderPdfPage(page, params) {
   return page.render(params);
