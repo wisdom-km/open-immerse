@@ -178,12 +178,13 @@
   --oi-reader-mirror-size: 11px;
   --oi-reader-ui-weight: 500;
   --oi-reader-font-size: 16px;
-  --oi-reader-line-height: 1.9;
+  --oi-reader-fs-num: 16;
+  --oi-reader-line-height: clamp(1.5, calc(1.9 - 0.025 * (var(--oi-reader-fs-num) - 16)), 1.9);
   --oi-reader-tracking: 0.02em;
   --oi-reader-body-weight: 400;
 
   --oi-reader-measure: 36em;
-  --oi-reader-min-measure: 480px;
+  --oi-reader-min-measure: min(480px, 100%);
   --oi-reader-measure-inset: 80px;
   --oi-reader-measure-inset-lg: 56px;
   --oi-reader-measure-inset-md: 40px;
@@ -218,7 +219,7 @@
   --oi-reader-h4-tracking: 0.03em;
   --oi-reader-hnum-weight: 600;
   --oi-reader-hnum-gap: 0.6em;
-  --oi-reader-paragraph-gap: calc(1.125 * var(--oi-reader-font-size));
+  --oi-reader-paragraph-gap: clamp(0.75em, calc((1.125 - 0.02 * (var(--oi-reader-fs-num) - 16)) * 1em), 1.125em);
   --oi-reader-abstract-gap: 8px;
 
   --oi-reader-author-min: 140px;
@@ -227,14 +228,14 @@
   --oi-reader-authors-row-gap: 2px;
   --oi-reader-author-cell-gap: 2px;
   --oi-reader-author-name-weight: 600;
-  --oi-reader-author-name-size: 13px;
+  --oi-reader-author-name-size: max(13px, 0.8125em);
   --oi-reader-author-name-line: 1.35;
   --oi-reader-author-meta-weight: 400;
   --oi-reader-author-meta-size: 11.5px;
   --oi-reader-author-meta-line: 1.4;
   --oi-reader-footnotes-margin: 0 0 16px;
   --oi-reader-footnote-weight: 400;
-  --oi-reader-footnote-size: 11px;
+  --oi-reader-footnote-size: max(11px, 0.6875em);
   --oi-reader-footnote-line: 1.4;
   --oi-reader-crop-pad: 2px;
 
@@ -297,8 +298,8 @@
   --oi-reader-aa-icon-size: 32px;
   --oi-reader-aa-icon-radius: 8px;
   --oi-reader-aa-value-min: 42px;
-  --oi-reader-aa-value-weight: 500;
-  --oi-reader-aa-value-size: 14px;
+  --oi-reader-aa-value-weight: 600;
+  --oi-reader-aa-value-size: 20px;
   --oi-reader-aa-value-line: 1;
   --oi-reader-aa-text-pad: 0 4px 0 8px;
   --oi-reader-aa-text-weight: 400;
@@ -353,9 +354,10 @@
   --oi-reader-touch-min: 44px;
 
   --oi-reader-display-margin: 0.875em 0 1.125em;
-  --oi-reader-eqno: 400 15px/1 var(--oi-reader-latin);
+  --oi-reader-eqno: 400 max(15px, 0.9375em)/1 var(--oi-reader-latin);
   --oi-reader-figure-margin: 20px 0 24px;
-  --oi-reader-caption-font: 400 14px/1.65 var(--oi-reader-font);
+  --oi-reader-caption-font: 400 max(13px, calc(0.875 * var(--oi-reader-font-size)))/1.6 var(--oi-reader-font);
+  --oi-reader-caption-max: min(34em, 100%);
   --oi-reader-fade-h: 40px;
   --oi-reader-fade: linear-gradient(to bottom, transparent, var(--oi-reader-paper) 85%);
   /* 栏高 48，光学中线 y=24。1px 底线用 inset 阴影，不占布局。不要改回 49。 */
@@ -514,4 +516,13 @@
   --oi-reader-thumb: var(--oi-reader-green-thumb);
   --oi-reader-hover: var(--oi-reader-green-hover);
   --oi-reader-pair-bg-solid: var(--oi-reader-green-pair-bg-solid);
+}
+
+.oi-reader-app[data-reader-fs-band="m"],
+.oi-reader[data-reader-fs-band="m"] {
+  --oi-reader-tracking: 0.015em;
+}
+.oi-reader-app[data-reader-fs-band="l"],
+.oi-reader[data-reader-fs-band="l"] {
+  --oi-reader-tracking: 0.01em;
 }
