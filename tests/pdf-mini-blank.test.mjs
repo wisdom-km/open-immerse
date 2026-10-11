@@ -48,7 +48,8 @@ function multiPagePdf(pageCount) {
     const pageId = id;
     id += 1;
     kids.push(`${pageId} 0 R`);
-    const stream = `BT /F1 18 Tf 72 720 Td (Mini blank page ${n}) Tj ET`;
+    const marks = Array.from({ length: 30 }, (_, i) => `${i * 4} 40 3 3 re f`).join("\n");
+    const stream = `BT /F1 18 Tf 72 720 Td (Mini blank page ${n}) Tj ET\n${marks}`;
     objects.set(contentId, `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
     objects.set(
       pageId,
@@ -107,6 +108,62 @@ globalThis.__oiStaleRender = async () => {
     hidden: view.canvas.hidden === true,
     cancelled
   };
+};
+globalThis.__oiTimerCancelRender = async () => {
+  const nativeSet = window.setTimeout.bind(window);
+  const nativeClear = window.clearTimeout.bind(window);
+  const nativeCaf = window.cancelAnimationFrame.bind(window);
+  const nativeNow = Date.now;
+  const timers = [];
+  const clears = [];
+  const cafs = [];
+  let ticks = 0;
+  let task = null;
+  Date.now = () => nativeNow() + ticks++ * 50;
+  window.setTimeout = (fn, ms, ...args) => {
+    const id = nativeSet(fn, ms, ...args);
+    timers.push(id);
+    if (timers.length === 1 && task) queueMicrotask(() => {
+      try { task.cancel(); } catch { /* already settled */ }
+    });
+    return id;
+  };
+  window.clearTimeout = (id) => {
+    clears.push(id);
+    return nativeClear(id);
+  };
+  window.cancelAnimationFrame = (id) => {
+    cafs.push(id);
+    return nativeCaf(id);
+  };
+  try {
+    const page = await pdfDoc.getPage(1);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(viewport.width));
+    canvas.height = Math.max(1, Math.ceil(viewport.height));
+    task = page.render({
+      canvasContext: canvas.getContext("2d", { alpha: false }),
+      viewport
+    });
+    let rejected = "";
+    try {
+      await task.promise;
+    } catch (err) {
+      rejected = err?.name || "error";
+    }
+    return {
+      sawTimer: timers.length > 0,
+      cleared: timers.some((id) => clears.includes(id)),
+      cafOnTimer: timers.some((id) => cafs.includes(id)),
+      rejected
+    };
+  } finally {
+    Date.now = nativeNow;
+    window.setTimeout = nativeSet;
+    window.clearTimeout = nativeClear;
+    window.cancelAnimationFrame = nativeCaf;
+  }
 };
 globalThis.__oiRafStallRender = async () => {
   const native = window.requestAnimationFrame;
@@ -460,6 +517,11 @@ test("mini divider drags do not blank pages outside the render radius", { timeou
   assert.equal(race.renderedScale, race.zoom);
   assert.equal(race.hidden, false);
   assert.equal(race.cancelled, true);
+  const timerCancel = await evaluate("globalThis.__oiTimerCancelRender()");
+  assert.equal(timerCancel.sawTimer, true, "display render continuation did not use setTimeout");
+  assert.equal(timerCancel.cleared, true, "cancel did not clear the continuation timer");
+  assert.equal(timerCancel.cafOnTimer, false, "cancel passed the timer id to cancelAnimationFrame");
+  assert.equal(timerCancel.rejected, "RenderingCancelledException");
   const stalled = await evaluate("globalThis.__oiRafStallRender()");
   assert.equal(stalled.calls, 0, "display render still scheduled an animation frame");
   assert.ok(stalled.width > 0 && stalled.ms < 5000, JSON.stringify(stalled));

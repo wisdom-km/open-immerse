@@ -2129,8 +2129,16 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
 // on a 0ms timer (pdf/vendor/pdf.min.mjs). RenderTask hides the internal
 // task behind a private field, so this cannot be switched from here.
 // window.requestAnimationFrame is not replaced.
+// Sharp formula crops are the renders a resize can abandon. While one of
+// those is in flight, its task is recorded so a newer plan can cancel it
+// instead of leaving another timer chain on the event loop.
+let captureFormulaCropTask = false;
+let formulaCropRenderTask = null;
+
 function renderPdfPage(page, params) {
-  return page.render(params);
+  const task = page.render(params);
+  if (captureFormulaCropTask) formulaCropRenderTask = task;
+  return task;
 }
 
 /**
@@ -8438,7 +8446,20 @@ function noteFormulaCropPlan(layout) {
  * and DPR; this replans visuals whose stored key is stale. A miss keeps
  * the page-raster crop.
  */
-let formulaCropGen = 0;
+let formulaCropJob = null;
+let formulaCropPending = false;
+
+function preemptFormulaCropRender() {
+  formulaCropPending = true;
+  const task = formulaCropRenderTask;
+  formulaCropRenderTask = null;
+  if (!task) return;
+  try {
+    task.cancel();
+  } catch {
+    /* already finished */
+  }
+}
 
 function watchFormulaRasterRatio() {
   if (typeof window.matchMedia !== "function") return;
@@ -8459,49 +8480,87 @@ function watchFormulaRasterRatio() {
 
 async function refreshFormulaCropsForDisplay() {
   if (!pdfDoc) return;
-  const key = formulaCropPlanKeyNow();
-  const gen = ++formulaCropGen;
-  const root = document.documentElement;
-  if (root) root.dataset.oiFormulaCrop = "run";
-  try {
-    const total = Number(pdfDoc.numPages) || 0;
-    let changed = false;
-    for (let n = 1; n <= total; n += 1) {
-      if (gen !== formulaCropGen) return;
-      const layout = getPageLayout(n);
-      if (!layout?.blocks?.length || layout.formulaPlanKey === key) continue;
-      if (!layout.blocks.some((block) => isSourceRedrawBlock(block) && block.imageUrl)) {
-        noteFormulaCropPlan(layout);
-        continue;
-      }
-      let page = null;
-      try {
-        page = await pdfDoc.getPage(n);
-      } catch {
-        continue;
-      }
-      if (gen !== formulaCropGen) return;
-      const raster = {
-        pixelWidth: layout.pixelWidth,
-        pixelHeight: layout.pixelHeight
-      };
-      for (const block of layout.blocks) {
-        if (gen !== formulaCropGen) return;
-        if (!isSourceRedrawBlock(block) || !block.imageUrl) continue;
-        const sharp = await renderSharpFormulaCrop(page, raster, block, n);
-        if (sharp && sharp !== block.imageUrl) {
-          block.imageUrl = sharp;
-          block.surface = "redraw";
-          changed = true;
-          clearSlotPainted(n);
-        }
-      }
-      noteFormulaCropPlan(layout);
-    }
-    if (changed && gen === formulaCropGen) renderArticle();
-  } finally {
-    if (gen === formulaCropGen && root) root.dataset.oiFormulaCrop = "idle";
+  // A resize storm used to start one walk per event and leave every walk's
+  // page.render() scheduling slice timers. One walk runs at a time. A newer
+  // plan cancels the block currently drawing and is applied once after it.
+  if (formulaCropJob) {
+    preemptFormulaCropRender();
+    return;
   }
+  const root = document.documentElement;
+  let finishWalk = () => {};
+  formulaCropJob = new Promise((resolve) => {
+    finishWalk = resolve;
+  });
+  (async () => {
+    if (root) root.dataset.oiFormulaCrop = "run";
+    try {
+      do {
+        formulaCropPending = false;
+        const key = formulaCropPlanKeyNow();
+        const total = Number(pdfDoc?.numPages) || 0;
+        let changed = false;
+        for (let n = 1; n <= total; n += 1) {
+          if (formulaCropPending || !pdfDoc) break;
+          const layout = getPageLayout(n);
+          if (!layout?.blocks?.length || layout.formulaPlanKey === key) continue;
+          if (!layout.blocks.some((block) => isSourceRedrawBlock(block) && block.imageUrl)) {
+            noteFormulaCropPlan(layout);
+            continue;
+          }
+          let page = null;
+          try {
+            page = await pdfDoc.getPage(n);
+          } catch {
+            continue;
+          }
+          if (formulaCropPending || !pdfDoc) break;
+          const raster = {
+            pixelWidth: layout.pixelWidth,
+            pixelHeight: layout.pixelHeight
+          };
+          let pageDone = true;
+          for (const block of layout.blocks) {
+            if (formulaCropPending || !pdfDoc) {
+              pageDone = false;
+              break;
+            }
+            if (!isSourceRedrawBlock(block) || !block.imageUrl) continue;
+            captureFormulaCropTask = true;
+            let sharp = "";
+            try {
+              sharp = await renderSharpFormulaCrop(page, raster, block, n);
+            } finally {
+              captureFormulaCropTask = false;
+              formulaCropRenderTask = null;
+            }
+            if (formulaCropPending) {
+              pageDone = false;
+              break;
+            }
+            if (sharp && sharp !== block.imageUrl) {
+              block.imageUrl = sharp;
+              block.surface = "redraw";
+              changed = true;
+              clearSlotPainted(n);
+            }
+          }
+          if (!pageDone) break;
+          noteFormulaCropPlan(layout);
+        }
+        if (changed) renderArticle();
+      } while (formulaCropPending && pdfDoc);
+    } finally {
+      formulaCropJob = null;
+      if (!formulaCropPending && root) root.dataset.oiFormulaCrop = "idle";
+      finishWalk();
+    }
+    if (formulaCropPending) {
+      formulaCropPending = false;
+      if (pdfDoc) refreshFormulaCropsForDisplay();
+      else if (root) root.dataset.oiFormulaCrop = "idle";
+    }
+  })();
 }
 
 function setMirrorZoom(next) {
