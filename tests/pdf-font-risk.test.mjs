@@ -390,6 +390,14 @@ describe("Aa font-size risk checks on DPO", () => {
           localStorage.setItem("reader.sourceMode", "side");
           localStorage.setItem("reader.follow", "0");
         } catch {}
+        const nativeFetch = globalThis.fetch;
+        if (typeof nativeFetch === "function") {
+          globalThis.fetch = function(input, init) {
+            const url = typeof input === "string" ? input : (input && input.url) || "";
+            if (String(url).includes(":8765/")) return Promise.reject(new TypeError("library unavailable"));
+            return nativeFetch.call(this, input, init);
+          };
+        }
         globalThis.chrome = {
           storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
           runtime: {
