@@ -8404,11 +8404,10 @@ async function goPage(dir) {
   }
   if (gen !== navGen) return;
   settlePairChrome();
+  await scheduleVisibleRenders();
   } finally {
     endPageNav();
   }
-  if (gen !== navGen) return;
-  await scheduleVisibleRenders();
 }
 
 function formulaCropPlanKeyNow() {
@@ -8675,12 +8674,19 @@ async function renderView(view) {
   canvas.width = Math.floor(viewport.width * outputScale);
   canvas.height = Math.floor(viewport.height * outputScale);
   if (view.renderTask) {
-    view.renderTask.cancel();
+    const pending = view.renderTask;
+    view.renderTask = null;
     try {
-      await view.renderTask.promise;
+      pending.cancel();
     } catch {
-      /* cancelled */
+      /* already finished */
     }
+    // A cancelled pdf.js task can leave its promise pending. Waiting for it
+    // held goPage open after the reader page had already painted.
+    await Promise.race([
+      pending.promise.catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 1000))
+    ]);
   }
   const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
   view.renderTask = page.render({ canvasContext: context, viewport, transform });
