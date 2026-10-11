@@ -336,34 +336,6 @@ async function animationFrame() {
   })`, 5000);
 }
 
-function formatNavTrace(payload) {
-  if (!payload) return "trace unread";
-  if (payload.readError) return `trace unread: ${payload.readError}`;
-  const tail = Array.isArray(payload.tail) ? payload.tail : [];
-  const origin = tail.length ? Number(tail[0].t) || 0 : 0;
-  const lines = tail.map((row) => {
-    const extra = Object.entries(row)
-      .filter(([key]) => !["t", "step", "nav", "text", "render", "page"].includes(key))
-      .map(([key, value]) => `${key}=${value}`)
-      .join(" ");
-    const at = Number(row.t) - origin;
-    return `+${at} ${row.step} nav=${row.nav} text=${row.text} render=${row.render} page=${row.page}${extra ? ` ${extra}` : ""}`;
-  });
-  return `raf=${payload.ticks} hidden=${payload.hidden} trace:\n${lines.join("\n")}`;
-}
-
-async function readNavTrace() {
-  try {
-    return await handle.evaluate(`(() => ({
-      ticks: globalThis.__oiRafTicks || 0,
-      hidden: document.hidden,
-      tail: Array.isArray(globalThis.__oiNavTrace) ? globalThis.__oiNavTrace.slice(-40) : []
-    }))()`, 8000);
-  } catch (error) {
-    return { readError: error instanceof Error ? error.message : String(error) };
-  }
-}
-
 async function waitForLayout({ page = 0, allPages = false, blockPage = "", blockId = "", timeout = 120000 } = {}) {
   const started = Date.now();
   let last = "";
@@ -388,8 +360,7 @@ async function waitForLayout({ page = 0, allPages = false, blockPage = "", block
     try { await animationFrame(); } catch { /* context is still changing */ }
   }
   const detail = failed ? `${failed}; ${layoutDetail(sample)}` : layoutDetail(sample);
-  const trace = formatNavTrace(await readNavTrace());
-  throw new Error(page ? `page ${page} did not paint (${detail})\n${trace}` : `layout did not settle (${detail})\n${trace}`);
+  throw new Error(page ? `page ${page} did not paint (${detail})` : `layout did not settle (${detail})`);
 }
 
 describe("Aa font-size risk checks on DPO", () => {
@@ -419,13 +390,6 @@ describe("Aa font-size risk checks on DPO", () => {
           localStorage.setItem("reader.sourceMode", "side");
           localStorage.setItem("reader.follow", "0");
         } catch {}
-        globalThis.__oiNavTrace = [];
-        globalThis.__oiRafTicks = 0;
-        const beat = () => {
-          globalThis.__oiRafTicks += 1;
-          requestAnimationFrame(beat);
-        };
-        requestAnimationFrame(beat);
         const nativeFetch = globalThis.fetch;
         if (typeof nativeFetch === "function") {
           globalThis.fetch = function(input, init) {
