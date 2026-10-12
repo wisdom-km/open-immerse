@@ -166,7 +166,11 @@ import {
   visualAlt
 } from "../lib/pdf-blocks.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
-import { injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
+import { createBlockAnchor, injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
+import { exportMarkdown } from "../lib/notes-io.js";
+import { dismissPersistHint, persistHintDismissed, readNotesUiPrefs, writeNotesUiPrefs } from "../lib/notes-prefs.js";
+import { firstLineQuote } from "../lib/notes-view-model.js";
+import { mountNotesUi, textRangeOffsets } from "./notes-panel.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
@@ -329,6 +333,7 @@ let libraryArticle = null;
 let libraryDoc = null;
 let libraryProbe = null;
 let notesDocHash = "";
+let notesUi = null;
 let titleStructure = null;
 const librarySourceSent = new Set();
 const enqueueLibraryWrite = createLibraryWriteQueue();
@@ -510,6 +515,7 @@ function init() {
   bindSourcePointer();
   watchSourceAvailability();
   bindSelToolbar();
+  installNotesUi();
   $("translatePage").addEventListener("click", () => startTranslate());
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("translateMenuRetranslate")?.addEventListener("click", () => {
@@ -568,6 +574,10 @@ function applyPageProgress(message) {
 }
 
 function onKey(event) {
+  if (event.key === "Escape" && event.target?.closest?.(".oi-note-editor") && notesUi?.consumeEscape()) {
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape" && closeAaPanel()) {
     event.preventDefault();
     return;
@@ -597,6 +607,10 @@ function onKey(event) {
     return;
   }
   if (event.key === "Escape" && closeSourcePop(true)) {
+    event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && notesUi?.consumeEscape()) {
     event.preventDefault();
     return;
   }
@@ -643,7 +657,18 @@ function onKey(event) {
     return;
   }
   if (eventTargetIsField(event.target) || event.target?.isContentEditable) return;
+  if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.key === "z" || event.key === "Z")) {
+    if (notesUi?.undo()) {
+      event.preventDefault();
+      return;
+    }
+  }
   if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (readerPrefs.singleKey !== false && event.shiftKey && !focusInOpenMenu() && !focusInAaPanel() && (event.key === "N" || event.key === "n")) {
+    event.preventDefault();
+    void notesQuestionShortcut();
+    return;
+  }
   const sourceScrollKey = event.key === "ArrowUp" || event.key === "ArrowDown"
     || event.key === "PageUp" || event.key === "PageDown"
     || event.key === "Home" || event.key === "End" || event.key === " ";
@@ -698,8 +723,23 @@ function onKey(event) {
       toggleSourceSide();
       return;
     }
+    if (event.key === "m" || event.key === "M") {
+      event.preventDefault();
+      notesUi?.toggle();
+      return;
+    }
+    if (event.key === "n" || event.key === "N") {
+      event.preventDefault();
+      void notesShortcut("note");
+      return;
+    }
+    if (event.key === "h" || event.key === "H") {
+      event.preventDefault();
+      void notesShortcut("highlight");
+      return;
+    }
   }
-  if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && event.target?.closest?.(".split-handle")) return;
+  if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && event.target?.closest?.(".split-handle, .oi-notes")) return;
   if (event.key === "ArrowLeft") {
     noteUserSourceInput();
     goPage(-1);
@@ -1928,6 +1968,178 @@ function notePagesAround(center) {
   return pages;
 }
 
+function installNotesUi() {
+  notesUi = mountNotesUi({
+    hasDoc: () => Boolean(pdfDoc),
+    docHash: () => notesDocHashNow(),
+    docTitle: () => $("docTitle")?.title || $("docTitle")?.textContent || "笔记",
+    list: (hash) => sharedNotesStore().list(hash),
+    listTrash: (hash) => sharedNotesStore().listTrash(hash),
+    put: (input) => sharedNotesStore().put(input),
+    softDelete: (id) => sharedNotesStore().softDelete(id),
+    restore: (id) => sharedNotesStore().restore(id),
+    purge: (id) => sharedNotesStore().purge(id),
+    exportDoc: (hash) => sharedNotesStore().exportDoc(hash),
+    exportMarkdown: (bundle) => exportMarkdown(bundle),
+    importBundle: (bundle) => sharedNotesStore().import(bundle, { mode: "merge" }),
+    subscribe: (cb) => sharedNotesStore().subscribe(cb),
+    download: (filename, blob) => downloadBlob(filename, blob),
+    readPrefs: () => readNotesUiPrefs(localStorage),
+    persistDismissed: (hash) => persistHintDismissed(readNotesUiPrefs(localStorage), hash),
+    dismissPersist: (hash) => {
+      const next = dismissPersistHint(readNotesUiPrefs(localStorage), hash);
+      writeNotesUiPrefs(localStorage, next);
+    },
+    persistDenied: async () => {
+      // T2a already calls persist() on the first write and records notesPersistGranted.
+      // Opening the panel must not ask again. The banner only follows a recorded refusal.
+      const store = sharedNotesStore();
+      const record = store.persistRecord || store.memory?.persistRecord || null;
+      return record?.notesPersistGranted === false;
+    },
+    flow: () => readerFlowEl(),
+    pane: () => translateScrollRoot(),
+    pointerFine: () => window.matchMedia?.("(pointer: fine)")?.matches !== false,
+    currentParagraph: () => currentNoteParagraph(),
+    anchorForParagraph: (current) => anchorForParagraph(current),
+    blockOrder: () => noteBlockOrder(),
+    jumpPage: (page) => jumpToNotePage(page),
+    jumpAnchor: (note) => jumpToNoteAnchor(note),
+    onOpenChange: () => applySourceLayout(false)
+  });
+}
+
+function currentNoteParagraph() {
+  const flow = readerFlowEl();
+  if (!flow) return null;
+  const el = flow.querySelector(".rf-block.is-pair-current[data-bid]")
+    || (currentPairId && flow.querySelector(`.rf-block[data-pair-id="${cssEscape(currentPairId)}"]`));
+  if (!el?.dataset?.bid) return null;
+  const page = Number(el.dataset.srcPage) || Number(el.dataset.page) || 0;
+  const translation = el.querySelector(".rf-zh")?.textContent || "";
+  return {
+    el,
+    bid: el.dataset.bid,
+    page,
+    translation,
+    preview: firstLineQuote(translation),
+    pairId: el.dataset.pairId || ""
+  };
+}
+
+function anchorForParagraph(current) {
+  const page = current?.page || 0;
+  const block = (getPageLayout(page)?.blocks || []).find((item) => String(item.bid || "") === current.bid)
+    || { bid: current.bid, id: current.bid, sourceText: "", page };
+  const translation = current.translation || "";
+  const preview = current.preview || firstLineQuote(translation);
+  const end = preview ? Math.max(preview.length, translation.indexOf(preview) + preview.length) : 0;
+  return createBlockAnchor({
+    docHash: notesDocHashNow(),
+    block,
+    page,
+    translation,
+    layoutRev: knownLayoutVersion || "",
+    start: 0,
+    end
+  });
+}
+
+function noteBlockOrder() {
+  const order = new Map();
+  const flow = readerFlowEl();
+  if (!flow) return order;
+  [...flow.querySelectorAll(".rf-block[data-bid]")].forEach((el, index) => {
+    if (el.dataset.bid) order.set(el.dataset.bid, index);
+  });
+  return order;
+}
+
+function jumpToNotePage(page) {
+  const n = Number(page);
+  if (!(n >= 1)) return;
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  const node = flow?.querySelector(`.rf-block[data-src-page="${n}"]`)
+    || flow?.querySelector(`.rf-page[data-page="${n}"]`);
+  if (node && pane) {
+    const top = node.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+    pane.scrollTop = Math.max(0, top - pane.clientHeight / 3);
+  }
+  revealSourcePage(n);
+}
+
+function jumpToNoteAnchor(note) {
+  const bid = note?.anchor?.bid || "";
+  const flow = readerFlowEl();
+  const el = bid ? flow?.querySelector(`.rf-block[data-bid="${cssEscape(bid)}"]`) : null;
+  if (!el) {
+    jumpToNotePage(note?.page);
+    return;
+  }
+  const pane = translateScrollRoot();
+  if (pane) {
+    const top = el.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+    pane.scrollTop = Math.max(0, top - pane.clientHeight / 3);
+  }
+  if (el.dataset.pairId) {
+    currentPairId = el.dataset.pairId;
+    paintPairChrome();
+    jumpTranslationToSource(el);
+  } else jumpToNotePage(note?.page);
+}
+
+function notesFromSel(ctx, kind) {
+  const payload = notePayloadFromSelection(ctx, kind);
+  if (!payload) return;
+  closeSelToolbar({ restore: false });
+  void notesUi?.fromSelection(payload);
+}
+
+async function notesShortcut(kind) {
+  if (!pdfDoc || !notesUi) return;
+  const ctx = readSelContext();
+  if (ctx) {
+    notesFromSel(ctx, kind);
+    return;
+  }
+  if (kind === "note") notesUi.composeCurrent();
+}
+
+async function notesQuestionShortcut() {
+  if (!pdfDoc || !notesUi) return;
+  const ctx = readSelContext();
+  if (!ctx) return;
+  notesFromSel(ctx, "question");
+}
+
+function notePayloadFromSelection(ctx, kind) {
+  const bid = ctx?.bids?.[0] || "";
+  if (!bid) return null;
+  const el = readerFlowEl()?.querySelector(`.rf-block[data-bid="${cssEscape(bid)}"]`);
+  const page = Number(el?.dataset?.srcPage) || Number(ctx.srcPage) || 0;
+  const block = (getPageLayout(page)?.blocks || []).find((item) => String(item.bid || "") === bid)
+    || { bid, id: bid, sourceText: "", page };
+  const zh = el?.querySelector(".rf-zh");
+  const translation = zh?.textContent || ctx.text || "";
+  const offsets = zh && ctx.range ? textRangeOffsets(zh, ctx.range) : { start: 0, end: String(ctx.text || "").length };
+  const built = createBlockAnchor({
+    docHash: notesDocHashNow(),
+    block,
+    page,
+    translation,
+    layoutRev: knownLayoutVersion || "",
+    start: offsets.start,
+    end: offsets.end
+  });
+  return {
+    kind,
+    page,
+    pairId: ctx.pairIds?.[0] || el?.dataset?.pairId || "",
+    ...built
+  };
+}
+
 function notesDocHashNow() {
   return libraryDoc?.hash || notesDocHash || "";
 }
@@ -1953,7 +2165,7 @@ function exposeNotesProbe() {
   });
 }
 
-/** Layout or retranslate finished. Re-anchor this page ±1. No note UI. */
+/** Layout or retranslate finished. Re-anchor this page ±1, then repaint marks. */
 function refreshNoteAnchors(page, reason) {
   const center = Number(page);
   if (!(center >= 1)) return;
@@ -1974,6 +2186,8 @@ function refreshNoteAnchors(page, reason) {
     if (!result || !bucket) return;
     bucket[center] = result;
     bucket.last = result;
+  }).then(() => {
+    notesUi?.paint();
   }).catch(() => {});
 }
 
@@ -3742,9 +3956,14 @@ function bindMoreMenu() {
     closeMoreMenu(true);
     showSoonToast();
   });
-  for (const id of ["menuNotes", "menuAsk", "menuLibrary"]) {
+  $("menuNotes")?.addEventListener("click", () => {
+    closeMoreMenu(true);
+    notesUi?.toggle();
+  });
+  for (const id of ["menuAsk", "menuLibrary"]) {
     $(id)?.addEventListener("click", () => {
       closeMoreMenu(true);
+      notesUi?.close();
       showSoonToast();
     });
   }
@@ -3820,9 +4039,13 @@ function bindViewChrome() {
     setReaderView(button.dataset.view);
   });
   bindSourceModeChrome();
-  for (const id of ["tocButton", "notesButton", "askButton", "libraryButton"]) {
-    $(id)?.addEventListener("click", () => showSoonToast());
+  for (const id of ["tocButton", "askButton", "libraryButton"]) {
+    $(id)?.addEventListener("click", () => {
+      if (id === "askButton" || id === "libraryButton") notesUi?.close();
+      showSoonToast();
+    });
   }
+  $("notesButton")?.addEventListener("click", () => notesUi?.toggle());
   setReaderView(document.querySelector(".workspace")?.dataset.view || "zh");
 }
 
@@ -4008,6 +4231,11 @@ function applySourceLayout(anchor) {
   const px = collapsed ? MINI_RAIL_PX : normalizeMiniWidth(readerPrefs.miniWidth);
   workspace.style.setProperty("--oi-mini-width", `${px}px`);
   if (mode === "mini" && !collapsed) paintMiniWidth(workspace, px);
+  // Notes in mini occupy the source column at reader.panelWidth. Apply after
+  // paintMiniWidth so the stored source width (and its aria) stay untouched.
+  if (workspace.dataset.notesOpen === "true" && mode === "mini") {
+    workspace.style.setProperty("--oi-mini-width", `${readNotesUiPrefs(localStorage).panelWidth}px`);
+  }
   else if (mode === "side") {
     const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
     writeSplitAria(workspace, Number.isFinite(ratio) ? ratio : defaultSplitRatio(width));
@@ -4087,6 +4315,8 @@ function paintMiniWidth(workspace, width) {
 }
 
 function persistMiniWidth(workspace) {
+  // While notes are open the column shows reader.panelWidth, not the source mini width.
+  if (workspace.dataset.notesOpen === "true") return;
   const raw = parseFloat(workspace.style.getPropertyValue("--oi-mini-width"));
   const width = normalizeMiniWidth(raw);
   readerPrefs = { ...readerPrefs, miniWidth: width };
@@ -4246,6 +4476,21 @@ function bindSelToolbar() {
   registerSelAction({ id: "see-source", run: (ctx) => seeSourceForSelection(ctx) });
   registerSelAction({ id: "jump-source", run: (ctx) => jumpSourceForSelection(ctx) });
   registerSelAction({ id: "copy", run: (ctx) => copySelectionText(ctx) });
+  registerSelAction({
+    id: "note",
+    enabled: () => Boolean(pdfDoc),
+    run: (ctx) => notesFromSel(ctx, "note")
+  });
+  registerSelAction({
+    id: "highlight",
+    enabled: () => Boolean(pdfDoc),
+    run: (ctx) => notesFromSel(ctx, "highlight")
+  });
+  registerSelAction({
+    id: "question",
+    enabled: () => Boolean(pdfDoc),
+    run: (ctx) => notesFromSel(ctx, "question")
+  });
   document.addEventListener("mouseup", onSelGestureEnd);
   document.addEventListener("touchend", onSelGestureEnd);
   document.addEventListener("keyup", onSelGestureEnd);
@@ -4406,17 +4651,24 @@ function selToolbarButton(item) {
   return btn;
 }
 
+function selMenuHint(item) {
+  if (item.keyshortcuts === "Shift+N") return "⇧N";
+  if (item.keyshortcuts === "h") return "h";
+  return "";
+}
+
 function selMenuButton(item) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.setAttribute("role", "menuitem");
   btn.dataset.selAction = item.id;
   btn.tabIndex = -1;
-  if (item.id === "copy") {
+  const hint = item.id === "copy" ? "⌘C" : selMenuHint(item);
+  if (hint) {
     btn.append(document.createTextNode(item.label));
     const key = document.createElement("span");
     key.className = "k";
-    key.textContent = "⌘C";
+    key.textContent = hint;
     btn.append(key);
   } else btn.textContent = item.label;
   if (item.keyshortcuts) btn.setAttribute("aria-keyshortcuts", item.keyshortcuts);
@@ -5727,6 +5979,7 @@ function renderArticle() {
   updateTranslateControls();
   refreshDocStatus();
   noteAutoProgress();
+  notesUi?.paint();
 }
 
 function noteAutoProgress() {
@@ -8454,6 +8707,7 @@ async function adoptDoc(doc, title) {
   libraryDoc = null;
   libraryProbe = null;
   notesDocHash = "";
+  notesUi?.onDocumentReset();
   titleStructure = null;
   layoutCache.clear();
   formulaRasterCache.clear();
@@ -8470,6 +8724,7 @@ async function adoptDoc(doc, title) {
     setDocTitle(title);
   }
   setHasDoc(true);
+  void resolveNotesDocHash().then((hash) => notesUi?.onDocument(hash));
   await buildPages();
   if (!syncMiniFitZoom()) {
     requestAnimationFrame(() => {
@@ -9394,6 +9649,14 @@ function syncNoTextLayerHint(showLegacy) {
 function setHasDoc(has) {
   const bar = document.querySelector(".toolbar");
   if (bar) bar.dataset.hasDoc = has ? "1" : "0";
+  const notesBtn = $("notesButton");
+  if (notesBtn) notesBtn.disabled = !has;
+  const menuNotes = $("menuNotes");
+  if (menuNotes) {
+    menuNotes.disabled = !has;
+    menuNotes.setAttribute("aria-disabled", has ? "false" : "true");
+  }
+  if (!has) notesUi?.close(false);
   if (!has) {
     $("pages").replaceChildren();
     pageViews = [];
