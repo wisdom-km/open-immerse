@@ -238,8 +238,11 @@ test("empty copy, filenames, and markdown stay local to the notes model", () => 
 test("panel width and the persist hint live beside the locked reader prefs", () => {
   const storage = {};
   assert.equal(normalizePanelWidth("nope"), NOTES_PANEL_WIDTH_DEFAULT);
+  assert.equal(normalizePanelWidth(null), NOTES_PANEL_WIDTH_DEFAULT);
+  assert.equal(normalizePanelWidth(""), NOTES_PANEL_WIDTH_DEFAULT);
   assert.equal(normalizePanelWidth(10), 360);
   assert.equal(normalizePanelWidth(900), 640);
+  assert.equal(readNotesUiPrefs({}).panelWidth, NOTES_PANEL_WIDTH_DEFAULT);
   const written = writeNotesUiPrefs(storage, { panelWidth: 480 });
   assert.equal(written.panelWidth, 480);
   assert.equal(storage[NOTES_PANEL_WIDTH_KEY], "480");
@@ -275,4 +278,17 @@ test("question stays disabled in the builtin registry and the panel has no cross
   assert.match(panelSrc, /本文档不再提示/);
   assert.match(panelSrc, /给这段写笔记/);
   assert.equal(panelSrc.includes("chrome.storage.sync"), false);
+});
+
+test("NB-14 import menu clicks the file input inside the notes panel", () => {
+  const menuAt = panelSrc.indexOf("导入 JSON…");
+  const handler = panelSrc.slice(menuAt, menuAt + 80);
+  assert.match(handler, /root\.querySelector\("\.oi-notes-file"\)\?\.click\(\)/);
+  assert.match(panelSrc, /root\.append\(fileInput\)/);
+  assert.match(panelSrc, /if \(fileInput\) nodes\.push\(fileInput\)/);
+  assert.equal(panelSrc.includes("slot.append(file"), false);
+  assert.equal(panelSrc.includes('class: "oi-notes-file"'), true);
+  const fileRule = readFileSync(join(root, "pdf/notes-panel.css"), "utf8");
+  assert.match(fileRule, /\.oi-notes-file\s*\{[^}]*clip:\s*rect\(0 0 0 0\)/);
+  assert.equal(/\.oi-notes-file\s*\{\s*display:\s*none/.test(fileRule), false);
 });

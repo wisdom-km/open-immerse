@@ -540,7 +540,16 @@
   outline-offset: var(--oi-reader-focus-offset);
 }
 .oi-notes-menu [role="menuitem"]:focus-visible { outline-offset: 0; }
-.oi-notes-file { display: none; }
+.oi-notes-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 @media (max-width: 899px) {
   .oi-note-actions { visibility: visible; }

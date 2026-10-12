@@ -116,6 +116,7 @@ export function mountNotesUi(api) {
   let undoStamp = 0;
   let undoPaused = false;
   let subscribed = false;
+  let fileInput = null;
 
   function counts() {
     return filterCounts(state.notes);
@@ -256,6 +257,7 @@ export function mountNotesUi(api) {
     if (ticket !== loadTicket) return;
     render();
     paint();
+    // Reopen shows a refusal that was already recorded. This does not call persist().
     void maybePersistHint();
   }
 
@@ -680,7 +682,9 @@ export function mountNotesUi(api) {
   function render() {
     const scroll = root.querySelector(".oi-notes-scroll");
     const scrollTop = scroll?.scrollTop || 0;
-    root.replaceChildren(renderHead(), renderBody(), renderUndo());
+    const nodes = [renderHead(), renderBody(), renderUndo()];
+    if (fileInput) nodes.push(fileInput);
+    root.replaceChildren(...nodes);
     const nextScroll = root.querySelector(".oi-notes-scroll");
     if (nextScroll) nextScroll.scrollTop = scrollTop;
     hydrateMath(root);
@@ -1455,13 +1459,19 @@ export function mountNotesUi(api) {
     return false;
   }
 
-  const file = h("input", { class: "oi-notes-file", type: "file", accept: "application/json,.json", hidden: true });
-  file.addEventListener("change", () => {
-    const picked = file.files?.[0];
-    file.value = "";
+  fileInput = h("input", {
+    class: "oi-notes-file",
+    type: "file",
+    accept: "application/json,.json",
+    tabindex: "-1",
+    "aria-hidden": "true"
+  });
+  fileInput.addEventListener("change", () => {
+    const picked = fileInput.files?.[0];
+    fileInput.value = "";
     if (picked) void importFile(picked);
   });
-  slot.append(file);
+  root.append(fileInput);
 
   document.addEventListener("pointerdown", (event) => {
     if (state.menuOpen && !event.target.closest?.(".oi-notes-menu, .oi-notes-more")) {

@@ -169,6 +169,7 @@ import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { createBlockAnchor, injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
 import { exportMarkdown } from "../lib/notes-io.js";
 import { dismissPersistHint, persistHintDismissed, readNotesUiPrefs, writeNotesUiPrefs } from "../lib/notes-prefs.js";
+import { recordedPersistDenied } from "../lib/notes-store.js";
 import { firstLineQuote } from "../lib/notes-view-model.js";
 import { mountNotesUi, textRangeOffsets } from "./notes-panel.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
@@ -1991,11 +1992,23 @@ function installNotesUi() {
       writeNotesUiPrefs(localStorage, next);
     },
     persistDenied: async () => {
-      // T2a already calls persist() on the first write and records notesPersistGranted.
-      // Opening the panel must not ask again. The banner only follows a recorded refusal.
+      // persist() runs on the user's put, not when the panel opens and not
+      // when a background re-anchor writes. A later open reads the recorded
+      // refusal and does not ask the browser again.
       const store = sharedNotesStore();
       const record = store.persistRecord || store.memory?.persistRecord || null;
-      return record?.notesPersistGranted === false;
+      if (record && Object.prototype.hasOwnProperty.call(record, "notesPersistGranted")) {
+        return recordedPersistDenied(record, undefined);
+      }
+      try {
+        const get = globalThis.chrome?.storage?.local?.get;
+        if (typeof get !== "function") return false;
+        const bag = await get("notesPersistGranted");
+        if (!bag || !Object.prototype.hasOwnProperty.call(bag, "notesPersistGranted")) return false;
+        return recordedPersistDenied(null, bag.notesPersistGranted);
+      } catch {
+        return false;
+      }
     },
     flow: () => readerFlowEl(),
     pane: () => translateScrollRoot(),
@@ -2155,6 +2168,21 @@ function exposeNotesProbe() {
   if (!viewerUnderTest()) return;
   const bucket = globalThis.__oiNotes || (globalThis.__oiNotes = {});
   bucket.store = sharedNotesStore();
+  bucket.reanchor = async (page, reason) => {
+    const center = Number(page);
+    if (!(center >= 1)) return null;
+    const result = await reanchorOpenPage({
+      docHash: notesDocHashNow(),
+      page: center,
+      pages: notePagesAround(center),
+      reason: reason || "layout",
+      layoutRev: knownLayoutVersion,
+      resolveDocHash: resolveNotesDocHash
+    });
+    if (result) bucket.last = result;
+    notesUi?.paint();
+    return result;
+  };
   bucket.injectDeadExact = (spec) => injectDeadExactNote(spec, {
     store: () => bucket.store,
     docHash: notesDocHashNow,
@@ -4689,22 +4717,29 @@ function positionSelToolbar(ctx) {
   bar.style.insetInlineStart = `${Math.round(place.inlineStart + root.scrollLeft)}px`;
 }
 
+function selKeyboardHome(buttons) {
+  const enabled = buttons.filter((btn) => !btn.disabled);
+  // 笔记 is the leftmost main action once a PDF is open. F10 still starts on
+  // 看原文 so ArrowRight walks see-source → jump-source → more.
+  return enabled.find((btn) => btn.dataset.selAction === "see-source") || enabled[0] || null;
+}
+
 function armSelTabStops() {
   const buttons = selToolbarButtons();
-  const enabled = buttons.filter((btn) => !btn.disabled);
+  const home = selKeyboardHome(buttons);
   buttons.forEach((btn) => {
-    btn.tabIndex = enabled.length && btn === enabled[0] ? 0 : -1;
+    btn.tabIndex = home && btn === home ? 0 : -1;
   });
 }
 
 function focusFirstSelButton() {
   const buttons = selToolbarButtons();
-  const enabled = buttons.filter((btn) => !btn.disabled);
-  if (!enabled[0]) return;
+  const home = selKeyboardHome(buttons);
+  if (!home) return;
   buttons.forEach((btn) => {
-    btn.tabIndex = btn === enabled[0] ? 0 : -1;
+    btn.tabIndex = btn === home ? 0 : -1;
   });
-  enabled[0].focus();
+  home.focus();
 }
 
 function selToolbarButtons() {

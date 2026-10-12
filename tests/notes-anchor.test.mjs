@@ -479,3 +479,153 @@ test("real Attention and DPO blocks re-anchor without fuzzy recovery", { timeout
   assert.equal(kept.page, dpoText.page.page);
   assert.equal((await store.list(DOC)).some((item) => item.id === "lost-1"), true);
 });
+
+test("位置近似 notes are not stored again when only the check or layout rev changes", async () => {
+  let persistCalls = 0;
+  const store = createNotesStore({
+    memory: true,
+    persist: async () => {
+      persistCalls += 1;
+      return false;
+    },
+    deviceId: "device-a",
+    now: () => 40,
+    createId: () => "unused-approx"
+  });
+  const doc = "doc-approx";
+  const pages = [{
+    page: 1,
+    blocks: [{
+      bid: "b1-p1-tother",
+      id: "p1-b1",
+      page: 1,
+      sourceText: "other source text",
+      text: "other source text",
+      translation: "位置近似的引文"
+    }]
+  }];
+  const quoteAnchor = {
+    docHash: doc,
+    bid: "b1-p1-tmissing",
+    page: 1,
+    srcHead: "zzzznotthesource",
+    quote: "位置近似的引文",
+    prefix: "",
+    suffix: "",
+    quoteSrc: { quote: "nope", prefix: "", suffix: "" },
+    offset: { start: 0, end: 0 }
+  };
+  await store.put({
+    id: "approx",
+    docHash: doc,
+    kind: "highlight",
+    page: 1,
+    anchor: quoteAnchor,
+    anchorState: { status: "quote", layoutRev: "source-v3:old", checkedAt: 1 }
+  });
+  const first = await reanchorOpenPage({
+    store,
+    docHash: doc,
+    page: 1,
+    pages,
+    layoutRev: "source-v3:new",
+    checkedAt: 2
+  });
+  assert.equal(first.results.find((row) => row.note.id === "approx").stored, false);
+  assert.equal((await store.get("approx")).rev, 1);
+  assert.equal((await store.get("approx")).anchorState.layoutRev, "source-v3:old");
+  assert.equal((await store.get("approx")).anchorState.status, "quote");
+  const second = await reanchorOpenPage({
+    store,
+    docHash: doc,
+    page: 1,
+    pages,
+    layoutRev: "source-v3:newer",
+    checkedAt: 3
+  });
+  assert.equal(second.results.find((row) => row.note.id === "approx").stored, false);
+  assert.equal((await store.get("approx")).rev, 1);
+  assert.equal(persistCalls, 1);
+
+  await store.put({
+    id: "blocked",
+    docHash: doc,
+    kind: "highlight",
+    page: 1,
+    anchor: {
+      docHash: doc,
+      bid: "b1-p1-tother",
+      page: 1,
+      quote: "没有这段译文",
+      prefix: "",
+      suffix: "",
+      offset: { start: 0, end: 0 }
+    },
+    anchorState: { status: "block", layoutRev: "source-v3:old", checkedAt: 1 }
+  });
+  const blocked = await reanchorOpenPage({
+    store,
+    docHash: doc,
+    page: 1,
+    pages,
+    layoutRev: "source-v3:block",
+    checkedAt: 4
+  });
+  assert.equal(blocked.results.find((row) => row.note.id === "blocked").stored, false);
+  assert.equal((await store.get("blocked")).rev, 1);
+  assert.equal((await store.get("blocked")).anchorState.status, "block");
+
+  await store.put({
+    id: "exact-1",
+    docHash: doc,
+    kind: "highlight",
+    page: 1,
+    anchor: {
+      docHash: doc,
+      bid: "b1-p1-tother",
+      page: 1,
+      quote: "位置近似的引文",
+      prefix: "",
+      suffix: "",
+      offset: { start: 0, end: "位置近似的引文".length }
+    },
+    anchorState: { status: "exact", layoutRev: "source-v3:old", checkedAt: 1 }
+  });
+  const exact = await reanchorOpenPage({
+    store,
+    docHash: doc,
+    page: 1,
+    pages,
+    layoutRev: REV_A,
+    checkedAt: 5
+  });
+  assert.equal(exact.results.find((row) => row.note.id === "exact-1").stored, true);
+  assert.equal((await store.get("exact-1")).rev, 2);
+  assert.equal((await store.get("exact-1")).anchorState.status, "exact");
+  assert.equal((await store.get("approx")).rev, 1);
+  assert.equal(persistCalls, 1);
+
+  const lostPages = [{
+    page: 1,
+    blocks: [{
+      bid: "b1-p1-tother",
+      id: "p1-b1",
+      page: 1,
+      sourceText: "other source text",
+      text: "other source text",
+      translation: "完全不同"
+    }]
+  }];
+  const lost = await reanchorOpenPage({
+    store,
+    docHash: doc,
+    page: 1,
+    pages: lostPages,
+    layoutRev: REV_B,
+    checkedAt: 6
+  });
+  assert.equal(lost.results.find((row) => row.note.id === "approx").stored, true);
+  assert.equal((await store.get("approx")).anchorState.status, "lost");
+  assert.equal((await store.get("approx")).anchor.bid, "b1-p1-tmissing");
+  assert.equal(persistCalls, 1);
+});
