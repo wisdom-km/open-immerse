@@ -18,6 +18,44 @@
 .workspace[data-notes-open="true"] > .pane-pdf {
   visibility: hidden;
 }
+.workspace[data-layout="3"] > .pane-pdf {
+  visibility: visible;
+}
+.workspace[data-layout="3"] {
+  grid-template-columns: var(--oi-three-source) var(--oi-reader-split-w) var(--oi-three-translate) var(--oi-reader-split-w) var(--oi-notes-pane-w);
+  grid-template-areas: "pdf splitA translate splitB notes";
+}
+.workspace[data-layout="3"][data-notes-side="start"] {
+  grid-template-columns: var(--oi-notes-pane-w) var(--oi-reader-split-w) var(--oi-three-translate) var(--oi-reader-split-w) var(--oi-three-source);
+  grid-template-areas: "notes splitB translate splitA pdf";
+}
+.workspace[data-layout="3"] > #sideSlot {
+  display: flex;
+  grid-area: notes;
+  position: relative;
+  width: auto;
+  height: auto;
+  visibility: visible;
+  pointer-events: auto;
+  z-index: 1;
+}
+.workspace[data-layout="pair"][data-notes-side="end"] {
+  grid-template-columns: minmax(0, 1fr) var(--oi-reader-split-w) var(--oi-notes-pane-w);
+  grid-template-areas: "translate splitB notes";
+}
+.workspace[data-layout="pair"][data-notes-side="start"] {
+  grid-template-columns: var(--oi-notes-pane-w) var(--oi-reader-split-w) minmax(0, 1fr);
+  grid-template-areas: "notes splitB translate";
+}
+.workspace[data-layout="pair"] > #sideSlot {
+  display: flex;
+  grid-area: notes;
+  position: relative;
+  width: auto;
+  height: auto;
+  visibility: visible;
+  pointer-events: auto;
+}
 .workspace[data-notes-open="true"][data-source-mode="mini"] {
   --oi-mini-width: var(--oi-notes-panel-w, 440px);
 }
@@ -132,6 +170,11 @@
   width: max-content;
   min-width: 220px;
   max-width: calc(100% - 16px);
+}
+.oi-notes-menu-rule {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--oi-reader-line);
 }
 .oi-notes-menu .mh {
   margin: 0;

@@ -5,6 +5,7 @@
  * mountNotesUi(api) is the only entry the reader calls.
  */
 
+import { notesCloseTitle, notesSideMenuModel } from "../lib/notes-pane.js";
 import { NotesStoreError } from "../lib/notes-io.js";
 import {
   NOTE_FILTERS,
@@ -166,7 +167,11 @@ export function mountNotesUi(api) {
     if (mode === "mini" || mode === "hidden") {
       workspace.style.setProperty("--oi-notes-panel-w", `${prefs.panelWidth}px`);
     } else workspace.style.removeProperty("--oi-notes-panel-w");
-    const panelWidth = slot.clientWidth || 0;
+    const layout = workspace.dataset.layout || "";
+    const paneWidth = Number(prefs.notesWidth);
+    const panelWidth = layout === "3" || layout === "pair"
+      ? (Number.isFinite(paneWidth) && paneWidth > 0 ? paneWidth : slot.clientWidth || 0)
+      : (slot.clientWidth || 0);
     root.classList.toggle("slim", panelWidth > 0 && panelWidth < 480);
     root.classList.toggle("xs", panelWidth > 0 && panelWidth < NOTES_XS);
     root.dataset.place = place;
@@ -779,7 +784,9 @@ export function mountNotesUi(api) {
     more.addEventListener("click", () => {
       state.menuOpen = !state.menuOpen;
       render();
-      if (state.menuOpen) root.querySelector(".oi-notes-menu [role='menuitem']")?.focus();
+      if (state.menuOpen) {
+        root.querySelector(".oi-notes-menu [role='menuitemradio'], .oi-notes-menu [role='menuitem']")?.focus();
+      }
     });
     head.append(seg, reserve, trash, rule, more, closeButton());
     if (state.menuOpen) head.append(renderMenu());
@@ -805,17 +812,39 @@ export function mountNotesUi(api) {
   }
 
   function closeButton() {
-    return h("button", {
+    const button = h("button", {
       type: "button",
       class: "oi-notes-icon",
       "data-notes-close": "true",
       "aria-label": "关闭笔记",
+      title: notesCloseTitle(workspace.dataset.layout),
       text: "×"
     });
+    return button;
+  }
+
+  function syncLayoutChrome() {
+    const close = root.querySelector("[data-notes-close]");
+    if (close) close.title = notesCloseTitle(workspace.dataset.layout);
+    const side = (api.readPrefs?.() || {}).notesPaneSide === "start" ? "start" : "end";
+    for (const item of root.querySelectorAll("[data-notes-side]")) {
+      const on = item.dataset.notesSide === side;
+      item.setAttribute("aria-checked", on ? "true" : "false");
+      const label = item.querySelector("[data-notes-side-label]");
+      const name = item.dataset.notesSide === "start" ? "笔记在左侧" : "笔记在右侧";
+      if (label) label.textContent = on ? `✓ ${name}` : name;
+    }
+    syncPlace();
   }
 
   function renderMenu() {
     const menu = h("div", { class: "oi-notes-menu more-menu", role: "menu", "aria-label": "导入导出" });
+    if (typeof api.setNotesPaneSide === "function") {
+      const place = notesSideMenuModel((api.readPrefs?.() || {}).notesPaneSide);
+      menu.append(menuHeading(place.heading));
+      for (const item of place.items) menu.append(sideMenuItem(item, place.shortcut));
+      menu.append(h("div", { class: "oi-notes-menu-rule", role: "separator" }));
+    }
     const copy = notesMenuModel();
     menu.append(
       menuHeading(copy.exportHeading),
@@ -825,6 +854,24 @@ export function mountNotesUi(api) {
       menuItem("导入 JSON…", () => root.querySelector(".oi-notes-file")?.click(), ".json")
     );
     return menu;
+  }
+
+  function sideMenuItem(item, shortcut) {
+    const button = h("button", {
+      type: "button",
+      class: "more-item",
+      role: "menuitemradio",
+      "data-notes-side": item.side,
+      "aria-checked": item.checked ? "true" : "false"
+    });
+    button.append(h("span", { "data-notes-side-label": item.side, text: item.checked ? `✓ ${item.label}` : item.label }));
+    button.append(h("span", { class: "r", text: shortcut }));
+    button.addEventListener("click", () => {
+      state.menuOpen = false;
+      api.setNotesPaneSide?.(item.side);
+      render();
+    });
+    return button;
   }
 
   function menuHeading(text) {
@@ -1675,7 +1722,7 @@ export function mountNotesUi(api) {
   const observer = new MutationObserver(() => {
     if (state.open) syncPlace();
   });
-  observer.observe(workspace, { attributes: true, attributeFilter: ["data-source-mode", "data-source-side"] });
+  observer.observe(workspace, { attributes: true, attributeFilter: ["data-source-mode", "data-source-side", "data-layout"] });
 
   syncChrome();
 
@@ -1683,6 +1730,7 @@ export function mountNotesUi(api) {
     toggle,
     open,
     close,
+    syncLayoutChrome,
     isOpen: () => state.open,
     consumeEscape,
     undo,

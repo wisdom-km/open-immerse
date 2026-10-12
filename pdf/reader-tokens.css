@@ -550,6 +550,10 @@
   --oi-notes-banner-line-h: 32px;
   --oi-notes-safe-bottom: 72px;
   --oi-notes-xs: 340px;
+  --oi-notes-pane-min: 320px;
+  --oi-notes-pane-max: 480px;
+  --oi-notes-pane-default: 360px;
+  --oi-notes-pane-w: var(--notes-width, 360px);
   --oi-notes-undo-ms: 6000;
   --oi-notes-save-debounce-ms: 600;
   --oi-notes-loading-delay-ms: 150;

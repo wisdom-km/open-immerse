@@ -169,6 +169,24 @@ import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { createBlockAnchor, injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
 import { exportMarkdown } from "../lib/notes-io.js";
 import { dismissPersistHint, persistHintDismissed, readNotesUiPrefs, writeNotesUiPrefs } from "../lib/notes-prefs.js";
+import {
+  NOTES_PANE_RESIZE_DEBOUNCE_MS,
+  NOTES_PANE_WIDTH_DEFAULT,
+  NOTES_PANE_WIDTH_MIN,
+  applyNotesSplitAria,
+  clampDraggedNotesWidth,
+  notesChromeKind,
+  notesDomOrder,
+  notesSideFromSource,
+  notesSplitAria,
+  notesSplitKeyStep,
+  notesWidthLimit,
+  notesWorkspaceWidth,
+  reorderWorkspacePanes,
+  sourceSideFromNotes,
+  threePaneColumns,
+  threeSourceAria
+} from "../lib/notes-pane.js";
 import { recordedPersistDenied } from "../lib/notes-store.js";
 import { firstLineQuote } from "../lib/notes-view-model.js";
 import { mountNotesUi, textRangeOffsets } from "./notes-panel.js";
@@ -335,6 +353,12 @@ let libraryDoc = null;
 let libraryProbe = null;
 let notesDocHash = "";
 let notesUi = null;
+let notesLayoutLatch = "";
+let notesPaintedKind = "";
+let notesUserPin = "";
+let notesTempUpgrade = "";
+let notesResizeTimer = 0;
+let notesChromeLock = false;
 let titleStructure = null;
 const librarySourceSent = new Set();
 const enqueueLibraryWrite = createLibraryWriteQueue();
@@ -665,11 +689,17 @@ function onKey(event) {
     }
   }
   if (event.metaKey || event.ctrlKey || event.altKey) return;
-  if (readerPrefs.singleKey !== false && event.shiftKey && !focusInOpenMenu() && !focusInAaPanel() && (event.key === "N" || event.key === "n")) {
-    event.preventDefault();
-    void notesQuestionShortcut();
-    return;
-  }
+    if (readerPrefs.singleKey !== false && event.shiftKey && !focusInOpenMenu() && !focusInAaPanel() && (event.key === "N" || event.key === "n")) {
+      event.preventDefault();
+      void notesQuestionShortcut();
+      return;
+    }
+    if (event.shiftKey && !focusInOpenMenu() && !focusInAaPanel() && (event.key === "M" || event.key === "m")) {
+      event.preventDefault();
+      const current = readNotesUiPrefs(localStorage).notesPaneSide;
+      setNotesPaneSide(current === "start" ? "end" : "start");
+      return;
+    }
   const sourceScrollKey = event.key === "ArrowUp" || event.key === "ArrowDown"
     || event.key === "PageUp" || event.key === "PageDown"
     || event.key === "Home" || event.key === "End" || event.key === " ";
@@ -721,7 +751,10 @@ function onKey(event) {
     }
     if (event.key === "s" || event.key === "S") {
       event.preventDefault();
-      toggleSourceSide();
+      if (document.querySelector(".workspace")?.dataset.layout === "3") {
+        const current = readNotesUiPrefs(localStorage).notesPaneSide;
+        setNotesPaneSide(current === "start" ? "end" : "start");
+      } else toggleSourceSide();
       return;
     }
     if (event.key === "m" || event.key === "M") {
@@ -1321,13 +1354,29 @@ function translateScrollRoot() {
   return $("translateScroll") || document.querySelector(".pane-translate");
 }
 
+function sourceSplitHandle(workspace) {
+  const root = workspace || document.querySelector(".workspace");
+  return root?.querySelector('.split-handle[data-split="source"]') || null;
+}
+
+function notesSplitHandle(workspace) {
+  const root = workspace || document.querySelector(".workspace");
+  return root?.querySelector('.split-handle[data-split="notes"]') || null;
+}
+
 function bindSplitResize() {
   const workspace = document.querySelector(".workspace");
-  const handle = document.querySelector(".split-handle");
+  const handle = sourceSplitHandle(workspace);
   if (!workspace || !handle) return;
   handle.addEventListener("pointerdown", (event) => startSplitDrag(event, workspace, handle));
   handle.addEventListener("dblclick", () => resetSplit(workspace));
   handle.addEventListener("keydown", (event) => onSplitKey(event, workspace));
+  const notesHandle = notesSplitHandle(workspace);
+  if (notesHandle) {
+    notesHandle.addEventListener("pointerdown", (event) => startNotesSplitDrag(event, workspace, notesHandle));
+    notesHandle.addEventListener("dblclick", () => resetNotesSplit(workspace));
+    notesHandle.addEventListener("keydown", (event) => onNotesSplitKey(event, workspace));
+  }
   window.addEventListener("resize", () => {
     syncSplitAria(workspace);
     scheduleMiniFitSettle();
@@ -1358,8 +1407,14 @@ function startSplitDrag(event, workspace, handle) {
     handle.removeEventListener("pointerup", onUp);
     handle.removeEventListener("pointercancel", onUp);
     if (mode === "mini") endMiniFitDrag();
-    if (workspace.dataset.sourceMode === "mini") persistMiniWidth(workspace);
-    else persistSplitRatio(workspace);
+    if (workspace.dataset.layout === "3") persistSplitRatio(workspace);
+    else if (workspace.dataset.sourceMode === "mini") {
+      if (workspace.dataset.notesOpen === "true") persistSlotPanelWidth(workspace);
+      else persistMiniWidth(workspace);
+    } else {
+      persistSplitRatio(workspace);
+      if (workspace.dataset.notesOpen === "true") persistSlotPanelWidth(workspace);
+    }
   };
   handle.addEventListener("pointermove", onMove);
   handle.addEventListener("pointerup", onUp);
@@ -1393,6 +1448,15 @@ function persistSplitRatio(workspace) {
 }
 
 function resetSplit(workspace) {
+  if (workspace?.dataset.layout === "3") {
+    paintThreeColumns(workspace, { splitRatio: defaultSplitRatio(readerWidth()) });
+    persistSplitRatio(workspace);
+    syncZoomChip();
+    syncMirrorZoomChip();
+    applyPaperMetrics();
+    layoutCapsule({ keepAnchor: true });
+    return;
+  }
   if (workspace?.dataset.sourceMode === "mini") {
     readerPrefs = { ...readerPrefs, miniWidth: MINI_WIDTH_DEFAULT };
     persistReaderPrefs();
@@ -1413,8 +1477,23 @@ function resetSplit(workspace) {
 }
 
 function writeSplitAria(workspace, ratio) {
-  const handle = workspace?.querySelector(".split-handle");
+  const handle = sourceSplitHandle(workspace);
   if (!handle) return;
+  if (workspace?.dataset.layout === "3") {
+    const prefs = readNotesUiPrefs(localStorage);
+    const model = threeSourceAria({
+      workspaceWidth: measuredWorkspaceWidth(workspace),
+      notesWidth: prefs.notesWidth,
+      splitRatio: ratio
+    });
+    handle.setAttribute("aria-valuemin", String(model.valuemin));
+    handle.setAttribute("aria-valuemax", String(model.valuemax));
+    handle.setAttribute("aria-valuenow", String(model.valuenow));
+    handle.setAttribute("aria-valuetext", model.valuetext);
+    const bubble = handle.querySelector(".split-bubble");
+    if (bubble) bubble.textContent = model.bubble;
+    return;
+  }
   const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
   const model = splitAriaModel({
     width,
@@ -1462,6 +1541,10 @@ function bindAutoHideScrollbars(root = document) {
 }
 
 function onSplitKey(event, workspace) {
+  if (workspace?.dataset.layout === "3") {
+    onThreeSourceKey(event, workspace);
+    return;
+  }
   const step = splitKeyStep({ key: event.key, shift: event.shiftKey, side: appliedSide === "end" ? "end" : "start" });
   if (!step) return;
   event.preventDefault();
@@ -1474,6 +1557,15 @@ function onSplitKey(event, workspace) {
     else if (step.to === "reset") next = MINI_WIDTH_DEFAULT;
     else if (Number.isFinite(step.delta)) next = normalizeMiniWidth(next + step.delta);
     else return;
+    if (workspace.dataset.notesOpen === "true") {
+      writeNotesUiPrefs(localStorage, { panelWidth: next });
+      paintMiniWidth(workspace, next);
+      syncZoomChip();
+      syncMirrorZoomChip();
+      applyPaperMetrics();
+      layoutCapsule({ keepAnchor: true });
+      return;
+    }
     readerPrefs = { ...readerPrefs, miniWidth: next };
     persistReaderPrefs();
     paintMiniWidth(workspace, next);
@@ -1512,6 +1604,10 @@ function splitColumnWidth(workspace) {
 }
 
 function applySplit(workspace, clientX) {
+  if (workspace?.dataset.layout === "3") {
+    applyThreeSourceSplit(workspace, clientX);
+    return;
+  }
   if (workspace?.dataset.sourceMode === "mini") {
     if (workspace.dataset.miniCollapsed === "true") return;
     const rect = workspace.getBoundingClientRect();
@@ -2018,7 +2114,11 @@ function installNotesUi() {
     blockOrder: () => noteBlockOrder(),
     jumpPage: (page) => jumpToNotePage(page),
     jumpAnchor: (note) => jumpToNoteAnchor(note),
-    onOpenChange: () => applySourceLayout(false)
+    onOpenChange: (open) => {
+      if (open) syncNotesChrome({ opening: true });
+      else closeNotesChrome();
+    },
+    setNotesPaneSide: (side) => setNotesPaneSide(side)
   });
 }
 
@@ -3947,7 +4047,7 @@ function reorderPanes(side, anchor) {
   const workspace = document.querySelector(".workspace");
   const source = $("pdfPane");
   const translation = document.querySelector(".pane-translate");
-  const split = document.querySelector(".split-handle");
+  const split = sourceSplitHandle(workspace);
   if (!workspace || !source || !translation || !split) return;
   if (source.parentElement !== workspace) return;
   const map = { source, translation, split };
@@ -4241,6 +4341,10 @@ function commitSourceMode(mode) {
     showToast(SOURCE_MODE_NARROW_HINT);
     return;
   }
+  if (document.querySelector(".workspace")?.dataset.notesOpen === "true") {
+    chooseNotesSourceMode(next);
+    return;
+  }
   readerPrefs = { ...readerPrefs, sourceMode: next };
   persistReaderPrefs();
   if (sourcePopOpen() && next !== "hidden") closeSourcePop(false);
@@ -4256,6 +4360,15 @@ function setMiniCollapsed(collapsed) {
 }
 
 function cycleSourceModeFromKey() {
+  const workspace = document.querySelector(".workspace");
+  const layout = workspace?.dataset.layout || "";
+  if (workspace?.dataset.notesOpen === "true" && (layout === "3" || layout === "pair")) {
+    const shown = layout === "3" ? "side" : "hidden";
+    const order = ["side", "mini", "hidden"];
+    const next = order[(Math.max(0, order.indexOf(shown)) + 1) % order.length];
+    chooseNotesSourceMode(next);
+    return;
+  }
   const result = cycleSourceMode({
     width: readerWidth(),
     current: currentSourceMode(),
@@ -4268,11 +4381,346 @@ function cycleSourceModeFromKey() {
   commitSourceMode(result.mode);
 }
 
+function measuredWorkspaceWidth(workspace) {
+  const rect = workspace?.getBoundingClientRect();
+  return notesWorkspaceWidth({
+    windowWidth: readerWidth(),
+    measured: rect?.width,
+    drawerDocked: Boolean(document.querySelector("[data-drawer-docked]"))
+  });
+}
+
+function persistSlotPanelWidth(workspace) {
+  if (workspace?.dataset.notesOpen !== "true") return;
+  if (workspace.dataset.layout === "3" || workspace.dataset.layout === "pair") return;
+  if (workspace.dataset.sourceMode === "mini") {
+    const raw = parseFloat(workspace.style.getPropertyValue("--oi-mini-width"));
+    if (raw > 0) writeNotesUiPrefs(localStorage, { panelWidth: raw });
+    return;
+  }
+  const slot = document.getElementById("sideSlot");
+  const measured = slot?.getBoundingClientRect().width;
+  if (measured > 0) writeNotesUiPrefs(localStorage, { panelWidth: measured });
+}
+
+function setNotesSplitVisible(on) {
+  const handle = notesSplitHandle();
+  if (!handle) return;
+  handle.hidden = !on;
+  handle.tabIndex = on ? 0 : -1;
+  handle.setAttribute("aria-hidden", on ? "false" : "true");
+}
+
+function paintThreeColumns(workspace, { notesWidth, splitRatio } = {}) {
+  const prefs = readNotesUiPrefs(localStorage);
+  const width = measuredWorkspaceWidth(workspace);
+  const ratio = Number.isFinite(splitRatio)
+    ? splitRatio
+    : (Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio")) || defaultSplitRatio(readerWidth()));
+  const notes = notesWidth == null ? prefs.notesWidth : notesWidth;
+  const columns = threePaneColumns({ workspaceWidth: width, notesWidth: notes, splitRatio: ratio });
+  workspace.style.setProperty("--oi-three-source", `${columns.source}px`);
+  workspace.style.setProperty("--oi-three-translate", `${columns.translate}px`);
+  workspace.style.setProperty("--oi-split-ratio", String(columns.ratio));
+  workspace.style.setProperty("--notes-width", `${columns.notes}px`);
+  workspace.style.setProperty("--oi-notes-pane-w", `${columns.notes}px`);
+  const sourceAria = threeSourceAria({
+    workspaceWidth: width,
+    notesWidth: columns.notes,
+    splitRatio: columns.ratio
+  });
+  const handle = sourceSplitHandle(workspace);
+  if (handle) {
+    handle.setAttribute("aria-valuemin", String(sourceAria.valuemin));
+    handle.setAttribute("aria-valuemax", String(sourceAria.valuemax));
+    handle.setAttribute("aria-valuenow", String(sourceAria.valuenow));
+    handle.setAttribute("aria-valuetext", sourceAria.valuetext);
+    const bubble = handle.querySelector(".split-bubble");
+    if (bubble) bubble.textContent = sourceAria.bubble;
+  }
+  applyNotesSplitAria(notesSplitHandle(workspace), notesSplitAria({ notesWidth: columns.notes, workspaceWidth: width }));
+  return columns;
+}
+
+function applyThreeSourceSplit(workspace, clientX) {
+  const prefs = readNotesUiPrefs(localStorage);
+  const rect = workspace.getBoundingClientRect();
+  const width = measuredWorkspaceWidth(workspace);
+  const columns = threePaneColumns({ workspaceWidth: width, notesWidth: prefs.notesWidth, splitRatio: 0.5 });
+  const notesSide = workspace.dataset.notesSide === "start" ? "start" : "end";
+  const blockWidth = Math.max(1, columns.rest + 8);
+  const origin = notesSide === "start" ? rect.x + columns.notes + 8 : rect.x;
+  const ratio = splitPointerRatio({
+    clientX,
+    rect: { x: origin, width: blockWidth, end: origin + blockWidth },
+    splitW: 8,
+    side: notesSide === "start" ? "end" : "start"
+  });
+  paintThreeColumns(workspace, { notesWidth: prefs.notesWidth, splitRatio: ratio });
+}
+
+function applyNotesColumnDrag(workspace, clientX) {
+  const rect = workspace.getBoundingClientRect();
+  const width = measuredWorkspaceWidth(workspace);
+  const notesSide = workspace.dataset.notesSide === "start" ? "start" : "end";
+  const raw = notesSide === "start" ? clientX - rect.x : rect.right - clientX;
+  const next = clampDraggedNotesWidth({ workspaceWidth: width, requested: raw - 4 });
+  const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+  paintThreeColumns(workspace, {
+    notesWidth: next,
+    splitRatio: Number.isFinite(ratio) ? ratio : defaultSplitRatio(readerWidth())
+  });
+}
+
+function persistNotesColumnWidth(workspace) {
+  const painted = parseFloat(workspace.style.getPropertyValue("--notes-width"));
+  if (painted > 0) writeNotesUiPrefs(localStorage, { notesWidth: painted });
+}
+
+function startNotesSplitDrag(event, workspace, handle) {
+  if (event.button !== 0 || workspace?.dataset.layout !== "3") return;
+  event.preventDefault();
+  handle.setPointerCapture(event.pointerId);
+  handle.classList.add("is-dragging");
+  workspace.classList.add("is-splitting");
+  const onMove = (moveEvent) => applyNotesColumnDrag(workspace, moveEvent.clientX);
+  const onUp = () => {
+    handle.classList.remove("is-dragging");
+    workspace.classList.remove("is-splitting");
+    handle.removeEventListener("pointermove", onMove);
+    handle.removeEventListener("pointerup", onUp);
+    handle.removeEventListener("pointercancel", onUp);
+    persistNotesColumnWidth(workspace);
+    notesUi?.syncLayoutChrome?.();
+  };
+  handle.addEventListener("pointermove", onMove);
+  handle.addEventListener("pointerup", onUp);
+  handle.addEventListener("pointercancel", onUp);
+  applyNotesColumnDrag(workspace, event.clientX);
+}
+
+function resetNotesSplit(workspace) {
+  if (workspace?.dataset.layout !== "3") return;
+  const next = clampDraggedNotesWidth({
+    workspaceWidth: measuredWorkspaceWidth(workspace),
+    requested: NOTES_PANE_WIDTH_DEFAULT
+  });
+  const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+  paintThreeColumns(workspace, {
+    notesWidth: next,
+    splitRatio: Number.isFinite(ratio) ? ratio : defaultSplitRatio(readerWidth())
+  });
+  persistNotesColumnWidth(workspace);
+  notesUi?.syncLayoutChrome?.();
+}
+
+function onNotesSplitKey(event, workspace) {
+  if (workspace?.dataset.layout !== "3") return;
+  const step = notesSplitKeyStep({
+    key: event.key,
+    shift: event.shiftKey,
+    notesSide: workspace.dataset.notesSide
+  });
+  if (!step) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const width = measuredWorkspaceWidth(workspace);
+  const prefs = readNotesUiPrefs(localStorage);
+  let next = prefs.notesWidth;
+  if (step.to === "min") next = NOTES_PANE_WIDTH_MIN;
+  else if (step.to === "max") next = notesWidthLimit(width);
+  else if (step.to === "reset") next = NOTES_PANE_WIDTH_DEFAULT;
+  else if (Number.isFinite(step.delta)) next = prefs.notesWidth + step.delta;
+  else return;
+  next = clampDraggedNotesWidth({ workspaceWidth: width, requested: next });
+  const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+  paintThreeColumns(workspace, {
+    notesWidth: next,
+    splitRatio: Number.isFinite(ratio) ? ratio : defaultSplitRatio(readerWidth())
+  });
+  persistNotesColumnWidth(workspace);
+  notesUi?.syncLayoutChrome?.();
+}
+
+function onThreeSourceKey(event, workspace) {
+  const step = splitKeyStep({
+    key: event.key,
+    shift: event.shiftKey,
+    side: workspace.dataset.notesSide === "start" ? "end" : "start"
+  });
+  if (!step) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (step.to === "reset") {
+    resetSplit(workspace);
+    return;
+  }
+  const prefs = readNotesUiPrefs(localStorage);
+  const width = measuredWorkspaceWidth(workspace);
+  const current = threePaneColumns({
+    workspaceWidth: width,
+    notesWidth: prefs.notesWidth,
+    splitRatio: Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio")) || defaultSplitRatio(readerWidth())
+  });
+  let ratio = current.ratio;
+  if (step.to === "min") ratio = 0;
+  else if (step.to === "max") ratio = 1;
+  else if (Number.isFinite(step.delta)) ratio = (current.source + step.delta) / Math.max(1, current.rest);
+  paintThreeColumns(workspace, { notesWidth: prefs.notesWidth, splitRatio: ratio });
+  persistSplitRatio(workspace);
+}
+
+function applyNotesChrome(kind) {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  notesChromeLock = true;
+  try {
+    const prevKind = notesPaintedKind;
+    notesPaintedKind = kind;
+    if (kind === "three" || kind === "slot") notesLayoutLatch = kind;
+    const prefs = readNotesUiPrefs(localStorage);
+    const notesSide = prefs.notesPaneSide === "start" ? "start" : "end";
+    workspace.dataset.notesSide = notesSide;
+    const storedSide = readerPrefs.sourceSide === "end" ? "end" : "start";
+    if (kind === "three") {
+      const paired = sourceSideFromNotes(notesSide);
+      workspace.dataset.layout = "3";
+      workspace.dataset.sourceSide = paired;
+      workspace.dataset.sourceMode = "side";
+      workspace.dataset.miniCollapsed = "false";
+      appliedSide = paired;
+      reorderWorkspacePanes(workspace, notesDomOrder({ layout: "3", notesSide, sourceSide: paired }));
+      setNotesSplitVisible(true);
+      const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+      paintThreeColumns(workspace, { splitRatio: Number.isFinite(ratio) ? ratio : defaultSplitRatio(readerWidth()) });
+    } else if (kind === "pair") {
+      workspace.dataset.layout = "pair";
+      workspace.dataset.sourceMode = "hidden";
+      reorderWorkspacePanes(workspace, notesDomOrder({ layout: "pair", notesSide, sourceSide: storedSide }));
+      setNotesSplitVisible(false);
+      workspace.style.setProperty("--notes-width", `${prefs.notesWidth}px`);
+      workspace.style.setProperty("--oi-notes-pane-w", `${prefs.notesWidth}px`);
+    } else {
+      delete workspace.dataset.layout;
+      setNotesSplitVisible(false);
+      const mode = kind === "sheet"
+        ? "hidden"
+        : effectiveSourceMode({ width: readerWidth(), stored: readerPrefs.sourceMode });
+      workspace.dataset.sourceMode = mode;
+      reorderWorkspacePanes(workspace, notesDomOrder({
+        layout: "",
+        notesSide,
+        sourceSide: workspace.dataset.sourceSide === "end" ? "end" : "start"
+      }));
+      if (mode === "mini" || mode === "hidden") {
+        workspace.style.setProperty("--oi-notes-panel-w", `${prefs.panelWidth}px`);
+        if (mode === "mini") workspace.style.setProperty("--oi-mini-width", `${prefs.panelWidth}px`);
+      }
+    }
+    if (prevKind && prevKind !== kind) applyDefaultSourceZoom(workspace.dataset.sourceMode || "side");
+    syncSourceModeControls();
+    notesUi?.syncLayoutChrome?.();
+  } finally {
+    notesChromeLock = false;
+  }
+}
+
+function syncNotesChrome({ opening = false } = {}) {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace || workspace.dataset.notesOpen !== "true") return;
+  if (opening) {
+    const implied = notesSideFromSource(readerPrefs.sourceSide);
+    const prefs = readNotesUiPrefs(localStorage);
+    if (prefs.notesPaneSide !== implied) writeNotesUiPrefs(localStorage, { notesPaneSide: implied });
+    notesUserPin = "";
+    notesTempUpgrade = "";
+    notesLayoutLatch = "";
+  }
+  const prefs = readNotesUiPrefs(localStorage);
+  const windowWidth = readerWidth();
+  const kind = notesChromeKind({
+    windowWidth,
+    workspaceWidth: measuredWorkspaceWidth(workspace),
+    notesWidth: prefs.notesWidth,
+    latched: notesLayoutLatch,
+    opening,
+    pinned: notesUserPin
+  });
+  if (opening && kind === "three") {
+    const stored = effectiveSourceMode({ width: windowWidth, stored: readerPrefs.sourceMode });
+    if (stored === "mini" || stored === "hidden") notesTempUpgrade = stored;
+  }
+  applyNotesChrome(kind);
+}
+
+function scheduleNotesChrome() {
+  window.clearTimeout(notesResizeTimer);
+  notesResizeTimer = window.setTimeout(() => {
+    if (document.querySelector(".workspace")?.dataset.notesOpen === "true") syncNotesChrome({ opening: false });
+  }, NOTES_PANE_RESIZE_DEBOUNCE_MS);
+}
+
+function closeNotesChrome() {
+  window.clearTimeout(notesResizeTimer);
+  notesPaintedKind = "";
+  notesLayoutLatch = "";
+  notesUserPin = "";
+  notesTempUpgrade = "";
+  const workspace = document.querySelector(".workspace");
+  if (workspace) {
+    delete workspace.dataset.layout;
+    delete workspace.dataset.notesSide;
+    workspace.style.removeProperty("--oi-three-source");
+    workspace.style.removeProperty("--oi-three-translate");
+    workspace.style.removeProperty("--oi-notes-pane-w");
+    workspace.style.removeProperty("--notes-width");
+  }
+  setNotesSplitVisible(false);
+  applySourceLayout(false);
+  applySourceSide(false);
+}
+
+function chooseNotesSourceMode(next) {
+  readerPrefs = { ...readerPrefs, sourceMode: next };
+  persistReaderPrefs();
+  notesTempUpgrade = "";
+  notesUserPin = next === "mini" ? "mini" : next === "hidden" ? "hidden" : "";
+  if (sourcePopOpen() && next !== "hidden") closeSourcePop(false);
+  syncNotesChrome({ opening: next === "side" });
+  applyFollow({ type: "sourceModeChange" });
+}
+
+function setNotesPaneSide(side) {
+  const notesPaneSide = side === "start" ? "start" : "end";
+  const sourceSide = sourceSideFromNotes(notesPaneSide);
+  writeNotesUiPrefs(localStorage, { notesPaneSide });
+  readerPrefs = { ...readerPrefs, sourceSide };
+  persistReaderPrefs();
+  syncSwapCheck();
+  const workspace = document.querySelector(".workspace");
+  const layout = workspace?.dataset.layout || "";
+  const open = workspace?.dataset.notesOpen === "true";
+  if (open && (layout === "3" || layout === "pair")) {
+    workspace.dataset.sourceSide = sourceSide;
+    workspace.dataset.notesSide = notesPaneSide;
+    appliedSide = sourceSide;
+    reorderWorkspacePanes(workspace, notesDomOrder({ layout, notesSide: notesPaneSide, sourceSide }));
+    if (layout === "3") {
+      const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+      paintThreeColumns(workspace, { splitRatio: Number.isFinite(ratio) ? ratio : defaultSplitRatio(readerWidth()) });
+    }
+  } else if (!open) applySourceSide(true);
+  notesUi?.syncLayoutChrome?.();
+}
+
 function applySourceLayout(anchor) {
   const workspace = document.querySelector(".workspace");
   if (!workspace) return;
   const width = readerWidth();
-  const mode = effectiveSourceMode({ width, stored: readerPrefs.sourceMode });
+  let mode = effectiveSourceMode({ width, stored: readerPrefs.sourceMode });
+  if (workspace.dataset.notesOpen === "true" && notesPaintedKind === "three") mode = "side";
+  else if (workspace.dataset.notesOpen === "true" && notesPaintedKind === "pair") mode = "hidden";
+  else if (workspace.dataset.notesOpen === "true" && notesUserPin === "mini") mode = "mini";
   const prev = workspace.dataset.sourceMode || "";
   const changed = Boolean(prev) && prev !== mode;
   const token = anchor || changed ? captureReaderAnchor() : null;
@@ -4291,7 +4739,7 @@ function applySourceLayout(anchor) {
     const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
     writeSplitAria(workspace, Number.isFinite(ratio) ? ratio : defaultSplitRatio(width));
   }
-  const handle = workspace.querySelector(".split-handle");
+  const handle = sourceSplitHandle(workspace);
   if (handle) {
     const draggable = mode === "side" || (mode === "mini" && !collapsed);
     handle.tabIndex = draggable ? 0 : -1;
@@ -4315,6 +4763,7 @@ function applySourceLayout(anchor) {
       requestAnimationFrame(() => restoreReaderAnchor(token));
     });
   }
+  if (!notesChromeLock && workspace.dataset.notesOpen === "true" && notesPaintedKind) scheduleNotesChrome();
 }
 
 function syncSourceModeControls() {
@@ -4354,7 +4803,7 @@ function syncSourceModeControls() {
 function paintMiniWidth(workspace, width) {
   const next = normalizeMiniWidth(width);
   workspace.style.setProperty("--oi-mini-width", `${next}px`);
-  const handle = workspace.querySelector(".split-handle");
+  const handle = sourceSplitHandle(workspace);
   if (!handle || workspace.dataset.miniCollapsed === "true") return;
   handle.setAttribute("aria-valuemin", "300");
   handle.setAttribute("aria-valuemax", "480");
@@ -4392,7 +4841,7 @@ function restoreSourceScroll(saved) {
 function placeSourceInWorkspace() {
   const workspace = document.querySelector(".workspace");
   const source = $("pdfPane");
-  const split = workspace?.querySelector(":scope > .split-handle") || document.querySelector(".split-handle");
+  const split = sourceSplitHandle(workspace);
   if (!workspace || !source || !split) return;
   const side = workspace.dataset.sourceSide === "end" ? "end" : "start";
   if (side === "end") split.after(source);
@@ -5221,11 +5670,14 @@ function onSourcePageButton() {
 
 function cycleF6(backward) {
   const workspace = document.querySelector(".workspace");
+  const layout = workspace?.dataset.layout === "3" ? "3" : (workspace?.dataset.layout === "pair" ? "pair" : "");
   const ids = f6RegionIds({
     mode: workspace?.dataset.sourceMode || "side",
     popOpen: sourcePopOpen(),
     side: workspace?.dataset.sourceSide === "end" ? "end" : "start",
-    sideSlotOpen: sideSlotOpen()
+    sideSlotOpen: layout ? false : sideSlotOpen(),
+    notesLayout: layout,
+    notesSide: workspace?.dataset.notesSide === "start" ? "start" : "end"
   });
   const current = f6CurrentRegion(ids);
   const step = backward ? -1 : 1;
@@ -5240,7 +5692,8 @@ function f6CurrentRegion(ids) {
     source: $("pdfPane"),
     translation: document.querySelector(".pane-translate"),
     popup: $("sourcePop"),
-    sideSlot: document.querySelector("[data-side-slot]")
+    sideSlot: document.querySelector("[data-side-slot]"),
+    notes: document.querySelector(".oi-notes") || document.querySelector("[data-side-slot]")
   };
   for (let i = 0; i < ids.length; i += 1) {
     const host = map[ids[i]];
@@ -5255,7 +5708,8 @@ function focusF6Region(id) {
     source: () => $("pages") || $("pdfPane"),
     translation: () => $("readerFlow"),
     popup: () => $("sourcePopClose") || $("sourcePop"),
-    sideSlot: () => document.querySelector("[data-side-slot]")
+    sideSlot: () => document.querySelector("[data-side-slot]"),
+    notes: () => document.querySelector(".oi-notes [data-notes-segment]") || document.querySelector(".oi-notes") || document.querySelector("[data-side-slot]")
   }[id]?.();
   if (!target) return;
   if (target.tabIndex < 0 && target.id !== "sourcePopClose") target.tabIndex = -1;
