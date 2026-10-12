@@ -326,6 +326,7 @@ let autoAfterForce = false;
 let forceRetranslatePending = false;
 let libraryArticle = null;
 let libraryDoc = null;
+let libraryProbe = null;
 let titleStructure = null;
 const librarySourceSent = new Set();
 const enqueueLibraryWrite = createLibraryWriteQueue();
@@ -2126,19 +2127,18 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
 // pdf.js 4.10.38 continues a display render only on requestAnimationFrame.
 // If no frame arrives, page.render() never settles and open / goPage stay
 // there. The vendored build forces that flag off and continues each slice
-// on a 0ms timer (pdf/vendor/pdf.min.mjs). RenderTask hides the internal
-// task behind a private field, so this cannot be switched from here.
-// window.requestAnimationFrame is not replaced.
-// Sharp formula crops are the renders a resize can abandon. While one of
-// those is in flight, its task is recorded so a newer plan can cancel it
-// instead of leaving another timer chain on the event loop.
-let captureFormulaCropTask = false;
+// on a 16ms timer (pdf/vendor/pdf.min.mjs). A 0ms timer is always due, so
+// a chain of slices runs before library probes and every other delayed
+// timer. RenderTask hides the internal task behind a private field, so
+// this cannot be switched from here. window.requestAnimationFrame is not
+// replaced.
+// Only the sharp-crop page.render is recorded. A page canvas started while
+// that crop is awaited must stay on its own task, or the next crop cancels
+// the canvas.
 let formulaCropRenderTask = null;
 
 function renderPdfPage(page, params) {
-  const task = page.render(params);
-  if (captureFormulaCropTask) formulaCropRenderTask = task;
-  return task;
+  return page.render(params);
 }
 
 /**
@@ -2207,7 +2207,13 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     canvas.height = plan.pixelHeight;
     const context = formula ? formulaDrawContext(canvas) : canvas.getContext("2d", { alpha: false });
     if (!context) return "";
-    await renderPdfPage(page, { canvasContext: context, viewport }).promise;
+    const task = renderPdfPage(page, { canvasContext: context, viewport });
+    formulaCropRenderTask = task;
+    try {
+      await task.promise;
+    } finally {
+      if (formulaCropRenderTask === task) formulaCropRenderTask = null;
+    }
     if (formula) compositeWhitePaper(context, canvas);
     paintFormulaMask(canvas, block.bbox, block);
     if (!formula && !redrawKeepsInk(context, canvas, raster, block)) {
@@ -6541,14 +6547,77 @@ function bindSavedPairs(saved, units) {
   return saved;
 }
 
+function ensureLibraryDocument() {
+  if (libraryDoc) return Promise.resolve(libraryDoc);
+  if (libraryProbe) return libraryProbe;
+  const stamp = docId;
+  libraryProbe = (async () => {
+    try {
+      const hash = await pdfByteHash();
+      if (docId !== stamp || !hash || hash === "nohash") return null;
+      if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
+      const doc = await fetchLibraryDocument(hash);
+      if (docId !== stamp) return null;
+      if (doc) {
+        doc.hash = hash;
+        if (doc.sourcePath) librarySourceSent.add(hash);
+      }
+      libraryDoc = doc || null;
+      return libraryDoc;
+    } catch {
+      // One probe per document. Page turns do not wait for these delays,
+      // and a failed probe is not started again on the next page.
+      if (docId === stamp && !getPageLayout(pageNum)?.blocks?.length) noteLibraryUnavailable();
+      return null;
+    }
+  })();
+  return libraryProbe;
+}
+
+function savedTranslationForNav(page) {
+  if (!libraryDoc) return Promise.resolve(null);
+  return savedTranslationFor(page).catch(() => null);
+}
+
+function paintLateLibrary(n, ticket) {
+  if (libraryDoc) return;
+  const stamp = docId;
+  ensureLibraryDocument().then(async () => {
+    if (ticket !== textGen || docId !== stamp || !libraryDoc) return;
+    const saved = await savedTranslationFor(n).catch(() => null);
+    if (ticket !== textGen || docId !== stamp || !saved) return;
+    if (saved.readout && !saved.pairs) {
+      setStatus(PDF_COPY.doneDocument);
+      renderArticle();
+      updateTranslateControls();
+      return;
+    }
+    const layout = getPageLayout(n);
+    if (!layout?.blocks?.length || !saved.pairs) return;
+    const prepared = bindSavedPairs(saved, unitsForLayout(layout));
+    const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs, savedPairSettings());
+    const blocks = layout.blocks || [];
+    const covers = libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang, pdfProvider) ||
+      libraryCoversLiveBlocks(merged, blocks, pdfTargetLang, pdfProvider);
+    if (n === pageNum || n === textLoadPage) pageResults = merged;
+    pageCache.set(docId, n, merged);
+    const skipped = skipLocked.has(n) || isSkipOnlyPage(blocks);
+    notePageState(n, { state: skipped ? "skipped" : (covers ? "done" : "partial"), hasLayout: true });
+    if (!pdfTranslateBusy(session)) {
+      setStatus(savedPageStatus(prepared, merged, blocks));
+      rememberSkipHole(n, blocks);
+    }
+    clearSlotPainted(n);
+    refreshDocStatus();
+    renderArticle();
+    updateTranslateControls();
+  }).catch(() => {});
+}
+
 async function savedTranslationFor(page) {
   const hash = await pdfByteHash();
   if (!hash || hash === "nohash") return null;
-  if (!libraryDoc || libraryDoc.hash !== hash) {
-    libraryDoc = await fetchLibraryDocument(hash);
-    if (libraryDoc) libraryDoc.hash = hash;
-    if (libraryDoc?.sourcePath) librarySourceSent.add(hash);
-  }
+  if (!libraryDoc || libraryDoc.hash !== hash) await ensureLibraryDocument();
   if (!libraryDoc) return null;
   const selected = selectSavedTranslation(libraryDoc, page, getPageLayout(page)?.blocks);
   if (libraryDoc.pages?.length) {
@@ -8203,6 +8272,7 @@ async function adoptDoc(doc, title) {
   notePageState(1, { state: "layout", hasLayout: false });
   libraryArticle = null;
   libraryDoc = null;
+  libraryProbe = null;
   titleStructure = null;
   layoutCache.clear();
   formulaRasterCache.clear();
@@ -8526,12 +8596,10 @@ async function refreshFormulaCropsForDisplay() {
               break;
             }
             if (!isSourceRedrawBlock(block) || !block.imageUrl) continue;
-            captureFormulaCropTask = true;
             let sharp = "";
             try {
               sharp = await renderSharpFormulaCrop(page, raster, block, n);
             } finally {
-              captureFormulaCropTask = false;
               formulaCropRenderTask = null;
             }
             if (formulaCropPending) {
@@ -8904,18 +8972,20 @@ async function primeKnownPages() {
   const stamp = docId;
   const stale = () => docId !== stamp;
   await loadPdfLayout();
-  try {
-    await savedTranslationFor(pageNum);
-  } catch {
-    noteLibraryUnavailable();
-  }
   if (stale()) return;
   await layoutVersionNow();
   if (stale()) return;
-  const libraryChanged = seedLibraryProgress();
-  const legacyChanged = await seedLegacySkipPages();
-  if (stale()) return;
-  if (libraryChanged || legacyChanged) renderArticle();
+  const seed = async () => {
+    if (stale() || !libraryDoc) return;
+    const libraryChanged = seedLibraryProgress();
+    const legacyChanged = await seedLegacySkipPages();
+    if (stale()) return;
+    if (libraryChanged || legacyChanged) renderArticle();
+  };
+  // The probe's 400/1000/1800ms delays used to sit on the page-turn await.
+  // Layout paints first. Pairs land when the probe resolves.
+  if (libraryDoc) await seed();
+  else ensureLibraryDocument().then(() => seed()).catch(() => {});
   hydrateMissingVisualCrops(stale).catch(() => {});
 }
 
@@ -8933,7 +9003,8 @@ async function loadCurrentPageText(explicitPage) {
   const openedStored = getPageLayout(n);
   if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version)) {
     if (!showOpenedLayout(openedStored, isStale)) return;
-    const saved = await savedTranslationFor(n).catch(() => null);
+    const saved = await savedTranslationForNav(n);
+    if (!libraryDoc) paintLateLibrary(n, ticket);
     if (isStale()) return;
     if (saved?.pairs) {
       const prepared = bindSavedPairs(saved, unitsForLayout(openedStored));
@@ -8972,7 +9043,8 @@ async function loadCurrentPageText(explicitPage) {
   let mode = pdfEngineMode();
   let preloadedSaved = null;
   if (mode === "legacy") {
-    preloadedSaved = await savedTranslationFor(n).catch(() => null);
+    preloadedSaved = await savedTranslationForNav(n);
+    if (!libraryDoc) paintLateLibrary(n, ticket);
     if (isStale()) return;
     if (libraryDoc?.pages?.length) mode = "text-layer";
   }
@@ -8985,7 +9057,8 @@ async function loadCurrentPageText(explicitPage) {
       const quick = await ingestTextLayerLayout(n, isStale, { persist: false });
       if (!showOpenedLayout(quick, isStale)) return;
       await ensuring;
-      const saved = preloadedSaved || await savedTranslationFor(n).catch(() => null);
+      const saved = preloadedSaved || await savedTranslationForNav(n);
+      if (!libraryDoc) paintLateLibrary(n, ticket);
       if (saved?.readout && !isStale()) {
         setStatus(PDF_COPY.doneDocument);
         renderArticle();
@@ -9036,7 +9109,8 @@ async function loadCurrentPageText(explicitPage) {
       : await ingestPageLayout(n, isStale);
     if (!showOpenedLayout(layout, isStale)) return;
     await ensuring;
-    const saved = preloadedSaved || await savedTranslationFor(n).catch(() => null);
+    const saved = preloadedSaved || await savedTranslationForNav(n);
+    if (!libraryDoc) paintLateLibrary(n, ticket);
     if (saved?.readout && !isStale()) {
       setStatus(PDF_COPY.doneDocument);
       renderArticle();
