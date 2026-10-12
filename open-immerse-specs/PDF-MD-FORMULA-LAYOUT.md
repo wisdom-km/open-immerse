@@ -12,7 +12,7 @@
 | 项 | 锁定 |
 | --- | --- |
 | 产品路径 | 左 **pdf.js** + 右 **Markdown 通读**（非 bbox 镜像；非 BabelDOC 矢量回写整页） |
-| 公式展示 | 当前已上线的第一层是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `pdf/high-precision/REQUIREMENTS.md` §2.6。高清重渲染本质上是区域渲染。目标是按原字体、原位置重绘字符。不得为「好看」编造 TeX |
+| 公式展示 | 当前已上线的第一层是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `pdf/high-precision/REQUIREMENTS.md` §2.6。高清重渲染本质上是区域渲染。目标是用 LaTeX 渲染，判不出就显示裁图；重绘只是退回链里的一级。不得为「好看」编造 TeX |
 | 独立公式块 | 相对右栏正文列 **水平居中**；宽度 ≤ 通读列宽；上下空隙见 §3 |
 | 行内公式 | **句中基线对齐**；高度是 1 CSS px 每 PDF pt，不随阅读字号缩放；**禁止**整行大图砸版 |
 | 图 / 表 | 保持原件裁切；题注用 Soft Graphite **既有 token**（muted），**不改**网页 Soft Graphite / `tokens.css` |

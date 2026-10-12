@@ -8,7 +8,7 @@
 | | |
 | --- | --- |
 | 原文栏 | **现有** pdf.js PDF 渲染（不改网页）。译文不进入原文栏 |
-| 右栏 | **`.readout` Markdown 通读**（连续滚动）。当前已上线的公式画面按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层：`surface="redraw"` 是 `renderSharpVisualCrop` 的原页高清重渲染。右栏使用原页裁图（译文段落，加上公式、图、表的原页画面）；pageRaster 裁图是 png 回退。目标是按原字体、原位置重绘字符 |
+| 右栏 | **`.readout` Markdown 通读**（连续滚动）。当前已上线的公式画面按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层：`surface="redraw"` 是 `renderSharpVisualCrop` 的原页高清重渲染。右栏使用原页裁图（译文段落，加上公式、图、表的原页画面）；pageRaster 裁图是 png 回退。目标是用 LaTeX 渲染，判不出就显示裁图；重绘只是退回链里的一级 |
 | 公式 / 图 / 表 | 跟打开的 PDF 同一套内容。当前已上线的第一层是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`），或 pageRaster 裁图这条 png 回退（`surface="png"`）。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。其他手段须过同一条验收。右栏块级/行内排版以 [`PDF-MD-FORMULA-LAYOUT.md`](./PDF-MD-FORMULA-LAYOUT.md) 为准 |
 | 停 | 把译文贴进原文栏原文框（**#40 closed**）。Issue #40 保持关闭。禁止再开 bbox 镜像 |
 | 网页 | **仍主路径**；本单 **勿回归** 网页 content/Options |
@@ -22,7 +22,7 @@
 ## 1. 产品事实
 
 - 译文跟抽出的原文一致：不增主张、不漏句子、不改数字和变量名。
-- 公式、图、表跟打开的 PDF 是同一套内容。当前已上线的公式画面是第一层：`renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`），或 pageRaster 的 png 裁图。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。按 `pdf/high-precision/REQUIREMENTS.md` §2.6，高清重渲染本质上仍是区域渲染。目标是按原字体、原位置重绘字符。高清重渲染失败时静默退成 png，不加徽章（V1-B1，见 `pdf/high-precision/REQUIREMENTS.md` §2.6 术语表），不算换层。换层只看框的把握。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。内嵌图原样取出也可以。换手段时，右栏这一块仍须与原文栏同一区域的内容一致。重画图内英文，不采用。
+- 公式、图、表跟打开的 PDF 是同一套内容。当前已上线的公式画面是第一层：`renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`），或 pageRaster 的 png 裁图。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。按 `pdf/high-precision/REQUIREMENTS.md` §2.6，高清重渲染本质上仍是区域渲染。目标是用 LaTeX 渲染，判不出就显示裁图；重绘只是退回链里的一级。高清重渲染失败时静默退成 png，不加徽章（V1-B1，见 `pdf/high-precision/REQUIREMENTS.md` §2.6 术语表），不算换层。换层只看框的把握。两个开关互相独立，都默认关闭。第二层开关（待实现）：用户可见，在 Aa 面板里，叫「用看图模型补全公式」。第二层上线之前界面上不显示这个开关；等 DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式的实验做完、产品方决定上线后才出现，出现时默认关闭。分流：框的把握过阈值，用第一层。没过阈值、第二层开关开着、核对也通过，用 KaTeX。否则，第三层开关开着就是占位；关着就按现状显示。内嵌图原样取出也可以。换手段时，右栏这一块仍须与原文栏同一区域的内容一致。重画图内英文，不采用。
 - OCR 认错的字母不上屏，也不得送进翻译。把 `i` 认成 `n`，或把 `n` 认成 `i`，都算失败。
 - 有文字层的正文用文字层原句。这是主场景。没有可信文字层时，正文才用识别结果，并在右栏标明可能有误差。公式、图、表仍是原页裁图。划区框内的字母不进正文。文字层兜底时，一行里除去公式函数名后没有普通句子，就整行裁图，不把 `softmax` 送去翻译。
 - 译文只出现在右栏。
@@ -63,4 +63,4 @@
 | Attention 验收 | 回归网页 content/Options |
 | 测试期本机智谱 GLM-OCR，上线 OCR API | 用 OCR 字母代替原页公式画面。当前已发布的是区域渲染，按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。例外：OCR API 层核对通过的结果可以上屏（据 01:12 顺序推论；细节待确认） |
 
-`pdf/viewer.js` 在切换默认路径之前可以仍走遗留渲染。那不是本文的展示手段。当前已发布的右栏公式画面是区域渲染，按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。目标是按原字体、原位置重绘字符。
+`pdf/viewer.js` 在切换默认路径之前可以仍走遗留渲染。那不是本文的展示手段。当前已发布的右栏公式画面是区域渲染，按 `pdf/high-precision/REQUIREMENTS.md` §2.6 算第一层。目标是用 LaTeX 渲染，判不出就显示裁图；重绘只是退回链里的一级。
