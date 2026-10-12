@@ -72,7 +72,7 @@
 6. （已完成）文档修正：docs/v1-m1-labels.md 已改为 7e10df3（PR #86）；对应测试断言在 PR #88 同步修正。
 7. **D0（待 F3 公式回退链的代码 PR 一起改）**。2026-10-13 00:02 Wisdom 定：公式采用 LaTeX 渲染。arXiv 源码用 KaTeX 渲染；多模态和 OCR 的结果也渲染成 LaTeX 上屏，判不出时退回裁图。README.md（第 9、25、155、323 行附近）、README.en.md 的对应英文句、CONTRIBUTING.md 第 17 行写的「公式画面不来自 LaTeX 渲染」是旧说法。`tests/pdf-readout.test.mjs` 第 239、246、261 行锁了这句。README、CONTRIBUTING 和这几条断言待 F3 的代码 PR 一起改。这次纯文档 PR 不改它们。
 
-8. **F9**。另开 PR 实现公式的 OCR API 接入（2026-10-05 01:12 你要求：运行时排在多模态之后、自研算法之前）。厂商已定：OCR 为智谱和百度，多模态为 OpenAI、Gemini、DeepSeek、豆包、Kimi、Grok（支持的厂商用 OpenAI 兼容格式，Gemini 单独写适配，另加自定义兼容端点；不能读图的标「暂不可用」）。实际接入状态随 F7/F9 更新。路线图 v2 决定 4（2026-10-12 23:52）：多模态（F7）先做并抽出共用核对模块，OCR 排在 F9。开关、费用和隐私说明、字符核对等细节是文档细化，待确认，见 `pdf/high-precision/REQUIREMENTS.md` §2.6「OCR API 层」。
+8. **F9**。另开 PR 实现公式的 OCR API 接入（2026-10-05 01:12 你要求：运行时排在多模态之后、自研算法之前）。OCR API 层不只接智谱和百度，还要接入其他识别准确率高的优秀 OCR 模型，具体名单在 F9 开工前调研对比后由 Wisdom 选定（2026-10-13 01:09）。实际接入状态随 F9 更新。多模态为 OpenAI、Gemini、DeepSeek、豆包、Kimi、Grok（支持的厂商用 OpenAI 兼容格式，Gemini 单独写适配，另加自定义兼容端点；不能读图的标「暂不可用」）。实际接入状态随 F7 更新。路线图 v2 决定 4（2026-10-12 23:52）：多模态（F7）先做并抽出共用核对模块，OCR 排在 F9。开关、费用和隐私说明、字符核对等细节是文档细化，待确认，见 `pdf/high-precision/REQUIREMENTS.md` §2.6「OCR API 层」。
 
 ## 四、已知风险（仅供知悉，已排进计划）
 
