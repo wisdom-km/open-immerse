@@ -335,7 +335,13 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
     const started = Date.now();
     let last = null;
     while (Date.now() - started < timeoutMs) {
-      last = await evaluate(expression);
+      try {
+        last = await evaluate(expression);
+      } catch (err) {
+        // Reload drops the old document before the next one can answer. Keep polling.
+        if (!String(err?.message || err).includes("Inspected target navigated or closed")) throw err;
+        last = null;
+      }
       if (last) return last;
       await sleep(150);
     }
