@@ -6316,6 +6316,14 @@ async function maybeAutoTranslateDocument() {
     return;
   }
   if (adopting !== docId || !pdfDoc || documentTranslateSuperseded()) return;
+  // The retranslate button is enabled while docPhase is still "opening".
+  // Settings reads resolve as microtasks, so without a timer the phase
+  // flips to running before any click or interval can run. The library
+  // probe used to leave that gap, and it also held page-nav. Page-nav has
+  // already ended; this 16ms only keeps opening observable. A 0ms timer
+  // would run before a pending interval and close the gap again.
+  await new Promise((resolve) => setTimeout(resolve, 16));
+  if (adopting !== docId || !pdfDoc || documentTranslateSuperseded()) return;
   await startTranslate();
 }
 
