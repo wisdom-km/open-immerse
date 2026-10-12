@@ -12,11 +12,12 @@ import {
   TIER_ORDER,
   contractViolations,
   cropHashOf,
+  failureReason,
   tierCacheKey,
   tierResult,
   unitKeyOf
 } from "../lib/formula-contract.js";
-import { canRenderLatex, renderLatexInto, renderLatexMarkup } from "../lib/formula-katex.js";
+import { KATEX_RENDER_OPTIONS, canRenderLatex, renderLatexInto } from "../lib/formula-katex.js";
 import { judgeCrop } from "../lib/formula-tiers/crop.js";
 import { createDefaultTiers } from "../lib/formula-tiers/index.js";
 import { loadKatex } from "./helpers/arxiv-paper.mjs";
@@ -690,6 +691,60 @@ test("candidates run together, and a slow candidate upgrades a crop preview", as
   assert.equal(upgrades.at(-1), "multimodal");
 });
 
+test("failureReason keeps http for request failures only", async () => {
+  const refused = new TypeError("fetch failed");
+  refused.cause = Object.assign(new Error("connect"), { code: "ECONNREFUSED" });
+  assert.equal(failureReason(refused), "http");
+  const status = new Error("bad gateway");
+  status.status = 502;
+  assert.equal(failureReason(status), "http");
+
+  const timed = new Error("slow");
+  timed.code = "ETIMEDOUT";
+  assert.equal(failureReason(timed), "timeout");
+  const aborted = new Error("stopped");
+  aborted.name = "AbortError";
+  assert.equal(failureReason(aborted), "aborted");
+  const limited = new Error("Too Many Requests");
+  limited.status = 429;
+  assert.equal(failureReason(limited), "cooldown");
+  const parse = new Error("KaTeX parse error: Expected 'EOF'");
+  parse.name = "ParseError";
+  assert.equal(failureReason(parse), "katex-error");
+  const unknown = new Error("Undefined control sequence: \\foo");
+  assert.equal(failureReason(unknown), "unknown-command");
+
+  const bug = new TypeError("Cannot read properties of undefined (reading 'latex')");
+  assert.equal(failureReason(bug), null);
+
+  const counts = {};
+  const decision = await decideFormula(unit({ pdfText: "α" }), {
+    katex,
+    tiers: spyTiers(baseTiers({
+      multimodal: candidate("multimodal", async () => {
+        throw refused;
+      }),
+      ocr: providerOk("ocr", "\\alpha")
+    }), counts)
+  });
+  assert.equal(decision.trace.find((item) => item.tier === "multimodal").reason, "http");
+  assert.equal(decision.chosen.tier, "ocr");
+  assert.equal(count(counts, "self"), 0);
+  assert.equal(count(counts, "vector"), 0);
+
+  await assert.rejects(() => decideFormula(unit(), {
+    katex,
+    tiers: baseTiers({
+      self: {
+        ...createDefaultTiers().self,
+        async run() {
+          throw bug;
+        }
+      }
+    })
+  }), /Cannot read properties of undefined/);
+});
+
 test("an aborted signal does not run later tiers", async () => {
   const counts = {};
   const decision = await decideFormula(unit(), {
@@ -723,7 +778,7 @@ test("F3-17 KaTeX rendering stays untrusted and does not use innerHTML", () => {
   assert.equal(canRenderLatex("\\alpha+\\beta", true, katex).pass, true);
   installMiniDom();
   for (const latex of ["<script>alert(1)</script>", '"><img onerror=alert(1)>']) {
-    const html = renderLatexMarkup(latex, false, katex);
+    const html = latexMarkupForTest(latex);
     assert.equal(/<script[\s>/]/i.test(html), false, latex);
     assert.equal(/<img[\s>/]/i.test(html), false, latex);
     const node = makeNode();
@@ -819,6 +874,14 @@ test("F3-15 arXiv tier reads the stored Attention alignment", async () => {
     assert.equal(adopted.includes(extra.latex), false);
   }
 });
+
+function latexMarkupForTest(latex, display = false) {
+  if (!canRenderLatex(latex, display, katex).pass) return "";
+  return katex.renderToString(String(latex ?? ""), {
+    ...KATEX_RENDER_OPTIONS,
+    displayMode: Boolean(display)
+  });
+}
 
 function installMiniDom() {
   class Node {
