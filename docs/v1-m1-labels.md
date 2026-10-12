@@ -238,7 +238,7 @@ $env:PORT=4174; node scripts/label-review.mjs
 
 清单文件每行一个 `#N`，和左侧队列序号相同。空行可以留，行尾空白可以留。编码用 UTF-8（可以带 BOM）或 UTF-16LE；PowerShell 5.1 的 `>` 和 `Out-File` 默认就是 UTF-16LE。解析失败、重复、编号越界，都是一行错误后退出。输出目录必须在仓库根目录外面；符号链接按 realpath 判断，指回仓库里面也会拒绝启动。目录不存在时会自动创建。不要把清单文件和 out-dir 提交进仓库。
 
-PowerShell 里可以照抄（路径换成自己的）：
+PowerShell 里可以照抄（`D:\` 是示例路径，换成自己的）：
 
 ```
 $env:PORT=4174; node scripts/label-review.mjs --manifest D:\review\batch.txt --out-dir D:\review\out
@@ -258,7 +258,7 @@ $env:PORT=4174; node scripts/label-review.mjs --manifest D:\review\batch.txt --o
 - 同一页上，其他单元的序号标记只画清单内的条目。
 - 顶栏是「清单模式：已标 x / 共 y」。
 - `n` / `p` 打开下一页或上一页上的清单条目。那一页没有清单条目时，继续转到还有条目的页。没有真正写盘的改动会显示「未保存」。
-- 写入只落在 `--out-dir`，每个条目一个文件，例如 `D:\review\out\12.json`，里面是这一条的标注和写入时间。不会读、也不会改 `labels/reviewed/`。
+- 写入只落在 `--out-dir`，每个条目一个文件，例如 `<out-dir>/12.json`（路径示例），里面是这一条的标注和写入时间。不会读、也不会改 `labels/reviewed/`。
 
 `out-dir/<N>.json` 的记录是：
 
