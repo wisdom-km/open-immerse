@@ -458,6 +458,7 @@ test("NTP-01/02/06/12/13 three-pane columns keep order, scroll, and the notes sp
       buttons,
       segDir: getComputedStyle(seg).flexDirection,
       border: mark.borderBottomWidth,
+      shadow: mark.boxShadow,
       borderColor: mark.borderBottomColor,
       plainH: plain.getBoundingClientRect().height,
       linkedH: linked.getBoundingClientRect().height
@@ -475,6 +476,7 @@ test("NTP-01/02/06/12/13 three-pane columns keep order, scroll, and the notes sp
   assert.ok(sheet.buttons[1].left > sheet.buttons[0].left, JSON.stringify(sheet.buttons));
   assert.ok(sheet.buttons[2].left > sheet.buttons[1].left, JSON.stringify(sheet.buttons));
   assert.equal(sheet.border, "2px");
+  assert.equal(sheet.shadow, "none");
   assert.match(sheet.borderColor, /122,\s*74,\s*134/);
   assert.ok(Math.abs(sheet.linkedH - sheet.plainH - 2) <= 1, JSON.stringify(sheet));
 });

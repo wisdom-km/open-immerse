@@ -71,6 +71,15 @@ test("NTP prefs keep notesWidth apart from panelWidth and reader prefs", () => {
   writeNotesUiPrefs(storage, { panelWidth: 500 });
   assert.equal(readNotesUiPrefs(storage).notesWidth, 420);
   assert.equal(readNotesUiPrefs(storage).panelWidth, 500);
+  assert.equal(storage["reader.notesPaneSide"], "start");
+  const sideOnly = {};
+  writeNotesUiPrefs(sideOnly, { notesPaneSide: "start" });
+  assert.equal(sideOnly["reader.notesPaneSide"], "start");
+  assert.equal(Object.hasOwn(sideOnly, "reader.panelWidth"), false);
+  assert.equal(Object.hasOwn(sideOnly, "reader.notesWidth"), false);
+  assert.equal(Object.hasOwn(sideOnly, "reader.notesPersistHintDismissed"), false);
+  writeNotesUiPrefs(sideOnly, { notesPaneSide: "start" });
+  assert.equal(sideOnly["reader.notesPaneSide"], "start");
   storage["reader.notesWidth"] = "";
   assert.equal(readNotesUiPrefs(storage).notesWidth, 360);
   const reader = readReaderPrefs(storage);
@@ -106,7 +115,22 @@ test("NTP-02/03/04/05 width formula, threshold, and hysteresis", () => {
     workspaceWidth: 1300,
     notesWidth: 360,
     latched: "three"
+  }), "slot");
+  assert.equal(notesChromeKind({
+    windowWidth: 1314,
+    workspaceWidth: 1314,
+    notesWidth: 360,
+    latched: "three"
   }), "three");
+  assert.equal(notesChromeKind({
+    windowWidth: 1313,
+    workspaceWidth: 1313,
+    notesWidth: 360,
+    latched: "three"
+  }), "slot");
+  const held = threePaneColumns({ workspaceWidth: 1314, notesWidth: 360, splitRatio: 0.5 });
+  assert.equal(held.source, 320);
+  assert.ok(held.translate >= NOTES_TRANSLATE_MIN);
   assert.equal(notesChromeKind({
     windowWidth: 1329,
     workspaceWidth: 1329,

@@ -96,6 +96,7 @@
 .oi-notes-head {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 8px;
   flex: 0 0 var(--oi-notes-head-h);
   height: var(--oi-notes-head-h);
@@ -104,22 +105,29 @@
   border-bottom: 1px solid var(--oi-reader-line);
 }
 .oi-notes-head .view-seg {
-  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: max-content;
 }
 .oi-notes-head .view-seg-btn {
+  flex: none;
   height: 26px;
   padding: 0 8px;
   border: 0;
   font: 500 13px/26px var(--oi-reader-ui-font);
   color: var(--oi-reader-ink-2);
+  white-space: nowrap;
 }
 .oi-notes-head .view-seg-btn[aria-selected="true"] {
   color: var(--oi-reader-ink);
   font-weight: 500;
 }
 .oi-notes-reserve {
-  flex: 0 0 30px;
+  flex: 0 1 30px;
   width: 30px;
+  min-width: 0;
+  max-width: 30px;
   height: 1px;
 }
 .oi-notes-head-gap { flex: 1 1 auto; }
@@ -134,17 +142,20 @@
   color: var(--oi-reader-ink-2);
   font: 500 13px/30px var(--oi-reader-ui-font);
 }
-.oi-notes-icon { width: 30px; padding: 0; }
+.oi-notes-icon { width: 30px; padding: 0; flex-shrink: 0; }
 .oi-notes-trash.tbtn {
   width: auto;
   height: 30px;
   min-height: 30px;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 0 9px 0 7px;
   font: 400 12px/30px var(--oi-reader-ui-font);
+  white-space: nowrap;
 }
+.oi-notes-trash .tbtn-label { white-space: nowrap; }
 .oi-notes-trash-n {
   color: var(--oi-reader-muted);
   font-size: 12px;
@@ -730,7 +741,6 @@
   border-bottom: 2px solid var(--oi-reader-mine);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
-  box-shadow: inset 0 -2px 0 var(--oi-reader-mine);
 }
 .oi-notes :focus-visible {
   outline: var(--oi-reader-focus-width) solid var(--oi-reader-focus);

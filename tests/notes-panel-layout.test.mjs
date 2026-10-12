@@ -548,17 +548,19 @@ test("NIM-01…09 notes panel layout holds without a PDF fixture", { timeout: 90
     const want = getComputedStyle(probe).backgroundColor;
     const mark = document.querySelector('.hl.linked, .oi-note-mark.linked');
     const shadow = mark ? getComputedStyle(mark).boxShadow : "";
+    const border = mark ? getComputedStyle(mark).borderBottomWidth : "";
     return JSON.stringify({
       bg: getComputedStyle(card).backgroundColor,
       want,
       linked: card.classList.contains("linked"),
-      shadow
+      shadow,
+      border
     });
   })()`));
   assert.equal(linked.bg, linked.want, JSON.stringify(linked));
   assert.equal(linked.linked, true);
-  assert.match(linked.shadow, /rgb\(122,\s*74,\s*134\)/);
-  assert.match(linked.shadow, /inset/);
+  assert.equal(linked.border, "2px");
+  assert.equal(linked.shadow, "none");
 
   const { root: domRoot } = await cdp.send("DOM.getDocument", {}, sessionId);
   const { nodeId } = await cdp.send("DOM.querySelector", {
@@ -634,4 +636,55 @@ test("NIM-01…09 notes panel layout holds without a PDF fixture", { timeout: 90
   })()`));
   assert.ok(Math.abs(safe.toastHeight - 40) <= 1, JSON.stringify(safe));
   assert.ok(safe.cardBottom <= safe.toastTop - 8 + 0.5, JSON.stringify(safe));
+
+  const headLine = JSON.parse(await evaluate(`(async () => {
+    const slot = document.getElementById("sideSlot");
+    const rows = [];
+    const textLines = (node) => {
+      if (!node) return 0;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return range.getClientRects().length;
+    };
+    for (const width of [320, 360, 480]) {
+      for (const font of [14, 40]) {
+        document.body.style.setProperty("--oi-reader-font-size", font + "px");
+        slot.style.width = width + "px";
+        window.dispatchEvent(new Event("resize"));
+        await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+        const head = document.querySelector(".oi-notes-head");
+        const buttons = [...head.querySelectorAll(".view-seg-btn")];
+        const label = head.querySelector(".tbtn-label");
+        const box = head.getBoundingClientRect();
+        rows.push({
+          width,
+          font,
+          headH: box.height,
+          scroll: head.scrollWidth,
+          client: head.clientWidth,
+          buttons: buttons.map((node) => ({
+            text: node.textContent,
+            lines: textLines(node),
+            h: node.getBoundingClientRect().height
+          })),
+          trashLines: label && getComputedStyle(label).display !== "none" ? textLines(label) : 0,
+          trashH: head.querySelector(".oi-notes-trash").getBoundingClientRect().height
+        });
+      }
+    }
+    document.body.style.removeProperty("--oi-reader-font-size");
+    slot.style.width = "400px";
+    window.dispatchEvent(new Event("resize"));
+    return JSON.stringify(rows);
+  })()`));
+  for (const row of headLine) {
+    assert.ok(row.headH <= 44.5, JSON.stringify(row));
+    assert.ok(row.scroll <= row.client + 1, JSON.stringify(row));
+    for (const button of row.buttons) {
+      assert.equal(button.lines, 1, JSON.stringify(row));
+      assert.ok(button.h <= 30, JSON.stringify(row));
+    }
+    if (row.trashLines) assert.equal(row.trashLines, 1, JSON.stringify(row));
+    assert.ok(row.trashH <= 30.5, JSON.stringify(row));
+  }
 });

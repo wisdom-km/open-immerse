@@ -253,7 +253,7 @@ test("panel width and the persist hint live beside the locked reader prefs", () 
   const written = writeNotesUiPrefs(storage, { panelWidth: 480 });
   assert.equal(written.panelWidth, 480);
   assert.equal(storage[NOTES_PANEL_WIDTH_KEY], "480");
-  assert.equal(storage[NOTES_PERSIST_HINT_KEY], "{}");
+  assert.equal(storage[NOTES_PERSIST_HINT_KEY], undefined);
   const dismissed = writeNotesUiPrefs(storage, dismissPersistHint(written, "doc-a"));
   assert.equal(persistHintDismissed(dismissed, "doc-a"), true);
   assert.equal(persistHintDismissed(readNotesUiPrefs(storage), "doc-b"), false);
@@ -382,7 +382,8 @@ test("NIM panel source keeps the new rows without moving the locked import click
   assert.match(css, /margin:\s*0 0 var\(--oi-notes-card-gap\)/);
   assert.match(css, /padding:\s*0 var\(--oi-notes-pad-x\) var\(--oi-notes-safe-bottom\)/);
   assert.match(css, /\.oi-note-card\.is-linked:hover[\s\S]*--oi-reader-mine-soft/);
-  assert.match(css, /\.hl\.linked\s*\{[^}]*inset 0 -2px 0 var\(--oi-reader-mine\)/);
+  assert.match(css, /\.hl\.linked\s*\{[^}]*border-bottom:\s*2px solid var\(--oi-reader-mine\)/);
+  assert.equal(/\.hl\.linked\s*\{[^}]*box-shadow/.test(css), false);
   assert.match(css, /\.lostline\s*\{[^}]*height:\s*28px/);
   assert.match(css, /\.lostsec\s*\{[^}]*25%/);
   assert.match(css, /\.lostsec \.oi-note-quote\s*\{[^}]*line-through/);
