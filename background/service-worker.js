@@ -2,6 +2,7 @@ import { completePdfStructure, getProvider, guardZhTranslations, isThinkingEnabl
 import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { featureOn, resolveFeatures } from "../lib/features.js";
+import { handleArxivSourceMessage } from "./arxiv-source.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
@@ -194,6 +195,8 @@ async function handleMessage(message, sender) {
       else rules.push({ host, auto: true, hover: false, subtitle: false, ...message.rule });
       return { ok: true, settings: await saveSettings({ siteRules: rules }) };
     }
+    case "OI_ARXIV_SOURCE":
+      return handleArxivSourceMessage(message);
     default:
       return { ok: false, error: "unknown message" };
   }
