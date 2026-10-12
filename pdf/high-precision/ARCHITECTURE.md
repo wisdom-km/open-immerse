@@ -157,11 +157,13 @@ F4 迁移时，版面和译文的 schema 预留跨页组字段：`groupId`、`me
 5. 锚点找不到时不按相似度改挂到别的段。状态记 `lost`，原锚点和页码留着，用来跳到第 N 页。
 6. 导出格式预留 AI 问答：笔记上的 `author: "ai"` 与 `qa`，以及文件顶层的 `qa` 数组。T2a 不写 AI 数据。
 
+2026-10-13 02:12 Wisdom 批准，收窄上面第 2 条的申请时机：重新锚定时如果位置没变，就不写库，也不申请持久存储。`navigator.storage.persist()` 只在用户写入或导入笔记时调用。代价：不写库时 `layoutRev` 不更新，所以每次打开都会重新计算位置。
+
 一条笔记有 `kind`（`highlight` | `note` | `question` | `paperNote`）、`author`、`anchor`、`anchorState`、`page`、`rev`、`deviceId`。`paperNote` 没有锚点。`anchorState.status` 是 `exact` | `alias` | `text` | `quote` | `lost` | `block`。
 
 锚点复用 `lib/pdf-block-id.js` 的 `resolveBlockAnchor`，不改它的语义（BID-10）。块找到之后，先对译文 TextQuote（前后文各 32 字），再对原文 `quoteSrc`，再对截断进块长的 `offset`；都失败就整块高亮。`bid` 变了则写入新值，旧值放进 `legacy.bids`。原文哈希变了记 `drift`，不算丢失。`layoutRev` 没变且上次是 `exact` 时跳过；只重译时不跳过。查找不超过笔记所在页的前后一页。
 
-版面写入 `setPageLayout` 之后，以及重译成功之后，阅读器把这一页 ±1 页交给重新锚定。结果只进内存或 IndexedDB。测试页（`oiAuto`）把最近一次结果挂在 `__oiNotes`。同一页可以 `await __oiNotes.injectDeadExact({ path: "alias" })` 或 `{ path: "text" }`，注入一条精确 `bid` 对不上的笔记并重新锚定，用来核对别名路径和文本路径。没有笔记界面。
+版面写入 `setPageLayout` 之后，以及重译成功之后，阅读器把这一页 ±1 页交给重新锚定。结果只进内存或 IndexedDB。位置没变则不写库，也不申请持久存储（2026-10-13 02:12）。代价：`layoutRev` 不更新，所以每次打开都会重新计算位置。持久存储只在用户写入或导入笔记时申请。测试页（`oiAuto`）把最近一次结果挂在 `__oiNotes`。同一页可以 `await __oiNotes.injectDeadExact({ path: "alias" })` 或 `{ path: "text" }`，注入一条精确 `bid` 对不上的笔记并重新锚定，用来核对别名路径和文本路径。没有笔记界面。
 
 导出 JSON 的 `format` 是 `open-immerse-notes`，`schema` 是 1。比当前新的文件整份拒绝，并提示先升级扩展。更旧的记录走 `migrations[n]`。Markdown 只导出，按页分组，带原文引文。磁盘写失败时抛出带类型的错误，这次打开的内存里仍保留那条笔记。
 
