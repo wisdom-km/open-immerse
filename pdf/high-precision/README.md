@@ -46,7 +46,7 @@ node --test tests/*.test.mjs
 - 实验室开关：`lib/features.js` 的 `features.pdf` 默认 `false`。入口在设置 → 高级。
 - 阅读器：`pdf/viewer.html`、`pdf/viewer.js`。原文栏 `#pages` 里的 pdf.js canvas。右栏 `#readout`。
 - 翻译：阅读器发 `OI_TRANSLATE_BATCH`，`background/service-worker.js` 的 `translateBatch`。密钥在 `chrome.storage.sync`。
-- 划区 sidecar 放在扩展仓外面，目录 `D:\pdf-layout-sidecar`。它听 `127.0.0.1:8765`（`/v1/layout` 划区接口；同一端口上的 `/v1/library/*` 文献库接口由路线图 v2 的 F4 替换，划区不在 F4 范围）。`7860` 是 GLM-OCR 网页，不是这个接口。认字模型在 `127.0.0.1:5002`。版面模型在 `D:\pdf-layout-models`，仓库名 `PaddlePaddle/PP-DocLayoutV3_safetensors`。`id2label` 在模型加载后从权重配置读取，不写进扩展仓。权重、PyTorch、vLLM 不进本仓库。
+- 划区 sidecar 放在扩展仓外面（本机示例名 `pdf-layout-sidecar`）。它听 `127.0.0.1:8765`（`/v1/layout` 划区接口；同一端口上的 `/v1/library/*` 文献库接口由路线图 v2 的 F4 替换，划区不在 F4 范围）。`7860` 是 GLM-OCR 网页，不是这个接口。认字模型在 `127.0.0.1:5002`。版面模型在扩展仓外的模型目录（本机示例名 `pdf-layout-models`），仓库名 `PaddlePaddle/PP-DocLayoutV3_safetensors`。`id2label` 在模型加载后从权重配置读取，不写进扩展仓。权重、PyTorch、vLLM 不进本仓库。
 - `tests/fixtures/Attention_Is_All_You_Need.pdf` 若在本地，不要 `git add`。手标样例只用小 JSON。
 
 ## 已经写好、直接调用的函数

@@ -169,7 +169,7 @@ Anvil 仍要在本机 Chrome 看 Attention 第 5 页左右栏。下面的 M1–M
 
 ## 2026-09-23 逐页库迁移后的状态
 
-用户已授权迁移 Attention 旧库，并且只补译确认缺失的段落。代码直接在 `D:\open-immerse` 修改；Attention 测试 PDF 不加入 Git。库内原 `readout.md` 保留，`library.sqlite` 已保存迁移前备份 `library.sqlite.before-attention-migration-2026-09-23`。一次性脚本 `scripts/migrate-attention-library.mjs` 先核对 `source.pdf` 的 SHA-256，再通过现有 8765 库接口写入 15 个逐页 JSON 与索引。
+用户已授权迁移 Attention 旧库，并且只补译确认缺失的段落。代码直接在 `扩展仓库（本机示例）` 修改；Attention 测试 PDF 不加入 Git。库内原 `readout.md` 保留，`library.sqlite` 已保存迁移前备份 `library.sqlite.before-attention-migration-2026-09-23`。一次性脚本 `scripts/migrate-attention-library.mjs` 先核对 `source.pdf` 的 SHA-256，再通过现有 8765 库接口写入 15 个逐页 JSON 与索引。
 
 迁移结果为 145 个可译源块：73 个明确配对并复用旧译文、34 个确认旧库缺失或残缺而补译、38 个源文或对应关系尚不能确认的块。第 1–4 页没有待核对译文块，摘要与第 3 页 Encoder 全段已补齐；第 2 页的 `[13]`、`[7]`、`[5, 2, 35]` 与第 3 页的 `N = 6`、`d_{model} = 512` 均在逐页记录中。第 5 页一段矩阵参数文字层顺序仍不可靠；另 37 块是第 10–12 页参考文献。这 38 块显示待核对提示，不送去自动翻译，也不冒充已译。完整列表在库内 `migration-audit.json`。
 
@@ -177,7 +177,7 @@ Anvil 仍要在本机 Chrome 看 Attention 第 5 页左右栏。下面的 M1–M
 
 **网页视觉验收仍未完成。** Browser Use 对 `chrome-extension://.../pdf/viewer.html` 返回 URL 策略拒绝；本轮没有绕过限制，也没有得到迁移后的 Chrome 左右栏截图或网络请求记录。上述是代码、原 PDF 文字层、库接口与自动测试的结果，不能据此声称真实网页已完成对齐。下面各节保留前期调查和修复历史；其中“旧库 pages 为 0”等描述属于迁移前状态。
 
-提交前在 `D:\open-immerse` 运行 `node --test tests/*.test.mjs`：334 通过、0 失败、0 跳过。本机拥有 Attention 测试 PDF；该 PDF 不纳入 Git，其他机器没有该文件时，对应的大样本边界测试会跳过。`git diff --check` 没有空白错误。
+提交前在 `扩展仓库（本机示例）` 运行 `node --test tests/*.test.mjs`：334 通过、0 失败、0 跳过。本机拥有 Attention 测试 PDF；该 PDF 不纳入 Git，其他机器没有该文件时，对应的大样本边界测试会跳过。`git diff --check` 没有空白错误。
 
 ## 当前未解决问题与验证边界
 
@@ -187,7 +187,7 @@ Anvil 仍要在本机 Chrome 看 Attention 第 5 页左右栏。下面的 M1–M
 | 第 10–12 页 37 个参考文献源块有错序、粘连，旧译文无法可靠逐块配对 | 标为 `source-uncertain`，不自动重译 | 逐条校正文字层阅读序、引文编号和条目边界，再决定原文显示或逐条配对 |
 | 73 个复用旧译文的“明确配对”只通过源块前缀、引用和公式占位符等结构核验；语义、所有数字仍需人工抽检 | 不把结构核验等同于全文语义验收；占位符或引用丢失时显示原文提示 | 在指定阅读器逐段比对原文与译文，重点抽检数值、单位、引文、跨页段 |
 | 迁移后的 Chrome 扩展页没有可访问的工具验收记录 | 自动测试和库接口成功不代替网页结论；未能证明无新 `OI_TRANSLATE_BATCH` 请求 | 在本机 Chrome 重载扩展、完全退出再重开，打开相同 PDF，检查第 1–4、6、8 页左右栏及网络请求 |
-| 本机库、模型权重和 `D:\pdf-layout-sidecar` 位于扩展仓外 | GitHub 只包含扩展代码、迁移脚本、文档及小型标注 JSON；不包含 SQLite、逐页译文数据、模型权重或测试 PDF | 其他机器复现前需单独配置本机服务和库，不能把 GitHub checkout 当成已迁移的本地库 |
+| 本机库、模型权重和 `扩展仓外的划区目录（本机示例）` 位于扩展仓外 | GitHub 只包含扩展代码、迁移脚本、文档及小型标注 JSON；不包含 SQLite、逐页译文数据、模型权重或测试 PDF | 其他机器复现前需单独配置本机服务和库，不能把 GitHub checkout 当成已迁移的本地库 |
 
 以下各节为迁移前及阶段 0–5 的历史记录，出现的旧测试计数、`pages: 0`、未补译或未提交描述不代表上表的当前状态。
 
@@ -217,7 +217,7 @@ Anvil 仍要在本机 Chrome 看 Attention 第 5 页左右栏。下面的 M1–M
 
 `chrome-extension://aeokbdehdhpdoibdjdgffhaieibomlcn/pdf/viewer.html`
 
-手动查看只用本机 Google Chrome：`C:\Program Files\Google\Chrome\Application\chrome.exe`。扩展从 `D:\open-immerse` 加载，改完代码后在 `chrome://extensions` 重新加载，不要移除。
+手动查看只用本机 Google Chrome（可执行文件路径是本机示例）。扩展从扩展仓库加载，改完代码后在 `chrome://extensions` 重新加载，不要移除。
 
 ## 进度
 
@@ -232,18 +232,18 @@ Anvil 仍要在本机 Chrome 看 Attention 第 5 页左右栏。下面的 M1–M
 | 地址 | 状态 |
 | --- | --- |
 | `http://127.0.0.1:7860/` | GLM-OCR 的 Gradio 网页。给人看结果，没有阅读器要的划区接口。不要填进扩展的本机基址。 |
-| `http://127.0.0.1:5002/v1/chat/completions` | 本机 GLM-OCR 认字。只回文字，不回版面框。权重在 `C:\Users\19612\.cache\huggingface\hub\models--zai-org--GLM-OCR`，约 2.5 GB。5002 按这个路径读，没有搬到 D 盘。 |
-| `http://127.0.0.1:8765/v1/layout` | 扩展的划区口，进程是 `D:\pdf-layout-sidecar\server.mjs`。这个目录在扩展仓外面。 |
+| `http://127.0.0.1:5002/v1/chat/completions` | 本机 GLM-OCR 认字。只回文字，不回版面框。权重在本机 Hugging Face 缓存的 `models--zai-org--GLM-OCR`（本机示例，不进仓库），约 2.5 GB。5002 按这个路径读，没有另搬目录。 |
+| `http://127.0.0.1:8765/v1/layout` | 扩展的划区口，进程是扩展仓外划区目录里的 `server.mjs`（本机示例）。这个目录在扩展仓外面。 |
 
-版面模型已下载到 D 盘，没有进 C 盘缓存：
+版面模型在扩展仓外的模型目录（本机示例），不在用户缓存里：
 
-`D:\pdf-layout-models\huggingface\hub\models--PaddlePaddle--PP-DocLayoutV3_safetensors`
+`版面模型目录（本机示例）/huggingface/hub/models--PaddlePaddle--PP-DocLayoutV3_safetensors`
 
-约 127 MB。划区配置里的 `model_dir` 指向这份快照。`id2label` 不在已安装的 `LayoutConfig` 上，sidecar 在加载前补上这个属性，再从模型配置读取类别名。队列长度写成 `region_maxsize: 800`，否则这份 SDK 会把空长度传给队列。版面后处理需要 OpenCV，已装进 `G:\BaseWare\Anaconda\envs\glm-ocr` 的 `opencv-python-headless` 5.0.0.93。
+约 127 MB。划区配置里的 `model_dir` 指向这份快照。`id2label` 不在已安装的 `LayoutConfig` 上，sidecar 在加载前补上这个属性，再从模型配置读取类别名。队列长度写成 `region_maxsize: 800`，否则这份 SDK 会把空长度传给队列。版面后处理需要 OpenCV，已装进本机 Python 环境（本机示例）的 `opencv-python-headless` 5.0.0.93。
 
 用 Attention 第 3 页跑过一次版面检测。结果是 1 个图、1 个图题、4 段正文、2 个小节标题，没有公式类别。所以本机模型目前没有把这条论文里的公式划成公式框。
 
-打开 PDF 时，阅读器先通知本机程序 `com.open_immerse.glmocr`。5002、7860、8765 里没在听的会被拉起，已经开着的不动。左栏先出来。若这份 PDF 已经在本地库里，右栏直接显示存好的译文，不再请求翻译。库在 `D:\open-immerse-pdf-library`：`library.sqlite` 是索引，`files\{哈希}\` 放译文、原文 PDF 和以后每一页的识别结果。这一步要在 `chrome://extensions` 重新加载扩展后才生效。本机程序登记在当前用户的 Chrome Native Messaging 里，只允许扩展 `aeokbdehdhpdoibdjdgffhaieibomlcn` 调用。
+打开 PDF 时，阅读器先通知本机程序 `com.open_immerse.glmocr`。5002、7860、8765 里没在听的会被拉起，已经开着的不动。左栏先出来。若这份 PDF 已经在本地库里，右栏直接显示存好的译文，不再请求翻译。库在 `本地论文库目录（本机示例）`：`library.sqlite` 是索引，`files\{哈希}\` 放译文、原文 PDF 和以后每一页的识别结果。这一步要在 `chrome://extensions` 重新加载扩展后才生效。本机程序登记在当前用户的 Chrome Native Messaging 里，只允许扩展 `aeokbdehdhpdoibdjdgffhaieibomlcn` 调用。
 
 ## 上轮网页问题（修复前记录）
 
