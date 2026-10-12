@@ -138,7 +138,9 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 
 本地库按 PDF 文件 SHA-256 查找。`GET /v1/library/document?hash=...` 读取逐页记录；`POST /v1/library/page` 保存页、`pairs`、版面和首次打开的原 PDF。SQLite 是索引，仓外 `files/{hash}/page-NNN.json` 保存逐页数据，`source.pdf` 与 `readout.md` 分别是原件和旧格式兼容文件。阅读器优先用逐页 `pairs`，只在没有逐页记录时回退旧整篇 `readout.md`；已入库文档不自动重新翻译。
 
-存储替换方案已批准（2026-10-11，路线图第 8 步，见 `docs/ui-phase2-plan.md` 第 4 节）：论文、版面、译文、笔记改存 Chrome IndexedDB，设置留在 `chrome.storage`，不用 SQLite。论文、版面、译文还没迁，上面这段本地库代码在那一步落地前仍然有效。笔记已落到扩展自己的 IndexedDB（T2a，2026-10-12），合同见下一小节。
+存储替换方案已批准（2026-10-11，路线图第 8 步，见 `docs/ui-phase2-plan.md` 第 4 节）：论文、版面、译文、笔记改存 Chrome IndexedDB，设置留在 `chrome.storage`，不用 SQLite。论文、版面、译文还没迁，上面这段本地库代码在那一步落地前仍然有效。笔记已落到扩展自己的 IndexedDB（T2a，2026-10-12），合同见下一小节。落地顺序是路线图 v2 的 F4。
+
+F4 迁移时，版面和译文的 schema 预留跨页组字段：`groupId`、`memberBids`、引用起始页（路线图 v2 决定 2，2026-10-12 23:52）。PR-2b-2 在打磨池，字段先留着，以后做跨页续段时不用再迁数据。笔记锚点已有 `memberBid`，不受影响。
 
 每个 `pair` 至少包含源块 `sourceId`、送译文本 `text`、文字层原句 `sourceText`、`translation` 和状态。恢复时同时核对文件哈希、`sourceId` 与 `sourceText`；原句变化或公式占位符、引用编号不一致时，不展示不可信译文。批量翻译完成后，本地库写入按顺序执行，避免后到的早期批次覆盖同一页的完整记录。当前 Attention 的一次性迁移和剩余例外见 `STATUS.md`。
 
