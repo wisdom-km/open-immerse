@@ -1,6 +1,6 @@
 # 阅读器界面第二期 · 计划
 
-- 日期：2026-10-04（北京时间）；文献库存储：2026-10-11
+- 日期：2026-10-04（北京时间）；文献库存储：2026-10-11；笔记存储与锚点：2026-10-12
 - 来源：Wisdom 2026-10-04 的界面反馈，共 7 条；23:52 确认了界面方向和整体分工。本文只记计划和验收，不改代码。
 - 合入规矩：每个 PR 由 Anvil 用 Attention 实测、Wisdom 批准后才合入。
 - 基于：main@66b335b（#96、#97 已合入）。
@@ -25,7 +25,7 @@
 - 按原文页分组，每组标「原文第 N 页 · 章节名」，点组头跳到那一页。
 - 每条可以：编辑、改成问题、删除（删除后能撤销）。
 - 导出（Markdown）。
-- 笔记存在本机。是否进本地库服务、怎么跟论文绑定（建议按 PDF sha256），等 Loom 规格和第 1.5 条一起定。
+- 笔记存在本机 IndexedDB（库名 `oi-annotations`），按 PDF sha256（`docHash`）跟论文绑定，不进本地库服务。存储、锚点、导出导入见第 5 节。
 
 **问 AI**：
 
@@ -194,4 +194,76 @@ Wisdom 的要求（转述，不是逐字原话）：模型除了大语言模型�
 - 不用 SQLite。用户不用安装任何东西。
 - 云端同步以后再加。现在先预留存储接口，上层只依赖这个接口；以后接云端时换实现，不用改上层代码。
 
-当前代码仍走本机库服务 `127.0.0.1:8765`（仓外 SQLite）。本步是替换方案，落地前那段代码仍按现状工作。§1.5 的列表和删除按本步做，不再等那个服务加接口。
+当前代码仍走本机库服务 `127.0.0.1:8765`（仓外 SQLite）。本步是替换方案。论文、版面、译文落地前，`lib/pdf-library.js` 仍按现状工作。§1.5 的列表和删除按本步做，不再等那个服务加接口。笔记是这套接口里先落地的一集（T2a，2026-10-12，见第 5 节）。
+
+---
+
+## 5. 笔记存储与锚点（T2a，2026-10-12 Wisdom 批准）
+
+T2a 只做笔记的存储、锚点、导出和导入，没有界面。侧槽、卡片、图钉、工具条和筛选是 T2b，等 T3 合入后再做。AI 问答本身不做；格式里只留字段。
+
+实现：`lib/notes-store.js`、`lib/notes-anchor.js`、`lib/notes-io.js`。阅读器在版面写入后和重译成功后各有一个钩子，只把当页 ±1 页的笔记重新锚定，结果进内存或 IndexedDB，不画 UI。`lib/pdf-block-id.js` 的 `resolveBlockAnchor` 不改（BID-10）。`lib/pdf-library.js`、`lib/export.js` 和 manifest 权限不动。
+
+### 5.1 Wisdom 决定（2026-10-12）
+
+1. 现在只建笔记库，库名 `oi-annotations`。存储接口按整个文献库的形状来：按 `docHash` 隔离，带 `rev` / `deviceId`，有导出导入、`changes(sinceRev)` 和 `subscribe`。论文、版面、译文以后加进同一套接口，上层不用改。云同步以后换实现，也不改上层。
+2. 不申请 `unlimitedStorage`。笔记库第一次写入时调用 `navigator.storage.persist()`，把是否成功记到 `chrome.storage.local` 的 `notesPersistGranted`，并把见过的格式版本记到 `notesSchemaSeen`。持久存储被拒绝时，导出的 JSON 是备份。
+3. 删掉的笔记一直留在回收站（软删除，不按时间自动清）。存储接口是 `softDelete`、`restore`、`purge`（立即彻底删除）、`listTrash`。回收站界面是 T2b。导出默认不带回收站里的笔记。
+4. 导入只合并：`rev` 大的胜出；`rev` 相同比 `updatedAt`，较新的胜出。只新增和更新，不删除本地笔记。本地还没打开过的 `docHash` 也入库，等那份 PDF 打开再锚定。
+5. 找不到位置时不按相似度挂到别的段。笔记标成 `lost`，锚点和页码保持原样，用来跳到第 N 页。没有模糊匹配，也不到笔记所在页的前后一页之外去找。之后版面再变，丢失的笔记会再试一次。
+6. 导出格式为 AI 问答预留字段。每条笔记可以有 `author: "ai"` 和 `qa`（`sessionId`、`turnId`、`question`、`answer`、`model`）。文件顶层有 `qa` 数组，放以后的会话。T2a 不写入任何 AI 数据；导入时按这些字段保留，并且不会删掉本地已有的会话。
+
+### 5.2 记录
+
+IndexedDB `oi-annotations`，`DB_VERSION = 1`。库在第一次写入（新建或导入）时才创建。列出、查找、回收站和变更记录在库还不存在时返回空，不调用 `indexedDB.open`（`open` 会把空库建出来）。有 `indexedDB.databases()` 时用它判断库在不在。
+
+- `notes`：主键 `id`。索引 `byDoc(docHash)`、`byDocPage([docHash, page])`、`byUpdated(updatedAt)`。
+- `docs`：主键 `docHash`。字段 `title`、`layoutRev`、`notesCount`、`updatedAt`。
+- `meta`：`schemaVersion`、`lastExportAt`、`deviceId`，以及预留的 `qa`。
+
+一条笔记：`id`、`schema`、`docHash`、`kind`（`highlight` | `note` | `question` | `paperNote`）、`author`（`me` | `ai`）、`body`、`title`、`anchor`、`anchorState`、`page`、`createdAt`、`updatedAt`、`deletedAt`、`rev`、`deviceId`。`paperNote` 的 `anchor` 是 `null`。`anchorState.status` 是 `exact` | `alias` | `text` | `quote` | `lost` | `block`。用户写入时 `rev` 加一。
+
+`BlockAnchor` 沿用稳定块 id 的合同：`docHash`、`bid`、`bidV`、`memberBid`、`page`、`srcRects`、`srcHead`、`srcHash`、`legacy`、`quote`、`prefix`、`suffix`。另外有原文上的 `quoteSrc`（重译后不变）和译文里的 `offset`（只作提示，超出块长会截断）。译文 TextQuote 的前后文各 32 个字符。
+
+格式版本比当前新时，导入整份拒绝，并说明要先升级扩展。旧版本走 `migrations[n]`，导入和以后的数据库升级用同一组纯函数。
+
+磁盘写失败（配额、隐私模式）抛出带类型的错误。这次打开期间的内存里仍留着那条笔记。
+
+### 5.3 重新锚定
+
+页面版面就绪，或这一页重译完成时，只处理这一页 ±1 页的笔记。
+
+1. 调用现有的 `resolveBlockAnchor`，得到 `exact`、`alias`、`text`、`quote` 或 `lost`。
+2. `exact`、`alias`、`text`：块已经找到。先在译文上对 TextQuote；对不上就用原文 `quoteSrc`；再对不上就用截断后的 `offset`。三处都失败就整块高亮，状态记 `block`。`bid` 变了就把新 `bid` 写上，旧的放进 `legacy.bids`。`srcHash` 对不上记 `drift: true`，不当成丢失。
+3. `quote`：锚点原样保留，状态记 `quote`。
+4. `lost`：不删除，不改锚点，页码留着。
+5. `layoutRev` 和上次一样，而且上次是 `exact`，就跳过。只重译、不重算版面时不走这条快路径，因为译文可能已经变了，这时退回 `quoteSrc` 或 `offset`，不算丢失。
+
+### 5.4 导出和导入
+
+JSON：`format: "open-immerse-notes"`，`schema: 1`，`exportedAt`，`app.version`，预留的 `qa`，以及 `docs[].notes`。默认不含 `deletedAt` 的笔记。Markdown 只导出：标题是论文名和 `docHash` 前 8 位，按页分组，每条有种类、原文引文和正文（N4）。Markdown 不能导入。
+
+### 5.5 验收编号 NT-01…NT-10
+
+T2a 计划点过 NT-03（导入不丢条目）和 NT-08（重开后笔记还在，对得上时是 exact）。P2-a 里的整张编号表不在本仓库，下面这 10 条按那份 T2a 计划的验收写进这里，03 和 08 用计划里已经点名的含义。
+
+| 编号 | 验收 |
+| --- | --- |
+| NT-01 | 笔记按 `docHash` 隔离，A 文档的笔记不会出现在 B 文档 |
+| NT-02 | 软删除进回收站并可恢复；不自动清理。`purge` 立即彻底删除，`listTrash` 列出回收站。`rev` 随写入增加 |
+| NT-03 | 导入不丢本地笔记。`rev` 大的胜出，`rev` 相同比 `updatedAt`。只新增和更新，不删除 |
+| NT-04 | Markdown 按页分组并带原文引文（N4）。JSON 默认不含回收站 |
+| NT-05 | 重新锚定复用 `resolveBlockAnchor`，不改 BID-10 |
+| NT-06 | 版面变化走 alias；原文变化且旧 id 对不上时走 text。`layoutRev` 相同且上次是 exact 时跳过；`layoutRev` 变了就重算 |
+| NT-07 | 重译后译文引文失配，回退原文 `quoteSrc` 或截断后的 `offset`，不算丢失 |
+| NT-08 | 重开同一份 PDF，笔记还在；对得上时状态是 exact |
+| NT-09 | 找不到位置不模糊重挂，标 `lost`，保留跳到第 N 页 |
+| NT-10 | 第一次写入申请 `persist`，结果记入设置。更旧的格式会迁移；更新的格式拒绝导入。导出预留 AI 问答字段，T2a 不写 AI 数据 |
+
+### 5.6 分期
+
+| 阶段 | 做什么 | 依赖 |
+| --- | --- | --- |
+| T2a | 笔记的存储、锚点、导出导入。只有逻辑 | T1 与 PR #118 已在 main（`7219c5d`） |
+| T2b | 侧槽、卡片、编辑、五个筛选（AI 为空态，待回答列出 `question`）、图钉、工具条、撤销界面 | T2a；T3 合入之后 |
+| 以后 | 论文、版面、译文进同一套存储接口；云同步换实现 | 路线图第 8 步的其余部分。上层继续调用现在的接口 |

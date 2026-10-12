@@ -166,6 +166,7 @@ import {
   visualAlt
 } from "../lib/pdf-blocks.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
+import { injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
@@ -327,6 +328,7 @@ let forceRetranslatePending = false;
 let libraryArticle = null;
 let libraryDoc = null;
 let libraryProbe = null;
+let notesDocHash = "";
 let titleStructure = null;
 const librarySourceSent = new Set();
 const enqueueLibraryWrite = createLibraryWriteQueue();
@@ -1906,6 +1908,75 @@ function getPageLayout(page) {
   return layoutCache.get(layoutKey(page)) || null;
 }
 
+function reanchorLaidPage(page) {
+  refreshNoteAnchors(page, "layout");
+}
+
+function reanchorTranslatedPage(page) {
+  refreshNoteAnchors(page, "retranslate");
+}
+
+function notePagesAround(center) {
+  const pages = [];
+  for (const n of [center - 1, center, center + 1]) {
+    if (n < 1) continue;
+    const layout = getPageLayout(n);
+    if (!layout?.blocks?.length) continue;
+    const rows = pageCache.get(docId, n) || (n === pageNum ? pageResults : null) || [];
+    pages.push({ page: n, blocks: applyBlockTranslations(layout.blocks, rows) });
+  }
+  return pages;
+}
+
+function notesDocHashNow() {
+  return libraryDoc?.hash || notesDocHash || "";
+}
+
+async function resolveNotesDocHash() {
+  const hash = libraryDoc?.hash || notesDocHash || await pdfByteHash();
+  if (hash && hash !== "nohash") notesDocHash = hash;
+  return notesDocHash || hash;
+}
+
+/** oiAuto only. Inject a note whose exact bid cannot match, then re-anchor. */
+function exposeNotesProbe() {
+  if (!viewerUnderTest()) return;
+  const bucket = globalThis.__oiNotes || (globalThis.__oiNotes = {});
+  bucket.store = sharedNotesStore();
+  bucket.injectDeadExact = (spec) => injectDeadExactNote(spec, {
+    store: () => bucket.store,
+    docHash: notesDocHashNow,
+    resolveDocHash: resolveNotesDocHash,
+    layoutRev: () => knownLayoutVersion || "probe",
+    laidPages: () => Object.keys(globalThis.__oiLayouts || {}).map((key) => Number(key)).filter((n) => n >= 1),
+    pagesFor: notePagesAround
+  });
+}
+
+/** Layout or retranslate finished. Re-anchor this page ±1. No note UI. */
+function refreshNoteAnchors(page, reason) {
+  const center = Number(page);
+  if (!(center >= 1)) return;
+  const pages = notePagesAround(center);
+  if (!pages.length) return;
+  const underTest = viewerUnderTest();
+  void reanchorOpenPage({
+    docHash: notesDocHashNow(),
+    page: center,
+    pages,
+    reason,
+    layoutRev: knownLayoutVersion,
+    resolveDocHash: resolveNotesDocHash
+  }).then((result) => {
+    if (!underTest) return;
+    exposeNotesProbe();
+    const bucket = globalThis.__oiNotes;
+    if (!result || !bucket) return;
+    bucket[center] = result;
+    bucket.last = result;
+  }).catch(() => {});
+}
+
 function setPageLayout(page, layout) {
   if (layout) {
     stampLayoutBids(page, layout);
@@ -1923,6 +1994,7 @@ function setPageLayout(page, layout) {
       label: String(block.label || "")
     }));
   }
+  if (layout?.blocks?.length) reanchorLaidPage(page);
 }
 
 function appendReadoutNode(input, parent) {
@@ -2649,6 +2721,7 @@ function publishViewerTestHooks() {
     sourceId: String(block.sourceId || ""),
     text: String(block.text || "")
   }));
+  exposeNotesProbe();
 }
 
 function landedText(translation, source = "") {
@@ -7850,6 +7923,7 @@ async function forceRetranslateCurrentPage() {
       clearSlotPainted(targetPage);
       finishDocPhase();
       renderArticle();
+      reanchorTranslatedPage(targetPage);
       if (!work.aborted && isCurrentWork(work, gen, translatingDoc)) setStatus(PDF_COPY.retranslateDone);
     } catch {
       restoreForceReadout(prior, translatingDoc, targetPage);
@@ -8379,6 +8453,7 @@ async function adoptDoc(doc, title) {
   libraryArticle = null;
   libraryDoc = null;
   libraryProbe = null;
+  notesDocHash = "";
   titleStructure = null;
   layoutCache.clear();
   formulaRasterCache.clear();

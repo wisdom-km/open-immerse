@@ -138,9 +138,30 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 
 本地库按 PDF 文件 SHA-256 查找。`GET /v1/library/document?hash=...` 读取逐页记录；`POST /v1/library/page` 保存页、`pairs`、版面和首次打开的原 PDF。SQLite 是索引，仓外 `files/{hash}/page-NNN.json` 保存逐页数据，`source.pdf` 与 `readout.md` 分别是原件和旧格式兼容文件。阅读器优先用逐页 `pairs`，只在没有逐页记录时回退旧整篇 `readout.md`；已入库文档不自动重新翻译。
 
-存储替换方案已批准（2026-10-11，路线图第 8 步，见 `docs/ui-phase2-plan.md` 第 4 节）：论文、版面、译文、笔记改存 Chrome IndexedDB，设置留在 `chrome.storage`，不用 SQLite。上面这段是当前代码，本步落地前仍然有效。
+存储替换方案已批准（2026-10-11，路线图第 8 步，见 `docs/ui-phase2-plan.md` 第 4 节）：论文、版面、译文、笔记改存 Chrome IndexedDB，设置留在 `chrome.storage`，不用 SQLite。论文、版面、译文还没迁，上面这段本地库代码在那一步落地前仍然有效。笔记已落到扩展自己的 IndexedDB（T2a，2026-10-12），合同见下一小节。
 
 每个 `pair` 至少包含源块 `sourceId`、送译文本 `text`、文字层原句 `sourceText`、`translation` 和状态。恢复时同时核对文件哈希、`sourceId` 与 `sourceText`；原句变化或公式占位符、引用编号不一致时，不展示不可信译文。批量翻译完成后，本地库写入按顺序执行，避免后到的早期批次覆盖同一页的完整记录。当前 Attention 的一次性迁移和剩余例外见 `STATUS.md`。
+
+### 笔记存储与锚点（T2a）
+
+上层只依赖 `createNotesStore()`，不直接调用 `indexedDB`。T2a 打开的集合只有笔记，库名 `oi-annotations`，按 PDF SHA-256（`docHash`）隔离。没有笔记时打开 PDF 不创建这个库：列出和查找在库不存在时直接返回空。第一次写入（新建或导入）才 `open` 建库。是否已有库用 `indexedDB.databases()` 判断。论文、版面、译文在接口上留着同样的形状（`list` / `get` / `put` / 导出导入 / `changes(sinceRev)` / `subscribe`），实现仍是 `lib/pdf-library.js`。以后的云同步换掉笔记这一集的实现，调用方不用改。
+
+2026-10-12 Wisdom 定了六条，细则在 `docs/ui-phase2-plan.md` 第 5 节：
+
+1. 现在只建笔记库，接口按整个文献库设计。
+2. 不申请 `unlimitedStorage`。第一次写入调用 `navigator.storage.persist()`，结果记在 `chrome.storage.local` 的 `notesPersistGranted`，格式版本记在 `notesSchemaSeen`。
+3. 删除进回收站，一直留着，不按时间自动清。接口是 `softDelete`、`restore`、`purge`（立即彻底删除）和 `listTrash`。导出默认不带回收站。
+4. 导入只合并：`rev` 大的胜出，`rev` 相同比 `updatedAt`。只新增和更新，不删除本地笔记。
+5. 锚点找不到时不按相似度改挂到别的段。状态记 `lost`，原锚点和页码留着，用来跳到第 N 页。
+6. 导出格式预留 AI 问答：笔记上的 `author: "ai"` 与 `qa`，以及文件顶层的 `qa` 数组。T2a 不写 AI 数据。
+
+一条笔记有 `kind`（`highlight` | `note` | `question` | `paperNote`）、`author`、`anchor`、`anchorState`、`page`、`rev`、`deviceId`。`paperNote` 没有锚点。`anchorState.status` 是 `exact` | `alias` | `text` | `quote` | `lost` | `block`。
+
+锚点复用 `lib/pdf-block-id.js` 的 `resolveBlockAnchor`，不改它的语义（BID-10）。块找到之后，先对译文 TextQuote（前后文各 32 字），再对原文 `quoteSrc`，再对截断进块长的 `offset`；都失败就整块高亮。`bid` 变了则写入新值，旧值放进 `legacy.bids`。原文哈希变了记 `drift`，不算丢失。`layoutRev` 没变且上次是 `exact` 时跳过；只重译时不跳过。查找不超过笔记所在页的前后一页。
+
+版面写入 `setPageLayout` 之后，以及重译成功之后，阅读器把这一页 ±1 页交给重新锚定。结果只进内存或 IndexedDB。测试页（`oiAuto`）把最近一次结果挂在 `__oiNotes`。同一页可以 `await __oiNotes.injectDeadExact({ path: "alias" })` 或 `{ path: "text" }`，注入一条精确 `bid` 对不上的笔记并重新锚定，用来核对别名路径和文本路径。没有笔记界面。
+
+导出 JSON 的 `format` 是 `open-immerse-notes`，`schema` 是 1。比当前新的文件整份拒绝，并提示先升级扩展。更旧的记录走 `migrations[n]`。Markdown 只导出，按页分组，带原文引文。磁盘写失败时抛出带类型的错误，这次打开的内存里仍保留那条笔记。
 
 视觉块是 `formula`、`figure`、`table`。进入右栏之前，适配器从这三类对象上删除 OCR 或划区 API 带来的 `latex`、`content`、`html`、`md`、`text`。校验函数发现这些键，删键并继续，不把它们渲染出来。公式块再按 REQUIREMENTS §2.6「运行时顺序」选择节点：第零层 → 第二层多模态 → OCR API 层 → 第一层自研算法 → 第一层矢量重绘 → 第一层原页裁图 → 第三层占位，每一步没过自己的自动判据就交给下一步；用户没接多模态 API 或第二层开关关着时，交给 OCR API 层；OCR API 也没接或开关关着时，交给自研算法（推论，由 01:12 顺序推出）。多模态是公式主路径；第一层（自建识别和矢量重绘）按现状冻结，只作兜底，不再优化；练习集各层占比基线不再做（2026-10-05 00:48 Wisdom 定）。矢量重绘还没实现的部分做不做，待 Wisdom 确认。现在已上线的高清重渲染（`surface="redraw"`）和 pageRaster 的 png 裁图都算第一层的原页裁图。各层的节点形态（按层号列，不是运行时顺序）：
 
