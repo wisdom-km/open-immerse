@@ -144,7 +144,7 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 
 ### 笔记存储与锚点（T2a）
 
-上层只依赖 `createNotesStore()`，不直接调用 `indexedDB`。T2a 打开的集合只有笔记，库名 `oi-annotations`，按 PDF SHA-256（`docHash`）隔离。论文、版面、译文在接口上留着同样的形状（`list` / `get` / `put` / 导出导入 / `changes(sinceRev)` / `subscribe`），实现仍是 `lib/pdf-library.js`。以后的云同步换掉笔记这一集的实现，调用方不用改。
+上层只依赖 `createNotesStore()`，不直接调用 `indexedDB`。T2a 打开的集合只有笔记，库名 `oi-annotations`，按 PDF SHA-256（`docHash`）隔离。没有笔记时打开 PDF 不创建这个库：列出和查找在库不存在时直接返回空。第一次写入（新建或导入）才 `open` 建库。是否已有库用 `indexedDB.databases()` 判断。论文、版面、译文在接口上留着同样的形状（`list` / `get` / `put` / 导出导入 / `changes(sinceRev)` / `subscribe`），实现仍是 `lib/pdf-library.js`。以后的云同步换掉笔记这一集的实现，调用方不用改。
 
 2026-10-12 Wisdom 定了六条，细则在 `docs/ui-phase2-plan.md` 第 5 节：
 
@@ -159,7 +159,7 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 
 锚点复用 `lib/pdf-block-id.js` 的 `resolveBlockAnchor`，不改它的语义（BID-10）。块找到之后，先对译文 TextQuote（前后文各 32 字），再对原文 `quoteSrc`，再对截断进块长的 `offset`；都失败就整块高亮。`bid` 变了则写入新值，旧值放进 `legacy.bids`。原文哈希变了记 `drift`，不算丢失。`layoutRev` 没变且上次是 `exact` 时跳过；只重译时不跳过。查找不超过笔记所在页的前后一页。
 
-版面写入 `setPageLayout` 之后，以及重译成功之后，阅读器把这一页 ±1 页交给重新锚定。结果只进内存或 IndexedDB。测试页（`oiAuto`）把最近一次结果挂在 `__oiNotes`。没有笔记界面。
+版面写入 `setPageLayout` 之后，以及重译成功之后，阅读器把这一页 ±1 页交给重新锚定。结果只进内存或 IndexedDB。测试页（`oiAuto`）把最近一次结果挂在 `__oiNotes`。同一页可以 `await __oiNotes.injectDeadExact({ path: "alias" })` 或 `{ path: "text" }`，注入一条精确 `bid` 对不上的笔记并重新锚定，用来核对别名路径和文本路径。没有笔记界面。
 
 导出 JSON 的 `format` 是 `open-immerse-notes`，`schema` 是 1。比当前新的文件整份拒绝，并提示先升级扩展。更旧的记录走 `migrations[n]`。Markdown 只导出，按页分组，带原文引文。磁盘写失败时抛出带类型的错误，这次打开的内存里仍保留那条笔记。
 

@@ -10,6 +10,8 @@ import { createNotesStore } from "../lib/notes-store.js";
 import {
   QUOTE_CONTEXT,
   createBlockAnchor,
+  injectDeadExactNote,
+  noteWithDeadExactBid,
   reanchorNote,
   reanchorNotes,
   reanchorOpenPage
@@ -181,9 +183,100 @@ test("viewer re-anchors after layout and retranslate without drawing notes", () 
   assert.equal(setPage.includes("assignBids"), false);
   assert.match(viewerSrc, /reanchorTranslatedPage\(targetPage\)/);
   assert.match(viewerSrc, /__oiNotes/);
+  assert.match(viewerSrc, /injectDeadExact/);
   assert.equal(viewerSrc.includes("indexedDB"), false);
   assert.equal(viewerSrc.includes("unlimitedStorage"), false);
   assert.equal(manifest.includes("unlimitedStorage"), false);
+});
+
+test("a dead exact bid is forced through alias, and a second note through text", async () => {
+  const source = "Attention is all you need for this anchor probe sentence.";
+  const block = {
+    id: "p4-b7",
+    bid: "b1-p4-t010gv1t",
+    sourceId: "p4-src",
+    label: "text",
+    sourceText: source,
+    text: source
+  };
+  const pages = [{ page: 4, blocks: [block] }];
+  const aliasDraft = noteWithDeadExactBid({
+    block,
+    page: 4,
+    docHash: DOC,
+    path: "alias",
+    id: "dead-alias"
+  });
+  assert.notEqual(aliasDraft.deadBid, block.bid);
+  assert.equal(aliasDraft.note.anchor.srcHead, "");
+  assert.equal(aliasDraft.note.anchor.legacy.pairId, "p4:p4-b7");
+  assert.equal(aliasDraft.note.anchor.quote, "");
+  const aliasHit = reanchorNote(aliasDraft.note, pages, { layoutRev: REV_B, checkedAt: 1 });
+  assert.equal(aliasHit.note.anchorState.status, "alias");
+  assert.equal(aliasHit.note.anchor.bid, block.bid);
+  assert.equal(aliasHit.note.page, 4);
+  assert.equal(aliasHit.located.how, "quoteSrc");
+  assert.equal(aliasHit.located.start, 0);
+  assert.equal(aliasHit.located.end, source.length);
+
+  const textDraft = noteWithDeadExactBid({
+    block,
+    page: 4,
+    docHash: DOC,
+    path: "text",
+    id: "dead-text"
+  });
+  assert.equal(textDraft.note.anchor.legacy, undefined);
+  assert.equal(textDraft.note.anchor.srcHead.length > 0, true);
+  assert.notEqual(textDraft.deadBid, block.bid);
+  const textHit = reanchorNote(textDraft.note, pages, { layoutRev: REV_B, checkedAt: 2 });
+  assert.equal(textHit.note.anchorState.status, "text");
+  assert.equal(textHit.note.anchor.bid, block.bid);
+  assert.equal(textHit.note.page, 4);
+  assert.equal(textHit.located.how, "quoteSrc");
+  assert.equal(textHit.located.start, 0);
+  assert.equal(textHit.located.end, source.length);
+
+  const store = createNotesStore({
+    memory: true,
+    persist: false,
+    deviceId: "device-a",
+    now: () => 40,
+    createId: () => "unused"
+  });
+  const probed = await injectDeadExactNote({ path: "alias", page: 4, id: "probe-alias" }, {
+    store,
+    docHash: DOC,
+    layoutRev: REV_B,
+    pagesFor: () => pages
+  });
+  assert.equal(probed.status, "alias");
+  assert.equal(probed.bid, block.bid);
+  assert.equal(probed.page, 4);
+  assert.equal(probed.located.how, "quoteSrc");
+  assert.notEqual(probed.deadBid, probed.bid);
+  const textProbe = await injectDeadExactNote({ path: "text", page: 4, id: "probe-text" }, {
+    store,
+    docHash: DOC,
+    layoutRev: REV_B,
+    pagesFor: () => pages
+  });
+  assert.equal(textProbe.status, "text");
+  assert.equal(textProbe.bid, block.bid);
+  assert.equal(textProbe.page, 4);
+  assert.equal(textProbe.located.how, "quoteSrc");
+  const lost = reanchorNote({
+    ...textDraft.note,
+    id: "dead-lost",
+    anchor: {
+      ...textDraft.note.anchor,
+      srcHead: "zzzznotthesource",
+      quoteSrc: { quote: "也没有", prefix: "", suffix: "" }
+    }
+  }, pages, { layoutRev: REV_B, checkedAt: 3 });
+  assert.equal(lost.note.anchorState.status, "lost");
+  assert.equal(lost.note.page, 4);
+  assert.equal(lost.note.anchor.bid, textDraft.deadBid);
 });
 
 test("real Attention and DPO blocks re-anchor without fuzzy recovery", { timeout: 120000 }, async () => {

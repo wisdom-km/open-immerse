@@ -166,7 +166,7 @@ import {
   visualAlt
 } from "../lib/pdf-blocks.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
-import { reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
+import { injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
@@ -1916,10 +1916,7 @@ function reanchorTranslatedPage(page) {
   refreshNoteAnchors(page, "retranslate");
 }
 
-/** Layout or retranslate finished. Re-anchor this page ±1. No note UI. */
-function refreshNoteAnchors(page, reason) {
-  const center = Number(page);
-  if (!(center >= 1)) return;
+function notePagesAround(center) {
   const pages = [];
   for (const n of [center - 1, center, center + 1]) {
     if (n < 1) continue;
@@ -1928,24 +1925,53 @@ function refreshNoteAnchors(page, reason) {
     const rows = pageCache.get(docId, n) || (n === pageNum ? pageResults : null) || [];
     pages.push({ page: n, blocks: applyBlockTranslations(layout.blocks, rows) });
   }
+  return pages;
+}
+
+function notesDocHashNow() {
+  return libraryDoc?.hash || notesDocHash || "";
+}
+
+async function resolveNotesDocHash() {
+  const hash = libraryDoc?.hash || notesDocHash || await pdfByteHash();
+  if (hash && hash !== "nohash") notesDocHash = hash;
+  return notesDocHash || hash;
+}
+
+/** oiAuto only. Inject a note whose exact bid cannot match, then re-anchor. */
+function exposeNotesProbe() {
+  if (!viewerUnderTest()) return;
+  const bucket = globalThis.__oiNotes || (globalThis.__oiNotes = {});
+  bucket.store = sharedNotesStore();
+  bucket.injectDeadExact = (spec) => injectDeadExactNote(spec, {
+    store: () => bucket.store,
+    docHash: notesDocHashNow,
+    resolveDocHash: resolveNotesDocHash,
+    layoutRev: () => knownLayoutVersion || "probe",
+    laidPages: () => Object.keys(globalThis.__oiLayouts || {}).map((key) => Number(key)).filter((n) => n >= 1),
+    pagesFor: notePagesAround
+  });
+}
+
+/** Layout or retranslate finished. Re-anchor this page ±1. No note UI. */
+function refreshNoteAnchors(page, reason) {
+  const center = Number(page);
+  if (!(center >= 1)) return;
+  const pages = notePagesAround(center);
   if (!pages.length) return;
   const underTest = viewerUnderTest();
   void reanchorOpenPage({
-    docHash: libraryDoc?.hash || notesDocHash || "",
+    docHash: notesDocHashNow(),
     page: center,
     pages,
     reason,
     layoutRev: knownLayoutVersion,
-    resolveDocHash: async () => {
-      const hash = libraryDoc?.hash || notesDocHash || await pdfByteHash();
-      if (hash && hash !== "nohash") notesDocHash = hash;
-      return notesDocHash || hash;
-    }
+    resolveDocHash: resolveNotesDocHash
   }).then((result) => {
     if (!underTest) return;
-    const bucket = globalThis.__oiNotes || (globalThis.__oiNotes = {});
-    bucket.store = sharedNotesStore();
-    if (!result) return;
+    exposeNotesProbe();
+    const bucket = globalThis.__oiNotes;
+    if (!result || !bucket) return;
     bucket[center] = result;
     bucket.last = result;
   }).catch(() => {});
@@ -2695,8 +2721,7 @@ function publishViewerTestHooks() {
     sourceId: String(block.sourceId || ""),
     text: String(block.text || "")
   }));
-  globalThis.__oiNotes = globalThis.__oiNotes || {};
-  globalThis.__oiNotes.store = sharedNotesStore();
+  exposeNotesProbe();
 }
 
 function landedText(translation, source = "") {

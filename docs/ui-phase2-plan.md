@@ -215,7 +215,7 @@ T2a 只做笔记的存储、锚点、导出和导入，没有界面。侧槽、�
 
 ### 5.2 记录
 
-IndexedDB `oi-annotations`，`DB_VERSION = 1`。
+IndexedDB `oi-annotations`，`DB_VERSION = 1`。库在第一次写入（新建或导入）时才创建。列出、查找、回收站和变更记录在库还不存在时返回空，不调用 `indexedDB.open`（`open` 会把空库建出来）。有 `indexedDB.databases()` 时用它判断库在不在。
 
 - `notes`：主键 `id`。索引 `byDoc(docHash)`、`byDocPage([docHash, page])`、`byUpdated(updatedAt)`。
 - `docs`：主键 `docHash`。字段 `title`、`layoutRev`、`notesCount`、`updatedAt`。
