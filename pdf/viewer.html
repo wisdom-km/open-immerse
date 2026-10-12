@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="reader-tokens.css" />
   <link rel="stylesheet" href="./vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="viewer.css" />
+  <link rel="stylesheet" href="notes-panel.css" />
 </head>
 <body class="oi-reader-app" data-reader-theme="warm">
   <header class="toolbar" data-tb-zones data-band="wide" data-has-doc="0">
@@ -181,7 +182,7 @@
         <button type="button" id="zoomIn" class="zoom-gutter-btn" disabled>放大</button>
       </div>
     </section>
-    <div class="split-handle" role="separator" aria-orientation="vertical" aria-controls="pdfPane" aria-valuemin="22.3" aria-valuemax="56.8" aria-valuenow="50" aria-valuetext="原文栏 50%" tabindex="0" aria-label="调整分栏"><span class="split-bubble" aria-hidden="true">原文栏 50%</span></div>
+    <div class="split-handle" data-split="source" role="separator" aria-orientation="vertical" aria-controls="pdfPane" aria-valuemin="22.3" aria-valuemax="56.8" aria-valuenow="50" aria-valuetext="原文栏 50%" tabindex="0" aria-label="调整分栏"><span class="split-bubble" aria-hidden="true">原文栏 50%</span></div>
     <aside class="pane-translate" aria-label="译文栏">
       <div id="reader" class="oi-reader" data-reader-theme="warm">
         <div id="translateScroll" class="pane-translate-scroll oi-sb">
@@ -196,6 +197,8 @@
         <div id="readerFade" class="rf-fade" aria-hidden="true" hidden></div>
       </div>
     </aside>
+    <div id="sideSlot" data-side-slot hidden aria-hidden="true"></div>
+    <div class="split-handle" data-split="notes" role="separator" aria-orientation="vertical" aria-controls="sideSlot" aria-valuemin="320" aria-valuemax="480" aria-valuenow="360" aria-valuetext="笔记栏 360 像素" tabindex="-1" aria-hidden="true" aria-label="调整笔记栏宽度" hidden><span class="split-bubble" aria-hidden="true">笔记栏 360px</span></div>
   </div>
   <div id="sourcePop" class="source-pop" hidden role="dialog" aria-label="原文" data-place="side" data-side="start" data-full="0">
     <header class="source-pop-head">
@@ -207,7 +210,6 @@
     </header>
     <div id="sourcePopBody" class="source-pop-body"></div>
   </div>
-  <div id="sideSlot" data-side-slot hidden aria-hidden="true"></div>
   <div id="tbToast" class="tb-toast" role="status" hidden>即将推出</div>
   <script src="./vendor/katex/katex.min.js"></script>
   <script type="module" src="viewer.js"></script>

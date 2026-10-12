@@ -283,6 +283,45 @@ body {
 .workspace.is-splitting .pane-translate {
   pointer-events: none;
 }
+.workspace.is-splitting #sideSlot {
+  pointer-events: none;
+}
+.split-handle[data-split="notes"] {
+  display: none;
+}
+.workspace[data-layout="3"] > .split-handle[data-split="source"] {
+  grid-area: splitA;
+}
+.workspace[data-layout="3"] > .split-handle[data-split="notes"] {
+  display: block;
+  grid-area: splitB;
+  visibility: visible;
+  pointer-events: auto;
+  width: var(--oi-reader-split-hit);
+  height: auto;
+  position: absolute;
+}
+.workspace.is-splitting .split-handle[data-split="notes"] .split-bubble {
+  opacity: 0;
+  visibility: hidden;
+}
+.workspace.is-splitting .split-handle[data-split="notes"].is-dragging .split-bubble {
+  opacity: 1;
+  visibility: visible;
+}
+.workspace[data-layout="3"][data-notes-side="end"] .split-handle[data-split="notes"]:focus-visible::before,
+.workspace[data-layout="3"][data-notes-side="end"].is-splitting .split-handle[data-split="notes"].is-dragging::before {
+  box-shadow: inset 1px 0 0 var(--oi-reader-split-line-drag);
+}
+.workspace[data-layout="3"][data-notes-side="end"] .split-handle[data-split="notes"]:focus-visible::before {
+  box-shadow: inset 2px 0 0 var(--oi-reader-split-line-drag);
+}
+.workspace[data-layout="3"][data-notes-side="start"] .split-handle[data-split="notes"]:focus-visible::before {
+  box-shadow: inset -2px 0 0 var(--oi-reader-split-line-drag);
+}
+.workspace[data-layout="3"][data-notes-side="start"].is-splitting .split-handle[data-split="notes"].is-dragging::before {
+  box-shadow: inset -1px 0 0 var(--oi-reader-split-line-drag);
+}
 .split-handle {
   grid-area: split;
   position: absolute;

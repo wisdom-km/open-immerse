@@ -8,6 +8,7 @@ import {
   LIBRARY_COLLECTIONS,
   NOTES_DB_NAME,
   createNotesStore,
+  recordedPersistDenied,
   upgradeNotesDatabase,
   wrapStoreError
 } from "../lib/notes-store.js";
@@ -137,6 +138,33 @@ test("the first write records navigator.storage.persist() once", async () => {
   assert.equal(settings.notesPersistGranted, true);
   assert.equal(settings.notesSchemaSeen, 1);
   assert.equal(store.persistRecord.notesPersistGranted, true);
+});
+
+test("a re-anchor put can skip persist(), and a recorded refusal is explicit", async () => {
+  let calls = 0;
+  const { store } = make({
+    persist: async () => {
+      calls += 1;
+      return false;
+    }
+  });
+  await store.put({ docHash: "doc-a", kind: "highlight", page: 1, anchor: anchor(1) }, { persist: false });
+  assert.equal(calls, 0);
+  assert.equal(store.persistRecord, null);
+  await store.put({ docHash: "doc-a", kind: "note", page: 1, body: "用户写入" });
+  assert.equal(calls, 1);
+  assert.equal(store.persistRecord.notesPersistGranted, false);
+  assert.equal(recordedPersistDenied(store.persistRecord, undefined), true);
+  assert.equal(recordedPersistDenied(null, undefined), false);
+  assert.equal(recordedPersistDenied(null, false), true);
+  assert.equal(recordedPersistDenied(null, true), false);
+  assert.equal(recordedPersistDenied({ notesPersistGranted: true }, false), false);
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const anchorSrc = readFileSync(join(root, "lib/notes-anchor.js"), "utf8");
+  assert.match(anchorSrc, /store\.put\(outcome\.note, \{ persist: false \}\)/);
+  assert.match(viewer, /recordedPersistDenied/);
+  assert.match(viewer, /chrome\?\.storage\?\.local\?\.get/);
+  assert.equal(viewer.includes("navigator.storage.persist"), false);
 });
 
 test("a quota failure keeps the note in memory and throws a typed error", async () => {

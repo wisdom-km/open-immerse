@@ -508,3 +508,13 @@ function functionBody(source, name) {
   }
   assert.fail(name);
 }
+
+test("SEL-20 keyboard home stays on see-source when 笔记 is also enabled", () => {
+  const home = viewer.slice(viewer.indexOf("function selKeyboardHome"));
+  assert.match(home, /dataset\.selAction === "see-source"/);
+  const focus = viewer.slice(viewer.indexOf("function focusFirstSelButton"), viewer.indexOf("function selToolbarButtons"));
+  assert.match(focus, /selKeyboardHome\(buttons\)/);
+  assert.match(focus, /home\.focus\(\)/);
+  const arm = viewer.slice(viewer.indexOf("function armSelTabStops"), viewer.indexOf("function focusFirstSelButton"));
+  assert.match(arm, /selKeyboardHome\(buttons\)/);
+});

@@ -166,7 +166,28 @@ import {
   visualAlt
 } from "../lib/pdf-blocks.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
-import { injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
+import { createBlockAnchor, injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
+import { exportMarkdown } from "../lib/notes-io.js";
+import { NOTES_PANE_WIDTH_DEFAULT, NOTES_PANE_WIDTH_MIN, dismissPersistHint, persistHintDismissed, readNotesUiPrefs, writeNotesUiPrefs } from "../lib/notes-prefs.js";
+import {
+  NOTES_PANE_RESIZE_DEBOUNCE_MS,
+  applyNotesSplitAria,
+  clampDraggedNotesWidth,
+  notesChromeKind,
+  notesDomOrder,
+  notesSideFromSource,
+  notesSplitAria,
+  notesSplitKeyStep,
+  notesWidthLimit,
+  notesWorkspaceWidth,
+  reorderWorkspacePanes,
+  sourceSideFromNotes,
+  threePaneColumns,
+  threeSourceAria
+} from "../lib/notes-pane.js";
+import { recordedPersistDenied } from "../lib/notes-store.js";
+import { firstLineQuote } from "../lib/notes-view-model.js";
+import { mountNotesUi, textRangeOffsets } from "./notes-panel.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
@@ -222,6 +243,7 @@ import {
   pageBreakLabel,
   planReaderFlow,
   precompositeMultiplyPixels,
+  READER_SOURCE_SIDE_STORAGE_KEY,
   readReaderPrefs,
   readerFontAnchorTop,
   readerFontBand,
@@ -329,6 +351,13 @@ let libraryArticle = null;
 let libraryDoc = null;
 let libraryProbe = null;
 let notesDocHash = "";
+let notesUi = null;
+let notesLayoutLatch = "";
+let notesPaintedKind = "";
+let notesUserPin = "";
+let notesTempUpgrade = "";
+let notesResizeTimer = 0;
+let notesChromeLock = false;
 let titleStructure = null;
 const librarySourceSent = new Set();
 const enqueueLibraryWrite = createLibraryWriteQueue();
@@ -510,6 +539,7 @@ function init() {
   bindSourcePointer();
   watchSourceAvailability();
   bindSelToolbar();
+  installNotesUi();
   $("translatePage").addEventListener("click", () => startTranslate());
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("translateMenuRetranslate")?.addEventListener("click", () => {
@@ -568,6 +598,10 @@ function applyPageProgress(message) {
 }
 
 function onKey(event) {
+  if (event.key === "Escape" && event.target?.closest?.(".oi-note-editor") && notesUi?.consumeEscape()) {
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape" && closeAaPanel()) {
     event.preventDefault();
     return;
@@ -597,6 +631,10 @@ function onKey(event) {
     return;
   }
   if (event.key === "Escape" && closeSourcePop(true)) {
+    event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && notesUi?.consumeEscape()) {
     event.preventDefault();
     return;
   }
@@ -643,7 +681,24 @@ function onKey(event) {
     return;
   }
   if (eventTargetIsField(event.target) || event.target?.isContentEditable) return;
+  if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.key === "z" || event.key === "Z")) {
+    if (notesUi?.undo()) {
+      event.preventDefault();
+      return;
+    }
+  }
   if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (readerPrefs.singleKey !== false && event.shiftKey && !focusInOpenMenu() && !focusInAaPanel() && (event.key === "N" || event.key === "n")) {
+      event.preventDefault();
+      void notesQuestionShortcut();
+      return;
+    }
+    if (event.shiftKey && !focusInOpenMenu() && !focusInAaPanel() && (event.key === "M" || event.key === "m")) {
+      event.preventDefault();
+      const current = readNotesUiPrefs(localStorage).notesPaneSide;
+      setNotesPaneSide(current === "start" ? "end" : "start");
+      return;
+    }
   const sourceScrollKey = event.key === "ArrowUp" || event.key === "ArrowDown"
     || event.key === "PageUp" || event.key === "PageDown"
     || event.key === "Home" || event.key === "End" || event.key === " ";
@@ -695,11 +750,29 @@ function onKey(event) {
     }
     if (event.key === "s" || event.key === "S") {
       event.preventDefault();
-      toggleSourceSide();
+      if (document.querySelector(".workspace")?.dataset.layout === "3") {
+        const current = readNotesUiPrefs(localStorage).notesPaneSide;
+        setNotesPaneSide(current === "start" ? "end" : "start");
+      } else toggleSourceSide();
+      return;
+    }
+    if (event.key === "m" || event.key === "M") {
+      event.preventDefault();
+      notesUi?.toggle();
+      return;
+    }
+    if (event.key === "n" || event.key === "N") {
+      event.preventDefault();
+      void notesShortcut("note");
+      return;
+    }
+    if (event.key === "h" || event.key === "H") {
+      event.preventDefault();
+      void notesShortcut("highlight");
       return;
     }
   }
-  if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && event.target?.closest?.(".split-handle")) return;
+  if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && event.target?.closest?.(".split-handle, .oi-notes")) return;
   if (event.key === "ArrowLeft") {
     noteUserSourceInput();
     goPage(-1);
@@ -1280,13 +1353,29 @@ function translateScrollRoot() {
   return $("translateScroll") || document.querySelector(".pane-translate");
 }
 
+function sourceSplitHandle(workspace) {
+  const root = workspace || document.querySelector(".workspace");
+  return root?.querySelector('.split-handle[data-split="source"]') || null;
+}
+
+function notesSplitHandle(workspace) {
+  const root = workspace || document.querySelector(".workspace");
+  return root?.querySelector('.split-handle[data-split="notes"]') || null;
+}
+
 function bindSplitResize() {
   const workspace = document.querySelector(".workspace");
-  const handle = document.querySelector(".split-handle");
+  const handle = sourceSplitHandle(workspace);
   if (!workspace || !handle) return;
   handle.addEventListener("pointerdown", (event) => startSplitDrag(event, workspace, handle));
   handle.addEventListener("dblclick", () => resetSplit(workspace));
   handle.addEventListener("keydown", (event) => onSplitKey(event, workspace));
+  const notesHandle = notesSplitHandle(workspace);
+  if (notesHandle) {
+    notesHandle.addEventListener("pointerdown", (event) => startNotesSplitDrag(event, workspace, notesHandle));
+    notesHandle.addEventListener("dblclick", () => resetNotesSplit(workspace));
+    notesHandle.addEventListener("keydown", (event) => onNotesSplitKey(event, workspace));
+  }
   window.addEventListener("resize", () => {
     syncSplitAria(workspace);
     scheduleMiniFitSettle();
@@ -1317,8 +1406,14 @@ function startSplitDrag(event, workspace, handle) {
     handle.removeEventListener("pointerup", onUp);
     handle.removeEventListener("pointercancel", onUp);
     if (mode === "mini") endMiniFitDrag();
-    if (workspace.dataset.sourceMode === "mini") persistMiniWidth(workspace);
-    else persistSplitRatio(workspace);
+    if (workspace.dataset.layout === "3") persistSplitRatio(workspace);
+    else if (workspace.dataset.sourceMode === "mini") {
+      if (workspace.dataset.notesOpen === "true") persistSlotPanelWidth(workspace);
+      else persistMiniWidth(workspace);
+    } else {
+      persistSplitRatio(workspace);
+      if (workspace.dataset.notesOpen === "true") persistSlotPanelWidth(workspace);
+    }
   };
   handle.addEventListener("pointermove", onMove);
   handle.addEventListener("pointerup", onUp);
@@ -1352,6 +1447,15 @@ function persistSplitRatio(workspace) {
 }
 
 function resetSplit(workspace) {
+  if (workspace?.dataset.layout === "3") {
+    paintThreeColumns(workspace, { splitRatio: defaultSplitRatio(readerWidth()) });
+    persistSplitRatio(workspace);
+    syncZoomChip();
+    syncMirrorZoomChip();
+    applyPaperMetrics();
+    layoutCapsule({ keepAnchor: true });
+    return;
+  }
   if (workspace?.dataset.sourceMode === "mini") {
     readerPrefs = { ...readerPrefs, miniWidth: MINI_WIDTH_DEFAULT };
     persistReaderPrefs();
@@ -1372,8 +1476,23 @@ function resetSplit(workspace) {
 }
 
 function writeSplitAria(workspace, ratio) {
-  const handle = workspace?.querySelector(".split-handle");
+  const handle = sourceSplitHandle(workspace);
   if (!handle) return;
+  if (workspace?.dataset.layout === "3") {
+    const prefs = readNotesUiPrefs(localStorage);
+    const model = threeSourceAria({
+      workspaceWidth: measuredWorkspaceWidth(workspace),
+      notesWidth: prefs.notesWidth,
+      splitRatio: ratio
+    });
+    handle.setAttribute("aria-valuemin", String(model.valuemin));
+    handle.setAttribute("aria-valuemax", String(model.valuemax));
+    handle.setAttribute("aria-valuenow", String(model.valuenow));
+    handle.setAttribute("aria-valuetext", model.valuetext);
+    const bubble = handle.querySelector(".split-bubble");
+    if (bubble) bubble.textContent = model.bubble;
+    return;
+  }
   const width = workspace.getBoundingClientRect().width || window.innerWidth || 1200;
   const model = splitAriaModel({
     width,
@@ -1421,6 +1540,10 @@ function bindAutoHideScrollbars(root = document) {
 }
 
 function onSplitKey(event, workspace) {
+  if (workspace?.dataset.layout === "3") {
+    onThreeSourceKey(event, workspace);
+    return;
+  }
   const step = splitKeyStep({ key: event.key, shift: event.shiftKey, side: appliedSide === "end" ? "end" : "start" });
   if (!step) return;
   event.preventDefault();
@@ -1433,6 +1556,15 @@ function onSplitKey(event, workspace) {
     else if (step.to === "reset") next = MINI_WIDTH_DEFAULT;
     else if (Number.isFinite(step.delta)) next = normalizeMiniWidth(next + step.delta);
     else return;
+    if (workspace.dataset.notesOpen === "true") {
+      writeNotesUiPrefs(localStorage, { panelWidth: next });
+      paintMiniWidth(workspace, next);
+      syncZoomChip();
+      syncMirrorZoomChip();
+      applyPaperMetrics();
+      layoutCapsule({ keepAnchor: true });
+      return;
+    }
     readerPrefs = { ...readerPrefs, miniWidth: next };
     persistReaderPrefs();
     paintMiniWidth(workspace, next);
@@ -1471,6 +1603,10 @@ function splitColumnWidth(workspace) {
 }
 
 function applySplit(workspace, clientX) {
+  if (workspace?.dataset.layout === "3") {
+    applyThreeSourceSplit(workspace, clientX);
+    return;
+  }
   if (workspace?.dataset.sourceMode === "mini") {
     if (workspace.dataset.miniCollapsed === "true") return;
     const rect = workspace.getBoundingClientRect();
@@ -1928,6 +2064,217 @@ function notePagesAround(center) {
   return pages;
 }
 
+function installNotesUi() {
+  notesUi = mountNotesUi({
+    hasDoc: () => Boolean(pdfDoc),
+    docHash: () => notesDocHashNow(),
+    docTitle: () => $("docTitle")?.title || $("docTitle")?.textContent || "笔记",
+    list: (hash) => sharedNotesStore().list(hash),
+    listTrash: (hash) => sharedNotesStore().listTrash(hash),
+    put: (input) => sharedNotesStore().put(input),
+    softDelete: (id) => sharedNotesStore().softDelete(id),
+    restore: (id) => sharedNotesStore().restore(id),
+    purge: (id) => sharedNotesStore().purge(id),
+    exportDoc: (hash) => sharedNotesStore().exportDoc(hash),
+    exportMarkdown: (bundle) => exportMarkdown(bundle),
+    importBundle: (bundle) => sharedNotesStore().import(bundle, { mode: "merge" }),
+    subscribe: (cb) => sharedNotesStore().subscribe(cb),
+    download: (filename, blob) => downloadBlob(filename, blob),
+    readPrefs: () => readNotesUiPrefs(localStorage),
+    persistDismissed: (hash) => persistHintDismissed(readNotesUiPrefs(localStorage), hash),
+    dismissPersist: (hash) => {
+      const next = dismissPersistHint(readNotesUiPrefs(localStorage), hash);
+      writeNotesUiPrefs(localStorage, next);
+    },
+    persistDenied: async () => {
+      // persist() runs on the user's put, not when the panel opens and not
+      // when a background re-anchor writes. A later open reads the recorded
+      // refusal and does not ask the browser again.
+      const store = sharedNotesStore();
+      const record = store.persistRecord || store.memory?.persistRecord || null;
+      if (record && Object.prototype.hasOwnProperty.call(record, "notesPersistGranted")) {
+        return recordedPersistDenied(record, undefined);
+      }
+      try {
+        const get = globalThis.chrome?.storage?.local?.get;
+        if (typeof get !== "function") return false;
+        const bag = await get("notesPersistGranted");
+        if (!bag || !Object.prototype.hasOwnProperty.call(bag, "notesPersistGranted")) return false;
+        return recordedPersistDenied(null, bag.notesPersistGranted);
+      } catch {
+        return false;
+      }
+    },
+    flow: () => readerFlowEl(),
+    pane: () => translateScrollRoot(),
+    pointerFine: () => window.matchMedia?.("(pointer: fine)")?.matches !== false,
+    currentParagraph: () => currentNoteParagraph(),
+    anchorForParagraph: (current) => anchorForParagraph(current),
+    blockOrder: () => noteBlockOrder(),
+    jumpPage: (page) => jumpToNotePage(page),
+    jumpAnchor: (note) => jumpToNoteAnchor(note),
+    onOpenChange: (open) => {
+      if (open) syncNotesChrome({ opening: true });
+      else closeNotesChrome();
+    },
+    setNotesPaneSide: (side) => setNotesPaneSide(side)
+  });
+}
+
+function currentNoteParagraph() {
+  const flow = readerFlowEl();
+  if (!flow) return null;
+  const el = flow.querySelector(".rf-block.is-pair-current[data-bid]")
+    || (currentPairId && flow.querySelector(`.rf-block[data-pair-id="${cssEscape(currentPairId)}"]`));
+  if (!el?.dataset?.bid) return null;
+  const page = Number(el.dataset.srcPage) || Number(el.dataset.page) || 0;
+  const translation = el.querySelector(".rf-zh")?.textContent || "";
+  return {
+    el,
+    bid: el.dataset.bid,
+    page,
+    translation,
+    preview: firstLineQuote(translation),
+    pairId: el.dataset.pairId || ""
+  };
+}
+
+function anchorForParagraph(current) {
+  const page = current?.page || 0;
+  const block = (getPageLayout(page)?.blocks || []).find((item) => String(item.bid || "") === current.bid)
+    || { bid: current.bid, id: current.bid, sourceText: "", page };
+  const translation = current.translation || "";
+  const preview = current.preview || firstLineQuote(translation);
+  const end = preview ? Math.max(preview.length, translation.indexOf(preview) + preview.length) : 0;
+  return createBlockAnchor({
+    docHash: notesDocHashNow(),
+    block,
+    page,
+    translation,
+    layoutRev: knownLayoutVersion || "",
+    start: 0,
+    end
+  });
+}
+
+function noteBlockOrder() {
+  const order = new Map();
+  const flow = readerFlowEl();
+  if (!flow) return order;
+  [...flow.querySelectorAll(".rf-block[data-bid]")].forEach((el, index) => {
+    if (el.dataset.bid) order.set(el.dataset.bid, index);
+  });
+  return order;
+}
+
+function jumpToNotePage(page) {
+  const n = Number(page);
+  if (!(n >= 1)) return;
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  const node = flow?.querySelector(`.rf-block[data-src-page="${n}"]`)
+    || flow?.querySelector(`.rf-page[data-page="${n}"]`);
+  if (node && pane) {
+    const top = node.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+    pane.scrollTop = Math.max(0, top - pane.clientHeight / 3);
+  }
+  revealSourcePage(n);
+}
+
+function jumpToNoteAnchor(note) {
+  const bid = note?.anchor?.bid || "";
+  const flow = readerFlowEl();
+  const el = bid ? flow?.querySelector(`.rf-block[data-bid="${cssEscape(bid)}"]`) : null;
+  if (!el) {
+    jumpToNotePage(note?.page);
+    return;
+  }
+  const pane = translateScrollRoot();
+  if (pane) {
+    const top = el.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+    pane.scrollTop = Math.max(0, top - pane.clientHeight / 3);
+  }
+  if (!el.dataset.pairId) {
+    jumpToNotePage(note?.page);
+    return;
+  }
+  // Keep the current-block pair bar and scroll the source. Do not set
+  // jumpPairId, so the paragraph gets no pair outline and no jump pair-box.
+  dismissSeeSource();
+  currentPairId = el.dataset.pairId;
+  jumpPairId = "";
+  jumpPart = "";
+  paintPairChrome();
+  const presented = presentSourceForJump(el);
+  const run = () => {
+    const rect = decodeSrcRects(el.dataset.srcRects)[0];
+    const before = translateScrollRoot()?.scrollTop;
+    if (rect) scrollSourceToRect(rect);
+    else {
+      const page = Number(el.dataset.page || el.dataset.srcPage);
+      if (page >= 1) revealSourcePage(page);
+    }
+    if (translateScrollRoot() && Number.isFinite(before)) translateScrollRoot().scrollTop = before;
+    applyFollow({ type: "clickJump" });
+    armJumpLock();
+    paintPairChrome();
+    syncSourcePopChrome(Number(el.dataset.page || el.dataset.srcPage), false);
+  };
+  if (presented === "ready") run();
+  else requestAnimationFrame(() => requestAnimationFrame(run));
+}
+
+function notesFromSel(ctx, kind) {
+  const payload = notePayloadFromSelection(ctx, kind);
+  if (!payload) return;
+  closeSelToolbar({ restore: false });
+  void notesUi?.fromSelection(payload);
+}
+
+async function notesShortcut(kind) {
+  if (!pdfDoc || !notesUi) return;
+  const ctx = readSelContext();
+  if (ctx) {
+    notesFromSel(ctx, kind);
+    return;
+  }
+  if (kind === "note") notesUi.composeCurrent();
+}
+
+async function notesQuestionShortcut() {
+  if (!pdfDoc || !notesUi) return;
+  const ctx = readSelContext();
+  if (!ctx) return;
+  notesFromSel(ctx, "question");
+}
+
+function notePayloadFromSelection(ctx, kind) {
+  const bid = ctx?.bids?.[0] || "";
+  if (!bid) return null;
+  const el = readerFlowEl()?.querySelector(`.rf-block[data-bid="${cssEscape(bid)}"]`);
+  const page = Number(el?.dataset?.srcPage) || Number(ctx.srcPage) || 0;
+  const block = (getPageLayout(page)?.blocks || []).find((item) => String(item.bid || "") === bid)
+    || { bid, id: bid, sourceText: "", page };
+  const zh = el?.querySelector(".rf-zh");
+  const translation = zh?.textContent || ctx.text || "";
+  const offsets = zh && ctx.range ? textRangeOffsets(zh, ctx.range) : { start: 0, end: String(ctx.text || "").length };
+  const built = createBlockAnchor({
+    docHash: notesDocHashNow(),
+    block,
+    page,
+    translation,
+    layoutRev: knownLayoutVersion || "",
+    start: offsets.start,
+    end: offsets.end
+  });
+  return {
+    kind,
+    page,
+    pairId: ctx.pairIds?.[0] || el?.dataset?.pairId || "",
+    ...built
+  };
+}
+
 function notesDocHashNow() {
   return libraryDoc?.hash || notesDocHash || "";
 }
@@ -1943,6 +2290,21 @@ function exposeNotesProbe() {
   if (!viewerUnderTest()) return;
   const bucket = globalThis.__oiNotes || (globalThis.__oiNotes = {});
   bucket.store = sharedNotesStore();
+  bucket.reanchor = async (page, reason) => {
+    const center = Number(page);
+    if (!(center >= 1)) return null;
+    const result = await reanchorOpenPage({
+      docHash: notesDocHashNow(),
+      page: center,
+      pages: notePagesAround(center),
+      reason: reason || "layout",
+      layoutRev: knownLayoutVersion,
+      resolveDocHash: resolveNotesDocHash
+    });
+    if (result) bucket.last = result;
+    notesUi?.paint();
+    return result;
+  };
   bucket.injectDeadExact = (spec) => injectDeadExactNote(spec, {
     store: () => bucket.store,
     docHash: notesDocHashNow,
@@ -1953,7 +2315,7 @@ function exposeNotesProbe() {
   });
 }
 
-/** Layout or retranslate finished. Re-anchor this page ±1. No note UI. */
+/** Layout or retranslate finished. Re-anchor this page ±1, then repaint marks. */
 function refreshNoteAnchors(page, reason) {
   const center = Number(page);
   if (!(center >= 1)) return;
@@ -1974,10 +2336,12 @@ function refreshNoteAnchors(page, reason) {
     if (!result || !bucket) return;
     bucket[center] = result;
     bucket.last = result;
+  }).then(() => {
+    notesUi?.paint();
   }).catch(() => {});
 }
 
-function setPageLayout(page, layout) {
+function setPageLayout(page, layout, { reanchor = true } = {}) {
   if (layout) {
     stampLayoutBids(page, layout);
     noteFormulaCropPlan(layout);
@@ -1994,7 +2358,7 @@ function setPageLayout(page, layout) {
       label: String(block.label || "")
     }));
   }
-  if (layout?.blocks?.length) reanchorLaidPage(page);
+  if (reanchor && layout?.blocks?.length) reanchorLaidPage(page);
 }
 
 function appendReadoutNode(input, parent) {
@@ -3682,8 +4046,9 @@ function reorderPanes(side, anchor) {
   const workspace = document.querySelector(".workspace");
   const source = $("pdfPane");
   const translation = document.querySelector(".pane-translate");
-  const split = document.querySelector(".split-handle");
+  const split = sourceSplitHandle(workspace);
   if (!workspace || !source || !translation || !split) return;
+  if (workspace.dataset.layout === "3" || workspace.dataset.layout === "pair") return;
   if (source.parentElement !== workspace) return;
   const map = { source, translation, split };
   const order = visualPaneOrder(side).map((name) => map[name]);
@@ -3697,6 +4062,12 @@ function reorderPanes(side, anchor) {
     translationAcross: translationPane?.scrollLeft || 0
   };
   for (const node of order) workspace.append(node);
+  // The notes splitter stays after the source splitter. Tests and the mini
+  // drag path take the first .split-handle, which has to be the source one.
+  const slot = workspace.querySelector("#sideSlot");
+  const notesSplit = notesSplitHandle(workspace);
+  if (slot?.parentElement === workspace) workspace.append(slot);
+  if (notesSplit?.parentElement === workspace) workspace.append(notesSplit);
   if (sourcePane) {
     sourcePane.scrollTop = saved.sourceTop;
     sourcePane.scrollLeft = saved.sourceAcross;
@@ -3742,9 +4113,14 @@ function bindMoreMenu() {
     closeMoreMenu(true);
     showSoonToast();
   });
-  for (const id of ["menuNotes", "menuAsk", "menuLibrary"]) {
+  $("menuNotes")?.addEventListener("click", () => {
+    closeMoreMenu(true);
+    notesUi?.toggle();
+  });
+  for (const id of ["menuAsk", "menuLibrary"]) {
     $(id)?.addEventListener("click", () => {
       closeMoreMenu(true);
+      notesUi?.close();
       showSoonToast();
     });
   }
@@ -3820,9 +4196,13 @@ function bindViewChrome() {
     setReaderView(button.dataset.view);
   });
   bindSourceModeChrome();
-  for (const id of ["tocButton", "notesButton", "askButton", "libraryButton"]) {
-    $(id)?.addEventListener("click", () => showSoonToast());
+  for (const id of ["tocButton", "askButton", "libraryButton"]) {
+    $(id)?.addEventListener("click", () => {
+      if (id === "askButton" || id === "libraryButton") notesUi?.close();
+      showSoonToast();
+    });
   }
+  $("notesButton")?.addEventListener("click", () => notesUi?.toggle());
   setReaderView(document.querySelector(".workspace")?.dataset.view || "zh");
 }
 
@@ -3967,6 +4347,10 @@ function commitSourceMode(mode) {
     showToast(SOURCE_MODE_NARROW_HINT);
     return;
   }
+  if (document.querySelector(".workspace")?.dataset.notesOpen === "true") {
+    chooseNotesSourceMode(next);
+    return;
+  }
   readerPrefs = { ...readerPrefs, sourceMode: next };
   persistReaderPrefs();
   if (sourcePopOpen() && next !== "hidden") closeSourcePop(false);
@@ -3982,6 +4366,15 @@ function setMiniCollapsed(collapsed) {
 }
 
 function cycleSourceModeFromKey() {
+  const workspace = document.querySelector(".workspace");
+  const layout = workspace?.dataset.layout || "";
+  if (workspace?.dataset.notesOpen === "true" && (layout === "3" || layout === "pair")) {
+    const shown = layout === "3" ? "side" : "hidden";
+    const order = ["side", "mini", "hidden"];
+    const next = order[(Math.max(0, order.indexOf(shown)) + 1) % order.length];
+    chooseNotesSourceMode(next);
+    return;
+  }
   const result = cycleSourceMode({
     width: readerWidth(),
     current: currentSourceMode(),
@@ -3994,11 +4387,354 @@ function cycleSourceModeFromKey() {
   commitSourceMode(result.mode);
 }
 
+function measuredWorkspaceWidth(workspace) {
+  const rect = workspace?.getBoundingClientRect();
+  return notesWorkspaceWidth({
+    windowWidth: readerWidth(),
+    measured: rect?.width,
+    drawerDocked: Boolean(document.querySelector("[data-drawer-docked]"))
+  });
+}
+
+function persistSlotPanelWidth(workspace) {
+  if (workspace?.dataset.notesOpen !== "true") return;
+  if (workspace.dataset.layout === "3" || workspace.dataset.layout === "pair") return;
+  if (workspace.dataset.sourceMode === "mini") {
+    const raw = parseFloat(workspace.style.getPropertyValue("--oi-mini-width"));
+    if (raw > 0) writeNotesUiPrefs(localStorage, { panelWidth: raw });
+    return;
+  }
+  const slot = document.getElementById("sideSlot");
+  const measured = slot?.getBoundingClientRect().width;
+  if (measured > 0) writeNotesUiPrefs(localStorage, { panelWidth: measured });
+}
+
+function setNotesSplitVisible(on) {
+  const handle = notesSplitHandle();
+  if (!handle) return;
+  handle.hidden = !on;
+  handle.tabIndex = on ? 0 : -1;
+  handle.setAttribute("aria-hidden", on ? "false" : "true");
+}
+
+function paintThreeColumns(workspace, { notesWidth, splitRatio } = {}) {
+  const prefs = readNotesUiPrefs(localStorage);
+  const width = measuredWorkspaceWidth(workspace);
+  const ratio = Number.isFinite(splitRatio)
+    ? splitRatio
+    : (Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio")) || defaultSplitRatio(readerWidth()));
+  const notes = notesWidth == null ? prefs.notesWidth : notesWidth;
+  const columns = threePaneColumns({ workspaceWidth: width, notesWidth: notes, splitRatio: ratio });
+  workspace.style.setProperty("--oi-three-source", `${columns.source}px`);
+  workspace.style.setProperty("--oi-three-translate", `${columns.translate}px`);
+  workspace.style.setProperty("--oi-split-ratio", String(columns.ratio));
+  workspace.style.setProperty("--notes-width", `${columns.notes}px`);
+  workspace.style.setProperty("--oi-notes-pane-w", `${columns.notes}px`);
+  const sourceAria = threeSourceAria({
+    workspaceWidth: width,
+    notesWidth: columns.notes,
+    splitRatio: columns.ratio
+  });
+  const handle = sourceSplitHandle(workspace);
+  if (handle) {
+    handle.setAttribute("aria-valuemin", String(sourceAria.valuemin));
+    handle.setAttribute("aria-valuemax", String(sourceAria.valuemax));
+    handle.setAttribute("aria-valuenow", String(sourceAria.valuenow));
+    handle.setAttribute("aria-valuetext", sourceAria.valuetext);
+    const bubble = handle.querySelector(".split-bubble");
+    if (bubble) bubble.textContent = sourceAria.bubble;
+  }
+  applyNotesSplitAria(notesSplitHandle(workspace), notesSplitAria({ notesWidth: columns.notes, workspaceWidth: width }));
+  return columns;
+}
+
+function applyThreeSourceSplit(workspace, clientX) {
+  const prefs = readNotesUiPrefs(localStorage);
+  const rect = workspace.getBoundingClientRect();
+  const width = measuredWorkspaceWidth(workspace);
+  const columns = threePaneColumns({ workspaceWidth: width, notesWidth: prefs.notesWidth, splitRatio: 0.5 });
+  const notesSide = workspace.dataset.notesSide === "start" ? "start" : "end";
+  const blockWidth = Math.max(1, columns.rest + 8);
+  const origin = notesSide === "start" ? rect.x + columns.notes + 8 : rect.x;
+  const ratio = splitPointerRatio({
+    clientX,
+    rect: { x: origin, width: blockWidth, end: origin + blockWidth },
+    splitW: 8,
+    side: notesSide === "start" ? "end" : "start"
+  });
+  paintThreeColumns(workspace, { notesWidth: prefs.notesWidth, splitRatio: ratio });
+}
+
+function applyNotesColumnDrag(workspace, clientX) {
+  const rect = workspace.getBoundingClientRect();
+  const width = measuredWorkspaceWidth(workspace);
+  const notesSide = workspace.dataset.notesSide === "start" ? "start" : "end";
+  const raw = notesSide === "start" ? clientX - rect.x : rect.right - clientX;
+  const next = clampDraggedNotesWidth({ workspaceWidth: width, requested: raw - 4 });
+  const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+  paintThreeColumns(workspace, {
+    notesWidth: next,
+    splitRatio: Number.isFinite(ratio) ? ratio : defaultSplitRatio(readerWidth())
+  });
+}
+
+function persistNotesColumnWidth(workspace) {
+  const painted = parseFloat(workspace.style.getPropertyValue("--notes-width"));
+  if (painted > 0) writeNotesUiPrefs(localStorage, { notesWidth: painted });
+}
+
+function startNotesSplitDrag(event, workspace, handle) {
+  if (event.button !== 0 || workspace?.dataset.layout !== "3") return;
+  event.preventDefault();
+  handle.setPointerCapture(event.pointerId);
+  handle.classList.add("is-dragging");
+  workspace.classList.add("is-splitting");
+  const onMove = (moveEvent) => applyNotesColumnDrag(workspace, moveEvent.clientX);
+  const onUp = () => {
+    handle.classList.remove("is-dragging");
+    workspace.classList.remove("is-splitting");
+    handle.removeEventListener("pointermove", onMove);
+    handle.removeEventListener("pointerup", onUp);
+    handle.removeEventListener("pointercancel", onUp);
+    persistNotesColumnWidth(workspace);
+    notesUi?.syncLayoutChrome?.();
+  };
+  handle.addEventListener("pointermove", onMove);
+  handle.addEventListener("pointerup", onUp);
+  handle.addEventListener("pointercancel", onUp);
+  applyNotesColumnDrag(workspace, event.clientX);
+}
+
+function resetNotesSplit(workspace) {
+  if (workspace?.dataset.layout !== "3") return;
+  const next = clampDraggedNotesWidth({
+    workspaceWidth: measuredWorkspaceWidth(workspace),
+    requested: NOTES_PANE_WIDTH_DEFAULT
+  });
+  const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+  paintThreeColumns(workspace, {
+    notesWidth: next,
+    splitRatio: Number.isFinite(ratio) ? ratio : defaultSplitRatio(readerWidth())
+  });
+  persistNotesColumnWidth(workspace);
+  notesUi?.syncLayoutChrome?.();
+}
+
+function onNotesSplitKey(event, workspace) {
+  if (workspace?.dataset.layout !== "3") return;
+  const step = notesSplitKeyStep({
+    key: event.key,
+    shift: event.shiftKey,
+    notesSide: workspace.dataset.notesSide
+  });
+  if (!step) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const width = measuredWorkspaceWidth(workspace);
+  const prefs = readNotesUiPrefs(localStorage);
+  let next = prefs.notesWidth;
+  if (step.to === "min") next = NOTES_PANE_WIDTH_MIN;
+  else if (step.to === "max") next = notesWidthLimit(width);
+  else if (step.to === "reset") next = NOTES_PANE_WIDTH_DEFAULT;
+  else if (Number.isFinite(step.delta)) next = prefs.notesWidth + step.delta;
+  else return;
+  next = clampDraggedNotesWidth({ workspaceWidth: width, requested: next });
+  const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+  paintThreeColumns(workspace, {
+    notesWidth: next,
+    splitRatio: Number.isFinite(ratio) ? ratio : defaultSplitRatio(readerWidth())
+  });
+  persistNotesColumnWidth(workspace);
+  notesUi?.syncLayoutChrome?.();
+}
+
+function onThreeSourceKey(event, workspace) {
+  const step = splitKeyStep({
+    key: event.key,
+    shift: event.shiftKey,
+    side: workspace.dataset.notesSide === "start" ? "end" : "start"
+  });
+  if (!step) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (step.to === "reset") {
+    resetSplit(workspace);
+    return;
+  }
+  const prefs = readNotesUiPrefs(localStorage);
+  const width = measuredWorkspaceWidth(workspace);
+  const current = threePaneColumns({
+    workspaceWidth: width,
+    notesWidth: prefs.notesWidth,
+    splitRatio: Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio")) || defaultSplitRatio(readerWidth())
+  });
+  let ratio = current.ratio;
+  if (step.to === "min") ratio = 0;
+  else if (step.to === "max") ratio = 1;
+  else if (Number.isFinite(step.delta)) ratio = (current.source + step.delta) / Math.max(1, current.rest);
+  paintThreeColumns(workspace, { notesWidth: prefs.notesWidth, splitRatio: ratio });
+  persistSplitRatio(workspace);
+}
+
+function applyNotesChrome(kind) {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  notesChromeLock = true;
+  try {
+    const prevKind = notesPaintedKind;
+    notesPaintedKind = kind;
+    if (kind === "three" || kind === "slot") notesLayoutLatch = kind;
+    const prefs = readNotesUiPrefs(localStorage);
+    const notesSide = prefs.notesPaneSide === "start" ? "start" : "end";
+    workspace.dataset.notesSide = notesSide;
+    const storedSide = readerPrefs.sourceSide === "end" ? "end" : "start";
+    if (kind === "three") {
+      const paired = sourceSideFromNotes(notesSide);
+      workspace.dataset.layout = "3";
+      workspace.dataset.sourceSide = paired;
+      workspace.dataset.sourceMode = "side";
+      workspace.dataset.miniCollapsed = "false";
+      appliedSide = paired;
+      reorderWorkspacePanes(workspace, notesDomOrder({ layout: "3", notesSide, sourceSide: paired }));
+      setNotesSplitVisible(true);
+      const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+      paintThreeColumns(workspace, { splitRatio: Number.isFinite(ratio) ? ratio : defaultSplitRatio(readerWidth()) });
+    } else if (kind === "pair") {
+      workspace.dataset.layout = "pair";
+      workspace.dataset.sourceMode = "hidden";
+      reorderWorkspacePanes(workspace, notesDomOrder({ layout: "pair", notesSide, sourceSide: storedSide }));
+      setNotesSplitVisible(false);
+      workspace.style.setProperty("--notes-width", `${prefs.notesWidth}px`);
+      workspace.style.setProperty("--oi-notes-pane-w", `${prefs.notesWidth}px`);
+    } else {
+      delete workspace.dataset.layout;
+      setNotesSplitVisible(false);
+      const mode = kind === "sheet"
+        ? "hidden"
+        : effectiveSourceMode({ width: readerWidth(), stored: readerPrefs.sourceMode });
+      workspace.dataset.sourceMode = mode;
+      reorderWorkspacePanes(workspace, notesDomOrder({
+        layout: "",
+        notesSide,
+        sourceSide: workspace.dataset.sourceSide === "end" ? "end" : "start"
+      }));
+      if (mode === "mini" || mode === "hidden") {
+        workspace.style.setProperty("--oi-notes-panel-w", `${prefs.panelWidth}px`);
+        if (mode === "mini") workspace.style.setProperty("--oi-mini-width", `${prefs.panelWidth}px`);
+      }
+    }
+    if (prevKind && prevKind !== kind) applyDefaultSourceZoom(workspace.dataset.sourceMode || "side");
+    syncSourceModeControls();
+    notesUi?.syncLayoutChrome?.();
+  } finally {
+    notesChromeLock = false;
+  }
+}
+
+function syncNotesChrome({ opening = false } = {}) {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace || workspace.dataset.notesOpen !== "true") return;
+  if (opening) {
+    const implied = notesSideFromSource(readerPrefs.sourceSide);
+    const prefs = readNotesUiPrefs(localStorage);
+    if (prefs.notesPaneSide !== implied) writeNotesUiPrefs(localStorage, { notesPaneSide: implied });
+    notesUserPin = "";
+    notesTempUpgrade = "";
+    notesLayoutLatch = "";
+  }
+  const prefs = readNotesUiPrefs(localStorage);
+  const windowWidth = readerWidth();
+  const kind = notesChromeKind({
+    windowWidth,
+    workspaceWidth: measuredWorkspaceWidth(workspace),
+    notesWidth: prefs.notesWidth,
+    latched: notesLayoutLatch,
+    opening,
+    pinned: notesUserPin
+  });
+  if (opening && kind === "three") {
+    const stored = effectiveSourceMode({ width: windowWidth, stored: readerPrefs.sourceMode });
+    if (stored === "mini" || stored === "hidden") notesTempUpgrade = stored;
+  }
+  applyNotesChrome(kind);
+}
+
+function scheduleNotesChrome() {
+  window.clearTimeout(notesResizeTimer);
+  notesResizeTimer = window.setTimeout(() => {
+    if (document.querySelector(".workspace")?.dataset.notesOpen === "true") syncNotesChrome({ opening: false });
+  }, NOTES_PANE_RESIZE_DEBOUNCE_MS);
+}
+
+function closeNotesChrome() {
+  window.clearTimeout(notesResizeTimer);
+  notesPaintedKind = "";
+  notesLayoutLatch = "";
+  notesUserPin = "";
+  notesTempUpgrade = "";
+  const workspace = document.querySelector(".workspace");
+  if (workspace) {
+    delete workspace.dataset.layout;
+    delete workspace.dataset.notesSide;
+    workspace.style.removeProperty("--oi-three-source");
+    workspace.style.removeProperty("--oi-three-translate");
+    workspace.style.removeProperty("--oi-notes-pane-w");
+    workspace.style.removeProperty("--notes-width");
+  }
+  setNotesSplitVisible(false);
+  applySourceLayout(false);
+  appliedSide = "";
+  applySourceSide(false);
+}
+
+function chooseNotesSourceMode(next) {
+  readerPrefs = { ...readerPrefs, sourceMode: next };
+  persistReaderPrefs();
+  notesTempUpgrade = "";
+  notesUserPin = next === "mini" ? "mini" : next === "hidden" ? "hidden" : "";
+  if (sourcePopOpen() && next !== "hidden") closeSourcePop(false);
+  syncNotesChrome({ opening: next === "side" });
+  applyFollow({ type: "sourceModeChange" });
+}
+
+function setNotesPaneSide(side) {
+  const notesPaneSide = side === "start" ? "start" : "end";
+  const sourceSide = sourceSideFromNotes(notesPaneSide);
+  writeNotesUiPrefs(localStorage, { notesPaneSide });
+  // ⇧M must not dump the rest of the reader defaults (font, theme, sourceMode, …).
+  if (readerPrefs.sourceSide !== sourceSide) {
+    readerPrefs = { ...readerPrefs, sourceSide };
+    try {
+      localStorage.setItem(READER_SOURCE_SIDE_STORAGE_KEY, sourceSide);
+    } catch {
+      /* private mode */
+    }
+  }
+  syncSwapCheck();
+  const workspace = document.querySelector(".workspace");
+  const layout = workspace?.dataset.layout || "";
+  const open = workspace?.dataset.notesOpen === "true";
+  if (open && (layout === "3" || layout === "pair")) {
+    workspace.dataset.sourceSide = sourceSide;
+    workspace.dataset.notesSide = notesPaneSide;
+    appliedSide = sourceSide;
+    reorderWorkspacePanes(workspace, notesDomOrder({ layout, notesSide: notesPaneSide, sourceSide }));
+    if (layout === "3") {
+      const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
+      paintThreeColumns(workspace, { splitRatio: Number.isFinite(ratio) ? ratio : defaultSplitRatio(readerWidth()) });
+    }
+  } else if (!open) applySourceSide(true);
+  notesUi?.syncLayoutChrome?.();
+}
+
 function applySourceLayout(anchor) {
   const workspace = document.querySelector(".workspace");
   if (!workspace) return;
   const width = readerWidth();
-  const mode = effectiveSourceMode({ width, stored: readerPrefs.sourceMode });
+  let mode = effectiveSourceMode({ width, stored: readerPrefs.sourceMode });
+  if (workspace.dataset.notesOpen === "true" && notesPaintedKind === "three") mode = "side";
+  else if (workspace.dataset.notesOpen === "true" && notesPaintedKind === "pair") mode = "hidden";
+  else if (workspace.dataset.notesOpen === "true" && notesUserPin === "mini") mode = "mini";
   const prev = workspace.dataset.sourceMode || "";
   const changed = Boolean(prev) && prev !== mode;
   const token = anchor || changed ? captureReaderAnchor() : null;
@@ -4008,11 +4744,16 @@ function applySourceLayout(anchor) {
   const px = collapsed ? MINI_RAIL_PX : normalizeMiniWidth(readerPrefs.miniWidth);
   workspace.style.setProperty("--oi-mini-width", `${px}px`);
   if (mode === "mini" && !collapsed) paintMiniWidth(workspace, px);
+  // Notes in mini occupy the source column at reader.panelWidth. Apply after
+  // paintMiniWidth so the stored source width (and its aria) stay untouched.
+  if (workspace.dataset.notesOpen === "true" && mode === "mini") {
+    workspace.style.setProperty("--oi-mini-width", `${readNotesUiPrefs(localStorage).panelWidth}px`);
+  }
   else if (mode === "side") {
     const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
     writeSplitAria(workspace, Number.isFinite(ratio) ? ratio : defaultSplitRatio(width));
   }
-  const handle = workspace.querySelector(".split-handle");
+  const handle = sourceSplitHandle(workspace);
   if (handle) {
     const draggable = mode === "side" || (mode === "mini" && !collapsed);
     handle.tabIndex = draggable ? 0 : -1;
@@ -4036,6 +4777,7 @@ function applySourceLayout(anchor) {
       requestAnimationFrame(() => restoreReaderAnchor(token));
     });
   }
+  if (!notesChromeLock && workspace.dataset.notesOpen === "true" && notesPaintedKind) scheduleNotesChrome();
 }
 
 function syncSourceModeControls() {
@@ -4075,7 +4817,7 @@ function syncSourceModeControls() {
 function paintMiniWidth(workspace, width) {
   const next = normalizeMiniWidth(width);
   workspace.style.setProperty("--oi-mini-width", `${next}px`);
-  const handle = workspace.querySelector(".split-handle");
+  const handle = sourceSplitHandle(workspace);
   if (!handle || workspace.dataset.miniCollapsed === "true") return;
   handle.setAttribute("aria-valuemin", "300");
   handle.setAttribute("aria-valuemax", "480");
@@ -4087,6 +4829,8 @@ function paintMiniWidth(workspace, width) {
 }
 
 function persistMiniWidth(workspace) {
+  // While notes are open the column shows reader.panelWidth, not the source mini width.
+  if (workspace.dataset.notesOpen === "true") return;
   const raw = parseFloat(workspace.style.getPropertyValue("--oi-mini-width"));
   const width = normalizeMiniWidth(raw);
   readerPrefs = { ...readerPrefs, miniWidth: width };
@@ -4111,7 +4855,7 @@ function restoreSourceScroll(saved) {
 function placeSourceInWorkspace() {
   const workspace = document.querySelector(".workspace");
   const source = $("pdfPane");
-  const split = workspace?.querySelector(":scope > .split-handle") || document.querySelector(".split-handle");
+  const split = sourceSplitHandle(workspace);
   if (!workspace || !source || !split) return;
   const side = workspace.dataset.sourceSide === "end" ? "end" : "start";
   if (side === "end") split.after(source);
@@ -4246,6 +4990,21 @@ function bindSelToolbar() {
   registerSelAction({ id: "see-source", run: (ctx) => seeSourceForSelection(ctx) });
   registerSelAction({ id: "jump-source", run: (ctx) => jumpSourceForSelection(ctx) });
   registerSelAction({ id: "copy", run: (ctx) => copySelectionText(ctx) });
+  registerSelAction({
+    id: "note",
+    enabled: () => Boolean(pdfDoc),
+    run: (ctx) => notesFromSel(ctx, "note")
+  });
+  registerSelAction({
+    id: "highlight",
+    enabled: () => Boolean(pdfDoc),
+    run: (ctx) => notesFromSel(ctx, "highlight")
+  });
+  registerSelAction({
+    id: "question",
+    enabled: () => Boolean(pdfDoc),
+    run: (ctx) => notesFromSel(ctx, "question")
+  });
   document.addEventListener("mouseup", onSelGestureEnd);
   document.addEventListener("touchend", onSelGestureEnd);
   document.addEventListener("keyup", onSelGestureEnd);
@@ -4406,17 +5165,24 @@ function selToolbarButton(item) {
   return btn;
 }
 
+function selMenuHint(item) {
+  if (item.keyshortcuts === "Shift+N") return "⇧N";
+  if (item.keyshortcuts === "h") return "h";
+  return "";
+}
+
 function selMenuButton(item) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.setAttribute("role", "menuitem");
   btn.dataset.selAction = item.id;
   btn.tabIndex = -1;
-  if (item.id === "copy") {
+  const hint = item.id === "copy" ? "⌘C" : selMenuHint(item);
+  if (hint) {
     btn.append(document.createTextNode(item.label));
     const key = document.createElement("span");
     key.className = "k";
-    key.textContent = "⌘C";
+    key.textContent = hint;
     btn.append(key);
   } else btn.textContent = item.label;
   if (item.keyshortcuts) btn.setAttribute("aria-keyshortcuts", item.keyshortcuts);
@@ -4437,22 +5203,29 @@ function positionSelToolbar(ctx) {
   bar.style.insetInlineStart = `${Math.round(place.inlineStart + root.scrollLeft)}px`;
 }
 
+function selKeyboardHome(buttons) {
+  const enabled = buttons.filter((btn) => !btn.disabled);
+  // 笔记 is the leftmost main action once a PDF is open. F10 still starts on
+  // 看原文 so ArrowRight walks see-source → jump-source → more.
+  return enabled.find((btn) => btn.dataset.selAction === "see-source") || enabled[0] || null;
+}
+
 function armSelTabStops() {
   const buttons = selToolbarButtons();
-  const enabled = buttons.filter((btn) => !btn.disabled);
+  const home = selKeyboardHome(buttons);
   buttons.forEach((btn) => {
-    btn.tabIndex = enabled.length && btn === enabled[0] ? 0 : -1;
+    btn.tabIndex = home && btn === home ? 0 : -1;
   });
 }
 
 function focusFirstSelButton() {
   const buttons = selToolbarButtons();
-  const enabled = buttons.filter((btn) => !btn.disabled);
-  if (!enabled[0]) return;
+  const home = selKeyboardHome(buttons);
+  if (!home) return;
   buttons.forEach((btn) => {
-    btn.tabIndex = btn === enabled[0] ? 0 : -1;
+    btn.tabIndex = btn === home ? 0 : -1;
   });
-  enabled[0].focus();
+  home.focus();
 }
 
 function selToolbarButtons() {
@@ -4911,11 +5684,14 @@ function onSourcePageButton() {
 
 function cycleF6(backward) {
   const workspace = document.querySelector(".workspace");
+  const layout = workspace?.dataset.layout === "3" ? "3" : (workspace?.dataset.layout === "pair" ? "pair" : "");
   const ids = f6RegionIds({
     mode: workspace?.dataset.sourceMode || "side",
     popOpen: sourcePopOpen(),
     side: workspace?.dataset.sourceSide === "end" ? "end" : "start",
-    sideSlotOpen: sideSlotOpen()
+    sideSlotOpen: layout ? false : sideSlotOpen(),
+    notesLayout: layout,
+    notesSide: workspace?.dataset.notesSide === "start" ? "start" : "end"
   });
   const current = f6CurrentRegion(ids);
   const step = backward ? -1 : 1;
@@ -4930,7 +5706,8 @@ function f6CurrentRegion(ids) {
     source: $("pdfPane"),
     translation: document.querySelector(".pane-translate"),
     popup: $("sourcePop"),
-    sideSlot: document.querySelector("[data-side-slot]")
+    sideSlot: document.querySelector("[data-side-slot]"),
+    notes: document.querySelector(".oi-notes") || document.querySelector("[data-side-slot]")
   };
   for (let i = 0; i < ids.length; i += 1) {
     const host = map[ids[i]];
@@ -4945,7 +5722,8 @@ function focusF6Region(id) {
     source: () => $("pages") || $("pdfPane"),
     translation: () => $("readerFlow"),
     popup: () => $("sourcePopClose") || $("sourcePop"),
-    sideSlot: () => document.querySelector("[data-side-slot]")
+    sideSlot: () => document.querySelector("[data-side-slot]"),
+    notes: () => document.querySelector(".oi-notes [data-notes-segment]") || document.querySelector(".oi-notes") || document.querySelector("[data-side-slot]")
   }[id]?.();
   if (!target) return;
   if (target.tabIndex < 0 && target.id !== "sourcePopClose") target.tabIndex = -1;
@@ -5727,6 +6505,7 @@ function renderArticle() {
   updateTranslateControls();
   refreshDocStatus();
   noteAutoProgress();
+  notesUi?.paint();
 }
 
 function noteAutoProgress() {
@@ -8262,7 +9041,9 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
-  setPageLayout(n, layout);
+  // The quick stand-in (persist: false) is replaced by the vendor layout.
+  // Re-anchoring it marks 位置近似 notes lost, then the real layout writes them back.
+  setPageLayout(n, layout, { reanchor: options.persist !== false });
   if (fallback) persistPageLayout(n).catch(() => {});
   else if (options.persist !== false) persistDisplayedLayout(n).catch(() => {});
   return layout;
@@ -8454,6 +9235,7 @@ async function adoptDoc(doc, title) {
   libraryDoc = null;
   libraryProbe = null;
   notesDocHash = "";
+  notesUi?.onDocumentReset();
   titleStructure = null;
   layoutCache.clear();
   formulaRasterCache.clear();
@@ -8470,6 +9252,7 @@ async function adoptDoc(doc, title) {
     setDocTitle(title);
   }
   setHasDoc(true);
+  void resolveNotesDocHash().then((hash) => notesUi?.onDocument(hash));
   await buildPages();
   if (!syncMiniFitZoom()) {
     requestAnimationFrame(() => {
@@ -9394,6 +10177,14 @@ function syncNoTextLayerHint(showLegacy) {
 function setHasDoc(has) {
   const bar = document.querySelector(".toolbar");
   if (bar) bar.dataset.hasDoc = has ? "1" : "0";
+  const notesBtn = $("notesButton");
+  if (notesBtn) notesBtn.disabled = !has;
+  const menuNotes = $("menuNotes");
+  if (menuNotes) {
+    menuNotes.disabled = !has;
+    menuNotes.setAttribute("aria-disabled", has ? "false" : "true");
+  }
+  if (!has) notesUi?.close(false);
   if (!has) {
     $("pages").replaceChildren();
     pageViews = [];

@@ -526,3 +526,35 @@
 .oi-reader[data-reader-fs-band="l"] {
   --oi-reader-tracking: 0.01em;
 }
+
+/* T2b notes. Mine / AI / warn-soft are approved colors; the rest size the panel. */
+.oi-reader-app {
+  --oi-reader-mine: #7A4A86;
+  --oi-reader-mine-soft: rgba(122, 74, 134, 0.10);
+  --oi-reader-ai: #2A6670;
+  --oi-reader-ai-soft: rgba(42, 102, 112, 0.08);
+  --oi-reader-warn-soft: rgba(138, 75, 15, 0.08);
+  --oi-notes-head-h: 44px;
+  --oi-notes-pad-x: 24px;
+  --oi-notes-list-max: 640px;
+  --oi-notes-chip-h: 24px;
+  --oi-notes-group-size: 12px;
+  --oi-notes-label-size: 12px;
+  --oi-notes-body-size: clamp(13px, calc(0.84375 * var(--oi-reader-font-size)), 20px);
+  --oi-notes-body-line: round(nearest, calc(var(--oi-notes-body-size) * 1.7), 1px);
+  --oi-notes-quote-size: calc(var(--oi-notes-body-size) - 0.5px);
+  --oi-notes-quote-line: round(nearest, calc(var(--oi-notes-quote-size) * 1.6), 1px);
+  --oi-notes-pin-h: 20px;
+  --oi-notes-pin-offset: -36px;
+  --oi-notes-card-gap: 16px;
+  --oi-notes-banner-line-h: 32px;
+  --oi-notes-safe-bottom: 72px;
+  --oi-notes-xs: 340px;
+  --oi-notes-pane-min: 320px;
+  --oi-notes-pane-max: 480px;
+  --oi-notes-pane-default: 360px;
+  --oi-notes-pane-w: var(--notes-width, 360px);
+  --oi-notes-undo-ms: 6000;
+  --oi-notes-save-debounce-ms: 600;
+  --oi-notes-loading-delay-ms: 150;
+}
