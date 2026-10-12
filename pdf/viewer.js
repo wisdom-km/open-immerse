@@ -2340,7 +2340,7 @@ function refreshNoteAnchors(page, reason) {
   }).catch(() => {});
 }
 
-function setPageLayout(page, layout) {
+function setPageLayout(page, layout, { reanchor = true } = {}) {
   if (layout) {
     stampLayoutBids(page, layout);
     noteFormulaCropPlan(layout);
@@ -2357,7 +2357,7 @@ function setPageLayout(page, layout) {
       label: String(block.label || "")
     }));
   }
-  if (layout?.blocks?.length) reanchorLaidPage(page);
+  if (reanchor && layout?.blocks?.length) reanchorLaidPage(page);
 }
 
 function appendReadoutNode(input, parent) {
@@ -9033,7 +9033,9 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
-  setPageLayout(n, layout);
+  // The quick stand-in (persist: false) is replaced by the vendor layout.
+  // Re-anchoring it marks 位置近似 notes lost, then the real layout writes them back.
+  setPageLayout(n, layout, { reanchor: options.persist !== false });
   if (fallback) persistPageLayout(n).catch(() => {});
   else if (options.persist !== false) persistDisplayedLayout(n).catch(() => {});
   return layout;

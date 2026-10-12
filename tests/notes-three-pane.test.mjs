@@ -392,4 +392,89 @@ test("NTP-01/02/06/12/13 three-pane columns keep order, scroll, and the notes sp
   assert.equal(kinds.open, "three");
   assert.equal(kinds.below, "slot");
   assert.equal(kinds.back, "three");
+
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: 600,
+    height: 900,
+    deviceScaleFactor: 1,
+    mobile: false
+  }, sessionId);
+  const sheet = JSON.parse(await evaluate(`(() => {
+    const ws = document.querySelector(".workspace");
+    ws.style.width = "600px";
+    ws.style.height = "852px";
+    ws.dataset.notesOpen = "true";
+    ws.dataset.notesPlace = "sheet";
+    ws.dataset.sourceMode = "hidden";
+    delete ws.dataset.layout;
+    const bar = document.createElement("header");
+    bar.className = "toolbar";
+    bar.dataset.band = "narrow";
+    bar.innerHTML = '<span id="viewSegAnchor" hidden></span>';
+    const sub = document.createElement("div");
+    sub.id = "tbSubbar";
+    sub.className = "tb-subbar";
+    const seg = document.createElement("div");
+    seg.id = "viewSeg";
+    seg.className = "view-seg";
+    seg.setAttribute("role", "radiogroup");
+    for (const label of ["译文", "对照", "原文"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "view-seg-btn";
+      button.dataset.tb = "text";
+      button.textContent = label;
+      seg.append(button);
+    }
+    sub.append(seg);
+    document.body.prepend(sub);
+    document.body.prepend(bar);
+    const host = document.createElement("p");
+    host.id = "markProbe";
+    host.style.cssText = "position:fixed;left:12px;top:200px;margin:0;z-index:80;font:16px/24px sans-serif;background:#fff;";
+    const plain = document.createElement("span");
+    plain.className = "oi-note-mark hl";
+    plain.textContent = "普通划线";
+    const linked = document.createElement("span");
+    linked.className = "oi-note-mark hl is-linked linked";
+    linked.textContent = "选中划线";
+    host.append(plain, document.createTextNode(" "), linked);
+    document.body.append(host);
+    const slot = document.getElementById("sideSlot").getBoundingClientRect();
+    const buttons = [...seg.querySelectorAll("button")].map((node) => {
+      const box = node.getBoundingClientRect();
+      return { top: box.top, left: box.left, width: box.width, height: box.height };
+    });
+    const mark = getComputedStyle(linked);
+    return JSON.stringify({
+      top: slot.top,
+      left: slot.left,
+      width: slot.width,
+      height: slot.height,
+      bottom: slot.bottom,
+      inner: window.innerWidth,
+      innerH: window.innerHeight,
+      position: getComputedStyle(document.getElementById("sideSlot")).position,
+      buttons,
+      segDir: getComputedStyle(seg).flexDirection,
+      border: mark.borderBottomWidth,
+      borderColor: mark.borderBottomColor,
+      plainH: plain.getBoundingClientRect().height,
+      linkedH: linked.getBoundingClientRect().height
+    });
+  })()`));
+  assert.equal(sheet.position, "fixed");
+  assert.ok(Math.abs(sheet.top - 48) <= 1, JSON.stringify(sheet));
+  assert.ok(Math.abs(sheet.left) <= 1, JSON.stringify(sheet));
+  assert.ok(Math.abs(sheet.width - 600) <= 1, JSON.stringify(sheet));
+  assert.ok(Math.abs(sheet.width - sheet.inner) <= 1, JSON.stringify(sheet));
+  assert.ok(sheet.bottom >= 890, JSON.stringify(sheet));
+  assert.equal(sheet.segDir, "row");
+  assert.equal(sheet.buttons.length, 3);
+  assert.ok(sheet.buttons.every((button) => Math.abs(button.top - sheet.buttons[0].top) <= 1), JSON.stringify(sheet.buttons));
+  assert.ok(sheet.buttons[1].left > sheet.buttons[0].left, JSON.stringify(sheet.buttons));
+  assert.ok(sheet.buttons[2].left > sheet.buttons[1].left, JSON.stringify(sheet.buttons));
+  assert.equal(sheet.border, "2px");
+  assert.match(sheet.borderColor, /122,\s*74,\s*134/);
+  assert.ok(Math.abs(sheet.linkedH - sheet.plainH - 2) <= 1, JSON.stringify(sheet));
 });

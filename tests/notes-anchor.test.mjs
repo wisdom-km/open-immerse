@@ -629,3 +629,124 @@ test("位置近似 notes are not stored again when only the check or layout rev 
   assert.equal((await store.get("approx")).anchor.bid, "b1-p1-tmissing");
   assert.equal(persistCalls, 1);
 });
+
+test("版面晚到时位置近似笔记不写库，revision 不变", async () => {
+  let persistCalls = 0;
+  const store = createNotesStore({
+    memory: true,
+    persist: async () => {
+      persistCalls += 1;
+      return false;
+    },
+    deviceId: "device-a",
+    now: () => 50,
+    createId: () => "unused-late"
+  });
+  const doc = "doc-late-layout";
+  const quote = "版面晚到的引文";
+  await store.put({
+    id: "late",
+    docHash: doc,
+    kind: "highlight",
+    page: 1,
+    anchor: {
+      docHash: doc,
+      bid: "b1-p1-tmissing",
+      page: 1,
+      srcHead: "zzzznotthesource",
+      quote,
+      prefix: "",
+      suffix: "",
+      quoteSrc: { quote: "nope", prefix: "", suffix: "" },
+      offset: { start: 0, end: 0 }
+    },
+    anchorState: { status: "quote", layoutRev: "source-v3:old", checkedAt: 1 }
+  });
+  assert.equal((await store.get("late")).rev, 1);
+
+  const empty = await reanchorOpenPage({
+    store,
+    docHash: doc,
+    page: 1,
+    pages: [],
+    layoutRev: "source-v3:empty",
+    checkedAt: 2
+  });
+  assert.equal(empty.results.find((row) => row.note.id === "late").stored, false);
+  assert.equal(empty.results.find((row) => row.note.id === "late").pendingLayout, true);
+  assert.equal((await store.get("late")).rev, 1);
+  assert.equal((await store.get("late")).anchorState.status, "quote");
+
+  const neighbor = await reanchorOpenPage({
+    store,
+    docHash: doc,
+    page: 1,
+    pages: [{
+      page: 2,
+      blocks: [{
+        bid: "b1-p2-tother",
+        id: "p2-b1",
+        page: 2,
+        sourceText: "neighbor source",
+        text: "neighbor source",
+        translation: "邻页译文"
+      }]
+    }],
+    layoutRev: "source-v3:neighbor",
+    checkedAt: 3
+  });
+  assert.equal(neighbor.results.find((row) => row.note.id === "late").stored, false);
+  assert.equal(neighbor.results.find((row) => row.note.id === "late").pendingLayout, true);
+  assert.equal((await store.get("late")).rev, 1);
+  assert.equal((await store.get("late")).anchorState.status, "quote");
+
+  const untranslated = await reanchorOpenPage({
+    store,
+    docHash: doc,
+    page: 1,
+    pages: [{
+      page: 1,
+      blocks: [{
+        bid: "b1-p1-tother",
+        id: "p1-b1",
+        page: 1,
+        sourceText: "source is here",
+        text: "source is here",
+        translation: ""
+      }]
+    }],
+    layoutRev: "source-v3:bare",
+    checkedAt: 4
+  });
+  assert.equal(untranslated.results.find((row) => row.note.id === "late").stored, false);
+  assert.equal(untranslated.results.find((row) => row.note.id === "late").pendingLayout, true);
+  assert.equal((await store.get("late")).rev, 1);
+  assert.equal((await store.get("late")).anchorState.status, "quote");
+
+  const ready = await reanchorOpenPage({
+    store,
+    docHash: doc,
+    page: 1,
+    pages: [{
+      page: 1,
+      blocks: [{
+        bid: "b1-p1-tother",
+        id: "p1-b1",
+        page: 1,
+        sourceText: "source is here",
+        text: "source is here",
+        translation: quote
+      }]
+    }],
+    layoutRev: "source-v3:ready",
+    checkedAt: 5
+  });
+  const row = ready.results.find((item) => item.note.id === "late");
+  assert.equal(row.stored, false);
+  assert.equal(row.note.anchorState.status, "quote");
+  const saved = await store.get("late");
+  assert.equal(saved.rev, 1);
+  assert.equal(saved.anchorState.status, "quote");
+  assert.equal(saved.anchorState.layoutRev, "source-v3:old");
+  assert.equal(persistCalls, 1);
+});
