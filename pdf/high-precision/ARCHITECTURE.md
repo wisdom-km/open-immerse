@@ -40,8 +40,8 @@ pdf/viewer.js（扩展页）
   引擎产出 PageBlocks
   右栏按数组顺序画：译文段落，或 img
   可译文本 → OI_TRANSLATE_BATCH（只走 service worker）
-  第零层（默认关，用户点了才发）→ OI_ARXIV_SOURCE（暂定名）：service worker 下载 arXiv 源码包、解包、存 IndexedDB，只回传源码文本
-  划区 HTTP 从 viewer.js 直接 fetch，不把整页 base64 塞进 runtime.sendMessage（现有例外，见下）
+  第零层（默认关，用户点了才发）→ OI_ARXIV_SOURCE：service worker 下载 arXiv 源码包、解包、存 IndexedDB，默认回传文本、图片元数据和 skipped；单张图用 action:"asset" 取，以 base64 回传
+  划区 HTTP 从 viewer.js 直接 fetch，不把整页 base64 塞进 runtime.sendMessage（现有例外，见下）。asset 以 base64 传单张图是允许的例外
 
 lib/pdf-blocks.js          协议、校验、百分比矩形、占位符
 lib/pdf-text-layer.js      数字 PDF 的文字层引擎（阶段 2 新建）

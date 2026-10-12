@@ -104,3 +104,16 @@ test("images over the per-paper budget are skipped, other binaries stay unsuppor
   assert.ok(unpacked.skipped.some((row) => row.path === "fake.png" && row.reason === "magic"));
   assert.ok(unpacked.skipped.some((row) => row.path === "mystery.bin" && row.reason === "unsupported"));
 });
+
+test("svg magic requires an svg root and skips html script payloads", async () => {
+  const unpacked = await unpackSource(tarGz([
+    { name: "evil.svg", body: "<!DOCTYPE html><script>alert(1)</script>" },
+    { name: "ok.svg", body: "<?xml version=\"1.0\"?>\n<!-- note -->\n<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>" },
+    { name: "html.svg", body: "<?xml version=\"1.0\"?><html><script></script></html>" }
+  ]), { gunzip });
+  assert.ok(unpacked.skipped.some((row) => row.path === "evil.svg" && row.reason === "magic"));
+  assert.deepEqual(unpacked.assets.map((asset) => ({ path: asset.path, mime: asset.mime })), [
+    { path: "ok.svg", mime: "image/svg+xml" }
+  ]);
+  assert.ok(unpacked.skipped.some((row) => row.path === "html.svg" && row.reason === "magic"));
+});

@@ -53,7 +53,7 @@ Attention v7 里实际有的线索：
 扩展这边：
 
 - `manifest.json` 已经有 `"host_permissions": ["<all_urls>"]`，扩展（含 service worker）发 fetch 不受 CORS 限制，**不用加权限**。
-- 联网下载放在 `background/`（service worker）里，守住 README「网络与缓存只在 `background/`」这条约定。阅读器页面发消息（`OI_ARXIV_SOURCE`，带编号和版本）给 service worker；service worker 查缓存，没有才下载、解包、存进 IndexedDB。默认只回传文本和图片元数据；单张图片用 `action: "asset"` 另取（见 2.8）。service worker 里也有 `fetch`、`DecompressionStream` 和 IndexedDB，不用加权限。（仓库里本地库 `lib/pdf-library.js` 和划区请求是从阅读器页面直接 fetch 的，那是现有的例外，这次不动。）
+- 联网下载放在 `background/`（service worker）里，守住 README「网络与缓存只在 `background/`」这条约定。阅读器页面发消息（`OI_ARXIV_SOURCE`，带编号和版本）给 service worker；service worker 查缓存，没有才下载、解包、存进 IndexedDB。默认回传文本、图片元数据和 skipped；单张图片用 `action: "asset"` 另取（见 2.8）。service worker 里也有 `fetch`、`DecompressionStream` 和 IndexedDB，不用加权限。（仓库里本地库 `lib/pdf-library.js` 和划区请求是从阅读器页面直接 fetch 的，那是现有的例外，这次不动。）
 - 只用 e-print 源码包，第一版不用 arXiv HTML（决定 8）。
 
 **robots 和礼貌（实现初始值，待确认；「点了才下」「以后自动」是已确认的）：**
@@ -74,7 +74,7 @@ Attention v7 里实际有的线索：
 - 不加新依赖：用 Chrome 自带的 `DecompressionStream('gzip')`（manifest 要求 Chrome ≥114，够用），加一个约 40 行的 ustar 读取器。原型 `arxiv-src-unpack.mjs` gzip 后 1.1 KB。
 - 判断格式：先看开头是不是 `%PDF-`（只有 PDF 的投稿）；再看是不是 gzip；解开后第 257 字节处是不是 `ustar`，是就是 tar，不是就是单个 .tex。
 - 安全：处理 GNU 长文件名和 pax 头；挡掉 `..` 和绝对路径；只收普通文件；限制文件数和总大小（初始值：2,000 个文件、解开后 50 MB）。
-- 文本（.tex、.bbl、.sty、.cls、.bib 等）留在 `files`。常见图片按白名单留成二进制 `assets`：png、jpg、jpeg、gif、pdf、eps、svg。扩展名还要对上文件头魔数（png、jpeg、gif、pdf、eps；svg 看开头是不是 SVG 标记），对不上记 `magic`。其他无法识别的二进制仍然跳过，原因 `unsupported`。Attention v7 包 23 个普通文件：文本 11 个，图片 12 个（6 张 png、6 个 pdf）。文本大约 80 KB。
+- 文本（.tex、.bbl、.sty、.cls、.bib 等）留在 `files`。常见图片按白名单留成二进制 `assets`：png、jpg、jpeg、gif、pdf、eps、svg。扩展名还要对上文件头魔数（png、jpeg、gif、pdf、eps；svg 的根元素必须是 `<svg`，前面只允许 `<?xml` 和注释），对不上记 `magic`。其他无法识别的二进制仍然跳过，原因 `unsupported`。Attention v7 包 23 个普通文件：文本 11 个，图片 12 个（6 张 png、6 个 pdf）。文本大约 80 KB。
 - 每篇图片总量上限是 `MAX_ASSET_BYTES`，默认 30 MB（2026-10-13 02:34 Wisdom 决定）。超过上限的图片跳过，原因记为 `asset-budget`。svg 只能放进 `<img>`，或先做清理后再用；禁止 `innerHTML`。
 - 实测：v7 解包加列文件 185 ms（node 首次运行），v1 41 ms。
 
