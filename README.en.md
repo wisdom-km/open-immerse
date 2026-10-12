@@ -8,7 +8,7 @@ Translate foreign-language webpages and plain-text documents into a side-by-side
 
 Repo: https://github.com/wisdom-km/open-immerse
 
-Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. **PDF reading is a lab feature: off by default.** It only appears after you opt in under **Settings → Advanced**. The target is text-layer body text plus content-accurate original-page display (crops by default). Formula images do not come from LaTeX rendering. Translations are not pasted into the left pane. YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
+Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. **PDF reading is a lab feature: off by default.** It only appears after you opt in under **Settings → Advanced**. The target is text-layer body text plus content-accurate original-page display (crops by default). Formula images do not come from LaTeX rendering. (D0 待改（随 F3）/ D0 pending, changes with F3: formulas now target verified KaTeX and fall back to the original-page crop when undecidable; `pdf/high-precision/REQUIREMENTS.md` §2.6 governs.) Translations are not pasted into the left pane. YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
 
 Not affiliated with the commercial “Immersive Translate” product.
 
@@ -24,7 +24,7 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
 | Faithful-then-polish | **On by default** (**Settings → 功能**, not Advanced). LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only; a custom system prompt skips the second pass. |
-| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). Target: text-layer body text plus content-accurate original-page display (crops by default). Formula images do not come from LaTeX rendering. Formulas, figures, and tables match the opened PDF. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the LLM API already configured in the extension. **Webpage bilingual remains the primary product.** |
+| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). Target: text-layer body text plus content-accurate original-page display (crops by default). Formula images do not come from LaTeX rendering. (D0 待改（随 F3）/ D0 pending, changes with F3: formulas now target verified KaTeX and fall back to the original-page crop when undecidable; `pdf/high-precision/REQUIREMENTS.md` §2.6 governs.) Formulas, figures, and tables match the opened PDF. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the LLM API already configured in the extension. **Webpage bilingual remains the primary product.** |
 | Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
 
 Suggested regression page (article-scope scan and title handling were tuned on posts like this):  
@@ -156,7 +156,7 @@ No layout-preserving Office or scanned files here. Convert to plain text first. 
 
 **Not a default entry.** Enable **PDF 阅读（实验室）** under **Settings → Advanced** before the popup footer **PDF** button or a PDF tab’s **在沉浸译中打开（实验室）** appear.
 
-Target: text-layer body text plus content-accurate original-page display (crops by default). The right pane stays a **Markdown reading-flow** in reading order. Formula images do not come from LaTeX rendering. The spec is `pdf/PDF-MD-READOUT.md`. The reader runtime switches by the phases in `pdf/high-precision/EXECUTION.md`.
+Target: text-layer body text plus content-accurate original-page display (crops by default). The right pane stays a **Markdown reading-flow** in reading order. Formula images do not come from LaTeX rendering. (D0 待改（随 F3）/ D0 pending, changes with F3: formulas now target verified KaTeX and fall back to the original-page crop when undecidable; `pdf/high-precision/REQUIREMENTS.md` §2.6 governs.) The spec is `pdf/PDF-MD-READOUT.md`. The reader runtime switches by the phases in `pdf/high-precision/EXECUTION.md`.
 
 - Left pane: pdf.js continuous scroll; zoom applies only to the original page
 - Top bar: translated n / t pages → Open PDF → Translate → Retranslate page → Stop (shown only while a job is running) → Original → Previous → page number → Next → Aa. Export MD / PDF lives in the **···** menu, not on the bar. Opening starts a full-document translation. Settings → 功能 → PDF has **打开 PDF 时自动翻译全文**, on by default. Original only switches the view; it does not abort the job or clear the cache.
@@ -323,7 +323,7 @@ Not built, not guaranteed, or still experimental:
 
 | Item | Notes |
 | --- | --- |
-| **PDF reader (lab, default off)** | `features.pdf` defaults to `false`. Target: text-layer body text plus content-accurate original-page display (crops by default). Formula images do not come from LaTeX rendering. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the configured LLM API. Webpage bilingual remains the primary product |
+| **PDF reader (lab, default off)** | `features.pdf` defaults to `false`. Target: text-layer body text plus content-accurate original-page display (crops by default). Formula images do not come from LaTeX rendering. (D0 待改（随 F3）/ D0 pending, changes with F3: formulas now target verified KaTeX and fall back to the original-page crop when undecidable; `pdf/high-precision/REQUIREMENTS.md` §2.6 governs.) Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the configured LLM API. Webpage bilingual remains the primary product |
 | Sidebar en/zh pairing | Shelved; product focus is body/main-text bilingual |
 | Chrome Web Store | Unpacked load only |
 | OCR | When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong. Formulas, figures, and tables stay original-page crops. An `i` read as `n`, or an `n` read as `i`, is not shown |

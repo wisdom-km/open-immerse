@@ -138,7 +138,7 @@ D:\pdf-layout-sidecar      扩展仓之外。只负责把本机 GLM-OCR 包成�
 
 本地库按 PDF 文件 SHA-256 查找。`GET /v1/library/document?hash=...` 读取逐页记录；`POST /v1/library/page` 保存页、`pairs`、版面和首次打开的原 PDF。SQLite 是索引，仓外 `files/{hash}/page-NNN.json` 保存逐页数据，`source.pdf` 与 `readout.md` 分别是原件和旧格式兼容文件。阅读器优先用逐页 `pairs`，只在没有逐页记录时回退旧整篇 `readout.md`；已入库文档不自动重新翻译。
 
-存储替换方案已批准（2026-10-11，路线图第 8 步，见 `docs/ui-phase2-plan.md` 第 4 节）：论文、版面、译文、笔记改存 Chrome IndexedDB，设置留在 `chrome.storage`，不用 SQLite。论文、版面、译文还没迁，上面这段本地库代码在那一步落地前仍然有效。笔记已落到扩展自己的 IndexedDB（T2a，2026-10-12），合同见下一小节。落地顺序是路线图 v2 的 F4。
+存储替换方案已批准（2026-10-11，落地 = 路线图 v2 的 F4，见 `docs/ui-phase2-plan.md` 第 4 节）：论文、版面、译文、笔记改存 Chrome IndexedDB，设置留在 `chrome.storage`，不用 SQLite。论文、版面、译文还没迁，上面这段本地库代码在那一步落地前仍然有效。笔记已落到扩展自己的 IndexedDB（T2a，2026-10-12），合同见下一小节。落地顺序是路线图 v2 的 F4。
 
 F4 迁移时，版面和译文的 schema 预留跨页组字段：`groupId`、`memberBids`、引用起始页（路线图 v2 决定 2，2026-10-12 23:52）。PR-2b-2 在打磨池，字段先留着，以后做跨页续段时不用再迁数据。笔记锚点已有 `memberBid`，不受影响。
 
@@ -169,8 +169,8 @@ F4 迁移时，版面和译文的 schema 预留跨页组字段：`groupId`、`me
 
 - 第零层（REQUIREMENTS §2.7，默认关）：主展示是 KaTeX，渲染作者源码里的 LaTeX。单个公式不加小记号，状态栏写一句总的。只有这个公式通过位置、字符、编号核对并且 KaTeX 能渲染时才出现，否则交给多模态（没接 API 或开关关着时往下交给 OCR API 层，再往下是自研算法；这是推论，由 01:12 顺序推出）。`latex`、`latexSource: "arxiv-src"`、`verified: true` 要同时在，缺一则整组丢弃，规则见 REQUIREMENTS §6。点公式本体跳回原文，用对齐到的 PDF 块的 `page + bbox`。
 
-- 第一层：目标是按原字体、原位置重绘字符。做出来之前，`surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`：把该区域高清重新渲染。`withRasterCrop` 先从 pageRaster 得到图并标 `surface="png"`，高清重渲染成功才改成 `surface="redraw"`。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支，静默、不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。第二层没采用时用这一层：先矢量重绘（目标做法，待实现；把握分数过阈值才用），再原页裁图（清楚、没切到邻行才用），判据见 REQUIREMENTS §2.6「运行时顺序」。UI 以 Loom 规格为准。
-- 第二层：主展示是 KaTeX，加小记号，点小记号看原图对照。运行时排在第一层之前：用户接上了多模态 API、Aa 面板里的「用看图模型补全公式」（待实现）开着、并且字符核对通过才出现；对不上就交给运行时顺序的下一级（OCR API 层 → 自研算法 → 矢量重绘 → 裁图 → 占位）。用户接上多模态 API 后显示，默认关闭，开关旁注明费用和隐私（2026-10-05 00:33 Wisdom 定）。DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式是多模态准确率的参考测试：不是合入或上线的门槛（2026-10-05 00:48 Wisdom 定，取代 2026-10-02「第二层在 DPO 测试前保持关闭」）；接上 API 后先跑一次，结果给 Wisdom 看（据 00:48 决定整理）。和第三层占位开关互相独立。`latex`、`latexSource: "vlm"`、`verified: true` 要同时在，规则见 REQUIREMENTS §6。
+- 第一层：第一层矢量重绘的目标是按原字体、原位置重绘字符（兜底，做不做待定；公式上屏目标是核对过的 KaTeX，判不出时显示原页裁图，见 REQUIREMENTS §2.6）。做出来之前，`surface="redraw"` 也算第一层。真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`：把该区域高清重新渲染。`withRasterCrop` 先从 pageRaster 得到图并标 `surface="png"`，高清重渲染成功才改成 `surface="redraw"`。`lib/pdf-formula-redraw.js` 是从页面光栅贴像素的 png 底图，不是 redraw。pageRaster 裁图是 png 回退那一支，静默、不加徽章（V1-B1，见 REQUIREMENTS §2.6 术语表），不算换层。多模态和 OCR 两家结果判不出时直接显示原页裁图，不走自研算法和矢量重绘（REQUIREMENTS §2.6「调度与仲裁的关系」，2026-10-13 00:23）。只接了一家（只有多模态或只有 OCR）且核对不过时，同样直接显示原页裁图，不交给自研算法（2026-10-13 00:30 Wisdom 定）。没有任何识别候选（两家都没接或开关都关着）时用这一层：先矢量重绘（目标做法，待实现；把握分数过阈值才用），再原页裁图（清楚、没切到邻行才用），判据见 REQUIREMENTS §2.6「运行时顺序」。UI 以 Loom 规格为准。
+- 第二层：主展示是 KaTeX，加小记号，点小记号看原图对照。运行时排在第一层之前：用户接上了多模态 API、Aa 面板里的「用看图模型补全公式」（待实现）开着、并且字符核对通过才出现；对不上时：同时接了 OCR 就一起仲裁，判不出或只接了这一家且核对不过，直接显示原页裁图，不交给自研算法（2026-10-13 00:23 / 00:30）；两家都没接或开关都关着，才交给自研算法 → 矢量重绘 → 裁图 → 占位。用户接上多模态 API 后显示，默认关闭，开关旁注明费用和隐私（2026-10-05 00:33 Wisdom 定）。DPO 论文（arXiv 2305.18290v3）第 3–5 页 79 个公式是多模态准确率的参考测试：不是合入或上线的门槛（2026-10-05 00:48 Wisdom 定，取代 2026-10-02「第二层在 DPO 测试前保持关闭」）；接上 API 后先跑一次，结果给 Wisdom 看（据 00:48 决定整理）。和第三层占位开关互相独立。`latex`、`latexSource: "vlm"`、`verified: true` 要同时在，规则见 REQUIREMENTS §6。
 - 第三层：独立公式用写明位置的占位加一张小缩略图。只有第零层、第二层、OCR API 层、第一层（自研算法、矢量重绘和原页裁图）都没采用、并且第三层占位开关（待实现）开着才出现；开关关着就按现状显示（原页裁图）。文案是目标状态，待实现：「这里有公式，点击查看原文第 N 页」，不写公式编号（这句文案是文档细化，待确认；00:48 Wisdom 定的是占位说明这里有个公式、点了原文栏直接跳到对应的公式），跨页「第 4–5 页」。点公式本体也跳转原文。没有框时只跳到页顶。只有这种占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。UI 以 Loom 规格为准。
 
 `header` 和 `footer` 在准备右栏数据时整块丢掉，规则复用 `isPageChromeItem` / `isPageChromeText`。适配器可以原样返回它们。

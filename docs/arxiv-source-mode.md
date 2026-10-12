@@ -3,8 +3,8 @@
 - 日期：2026-10-04（北京时间）
 - 状态：2026-10-04 23:33 Wisdom 逐条同意建议（他贴回 12 个问题和选项原文，回复「这12条我都同意你的建议」）；23:52 确认整体分工。本文是 P0，只改文档。规则正本是 `pdf/high-precision/REQUIREMENTS.md` §2.7，本文和它冲突时以 REQUIREMENTS 为准。
 - 哪些是已确认的、哪些是实现初始值：见第 6 节的两列。正文里写的限速、超时、上限、门槛等数字，凡是不在第 6 节第一列的，都是初始值或建议，待确认。
-- 合入规矩：每期一个 PR（建议）；每个 PR 由 Anvil 用 Attention 实测、Wisdom 批准后才合入（23:52 已确认）。
-- 基于：main@66b335b。原型和原始数据不在仓库里，在共享盒子上的 `/workspace/oi-qa/arxiv-src-plan/`（`PROPOSAL.md` 加脚本和输出）。
+- 合入规矩：每期一个 PR（建议）；流程见 `CONTRIBUTING.md`「合入流程」（23:52 已确认 Anvil 实测、Wisdom 批准）。
+- 基于：main@66b335b 写成，2026-10-13 按 main@6fac8d6 复核。原型和原始数据不在仓库里，在共享盒子上的 `/workspace/oi-qa/arxiv-src-plan/`（`PROPOSAL.md` 加脚本和输出）。
 - 测试夹具：`tests/fixtures/Attention_Is_All_You_Need.pdf`（arXiv v7，sha256 `bdfaa68d…df697`，gitignored）。
 
 ---
@@ -187,7 +187,7 @@ Attention v7 的解析数字（P3 测试要锁住）：独立公式 5、行内�
 - 用到夹具的测试先校验 sha256。**夹具不在时测试失败**，报错写明怎么取（例如「缺 `tests/fixtures/arxiv-src/1706.03762v7.tar.gz`：从 `https://arxiv.org/src/1706.03762v7` 下载并放到这里，sha256 应为 …」），和 Attention PDF 夹具的现有做法一样。
 - 这一条细化了决定 10 选项原文里的「夹具不在时测试跳过」：仓库的规矩是默认全量 `node --test tests/*.test.mjs` 必须 0 skipped，所以改成「失败并提示」。
 - 默认测试不联网。联网测试放在 `tests/*.test.mjs` 匹配不到的位置（例如 `tests/net/arxiv-live.test.mjs`），用单独的命令跑（例如 `node --test tests/net/`），不进默认全量。文件名必须以 `.test.mjs` 结尾：Node 20 给目录时只收这类文件，写成 `arxiv-live.mjs` 会跑 0 个测试、照样退出 0，看着是绿的。`tests/net/` 下的文件不会被默认的 `tests/*.test.mjs` 匹配到。
-- 每期 PR 由 Anvil 用 Attention 实测、Wisdom 批准后才合入。
+- 每期 PR 按 `CONTRIBUTING.md`「合入流程」合入。
 
 | 期 | 内容 | 测试（Attention 夹具） |
 | --- | --- | --- |
@@ -214,7 +214,7 @@ P1–P4 不碰右栏，可以和第一层、第三层并行。**P0 文档已合�
 7. **KaTeX 是重新排版**：内容对，但不是原页像素。现在的验收口径是「同一套内容」，可以接受。
 8. **性能**：全文对齐的内存要有上限；下载约 1 MB，放后台，不挡原页。
 9. **隐私**：下载会让 arXiv 知道用户在读哪篇。所以默认关闭，点了才下。
-10. **范围膨胀**：新管线会和第一层、第三层、held-out 抢时间。P1–P4 小步走，P5 等规格。
+10. **范围膨胀**：新管线会和第一层、第三层抢时间。P1–P4 小步走，P5 等规格。
 
 **没验证过的：** 只有 PDF 的 arXiv 投稿（没找到例子）；Chrome 扩展里实跑下载、解包和渲染（只在 node 里跑过）；arXiv HTML 的对齐；国内网络下 arxiv.org 的速度；出版社 PDF 只测了一篇。
 
