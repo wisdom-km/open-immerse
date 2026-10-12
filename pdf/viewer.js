@@ -328,6 +328,7 @@ let forceRetranslatePending = false;
 let libraryArticle = null;
 let libraryDoc = null;
 let libraryProbe = null;
+let notesDocHash = "";
 let titleStructure = null;
 const librarySourceSent = new Set();
 const enqueueLibraryWrite = createLibraryWriteQueue();
@@ -1930,12 +1931,16 @@ function refreshNoteAnchors(page, reason) {
   if (!pages.length) return;
   const underTest = viewerUnderTest();
   void reanchorOpenPage({
-    docHash: libraryDoc?.hash || "",
+    docHash: libraryDoc?.hash || notesDocHash || "",
     page: center,
     pages,
     reason,
     layoutRev: knownLayoutVersion,
-    resolveDocHash: () => pdfByteHash()
+    resolveDocHash: async () => {
+      const hash = libraryDoc?.hash || notesDocHash || await pdfByteHash();
+      if (hash && hash !== "nohash") notesDocHash = hash;
+      return notesDocHash || hash;
+    }
   }).then((result) => {
     if (!underTest) return;
     const bucket = globalThis.__oiNotes || (globalThis.__oiNotes = {});
@@ -8423,6 +8428,7 @@ async function adoptDoc(doc, title) {
   libraryArticle = null;
   libraryDoc = null;
   libraryProbe = null;
+  notesDocHash = "";
   titleStructure = null;
   layoutCache.clear();
   formulaRasterCache.clear();
