@@ -79,7 +79,66 @@ const PAGE = `<!doctype html>
       handle.setAttribute("aria-valuetext", source.valuetext);
       handle.querySelector(".split-bubble").textContent = source.bubble;
       reorderWorkspacePanes(workspace, notesDomOrder({ layout: "3", notesSide: side, sourceSide: workspace.dataset.sourceSide }));
+      const notesHandle = document.querySelector('.split-handle[data-split="notes"]');
+      if (notesHandle) notesHandle.hidden = false;
       return columns;
+    };
+    window.__pair = (width, notesWidth, side) => {
+      workspace.style.width = width + "px";
+      workspace.dataset.layout = "pair";
+      workspace.dataset.notesOpen = "true";
+      workspace.dataset.notesSide = side;
+      workspace.dataset.sourceMode = "hidden";
+      workspace.dataset.sourceSide = side === "start" ? "end" : "start";
+      workspace.style.setProperty("--notes-width", notesWidth + "px");
+      workspace.style.setProperty("--oi-notes-pane-w", notesWidth + "px");
+      const notesHandle = document.querySelector('.split-handle[data-split="notes"]');
+      if (notesHandle) notesHandle.hidden = true;
+      reorderWorkspacePanes(workspace, notesDomOrder({
+        layout: "pair",
+        notesSide: side,
+        sourceSide: workspace.dataset.sourceSide
+      }));
+    };
+    window.__columns = () => {
+      const style = getComputedStyle(workspace);
+      const widths = style.gridTemplateColumns.split(/\\s+/).map((value) => Number.parseFloat(value));
+      const origin = workspace.getBoundingClientRect().left;
+      let x = origin;
+      const tracks = widths.map((width) => {
+        const track = { x, width };
+        x += width;
+        return track;
+      });
+      const visible = [document.querySelector(".pane-pdf"), document.querySelector(".pane-translate"), document.getElementById("sideSlot")]
+        .filter((el) => {
+          const computed = getComputedStyle(el);
+          const box = el.getBoundingClientRect();
+          return computed.visibility !== "hidden" && computed.display !== "none" && box.width > 1 && box.height > 1;
+        });
+      const empty = tracks.filter((track) => {
+        if (track.width < 1) return true;
+        if (track.width <= 12) return false;
+        return !visible.some((el) => {
+          const box = el.getBoundingClientRect();
+          const overlap = Math.min(box.right, track.x + track.width) - Math.max(box.left, track.x);
+          return overlap > 1 && box.height > 0;
+        });
+      });
+      const translate = document.querySelector(".pane-translate").getBoundingClientRect();
+      const notes = document.getElementById("sideSlot").getBoundingClientRect();
+      return {
+        widths,
+        empty: empty.map((track) => track.width),
+        translateW: translate.width,
+        translateH: translate.height,
+        notesW: notes.width,
+        notesH: notes.height,
+        notesLeft: notes.left,
+        translateLeft: translate.left,
+        layout: workspace.dataset.layout,
+        stored: localStorage.getItem("reader.notesWidth")
+      };
     };
     window.__kind = (windowWidth, workspaceWidth, notesWidth, extra) => notesChromeKind({
       windowWidth, workspaceWidth, notesWidth, ...extra
@@ -479,4 +538,150 @@ test("NTP-01/02/06/12/13 three-pane columns keep order, scroll, and the notes sp
   assert.equal(sheet.shadow, "none");
   assert.match(sheet.borderColor, /122,\s*74,\s*134/);
   assert.ok(Math.abs(sheet.linkedH - sheet.plainH - 2) <= 1, JSON.stringify(sheet));
+});
+
+test("NTP-18 hiding the source after three panes keeps the translation column", { timeout: 90000 }, async (t) => {
+  const server = await serveRepo();
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-notes-three-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const handle = { child: null, cdp: null };
+  t.after(async () => {
+    try {
+      handle.cdp?.dispose();
+    } finally {
+      await cleanupChrome({ t, child: handle.child, server, ownedDir, userDataDir });
+    }
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  handle.child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
+  handle.cdp = cdp;
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  await cdp.send("Page.enable", {}, sessionId);
+  await cdp.send("Runtime.enable", {}, sessionId);
+  await cdp.send("Page.navigate", { url: `${origin}/three-pane.html` }, sessionId);
+  const evaluate = async (expression) => {
+    const result = await cdp.send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true
+    }, sessionId);
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails.exception?.description || result.exceptionDetails.text;
+      throw new Error(detail || JSON.stringify(result.exceptionDetails));
+    }
+    return result.result?.value;
+  };
+  const started = Date.now();
+  let ready = "";
+  while (Date.now() - started < 8000) {
+    ready = await evaluate(`window.__ready ? "yes" : ""`);
+    if (ready) break;
+    await sleep(40);
+  }
+  assert.equal(ready, "yes");
+  const pairOrders = JSON.parse(await evaluate(`(() => {
+    localStorage.setItem("reader.notesWidth", "360");
+    document.body.style.cssText = "margin:0;display:flex;flex-direction:column;width:1440px;height:900px;";
+    const ws = document.querySelector(".workspace");
+    ws.style.height = "auto";
+    ws.style.flex = "1";
+    ws.style.minHeight = "0";
+    document.querySelector(".oi-notes-scroll").style.height = "2000px";
+    document.querySelector(".oi-notes").style.minWidth = "380px";
+    const rows = [];
+    for (const side of ["end", "start"]) {
+      window.__paint(1440, 360, 0.5, side);
+      rows.push({ order: "hide-then-open", side, ...window.__columns() });
+      window.__pair(1440, 360, side);
+      rows.push({ order: "three-then-hide", side, ...window.__columns() });
+    }
+    return JSON.stringify(rows);
+  })()`));
+  assert.equal(pairOrders.length, 4);
+  for (const row of pairOrders) {
+    assert.ok(row.translateH > 0, JSON.stringify(row));
+    assert.deepEqual(row.empty, [], JSON.stringify(row));
+    assert.equal(row.stored, "360", JSON.stringify(row));
+    assert.ok(Math.abs(row.notesW - 360) <= 1, JSON.stringify(row));
+    assert.ok(row.notesH > 0, JSON.stringify(row));
+    if (row.order === "three-then-hide") {
+      assert.equal(row.layout, "pair");
+      assert.ok(Math.abs(row.translateW - 1072) <= 1, JSON.stringify(row));
+      assert.deepEqual(row.widths.map((width) => Math.round(width)), row.side === "start"
+        ? [360, 8, 1072]
+        : [1072, 8, 360]);
+    } else {
+      assert.equal(row.layout, "3");
+      assert.ok(Math.abs(row.translateW - 618) <= 1, JSON.stringify(row));
+    }
+    if (row.side === "start") assert.ok(row.notesLeft < row.translateLeft, JSON.stringify(row));
+    else assert.ok(row.translateLeft < row.notesLeft, JSON.stringify(row));
+  }
+});
+
+test("⇧M writes only reader.notesPaneSide and a changed reader.sourceSide", { timeout: 90000 }, async (t) => {
+  const server = await serveRepo();
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-notes-three-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const handle = { child: null, cdp: null };
+  t.after(async () => {
+    try {
+      handle.cdp?.dispose();
+    } finally {
+      await cleanupChrome({ t, child: handle.child, server, ownedDir, userDataDir });
+    }
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  handle.child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
+  handle.cdp = cdp;
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  await cdp.send("Page.enable", {}, sessionId);
+  await cdp.send("Runtime.enable", {}, sessionId);
+  await cdp.send("Page.navigate", { url: `${origin}/pdf/viewer.html` }, sessionId);
+  const evaluate = async (expression) => {
+    const result = await cdp.send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true
+    }, sessionId);
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails.exception?.description || result.exceptionDetails.text;
+      throw new Error(detail || JSON.stringify(result.exceptionDetails));
+    }
+    return result.result?.value;
+  };
+  const started = Date.now();
+  let ready = "";
+  while (Date.now() - started < 20000) {
+    ready = await evaluate(`document.querySelector(".toolbar")?.dataset.tbBound || ""`);
+    if (ready === "1") break;
+    await sleep(50);
+  }
+  assert.equal(ready, "1");
+  const written = JSON.parse(await evaluate(`(() => {
+    localStorage.clear();
+    document.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "M",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true
+    }));
+    return JSON.stringify(Object.keys(localStorage).sort().map((key) => [key, localStorage.getItem(key)]));
+  })()`));
+  assert.deepEqual(written, [
+    ["reader.notesPaneSide", "start"],
+    ["reader.sourceSide", "end"]
+  ]);
 });

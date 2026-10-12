@@ -47,6 +47,20 @@
   grid-template-columns: var(--oi-notes-pane-w) var(--oi-reader-split-w) minmax(0, 1fr);
   grid-template-areas: "notes splitB translate";
 }
+/* Hidden-source rules later in this file (and viewer.css) also match pair,
+   because pair sets source-mode=hidden. Those rules paint the side-slot grid
+   and can drop the translation row to 0. Pair must win after either order:
+   three-pane then hide, or hide then open. */
+.workspace[data-notes-open="true"][data-layout="pair"][data-source-mode="hidden"][data-notes-side="end"] {
+  grid-template-columns: minmax(0, 1fr) var(--oi-reader-split-w) var(--oi-notes-pane-w);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "translate splitB notes";
+}
+.workspace[data-notes-open="true"][data-layout="pair"][data-source-mode="hidden"][data-notes-side="start"] {
+  grid-template-columns: var(--oi-notes-pane-w) var(--oi-reader-split-w) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "notes splitB translate";
+}
 .workspace[data-layout="pair"] > #sideSlot {
   display: flex;
   grid-area: notes;
@@ -55,6 +69,10 @@
   height: auto;
   visibility: visible;
   pointer-events: auto;
+}
+.workspace[data-layout="pair"] > .pane-pdf,
+.workspace[data-layout="pair"] > .split-handle[data-split="source"] {
+  grid-area: auto;
 }
 .workspace[data-notes-open="true"][data-source-mode="mini"] {
   --oi-mini-width: var(--oi-notes-panel-w, 440px);

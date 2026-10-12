@@ -243,6 +243,7 @@ import {
   pageBreakLabel,
   planReaderFlow,
   precompositeMultiplyPixels,
+  READER_SOURCE_SIDE_STORAGE_KEY,
   readReaderPrefs,
   readerFontAnchorTop,
   readerFontBand,
@@ -4700,8 +4701,15 @@ function setNotesPaneSide(side) {
   const notesPaneSide = side === "start" ? "start" : "end";
   const sourceSide = sourceSideFromNotes(notesPaneSide);
   writeNotesUiPrefs(localStorage, { notesPaneSide });
-  readerPrefs = { ...readerPrefs, sourceSide };
-  persistReaderPrefs();
+  // ⇧M must not dump the rest of the reader defaults (font, theme, sourceMode, …).
+  if (readerPrefs.sourceSide !== sourceSide) {
+    readerPrefs = { ...readerPrefs, sourceSide };
+    try {
+      localStorage.setItem(READER_SOURCE_SIDE_STORAGE_KEY, sourceSide);
+    } catch {
+      /* private mode */
+    }
+  }
   syncSwapCheck();
   const workspace = document.querySelector(".workspace");
   const layout = workspace?.dataset.layout || "";
