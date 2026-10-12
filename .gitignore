@@ -11,6 +11,7 @@ dist/
 
 # Local regression PDF; only the small boundary annotations are versioned.
 tests/fixtures/Attention_Is_All_You_Need.pdf
+tests/fixtures/arxiv-src/
 tests/fixtures/DDPM_2006.11239.pdf
 tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf
 

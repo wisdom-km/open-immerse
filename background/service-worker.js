@@ -194,6 +194,8 @@ async function handleMessage(message, sender) {
       else rules.push({ host, auto: true, hover: false, subtitle: false, ...message.rule });
       return { ok: true, settings: await saveSettings({ siteRules: rules }) };
     }
+    case "OI_ARXIV_SOURCE":
+      return import("./arxiv-source.js").then((mod) => mod.handleArxivSourceMessage(message));
     default:
       return { ok: false, error: "unknown message" };
   }
