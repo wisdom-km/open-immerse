@@ -168,11 +168,9 @@ import {
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { createBlockAnchor, injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
 import { exportMarkdown } from "../lib/notes-io.js";
-import { dismissPersistHint, persistHintDismissed, readNotesUiPrefs, writeNotesUiPrefs } from "../lib/notes-prefs.js";
+import { NOTES_PANE_WIDTH_DEFAULT, NOTES_PANE_WIDTH_MIN, dismissPersistHint, persistHintDismissed, readNotesUiPrefs, writeNotesUiPrefs } from "../lib/notes-prefs.js";
 import {
   NOTES_PANE_RESIZE_DEBOUNCE_MS,
-  NOTES_PANE_WIDTH_DEFAULT,
-  NOTES_PANE_WIDTH_MIN,
   applyNotesSplitAria,
   clampDraggedNotesWidth,
   notesChromeKind,
@@ -4049,6 +4047,7 @@ function reorderPanes(side, anchor) {
   const translation = document.querySelector(".pane-translate");
   const split = sourceSplitHandle(workspace);
   if (!workspace || !source || !translation || !split) return;
+  if (workspace.dataset.layout === "3" || workspace.dataset.layout === "pair") return;
   if (source.parentElement !== workspace) return;
   const map = { source, translation, split };
   const order = visualPaneOrder(side).map((name) => map[name]);
@@ -4062,6 +4061,12 @@ function reorderPanes(side, anchor) {
     translationAcross: translationPane?.scrollLeft || 0
   };
   for (const node of order) workspace.append(node);
+  // The notes splitter stays after the source splitter. Tests and the mini
+  // drag path take the first .split-handle, which has to be the source one.
+  const slot = workspace.querySelector("#sideSlot");
+  const notesSplit = notesSplitHandle(workspace);
+  if (slot?.parentElement === workspace) workspace.append(slot);
+  if (notesSplit?.parentElement === workspace) workspace.append(notesSplit);
   if (sourcePane) {
     sourcePane.scrollTop = saved.sourceTop;
     sourcePane.scrollLeft = saved.sourceAcross;
@@ -4677,6 +4682,7 @@ function closeNotesChrome() {
   }
   setNotesSplitVisible(false);
   applySourceLayout(false);
+  appliedSide = "";
   applySourceSide(false);
 }
 
