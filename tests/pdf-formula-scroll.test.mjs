@@ -548,7 +548,10 @@ test("a real DPO display formula shrinks to the floor and scrolls in its box", {
       .sort((a, b) => b.querySelector(".oi-pdf-math-crop").getBoundingClientRect().width - a.querySelector(".oi-pdf-math-crop").getBoundingClientRect().width)[0];
     row.closest(".oi-pdf-display-math").dataset.oiProbe = "wide-formula";
     const flow = document.getElementById("readerFlow");
+    // The column floor is min(480px, 100%) and beats max-width, so the probe
+    // sets min-width too. Otherwise the column stays 480px and never hits the floor.
     flow.style.setProperty("width", "280px", "important");
+    flow.style.setProperty("min-width", "280px", "important");
     flow.style.setProperty("max-width", "280px", "important");
     window.dispatchEvent(new Event("resize"));
     return true;
