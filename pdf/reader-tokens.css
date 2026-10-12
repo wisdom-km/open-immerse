@@ -546,6 +546,10 @@
   --oi-notes-quote-line: round(nearest, calc(var(--oi-notes-quote-size) * 1.6), 1px);
   --oi-notes-pin-h: 20px;
   --oi-notes-pin-offset: -36px;
+  --oi-notes-card-gap: 16px;
+  --oi-notes-banner-line-h: 32px;
+  --oi-notes-safe-bottom: 72px;
+  --oi-notes-xs: 340px;
   --oi-notes-undo-ms: 6000;
   --oi-notes-save-debounce-ms: 600;
   --oi-notes-loading-delay-ms: 150;

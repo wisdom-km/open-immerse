@@ -2095,11 +2095,34 @@ function jumpToNoteAnchor(note) {
     const top = el.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
     pane.scrollTop = Math.max(0, top - pane.clientHeight / 3);
   }
-  if (el.dataset.pairId) {
-    currentPairId = el.dataset.pairId;
+  if (!el.dataset.pairId) {
+    jumpToNotePage(note?.page);
+    return;
+  }
+  // Keep the current-block pair bar and scroll the source. Do not set
+  // jumpPairId, so the paragraph gets no pair outline and no jump pair-box.
+  dismissSeeSource();
+  currentPairId = el.dataset.pairId;
+  jumpPairId = "";
+  jumpPart = "";
+  paintPairChrome();
+  const presented = presentSourceForJump(el);
+  const run = () => {
+    const rect = decodeSrcRects(el.dataset.srcRects)[0];
+    const before = translateScrollRoot()?.scrollTop;
+    if (rect) scrollSourceToRect(rect);
+    else {
+      const page = Number(el.dataset.page || el.dataset.srcPage);
+      if (page >= 1) revealSourcePage(page);
+    }
+    if (translateScrollRoot() && Number.isFinite(before)) translateScrollRoot().scrollTop = before;
+    applyFollow({ type: "clickJump" });
+    armJumpLock();
     paintPairChrome();
-    jumpTranslationToSource(el);
-  } else jumpToNotePage(note?.page);
+    syncSourcePopChrome(Number(el.dataset.page || el.dataset.srcPage), false);
+  };
+  if (presented === "ready") run();
+  else requestAnimationFrame(() => requestAnimationFrame(run));
 }
 
 function notesFromSel(ctx, kind) {

@@ -24,18 +24,25 @@ import {
   NOTES_LOADING_DELAY_MS,
   NOTES_SAVE_DEBOUNCE_MS,
   NOTES_UNDO_MS,
+  NOTES_XS,
   anchorPresentation,
+  currentParagraphHint,
   emptyState,
   filterCounts,
   firstLineQuote,
   groupNotes,
   importResultModel,
   kindGlyph,
+  lostSectionCopy,
   noteBodySavable,
+  noteMatchesFilter,
   notesBodyFont,
   notesExportFilename,
+  notesListModel,
+  notesMenuModel,
   paperEmptyState,
   paperNotes,
+  persistHintBanner,
   pinModel,
   renderNoteMarkdown,
   replaceUndo,
@@ -278,6 +285,122 @@ test("question stays disabled in the builtin registry and the panel has no cross
   assert.match(panelSrc, /本文档不再提示/);
   assert.match(panelSrc, /给这段写笔记/);
   assert.equal(panelSrc.includes("chrome.storage.sync"), false);
+});
+
+test("NIM-01/03/04/09 copy and the lost section stay beside the locked page groups", () => {
+  assert.equal(currentParagraphHint(null), "先在译文里点一段");
+  assert.equal(currentParagraphHint(undefined), "先在译文里点一段");
+  assert.equal(currentParagraphHint({ page: 4 }), "当前段：原文第 4 页");
+  assert.equal(currentParagraphHint({ page: 4, section: "  " }), "当前段：原文第 4 页");
+  assert.equal(currentParagraphHint({ page: 4, section: "缩放点积" }), "当前段：原文第 4 页 · 缩放点积");
+  assert.equal(currentParagraphHint({ page: 0 }), "当前段：未分页");
+  const lost = lostSectionCopy(2);
+  assert.equal(lost.title, "找不到原位置 · 2");
+  assert.equal(lost.line, "2 条找不到原位置");
+  assert.equal(lost.jump, "在列表末尾 ↓");
+  assert.equal(lost.collapse, "收起 ▴");
+  assert.equal(lost.expand, "展开 ▾");
+  assert.equal(lost.hint, anchorPresentation(note("c", { anchorState: { status: "lost" } })).hint);
+  assert.equal(lostSectionCopy(0).title, "找不到原位置 · 0");
+  const menu = notesMenuModel();
+  assert.equal(menu.exportHeading, "导出 · 本 PDF，不含回收站");
+  assert.equal(menu.importHeading, "导入 · 合并到本机，含其他文档的笔记");
+  const banner = persistHintBanner();
+  assert.equal(banner.line, "浏览器可能清理本机笔记，建议定期导出备份");
+  assert.equal(banner.exportLabel, "导出备份");
+  assert.equal(banner.dismissLabel, "本文档不再提示");
+  assert.equal(NOTES_XS, 340);
+
+  const notes = [
+    note("approx", { anchorState: { status: "quote" }, createdAt: 2 }),
+    note("lost-late", { page: 6, anchor: { bid: "b6", page: 6 }, anchorState: { status: "lost" }, createdAt: 4 }),
+    note("lost-early", { page: 2, anchor: { bid: "b2", page: 2 }, anchorState: { status: "lost" }, createdAt: 3 }),
+    note("exact", { createdAt: 1 }),
+    note("pending-lost", {
+      id: "pending-lost",
+      kind: "question",
+      page: 3,
+      anchor: { bid: "b3", page: 3 },
+      anchorState: { status: "lost" },
+      qa: { answer: "" },
+      createdAt: 5
+    })
+  ];
+  const listed = notesListModel(notes);
+  assert.deepEqual(listed.groups.map((group) => group.heading), ["原文第 4 页"]);
+  assert.deepEqual(listed.groups[0].notes.map((item) => item.id), ["exact", "approx"]);
+  assert.equal(anchorPresentation(listed.groups[0].notes[1]).label, "位置近似");
+  assert.deepEqual(listed.lost.map((item) => item.id), ["lost-early", "pending-lost", "lost-late"]);
+  assert.equal(listed.groups.some((group) => group.notes.some((item) => anchorPresentation(item).kind === "lost")), false);
+
+  const pending = notes.filter((item) => noteMatchesFilter(item, "pending"));
+  const pendingList = notesListModel(pending);
+  assert.equal(pendingList.lost.length, 1);
+  assert.equal(pendingList.groups.length, 0);
+  const visible = pendingList.groups.reduce((sum, group) => sum + group.notes.length, 0) + pendingList.lost.length;
+  assert.equal(visible, filterCounts(notes).pending);
+
+  const noLostPending = notes.filter((item) => item.id !== "pending-lost" && noteMatchesFilter(item, "pending"));
+  const quiet = notesListModel(noLostPending);
+  assert.equal(quiet.lost.length, 0);
+  assert.equal(quiet.groups.length, 0);
+});
+
+test("NIM panel source keeps the new rows without moving the locked import click", () => {
+  assert.match(panelSrc, /class: "oi-notes-add addb"/);
+  assert.match(panelSrc, /class: "hint2"/);
+  assert.match(panelSrc, /currentParagraphHint\(current\)/);
+  assert.match(panelSrc, /class: "lostline"/);
+  assert.match(panelSrc, /class: "lostsec"/);
+  assert.match(panelSrc, /lostOpen: true/);
+  assert.match(panelSrc, /text: state\.lostOpen \? copy\.collapse : copy\.expand/);
+  assert.match(panelSrc, /class: "ghostadd", text: "＋ 加笔记"/);
+  assert.match(panelSrc, /class: "tbtn-label", text: "回收站"/);
+  assert.match(panelSrc, /aria-label", `回收站，\$\{n\} 条`/);
+  assert.match(panelSrc, /class: "oi-notes-banner-line"/);
+  assert.match(panelSrc, /title: "本文档不再提示"/);
+  assert.match(panelSrc, /notesMenuModel\(\)/);
+  assert.match(panelSrc, /menuItem\("导出 Markdown".*\.md"\)/);
+  assert.match(panelSrc, /scroller\.scrollTop = Math\.max\(0, top\)/);
+  assert.match(panelSrc, /const scrollTop = scroll\?\.scrollTop \|\| 0/);
+  assert.match(panelSrc, /nextScroll\.scrollTop = scrollTop/);
+  assert.equal(panelSrc.includes("oi-note-lost-copy"), false);
+  const menuAt = panelSrc.indexOf("导入 JSON…");
+  const handler = panelSrc.slice(menuAt, menuAt + 80);
+  assert.match(handler, /root\.querySelector\("\.oi-notes-file"\)\?\.click\(\)/);
+
+  const css = readFileSync(join(root, "pdf/notes-panel.css"), "utf8");
+  const tokens = readFileSync(join(root, "pdf/reader-tokens.css"), "utf8");
+  assert.match(tokens, /--oi-notes-card-gap:\s*16px/);
+  assert.match(tokens, /--oi-notes-banner-line-h:\s*32px/);
+  assert.match(tokens, /--oi-notes-safe-bottom:\s*72px/);
+  assert.match(tokens, /--oi-notes-xs:\s*340px/);
+  assert.match(css, /\.addb[\s\S]*white-space:\s*nowrap/);
+  assert.match(css, /\.addb[\s\S]*height:\s*28px/);
+  assert.match(css, /\.hint2\s*\{[^}]*white-space:\s*nowrap/);
+  assert.match(css, /\.hint2\s*\{[^}]*text-overflow:\s*ellipsis/);
+  assert.match(css, /margin:\s*0 0 var\(--oi-notes-card-gap\)/);
+  assert.match(css, /padding:\s*0 var\(--oi-notes-pad-x\) var\(--oi-notes-safe-bottom\)/);
+  assert.match(css, /\.oi-note-card\.is-linked:hover[\s\S]*--oi-reader-mine-soft/);
+  assert.match(css, /\.hl\.linked\s*\{[^}]*inset 0 -2px 0 var\(--oi-reader-mine\)/);
+  assert.match(css, /\.lostline\s*\{[^}]*height:\s*28px/);
+  assert.match(css, /\.lostsec\s*\{[^}]*25%/);
+  assert.match(css, /\.lostsec \.oi-note-quote\s*\{[^}]*line-through/);
+  assert.match(css, /\.ghostadd\s*\{[^}]*height:\s*24px/);
+  assert.match(css, /\.oi-notes-banner-line\s*\{[^}]*height:\s*var\(--oi-notes-banner-line-h\)/);
+  assert.match(css, /\.oi-notes-trash\.tbtn\s*\{[^}]*height:\s*30px/);
+  assert.match(css, /\.oi-notes\.xs \.tbtn-label\s*\{\s*display:\s*none/);
+  assert.match(css, /\.oi-notes\.xs \.addb kbd\s*\{\s*display:\s*none/);
+  assert.match(css, /\.oi-notes-skeleton\s*\{[^}]*var\(--oi-notes-card-gap\)/);
+
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const start = viewer.indexOf("function jumpToNoteAnchor");
+  const end = viewer.indexOf("function notesFromSel");
+  const jump = viewer.slice(start, end);
+  assert.equal(jump.includes("jumpTranslationToSource"), false);
+  assert.match(jump, /jumpPairId = ""/);
+  assert.match(jump, /currentPairId = el\.dataset\.pairId/);
+  assert.match(jump, /scrollSourceToRect\(rect\)/);
 });
 
 test("NB-14 import menu clicks the file input inside the notes panel", () => {

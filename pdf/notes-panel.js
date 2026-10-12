@@ -11,17 +11,21 @@ import {
   NOTES_LOADING_DELAY_MS,
   NOTES_SAVE_DEBOUNCE_MS,
   NOTES_UNDO_MS,
+  NOTES_XS,
   anchorPresentation,
+  currentParagraphHint,
   emptyState,
   filterCounts,
   formatNoteStamp,
-  groupNotes,
   importResultModel,
   isAnnotationNote,
   kindGlyph,
   kindLabel,
+  lostSectionCopy,
   noteBodySavable,
   notesExportFilename,
+  notesListModel,
+  notesMenuModel,
   paperEmptyState,
   paperNotes,
   persistHintBanner,
@@ -106,7 +110,8 @@ export function mountNotesUi(api) {
     failedIds: new Set(),
     menuOpen: false,
     chipFocus: "all",
-    cardFocus: ""
+    cardFocus: "",
+    lostOpen: true
   };
 
   let loadTicket = 0;
@@ -161,8 +166,27 @@ export function mountNotesUi(api) {
     if (mode === "mini" || mode === "hidden") {
       workspace.style.setProperty("--oi-notes-panel-w", `${prefs.panelWidth}px`);
     } else workspace.style.removeProperty("--oi-notes-panel-w");
-    root.classList.toggle("slim", slot.clientWidth > 0 && slot.clientWidth < 480);
+    const panelWidth = slot.clientWidth || 0;
+    root.classList.toggle("slim", panelWidth > 0 && panelWidth < 480);
+    root.classList.toggle("xs", panelWidth > 0 && panelWidth < NOTES_XS);
     root.dataset.place = place;
+    const trash = root.querySelector(".oi-notes-trash");
+    if (trash) applyTrashLabel(trash, panelWidth);
+  }
+
+  function applyTrashLabel(trash, width) {
+    const n = state.trash.length;
+    const narrow = width > 0 && width < NOTES_XS;
+    if (narrow && n > 0) {
+      trash.setAttribute("aria-label", `回收站，${n} 条`);
+      trash.title = `回收站 · ${n} 条，可恢复`;
+    } else if (n > 0) {
+      trash.setAttribute("aria-label", `回收站，${n} 条`);
+      trash.removeAttribute("title");
+    } else {
+      trash.setAttribute("aria-label", "回收站");
+      trash.removeAttribute("title");
+    }
   }
 
   function open(focus = true) {
@@ -278,7 +302,7 @@ export function mountNotesUi(api) {
     if (!denied || state.docHash !== api.docHash?.()) return;
     if (state.banners.some((banner) => banner.id === "persist")) return;
     const copy = persistHintBanner();
-    state.banners.push({ id: "persist", tone: "neutral", title: copy.title, body: copy.body, persist: true });
+    state.banners.push({ id: "persist", tone: "neutral", line: copy.line, persist: true });
     render();
   }
 
@@ -733,16 +757,17 @@ export function mountNotesUi(api) {
     const reserve = h("span", { class: "oi-notes-reserve", "aria-hidden": "true" });
     const trash = h("button", {
       type: "button",
-      class: "oi-notes-icon oi-notes-trash",
-      "aria-label": trashCount ? `回收站 ${trashCount}` : "回收站"
+      class: "oi-notes-icon oi-notes-trash tbtn",
+      "aria-label": "回收站"
     });
-    trash.append(iconTrash());
+    trash.append(iconTrash(), h("span", { class: "tbtn-label", text: "回收站" }));
     if (trashCount) trash.append(h("span", { class: "oi-notes-trash-n", text: String(trashCount) }));
     trash.addEventListener("click", () => {
       state.view = "trash";
       state.menuOpen = false;
       render();
     });
+    const rule = h("span", { class: "oi-notes-rule", "aria-hidden": "true" });
     const more = h("button", {
       type: "button",
       class: "oi-notes-icon oi-notes-more",
@@ -756,7 +781,7 @@ export function mountNotesUi(api) {
       render();
       if (state.menuOpen) root.querySelector(".oi-notes-menu [role='menuitem']")?.focus();
     });
-    head.append(seg, reserve, trash, more, closeButton());
+    head.append(seg, reserve, trash, rule, more, closeButton());
     if (state.menuOpen) head.append(renderMenu());
     head.querySelector("[data-notes-close]").addEventListener("click", () => close(true));
     return head;
@@ -791,16 +816,25 @@ export function mountNotesUi(api) {
 
   function renderMenu() {
     const menu = h("div", { class: "oi-notes-menu more-menu", role: "menu", "aria-label": "导入导出" });
-    const hint = h("p", { class: "oi-notes-menu-hint", text: "本 PDF · 不含回收站" });
-    const md = menuItem("导出 Markdown", () => exportNotes("md"));
-    const json = menuItem("导出备份 JSON", () => exportNotes("json"));
-    const incoming = menuItem("导入 JSON…", () => root.querySelector(".oi-notes-file")?.click());
-    menu.append(hint, md, json, incoming);
+    const copy = notesMenuModel();
+    menu.append(
+      menuHeading(copy.exportHeading),
+      menuItem("导出 Markdown", () => exportNotes("md"), ".md"),
+      menuItem("导出备份 JSON", () => exportNotes("json"), ".json"),
+      menuHeading(copy.importHeading),
+      menuItem("导入 JSON…", () => root.querySelector(".oi-notes-file")?.click(), ".json")
+    );
     return menu;
   }
 
-  function menuItem(label, run) {
-    const button = h("button", { type: "button", class: "more-item", role: "menuitem", text: label });
+  function menuHeading(text) {
+    return h("p", { class: "mh", text });
+  }
+
+  function menuItem(label, run, suffix) {
+    const button = h("button", { type: "button", class: "more-item", role: "menuitem" });
+    button.append(h("span", { text: label }));
+    if (suffix) button.append(h("span", { class: "r", text: suffix }));
     button.addEventListener("click", () => run());
     return button;
   }
@@ -816,11 +850,19 @@ export function mountNotesUi(api) {
       body.append(renderPaper());
       return body;
     }
-    body.append(renderFilters(), renderAddRow(), renderAnnotationList());
+    const listed = notesListModel(filteredAnnotations(), { blockOrder: api.blockOrder?.() });
+    body.append(renderFilters(), renderAddRow());
+    if (!state.showSkeleton && listed.lost.length) body.append(renderLostLine(listed.lost.length));
+    body.append(renderAnnotationList(listed));
     return body;
   }
 
+  function filteredAnnotations() {
+    return state.notes.filter((note) => filterCounts([note])[state.filter] > 0);
+  }
+
   function renderBanner(banner) {
+    if (banner.persist) return renderPersistLine(banner);
     const node = h("div", {
       class: `oi-notes-banner is-${banner.tone || "neutral"}`,
       role: "status"
@@ -833,10 +875,9 @@ export function mountNotesUi(api) {
     }
     const actions = h("div", { class: "oi-notes-banner-actions" });
     if (banner.retry) actions.append(smallButton("重试", () => retryFailed()));
-    if (banner.retry || banner.retryExport || banner.persist) {
+    if (banner.retry || banner.retryExport) {
       actions.append(smallButton("导出备份 JSON", () => exportNotes("json")));
     }
-    if (banner.persist) actions.append(smallButton("本文档不再提示", () => dismissPersist()));
     if (banner.id === "import" || banner.id === "export" || banner.id === "write") {
       actions.append(smallButton("关闭", () => {
         state.banners = state.banners.filter((item) => item !== banner);
@@ -844,6 +885,32 @@ export function mountNotesUi(api) {
       }));
     }
     node.append(text, actions);
+    return node;
+  }
+
+  function renderPersistLine(banner) {
+    const copy = persistHintBanner();
+    const line = banner.line || copy.line;
+    const node = h("div", {
+      class: "oi-notes-banner-line",
+      role: "status",
+      title: line
+    });
+    const dismiss = h("button", {
+      type: "button",
+      class: "oi-notes-banner-x",
+      "aria-label": "本文档不再提示",
+      title: "本文档不再提示",
+      text: "×"
+    });
+    dismiss.addEventListener("click", () => dismissPersist());
+    const backup = h("button", {
+      type: "button",
+      class: "oi-notes-banner-btn",
+      text: copy.exportLabel
+    });
+    backup.addEventListener("click", () => exportNotes("json"));
+    node.append(h("span", { class: "oi-notes-banner-line-text", text: line }), backup, dismiss);
     return node;
   }
 
@@ -900,30 +967,46 @@ export function mountNotesUi(api) {
 
   function renderAddRow() {
     const current = api.currentParagraph?.();
-    const row = h("div", { class: "oi-notes-add-row" });
+    const hint = currentParagraphHint(current);
+    const row = h("div", { class: "oi-notes-add-row addrow2" });
     const button = h("button", {
       type: "button",
-      class: "oi-notes-add",
-      disabled: current ? false : true,
-      title: current ? "" : "先在译文里点一段"
+      class: "oi-notes-add addb",
+      disabled: current ? false : true
     });
     button.append(h("span", { text: "＋ 给当前段写笔记" }), h("kbd", { text: "n" }));
-    if (current?.preview) button.append(h("span", { class: "oi-notes-add-where", text: current.preview }));
     button.addEventListener("click", () => composeCurrent());
-    row.append(button);
+    row.append(button, h("p", { class: "hint2", text: hint, title: hint }));
     return row;
   }
 
-  function renderAnnotationList() {
+  function renderLostLine(count) {
+    const copy = lostSectionCopy(count);
+    const line = h("button", { type: "button", class: "lostline" });
+    line.append(
+      h("span", { class: "lostline-n", text: copy.line }),
+      h("span", { class: "lostline-jump", text: copy.jump })
+    );
+    line.addEventListener("click", () => {
+      const sec = root.querySelector(".lostsec");
+      const scroller = root.querySelector(".oi-notes-scroll");
+      if (!sec || !scroller) return;
+      const top = sec.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      scroller.scrollTop = Math.max(0, top);
+    });
+    return line;
+  }
+
+  function renderAnnotationList(listed) {
     const list = h("div", { class: "oi-notes-list", role: "list" });
     if (state.showSkeleton) {
       list.append(h("p", { class: "oi-notes-loading", text: "正在读取本机笔记…" }));
       for (let i = 0; i < 3; i += 1) list.append(h("div", { class: "oi-notes-skeleton", "aria-hidden": "true" }));
       return list;
     }
+    const model = listed || notesListModel(filteredAnnotations(), { blockOrder: api.blockOrder?.() });
     const total = counts().all;
-    const filtered = state.notes.filter((note) => filterCounts([note])[state.filter] > 0);
-    if (!filtered.length && !(state.editor?.isNew && state.editor.kind !== "paperNote")) {
+    if (!model.groups.length && !model.lost.length && !(state.editor?.isNew && state.editor.kind !== "paperNote")) {
       const copy = emptyState(state.filter, { total });
       list.append(renderEmpty(copy, () => {
         state.filter = "all";
@@ -931,7 +1014,7 @@ export function mountNotesUi(api) {
       }));
       return list;
     }
-    const groups = groupNotes(filtered, { blockOrder: api.blockOrder?.() });
+    const groups = model.groups;
     if (state.editor?.isNew && state.editor.kind !== "paperNote" && !groups.some((group) => group.page === (state.editor.page || 0))) {
       const page = state.editor.page || 0;
       groups.push({
@@ -945,8 +1028,39 @@ export function mountNotesUi(api) {
     for (const group of groups) {
       list.append(renderGroup(group, group.page === currentPage));
     }
+    if (model.lost.length) list.append(renderLostSection(model.lost));
     list.addEventListener("keydown", onCardKey);
     return list;
+  }
+
+  function renderLostSection(notes) {
+    const copy = lostSectionCopy(notes.length);
+    const section = h("section", {
+      class: "lostsec",
+      "data-open": state.lostOpen ? "true" : "false"
+    });
+    const toggle = h("button", {
+      type: "button",
+      class: "lostsec-toggle",
+      text: state.lostOpen ? copy.collapse : copy.expand
+    });
+    toggle.addEventListener("click", () => {
+      state.lostOpen = !state.lostOpen;
+      render();
+    });
+    const head = h("div", { class: "lostsec-head" });
+    head.append(iconLost(), h("span", { class: "lostsec-title", text: copy.title }), toggle);
+    section.append(head);
+    if (!state.lostOpen) return section;
+    section.append(h("p", { class: "lostsec-hint", text: copy.hint }));
+    for (const note of notes) {
+      if (state.editor && !state.editor.isNew && state.editor.id === note.id) {
+        section.append(renderEditor(state.editor));
+      } else {
+        section.append(renderCard(note, { inLost: true }));
+      }
+    }
+    return section;
   }
 
   function renderGroup(group, current) {
@@ -1042,10 +1156,15 @@ export function mountNotesUi(api) {
     return node;
   }
 
-  function renderCard(note) {
+  function renderCard(note, { inLost = false } = {}) {
     const pres = anchorPresentation(note);
+    const linked = state.linkedId === note.id;
+    const classes = ["oi-note-card", "card", `is-${note.kind}`, `is-${pres.kind}`];
+    if (linked) classes.push("is-linked", "linked");
+    if (pres.kind === "lost") classes.push("lost");
+    if (note.kind === "highlight") classes.push("hl", "compact");
     const card = h("article", {
-      class: `oi-note-card is-${note.kind}${state.linkedId === note.id ? " is-linked" : ""} is-${pres.kind}`,
+      class: classes.join(" "),
       "data-note-id": note.id,
       "data-kind": note.kind,
       tabindex: "-1",
@@ -1061,29 +1180,43 @@ export function mountNotesUi(api) {
       const tag = h("span", {
         class: `oi-note-tag is-${pres.kind}`,
         text: pres.label,
-        title: pres.hint
+        title: inLost ? null : pres.hint
       });
       label.append(tag);
     }
-    const stamp = formatNoteStamp(note.updatedAt);
-    if (stamp) label.append(h("time", { class: "oi-note-time", text: stamp }));
+    if (inLost) {
+      const page = Number(note.page);
+      const pageLabel = Number.isFinite(page) && page >= 1 ? `原文第 ${Math.floor(page)} 页` : "未分页";
+      label.append(h("span", { class: "oi-note-page", text: pageLabel }));
+    } else {
+      const stamp = formatNoteStamp(note.updatedAt);
+      if (stamp) label.append(h("time", { class: "oi-note-time", text: stamp }));
+    }
     card.append(label);
     const quote = quoteText(note);
     if (quote && note.kind !== "paperNote") card.append(h("blockquote", { class: "oi-note-quote", text: `「${quote}」` }));
-    if (pres.kind === "lost") card.append(h("p", { class: "oi-note-lost-copy", text: pres.hint }));
     if (note.body) {
       const body = h("div", { class: "oi-note-body", html: renderNoteMarkdown(note.body) });
       card.append(body);
     }
-    const actions = h("div", { class: "oi-note-actions" });
-    if (pres.kind === "lost") {
-      actions.append(smallButton(`跳到第 ${note.page || "?"} 页 ↗`, () => api.jumpPage?.(note.page)));
+    if (note.kind === "highlight" && !inLost) {
+      const add = h("button", { type: "button", class: "ghostadd", text: "＋ 加笔记" });
+      add.addEventListener("click", () => editNote(note));
+      card.append(add);
     }
-    if (note.kind === "highlight") actions.append(smallButton("加笔记", () => editNote(note)));
-    else actions.append(smallButton("编辑", () => editNote(note)));
-    if (note.kind === "note") actions.append(smallButton("改成问题", () => changeKind(note, "question")));
-    if (note.kind === "question") actions.append(smallButton("改成笔记", () => changeKind(note, "note")));
-    actions.append(smallButton("删除", () => deleteNote(note)));
+    const actions = h("div", { class: `oi-note-actions${inLost ? " is-visible" : ""}` });
+    if (inLost) {
+      actions.append(smallButton(`跳到第 ${note.page || "?"} 页 ↗`, () => api.jumpPage?.(note.page)));
+      actions.append(smallButton("编辑", () => editNote(note)));
+      actions.append(smallButton("删除", () => deleteNote(note)));
+    } else if (note.kind === "highlight") {
+      actions.append(smallButton("删除", () => deleteNote(note)));
+    } else {
+      actions.append(smallButton("编辑", () => editNote(note)));
+      if (note.kind === "note") actions.append(smallButton("改成问题", () => changeKind(note, "question")));
+      if (note.kind === "question") actions.append(smallButton("改成笔记", () => changeKind(note, "note")));
+      actions.append(smallButton("删除", () => deleteNote(note)));
+    }
     card.append(actions);
     card.addEventListener("click", (event) => {
       if (event.target.closest("button")) return;
@@ -1091,6 +1224,7 @@ export function mountNotesUi(api) {
       state.linkedId = note.id;
       api.jumpAnchor?.(note);
       render();
+      paint();
     });
     return card;
   }
@@ -1236,6 +1370,7 @@ export function mountNotesUi(api) {
         state.linkedId = note.id;
         api.jumpAnchor?.(note);
         render();
+        paint();
       }
     } else if (event.key === "e" || event.key === "E") {
       event.preventDefault();
@@ -1320,10 +1455,10 @@ export function mountNotesUi(api) {
       if (part.to < text.textContent.length) text.splitText(part.to);
       if (part.from > 0) text = text.splitText(part.from);
       const span = document.createElement("span");
-      span.className = "oi-note-mark";
+      span.className = "oi-note-mark hl";
       const pres = anchorPresentation(note);
       if (pres.kind === "approx") span.classList.add("is-approx");
-      if (note.id === state.linkedId) span.classList.add("is-linked");
+      if (note.id === state.linkedId) span.classList.add("is-linked", "linked");
       span.dataset.noteId = note.id;
       text.parentNode.insertBefore(span, text);
       span.append(text);
@@ -1369,6 +1504,7 @@ export function mountNotesUi(api) {
     state.filter = "all";
     state.linkedId = id || "";
     render();
+    paint();
     const card = root.querySelector(`[data-note-id="${cssEscape(id)}"]`);
     card?.scrollIntoView({ block: "nearest" });
     if (note) api.jumpAnchor?.(note);
@@ -1418,6 +1554,23 @@ export function mountNotesUi(api) {
         /* keep the escaped source */
       }
     });
+  }
+
+  function iconLost() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "lostsec-icon");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("viewBox", "0 0 14 14");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M7 1.8 12.2 12H1.8L7 1.8z");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.2");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.append(path);
+    return svg;
   }
 
   function iconTrash() {
