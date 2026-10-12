@@ -53,7 +53,7 @@ Attention v7 里实际有的线索：
 扩展这边：
 
 - `manifest.json` 已经有 `"host_permissions": ["<all_urls>"]`，扩展（含 service worker）发 fetch 不受 CORS 限制，**不用加权限**。
-- 联网下载放在 `background/`（service worker）里，守住 README「网络与缓存只在 `background/`」这条约定。阅读器页面发消息（暂定 `OI_ARXIV_SOURCE`，带编号和版本）给 service worker；service worker 查缓存，没有才下载、解包、存进 IndexedDB，只把源码文本回给页面。service worker 里也有 `fetch`、`DecompressionStream` 和 IndexedDB，不用加权限。（仓库里本地库 `lib/pdf-library.js` 和划区请求是从阅读器页面直接 fetch 的，那是现有的例外，这次不动。）
+- 联网下载放在 `background/`（service worker）里，守住 README「网络与缓存只在 `background/`」这条约定。阅读器页面发消息（`OI_ARXIV_SOURCE`，带编号和版本）给 service worker；service worker 查缓存，没有才下载、解包、存进 IndexedDB。默认只回传文本和图片元数据；单张图片用 `action: "asset"` 另取（见 2.8）。service worker 里也有 `fetch`、`DecompressionStream` 和 IndexedDB，不用加权限。（仓库里本地库 `lib/pdf-library.js` 和划区请求是从阅读器页面直接 fetch 的，那是现有的例外，这次不动。）
 - 只用 e-print 源码包，第一版不用 arXiv HTML（决定 8）。
 
 **robots 和礼貌（实现初始值，待确认；「点了才下」「以后自动」是已确认的）：**
@@ -74,7 +74,8 @@ Attention v7 里实际有的线索：
 - 不加新依赖：用 Chrome 自带的 `DecompressionStream('gzip')`（manifest 要求 Chrome ≥114，够用），加一个约 40 行的 ustar 读取器。原型 `arxiv-src-unpack.mjs` gzip 后 1.1 KB。
 - 判断格式：先看开头是不是 `%PDF-`（只有 PDF 的投稿）；再看是不是 gzip；解开后第 257 字节处是不是 `ustar`，是就是 tar，不是就是单个 .tex。
 - 安全：处理 GNU 长文件名和 pax 头；挡掉 `..` 和绝对路径；只收普通文件；限制文件数和总大小（初始值：2,000 个文件、解开后 50 MB）。
-- 只留文本文件（.tex、.bbl、.sty、.cls、.bib 等），图片丢掉。Attention v7 包里 23 个文件，.tex 加起来约 80 KB。
+- 文本（.tex、.bbl、.sty、.cls、.bib 等）留在 `files`。常见图片按白名单留成二进制 `assets`：png、jpg、jpeg、gif、pdf、eps、svg。其他无法识别的二进制仍然跳过，记进 `skipped` 并写明原因。Attention v7 包 23 个普通文件：文本 11 个，图片 12 个（6 张 png、6 个 pdf）。文本大约 80 KB。
+- 每篇图片总量上限是 `MAX_ASSET_BYTES`，默认 30 MB（2026-10-13 02:34 Wisdom 决定）。超过上限的图片跳过，原因记为 `asset-budget`。
 - 实测：v7 解包加列文件 185 ms（node 首次运行），v1 41 ms。
 
 ### 2.4 LaTeX 解析（P3）
@@ -166,8 +167,8 @@ Attention v7 的解析数字（P3 测试要锁住）：独立公式 5、行内�
 
 ### 2.8 缓存
 
-- 第二次打开同一份 PDF 不再联网。库名、存什么、缓存键见「F2 决定」第 4 条（对齐用仓库已有的 `pdfByteHash`）。
-- 只存文本，Attention 约 80 KB/篇。不用 `chrome.storage.local`（没有 `unlimitedStorage` 时上限 10 MB）。
+- 第二次打开同一份 PDF 不再联网。库名和缓存键见「F2 决定」第 4 条（对齐用仓库已有的 `pdfByteHash`）。
+- 文字和图片都放进 `oi-arxiv-src`。图片用 Blob（或 ArrayBuffer）存，service worker 重启后文本和二进制都能读回来。默认的 `OI_ARXIV_SOURCE` 只回传文本，以及图片的 `path`、`mime`、`size`，不回传图片本身。`action: "asset"` 按 `path` 取一张。`clear()` 同时清掉图片，`meta:politeness` 仍保留。不用 `chrome.storage.local`（没有 `unlimitedStorage` 时上限 10 MB）。图片总量上限 30 MB，见 2.3。
 - 设置里给「清除 arXiv 源码缓存」。
 - 不传到本地库服务（`127.0.0.1:8765`），不上传，不进仓库（决定 9）。
 - 读写缓存都在 `background/` 里（见 2.2）。
@@ -193,7 +194,7 @@ Attention v7 的解析数字（P3 测试要锁住）：独立公式 5、行内�
 | --- | --- | --- | --- |
 | **P0 文档** | 已合入 #98 | 本文、REQUIREMENTS（§2.1、§2.7 和相关各节）、ARCHITECTURE、EXECUTION 阶段 7 | 无代码；全量测试保持全绿、0 skipped |
 | **P1 认编号** | 完成（#124） | `lib/arxiv-id.js`：从网址和页边竖排戳取编号和版本（戳只看第 1 页是初始值，待确认）。纯函数，不联网 | PDF 夹具 → `1706.03762` + `v7`；参考文献里的 `1607.06450` 等不能被选中；网址不带版本时以戳为准；网址和戳冲突时以戳为准；没有戳、也不是 arxiv.org 网址 → 无编号；旧式编号 `hep-th/9711200` 能认 |
-| **P2 下载和解包** | 完成（#124） | `background/` 里的下载和缓存（用户触发才下、限速、超时、403 / 429 冷却、IndexedDB、设置里清除，数字按初始值）；`lib/arxiv-src-unpack.js` 纯函数（`%PDF-` / gzip / tar 判断、ustar 读取、限大小、挡 `..`、只留文本文件）；阅读器和 service worker 之间的消息 | 测试里现场生成小 tar.gz、单文件 gz、假 PDF、带 `..` 的包、超大包，不碰网络；限速和冷却用假时钟、假 fetch 测。夹具：v7 包 23 个文件、主文件 `ms.tex`；v1 包 21 个文件 |
+| **P2 下载和解包** | 完成（#124） | `background/` 里的下载和缓存（用户触发才下、限速、超时、403 / 429 冷却、IndexedDB、设置里清除，数字按初始值）；`lib/arxiv-src-unpack.js` 纯函数（`%PDF-` / gzip / tar 判断、ustar 读取、限大小、挡 `..`、文本进 `files`、图片进 `assets`）；阅读器和 service worker 之间的消息 | 测试里现场生成小 tar.gz、单文件 gz、假 PDF、带 `..` 的包、超大包，不碰网络；限速和冷却用假时钟、假 fetch 测。夹具：v7 包 23 个文件、主文件 `ms.tex`；v1 包 21 个文件 |
 | **P3 LaTeX 解析** | 完成（#124） | `lib/latex-units.js`：主文件、`\input`、注释、宏展开、单元切分、章节 / 图表 / 公式编号、`.bbl`、去掉正文里的宏定义、`\label` / `\tag` 处理 | 手写小 tex 片段的单元测试（被注释掉的 `\input` 不能进来）；夹具：独立公式 5、行内公式 98（正文 87，题注和脚注 11）、章节标题 25、宏 16；KaTeX 渲染 5/5、98/98 |
 | **P4 对齐和核对** | 完成（#124） | `lib/source-align.js`：锚点 + 分段动态规划（内存有上限）、第二遍浮动体、公式定位、字符集核对（和第二层共用映射表）、编号核对、每个单元的把握 | v7 包：要翻译的块 ≥104/108 达 90%；独立公式 5/5 定位、字符一致、编号一致；正文行内公式（共 87 个）找到位置 ≥85/87、字符一致 ≥83/87。v1 包：MultiHead 必须核对不过，多出的 `equation*` 不能上屏，要翻译的词约 89.8%。离线检查报告能列出 §2.5 的三个 PDF 流程问题 |
 | **P5 接进阅读器** | 未做 | 右栏第零层：过关的公式用 KaTeX，没过的按 REQUIREMENTS §2.6 的运行时顺序走（多模态 → OCR API → 自研算法 → 矢量重绘 → 裁图 → 占位）；状态栏按钮和「以后自动」；状态栏一句总结；译文继续用 `⟦fN⟧` | `tests/pdf-viewer*.test.mjs` 加用例；headless Chrome 打开 Attention，量右栏 KaTeX 公式的个数和位置；离线、下载失败时退回 PDF 流程且不弹错；默认关闭时不发任何请求 |
@@ -244,7 +245,7 @@ P1–P4 不碰右栏，可以和第一层、第三层并行。**P0 文档已合�
 | 6 | 版本对不上或不知道 | 下最新版，靠逐单元核对把关 | 有戳就下戳上的版本 |
 | 7 | 出版社 PDF 要不要反查 | 第一版不做，只认 PDF 上的 arXiv 戳和 arxiv.org 网址 | 戳只看第 1 页、旋转过、贴页边的文字项；网址和戳冲突时以戳为准；参考文献里的编号不算；按题名反查放到 P6，默认关 |
 | 8 | 用哪种来源 | 只用 e-print 源码包 | arXiv HTML 放到 P6 再比较 |
-| 9 | 缓存 | 只存文本文件（约 80 KB/篇），设置里能清除，不传到本地库服务。库名和键见「F2 决定」第 4 条 | 读写都在 `background/` |
+| 9 | 缓存 | 文字和图片都保留，设置里能清除，不传到本地库服务。库名、体积上限和 `asset` 接口见「F2 决定」第 4 条 | 读写都在 `background/` |
 | 10 | 源码包当测试夹具 | 同意：`tests/fixtures/arxiv-src/1706.03762v7.tar.gz`，再加一个 v1 包，永不提交（选项原文还写了「夹具不在时测试跳过」） | 为守住「默认全量 0 skipped」，细化为：夹具不在时测试**失败**并提示怎么取；联网测试放在 `tests/*.test.mjs` 匹配之外，单独命令跑；P2 先在 `.gitignore` 加 `tests/fixtures/arxiv-src/` |
 | 11 | 什么时候做 | 现在就开始 P0–P4（不碰右栏，可以和第一层、第三层并行），P5 等右栏规格；前提是 P0 的原则修改先批；每个 PR 由 Anvil 用 Attention 实测、Wisdom 批准后才合入（23:52 确认分工时一并确认）。F2 的提交方式和范围见「F2 决定」第 1、2 条（23:52 原话是「分批派云端」） | — |
 | 12 | 可复制 LaTeX | 第一版仍然不做；写进后续计划，标重要 | 排在 P6，做之前要改 REQUIREMENTS §2.3 |
@@ -255,9 +256,9 @@ P1–P4 不碰右栏，可以和第一层、第三层并行。**P0 文档已合�
 
 ## F2 决定
 
-日期：2026-10-13 00:25。Wisdom 确认下面四条，#124（P1–P4）按此实现。P5 不在 #124。
+日期：2026-10-13 00:25。Wisdom 确认下面四条，#124（P1–P4）按此实现。P5 不在 #124。2026-10-13 02:34 修订第 4 条：文字和图片都保留。
 
 1. **一个 PR，四个提交。** 顺序是 P1 → P2 → P3 → P4，合在 `feat/arxiv-source-p1-p4` 对 `main` 的 #124 里。不 force push。
 2. **不接 arXiv metadata / BibTeX API。** 编号只认第 1 页戳和 arxiv.org 网址。不按题名或 DOI 反查，不拉 BibTeX。元数据和 BibTeX 留到 F4/F8。
 3. **整篇不用源码的门槛。** 要翻译的正文词（第一遍，不含题注）对齐率低于 85% 时，`useSource` 为 false，整篇公式不走第零层，状态栏写「源码与此 PDF 差别较大」。题注、脚注、作者走第二遍，计入块比例，不计入这条词率。Attention v1 对 PDF v7 的正文词率约 89.9%，高于 85%，整篇仍可用，靠逐条核对挡版本差。
-4. **源码缓存单独一个库。** IndexedDB 库名 `oi-arxiv-src`，和 `oi-annotations` 分开。只存文本。源码按「编号 + 版本」存；对齐结果的键是编号 + 版本 + PDF sha256。
+4. **源码缓存单独一个库。** IndexedDB 库名 `oi-arxiv-src`，和 `oi-annotations` 分开。文字和图片都保留（2026-10-13 02:34）。图片白名单是 png、jpg、jpeg、gif、pdf、eps、svg，按二进制存；其他无法识别的二进制仍跳过并写明原因。每篇图片总量上限 `MAX_ASSET_BYTES`，默认 30 MB，超过的图片跳过。源码按「编号 + 版本」存；对齐结果的键是编号 + 版本 + PDF sha256。`OI_ARXIV_SOURCE` 默认只回传文本和图片元数据（`path`、`mime`、`size`）；`action: "asset"` 按 path 取单张图片。

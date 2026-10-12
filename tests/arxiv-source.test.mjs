@@ -137,7 +137,7 @@ test("AX-09 cooldown blocks every id for 24h", async () => {
   assert.equal(calls.length, 2);
 });
 
-test("AX-10 cache hit, clear, and text-only storage", async () => {
+test("AX-10 cache hit, clear, and cached figures", async () => {
   const calls = [];
   const clock = makeClock();
   clock.t = 10000;
@@ -155,10 +155,17 @@ test("AX-10 cache hit, clear, and text-only storage", async () => {
   const first = await api.get({ id: "1706.03762", version: "v7", userTriggered: true });
   assert.equal(first.ok, true);
   assert.deepEqual(first.files, [{ path: "note.tex", text: "alpha" }]);
+  assert.deepEqual(first.assets, [{ path: "pic.png", mime: "image/png", size: 3 }]);
+  const picture = await api.readAsset({ id: "1706.03762", version: "v7", path: "pic.png" });
+  assert.equal(picture.ok, true);
+  assert.equal(new TextDecoder().decode(new Uint8Array(await picture.bytes.arrayBuffer())), "png");
   const second = await api.get({ id: "1706.03762", version: "v7", userTriggered: true });
   assert.equal(second.cached, true);
+  assert.deepEqual(second.assets, first.assets);
   assert.equal(calls.length, 1);
   await api.clear();
+  const gone = await api.readAsset({ id: "1706.03762", version: "v7", path: "pic.png" });
+  assert.equal(gone.ok, false);
   const third = await api.get({ id: "1706.03762", version: "v7", userTriggered: true });
   assert.equal(third.cached, false);
   assert.equal(calls.length, 2);
@@ -214,6 +221,60 @@ test("cooldown still blocks after the client is rebuilt on the same store", asyn
   assert.deepEqual(calls, [0]);
   assert.equal(second.status().coolingDown, true);
   assert.equal(second.status().cooldownUntil, saved.cooldownUntil);
+});
+
+test("a rebuilt client reads a cached figure, and asset returns one path", async () => {
+  const calls = [];
+  const clock = makeClock();
+  const store = createMemoryStore();
+  const first = createArxivSourceClient({
+    fetch: okFetch(tarGz([
+      { name: "note.tex", body: "alpha" },
+      { name: "pic.png", body: "png-bytes" },
+      { name: "fig.pdf", body: "%PDF" }
+    ]), calls),
+    now: () => clock.t,
+    sleep: (ms) => clock.sleep(ms),
+    store,
+    gunzip
+  });
+  const saved = await first.get({ id: "1706.03762", version: "v7", userTriggered: true });
+  assert.deepEqual(saved.assets, [
+    { path: "pic.png", mime: "image/png", size: 9 },
+    { path: "fig.pdf", mime: "application/pdf", size: 4 }
+  ]);
+  assert.equal(saved.assets.every((asset) => !("bytes" in asset)), true);
+  const second = createArxivSourceClient({
+    fetch: async () => {
+      calls.push("rebuilt");
+      return { status: 500, arrayBuffer: async () => new ArrayBuffer(0) };
+    },
+    now: () => clock.t,
+    sleep: (ms) => clock.sleep(ms),
+    store,
+    gunzip
+  });
+  const again = await second.get({ id: "1706.03762", version: "v7", userTriggered: true });
+  assert.equal(again.cached, true);
+  assert.deepEqual(again.files, [{ path: "note.tex", text: "alpha" }]);
+  assert.deepEqual(again.assets, saved.assets);
+  const one = await handleArxivSourceMessage({
+    action: "asset",
+    id: "1706.03762",
+    version: "v7",
+    path: "pic.png"
+  }, second);
+  assert.equal(one.ok, true);
+  assert.equal(one.mime, "image/png");
+  assert.equal(new TextDecoder().decode(new Uint8Array(await one.bytes.arrayBuffer())), "png-bytes");
+  const missing = await handleArxivSourceMessage({
+    action: "asset",
+    id: "1706.03762",
+    version: "v7",
+    path: "other.png"
+  }, second);
+  assert.equal(missing.reason, "missing");
+  assert.deepEqual(calls, ["https://arxiv.org/src/1706.03762v7"]);
 });
 
 test("AX-12 a PDF response is cached and not fetched again", async () => {

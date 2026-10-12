@@ -2,7 +2,7 @@ import "./helpers/block-live-fetch.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { unpackSource } from "../lib/arxiv-src-unpack.js";
+import { MAX_ASSET_BYTES, unpackSource } from "../lib/arxiv-src-unpack.js";
 import { paxRecord, tarGz } from "./helpers/arxiv-pack.mjs";
 import { SRC_V1, SRC_V1_SHA, SRC_V7, SRC_V7_SHA, loadSource } from "./helpers/arxiv-paper.mjs";
 
@@ -71,6 +71,10 @@ test("AX-06 long names, pax headers, and Attention archives", async () => {
   const v7 = await loadSource(SRC_V7, SRC_V7_SHA, "从 https://arxiv.org/src/1706.03762v7 下载到 tests/fixtures/arxiv-src/。");
   assert.equal(v7.kind, "tar");
   assert.equal(v7.regularFileCount, 23);
+  assert.equal(v7.files.length, 11);
+  assert.equal(v7.assets.length, 12);
+  assert.equal(v7.assets.filter((asset) => asset.path.toLowerCase().endsWith(".png")).length, 6);
+  assert.equal(v7.assets.filter((asset) => asset.path.toLowerCase().endsWith(".pdf")).length, 6);
   const main = v7.files.find((file) => file.path === "ms.tex");
   assert.ok(main);
   assert.match(main.text, /\\documentclass/);
@@ -80,4 +84,20 @@ test("AX-06 long names, pax headers, and Attention archives", async () => {
   const v1 = await loadSource(SRC_V1, SRC_V1_SHA, "从 https://arxiv.org/src/1706.03762v1 下载到 tests/fixtures/arxiv-src/。");
   assert.equal(v1.kind, "tar");
   assert.equal(v1.regularFileCount, 21);
+});
+
+test("images over the per-paper budget are skipped, other binaries stay unsupported", async () => {
+  assert.equal(MAX_ASSET_BYTES, 30 * 1024 * 1024);
+  const unpacked = await unpackSource(tarGz([
+    { name: "keep.png", body: "123" },
+    { name: "big.png", body: "123456" },
+    { name: "mystery.bin", body: "zzz" },
+    { name: "note.tex", body: "t" }
+  ]), { gunzip, maxAssetBytes: 4 });
+  assert.deepEqual(unpacked.files.map((file) => file.path), ["note.tex"]);
+  assert.deepEqual(unpacked.assets.map((asset) => asset.path), ["keep.png"]);
+  assert.equal(unpacked.assets[0].mime, "image/png");
+  assert.equal(unpacked.assets[0].bytes.byteLength, 3);
+  assert.ok(unpacked.skipped.some((row) => row.path === "big.png" && row.reason === "asset-budget"));
+  assert.ok(unpacked.skipped.some((row) => row.path === "mystery.bin" && row.reason === "unsupported"));
 });

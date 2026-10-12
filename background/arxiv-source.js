@@ -93,6 +93,35 @@ function textOnly(files) {
   }));
 }
 
+function byteSize(bytes) {
+  if (!bytes) return 0;
+  if (typeof bytes.size === "number") return bytes.size;
+  if (typeof bytes.byteLength === "number") return bytes.byteLength;
+  return 0;
+}
+
+function asBlob(bytes, mime) {
+  if (bytes instanceof Blob) return bytes;
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  return new Blob([data], { type: mime || "application/octet-stream" });
+}
+
+function storeAssets(assets) {
+  return (assets || []).map((asset) => ({
+    path: String(asset.path || ""),
+    mime: String(asset.mime || ""),
+    bytes: asBlob(asset.bytes, asset.mime)
+  }));
+}
+
+function assetMeta(assets) {
+  return (assets || []).map((asset) => ({
+    path: String(asset.path || ""),
+    mime: String(asset.mime || ""),
+    size: byteSize(asset.bytes)
+  }));
+}
+
 export async function gunzipBytes(bytes) {
   if (typeof DecompressionStream !== "function") {
     throw new Error("gunzipBytes requires DecompressionStream; inject gunzip in tests");
@@ -197,7 +226,7 @@ export function createArxivSourceClient({
       const buffer = new Uint8Array(await response.arrayBuffer());
       const unpacked = await unpackSource(buffer, { gunzip: inflate });
       if (unpacked.kind === "pdf-only") {
-        return { ok: false, reason: "pdf-only", files: [] };
+        return { ok: false, reason: "pdf-only", files: [], assets: [] };
       }
       if (unpacked.kind === "rejected") {
         return { ok: false, reason: unpacked.reason || "unpack" };
@@ -205,6 +234,7 @@ export function createArxivSourceClient({
       return {
         ok: true,
         files: textOnly(unpacked.files),
+        assets: storeAssets(unpacked.assets),
         kind: unpacked.kind,
         regularFileCount: unpacked.regularFileCount
       };
@@ -238,6 +268,7 @@ export function createArxivSourceClient({
         ok: cached.reason !== "pdf-only",
         reason: cached.reason || undefined,
         files: cached.files || [],
+        assets: assetMeta(cached.assets),
         cached: true,
         id,
         version: version || null
@@ -254,8 +285,8 @@ export function createArxivSourceClient({
       return { ok: false, reason, id, version: version || null };
     }
     if (outcome.reason === "pdf-only") {
-      await cache.put(key, { reason: "pdf-only", files: [], id, version: version || null });
-      return { ok: false, reason: "pdf-only", files: [], cached: true, id, version: version || null };
+      await cache.put(key, { reason: "pdf-only", files: [], assets: [], id, version: version || null });
+      return { ok: false, reason: "pdf-only", files: [], assets: [], cached: true, id, version: version || null };
     }
     if (!outcome.ok) {
       if (outcome.reason === "timeout" || outcome.reason === "http" || outcome.reason === "unpack" || outcome.reason === "error") {
@@ -263,16 +294,36 @@ export function createArxivSourceClient({
       }
       return { ok: false, reason: outcome.reason || "error", id, version: version || null };
     }
+    const assets = storeAssets(outcome.assets);
     await cache.put(key, {
       files: textOnly(outcome.files),
+      assets,
       id,
       version: version || null
     });
-    return { ok: true, files: textOnly(outcome.files), id, version: version || null, cached: false };
+    return {
+      ok: true,
+      files: textOnly(outcome.files),
+      assets: assetMeta(assets),
+      id,
+      version: version || null,
+      cached: false
+    };
   }
 
-  // clear() drops cached source text and the alignment cache together.
-  // The persisted 403/429 cooldown stays, so a clear cannot resume requests early.
+  async function readAsset(request = {}) {
+    const id = String(request.id || "").trim();
+    const version = request.version ? String(request.version) : "";
+    const path = String(request.path || "");
+    if (!id || !path) return { ok: false, reason: "missing-id" };
+    const row = await cache.get(sourceCacheKey(id, version));
+    const asset = (row?.assets || []).find((item) => item.path === path);
+    if (!asset) return { ok: false, reason: "missing" };
+    return { ok: true, path: asset.path, mime: asset.mime, bytes: asset.bytes };
+  }
+
+  // clear() drops cached source text, figure bytes, and the alignment cache.
+  // The persisted 403/429 cooldown (meta:politeness) stays.
   async function clear() {
     const keys = await cache.keys();
     for (const key of keys || []) {
@@ -309,7 +360,7 @@ export function createArxivSourceClient({
     return { ok: true };
   }
 
-  return { get, clear, status, readAlignment, saveAlignment, ready: ensurePoliteness };
+  return { get, clear, status, readAsset, readAlignment, saveAlignment, ready: ensurePoliteness };
 }
 
 let singleton = null;
@@ -330,6 +381,7 @@ export function handleArxivSourceMessage(message = {}, client = sharedArxivSourc
   if (message.action === "status") {
     return Promise.resolve(typeof client.ready === "function" ? client.ready() : null).then(() => client.status());
   }
+  if (message.action === "asset") return client.readAsset(message);
   if (message.action === "read-alignment") {
     return client.readAlignment(message);
   }
