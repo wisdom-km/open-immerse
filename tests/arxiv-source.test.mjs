@@ -1,3 +1,4 @@
+import "./helpers/block-live-fetch.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -171,8 +172,48 @@ test("AX-11 a message without userTriggered does not fetch", async () => {
   assert.equal(quiet.reason, "not-triggered");
   assert.equal(calls.length, 0);
   assert.match(sw, /case "OI_ARXIV_SOURCE":/);
-  assert.match(sw, /import\("\.\/arxiv-source\.js"\)/);
-  assert.equal(sw.includes('from "./arxiv-source.js"'), false);
+  assert.match(sw, /import \{ handleArxivSourceMessage \} from "\.\/arxiv-source\.js";/);
+  assert.match(sw, /return handleArxivSourceMessage\(message\);/);
+  assert.equal(/\bimport\s*\(/.test(sw), false);
+});
+
+test("cooldown still blocks after the client is rebuilt on the same store", async () => {
+  const calls = [];
+  const clock = makeClock();
+  const store = createMemoryStore();
+  const first = createArxivSourceClient({
+    fetch: async () => {
+      calls.push(clock.t);
+      return { status: 429, arrayBuffer: async () => new ArrayBuffer(0) };
+    },
+    now: () => clock.t,
+    sleep: (ms) => clock.sleep(ms),
+    store,
+    gunzip
+  });
+  const blocked = await first.get({ id: "1706.03762", userTriggered: true });
+  assert.equal(blocked.reason, "cooldown");
+  const saved = await store.get("meta:politeness");
+  assert.equal(saved.cooldownUntil, clock.t + COOLDOWN_MS);
+  assert.equal(saved.lastStart, clock.t);
+  const second = createArxivSourceClient({
+    fetch: async () => {
+      calls.push("rebuilt");
+      return { status: 200, arrayBuffer: async () => tarGz([{ name: "a.tex", body: "x" }]) };
+    },
+    now: () => clock.t,
+    sleep: (ms) => clock.sleep(ms),
+    store,
+    gunzip
+  });
+  const reported = await handleArxivSourceMessage({ action: "status" }, second);
+  assert.equal(reported.coolingDown, true);
+  assert.equal(reported.cooldownUntil, saved.cooldownUntil);
+  const again = await second.get({ id: "9999.00001", userTriggered: true });
+  assert.equal(again.reason, "cooldown");
+  assert.deepEqual(calls, [0]);
+  assert.equal(second.status().coolingDown, true);
+  assert.equal(second.status().cooldownUntil, saved.cooldownUntil);
 });
 
 test("AX-12 a PDF response is cached and not fetched again", async () => {

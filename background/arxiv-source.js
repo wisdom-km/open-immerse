@@ -6,6 +6,7 @@ export const ARXIV_DB = "oi-arxiv-src";
 export const MIN_GAP_MS = 3000;
 export const TIMEOUT_MS = 20000;
 export const COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const POLITENESS_KEY = "meta:politeness";
 
 export function sourceCacheKey(id, version) {
   return `src:${id}${version ? `@${version}` : "@latest"}`;
@@ -93,12 +94,11 @@ function textOnly(files) {
 }
 
 export async function gunzipBytes(bytes) {
-  if (typeof DecompressionStream === "function") {
-    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("gunzipBytes requires DecompressionStream; inject gunzip in tests");
   }
-  const { gunzipSync } = await import("node:zlib");
-  return new Uint8Array(gunzipSync(bytes));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 function srcUrl(id, version) {
@@ -123,6 +123,28 @@ export function createArxivSourceClient({
   let lastStart = null;
   let cooldownUntil = 0;
   let active = 0;
+  let politenessLoaded = null;
+
+  function applyPoliteness(row) {
+    if (!row || typeof row !== "object") return;
+    if (Number.isFinite(row.cooldownUntil) && row.cooldownUntil > cooldownUntil) {
+      cooldownUntil = row.cooldownUntil;
+    }
+    if (Number.isFinite(row.lastStart) && (lastStart == null || row.lastStart > lastStart)) {
+      lastStart = row.lastStart;
+    }
+  }
+
+  function ensurePoliteness() {
+    if (!politenessLoaded) {
+      politenessLoaded = cache.get(POLITENESS_KEY).then(applyPoliteness, () => {});
+    }
+    return politenessLoaded;
+  }
+
+  function rememberPoliteness() {
+    return cache.put(POLITENESS_KEY, { cooldownUntil, lastStart });
+  }
 
   function enqueue(fn) {
     const run = chain.then(fn, fn);
@@ -131,9 +153,11 @@ export function createArxivSourceClient({
   }
 
   async function fetchOne(url) {
+    await ensurePoliteness();
     const gap = lastStart == null ? 0 : MIN_GAP_MS - (clock() - lastStart);
     if (gap > 0) await wait(gap);
     lastStart = clock();
+    await rememberPoliteness();
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     const timeout = wait(TIMEOUT_MS).then(() => {
       try { controller?.abort(); } catch { /* already finished */ }
@@ -164,6 +188,7 @@ export function createArxivSourceClient({
       const status = Number(response?.status || 0);
       if (status === 403 || status === 429) {
         cooldownUntil = clock() + COOLDOWN_MS;
+        await rememberPoliteness();
         return { ok: false, reason: "cooldown", status };
       }
       if (status && status >= 400) {
@@ -206,6 +231,7 @@ export function createArxivSourceClient({
   }
 
   async function runGet(id, version, key) {
+    await ensurePoliteness();
     const cached = await cache.get(key);
     if (cached) {
       return {
@@ -245,8 +271,14 @@ export function createArxivSourceClient({
     return { ok: true, files: textOnly(outcome.files), id, version: version || null, cached: false };
   }
 
+  // clear() drops cached source text and the alignment cache together.
+  // The persisted 403/429 cooldown stays, so a clear cannot resume requests early.
   async function clear() {
-    await cache.clear();
+    const keys = await cache.keys();
+    for (const key of keys || []) {
+      if (key === POLITENESS_KEY) continue;
+      await cache.delete(key);
+    }
     sessionFailed.clear();
     return { ok: true };
   }
@@ -277,7 +309,7 @@ export function createArxivSourceClient({
     return { ok: true };
   }
 
-  return { get, clear, status, readAlignment, saveAlignment };
+  return { get, clear, status, readAlignment, saveAlignment, ready: ensurePoliteness };
 }
 
 let singleton = null;
@@ -295,7 +327,9 @@ export function sharedArxivSourceClient() {
 
 export function handleArxivSourceMessage(message = {}, client = sharedArxivSourceClient()) {
   if (message.action === "clear") return client.clear();
-  if (message.action === "status") return client.status();
+  if (message.action === "status") {
+    return Promise.resolve(typeof client.ready === "function" ? client.ready() : null).then(() => client.status());
+  }
   if (message.action === "read-alignment") {
     return client.readAlignment(message);
   }

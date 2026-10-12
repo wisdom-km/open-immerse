@@ -1,3 +1,4 @@
+import "./helpers/block-live-fetch.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gunzipSync, gzipSync } from "node:zlib";
