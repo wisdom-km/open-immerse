@@ -72,7 +72,7 @@
 6. （已完成）文档修正：docs/v1-m1-labels.md 已改为 7e10df3（PR #86）；对应测试断言在 PR #88 同步修正。
 7. **D0（待 F3 公式回退链的代码 PR 一起改）**。2026-10-13 00:02 Wisdom 定：公式采用 LaTeX 渲染。arXiv 源码用 KaTeX 渲染；多模态和 OCR 的结果也渲染成 LaTeX 上屏，判不出时退回裁图。README.md（第 9、25、155、323 行附近）、README.en.md 的对应英文句、CONTRIBUTING.md 第 17 行写的「公式画面不来自 LaTeX 渲染」是旧说法。`tests/pdf-readout.test.mjs` 第 239、246、261 行锁了这句。README、CONTRIBUTING 和这几条断言待 F3 的代码 PR 一起改。这次纯文档 PR 不改它们。
 
-8. **F9**。另开 PR 实现公式的 OCR API 接入（2026-10-05 01:12 你要求：运行时排在多模态之后、自研算法之前）。用哪家 OCR API 待定。路线图 v2 决定 4（2026-10-12 23:52）：多模态（F7）先做并抽出共用核对模块，OCR 排在 F9；厂商在 F7 期间选定。开关、费用和隐私说明、字符核对等细节是文档细化，待确认，见 `pdf/high-precision/REQUIREMENTS.md` §2.6「OCR API 层」。
+8. **F9**。另开 PR 实现公式的 OCR API 接入（2026-10-05 01:12 你要求：运行时排在多模态之后、自研算法之前）。厂商已定：OCR 为智谱和百度，多模态为 OpenAI、Gemini、DeepSeek、豆包、Kimi、Grok（支持的厂商用 OpenAI 兼容格式，Gemini 单独写适配，另加自定义兼容端点；不能读图的标「暂不可用」）。实际接入状态随 F7/F9 更新。路线图 v2 决定 4（2026-10-12 23:52）：多模态（F7）先做并抽出共用核对模块，OCR 排在 F9。开关、费用和隐私说明、字符核对等细节是文档细化，待确认，见 `pdf/high-precision/REQUIREMENTS.md` §2.6「OCR API 层」。
 
 ## 四、已知风险（仅供知悉，已排进计划）
 
@@ -151,7 +151,7 @@
 
 - **可复制源码 LaTeX（重要）**：arXiv 源码模式第一版不做（2026-10-04 你的第 12 条决定）。有了第零层以后很容易做：过了核对的公式可以复制作者原稿里的 LaTeX。排在 P6，做之前要改 REQUIREMENTS §2.3「可复制 LaTeX 不做」。见 `docs/arxiv-source-mode.md` 第 3 节。
 - arXiv 源码模式 P6 的其他项：用源码修结构（补被吞的标题和词、改错标的题注）、出版社 PDF 按题名反查 arXiv（默认关）、arXiv HTML 作备用来源。等 P1–P5 的数据再定。
-- **ArXivHub 备忘，待融合（Wisdom 2026-10-12）。顺序见路线图 v2**（`docs/ui-phase2-plan.md`）。见 [`docs/research-arxivhub.md`](research-arxivhub.md)。它是链接导航站，不是阅读器。可借的是编号识别、元数据和 BibTeX（归 F2）、KaTeX 安全渲染、外部请求的超时、缓存、去重和退避；「在…中打开」和引用次数排在打磨池之后的「以后」。不抄第三方代理。
+- **ArXivHub 备忘，待融合（Wisdom 2026-10-12）。顺序见路线图 v2**（`docs/ui-phase2-plan.md`）。见 [`docs/research-arxivhub.md`](research-arxivhub.md)。它是链接导航站，不是阅读器。可借的是编号识别（归 F2）。F2 不做元数据 API（Wisdom 2026-10-13 00:25 决定），元数据和 BibTeX 留到文献库阶段（F4/F8）再做。另可借 KaTeX 安全渲染、外部请求的超时、缓存、去重和退避；「在…中打开」和引用次数排在打磨池之后的「以后」。不抄第三方代理。
 
 ## 九、#99 合入后推后
 
