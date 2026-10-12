@@ -195,6 +195,7 @@ import {
 } from "../lib/pdf-formula-size.js";
 import {
   READER_FONT_SIZES,
+  READER_FONT_TICKS,
   READER_THEME_LABELS,
   CAPSULE_END_BAND,
   CAPSULE_END_MIN,
@@ -204,6 +205,7 @@ import {
   CAPSULE_START_FLOOR,
   CAPSULE_START_RELAXED,
   applyReaderFontAction,
+  applyReaderFontSliderAction,
   capsuleLabel,
   capsulePlacement,
   capsuleSamplePages,
@@ -220,11 +222,20 @@ import {
   planReaderFlow,
   precompositeMultiplyPixels,
   readReaderPrefs,
+  readerFontAnchorTop,
+  readerFontBand,
+  readerFontCapHint,
+  readerFontRatio,
   readerFontShortcut,
+  readerFontSizeFromRatio,
+  readerFontValueText,
+  readerInlineCropEm,
+  readerLayoutFontCap,
   readerImageBlend,
   readerThemeAriaLabel,
   splitAriaModel,
   splitLayout,
+  syncReaderFontStorage,
   themePaperRgb,
   writeReaderPrefs
 } from "../lib/pdf-reader-flow.js";
@@ -295,6 +306,7 @@ let restoreGen = 0;
 let textGen = 0;
 let textLoadPage = 0;
 let navGen = 0;
+let pageNavDepth = 0;
 let navRevealPage = 0;
 let renderGen = 0;
 let pageItems = 0;
@@ -314,6 +326,7 @@ let autoAfterForce = false;
 let forceRetranslatePending = false;
 let libraryArticle = null;
 let libraryDoc = null;
+let libraryProbe = null;
 let titleStructure = null;
 const librarySourceSent = new Set();
 const enqueueLibraryWrite = createLibraryWriteQueue();
@@ -798,14 +811,14 @@ function applyReaderImageBlend(img) {
 
 function commitReaderFont(next) {
   if (next === readerPrefs.fontSize) return;
-  const anchor = captureReaderAnchor();
+  const anchor = captureFontAnchor();
   readerPrefs = { ...readerPrefs, fontSize: next };
   persistReaderPrefs();
   applyReaderSurface();
   renderArticle();
   layoutCapsule();
   applyPaperMetrics();
-  restoreReaderAnchor(anchor);
+  finishFontAnchor(anchor);
 }
 
 function applyReaderFontStep(action) {
@@ -832,14 +845,58 @@ function readerThemeRoots() {
   return [document.body, readerRootEl(), $("aaPanel")].filter(Boolean);
 }
 
+function readerShownFont() {
+  return Math.min(readerPrefs.fontSize, liveReaderFontCap());
+}
+
+function liveReaderFontCap() {
+  const pane = document.querySelector(".pane-translate");
+  const column = pane?.clientWidth || 0;
+  if (!(column > 0)) return READER_FONT_SIZES[READER_FONT_SIZES.length - 1];
+  const windowWidth = window.innerWidth || column;
+  const inBar = translateScrollRoot()?.dataset.capsuleMode === "bar" || windowWidth < 900;
+  return readerLayoutFontCap({ windowWidth, columnPx: column, capsuleInBar: inBar });
+}
+
+function readerHasBody() {
+  const flow = readerFlowEl();
+  return Boolean(flow?.querySelector(".rf-block, .oi-pdf-p, .oi-pdf-h1, .oi-pdf-h2, .oi-pdf-h3"));
+}
+
+function readerFontControlsDisabled() {
+  if (!pdfDoc) return true;
+  if (readerHasBody()) return false;
+  return pdfTranslateBusy(session);
+}
+
 function applyReaderSurface() {
-  const size = `${readerPrefs.fontSize}px`;
+  const shown = readerShownFont();
+  const size = `${shown}px`;
+  const band = readerFontBand(shown);
   for (const el of readerThemeRoots()) {
     el.dataset.readerTheme = readerPrefs.theme;
+    el.dataset.readerFsBand = band;
     el.style.setProperty("--oi-reader-font-size", size);
     el.style.setProperty("--oi-pdf-body-fs", size);
+    el.style.setProperty("--oi-reader-fs-num", String(shown));
+    if (readerInlineCropEm(shown) === 1.8) el.style.setProperty("--oi-pdf-inline-crop-em", "1.8em");
+    else el.style.removeProperty("--oi-pdf-inline-crop-em");
   }
   syncAaPanel();
+}
+
+let lastShownFont = 0;
+
+function refreshReaderFontCap() {
+  const next = readerShownFont();
+  const changed = lastShownFont > 0 && next !== lastShownFont;
+  const anchor = changed ? captureFontAnchor() : null;
+  applyReaderSurface();
+  lastShownFont = readerShownFont();
+  if (!changed) return;
+  layoutCapsule({ keepAnchor: true });
+  applyPaperMetrics();
+  finishFontAnchor(anchor);
 }
 
 const CJK_CACHE_KEY = "oi.reader.cjk";
@@ -879,6 +936,8 @@ function initCjkMode() {
 function loadReaderPrefs() {
   try {
     readerPrefs = readReaderPrefs(localStorage);
+    const snapped = syncReaderFontStorage(localStorage);
+    if (snapped !== readerPrefs.fontSize) readerPrefs = { ...readerPrefs, fontSize: snapped };
   } catch {
     readerPrefs = readReaderPrefs(null);
   }
@@ -894,19 +953,53 @@ function loadReaderPrefs() {
 }
 
 function syncAaPanel() {
-  const value = $("aaFontValue");
-  if (value) value.textContent = `${readerPrefs.fontSize}px`;
-  const down = $("aaFontDown");
-  const up = $("aaFontUp");
-  const reset = $("aaFontDefault");
-  if (down) down.disabled = readerPrefs.fontSize <= READER_FONT_SIZES[0];
-  if (up) up.disabled = readerPrefs.fontSize >= READER_FONT_SIZES[READER_FONT_SIZES.length - 1];
-  if (reset) reset.disabled = readerPrefs.fontSize === 16;
-  document.querySelectorAll("#aaFontScale [data-size]").forEach((tick) => {
-    const on = Number(tick.dataset.size) === readerPrefs.fontSize;
-    tick.setAttribute("aria-checked", on ? "true" : "false");
-    tick.tabIndex = on ? 0 : -1;
+  const setting = readerPrefs.fontSize;
+  const shown = readerShownFont();
+  const capped = shown < setting;
+  const hasBody = readerHasBody();
+  const mode = currentSourceMode();
+  const hint = readerFontCapHint({
+    cap: liveReaderFontCap(),
+    setting,
+    mode,
+    hasBody
   });
+  const value = $("aaFontValue");
+  if (value) {
+    value.replaceChildren();
+    value.append(document.createTextNode(`${setting} px`));
+    if (capped && hasBody) {
+      const mark = document.createElement("span");
+      mark.className = "aa-font-capped";
+      mark.textContent = ` → ${shown}`;
+      value.append(mark);
+    }
+  }
+  const reset = $("aaFontDefault");
+  if (reset) reset.disabled = setting === 16;
+  const slider = $("aaFontScale");
+  const disabled = readerFontControlsDisabled();
+  const group = $("aaFontGroup");
+  if (group) group.setAttribute("aria-disabled", disabled ? "true" : "false");
+  if (slider) {
+    const ratio = readerFontRatio(setting);
+    slider.setAttribute("aria-valuenow", String(setting));
+    slider.setAttribute("aria-valuetext", hint ? hint.valuetext : readerFontValueText(setting));
+    slider.setAttribute("aria-disabled", disabled ? "true" : "false");
+    slider.tabIndex = disabled ? -1 : 0;
+    const fill = $("aaFontFill");
+    const thumb = $("aaFontThumb");
+    if (fill) fill.style.width = `${ratio * 100}%`;
+    if (thumb) thumb.style.left = `${ratio * 100}%`;
+  }
+  const cap = $("aaFontCap");
+  const capText = $("aaFontCapText");
+  const hide = $("aaFontHideSource");
+  if (cap && capText) {
+    cap.hidden = !hint;
+    capText.textContent = hint ? hint.text : "";
+    if (hide) hide.hidden = !hint?.hideSource;
+  }
   document.querySelectorAll("#aaThemes [data-theme]").forEach((swatch) => {
     const on = swatch.dataset.theme === readerPrefs.theme;
     swatch.setAttribute("aria-checked", on ? "true" : "false");
@@ -919,29 +1012,27 @@ function syncAaPanel() {
 }
 
 function buildAaScale() {
-  const scale = $("aaFontScale");
-  if (!scale || scale.childElementCount) return;
-  for (const size of READER_FONT_SIZES) {
-    const tick = document.createElement("button");
-    tick.type = "button";
-    tick.className = "aa-tick";
+  const ticks = $("aaFontTicks");
+  if (!ticks || ticks.childElementCount) return;
+  const last = READER_FONT_SIZES.length - 1;
+  for (const size of READER_FONT_TICKS) {
+    const index = READER_FONT_SIZES.indexOf(size);
+    const tick = document.createElement("span");
+    tick.className = "aa-slider-tick";
     tick.dataset.size = String(size);
-    tick.setAttribute("role", "radio");
-    tick.setAttribute("aria-checked", size === readerPrefs.fontSize ? "true" : "false");
-    tick.tabIndex = size === readerPrefs.fontSize ? 0 : -1;
-    const mark = document.createElement("span");
-    mark.className = "aa-tick-mark";
+    tick.style.left = `${(index / last) * 100}%`;
+    const mark = document.createElement("i");
     mark.setAttribute("aria-hidden", "true");
     const num = document.createElement("span");
     num.textContent = String(size);
     tick.append(mark, num);
     if (size === 16) {
-      const note = document.createElement("span");
-      note.className = "aa-tick-note";
-      note.textContent = "默认";
-      tick.append(note);
+      const dot = document.createElement("span");
+      dot.className = "aa-slider-default";
+      dot.setAttribute("aria-hidden", "true");
+      tick.append(dot);
     }
-    scale.append(tick);
+    ticks.append(tick);
   }
 }
 
@@ -993,14 +1084,109 @@ function closeAaPanel() {
 }
 
 function onAaFontScaleKey(event) {
-  const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
-  if (!keys.includes(event.key)) return;
+  const actions = {
+    ArrowLeft: "decrease",
+    ArrowDown: "decrease",
+    ArrowRight: "increase",
+    ArrowUp: "increase",
+    Home: "min",
+    End: "max",
+    PageUp: "tick-up",
+    PageDown: "tick-down"
+  };
+  const action = actions[event.key];
+  if (!action || readerFontControlsDisabled()) return;
   event.preventDefault();
-  const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
-  const index = READER_FONT_SIZES.indexOf(readerPrefs.fontSize);
-  const next = READER_FONT_SIZES[Math.min(READER_FONT_SIZES.length - 1, Math.max(0, index + delta))];
-  commitReaderFont(next);
-  $("aaFontScale")?.querySelector(`[data-size="${next}"]`)?.focus();
+  commitReaderFont(applyReaderFontSliderAction(readerPrefs.fontSize, action));
+}
+
+let fontDragFrame = 0;
+let fontDragSize = null;
+
+function queueReaderFont(size) {
+  fontDragSize = size;
+  if (fontDragFrame) return;
+  fontDragFrame = requestAnimationFrame(() => {
+    fontDragFrame = 0;
+    const next = fontDragSize;
+    fontDragSize = null;
+    if (next == null) return;
+    commitReaderFont(next);
+  });
+}
+
+function sliderFontRatio(event) {
+  const track = $("aaFontScale")?.querySelector(".aa-slider-track");
+  if (!track) return 0;
+  const box = track.getBoundingClientRect();
+  const width = box.width || 1;
+  return (event.clientX - box.left) / width;
+}
+
+function placeFontTip(ratio) {
+  const tip = $("aaFontTip");
+  const slider = $("aaFontScale");
+  const track = slider?.querySelector(".aa-slider-track");
+  if (!tip || !slider || !track) return;
+  const size = readerFontSizeFromRatio(ratio);
+  tip.hidden = false;
+  tip.textContent = String(size);
+  const box = track.getBoundingClientRect();
+  const host = slider.getBoundingClientRect();
+  const x = box.left + Math.min(1, Math.max(0, ratio)) * box.width - host.left;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${box.top - host.top - 6}px`;
+}
+
+function onAaFontPointerDown(event) {
+  const slider = $("aaFontScale");
+  if (!slider || readerFontControlsDisabled()) return;
+  if (event.button != null && event.button !== 0) return;
+  event.preventDefault();
+  slider.focus();
+  slider.classList.add("is-dragging");
+  slider.setPointerCapture?.(event.pointerId);
+  queueReaderFont(readerFontSizeFromRatio(sliderFontRatio(event)));
+}
+
+function onAaFontPointerMove(event) {
+  const slider = $("aaFontScale");
+  if (!slider || readerFontControlsDisabled()) return;
+  const ratio = sliderFontRatio(event);
+  if (slider.classList.contains("is-dragging")) {
+    queueReaderFont(readerFontSizeFromRatio(ratio));
+    return;
+  }
+  if (event.pointerType === "mouse") placeFontTip(ratio);
+}
+
+function onAaFontPointerUp(event) {
+  const slider = $("aaFontScale");
+  if (!slider?.classList.contains("is-dragging")) return;
+  slider.classList.remove("is-dragging");
+  if (slider.hasPointerCapture?.(event.pointerId)) slider.releasePointerCapture(event.pointerId);
+  const ratio = sliderFontRatio(event);
+  queueReaderFont(readerFontSizeFromRatio(ratio));
+}
+
+function hideFontTip() {
+  const tip = $("aaFontTip");
+  if (tip) tip.hidden = true;
+}
+
+function bindFontCapObserver() {
+  const pane = document.querySelector(".pane-translate");
+  let timer = 0;
+  const schedule = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      timer = 0;
+      refreshReaderFontCap();
+    }, 150);
+  };
+  if (pane && typeof ResizeObserver === "function") new ResizeObserver(schedule).observe(pane);
+  else window.addEventListener("resize", schedule);
+  requestAnimationFrame(() => refreshReaderFontCap());
 }
 
 function onAaThemeKey(event) {
@@ -1026,19 +1212,20 @@ function bindReaderChrome() {
     if (panel.hidden) openAaPanel();
     else closeAaPanel();
   });
-  $("aaFontDown")?.addEventListener("click", () => applyReaderFontStep("decrease"));
-  $("aaFontUp")?.addEventListener("click", () => applyReaderFontStep("increase"));
   $("aaFontDefault")?.addEventListener("click", () => {
     commitReaderFont(16);
   });
-  $("aaFontScale")?.addEventListener("click", (event) => {
-    const tick = event.target.closest?.("[data-size]");
-    if (!tick) return;
-    const size = Number(tick.dataset.size);
-    if (!READER_FONT_SIZES.includes(size)) return;
-    commitReaderFont(size);
+  $("aaFontHideSource")?.addEventListener("click", () => {
+    commitSourceMode("hidden");
   });
-  $("aaFontScale")?.addEventListener("keydown", onAaFontScaleKey);
+  const slider = $("aaFontScale");
+  slider?.addEventListener("keydown", onAaFontScaleKey);
+  slider?.addEventListener("pointerdown", onAaFontPointerDown);
+  slider?.addEventListener("pointermove", onAaFontPointerMove);
+  slider?.addEventListener("pointerup", onAaFontPointerUp);
+  slider?.addEventListener("pointercancel", onAaFontPointerUp);
+  slider?.addEventListener("pointerleave", hideFontTip);
+  bindFontCapObserver();
   $("aaThemes")?.addEventListener("click", (event) => {
     const swatch = event.target.closest?.("[data-theme]");
     if (!swatch) return;
@@ -1931,10 +2118,29 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
     paperHeight: paper.heightBase > 0 ? paper.heightBase : leftHeight,
     mirrorZoom: 1,
     devicePixelRatio: Math.max(1, Number(window.devicePixelRatio) || 1),
-    readerFontPx: readerPrefs.fontSize,
+    readerFontPx: readerShownFont(),
     sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
     columnPx: readerColumnPx()
   };
+}
+
+// pdf.js 4.10.38 continues a display render only on requestAnimationFrame.
+// If no frame arrives, page.render() never settles and open / goPage stay
+// there. The vendored build forces that flag off and continues each slice
+// on a 4ms timer (pdf/vendor/pdf.min.mjs). A 0ms timer is always due, so
+// a chain of slices runs before library probes and every other delayed
+// timer. 4ms stays ordered with those delays without stretching a
+// full-page raster past the reopen crop budget. RenderTask hides the
+// internal task behind a private field, so
+// this cannot be switched from here. window.requestAnimationFrame is not
+// replaced.
+// Only the sharp-crop page.render is recorded. A page canvas started while
+// that crop is awaited must stay on its own task, or the next crop cancels
+// the canvas.
+let formulaCropRenderTask = null;
+
+function renderPdfPage(page, params) {
+  return page.render(params);
 }
 
 /**
@@ -2003,7 +2209,13 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
     canvas.height = plan.pixelHeight;
     const context = formula ? formulaDrawContext(canvas) : canvas.getContext("2d", { alpha: false });
     if (!context) return "";
-    await page.render({ canvasContext: context, viewport }).promise;
+    const task = renderPdfPage(page, { canvasContext: context, viewport });
+    formulaCropRenderTask = task;
+    try {
+      await task.promise;
+    } finally {
+      if (formulaCropRenderTask === task) formulaCropRenderTask = null;
+    }
     if (formula) compositeWhitePaper(context, canvas);
     paintFormulaMask(canvas, block.bbox, block);
     if (!formula && !redrawKeepsInk(context, canvas, raster, block)) {
@@ -2108,6 +2320,13 @@ function formulaPageFraction(block) {
   return Math.min(1, fraction);
 }
 
+/** Readability floor and inline line cap follow the size on screen, not the stored setting. */
+function readerFormulaFloor(page) {
+  const layout = getPageLayout(page);
+  const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
+  return formulaReadabilityFloor(readerShownFont(), bodyPt);
+}
+
 function mountDisplayMath(node, block, img, page) {
   const row = document.createElement("div");
   row.className = "oi-pdf-math-row";
@@ -2121,13 +2340,13 @@ function mountDisplayMath(node, block, img, page) {
     row.classList.add("is-matched");
     row.style.setProperty("--oi-formula-h", matched.height);
     row.style.setProperty("--oi-formula-ar", matched.aspect);
+    stampDisplayFormulaScale(row, matched, page);
   } else {
     const pageFraction = formulaPageFraction(block);
     const layout = getPageLayout(page);
-    const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
     const width = pageFraction ? displayFormulaWidthCss(pageFraction, 0, {
       pageWidthPt: Number(layout?.pageWidth) || 0,
-      floor: formulaReadabilityFloor(readerPrefs.fontSize, bodyPt)
+      floor: readerFormulaFloor(page)
     }) : "";
     if (width) row.style.setProperty("--oi-formula-w", width);
   }
@@ -2149,11 +2368,12 @@ function mountDisplayMath(node, block, img, page) {
 }
 
 function appendCropOrNotice(node, block, imageClass, page) {
+  const shownPage = page ?? node.dataset.page;
   const img = cropImage(block);
   if (img) {
     img.className = imageClass || "oi-pdf-math-crop";
     if (block.label === "formula") {
-      mountDisplayMath(node, block, img, page ?? node.dataset.page);
+      mountDisplayMath(node, block, img, shownPage);
       return;
     }
     if ((block.label === "figure" || block.label === "table") && block.surface === "redraw" && block.assetCapPx > 0) {
@@ -2162,17 +2382,95 @@ function appendCropOrNotice(node, block, imageClass, page) {
     }
     const pageFraction = displayCropColumnFraction(block);
     if (pageFraction) {
-      const layout = getPageLayout(page ?? node.dataset.page);
-      const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
+      const layout = getPageLayout(shownPage);
       img.style.width = displayFormulaWidthCss(pageFraction, Number(block.bbox[3]) - Number(block.bbox[1]), {
         pageWidthPt: Number(layout?.pageWidth) || 0,
-        floor: formulaReadabilityFloor(readerPrefs.fontSize, bodyPt)
+        floor: readerFormulaFloor(page ?? node.dataset.page)
       });
     }
+    if (block.label === "figure" || block.label === "table") noteAssetPaint("image", block, shownPage);
     node.append(img);
     return;
   }
-  node.append(visualCropNotice(block, page));
+  if (visualCropStillPending(block, shownPage)) {
+    node.append(visualCropPendingBox(block, shownPage));
+    return;
+  }
+  const notice = visualCropNotice(block, shownPage);
+  if (notice?.classList?.contains("oi-pdf-asset-fallback")) noteAssetPaint("fallback", block, shownPage);
+  node.append(notice);
+}
+
+const visualCropPendingPages = new Set();
+
+function armStoredVisualCrops(page, layout) {
+  if (layoutNeedsVisualCrops(layout)) visualCropPendingPages.add(Number(page));
+}
+
+function visualCropStillPending(block, page) {
+  const n = Number(page) || 0;
+  if (!(n >= 1) || !visualCropPendingPages.has(n) || block?.visualCropFailed === true) return false;
+  return block?.label === "figure" || block?.label === "table";
+}
+
+function noteAssetPaint(kind, block, page, extra = null) {
+  if (!viewerUnderTest()) return;
+  const log = globalThis.__oiAssetPaint || (globalThis.__oiAssetPaint = []);
+  log.push({
+    kind,
+    page: Number(page) || 0,
+    label: String(block?.label || ""),
+    id: String(block?.id || ""),
+    ...(extra && typeof extra === "object" ? extra : {})
+  });
+}
+
+/**
+ * Neutral hold while a stored page is still rasterizing.
+ * Size comes from visualDisplayCssSize, the same crop-pixel width and
+ * aspect the figure image uses, then min(100%, that width) so the column
+ * cap matches max-width: 100% on the bitmap.
+ */
+function visualCropPendingBox(block, page) {
+  const n = Number(page) || 0;
+  const hold = document.createElement("span");
+  hold.className = "oi-pdf-asset-pending";
+  hold.setAttribute("role", "status");
+  hold.setAttribute("aria-busy", "true");
+  const kind = block?.label === "table" ? "表" : "图";
+  hold.setAttribute("aria-label", `${kind}正在载入`);
+  const layout = getPageLayout(n);
+  const pageW = Number(layout?.pageWidth) || 0;
+  const pageH = Number(layout?.pageHeight) || 0;
+  let aspect = "";
+  let width = "";
+  if (pageW > 0 && pageH > 0) {
+    const sized = visualDisplayCssSize({
+      block,
+      pageWidth: pageW,
+      pageHeight: pageH,
+      rasterWidth: Math.max(1, Math.floor(pageW * CROP_SCALE)),
+      rasterHeight: Math.max(1, Math.floor(pageH * CROP_SCALE))
+    });
+    const widthPx = Number(sized?.layoutCapPx) || 0;
+    const heightPx = Number(sized?.cssHeight) || 0;
+    if (widthPx > 0 && heightPx > 0) {
+      width = `min(100%, ${widthPx}px)`;
+      aspect = `${widthPx} / ${heightPx}`;
+      hold.style.setProperty("width", width);
+      hold.style.setProperty("aspect-ratio", aspect);
+    }
+  }
+  noteAssetPaint("pending", block, n, { aspect, width });
+  return hold;
+}
+
+function markVisualCropsFailed(layout) {
+  for (const block of layout?.blocks || []) {
+    if ((block?.label === "figure" || block?.label === "table") && Array.isArray(block.bbox) && !block.imageUrl) {
+      block.visualCropFailed = true;
+    }
+  }
 }
 
 function visualCropNotice(block, page) {
@@ -2323,6 +2621,16 @@ function viewerUnderTest() {
 function publishViewerTestHooks() {
   if (!viewerUnderTest()) return;
   globalThis.__oiRenderArticle = () => renderArticle();
+  globalThis.__oiOpenPage = async (page) => {
+    const n = Number(page);
+    if (!(n >= 1) || !pdfDoc) return 0;
+    pageNum = n;
+    updatePager();
+    updateSourcePageLabel(n);
+    await loadCurrentPageText(n);
+    renderArticle();
+    return getPageLayout(n)?.blocks?.length || 0;
+  };
   globalThis.__oiTitleState = () => {
     const record = titleStructure;
     if (!record || record.docId !== docId) return null;
@@ -4829,12 +5137,13 @@ function readerFormulaStyle(block, page, inline, columnPx) {
   const fracH = Number(bbox[3]) - Number(bbox[1]);
   if (!(fracW > 0) || !(fracH > 0)) return null;
   const inkPt = fracH * pageH;
+  const widthPt = fracW * pageW;
   const column = columnPx > 0 ? columnPx : readerColumnPx();
   const sized = readerFormulaCssSize({
-    bodyFontPx: readerPrefs.fontSize,
+    bodyFontPx: readerShownFont(),
     sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
     inkPt,
-    widthPt: fracW * pageW,
+    widthPt,
     scriptPt: formulaScriptPt(block, inkPt),
     columnPx: column,
     inline
@@ -4850,8 +5159,19 @@ function readerFormulaStyle(block, page, inline, columnPx) {
   return {
     height: paperCssPx(height),
     aspect: width > 0 ? String(Math.round((width / height) * 10000) / 10000) : "1",
-    raised: Boolean(sized.raised)
+    raised: Boolean(sized.raised),
+    k: sized.k,
+    widthPt
   };
+}
+
+function stampDisplayFormulaScale(row, matched, page) {
+  if (!row || !matched) return;
+  const layout = getPageLayout(page);
+  const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
+  if (matched.k > 0) row.dataset.formulaK = String(matched.k);
+  if (matched.widthPt > 0) row.dataset.widthPt = String(Math.round(matched.widthPt * 100) / 100);
+  row.dataset.bodyPt = String(bodyPt);
 }
 
 function matchedFormulaStyle(block, page) {
@@ -4868,6 +5188,7 @@ function refreshMatchedFormulas(paper) {
     if (!matched) return;
     row.style.setProperty("--oi-formula-h", matched.height);
     row.style.setProperty("--oi-formula-ar", matched.aspect);
+    stampDisplayFormulaScale(row, matched, paper.dataset.page);
   });
   paper.querySelectorAll(".oi-pdf-inline-math.is-matched").forEach((span) => {
     const block = (layout?.blocks || []).find((item) => item.id === span.dataset.blockId);
@@ -4879,6 +5200,33 @@ function refreshMatchedFormulas(paper) {
   });
 }
 
+function refreshFallbackFormulaWidths(paper) {
+  const page = paper.dataset.page;
+  const layout = getPageLayout(page);
+  const blocks = layout?.blocks || [];
+  const pageWidthPt = Number(layout?.pageWidth) || 0;
+  const floor = readerFormulaFloor(page);
+  const blockFor = (node) => {
+    const id = node.closest?.("[data-block-id]")?.dataset?.blockId;
+    if (!id) return null;
+    return blocks.find((item) => item.id === id) || null;
+  };
+  paper.querySelectorAll(".oi-pdf-math-row:not(.is-matched)").forEach((row) => {
+    const pageFraction = formulaPageFraction(blockFor(row));
+    const width = pageFraction ? displayFormulaWidthCss(pageFraction, 0, { pageWidthPt, floor }) : "";
+    if (width) row.style.setProperty("--oi-formula-w", width);
+  });
+  paper.querySelectorAll("img.oi-pdf-math-crop, img.oi-pdf-asset-crop").forEach((img) => {
+    if (img.closest(".oi-pdf-math-row, .oi-pdf-inline-math")) return;
+    const block = blockFor(img);
+    const pageFraction = displayCropColumnFraction(block);
+    if (!pageFraction) return;
+    const heightFrac = Number(block.bbox[3]) - Number(block.bbox[1]);
+    const width = displayFormulaWidthCss(pageFraction, heightFrac, { pageWidthPt, floor });
+    if (width) img.style.width = width;
+  });
+}
+
 function applyPaperMetrics() {
   const flow = readerFlowEl();
   if (!flow) return;
@@ -4886,6 +5234,7 @@ function applyPaperMetrics() {
     const left = leftBaseBox(slot.dataset.page);
     if (left?.width > 0) slot.style.setProperty("--oi-pdf-left-w", paperCssPx(left.width));
     refreshMatchedFormulas(slot);
+    refreshFallbackFormulaWidths(slot);
   });
   refreshFormulaCropsForDisplay();
 }
@@ -5406,6 +5755,88 @@ function captureReaderAnchor() {
   return { page: block.dataset.srcPage || "", id: block.dataset.blockId || "" };
 }
 
+function captureFontAnchor() {
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  if (!pane || !flow) return null;
+  const paneTop = pane.getBoundingClientRect().top;
+  const blocks = [...flow.querySelectorAll(".rf-block[data-src-page]")];
+  const block = blocks.find((el) => el.getBoundingClientRect().bottom > paneTop + 1);
+  if (!block) return null;
+  const box = block.getBoundingClientRect();
+  const height = box.height || 1;
+  return {
+    page: block.dataset.srcPage || "",
+    id: block.dataset.blockId || "",
+    ratio: (paneTop - box.top) / height
+  };
+}
+
+let fontAnchorTimer = 0;
+let fontAnchorSerial = 0;
+
+function readerBlockNode(flow, token) {
+  const esc = globalThis.CSS?.escape || ((value) => String(value).replace(/"/g, '\\"'));
+  if (token?.id) {
+    const nodes = [...flow.querySelectorAll(`[data-block-id="${esc(token.id)}"]`)];
+    const blocks = nodes.filter((node) => node.classList.contains("rf-block"));
+    const onPage = token.page
+      ? blocks.filter((node) => node.dataset.srcPage === String(token.page) || node.dataset.page === String(token.page))
+      : blocks;
+    const pool = onPage.length ? onPage : blocks;
+    const visible = pool.find((node) => node.getClientRects().length);
+    if (visible) return visible;
+    if (pool[0]) return pool[0];
+  }
+  if (token?.page) return flow.querySelector(`.rf-block[data-src-page="${esc(token.page)}"]`);
+  return null;
+}
+
+function restoreFontAnchor(token) {
+  const pane = translateScrollRoot();
+  const flow = readerFlowEl();
+  if (!pane || !flow || !token) return;
+  const node = readerBlockNode(flow, token);
+  if (!node) return;
+  const paneBox = pane.getBoundingClientRect();
+  const box = node.getBoundingClientRect();
+  const target = readerFontAnchorTop({
+    blockTop: box.top,
+    blockHeight: box.height,
+    ratio: token.ratio
+  });
+  let delta = target - paneBox.top;
+  const slice = Math.min(16, box.height || 0);
+  if (slice > 0) {
+    const nextBottom = box.bottom - delta;
+    const nextTop = box.top - delta;
+    if (nextBottom < paneBox.top + slice) delta -= paneBox.top + slice - nextBottom;
+    else if (nextTop > paneBox.bottom - slice) delta += nextTop - (paneBox.bottom - slice);
+  }
+  if (Math.abs(delta) > 0.5) pane.scrollTop += delta;
+  updateReaderFade();
+}
+
+function finishFontAnchor(anchor) {
+  const serial = ++fontAnchorSerial;
+  const root = document.documentElement;
+  if (root) root.dataset.oiFontAnchor = "run";
+  restoreFontAnchor(anchor);
+  requestAnimationFrame(() => {
+    restoreFontAnchor(anchor);
+    if (serial !== fontAnchorSerial || anchor) return;
+    if (root) root.dataset.oiFontAnchor = "idle";
+  });
+  clearTimeout(fontAnchorTimer);
+  if (!anchor) return;
+  fontAnchorTimer = setTimeout(() => {
+    fontAnchorTimer = 0;
+    restoreFontAnchor(anchor);
+    if (serial !== fontAnchorSerial) return;
+    if (root) root.dataset.oiFontAnchor = "idle";
+  }, 180);
+}
+
 function restoreReaderAnchor(token) {
   const pane = translateScrollRoot();
   const flow = readerFlowEl();
@@ -5495,7 +5926,7 @@ function layoutCapsule({ keepAnchor = false } = {}) {
     gutter: narrow ? 0 : classicScrollbarWidth()
   });
   const widths = capsuleLabelWidths(maxPage);
-  const fontPx = readerPrefs.fontSize;
+  const fontPx = readerShownFont();
   const measurePad = readerMeasurePad();
   const column = box.paneW + (box.scrollbar > 0 ? box.scrollbar : 0);
   const want = Math.min(36 * fontPx, column - 2 * measurePad);
@@ -5977,6 +6408,14 @@ async function maybeAutoTranslateDocument() {
     return;
   }
   if (adopting !== docId || !pdfDoc || documentTranslateSuperseded()) return;
+  // The retranslate button is enabled while docPhase is still "opening".
+  // Settings reads resolve as microtasks, so without a timer the phase
+  // flips to running before any click or interval can run. The library
+  // probe used to leave that gap, and it also held page-nav. Page-nav has
+  // already ended; this 16ms only keeps opening observable. A 0ms timer
+  // would run before a pending interval and close the gap again.
+  await new Promise((resolve) => setTimeout(resolve, 16));
+  if (adopting !== docId || !pdfDoc || documentTranslateSuperseded()) return;
   await startTranslate();
 }
 
@@ -6113,7 +6552,9 @@ function installDisplayableLibraryLayouts(version = knownLayoutVersion) {
     const stored = storedLayoutDisplayable(entry, version);
     if (!stored?.blocks?.length) continue;
     if (getPageLayout(page)?.blocks?.length) continue;
-    setPageLayout(page, layoutFromStored(page, stored));
+    const laid = layoutFromStored(page, stored);
+    setPageLayout(page, laid);
+    armStoredVisualCrops(page, laid);
     if (isSkipOnlyPage(stored.blocks)) skipLocked.add(page);
     changed = true;
   }
@@ -6208,14 +6649,77 @@ function bindSavedPairs(saved, units) {
   return saved;
 }
 
+function ensureLibraryDocument() {
+  if (libraryDoc) return Promise.resolve(libraryDoc);
+  if (libraryProbe) return libraryProbe;
+  const stamp = docId;
+  libraryProbe = (async () => {
+    try {
+      const hash = await pdfByteHash();
+      if (docId !== stamp || !hash || hash === "nohash") return null;
+      if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
+      const doc = await fetchLibraryDocument(hash);
+      if (docId !== stamp) return null;
+      if (doc) {
+        doc.hash = hash;
+        if (doc.sourcePath) librarySourceSent.add(hash);
+      }
+      libraryDoc = doc || null;
+      return libraryDoc;
+    } catch {
+      // One probe per document. Page turns do not wait for these delays,
+      // and a failed probe is not started again on the next page.
+      if (docId === stamp && !getPageLayout(pageNum)?.blocks?.length) noteLibraryUnavailable();
+      return null;
+    }
+  })();
+  return libraryProbe;
+}
+
+function savedTranslationForNav(page) {
+  if (!libraryDoc) return Promise.resolve(null);
+  return savedTranslationFor(page).catch(() => null);
+}
+
+function paintLateLibrary(n, ticket) {
+  if (libraryDoc) return;
+  const stamp = docId;
+  ensureLibraryDocument().then(async () => {
+    if (ticket !== textGen || docId !== stamp || !libraryDoc) return;
+    const saved = await savedTranslationFor(n).catch(() => null);
+    if (ticket !== textGen || docId !== stamp || !saved) return;
+    if (saved.readout && !saved.pairs) {
+      setStatus(PDF_COPY.doneDocument);
+      renderArticle();
+      updateTranslateControls();
+      return;
+    }
+    const layout = getPageLayout(n);
+    if (!layout?.blocks?.length || !saved.pairs) return;
+    const prepared = bindSavedPairs(saved, unitsForLayout(layout));
+    const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs, savedPairSettings());
+    const blocks = layout.blocks || [];
+    const covers = libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang, pdfProvider) ||
+      libraryCoversLiveBlocks(merged, blocks, pdfTargetLang, pdfProvider);
+    if (n === pageNum || n === textLoadPage) pageResults = merged;
+    pageCache.set(docId, n, merged);
+    const skipped = skipLocked.has(n) || isSkipOnlyPage(blocks);
+    notePageState(n, { state: skipped ? "skipped" : (covers ? "done" : "partial"), hasLayout: true });
+    if (!pdfTranslateBusy(session)) {
+      setStatus(savedPageStatus(prepared, merged, blocks));
+      rememberSkipHole(n, blocks);
+    }
+    clearSlotPainted(n);
+    refreshDocStatus();
+    renderArticle();
+    updateTranslateControls();
+  }).catch(() => {});
+}
+
 async function savedTranslationFor(page) {
   const hash = await pdfByteHash();
   if (!hash || hash === "nohash") return null;
-  if (!libraryDoc || libraryDoc.hash !== hash) {
-    libraryDoc = await fetchLibraryDocument(hash);
-    if (libraryDoc) libraryDoc.hash = hash;
-    if (libraryDoc?.sourcePath) librarySourceSent.add(hash);
-  }
+  if (!libraryDoc || libraryDoc.hash !== hash) await ensureLibraryDocument();
   if (!libraryDoc) return null;
   const selected = selectSavedTranslation(libraryDoc, page, getPageLayout(page)?.blocks);
   if (libraryDoc.pages?.length) {
@@ -6511,7 +7015,7 @@ function installKnownSkipLayout(page, stored) {
   if (!isSkipOnlyPage(blocks)) return false;
   skipLocked.add(page);
   if (isSkipOnlyPage(getPageLayout(page)?.blocks)) return false;
-  setPageLayout(page, {
+  const laid = {
     kind: "blocks",
     protocol: stored.protocol || PROTOCOL,
     page: Number(page),
@@ -6519,7 +7023,9 @@ function installKnownSkipLayout(page, stored) {
     sourceAudit: stored.sourceAudit || null,
     blocks,
     itemCount: Number(stored.itemCount) || blocks.length
-  });
+  };
+  setPageLayout(page, laid);
+  armStoredVisualCrops(page, laid);
   return true;
 }
 
@@ -7694,7 +8200,7 @@ async function renderPageRaster(page) {
   canvas.width = Math.max(1, Math.floor(viewport.width));
   canvas.height = Math.max(1, Math.floor(viewport.height));
   const context = formulaDrawContext(canvas);
-  await page.render({ canvasContext: context, viewport }).promise;
+  await renderPdfPage(page, { canvasContext: context, viewport }).promise;
   compositeWhitePaper(context, canvas);
   return { canvas, pixelWidth: canvas.width, pixelHeight: canvas.height };
 }
@@ -7862,7 +8368,9 @@ async function adoptDoc(doc, title) {
   if (viewerUnderTest()) {
     globalThis.__oiLayouts = {};
     globalThis.__oiPaint = [];
+    globalThis.__oiAssetPaint = [];
   }
+  visualCropPendingPages.clear();
   abortInflightLayouts();
   vendorLayoutPending.clear();
   vendorLayoutReason.clear();
@@ -7870,6 +8378,7 @@ async function adoptDoc(doc, title) {
   notePageState(1, { state: "layout", hasLayout: false });
   libraryArticle = null;
   libraryDoc = null;
+  libraryProbe = null;
   titleStructure = null;
   layoutCache.clear();
   formulaRasterCache.clear();
@@ -7895,7 +8404,12 @@ async function adoptDoc(doc, title) {
   updatePager();
   await scheduleVisibleRenders();
   setStatus("原页已打开，正在读取文字层…");
-  await loadCurrentPageText();
+  beginPageNav();
+  try {
+    await loadCurrentPageText();
+  } finally {
+    endPageNav();
+  }
   syncZoomChip();
   await maybeAutoTranslateDocument();
 }
@@ -8034,12 +8548,24 @@ function syncVisiblePage() {
   noteSourcePage(false);
 }
 
+function beginPageNav() {
+  pageNavDepth += 1;
+  if (document.documentElement) document.documentElement.dataset.oiPageNav = "run";
+}
+
+function endPageNav() {
+  pageNavDepth = Math.max(0, pageNavDepth - 1);
+  if (pageNavDepth === 0 && document.documentElement) document.documentElement.dataset.oiPageNav = "idle";
+}
+
 async function goPage(dir) {
   if (!pdfDoc) return;
   const origin = sourceNavPage() || pageNum;
   const next = pageIndex(origin, pdfDoc.numPages, dir);
   if (next === origin) return;
   const gen = ++navGen;
+  beginPageNav();
+  try {
   const bringTranslation = dir > 0 && capsulePage() === origin;
   takeDriver("pdf");
   const view = pageViews[next - 1];
@@ -8073,6 +8599,9 @@ async function goPage(dir) {
   if (gen !== navGen) return;
   settlePairChrome();
   await scheduleVisibleRenders();
+  } finally {
+    endPageNav();
+  }
 }
 
 function formulaCropPlanKeyNow() {
@@ -8080,7 +8609,7 @@ function formulaCropPlanKeyNow() {
   const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
   const left = Number(zoom) > 0 ? Number(zoom) : 1;
   const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0);
-  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}|${readerPrefs.fontSize}`;
+  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}|${readerShownFont()}`;
 }
 
 function noteFormulaCropPlan(layout) {
@@ -8093,7 +8622,20 @@ function noteFormulaCropPlan(layout) {
  * and DPR; this replans visuals whose stored key is stale. A miss keeps
  * the page-raster crop.
  */
-let formulaCropGen = 0;
+let formulaCropJob = null;
+let formulaCropPending = false;
+
+function preemptFormulaCropRender() {
+  formulaCropPending = true;
+  const task = formulaCropRenderTask;
+  formulaCropRenderTask = null;
+  if (!task) return;
+  try {
+    task.cancel();
+  } catch {
+    /* already finished */
+  }
+}
 
 function watchFormulaRasterRatio() {
   if (typeof window.matchMedia !== "function") return;
@@ -8114,43 +8656,85 @@ function watchFormulaRasterRatio() {
 
 async function refreshFormulaCropsForDisplay() {
   if (!pdfDoc) return;
-  const key = formulaCropPlanKeyNow();
-  const gen = ++formulaCropGen;
-  const total = Number(pdfDoc.numPages) || 0;
-  let changed = false;
-  for (let n = 1; n <= total; n += 1) {
-    if (gen !== formulaCropGen) return;
-    const layout = getPageLayout(n);
-    if (!layout?.blocks?.length || layout.formulaPlanKey === key) continue;
-    if (!layout.blocks.some((block) => isSourceRedrawBlock(block) && block.imageUrl)) {
-      noteFormulaCropPlan(layout);
-      continue;
-    }
-    let page = null;
-    try {
-      page = await pdfDoc.getPage(n);
-    } catch {
-      continue;
-    }
-    if (gen !== formulaCropGen) return;
-    const raster = {
-      pixelWidth: layout.pixelWidth,
-      pixelHeight: layout.pixelHeight
-    };
-    for (const block of layout.blocks) {
-      if (gen !== formulaCropGen) return;
-      if (!isSourceRedrawBlock(block) || !block.imageUrl) continue;
-      const sharp = await renderSharpFormulaCrop(page, raster, block, n);
-      if (sharp && sharp !== block.imageUrl) {
-        block.imageUrl = sharp;
-        block.surface = "redraw";
-        changed = true;
-        clearSlotPainted(n);
-      }
-    }
-    noteFormulaCropPlan(layout);
+  // A resize storm used to start one walk per event and leave every walk's
+  // page.render() scheduling slice timers. One walk runs at a time. A newer
+  // plan cancels the block currently drawing and is applied once after it.
+  if (formulaCropJob) {
+    preemptFormulaCropRender();
+    return;
   }
-  if (changed && gen === formulaCropGen) renderArticle();
+  const root = document.documentElement;
+  let finishWalk = () => {};
+  formulaCropJob = new Promise((resolve) => {
+    finishWalk = resolve;
+  });
+  (async () => {
+    if (root) root.dataset.oiFormulaCrop = "run";
+    try {
+      do {
+        formulaCropPending = false;
+        const key = formulaCropPlanKeyNow();
+        const total = Number(pdfDoc?.numPages) || 0;
+        let changed = false;
+        for (let n = 1; n <= total; n += 1) {
+          if (formulaCropPending || !pdfDoc) break;
+          const layout = getPageLayout(n);
+          if (!layout?.blocks?.length || layout.formulaPlanKey === key) continue;
+          if (!layout.blocks.some((block) => isSourceRedrawBlock(block) && block.imageUrl)) {
+            noteFormulaCropPlan(layout);
+            continue;
+          }
+          let page = null;
+          try {
+            page = await pdfDoc.getPage(n);
+          } catch {
+            continue;
+          }
+          if (formulaCropPending || !pdfDoc) break;
+          const raster = {
+            pixelWidth: layout.pixelWidth,
+            pixelHeight: layout.pixelHeight
+          };
+          let pageDone = true;
+          for (const block of layout.blocks) {
+            if (formulaCropPending || !pdfDoc) {
+              pageDone = false;
+              break;
+            }
+            if (!isSourceRedrawBlock(block) || !block.imageUrl) continue;
+            let sharp = "";
+            try {
+              sharp = await renderSharpFormulaCrop(page, raster, block, n);
+            } finally {
+              formulaCropRenderTask = null;
+            }
+            if (formulaCropPending) {
+              pageDone = false;
+              break;
+            }
+            if (sharp && sharp !== block.imageUrl) {
+              block.imageUrl = sharp;
+              block.surface = "redraw";
+              changed = true;
+              clearSlotPainted(n);
+            }
+          }
+          if (!pageDone) break;
+          noteFormulaCropPlan(layout);
+        }
+        if (changed) renderArticle();
+      } while (formulaCropPending && pdfDoc);
+    } finally {
+      formulaCropJob = null;
+      if (!formulaCropPending && root) root.dataset.oiFormulaCrop = "idle";
+      finishWalk();
+    }
+    if (formulaCropPending) {
+      formulaCropPending = false;
+      if (pdfDoc) refreshFormulaCropsForDisplay();
+      else if (root) root.dataset.oiFormulaCrop = "idle";
+    }
+  })();
 }
 
 function setMirrorZoom(next) {
@@ -8321,33 +8905,51 @@ async function scheduleVisibleRenders() {
 
 async function renderView(view) {
   if (!pdfDoc || !view) return;
-  if (view.renderedScale === zoom && view.canvas.width) {
+  const serial = (view.renderSerial = (view.renderSerial || 0) + 1);
+  // A round trip of the mini divider can land back on this zoom while the
+  // previous render is still drawing. Returning here used to bump the serial
+  // and leave that render running, so the canvas kept the other scale.
+  if (view.renderedScale === zoom && view.canvas.width && !view.renderTask) {
     view.canvas.hidden = false;
     return;
   }
   const page = await pdfDoc.getPage(view.num);
+  if (serial !== view.renderSerial) return;
   const viewport = page.getViewport({ scale: zoom });
   const canvas = view.canvas;
   const context = canvas.getContext("2d", { alpha: false });
   const outputScale = canvasOutputScale(viewport.width, viewport.height, window.devicePixelRatio || 1);
+  if (view.renderTask) {
+    const pending = view.renderTask;
+    try {
+      pending.cancel();
+    } catch {
+      /* already finished */
+    }
+    // The cancelled task stays on the view so a third caller can still cancel
+    // it. pdf.js can also leave that promise pending; don't wait past 1s.
+    await Promise.race([
+      pending.promise.catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 1000))
+    ]);
+  }
+  if (serial !== view.renderSerial) return;
   canvas.width = Math.floor(viewport.width * outputScale);
   canvas.height = Math.floor(viewport.height * outputScale);
-  if (view.renderTask) {
-    view.renderTask.cancel();
-    try {
-      await view.renderTask.promise;
-    } catch {
-      /* cancelled */
-    }
-  }
   const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
-  view.renderTask = page.render({ canvasContext: context, viewport, transform });
+  let task = null;
   try {
-    await view.renderTask.promise;
+    task = renderPdfPage(page, { canvasContext: context, viewport, transform });
+    view.renderTask = task;
+    await task.promise;
+    if (task && view.renderTask === task) view.renderTask = null;
+    if (serial !== view.renderSerial) return;
     canvas.hidden = false;
     view.renderedScale = zoom;
   } catch (err) {
+    if (view.renderTask === task) view.renderTask = null;
     if (err?.name === "RenderingCancelledException") return;
+    if (serial !== view.renderSerial) return;
     setStatus(PDF_COPY.error, true);
   }
 }
@@ -8442,6 +9044,13 @@ async function hydrateMissingVisualCrops(isStale = () => false) {
         paint();
         return changed;
       }
+      const viewport = page.getViewport({ scale: 1 });
+      if (!(Number(layout.pageWidth) > 0) || !(Number(layout.pageHeight) > 0)) {
+        layout.pageWidth = viewport.width;
+        layout.pageHeight = viewport.height;
+        clearSlotPainted(n);
+        if (!stale()) renderArticle();
+      }
       const raster = await renderPageRaster(page);
       if (stale()) {
         paint();
@@ -8459,10 +9068,17 @@ async function hydrateMissingVisualCrops(isStale = () => false) {
       if (!blocks) continue;
       layout.blocks = blocks;
       delete layout.formulaPlanKey;
+      markVisualCropsFailed(layout);
+      visualCropPendingPages.delete(n);
       clearSlotPainted(n);
       changed = true;
       if (item.asset) paint();
     } catch {
+      const failedLayout = getPageLayout(n);
+      markVisualCropsFailed(failedLayout);
+      visualCropPendingPages.delete(n);
+      clearSlotPainted(n);
+      changed = true;
       continue;
     }
   }
@@ -8476,19 +9092,51 @@ async function primeKnownPages() {
   const stamp = docId;
   const stale = () => docId !== stamp;
   await loadPdfLayout();
-  try {
-    await savedTranslationFor(pageNum);
-  } catch {
-    noteLibraryUnavailable();
-  }
   if (stale()) return;
   await layoutVersionNow();
   if (stale()) return;
-  const libraryChanged = seedLibraryProgress();
-  const legacyChanged = await seedLegacySkipPages();
-  if (stale()) return;
-  if (libraryChanged || legacyChanged) renderArticle();
-  hydrateMissingVisualCrops(stale).catch(() => {});
+  const seed = async () => {
+    if (stale() || !libraryDoc) return;
+    const libraryChanged = seedLibraryProgress();
+    const legacyChanged = await seedLegacySkipPages();
+    if (stale()) return;
+    const sized = await stampPendingVisualPages(stale);
+    if (stale()) return;
+    if (libraryChanged || legacyChanged || sized) renderArticle();
+    // Stored library layouts have no image bytes. Hydrate after they land;
+    // an earlier pass sees an empty cache and returns without scheduling.
+    hydrateMissingVisualCrops(stale).catch(() => {});
+  };
+  // The probe's 400/1000/1800ms delays used to sit on the page-turn await.
+  // Layout paints first. Pairs land when the probe resolves.
+  if (libraryDoc) await seed();
+  else ensureLibraryDocument().then(() => seed()).catch(() => {});
+}
+
+/** Page box for a stored crop, before the slow page raster. The pending hold uses it. */
+async function stampPendingVisualPages(isStale) {
+  if (!pdfDoc || !visualCropPendingPages.size) return false;
+  let stamped = false;
+  for (const n of [...visualCropPendingPages]) {
+    if (isStale()) return stamped;
+    const layout = getPageLayout(n);
+    if (!layout) {
+      visualCropPendingPages.delete(n);
+      continue;
+    }
+    if (Number(layout.pageWidth) > 0 && Number(layout.pageHeight) > 0) continue;
+    try {
+      const page = await pdfDoc.getPage(n);
+      if (isStale()) return stamped;
+      const viewport = page.getViewport({ scale: 1 });
+      layout.pageWidth = viewport.width;
+      layout.pageHeight = viewport.height;
+      stamped = true;
+    } catch {
+      /* hydrate marks a real crop failure */
+    }
+  }
+  return stamped;
 }
 
 async function loadCurrentPageText(explicitPage) {
@@ -8505,7 +9153,8 @@ async function loadCurrentPageText(explicitPage) {
   const openedStored = getPageLayout(n);
   if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version)) {
     if (!showOpenedLayout(openedStored, isStale)) return;
-    const saved = await savedTranslationFor(n).catch(() => null);
+    const saved = await savedTranslationForNav(n);
+    if (!libraryDoc) paintLateLibrary(n, ticket);
     if (isStale()) return;
     if (saved?.pairs) {
       const prepared = bindSavedPairs(saved, unitsForLayout(openedStored));
@@ -8544,7 +9193,8 @@ async function loadCurrentPageText(explicitPage) {
   let mode = pdfEngineMode();
   let preloadedSaved = null;
   if (mode === "legacy") {
-    preloadedSaved = await savedTranslationFor(n).catch(() => null);
+    preloadedSaved = await savedTranslationForNav(n);
+    if (!libraryDoc) paintLateLibrary(n, ticket);
     if (isStale()) return;
     if (libraryDoc?.pages?.length) mode = "text-layer";
   }
@@ -8557,7 +9207,8 @@ async function loadCurrentPageText(explicitPage) {
       const quick = await ingestTextLayerLayout(n, isStale, { persist: false });
       if (!showOpenedLayout(quick, isStale)) return;
       await ensuring;
-      const saved = preloadedSaved || await savedTranslationFor(n).catch(() => null);
+      const saved = preloadedSaved || await savedTranslationForNav(n);
+      if (!libraryDoc) paintLateLibrary(n, ticket);
       if (saved?.readout && !isStale()) {
         setStatus(PDF_COPY.doneDocument);
         renderArticle();
@@ -8608,7 +9259,8 @@ async function loadCurrentPageText(explicitPage) {
       : await ingestPageLayout(n, isStale);
     if (!showOpenedLayout(layout, isStale)) return;
     await ensuring;
-    const saved = preloadedSaved || await savedTranslationFor(n).catch(() => null);
+    const saved = preloadedSaved || await savedTranslationForNav(n);
+    if (!libraryDoc) paintLateLibrary(n, ticket);
     if (saved?.readout && !isStale()) {
       setStatus(PDF_COPY.doneDocument);
       renderArticle();
@@ -8635,6 +9287,7 @@ async function loadCurrentPageText(explicitPage) {
     syncNoTextLayerHint(true);
   }
   updateTranslateControls();
+  if (!isStale()) hydrateMissingVisualCrops(isStale).catch(() => {});
 }
 
 function updatePager() {

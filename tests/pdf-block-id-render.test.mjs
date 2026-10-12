@@ -335,7 +335,13 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
     const started = Date.now();
     let last = null;
     while (Date.now() - started < timeoutMs) {
-      last = await evaluate(expression);
+      try {
+        last = await evaluate(expression);
+      } catch (err) {
+        // Reload drops the old document before the next one can answer. Keep polling.
+        if (!String(err?.message || err).includes("Inspected target navigated or closed")) throw err;
+        last = null;
+      }
       if (last) return last;
       await sleep(150);
     }
@@ -463,12 +469,23 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
 
   await clickSelector("#aaButton");
   await waitFor(`document.getElementById("aaPanel")?.hidden === false ? "open" : ""`, "Aa panel");
-  await clickSelector('#aaFontScale [data-size="14"]');
-  await waitFor(`document.getElementById("aaFontValue")?.textContent === "14px" ? "14" : ""`, "font 14");
+  await evaluate(`(() => {
+    const slider = document.getElementById("aaFontScale");
+    slider.focus();
+    slider.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true }));
+    return "home";
+  })()`);
+  await waitFor(`document.getElementById("aaFontValue")?.textContent === "14 px" ? "14" : ""`, "font 14");
   await frames(3);
   assertStable(await settled(4, page4Needles), page4, "font 14");
-  await clickSelector('#aaFontScale [data-size="20"]');
-  await waitFor(`document.getElementById("aaFontValue")?.textContent === "20px" ? "20" : ""`, "font 20");
+  await evaluate(`(() => {
+    const slider = document.getElementById("aaFontScale");
+    slider.focus();
+    slider.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }));
+    slider.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }));
+    return "pageup";
+  })()`);
+  await waitFor(`document.getElementById("aaFontValue")?.textContent === "20 px" ? "20" : ""`, "font 20");
   await frames(3);
   assertStable(await settled(4, page4Needles), page4, "font 20");
   const anchored = await evaluate(`document.querySelector('#readerFlow [data-block-id="${anchor.id}"]')?.dataset.bid || ""`);

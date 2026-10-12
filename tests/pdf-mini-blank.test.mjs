@@ -48,7 +48,8 @@ function multiPagePdf(pageCount) {
     const pageId = id;
     id += 1;
     kids.push(`${pageId} 0 R`);
-    const stream = `BT /F1 18 Tf 72 720 Td (Mini blank page ${n}) Tj ET`;
+    const marks = Array.from({ length: 30 }, (_, i) => `${i * 4} 40 3 3 re f`).join("\n");
+    const stream = `BT /F1 18 Tf 72 720 Td (Mini blank page ${n}) Tj ET\n${marks}`;
     objects.set(contentId, `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
     objects.set(
       pageId,
@@ -75,12 +76,243 @@ function multiPagePdf(pageCount) {
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
 }
 
+function heavyYieldPdf() {
+  const marks = Array.from({ length: 2500 }, (_, i) => `${(i % 80) * 4} ${40 + (i % 50)} 2 2 re f`).join("\n");
+  const stream = `BT /F1 12 Tf 72 720 Td (yield) Tj ET\n${marks}`;
+  const objects = new Map([
+    [1, "<< /Type /Catalog /Pages 2 0 R >>"],
+    [2, "<< /Type /Pages /Kids [4 0 R] /Count 1 >>"],
+    [3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"],
+    [5, `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`],
+    [4, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>"]
+  ]);
+  const chunks = ["%PDF-1.4\n"];
+  const offsets = [0];
+  let cursor = Buffer.byteLength(chunks[0]);
+  for (let n = 1; n <= 5; n += 1) {
+    offsets.push(cursor);
+    const piece = `${n} 0 obj\n${objects.get(n)}\nendobj\n`;
+    chunks.push(piece);
+    cursor += Buffer.byteLength(piece);
+  }
+  let xref = "xref\n0 6\n0000000000 65535 f \n";
+  for (let n = 1; n <= 5; n += 1) xref += `${String(offsets[n]).padStart(10, "0")} 00000 n \n`;
+  chunks.push(xref);
+  chunks.push(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${cursor}\n%%EOF\n`);
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+}
+
 function instrumentViewer(source) {
   const needle = "async function applyZoom(scale) {";
   const at = source.indexOf(needle);
   if (at < 0) throw new Error("applyZoom signature missing");
   const injected = `${source.slice(0, at + needle.length)}\n  globalThis.__oiZoomApplies = (globalThis.__oiZoomApplies || 0) + 1;${source.slice(at + needle.length)}`;
   return `${injected}
+globalThis.__oiStaleRender = async () => {
+  const view = pageViews[0];
+  const page = await pdfDoc.getPage(view.num);
+  const wrong = page.getViewport({ scale: zoom * 1.25 });
+  const outputScale = canvasOutputScale(wrong.width, wrong.height, window.devicePixelRatio || 1);
+  view.canvas.width = Math.max(1, Math.floor(wrong.width * outputScale));
+  view.canvas.height = Math.max(1, Math.floor(wrong.height * outputScale));
+  let cancelled = false;
+  view.renderTask = {
+    cancel() { cancelled = true; },
+    promise: new Promise(() => {})
+  };
+  view.renderedScale = zoom;
+  const before = view.canvas.width;
+  await renderView(view);
+  const fit = page.getViewport({ scale: zoom });
+  const expectScale = canvasOutputScale(fit.width, fit.height, window.devicePixelRatio || 1);
+  return {
+    before,
+    after: view.canvas.width,
+    expected: Math.max(1, Math.floor(fit.width * expectScale)),
+    renderedScale: view.renderedScale,
+    zoom,
+    hidden: view.canvas.hidden === true,
+    cancelled
+  };
+};
+globalThis.__oiTimerCancelRender = async () => {
+  const nativeSet = window.setTimeout.bind(window);
+  const nativeClear = window.clearTimeout.bind(window);
+  const nativeCaf = window.cancelAnimationFrame.bind(window);
+  const nativeNow = Date.now;
+  const timers = [];
+  const clears = [];
+  const cafs = [];
+  let ticks = 0;
+  let task = null;
+  Date.now = () => nativeNow() + ticks++ * 50;
+  window.setTimeout = (fn, ms, ...args) => {
+    const id = nativeSet(fn, ms, ...args);
+    timers.push(id);
+    if (timers.length === 1 && task) queueMicrotask(() => {
+      try { task.cancel(); } catch { /* already settled */ }
+    });
+    return id;
+  };
+  window.clearTimeout = (id) => {
+    clears.push(id);
+    return nativeClear(id);
+  };
+  window.cancelAnimationFrame = (id) => {
+    cafs.push(id);
+    return nativeCaf(id);
+  };
+  try {
+    const page = await pdfDoc.getPage(1);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(viewport.width));
+    canvas.height = Math.max(1, Math.ceil(viewport.height));
+    task = page.render({
+      canvasContext: canvas.getContext("2d", { alpha: false }),
+      viewport
+    });
+    let rejected = "";
+    try {
+      await task.promise;
+    } catch (err) {
+      rejected = err?.name || "error";
+    }
+    return {
+      sawTimer: timers.length > 0,
+      cleared: timers.some((id) => clears.includes(id)),
+      cafOnTimer: timers.some((id) => cafs.includes(id)),
+      rejected
+    };
+  } finally {
+    Date.now = nativeNow;
+    window.setTimeout = nativeSet;
+    window.clearTimeout = nativeClear;
+    window.cancelAnimationFrame = nativeCaf;
+  }
+};
+globalThis.__oiRafStallRender = async () => {
+  const native = window.requestAnimationFrame;
+  let calls = 0;
+  window.requestAnimationFrame = () => {
+    calls += 1;
+    return 0;
+  };
+  const started = performance.now();
+  try {
+    const page = await pdfDoc.getPage(1);
+    const viewport = page.getViewport({ scale: 0.5 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(viewport.width));
+    canvas.height = Math.max(1, Math.ceil(viewport.height));
+    await page.render({
+      canvasContext: canvas.getContext("2d", { alpha: false }),
+      viewport
+    }).promise;
+    return { ms: Math.round(performance.now() - started), calls, width: canvas.width };
+  } finally {
+    window.requestAnimationFrame = native;
+  }
+};
+globalThis.__oiCropLeavesPage = async () => {
+  const page = await pdfDoc.getPage(1);
+  const proto = Object.getPrototypeOf(page);
+  const real = proto.render;
+  const cancelled = [];
+  const pageIds = [];
+  let n = 0;
+  let release = () => {};
+  const hold = new Promise((resolve) => { release = resolve; });
+  proto.render = function render(params) {
+    n += 1;
+    const task = real.call(this, params);
+    const id = n;
+    if (globalThis.__oiMarkPage) pageIds.push(id);
+    const cancel = task.cancel.bind(task);
+    return new Proxy(task, {
+      get(target, prop, receiver) {
+        if (prop === "cancel") return () => { cancelled.push(id); return cancel(); };
+        if (prop === "promise" && id === 1) return hold.then(() => target.promise);
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+    });
+  };
+  const view = pageViews[0];
+  try {
+    const block = {
+      label: "formula",
+      bbox: [0.2, 0.2, 0.45, 0.28],
+      imageUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    };
+    const cropPromise = renderSharpFormulaCrop(page, { pixelWidth: 200, pixelHeight: 260 }, block, 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    view.renderedScale = (Number(zoom) || 1) + 0.5;
+    view.canvas.width = 0;
+    globalThis.__oiMarkPage = true;
+    const pagePromise = renderView(view);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    globalThis.__oiMarkPage = false;
+    preemptFormulaCropRender();
+    release();
+    await cropPromise;
+    await pagePromise;
+    return { n, cancelled, pageIds };
+  } finally {
+    globalThis.__oiMarkPage = false;
+    proto.render = real;
+    view.renderedScale = (Number(zoom) || 1) + 0.5;
+    view.canvas.width = 0;
+    await renderView(view);
+  }
+};
+globalThis.__oiProbeTimer = async () => {
+  const res = await fetch(new URL("/synthetic/yield.pdf", location.origin));
+  const data = new Uint8Array(await res.arrayBuffer());
+  const doc = await getDocument({ data }).promise;
+  const page = await doc.getPage(1);
+  const viewport = page.getViewport({ scale: 1 });
+  const nativeSet = window.setTimeout.bind(window);
+  const nativeNow = Date.now;
+  let ticks = 0;
+  let slices = 0;
+  Date.now = () => nativeNow() + ticks++ * 20;
+  window.setTimeout = (fn, ms, ...args) => {
+    if (ms === 4) {
+      slices += 1;
+      return nativeSet(() => {
+        const end = performance.now() + 12;
+        while (performance.now() < end) { /* keep this slice ahead of a 0ms queue */ }
+        fn(...args);
+      }, ms, ...args);
+    }
+    return nativeSet(fn, ms, ...args);
+  };
+  const started = performance.now();
+  let probeAt = 0;
+  const probe = new Promise((resolve) => {
+    nativeSet(() => {
+      probeAt = performance.now() - started;
+      resolve(probeAt);
+    }, 400);
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(viewport.width));
+  canvas.height = Math.max(1, Math.ceil(viewport.height));
+  const render = page.render({
+    canvasContext: canvas.getContext("2d", { alpha: false }),
+    viewport
+  }).promise.catch(() => {});
+  try {
+    const elapsed = await probe;
+    return { elapsed: Math.round(elapsed), slices, probeAt: Math.round(probeAt) };
+  } finally {
+    Date.now = nativeNow;
+    window.setTimeout = nativeSet;
+    render.catch(() => {});
+    doc.destroy();
+  }
+};
 globalThis.__oiPdfViews = () => ({
   zoom,
   fit: fitWidthZoom(pdfPageWidth, miniPagesInnerWidth()),
@@ -99,9 +331,9 @@ function serveRepo(syntheticPdf) {
   const server = createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "");
-    if (rel === "synthetic/mini-blank.pdf") {
+    if (rel === "synthetic/mini-blank.pdf" || rel === "synthetic/yield.pdf") {
       res.writeHead(200, { "content-type": "application/pdf", "cache-control": "no-store" });
-      res.end(syntheticPdf);
+      res.end(rel.endsWith("yield.pdf") ? heavyYieldPdf() : syntheticPdf);
       return;
     }
     const file = resolve(root, rel);
@@ -404,6 +636,28 @@ test("mini divider drags do not blank pages outside the render radius", { timeou
   })()`;
 
   const home = await waitFor(painted(HOME_PAGE), "page 1 painted");
+  const race = await evaluate("globalThis.__oiStaleRender()");
+  assert.notEqual(race.after, race.before, "in-flight render left the previous bitmap");
+  assert.equal(race.after, race.expected);
+  assert.equal(race.renderedScale, race.zoom);
+  assert.equal(race.hidden, false);
+  assert.equal(race.cancelled, true);
+  const timerCancel = await evaluate("globalThis.__oiTimerCancelRender()");
+  assert.equal(timerCancel.sawTimer, true, "display render continuation did not use setTimeout");
+  assert.equal(timerCancel.cleared, true, "cancel did not clear the continuation timer");
+  assert.equal(timerCancel.cafOnTimer, false, "cancel passed the timer id to cancelAnimationFrame");
+  assert.equal(timerCancel.rejected, "RenderingCancelledException");
+  const cropRace = await evaluate("globalThis.__oiCropLeavesPage()");
+  assert.ok(cropRace.n >= 2, `crop did not overlap a page render ${JSON.stringify(cropRace)}`);
+  assert.ok(cropRace.pageIds.length >= 1, `page render did not start ${JSON.stringify(cropRace)}`);
+  assert.ok(cropRace.cancelled.includes(1), `crop render was not cancelled ${JSON.stringify(cropRace)}`);
+  assert.equal(cropRace.pageIds.some((id) => cropRace.cancelled.includes(id)), false, `page render was cancelled ${JSON.stringify(cropRace)}`);
+  const probe = await evaluate("globalThis.__oiProbeTimer()");
+  assert.ok(probe.slices >= 8, `render did not keep slicing ${JSON.stringify(probe)}`);
+  assert.ok(probe.elapsed >= 350 && probe.elapsed < 1000, `library delay ${probe.elapsed}ms ${JSON.stringify(probe)}`);
+  const stalled = await evaluate("globalThis.__oiRafStallRender()");
+  assert.equal(stalled.calls, 0, "display render still scheduled an animation frame");
+  assert.ok(stalled.width > 0 && stalled.ms < 5000, JSON.stringify(stalled));
   assert.equal(await evaluate(scrollExpr(FAR_PAGE)), true);
   const far = await waitFor(painted(FAR_PAGE), "far page painted");
   const homeRow = far.pages.find((item) => item.num === HOME_PAGE);
