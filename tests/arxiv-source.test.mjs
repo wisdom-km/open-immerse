@@ -15,6 +15,9 @@ import {
   handleArxivSourceMessage
 } from "../background/arxiv-source.js";
 import { tarGz } from "./helpers/arxiv-pack.mjs";
+import { SRC_V7, SRC_V7_SHA, requireFile } from "./helpers/arxiv-paper.mjs";
+
+const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
@@ -145,7 +148,7 @@ test("AX-10 cache hit, clear, and cached figures", async () => {
   const api = createArxivSourceClient({
     fetch: okFetch(tarGz([
       { name: "note.tex", body: "alpha" },
-      { name: "pic.png", body: "png" }
+      { name: "pic.png", body: PNG }
     ]), calls),
     now: () => clock.t,
     sleep: (ms) => clock.sleep(ms),
@@ -155,10 +158,11 @@ test("AX-10 cache hit, clear, and cached figures", async () => {
   const first = await api.get({ id: "1706.03762", version: "v7", userTriggered: true });
   assert.equal(first.ok, true);
   assert.deepEqual(first.files, [{ path: "note.tex", text: "alpha" }]);
-  assert.deepEqual(first.assets, [{ path: "pic.png", mime: "image/png", size: 3 }]);
+  assert.deepEqual(first.assets, [{ path: "pic.png", mime: "image/png", size: PNG.length }]);
   const picture = await api.readAsset({ id: "1706.03762", version: "v7", path: "pic.png" });
   assert.equal(picture.ok, true);
-  assert.equal(new TextDecoder().decode(new Uint8Array(await picture.bytes.arrayBuffer())), "png");
+  assert.equal(picture.bytes instanceof Blob, true);
+  assert.deepEqual([...new Uint8Array(await picture.bytes.arrayBuffer())], [...PNG]);
   const second = await api.get({ id: "1706.03762", version: "v7", userTriggered: true });
   assert.equal(second.cached, true);
   assert.deepEqual(second.assets, first.assets);
@@ -230,8 +234,9 @@ test("a rebuilt client reads a cached figure, and asset returns one path", async
   const first = createArxivSourceClient({
     fetch: okFetch(tarGz([
       { name: "note.tex", body: "alpha" },
-      { name: "pic.png", body: "png-bytes" },
-      { name: "fig.pdf", body: "%PDF" }
+      { name: "pic.png", body: PNG },
+      { name: "fig.pdf", body: "%PDF" },
+      { name: "mystery.bin", body: "zzz" }
     ]), calls),
     now: () => clock.t,
     sleep: (ms) => clock.sleep(ms),
@@ -240,10 +245,11 @@ test("a rebuilt client reads a cached figure, and asset returns one path", async
   });
   const saved = await first.get({ id: "1706.03762", version: "v7", userTriggered: true });
   assert.deepEqual(saved.assets, [
-    { path: "pic.png", mime: "image/png", size: 9 },
+    { path: "pic.png", mime: "image/png", size: PNG.length },
     { path: "fig.pdf", mime: "application/pdf", size: 4 }
   ]);
   assert.equal(saved.assets.every((asset) => !("bytes" in asset)), true);
+  assert.deepEqual(saved.skipped, [{ path: "mystery.bin", reason: "unsupported" }]);
   const second = createArxivSourceClient({
     fetch: async () => {
       calls.push("rebuilt");
@@ -266,7 +272,11 @@ test("a rebuilt client reads a cached figure, and asset returns one path", async
   }, second);
   assert.equal(one.ok, true);
   assert.equal(one.mime, "image/png");
-  assert.equal(new TextDecoder().decode(new Uint8Array(await one.bytes.arrayBuffer())), "png-bytes");
+  assert.equal(one.encoding, "base64");
+  const round = JSON.parse(JSON.stringify(one));
+  assert.deepEqual([...Buffer.from(round.data, "base64")], [...PNG]);
+  const internal = await second.readAsset({ id: "1706.03762", version: "v7", path: "pic.png" });
+  assert.equal(internal.bytes instanceof Blob, true);
   const missing = await handleArxivSourceMessage({
     action: "asset",
     id: "1706.03762",
@@ -275,6 +285,68 @@ test("a rebuilt client reads a cached figure, and asset returns one path", async
   }, second);
   assert.equal(missing.reason, "missing");
   assert.deepEqual(calls, ["https://arxiv.org/src/1706.03762v7"]);
+});
+
+test("get message lists skipped figures and unsupported files", async () => {
+  const calls = [];
+  const clock = makeClock();
+  const api = createArxivSourceClient({
+    fetch: okFetch(tarGz([
+      { name: "keep.png", body: PNG },
+      { name: "big.png", body: Buffer.concat([Buffer.from(PNG), Buffer.from("x")]) },
+      { name: "mystery.bin", body: "z" }
+    ]), calls),
+    now: () => clock.t,
+    sleep: (ms) => clock.sleep(ms),
+    store: createMemoryStore(),
+    gunzip,
+    maxAssetBytes: PNG.length
+  });
+  const listed = await handleArxivSourceMessage({
+    id: "1",
+    version: "v1",
+    userTriggered: true
+  }, api);
+  const round = JSON.parse(JSON.stringify(listed));
+  assert.deepEqual(round.skipped, [
+    { path: "big.png", reason: "asset-budget" },
+    { path: "mystery.bin", reason: "unsupported" }
+  ]);
+  assert.deepEqual(round.assets, [{ path: "keep.png", mime: "image/png", size: PNG.length }]);
+});
+
+test("asset message JSON restores Figures/ModalNet-21.png", async () => {
+  const packed = requireFile(SRC_V7, SRC_V7_SHA, "从 https://arxiv.org/src/1706.03762v7 下载到 tests/fixtures/arxiv-src/。");
+  const calls = [];
+  const clock = makeClock();
+  const api = createArxivSourceClient({
+    fetch: async (url) => {
+      calls.push(url);
+      return { status: 200, arrayBuffer: async () => packed };
+    },
+    now: () => clock.t,
+    sleep: (ms) => clock.sleep(ms),
+    store: createMemoryStore(),
+    gunzip
+  });
+  const listed = await api.get({ id: "1706.03762", version: "v7", userTriggered: true });
+  assert.equal(listed.assets.some((asset) => asset.path === "Figures/ModalNet-21.png"), true);
+  assert.equal(listed.assets.every((asset) => !("bytes" in asset)), true);
+  const message = await handleArxivSourceMessage({
+    action: "asset",
+    id: "1706.03762",
+    version: "v7",
+    path: "Figures/ModalNet-21.png"
+  }, api);
+  const round = JSON.parse(JSON.stringify(message));
+  const raw = Buffer.from(round.data, "base64");
+  assert.equal(round.path, "Figures/ModalNet-21.png");
+  assert.equal(round.encoding, "base64");
+  assert.equal(raw.length, 159152);
+  assert.deepEqual([...raw.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const stored = await api.readAsset({ id: "1706.03762", version: "v7", path: "Figures/ModalNet-21.png" });
+  assert.equal(stored.bytes instanceof Blob, true);
+  assert.equal(calls.length, 1);
 });
 
 test("AX-12 a PDF response is cached and not fetched again", async () => {

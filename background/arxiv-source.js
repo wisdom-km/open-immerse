@@ -122,6 +122,35 @@ function assetMeta(assets) {
   }));
 }
 
+function skipMeta(skipped) {
+  return (skipped || []).map((row) => ({
+    path: String(row.path || ""),
+    reason: String(row.reason || "")
+  }));
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + step));
+  }
+  return btoa(binary);
+}
+
+async function assetForMessage(result) {
+  if (!result || result.ok !== true || result.bytes == null) return result;
+  const blob = result.bytes instanceof Blob ? result.bytes : asBlob(result.bytes, result.mime);
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  return {
+    ok: true,
+    path: result.path,
+    mime: result.mime,
+    encoding: "base64",
+    data: bytesToBase64(bytes)
+  };
+}
+
 export async function gunzipBytes(bytes) {
   if (typeof DecompressionStream !== "function") {
     throw new Error("gunzipBytes requires DecompressionStream; inject gunzip in tests");
@@ -139,7 +168,8 @@ export function createArxivSourceClient({
   now,
   sleep,
   store,
-  gunzip
+  gunzip,
+  maxAssetBytes
 } = {}) {
   if (typeof doFetch !== "function") throw new Error("createArxivSourceClient requires fetch");
   const clock = now || (() => Date.now());
@@ -224,7 +254,7 @@ export function createArxivSourceClient({
         return { ok: false, reason: "http", status };
       }
       const buffer = new Uint8Array(await response.arrayBuffer());
-      const unpacked = await unpackSource(buffer, { gunzip: inflate });
+      const unpacked = await unpackSource(buffer, { gunzip: inflate, maxAssetBytes });
       if (unpacked.kind === "pdf-only") {
         return { ok: false, reason: "pdf-only", files: [], assets: [] };
       }
@@ -235,6 +265,7 @@ export function createArxivSourceClient({
         ok: true,
         files: textOnly(unpacked.files),
         assets: storeAssets(unpacked.assets),
+        skipped: skipMeta(unpacked.skipped),
         kind: unpacked.kind,
         regularFileCount: unpacked.regularFileCount
       };
@@ -269,6 +300,7 @@ export function createArxivSourceClient({
         reason: cached.reason || undefined,
         files: cached.files || [],
         assets: assetMeta(cached.assets),
+        skipped: skipMeta(cached.skipped),
         cached: true,
         id,
         version: version || null
@@ -285,8 +317,8 @@ export function createArxivSourceClient({
       return { ok: false, reason, id, version: version || null };
     }
     if (outcome.reason === "pdf-only") {
-      await cache.put(key, { reason: "pdf-only", files: [], assets: [], id, version: version || null });
-      return { ok: false, reason: "pdf-only", files: [], assets: [], cached: true, id, version: version || null };
+      await cache.put(key, { reason: "pdf-only", files: [], assets: [], skipped: [], id, version: version || null });
+      return { ok: false, reason: "pdf-only", files: [], assets: [], skipped: [], cached: true, id, version: version || null };
     }
     if (!outcome.ok) {
       if (outcome.reason === "timeout" || outcome.reason === "http" || outcome.reason === "unpack" || outcome.reason === "error") {
@@ -295,9 +327,11 @@ export function createArxivSourceClient({
       return { ok: false, reason: outcome.reason || "error", id, version: version || null };
     }
     const assets = storeAssets(outcome.assets);
+    const skipped = skipMeta(outcome.skipped);
     await cache.put(key, {
       files: textOnly(outcome.files),
       assets,
+      skipped,
       id,
       version: version || null
     });
@@ -305,6 +339,7 @@ export function createArxivSourceClient({
       ok: true,
       files: textOnly(outcome.files),
       assets: assetMeta(assets),
+      skipped,
       id,
       version: version || null,
       cached: false
@@ -381,7 +416,7 @@ export function handleArxivSourceMessage(message = {}, client = sharedArxivSourc
   if (message.action === "status") {
     return Promise.resolve(typeof client.ready === "function" ? client.ready() : null).then(() => client.status());
   }
-  if (message.action === "asset") return client.readAsset(message);
+  if (message.action === "asset") return Promise.resolve(client.readAsset(message)).then(assetForMessage);
   if (message.action === "read-alignment") {
     return client.readAlignment(message);
   }

@@ -88,16 +88,19 @@ test("AX-06 long names, pax headers, and Attention archives", async () => {
 
 test("images over the per-paper budget are skipped, other binaries stay unsupported", async () => {
   assert.equal(MAX_ASSET_BYTES, 30 * 1024 * 1024);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const unpacked = await unpackSource(tarGz([
-    { name: "keep.png", body: "123" },
-    { name: "big.png", body: "123456" },
+    { name: "keep.png", body: png },
+    { name: "big.png", body: Buffer.concat([png, Buffer.from("more")]) },
+    { name: "fake.png", body: "not-a-png" },
     { name: "mystery.bin", body: "zzz" },
     { name: "note.tex", body: "t" }
-  ]), { gunzip, maxAssetBytes: 4 });
+  ]), { gunzip, maxAssetBytes: png.length });
   assert.deepEqual(unpacked.files.map((file) => file.path), ["note.tex"]);
   assert.deepEqual(unpacked.assets.map((asset) => asset.path), ["keep.png"]);
   assert.equal(unpacked.assets[0].mime, "image/png");
-  assert.equal(unpacked.assets[0].bytes.byteLength, 3);
+  assert.equal(unpacked.assets[0].bytes.byteLength, png.length);
   assert.ok(unpacked.skipped.some((row) => row.path === "big.png" && row.reason === "asset-budget"));
+  assert.ok(unpacked.skipped.some((row) => row.path === "fake.png" && row.reason === "magic"));
   assert.ok(unpacked.skipped.some((row) => row.path === "mystery.bin" && row.reason === "unsupported"));
 });

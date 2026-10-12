@@ -74,8 +74,8 @@ Attention v7 里实际有的线索：
 - 不加新依赖：用 Chrome 自带的 `DecompressionStream('gzip')`（manifest 要求 Chrome ≥114，够用），加一个约 40 行的 ustar 读取器。原型 `arxiv-src-unpack.mjs` gzip 后 1.1 KB。
 - 判断格式：先看开头是不是 `%PDF-`（只有 PDF 的投稿）；再看是不是 gzip；解开后第 257 字节处是不是 `ustar`，是就是 tar，不是就是单个 .tex。
 - 安全：处理 GNU 长文件名和 pax 头；挡掉 `..` 和绝对路径；只收普通文件；限制文件数和总大小（初始值：2,000 个文件、解开后 50 MB）。
-- 文本（.tex、.bbl、.sty、.cls、.bib 等）留在 `files`。常见图片按白名单留成二进制 `assets`：png、jpg、jpeg、gif、pdf、eps、svg。其他无法识别的二进制仍然跳过，记进 `skipped` 并写明原因。Attention v7 包 23 个普通文件：文本 11 个，图片 12 个（6 张 png、6 个 pdf）。文本大约 80 KB。
-- 每篇图片总量上限是 `MAX_ASSET_BYTES`，默认 30 MB（2026-10-13 02:34 Wisdom 决定）。超过上限的图片跳过，原因记为 `asset-budget`。
+- 文本（.tex、.bbl、.sty、.cls、.bib 等）留在 `files`。常见图片按白名单留成二进制 `assets`：png、jpg、jpeg、gif、pdf、eps、svg。扩展名还要对上文件头魔数（png、jpeg、gif、pdf、eps；svg 看开头是不是 SVG 标记），对不上记 `magic`。其他无法识别的二进制仍然跳过，原因 `unsupported`。Attention v7 包 23 个普通文件：文本 11 个，图片 12 个（6 张 png、6 个 pdf）。文本大约 80 KB。
+- 每篇图片总量上限是 `MAX_ASSET_BYTES`，默认 30 MB（2026-10-13 02:34 Wisdom 决定）。超过上限的图片跳过，原因记为 `asset-budget`。svg 只能放进 `<img>`，或先做清理后再用；禁止 `innerHTML`。
 - 实测：v7 解包加列文件 185 ms（node 首次运行），v1 41 ms。
 
 ### 2.4 LaTeX 解析（P3）
@@ -168,7 +168,7 @@ Attention v7 的解析数字（P3 测试要锁住）：独立公式 5、行内�
 ### 2.8 缓存
 
 - 第二次打开同一份 PDF 不再联网。库名和缓存键见「F2 决定」第 4 条（对齐用仓库已有的 `pdfByteHash`）。
-- 文字和图片都放进 `oi-arxiv-src`。图片用 Blob（或 ArrayBuffer）存，service worker 重启后文本和二进制都能读回来。默认的 `OI_ARXIV_SOURCE` 只回传文本，以及图片的 `path`、`mime`、`size`，不回传图片本身。`action: "asset"` 按 `path` 取一张。`clear()` 同时清掉图片，`meta:politeness` 仍保留。不用 `chrome.storage.local`（没有 `unlimitedStorage` 时上限 10 MB）。图片总量上限 30 MB，见 2.3。
+- 文字和图片都放进 `oi-arxiv-src`。图片用 Blob 存，service worker 重启后文本和二进制都能读回来。默认的 `OI_ARXIV_SOURCE` 回传文本、图片元数据（`path`、`mime`、`size`）和 `skipped`（`path` 与原因，含 `asset-budget`、`unsupported`、`magic`），不回传图片本身。`action: "asset"` 按 `path` 取一张。消息返回值是 JSON：`{ ok, path, mime, encoding: "base64", data }`，`data` 是标准 base64，没有 `data:` 前缀。`readAsset` 内部仍是 Blob，不进这条消息。`clear()` 同时清掉图片，`meta:politeness` 仍保留。不用 `chrome.storage.local`（没有 `unlimitedStorage` 时上限 10 MB）。图片总量上限 30 MB，见 2.3。svg 只能用 `<img>` 显示或先做清理，禁止 `innerHTML`。
 - 设置里给「清除 arXiv 源码缓存」。
 - 不传到本地库服务（`127.0.0.1:8765`），不上传，不进仓库（决定 9）。
 - 读写缓存都在 `background/` 里（见 2.2）。
@@ -261,4 +261,4 @@ P1–P4 不碰右栏，可以和第一层、第三层并行。**P0 文档已合�
 1. **一个 PR，四个提交。** 顺序是 P1 → P2 → P3 → P4，合在 `feat/arxiv-source-p1-p4` 对 `main` 的 #124 里。不 force push。
 2. **不接 arXiv metadata / BibTeX API。** 编号只认第 1 页戳和 arxiv.org 网址。不按题名或 DOI 反查，不拉 BibTeX。元数据和 BibTeX 留到 F4/F8。
 3. **整篇不用源码的门槛。** 要翻译的正文词（第一遍，不含题注）对齐率低于 85% 时，`useSource` 为 false，整篇公式不走第零层，状态栏写「源码与此 PDF 差别较大」。题注、脚注、作者走第二遍，计入块比例，不计入这条词率。Attention v1 对 PDF v7 的正文词率约 89.9%，高于 85%，整篇仍可用，靠逐条核对挡版本差。
-4. **源码缓存单独一个库。** IndexedDB 库名 `oi-arxiv-src`，和 `oi-annotations` 分开。文字和图片都保留（2026-10-13 02:34）。图片白名单是 png、jpg、jpeg、gif、pdf、eps、svg，按二进制存；其他无法识别的二进制仍跳过并写明原因。每篇图片总量上限 `MAX_ASSET_BYTES`，默认 30 MB，超过的图片跳过。源码按「编号 + 版本」存；对齐结果的键是编号 + 版本 + PDF sha256。`OI_ARXIV_SOURCE` 默认只回传文本和图片元数据（`path`、`mime`、`size`）；`action: "asset"` 按 path 取单张图片。
+4. **源码缓存单独一个库。** IndexedDB 库名 `oi-arxiv-src`，和 `oi-annotations` 分开。文字和图片都保留（2026-10-13 02:34）。图片用 Blob 存。白名单是 png、jpg、jpeg、gif、pdf、eps、svg，扩展名必须对上文件头魔数，否则原因 `magic`。其他无法识别的二进制原因 `unsupported`。每篇图片总量上限 `MAX_ASSET_BYTES`，默认 30 MB，超过的图片原因 `asset-budget`。源码按「编号 + 版本」存；对齐结果的键是编号 + 版本 + PDF sha256。`OI_ARXIV_SOURCE` 默认回传文本、图片元数据（`path`、`mime`、`size`）和 `skipped`。`action: "asset"` 按 path 取单张，消息字段是 `encoding: "base64"` 和 `data`（标准 base64）。svg 只能用 `<img>` 显示或先做清理，禁止 `innerHTML`。

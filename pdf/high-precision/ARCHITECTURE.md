@@ -403,7 +403,7 @@ Faithfulness to the source outranks smoother wording.
 
 阶段 4 起：划区结果按 PDF 字节的 SHA-256（`crypto.subtle`）、页码、`mode`、`PROTOCOL` 放在 `chrome.storage.local`。只存 JSON，不存 PNG。裁图每次从 pageRaster 现切。`storage.sync` 只放设置和密钥。
 
-第零层（REQUIREMENTS §2.7）：源码文本按「arXiv 编号 + 版本」放在扩展自己的 IndexedDB，由 `background/` 读写；对齐结果按「编号 + 版本 + PDF SHA-256」另存。只存文本，不存图片，设置里能清除，不写进本地库服务。
+第零层（REQUIREMENTS §2.7）：源码按「arXiv 编号 + 版本」放在扩展自己的 IndexedDB，由 `background/` 读写；对齐结果按「编号 + 版本 + PDF SHA-256」另存。文字和图片都保留（2026-10-13 02:34）。图片用 Blob 存在同一库，每篇上限 30 MB。`OI_ARXIV_SOURCE` 回传文本、图片元数据（path、mime、size）和 skipped；`action: "asset"` 回传 `encoding: "base64"` 的 `data`。svg 只能用 `<img>` 显示或先做清理，禁止 `innerHTML`。设置里能清除，不写进本地库服务。
 
 ## 11. 导出
 

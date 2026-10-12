@@ -272,7 +272,7 @@ node --test tests/*.test.mjs
 路线图 v2（2026-10-12 23:52）：P1–P4 对应 F2（与笔记 T2b 同时，不碰右栏）；P5 接右栏对应 F5，排在 F3 回退链骨架之后，并依赖 D0 断言改写和 Loom 右栏规格。调度器骨架在 F3 先行。默认仍按 §2.7：关着，认出编号给按钮，点了才下，可以勾「以后自动」。
 
 - P1 认编号：只认 PDF 上的 arXiv 戳和 arxiv.org 网址（已确认）。实现初始值：戳只看第 1 页页边竖排的文字项，冲突时以戳为准，参考文献里的编号不能被选中。
-- P2 下载和解包：联网、解包、IndexedDB 缓存都放在 `background/`（service worker），阅读器发消息取文本。只存文本，设置里能清除（已确认）。限速、超时、冷却、解包上限按 REQUIREMENTS §2.7 第二张表的初始值。先在 `.gitignore` 加 `tests/fixtures/arxiv-src/`。
+- P2 下载和解包：联网、解包、IndexedDB 缓存都放在 `background/`（service worker），阅读器发消息取文本和图片。文字和图片都保留（2026-10-13 02:34）：图片用 Blob，每篇上限 30 MB，`action: "asset"` 按 path 取单张并以 base64 回传。设置里能清除。限速、超时、冷却、解包上限按 REQUIREMENTS §2.7 第二张表的初始值。先在 `.gitignore` 加 `tests/fixtures/arxiv-src/`。
 - P3 LaTeX 解析：从主文件顺着 `\input` 走，先去注释，展开宏。KaTeX 不认的宏不猜。
 - P4 对齐和核对：内存有上限。字符核对和第二层共用映射表。
 - P1–P4 不碰右栏。P5 接进右栏，等 Loom 规格。UI 以 Loom 规格为准。
