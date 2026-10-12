@@ -278,7 +278,7 @@ globalThis.__oiProbeTimer = async () => {
   let slices = 0;
   Date.now = () => nativeNow() + ticks++ * 20;
   window.setTimeout = (fn, ms, ...args) => {
-    if (ms === 16) {
+    if (ms === 4) {
       slices += 1;
       return nativeSet(() => {
         const end = performance.now() + 12;

@@ -2127,9 +2127,11 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
 // pdf.js 4.10.38 continues a display render only on requestAnimationFrame.
 // If no frame arrives, page.render() never settles and open / goPage stay
 // there. The vendored build forces that flag off and continues each slice
-// on a 16ms timer (pdf/vendor/pdf.min.mjs). A 0ms timer is always due, so
+// on a 4ms timer (pdf/vendor/pdf.min.mjs). A 0ms timer is always due, so
 // a chain of slices runs before library probes and every other delayed
-// timer. RenderTask hides the internal task behind a private field, so
+// timer. 4ms stays ordered with those delays without stretching a
+// full-page raster past the reopen crop budget. RenderTask hides the
+// internal task behind a private field, so
 // this cannot be switched from here. window.requestAnimationFrame is not
 // replaced.
 // Only the sharp-crop page.render is recorded. A page canvas started while
@@ -8989,12 +8991,14 @@ async function primeKnownPages() {
     const legacyChanged = await seedLegacySkipPages();
     if (stale()) return;
     if (libraryChanged || legacyChanged) renderArticle();
+    // Stored library layouts have no image bytes. Hydrate after they land;
+    // an earlier pass sees an empty cache and returns without scheduling.
+    hydrateMissingVisualCrops(stale).catch(() => {});
   };
   // The probe's 400/1000/1800ms delays used to sit on the page-turn await.
   // Layout paints first. Pairs land when the probe resolves.
   if (libraryDoc) await seed();
   else ensureLibraryDocument().then(() => seed()).catch(() => {});
-  hydrateMissingVisualCrops(stale).catch(() => {});
 }
 
 async function loadCurrentPageText(explicitPage) {
@@ -9145,6 +9149,7 @@ async function loadCurrentPageText(explicitPage) {
     syncNoTextLayerHint(true);
   }
   updateTranslateControls();
+  if (!isStale()) hydrateMissingVisualCrops(isStale).catch(() => {});
 }
 
 function updatePager() {
