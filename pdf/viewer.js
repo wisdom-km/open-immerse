@@ -166,6 +166,7 @@ import {
   visualAlt
 } from "../lib/pdf-blocks.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
+import { reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
@@ -1906,6 +1907,45 @@ function getPageLayout(page) {
   return layoutCache.get(layoutKey(page)) || null;
 }
 
+function reanchorLaidPage(page) {
+  refreshNoteAnchors(page, "layout");
+}
+
+function reanchorTranslatedPage(page) {
+  refreshNoteAnchors(page, "retranslate");
+}
+
+/** Layout or retranslate finished. Re-anchor this page ±1. No note UI. */
+function refreshNoteAnchors(page, reason) {
+  const center = Number(page);
+  if (!(center >= 1)) return;
+  const pages = [];
+  for (const n of [center - 1, center, center + 1]) {
+    if (n < 1) continue;
+    const layout = getPageLayout(n);
+    if (!layout?.blocks?.length) continue;
+    const rows = pageCache.get(docId, n) || (n === pageNum ? pageResults : null) || [];
+    pages.push({ page: n, blocks: applyBlockTranslations(layout.blocks, rows) });
+  }
+  if (!pages.length) return;
+  const underTest = viewerUnderTest();
+  void reanchorOpenPage({
+    docHash: libraryDoc?.hash || "",
+    page: center,
+    pages,
+    reason,
+    layoutRev: knownLayoutVersion,
+    resolveDocHash: () => pdfByteHash()
+  }).then((result) => {
+    if (!underTest) return;
+    const bucket = globalThis.__oiNotes || (globalThis.__oiNotes = {});
+    bucket.store = sharedNotesStore();
+    if (!result) return;
+    bucket[center] = result;
+    bucket.last = result;
+  }).catch(() => {});
+}
+
 function setPageLayout(page, layout) {
   if (layout) {
     stampLayoutBids(page, layout);
@@ -1923,6 +1963,7 @@ function setPageLayout(page, layout) {
       label: String(block.label || "")
     }));
   }
+  if (layout?.blocks?.length) reanchorLaidPage(page);
 }
 
 function appendReadoutNode(input, parent) {
@@ -2649,6 +2690,8 @@ function publishViewerTestHooks() {
     sourceId: String(block.sourceId || ""),
     text: String(block.text || "")
   }));
+  globalThis.__oiNotes = globalThis.__oiNotes || {};
+  globalThis.__oiNotes.store = sharedNotesStore();
 }
 
 function landedText(translation, source = "") {
@@ -7850,6 +7893,7 @@ async function forceRetranslateCurrentPage() {
       clearSlotPainted(targetPage);
       finishDocPhase();
       renderArticle();
+      reanchorTranslatedPage(targetPage);
       if (!work.aborted && isCurrentWork(work, gen, translatingDoc)) setStatus(PDF_COPY.retranslateDone);
     } catch {
       restoreForceReadout(prior, translatingDoc, targetPage);
