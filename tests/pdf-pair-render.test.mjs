@@ -426,7 +426,12 @@ test("Attention pairing, follow, and swap match the phase-1 brief", { timeout: 3
       const started = Date.now();
       let last = null;
       while (Date.now() - started < timeoutMs) {
-        last = await evaluate(expression);
+        try {
+          last = await evaluate(expression);
+        } catch (err) {
+          if (!String(err?.message || err).includes("Inspected target navigated or closed")) throw err;
+          last = null;
+        }
         if (last) return last;
         await sleep(150);
       }
@@ -2293,7 +2298,12 @@ async function openAttentionPair(t) {
     const started = Date.now();
     let last = null;
     while (Date.now() - started < timeoutMs) {
-      last = await evaluate(expression);
+      try {
+        last = await evaluate(expression);
+      } catch (err) {
+        if (!String(err?.message || err).includes("Inspected target navigated or closed")) throw err;
+        last = null;
+      }
       if (last) return last;
       await sleep(150);
     }

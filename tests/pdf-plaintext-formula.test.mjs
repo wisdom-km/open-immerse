@@ -203,7 +203,7 @@ test("inline box height is ink divided by pad share, not a taller fixed em", () 
   assert.match(css, new RegExp(`--oi-pdf-inline-crop-em, ${box}em`));
   assert.match(css, new RegExp(`--oi-pdf-inline-line-em, ${line}em`));
   assert.match(viewer, /matchedFormulaStyle\(formula, layout\?\.page \?\? node\.dataset\.page\)/);
-  assert.match(viewer, /formulaReadabilityFloor\(readerPrefs\.fontSize, bodyPt\)/);
+  assert.match(viewer, /formulaReadabilityFloor\(readerShownFont\(\), bodyPt\)/);
   assert.match(viewer, /pageWidthPt: Number\(layout\?\.pageWidth\)/);
   assert.doesNotMatch(viewer, /INLINE_BODY_HARD_MAX|DISPLAY_INK_PAINT|SCRIPT_INK_MIN_PX/);
   assert.doesNotMatch(viewer, /classList\.add\("is-promoted"\)/);

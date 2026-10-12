@@ -122,15 +122,24 @@
   </header>
   <div id="tbSubbar" class="tb-subbar" hidden></div>
   <div id="aaPanel" class="aa-panel oi-reader oi-sb" data-reader-theme="warm" hidden role="dialog" aria-label="阅读设置">
-    <div class="aa-group">
+    <div class="aa-group aa-font-group" id="aaFontGroup">
       <div class="aa-font-row">
         <span class="aa-label" id="aaFontLabel">字号</span>
-        <button type="button" id="aaFontDown" class="aa-icon-btn" aria-label="减小字号">−</button>
-        <span id="aaFontValue" class="aa-font-value" aria-live="polite">16px</span>
-        <button type="button" id="aaFontUp" class="aa-icon-btn" aria-label="增大字号">+</button>
-        <button type="button" id="aaFontDefault" class="aa-text-btn">默认</button>
+        <span id="aaFontValue" class="aa-font-value" aria-live="polite">16 px</span>
+        <button type="button" id="aaFontDefault" class="aa-text-btn" disabled>恢复默认 16</button>
       </div>
-      <div id="aaFontScale" class="aa-scale" role="radiogroup" aria-labelledby="aaFontLabel"></div>
+      <div id="aaFontScale" class="aa-slider" role="slider" tabindex="0" aria-labelledby="aaFontLabel" aria-valuemin="14" aria-valuemax="40" aria-valuenow="16" aria-valuetext="16 像素">
+        <div class="aa-slider-track">
+          <div id="aaFontFill" class="aa-slider-fill"></div>
+          <div id="aaFontThumb" class="aa-slider-thumb"></div>
+        </div>
+        <div id="aaFontTip" class="aa-slider-tip" hidden></div>
+        <div id="aaFontTicks" class="aa-slider-ticks"></div>
+      </div>
+      <p id="aaFontCap" class="aa-font-hint aa-font-cap" hidden>
+        <span id="aaFontCapText"></span>
+        <button type="button" id="aaFontHideSource" class="aa-text-btn">隐藏原文</button>
+      </p>
     </div>
     <div class="aa-group">
       <div class="aa-label" id="aaThemeLabel">背景</div>
