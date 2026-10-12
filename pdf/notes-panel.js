@@ -1246,12 +1246,13 @@ export function mountNotesUi(api) {
       const body = h("div", { class: "oi-note-body", html: renderNoteMarkdown(note.body) });
       card.append(body);
     }
+    const actions = h("div", { class: `oi-note-actions${inLost ? " is-visible" : ""}` });
     if (note.kind === "highlight" && !inLost) {
+      actions.classList.add("is-hl-row");
       const add = h("button", { type: "button", class: "ghostadd", text: "＋ 加笔记" });
       add.addEventListener("click", () => editNote(note));
-      card.append(add);
+      actions.append(add);
     }
-    const actions = h("div", { class: `oi-note-actions${inLost ? " is-visible" : ""}` });
     if (inLost) {
       actions.append(smallButton(`跳到第 ${note.page || "?"} 页 ↗`, () => api.jumpPage?.(note.page)));
       actions.append(smallButton("编辑", () => editNote(note)));

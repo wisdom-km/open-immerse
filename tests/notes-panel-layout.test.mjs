@@ -687,4 +687,71 @@ test("NIM-01…09 notes panel layout holds without a PDF fixture", { timeout: 90
     if (row.trashLines) assert.equal(row.trashLines, 1, JSON.stringify(row));
     assert.ok(row.trashH <= 30.5, JSON.stringify(row));
   }
+
+  const hlRow = JSON.parse(await evaluate(`(() => {
+    document.querySelector('[data-note-id="h1"] .oi-note-quote').click();
+    const card = document.querySelector('[data-note-id="h1"]');
+    card.scrollIntoView({ block: "center", inline: "nearest" });
+    const add = card.querySelector(".ghostadd");
+    const del = card.querySelector(".oi-note-actions .oi-notes-text-btn");
+    const addBox = add.getBoundingClientRect();
+    const delBox = del.getBoundingClientRect();
+    const style = getComputedStyle(del);
+    const midY = delBox.top + delBox.height / 2;
+    const hit = document.elementFromPoint(delBox.left + delBox.width / 2, midY);
+    const padHit = document.elementFromPoint(delBox.left + 4, midY);
+    return JSON.stringify({
+      linked: card.classList.contains("linked"),
+      addTop: addBox.top,
+      delTop: delBox.top,
+      addRight: addBox.right,
+      delLeft: delBox.left,
+      delW: delBox.width,
+      delH: delBox.height,
+      pad: style.paddingLeft,
+      hit: hit === del,
+      padHit: padHit === del,
+      text: del.textContent
+    });
+  })()`));
+  assert.equal(hlRow.linked, true);
+  assert.equal(hlRow.text, "删除");
+  assert.ok(Math.abs(hlRow.addTop - hlRow.delTop) <= 1, JSON.stringify(hlRow));
+  assert.ok(hlRow.delLeft >= hlRow.addRight - 1, JSON.stringify(hlRow));
+  assert.equal(hlRow.pad, "8px");
+  assert.ok(hlRow.delH >= 24, JSON.stringify(hlRow));
+  assert.ok(hlRow.delW >= 24, JSON.stringify(hlRow));
+  assert.equal(hlRow.hit, true, JSON.stringify(hlRow));
+  assert.equal(hlRow.padHit, true, JSON.stringify(hlRow));
+
+  const chips = JSON.parse(await evaluate(`(async () => {
+    const slot = document.getElementById("sideSlot");
+    const measure = async (font) => {
+      document.body.style.setProperty("--oi-reader-font-size", font + "px");
+      slot.style.width = "360px";
+      window.dispatchEvent(new Event("resize"));
+      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+      const row = document.querySelector(".oi-notes-chips");
+      const buttons = [...row.querySelectorAll(".oi-notes-chip")];
+      const tops = buttons.map((node) => Math.round(node.getBoundingClientRect().top));
+      return {
+        font,
+        pad: getComputedStyle(buttons[0]).paddingLeft,
+        wrap: getComputedStyle(row).flexWrap,
+        tops,
+        lines: new Set(tops).size
+      };
+    };
+    const at14 = await measure(14);
+    const at40 = await measure(40);
+    document.body.style.removeProperty("--oi-reader-font-size");
+    slot.style.width = "400px";
+    window.dispatchEvent(new Event("resize"));
+    return JSON.stringify({ at14, at40 });
+  })()`));
+  assert.equal(chips.at14.pad, "8px");
+  assert.equal(chips.at14.wrap, "wrap");
+  assert.equal(chips.at14.lines, 1, JSON.stringify(chips.at14));
+  assert.equal(chips.at40.wrap, "wrap");
+  assert.equal(chips.at40.pad, "8px");
 });

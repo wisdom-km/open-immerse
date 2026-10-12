@@ -111,6 +111,9 @@
 .oi-notes.slim {
   --oi-notes-pad-x: 16px;
 }
+.oi-notes.slim .oi-notes-chip {
+  padding: 0 8px;
+}
 .oi-notes-head {
   display: flex;
   align-items: center;
@@ -448,7 +451,9 @@
 .ghostadd {
   display: inline-flex;
   align-items: center;
+  box-sizing: border-box;
   height: 24px;
+  min-height: 24px;
   margin-top: 4px;
   padding: 0 8px;
   border: 0;
@@ -503,7 +508,23 @@
 .oi-note-card:hover .oi-note-actions,
 .oi-note-card:focus-within .oi-note-actions,
 .oi-note-actions.is-visible,
-.oi-note-card.is-lost .oi-note-actions { visibility: visible; }
+.oi-note-card.is-lost .oi-note-actions,
+.oi-note-card.is-linked .oi-note-actions.is-hl-row,
+.oi-note-card.linked .oi-note-actions.is-hl-row { visibility: visible; }
+.oi-note-actions.is-hl-row {
+  flex-wrap: nowrap;
+  align-items: center;
+  margin-top: 4px;
+}
+.oi-note-actions.is-hl-row .ghostadd { margin-top: 0; }
+.oi-note-actions.is-hl-row .ghostadd,
+.oi-note-actions.is-hl-row .oi-notes-text-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
 .oi-notes-text-btn,
 .oi-note-actions button,
 .oi-note-kinds button,
