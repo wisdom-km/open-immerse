@@ -113,7 +113,7 @@ Toolbar icon → **设置** (Settings), or right-click the icon → Options.
 
 Default engine is **MyMemory (free trial)** — no key required, quality and quota are limited. For real reading, switch to DeepL or any LLM channel.
 
-Translation-engine keys live in `chrome.storage.sync`. Settings export includes keys; keep that file private. Multimodal and OCR API keys stay in `chrome.storage.local` and do not enter sync for now. When cloud sync (F10) is built, whether those keys follow the account is the user's choice, and the storage layer must reserve an interface for that (2026-10-13 11:57).
+Translation-engine keys live in `chrome.storage.sync`. Settings export includes keys; keep that file private. Multimodal and OCR API keys stay in `chrome.storage.local` and do not enter sync for now. When cloud sync (F10) is built, whether those keys follow the account is the user's choice, and the storage layer must reserve an interface for that (2026-10-13 11:57). Notes-panel preferences (panel width, filter, "don't show again", and the like) move from `localStorage` into `chrome.storage.local` with the other settings (2026-10-13 12:00). Existing values migrate automatically and must not be dropped. A separate small PR does this; it is not in yet.
 
 ### 2. Translate a page
 
