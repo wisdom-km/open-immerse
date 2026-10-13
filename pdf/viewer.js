@@ -314,7 +314,7 @@ import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard } from "../lib/persist-card.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
-import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/notes-pending.js";
+import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
 import { getProvider, missingRequiredField } from "../lib/providers.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
@@ -7788,12 +7788,13 @@ function rememberTranslation(page, results) {
       page,
       pairs,
       layout,
+      blocks,
+      targetLang: pdfTargetLang,
       ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
       sourceBase64,
       ...(skipped ? { skipped: true } : {})
     };
     await saveLibraryPage(savedPayload);
-    mirrorLibrarySaveForTest(savedPayload);
     void maybeShowPersistCard();
     librarySourceSent.add(hash);
     const savedPage = libraryDoc?.pages?.find((item) => item.page === page);
@@ -7910,11 +7911,12 @@ function persistPageLayout(page) {
       page,
       pairs,
       layout,
+      blocks: raw.blocks,
+      targetLang: pdfTargetLang,
       layoutVersion: version,
       ...(skipped ? { skipped: true } : {})
     };
     await saveLibraryPage(savedPayload);
-    mirrorLibrarySaveForTest(savedPayload);
   });
 }
 
@@ -7935,58 +7937,14 @@ function persistPagePairs(saved) {
       pageCount,
       page,
       pairs: saved.pairs,
+      ...(rawLayout?.blocks ? { blocks: rawLayout.blocks } : {}),
+      targetLang: pdfTargetLang,
       ...(layout ? { layout } : {}),
       ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
       ...(saved.skipped ? { skipped: true } : {})
     };
     await saveLibraryPage(savedPayload);
-    mirrorLibrarySaveForTest(savedPayload);
   });
-}
-
-function mirrorLibrarySaveForTest(payload) {
-  if (!viewerUnderTest() || !payload) return;
-  const page = Number(payload.page) || 0;
-  if (!page) return;
-  const record = {
-    page,
-    pairs: payload.pairs || [],
-    skipped: payload.skipped === true,
-    layout: payload.layout || null,
-    layoutVersion: payload.layoutVersion || payload.layout?.layoutVersion || ""
-  };
-  const bucket = globalThis.__oiAuto;
-  if (bucket) {
-    const prev = Array.isArray(bucket.saved) ? bucket.saved : [];
-    const pages = prev.filter((item) => Number(item.page) !== page);
-    pages.push(record);
-    bucket.saved = pages;
-    if (Array.isArray(bucket.library)) {
-      const at = bucket.library.findIndex((item) => Number(item.page) === page);
-      if (at >= 0) bucket.library[at] = { ...bucket.library[at], ...record };
-      else bucket.library.push(record);
-    }
-  }
-  if (Array.isArray(globalThis.__oiPosts)) {
-    const posted = { ...payload };
-    delete posted.sourceBase64;
-    globalThis.__oiPosts.push(posted);
-  }
-  try {
-    const prevLib = JSON.parse(sessionStorage.getItem("oiSavedLib") || "[]");
-    const libPages = (Array.isArray(prevLib) ? prevLib : []).filter((item) => Number(item.page) !== page);
-    libPages.push({ page, pairs: payload.pairs || [], skipped: payload.skipped === true });
-    sessionStorage.setItem("oiSavedLib", JSON.stringify(libPages));
-    const scene = new URLSearchParams(location.search).get("oiScene") || "";
-    if (!scene) return;
-    const key = `oiSaved:${scene}`;
-    const prev = JSON.parse(sessionStorage.getItem(key) || "[]");
-    const pages = (Array.isArray(prev) ? prev : []).filter((item) => Number(item.page) !== page);
-    pages.push(record);
-    sessionStorage.setItem(key, JSON.stringify(pages));
-  } catch {
-    /* the harness snapshot is enough when session storage is blocked */
-  }
 }
 
 /** Drop a historical source-uncertain hold on the page-5 matrix sentence and store its Chinese. */
@@ -9406,6 +9364,10 @@ async function ingestVendorLayout(n, mode, isStale) {
   const hash = await pdfByteHash();
   const key = layoutCacheKey({ hash, page: n, mode });
   const version = await layoutVersionNow();
+  // The library probe is already running. A current page layout there means
+  // this open must not zone the page again. Waiting here keeps a slow first
+  // IndexedDB open from losing that race.
+  await ensureLibraryDocument();
   // A source-v3 entry with no revision, or an older revision, is not the current
   // block structure. Library page layouts follow the same rule.
   let mapped = storedLayoutCurrent(await readStoredLayout(key), version)

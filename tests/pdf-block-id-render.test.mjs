@@ -16,6 +16,7 @@ import { isTranslatableBlock } from "../lib/pdf-blocks.js";
 import { assignBids, isBid, stampLayoutBids } from "../lib/pdf-block-id.js";
 import { currentLayoutVersion, layoutCacheKey } from "../lib/pdf-layout-client.js";
 import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
+import { e2eLibrarySceneResetSource, storedLibraryPagesSource } from "./helpers/library-observe.mjs";
 import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs";
 
 const BID_TMP_PREFIXES = ["oi-bid-render-", "com.google.Chrome.", ".com.google.Chrome."];
@@ -262,10 +263,23 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
   await send("Page.addScriptToEvaluateOnNewDocument", {
     source: `(() => {
       const payload = ${payload};
-      const mode = new URLSearchParams(location.search).get("oiBidMode") || "text";
+      const params = new URLSearchParams(location.search);
+      const mode = params.get("oiBidMode") || "text";
+      ${e2eLibrarySceneResetSource()}
       if (mode === "cache") localStorage.setItem("oi-pdf-engine", "local-ocr");
       else localStorage.removeItem("oi-pdf-engine");
       window.__oiPosts = [];
+      window.__oiPageWrites = [];
+      import("/lib/library-session.js").then(({ sharedLibraryStore }) => {
+        sharedLibraryStore().subscribe((event) => {
+          if (!event || event.collection !== "pages") return;
+          window.__oiPageWrites.push({
+            collection: event.collection,
+            docHash: event.docHash || "",
+            page: event.page || 0
+          });
+        });
+      }).catch(() => {});
       const origFetch = window.fetch.bind(window);
       window.fetch = async (input, init) => {
         const url = typeof input === "string" ? input : (input && input.url) || "";
@@ -296,6 +310,7 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
           }
         },
         runtime: {
+          id: "oi-e2e",
           getURL() { return new URL("./vendor/pdf.worker.min.mjs", location.href).href; },
           sendMessage(message) {
             const type = message && message.type;
@@ -381,7 +396,12 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
       bid: nodes.map((el) => el.dataset.bid || "")
     });
   })()`));
-  const posts = async () => JSON.parse(await evaluate(`JSON.stringify(window.__oiPosts || [])`));
+  const posts = async () => JSON.parse(await evaluate(`JSON.stringify(window.__oiPageWrites || [])`));
+  const storedPage = async (page) => JSON.parse(await evaluate(`(async () => {
+    ${storedLibraryPagesSource()}
+    const pages = await oiStoredLibraryPages();
+    return JSON.stringify(pages.find((item) => Number(item.page) === ${page}) || null);
+  })()`));
   const hasBid = (row, bid) => row.bid.includes(bid) || row.pair.includes(bid);
   const settled = async (page, needles) => {
     const want = Array.isArray(needles) ? needles : [needles];
@@ -569,7 +589,8 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
   assertStable(await settled(4, page4Needles), beforeSave, "retranslate keeps bids");
   const saved = (await posts()).filter((body) => Number(body.page) === 4);
   assert.ok(saved.length >= 1, "retranslate writes the page");
-  const pairBids = saved[saved.length - 1].pairs.map((pair) => pair.bid).filter(Boolean);
+  const stored = await storedPage(4);
+  const pairBids = (stored?.pairs || []).map((pair) => pair.bid).filter(Boolean);
   assert.ok(pairBids.length > 0);
   assert.equal(pairBids.every((bid) => isBid(bid)), true, "saved pairs carry bids");
   assert.ok(pairBids.includes("b1-p4-t010gv1t"), "saved page 4 keeps the paragraph bid");

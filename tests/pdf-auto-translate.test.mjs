@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
+import { e2eLibrarySceneResetSource, storedLibraryPagesSource } from "./helpers/library-observe.mjs";
 import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs";
 
 const AUTO_TMP_PREFIXES = ["oi-auto-translate-", "com.google.Chrome.", ".com.google.Chrome."];
@@ -37,6 +38,7 @@ const STUB = `(() => {
   const params = new URLSearchParams(location.search);
   const mode = params.get("oiAuto") || "";
   if (!mode || mode === "runtime") return;
+  ${e2eLibrarySceneResetSource()}
   const lang = params.get("oiLang") || (mode === "en" ? "en" : mode === "ja" ? "ja" : "zh-CN");
   const delayMs = Number(params.get("oiDelay") || 0);
   const settings = {
@@ -157,6 +159,7 @@ const STUB = `(() => {
   };
   globalThis.chrome = {
     runtime: {
+      id: "oi-e2e",
       getURL() {
         return new URL("./vendor/pdf.worker.min.mjs", location.href).href;
       },
@@ -786,7 +789,11 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     if (page1 === "running" || page1 === "layout") return "";
     return "idle";
   })()`, "fast: 全文译完后主按钮回到翻译", 180000);
-  await evaluate(`sessionStorage.setItem("oiRecorded", sessionStorage.getItem("oiSavedLib") || "[]")`);
+  await evaluate(`(async () => {
+    ${storedLibraryPagesSource()}
+    sessionStorage.setItem("oiRecorded", JSON.stringify(await oiStoredLibraryPages()));
+    return true;
+  })()`);
   await evaluate(`(() => {
     window.__oiAuto.retranslateAt = (window.__oiAuto.messages || []).length;
     document.getElementById("retranslatePage").click();
@@ -1089,13 +1096,14 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.match(replayZh.zh, /译:/);
 
   await openMode("echo");
-  const echoed = JSON.parse(await waitFor(`(() => {
+  const echoed = JSON.parse(await waitFor(`(async () => {
+    ${storedLibraryPagesSource()}
     const docEl = document.querySelector("#docStatus");
     const doc = docEl?.querySelector(".doc-text")?.textContent || "";
     const pages = [...document.querySelectorAll("#readerFlow .rf-page")];
     if (docEl?.dataset.state !== "done" || !pages.length) return "";
     if (pages.some((el) => !["done", "skipped", "empty"].includes(el.dataset.state || ""))) return "";
-    const saved = JSON.parse(sessionStorage.getItem("oiSavedLib") || "[]");
+    const saved = await oiStoredLibraryPages();
     const blocks = window.__oiLiveBlocks ? window.__oiLiveBlocks(1) : [];
     const zh = [...document.querySelectorAll('#readerFlow .rf-page[data-page="1"] .rf-zh')].map((el) => el.textContent || "").join("\\n");
     if (!zh.includes("dominant sequence")) return "";
@@ -1178,12 +1186,17 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   })()`, "en: 英文译文能让第 1 页 done", 120000));
   assert.equal(english.page1, "done");
   assert.match(english.zh, /Rendered English translation/);
-  await waitFor(`(() => {
-    const pages = JSON.parse(sessionStorage.getItem("oiSavedLib") || "[]");
+  await waitFor(`(async () => {
+    ${storedLibraryPagesSource()}
+    const pages = await oiStoredLibraryPages();
     const page1 = pages.find((item) => Number(item.page) === 1);
     return JSON.stringify(page1 || {}).includes("Rendered English translation") ? "saved" : "";
   })()`, "en: 第 1 页已写入库");
-  await evaluate(`sessionStorage.setItem("oiRecorded", sessionStorage.getItem("oiSavedLib") || "[]")`);
+  await evaluate(`(async () => {
+    ${storedLibraryPagesSource()}
+    sessionStorage.setItem("oiRecorded", JSON.stringify(await oiStoredLibraryPages()));
+    return true;
+  })()`);
   const replayEn = await replayWrittenLibrary("en", "Rendered English translation");
   assert.equal(replayEn.page1, "done");
   assert.match(replayEn.zh, /Rendered English translation/);
@@ -1197,12 +1210,17 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   })()`, "ja: 假名译文能让第 1 页 done", 120000));
   assert.equal(kana.page1, "done");
   assert.match(kana.zh, /ちゅういりょくのやく/);
-  await waitFor(`(() => {
-    const pages = JSON.parse(sessionStorage.getItem("oiSavedLib") || "[]");
+  await waitFor(`(async () => {
+    ${storedLibraryPagesSource()}
+    const pages = await oiStoredLibraryPages();
     const page1 = pages.find((item) => Number(item.page) === 1);
     return JSON.stringify(page1 || {}).includes("ちゅういりょくのやく") ? "saved" : "";
   })()`, "ja: 第 1 页已写入库");
-  await evaluate(`sessionStorage.setItem("oiRecorded", sessionStorage.getItem("oiSavedLib") || "[]")`);
+  await evaluate(`(async () => {
+    ${storedLibraryPagesSource()}
+    sessionStorage.setItem("oiRecorded", JSON.stringify(await oiStoredLibraryPages()));
+    return true;
+  })()`);
   const replayJa = await replayWrittenLibrary("ja", "ちゅういりょくのやく");
   assert.equal(replayJa.page1, "done");
   assert.match(replayJa.zh, /ちゅういりょくのやく/);

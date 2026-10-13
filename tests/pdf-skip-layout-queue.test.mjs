@@ -20,6 +20,7 @@ import { cacheableLayout, layoutCacheKey } from "../lib/pdf-layout-client.js";
 import { isSkipOnlyPage, sourceReuseHash } from "../lib/pdf-library.js";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
+import { e2eLibrarySceneResetSource, storedLibraryPagesSource } from "./helpers/library-observe.mjs";
 import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs";
 
 const SKIP_TMP_PREFIXES = ["oi-skip-layout-", "com.google.Chrome.", ".com.google.Chrome."];
@@ -172,6 +173,7 @@ function stubSource(cache) {
   const params = new URLSearchParams(location.search);
   const mode = params.get("oiAuto") || "";
   if (!mode) return;
+  ${e2eLibrarySceneResetSource()}
   const scene = params.get("oiScene") || "";
   const settings = {
     provider: "mymemory",
@@ -263,6 +265,7 @@ function stubSource(cache) {
   };
   globalThis.chrome = {
     runtime: {
+      id: "oi-e2e",
       getURL() {
         return new URL("./vendor/pdf.worker.min.mjs", location.href).href;
       },
@@ -434,7 +437,9 @@ function sleep(ms) {
   return new Promise((done) => setTimeout(done, ms));
 }
 
-const READ = `(() => {
+const READ = `(async () => {
+  ${storedLibraryPagesSource()}
+  const storedPages = await oiStoredLibraryPages();
   const shown = [...document.querySelectorAll("[data-bid]")].map((el) => ({
     bid: el.dataset.bid || "",
     zh: [...el.children].filter((child) => child.classList.contains("rf-zh")).map((child) => child.textContent || "").join("").trim()
@@ -463,7 +468,7 @@ const READ = `(() => {
     shown,
     batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
     messages: (window.__oiAuto && window.__oiAuto.messages) || [],
-    library: (window.__oiAuto && window.__oiAuto.library) || [],
+    library: storedPages,
     layouts: (window.__oiAuto && window.__oiAuto.layouts) || []
   });
 })()`;

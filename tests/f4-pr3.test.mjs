@@ -20,13 +20,14 @@ import {
   fetchLibraryDocument,
   flushPendingPages,
   mergeLibraryPairs,
+  mergeStoredPagePairs,
   saveLibraryPage
 } from "../lib/pdf-library.js";
 import { layoutCacheKey, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { readLayoutCache, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard } from "../lib/persist-card.js";
-import { bindPendingUnload, createPendingNotes, pendingNotesKey } from "../lib/notes-pending.js";
+import { bindPendingUnload, createPendingNotes, pendingNotesKey } from "../lib/pending-notes.js";
 import { mountNotesUi } from "../pdf/notes-panel.js";
 import {
   BLOCKED_CAN,
@@ -559,6 +560,16 @@ test("a pending open is inherited without another indexedDB.open, then release e
   assert.equal(second.cause, failed.cause);
   assert.equal(second.since, failed.since);
   assert.equal(second.message, "这次没能打开本机存储。");
+  held.req.onblocked();
+  const upgraded = await openIndexedDatabase({
+    name: "oi-pr3-inherit",
+    version: 2,
+    indexedDB: held.factory,
+    blockedTimeoutMs: 20
+  }).then(() => null, (error) => error);
+  assert.equal(opens, opensAfter);
+  assert.equal(upgraded.cause, "blocked");
+  assert.equal(upgraded.since, failed.since);
   held.req.result = { close() {} };
   held.req.onsuccess();
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -619,8 +630,48 @@ test("F4-08 keeps the old layout key and still judges it with storedLayoutCurren
   assert.equal(storedLayoutCurrent(second, "rev-1")?.blocks[0].bid, "b");
   assert.equal(storedLayoutCurrent({ layout: second, layoutVersion: "rev-1" }, "rev-1")?.blocks[0].bid, "b");
   assert.equal(storedLayoutCurrent(second, "other"), null);
+  await store.putLayout({
+    docHash: "doc-layout",
+    page: 2,
+    mode: "text-layer",
+    protocol: "blocks-1",
+    layoutRev: "rev-9",
+    layout: { blocks: [{ bid: "new", text: "fresh" }], layoutVersion: "rev-9", protocol: "blocks-1" }
+  });
+  puts = 0;
+  const kept = await readLayoutCache(key, { store });
+  assert.equal(kept.blocks[0].bid, "new");
+  assert.equal(puts, 0);
+  assert.equal((await store.getLayout("doc-layout", 2, "text-layer", "blocks-1")).layoutRev, "rev-9");
   await writeLayoutCache(key, { ...legacy, layoutVersion: "rev-2" }, { store });
   assert.equal(bag.get(key).layoutVersion, "rev-1");
+  const freshKey = layoutCacheKey({ hash: "doc-layout", page: 4, mode: "local-ocr" });
+  const stale = { blocks: [{ bid: "old", text: "stale" }], protocol: "blocks-1", textSource: "text-layer" };
+  let releaseRead;
+  const gate = new Promise((resolve) => { releaseRead = resolve; });
+  let readEntered = false;
+  globalThis.chrome.storage.local.get = async (keys) => {
+    const names = Array.isArray(keys) ? keys : [keys];
+    if (names.includes(freshKey)) {
+      readEntered = true;
+      await gate;
+      return { [freshKey]: stale };
+    }
+    const out = {};
+    for (const name of names) if (bag.has(name)) out[name] = bag.get(name);
+    return out;
+  };
+  const reading = readLayoutCache(freshKey, { store });
+  while (!readEntered) await new Promise((resolve) => setTimeout(resolve, 1));
+  await writeLayoutCache(freshKey, {
+    blocks: [{ bid: "new", text: "fresh" }],
+    layoutVersion: "rev-2",
+    protocol: "blocks-1"
+  }, { store });
+  releaseRead();
+  const during = await reading;
+  assert.equal(during.blocks[0].bid, "new");
+  assert.equal((await store.getLayout("doc-layout", 4, "local-ocr", "blocks-1")).layoutRev, "rev-2");
   const viewer = read("pdf/viewer.js");
   const readFn = viewer.slice(viewer.indexOf("async function readStoredLayout"), viewer.indexOf("async function writeStoredLayout"));
   const writeFn = viewer.slice(viewer.indexOf("async function writeStoredLayout"), viewer.indexOf("const vendorLayoutPending"));
@@ -741,6 +792,8 @@ test("F4-10 migrates one paper once, merges a later page, and does not rebroadca
     locks: { request: async (_name, _options, fn) => fn(null) }
   });
   assert.equal(skipped.title, "这页先读");
+  assert.equal(skipped.hash, "skipped");
+  assert.equal(skipped.pages[0].pairs[0].translation, "你好");
   assert.equal(await store.getPaper("skipped"), null);
 
   await store.putPage("once", 1, {
@@ -1263,6 +1316,38 @@ test("notes panel shows the unread empty state and does not put the blocked mess
   assert.match(tree, /电脑这会儿读写比较慢|打开存储超过了|新写和修改的笔记先暂存在本页/);
 });
 
+test("a manual retry replaces the failure reason with the new error", async () => {
+  globalThis.BroadcastChannel = class {
+    postMessage() {}
+    close() {}
+    set onmessage(_value) {}
+  };
+  const timers = createTimers();
+  const host = dom.document.createElement("div");
+  dom.body.append(host);
+  let cause = "timeout";
+  const chip = createLibraryChip({
+    host,
+    timers,
+    pollMs: 100000,
+    manualRetryMs: 80,
+    minDisableMs: 15,
+    openStorage: async () => {
+      throw blockedError(cause, Date.parse("2026-10-13T08:05:00"));
+    }
+  });
+  chip.block(blockedError("timeout", Date.parse("2026-10-13T08:05:00")));
+  dom.click(host.querySelector(".oi-lib-chip"));
+  assert.match(dom.text(host.querySelector(".oi-lib-reason")), /电脑这会儿读写比较慢/);
+  cause = "blocked";
+  dom.click(findButton(host, "重试"));
+  await tick();
+  timers.advance(20);
+  await tick();
+  assert.match(dom.text(host.querySelector(".oi-lib-reason")), /另一个 Open Immerse 页面/);
+  assert.doesNotMatch(dom.text(host.querySelector(".oi-lib-reason")), /电脑慢/);
+});
+
 test("reader warn contrast stays at least 4.5 on every theme, and dark uses #E2A86A", () => {
   const css = read("pdf/reader-tokens.css");
   assert.match(css, /--oi-reader-warn:\s*#8A4B0F/i);
@@ -1291,6 +1376,51 @@ test("reader warn contrast stays at least 4.5 on every theme, and dark uses #E2A
   assert.ok(contrast("#E8E6E1", darkPaperSoft) >= 4.5);
   assert.ok(contrast("#E8E6E1", darkWellSoft) >= 4.5);
   assert.ok(rows.length >= 15);
+});
+
+test("a retranslated pair replaces a stored pair whose formula slots do not line up", async () => {
+  const { store } = memoryStore({
+    mergePairs: (existing, incoming, blocks, lang) => mergeStoredPagePairs(existing, incoming, blocks, lang)
+  });
+  const block = {
+    bid: "b-mis",
+    sourceId: "p18-s1",
+    label: "text",
+    text: "see ⟦f1⟧ and ⟦f2⟧",
+    sourceText: "see ALPHA and BETA"
+  };
+  await saveLibraryPage({
+    hash: "doc-slots",
+    title: "槽",
+    pageCount: 1,
+    page: 1,
+    pairs: [{
+      bid: "b-mis",
+      sourceId: "p18-s1",
+      text: "see ⟦f9⟧ and BETA",
+      sourceText: "see ALPHA and BETA",
+      translation: "见⟦f9⟧和乙",
+      targetLang: "zh-CN",
+      provider: "mymemory"
+    }]
+  }, { store });
+  await saveLibraryPage({
+    hash: "doc-slots",
+    page: 1,
+    pairs: [{
+      bid: "b-mis",
+      text: block.text,
+      sourceText: block.sourceText,
+      translation: "见甲⟦f1⟧和乙⟦f2⟧",
+      targetLang: "zh-CN",
+      provider: "mymemory"
+    }],
+    blocks: [block],
+    targetLang: "zh-CN"
+  }, { store });
+  const page = await store.getPage("doc-slots", 1);
+  assert.equal(page.pairs[0].translation, "见甲⟦f1⟧和乙⟦f2⟧");
+  assert.match(read("lib/library-session.js"), /mergeStoredPagePairs/);
 });
 
 test("a blocked page write is queued and a blocked flush puts the rest back", async () => {
