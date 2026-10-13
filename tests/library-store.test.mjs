@@ -943,6 +943,94 @@ test("a blocked upgrade times out with a typed error and can be retried", async 
   }
 });
 
+test("a second open and a notes list settle while the first upgrade is still blocked", async () => {
+  const factory = createIdbLibraryFactory();
+  const unhandled = [];
+  const onUnhandled = (error) => unhandled.push(error);
+  process.on("unhandledRejection", onUnhandled);
+  const realOpen = indexedDB.open.bind(indexedDB);
+  let opened = 0;
+  indexedDB.open = (...args) => {
+    opened += 1;
+    return realOpen(...args);
+  };
+  const settle = (promise) => Promise.race([
+    Promise.resolve(promise).then((value) => value, (error) => error),
+    new Promise((resolve) => setTimeout(() => resolve("hung"), 1000))
+  ]);
+  let held = null;
+  try {
+    await resetDatabase(factory);
+    const notes = createNotesStore({
+      persist: false,
+      deviceId: "device-seed",
+      now: () => 3,
+      createId: () => "n-queue"
+    });
+    await notes.put({ docHash: "doc-a", kind: "note", page: 1, body: "还在 v1" });
+    held = await new Promise((resolve, reject) => {
+      const request = indexedDB.open(NOTES_DB_NAME);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("open failed"));
+    });
+    held.onversionchange = () => {};
+    const library = createLibraryStore({
+      platform: { target: "idb", kv: createMemoryKv(), library: factory },
+      persist: false,
+      deviceId: "device-lib",
+      now: () => 4,
+      blockedTimeoutMs: 40
+    });
+    const first = await settle(library.touchPaper("doc-a", { title: "升", pageCount: 1 }));
+    assert.notEqual(first, "hung");
+    assert.equal(first.type, "blocked");
+    const opensAfterTimeout = opened;
+    const secondStarted = Date.now();
+    const second = await settle(library.touchPaper("doc-a", { title: "再试", pageCount: 1 }));
+    assert.notEqual(second, "hung");
+    assert.equal(second.type, "blocked");
+    assert.equal(second.name, "LibraryStoreError");
+    assert.ok(Date.now() - secondStarted < 500);
+    const listedStarted = Date.now();
+    const listed = await settle(notes.list("doc-a"));
+    assert.notEqual(listed, "hung");
+    assert.equal(listed[0].body, "还在 v1");
+    assert.ok(Date.now() - listedStarted < 500);
+    const fresh = createNotesStore({
+      persist: false,
+      deviceId: "other",
+      capture: false,
+      now: () => 5,
+      createId: () => "n-fresh"
+    });
+    const freshListed = await settle(fresh.list("doc-a"));
+    assert.notEqual(freshListed, "hung");
+    assert.equal(freshListed.type, "blocked");
+    assert.equal(freshListed.name, "NotesStoreError");
+    assert.equal(opened, opensAfterTimeout);
+    held.close();
+    held = null;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const paper = await library.touchPaper("doc-a", { title: "升", pageCount: 1, origin: "native" });
+    assert.equal(paper.title, "升");
+    assert.equal((await fresh.list("doc-a"))[0].body, "还在 v1");
+    assert.equal((await notes.list("doc-a"))[0].body, "还在 v1");
+    assert.equal((await describeStore("notes")).version, 2);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(unhandled.length, 0);
+  } finally {
+    indexedDB.open = realOpen;
+    process.off("unhandledRejection", onUnhandled);
+    try {
+      held?.close();
+    } catch {
+      /* already closed */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await resetDatabase(factory);
+  }
+});
+
 test("a browser without databases() does not create or upgrade on a library read", async () => {
   const factory = createIdbLibraryFactory();
   try {
