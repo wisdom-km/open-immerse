@@ -527,6 +527,8 @@
   --oi-reader-ink: #E8E6E1;
   --oi-reader-muted: #A8A49B;
   --oi-reader-focus: #8FA8FF;
+  --oi-reader-warn: #E2A86A;
+  --oi-reader-warn-soft: rgba(226, 168, 106, 0.14);
 }
 
 .oi-reader-app[data-reader-fs-band="m"],

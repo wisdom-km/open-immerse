@@ -309,7 +309,13 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, setLibraryUiHooks, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
+import { createLibraryChip } from "../lib/library-chip.js";
+import { PERSIST_CARD_SESSION_KEY, createPersistCard } from "../lib/persist-card.js";
+import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
+import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/notes-pending.js";
+import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
 import { getProvider, missingRequiredField } from "../lib/providers.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -370,6 +376,10 @@ let libraryDoc = null;
 let libraryProbe = null;
 let notesDocHash = "";
 let notesUi = null;
+let libraryChip = null;
+let persistCard = null;
+let pendingNotes = null;
+let pendingUnload = () => {};
 let notesLayoutLatch = "";
 let notesPaintedKind = "";
 let notesUserPin = "";
@@ -574,6 +584,7 @@ function init() {
   watchSourceAvailability();
   bindSelToolbar();
   installNotesUi();
+  installLibraryChrome();
   $("translatePage").addEventListener("click", () => startTranslate());
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("translateMenuRetranslate")?.addEventListener("click", () => {
@@ -2141,14 +2152,157 @@ function notePagesAround(center) {
   return pages;
 }
 
+function noteLibrarySaveError(error) {
+  if (!error) return null;
+  if (isStorageBlocked(error)) {
+    libraryChip?.block(error);
+    notesUi?.setStorageState?.({
+      blocked: true,
+      cause: storageFailureCause(error),
+      since: storageFailureSince(error)
+    });
+    return null;
+  }
+  if (error?.type === "quota") {
+    libraryChip?.writeFailed(error);
+    return null;
+  }
+  return error;
+}
+
+async function persistDismissedNow() {
+  try {
+    const get = globalThis.chrome?.storage?.local?.get;
+    if (typeof get !== "function") return false;
+    const bag = await get(LIBRARY_PERSIST_HINT_KEY);
+    return bag?.[LIBRARY_PERSIST_HINT_KEY] === true;
+  } catch {
+    return false;
+  }
+}
+
+async function persistHiddenThisSession() {
+  try {
+    const get = globalThis.chrome?.storage?.session?.get;
+    if (typeof get !== "function") return false;
+    const bag = await get(PERSIST_CARD_SESSION_KEY);
+    return bag?.[PERSIST_CARD_SESSION_KEY] === true;
+  } catch {
+    return false;
+  }
+}
+
+async function maybeShowPersistCard() {
+  if (!persistCard || persistCard.isOpen()) return;
+  if (await persistDismissedNow()) return;
+  if (await persistHiddenThisSession()) return;
+  let libraryDenied = false;
+  let notesFlag = false;
+  try {
+    const get = globalThis.chrome?.storage?.local?.get;
+    if (typeof get === "function") {
+      const bag = await get(["libraryPersistGranted", "notesPersistGranted"]);
+      if (bag && Object.prototype.hasOwnProperty.call(bag, "libraryPersistGranted")) {
+        libraryDenied = bag.libraryPersistGranted === false;
+      }
+      if (bag && Object.prototype.hasOwnProperty.call(bag, "notesPersistGranted")) {
+        notesFlag = recordedPersistDenied(null, bag.notesPersistGranted);
+      }
+    }
+  } catch {
+    libraryDenied = false;
+    notesFlag = false;
+  }
+  if (libraryDenied || notesFlag) persistCard.show();
+}
+
+function installLibraryChrome() {
+  const slot = document.getElementById("oiLibSlot");
+  const cardHost = document.createElement("div");
+  cardHost.id = "oiPersistSlot";
+  document.body.append(cardHost);
+  pendingNotes = pendingNotes || createPendingNotes({
+    storage: chromeSessionArea() || undefined,
+    tabId: () => globalThis.__oiReaderTabId || "tab"
+  });
+  try {
+    globalThis.chrome?.tabs?.getCurrent?.((tab) => {
+      if (tab?.id != null) globalThis.__oiReaderTabId = String(tab.id);
+    });
+  } catch {
+    /* opened outside the extension */
+  }
+  libraryChip = createLibraryChip({
+    host: slot,
+    openStorage: async () => {
+      const { sharedLibraryStore } = await import("../lib/library-session.js");
+      return sharedLibraryStore().retryOpen();
+    },
+    flushNotes: async () => {
+      const hash = notesDocHashNow();
+      if (!hash || !pendingNotes) return 0;
+      const count = await pendingNotes.flush(hash, (item) => sharedNotesStore().put(item));
+      return count;
+    },
+    flushPages: () => flushPendingPages(),
+    onRecovered() {
+      notesUi?.setStorageState?.(null);
+      void maybeShowPersistCard();
+    }
+  });
+  persistCard = createPersistCard({
+    host: cardHost,
+    onDismiss: () => {
+      globalThis.chrome?.storage?.local?.set?.({ [LIBRARY_PERSIST_HINT_KEY]: true });
+    },
+    onHideSession: () => {
+      globalThis.chrome?.storage?.session?.set?.({ [PERSIST_CARD_SESSION_KEY]: true });
+    },
+    onExport: () => {
+      const url = globalThis.chrome?.runtime?.getURL?.("options/options.html");
+      if (url) globalThis.chrome?.tabs?.create?.({ url: `${url}#data?focus=export` });
+    }
+  });
+  setLibraryUiHooks({
+    onMoveStart() { libraryChip?.startMove({ holds: true }); },
+    onMoveEnd() { libraryChip?.finishMove(); },
+    onStorageBlocked(error) {
+      libraryChip?.block(error);
+      notesUi?.setStorageState?.({
+        blocked: true,
+        cause: storageFailureCause(error),
+        since: storageFailureSince(error)
+      });
+    },
+    onWriteFailed(error) { libraryChip?.writeFailed(error); }
+  });
+  pendingUnload = bindPendingUnload(() => pendingNotes?.pendingNow?.(notesDocHashNow()) || 0);
+}
+
 function installNotesUi() {
+  pendingNotes = pendingNotes || createPendingNotes({
+    storage: chromeSessionArea() || undefined,
+    tabId: () => globalThis.__oiReaderTabId || "tab"
+  });
   notesUi = mountNotesUi({
     hasDoc: () => Boolean(pdfDoc),
     docHash: () => notesDocHashNow(),
     docTitle: () => $("docTitle")?.title || $("docTitle")?.textContent || "笔记",
     list: (hash) => sharedNotesStore().list(hash),
     listTrash: (hash) => sharedNotesStore().listTrash(hash),
-    put: (input) => sharedNotesStore().put(input),
+    put: async (input) => {
+      try {
+        const saved = await sharedNotesStore().put(input);
+        void maybeShowPersistCard();
+        return saved;
+      } catch (error) {
+        if (isStorageBlocked(error)) libraryChip?.block(error);
+        throw error;
+      }
+    },
+    stageNote: (input) => pendingNotes?.stage(notesDocHashNow(), input),
+    onStorageBlocked: (error) => libraryChip?.block(error),
+    sharedPersistCard: true,
     softDelete: (id) => sharedNotesStore().softDelete(id),
     restore: (id) => sharedNotesStore().restore(id),
     purge: (id) => sharedNotesStore().purge(id),
@@ -7627,7 +7781,7 @@ function rememberTranslation(page, results) {
       }
       sourceBase64 = btoa(binary);
     }
-    await saveLibraryPage({
+    const savedPayload = {
       hash,
       title,
       pageCount,
@@ -7637,7 +7791,10 @@ function rememberTranslation(page, results) {
       ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
       sourceBase64,
       ...(skipped ? { skipped: true } : {})
-    });
+    };
+    await saveLibraryPage(savedPayload);
+    mirrorLibrarySaveForTest(savedPayload);
+    void maybeShowPersistCard();
     librarySourceSent.add(hash);
     const savedPage = libraryDoc?.pages?.find((item) => item.page === page);
     if (savedPage && layout) {
@@ -7746,7 +7903,7 @@ function persistPageLayout(page) {
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
     if (!hash || hash === "nohash") return;
-    await saveLibraryPage({
+    const savedPayload = {
       hash,
       title,
       pageCount,
@@ -7755,7 +7912,9 @@ function persistPageLayout(page) {
       layout,
       layoutVersion: version,
       ...(skipped ? { skipped: true } : {})
-    });
+    };
+    await saveLibraryPage(savedPayload);
+    mirrorLibrarySaveForTest(savedPayload);
   });
 }
 
@@ -7770,7 +7929,7 @@ function persistPagePairs(saved) {
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
     if (!hash || hash === "nohash") return;
-    await saveLibraryPage({
+    const savedPayload = {
       hash,
       title,
       pageCount,
@@ -7779,8 +7938,55 @@ function persistPagePairs(saved) {
       ...(layout ? { layout } : {}),
       ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
       ...(saved.skipped ? { skipped: true } : {})
-    });
+    };
+    await saveLibraryPage(savedPayload);
+    mirrorLibrarySaveForTest(savedPayload);
   });
+}
+
+function mirrorLibrarySaveForTest(payload) {
+  if (!viewerUnderTest() || !payload) return;
+  const page = Number(payload.page) || 0;
+  if (!page) return;
+  const record = {
+    page,
+    pairs: payload.pairs || [],
+    skipped: payload.skipped === true,
+    layout: payload.layout || null,
+    layoutVersion: payload.layoutVersion || payload.layout?.layoutVersion || ""
+  };
+  const bucket = globalThis.__oiAuto;
+  if (bucket) {
+    const prev = Array.isArray(bucket.saved) ? bucket.saved : [];
+    const pages = prev.filter((item) => Number(item.page) !== page);
+    pages.push(record);
+    bucket.saved = pages;
+    if (Array.isArray(bucket.library)) {
+      const at = bucket.library.findIndex((item) => Number(item.page) === page);
+      if (at >= 0) bucket.library[at] = { ...bucket.library[at], ...record };
+      else bucket.library.push(record);
+    }
+  }
+  if (Array.isArray(globalThis.__oiPosts)) {
+    const posted = { ...payload };
+    delete posted.sourceBase64;
+    globalThis.__oiPosts.push(posted);
+  }
+  try {
+    const prevLib = JSON.parse(sessionStorage.getItem("oiSavedLib") || "[]");
+    const libPages = (Array.isArray(prevLib) ? prevLib : []).filter((item) => Number(item.page) !== page);
+    libPages.push({ page, pairs: payload.pairs || [], skipped: payload.skipped === true });
+    sessionStorage.setItem("oiSavedLib", JSON.stringify(libPages));
+    const scene = new URLSearchParams(location.search).get("oiScene") || "";
+    if (!scene) return;
+    const key = `oiSaved:${scene}`;
+    const prev = JSON.parse(sessionStorage.getItem(key) || "[]");
+    const pages = (Array.isArray(prev) ? prev : []).filter((item) => Number(item.page) !== page);
+    pages.push(record);
+    sessionStorage.setItem(key, JSON.stringify(pages));
+  } catch {
+    /* the harness snapshot is enough when session storage is blocked */
+  }
 }
 
 /** Drop a historical source-uncertain hold on the page-5 matrix sentence and store its Chinese. */
@@ -7811,6 +8017,7 @@ function ensureLibraryDocument() {
         if (doc.sourcePath) librarySourceSent.add(hash);
       }
       libraryDoc = doc || null;
+      if (hash) void pendingNotes?.hydrate?.(hash);
       return libraryDoc;
     } catch {
       // One probe per document. Page turns do not wait for these delays,
@@ -8140,8 +8347,8 @@ async function translateCurrentPage() {
   if (!aborted) {
     try {
       await rememberTranslation(targetPage, merged);
-    } catch {
-      setStatus("译文已生成，但写入本地库失败。", true);
+    } catch (error) {
+      if (noteLibrarySaveError(error)) setStatus("译文已生成，但写入本地库失败。", true);
     }
   }
   updateTranslateControls();
@@ -8177,9 +8384,8 @@ function installKnownSkipLayout(page, stored) {
 
 async function readStoredLayouts(keys) {
   try {
-    if (!keys?.length || typeof globalThis.chrome?.storage?.local?.get !== "function") return {};
-    const bag = await globalThis.chrome.storage.local.get(keys);
-    return bag && typeof bag === "object" ? bag : {};
+    if (!keys?.length) return {};
+    return await readLayoutCaches(keys);
   } catch {
     return {};
   }
@@ -8793,7 +8999,7 @@ async function translateWholeDocument() {
   else if (!clean) setStatus(any ? PDF_COPY.incompletePages : PDF_COPY.noReturnedTranslation, true);
   else setStatus(PDF_COPY.doneDocument);
   finishDocPhase({ aborted, error: Boolean(error) || totals.needsRetry > 0 || totals.n !== total });
-  const saveErrors = await Promise.all(saveTasks);
+  const saveErrors = (await Promise.all(saveTasks)).map((error) => noteLibrarySaveError(error));
   // A retranslate click during the save wait takes a new session. Do not
   // clear its page or start another job over the batches it just sent.
   if (!isCurrentWork(work, gen, translatingDoc) || forceReadoutHold || forceRetranslatePending) return;
@@ -8987,7 +9193,12 @@ async function forceRetranslateCurrentPage() {
     updateTranslateControls();
     try {
       const pairs = pairsFromResults(merged);
-      await rememberTranslation(targetPage, merged);
+      try {
+        await rememberTranslation(targetPage, merged);
+      } catch (error) {
+        const leftover = noteLibrarySaveError(error);
+        if (leftover) throw leftover;
+      }
       if (!pairs.length) throw new Error("empty retranslation");
       replaceLibraryPagePairs(libraryDoc, targetPage, pairs);
       pageCache.set(translatingDoc, targetPage, merged);
@@ -9114,8 +9325,7 @@ async function pdfByteHash(bytes = pdfBytes) {
 
 async function readStoredLayout(key) {
   try {
-    const bag = await chrome.storage.local.get(key);
-    return bag?.[key] || null;
+    return await readLayoutCache(key);
   } catch {
     return null;
   }
@@ -9123,7 +9333,7 @@ async function readStoredLayout(key) {
 
 async function writeStoredLayout(key, page) {
   try {
-    await chrome.storage.local.set({ [key]: cacheableLayout(page) });
+    await writeLayoutCache(key, page);
   } catch {
     /* storage is optional */
   }

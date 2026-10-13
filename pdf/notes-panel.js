@@ -8,6 +8,15 @@
 import { notesCloseTitle, notesSideMenuModel } from "../lib/notes-pane.js";
 import { NotesStoreError } from "../lib/notes-io.js";
 import {
+  LOCKED_ACTION_TITLE,
+  NOTES_UNREAD_EMPTY,
+  PENDING_STATUS,
+  blockedBannerBody,
+  formatClock,
+  isStorageBlocked,
+  storageFailureCause
+} from "../lib/storage-copy.js";
+import {
   NOTE_FILTERS,
   NOTES_LOADING_DELAY_MS,
   NOTES_SAVE_DEBOUNCE_MS,
@@ -112,7 +121,9 @@ export function mountNotesUi(api) {
     menuOpen: false,
     chipFocus: "all",
     cardFocus: "",
-    lostOpen: true
+    lostOpen: true,
+    storage: null,
+    notesUnread: false
   };
 
   let loadTicket = 0;
@@ -279,7 +290,11 @@ export function mountNotesUi(api) {
       if (ticket !== loadTicket) return;
       state.loading = false;
       state.showSkeleton = false;
-      rememberFailure(error);
+      if (isStorageBlocked(error)) {
+        state.storage = { blocked: true, cause: storageFailureCause(error) };
+        state.notesUnread = state.notes.length === 0;
+        api.onStorageBlocked?.(error);
+      } else rememberFailure(error);
     } finally {
       clearTimeout(timer);
     }
@@ -299,6 +314,7 @@ export function mountNotesUi(api) {
 
   async function maybePersistHint() {
     const hash = state.docHash;
+    if (api.sharedPersistCard) return;
     if (!hash || !api.persistDenied) return;
     // resolveNotesDocHash can publish the hash before loadDocHint finishes.
     // Opening the panel, a library refresh, or a save lands in that gap.
@@ -336,8 +352,15 @@ export function mountNotesUi(api) {
       void maybePersistHint();
       return saved;
     } catch (error) {
+      if (isStorageBlocked(error) && typeof api.stageNote === "function") {
+        const staged = await api.stageNote({ ...input, updatedAt: Date.now() });
+        state.storage = { blocked: true, cause: storageFailureCause(error) };
+        api.onStorageBlocked?.(error);
+        render();
+        return staged;
+      }
       if (input?.id) state.failedIds.add(input.id);
-      rememberFailure(error);
+      if (!isStorageBlocked(error)) rememberFailure(error);
       render();
       throw error;
     }
@@ -345,8 +368,9 @@ export function mountNotesUi(api) {
 
   function editorStatusText(editor) {
     if (!editor) return "";
+    if (editor.status === "pending") return PENDING_STATUS;
     if (editor.status === "error") return "没存上 · 重试";
-    if (editor.status === "saving") return "保存中…";
+    if (editor.status === "saving") return "正在保存…";
     if (editor.status === "saved") return "已保存";
     return "空笔记不会保存";
   }
@@ -372,12 +396,13 @@ export function mountNotesUi(api) {
         page: editor.page
       });
       editor.id = saved.id;
-      editor.isNew = false;
-      editor.wasHighlight = false;
-      editor.kind = saved.kind;
-      editor.status = "saved";
+      editor.isNew = saved.pending ? editor.isNew : false;
+      editor.wasHighlight = saved.pending ? editor.wasHighlight : false;
+      editor.kind = saved.kind || editor.kind;
+      editor.status = saved.pending ? "pending" : "saved";
+      if (saved.pending) editor.pendingAt = saved.updatedAt || Date.now();
       state.linkedId = saved.id;
-      if (closeAfter) {
+      if (closeAfter && !saved.pending) {
         state.editor = null;
         render();
       } else paintEditorStatus();
@@ -521,6 +546,7 @@ export function mountNotesUi(api) {
   }
 
   async function changeKind(note, kind) {
+    if (state.storage?.blocked) return;
     await putNote({
       id: note.id,
       docHash: note.docHash,
@@ -535,6 +561,7 @@ export function mountNotesUi(api) {
   }
 
   async function deleteNote(note) {
+    if (state.storage?.blocked) return;
     const saved = await api.softDelete(note.id);
     state.undo = replaceUndo(null, saved || note, Date.now());
     undoLeft = NOTES_UNDO_MS;
@@ -716,6 +743,9 @@ export function mountNotesUi(api) {
     if (!node || !editor) return;
     node.textContent = editorStatusText(editor);
     node.classList.toggle("is-error", editor.status === "error");
+    node.classList.toggle("is-pending", editor.status === "pending");
+    const time = root.querySelector("[data-editor-pending-time]");
+    if (time) time.textContent = editor.status === "pending" && editor.pendingAt ? formatClock(editor.pendingAt) : "";
     root.querySelector(".oi-note-editor")?.classList.toggle("is-error", editor.status === "error");
   }
 
@@ -897,8 +927,20 @@ export function mountNotesUi(api) {
     return button;
   }
 
+  function renderStoreBanner() {
+    if (!state.storage?.blocked) return null;
+    const banner = h("aside", { class: "oi-store-banner", role: "status" });
+    banner.append(
+      h("h3", { text: "暂时存不了" }),
+      h("p", { text: blockedBannerBody(state.storage.cause) })
+    );
+    return banner;
+  }
+
   function renderBody() {
     const body = h("div", { class: "oi-notes-scroll" });
+    const storeBanner = renderStoreBanner();
+    if (storeBanner) body.append(storeBanner);
     for (const banner of state.banners) body.append(renderBanner(banner));
     if (state.view === "trash") {
       body.append(renderTrash());
@@ -972,9 +1014,19 @@ export function mountNotesUi(api) {
     return node;
   }
 
-  function smallButton(label, run) {
+  function smallButton(label, run, locked = false) {
     const button = h("button", { type: "button", class: "oi-notes-text-btn", text: label });
-    button.addEventListener("click", () => run());
+    if (locked) {
+      button.setAttribute("aria-disabled", "true");
+      button.title = LOCKED_ACTION_TITLE;
+    }
+    button.addEventListener("click", (event) => {
+      if (locked || state.storage?.blocked && button.getAttribute("aria-disabled") === "true") {
+        event.preventDefault();
+        return;
+      }
+      return run();
+    });
     return button;
   }
 
@@ -1064,6 +1116,10 @@ export function mountNotesUi(api) {
     }
     const model = listed || notesListModel(filteredAnnotations(), { blockOrder: api.blockOrder?.() });
     const total = counts().all;
+    if (state.storage?.blocked && state.notesUnread && !state.notes.length && !model.groups.length && !model.lost.length) {
+      list.append(h("p", { class: "oi-notes-blocked-empty", text: NOTES_UNREAD_EMPTY }));
+      return list;
+    }
     if (!model.groups.length && !model.lost.length && !(state.editor?.isNew && state.editor.kind !== "paperNote")) {
       const copy = emptyState(state.filter, { total });
       list.append(renderEmpty(copy, () => {
@@ -1264,17 +1320,18 @@ export function mountNotesUi(api) {
       add.addEventListener("click", () => editNote(note));
       actions.append(add);
     }
+    const locked = Boolean(state.storage?.blocked);
     if (inLost) {
       actions.append(smallButton(`跳到第 ${note.page || "?"} 页 ↗`, () => api.jumpPage?.(note.page)));
       actions.append(smallButton("编辑", () => editNote(note)));
-      actions.append(smallButton("删除", () => deleteNote(note)));
+      actions.append(smallButton("删除", () => deleteNote(note), locked));
     } else if (note.kind === "highlight") {
-      actions.append(smallButton("删除", () => deleteNote(note)));
+      actions.append(smallButton("删除", () => deleteNote(note), locked));
     } else {
       actions.append(smallButton("编辑", () => editNote(note)));
-      if (note.kind === "note") actions.append(smallButton("改成问题", () => changeKind(note, "question")));
-      if (note.kind === "question") actions.append(smallButton("改成笔记", () => changeKind(note, "note")));
-      actions.append(smallButton("删除", () => deleteNote(note)));
+      if (note.kind === "note") actions.append(smallButton("改成问题", () => changeKind(note, "question"), locked));
+      if (note.kind === "question") actions.append(smallButton("改成笔记", () => changeKind(note, "note"), locked));
+      actions.append(smallButton("删除", () => deleteNote(note), locked));
     }
     card.append(actions);
     card.addEventListener("click", (event) => {
@@ -1359,14 +1416,19 @@ export function mountNotesUi(api) {
     const hint = h("span", { class: "oi-note-hint", text: "空笔记不会保存" });
     const status = h("button", {
       type: "button",
-      class: `oi-note-save-state${editor.status === "error" ? " is-error" : ""}`,
+      class: `oi-note-save-state${editor.status === "error" ? " is-error" : ""}${editor.status === "pending" ? " is-pending" : ""}`,
       "data-editor-status": "true",
       text: editorStatusText(editor)
     });
     status.addEventListener("click", () => {
       if (editor.status === "error") void commitEditor(editor);
     });
-    bar.append(preview, hint, status);
+    const pendingTime = h("span", {
+      class: "oi-note-pending-time",
+      "data-editor-pending-time": "true",
+      text: editor.status === "pending" && editor.pendingAt ? formatClock(editor.pendingAt) : ""
+    });
+    bar.append(preview, hint, status, pendingTime);
     form.append(bar);
     return form;
   }
@@ -1767,6 +1829,12 @@ export function mountNotesUi(api) {
     fromSelection,
     composeCurrent,
     composePaper,
-    openAt
+    openAt,
+    setStorageState(info) {
+      state.storage = info && info.blocked ? info : null;
+      if (!state.storage) state.notesUnread = false;
+      render();
+    },
+    storageBlocked: () => Boolean(state.storage?.blocked)
   };
 }
