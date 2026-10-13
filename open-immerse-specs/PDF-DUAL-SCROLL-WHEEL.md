@@ -82,7 +82,7 @@ GOOD: 左 scroll → page 变化 → 右 scrollTop/锚点 auto 一次；期间�
 | 存储键 | `pdfScroll.softPageFollow`（boolean，**默认 `false`**） |
 | DOM id | `#pdfSoftPageFollow`（`<input type="checkbox">`） |
 | 可见性 | 仅当 **PDF 功能开**（`features.pdf` / 现有 PDF 实验室入口为真）时显示；与 `#pdfLayoutBox` 同级可见条件 |
-| 位置 | Options → **功能** → PDF 区块内，放在「PDF 划区」(`#pdfLayoutBox`) **上方** 的「PDF 阅读」小组：先开关，再划区高级项 |
+| 位置 | 设置页「PDF 阅读」（`#pdf`，见 `docs/settings-spec.md`）内，放在「版面识别」（原「PDF 划区」，`#pdfLayoutBox`）**上方** 的「PDF 阅读」小组：先开关，再划区高级项 |
 | 文案（label） | `左右栏换页跟随` |
 | 说明（hint，muted） | `默认关闭。开启后，滚动换页时另一侧对齐到同一页；跟手瞬时对齐，不会拖尾。` |
 | 开态实现 | **必须**走 §2.2–§3 同一套：单侧 driver + `auto` / 写 `scrollTop` + 无 360ms 长锁 + 无双向 smooth 对打。**禁止**开启后回潮旧 `smooth`+360ms 路径 |

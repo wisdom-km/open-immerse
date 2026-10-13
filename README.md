@@ -109,7 +109,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 
 默认引擎是 **MyMemory（免费试用）**，不用 Key 就能跑通，质量与额度有限。正式阅读请换成 DeepL 或任意 LLM 通道。
 
-已定改为即时保存，去掉「保存设置」；密钥在离开输入框或按回车时提交。空输入不覆盖已存密钥；清除密钥只通过『移除』（可撤销）（SET-05、SET-07）（2026-10-13 12:19–12:23，待设置页重设计 PR）。所有密钥只存 `chrome.storage.local`，不进 sync。翻译密钥和 PDF 云端密钥从 sync 迁到 local，迁移和回滚都要有测试；合入前这两处密钥仍在 sync。导出设置会带上密钥，文件请自行保管。F10 时密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口。笔记面板偏好（面板宽度、筛选、「不再提示」等）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起（2026-10-13 11:55 定，12:00 确认）；旧值自动迁移，不能丢，待单独小 PR 合入，键名以笔记偏好 PR 为准。问 AI 不再单独设一页，也不单独配模型。
+已定改为即时保存，去掉「保存设置」；密钥在离开输入框或按回车时提交。空输入不覆盖已存密钥；清除密钥只通过『移除』（可撤销）（SET-05、SET-07）（2026-10-13 12:19–12:23，待设置页重设计 PR）。所有密钥只存 `chrome.storage.local`，不进 sync。翻译密钥和 PDF 云端密钥从 sync 迁到 local，迁移和回滚都要有测试；合入前这两处密钥仍在 sync。导出设置会带上密钥，文件请自行保管。F10 时密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口。笔记面板偏好（面板宽度、筛选、「不再提示」等）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起（2026-10-13 11:55 定，12:00 确认）；旧值自动迁移，不能丢，待单独小 PR 合入。键是 `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`。问 AI 不再单独设一页，也不单独配模型。
 
 ### 2. 译网页
 

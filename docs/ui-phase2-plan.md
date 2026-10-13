@@ -238,7 +238,7 @@ Wisdom 的要求（转述，不是逐字原话）：模型除了大语言模型�
 | 更多 | 数据与隐私 | `#data` |
 | 更多 | 关于 | `#about` |
 
-「多模态 · OCR」是一级页（`#mm`，常规组第 2 位，紧跟翻译，不进高级），不是别的页里的一节。多模态主开关在这一页，Aa 面板做同步镜像。公式开关存在 `chrome.storage.local` 的 `formulaSettings` 里：`formula.tier2.enabled`、`formula.ocr.enabled`、`formula.tier3.enabled`（PR #128）。
+「多模态 · OCR」是一级页（`#mm`，常规组第 2 位，紧跟翻译，不进高级），不是别的页里的一节。多模态主开关在这一页，Aa 面板做同步镜像。公式开关存在 `chrome.storage.local` 的 `formulaSettings` 里：`formula.tier2.enabled`、`formula.ocr.enabled`、`formula.tier3.enabled`（PR #128 待合入）。
 
 1. 设置页改成上面这 8 个一级页，页名见 [`settings-spec.md`](./settings-spec.md)。问 AI 不再单独设一页，也不单独配模型。配了多模态就用多模态，没配就用翻译的文字模型，两个都没配时显示「未配置模型」。这条推翻 W-08 和 AQ-01：`ask.model` 作废，旧链接 `#ai` 跳到 `#mm`。多模态调用失败时，问 AI 不自动改用翻译模型，直接报错并给出「去设置」。问 AI 选哪个模型的逻辑归 F6，不在这个 PR 里做。翻译模型和多模态模型仍然分开配（1.7 M1）。多模态卡（B 卡）标题下常显「问 AI 也用这个模型；没配时用翻译的文字模型。」（SET-24）。有外发的卡片底部常显隐私条，其中包含「问 AI 时还会发送你的问题和引用的段落」（SET-25）。
 2. 设置改为即时保存，去掉「保存设置」按钮。密钥在离开输入框或按回车时提交。空输入不覆盖已存密钥；清除密钥只通过『移除』（可撤销）（SET-05、SET-07）。
@@ -275,7 +275,7 @@ Wisdom 的要求（转述，不是逐字原话）：模型除了大语言模型�
 
 - 论文、版面、译文、笔记都存在 Chrome 自带的 IndexedDB 里。
 - 设置存在 `chrome.storage`。
-- 笔记面板偏好从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起，不进 sync（2026-10-13 11:55 定，12:00 确认）。包括面板宽度、三栏宽度、笔记在左还是右、筛选和「不再提示」。已有键是 `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`；筛选现在还在内存里，一并放进这套存储。理由：F4 迁移时不会漏掉这些偏好；F10 云同步可以用同一套接口；后台和设置页也能读到这些偏好。已经写在 `localStorage` 里的旧值要自动迁过去，不能丢。实现由另一个单独的小 PR 做，待该 PR 合入。设置页读写的键名以笔记偏好 PR 为准，见 [`settings-spec.md`](./settings-spec.md) §2。见第 6.1 节。
+- 笔记面板偏好从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起，不进 sync（2026-10-13 11:55 定，12:00 确认）。包括面板宽度、三栏宽度、笔记在左还是右、筛选和「不再提示」。已有键是 `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`；筛选现在还在内存里，一并放进这套存储。理由：F4 迁移时不会漏掉这些偏好；F10 云同步可以用同一套接口；后台和设置页也能读到这些偏好。已经写在 `localStorage` 里的旧值要自动迁过去，不能丢。实现由另一个单独的小 PR 做，待该 PR 合入。设置页读写这 4 个键，见 [`settings-spec.md`](./settings-spec.md) §2。见第 6.1 节。
 - 所有密钥只存 `chrome.storage.local`，不进 sync（2026-10-13 12:19–12:23 Wisdom 定）。翻译密钥和 PDF 云端密钥从 sync 迁到 local，迁移和回滚都要有测试。已定，待设置页重设计 PR 实现；合入前这两处密钥仍在 sync。多模态 / OCR 的密钥按 11:57 已经只存 local。以后做 F10 云同步时，密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口。见「设置页重设计」和 REQUIREMENTS §2.6「开关」。
 - 申请持久存储，避免浏览器在磁盘紧张时清掉文献库。
 - 提供导出和导入。
@@ -382,7 +382,7 @@ T3 与 T2a 已在 main。这一集做侧槽、卡片、编辑、筛选、图钉�
 
 沿用第 5.1 节：不申请 `unlimitedStorage`；导入只合并；丢失的笔记不模糊重挂，只跳到第 N 页；导出默认不含回收站。
 
-笔记面板偏好（面板宽度、三栏宽度、笔记在左还是右、筛选、「不再提示」）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起，不进 `chrome.storage.sync`（2026-10-13 11:55 定，12:00 确认）。键是 `reader.panelWidth`（360–640，默认 440）、`reader.notesWidth`（320–480，默认 360）、`reader.notesPaneSide` 和 `reader.notesPersistHintDismissed`。筛选现在还在内存里，这次一并放进同一套 `chrome.storage.local`，不另造第三种存法。理由有三条：F4 迁移时不会漏掉这些偏好；F10 云同步可以用同一套接口；后台和设置页也能读到这些偏好。已经写在 `localStorage` 里的旧值要自动迁移，不能丢。实现由另一个单独的小 PR 做，待该 PR 合入。设置页读写的键名以笔记偏好 PR 为准，见 [`settings-spec.md`](./settings-spec.md) §2。合入前代码仍读 `localStorage` 里的同名键，F4 不要把还没迁走的旧值漏掉。规格 U10 建议用 sync；这里改成本机，因为这些偏好留在这台设备，F10 再走上面那套接口。`readReaderPrefs` / `writeReaderPrefs` 的返回形状已被测试锁住，这些键放在旁边的 `lib/notes-prefs.js`，不塞进那个对象。
+笔记面板偏好（面板宽度、三栏宽度、笔记在左还是右、筛选、「不再提示」）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起，不进 `chrome.storage.sync`（2026-10-13 11:55 定，12:00 确认）。键是 `reader.panelWidth`（360–640，默认 440）、`reader.notesWidth`（320–480，默认 360）、`reader.notesPaneSide` 和 `reader.notesPersistHintDismissed`。筛选现在还在内存里，这次一并放进同一套 `chrome.storage.local`，不另造第三种存法。理由有三条：F4 迁移时不会漏掉这些偏好；F10 云同步可以用同一套接口；后台和设置页也能读到这些偏好。已经写在 `localStorage` 里的旧值要自动迁移，不能丢。实现由另一个单独的小 PR 做，待该 PR 合入。设置页读写这 4 个键，见 [`settings-spec.md`](./settings-spec.md) §2。合入前代码仍读 `localStorage` 里的同名键，F4 不要把还没迁走的旧值漏掉。规格 U10 建议用 sync；这里改成本机，因为这些偏好留在这台设备，F10 再走上面那套接口。`readReaderPrefs` / `writeReaderPrefs` 的返回形状已被测试锁住，这些键放在旁边的 `lib/notes-prefs.js`，不塞进那个对象。
 
 ### 6.2 相对第 5 节多做的界面行为
 

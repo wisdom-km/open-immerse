@@ -1,6 +1,6 @@
 # 设置页规格
 
-> 本文是 `options/` 设置页重设计的实现规格，界面文字都用中文。完整设计稿（含调研和示意图）放在仓库外，本文就是实现依据。仓库路径：`docs/settings-spec.md`。2026-10-13 13:01 Wisdom 批准本稿。
+> 本文是 `options/` 设置页重设计的实现规格，界面文字都用中文。完整设计稿（含调研和示意图）放在仓库外，作者是 Loom（设计负责人），路径 `/workspace/oi-qa/settings-redesign/`。本文就是实现依据。仓库路径：`docs/settings-spec.md`。2026-10-13 Wisdom 批准本稿（13:01）。
 > 已定的决定（2026-10-13，Wisdom 全部按推荐批准）：
 > - Q1：即时保存，去掉「保存设置」按钮；
 > - Q2：所有密钥改存 `chrome.storage.local`；
@@ -45,10 +45,10 @@
 |---|---|---|
 | 普通设置（引擎、语言、开关、间距等） | `chrome.storage.sync` | 沿用 `lib/storage.js` 的 `settings` 对象（`DEFAULT_SETTINGS`） |
 | 所有密钥：翻译引擎 `providers.*.apiKey`、PDF 云端 `pdfLayout.cloudApiKey`、多模态、OCR | `chrome.storage.local` | 从 `settings` 中移出。上线时做一次性迁移（sync → local，迁完后删除 sync 中的副本），要有回滚测试 |
-| 公式开关 | `chrome.storage.local` 的 `formulaSettings` 记录（与 F3 PR #128 一致） | `formula.tier2.enabled`、`formula.ocr.enabled`、`formula.tier3.enabled`，默认都是 `false` |
+| 公式开关 | `chrome.storage.local` 的 `formulaSettings` 记录（PR #128 待合入） | `formula.tier2.enabled`、`formula.ocr.enabled`、`formula.tier3.enabled`，默认都是 `false` |
 | 同步密钥（F10 预留） | `chrome.storage.local` | `keys.syncOptIn`，本期恒为 `false`，只读 |
-| 笔记面板偏好 | `chrome.storage.local` | 以笔记偏好 PR 为准 |
-| 阅读页偏好 | `localStorage` | `reader.*`、`oi.reader.cjk`、`oi.rfSrcFold`。这些是就地设置；设置页只提供「恢复默认值」 |
+| 笔记面板偏好 | `chrome.storage.local` | `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`。这 4 个键从 `localStorage` 迁入（2026-10-13 11:55 定，12:00 确认） |
+| 阅读页偏好 | `localStorage` | `reader.*`（不含上面 4 个笔记键：`reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`，这 4 个改存 `chrome.storage.local`）、`oi.reader.cjk`、`oi.rfSrcFold`。这些是就地设置；设置页只提供「恢复默认值」 |
 | 作废 | — | `ask.model`（不再读写）。`ask.contextNearby` 固定为 2；`ask.confirmSend` 只在问 AI 面板首次发送确认框里修改 |
 
 - 导出文件要包含 local 里的密钥，导入时写回 local。
@@ -121,7 +121,7 @@
 | SET-15 | 加载 < 150 ms 不显示骨架；≥ 150 ms 显示骨架，CLS ≤ 0.02 |
 | SET-16 | 宽 759 时侧栏变成顶部条；宽 519 时控件换行；420 宽下不重叠、不裁切 |
 | SET-17 | 可用键盘操作，focus 环可见；开关语义正确 |
-| SET-18 | 笔记偏好读写 local；点「恢复 360」后，阅读页里的笔记面板立即变成 360。键名以笔记偏好 PR 为准 |
+| SET-18 | 笔记偏好读写 `chrome.storage.local` 的 `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`；点「恢复 360」后，阅读页里的笔记面板立即变成 360 |
 | SET-19 | 导出文件含 local 中的密钥；导入后写回 local |
 | SET-20 | `features.pdf` 关时，`#mm` 显示页顶提示，页面仍可配置 |
 | SET-21 | 搜索「密钥」能命中 4 处密钥行，点击后跳过去并高亮 1.2 s |
