@@ -8,7 +8,7 @@ import { ANNOTATIONS_SCHEMA, createLibraryStore } from "../lib/library-store.js"
 import { NOTES_DB_NAME } from "../lib/notes-store.js";
 import { createIdbLibraryFactory } from "../lib/platform/idb-backend.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
-import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
+import { createMemoryBackend, createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
 import { createSqliteLikeFactory } from "./sqlite-like-backend.mjs";
 
 globalThis.fetch = () => {
@@ -151,6 +151,27 @@ test("the tx callback must not await anything outside the backend", () => {
   ]) {
     assert.equal(readFileSync(join(root, path), "utf8").includes("must not await anything outside the backend"), true);
   }
+});
+
+test("interleaved memory transactions keep independent tx state", async () => {
+  const left = createMemoryBackend(ANNOTATIONS_SCHEMA);
+  const right = createMemoryBackend(ANNOTATIONS_SCHEMA);
+  await left.put("meta", { key: "deviceId", value: "L" });
+  await right.put("meta", { key: "deviceId", value: "R" });
+  const good = left.tx(["meta"], "readwrite", async (work) => {
+    const row = await work.get("meta", "deviceId");
+    await work.put("meta", { key: "deviceId", value: `${row.value}1` });
+  });
+  const bad = right.tx(["meta"], "readwrite", async (work) => {
+    await Promise.resolve();
+    await work.put("meta", { key: "deviceId", value: "nope" });
+  });
+  const [goodResult, badResult] = await Promise.allSettled([good, bad]);
+  assert.equal(goodResult.status, "fulfilled");
+  assert.equal(badResult.status, "rejected");
+  assert.equal(badResult.reason.name, "TransactionInactiveError");
+  assert.equal((await left.get("meta", "deviceId")).value, "L1");
+  assert.equal((await right.get("meta", "deviceId")).value, "R");
 });
 
 test("memory, IndexedDB, and the SQLite stand-in follow one contract", async () => {

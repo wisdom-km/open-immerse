@@ -669,6 +669,87 @@ test("a live notes store stays current across a v2 open, import, and trash", asy
   }
 });
 
+test("delete, edit, and import stay consistent if the library is created before or after the panel", async () => {
+  const factory = createIdbLibraryFactory();
+  try {
+    await resetDatabase(factory);
+    let now = 20;
+    for (const order of ["library-first", "panel-first"]) {
+      const hash = order === "library-first" ? "doc-lib" : "doc-panel";
+      let nextId = 0;
+      const makePanel = () => createNotesStore({
+        persist: false,
+        deviceId: "device-panel",
+        now: () => now,
+        createId: () => `${order}-${++nextId}`
+      });
+      const makeLibrary = () => createLibraryStore({
+        platform: { target: "idb", kv: createMemoryKv(), library: factory },
+        persist: false,
+        deviceId: "device-lib",
+        now: () => now
+      });
+      let library;
+      let panel;
+      if (order === "library-first") {
+        library = makeLibrary();
+        panel = makePanel();
+      } else {
+        panel = makePanel();
+      }
+      const note = await panel.put({ docHash: hash, kind: "note", page: 1, body: "live" });
+      if (!library) library = makeLibrary();
+      const report = await library.deletePaperData(hash, { notes: true });
+      assert.equal(report.notes, 1);
+      assert.equal((await panel.list(hash)).length, 0);
+      assert.deepEqual((await panel.listTrash(hash)).map((item) => item.body), ["live"]);
+      now += 1;
+      await panel.put({ id: note.id, body: "edited after trash" });
+      assert.equal((await panel.list(hash)).length, 0);
+      const trashed = await panel.listTrash(hash);
+      assert.equal(trashed.length, 1);
+      assert.equal(trashed[0].body, "edited after trash");
+      assert.equal(trashed[0].deletedAt > 0, true);
+      const disk = (await dump("notes")).filter((item) => item.docHash === hash);
+      assert.equal(disk.length, 1);
+      assert.equal(disk[0].body, "edited after trash");
+      assert.equal(disk[0].deletedAt > 0, true);
+      const imported = await library.importBundle({
+        format: LIBRARY_FORMAT,
+        schema: LIBRARY_SCHEMA,
+        papers: [{
+          paper: { docHash: hash, schema: LIBRARY_SCHEMA, title: "题", rev: 1, updatedAt: 1, deviceId: "other" },
+          pages: [],
+          groups: [],
+          notes: [{
+            id: `${order}-imported`,
+            schema: 1,
+            docHash: hash,
+            kind: "note",
+            author: "me",
+            body: "imported",
+            anchor: null,
+            anchorState: { status: "lost", layoutRev: "", checkedAt: 0 },
+            page: 1,
+            createdAt: 2,
+            updatedAt: 2,
+            rev: 1,
+            deviceId: "other"
+          }]
+        }]
+      });
+      assert.equal(imported.errors.length, 0);
+      assert.equal((await panel.list(hash)).some((item) => item.body === "imported"), true);
+      assert.equal((await panel.listTrash(hash)).some((item) => item.body === "edited after trash"), true);
+      const after = (await dump("notes")).filter((item) => item.docHash === hash);
+      assert.equal(after.some((item) => item.body === "imported" && !item.deletedAt), true);
+      assert.equal(after.some((item) => item.body === "edited after trash" && item.deletedAt), true);
+    }
+  } finally {
+    await resetDatabase(factory);
+  }
+});
+
 test("a blocked upgrade times out with a typed error and can be retried", async () => {
   const factory = createIdbLibraryFactory();
   try {
@@ -707,6 +788,8 @@ test("a blocked upgrade times out with a typed error and can be retried", async 
       held.close();
     }
     await new Promise((resolve) => setTimeout(resolve, 30));
+    // The timed-out request can still commit v2 once the holder closes.
+    // That upgrade is idempotent, so this retry opens version 2 either way.
     const paper = await library.touchPaper("doc-a", { title: "升", pageCount: 1, origin: "native" });
     assert.equal(paper.title, "升");
     assert.equal((await describeStore("notes")).version, 2);
