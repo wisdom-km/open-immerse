@@ -2265,6 +2265,58 @@ test("a preempted open that succeeds is kept, and a manual retry does not open t
   polling.destroy();
 });
 
+test("both a preempted open and the new open recover and announce once", async () => {
+  const dom = installDom();
+  const host = dom.document.createElement("div");
+  dom.body.append(host);
+  const announcements = [];
+  const append = host.append.bind(host);
+  host.append = (...kids) => {
+    append(...kids);
+    for (const kid of kids) {
+      if (kid?.classList?.contains("oi-lib-live")) announcements.push(kid.textContent);
+    }
+  };
+  const gates = [];
+  let recoveries = 0;
+  let flushes = 0;
+  const chip = createLibraryChip({
+    host,
+    pollMs: 60000,
+    manualRetryMs: 11000,
+    flushNotes: async () => {
+      flushes += 1;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return 1;
+    },
+    onRecovered() {
+      recoveries += 1;
+    },
+    openStorage: () => new Promise((resolve) => { gates.push(resolve); })
+  });
+  chip.block(blockedError("blocked"));
+  void chip.autoRetry();
+  await Promise.resolve();
+  await Promise.resolve();
+  storagePageTarget().dispatchEvent(new CustomEvent(STORAGE_AVAILABLE_EVENT, {
+    detail: { type: STORAGE_AVAILABLE_EVENT }
+  }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(chip.opens(), 2);
+  gates[0](true);
+  gates[1](true);
+  const started = Date.now();
+  while (chip.state.mode !== "recovered" && Date.now() - started < 500) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(chip.state.mode, "recovered");
+  assert.equal(recoveries, 1);
+  assert.equal(flushes, 1);
+  assert.deepEqual(announcements.filter((text) => text.includes("已恢复")), ["已恢复，存好 1 条笔记"]);
+  chip.destroy();
+});
+
 function installFakeLocks() {
   const held = new Set();
   const waiters = new Map();
