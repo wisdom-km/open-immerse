@@ -20,7 +20,7 @@
 | 4 | 阅读 | PDF 阅读 | `#pdf` | 打开时自动翻译、正文译文间距、译文段间距、版面识别（原「PDF 划区」）、「恢复阅读偏好默认值」 |
 | 5 | 阅读 | 笔记 | `#notes` | 默认布局、面板宽度（恢复 360）、新笔记默认类型 |
 | 6 | 更多 | 功能与实验室 | `#labs` | 功能开关（网页翻译 / 学习中心 / 文档翻译 / 页面开关按钮），实验室（悬浮 / 划词 / YouTube / X / PDF 阅读） |
-| 7 | 更多 | 数据与隐私 | `#data` | 密钥存放位置一览、同步密钥（F10 预留，置灰）、导出 / 导入（「文献库」和「设置」两个文件，都不含 API key，见 §2） |
+| 7 | 更多 | 数据与隐私 | `#data` | 密钥存放位置一览、同步密钥（F10 预留，置灰）、导出 / 导入（「文献库」和「设置」两个文件，都不含 API key，见 §2）。导入旧的设置文件时忽略里面的 key，并给出提示。持久存储被拒绝时不阻止导入，只提示一次；本页提供「再申请一次」 |
 | 8 | 更多 | 关于 | `#about` | 版本、学习中心 / 文档翻译入口 |
 
 - 没有「高级」页，也没有「问 AI」页。
@@ -51,7 +51,7 @@
 | 阅读页偏好 | `localStorage` | `reader.*`（不含上面 4 个笔记键：`reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`，这 4 个改存 `chrome.storage.local`）、`oi.reader.cjk`、`oi.rfSrcFold`。这些是就地设置；设置页只提供「恢复默认值」 |
 | 作废 | — | `ask.model`（不再读写）。`ask.contextNearby` 固定为 2；`ask.confirmSend` 只在问 AI 面板首次发送确认框里修改 |
 
-- **导出、导入和 sync 里的密钥（2026-10-13 17:29 Wisdom 定，放进设置页重设计范围）。** 导出拆成「文献库」和「设置」两个文件，两个文件都不含任何 API key。设置导出不带 key；导入设置也不写入 key。现状：从「导入设置」导入后，`chrome.storage.sync` 里会存着非空的 `settings.providers.openai.apiKey`。main 上也是这样，是 Anvil 测 #128 时发现的。放在设置页重设计 PR 里修，和翻译、PDF 云端 key 从 sync 迁到 local 一起做。sync 里已有的 key（所有 `settings.providers.*.apiKey`、`pdfLayout.cloudApiKey`、多模态和 OCR 的 key）先迁到 local，再从 sync 删掉。迁移后再导入一次，不把 key 写回 sync。迁移可以重复跑。迁移、导入和回滚都要有测试。
+- **导出、导入和 sync 里的密钥（2026-10-13 17:29 Wisdom 定，放进设置页重设计范围；F4 界面 2026-10-13 补）。** 导出拆成「文献库」和「设置」两个文件，两个文件都不含任何 API key。设置导出不带 key；导入设置也不写入 key。导入旧的设置文件时忽略里面的 key，并给出提示。持久存储被拒绝时不阻止导入，只提示一次。`#data` 页提供「再申请一次」。迁移和导入都在后台进行。「完成」状态用中性色加 ✓。现状：从「导入设置」导入后，`chrome.storage.sync` 里会存着非空的 `settings.providers.openai.apiKey`。main 上也是这样，是 Anvil 测 #128 时发现的。放在设置页重设计 PR 里修，和翻译、PDF 云端 key 从 sync 迁到 local 一起做。sync 里已有的 key（所有 `settings.providers.*.apiKey`、`pdfLayout.cloudApiKey`、多模态和 OCR 的 key）先迁到 local，再从 sync 删掉。迁移后再导入一次，不把 key 写回 sync。迁移可以重复跑。迁移、导入和回滚都要有测试。
 - 设置页和阅读页通过 `chrome.storage.onChanged` 互相刷新，不需要刷新页面。
 
 ## 3 保存
@@ -122,7 +122,7 @@
 | SET-16 | 宽 759 时侧栏变成顶部条；宽 519 时控件换行；420 宽下不重叠、不裁切 |
 | SET-17 | 可用键盘操作，focus 环可见；开关语义正确 |
 | SET-18 | 笔记偏好读写 `chrome.storage.local` 的 `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`；点「恢复 360」后，阅读页里的笔记面板立即变成 360 |
-| SET-19 | 导出拆成「文献库」和「设置」两个文件，两个文件都不含任何 API key。设置导出不带 key；导入设置也不写入 key。导入后 sync 中不存在任何密钥（所有 `settings.providers.*.apiKey`、`pdfLayout.cloudApiKey`、多模态和 OCR 的 key）。现状会留下非空的 `settings.providers.openai.apiKey`（main 上也是这样，Anvil 测 #128 时发现），这只是已经复现的例子。sync 里已有的 key 先迁到 local，再删掉。迁移后再导入一次，不把 key 写回 sync。迁移可以重复跑。迁移、导入和回滚都要有测试 |
+| SET-19 | 导出拆成「文献库」和「设置」两个文件，两个文件都不含任何 API key。设置导出不带 key；导入设置也不写入 key。导入旧的设置文件时忽略里面的 key，并给出提示。导入后 sync 中不存在任何密钥（所有 `settings.providers.*.apiKey`、`pdfLayout.cloudApiKey`、多模态和 OCR 的 key）。现状会留下非空的 `settings.providers.openai.apiKey`（main 上也是这样，Anvil 测 #128 时发现），这只是已经复现的例子。sync 里已有的 key 先迁到 local，再删掉。迁移后再导入一次，不把 key 写回 sync。迁移可以重复跑。迁移、导入和回滚都要有测试 |
 | SET-20 | `features.pdf` 关时，`#mm` 显示页顶提示，页面仍可配置 |
 | SET-21 | 搜索「密钥」能命中 4 处密钥行，点击后跳过去并高亮 1.2 s |
 | SET-22 | 同步开关置灰，`keys.syncOptIn` 恒为 `false` |
