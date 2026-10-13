@@ -119,7 +119,7 @@ Anvil 仍要在本机 Chrome 看 Attention 第 5 页左右栏。下面的 M1–M
 
 ## 2026-09-23 公式呈现（本轮）
 
-内容仍以打开的 PDF 笔画为准。本轮只改呈现：行内公式嵌进句子，独占公式按论文居中，裁框按字形并集收紧，不再用固定整行外扩去吃相邻行或图注。计划见 `FORMULA-ELEGANCE.md`。通读结构仍以 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md) 为准（与 `open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md` 同一份）。节奏数字以 [`FORMULA-RIGHT-PANE.md`](./FORMULA-RIGHT-PANE.md) §2–§5 为准：独占公式 `10px / 14px`，行内裁图现行 `1.22em`（盒高 ≤ `1.45em`；显示宽度补偿见文首），图到题注 `6px`、题注到正文 `12px`。主展示是原页裁图，不用 KaTeX。第 5 页矩阵句的中文译文不在本轮，见文首「矩阵句译文」。
+内容仍以打开的 PDF 笔画为准。本轮只改呈现：行内公式嵌进句子，独占公式按论文居中，裁框按字形并集收紧，不再用固定整行外扩去吃相邻行或图注。计划见 `FORMULA-ELEGANCE.md`。通读结构仍以 [`pdf/PDF-MD-FORMULA-LAYOUT.md`](../PDF-MD-FORMULA-LAYOUT.md) 为准（正本只此一份；`open-immerse-specs/PDF-MD-FORMULA-LAYOUT.md` 是指向它的指针）。节奏数字以 [`FORMULA-RIGHT-PANE.md`](./FORMULA-RIGHT-PANE.md) §2–§5 为准：独占公式 `10px / 14px`，行内裁图现行 `1.22em`（盒高 ≤ `1.45em`；显示宽度补偿见文首），图到题注 `6px`、题注到正文 `12px`。主展示是原页裁图，不用 KaTeX。第 5 页矩阵句的中文译文不在本轮，见文首「矩阵句译文」。
 
 ## 2026-09-23 文字层主路径（上一轮）
 

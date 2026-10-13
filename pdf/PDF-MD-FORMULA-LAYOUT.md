@@ -21,7 +21,7 @@
 
 **否决：** 把左右半句文字一起裁进公式图；`display:block` 大白块打断段落；公式外包 `card`/`shadow`/`≥2px` 实线框；为 PDF 另起一套配色；扫描件假装矢量化。
 
-**与旧镜像文关系：** `PDF-READOUT-MIRROR` §4.2「KaTeX 默认、裁切兜底」**不适用于**本通读轨。通读轨以 **本文 + PDF-MD-READOUT** 为准。
+**与旧镜像文关系：** `PDF-READOUT-MIRROR` §4.2 的「从 PDF 符号回收 LaTeX」不适用；公式上屏按 REQUIREMENTS §2.6（核对过的 KaTeX，判不出显示裁图）。通读轨以 **本文 + PDF-MD-READOUT** 为准。`PDF-READOUT-MIRROR` 是历史文档。
 
 ---
 

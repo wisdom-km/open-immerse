@@ -1,5 +1,7 @@
 # PDF 右栏 · 版式全镜像（PDF-READOUT-MIRROR）
 
+**历史，已被 [`PDF-MD-READOUT.md`](./PDF-MD-READOUT.md) 和 `pdf/high-precision/REQUIREMENTS.md` §2.6 取代。** 下文不再作为实现依据。§4.2 的「从 PDF 符号回收 LaTeX」不适用于通读轨；公式上屏按 REQUIREMENTS §2.6（核对过的 KaTeX，判不出显示裁图）。
+
 拍板：全镜像 V3，不要仅语义通读。样例：Attention Is All You Need / arXiv 1706.03762。
 
 ## 1 决策
