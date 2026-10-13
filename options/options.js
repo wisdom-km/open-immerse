@@ -12,6 +12,7 @@ import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-l
 import { normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
   FORMULA_SETTINGS_KEY,
+  applyFormulaPart,
   multimodalTestDisabled,
   normalizeFormulaSettings,
   ocrTestDisabled,
@@ -363,10 +364,7 @@ function syncFormulaDerived() {
 }
 
 function updateFormulaPart(which, patch, opts = {}) {
-  formulaSettings = normalizeFormulaSettings({
-    ...formulaSettings,
-    [which]: { ...formulaSettings[which], ...patch }
-  });
+  formulaSettings = applyFormulaPart(formulaSettings, which, patch);
   if (opts.live) {
     syncFormulaDerived();
     return;
@@ -421,9 +419,6 @@ async function testFormulaConnection(kind) {
 }
 
 function bindFormulaSettings() {
-  el("askFormulaLink")?.addEventListener("click", () => {
-    location.hash = "formula";
-  });
   const storage = globalThis.chrome?.storage;
   storage?.onChanged?.addListener((changes, area) => {
     if (formulaWriting || area !== "local" || !changes[FORMULA_SETTINGS_KEY]) return;
@@ -439,7 +434,7 @@ function bindFormulaSettings() {
 function bindPanelNav() {
   const tabs = [...document.querySelectorAll("[data-nav]")];
   const show = (id) => {
-    const next = ["engine", "reading", "features", "advanced", "ask", "formula"].includes(id) ? id : "engine";
+    const next = ["engine", "reading", "features", "advanced", "formula"].includes(id) ? id : "engine";
     document.querySelectorAll("[data-panel]").forEach((panel) => {
       const on = panel.dataset.panel === next;
       panel.classList.toggle("is-on", on);

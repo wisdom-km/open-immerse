@@ -17,6 +17,7 @@ import {
   FORMULA_SWITCH_KEYS,
   MULTIMODAL_PROVIDERS,
   OCR_PROVIDERS,
+  applyFormulaPart,
   classifyFormulaProbe,
   defaultFormulaSettings,
   formulaChainFlags,
@@ -249,6 +250,29 @@ test("F3-20 multimodal settings stay out of translation settings", async () => {
   assert.equal(local.bag[FORMULA_SETTINGS_KEY][FORMULA_SWITCH_KEYS.tier2], true);
 });
 
+test("SET-05 an empty key input does not overwrite a stored key", async () => {
+  const stored = normalizeFormulaSettings({
+    multimodal: { provider: "openai", apiKey: "sk-kept", model: "gpt-4o" },
+    ocr: { provider: "zhipu", apiKey: "ocr-kept" },
+    [FORMULA_SWITCH_KEYS.tier2]: true
+  });
+  const cleared = applyFormulaPart(stored, "multimodal", { apiKey: "" });
+  const blanked = applyFormulaPart(stored, "ocr", { apiKey: "   " });
+  const replaced = applyFormulaPart(stored, "multimodal", { apiKey: "sk-new" });
+  assert.equal(cleared.multimodal.apiKey, "sk-kept");
+  assert.equal(cleared.ocr.apiKey, "ocr-kept");
+  assert.equal(blanked.ocr.apiKey, "ocr-kept");
+  assert.equal(blanked.multimodal.apiKey, "sk-kept");
+  assert.equal(replaced.multimodal.apiKey, "sk-new");
+  assert.equal(replaced.ocr.apiKey, "ocr-kept");
+  const local = memoryStorage();
+  const saved = await writeFormulaSettings(cleared, local);
+  assert.equal(saved.multimodal.apiKey, "sk-kept");
+  assert.equal(local.bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, "sk-kept");
+  const options = read("options/options.js");
+  assert.match(options, /formulaSettings = applyFormulaPart\(formulaSettings, which, patch\)/);
+});
+
 test("F3-20 an unconfigured multimodal model hides the tier-2 switch", () => {
   installDocument();
   const panel = new DomEl("div");
@@ -457,7 +481,10 @@ test("settings screen and Aa panel expose the same switch keys", () => {
   const css = read("pdf/viewer.css");
   assert.match(html, /data-nav="formula"[^>]*>多模态 · OCR</);
   assert.match(html, /id="panel-formula"/);
-  assert.match(html, /引用公式时用「多模态 · OCR」里的模型/);
+  assert.doesNotMatch(html, /问 AI 模型/);
+  assert.doesNotMatch(html, /引用公式时用「多模态 · OCR」里的模型/);
+  assert.doesNotMatch(html, /data-nav="ask"/);
+  assert.doesNotMatch(html, /id="panel-ask"/);
   assert.doesNotMatch(html.match(/id="panel-reading"[\s\S]*?<\/section>/)[0], /formulaSettings|用多模态模型补全公式/);
   assert.match(viewer, /id="aaFormulaSwitches"/);
   assert.match(viewer, /id="aaFormulaSettings"[^>]*>公式设置…/);
