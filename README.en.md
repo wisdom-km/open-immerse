@@ -54,7 +54,7 @@ Intent card: primary **翻译此页** (becomes **停止** while a job runs), **�
 
 **Settings four groups: 引擎 / 阅读 / 功能 / 高级**
 
-Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages; page names are in [`docs/settings-spec.md`](docs/settings-spec.md) (`#translate`, `#mm`, `#web`, `#pdf`, `#notes`, `#labs`, `#data`, `#about`). 多模态 · OCR is a top-level page (`#mm`, second item in the 常规 group), not a section inside another page. Ask AI is no longer its own page (2026-10-13 12:19–12:23, spec approved by Wisdom at 13:01, SET-01…SET-31). Decided, pending the settings redesign PR. The four groups and the screenshots below are the current UI. Lab PDF is still enabled under **Settings → Advanced**.
+Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages; page names are in [`docs/settings-spec.md`](docs/settings-spec.md) (`#translate`, `#mm`, `#web`, `#pdf`, `#notes`, `#labs`, `#data`, `#about`). 多模态 · OCR is a top-level page (`#mm`, second item in the 常规 group), not a section inside another page. Ask AI is no longer its own page (2026-10-13 12:19–12:23, spec approved by Wisdom at 13:01, SET-01…SET-34). Decided, pending the settings redesign PR. The four groups and the screenshots below are the current UI. Lab PDF is still enabled under **Settings → Advanced**.
 
 ![Options: default engine and test connection](docs/screenshots/03-options-engine.png)
 
@@ -92,7 +92,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 2. Turn on **Developer mode**
 3. **Load unpacked** and pick the repo root (the folder that contains `manifest.json`)
 
-Already installed: `git pull`, then click **Reload** on the extensions page. Do **not** Remove and re-add — translation keys and PDF cloud keys currently in `chrome.storage.sync` are wiped with it. All keys are decided to move to `chrome.storage.local` (2026-10-13 12:19–12:23, pending the settings redesign PR); after that move, removing the extension still clears the on-device keys. Export settings first if you must reinstall.
+Already installed: `git pull`, then click **Reload** on the extensions page. Do **not** Remove and re-add — translation keys and PDF cloud keys currently in `chrome.storage.sync` are wiped with it. All keys are decided to move to `chrome.storage.local` (2026-10-13 12:19–12:23, pending the settings redesign PR); after that move, removing the extension still clears the on-device keys. Export still includes keys today, so export before a reinstall if you must. TODO (rewrite this sentence when the settings-redesign PR lands): today Remove wipes keys in sync; after they move to local, Remove wipes the on-device keys in local. Per the 2026-10-13 17:29 decision, settings export then omits keys and importing settings does not write keys, so export will not preserve them.
 
 **Zero build.** Edit JS / CSS / HTML and reload. There is no bundle step.
 
@@ -113,7 +113,7 @@ Toolbar icon → **设置** (Settings), or right-click the icon → Options.
 
 Default engine is **MyMemory (free trial)** — no key required, quality and quota are limited. For real reading, switch to DeepL or any LLM channel.
 
-Decided: settings save immediately and the Save button goes away; keys commit when the field loses focus or on Enter. An empty input never overwrites a stored key; a key is cleared only through Remove, which can be undone (SET-05, SET-07) (2026-10-13 12:19–12:23, pending the settings redesign PR). All keys live only in `chrome.storage.local` and do not enter sync. Translation keys and PDF cloud keys move from sync to local; migration and rollback both need tests. Until that PR lands, those two still sit in sync. Settings export includes keys; keep that file private. When cloud sync (F10) is built, whether keys follow the account is the user's choice, using the interface reserved on 2026-10-13 11:57. Notes-panel preferences (panel width, filter, "don't show again", and the like) move from `localStorage` into `chrome.storage.local` with the other settings (2026-10-13, decided 11:55, confirmed 12:00). Existing values migrate automatically and must not be dropped. A separate small PR does this; it is not in yet. The keys are `reader.panelWidth`, `reader.notesWidth`, `reader.notesPaneSide`, and `reader.notesPersistHintDismissed`. Ask AI is not a separate settings page and has no model of its own.
+Decided: settings save immediately and the Save button goes away; keys commit when the field loses focus or on Enter. An empty input never overwrites a stored key; a key is cleared only through Remove, which can be undone (SET-05, SET-07) (2026-10-13 12:19–12:23, pending the settings redesign PR). All keys live only in `chrome.storage.local` and do not enter sync. Translation keys and PDF cloud keys move from sync to local; migration, import, and rollback all need tests. Until that PR lands, those two still sit in sync. On 2026-10-13 17:29 export was split into a library file and a settings file; neither contains any API key. Settings export omits keys, and importing settings does not write keys. See `docs/settings-spec.md` §2. When cloud sync (F10) is built, whether keys follow the account is the user's choice, using the interface reserved on 2026-10-13 11:57. Notes-panel preferences (panel width, filter, "don't show again", and the like) move from `localStorage` into `chrome.storage.local` with the other settings (2026-10-13, decided 11:55, confirmed 12:00). Existing values migrate automatically and must not be dropped. Merged in #130 (`4e0a705`). The keys are `reader.panelWidth`, `reader.notesWidth`, `reader.notesPaneSide`, and `reader.notesPersistHintDismissed` (one key; the value is a map of docHash to true). Ask AI is not a separate settings page and has no model of its own.
 
 ### 2. Translate a page
 
@@ -339,7 +339,7 @@ Not built, not guaranteed, or still experimental:
 | Hover / selection / captions | `features.js` `group: "later"`, off by default |
 | Dedicated Ollama row | Use the OpenAI-compatible channel |
 | Persistent translation cache | Service-worker memory only |
-| Isolated secrets | Decided: every key lives only in `chrome.storage.local`; exported JSON is plaintext (2026-10-13 12:19–12:23). Translation keys and PDF cloud keys move off sync in the settings redesign PR; migration and rollback both need tests. Until that PR lands, those two still sit in sync. F10 leaves the account-sync choice to the user, using the interface reserved on 2026-10-13 11:57 |
+| Isolated secrets | Decided: every key lives only in `chrome.storage.local`; export splits into a library file and a settings file, and neither contains any API key (2026-10-13 17:29; see `docs/settings-spec.md` §2). Translation keys and PDF cloud keys move off sync in the settings redesign PR; migration, import, and rollback all need tests. Until that PR lands, those two still sit in sync. F10 leaves the account-sync choice to the user, using the interface reserved on 2026-10-13 11:57 |
 | Pixel-perfect page restyle | Webpage mode is “translation under each block”, not a CSS rebuild |
 
 ---
