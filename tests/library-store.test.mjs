@@ -14,7 +14,7 @@ import {
   createLibraryStore
 } from "../lib/library-store.js";
 import { NOTES_FORMAT } from "../lib/notes-io.js";
-import { NOTES_DB_NAME, NOTES_DB_VERSION, createNotesStore } from "../lib/notes-store.js";
+import { NOTES_DB_NAME, NOTES_DB_VERSION, createNotesStore, currentNotesStore } from "../lib/notes-store.js";
 import { NOTES_PERSIST_HINT_KEY } from "../lib/notes-prefs.js";
 import { createIdbLibraryFactory } from "../lib/platform/idb-backend.js";
 import { indexedDatabaseExists } from "../lib/platform/idb-open.js";
@@ -112,6 +112,33 @@ async function describeStore(storeName) {
     await done;
     return info;
   });
+}
+
+function libraryNotesBundle(docHash, id, body) {
+  return {
+    format: LIBRARY_FORMAT,
+    schema: LIBRARY_SCHEMA,
+    papers: [{
+      paper: { docHash, schema: LIBRARY_SCHEMA, title: "题", rev: 1, updatedAt: 1, deviceId: "other" },
+      pages: [],
+      groups: [],
+      notes: [{
+        id,
+        schema: 1,
+        docHash,
+        kind: "note",
+        author: "me",
+        body,
+        anchor: null,
+        anchorState: { status: "lost", layoutRev: "", checkedAt: 0 },
+        page: 1,
+        createdAt: 2,
+        updatedAt: 2,
+        rev: 1,
+        deviceId: "other"
+      }]
+    }]
+  };
 }
 
 function noteBundle(body = "导入的笔记") {
@@ -745,6 +772,123 @@ test("delete, edit, and import stay consistent if the library is created before 
       assert.equal(after.some((item) => item.body === "imported" && !item.deletedAt), true);
       assert.equal(after.some((item) => item.body === "edited after trash" && item.deletedAt), true);
     }
+  } finally {
+    await resetDatabase(factory);
+  }
+});
+
+test("touchPaper closes the panel connection, then delete and a panel edit do not bring the note back", async () => {
+  const factory = createIdbLibraryFactory();
+  try {
+    await resetDatabase(factory);
+    const library = createLibraryStore({
+      platform: { target: "idb", kv: createMemoryKv(), library: factory },
+      persist: false,
+      deviceId: "d",
+      now: () => 4
+    });
+    const panel = createNotesStore({
+      persist: false,
+      deviceId: "d",
+      now: () => 4,
+      createId: () => "p1"
+    });
+    await panel.put({ docHash: "a", kind: "note", page: 1, body: "panel" });
+    await library.touchPaper("a", { title: "T" });
+    assert.equal((await describeStore("notes")).version, 2);
+    assert.equal(currentNotesStore(), panel);
+    await library.deletePaperData("a", { notes: true });
+    assert.equal((await panel.list("a")).length, 0);
+    assert.equal((await panel.listTrash("a")).length, 1);
+    const mid = createNotesStore({ persist: false, deviceId: "d", capture: false, createId: () => "disk-mid" });
+    assert.equal((await mid.list("a")).length, 0);
+    assert.equal((await mid.listTrash("a")).length, 1);
+    await panel.put({ id: "p1", body: "edited after trash" });
+    assert.equal((await panel.list("a")).length, 0);
+    const after = createNotesStore({ persist: false, deviceId: "d", capture: false, createId: () => "disk-after" });
+    assert.deepEqual((await after.list("a")).map((note) => note.body), []);
+    assert.equal((await after.listTrash("a")).length, 1);
+    assert.equal((await after.listTrash("a"))[0].body, "edited after trash");
+  } finally {
+    await resetDatabase(factory);
+  }
+});
+
+test("a library write, then a delete, then a panel edit does not bring the note back", async () => {
+  const factory = createIdbLibraryFactory();
+  try {
+    for (const write of ["touchPaper", "putPage", "import"]) {
+      await resetDatabase(factory);
+      let now = 8;
+      const hash = `doc-${write}`;
+      const panel = createNotesStore({
+        persist: false,
+        deviceId: "device-panel",
+        now: () => now,
+        createId: () => `${write}-note`
+      });
+      const note = await panel.put({ docHash: hash, kind: "note", page: 1, body: "live" });
+      const library = createLibraryStore({
+        platform: { target: "idb", kv: createMemoryKv(), library: factory },
+        persist: false,
+        deviceId: "device-lib",
+        now: () => now
+      });
+      if (write === "putPage") {
+        await library.putPage(hash, 1, { pairs: [{ text: "页", translation: "页" }] });
+      } else if (write === "import") {
+        const imported = await library.importBundle(libraryNotesBundle(hash, `${write}-brought`, "brought in"));
+        assert.equal(imported.errors.length, 0);
+        assert.equal((await panel.list(hash)).some((item) => item.body === "brought in"), true);
+      } else {
+        await library.touchPaper(hash, { title: "T", pageCount: 1, origin: "native" });
+      }
+      assert.equal((await describeStore("notes")).version, 2);
+      assert.equal(currentNotesStore(), panel);
+      now += 1;
+      const report = await library.deletePaperData(hash, { notes: true });
+      assert.equal(report.notes >= 1, true);
+      assert.equal((await panel.list(hash)).length, 0);
+      assert.equal((await panel.listTrash(hash)).some((item) => item.id === note.id), true);
+      await panel.put({ id: note.id, body: "edited after trash" });
+      assert.equal((await panel.list(hash)).length, 0);
+      const disk = (await dump("notes")).filter((item) => item.docHash === hash);
+      assert.equal(disk.some((item) => !item.deletedAt), false);
+      assert.equal(disk.find((item) => item.id === note.id).body, "edited after trash");
+      assert.equal(disk.find((item) => item.id === note.id).deletedAt > 0, true);
+    }
+  } finally {
+    await resetDatabase(factory);
+  }
+});
+
+test("after a library write, an import shows up in the panel", async () => {
+  const factory = createIdbLibraryFactory();
+  try {
+    await resetDatabase(factory);
+    const hash = "doc-see";
+    const panel = createNotesStore({
+      persist: false,
+      deviceId: "device-panel",
+      now: () => 6,
+      createId: () => "see-note"
+    });
+    await panel.put({ docHash: hash, kind: "note", page: 1, body: "already here" });
+    const library = createLibraryStore({
+      platform: { target: "idb", kv: createMemoryKv(), library: factory },
+      persist: false,
+      deviceId: "device-lib",
+      now: () => 6
+    });
+    await library.touchPaper(hash, { title: "已打开", pageCount: 1, origin: "native" });
+    assert.equal(currentNotesStore(), panel);
+    const imported = await library.importBundle(libraryNotesBundle(hash, "see-imported", "imported"));
+    assert.equal(imported.errors.length, 0);
+    const live = await panel.list(hash);
+    assert.equal(live.some((item) => item.body === "already here"), true);
+    assert.equal(live.some((item) => item.body === "imported"), true);
+    const disk = (await dump("notes")).filter((item) => item.docHash === hash && !item.deletedAt);
+    assert.equal(disk.some((item) => item.body === "imported"), true);
   } finally {
     await resetDatabase(factory);
   }
