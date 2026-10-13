@@ -52,7 +52,7 @@ https://claude.com/blog/what-1-000-small-business-owners-taught-us-about-ai
 
 **设置四组：引擎 / 阅读 / 功能 / 高级**
 
-左侧栏标题下是弱化的 **学习中心 · 文档翻译**（不是强调色按钮），其下四个分组。已定改成 8 个一级页，页名见 [`docs/settings-spec.md`](docs/settings-spec.md)（`#translate` 翻译、`#mm` 多模态 · OCR、`#web` 网页、`#pdf` PDF 阅读、`#notes` 笔记、`#labs` 功能与实验室、`#data` 数据与隐私、`#about` 关于）。「多模态 · OCR」是一级页（常规组第 2 位），不是一节。问 AI 不再单独设一页（2026-10-13 12:19–12:23，规格 2026-10-13 13:01 Wisdom 批准，SET-01…SET-31）。已定，待设置页重设计 PR 实现。上面的四组和下面的截图是现在的界面。实验室 PDF 仍从 **设置 → 高级** 开启。
+左侧栏标题下是弱化的 **学习中心 · 文档翻译**（不是强调色按钮），其下四个分组。已定改成 8 个一级页，页名见 [`docs/settings-spec.md`](docs/settings-spec.md)（`#translate` 翻译、`#mm` 多模态 · OCR、`#web` 网页、`#pdf` PDF 阅读、`#notes` 笔记、`#labs` 功能与实验室、`#data` 数据与隐私、`#about` 关于）。「多模态 · OCR」是一级页（常规组第 2 位），不是一节。问 AI 不再单独设一页（2026-10-13 12:19–12:23，规格 2026-10-13 13:01 Wisdom 批准，SET-01…SET-34）。已定，待设置页重设计 PR 实现。上面的四组和下面的截图是现在的界面。实验室 PDF 仍从 **设置 → 高级** 开启。
 
 ![设置：默认引擎与测试连接](docs/screenshots/03-options-engine.png)
 

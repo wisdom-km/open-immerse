@@ -20,7 +20,7 @@
 | 4 | 阅读 | PDF 阅读 | `#pdf` | 打开时自动翻译、正文译文间距、译文段间距、版面识别（原「PDF 划区」）、「恢复阅读偏好默认值」 |
 | 5 | 阅读 | 笔记 | `#notes` | 默认布局、面板宽度（恢复 360）、新笔记默认类型 |
 | 6 | 更多 | 功能与实验室 | `#labs` | 功能开关（网页翻译 / 学习中心 / 文档翻译 / 页面开关按钮），实验室（悬浮 / 划词 / YouTube / X / PDF 阅读） |
-| 7 | 更多 | 数据与隐私 | `#data` | 密钥存放位置一览、同步密钥（F10 预留，置灰）、导出 / 导入（「文献库」和「设置」两个文件，都不含 API key，见 §2）。导入旧的设置文件时忽略里面的 key，并给出提示。持久存储被拒绝时不阻止导入，只提示一次；本页提供「再申请一次」 |
+| 7 | 更多 | 数据与隐私 | `#data` | 密钥存放位置一览、同步密钥（F10 预留，置灰）、导出 / 导入（「文献库」和「设置」两个文件，都不含 API key，见 §2）。导入旧的设置文件时忽略里面的 key，并给出提示。持久存储被拒绝时不阻止导入，只提示一次（并进 NIM-04）；本页提供「再申请一次」。迁移和导入在后台进行，「完成」用中性色加 ✓（SET-32…SET-34） |
 | 8 | 更多 | 关于 | `#about` | 版本、学习中心 / 文档翻译入口 |
 
 - 没有「高级」页，也没有「问 AI」页。
@@ -51,7 +51,7 @@
 | 阅读页偏好 | `localStorage` | `reader.*`（不含上面 4 个笔记键：`reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`，这 4 个改存 `chrome.storage.local`）、`oi.reader.cjk`、`oi.rfSrcFold`。这些是就地设置；设置页只提供「恢复默认值」 |
 | 作废 | — | `ask.model`（不再读写）。`ask.contextNearby` 固定为 2；`ask.confirmSend` 只在问 AI 面板首次发送确认框里修改 |
 
-- **导出、导入和 sync 里的密钥（2026-10-13 17:29 Wisdom 定，放进设置页重设计范围；F4 界面 2026-10-13 补）。** 导出拆成「文献库」和「设置」两个文件，两个文件都不含任何 API key。设置导出不带 key；导入设置也不写入 key。导入旧的设置文件时忽略里面的 key，并给出提示。持久存储被拒绝时不阻止导入，只提示一次。`#data` 页提供「再申请一次」。迁移和导入都在后台进行。「完成」状态用中性色加 ✓。现状：从「导入设置」导入后，`chrome.storage.sync` 里会存着非空的 `settings.providers.openai.apiKey`。main 上也是这样，是 Anvil 测 #128 时发现的。放在设置页重设计 PR 里修，和翻译、PDF 云端 key 从 sync 迁到 local 一起做。sync 里已有的 key（所有 `settings.providers.*.apiKey`、`pdfLayout.cloudApiKey`、多模态和 OCR 的 key）先迁到 local，再从 sync 删掉。迁移后再导入一次，不把 key 写回 sync。迁移可以重复跑。迁移、导入和回滚都要有测试。
+- **导出、导入和 sync 里的密钥（2026-10-13 17:29 Wisdom 定，放进设置页重设计范围；F4 界面 2026-10-13 补）。** 导出拆成「文献库」和「设置」两个文件，两个文件都不含任何 API key。设置导出不带 key；导入设置也不写入 key。导入旧的设置文件时忽略里面的 key，并给出提示。持久存储被拒绝时不阻止导入，只提示一次；这条提示默认并进 NIM-04，不另开一行，关闭记在 `chrome.storage.local` 的 `reader.notesPersistHintDismissed`。`#data` 页提供「再申请一次」。迁移和导入都在后台进行。「完成」状态用中性色加 ✓。验收见 SET-32、SET-33、SET-34。现状：从「导入设置」导入后，`chrome.storage.sync` 里会存着非空的 `settings.providers.openai.apiKey`。main 上也是这样，是 Anvil 测 #128 时发现的。放在设置页重设计 PR 里修，和翻译、PDF 云端 key 从 sync 迁到 local 一起做。sync 里已有的 key（所有 `settings.providers.*.apiKey`、`pdfLayout.cloudApiKey`、多模态和 OCR 的 key）先迁到 local，再从 sync 删掉。迁移后再导入一次，不把 key 写回 sync。迁移可以重复跑。迁移、导入和回滚都要有测试。
 - 设置页和阅读页通过 `chrome.storage.onChanged` 互相刷新，不需要刷新页面。
 
 ## 3 保存
@@ -101,7 +101,7 @@
 - 最小支持宽 420：不重叠、不裁切、不出现横向滚动条。
 - 无障碍：可以用 Tab 走遍所有控件；导航支持 ↑ / ↓；开关带 `role=switch` 和 `aria-checked`。
 
-## 8 验收索引（SET-01…31）
+## 8 验收索引（SET-01…34）
 | ID | 要点 |
 |---|---|
 | SET-01 | 正好 8 个一级页、3 组，顺序 / 名称 / 锚点与 §1 一致；「多模态 · OCR」在常规组第 2 位；没有「高级」页 |
@@ -135,3 +135,6 @@
 | SET-29 | 移除多模态密钥后，问 AI 立即改用翻译模型；撤销后又回到多模态 |
 | SET-30 | 多模态失败时问 AI 报错，不改用翻译模型 |
 | SET-31 | 不再读写 `ask.model`；设置页没有问 AI 专属控件 |
+| SET-32 | 文献库迁移和设置导入都在后台进行，不挡住当前阅读。可以取消，取消后下次接着做 |
+| SET-33 | `#data` 有「再申请一次」。持久存储被拒绝时不阻止导入，只提示一次。这条提示并进 NIM-04，不另开一行。关闭记在 `chrome.storage.local` 的 `reader.notesPersistHintDismissed` |
+| SET-34 | 迁移或导入的「完成」用中性色加 ✓ |
