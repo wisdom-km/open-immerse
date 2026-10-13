@@ -46,33 +46,29 @@ export function e2eLibrarySceneResetSource() {
  */
 export function storedLibraryPagesSource() {
   return `async function oiStoredLibraryPages() {
-  try {
-    const { sharedLibraryStore } = await import("/lib/library-session.js");
-    const store = sharedLibraryStore();
-    const papers = await store.listPapers();
-    const pages = [];
-    for (const paper of papers || []) {
-      const hash = paper && paper.docHash;
-      if (!hash) continue;
-      const rows = await store.getPages(hash);
-      const layouts = typeof store.listLayouts === "function" ? await store.listLayouts(hash) : [];
-      for (const row of rows || []) {
-        const matches = (layouts || []).filter((item) => Number(item.page) === Number(row.page));
-        matches.sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
-        const layout = matches[0] && matches[0].layout || null;
-        pages.push({
-          page: Number(row.page) || 0,
-          pairs: Array.isArray(row.pairs) ? row.pairs : [],
-          skipped: row.skipped === true,
-          layout,
-          layoutVersion: row.layoutVersion || (layout && layout.layoutVersion) || (matches[0] && matches[0].layoutRev) || ""
-        });
-      }
+  const { sharedLibraryStore } = await import("/lib/library-session.js");
+  const store = sharedLibraryStore();
+  const papers = await store.listPapers();
+  const pages = [];
+  for (const paper of papers || []) {
+    const hash = paper && paper.docHash;
+    if (!hash) continue;
+    const rows = await store.getPages(hash);
+    const layouts = typeof store.listLayouts === "function" ? await store.listLayouts(hash) : [];
+    for (const row of rows || []) {
+      const matches = (layouts || []).filter((item) => Number(item.page) === Number(row.page));
+      matches.sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
+      const layout = matches[0] && matches[0].layout || null;
+      pages.push({
+        page: Number(row.page) || 0,
+        pairs: Array.isArray(row.pairs) ? row.pairs : [],
+        skipped: row.skipped === true,
+        layout,
+        layoutVersion: row.layoutVersion || (layout && layout.layoutVersion) || (matches[0] && matches[0].layoutRev) || ""
+      });
     }
-    pages.sort((a, b) => a.page - b.page);
-    return pages;
-  } catch {
-    return [];
   }
+  pages.sort((a, b) => a.page - b.page);
+  return pages;
 }`;
 }

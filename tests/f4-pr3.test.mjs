@@ -11,23 +11,31 @@ import {
   DEFAULT_BLOCKED_TIMEOUT_MS,
   STORAGE_AVAILABLE_EVENT,
   onStorageAvailable,
-  openIndexedDatabase
+  openIndexedDatabase,
+  storageOpenIsBlocked
 } from "../lib/platform/idb-open.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
 import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
 import {
   LIBRARY_PROBE_DELAYS_MS,
+  LIBRARY_ZONE_WAIT_MS,
+  currentLayoutIfArrived,
   fetchLibraryDocument,
   flushPendingPages,
   mergeLibraryPairs,
   mergeStoredPagePairs,
-  saveLibraryPage
+  preferArrivedLayout,
+  saveLibraryPage,
+  settleFreshZone,
+  waitForFirstZone,
+  whenZoneReadSettles
 } from "../lib/pdf-library.js";
 import { layoutCacheKey, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { readLayoutCache, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard } from "../lib/persist-card.js";
 import { bindPendingUnload, createPendingNotes, pendingNotesKey } from "../lib/pending-notes.js";
+import { storedLibraryPagesSource } from "./helpers/library-observe.mjs";
 import { mountNotesUi } from "../pdf/notes-panel.js";
 import {
   BLOCKED_CAN,
@@ -1445,6 +1453,216 @@ test("a blocked page write is queued and a blocked flush puts the rest back", as
   const saved = await flushPendingPages({ store });
   assert.equal(saved, 1);
   assert.equal((await store.getPage("pend", 1)).pairs[0].translation, "你好");
+});
+
+test("oiStoredLibraryPages throws when the library read fails", async () => {
+  const source = storedLibraryPagesSource();
+  assert.match(source, /async function oiStoredLibraryPages/);
+  assert.doesNotMatch(source, /catch\s*\{/);
+  const readPages = new Function(`${source}\nreturn oiStoredLibraryPages;`)();
+  await assert.rejects(readPages());
+});
+
+test("zoning waits only for the IndexedDB read", { timeout: 15000 }, async () => {
+  const version = "rev-zone";
+  const retryMs = LIBRARY_PROBE_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
+  assert.equal(LIBRARY_ZONE_WAIT_MS, 300);
+  assert.equal(retryMs, 3200);
+
+  const emptyStore = {
+    async getPaper() { return null; }
+  };
+  const originalFetch = globalThis.fetch;
+  let fetches = 0;
+  globalThis.fetch = async () => {
+    fetches += 1;
+    return new Promise(() => {});
+  };
+  let legacyDownMs = 0;
+  try {
+    const started = performance.now();
+    const gate = await waitForFirstZone("zone-down", { store: emptyStore });
+    legacyDownMs = performance.now() - started;
+    assert.equal(gate.reason, "stored");
+    assert.equal(gate.document, null);
+    assert.equal(fetches, 0);
+    assert.ok(legacyDownMs < 80, `8765 down delayed zoning by ${legacyDownMs}ms`);
+    assert.ok(legacyDownMs < retryMs / 10, legacyDownMs);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const slowHash = "zone-slow";
+  const slowStore = {
+    async getPaper() {
+      await new Promise((resolve) => setTimeout(resolve, LIBRARY_ZONE_WAIT_MS + 500));
+      return { docHash: slowHash, title: "slow", pageCount: 1, origin: "native" };
+    },
+    async getPages() {
+      return [{ page: 1, pairs: [], layoutVersion: version }];
+    },
+    async listLayouts() {
+      return [{
+        page: 1,
+        savedAt: 5,
+        layout: {
+          blocks: [{ bid: "kept", text: "current" }],
+          layoutVersion: version,
+          protocol: "blocks-1"
+        }
+      }];
+    }
+  };
+  const slowStarted = performance.now();
+  const slowGate = await waitForFirstZone(slowHash, { store: slowStore });
+  const slowIdbMs = performance.now() - slowStarted;
+  assert.equal(slowGate.reason, "cap");
+  assert.equal(slowGate.document, null);
+  assert.ok(slowIdbMs >= LIBRARY_ZONE_WAIT_MS - 40, slowIdbMs);
+  assert.ok(slowIdbMs < LIBRARY_ZONE_WAIT_MS + 180, `slow IDB delayed zoning by ${slowIdbMs}ms`);
+  assert.equal(currentLayoutIfArrived({ hash: slowHash, page: 1, version }), null);
+  let slowWrites = 0;
+  const slowSettled = await settleFreshZone({
+    hash: slowHash,
+    page: 1,
+    version,
+    reason: slowGate.reason,
+    write: async () => { slowWrites += 1; }
+  });
+  assert.equal(slowSettled.deferred, true);
+  assert.equal(slowSettled.recomputed, false);
+  assert.equal(slowWrites, 0);
+  await whenZoneReadSettles(slowHash);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(slowWrites, 0);
+  const arrived = currentLayoutIfArrived({ hash: slowHash, page: 1, version });
+  assert.equal(arrived.blocks[0].bid, "kept");
+  assert.equal(preferArrivedLayout({ blocks: [{ bid: "fresh" }], layoutVersion: version }, arrived).recomputed, false);
+
+  const fastHash = "zone-fast";
+  const fastStore = {
+    async getPaper() {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      return { docHash: fastHash, title: "fast", pageCount: 1, origin: "native" };
+    },
+    async getPages() {
+      return [{ page: 1, pairs: [], layoutVersion: version }];
+    },
+    async listLayouts() {
+      return [{
+        page: 1,
+        savedAt: 1,
+        layout: {
+          blocks: [{ bid: "kept", text: "current" }],
+          layoutVersion: version,
+          protocol: "blocks-1"
+        }
+      }];
+    }
+  };
+  const fastStarted = performance.now();
+  const fastGate = await waitForFirstZone(fastHash, { store: fastStore });
+  const fastIdbMs = performance.now() - fastStarted;
+  assert.equal(fastGate.reason, "stored");
+  assert.ok(fastIdbMs >= 60, fastIdbMs);
+  assert.ok(fastIdbMs < LIBRARY_ZONE_WAIT_MS, fastIdbMs);
+  assert.equal(storedLayoutCurrent(fastGate.document.pages[0], version).blocks[0].bid, "kept");
+
+  const emptyHash = "zone-empty-slow";
+  let emptyWrites = 0;
+  const emptyGate = await waitForFirstZone(emptyHash, {
+    store: {
+      async getPaper() {
+        await new Promise((resolve) => setTimeout(resolve, LIBRARY_ZONE_WAIT_MS + 80));
+        return null;
+      }
+    }
+  });
+  assert.equal(emptyGate.reason, "cap");
+  await settleFreshZone({
+    hash: emptyHash,
+    page: 1,
+    version,
+    reason: emptyGate.reason,
+    write: async () => { emptyWrites += 1; }
+  });
+  assert.equal(emptyWrites, 0);
+  await whenZoneReadSettles(emptyHash);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(emptyWrites, 1);
+
+  const hangStarted = performance.now();
+  const hangGate = await waitForFirstZone("zone-hang", {
+    store: {
+      getPaper() {
+        return new Promise(() => {});
+      }
+    }
+  });
+  const blockedHangMs = performance.now() - hangStarted;
+  assert.equal(hangGate.reason, "cap");
+  assert.equal(hangGate.document, null);
+  assert.ok(blockedHangMs >= LIBRARY_ZONE_WAIT_MS - 40, blockedHangMs);
+  assert.ok(blockedHangMs < 1000, `blocked hang delayed zoning by ${blockedHangMs}ms`);
+
+  const held = hangingFactory();
+  const pendingOpen = openIndexedDatabase({
+    name: NOTES_DB_NAME,
+    version: 2,
+    indexedDB: held.factory,
+    blockedTimeoutMs: 10000
+  });
+  let blockedKnownMs = 0;
+  try {
+    held.req.onblocked();
+    assert.equal(storageOpenIsBlocked(NOTES_DB_NAME), true);
+    let reads = 0;
+    const knownStarted = performance.now();
+    const known = await waitForFirstZone("zone-blocked", {
+      store: {
+        getPaper() {
+          reads += 1;
+          return new Promise(() => {});
+        }
+      },
+      layoutRead() {
+        reads += 1;
+        return new Promise(() => {});
+      }
+    });
+    blockedKnownMs = performance.now() - knownStarted;
+    assert.equal(known.reason, "unavailable");
+    assert.equal(known.document, null);
+    assert.equal(reads, 0);
+    assert.ok(blockedKnownMs < 50, `known blocked store delayed zoning by ${blockedKnownMs}ms`);
+    const settled = await settleFreshZone({
+      hash: "zone-blocked",
+      page: 1,
+      version,
+      reason: known.reason,
+      write: () => new Promise(() => {})
+    });
+    assert.equal(settled.deferred, true);
+    assert.equal(settled.recomputed, false);
+  } finally {
+    held.req.result = { close() {} };
+    held.req.onsuccess();
+    await pendingOpen;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  const viewer = read("pdf/viewer.js");
+  const fn = viewer.slice(
+    viewer.indexOf("async function ingestVendorLayout"),
+    viewer.indexOf("async function ingestSkippedSourceLayout")
+  );
+  assert.doesNotMatch(fn, /await ensureLibraryDocument\(\)/);
+  assert.match(fn, /void ensureLibraryDocument\(\)/);
+  assert.match(fn, /waitForFirstZone/);
+  assert.match(fn, /settleFreshZone/);
+  assert.match(fn, /currentLayoutIfArrived/);
+
+  console.log(`[zone-delay] blockedKnown=${blockedKnownMs.toFixed(1)}ms blockedHang=${blockedHangMs.toFixed(1)}ms legacyDown=${legacyDownMs.toFixed(1)}ms slowIdb=${slowIdbMs.toFixed(1)}ms fastIdb=${fastIdbMs.toFixed(1)}ms`);
 });
 
 function hangingFactory(onOpen) {

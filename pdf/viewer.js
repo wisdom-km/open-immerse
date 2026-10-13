@@ -309,7 +309,7 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, setLibraryUiHooks, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, storedReadoutBlocks, waitForFirstZone, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard } from "../lib/persist-card.js";
@@ -9364,13 +9364,20 @@ async function ingestVendorLayout(n, mode, isStale) {
   const hash = await pdfByteHash();
   const key = layoutCacheKey({ hash, page: n, mode });
   const version = await layoutVersionNow();
-  // The library probe is already running. A current page layout there means
-  // this open must not zone the page again. Waiting here keeps a slow first
-  // IndexedDB open from losing that race.
-  await ensureLibraryDocument();
+  // The full probe, including the 8765 retries, keeps running for saved
+  // translations. Zoning waits only for the IndexedDB read, and only briefly.
+  // A store that is already blocked or unavailable is not waited on at all.
+  void ensureLibraryDocument();
+  const zone = await waitForFirstZone(hash, {
+    layoutRead: () => readStoredLayout(key)
+  });
+  if (zone.document && (!libraryDoc || libraryDoc.hash !== hash)) {
+    if (!zone.document.hash) zone.document.hash = hash;
+    libraryDoc = zone.document;
+  }
   // A source-v3 entry with no revision, or an older revision, is not the current
   // block structure. Library page layouts follow the same rule.
-  let mapped = storedLayoutCurrent(await readStoredLayout(key), version)
+  let mapped = storedLayoutCurrent(zone.cached, version)
     || storedLayoutCurrent(libraryEntry(n), version);
   let recomputed = false;
   if (!mapped) {
@@ -9401,8 +9408,16 @@ async function ingestVendorLayout(n, mode, isStale) {
       attachFontRealNames(content.items, page.commonObjs);
       mapped = vendorLayoutToBlocks(envelope, { items: content.items, viewport, images, page: n });
       if (version) mapped.layoutVersion = version;
-      await writeStoredLayout(key, mapped);
-      recomputed = true;
+      const settled = await settleFreshZone({
+        hash,
+        page: n,
+        version,
+        reason: zone.reason,
+        cachedRead: () => (zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null),
+        write: () => writeStoredLayout(key, mapped)
+      });
+      if (settled.layout) mapped = settled.layout;
+      recomputed = settled.recomputed;
       vendorLayoutPending.delete(n);
     } catch (err) {
       if (err?.name === "AbortError" || err?.code === "aborted") {
@@ -9429,8 +9444,29 @@ async function ingestVendorLayout(n, mode, isStale) {
     }
   }
   if (isStale()) return null;
-  const blocks = await cropLayoutBlocks(raster, page, mapped.blocks, n, isStale);
+  const arrived = currentLayoutIfArrived({
+    hash,
+    page: n,
+    version,
+    cached: zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null
+  });
+  if (arrived) {
+    mapped = arrived;
+    recomputed = false;
+  }
+  let blocks = await cropLayoutBlocks(raster, page, mapped.blocks, n, isStale);
   if (!blocks || isStale()) return null;
+  const latePaint = currentLayoutIfArrived({
+    hash,
+    page: n,
+    version,
+    cached: zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null
+  });
+  if (latePaint) {
+    mapped = latePaint;
+    recomputed = false;
+    blocks = latePaint.blocks;
+  }
   const layout = stampBodyFont({
     ...mapped,
     kind: "blocks",
@@ -9440,6 +9476,18 @@ async function ingestVendorLayout(n, mode, isStale) {
   }, content.items, viewport);
   setPageLayout(n, layout);
   if (recomputed) persistPageLayout(n).catch(() => {});
+  else if (zone.reason === "cap" || zone.reason === "unavailable") {
+    void whenZoneReadSettles(hash).then(() => {
+      const still = currentLayoutIfArrived({
+        hash,
+        page: n,
+        version,
+        cached: zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null
+      });
+      if (still) return;
+      persistPageLayout(n).catch(() => {});
+    });
+  }
   return layout;
 }
 
