@@ -155,7 +155,7 @@ node --test tests/*.test.mjs
 - `lib/pdf-layout-adapter.js`：`vendorLayoutToBlocks(envelope)`。映射表按 `ARCHITECTURE.md` 第 8 节。视觉块丢掉 `content`。`text` 块的 `content` 先放在临时字段 `vendorText`，不要直接写成 `text`。
 - 可信文字层：块的框来自信封，`text` 用来自文字项、中心点落在 bbox 内的拼接。拼接为空则 `text` 为 `""`。然后用现有启发式把部分 `text` 改成 `title` / `heading` / `caption` / `header` / `footer`，并处理作者与参考文献的 `skipTranslate`。
 - `lib/pdf-layout-client.js`：`fetchCloudEnvelope` 与 `fetchLocalEnvelope`。由 `viewer.js` 调用。失败时该页回退到 `textLayerToBlocks`，状态栏写「划区服务不可用，已使用文字层」。
-- 设置 `pdfLayout` 按第 8 节，放在现有设置对象里。划区这一组（模式下拉、本机基址、云端基址、云端密钥、一句「云端模式会上传每一页的渲染图」）仍只在 `features.pdf` 打开时显示。不要新的顶层 feature id。云端密钥只存 `chrome.storage.local`（2026-10-13 12:19–12:23：所有密钥只存 local），已定，待设置页重设计 PR 实现。「多模态 · OCR」页在 PDF 阅读开关关闭时不隐藏，只在页顶加一行提示和「开启」链接。见 `docs/ui-phase2-plan.md`「设置页重设计」。
+- 设置 `pdfLayout` 按第 8 节，放在现有设置对象里。划区这一组（模式下拉、本机基址、云端基址、云端密钥、一句「云端模式会上传每一页的渲染图」）在 PDF 阅读开关打开后才出现的那一页上，页名见 SET 规格，不是「多模态 · OCR」页。它仍只在 `features.pdf` 打开时显示。不要新的顶层 feature id。云端密钥只存 `chrome.storage.local`（2026-10-13 12:19–12:23：所有密钥只存 local），已定，待设置页重设计 PR 实现。PDF 阅读开关关闭时不隐藏的是另一页「多模态 · OCR」：页仍在，只在页顶加一行提示和「开启」链接。见 `docs/ui-phase2-plan.md`「设置页重设计」。
 - 缓存按 `ARCHITECTURE.md` 第 10 节写入 `chrome.storage.local`。
 
 ### 夹具

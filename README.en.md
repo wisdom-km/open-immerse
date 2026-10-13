@@ -54,7 +54,7 @@ Intent card: primary **翻译此页** (becomes **停止** while a job runs), **�
 
 **Settings four groups: 引擎 / 阅读 / 功能 / 高级**
 
-Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages, and Ask AI is no longer its own page (2026-10-13 12:19–12:23, Loom settings-redesign, SET-01…SET-31). Decided, pending the settings redesign PR. The four groups and the screenshots below are the current UI. Lab PDF is still enabled under **Settings → Advanced**.
+Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages; page names are in the SET spec. Ask AI is no longer its own page (2026-10-13 12:19–12:23, Loom settings-redesign, SET-01…SET-31). Decided, pending the settings redesign PR. The four groups and the screenshots below are the current UI. Lab PDF is still enabled under **Settings → Advanced**.
 
 ![Options: default engine and test connection](docs/screenshots/03-options-engine.png)
 
@@ -113,7 +113,7 @@ Toolbar icon → **设置** (Settings), or right-click the icon → Options.
 
 Default engine is **MyMemory (free trial)** — no key required, quality and quota are limited. For real reading, switch to DeepL or any LLM channel.
 
-Decided: settings save immediately and the Save button goes away; keys commit when the field loses focus or on Enter (2026-10-13 12:19–12:23, pending the settings redesign PR). All keys live only in `chrome.storage.local` and do not enter sync. Translation keys and PDF cloud keys move from sync to local; migration and rollback both need tests. Until that PR lands, those two still sit in sync. Settings export includes keys; keep that file private. When cloud sync (F10) is built, whether keys follow the account is the user's choice, using the interface reserved on 2026-10-13 11:57. Notes-panel preferences (panel width, filter, "don't show again", and the like) move from `localStorage` into `chrome.storage.local` with the other settings (2026-10-13 12:00). Existing values migrate automatically and must not be dropped. A separate small PR does this; it is not in yet. Ask AI is not a separate settings page and has no model of its own.
+Decided: settings save immediately and the Save button goes away; keys commit when the field loses focus or on Enter (2026-10-13 12:19–12:23, pending the settings redesign PR). All keys live only in `chrome.storage.local` and do not enter sync. Translation keys and PDF cloud keys move from sync to local; migration and rollback both need tests. Until that PR lands, those two still sit in sync. Settings export includes keys; keep that file private. When cloud sync (F10) is built, whether keys follow the account is the user's choice, using the interface reserved on 2026-10-13 11:57. Notes-panel preferences (panel width, filter, "don't show again", and the like) move from `localStorage` into `chrome.storage.local` with the other settings (2026-10-13, decided 11:55, confirmed 12:00). Existing values migrate automatically and must not be dropped. A separate small PR does this; it is not in yet. Ask AI is not a separate settings page and has no model of its own.
 
 ### 2. Translate a page
 
@@ -227,7 +227,7 @@ Other engines omit those fields so they do not 400. Webpage, PDF, and documents 
 
 `manifest.json` requests:
 
-- `storage` — settings (`sync`) + learning items (`local`)
+- `storage` — settings (`sync`) + learning items (`local`). Keys will live only in local (not implemented yet)
 - `activeTab` / `scripting` — start/stop on the current tab
 - `contextMenus` — right-click save
 - `alarms` — reserved

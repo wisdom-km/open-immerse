@@ -142,7 +142,7 @@ pdf-layout-sidecar         扩展仓之外（本机示例名）。只负责把�
 
 本地库按 PDF 文件 SHA-256 查找。`GET /v1/library/document?hash=...` 读取逐页记录；`POST /v1/library/page` 保存页、`pairs`、版面和首次打开的原 PDF。SQLite 是索引，仓外 `files/{hash}/page-NNN.json` 保存逐页数据，`source.pdf` 与 `readout.md` 分别是原件和旧格式兼容文件。阅读器优先用逐页 `pairs`，只在没有逐页记录时回退旧整篇 `readout.md`；已入库文档不自动重新翻译。
 
-存储替换方案已批准（2026-10-11，落地 = 路线图 v2 的 F4，见 `docs/ui-phase2-plan.md` 第 4 节）：论文、版面、译文、笔记改存 Chrome IndexedDB，设置留在 `chrome.storage`，不用 SQLite。笔记面板偏好（面板宽度、筛选、「不再提示」等）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起，不进 sync（2026-10-13 12:00 Wisdom 确认，收窄 11:55）。理由：F4 迁移时不会漏掉；F10 可以用同一套接口；后台和设置页也能读到。旧值自动迁移，不能丢。待单独小 PR 合入，见 `docs/ui-phase2-plan.md` 第 4 节和第 6.1 节。所有密钥只存 `chrome.storage.local`，不进 sync（2026-10-13 12:19–12:23 Wisdom 定，收窄 11:57）。翻译密钥和 PDF 云端密钥从 sync 迁到 local，迁移和回滚都要有测试；已定，待设置页重设计 PR 实现。以后做 F10 云同步时，密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口。论文、版面、译文还没迁，上面这段本地库代码在那一步落地前仍然有效。笔记已落到扩展自己的 IndexedDB（T2a，2026-10-12），合同见下一小节。落地顺序是路线图 v2 的 F4。
+存储替换方案已批准（2026-10-11，落地 = 路线图 v2 的 F4，见 `docs/ui-phase2-plan.md` 第 4 节）：论文、版面、译文、笔记改存 Chrome IndexedDB，设置留在 `chrome.storage`，不用 SQLite。笔记面板偏好（面板宽度、筛选、「不再提示」等）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起，不进 sync（2026-10-13 11:55 定，12:00 确认）。理由：F4 迁移时不会漏掉；F10 可以用同一套接口；后台和设置页也能读到。旧值自动迁移，不能丢。待单独小 PR 合入，见 `docs/ui-phase2-plan.md` 第 4 节和第 6.1 节。所有密钥只存 `chrome.storage.local`，不进 sync（2026-10-13 12:19–12:23 Wisdom 定，收窄 11:57）。翻译密钥和 PDF 云端密钥从 sync 迁到 local，迁移和回滚都要有测试；已定，待设置页重设计 PR 实现。以后做 F10 云同步时，密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口。论文、版面、译文还没迁，上面这段本地库代码在那一步落地前仍然有效。笔记已落到扩展自己的 IndexedDB（T2a，2026-10-12），合同见下一小节。落地顺序是路线图 v2 的 F4。
 
 F4 迁移时，版面和译文的 schema 预留跨页组字段：`groupId`、`memberBids`、引用起始页（路线图 v2 决定 2，2026-10-12 23:52）。PR-2b-2 在打磨池，字段先留着，以后做跨页续段时不用再迁数据。笔记锚点已有 `memberBid`，不受影响。
 
@@ -407,7 +407,7 @@ Faithfulness to the source outranks smoother wording.
 
 阶段 1–3：沿用阅读器内存里的 `layoutCache` / `pageCache`，键为 `docId + page + engine + PROTOCOL`。关闭阅读器即丢。
 
-阶段 4 起：划区结果按 PDF 字节的 SHA-256（`crypto.subtle`）、页码、`mode`、`PROTOCOL` 放在 `chrome.storage.local`。只存 JSON，不存 PNG。裁图每次从 pageRaster 现切。`storage.sync` 放非密钥设置。所有密钥只存 `chrome.storage.local`，不进 sync（2026-10-13 12:19–12:23 Wisdom 定）：翻译密钥、PDF 云端密钥、多模态 / OCR 密钥都在 local。11:57 只把多模态 / OCR 放 local 的例外收成这一条。以后做 F10 云同步时，密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口。翻译密钥和 PDF 云端密钥的迁移和回滚都要有测试。已定，待设置页重设计 PR 实现。见 REQUIREMENTS §2.6「开关」和 `docs/ui-phase2-plan.md`「设置页重设计」。笔记面板偏好也在 `chrome.storage.local`，和其他本机设置放在一起（2026-10-13 12:00 Wisdom 确认），见 `docs/ui-phase2-plan.md` 第 4 节。
+阶段 4 起：划区结果按 PDF 字节的 SHA-256（`crypto.subtle`）、页码、`mode`、`PROTOCOL` 放在 `chrome.storage.local`。只存 JSON，不存 PNG。裁图每次从 pageRaster 现切。`storage.sync` 放非密钥设置。所有密钥只存 `chrome.storage.local`，不进 sync（2026-10-13 12:19–12:23 Wisdom 定）：翻译密钥、PDF 云端密钥、多模态 / OCR 密钥都在 local。11:57 只把多模态 / OCR 放 local 的例外收成这一条。以后做 F10 云同步时，密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口。翻译密钥和 PDF 云端密钥的迁移和回滚都要有测试。已定，待设置页重设计 PR 实现。见 REQUIREMENTS §2.6「开关」和 `docs/ui-phase2-plan.md`「设置页重设计」。笔记面板偏好也在 `chrome.storage.local`，和其他本机设置放在一起（2026-10-13 11:55 定，12:00 确认），见 `docs/ui-phase2-plan.md` 第 4 节。
 
 第零层（REQUIREMENTS §2.7）：源码按「arXiv 编号 + 版本」放在扩展自己的 IndexedDB，由 `background/` 读写；对齐结果按「编号 + 版本 + PDF SHA-256」另存。文字和图片都保留（2026-10-13 02:34）。图片用 Blob 存在同一库，每篇上限 30 MB。`OI_ARXIV_SOURCE` 回传文本、图片元数据（path、mime、size）和 skipped；`action: "asset"` 回传 `encoding: "base64"` 的 `data`。svg 只能用 `<img>` 显示或先做清理，禁止 `innerHTML`。设置里能清除，不写进本地库服务。
 
