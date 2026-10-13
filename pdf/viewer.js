@@ -9306,7 +9306,12 @@ async function adoptDoc(doc, title) {
     setDocTitle(title);
   }
   setHasDoc(true);
-  void resolveNotesDocHash().then((hash) => notesUi?.onDocument(hash));
+  // Read this document's hint key only. The local area also holds layout
+  // cache and notes, so opening must not scan every stored item.
+  void resolveNotesDocHash().then(async (hash) => {
+    if (hash && hash !== "nohash") await notesPrefsSession.loadDocHint(hash);
+    notesUi?.onDocument(hash);
+  });
   await buildPages();
   if (!syncMiniFitZoom()) {
     requestAnimationFrame(() => {

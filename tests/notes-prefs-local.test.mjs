@@ -203,7 +203,7 @@ test("two pages hear local-area changes and merge dismissed-hint records", async
   assert.equal(pageB.read().panelWidth, 520);
 });
 
-test("concurrent hint dismissals from two pages both survive", async () => {
+test("concurrent hint dismissals from two pages both survive", { timeout: 3000 }, async () => {
   const listeners = [];
   const local = memoryArea({
     "reader.notesPersistHintDismissed": JSON.stringify({ seed: true })
@@ -213,13 +213,21 @@ test("concurrent hint dismissals from two pages both survive", async () => {
   const bothSets = new Promise((resolve) => {
     releaseSets = resolve;
   });
+  const gateTimeout = new Promise((_, reject) => {
+    const timer = setTimeout(() => reject(new Error("concurrent hint writes timed out before both sets")), 1000);
+    const prior = releaseSets;
+    releaseSets = () => {
+      clearTimeout(timer);
+      prior();
+    };
+  });
   const rawSet = local.set.bind(local);
   local.set = async (items) => {
     const perDoc = Object.keys(items).some((key) => key.startsWith(NOTES_HINT_DOC_PREFIX));
     if (perDoc) {
       hintSets += 1;
       if (hintSets === 2) releaseSets();
-      await bothSets;
+      await Promise.race([bothSets, gateTimeout]);
     }
     const changes = {};
     for (const [key, value] of Object.entries(items)) {
@@ -243,8 +251,10 @@ test("concurrent hint dismissals from two pages both survive", async () => {
   await pageB.prime();
   pageA.write({ notesPersistHintDismissed: { attention: true } });
   pageB.write({ notesPersistHintDismissed: { dpo: true } });
-  await pageA.settled();
-  await pageB.settled();
+  await Promise.race([
+    Promise.all([pageA.settled(), pageB.settled()]),
+    gateTimeout
+  ]);
   assert.equal(hintSets, 2);
   assert.equal(local.data[`${NOTES_HINT_DOC_PREFIX}attention`], true);
   assert.equal(local.data[`${NOTES_HINT_DOC_PREFIX}dpo`], true);
@@ -258,10 +268,17 @@ test("concurrent hint dismissals from two pages both survive", async () => {
     assert.equal(flags.dpo, true);
   }
   const reloaded = createNotesPrefsSession({ webStorage: memoryWeb(), localArea: local, onChanged });
-  const prefs = await reloaded.prime();
-  assert.equal(prefs.notesPersistHintDismissed.seed, true);
-  assert.equal(prefs.notesPersistHintDismissed.attention, true);
-  assert.equal(prefs.notesPersistHintDismissed.dpo, true);
+  const primed = await reloaded.prime();
+  assert.equal(primed.notesPersistHintDismissed.seed, true);
+  assert.equal(primed.notesPersistHintDismissed.attention, undefined);
+  assert.equal(primed.notesPersistHintDismissed.dpo, undefined);
+  const attention = await reloaded.loadDocHint("attention");
+  assert.equal(attention.notesPersistHintDismissed.attention, true);
+  const dpo = await reloaded.loadDocHint("dpo");
+  assert.equal(dpo.notesPersistHintDismissed.seed, true);
+  assert.equal(dpo.notesPersistHintDismissed.attention, true);
+  assert.equal(dpo.notesPersistHintDismissed.dpo, true);
+  assert.equal(local.calls.some((call) => call[0] === "get" && (call[1] == null || call[1] === undefined)), false);
 });
 
 test("notes prefs persist across a reload from chrome.storage.local", async () => {
