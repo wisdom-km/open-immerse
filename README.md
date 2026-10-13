@@ -52,7 +52,7 @@ https://claude.com/blog/what-1-000-small-business-owners-taught-us-about-ai
 
 **设置四组：引擎 / 阅读 / 功能 / 高级**
 
-左侧栏标题下是弱化的 **学习中心 · 文档翻译**（不是强调色按钮），其下四个分组。
+左侧栏标题下是弱化的 **学习中心 · 文档翻译**（不是强调色按钮），其下四个分组。已定改成 8 个一级页，问 AI 不再单独设一页（2026-10-13 12:19–12:23，Loom settings-redesign，SET-01…SET-31）。已定，待设置页重设计 PR 实现。上面的四组和下面的截图是现在的界面。实验室 PDF 仍从 **设置 → 高级** 开启。
 
 ![设置：默认引擎与测试连接](docs/screenshots/03-options-engine.png)
 
@@ -90,7 +90,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 2. 打开「开发者模式」
 3. 「加载已解压的扩展程序」，选中仓库根目录（含 `manifest.json` 的那一层）
 
-已装过的：`git pull` 后在扩展页点 **重新加载**。不要点「移除」再装——`chrome.storage.sync` 里的密钥会一起清掉。设置页可以先导出再导入。
+已装过的：`git pull` 后在扩展页点 **重新加载**。不要点「移除」再装——现在 `chrome.storage.sync` 里的翻译密钥和 PDF 云端密钥会一起清掉。已定把所有密钥迁到 `chrome.storage.local`（2026-10-13 12:19–12:23，待设置页重设计 PR）；迁完之后密钥在本机，移除扩展同样会清掉。设置页可以先导出再导入。
 
 本仓库 **零构建**：改 JS / CSS / HTML 后重新加载即可，没有打包步骤。
 
@@ -105,11 +105,11 @@ git clone https://github.com/wisdom-km/open-immerse.git
 1. 选默认引擎
 2. 填 API Key / Base URL / 模型（视引擎而定）
 3. 点「测试连接」
-4. 保存设置
+4. 保存设置（现在仍要点这个按钮）
 
 默认引擎是 **MyMemory（免费试用）**，不用 Key 就能跑通，质量与额度有限。正式阅读请换成 DeepL 或任意 LLM 通道。
 
-翻译引擎的密钥存在 `chrome.storage.sync`。导出设置会带上密钥，文件请自行保管。多模态 / OCR 的 API key 现在只存 `chrome.storage.local`，不进 sync；以后做 F10 云同步时，key 是否跟账号同步由用户选择，需要给同步预留接口（2026-10-13 11:57）。笔记面板偏好（面板宽度、筛选、「不再提示」等）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起（2026-10-13 12:00）；旧值自动迁移，不能丢，待单独小 PR 合入。
+已定改为即时保存，去掉「保存设置」；密钥在离开输入框或按回车时提交（2026-10-13 12:19–12:23，待设置页重设计 PR）。所有密钥只存 `chrome.storage.local`，不进 sync。翻译密钥和 PDF 云端密钥从 sync 迁到 local，迁移和回滚都要有测试；合入前这两处密钥仍在 sync。导出设置会带上密钥，文件请自行保管。F10 时密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口。笔记面板偏好（面板宽度、筛选、「不再提示」等）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起（2026-10-13 12:00）；旧值自动迁移，不能丢，待单独小 PR 合入。问 AI 不再单独设一页，也不单独配模型。
 
 ### 2. 译网页
 
@@ -336,7 +336,7 @@ node --test tests/*.test.mjs
 | 悬浮 / 划词 / 字幕 | `features.js` 里 `group: "later"`，默认关 |
 | 独立 Ollama 项 | 用 OpenAI 兼容通道 |
 | 译文缓存持久化 | 仅 SW 内存 |
-| 密钥隔离 | 翻译引擎密钥与其它设置一起 sync；导出 JSON 含明文 Key。多模态 / OCR 的 API key 现在只存 `chrome.storage.local`，不进 sync；F10 时是否跟账号同步由用户选择，要预留接口（2026-10-13 11:57） |
+| 密钥隔离 | 已定：所有密钥只存 `chrome.storage.local`，导出 JSON 含明文 Key（2026-10-13 12:19–12:23）。翻译密钥和 PDF 云端密钥待设置页重设计 PR 从 sync 迁到 local，迁移和回滚都要有测试；合入前这两处仍在 sync。F10 时是否跟账号同步由用户选择，沿用 11:57 预留的接口 |
 | 全站像素级还原 | 网页是「段下落下」对照，不是重排整个 CSS 布局 |
 
 ---

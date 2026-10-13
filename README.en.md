@@ -54,7 +54,7 @@ Intent card: primary **翻译此页** (becomes **停止** while a job runs), **�
 
 **Settings four groups: 引擎 / 阅读 / 功能 / 高级**
 
-Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs.
+Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages, and Ask AI is no longer its own page (2026-10-13 12:19–12:23, Loom settings-redesign, SET-01…SET-31). Decided, pending the settings redesign PR. The four groups and the screenshots below are the current UI. Lab PDF is still enabled under **Settings → Advanced**.
 
 ![Options: default engine and test connection](docs/screenshots/03-options-engine.png)
 
@@ -92,7 +92,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 2. Turn on **Developer mode**
 3. **Load unpacked** and pick the repo root (the folder that contains `manifest.json`)
 
-Already installed: `git pull`, then click **Reload** on the extensions page. Do **not** Remove and re-add — that wipes keys in `chrome.storage.sync`. Export settings first if you must reinstall.
+Already installed: `git pull`, then click **Reload** on the extensions page. Do **not** Remove and re-add — translation keys and PDF cloud keys currently in `chrome.storage.sync` are wiped with it. All keys are decided to move to `chrome.storage.local` (2026-10-13 12:19–12:23, pending the settings redesign PR); after that move, removing the extension still clears the on-device keys. Export settings first if you must reinstall.
 
 **Zero build.** Edit JS / CSS / HTML and reload. There is no bundle step.
 
@@ -109,11 +109,11 @@ Toolbar icon → **设置** (Settings), or right-click the icon → Options.
 1. Pick the default engine
 2. Fill API key / base URL / model (depends on the engine)
 3. Click **测试连接** (Test connection)
-4. Save
+4. Save (the button is still there)
 
 Default engine is **MyMemory (free trial)** — no key required, quality and quota are limited. For real reading, switch to DeepL or any LLM channel.
 
-Translation-engine keys live in `chrome.storage.sync`. Settings export includes keys; keep that file private. Multimodal and OCR API keys stay in `chrome.storage.local` and do not enter sync for now. When cloud sync (F10) is built, whether those keys follow the account is the user's choice, and the storage layer must reserve an interface for that (2026-10-13 11:57). Notes-panel preferences (panel width, filter, "don't show again", and the like) move from `localStorage` into `chrome.storage.local` with the other settings (2026-10-13 12:00). Existing values migrate automatically and must not be dropped. A separate small PR does this; it is not in yet.
+Decided: settings save immediately and the Save button goes away; keys commit when the field loses focus or on Enter (2026-10-13 12:19–12:23, pending the settings redesign PR). All keys live only in `chrome.storage.local` and do not enter sync. Translation keys and PDF cloud keys move from sync to local; migration and rollback both need tests. Until that PR lands, those two still sit in sync. Settings export includes keys; keep that file private. When cloud sync (F10) is built, whether keys follow the account is the user's choice, using the interface reserved on 2026-10-13 11:57. Notes-panel preferences (panel width, filter, "don't show again", and the like) move from `localStorage` into `chrome.storage.local` with the other settings (2026-10-13 12:00). Existing values migrate automatically and must not be dropped. A separate small PR does this; it is not in yet. Ask AI is not a separate settings page and has no model of its own.
 
 ### 2. Translate a page
 
@@ -339,7 +339,7 @@ Not built, not guaranteed, or still experimental:
 | Hover / selection / captions | `features.js` `group: "later"`, off by default |
 | Dedicated Ollama row | Use the OpenAI-compatible channel |
 | Persistent translation cache | Service-worker memory only |
-| Isolated secrets | Translation-engine keys sit in the same sync blob as other settings; exported JSON is plaintext. Multimodal and OCR API keys stay in `chrome.storage.local` and do not enter sync for now; F10 leaves the account-sync choice to the user and must reserve an interface (2026-10-13 11:57) |
+| Isolated secrets | Decided: every key lives only in `chrome.storage.local`; exported JSON is plaintext (2026-10-13 12:19–12:23). Translation keys and PDF cloud keys move off sync in the settings redesign PR; migration and rollback both need tests. Until that PR lands, those two still sit in sync. F10 leaves the account-sync choice to the user, using the interface reserved on 2026-10-13 11:57 |
 | Pixel-perfect page restyle | Webpage mode is “translation under each block”, not a CSS rebuild |
 
 ---
