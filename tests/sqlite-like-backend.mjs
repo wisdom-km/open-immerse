@@ -5,6 +5,10 @@
  * the sources table. There is no IndexedDB type and no requestPersist: the
  * desktop app does not ask the browser to persist storage. The contract test
  * runs this double beside the IndexedDB backend.
+ *
+ * The tx callback must not await anything outside the backend. This stand-in
+ * rejects that, same as the memory backend, so a SQLite port cannot drift
+ * into awaits IndexedDB would commit out from under.
  */
 
 import {
@@ -16,6 +20,7 @@ import {
   keyMissing,
   valueAt
 } from "../lib/platform/record-key.js";
+import { backendAwait, guardCallback } from "../lib/platform/tx-guard.js";
 
 function missingStore(name) {
   const error = new Error(`missing store ${name}`);
@@ -61,14 +66,14 @@ export function createSqliteLikeBackend(schema) {
   function session(drafts, sequencesDraft, mode) {
     const writable = mode === "readwrite";
     return {
-      async get(collection, key) {
+      get(collection, key) {
         const record = drafts.get(collection).get(canonicalKey(key));
-        return record ? clone(record) : null;
+        return backendAwait(record ? clone(record) : null);
       },
-      async getAll(collection, query) {
-        return select(drafts.get(collection), schema.stores[collection], query);
+      getAll(collection, query) {
+        return backendAwait(select(drafts.get(collection), schema.stores[collection], query));
       },
-      async put(collection, record) {
+      put(collection, record) {
         if (!writable) {
           const error = new Error("readonly");
           error.name = "ReadOnlyError";
@@ -90,15 +95,16 @@ export function createSqliteLikeBackend(schema) {
           key = next;
         }
         drafts.get(collection).set(canonicalKey(key), copy);
-        return key;
+        return backendAwait(key);
       },
-      async delete(collection, key) {
+      delete(collection, key) {
         if (!writable) {
           const error = new Error("readonly");
           error.name = "ReadOnlyError";
           throw error;
         }
         drafts.get(collection).delete(canonicalKey(key));
+        return backendAwait(undefined);
       }
     };
   }
@@ -109,7 +115,8 @@ export function createSqliteLikeBackend(schema) {
     for (const name of [].concat(collections || [])) {
       drafts.set(name, new Map(rows(name)));
     }
-    const result = await fn(session(drafts, sequencesDraft, mode === "readonly" ? "readonly" : "readwrite"));
+    // The tx callback must not await anything outside the backend.
+    const result = await guardCallback(() => fn(session(drafts, sequencesDraft, mode === "readonly" ? "readonly" : "readwrite")));
     if (mode !== "readonly") {
       for (const [name, table] of drafts) tables.set(name, table);
       for (const [name, value] of sequencesDraft) sequences.set(name, value);

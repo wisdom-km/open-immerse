@@ -1,5 +1,8 @@
 import "fake-indexeddb/auto";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { ANNOTATIONS_SCHEMA, createLibraryStore } from "../lib/library-store.js";
 import { NOTES_DB_NAME } from "../lib/notes-store.js";
@@ -45,6 +48,17 @@ async function exerciseBackend(backend) {
     (error) => error.message === "roll back"
   );
   assert.equal((await backend.get("meta", "deviceId")).value, "device-a");
+
+  if (backend.kind !== "idb") {
+    await assert.rejects(
+      () => backend.tx(["meta"], "readwrite", async (work) => {
+        await Promise.resolve();
+        await work.put("meta", { key: "deviceId", value: "outside" });
+      }),
+      (error) => error.name === "TransactionInactiveError"
+    );
+    assert.equal((await backend.get("meta", "deviceId")).value, "device-a");
+  }
 
   await backend.put("papers", { docHash: "a", lastOpenedAt: 1, updatedAt: 1, rev: 1, schema: 2 });
   await backend.put("papers", { docHash: "b", lastOpenedAt: 3, updatedAt: 3, rev: 1, schema: 2 });
@@ -127,6 +141,18 @@ async function librarySnapshot(factory) {
   };
 }
 
+test("the tx callback must not await anything outside the backend", () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  for (const path of [
+    "lib/platform/tx-guard.js",
+    "lib/platform/memory-backend.js",
+    "lib/platform/idb-backend.js",
+    "tests/sqlite-like-backend.mjs"
+  ]) {
+    assert.equal(readFileSync(join(root, path), "utf8").includes("must not await anything outside the backend"), true);
+  }
+});
+
 test("memory, IndexedDB, and the SQLite stand-in follow one contract", async () => {
   const memory = createMemoryLibraryFactory();
   const sqlite = createSqliteLikeFactory();
@@ -143,10 +169,15 @@ test("memory, IndexedDB, and the SQLite stand-in follow one contract", async () 
     assert.equal(sqliteBackend.requestPersist, undefined);
 
     const idbBlobs = await idb.blobs(NOTES_DB_NAME, ANNOTATIONS_SCHEMA);
-    await idbBlobs.put("doc-a", new Blob(["%PDF"]));
-    const stored = await (await idb.open(NOTES_DB_NAME, ANNOTATIONS_SCHEMA)).get("sources", "doc-a");
-    assert.equal(stored.docHash, "doc-a");
-    assert.equal(stored.size, 4);
+    const payload = new Uint8Array([0, 255, 10, 37]);
+    await idbBlobs.put("doc-bin", new Blob([payload], { type: "application/pdf" }));
+    const stored = await (await idb.open(NOTES_DB_NAME, ANNOTATIONS_SCHEMA)).get("sources", "doc-bin");
+    assert.equal(stored.docHash, "doc-bin");
+    assert.equal(stored.size, payload.byteLength);
+    assert.equal(stored.blob instanceof Blob, true);
+    assert.equal(Array.isArray(stored.blob), false);
+    assert.equal(stored.bytes, undefined);
+    assert.deepEqual(new Uint8Array(await (await idbBlobs.get("doc-bin")).arrayBuffer()), payload);
 
     await memory.close(NOTES_DB_NAME);
     await sqlite.close("oi-annotations-sqlite");

@@ -17,6 +17,7 @@ import { NOTES_FORMAT } from "../lib/notes-io.js";
 import { NOTES_DB_NAME, NOTES_DB_VERSION, createNotesStore } from "../lib/notes-store.js";
 import { NOTES_PERSIST_HINT_KEY } from "../lib/notes-prefs.js";
 import { createIdbLibraryFactory } from "../lib/platform/idb-backend.js";
+import { indexedDatabaseExists } from "../lib/platform/idb-open.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
 import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
 
@@ -531,6 +532,220 @@ test("product files do not leak an IndexedDB range type into the shared interfac
   assert.equal(read("lib/platform/record-key.js").includes("IDBKeyRange"), false);
   assert.equal(read("lib/platform/index.js").includes("IDBKeyRange"), false);
   assert.equal(read("lib/platform/idb-backend.js").includes("IDBKeyRange"), true);
+  assert.equal(read("lib/platform/idb-backend.js").includes("Array.from"), false);
   assert.equal(read("pdf/viewer.js").includes("createLibraryStore"), false);
   assert.equal(read("lib/pdf-library.js").includes("createLibraryStore"), false);
+});
+
+test("touchPaper, putPage, and putGroup read the previous rev inside the write", async () => {
+  const { library } = memoryStore({ persist: false });
+  const backend = await library.open("oi-annotations", ANNOTATIONS_SCHEMA);
+  const events = [];
+  const originalTx = backend.tx.bind(backend);
+  backend.tx = (collections, mode, fn) => {
+    const names = [].concat(collections);
+    const watched = names.some((name) => name === "papers" || name === "pages" || name === "groups");
+    if (watched) events.push(`tx:${names.filter((name) => name !== "changes").join("+")}`);
+    return originalTx(collections, mode, (work) => fn({
+      get(collection, key) {
+        if (watched) events.push(`get:${collection}`);
+        return work.get(collection, key);
+      },
+      getAll: (...args) => work.getAll(...args),
+      put(collection, record) {
+        if (watched && collection !== "changes") events.push(`put:${collection}`);
+        return work.put(collection, record);
+      },
+      delete: (...args) => work.delete(...args)
+    }));
+  };
+  const store = createLibraryStore({
+    backend,
+    blobs: await library.blobs("oi-annotations", ANNOTATIONS_SCHEMA),
+    platform: { target: "memory", kv: createMemoryKv(), library },
+    persist: false,
+    deviceId: "device-lib",
+    now: () => 4
+  });
+  await store.touchPaper("doc-a", { title: "A", pageCount: 1, origin: "native" });
+  await store.putPage("doc-a", 1, { pairs: [{ text: "甲", translation: "乙" }] });
+  await store.putGroup({ docHash: "doc-a", groupId: "g", startPage: 1, memberBids: [] });
+  assert.deepEqual(events, [
+    "tx:papers", "get:papers", "put:papers",
+    "tx:pages", "get:pages", "put:pages",
+    "tx:groups", "get:groups", "put:groups"
+  ]);
+  assert.equal((await store.getPaper("doc-a")).rev, 1);
+  await store.touchPaper("doc-a", { title: "A2" });
+  assert.equal((await store.getPaper("doc-a")).rev, 2);
+});
+
+const BASE64_PROBE = 40000;
+
+test("import keeps layouts and sources that export produced", async () => {
+  const { store } = memoryStore({ persist: false, now: () => 15 });
+  await store.touchPaper("doc-a", { title: "Attention", pageCount: 1, origin: "native" });
+  await store.putLayout({
+    docHash: "doc-a",
+    page: 1,
+    mode: "local",
+    protocol: "source-v3",
+    layoutRev: "source-v3:abc",
+    layout: { blocks: [{ id: "b1" }], apiKey: "sk-layout" }
+  });
+  const bytes = new Uint8Array(BASE64_PROBE);
+  for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 251;
+  await store.putSource("doc-a", new Blob([bytes], { type: "application/pdf" }));
+  const exported = await store.exportLibrary({
+    exportedAt: 15,
+    appVersion: "0.3.0",
+    include: { layouts: true, sources: true, notes: false }
+  });
+  assert.equal(exported.papers[0].layouts[0].layout.apiKey, undefined);
+  assert.equal(exported.papers[0].source.base64.length > bytes.length, true);
+  const empty = createLibraryStore({
+    platform: { target: "memory", kv: createMemoryKv(), library: createMemoryLibraryFactory() },
+    persist: false,
+    deviceId: "device-other",
+    now: () => 16
+  });
+  const imported = await empty.importBundle(exported);
+  assert.equal(imported.errors.length, 0);
+  const layout = await empty.getLayout("doc-a", 1, "local", "source-v3");
+  assert.equal(layout.layout.blocks[0].id, "b1");
+  assert.equal(layout.layout.apiKey, undefined);
+  const source = new Uint8Array(await (await empty.getSource("doc-a")).arrayBuffer());
+  assert.deepEqual(source, bytes);
+  const again = await empty.importBundle(exported);
+  assert.equal(again.added, 0);
+});
+
+test("a live notes store stays current across a v2 open, import, and trash", async () => {
+  const factory = createIdbLibraryFactory();
+  try {
+    await resetDatabase(factory);
+    let now = 6;
+    let nextId = 0;
+    const notes = createNotesStore({
+      persist: false,
+      deviceId: "device-seed",
+      now: () => now,
+      createId: () => `n-live-${++nextId}`
+    });
+    const first = await notes.put({ docHash: "doc-a", kind: "note", page: 1, body: "升级前" });
+    const library = createLibraryStore({
+      platform: { target: "idb", kv: createMemoryKv(), library: factory },
+      notes,
+      persist: false,
+      deviceId: "device-lib",
+      now: () => now
+    });
+    const [paper, during] = await Promise.all([
+      library.touchPaper("doc-a", { title: "Attention", pageCount: 1, origin: "native" }),
+      notes.put({ docHash: "doc-a", kind: "highlight", page: 2, body: "同时写" })
+    ]);
+    assert.equal(paper.schema, LIBRARY_SCHEMA);
+    assert.equal(during.body, "同时写");
+    assert.equal((await describeStore("notes")).version, 2);
+    const imported = await library.importBundle(noteBundle("面板能看见"));
+    assert.equal(imported.added >= 1, true);
+    assert.equal((await notes.list("doc-a")).some((note) => note.body === "面板能看见"), true);
+    now = 9;
+    const report = await library.deletePaperData("doc-a", { notes: true });
+    assert.equal(report.notes, 3);
+    assert.equal((await notes.list("doc-a")).length, 0);
+    const trash = await notes.listTrash("doc-a");
+    assert.deepEqual(trash.map((note) => note.body).sort(), ["升级前", "同时写", "面板能看见"]);
+    assert.equal(trash.every((note) => note.deletedAt), true);
+    const fresh = createNotesStore({ persist: false, deviceId: "other", now: () => 11, createId: () => "n-other" });
+    assert.equal((await fresh.list("doc-a")).length, 0);
+    assert.equal((await fresh.listTrash("doc-a")).length, 3);
+    assert.equal((await fresh.get(first.id)).deletedAt > 0, true);
+    const disk = await dump("notes");
+    assert.equal(disk.length, 3);
+    assert.equal(disk.every((note) => note.deletedAt), true);
+  } finally {
+    await resetDatabase(factory);
+  }
+});
+
+test("a blocked upgrade times out with a typed error and can be retried", async () => {
+  const factory = createIdbLibraryFactory();
+  try {
+    await resetDatabase(factory);
+    const notes = createNotesStore({
+      persist: false,
+      deviceId: "device-seed",
+      now: () => 3,
+      createId: () => "n-block"
+    });
+    await notes.put({ docHash: "doc-a", kind: "note", page: 1, body: "还在 v1" });
+    const held = await new Promise((resolve, reject) => {
+      const request = indexedDB.open(NOTES_DB_NAME);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("open failed"));
+    });
+    held.onversionchange = () => {};
+    const library = createLibraryStore({
+      platform: { target: "idb", kv: createMemoryKv(), library: factory },
+      persist: false,
+      deviceId: "device-lib",
+      now: () => 4,
+      blockedTimeoutMs: 40
+    });
+    try {
+      const result = await Promise.race([
+        library.touchPaper("doc-a", { title: "升", pageCount: 1 }).then(() => "opened", (error) => error),
+        new Promise((resolve) => setTimeout(() => resolve("hung"), 1000))
+      ]);
+      assert.notEqual(result, "hung");
+      assert.equal(result.type, "blocked");
+      assert.equal(result.name, "LibraryStoreError");
+      const rows = await indexedDB.databases();
+      assert.equal(rows.find((row) => row.name === NOTES_DB_NAME)?.version, 1);
+    } finally {
+      held.close();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const paper = await library.touchPaper("doc-a", { title: "升", pageCount: 1, origin: "native" });
+    assert.equal(paper.title, "升");
+    assert.equal((await describeStore("notes")).version, 2);
+    assert.equal((await notes.list("doc-a"))[0].body, "还在 v1");
+  } finally {
+    await resetDatabase(factory);
+  }
+});
+
+test("a browser without databases() does not create or upgrade on a library read", async () => {
+  const factory = createIdbLibraryFactory();
+  try {
+    await resetDatabase(factory);
+    const notes = createNotesStore({
+      persist: false,
+      deviceId: "device-seed",
+      now: () => 2,
+      createId: () => "n-nodb"
+    });
+    await notes.put({ docHash: "doc-a", kind: "note", page: 1, body: "v1" });
+    assert.equal(await indexedDatabaseExists(NOTES_DB_NAME), true);
+    const original = indexedDB.databases;
+    indexedDB.databases = undefined;
+    try {
+      assert.equal(await indexedDatabaseExists(NOTES_DB_NAME), false);
+      const library = createLibraryStore({
+        platform: { target: "idb", kv: createMemoryKv(), library: factory },
+        persist: false,
+        deviceId: "device-lib",
+        now: () => 2
+      });
+      assert.deepEqual(await library.listPapers(), []);
+      assert.equal(await library.getPaper("doc-a"), null);
+      assert.equal((await describeStore("notes")).version, 1);
+      assert.deepEqual((await describeStore("notes")).stores, ["docs", "meta", "notes"]);
+    } finally {
+      indexedDB.databases = original;
+    }
+  } finally {
+    await resetDatabase(factory);
+  }
 });
