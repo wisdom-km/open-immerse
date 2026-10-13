@@ -47,7 +47,7 @@
 | 所有密钥：翻译引擎 `providers.*.apiKey`、PDF 云端 `pdfLayout.cloudApiKey`、多模态、OCR | `chrome.storage.local` | 从 `settings` 中移出。上线时做一次性迁移（sync → local，迁完后删除 sync 中的副本），要有回滚测试 |
 | 公式开关 | `chrome.storage.local` 的 `formulaSettings` 记录（PR #128 待合入） | `formula.tier2.enabled`、`formula.ocr.enabled`、`formula.tier3.enabled`，默认都是 `false` |
 | 同步密钥（F10 预留） | `chrome.storage.local` | `keys.syncOptIn`，本期恒为 `false`，只读 |
-| 笔记面板偏好 | `chrome.storage.local` | `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`。这 4 个键从 `localStorage` 迁入（2026-10-13 11:55 定，12:00 确认） |
+| 笔记面板偏好 | `chrome.storage.local` | `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`。这 4 个键从 `localStorage` 迁入（2026-10-13 11:55 定，12:00 确认）。笔记筛选没有存储键：`pdf/notes-panel.js` 的 `state.filter` 只在内存里，默认 `"all"`，不写入 `chrome.storage.local`，也不进 `chrome.storage.sync` |
 | 阅读页偏好 | `localStorage` | `reader.*`（不含上面 4 个笔记键：`reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`，这 4 个改存 `chrome.storage.local`）、`oi.reader.cjk`、`oi.rfSrcFold`。这些是就地设置；设置页只提供「恢复默认值」 |
 | 作废 | — | `ask.model`（不再读写）。`ask.contextNearby` 固定为 2；`ask.confirmSend` 只在问 AI 面板首次发送确认框里修改 |
 

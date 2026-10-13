@@ -168,7 +168,8 @@ import {
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { createBlockAnchor, injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
 import { exportMarkdown } from "../lib/notes-io.js";
-import { NOTES_PANE_WIDTH_DEFAULT, NOTES_PANE_WIDTH_MIN, dismissPersistHint, persistHintDismissed, readNotesUiPrefs, writeNotesUiPrefs } from "../lib/notes-prefs.js";
+import { NOTES_PANE_WIDTH_DEFAULT, NOTES_PANE_WIDTH_MIN, dismissPersistHint, persistHintDismissed } from "../lib/notes-prefs.js";
+import { createNotesPrefsSession } from "../lib/reader-notes-local.js";
 import {
   NOTES_PANE_RESIZE_DEBOUNCE_MS,
   applyNotesSplitAria,
@@ -401,6 +402,7 @@ let translateScrollTick = 0;
 let viewMode = "readout";
 let mirrorZoom = DEFAULT_ZOOM;
 let readerPrefs = readReaderPrefs(null);
+const notesPrefsSession = createNotesPrefsSession();
 let sourcePopTrigger = null;
 let sourcePopSwipeY = 0;
 let readerBlend = readerImageBlend({ supportsMultiply: true, forcedColors: false });
@@ -489,7 +491,19 @@ function bindToolbarGeometry() {
   });
 }
 
+function readNotesPanelPrefs() {
+  return notesPrefsSession.read();
+}
+
+function writeNotesPanelPrefs(patch) {
+  return notesPrefsSession.write(patch);
+}
+
 function init() {
+  // Copy legacy localStorage keys into the local area once. Until that
+  // finishes, reads still use localStorage. On a later open those keys are
+  // already gone, so this window sees defaults rather than the saved values.
+  void notesPrefsSession.prime();
   bindToolbarGeometry();
   bindViewChrome();
   applyToolbarBand();
@@ -700,7 +714,7 @@ function onKey(event) {
     }
     if (event.shiftKey && !focusInOpenMenu() && !focusInAaPanel() && (event.key === "M" || event.key === "m")) {
       event.preventDefault();
-      const current = readNotesUiPrefs(localStorage).notesPaneSide;
+      const current = readNotesPanelPrefs().notesPaneSide;
       setNotesPaneSide(current === "start" ? "end" : "start");
       return;
     }
@@ -756,7 +770,7 @@ function onKey(event) {
     if (event.key === "s" || event.key === "S") {
       event.preventDefault();
       if (document.querySelector(".workspace")?.dataset.layout === "3") {
-        const current = readNotesUiPrefs(localStorage).notesPaneSide;
+        const current = readNotesPanelPrefs().notesPaneSide;
         setNotesPaneSide(current === "start" ? "end" : "start");
       } else toggleSourceSide();
       return;
@@ -1484,7 +1498,7 @@ function writeSplitAria(workspace, ratio) {
   const handle = sourceSplitHandle(workspace);
   if (!handle) return;
   if (workspace?.dataset.layout === "3") {
-    const prefs = readNotesUiPrefs(localStorage);
+    const prefs = readNotesPanelPrefs();
     const model = threeSourceAria({
       workspaceWidth: measuredWorkspaceWidth(workspace),
       notesWidth: prefs.notesWidth,
@@ -1562,7 +1576,7 @@ function onSplitKey(event, workspace) {
     else if (Number.isFinite(step.delta)) next = normalizeMiniWidth(next + step.delta);
     else return;
     if (workspace.dataset.notesOpen === "true") {
-      writeNotesUiPrefs(localStorage, { panelWidth: next });
+      writeNotesPanelPrefs({ panelWidth: next });
       paintMiniWidth(workspace, next);
       syncZoomChip();
       syncMirrorZoomChip();
@@ -2085,11 +2099,14 @@ function installNotesUi() {
     importBundle: (bundle) => sharedNotesStore().import(bundle, { mode: "merge" }),
     subscribe: (cb) => sharedNotesStore().subscribe(cb),
     download: (filename, blob) => downloadBlob(filename, blob),
-    readPrefs: () => readNotesUiPrefs(localStorage),
-    persistDismissed: (hash) => persistHintDismissed(readNotesUiPrefs(localStorage), hash),
+    readPrefs: () => readNotesPanelPrefs(),
+    persistDismissed: (hash) => persistHintDismissed(readNotesPanelPrefs(), hash),
+    // The panel waits on this before showing the refusal banner. It is the
+    // same loadDocHint call the reader started for the open document.
+    loadDocHint: (hash) => notesPrefsSession.loadDocHint(hash),
     dismissPersist: (hash) => {
-      const next = dismissPersistHint(readNotesUiPrefs(localStorage), hash);
-      writeNotesUiPrefs(localStorage, next);
+      const next = dismissPersistHint(readNotesPanelPrefs(), hash);
+      writeNotesPanelPrefs(next);
     },
     persistDenied: async () => {
       // persist() runs on the user's put, not when the panel opens and not
@@ -4441,12 +4458,12 @@ function persistSlotPanelWidth(workspace) {
   if (workspace.dataset.layout === "3" || workspace.dataset.layout === "pair") return;
   if (workspace.dataset.sourceMode === "mini") {
     const raw = parseFloat(workspace.style.getPropertyValue("--oi-mini-width"));
-    if (raw > 0) writeNotesUiPrefs(localStorage, { panelWidth: raw });
+    if (raw > 0) writeNotesPanelPrefs({ panelWidth: raw });
     return;
   }
   const slot = document.getElementById("sideSlot");
   const measured = slot?.getBoundingClientRect().width;
-  if (measured > 0) writeNotesUiPrefs(localStorage, { panelWidth: measured });
+  if (measured > 0) writeNotesPanelPrefs({ panelWidth: measured });
 }
 
 function setNotesSplitVisible(on) {
@@ -4458,7 +4475,7 @@ function setNotesSplitVisible(on) {
 }
 
 function paintThreeColumns(workspace, { notesWidth, splitRatio } = {}) {
-  const prefs = readNotesUiPrefs(localStorage);
+  const prefs = readNotesPanelPrefs();
   const width = measuredWorkspaceWidth(workspace);
   const ratio = Number.isFinite(splitRatio)
     ? splitRatio
@@ -4489,7 +4506,7 @@ function paintThreeColumns(workspace, { notesWidth, splitRatio } = {}) {
 }
 
 function applyThreeSourceSplit(workspace, clientX) {
-  const prefs = readNotesUiPrefs(localStorage);
+  const prefs = readNotesPanelPrefs();
   const rect = workspace.getBoundingClientRect();
   const width = measuredWorkspaceWidth(workspace);
   const columns = threePaneColumns({ workspaceWidth: width, notesWidth: prefs.notesWidth, splitRatio: 0.5 });
@@ -4520,7 +4537,7 @@ function applyNotesColumnDrag(workspace, clientX) {
 
 function persistNotesColumnWidth(workspace) {
   const painted = parseFloat(workspace.style.getPropertyValue("--notes-width"));
-  if (painted > 0) writeNotesUiPrefs(localStorage, { notesWidth: painted });
+  if (painted > 0) writeNotesPanelPrefs({ notesWidth: painted });
 }
 
 function startNotesSplitDrag(event, workspace, handle) {
@@ -4571,7 +4588,7 @@ function onNotesSplitKey(event, workspace) {
   event.preventDefault();
   event.stopPropagation();
   const width = measuredWorkspaceWidth(workspace);
-  const prefs = readNotesUiPrefs(localStorage);
+  const prefs = readNotesPanelPrefs();
   let next = prefs.notesWidth;
   if (step.to === "min") next = NOTES_PANE_WIDTH_MIN;
   else if (step.to === "max") next = notesWidthLimit(width);
@@ -4601,7 +4618,7 @@ function onThreeSourceKey(event, workspace) {
     resetSplit(workspace);
     return;
   }
-  const prefs = readNotesUiPrefs(localStorage);
+  const prefs = readNotesPanelPrefs();
   const width = measuredWorkspaceWidth(workspace);
   const current = threePaneColumns({
     workspaceWidth: width,
@@ -4624,7 +4641,7 @@ function applyNotesChrome(kind) {
     const prevKind = notesPaintedKind;
     notesPaintedKind = kind;
     if (kind === "three" || kind === "slot") notesLayoutLatch = kind;
-    const prefs = readNotesUiPrefs(localStorage);
+    const prefs = readNotesPanelPrefs();
     const notesSide = prefs.notesPaneSide === "start" ? "start" : "end";
     workspace.dataset.notesSide = notesSide;
     const storedSide = readerPrefs.sourceSide === "end" ? "end" : "start";
@@ -4676,13 +4693,13 @@ function syncNotesChrome({ opening = false } = {}) {
   if (!workspace || workspace.dataset.notesOpen !== "true") return;
   if (opening) {
     const implied = notesSideFromSource(readerPrefs.sourceSide);
-    const prefs = readNotesUiPrefs(localStorage);
-    if (prefs.notesPaneSide !== implied) writeNotesUiPrefs(localStorage, { notesPaneSide: implied });
+    const prefs = readNotesPanelPrefs();
+    if (prefs.notesPaneSide !== implied) writeNotesPanelPrefs({ notesPaneSide: implied });
     notesUserPin = "";
     notesTempUpgrade = "";
     notesLayoutLatch = "";
   }
-  const prefs = readNotesUiPrefs(localStorage);
+  const prefs = readNotesPanelPrefs();
   const windowWidth = readerWidth();
   const kind = notesChromeKind({
     windowWidth,
@@ -4740,7 +4757,7 @@ function chooseNotesSourceMode(next) {
 function setNotesPaneSide(side) {
   const notesPaneSide = side === "start" ? "start" : "end";
   const sourceSide = sourceSideFromNotes(notesPaneSide);
-  writeNotesUiPrefs(localStorage, { notesPaneSide });
+  writeNotesPanelPrefs({ notesPaneSide });
   // ⇧M must not dump the rest of the reader defaults (font, theme, sourceMode, …).
   if (readerPrefs.sourceSide !== sourceSide) {
     readerPrefs = { ...readerPrefs, sourceSide };
@@ -4787,7 +4804,7 @@ function applySourceLayout(anchor) {
   // Notes in mini occupy the source column at reader.panelWidth. Apply after
   // paintMiniWidth so the stored source width (and its aria) stay untouched.
   if (workspace.dataset.notesOpen === "true" && mode === "mini") {
-    workspace.style.setProperty("--oi-mini-width", `${readNotesUiPrefs(localStorage).panelWidth}px`);
+    workspace.style.setProperty("--oi-mini-width", `${readNotesPanelPrefs().panelWidth}px`);
   }
   else if (mode === "side") {
     const ratio = Number.parseFloat(workspace.style.getPropertyValue("--oi-split-ratio"));
@@ -9292,7 +9309,12 @@ async function adoptDoc(doc, title) {
     setDocTitle(title);
   }
   setHasDoc(true);
-  void resolveNotesDocHash().then((hash) => notesUi?.onDocument(hash));
+  // Read this document's hint key only. The local area also holds layout
+  // cache and notes, so opening must not scan every stored item.
+  void resolveNotesDocHash().then(async (hash) => {
+    if (hash && hash !== "nohash") await notesPrefsSession.loadDocHint(hash);
+    notesUi?.onDocument(hash);
+  });
   await buildPages();
   if (!syncMiniFitZoom()) {
     requestAnimationFrame(() => {
