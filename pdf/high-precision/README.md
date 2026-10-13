@@ -45,7 +45,7 @@ node --test tests/*.test.mjs
 - 扩展仓：本仓库，MIT，零构建。改完到 `chrome://extensions` 重新加载，不要移除扩展。
 - 实验室开关：`lib/features.js` 的 `features.pdf` 默认 `false`。入口在设置 → 高级。
 - 阅读器：`pdf/viewer.html`、`pdf/viewer.js`。原文栏 `#pages` 里的 pdf.js canvas。右栏 `#readout`。
-- 翻译：阅读器发 `OI_TRANSLATE_BATCH`，`background/service-worker.js` 的 `translateBatch`。所有密钥只存 `chrome.storage.local`，不进 sync（2026-10-13 12:19–12:23 Wisdom 定，收窄 11:57）。翻译密钥和 PDF 云端密钥从 sync 迁到 local，迁移和回滚都要有测试；已定，待设置页重设计 PR 实现，合入前这两处密钥仍在 sync。F10 时是否跟账号同步由用户选择，沿用 11:57 预留的接口（见 REQUIREMENTS §2.6「开关」和 `docs/ui-phase2-plan.md`「设置页重设计」）。笔记面板偏好从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起（2026-10-13 11:55 定，12:00 确认）；旧值自动迁移，待单独小 PR 合入，见 `docs/ui-phase2-plan.md` 第 4 节。
+- 翻译：阅读器发 `OI_TRANSLATE_BATCH`，`background/service-worker.js` 的 `translateBatch`。所有密钥只存 `chrome.storage.local`，不进 sync（2026-10-13 12:19–12:23 Wisdom 定，收窄 11:57）。翻译密钥和 PDF 云端密钥从 sync 迁到 local，迁移、导入和回滚都要有测试；已定，待设置页重设计 PR 实现，合入前这两处密钥仍在 sync。2026-10-13 17:29 Wisdom 定：导出拆成「文献库」和「设置」两个文件，都不含任何 API key；设置导出不带 key，导入设置也不写入 key。见 `docs/settings-spec.md` §2。F10 时是否跟账号同步由用户选择，沿用 11:57 预留的接口（见 REQUIREMENTS §2.6「开关」和 `docs/ui-phase2-plan.md`「设置页重设计」）。笔记面板偏好从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起（2026-10-13 11:55 定，12:00 确认）；旧值自动迁移，已合入（#130，`4e0a705`），见 `docs/ui-phase2-plan.md` 第 4 节。
 - 划区 sidecar 放在扩展仓外面（本机示例名 `pdf-layout-sidecar`）。它听 `127.0.0.1:8765`（`/v1/layout` 划区接口；同一端口上的 `/v1/library/*` 文献库接口由路线图 v2 的 F4 替换，划区不在 F4 范围）。`7860` 是 GLM-OCR 网页，不是这个接口。认字模型在 `127.0.0.1:5002`。版面模型在扩展仓外的模型目录（本机示例名 `pdf-layout-models`），仓库名 `PaddlePaddle/PP-DocLayoutV3_safetensors`。`id2label` 在模型加载后从权重配置读取，不写进扩展仓。权重、PyTorch、vLLM 不进本仓库。
 - `tests/fixtures/Attention_Is_All_You_Need.pdf` 若在本地，不要 `git add`。手标样例只用小 JSON。
 
