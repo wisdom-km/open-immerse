@@ -10,6 +10,13 @@
 > 另外，2026-10-13 12:19 起不设「问 AI」设置页。
 >
 > 实现顺序：F3 PR3 照 FUI 规格先做，不等设置页重设计。设置页重设计 PR 之后再换皮，并补 `#mm` 锚点。
+>
+> 设置页重设计范围再补一条（2026-10-13 Wisdom 定）：
+> - 现状：从「导入设置」导入后，`chrome.storage.sync` 里会存着非空的 `settings.providers.openai.apiKey`。main 上也是这样，是 Anvil 测 #128 时发现的。
+> - 放在设置页重设计 PR 里修，和翻译、PDF 云端 key 从 sync 迁到 local 一起做。
+> - 导入设置时，key 只写 `chrome.storage.local`。
+> - sync 里已有的 key 先迁到 local，再从 sync 删掉。
+> - 必须有测试。
 
 ## 1 一级页与锚点（8 页 = 8 个深链）
 | 顺序 | 分组 | 中文名 | 锚点 | 内容 |
@@ -51,7 +58,8 @@
 | 阅读页偏好 | `localStorage` | `reader.*`（不含上面 4 个笔记键：`reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`，这 4 个改存 `chrome.storage.local`）、`oi.reader.cjk`、`oi.rfSrcFold`。这些是就地设置；设置页只提供「恢复默认值」 |
 | 作废 | — | `ask.model`（不再读写）。`ask.contextNearby` 固定为 2；`ask.confirmSend` 只在问 AI 面板首次发送确认框里修改 |
 
-- 导出文件要包含 local 里的密钥，导入时写回 local。
+- 导出文件要包含 local 里的密钥。导入设置时，key 只写 `chrome.storage.local`。
+- **导入留下的 sync 密钥，放进设置页重设计范围（2026-10-13 Wisdom 定）。** 现状：从「导入设置」导入后，`chrome.storage.sync` 里会存着非空的 `settings.providers.openai.apiKey`。main 上也是这样，是 Anvil 测 #128 时发现的。放在设置页重设计 PR 里修，和翻译、PDF 云端 key 从 sync 迁到 local 一起做。sync 里已有的 key 先迁到 local，再从 sync 删掉。必须有测试。
 - 设置页和阅读页通过 `chrome.storage.onChanged` 互相刷新，不需要刷新页面。
 
 ## 3 保存
@@ -111,7 +119,7 @@
 | SET-05 | 空输入不覆盖已存密钥。① 已存 `sk-test…3f9a`；② 清空后按 Tab → 存储不变，恢复掩码，不提示「已保存」；③ 输入 3 个空格后按回车 → 同 ②；④ 粘贴 `  sk-new123  ` 后按 Tab → 存入 `sk-new123`，提示「已保存」；⑤ 只有「移除密钥」能让存储变空；⑥ 只输入、不离开也不按回车 → 不写存储 |
 | SET-06 | 掩码显示前 3 + 后 4；「显示」30 s 后自动恢复掩码 |
 | SET-07 | 「移除密钥」立即清空，对应开关从 DOM 中移除；5 s 内撤销后全部恢复 |
-| SET-08 | 所有密钥只在 local，sync 中没有 |
+| SET-08 | 所有密钥只在 local，sync 中没有。sync 里已有的 key 先迁到 local，再从 sync 删掉。必须有测试 |
 | SET-09 | 有外发的卡片常显费用和隐私说明；打开开关时不弹确认框 |
 | SET-10 | FUI-01…15 在新样式下回归通过 |
 | SET-11 | 「需处理」只在出错时出现 |
@@ -122,7 +130,7 @@
 | SET-16 | 宽 759 时侧栏变成顶部条；宽 519 时控件换行；420 宽下不重叠、不裁切 |
 | SET-17 | 可用键盘操作，focus 环可见；开关语义正确 |
 | SET-18 | 笔记偏好读写 `chrome.storage.local` 的 `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`；点「恢复 360」后，阅读页里的笔记面板立即变成 360 |
-| SET-19 | 导出文件含 local 中的密钥；导入后写回 local |
+| SET-19 | 导出文件含 local 中的密钥；导入设置时 key 只写 local。导入后 sync 里不能留下非空的 `settings.providers.openai.apiKey`（现状会留下，main 上也是这样，Anvil 测 #128 时发现）。必须有测试 |
 | SET-20 | `features.pdf` 关时，`#mm` 显示页顶提示，页面仍可配置 |
 | SET-21 | 搜索「密钥」能命中 4 处密钥行，点击后跳过去并高亮 1.2 s |
 | SET-22 | 同步开关置灰，`keys.syncOptIn` 恒为 `false` |
