@@ -24,7 +24,7 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
 | Faithful-then-polish | **On by default** (**Settings → 功能**, not Advanced). LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only; a custom system prompt skips the second pass. |
-| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Formulas, figures, and tables match the opened PDF. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the LLM API already configured in the extension. **Webpage bilingual remains the primary product.** |
+| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Notes (#122): side slot or three columns, highlights, export and import. arXiv source (#124): off by default, download only after a click. Formulas, figures, and tables match the opened PDF. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the LLM API already configured in the extension. **Webpage bilingual remains the primary product.** |
 | Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
 
 Suggested regression page (article-scope scan and title handling were tuned on posts like this):  
@@ -54,7 +54,7 @@ Intent card: primary **翻译此页** (becomes **停止** while a job runs), **�
 
 **Settings four groups: 引擎 / 阅读 / 功能 / 高级**
 
-Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs.
+Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages; page names are in the SET spec. Ask AI is no longer its own page (2026-10-13 12:19–12:23, Loom settings-redesign, SET-01…SET-31). Decided, pending the settings redesign PR. The four groups and the screenshots below are the current UI. Lab PDF is still enabled under **Settings → Advanced**.
 
 ![Options: default engine and test connection](docs/screenshots/03-options-engine.png)
 
@@ -92,7 +92,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 2. Turn on **Developer mode**
 3. **Load unpacked** and pick the repo root (the folder that contains `manifest.json`)
 
-Already installed: `git pull`, then click **Reload** on the extensions page. Do **not** Remove and re-add — that wipes keys in `chrome.storage.sync`. Export settings first if you must reinstall.
+Already installed: `git pull`, then click **Reload** on the extensions page. Do **not** Remove and re-add — translation keys and PDF cloud keys currently in `chrome.storage.sync` are wiped with it. All keys are decided to move to `chrome.storage.local` (2026-10-13 12:19–12:23, pending the settings redesign PR); after that move, removing the extension still clears the on-device keys. Export settings first if you must reinstall.
 
 **Zero build.** Edit JS / CSS / HTML and reload. There is no bundle step.
 
@@ -109,11 +109,11 @@ Toolbar icon → **设置** (Settings), or right-click the icon → Options.
 1. Pick the default engine
 2. Fill API key / base URL / model (depends on the engine)
 3. Click **测试连接** (Test connection)
-4. Save
+4. Save (the button is still there)
 
 Default engine is **MyMemory (free trial)** — no key required, quality and quota are limited. For real reading, switch to DeepL or any LLM channel.
 
-Keys live in `chrome.storage.sync`. Settings export includes keys; keep that file private.
+Decided: settings save immediately and the Save button goes away; keys commit when the field loses focus or on Enter (2026-10-13 12:19–12:23, pending the settings redesign PR). All keys live only in `chrome.storage.local` and do not enter sync. Translation keys and PDF cloud keys move from sync to local; migration and rollback both need tests. Until that PR lands, those two still sit in sync. Settings export includes keys; keep that file private. When cloud sync (F10) is built, whether keys follow the account is the user's choice, using the interface reserved on 2026-10-13 11:57. Notes-panel preferences (panel width, filter, "don't show again", and the like) move from `localStorage` into `chrome.storage.local` with the other settings (2026-10-13, decided 11:55, confirmed 12:00). Existing values migrate automatically and must not be dropped. A separate small PR does this; it is not in yet. Ask AI is not a separate settings page and has no model of its own.
 
 ### 2. Translate a page
 
@@ -158,6 +158,8 @@ No layout-preserving Office or scanned files here. Convert to plain text first. 
 
 Target: text-layer body text plus content-accurate original-page display (crops by default). The right pane stays a **Markdown reading-flow** in reading order. Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. The spec is `pdf/PDF-MD-READOUT.md`. The reader runtime switches by the phases in `pdf/high-precision/EXECUTION.md`.
 
+- Notes (#122): side slot or three columns, highlights, export and import
+- arXiv source (#124): off by default; download only after the user clicks
 - Left pane: pdf.js continuous scroll; zoom applies only to the original page
 - Top bar: translated n / t pages → Open PDF → Translate → Retranslate page → Stop (shown only while a job is running) → Original → Previous → page number → Next → Aa. Aa font size is 14–40 and is capped by the column width (#116). Formulas do not scale with the font size. Export MD / PDF lives in the **···** menu, not on the bar. Opening starts a full-document translation. Settings → 功能 → PDF has **打开 PDF 时自动翻译全文**, on by default. Original only switches the view; it does not abort the job or clear the cache.
 - Reopen checks the library against the live text-layer blocks. A page is done only when every block has its own settled translation. Fewer pairs than live blocks, or a long pair echoed from the source, queues that page and must not light **全文已译**. The abstract and its footnote are stored separately. A short unchanged token (≤3 words, or no letters) still counts as already in the target language.
@@ -170,7 +172,7 @@ Target: text-layer body text plus content-accurate original-page display (crops 
 - Body text of a text-layer PDF uses the original text-layer sentences. Clicking the right pane highlights the matching region in the left pane
 - OCR confusions of `i` and `n` are not shown and are not sent to translation
 - Test-time region detection uses a local Zhipu GLM-OCR. Production uses an OCR API plus the LLM API already configured in the extension
-- The extension does not inject into Chrome’s built-in PDF viewer. When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong; formulas, figures, and tables stay original-page crops
+- The extension does not inject into Chrome’s built-in PDF viewer. When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong; figures and tables stay original-page crops; formulas follow the fallback chain and show the original-page crop when it cannot be decided
 - Webpage bilingual remains the primary product and the regression target
 
 ---
@@ -225,7 +227,7 @@ Other engines omit those fields so they do not 400. Webpage, PDF, and documents 
 
 `manifest.json` requests:
 
-- `storage` — settings (`sync`) + learning items (`local`)
+- `storage` — settings (`sync`) + learning items (`local`). Keys will live only in local (not implemented yet)
 - `activeTab` / `scripting` — start/stop on the current tab
 - `contextMenus` — right-click save
 - `alarms` — reserved
@@ -242,7 +244,10 @@ Translations are cached in service-worker memory, cap 2000 entries, gone on rest
 ```
 open-immerse/
 ├── manifest.json              # MV3, version 0.3.0
-├── background/service-worker.js
+├── background/
+│   ├── service-worker.js
+│   ├── arxiv-source.js        # arXiv source download and cache (#124)
+│   └── formula-cache.js       # formula cache; static SW import (AX-23, 2026-10-13 10:36)
 ├── content/                   # DOM scan, insert translations, subtitle stubs
 ├── popup/
 ├── options/
@@ -262,6 +267,9 @@ open-immerse/
 │   ├── pdf-mirror.js          # extract helpers; bbox mirror is not the product path
 │   ├── pdf-viewer.js
 │   ├── pdf-latex.js           # recover LaTeX from the text layer
+│   ├── notes-*.js             # note store, anchors, panel (#122)
+│   ├── formula-*.js           # formula fallback, KaTeX, cache (F3)
+│   ├── arxiv-*.js             # arXiv id, unpack, align (#124)
 │   ├── learning.js
 │   ├── export.js              # MD / simple PDF / docx
 │   ├── translate-limit.js     # title + lead quota
@@ -326,12 +334,12 @@ Not built, not guaranteed, or still experimental:
 | **PDF reader (lab, default off)** | `features.pdf` defaults to `false`. Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the configured LLM API. Webpage bilingual remains the primary product |
 | Sidebar en/zh pairing | Shelved; product focus is body/main-text bilingual |
 | Chrome Web Store | Unpacked load only |
-| OCR | When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong. Formulas, figures, and tables stay original-page crops. An `i` read as `n`, or an `n` read as `i`, is not shown |
+| OCR | When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong. Figures and tables stay original-page crops; formulas follow the fallback chain and show the original-page crop when it cannot be decided. An `i` read as `n`, or an `n` read as `i`, is not shown |
 | DOCX / complex layouts | Documents page accepts plain-text-like files only |
 | Hover / selection / captions | `features.js` `group: "later"`, off by default |
 | Dedicated Ollama row | Use the OpenAI-compatible channel |
 | Persistent translation cache | Service-worker memory only |
-| Isolated secrets | Keys sit in the same sync blob as other settings; exported JSON is plaintext |
+| Isolated secrets | Decided: every key lives only in `chrome.storage.local`; exported JSON is plaintext (2026-10-13 12:19–12:23). Translation keys and PDF cloud keys move off sync in the settings redesign PR; migration and rollback both need tests. Until that PR lands, those two still sit in sync. F10 leaves the account-sync choice to the user, using the interface reserved on 2026-10-13 11:57 |
 | Pixel-perfect page restyle | Webpage mode is “translation under each block”, not a CSS rebuild |
 
 ---

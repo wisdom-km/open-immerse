@@ -22,7 +22,7 @@
 | 学习中心 | 收藏单词 / 短语 / 句子；全部 / 今日待复习（简化 SM-2）；导出 Markdown / PDF / Word。 |
 | 文档翻译 | TXT / MD / HTML 直读分段双语，译文可改，失败可重试，导出 HTML。 |
 | 先信后润 | **默认开**（**设置 → 功能**，不在高级里）。LLM 先忠实直译，再润色一稿；质量更好、更耗 token。可关。仅 LLM 引擎生效；自定义系统提示词则跳过第二步。 |
-| PDF 阅读（实验室） | **默认关闭**（设置 → 高级，opt-in）。目标：文字层正文 + 原页内容精准展示（默认裁图）；公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图。公式、图、表跟打开的 PDF 是同一套内容。有文字层的正文用文字层原句。译文只在右栏。测试期划区用本机智谱 GLM-OCR，上线用 OCR API 加已配置的大模型 API。**网页双语仍是主产品。** |
+| PDF 阅读（实验室） | **默认关闭**（设置 → 高级，opt-in）。目标：文字层正文 + 原页内容精准展示（默认裁图）；公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图。笔记（#122）：侧槽或三栏、划线、导出导入。arXiv 源码（#124）：默认关，点了才下。公式、图、表跟打开的 PDF 是同一套内容。有文字层的正文用文字层原句。译文只在右栏。测试期划区用本机智谱 GLM-OCR，上线用 OCR API 加已配置的大模型 API。**网页双语仍是主产品。** |
 | 快捷键 | `Alt+T`：开译 / 恢复原文（关即清译文）。 |
 
 建议回归页（主栏扫描、标题口径都按这类博客调过）：  
@@ -52,7 +52,7 @@ https://claude.com/blog/what-1-000-small-business-owners-taught-us-about-ai
 
 **设置四组：引擎 / 阅读 / 功能 / 高级**
 
-左侧栏标题下是弱化的 **学习中心 · 文档翻译**（不是强调色按钮），其下四个分组。
+左侧栏标题下是弱化的 **学习中心 · 文档翻译**（不是强调色按钮），其下四个分组。已定改成 8 个一级页，页名见 SET 规格。问 AI 不再单独设一页（2026-10-13 12:19–12:23，Loom settings-redesign，SET-01…SET-31）。已定，待设置页重设计 PR 实现。上面的四组和下面的截图是现在的界面。实验室 PDF 仍从 **设置 → 高级** 开启。
 
 ![设置：默认引擎与测试连接](docs/screenshots/03-options-engine.png)
 
@@ -90,7 +90,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 2. 打开「开发者模式」
 3. 「加载已解压的扩展程序」，选中仓库根目录（含 `manifest.json` 的那一层）
 
-已装过的：`git pull` 后在扩展页点 **重新加载**。不要点「移除」再装——`chrome.storage.sync` 里的密钥会一起清掉。设置页可以先导出再导入。
+已装过的：`git pull` 后在扩展页点 **重新加载**。不要点「移除」再装——现在 `chrome.storage.sync` 里的翻译密钥和 PDF 云端密钥会一起清掉。已定把所有密钥迁到 `chrome.storage.local`（2026-10-13 12:19–12:23，待设置页重设计 PR）；迁完之后密钥在本机，移除扩展同样会清掉。设置页可以先导出再导入。
 
 本仓库 **零构建**：改 JS / CSS / HTML 后重新加载即可，没有打包步骤。
 
@@ -105,11 +105,11 @@ git clone https://github.com/wisdom-km/open-immerse.git
 1. 选默认引擎
 2. 填 API Key / Base URL / 模型（视引擎而定）
 3. 点「测试连接」
-4. 保存设置
+4. 保存设置（现在仍要点这个按钮）
 
 默认引擎是 **MyMemory（免费试用）**，不用 Key 就能跑通，质量与额度有限。正式阅读请换成 DeepL 或任意 LLM 通道。
 
-密钥存在 `chrome.storage.sync`。导出设置会带上密钥，文件请自行保管。
+已定改为即时保存，去掉「保存设置」；密钥在离开输入框或按回车时提交（2026-10-13 12:19–12:23，待设置页重设计 PR）。所有密钥只存 `chrome.storage.local`，不进 sync。翻译密钥和 PDF 云端密钥从 sync 迁到 local，迁移和回滚都要有测试；合入前这两处密钥仍在 sync。导出设置会带上密钥，文件请自行保管。F10 时密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口。笔记面板偏好（面板宽度、筛选、「不再提示」等）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起（2026-10-13 11:55 定，12:00 确认）；旧值自动迁移，不能丢，待单独小 PR 合入。问 AI 不再单独设一页，也不单独配模型。
 
 ### 2. 译网页
 
@@ -154,6 +154,8 @@ git clone https://github.com/wisdom-km/open-immerse.git
 
 目标：文字层正文 + 原页内容精准展示（默认裁图）。右栏仍是 **Markdown 通读**，按阅读顺序排译文。公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图。规格见 `pdf/PDF-MD-READOUT.md`。阅读器运行路径按 `pdf/high-precision/EXECUTION.md` 分阶段接上。
 
+- 笔记（#122）：侧槽或三栏，划线，导出和导入
+- arXiv 源码（#124）：默认关，认出编号后点了才下载
 - 左栏：pdf.js 连续滚动；缩放只作用于原页
 - 顶栏：已译 n / t 页 → 打开 PDF → 翻译 → 重译本页 → 停止（只在翻译进行时显示）→ 原文 → 上一页 → 页码 → 下一页 → Aa。导出 MD / PDF 在「···」菜单里，不是顶栏按钮。Aa 字号范围 14–40，按栏宽封顶（#116）。打开后自动翻译全文。设置 → 功能 → PDF 里可关「打开 PDF 时自动翻译全文」
 - 重开时按当前文字层的活块核对本地库。每一块都要有自己的落地译文才算这一页译完；库对少于活块，或长段译文仍等于原文，该页进队补译，顶栏不能先写「全文已译」。摘要和脚注拆开存。不超过 3 个词、或没有字母的短段原样返回，仍算不需翻译
@@ -166,7 +168,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 - 有文字层的正文用文字层原句。点击右栏用左栏高亮对齐
 - OCR 把 `i` 认成 `n`，或把 `n` 认成 `i`，不上屏，也不送进翻译
 - 测试期划区用本机智谱 GLM-OCR。上线用 OCR API，翻译用插件里已经配置的大模型 API
-- 不注入 Chrome 自带 PDF Viewer。没有可信文字层时，正文才用识别结果，并标明可能有误差；公式、图、表仍是原页裁图
+- 不注入 Chrome 自带 PDF Viewer。没有可信文字层时，正文才用识别结果，并标明可能有误差；图、表仍是原页裁图；公式按回退链，判不出时显示原页裁图
 - 网页双语仍是主产品与回归标准
 
 ---
@@ -221,7 +223,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 
 `manifest.json` 申请了：
 
-- `storage`：设置（sync）+ 学习条目（local）
+- `storage`：设置（sync）+ 学习条目（local）。密钥将只存 local（待实现）
 - `activeTab` / `scripting`：当前页启停
 - `contextMenus`：右键收藏
 - `alarms`：预留
@@ -238,7 +240,10 @@ git clone https://github.com/wisdom-km/open-immerse.git
 ```
 open-immerse/
 ├── manifest.json              # MV3，版本 0.3.0
-├── background/service-worker.js
+├── background/
+│   ├── service-worker.js
+│   ├── arxiv-source.js        # arXiv 源码下载与缓存（#124）
+│   └── formula-cache.js       # 公式缓存；SW 静态导入（AX-23，2026-10-13 10:36）
 ├── content/                   # DOM 扫描、插入译文、字幕桩
 ├── popup/                     # 工具栏弹层
 ├── options/                   # 设置页
@@ -258,6 +263,9 @@ open-immerse/
 │   ├── pdf-mirror.js          # 抽取辅助；bbox 镜像不是产品路径
 │   ├── pdf-viewer.js          # 阅读器逻辑（供 viewer 与测试）
 │   ├── pdf-latex.js           # 文字层回收 LaTeX
+│   ├── notes-*.js             # 笔记存储、锚点、界面（#122）
+│   ├── formula-*.js           # 公式回退链、KaTeX、缓存（F3）
+│   ├── arxiv-*.js             # arXiv 编号、解包、对齐（#124）
 │   ├── learning.js            # 收藏与间隔复习
 │   ├── export.js              # MD / 简易 PDF / docx
 │   ├── translate-limit.js     # 标题+开头额度
@@ -323,12 +331,12 @@ node --test tests/*.test.mjs
 | **PDF 阅读（实验室，默认关）** | `features.pdf` 默认 `false`。目标：文字层正文 + 原页内容精准展示（默认裁图）；公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图。有文字层的正文用文字层原句。译文只在右栏。测试期划区用本机智谱 GLM-OCR，上线用 OCR API 加已配置的大模型 API。网页双语仍是主产品 |
 | 侧栏英/中配对 | 搁置；产品焦点是正文双语 |
 | Chrome 网上应用店 | 目前只支持加载已解压目录 |
-| OCR | 无可信文字层时，正文才用识别结果，并标明可能有误差。公式、图、表仍是原页裁图。把 `i` 认成 `n` 或把 `n` 认成 `i` 不上屏 |
+| OCR | 无可信文字层时，正文才用识别结果，并标明可能有误差。图、表仍是原页裁图；公式按回退链，判不出时显示原页裁图。把 `i` 认成 `n` 或把 `n` 认成 `i` 不上屏 |
 | DOCX / 复杂排版文档 | 文档页只吃纯文本类文件 |
 | 悬浮 / 划词 / 字幕 | `features.js` 里 `group: "later"`，默认关 |
 | 独立 Ollama 项 | 用 OpenAI 兼容通道 |
 | 译文缓存持久化 | 仅 SW 内存 |
-| 密钥隔离 | 与其它设置一起 sync；导出 JSON 含明文 Key |
+| 密钥隔离 | 已定：所有密钥只存 `chrome.storage.local`，导出 JSON 含明文 Key（2026-10-13 12:19–12:23）。翻译密钥和 PDF 云端密钥待设置页重设计 PR 从 sync 迁到 local，迁移和回滚都要有测试；合入前这两处仍在 sync。F10 时是否跟账号同步由用户选择，沿用 11:57 预留的接口 |
 | 全站像素级还原 | 网页是「段下落下」对照，不是重排整个 CSS 布局 |
 
 ---
