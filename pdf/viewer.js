@@ -2101,6 +2101,9 @@ function installNotesUi() {
     download: (filename, blob) => downloadBlob(filename, blob),
     readPrefs: () => readNotesPanelPrefs(),
     persistDismissed: (hash) => persistHintDismissed(readNotesPanelPrefs(), hash),
+    // The panel waits on this before showing the refusal banner. It is the
+    // same loadDocHint call the reader started for the open document.
+    loadDocHint: (hash) => notesPrefsSession.loadDocHint(hash),
     dismissPersist: (hash) => {
       const next = dismissPersistHint(readNotesPanelPrefs(), hash);
       writeNotesPanelPrefs(next);

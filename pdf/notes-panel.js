@@ -298,9 +298,20 @@ export function mountNotesUi(api) {
   }
 
   async function maybePersistHint() {
-    if (!state.docHash || !api.persistDenied) return;
-    if (api.persistDismissed?.(state.docHash)) {
+    const hash = state.docHash;
+    if (!hash || !api.persistDenied) return;
+    // resolveNotesDocHash can publish the hash before loadDocHint finishes.
+    // Opening the panel, a library refresh, or a save lands in that gap.
+    // Memory does not have this document's key yet, so a dismissed hint
+    // looks new. Wait for the read already started for this hash.
+    if (typeof api.loadDocHint === "function") await api.loadDocHint(hash);
+    if (state.docHash !== hash) return;
+    if (api.persistDismissed?.(hash)) {
+      const had = state.banners.some((banner) => banner.id === "persist");
       state.banners = state.banners.filter((banner) => banner.id !== "persist");
+      // onDocument reloads into this branch. Clearing the banner in state
+      // without painting leaves the line on screen.
+      if (had) render();
       return;
     }
     const denied = await api.persistDenied();
