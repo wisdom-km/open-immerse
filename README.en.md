@@ -24,7 +24,7 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
 | Faithful-then-polish | **On by default** (**Settings → 功能**, not Advanced). LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only; a custom system prompt skips the second pass. |
-| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Formulas, figures, and tables match the opened PDF. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the LLM API already configured in the extension. **Webpage bilingual remains the primary product.** |
+| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Notes (#122): side slot or three columns, highlights, export and import. arXiv source (#124): off by default, download only after a click. Formulas, figures, and tables match the opened PDF. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the LLM API already configured in the extension. **Webpage bilingual remains the primary product.** |
 | Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
 
 Suggested regression page (article-scope scan and title handling were tuned on posts like this):  
@@ -158,6 +158,8 @@ No layout-preserving Office or scanned files here. Convert to plain text first. 
 
 Target: text-layer body text plus content-accurate original-page display (crops by default). The right pane stays a **Markdown reading-flow** in reading order. Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. The spec is `pdf/PDF-MD-READOUT.md`. The reader runtime switches by the phases in `pdf/high-precision/EXECUTION.md`.
 
+- Notes (#122): side slot or three columns, highlights, export and import
+- arXiv source (#124): off by default; download only after the user clicks
 - Left pane: pdf.js continuous scroll; zoom applies only to the original page
 - Top bar: translated n / t pages → Open PDF → Translate → Retranslate page → Stop (shown only while a job is running) → Original → Previous → page number → Next → Aa. Aa font size is 14–40 and is capped by the column width (#116). Formulas do not scale with the font size. Export MD / PDF lives in the **···** menu, not on the bar. Opening starts a full-document translation. Settings → 功能 → PDF has **打开 PDF 时自动翻译全文**, on by default. Original only switches the view; it does not abort the job or clear the cache.
 - Reopen checks the library against the live text-layer blocks. A page is done only when every block has its own settled translation. Fewer pairs than live blocks, or a long pair echoed from the source, queues that page and must not light **全文已译**. The abstract and its footnote are stored separately. A short unchanged token (≤3 words, or no letters) still counts as already in the target language.
@@ -170,7 +172,7 @@ Target: text-layer body text plus content-accurate original-page display (crops 
 - Body text of a text-layer PDF uses the original text-layer sentences. Clicking the right pane highlights the matching region in the left pane
 - OCR confusions of `i` and `n` are not shown and are not sent to translation
 - Test-time region detection uses a local Zhipu GLM-OCR. Production uses an OCR API plus the LLM API already configured in the extension
-- The extension does not inject into Chrome’s built-in PDF viewer. When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong; formulas, figures, and tables stay original-page crops
+- The extension does not inject into Chrome’s built-in PDF viewer. When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong; figures and tables stay original-page crops; formulas follow the fallback chain and show the original-page crop when it cannot be decided
 - Webpage bilingual remains the primary product and the regression target
 
 ---
@@ -242,7 +244,10 @@ Translations are cached in service-worker memory, cap 2000 entries, gone on rest
 ```
 open-immerse/
 ├── manifest.json              # MV3, version 0.3.0
-├── background/service-worker.js
+├── background/
+│   ├── service-worker.js
+│   ├── arxiv-source.js        # arXiv source download and cache (#124)
+│   └── formula-cache.js       # formula cache; static SW import (AX-23, 2026-10-13 10:36)
 ├── content/                   # DOM scan, insert translations, subtitle stubs
 ├── popup/
 ├── options/
@@ -262,6 +267,9 @@ open-immerse/
 │   ├── pdf-mirror.js          # extract helpers; bbox mirror is not the product path
 │   ├── pdf-viewer.js
 │   ├── pdf-latex.js           # recover LaTeX from the text layer
+│   ├── notes-*.js             # note store, anchors, panel (#122)
+│   ├── formula-*.js           # formula fallback, KaTeX, cache (F3)
+│   ├── arxiv-*.js             # arXiv id, unpack, align (#124)
 │   ├── learning.js
 │   ├── export.js              # MD / simple PDF / docx
 │   ├── translate-limit.js     # title + lead quota
@@ -326,7 +334,7 @@ Not built, not guaranteed, or still experimental:
 | **PDF reader (lab, default off)** | `features.pdf` defaults to `false`. Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the configured LLM API. Webpage bilingual remains the primary product |
 | Sidebar en/zh pairing | Shelved; product focus is body/main-text bilingual |
 | Chrome Web Store | Unpacked load only |
-| OCR | When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong. Formulas, figures, and tables stay original-page crops. An `i` read as `n`, or an `n` read as `i`, is not shown |
+| OCR | When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong. Figures and tables stay original-page crops; formulas follow the fallback chain and show the original-page crop when it cannot be decided. An `i` read as `n`, or an `n` read as `i`, is not shown |
 | DOCX / complex layouts | Documents page accepts plain-text-like files only |
 | Hover / selection / captions | `features.js` `group: "later"`, off by default |
 | Dedicated Ollama row | Use the OpenAI-compatible channel |
