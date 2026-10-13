@@ -113,7 +113,7 @@ Toolbar icon → **设置** (Settings), or right-click the icon → Options.
 
 Default engine is **MyMemory (free trial)** — no key required, quality and quota are limited. For real reading, switch to DeepL or any LLM channel.
 
-Keys live in `chrome.storage.sync`. Settings export includes keys; keep that file private.
+Translation-engine keys live in `chrome.storage.sync`. Settings export includes keys; keep that file private. Multimodal and OCR API keys stay in `chrome.storage.local` and do not enter sync for now. When cloud sync (F10) is built, whether those keys follow the account is the user's choice, and the storage layer must reserve an interface for that (2026-10-13 11:57).
 
 ### 2. Translate a page
 
@@ -339,7 +339,7 @@ Not built, not guaranteed, or still experimental:
 | Hover / selection / captions | `features.js` `group: "later"`, off by default |
 | Dedicated Ollama row | Use the OpenAI-compatible channel |
 | Persistent translation cache | Service-worker memory only |
-| Isolated secrets | Keys sit in the same sync blob as other settings; exported JSON is plaintext |
+| Isolated secrets | Translation-engine keys sit in the same sync blob as other settings; exported JSON is plaintext. Multimodal and OCR API keys stay in `chrome.storage.local` and do not enter sync for now; F10 leaves the account-sync choice to the user and must reserve an interface (2026-10-13 11:57) |
 | Pixel-perfect page restyle | Webpage mode is “translation under each block”, not a CSS rebuild |
 
 ---

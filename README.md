@@ -109,7 +109,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 
 默认引擎是 **MyMemory（免费试用）**，不用 Key 就能跑通，质量与额度有限。正式阅读请换成 DeepL 或任意 LLM 通道。
 
-密钥存在 `chrome.storage.sync`。导出设置会带上密钥，文件请自行保管。
+翻译引擎的密钥存在 `chrome.storage.sync`。导出设置会带上密钥，文件请自行保管。多模态 / OCR 的 API key 现在只存 `chrome.storage.local`，不进 sync；以后做 F10 云同步时，key 是否跟账号同步由用户选择，需要给同步预留接口（2026-10-13 11:57）。
 
 ### 2. 译网页
 
@@ -336,7 +336,7 @@ node --test tests/*.test.mjs
 | 悬浮 / 划词 / 字幕 | `features.js` 里 `group: "later"`，默认关 |
 | 独立 Ollama 项 | 用 OpenAI 兼容通道 |
 | 译文缓存持久化 | 仅 SW 内存 |
-| 密钥隔离 | 与其它设置一起 sync；导出 JSON 含明文 Key |
+| 密钥隔离 | 翻译引擎密钥与其它设置一起 sync；导出 JSON 含明文 Key。多模态 / OCR 的 API key 现在只存 `chrome.storage.local`，不进 sync；F10 时是否跟账号同步由用户选择，要预留接口（2026-10-13 11:57） |
 | 全站像素级还原 | 网页是「段下落下」对照，不是重排整个 CSS 布局 |
 
 ---
