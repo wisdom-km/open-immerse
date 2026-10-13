@@ -309,10 +309,10 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, storedReadoutBlocks, waitForFirstZone, whenZoneReadSettles } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, saveLibraryPage, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, storedReadoutBlocks, waitForFirstZone, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
-import { PERSIST_CARD_SESSION_KEY, createPersistCard } from "../lib/persist-card.js";
+import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
@@ -2170,17 +2170,6 @@ function noteLibrarySaveError(error) {
   return error;
 }
 
-async function persistDismissedNow() {
-  try {
-    const get = globalThis.chrome?.storage?.local?.get;
-    if (typeof get !== "function") return false;
-    const bag = await get(LIBRARY_PERSIST_HINT_KEY);
-    return bag?.[LIBRARY_PERSIST_HINT_KEY] === true;
-  } catch {
-    return false;
-  }
-}
-
 async function persistHiddenThisSession() {
   try {
     const get = globalThis.chrome?.storage?.session?.get;
@@ -2192,28 +2181,28 @@ async function persistHiddenThisSession() {
   }
 }
 
+function flushStagedNotes(hash, options = {}) {
+  if (!hash || hash === "nohash" || !pendingNotes) return Promise.resolve(0);
+  const job = pendingNotes.flush(hash, (item) => sharedNotesStore().put(item), { allTabs: true });
+  // The chip must see a blocked flush and stay on 暂时存不了. Opening
+  // the paper only tries; a failure leaves the staged rows for the next time.
+  if (options.quiet) return job.catch(() => 0);
+  return job;
+}
+
 async function maybeShowPersistCard() {
   if (!persistCard || persistCard.isOpen()) return;
-  if (await persistDismissedNow()) return;
   if (await persistHiddenThisSession()) return;
-  let libraryDenied = false;
-  let notesFlag = false;
+  let decision = { show: false };
   try {
-    const get = globalThis.chrome?.storage?.local?.get;
-    if (typeof get === "function") {
-      const bag = await get(["libraryPersistGranted", "notesPersistGranted"]);
-      if (bag && Object.prototype.hasOwnProperty.call(bag, "libraryPersistGranted")) {
-        libraryDenied = bag.libraryPersistGranted === false;
-      }
-      if (bag && Object.prototype.hasOwnProperty.call(bag, "notesPersistGranted")) {
-        notesFlag = recordedPersistDenied(null, bag.notesPersistGranted);
-      }
-    }
+    // Pass the area, not a detached get. Chrome throws Illegal invocation
+    // when storage.local.get is called without its receiver, and the card
+    // then never opens.
+    decision = await readPersistCardState(globalThis.chrome?.storage?.local, notesDocHashNow());
   } catch {
-    libraryDenied = false;
-    notesFlag = false;
+    decision = { show: false };
   }
-  if (libraryDenied || notesFlag) persistCard.show();
+  if (decision.show) persistCard.show();
 }
 
 function installLibraryChrome() {
@@ -2238,12 +2227,7 @@ function installLibraryChrome() {
       const { sharedLibraryStore } = await import("../lib/library-session.js");
       return sharedLibraryStore().retryOpen();
     },
-    flushNotes: async () => {
-      const hash = notesDocHashNow();
-      if (!hash || !pendingNotes) return 0;
-      const count = await pendingNotes.flush(hash, (item) => sharedNotesStore().put(item));
-      return count;
-    },
+    flushNotes: () => flushStagedNotes(notesDocHashNow()),
     flushPages: () => flushPendingPages(),
     onRecovered() {
       notesUi?.setStorageState?.(null);
@@ -7669,7 +7653,13 @@ async function translatePreflight() {
   const missing = missingRequiredField(getProvider(providerId), settings.providers?.[providerId] || {});
   const layoutMode = pdfEngineMode();
   let localServiceUp = true;
-  if (layoutMode === "local-ocr") localServiceUp = await probeLocalService(cachedPdfLayout?.localBaseUrl);
+  // GET / on 8765 is the library-and-OCR probe, not a /v1/layout failure.
+  // A paper already in IndexedDB still translates from the library. A down
+  // zoning service keeps its own layout notice and is not hidden here.
+  const servedFromLibrary = Boolean(libraryDoc && (libraryDoc.pages?.length || libraryDoc.hash));
+  if (layoutMode === "local-ocr" && !servedFromLibrary) {
+    localServiceUp = await probeLocalService(cachedPdfLayout?.localBaseUrl);
+  }
   return pdfOpenTranslateBlocker({
     runtimeReady: true,
     missingField: missing?.label || "",
@@ -7975,7 +7965,10 @@ function ensureLibraryDocument() {
         if (doc.sourcePath) librarySourceSent.add(hash);
       }
       libraryDoc = doc || null;
-      if (hash) void pendingNotes?.hydrate?.(hash);
+      if (hash) {
+        void pendingNotes?.hydrate?.(hash);
+        void flushStagedNotes(hash, { quiet: true });
+      }
       return libraryDoc;
     } catch {
       // One probe per document. Page turns do not wait for these delays,
@@ -8030,7 +8023,19 @@ function paintLateLibrary(n, ticket) {
 async function savedTranslationFor(page) {
   const hash = await pdfByteHash();
   if (!hash || hash === "nohash") return null;
-  if (!libraryDoc || libraryDoc.hash !== hash) await ensureLibraryDocument();
+  if (!libraryDoc || libraryDoc.hash !== hash) {
+    // A blocked open used to sit here until the 10s deadline, so the first
+    // page could not zone. The capped read notices that flag and returns.
+    // Adopting its snapshot without the probe races the migration seed and
+    // wipes translations that landed in the meantime. The probe runs once
+    // per open, so a later 翻译 click does not pick up a partial save and
+    // drop the failed batch's bypassCache resend.
+    const zone = await waitForFirstZone(hash);
+    if (zone.reason === "unavailable" || zone.reason === "cap") {
+      if (!libraryProbe) void ensureLibraryDocument();
+    } else if (libraryProbe) await libraryProbe;
+    else await ensureLibraryDocument();
+  }
   if (!libraryDoc) return null;
   const selected = selectSavedTranslation(libraryDoc, page, getPageLayout(page)?.blocks);
   if (libraryDoc.pages?.length) {
@@ -9365,12 +9370,15 @@ async function ingestVendorLayout(n, mode, isStale) {
   const key = layoutCacheKey({ hash, page: n, mode });
   const version = await layoutVersionNow();
   // The full probe, including the 8765 retries, keeps running for saved
-  // translations. Zoning waits only for the IndexedDB read, and only briefly.
-  // A store that is already blocked or unavailable is not waited on at all.
-  void ensureLibraryDocument();
-  const zone = await waitForFirstZone(hash, {
+  // translations. Zoning waits only for the IndexedDB read. A blocked open
+  // is noticed from the flag and does not sit out the 10s deadline. A read
+  // that is merely slow is allowed to finish before any /v1/layout POST,
+  // so a current layout is not zoned again.
+  const zoneWait = await waitForFirstZone(hash, {
     layoutRead: () => readStoredLayout(key)
   });
+  const zone = await resolveZoneForVendor(hash, zoneWait);
+  void ensureLibraryDocument();
   if (zone.document && (!libraryDoc || libraryDoc.hash !== hash)) {
     if (!zone.document.hash) zone.document.hash = hash;
     libraryDoc = zone.document;
@@ -9769,7 +9777,10 @@ async function adoptDoc(doc, title) {
   // Read this document's hint key only. The local area also holds layout
   // cache and notes, so opening must not scan every stored item.
   void resolveNotesDocHash().then(async (hash) => {
-    if (hash && hash !== "nohash") await notesPrefsSession.loadDocHint(hash);
+    if (hash && hash !== "nohash") {
+      await notesPrefsSession.loadDocHint(hash);
+      void flushStagedNotes(hash, { quiet: true });
+    }
     notesUi?.onDocument(hash);
   });
   await buildPages();

@@ -12,7 +12,8 @@ import {
   STORAGE_AVAILABLE_EVENT,
   onStorageAvailable,
   openIndexedDatabase,
-  storageOpenIsBlocked
+  storageOpenIsBlocked,
+  storagePageTarget
 } from "../lib/platform/idb-open.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
 import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
@@ -26,6 +27,8 @@ import {
   mergeStoredPagePairs,
   preferArrivedLayout,
   saveLibraryPage,
+  withLibraryDocLock,
+  resolveZoneForVendor,
   settleFreshZone,
   waitForFirstZone,
   whenZoneReadSettles
@@ -33,7 +36,10 @@ import {
 import { layoutCacheKey, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { readLayoutCache, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
-import { PERSIST_CARD_SESSION_KEY, createPersistCard } from "../lib/persist-card.js";
+import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
+import { createLibrarySession } from "../lib/library-session.js";
+import { NOTES_PERSIST_HINT_KEY } from "../lib/notes-prefs.js";
+import { NOTES_HINT_DOC_PREFIX } from "../lib/reader-notes-local.js";
 import { bindPendingUnload, createPendingNotes, pendingNotesKey } from "../lib/pending-notes.js";
 import { storedLibraryPagesSource } from "./helpers/library-observe.mjs";
 import { mountNotesUi } from "../pdf/notes-panel.js";
@@ -1362,12 +1368,14 @@ test("reader warn contrast stays at least 4.5 on every theme, and dark uses #E2A
   const dark = css.slice(css.indexOf('[data-reader-theme="dark"]'));
   assert.match(dark, /--oi-reader-warn:\s*#E2A86A/i);
   assert.match(dark, /--oi-reader-warn-soft:\s*rgba\(226,\s*168,\s*106,\s*0?\.14\)/i);
+  assert.match(dark, /--oi-reader-surface:\s*#1C1D1F/i);
+  assert.match(dark, /--oi-reader-ink-2:\s*#C8C4BA/i);
   const themes = {
-    warm: { paper: "#F6F3EC", surface: "#FCFAF6", well: "#ECE9E2", ink: "#22201C", warn: "#8A4B0F" },
-    white: { paper: "#FFFFFF", surface: "#FFFFFF", well: "#F1F1EF", ink: "#1F1F1F", warn: "#8A4B0F" },
-    sepia: { paper: "#ECE7DD", surface: "#F4F0E9", well: "#E2DCD0", ink: "#26221C", warn: "#8A4B0F" },
-    green: { paper: "#E8EDE6", surface: "#F2F5F0", well: "#DDE3DA", ink: "#1E2420", warn: "#8A4B0F" },
-    dark: { paper: "#1C1D1F", surface: "#1C1D1F", well: "#2A2B2E", ink: "#E8E6E1", warn: "#E2A86A" }
+    warm: { paper: "#F6F3EC", surface: "#FCFAF6", well: "#ECE9E2", ink: "#22201C", ink2: "#4A463E", warn: "#8A4B0F" },
+    white: { paper: "#FFFFFF", surface: "#FFFFFF", well: "#F1F1EF", ink: "#1F1F1F", ink2: "#454545", warn: "#8A4B0F" },
+    sepia: { paper: "#ECE7DD", surface: "#F4F0E9", well: "#E2DCD0", ink: "#26221C", ink2: "#463F35", warn: "#8A4B0F" },
+    green: { paper: "#E8EDE6", surface: "#F2F5F0", well: "#DDE3DA", ink: "#1E2420", ink2: "#3E4740", warn: "#8A4B0F" },
+    dark: { paper: "#1C1D1F", surface: "#1C1D1F", well: "#2A2B2E", ink: "#E8E6E1", ink2: "#C8C4BA", warn: "#E2A86A" }
   };
   const rows = [];
   for (const [name, theme] of Object.entries(themes)) {
@@ -1375,8 +1383,18 @@ test("reader warn contrast stays at least 4.5 on every theme, and dark uses #E2A
       const ratio = contrast(theme.warn, theme[ground]);
       rows.push([name, ground, ratio]);
       assert.ok(ratio >= 4.5, `${name} warn on ${ground} ${ratio.toFixed(2)}`);
+      const inkRatio = contrast(theme.ink, theme[ground]);
+      rows.push([name, `ink/${ground}`, inkRatio]);
+      assert.ok(inkRatio >= 4.5, `${name} ink on ${ground} ${inkRatio.toFixed(2)}`);
+      const ink2Ratio = contrast(theme.ink2, theme[ground]);
+      rows.push([name, `ink2/${ground}`, ink2Ratio]);
+      assert.ok(ink2Ratio >= 4.5, `${name} ink-2 on ${ground} ${ink2Ratio.toFixed(2)}`);
     }
   }
+  const darkSoft = composite([226, 168, 106, 0.14], "#1C1D1F");
+  assert.ok(contrast("#E2A86A", darkSoft) >= 4.5, "dark warn on banner");
+  assert.ok(contrast("#E8E6E1", darkSoft) >= 4.5, "dark ink on banner");
+  assert.ok(contrast("#C8C4BA", "#2A2B2E") >= 4.5, "dark moving chip");
   const lightSoft = composite([138, 75, 15, 0.08], "#F6F3EC");
   assert.ok(contrast("#8A4B0F", lightSoft) >= 4.5);
   const darkPaperSoft = composite([226, 168, 106, 0.14], "#1C1D1F");
@@ -1659,10 +1677,309 @@ test("zoning waits only for the IndexedDB read", { timeout: 15000 }, async () =>
   assert.doesNotMatch(fn, /await ensureLibraryDocument\(\)/);
   assert.match(fn, /void ensureLibraryDocument\(\)/);
   assert.match(fn, /waitForFirstZone/);
+  assert.match(fn, /resolveZoneForVendor/);
+  assert.ok(fn.indexOf("resolveZoneForVendor") < fn.indexOf("runVendorLayoutHttp"));
   assert.match(fn, /settleFreshZone/);
   assert.match(fn, /currentLayoutIfArrived/);
+  const savedFn = viewer.slice(
+    viewer.indexOf("async function savedTranslationFor"),
+    viewer.indexOf("function savedPageStatus")
+  );
+  assert.match(savedFn, /waitForFirstZone/);
+  assert.match(savedFn, /zone\.reason === "unavailable" \|\| zone\.reason === "cap"/);
+  assert.match(savedFn, /if \(!libraryProbe\) void ensureLibraryDocument\(\)/);
+  assert.match(savedFn, /await ensureLibraryDocument\(\)/);
+  assert.doesNotMatch(savedFn, /if \(!libraryDoc \|\| libraryDoc\.hash !== hash\) await ensureLibraryDocument\(\)/);
 
   console.log(`[zone-delay] blockedKnown=${blockedKnownMs.toFixed(1)}ms blockedHang=${blockedHangMs.toFixed(1)}ms legacyDown=${legacyDownMs.toFixed(1)}ms slowIdb=${slowIdbMs.toFixed(1)}ms fastIdb=${fastIdbMs.toFixed(1)}ms`);
+});
+
+test("two tabs deliver a note once, deduped by sender id and seq", async () => {
+  const ports = [];
+  function connect() {
+    const port = { accept: null };
+    ports.push(port);
+    return {
+      post(message) {
+        for (const other of ports) {
+          if (other === port || typeof other.accept !== "function") continue;
+          void other.accept(message);
+        }
+      },
+      receive(accept) {
+        port.accept = accept;
+      }
+    };
+  }
+  const left = connect();
+  const right = connect();
+  const notesA = createNotesStore({ persist: false, now: () => 11, createId: () => "note-a" });
+  const notesB = createNotesStore({ persist: false, now: () => 12, createId: () => "note-b" });
+  const sessionA = createLibrarySession({
+    notes: notesA,
+    senderId: "tab-a",
+    channel: false,
+    post: left.post,
+    receive: left.receive
+  });
+  const sessionB = createLibrarySession({
+    notes: notesB,
+    senderId: "tab-b",
+    channel: false,
+    post: right.post,
+    receive: right.receive
+  });
+  assert.notEqual(sessionA.senderId, sessionB.senderId);
+  await notesA.put({ docHash: "doc-sync", kind: "note", author: "me", body: "from A", page: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  const seen = await notesB.list("doc-sync");
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].body, "from A");
+  let refreshes = 0;
+  const original = notesB.refreshDoc.bind(notesB);
+  notesB.refreshDoc = async (...args) => {
+    refreshes += 1;
+    return original(...args);
+  };
+  const echoed = { collection: "notes", docHash: "doc-sync", senderId: "tab-a", seq: 1 };
+  assert.equal(await sessionB.accept(echoed), false);
+  assert.equal(await sessionA.accept(echoed), false);
+  assert.equal(refreshes, 0);
+  assert.equal((await notesB.list("doc-sync")).length, 1);
+});
+
+test("persist refusal shows the card, and the T2b key wins when it exists", async () => {
+  const data = { libraryPersistGranted: false };
+  const local = {
+    async get(keys) {
+      if (this !== local) throw new TypeError("Illegal invocation");
+      const out = {};
+      for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(data, key)) out[key] = data[key];
+      }
+      return out;
+    }
+  };
+  const shown = await readPersistCardState(local, "doc-1");
+  assert.equal(shown.show, true);
+  data[LIBRARY_PERSIST_HINT_KEY] = true;
+  assert.equal((await readPersistCardState(local, "doc-1")).show, false);
+  data[`${NOTES_HINT_DOC_PREFIX}doc-1`] = false;
+  assert.equal((await readPersistCardState(local, "doc-1")).dismissed, false);
+  assert.equal((await readPersistCardState(local, "doc-1")).show, true);
+  data[`${NOTES_HINT_DOC_PREFIX}doc-1`] = true;
+  assert.equal((await readPersistCardState(local, "doc-1")).show, false);
+  delete data[`${NOTES_HINT_DOC_PREFIX}doc-1`];
+  data[NOTES_PERSIST_HINT_KEY] = JSON.stringify({ "doc-2": true });
+  assert.equal((await readPersistCardState(local, "doc-1")).show, true);
+  assert.equal((await readPersistCardState(local, "doc-2")).show, false);
+});
+
+test("a note staged in a closed tab is written on the next open", async () => {
+  const data = new Map();
+  const storage = {
+    async get(key) { return data.has(key) ? data.get(key) : null; },
+    async set(key, value) { data.set(key, value); }
+  };
+  const closed = createPendingNotes({ storage, tabId: () => "tab-old" });
+  await closed.stage("paper", { body: "关页前写的" });
+  const reopened = createPendingNotes({ storage, tabId: () => "tab-new" });
+  assert.equal((await reopened.list("paper")).length, 0);
+  const store = createNotesStore({ memory: true, persist: false, now: () => 20, createId: () => "staged-1" });
+  const saved = await reopened.flush("paper", (item) => store.put(item), { allTabs: true });
+  assert.equal(saved, 1);
+  assert.equal((await store.list("paper"))[0].body, "关页前写的");
+  const bag = await storage.get(pendingNotesKey("paper"));
+  assert.deepEqual(bag.tabs, {});
+});
+
+test("storage available recovers the chip within 1s even if a poll is in flight", async () => {
+  const dom = installDom();
+  const host = dom.document.createElement("div");
+  dom.body.append(host);
+  let released = false;
+  const chip = createLibraryChip({
+    host,
+    pollMs: 60000,
+    manualRetryMs: 11000,
+    openStorage: () => (released ? Promise.resolve(true) : new Promise(() => {}))
+  });
+  chip.block(blockedError("blocked", Date.parse("2026-10-13T08:05:00")));
+  void chip.autoRetry();
+  await Promise.resolve();
+  released = true;
+  storagePageTarget().dispatchEvent(new CustomEvent(STORAGE_AVAILABLE_EVENT, {
+    detail: { type: STORAGE_AVAILABLE_EVENT }
+  }));
+  const started = Date.now();
+  while (chip.state.mode !== "recovered" && Date.now() - started < 1000) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(chip.state.mode, "recovered");
+  assert.ok(Date.now() - started < 1000);
+  chip.destroy();
+});
+
+test("a slow current layout does not request vendor zoning", async () => {
+  const version = "rev-late";
+  const hash = "zone-late-layout";
+  let http = 0;
+  const started = performance.now();
+  const gate = await waitForFirstZone(hash, {
+    store: {
+      async getPaper() {
+        await new Promise((resolve) => setTimeout(resolve, LIBRARY_ZONE_WAIT_MS + 250));
+        return { docHash: hash, title: "late", pageCount: 1, origin: "native" };
+      },
+      async getPages() {
+        return [{ page: 1, pairs: [], layoutVersion: version }];
+      },
+      async listLayouts() {
+        return [{
+          page: 1,
+          savedAt: 9,
+          layout: {
+            blocks: [{ bid: "kept", text: "already" }],
+            layoutVersion: version,
+            protocol: "blocks-1"
+          }
+        }];
+      }
+    }
+  });
+  assert.equal(gate.reason, "cap");
+  const ready = await resolveZoneForVendor(hash, gate);
+  const layout = storedLayoutCurrent(ready.document?.pages?.[0], version);
+  if (!layout) http += 1;
+  assert.equal(http, 0);
+  assert.equal(layout.blocks[0].bid, "kept");
+  assert.ok(performance.now() - started >= LIBRARY_ZONE_WAIT_MS);
+  assert.ok(performance.now() - started < 2000);
+});
+
+test("a quota failure does not mark the library store blocked", async () => {
+  storagePageTarget().dispatchEvent(new CustomEvent(STORAGE_AVAILABLE_EVENT, {
+    detail: { type: STORAGE_AVAILABLE_EVENT }
+  }));
+  const quota = await waitForFirstZone("zone-quota", {
+    store: {
+      async getPaper() {
+        const error = new Error("quota");
+        error.type = "quota";
+        throw error;
+      }
+    }
+  });
+  assert.equal(quota.reason, "unavailable");
+  let reads = 0;
+  const next = await waitForFirstZone("zone-after-quota", {
+    store: {
+      async getPaper() {
+        reads += 1;
+        return null;
+      }
+    }
+  });
+  assert.equal(reads, 1);
+  assert.equal(next.reason, "stored");
+});
+
+test("a deferred zone write swallows rejection", async () => {
+  const caught = [];
+  const onUnhandled = (error) => caught.push(error);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    await settleFreshZone({
+      hash: "zone-unhandled-write",
+      page: 1,
+      version: "rev",
+      reason: "cap",
+      write: async () => {
+        throw new Error("deferred-write");
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(caught.length, 0);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("import keeps the migration record", async () => {
+  const { store } = memoryStore({ now: () => 70 });
+  await store.putLegacyDocument("doc-migrate", {
+    paper: { title: "已迁移", pageCount: 1, origin: "local-service" },
+    pages: [{
+      page: 1,
+      pairs: [{ bid: "a", text: "Hello", sourceText: "Hello", translation: "你好", targetLang: "zh-CN" }]
+    }]
+  });
+  const before = await store.migrationStatus();
+  assert.equal(before.doneDocs.includes("doc-migrate"), true);
+  const bundle = await store.exportLibrary({ exportedAt: 70, appVersion: "0.3.0" });
+  assert.equal(bundle.migration.doneDocs.includes("doc-migrate"), true);
+  const empty = memoryStore({ now: () => 71 });
+  await empty.store.importBundle(bundle);
+  const after = await empty.store.migrationStatus();
+  assert.equal(after.doneDocs.includes("doc-migrate"), true);
+  assert.equal((await empty.store.getPage("doc-migrate", 1)).pairs[0].translation, "你好");
+});
+
+test("F4-21 notes written before the library upgrade are still listed", async () => {
+  const notes = createNotesStore({
+    persist: false,
+    deviceId: "device-f421",
+    now: () => 8,
+    createId: () => "note-f421"
+  });
+  await notes.put({ docHash: "doc-f421", kind: "note", page: 1, body: "升级前的笔记" });
+  const store = createLibraryStore({
+    platform: { target: "idb", kv: createMemoryKv(), library: createIdbLibraryFactory() },
+    persist: false,
+    deviceId: "device-f421-lib",
+    now: () => 9
+  });
+  await store.putLegacyDocument("doc-f421", {
+    paper: { title: "升级", pageCount: 1, origin: "native" },
+    pages: [{ page: 1, pairs: [{ bid: "a", text: "A", sourceText: "A", translation: "甲", targetLang: "zh-CN" }] }]
+  });
+  assert.equal((await notes.list("doc-f421"))[0].body, "升级前的笔记");
+  const version = "rev-f421";
+  await store.putLayout({
+    docHash: "doc-f421",
+    page: 1,
+    mode: "local",
+    protocol: "blocks-1",
+    layoutRev: version,
+    layout: { blocks: [{ bid: "kept", text: "cached" }], layoutVersion: version, protocol: "blocks-1" }
+  });
+  const gate = await waitForFirstZone("doc-f421", { store });
+  const layout = storedLayoutCurrent(gate.document?.pages?.[0], version);
+  assert.equal(layout?.blocks?.[0]?.bid, "kept");
+});
+
+test("F4-22 two tabs upgrading one paper do not deadlock", async () => {
+  let held = 0;
+  let max = 0;
+  const locks = {
+    request(_name, options, fn) {
+      if (options?.ifAvailable && held > 0) return fn(null);
+      held += 1;
+      max = Math.max(max, held);
+      return Promise.resolve(fn({})).finally(() => {
+        held -= 1;
+      });
+    }
+  };
+  const first = withLibraryDocLock("doc-22", async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    return "first";
+  }, locks);
+  const second = withLibraryDocLock("doc-22", async () => "second", locks);
+  const both = await Promise.all([first, second]);
+  assert.equal(max, 1);
+  assert.equal(both.includes("first"), true);
+  assert.equal(both.some((item) => item && item.skipped === true), true);
 });
 
 function hangingFactory(onOpen) {
