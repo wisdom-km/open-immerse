@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>沉浸译 设置</title>
     <link rel="stylesheet" href="../ui/tokens.css" />
+    <link rel="stylesheet" href="../pdf/reader-tokens.css" />
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
@@ -27,6 +28,8 @@
           <button type="button" role="tab" data-nav="reading" aria-selected="false" aria-controls="panel-reading">阅读</button>
           <button type="button" role="tab" data-nav="features" aria-selected="false" aria-controls="panel-features">功能</button>
           <button type="button" role="tab" data-nav="advanced" aria-selected="false" aria-controls="panel-advanced">高级</button>
+          <button type="button" role="tab" data-nav="ask" aria-selected="false" aria-controls="panel-ask">问 AI 模型</button>
+          <button type="button" role="tab" data-nav="formula" aria-selected="false" aria-controls="panel-formula">多模态 · OCR</button>
         </nav>
       </aside>
       <main>
@@ -108,6 +111,16 @@
             <label>云端密钥<input id="pdfCloudApiKey" type="password" spellcheck="false" autocomplete="off" /></label>
             <p class="hint">云端模式会上传每一页的渲染图</p>
           </div>
+        </section>
+
+        <section id="panel-ask" data-panel="ask" role="tabpanel" hidden>
+          <h2>问 AI 模型</h2>
+          <p class="hint">引用公式时用「多模态 · OCR」里的模型 <button type="button" id="askFormulaLink" class="oi-set-link">多模态 · OCR</button></p>
+        </section>
+
+        <section id="panel-formula" data-panel="formula" role="tabpanel" hidden>
+          <h2>多模态 · OCR</h2>
+          <div id="formulaSettingsRoot" class="oi-reader" data-reader-theme="warm"></div>
         </section>
 
         <section id="panel-advanced" data-panel="advanced" role="tabpanel" hidden>
