@@ -113,13 +113,92 @@ test("values already in chrome.storage.local win over stale localStorage", async
   assert.equal(local.data["reader.panelWidth"], "510");
   assert.equal(local.data["reader.notesPaneSide"], "start");
   assert.equal(local.data["reader.notesWidth"], "400");
-  assert.equal(web.getItem("reader.panelWidth"), "360");
-  assert.equal(web.getItem("reader.notesPaneSide"), "end");
+  assert.equal(web.getItem("reader.panelWidth"), null);
+  assert.equal(web.getItem("reader.notesPaneSide"), null);
   assert.equal(web.getItem("reader.notesWidth"), null);
   assert.equal(web.getItem("reader.fontSize"), "19");
   assert.equal(Object.hasOwn(local.data, "reader.fontSize"), false);
   assert.equal(session.read().panelWidth, 510);
   assert.equal(session.read().notesPaneSide, "start");
+});
+
+test("migration removes a stale localStorage copy when the local area already has the key", async () => {
+  const local = memoryArea({
+    "reader.panelWidth": "510",
+    "reader.notesPersistHintDismissed": JSON.stringify({ "doc-a": true })
+  });
+  const web = memoryWeb({
+    "reader.panelWidth": "360",
+    "reader.notesPersistHintDismissed": JSON.stringify({ "doc-stale": true }),
+    "reader.fontSize": "17"
+  });
+  const session = createNotesPrefsSession({ webStorage: web, localArea: local });
+  const prefs = await session.prime();
+  assert.equal(prefs.panelWidth, 510);
+  assert.equal(prefs.notesPersistHintDismissed["doc-a"], true);
+  assert.equal(prefs.notesPersistHintDismissed["doc-stale"], undefined);
+  assert.equal(web.getItem("reader.panelWidth"), null);
+  assert.equal(web.getItem("reader.notesPersistHintDismissed"), null);
+  assert.equal(web.getItem("reader.fontSize"), "17");
+  assert.equal(local.data["reader.panelWidth"], "510");
+  assert.equal(JSON.parse(local.data["reader.notesPersistHintDismissed"])["doc-a"], true);
+  assert.equal(JSON.parse(local.data["reader.notesPersistHintDismissed"])["doc-stale"], undefined);
+  assert.equal(Object.hasOwn(local.data, "reader.fontSize"), false);
+});
+
+test("two pages hear local-area changes and merge dismissed-hint records", async () => {
+  const listeners = [];
+  const local = memoryArea({
+    "reader.notesPersistHintDismissed": JSON.stringify({ "doc-a": true })
+  });
+  const rawSet = local.set.bind(local);
+  local.set = async (items) => {
+    const changes = {};
+    for (const [key, value] of Object.entries(items)) {
+      changes[key] = { oldValue: local.data[key], newValue: value };
+    }
+    await rawSet(items);
+    for (const listener of [...listeners]) listener(changes, "local");
+  };
+  const onChanged = {
+    addListener(fn) {
+      listeners.push(fn);
+    },
+    removeListener(fn) {
+      const index = listeners.indexOf(fn);
+      if (index >= 0) listeners.splice(index, 1);
+    }
+  };
+  const pageA = createNotesPrefsSession({ webStorage: memoryWeb(), localArea: local, onChanged });
+  const pageB = createNotesPrefsSession({ webStorage: memoryWeb(), localArea: local, onChanged });
+  await pageA.prime();
+  await pageB.prime();
+
+  pageA.write({ panelWidth: 500, notesPaneSide: "start" });
+  await pageA.settled();
+  assert.equal(pageB.read().panelWidth, 500);
+  assert.equal(pageB.read().notesPaneSide, "start");
+
+  pageB.write({ panelWidth: 520 });
+  await pageB.settled();
+  assert.equal(pageA.read().panelWidth, 520);
+  assert.equal(local.data["reader.panelWidth"], "520");
+
+  // Page B's hint map omits doc-a, the same stale snapshot a tab keeps
+  // before it has heard the other tab. The stored record must keep both.
+  pageB.write({ notesPersistHintDismissed: { "doc-b": true } });
+  await pageB.settled();
+  const stored = JSON.parse(local.data["reader.notesPersistHintDismissed"]);
+  assert.equal(stored["doc-a"], true);
+  assert.equal(stored["doc-b"], true);
+  assert.equal(pageA.read().notesPersistHintDismissed["doc-a"], true);
+  assert.equal(pageA.read().notesPersistHintDismissed["doc-b"], true);
+  assert.equal(pageB.read().notesPersistHintDismissed["doc-a"], true);
+  assert.equal(pageB.read().notesPersistHintDismissed["doc-b"], true);
+
+  for (const listener of listeners) listener({ "reader.panelWidth": { newValue: "360" } }, "sync");
+  assert.equal(pageA.read().panelWidth, 520);
+  assert.equal(pageB.read().panelWidth, 520);
 });
 
 test("notes prefs persist across a reload from chrome.storage.local", async () => {

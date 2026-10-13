@@ -500,8 +500,9 @@ function writeNotesPanelPrefs(patch) {
 }
 
 function init() {
-  // Legacy localStorage copies move once. Until the local area answers, reads
-  // still see those keys, so the first paint matches the stored values.
+  // Copy legacy localStorage keys into the local area once. Until that
+  // finishes, reads still use localStorage. On a later open those keys are
+  // already gone, so this window sees defaults rather than the saved values.
   void notesPrefsSession.prime();
   bindToolbarGeometry();
   bindViewChrome();
