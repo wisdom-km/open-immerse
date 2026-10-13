@@ -4,7 +4,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { displayFormulaWidthCss } from "../lib/pdf-blocks.js";
 import { cacheableLayout } from "../lib/pdf-layout-client.js";
+import {
+  placeholderCssLength,
+  placeholderNativeBox,
+  placeholderUsedBox
+} from "../lib/pdf-formula-size.js";
+import { READER_THEMES } from "../lib/pdf-reader-flow.js";
 import { DEFAULT_SETTINGS, saveSettings } from "../lib/storage.js";
 import { multimodalTier } from "../lib/formula-tiers/multimodal.js";
 import { ocrTier } from "../lib/formula-tiers/ocr.js";
@@ -396,12 +403,16 @@ test("FUI-02 FUI-13 FUI-14 order, privacy, and placeholder copy", () => {
   renderFormulaPanel(panel, stored, {});
   assert.match(textOf(panel), /不上传整页 PDF/);
   assert.match(textOf(panel), /密钥只存本机/);
-  assert.equal(placeholderCopy({ page: 4, eqLabel: "(3)" }, { inline: false }), "公式 (3) · 原文第 4 页");
-  assert.equal(placeholderCopy({ page: 4, eqLabel: "3" }, { inline: false }), "公式 (3) · 原文第 4 页");
-  assert.equal(placeholderCopy({ page: 4 }, { inline: false }), "公式 · 原文第 4 页");
-  assert.equal(placeholderCopy({ page: 4 }, { inline: true }), "〔公式 · 原文第 4 页〕");
-  assert.equal(placeholderCopy({ page: null }, { inline: false }), "公式 · 原文");
-  assert.equal(placeholderCopy({ page: null }, { inline: true }), "〔公式 · 原文〕");
+  const numbered = placeholderCopy({ page: 4, eqLabel: "(3)" }, { inline: false });
+  assert.deepEqual(numbered.visible, ["点击查看原公式", "看原公式", "原公式"]);
+  assert.equal(numbered.aria, "公式 (3) · 原文第 4 页 · 点击查看原公式");
+  assert.equal(placeholderCopy({ page: 4, eqLabel: "3" }).aria, "公式 (3) · 原文第 4 页 · 点击查看原公式");
+  assert.equal(placeholderCopy({ page: 4 }).aria, "公式 · 原文第 4 页 · 点击查看原公式");
+  assert.equal(placeholderCopy({ page: 4 }, { inline: true }).aria, "行内公式 · 原文第 4 页 · 点击查看原公式");
+  assert.equal(placeholderCopy({ page: null, eqLabel: "(3)" }).aria, "公式 (3) · 点击查看原公式");
+  assert.equal(placeholderCopy({ page: null }, { inline: true }).aria, "行内公式 · 点击查看原公式");
+  assert.equal(placeholderCopy({ page: 3, figureLabel: "1" }, { kind: "figure" }).aria, "图 1 · 原文第 3 页 · 点击查看原图");
+  assert.deepEqual(placeholderCopy({ page: 3 }, { kind: "figure" }).visible, ["点击查看原图", "看原图", "原图"]);
 });
 
 test("F3-20 connectivity uses the stub, and tier adapters stay unavailable", async () => {
@@ -493,10 +504,17 @@ test("settings screen and Aa panel expose the same switch keys", () => {
   assert.match(viewerJs, /readCropImage: formulaFlags\.placeholderEnabled \? readFormulaCropImage/);
   assert.match(viewerJs, /data-oi-tier/);
   assert.equal(viewerJs.includes("innerHTML"), false);
-  assert.match(css, /\.oi-formula-placeholder\s*\{[^}]*min-height:\s*52px/);
-  assert.match(css, /\.oi-formula-ph-thumb\s*\{[^}]*height:\s*28px/);
-  assert.match(css, /\.oi-formula-ph-thumb\s*\{[^}]*max-width:\s*168px/);
-  assert.match(css, /\.oi-formula-ph-missing\s*\{[^}]*width:\s*96px/);
+  assert.match(css, /\.oi-formula-placeholder:not\(\.is-inline\)\s*\{[^}]*min\(100%,\s*max\(112px,\s*var\(--oi-ph-w,\s*112px\)\)\)/);
+  assert.match(css, /\.oi-formula-placeholder:not\(\.is-inline\)\s*\{[^}]*min-height:\s*32px/);
+  assert.match(css, /container:\s*oi-ph\s*\/\s*inline-size/);
+  assert.match(css, /@container\s+oi-ph\s+\(width\s*<\s*128px\)/);
+  assert.match(css, /@container\s+oi-ph\s+\(width\s*<\s*64px\)/);
+  assert.match(css, /@container\s+oi-ph\s+\(width\s*<\s*52px\)/);
+  assert.match(css, /\.oi-formula-placeholder\.is-inline\s*\{[^}]*clamp\(16px,\s*var\(--oi-ph-h,\s*16px\),\s*calc\(1lh\s*-\s*6px\)\)/);
+  assert.doesNotMatch(css, /oi-formula-ph-thumb/);
+  assert.doesNotMatch(css, /oi-formula-ph-missing/);
+  assert.doesNotMatch(viewerJs, /oi-formula-ph-thumb/);
+  assert.doesNotMatch(viewerJs, /oi-formula-ph-missing/);
   assert.match(css, /\.oi-formula-reserve\s*\{[^}]*width:\s*48px/);
   const stored = cacheableLayout({
     page: 1,
@@ -526,4 +544,221 @@ test("new formula settings files do not fetch, confirm, or touch sealed inputs",
     assert.equal(/\bfetch\s*\(/.test(src), false, file);
     assert.equal(src.includes("confirm("), false, file);
   }
+});
+
+class PhEl extends DomNode {
+  constructor(tag) {
+    super();
+    this.tagName = String(tag || "").toUpperCase();
+    this.attrs = {};
+    this.className = "";
+    this.type = "";
+    this.title = "";
+    this.dataset = {};
+    this.styleProps = {};
+    const self = this;
+    this.style = {
+      setProperty(name, value) {
+        self.styleProps[name] = String(value);
+      }
+    };
+  }
+  setAttribute(name, value) {
+    this.attrs[name] = String(value);
+  }
+  getAttribute(name) {
+    return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
+  }
+  addEventListener(type, fn) {
+    this.listeners = this.listeners || {};
+    (this.listeners[type] = this.listeners[type] || []).push(fn);
+  }
+}
+
+function phDocument() {
+  return {
+    createElement(tag) {
+      return new PhEl(tag);
+    },
+    createElementNS(_ns, tag) {
+      return new PhEl(tag);
+    }
+  };
+}
+
+function loadPlaceholderMount(document, getPageLayout, jumped) {
+  const src = read("pdf/viewer.js");
+  const start = src.indexOf("function placeholderCssNumber");
+  const end = src.indexOf("function jumpFormulaPlaceholder");
+  assert.ok(start > 0 && end > start);
+  const factory = new Function(
+    "placeholderCopy",
+    "placeholderNativeBox",
+    "placeholderCssLength",
+    "getPageLayout",
+    "document",
+    "jumpFormulaPlaceholder",
+    `${src.slice(start, end)}\nreturn mountFormulaPlaceholder;`
+  );
+  return factory(
+    placeholderCopy,
+    placeholderNativeBox,
+    placeholderCssLength,
+    getPageLayout,
+    document,
+    jumped
+  );
+}
+
+function fractionBox(union, pageW, pageH) {
+  return [union[0] / pageW, union[1] / pageH, union[2] / pageW, union[3] / pageH];
+}
+
+test("placeholder buttons append visible text for display and inline", () => {
+  const document = phDocument();
+  const jumped = [];
+  const mount = loadPlaceholderMount(document, (page) => {
+    if (Number(page) !== 7) return null;
+    return { pageWidth: 612, pageHeight: 792 };
+  }, (button) => jumped.push(button));
+  const union = [162.89, 615.8, 504.67, 629.92];
+  const displayHost = new PhEl("div");
+  mount(displayHost, {
+    label: "formula",
+    bbox: fractionBox(union, 612, 792),
+    eqLabel: "(3)",
+    formulaReason: "crop-blank",
+    imageUrl: "data:image/png;base64,abc",
+    page: 7
+  }, 7, false);
+  const row = displayHost.childNodes[0];
+  const button = row.childNodes.find((node) => node.tagName === "BUTTON");
+  assert.notEqual(button.textContent.trim(), "");
+  assert.match(button.textContent, /点击查看原公式/);
+  assert.equal(button.textContent.includes("原文第"), false);
+  assert.equal(button.textContent.includes("(3)"), false);
+  assert.equal(button.getAttribute("aria-label"), "公式 (3) · 原文第 7 页 · 点击查看原公式");
+  assert.equal(button.title, button.getAttribute("aria-label"));
+  assert.equal(button.dataset.oiTier, "placeholder");
+  assert.equal(button.dataset.kind, "formula");
+  assert.equal(button.dataset.oiReason, "crop-blank");
+  assert.equal(button.dataset.oiBbox, "1");
+  assert.equal(row.styleProps["--oi-ph-w"], "341.78px");
+  assert.equal(row.styleProps["--oi-ph-h"], "14.12px");
+  assert.equal(row.styleProps["--oi-ph-wn"], "341.78");
+  assert.equal(row.childNodes.some((node) => node.className === "oi-pdf-eq-num"), false);
+  assert.equal(row.childNodes.some((node) => String(node.className || "").includes("oi-formula-ph")), false);
+  const visible = button.childNodes.find((node) => node.className === "oi-ph-text");
+  assert.equal(visible.getAttribute("aria-hidden"), "true");
+  assert.deepEqual(
+    visible.childNodes.filter((node) => node.tagName === "SPAN").map((node) => node.textContent),
+    ["点击查看原公式", "看原公式", "原公式"]
+  );
+  button.listeners.click[0]({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(jumped.length, 1);
+
+  const inlineHost = new PhEl("span");
+  mount(inlineHost, {
+    bbox: fractionBox([0, 0, 56, 11], 612, 792),
+    page: 7
+  }, 7, true);
+  const inlineButton = inlineHost.childNodes[0];
+  assert.equal(inlineButton.tagName, "BUTTON");
+  assert.match(inlineButton.className, /is-inline/);
+  assert.notEqual(inlineButton.textContent.trim(), "");
+  assert.match(inlineButton.textContent, /看原公式/);
+  assert.match(inlineButton.textContent, /原公式/);
+  assert.equal(inlineButton.textContent.includes("原文第"), false);
+  assert.equal(inlineButton.getAttribute("aria-label"), "行内公式 · 原文第 7 页 · 点击查看原公式");
+  assert.equal(inlineButton.title, inlineButton.getAttribute("aria-label"));
+  assert.equal(inlineButton.styleProps["--oi-ph-w"], "56px");
+  assert.equal(inlineButton.styleProps["--oi-ph-h"], "11px");
+  assert.equal(inlineHost.childNodes.some((node) => node.className === "oi-pdf-eq-num"), false);
+
+  const bare = new PhEl("div");
+  mount(bare, { page: 4 }, 4, false);
+  assert.equal(bare.childNodes[0].styleProps["--oi-ph-w"], "112px");
+  assert.equal(bare.childNodes[0].styleProps["--oi-ph-h"], "32px");
+  assert.equal(bare.childNodes[0].childNodes.find((node) => node.tagName === "BUTTON").dataset.oiBbox, "0");
+  const bareInline = new PhEl("span");
+  mount(bareInline, {}, null, true);
+  assert.equal(bareInline.childNodes[0].styleProps["--oi-ph-w"], "20px");
+  assert.equal(bareInline.childNodes[0].styleProps["--oi-ph-h"], "16px");
+  assert.equal(bareInline.childNodes[0].getAttribute("aria-label"), "行内公式 · 点击查看原公式");
+});
+
+test("placeholder size follows displayFormulaWidthCss at ×1 and shortens copy by width", () => {
+  const pageW = 612;
+  const pageH = 792;
+  const union = [162.89, 615.8, 504.67, 629.92];
+  const bbox = fractionBox(union, pageW, pageH);
+  const native = placeholderNativeBox({ bbox, pageWidth: pageW, pageHeight: pageH });
+  assert.equal(placeholderCssLength(native.w), "341.78px");
+  assert.equal(placeholderCssLength(native.h), "14.12px");
+  assert.ok(union[0] + native.w >= 504.67 - 0.001);
+  const frac = bbox[2] - bbox[0];
+  const crop = displayFormulaWidthCss(frac, bbox[3] - bbox[1], { pageWidthPt: pageW, floor: 0.8 });
+  assert.equal(crop, "max(273.424px, min(100%, 341.78px))");
+  assert.equal(crop.includes("455.7067px"), false);
+  const wide = placeholderUsedBox({ w0: native.w, h0: native.h, column: 640 });
+  assert.ok(Math.abs(wide.w - 341.78) <= 0.001);
+  assert.equal(wide.h, 32);
+  const col320 = placeholderUsedBox({ w0: native.w, h0: native.h, column: 320 });
+  assert.equal(col320.w, 320);
+  assert.equal(col320.h, 32);
+  assert.deepEqual(placeholderUsedBox({ w0: 110, h0: 14, column: 640 }), { w: 112, h: 32 });
+  assert.deepEqual(placeholderUsedBox({ w0: 150, h0: 20, column: 640 }), { w: 150, h: 32 });
+  assert.deepEqual(placeholderUsedBox({ w0: 40, h0: 12, column: 640 }), { w: 112, h: 32 });
+  const shrunk = placeholderUsedBox({ w0: 397, h0: 41, column: 360 });
+  assert.equal(shrunk.w, 360);
+  assert.ok(Math.abs(shrunk.h - (41 * 360 / 397)) < 0.001);
+  const narrower = placeholderUsedBox({ w0: 397, h0: 41, column: 320 });
+  assert.equal(narrower.w, 320);
+  assert.ok(Math.abs(narrower.h - (41 * 320 / 397)) < 0.001);
+  assert.deepEqual(placeholderUsedBox({ w0: 14, h0: 9, inline: true }), { w: 20, h: 16 });
+  assert.deepEqual(placeholderUsedBox({ w0: 56, h0: 11, inline: true }), { w: 56, h: 16 });
+  assert.deepEqual(placeholderUsedBox({ w0: 70, h0: 13, inline: true }), { w: 70, h: 16 });
+  assert.equal(placeholderNativeBox({ bbox: null, pageWidth: pageW, pageHeight: pageH }), null);
+
+  const css = read("pdf/viewer.css");
+  assert.match(css, /@container\s+oi-ph\s+\(width\s*<\s*128px\)[\s\S]*?\.l0\s*\{\s*display:\s*none/);
+  assert.match(css, /@container\s+oi-ph\s+\(width\s*<\s*128px\)[\s\S]*?\.l1\s*\{\s*display:\s*inline/);
+  assert.match(css, /@container\s+oi-ph\s+\(width\s*<\s*64px\)[\s\S]*?\.l2\s*\{\s*display:\s*inline/);
+  assert.match(css, /@container\s+oi-ph\s+\(width\s*<\s*52px\)[\s\S]*?\.oi-ph-icon\s*\{\s*display:\s*block/);
+  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.oi-formula-placeholder::after\s*\{[^}]*transition:\s*none/);
+  assert.match(css, /\.oi-formula-placeholder:hover::after\s*\{[^}]*border-style:\s*solid/);
+  const tokens = read("pdf/reader-tokens.css");
+  assert.match(tokens, /\.oi-reader\[data-reader-theme="dark"\]/);
+  assert.match(tokens, /--oi-reader-paper:\s*#1C1D1F/);
+  assert.match(tokens, /--oi-reader-well:\s*#2A2B2E/);
+  assert.match(tokens, /--oi-reader-line:\s*#3A3C40/);
+  assert.match(tokens, /--oi-reader-line-strong:\s*#8A8F98/);
+  assert.match(tokens, /--oi-reader-ink:\s*#E8E6E1/);
+  assert.match(tokens, /--oi-reader-muted:\s*#A8A49B/);
+  assert.match(tokens, /--oi-reader-focus:\s*#8FA8FF/);
+  assert.deepEqual([...READER_THEMES], ["warm", "white", "sepia", "green"]);
+  const jump = read("pdf/viewer.js");
+  const jumpBody = jump.slice(jump.indexOf("function jumpFormulaPlaceholder"), jump.indexOf("function appendCropOrNotice"));
+  assert.match(jumpBody, /presentSourceForJump\(button\)/);
+  assert.match(jumpBody, /jumpTranslationToSource\(host\)/);
+  assert.match(jumpBody, /revealSourcePage\(page\)/);
+  assert.doesNotMatch(jumpBody, /placeholderCopy|--oi-ph-w|oi-ph-text/);
+});
+
+test("figure and table blocks stay off the formula placeholder path", async () => {
+  const figure = await scheduleFormulaBlock({ label: "figure", id: "fig", imageUrl: "data:image/png;base64,abc" }, {
+    placeholderEnabled: true,
+    withRasterCrop: async (item) => item
+  });
+  assert.equal(figure.formulaTier, undefined);
+  const table = await scheduleFormulaBlock({ label: "table", id: "tab" }, {
+    placeholderEnabled: true,
+    withRasterCrop: async (item) => item
+  });
+  assert.equal(table.formulaTier, undefined);
+  const viewer = read("pdf/viewer.js");
+  const append = viewer.slice(viewer.indexOf("function appendCropOrNotice"), viewer.indexOf("const visualCropPendingPages"));
+  assert.match(append, /if \(block\?\.label === "formula" && block\.formulaTier === "placeholder"\) \{\s*mountFormulaPlaceholder\(node, block, shownPage, false\)/);
+  assert.doesNotMatch(append, /label === "figure" && block\.formulaTier === "placeholder"/);
+  assert.doesNotMatch(append, /label === "table" && block\.formulaTier === "placeholder"/);
 });

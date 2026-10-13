@@ -2708,7 +2708,11 @@ button:disabled { opacity: 0.45; cursor: default; }
 .oi-formula-placeholder-row {
   position: relative;
   display: flex;
+  align-items: center;
   justify-content: center;
+  max-width: 100%;
+  min-width: 0;
+  margin: 6px 0 14px;
 }
 .oi-formula-reserve {
   position: absolute;
@@ -2719,45 +2723,124 @@ button:disabled { opacity: 0.45; cursor: default; }
   pointer-events: none;
 }
 .oi-formula-placeholder {
-  min-height: 52px;
+  position: relative;
+  box-sizing: border-box;
+  container: oi-ph / inline-size;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--oi-reader-line);
-  border-radius: 10px;
-  background: var(--oi-reader-surface);
-  color: var(--oi-reader-ink);
-  font: 600 13px/1.4 var(--oi-reader-ui-font, var(--oi-font));
-  cursor: pointer;
-}
-.oi-formula-placeholder:focus-visible {
-  outline: 2px solid var(--oi-reader-ink);
-  outline-offset: 2px;
-}
-.oi-formula-ph-thumb {
-  height: 28px;
-  max-width: 168px;
-  width: auto;
-  object-fit: contain;
-  filter: grayscale(1);
-  opacity: 0.72;
-  mix-blend-mode: multiply;
-}
-.oi-formula-ph-missing {
-  display: inline-block;
-  width: 96px;
-  height: 28px;
-  background: var(--oi-reader-line);
-}
-.oi-formula-placeholder.is-inline {
-  display: inline;
-  min-height: 0;
+  justify-content: center;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
   padding: 0;
   border: 0;
-  border-radius: 0;
-  background: none;
-  font-size: 0.875em;
-  font-weight: 400;
+  border-radius: 6px;
+  background: var(--oi-reader-well);
   color: var(--oi-reader-muted);
+  font: 600 13px/1 var(--oi-reader-ui-font, var(--oi-font));
+  cursor: pointer;
+  transition: background-color 120ms, color 120ms;
+}
+.oi-formula-placeholder:not(.is-inline) {
+  flex: 0 1 auto;
+  width: min(100%, max(112px, var(--oi-ph-w, 112px)));
+  height: auto;
+  aspect-ratio: var(--oi-ph-wn, 112) / var(--oi-ph-hn, 32);
+  min-height: 32px;
+  max-height: max(32px, var(--oi-ph-h, 32px));
+  overflow: hidden;
+}
+.oi-formula-placeholder::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px dashed color-mix(in srgb, var(--oi-reader-line-strong) 55%, transparent);
+  border-radius: inherit;
+  pointer-events: none;
+  transition: border-color 120ms;
+}
+.oi-formula-placeholder:hover {
+  background: color-mix(in srgb, var(--oi-reader-well) 70%, var(--oi-reader-line));
+  color: var(--oi-reader-ink);
+}
+.oi-formula-placeholder:hover::after {
+  border-style: solid;
+  border-color: var(--oi-reader-line-strong);
+}
+.oi-formula-placeholder:focus {
+  outline: none;
+}
+.oi-formula-placeholder:focus-visible {
+  outline: 2px solid var(--oi-reader-focus);
+  outline-offset: 2px;
+}
+.oi-ph-text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.oi-ph-text > .l0,
+.oi-ph-text > .l1,
+.oi-ph-text > .l2,
+.oi-ph-text > .oi-ph-icon {
+  display: none;
+}
+.oi-formula-placeholder:not(.is-inline) .l0 {
+  display: inline;
+}
+.oi-formula-placeholder.is-inline .l1 {
+  display: inline;
+}
+@container oi-ph (width < 128px) {
+  .oi-formula-placeholder:not(.is-inline) .l0 { display: none; }
+  .oi-formula-placeholder:not(.is-inline) .l1 { display: inline; }
+}
+@container oi-ph (width < 64px) {
+  .oi-formula-placeholder.is-inline .l1 { display: none; }
+  .oi-formula-placeholder.is-inline .l2 { display: inline; }
+}
+@container oi-ph (width < 52px) {
+  .oi-formula-placeholder.is-inline .oi-ph-text { padding: 0; }
+  .oi-formula-placeholder.is-inline .l1,
+  .oi-formula-placeholder.is-inline .l2 { display: none; }
+  .oi-formula-placeholder.is-inline .oi-ph-icon { display: block; }
+}
+.oi-ph-icon {
+  width: 12px;
+  height: 12px;
+}
+.oi-formula-placeholder.is-inline {
+  display: inline-flex;
+  vertical-align: -0.2em;
+  width: max(20px, var(--oi-ph-w, 20px));
+  height: clamp(16px, var(--oi-ph-h, 16px), calc(1lh - 6px));
+  min-width: 20px;
+  min-height: 16px;
+  max-height: none;
+  aspect-ratio: auto;
+  overflow: visible;
+  border-radius: 3px;
+  font: 500 12px/1 var(--oi-reader-ui-font, var(--oi-font));
+}
+.oi-formula-placeholder.is-inline .oi-ph-text {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0 6px;
+}
+.oi-formula-placeholder.is-inline::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 24px);
+  height: max(100%, 24px);
+  transform: translate(-50%, -50%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .oi-formula-placeholder,
+  .oi-formula-placeholder::after {
+    transition: none;
+  }
 }

@@ -213,6 +213,8 @@ import {
   displayFormulaColumnPx,
   formulaReadabilityFloor,
   formulaScriptPt,
+  placeholderCssLength,
+  placeholderNativeBox,
   readerFormulaCssSize
 } from "../lib/pdf-formula-size.js";
 import {
@@ -2945,48 +2947,95 @@ function mountDisplayMath(node, block, img, page) {
   });
 }
 
+function placeholderCssNumber(value) {
+  return String(Math.round(Number(value) * 10000) / 10000);
+}
+
+function placeholderBoxLengths(block, inline) {
+  const layout = getPageLayout(block?.page);
+  const native = placeholderNativeBox({
+    bbox: block?.bbox,
+    pageWidth: Number(layout?.pageWidth) || 0,
+    pageHeight: Number(layout?.pageHeight) || 0
+  });
+  const minW = inline ? 20 : 112;
+  const minH = inline ? 16 : 32;
+  const w = native?.w > 0 ? native.w : minW;
+  const h = native?.h > 0 ? native.h : minH;
+  return {
+    w: placeholderCssLength(w),
+    h: placeholderCssLength(h),
+    wn: placeholderCssNumber(w),
+    hn: placeholderCssNumber(h)
+  };
+}
+
+function stampPlaceholderBox(node, lengths) {
+  node.style.setProperty("--oi-ph-w", lengths.w);
+  node.style.setProperty("--oi-ph-h", lengths.h);
+  node.style.setProperty("--oi-ph-wn", lengths.wn);
+  node.style.setProperty("--oi-ph-hn", lengths.hn);
+}
+
+function placeholderIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "oi-ph-icon");
+  svg.setAttribute("viewBox", "0 0 12 12");
+  svg.setAttribute("width", "12");
+  svg.setAttribute("height", "12");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M3.2 8.8 L8.8 3.2 M5.2 3.2 H8.8 V6.8");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.4");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.append(path);
+  return svg;
+}
+
 function mountFormulaPlaceholder(parent, block, page, inline) {
   const shown = { ...block, page: page ?? block?.page };
+  const copy = placeholderCopy(shown, { inline, kind: "formula" });
   const known = Number(shown.page) >= 1;
-  const label = placeholderCopy(shown, { inline });
+  const lengths = placeholderBoxLengths(shown, Boolean(inline));
   const button = document.createElement("button");
   button.type = "button";
   button.className = inline ? "oi-formula-placeholder is-inline" : "oi-formula-placeholder";
   button.dataset.oiTier = "placeholder";
+  button.dataset.kind = "formula";
   if (block?.formulaReason) button.dataset.oiReason = String(block.formulaReason);
   const hasBbox = Array.isArray(block?.bbox) && block.bbox.length >= 4;
   button.dataset.oiBbox = hasBbox ? "1" : "0";
   if (known) button.dataset.page = String(Math.floor(Number(shown.page)));
-  button.title = "点击查看原文";
-  button.setAttribute("aria-label", label);
-  if (!inline) {
-    if (/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(block?.imageUrl || "")) {
-      const img = document.createElement("img");
-      img.className = "oi-formula-ph-thumb";
-      img.alt = "";
-      img.src = block.imageUrl;
-      button.append(img);
-    } else {
-      const missing = document.createElement("span");
-      missing.className = "oi-formula-ph-missing";
-      missing.setAttribute("aria-hidden", "true");
-      button.append(missing);
-    }
-  }
+  button.title = copy.aria;
+  button.setAttribute("aria-label", copy.aria);
   const text = document.createElement("span");
-  text.className = "oi-formula-ph-text";
-  text.textContent = !inline && known ? `${label} ↗` : label;
+  text.className = "oi-ph-text";
+  text.setAttribute("aria-hidden", "true");
+  ["l0", "l1", "l2"].forEach((level, index) => {
+    const line = document.createElement("span");
+    line.className = level;
+    line.textContent = copy.visible[index] || "";
+    text.append(line);
+  });
+  text.append(placeholderIcon());
+  button.append(text);
   button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     jumpFormulaPlaceholder(button);
   });
   if (inline) {
+    stampPlaceholderBox(button, lengths);
     parent.append(button);
     return;
   }
   const row = document.createElement("div");
   row.className = "oi-formula-placeholder-row";
+  stampPlaceholderBox(row, lengths);
   const reserve = document.createElement("span");
   reserve.className = "oi-formula-reserve";
   reserve.dataset.oiReserve = "f8";

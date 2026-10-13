@@ -518,6 +518,17 @@
   --oi-reader-pair-bg-solid: var(--oi-reader-green-pair-bg-solid);
 }
 
+.oi-reader-app[data-reader-theme="dark"],
+.oi-reader[data-reader-theme="dark"] {
+  --oi-reader-paper: #1C1D1F;
+  --oi-reader-well: #2A2B2E;
+  --oi-reader-line: #3A3C40;
+  --oi-reader-line-strong: #8A8F98;
+  --oi-reader-ink: #E8E6E1;
+  --oi-reader-muted: #A8A49B;
+  --oi-reader-focus: #8FA8FF;
+}
+
 .oi-reader-app[data-reader-fs-band="m"],
 .oi-reader[data-reader-fs-band="m"] {
   --oi-reader-tracking: 0.015em;
