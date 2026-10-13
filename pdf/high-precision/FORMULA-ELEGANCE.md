@@ -2,7 +2,7 @@
 
 回退链现状（F3-PR2，2026-10-13）：调度器已接进阅读器公式裁图路径。第 0 级 arXiv 源码由内部旗标控制，默认关，右栏画面仍是原页裁图，没有 KaTeX。多模态和 OCR 仍是桩，开关界面在 PR3。IndexedDB `oi-formula` 只在有多模态或 OCR 结果要写入时才建立。
 
-本轮只改进右栏怎么放公式。笔画仍来自当前打开的 PDF。当前已上线的是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `REQUIREMENTS.md` §2.6 算第一层。目标是用 LaTeX 渲染，判不出就显示裁图；重绘只是退回链里的一级。高清重渲染失败时静默退成 png，不加徽章（V1-B1，见 `REQUIREMENTS.md` §2.6 术语表），不算换层。OCR 字母和 OCR 返回的 LaTeX 仍不上屏。目标做法：OCR API 层核对通过的结果可以上屏，作为「OCR 不上屏」的例外（据 01:12 顺序推论；细节待确认）。不嵌入 BabelDOC / pdf2zh。第 5 页矩阵句的中文译文不在本轮。
+本轮只改进右栏怎么放公式。笔画仍来自当前打开的 PDF。当前已上线的是 `renderSharpVisualCrop` 的高清重渲染（`surface="redraw"`）或 pageRaster 的 png 裁图，按 `REQUIREMENTS.md` §2.6 算第一层。目标是用 LaTeX 渲染，判不出就显示裁图；重绘只是退回链里的一级。高清重渲染失败时静默退成 png，不加徽章（V1-B1，见 `REQUIREMENTS.md` §2.6 术语表），不算换层。未核对的 OCR 字母不上屏。公式 OCR（F9）核对通过后用 KaTeX 上屏，按 `REQUIREMENTS.md` §2.6 仲裁。不嵌入 BabelDOC / pdf2zh。第 5 页矩阵句的中文译文不在本轮。
 
 可借鉴的只有想法：公式保持原页字形，版面节奏靠近论文；裁图可以略松，但只为了下标和括号。
 

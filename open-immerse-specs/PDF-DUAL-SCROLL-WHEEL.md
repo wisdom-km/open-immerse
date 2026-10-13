@@ -5,7 +5,7 @@
 **来源：** 2026-09-23 Wisdom（四类全修）via Forge / Jone copy → Loom。  
 **基线：** main tip `87d4beffff3dafd7eb835fe29443277e57b9ce08`（已含 #53 formula rhythm）。  
 **摸底：** `pdf-scroll-survey-87d4beff`（基线审计，未入库）。  
-**挂接：** [`PDF-MD-READOUT.md`](./PDF-MD-READOUT.md)；公式节奏 [`../pdf/high-precision/FORMULA-RIGHT-PANE.md`](../pdf/high-precision/FORMULA-RIGHT-PANE.md)（**本单不改**）。  
+**挂接：** [`pdf/PDF-MD-READOUT.md`](../pdf/PDF-MD-READOUT.md)（正本；本目录同名文件只是指针）；公式节奏 [`../pdf/high-precision/FORMULA-RIGHT-PANE.md`](../pdf/high-precision/FORMULA-RIGHT-PANE.md)（**本单不改**）。  
 **fixture：** Attention Is All You Need。
 
 **明确不做：** 网页双语、Soft Graphite、#40 镜像、公式裁切主路径 / FORMULA-RIGHT-PANE / #53。
