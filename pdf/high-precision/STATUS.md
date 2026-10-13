@@ -94,7 +94,7 @@ Anvil 仍要在本机 Chrome 看 Attention 第 5 页左右栏。下面的 M1–M
 | M1 | 矩阵句右栏是中文，句内两张 pageRaster 裁图 |
 | M2 | 右栏没有 `W_iQ` / `Rdmodel` / 十几像素碎图 |
 | M3 | 这句不再长期显示「旧译文未沿用」，也不因它把整页标成待核对 |
-| M4 | 公式主画面不是 KaTeX；没有 `:8765/v1/layout` 矢量主路径（「不是 KaTeX」随 D0/F5 失效） |
+| M4 | 公式主画面仍是原页裁图（第 0 级默认关，KaTeX 上屏在 F5）。D0 已改文档：公式可来自核对过的 LaTeX，判不出时显示裁图。没有 `:8765/v1/layout` 矢量主路径 |
 | M5 | Soft Graphite、参考文献软状态文案、#60 裁框观感不回退 |
 
 ## 2026-09-23 公式裁框收紧（pdf-formula-crop-tighten）

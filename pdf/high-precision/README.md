@@ -75,7 +75,7 @@ node --test tests/*.test.mjs
 | `pdf/viewer.js` 含 `renderFormulaNode`、`dataset.latex` | 公式走 KaTeX | D0：随 F3 改（公式目标已改为核对过的 KaTeX，见 `REQUIREMENTS.md` §2.6；阶段 2 的「改为 pageRaster 裁图」是历史） |
 | `pdf/viewer.js` 不含 `cropCanvasToDataUrl`、`walkImageCtms`、`buildMirrorLayout`、`appendMirrorPage` | 阅读器不裁图、不建镜像页 | 阶段 2 允许前两个。后两个一直禁止 |
 | `extractReadoutBlocks` 的公式带 `latex` | 旧通读 | 阶段 2 起新路径不再展示 `latex`。旧函数可留到没有调用方 |
-| README 中英文含「原页内容精准展示（默认裁图）」「formula images do not come from LaTeX」 | 文案锁。D0 待改（随 F3），以 `REQUIREMENTS.md` 为准 | 改这些句子时同步改 `tests/pdf-readout.test.mjs`，不要放宽成空断言 |
+| README 中英文含「原页内容精准展示（默认裁图）」和「公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图」 | D0 已在 F3-PR2 改完，以 `REQUIREMENTS.md` 为准 | 再改这些句子时同步改 `tests/pdf-readout.test.mjs`，不要放宽成空断言 |
 | `features.pdf === false`、弹层 PDF 按钮默认隐藏 | `tests/v1-defaults.test.mjs`、`tests/popup-ia.test.mjs` | 始终保持 |
 
 ## 硬边界

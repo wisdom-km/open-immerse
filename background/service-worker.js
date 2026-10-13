@@ -197,6 +197,8 @@ async function handleMessage(message, sender) {
     }
     case "OI_ARXIV_SOURCE":
       return handleArxivSourceMessage(message);
+    case "OI_FORMULA_CACHE":
+      return handleArxivSourceMessage.formula(message);
     default:
       return { ok: false, error: "unknown message" };
   }

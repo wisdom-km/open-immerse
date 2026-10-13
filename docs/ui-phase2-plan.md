@@ -177,7 +177,7 @@ Wisdom 的要求（转述，不是逐字原话）：模型除了大语言模型�
 
 | 编号 | 内容 | 何时 |
 | --- | --- | --- |
-| D0 | README / CONTRIBUTING 的「公式不来自 LaTeX 渲染」是旧说法，连同 `tests/pdf-readout.test.mjs` 的断言 | 待 F3 公式回退链的代码 PR 一起改。这次不改这些文件 |
+| D0 | README / CONTRIBUTING 的「公式不来自 LaTeX 渲染」是旧说法，连同 `tests/pdf-readout.test.mjs` 的断言 | F3-PR2 已改成「公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图」 |
 | D1 | 导出时含行内公式图片的段落丢正文（`docs/owner-todo.md` 第四节） | F4 之前 |
 | D2 | T4b-e：裁图里多出「ˆ」（公式里本来没有的符号） | F3 前后的间隙 |
 | D3 | DPO p18 胶囊漂移（`docs/owner-todo.md` 第四节） | 只做分诊；确认真人操作也会触发才修 |
@@ -205,9 +205,9 @@ Wisdom 的要求（转述，不是逐字原话）：模型除了大语言模型�
 - F10（以后，F8 之后）：云同步。等本地版稳定再做。T2a 和 F4 已预留存储接口。
 - 末（A+B）：打磨池收尾、全量回归、真机全量测试。
 
-**D0–D4**：D0 是旧说法「公式不来自 LaTeX 渲染」，连同测试断言，待 F3 的代码 PR 一起改；D1 导出丢正文（F4 前）；D2 裁图多出「ˆ」；D3 p18 胶囊只做分诊；D4 跨页续段进打磨池，字段在 F4 预留。
+**D0–D4**：D0 已在 F3-PR2 改完（公式可来自核对过的 LaTeX，判不出时显示原页裁图）；D1 导出丢正文（F4 前）；D2 裁图多出「ˆ」；D3 p18 胶囊只做分诊；D4 跨页续段进打磨池，字段在 F4 预留。
 
-公式已定采用 LaTeX 渲染（2026-10-13 00:02 Wisdom 同意）：arXiv 源码用 KaTeX 渲染；多模态和 OCR 的结果也渲染成 LaTeX 上屏，判不出时退回裁图。README / CONTRIBUTING 里的旧说法和 `tests/pdf-readout.test.mjs` 的断言这次不改。
+公式已定采用 LaTeX 渲染（2026-10-13 00:02 Wisdom 同意）：arXiv 源码用 KaTeX 渲染；多模态和 OCR 的结果也渲染成 LaTeX 上屏，判不出时退回裁图。README / CONTRIBUTING 的旧说法和 `tests/pdf-readout.test.mjs` 的三条断言已在 F3-PR2 改掉。屏幕在第 0 级旗标关闭时仍是裁图。
 
 **打磨池**：T4b-f 行内尺寸和 1pt=4/3px；PR-3b-2；PR-3c 的卡片文案、图占位视觉、行内短裁图抛光；1.2 后续；SEL-20 剩余 nit；L-1、M13；Chrome 114 `safe center`；14px 下标 ②、x-height 下限 ③；旧行内盒常量；发版说明。
 
