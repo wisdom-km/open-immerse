@@ -169,7 +169,7 @@ import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { createBlockAnchor, injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
 import { exportMarkdown } from "../lib/notes-io.js";
 import { NOTES_PANE_WIDTH_DEFAULT, NOTES_PANE_WIDTH_MIN, dismissPersistHint, persistHintDismissed } from "../lib/notes-prefs.js";
-import { createNotesPrefsSession } from "../lib/notes-prefs-local.js";
+import { createNotesPrefsSession } from "../lib/reader-notes-local.js";
 import {
   NOTES_PANE_RESIZE_DEBOUNCE_MS,
   applyNotesSplitAria,

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   NOTES_LOCAL_KEYS,
   createNotesPrefsSession
-} from "../lib/notes-prefs-local.js";
+} from "../lib/reader-notes-local.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -164,7 +164,7 @@ test("notes prefs stay out of chrome.storage.sync", async () => {
     assert.equal(local.data["reader.notesWidth"], "400");
     assert.equal(local.data["reader.notesPaneSide"], "start");
     assert.equal(JSON.parse(local.data["reader.notesPersistHintDismissed"])["doc-b"], true);
-    const src = readFileSync(join(root, "lib/notes-prefs-local.js"), "utf8");
+    const src = readFileSync(join(root, "lib/reader-notes-local.js"), "utf8");
     assert.equal(src.includes(".sync.set"), false);
     assert.equal(src.includes("storage.sync"), false);
   } finally {
