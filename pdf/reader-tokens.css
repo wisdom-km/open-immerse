@@ -521,7 +521,7 @@
 .oi-reader-app[data-reader-theme="dark"],
 .oi-reader[data-reader-theme="dark"] {
   --oi-reader-paper: #1C1D1F;
-  --oi-reader-surface: #1C1D1F;
+  --oi-reader-surface: #232427;
   --oi-reader-well: #2A2B2E;
   --oi-reader-line: #3A3C40;
   --oi-reader-line-strong: #8A8F98;
@@ -531,6 +531,7 @@
   --oi-reader-focus: #8FA8FF;
   --oi-reader-warn: #E2A86A;
   --oi-reader-warn-soft: rgba(226, 168, 106, 0.14);
+  --oi-reader-panel-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .oi-reader-app[data-reader-fs-band="m"],

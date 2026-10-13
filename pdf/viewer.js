@@ -309,7 +309,7 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, saveLibraryPage, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, storedReadoutBlocks, waitForFirstZone, whenZoneReadSettles } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, saveLibraryPage, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
@@ -2217,6 +2217,7 @@ function installLibraryChrome() {
   try {
     globalThis.chrome?.tabs?.getCurrent?.((tab) => {
       if (tab?.id != null) globalThis.__oiReaderTabId = String(tab.id);
+      pendingNotes?.holdLive?.();
     });
   } catch {
     /* opened outside the extension */
@@ -7654,10 +7655,21 @@ async function translatePreflight() {
   const layoutMode = pdfEngineMode();
   let localServiceUp = true;
   // GET / on 8765 is the library-and-OCR probe, not a /v1/layout failure.
-  // A paper already in IndexedDB still translates from the library. A down
-  // zoning service keeps its own layout notice and is not hidden here.
-  const servedFromLibrary = Boolean(libraryDoc && (libraryDoc.pages?.length || libraryDoc.hash));
-  if (layoutMode === "local-ocr" && !servedFromLibrary) {
+  // Skip it only when this paper is already fully stored. A read that has
+  // not finished must not probe either: the red banner would flash and then
+  // go away. A real /v1/layout failure keeps its own layout notice.
+  let document = libraryDoc;
+  let zoneReason = "";
+  if (layoutMode === "local-ocr" && !paperFullyInLibrary(document)) {
+    const hash = await pdfByteHash();
+    if (hash && hash !== "nohash") {
+      const gate = await waitForFirstZone(hash);
+      const ready = gate.reason === "cap" ? await resolveZoneForVendor(hash, gate) : gate;
+      zoneReason = ready?.reason || "";
+      if (ready?.document) document = ready.document;
+    }
+  }
+  if (shouldProbeLocalService({ layoutMode, document, zoneReason })) {
     localServiceUp = await probeLocalService(cachedPdfLayout?.localBaseUrl);
   }
   return pdfOpenTranslateBlocker({
@@ -7965,10 +7977,7 @@ function ensureLibraryDocument() {
         if (doc.sourcePath) librarySourceSent.add(hash);
       }
       libraryDoc = doc || null;
-      if (hash) {
-        void pendingNotes?.hydrate?.(hash);
-        void flushStagedNotes(hash, { quiet: true });
-      }
+      if (hash) void pendingNotes?.hydrate?.(hash);
       return libraryDoc;
     } catch {
       // One probe per document. Page turns do not wait for these delays,
@@ -8031,7 +8040,7 @@ async function savedTranslationFor(page) {
     // per open, so a later 翻译 click does not pick up a partial save and
     // drop the failed batch's bypassCache resend.
     const zone = await waitForFirstZone(hash);
-    if (zone.reason === "unavailable" || zone.reason === "cap") {
+    if (!translationWaitsForLibrary(zone)) {
       if (!libraryProbe) void ensureLibraryDocument();
     } else if (libraryProbe) await libraryProbe;
     else await ensureLibraryDocument();
@@ -9370,10 +9379,11 @@ async function ingestVendorLayout(n, mode, isStale) {
   const key = layoutCacheKey({ hash, page: n, mode });
   const version = await layoutVersionNow();
   // The full probe, including the 8765 retries, keeps running for saved
-  // translations. Zoning waits only for the IndexedDB read. A blocked open
-  // is noticed from the flag and does not sit out the 10s deadline. A read
-  // that is merely slow is allowed to finish before any /v1/layout POST,
-  // so a current layout is not zoned again.
+  // translations. Zoning waits for the IndexedDB read, and only until
+  // LIBRARY_ZONE_HARD_MS from the start of the open. Past that cap the page
+  // requests zoning. settleFreshZone and the two current-layout checks still
+  // refuse to overwrite a layout that arrives later. A blocked open is
+  // noticed from the flag and does not sit out the 10s deadline.
   const zoneWait = await waitForFirstZone(hash, {
     layoutRead: () => readStoredLayout(key)
   });
