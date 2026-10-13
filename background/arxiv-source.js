@@ -1,7 +1,6 @@
 /** arXiv e-print client. Network, cooldown, and the oi-arxiv-src cache stay here. */
 
 import { unpackSource } from "../lib/arxiv-src-unpack.js";
-import { handleFormulaCacheMessage } from "./formula-cache.js";
 
 export const ARXIV_DB = "oi-arxiv-src";
 export const MIN_GAP_MS = 3000;
@@ -431,5 +430,3 @@ export function handleArxivSourceMessage(message = {}, client = sharedArxivSourc
     pdfSha256: message.pdfSha256
   });
 }
-
-handleArxivSourceMessage.formula = handleFormulaCacheMessage;

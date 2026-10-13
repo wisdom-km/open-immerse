@@ -406,6 +406,86 @@ test("F3-19 one in-flight call per key, and abort or stale does not write or upg
   assert.equal(earlyUpgrades, 0);
 });
 
+test("shared in-flight abort cancels only when every caller has aborted", async () => {
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  let calls = 0;
+  let sawAborted = false;
+  let release;
+  const hold = new Promise((resolve) => {
+    release = resolve;
+  });
+  const tier = provider("multimodal", "vShare", async (_unit, _ctx, opts) => {
+    calls += 1;
+    await hold;
+    sawAborted = opts?.signal?.aborted === true;
+    if (opts?.signal?.aborted) {
+      return tierResult({ tier: "multimodal", status: "reject", reason: "aborted", confidence: 0 });
+    }
+    return tierResult({
+      tier: "multimodal",
+      status: "ok",
+      render: "katex",
+      latex: "kept",
+      confidence: 1
+    });
+  });
+  const store = createMemoryStore();
+  const cache = createFormulaCache(store);
+  const sample = unit({ bid: "share-abort" });
+  const first = new AbortController();
+  const second = new AbortController();
+  const firstRun = cache.loadTier(tier, sample, { model: "m" }, { signal: first.signal });
+  await flush();
+  const secondRun = cache.loadTier(tier, sample, { model: "m" }, { signal: second.signal });
+  await flush();
+  first.abort();
+  release();
+  const [left, right] = await Promise.all([firstRun, secondRun]);
+  assert.equal(calls, 1);
+  assert.equal(sawAborted, false);
+  assert.equal(left.status, "ok");
+  assert.equal(right.latex, "kept");
+  assert.equal((await store.getTier(tierRecordKey(sample, tier, "m"))).result.latex, "kept");
+
+  let bothCalls = 0;
+  let bothAborted = false;
+  let releaseBoth;
+  const bothHold = new Promise((resolve) => {
+    releaseBoth = resolve;
+  });
+  const bothTier = provider("ocr", "vBoth", async (_unit, _ctx, opts) => {
+    bothCalls += 1;
+    await bothHold;
+    bothAborted = opts?.signal?.aborted === true;
+    return tierResult({
+      tier: "ocr",
+      status: bothAborted ? "reject" : "ok",
+      reason: bothAborted ? "aborted" : null,
+      render: bothAborted ? null : "katex",
+      latex: bothAborted ? null : "nope",
+      confidence: bothAborted ? 0 : 1
+    });
+  });
+  const bothStore = createMemoryStore();
+  const bothCache = createFormulaCache(bothStore);
+  const bothUnit = unit({ bid: "both-abort" });
+  const leftCtl = new AbortController();
+  const rightCtl = new AbortController();
+  const leftRun = bothCache.loadTier(bothTier, bothUnit, { model: "m" }, { signal: leftCtl.signal });
+  await flush();
+  const rightRun = bothCache.loadTier(bothTier, bothUnit, { model: "m" }, { signal: rightCtl.signal });
+  await flush();
+  leftCtl.abort();
+  rightCtl.abort();
+  releaseBoth();
+  const both = await Promise.all([leftRun, rightRun]);
+  assert.equal(bothCalls, 1);
+  assert.equal(bothAborted, true);
+  assert.equal(both[0].reason, "aborted");
+  assert.equal(both[1].reason, "aborted");
+  assert.equal(await bothStore.getTier(tierRecordKey(bothUnit, bothTier, "m")), null);
+});
+
 test("tier 0 viewer flag defaults off", () => {
   const before = formulaArxivSourceEnabled();
   try {
@@ -445,9 +525,13 @@ test("F3-21 and F3-22 default formula scheduling keeps the crop and does not cal
   assert.doesNotMatch(wired, /arxiv\.org/);
   assert.doesNotMatch(wired, /\bfetch\s*\(/);
   assert.doesNotMatch(wired, /katex\.render|renderLatexInto|renderLatexMarkup/);
-  assert.match(read("background/service-worker.js"), /case "OI_FORMULA_CACHE":/);
-  assert.match(read("background/service-worker.js"), /handleArxivSourceMessage\.formula\(message\)/);
-  assert.equal(/\bimport\s*\(/.test(read("background/service-worker.js")), false);
+  const sw = read("background/service-worker.js");
+  assert.match(sw, /import \{ handleFormulaCacheMessage \} from "\.\/formula-cache\.js";/);
+  assert.match(sw, /case "OI_FORMULA_CACHE":/);
+  assert.match(sw, /return handleFormulaCacheMessage\(message\);/);
+  assert.equal(sw.includes("handleArxivSourceMessage.formula"), false);
+  assert.equal(/\bimport\s*\(/.test(sw), false);
+  assert.equal(read("background/arxiv-source.js").includes("formula-cache"), false);
 
   let reads = 0;
   let crops = 0;
@@ -501,7 +585,7 @@ test("F3-21 and F3-22 default formula scheduling keeps the crop and does not cal
   });
   assert.equal(relation.imageUrl, "data:image/png;base64,rel");
   assert.equal(relation.surface, "png");
-  assert.equal(relation.formulaTier, "self");
+  assert.equal(relation.formulaTier, "crop");
 
   let flagged = 0;
   const flaggedShown = await scheduleFormulaBlock(block, {

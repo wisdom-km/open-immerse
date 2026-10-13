@@ -2770,7 +2770,7 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
       readAlignment: readCachedArxivAlignment,
       docHash: notesDocHashNow(),
       page: pageNumber,
-      cache: null
+      cache: null // TODO(F7): 接上公式缓存
     }));
   }
   return cropped;
@@ -2784,7 +2784,7 @@ function cropImage(block) {
   if (block?.surface === "redraw" || block?.surface === "png") {
     img.setAttribute("data-oi-surface", block.surface);
   }
-  if (block?.formulaTier) img.setAttribute("data-oi-tier", String(block.formulaTier));
+  if (block?.formulaTier === "crop") img.setAttribute("data-oi-tier", "crop");
   applyReaderImageBlend(img);
   return img;
 }
