@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  NOTES_HINT_DOC_PREFIX,
   NOTES_LOCAL_KEYS,
   createNotesPrefsSession
 } from "../lib/reader-notes-local.js";
@@ -190,7 +191,8 @@ test("two pages hear local-area changes and merge dismissed-hint records", async
   await pageB.settled();
   const stored = JSON.parse(local.data["reader.notesPersistHintDismissed"]);
   assert.equal(stored["doc-a"], true);
-  assert.equal(stored["doc-b"], true);
+  assert.equal(stored["doc-b"], undefined);
+  assert.equal(local.data[`${NOTES_HINT_DOC_PREFIX}doc-b`], true);
   assert.equal(pageA.read().notesPersistHintDismissed["doc-a"], true);
   assert.equal(pageA.read().notesPersistHintDismissed["doc-b"], true);
   assert.equal(pageB.read().notesPersistHintDismissed["doc-a"], true);
@@ -199,6 +201,67 @@ test("two pages hear local-area changes and merge dismissed-hint records", async
   for (const listener of listeners) listener({ "reader.panelWidth": { newValue: "360" } }, "sync");
   assert.equal(pageA.read().panelWidth, 520);
   assert.equal(pageB.read().panelWidth, 520);
+});
+
+test("concurrent hint dismissals from two pages both survive", async () => {
+  const listeners = [];
+  const local = memoryArea({
+    "reader.notesPersistHintDismissed": JSON.stringify({ seed: true })
+  });
+  let hintSets = 0;
+  let releaseSets = () => {};
+  const bothSets = new Promise((resolve) => {
+    releaseSets = resolve;
+  });
+  const rawSet = local.set.bind(local);
+  local.set = async (items) => {
+    const perDoc = Object.keys(items).some((key) => key.startsWith(NOTES_HINT_DOC_PREFIX));
+    if (perDoc) {
+      hintSets += 1;
+      if (hintSets === 2) releaseSets();
+      await bothSets;
+    }
+    const changes = {};
+    for (const [key, value] of Object.entries(items)) {
+      changes[key] = { oldValue: local.data[key], newValue: value };
+    }
+    await rawSet(items);
+    for (const listener of [...listeners]) listener(changes, "local");
+  };
+  const onChanged = {
+    addListener(fn) {
+      listeners.push(fn);
+    },
+    removeListener(fn) {
+      const index = listeners.indexOf(fn);
+      if (index >= 0) listeners.splice(index, 1);
+    }
+  };
+  const pageA = createNotesPrefsSession({ webStorage: memoryWeb(), localArea: local, onChanged });
+  const pageB = createNotesPrefsSession({ webStorage: memoryWeb(), localArea: local, onChanged });
+  await pageA.prime();
+  await pageB.prime();
+  pageA.write({ notesPersistHintDismissed: { attention: true } });
+  pageB.write({ notesPersistHintDismissed: { dpo: true } });
+  await pageA.settled();
+  await pageB.settled();
+  assert.equal(hintSets, 2);
+  assert.equal(local.data[`${NOTES_HINT_DOC_PREFIX}attention`], true);
+  assert.equal(local.data[`${NOTES_HINT_DOC_PREFIX}dpo`], true);
+  assert.equal(JSON.parse(local.data["reader.notesPersistHintDismissed"]).seed, true);
+  assert.equal(JSON.parse(local.data["reader.notesPersistHintDismissed"]).attention, undefined);
+  assert.equal(JSON.parse(local.data["reader.notesPersistHintDismissed"]).dpo, undefined);
+  for (const page of [pageA, pageB]) {
+    const flags = page.read().notesPersistHintDismissed;
+    assert.equal(flags.seed, true);
+    assert.equal(flags.attention, true);
+    assert.equal(flags.dpo, true);
+  }
+  const reloaded = createNotesPrefsSession({ webStorage: memoryWeb(), localArea: local, onChanged });
+  const prefs = await reloaded.prime();
+  assert.equal(prefs.notesPersistHintDismissed.seed, true);
+  assert.equal(prefs.notesPersistHintDismissed.attention, true);
+  assert.equal(prefs.notesPersistHintDismissed.dpo, true);
 });
 
 test("notes prefs persist across a reload from chrome.storage.local", async () => {
@@ -242,7 +305,10 @@ test("notes prefs stay out of chrome.storage.sync", async () => {
     assert.equal(local.data["reader.panelWidth"], "480");
     assert.equal(local.data["reader.notesWidth"], "400");
     assert.equal(local.data["reader.notesPaneSide"], "start");
-    assert.equal(JSON.parse(local.data["reader.notesPersistHintDismissed"])["doc-b"], true);
+    assert.equal(session.read().notesPersistHintDismissed["doc-b"], true);
+    assert.equal(local.data[`${NOTES_HINT_DOC_PREFIX}doc-b`], true);
+    assert.equal(Object.hasOwn(local.data, "reader.notesPersistHintDismissed"), false);
+    assert.equal(Object.hasOwn(sync.data, `${NOTES_HINT_DOC_PREFIX}doc-b`), false);
     const src = readFileSync(join(root, "lib/reader-notes-local.js"), "utf8");
     assert.equal(src.includes(".sync.set"), false);
     assert.equal(src.includes("storage.sync"), false);
