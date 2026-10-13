@@ -10,6 +10,18 @@ import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
+import {
+  FORMULA_SETTINGS_KEY,
+  applyFormulaPart,
+  multimodalTestDisabled,
+  normalizeFormulaSettings,
+  ocrTestDisabled,
+  readFormulaSettings,
+  runFormulaProbe,
+  stubFormulaProbe,
+  writeFormulaSettings
+} from "../lib/formula-settings.js";
+import { focusFormulaCard, renderFormulaPanel } from "../lib/formula-settings-ui.js";
 
 function el(id) {
   return document.getElementById(id);
@@ -68,6 +80,7 @@ async function init() {
   syncPdfLayoutBox();
   el("laterList")?.addEventListener("change", syncPdfLayoutBox);
   renderProviderFields();
+  bindFormulaSettings();
   el("provider").addEventListener("change", () => {
     harvestVisibleProvider();
     renderProviderFields();
@@ -323,10 +336,105 @@ function fillSelect(select, items) {
   });
 }
 
+let formulaSettings = normalizeFormulaSettings(null);
+let formulaBusy = "";
+let formulaWriting = false;
+let formulaWrite = Promise.resolve();
+
+function paintFormulaSettings() {
+  const root = el("formulaSettingsRoot");
+  if (!root) return;
+  renderFormulaPanel(root, formulaSettings, {
+    busy: formulaBusy,
+    onMultimodal: (patch, opts) => updateFormulaPart("multimodal", patch, opts),
+    onOcr: (patch, opts) => updateFormulaPart("ocr", patch, opts),
+    onToggle: (key, enabled) => updateFormulaSwitch(key, enabled),
+    onConfigure: (target) => focusFormulaCard(root, target),
+    onTest: (kind) => testFormulaConnection(kind)
+  });
+}
+
+function syncFormulaDerived() {
+  const root = el("formulaSettingsRoot");
+  if (!root || formulaBusy) return;
+  const mm = root.querySelector("[data-formula-action='mm']");
+  if (mm) mm.disabled = multimodalTestDisabled(formulaSettings);
+  const ocr = root.querySelector("[data-formula-action='ocr']");
+  if (ocr) ocr.disabled = ocrTestDisabled(formulaSettings);
+}
+
+function updateFormulaPart(which, patch, opts = {}) {
+  formulaSettings = applyFormulaPart(formulaSettings, which, patch);
+  if (opts.live) {
+    syncFormulaDerived();
+    return;
+  }
+  const structural = Object.prototype.hasOwnProperty.call(patch, "provider")
+    || Object.prototype.hasOwnProperty.call(patch, "customModel");
+  return persistFormulaSettings(structural);
+}
+
+async function updateFormulaSwitch(key, enabled) {
+  const next = { ...formulaSettings, [key]: enabled === true };
+  formulaSettings = normalizeFormulaSettings(next);
+  await persistFormulaSettings(true);
+}
+
+function persistFormulaSettings(rerender) {
+  const job = formulaWrite.then(async () => {
+    formulaWriting = true;
+    const snapshot = formulaSettings;
+    try {
+      await writeFormulaSettings(snapshot, globalThis.chrome?.storage?.local);
+    } catch {
+      /* keep the draft on this page */
+    } finally {
+      formulaWriting = false;
+    }
+    if (rerender && formulaSettings === snapshot) paintFormulaSettings();
+  });
+  formulaWrite = job.catch(() => {});
+  return job;
+}
+
+async function testFormulaConnection(kind) {
+  if (formulaBusy) return;
+  const which = kind === "ocr" ? "ocr" : "multimodal";
+  formulaBusy = kind === "ocr" ? "ocr" : "mm";
+  paintFormulaSettings();
+  const card = formulaSettings[which];
+  const probe = await runFormulaProbe({
+    kind: which,
+    provider: card.provider,
+    model: card.model,
+    baseUrl: card.baseUrl || "",
+    apiKey: card.apiKey
+  }, stubFormulaProbe);
+  formulaSettings = normalizeFormulaSettings({
+    ...formulaSettings,
+    [which]: { ...formulaSettings[which], probe }
+  });
+  formulaBusy = "";
+  await persistFormulaSettings(true);
+}
+
+function bindFormulaSettings() {
+  const storage = globalThis.chrome?.storage;
+  storage?.onChanged?.addListener((changes, area) => {
+    if (formulaWriting || area !== "local" || !changes[FORMULA_SETTINGS_KEY]) return;
+    formulaSettings = normalizeFormulaSettings(changes[FORMULA_SETTINGS_KEY].newValue);
+    paintFormulaSettings();
+  });
+  readFormulaSettings(storage?.local).then((stored) => {
+    formulaSettings = stored;
+    paintFormulaSettings();
+  }).catch(() => paintFormulaSettings());
+}
+
 function bindPanelNav() {
   const tabs = [...document.querySelectorAll("[data-nav]")];
   const show = (id) => {
-    const next = ["engine", "reading", "features", "advanced"].includes(id) ? id : "engine";
+    const next = ["engine", "reading", "features", "advanced", "formula"].includes(id) ? id : "engine";
     document.querySelectorAll("[data-panel]").forEach((panel) => {
       const on = panel.dataset.panel === next;
       panel.classList.toggle("is-on", on);

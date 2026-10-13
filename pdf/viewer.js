@@ -214,6 +214,8 @@ import {
   displayFormulaColumnPx,
   formulaReadabilityFloor,
   formulaScriptPt,
+  placeholderCssLength,
+  placeholderNativeBox,
   readerFormulaCssSize
 } from "../lib/pdf-formula-size.js";
 import {
@@ -297,6 +299,16 @@ import {
 import { detectArxivId } from "../lib/arxiv-id.js";
 import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
+import {
+  FORMULA_SETTINGS_KEY,
+  defaultFormulaSettings,
+  formulaChainFlags,
+  normalizeFormulaSettings,
+  placeholderCopy,
+  readFormulaSettings,
+  writeFormulaSettings
+} from "../lib/formula-settings.js";
+import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import { getProvider, missingRequiredField } from "../lib/providers.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
@@ -408,6 +420,9 @@ let sourcePopSwipeY = 0;
 let readerBlend = readerImageBlend({ supportsMultiply: true, forcedColors: false });
 let toolbarSnapFrame = 0;
 const READER_VIEWS = ["zh", "bi", "src"];
+let formulaViewerSettings = defaultFormulaSettings();
+let formulaSettingsWriting = false;
+let formulaSettingsReady = Promise.resolve();
 
 init();
 
@@ -1295,11 +1310,54 @@ function onAaThemeKey(event) {
   $("aaThemes")?.querySelector(`[data-theme="${next}"]`)?.focus();
 }
 
+function renderAaFormulaSwitches() {
+  const host = $("aaFormulaSwitches");
+  if (!host) return;
+  renderFormulaSwitchList(host, formulaViewerSettings, {
+    onToggle: (key, enabled) => updateFormulaViewerSwitch(key, enabled),
+    onConfigure: () => openFormulaSettings()
+  });
+}
+
+async function updateFormulaViewerSwitch(key, enabled) {
+  formulaViewerSettings = normalizeFormulaSettings({ ...formulaViewerSettings, [key]: enabled === true });
+  formulaSettingsWriting = true;
+  try {
+    formulaViewerSettings = await writeFormulaSettings(formulaViewerSettings, globalThis.chrome?.storage?.local);
+  } catch {
+    /* keep the in-memory switch */
+  } finally {
+    formulaSettingsWriting = false;
+  }
+  renderAaFormulaSwitches();
+}
+
+function openFormulaSettings() {
+  const url = globalThis.chrome?.runtime?.getURL?.("options/options.html#formula");
+  if (url) window.open(url);
+}
+
+function bindFormulaViewerSettings() {
+  renderAaFormulaSwitches();
+  $("aaFormulaSettings")?.addEventListener("click", () => openFormulaSettings());
+  const storage = globalThis.chrome?.storage;
+  storage?.onChanged?.addListener((changes, area) => {
+    if (formulaSettingsWriting || area !== "local" || !changes[FORMULA_SETTINGS_KEY]) return;
+    formulaViewerSettings = normalizeFormulaSettings(changes[FORMULA_SETTINGS_KEY].newValue);
+    renderAaFormulaSwitches();
+  });
+  formulaSettingsReady = readFormulaSettings(storage?.local).then((stored) => {
+    formulaViewerSettings = stored;
+    renderAaFormulaSwitches();
+  }).catch(() => {});
+}
+
 function bindReaderChrome() {
   buildAaScale();
   buildAaThemes();
   initCjkMode();
   loadReaderPrefs();
+  bindFormulaViewerSettings();
   $("aaButton")?.addEventListener("click", () => {
     const panel = $("aaPanel");
     if (!panel) return;
@@ -2768,9 +2826,11 @@ async function readCachedArxivAlignment(query) {
 }
 
 async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, options = {}) {
+  try { await formulaSettingsReady; } catch { /* defaults stay off */ }
   const cropped = [];
   const arxivOn = formulaArxivSourceEnabled();
   const arxiv = arxivOn ? detectArxivId({ url: sourceUrl }) : null;
+  const formulaFlags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: arxivOn });
   for (const block of blocks || []) {
     if (isStale()) return null;
     if (block?.label !== "formula") {
@@ -2782,6 +2842,12 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
       isStale,
       signal: options.signal,
       arxivEnabled: arxivOn,
+      multimodalEnabled: formulaFlags.multimodalEnabled,
+      multimodalConfigured: formulaFlags.multimodalConfigured,
+      ocrEnabled: formulaFlags.ocrEnabled,
+      ocrConfigured: formulaFlags.ocrConfigured,
+      placeholderEnabled: formulaFlags.placeholderEnabled,
+      readCropImage: formulaFlags.placeholderEnabled ? readFormulaCropImage : undefined,
       arxivId: arxiv?.id || "",
       arxivVersion: arxiv?.version || "",
       readAlignment: readCachedArxivAlignment,
@@ -2791,6 +2857,44 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
     }));
   }
   return cropped;
+}
+
+function readFormulaCropImage(url) {
+  return new Promise((resolve) => {
+    if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(url || "")) {
+      resolve(null);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      const width = img.naturalWidth || img.width;
+      const height = img.naturalHeight || img.height;
+      if (!(width > 0) || !(height > 0)) {
+        resolve(null);
+        return;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context || typeof context.getImageData !== "function") {
+        resolve(null);
+        return;
+      }
+      context.drawImage(img, 0, 0);
+      let image = null;
+      try {
+        image = context.getImageData(0, 0, width, height);
+      } catch {
+        image = null;
+      }
+      canvas.width = 0;
+      canvas.height = 0;
+      resolve(image ? { image, pixelSize: { width, height } } : null);
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
 }
 
 function cropImage(block) {
@@ -2860,8 +2964,127 @@ function mountDisplayMath(node, block, img, page) {
   });
 }
 
+function placeholderCssNumber(value) {
+  return String(Math.round(Number(value) * 10000) / 10000);
+}
+
+function placeholderBoxLengths(block, inline) {
+  const layout = getPageLayout(block?.page);
+  const native = placeholderNativeBox({
+    bbox: block?.bbox,
+    pageWidth: Number(layout?.pageWidth) || 0,
+    pageHeight: Number(layout?.pageHeight) || 0
+  });
+  const minW = inline ? 20 : 112;
+  const minH = inline ? 16 : 32;
+  const w = native?.w > 0 ? native.w : minW;
+  const h = native?.h > 0 ? native.h : minH;
+  return {
+    w: placeholderCssLength(w),
+    h: placeholderCssLength(h),
+    wn: placeholderCssNumber(w),
+    hn: placeholderCssNumber(h)
+  };
+}
+
+function stampPlaceholderBox(node, lengths) {
+  node.style.setProperty("--oi-ph-w", lengths.w);
+  node.style.setProperty("--oi-ph-h", lengths.h);
+  node.style.setProperty("--oi-ph-wn", lengths.wn);
+  node.style.setProperty("--oi-ph-hn", lengths.hn);
+}
+
+function placeholderIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "oi-ph-icon");
+  svg.setAttribute("viewBox", "0 0 12 12");
+  svg.setAttribute("width", "12");
+  svg.setAttribute("height", "12");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M3.2 8.8 L8.8 3.2 M5.2 3.2 H8.8 V6.8");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.4");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.append(path);
+  return svg;
+}
+
+function mountFormulaPlaceholder(parent, block, page, inline) {
+  const shown = { ...block, page: page ?? block?.page };
+  const copy = placeholderCopy(shown, { inline, kind: "formula" });
+  const known = Number(shown.page) >= 1;
+  const lengths = placeholderBoxLengths(shown, Boolean(inline));
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = inline ? "oi-formula-placeholder is-inline" : "oi-formula-placeholder";
+  button.dataset.oiTier = "placeholder";
+  button.dataset.kind = "formula";
+  if (block?.formulaReason) button.dataset.oiReason = String(block.formulaReason);
+  const hasBbox = Array.isArray(block?.bbox) && block.bbox.length >= 4;
+  button.dataset.oiBbox = hasBbox ? "1" : "0";
+  if (known) button.dataset.page = String(Math.floor(Number(shown.page)));
+  button.title = copy.aria;
+  button.setAttribute("aria-label", copy.aria);
+  const text = document.createElement("span");
+  text.className = "oi-ph-text";
+  text.setAttribute("aria-hidden", "true");
+  ["l0", "l1", "l2"].forEach((level, index) => {
+    const line = document.createElement("span");
+    line.className = level;
+    line.textContent = copy.visible[index] || "";
+    text.append(line);
+  });
+  text.append(placeholderIcon());
+  button.append(text);
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    jumpFormulaPlaceholder(button);
+  });
+  if (inline) {
+    stampPlaceholderBox(button, lengths);
+    parent.append(button);
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "oi-formula-placeholder-row";
+  stampPlaceholderBox(row, lengths);
+  const reserve = document.createElement("span");
+  reserve.className = "oi-formula-reserve";
+  reserve.dataset.oiReserve = "f8";
+  reserve.setAttribute("aria-hidden", "true");
+  row.append(reserve, button);
+  parent.append(row);
+}
+
+function jumpFormulaPlaceholder(button) {
+  const page = Number(button.dataset.page);
+  const hasBbox = button.dataset.oiBbox === "1";
+  const host = button.closest?.("[data-pair-id]");
+  const presented = presentSourceForJump(button);
+  const run = () => {
+    if (!hasBbox) {
+      if (page >= 1) revealSourcePage(page);
+      else if (host?.dataset?.pairId) jumpTranslationToSource(host);
+      return;
+    }
+    if (host?.dataset?.pairId) jumpTranslationToSource(host);
+    else if (page >= 1) revealSourcePage(page);
+  };
+  if (presented === "ready") run();
+  else requestAnimationFrame(() => requestAnimationFrame(run));
+}
+
 function appendCropOrNotice(node, block, imageClass, page) {
   const shownPage = page ?? node.dataset.page;
+  if (block?.label === "formula" && block.formulaTier === "placeholder") {
+    mountFormulaPlaceholder(node, block, shownPage, false);
+    return;
+  }
   const img = cropImage(block);
   if (img) {
     img.className = imageClass || "oi-pdf-math-crop";
@@ -3056,6 +3279,20 @@ function writeBlockPieces(node, block, layout) {
       return;
     }
     const formula = (layout.blocks || []).find((item) => item.id === piece.blockId);
+    const inlinePage = layout?.page ?? node.dataset.page;
+    if (formula?.formulaTier === "placeholder") {
+      const span = document.createElement("span");
+      span.className = "oi-pdf-inline-math";
+      span.tabIndex = -1;
+      if (formula.id) {
+        span.dataset.blockId = String(formula.id);
+        span.dataset.label = "formula";
+        if (inlinePage) span.dataset.page = String(inlinePage);
+      }
+      mountFormulaPlaceholder(span, formula, inlinePage, true);
+      node.append(span);
+      return;
+    }
     const img = cropImage({ ...(formula || {}), imageUrl: piece.src || formula?.imageUrl || "", label: "formula" });
     const span = document.createElement("span");
     span.className = "oi-pdf-inline-math";
