@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { cacheableLayout } from "../lib/pdf-layout-client.js";
-import { DEFAULT_SETTINGS } from "../lib/storage.js";
+import { DEFAULT_SETTINGS, saveSettings } from "../lib/storage.js";
 import { multimodalTier } from "../lib/formula-tiers/multimodal.js";
 import { ocrTier } from "../lib/formula-tiers/ocr.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
@@ -212,6 +212,41 @@ test("F3-20 multimodal settings stay out of translation settings", async () => {
   assert.equal(persist.includes(FORMULA_SETTINGS_KEY), false);
   assert.equal(persist.includes("formula.tier2"), false);
   assert.match(persist, /OI_SAVE_SETTINGS/);
+
+  const formulaKey = "sk-formula-local-only";
+  const ocrKey = "ocr-local-only";
+  const syncWrites = [];
+  const previousChrome = globalThis.chrome;
+  globalThis.chrome = {
+    storage: {
+      local,
+      sync: {
+        async get() {
+          return { settings: translation };
+        },
+        async set(patch) {
+          syncWrites.push(JSON.parse(JSON.stringify(patch)));
+        }
+      }
+    }
+  };
+  try {
+    await writeFormulaSettings({
+      multimodal: { provider: "openai", apiKey: formulaKey, model: "gpt-4o" },
+      ocr: { provider: "zhipu", apiKey: ocrKey },
+      [FORMULA_SWITCH_KEYS.tier2]: true
+    }, globalThis.chrome.storage.local);
+    await saveSettings({ provider: "openai" });
+  } finally {
+    globalThis.chrome = previousChrome;
+  }
+  const synced = JSON.stringify(syncWrites);
+  assert.equal(syncWrites.length > 0, true);
+  assert.equal(synced.includes(formulaKey), false);
+  assert.equal(synced.includes(ocrKey), false);
+  assert.equal(local.bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, formulaKey);
+  assert.equal(local.bag[FORMULA_SETTINGS_KEY].ocr.apiKey, ocrKey);
+  assert.equal(local.bag[FORMULA_SETTINGS_KEY][FORMULA_SWITCH_KEYS.tier2], true);
 });
 
 test("F3-20 an unconfigured multimodal model hides the tier-2 switch", () => {
