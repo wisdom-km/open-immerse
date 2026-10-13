@@ -22,13 +22,9 @@ function changedNames() {
   return [];
 }
 
-test("AX-23 viewer and notes files are untouched versus origin/main", () => {
+// viewer 锁定随 F3-PR2 解除（Wisdom 2026-10-13）。lib/notes-* 继续锁定。
+test("AX-23 notes files are untouched versus origin/main", () => {
   const names = changedNames();
-  const forbidden = names.filter((name) =>
-    name === "pdf/viewer.js" ||
-    name === "pdf/viewer.html" ||
-    name === "pdf/viewer.css" ||
-    name.startsWith("lib/notes-")
-  );
+  const forbidden = names.filter((name) => name.startsWith("lib/notes-"));
   assert.deepEqual(forbidden, []);
 });

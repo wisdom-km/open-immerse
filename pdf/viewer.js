@@ -293,6 +293,9 @@ import {
   pageCropLooksEmpty,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
+import { detectArxivId } from "../lib/arxiv-id.js";
+import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
+import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
 import { getProvider, missingRequiredField } from "../lib/providers.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
@@ -314,6 +317,8 @@ import {
 } from "../lib/pdf-structure-render.js";
 
 const $ = (id) => document.getElementById(id);
+// Anvil can turn tier 0 on from the console. There is no settings control.
+globalThis.__oiSetFormulaArxivSource = setFormulaArxivSourceEnabled;
 const RENDER_RADIUS = 2;
 
 GlobalWorkerOptions.workerSrc = workerSrc();
@@ -2384,6 +2389,7 @@ function appendReadoutNode(input, parent) {
   return node;
 }
 
+// 只用于非回退链展示。回退链一律走 lib/formula-katex.js。F5 再决定复用或删除。
 function renderFormulaNode(node, latex, display) {
   const katex = globalThis.katex;
   if (!katex?.render || !latex) {
@@ -2728,11 +2734,44 @@ async function withRasterCrop(raster, page, block, pageNumber, options = {}) {
   return next;
 }
 
+async function readCachedArxivAlignment(query) {
+  try {
+    const res = await runtimeSend({
+      type: "OI_ARXIV_SOURCE",
+      action: "read-alignment",
+      id: query?.id || "",
+      version: query?.version || "",
+      pdfSha256: query?.pdfSha256 || notesDocHashNow()
+    });
+    if (!res || res.ok === false) return null;
+    return res;
+  } catch {
+    return null;
+  }
+}
+
 async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, options = {}) {
   const cropped = [];
+  const arxivOn = formulaArxivSourceEnabled();
+  const arxiv = arxivOn ? detectArxivId({ url: sourceUrl }) : null;
   for (const block of blocks || []) {
     if (isStale()) return null;
-    cropped.push(await withRasterCrop(raster, page, block, pageNumber, options));
+    if (block?.label !== "formula") {
+      cropped.push(await withRasterCrop(raster, page, block, pageNumber, options));
+      continue;
+    }
+    cropped.push(await scheduleFormulaBlock(block, {
+      withRasterCrop: (item) => withRasterCrop(raster, page, item, pageNumber, options),
+      isStale,
+      signal: options.signal,
+      arxivEnabled: arxivOn,
+      arxivId: arxiv?.id || "",
+      arxivVersion: arxiv?.version || "",
+      readAlignment: readCachedArxivAlignment,
+      docHash: notesDocHashNow(),
+      page: pageNumber,
+      cache: null // TODO(F7): 接上公式缓存
+    }));
   }
   return cropped;
 }
@@ -2745,6 +2784,7 @@ function cropImage(block) {
   if (block?.surface === "redraw" || block?.surface === "png") {
     img.setAttribute("data-oi-surface", block.surface);
   }
+  if (block?.formulaTier === "crop") img.setAttribute("data-oi-tier", "crop");
   applyReaderImageBlend(img);
   return img;
 }

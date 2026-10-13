@@ -3,6 +3,7 @@ import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { featureOn, resolveFeatures } from "../lib/features.js";
 import { handleArxivSourceMessage } from "./arxiv-source.js";
+import { handleFormulaCacheMessage } from "./formula-cache.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
@@ -197,6 +198,8 @@ async function handleMessage(message, sender) {
     }
     case "OI_ARXIV_SOURCE":
       return handleArxivSourceMessage(message);
+    case "OI_FORMULA_CACHE":
+      return handleFormulaCacheMessage(message);
     default:
       return { ok: false, error: "unknown message" };
   }

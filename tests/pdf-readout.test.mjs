@@ -236,14 +236,14 @@ test("viewer default right pane is Markdown readout without bbox wiring", () => 
   assert.match(src, /viewMode = "readout"/);
   assert.match(contrib, /右侧默认\*\*Markdown 通读\*\*|右侧默认 Markdown 通读|阅读顺序/);
   assert.match(contrib, /原页裁图/);
-  assert.match(contrib, /画面不来自 LaTeX 渲染/);
+  assert.match(contrib, /公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图/);
   assert.match(readme, /Markdown 通读|阅读顺序/);
   assert.doesNotMatch(readme, /右栏默认按 bbox \*\*版式镜像\*\*/);
   assert.match(readme, /实验室功能：默认关闭|PDF 阅读（实验室）/);
   assert.match(readme, /设置 → 高级/);
   assert.match(readme, /OCR API/);
   assert.match(readme, /原页内容精准展示（默认裁图）/);
-  assert.match(readme, /公式画面不来自 LaTeX 渲染/);
+  assert.match(readme, /公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图/);
   assert.match(readme, /docs\/screenshots\/01-bilingual-page\.png/);
   assert.match(readme, /docs\/screenshots\/06-pdf-readout\.png/);
   assert.match(readme, /开启实验室 PDF 后/);
@@ -258,7 +258,7 @@ test("viewer default right pane is Markdown readout without bbox wiring", () => 
   assert.match(readmeEn, /Settings → Advanced/);
   assert.match(readmeEn, /OCR API/i);
   assert.match(readmeEn, /content-accurate original-page display \(crops by default\)/i);
-  assert.match(readmeEn, /formula images do not come from LaTeX/i);
+  assert.match(readmeEn, /formulas may be rendered from verified LaTeX \(KaTeX\); when that cannot be decided, the original-page crop is shown/i);
   assert.match(readmeEn, /after enabling lab PDF/i);
   assert.match(readmeEn, /text-layer body/i);
   assert.match(popupHtml, /id="openPdfPage"[^>]*>PDF</);
