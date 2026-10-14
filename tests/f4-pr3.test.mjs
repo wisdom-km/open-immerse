@@ -2353,11 +2353,109 @@ test("a second open during a stuck indexedDB open does not queue behind it", asy
     blockedTimeoutMs: 10000
   }).then(() => null, (error) => error);
   assert.equal(opens, 1);
-  assert.equal(second.name, "BlockedError");
+  assert.equal(second.name, "BusyError");
+  assert.equal(second.cause?.type, "busy");
+  assert.equal(storageOpenIsBlocked("oi-pr3-inherit-slow"), false);
   assert.ok(Date.now() - started < 50, `queued open waited ${Date.now() - started}ms`);
+  held.req.onblocked();
+  const blocked = await openIndexedDatabase({
+    name: "oi-pr3-inherit-slow",
+    version: 2,
+    indexedDB: held.factory,
+    blockedTimeoutMs: 10000
+  }).then(() => null, (error) => error);
+  assert.equal(opens, 1);
+  assert.equal(blocked.name, "BlockedError");
+  assert.equal(blocked.cause, "blocked");
   held.req.result = { close() {} };
   held.req.onsuccess();
   await first;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(storageOpenIsBlocked("oi-pr3-inherit-slow"), false);
+});
+
+test("a slow open is not blocked when a second open starts during it", async () => {
+  let opens = 0;
+  const fake = {
+    open() {
+      opens += 1;
+      const req = {
+        result: null,
+        error: null,
+        onsuccess: null,
+        onerror: null,
+        onblocked: null,
+        onupgradeneeded: null
+      };
+      setTimeout(() => {
+        req.result = { close() {}, objectStoreNames: { contains: () => true } };
+        req.onsuccess?.({ target: req });
+      }, 2000);
+      return req;
+    }
+  };
+  let events = 0;
+  const stop = onStorageAvailable(() => { events += 1; });
+  try {
+    const started = Date.now();
+    const first = openIndexedDatabase({
+      name: "oi-pr3-slow-concurrent",
+      indexedDB: fake,
+      blockedTimeoutMs: 10000
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const second = await openIndexedDatabase({
+      name: "oi-pr3-slow-concurrent",
+      indexedDB: fake,
+      blockedTimeoutMs: 10000
+    }).then(() => null, (error) => error);
+    assert.equal(opens, 1);
+    assert.equal(second.name, "BusyError");
+    assert.notEqual(second.name, "BlockedError");
+    assert.equal(second.cause?.type, "busy");
+    assert.ok(Date.now() - started < 1000, `second open waited ${Date.now() - started}ms`);
+    assert.equal(storageOpenIsBlocked("oi-pr3-slow-concurrent"), false);
+    const db = await first;
+    assert.equal(typeof db.close, "function");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(storageOpenIsBlocked("oi-pr3-slow-concurrent"), false);
+    assert.equal(events, 0);
+  } finally {
+    stop();
+  }
+});
+
+test("concurrent library opens share the in-flight open", async () => {
+  let opens = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const db = {
+    version: 3,
+    closed: false,
+    close() {},
+    async get() { return null; },
+    async put() {}
+  };
+  const library = {
+    async exists() { return true; },
+    open() {
+      opens += 1;
+      return gate.then(() => db);
+    }
+  };
+  const store = createLibraryStore({
+    platform: { target: "memory", kv: createMemoryKv(), library },
+    persist: false
+  });
+  const first = store.openFor(false);
+  const second = store.openFor(true);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(opens, 1);
+  release();
+  const [read, write] = await Promise.all([first, second]);
+  assert.equal(read, db);
+  assert.equal(write, db);
+  assert.equal(opens, 1);
 });
 
 test("a timed-out open's late success closes and emits on a later turn", async () => {
@@ -2448,6 +2546,7 @@ test("a stuck indexedDB read does not hold translation until the 10s timeout", {
   assert.match(savedFn, /zone\?\.reason === "unavailable"/);
   assert.ok(savedFn.indexOf("unavailable") < savedFn.indexOf("waitForZoneMigration"));
   assert.match(savedFn, /librarySourceSent\.has\(hash\)/);
+  assert.doesNotMatch(savedFn, /librarySourceSent\.clear\(\)/);
   assert.doesNotMatch(savedFn, /await ensureLibraryDocument\(\)/);
   assert.doesNotMatch(savedFn, /await libraryProbe/);
   const ensure = viewer.slice(
@@ -3224,6 +3323,7 @@ test("Stop during a background fill sends no further translation requests", asyn
   const force = viewer.slice(viewer.indexOf("async function forceRetranslateCurrentPage"), viewer.indexOf("function titleStructureFailed"));
   assert.match(force, /abortBackgroundFills\(\)/);
   const adopt = viewer.slice(viewer.indexOf("async function adoptDoc"), viewer.indexOf("async function adoptDoc") + 800);
+  assert.match(adopt, /librarySourceSent\.clear\(\)/);
   assert.match(adopt, /abortBackgroundFills\(\)/);
   const close = viewer.slice(viewer.indexOf("function abortInflightLayouts"), viewer.indexOf("function postVendorLayout"));
   assert.match(close, /abortBackgroundFills\(\)/);

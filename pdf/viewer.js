@@ -7842,6 +7842,7 @@ function rememberTranslation(page, results) {
   const title = document.title;
   const pageCount = pdfDoc?.numPages || 0;
   const skipped = skipOnly && !pairs.length;
+  const sentFor = docId;
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
     if (!hash || hash === "nohash") return;
@@ -7872,7 +7873,7 @@ function rememberTranslation(page, results) {
     };
     await saveLibraryPage(savedPayload);
     void maybeShowPersistCard();
-    librarySourceSent.add(hash);
+    if (docId === sentFor) librarySourceSent.add(hash);
     const savedPage = libraryDoc?.pages?.find((item) => item.page === page);
     if (keepLayout && savedPage && layout) {
       savedPage.layout = layout;
@@ -9953,6 +9954,11 @@ async function openPdfData(data, title) {
 }
 
 async function adoptDoc(doc, title) {
+  // A new document, including the same PDF opened again in this tab, may
+  // adopt what was saved. The set stays for a retry that does not adopt:
+  // those pages were saved without a failed flag, and adopting them would
+  // drop bypassCache on the failed batch.
+  librarySourceSent.clear();
   if (pdfDoc) {
     try {
       await pdfDoc.destroy();
