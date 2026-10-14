@@ -23,6 +23,7 @@ import {
   LIBRARY_ZONE_WAIT_MS,
   currentLayoutIfArrived,
   fetchLibraryDocument,
+  libraryDocumentFromRecords,
   flushPendingPages,
   mergeLibraryPairs,
   mergeStoredPagePairs,
@@ -37,7 +38,7 @@ import {
   waitForFirstZone,
   whenZoneReadSettles
 } from "../lib/pdf-library.js";
-import { layoutCacheKey, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
+import { LAYOUT_RETRY_DELAYS_MS, fetchLocalEnvelope, layoutCacheKey, layoutReadyForZone, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { readLayoutCache, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
@@ -408,6 +409,8 @@ function installDom() {
   globalThis.NodeFilter = { SHOW_TEXT: 4 };
   globalThis.Node = { TEXT_NODE: 3, ELEMENT_NODE: 1 };
   globalThis.requestAnimationFrame = globalThis.window.requestAnimationFrame;
+  globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+  globalThis.window.cancelAnimationFrame = globalThis.cancelAnimationFrame;
   const slot = el("div");
   slot.attrs.id = "sideSlot";
   const workspace = el("div");
@@ -425,7 +428,7 @@ function installDom() {
     text(node) {
       if (!node) return "";
       if (node.children?.length) return node.children.map((child) => this.text(child)).join("");
-      return String(node.textContent || "");
+      return String(node.textContent || node.innerHTML || "");
     },
     click(node) {
       node.dispatchEvent({ type: "click", preventDefault() {}, target: node, currentTarget: node });
@@ -1441,6 +1444,13 @@ test("reader warn contrast stays at least 4.5 on every theme, and dark uses #E2A
   }
   assert.match(notesCss, /#sideSlot[\s\S]*background:\s*var\(--oi-reader-surface\)/);
   assert.match(notesCss, /\.oi-note-card\.is-paperNote[\s\S]*border:\s*1px solid var\(--oi-reader-line\)/);
+  assert.match(notesCss, /\[data-reader-theme="dark"\] \.oi-note-card[\s\S]*border:\s*1px solid var\(--oi-reader-line\)/);
+  assert.match(notesCss, /\[data-reader-theme="dark"\] \.workspace\[data-notes-open="true"\] > #sideSlot[\s\S]*border-inline-start:\s*1px solid var\(--oi-reader-line\)/);
+  assert.match(notesCss, /\[data-notes-side="start"\] > #sideSlot[\s\S]*border-inline-end:\s*1px solid var\(--oi-reader-line\)/);
+  const tokens = read("pdf/reader-tokens.css");
+  const darkBlock = tokens.slice(tokens.indexOf('[data-reader-theme="dark"]'));
+  assert.match(darkBlock, /--oi-reader-panel-shadow:\s*0 18px 40px -12px rgba\(0, 0, 0, 0\.6\), 0 2px 8px rgba\(0, 0, 0, 0\.3\)/);
+  assert.match(darkBlock, /--oi-reader-popover-shadow:\s*var\(--oi-reader-panel-shadow\)/);
   assert.match(notesCss, /\.oi-store-banner[\s\S]*border-left:\s*3px solid var\(--oi-reader-warn\)/);
   assert.match(notesCss, /\.oi-store-banner[\s\S]*background:\s*var\(--oi-reader-warn-soft\)/);
   const chipRule = viewerCss.slice(viewerCss.indexOf(".toolbar button.oi-lib-chip {"), viewerCss.indexOf(".toolbar button.oi-lib-chip:hover"));
@@ -1731,9 +1741,10 @@ test("zoning waits only for the IndexedDB read", { timeout: 15000 }, async () =>
     viewer.indexOf("function savedPageStatus")
   );
   assert.match(savedFn, /waitForFirstZone/);
-  assert.match(savedFn, /translationWaitsForLibrary\(zone\)/);
+  assert.match(savedFn, /unavailable" \|\| zone\?\.reason === "cap"/);
   assert.match(savedFn, /if \(!libraryProbe\) void ensureLibraryDocument\(\)/);
   assert.match(savedFn, /await ensureLibraryDocument\(\)/);
+  assert.doesNotMatch(savedFn, /await libraryProbe/);
   assert.doesNotMatch(savedFn, /if \(!libraryDoc \|\| libraryDoc\.hash !== hash\) await ensureLibraryDocument\(\)/);
 
   console.log(`[zone-delay] blockedKnown=${blockedKnownMs.toFixed(1)}ms blockedHang=${blockedHangMs.toFixed(1)}ms legacyDown=${legacyDownMs.toFixed(1)}ms slowIdb=${slowIdbMs.toFixed(1)}ms fastIdb=${fastIdbMs.toFixed(1)}ms`);
@@ -1791,7 +1802,7 @@ test("two tabs deliver a note once, deduped by sender id and seq", async () => {
   assert.equal((await notesB.list("doc-sync")).length, 1);
 });
 
-test("persist refusal shows the card, and the T2b key wins when it exists", async () => {
+test("the library persist card uses only library.persistHintDismissed", async () => {
   const data = { libraryPersistGranted: false };
   const local = {
     async get(keys) {
@@ -1805,17 +1816,19 @@ test("persist refusal shows the card, and the T2b key wins when it exists", asyn
   };
   const shown = await readPersistCardState(local, "doc-1");
   assert.equal(shown.show, true);
-  data[LIBRARY_PERSIST_HINT_KEY] = true;
-  assert.equal((await readPersistCardState(local, "doc-1")).show, false);
-  data[`${NOTES_HINT_DOC_PREFIX}doc-1`] = false;
-  assert.equal((await readPersistCardState(local, "doc-1")).dismissed, false);
-  assert.equal((await readPersistCardState(local, "doc-1")).show, true);
+  assert.equal(shown.dismissed, false);
   data[`${NOTES_HINT_DOC_PREFIX}doc-1`] = true;
+  data[NOTES_PERSIST_HINT_KEY] = JSON.stringify({ "doc-1": true, "doc-2": true });
+  const ignored = await readPersistCardState(local, "doc-1");
+  assert.equal(ignored.show, true);
+  assert.equal(ignored.dismissed, false);
+  data[LIBRARY_PERSIST_HINT_KEY] = true;
+  const dismissed = await readPersistCardState(local, "doc-2");
+  assert.equal(dismissed.show, false);
+  assert.equal(dismissed.dismissed, true);
+  delete data[LIBRARY_PERSIST_HINT_KEY];
+  data.libraryPersistGranted = true;
   assert.equal((await readPersistCardState(local, "doc-1")).show, false);
-  delete data[`${NOTES_HINT_DOC_PREFIX}doc-1`];
-  data[NOTES_PERSIST_HINT_KEY] = JSON.stringify({ "doc-2": true });
-  assert.equal((await readPersistCardState(local, "doc-1")).show, true);
-  assert.equal((await readPersistCardState(local, "doc-2")).show, false);
 });
 
 test("a note staged in a closed tab is written on the next open", async () => {
@@ -2315,6 +2328,204 @@ test("both a preempted open and the new open recover and announce once", async (
   assert.equal(flushes, 1);
   assert.deepEqual(announcements.filter((text) => text.includes("已恢复")), ["已恢复，存好 1 条笔记"]);
   chip.destroy();
+});
+
+test("a second save replaces the staged create for that note", async () => {
+  const pending = createPendingNotes({ tabId: "tab-replace", now: () => 70 });
+  const first = await pending.stage("doc-replace", { body: "新建", op: "create", page: 1 });
+  await pending.stage("doc-replace", { id: first.id, body: "新建改", op: "create", page: 1 });
+  const rows = await pending.list("doc-replace");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].op, "create");
+  assert.equal(rows[0].body, "新建改");
+  assert.equal(rows[0].tempId || rows[0].noteId, first.id);
+});
+
+test("one blocked save stages one note and keeps the seed card", async () => {
+  const view = installDom();
+  const pending = createPendingNotes({ tabId: "tab-one", now: () => 80 });
+  const secret = new Error("blocked");
+  secret.name = "BlockedError";
+  let listed = 0;
+  const ui = mountNotesUi({
+    hasDoc: () => true,
+    docHash: () => "doc-one",
+    docTitle: () => "笔记",
+    list: async () => {
+      listed += 1;
+      if (listed > 1) return [];
+      return [{
+        id: "seed",
+        kind: "note",
+        author: "me",
+        body: "种子",
+        page: 1,
+        updatedAt: 1,
+        anchor: { bid: "b" },
+        anchorState: { status: "exact" }
+      }];
+    },
+    listTrash: async () => [],
+    put: async () => { throw secret; },
+    stageNote: (input) => pending.stage("doc-one", input),
+    sharedPersistCard: true,
+    persistDenied: async () => false,
+    currentParagraph: () => ({ bid: "b", page: 1, translation: "甲", preview: "甲" }),
+    anchorForParagraph: (current) => ({
+      anchor: { bid: current.bid, page: current.page, quote: current.preview || "" },
+      anchorState: { status: "exact" },
+      page: current.page
+    }),
+    flow: () => null,
+    pane: () => null,
+    pointerFine: () => true,
+    blockOrder: () => new Map([["b", 0]]),
+    readPrefs: () => ({}),
+    subscribe: () => () => {}
+  });
+  ui.open();
+  await tick();
+  await tick();
+  const panel = view.slot.querySelector(".oi-notes");
+  assert.match(view.text(panel), /种子/);
+  view.click(findButton(panel, "＋ 给当前段写笔记"));
+  assert.ok(panel.querySelector("[data-note-id='seed']"));
+  let field = panel.querySelector("textarea");
+  assert.ok(field);
+  field.value = "新建";
+  field.dispatchEvent({ type: "input" });
+  field.dispatchEvent({
+    type: "keydown",
+    key: "Enter",
+    ctrlKey: true,
+    preventDefault() {},
+    stopPropagation() {}
+  });
+  field.dispatchEvent({
+    type: "keydown",
+    key: "Enter",
+    ctrlKey: true,
+    preventDefault() {},
+    stopPropagation() {}
+  });
+  await tick();
+  await tick();
+  const first = await pending.list("doc-one");
+  assert.equal(first.length, 1);
+  assert.equal(first[0].op, "create");
+  assert.equal(first[0].body, "新建");
+  assert.ok(panel.querySelector("[data-note-id='seed']"));
+  field = panel.querySelector("textarea");
+  field.value = "新建改";
+  field.dispatchEvent({ type: "input" });
+  field.dispatchEvent({
+    type: "keydown",
+    key: "Enter",
+    ctrlKey: true,
+    preventDefault() {},
+    stopPropagation() {}
+  });
+  await tick();
+  await tick();
+  const second = await pending.list("doc-one");
+  assert.equal(second.length, 1);
+  assert.equal(second[0].body, "新建改");
+  assert.equal(second[0].tempId || second[0].noteId, first[0].tempId || first[0].noteId);
+  await ui.refresh();
+  assert.ok(panel.querySelector("[data-note-id='seed']"));
+  assert.match(view.text(panel), /种子/);
+});
+
+test("a migrated layout whose revision sits on the row is current, and a late zone does not replace it", async () => {
+  const version = "source-v3:migrated";
+  const doc = libraryDocumentFromRecords(
+    { docHash: "doc-mig", title: "迁", pageCount: 1 },
+    [{ docHash: "doc-mig", page: 1, pairs: [{ text: "a", translation: "甲" }] }],
+    [{
+      docHash: "doc-mig",
+      page: 1,
+      mode: "text-layer",
+      protocol: "blocks-1",
+      layoutRev: version,
+      layout: { blocks: [{ bid: "kept", text: "cached" }], protocol: "blocks-1" }
+    }]
+  );
+  assert.equal(doc.pages[0].layout.layoutVersion, version);
+  assert.equal(layoutReadyForZone(doc.pages[0], version).blocks[0].bid, "kept");
+  assert.equal(storedLayoutCurrent(doc.pages[0], version).blocks[0].bid, "kept");
+  assert.equal(layoutReadyForZone({
+    layout: { blocks: [{ bid: "old", text: "stale" }], protocol: "blocks-1" },
+    layoutRev: "source-v3:other"
+  }, version), null);
+  assert.equal(layoutReadyForZone({
+    layout: { blocks: [{ bid: "plain", text: "blocks" }], protocol: "blocks-1" }
+  }, version), null);
+  assert.equal(layoutReadyForZone({
+    layout: { blocks: [{ bid: "inner-old", text: "stale" }], layoutVersion: "source-v3:other", protocol: "blocks-1" },
+    layoutRev: version
+  }, version).blocks[0].bid, "inner-old");
+  assert.equal(layoutReadyForZone({
+    layout: {
+      blocks: [{ bid: "fall", text: "stand-in" }],
+      layoutVersion: version,
+      fallback: { source: "text-layer", reason: "network" }
+    }
+  }, version), null);
+
+  const { store } = memoryStore();
+  await store.putLayout({
+    docHash: "doc-mode",
+    page: 1,
+    mode: "text-layer",
+    protocol: "blocks-1",
+    layoutRev: version,
+    layout: { blocks: [{ bid: "vendor", text: "from service" }], protocol: "blocks-1" }
+  });
+  const key = layoutCacheKey({ hash: "doc-mode", page: 1, mode: "local-ocr" });
+  const read = await readLayoutCache(key, { store });
+  assert.equal(read.blocks[0].bid, "vendor");
+  assert.equal(read.layoutVersion, version);
+  assert.equal(layoutReadyForZone(read, version).blocks[0].bid, "vendor");
+
+  let writes = 0;
+  const settled = await settleFreshZone({
+    hash: "doc-late",
+    page: 1,
+    version,
+    reason: "stored",
+    cachedRead: () => read,
+    write: async () => { writes += 1; }
+  });
+  assert.equal(writes, 0);
+  assert.equal(settled.recomputed, false);
+  assert.equal(settled.layout.blocks[0].bid, "vendor");
+});
+
+test("a stopped layout port surfaces the zoning failure before the retry budget ends", async () => {
+  let noticed = 0;
+  const sleeps = [];
+  await assert.rejects(
+    () => fetchLocalEnvelope({
+      page: 1,
+      imageBase64: "abc",
+      fetchImpl: async () => { throw new TypeError("Failed to fetch"); },
+      sleep: async (ms) => { sleeps.push(ms); },
+      onNetworkFailure() { noticed += 1; }
+    }),
+    /Failed to fetch/
+  );
+  assert.equal(noticed, 1);
+  assert.equal(sleeps.length, LAYOUT_RETRY_DELAYS_MS.length);
+  const viewer = read("pdf/viewer.js");
+  assert.match(viewer, /onNetworkFailure\(\) \{[\s\S]*layoutNotice = LAYOUT_FALLBACK_STATUS/);
+  assert.match(viewer, /const stale = Boolean\(entry && hasStored && version && !layoutReadyForZone\(entry, version\)\)/);
+  const retranslate = viewer.slice(
+    viewer.indexOf("async function forceRetranslateCurrentPage"),
+    viewer.indexOf("function titleStructureFailed")
+  );
+  const rememberAt = retranslate.indexOf("rememberTranslation(");
+  const doneAt = retranslate.indexOf("PDF_COPY.retranslateDone");
+  assert.ok(rememberAt > 0 && doneAt > rememberAt);
 });
 
 function installFakeLocks() {

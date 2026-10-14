@@ -369,6 +369,17 @@
   margin-top: 12px;
   padding: 8px 12px 16px;
 }
+[data-reader-theme="dark"] .oi-note-card {
+  background: var(--oi-reader-surface);
+  border: 1px solid var(--oi-reader-line);
+}
+[data-reader-theme="dark"] .workspace[data-notes-open="true"] > #sideSlot {
+  border-inline-start: 1px solid var(--oi-reader-line);
+}
+[data-reader-theme="dark"] .workspace[data-notes-open="true"][data-notes-side="start"] > #sideSlot {
+  border-inline-start: 0;
+  border-inline-end: 1px solid var(--oi-reader-line);
+}
 .oi-note-card:hover {
   background: var(--oi-reader-hover);
   border-radius: 0 8px 8px 0;

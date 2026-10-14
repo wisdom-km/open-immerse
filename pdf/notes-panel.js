@@ -281,7 +281,7 @@ export function mountNotesUi(api) {
         ]);
         if (ticket !== loadTicket) return;
         state.docHash = hash;
-        state.notes = notes || [];
+        state.notes = mergeShownNotes(notes || []);
         state.trash = trash || [];
         state.loading = false;
         state.showSkeleton = false;
@@ -303,6 +303,13 @@ export function mountNotesUi(api) {
     paint();
     // Reopen shows a refusal that was already recorded. This does not call persist().
     void maybePersistHint();
+  }
+
+  function mergeShownNotes(incoming) {
+    if (!state.editor || !state.notes.length) return incoming;
+    const ids = new Set(incoming.map((note) => note?.id).filter(Boolean));
+    const kept = state.notes.filter((note) => note?.id && !ids.has(note.id));
+    return kept.length ? incoming.concat(kept) : incoming;
   }
 
   function rememberFailure(error) {
@@ -375,8 +382,30 @@ export function mountNotesUi(api) {
     return "空笔记不会保存";
   }
 
+  function editorKey(editor) {
+    if (!editor.clientId) {
+      editor.clientId = editor.id || `tmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+    return editor.clientId;
+  }
+
   async function commitEditor(editor, { closeAfter = false } = {}) {
     if (!editor) return null;
+    clearTimeout(saveTimer);
+    if (editor.commitInflight) {
+      await editor.commitInflight;
+      if (!noteBodySavable(editor.body)) return null;
+    }
+    const run = performCommit(editor, { closeAfter });
+    editor.commitInflight = run;
+    try {
+      return await run;
+    } finally {
+      if (editor.commitInflight === run) editor.commitInflight = null;
+    }
+  }
+
+  async function performCommit(editor, { closeAfter = false } = {}) {
     if (!noteBodySavable(editor.body)) {
       editor.status = "empty";
       return null;
@@ -384,9 +413,11 @@ export function mountNotesUi(api) {
     editor.status = "saving";
     paintEditorStatus();
     const kind = editor.wasHighlight ? "note" : editor.kind;
+    const id = editorKey(editor);
     try {
       const saved = await putNote({
-        id: editor.isNew ? undefined : editor.id,
+        id,
+        op: editor.isNew ? "create" : "update",
         docHash: state.docHash || api.docHash?.(),
         kind,
         author: "me",
@@ -395,7 +426,8 @@ export function mountNotesUi(api) {
         anchorState: editor.anchorState,
         page: editor.page
       });
-      editor.id = saved.id;
+      editor.clientId = saved.id || id;
+      editor.id = editor.clientId;
       editor.isNew = saved.pending ? editor.isNew : false;
       editor.wasHighlight = saved.pending ? editor.wasHighlight : false;
       editor.kind = saved.kind || editor.kind;
@@ -1394,6 +1426,7 @@ export function mountNotesUi(api) {
       field.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
+          clearTimeout(saveTimer);
           void commitEditor(editor, { closeAfter: true });
         }
         if (event.key === "Escape") {

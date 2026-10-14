@@ -205,6 +205,7 @@ import {
   normalizePdfLayout,
   resolveLayoutMode,
   shouldFetchCloud,
+  layoutReadyForZone,
   storedLayoutCurrent,
   storedLayoutDisplayable
 } from "../lib/pdf-layout-client.js";
@@ -7793,6 +7794,7 @@ function rememberTranslation(page, results) {
       blocks,
       targetLang: pdfTargetLang,
       ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
+      ...(pdfEngineMode() === "local-ocr" || pdfEngineMode() === "cloud-ocr" ? { mode: pdfEngineMode() } : {}),
       sourceBase64,
       ...(skipped ? { skipped: true } : {})
     };
@@ -7878,7 +7880,7 @@ function libraryLayoutNeedsWrite(page) {
   const hasLayout = Array.isArray(storedBlocks) && storedBlocks.length > 0;
   const hasVersion = Boolean(entry.layoutVersion || entry.layout?.layoutVersion);
   if (!hasLayout && !hasVersion) return false;
-  return !storedLayoutCurrent(entry, version);
+  return !layoutReadyForZone(entry, version);
 }
 
 function persistDisplayedLayout(page) {
@@ -7916,6 +7918,7 @@ function persistPageLayout(page) {
       blocks: raw.blocks,
       targetLang: pdfTargetLang,
       layoutVersion: version,
+      ...(pdfEngineMode() === "local-ocr" || pdfEngineMode() === "cloud-ocr" ? { mode: pdfEngineMode() } : {}),
       ...(skipped ? { skipped: true } : {})
     };
     await saveLibraryPage(savedPayload);
@@ -8033,17 +8036,21 @@ async function savedTranslationFor(page) {
   const hash = await pdfByteHash();
   if (!hash || hash === "nohash") return null;
   if (!libraryDoc || libraryDoc.hash !== hash) {
-    // A blocked open used to sit here until the 10s deadline, so the first
-    // page could not zone. The capped read notices that flag and returns.
-    // Adopting its snapshot without the probe races the migration seed and
-    // wipes translations that landed in the meantime. The probe runs once
-    // per open, so a later 翻译 click does not pick up a partial save and
-    // drop the failed batch's bypassCache resend.
+    // A blocked open, and a read still running past the cap, must not hold
+    // translation until the 10s deadline. A read that already finished is
+    // the probe this page used to wait for. Re-reading IndexedDB here would
+    // treat pages saved during this translation as a library hit and skip
+    // the failed-batch retry.
     const zone = await waitForFirstZone(hash);
-    if (!translationWaitsForLibrary(zone)) {
+    const stillOpen = zone?.reason === "unavailable" || zone?.reason === "cap";
+    if (stillOpen) {
       if (!libraryProbe) void ensureLibraryDocument();
-    } else if (libraryProbe) await libraryProbe;
-    else await ensureLibraryDocument();
+    } else if (!libraryProbe && zone?.reason === "stored" && zone.document) {
+      if (!zone.document.hash) zone.document.hash = hash;
+      libraryDoc = zone.document;
+    } else {
+      await ensureLibraryDocument();
+    }
   }
   if (!libraryDoc) return null;
   const selected = selectSavedTranslation(libraryDoc, page, getPageLayout(page)?.blocks);
@@ -9252,7 +9259,7 @@ async function retryPendingVendorLayouts(isStale) {
     const storedBlocks = entry?.layout?.blocks;
     const hasStored = (Array.isArray(storedBlocks) && storedBlocks.length > 0) ||
       Boolean(entry?.layoutVersion || entry?.layout?.layoutVersion);
-    const stale = Boolean(entry && hasStored && version && !storedLayoutCurrent(entry, version));
+    const stale = Boolean(entry && hasStored && version && !layoutReadyForZone(entry, version));
     if (!stale && !vendorLayoutPending.has(page)) continue;
     try {
       const laid = await ingestPageLayout(page, isStale);
@@ -9395,8 +9402,8 @@ async function ingestVendorLayout(n, mode, isStale) {
   }
   // A source-v3 entry with no revision, or an older revision, is not the current
   // block structure. Library page layouts follow the same rule.
-  let mapped = storedLayoutCurrent(zone.cached, version)
-    || storedLayoutCurrent(libraryEntry(n), version);
+  let mapped = layoutReadyForZone(zone.cached, version)
+    || layoutReadyForZone(libraryEntry(n), version);
   let recomputed = false;
   if (!mapped) {
     try {
@@ -9414,7 +9421,12 @@ async function ingestVendorLayout(n, mode, isStale) {
             imageBase64: png.replace(/^data:image\/png;base64,/, ""),
             pixelWidth: raster.pixelWidth,
             pixelHeight: raster.pixelHeight,
-            signal
+            signal,
+            onNetworkFailure() {
+              if (isStale()) return;
+              layoutNotice = LAYOUT_FALLBACK_STATUS;
+              if (!pdfTranslateBusy(session)) setStatus(layoutNotice);
+            }
           })));
       let images = null;
       try {
@@ -10573,7 +10585,7 @@ async function loadCurrentPageText(explicitPage) {
     refreshDocStatus();
     renderArticle();
     updateTranslateControls();
-    if (!storedLayoutCurrent(openedStored, version) && (pdfEngineMode() === "local-ocr" || pdfEngineMode() === "cloud-ocr")) {
+    if (!layoutReadyForZone(openedStored, version) && (pdfEngineMode() === "local-ocr" || pdfEngineMode() === "cloud-ocr")) {
       upgradeStoredFallback(n, pdfEngineMode(), isStale).catch(() => {});
     }
     return;
