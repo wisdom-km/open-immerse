@@ -2958,8 +2958,11 @@ button:disabled { opacity: 0.45; cursor: default; }
   color: var(--oi-reader-muted);
 }
 @media (max-width: 719px) {
+  .oi-lib-slot { flex: 0 0 auto; }
   .toolbar button.oi-lib-chip {
     width: 26px;
+    min-width: 26px;
+    flex: 0 0 26px;
     padding: 0;
     justify-content: center;
   }

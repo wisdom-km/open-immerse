@@ -11,6 +11,7 @@ import {
   DEFAULT_BLOCKED_TIMEOUT_MS,
   STORAGE_AVAILABLE_EVENT,
   onStorageAvailable,
+  OPEN_INHERIT_AFTER_MS,
   openIndexedDatabase,
   storageOpenIsBlocked,
   storagePageTarget
@@ -21,6 +22,9 @@ import {
   LIBRARY_PROBE_DELAYS_MS,
   LIBRARY_ZONE_HARD_MS,
   LIBRARY_ZONE_WAIT_MS,
+  asLibraryDocument,
+  beginLegacyLibraryFetch,
+  beginZoneStoredRead,
   currentLayoutIfArrived,
   fetchLibraryDocument,
   libraryDocumentFromRecords,
@@ -40,9 +44,10 @@ import {
   resolveZoneForVendor,
   settleFreshZone,
   waitForFirstZone,
+  waitForZoneMigration,
   whenZoneReadSettles
 } from "../lib/pdf-library.js";
-import { LAYOUT_RETRY_DELAYS_MS, createPrioritySerialLane, fetchLocalEnvelope, layoutCacheKey, layoutCurrentForEngine, layoutCurrentForLibrary, layoutReadyForZone, layoutRetrySplit, runLaneAttempts, stampSessionLayout, startDocumentLayoutRetry, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
+import { LAYOUT_RETRY_DELAYS_MS, cacheableLayout, createPrioritySerialLane, fetchLocalEnvelope, layoutCacheKey, layoutCurrentForEngine, layoutCurrentForLibrary, layoutReadyForZone, layoutRetrySplit, runLaneAttempts, stampSessionLayout, startDocumentLayoutRetry, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { readLayoutCache, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
@@ -553,6 +558,8 @@ test("a slow open without onblocked is a timeout, and onblocked is blocked", asy
   assert.equal(blocked.message, "这次没能打开本机存储。");
   held.req.result = { close() {} };
   held.req.onsuccess();
+  // The late connection closes, then announces, on a later turn.
+  await new Promise((resolve) => setTimeout(resolve, 20));
 });
 
 test("a pending open is inherited without another indexedDB.open, then release emits oi-storage-available", async () => {
@@ -565,6 +572,7 @@ test("a pending open is inherited without another indexedDB.open, then release e
   const channel = new BroadcastChannel("oi-library");
   const remote = [];
   channel.onmessage = (event) => remote.push(event.data);
+  try {
   const first = openIndexedDatabase({
     name: "oi-pr3-inherit",
     version: 2,
@@ -603,8 +611,10 @@ test("a pending open is inherited without another indexedDB.open, then release e
   assert.equal(heard[0].type, STORAGE_AVAILABLE_EVENT);
   assert.equal(remote.length, 1);
   assert.equal(remote[0].type, "oi-storage-available");
-  stop();
-  channel.close();
+  } finally {
+    stop();
+    channel.close();
+  }
 });
 
 test("F4-08 keeps the old layout key and still judges it with storedLayoutCurrent", async () => {
@@ -1468,6 +1478,8 @@ test("reader warn contrast stays at least 4.5 on every theme, and dark uses #E2A
   assert.match(chipRule, /background:\s*var\(--oi-reader-well\)/);
   assert.doesNotMatch(chipRule, /box-shadow/);
   assert.doesNotMatch(chipRule, /(^|\n)\s*border\s*:/);
+  const narrowChip = viewerCss.slice(viewerCss.indexOf("@media (max-width: 719px)"));
+  assert.match(narrowChip, /\.toolbar button\.oi-lib-chip \{[^}]*min-width:\s*26px/);
 });
 
 test("a retranslated pair replaces a stored pair whose formula slots do not line up", async () => {
@@ -1743,8 +1755,9 @@ test("zoning waits only for the IndexedDB read", { timeout: 15000 }, async () =>
   assert.doesNotMatch(fn, /await ensureLibraryDocument\(\)/);
   assert.match(fn, /void ensureLibraryDocument\(\)/);
   assert.match(fn, /waitForFirstZone/);
-  assert.match(fn, /resolveZoneForVendor/);
-  assert.ok(fn.indexOf("resolveZoneForVendor") < fn.indexOf("postVendorLayout"));
+  assert.match(fn, /waitForZoneMigration/);
+  assert.ok(fn.indexOf("waitForZoneMigration") < fn.indexOf("postVendorLayout"));
+  assert.match(fn, /stampProducedEngine\(mapped, mode\)/);
   assert.match(fn, /settleFreshZone/);
   assert.match(fn, /currentLayoutIfArrived/);
   const savedFn = viewer.slice(
@@ -1752,11 +1765,11 @@ test("zoning waits only for the IndexedDB read", { timeout: 15000 }, async () =>
     viewer.indexOf("function savedPageStatus")
   );
   assert.match(savedFn, /waitForFirstZone/);
-  assert.match(savedFn, /unavailable" \|\| zone\?\.reason === "cap"/);
+  assert.match(savedFn, /translationWaitsForLibrary/);
   assert.match(savedFn, /if \(!libraryProbe\) void ensureLibraryDocument\(\)/);
-  assert.match(savedFn, /await ensureLibraryDocument\(\)/);
+  assert.match(savedFn, /waitForZoneMigration/);
+  assert.doesNotMatch(savedFn, /await ensureLibraryDocument\(\)/);
   assert.doesNotMatch(savedFn, /await libraryProbe/);
-  assert.doesNotMatch(savedFn, /if \(!libraryDoc \|\| libraryDoc\.hash !== hash\) await ensureLibraryDocument\(\)/);
 
   console.log(`[zone-delay] blockedKnown=${blockedKnownMs.toFixed(1)}ms blockedHang=${blockedHangMs.toFixed(1)}ms legacyDown=${legacyDownMs.toFixed(1)}ms slowIdb=${slowIdbMs.toFixed(1)}ms fastIdb=${fastIdbMs.toFixed(1)}ms`);
 });
@@ -2126,6 +2139,403 @@ test("a slow unblocked read zones within the hard cap and does not overwrite a l
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(writes, 0);
   assert.equal(currentLayoutIfArrived({ hash, page: 1, version }).blocks[0].bid, "kept");
+});
+
+test("a 2s indexedDB read still sees the in-flight migration before the zoning cap", { timeout: 8000 }, async () => {
+  const hash = "zone-migrate-2s";
+  const version = "rev-mig";
+  const started = Date.now();
+  let fetchedAt = 0;
+  const store = {
+    async getPaper() {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return null;
+    },
+    async getPages() { return []; },
+    async listLayouts() { return []; }
+  };
+  const fetchImpl = async () => {
+    fetchedAt = Date.now() - started;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        title: "legacy",
+        pageCount: 1,
+        pages: [{
+          page: 1,
+          layout: {
+            blocks: [{ bid: "kept", text: "legacy" }],
+            layoutVersion: version,
+            protocol: "blocks-1"
+          }
+        }]
+      })
+    };
+  };
+  const probe = fetchLibraryDocument(hash, { store, fetch: fetchImpl, sleep: () => Promise.resolve() });
+  const gate = await waitForFirstZone(hash, { store });
+  assert.equal(gate.reason, "cap");
+  const zone = await waitForZoneMigration(hash, gate, {
+    page: 1,
+    version,
+    engine: "local-ocr",
+    fetch: fetchImpl
+  });
+  const elapsed = Date.now() - started;
+  assert.ok(fetchedAt > 0 && fetchedAt < LIBRARY_ZONE_HARD_MS + 200, `migration GET started at ${fetchedAt}ms`);
+  assert.ok(elapsed < LIBRARY_ZONE_HARD_MS + 500, `zoning waited ${elapsed}ms`);
+  assert.equal(zone.reason, "stored");
+  assert.equal(zone.document.pages[0].layout.mode, "unknown");
+  assert.equal(layoutCurrentForLibrary(zone.document.pages[0], version, "local-ocr").blocks[0].bid, "kept");
+  let writes = 0;
+  const settled = await settleFreshZone({
+    hash,
+    page: 1,
+    version,
+    reason: "cap",
+    engine: "local-ocr",
+    write: async () => { writes += 1; }
+  });
+  assert.equal(settled.recomputed, false);
+  assert.equal(settled.layout.blocks[0].bid, "kept");
+  await whenZoneReadSettles(hash);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(writes, 0);
+  beginZoneStoredRead(hash, { store: { getPaper() { return new Promise(() => {}); } } });
+  assert.equal(currentLayoutIfArrived({ hash, page: 1, version, engine: "local-ocr" }).blocks[0].bid, "kept");
+  probe.catch(() => {});
+});
+
+test("a fast legacy GET does not hide the in-flight IndexedDB document on reopen", async () => {
+  const hash = "zone-reopen-idb-wins";
+  const version = "rev-reopen";
+  const store = {
+    async getPaper() {
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      return { docHash: hash, title: "stored", pageCount: 1, origin: "native" };
+    },
+    async getPages() {
+      return [{
+        page: 1,
+        pairs: [{ bid: "a", text: "Hello", sourceText: "Hello", translation: "已译", targetLang: "zh-CN" }],
+        layoutVersion: version
+      }];
+    },
+    async listLayouts() {
+      return [{
+        page: 1,
+        savedAt: 2,
+        layout: {
+          blocks: [{ bid: "kept", text: "Hello" }],
+          layoutVersion: version,
+          protocol: "blocks-1",
+          mode: "local-ocr"
+        }
+      }];
+    }
+  };
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      title: "fixture",
+      pageCount: 1,
+      pages: [{
+        page: 1,
+        pairs: [{ bid: "a", text: "Hello", sourceText: "Hello", translation: "见⟦f99⟧", targetLang: "zh-CN" }],
+        layout: { blocks: [{ bid: "fixture", text: "Hello" }], layoutVersion: version, protocol: "blocks-1" }
+      }]
+    })
+  });
+  const started = Date.now();
+  const probe = fetchLibraryDocument(hash, { store, fetch: fetchImpl, sleep: () => Promise.resolve() });
+  const gate = await waitForFirstZone(hash, { store });
+  assert.equal(gate.reason, "cap");
+  const zone = await waitForZoneMigration(hash, gate, {
+    page: 1,
+    version,
+    engine: "local-ocr",
+    fetch: fetchImpl
+  });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < LIBRARY_ZONE_HARD_MS, `reopen waited out the cap at ${elapsed}ms`);
+  assert.equal(zone.reason, "stored");
+  assert.equal(zone.document.pages[0].pairs[0].translation, "已译");
+  assert.equal(zone.document.pages[0].layout.blocks[0].bid, "kept");
+  const doc = await probe;
+  assert.equal(doc.pages[0].pairs[0].translation, "已译");
+});
+
+test("an empty indexedDB read still adopts the legacy row that arrived while it was pending", async () => {
+  const hash = "zone-reopen-idb-empty";
+  const version = "rev-empty";
+  const store = {
+    async getPaper() {
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      return null;
+    },
+    async getPages() { return []; },
+    async listLayouts() { return []; }
+  };
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      title: "legacy",
+      pageCount: 1,
+      pages: [{
+        page: 1,
+        layout: {
+          blocks: [{ bid: "kept", text: "legacy" }],
+          layoutVersion: version,
+          protocol: "blocks-1"
+        }
+      }]
+    })
+  });
+  const started = Date.now();
+  const probe = fetchLibraryDocument(hash, { store, fetch: fetchImpl, sleep: () => Promise.resolve() });
+  const gate = await waitForFirstZone(hash, { store });
+  assert.equal(gate.reason, "cap");
+  const zone = await waitForZoneMigration(hash, gate, {
+    page: 1,
+    version,
+    engine: "local-ocr",
+    fetch: fetchImpl
+  });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 1200, `empty read held zoning for ${elapsed}ms`);
+  assert.equal(zone.reason, "stored");
+  assert.equal(zone.document.pages[0].layout.blocks[0].bid, "kept");
+  assert.equal(zone.document.pages[0].layout.mode, "unknown");
+  const doc = await probe;
+  assert.equal(doc.pages[0].layout.blocks[0].bid, "kept");
+});
+
+test("a vendor re-zone keeps the engine that produced it, and cacheableLayout does not drop that mode", () => {
+  const produced = { blocks: [{ bid: "v" }], layoutVersion: "rev-mig", protocol: "blocks-1", textSource: "text-layer" };
+  stampSessionLayout(produced, "local-ocr");
+  assert.equal(produced.mode, "local-ocr");
+  const stored = cacheableLayout(produced);
+  assert.equal(stored.mode, "local-ocr");
+  assert.equal(stored.textSource, "text-layer");
+  assert.equal(recordedLayoutMode({ layout: stored }), "local-ocr");
+  const mismatch = { mode: "cloud-ocr", blocks: [{ bid: "v" }], textSource: "text-layer", layoutVersion: "rev-mig" };
+  stampSessionLayout(mismatch, "local-ocr");
+  assert.equal(mismatch.mode, "local-ocr");
+  assert.equal(recordedLayoutMode({ layout: cacheableLayout(mismatch) }), "local-ocr");
+  const unknown = { mode: "unknown", blocks: [{ bid: "u" }] };
+  stampSessionLayout(unknown, "local-ocr");
+  assert.equal(unknown.mode, "unknown");
+  const viewer = read("pdf/viewer.js");
+  const ingest = viewer.slice(viewer.indexOf("async function ingestVendorLayout"), viewer.indexOf("async function ingestSkippedSourceLayout"));
+  assert.ok(ingest.indexOf("stampProducedEngine(mapped, mode)") < ingest.indexOf("await settleFreshZone"));
+});
+
+test("a second open during a stuck indexedDB open does not queue behind it", async () => {
+  assert.equal(OPEN_INHERIT_AFTER_MS, 300);
+  let opens = 0;
+  const held = hangingFactory(() => { opens += 1; });
+  const first = openIndexedDatabase({
+    name: "oi-pr3-inherit-slow",
+    version: 2,
+    indexedDB: held.factory,
+    blockedTimeoutMs: 10000,
+    inheritAfterMs: 40
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const started = Date.now();
+  const second = await openIndexedDatabase({
+    name: "oi-pr3-inherit-slow",
+    version: 2,
+    indexedDB: held.factory,
+    blockedTimeoutMs: 10000
+  }).then(() => null, (error) => error);
+  assert.equal(opens, 1);
+  assert.equal(second.name, "BlockedError");
+  assert.ok(Date.now() - started < 50, `queued open waited ${Date.now() - started}ms`);
+  held.req.result = { close() {} };
+  held.req.onsuccess();
+  await first;
+});
+
+test("a timed-out open's late success closes and emits on a later turn", async () => {
+  const held = hangingFactory();
+  const heard = [];
+  const stop = onStorageAvailable(() => heard.push("available"));
+  const pending = openIndexedDatabase({
+    name: "oi-pr3-late-success",
+    version: 2,
+    indexedDB: held.factory,
+    blockedTimeoutMs: 20
+  });
+  const failed = await pending.then(() => null, (error) => error);
+  assert.equal(failed.name, "BlockedError");
+  let closedSync = false;
+  held.req.result = {
+    close() { closedSync = true; heard.push("closed"); }
+  };
+  held.req.onsuccess();
+  assert.equal(closedSync, false);
+  assert.equal(heard.includes("available"), false);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(heard.includes("closed"), true);
+  assert.equal(heard.includes("available"), true);
+  assert.ok(heard.indexOf("closed") < heard.indexOf("available"));
+  stop();
+});
+
+test("a stuck indexedDB read does not hold translation until the 10s timeout", { timeout: 8000 }, async () => {
+  const hash = "zone-translate-stuck";
+  const version = "rev-tr";
+  const store = {
+    async getPaper() {
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 8000);
+        if (typeof timer.unref === "function") timer.unref();
+      });
+      return null;
+    },
+    async getPages() { return []; },
+    async listLayouts() { return []; }
+  };
+  const body = {
+    title: "legacy",
+    pageCount: 1,
+    pages: [{
+      page: 1,
+      pairs: [{ bid: "a", text: "Hello", sourceText: "Hello", translation: "你好", targetLang: "zh-CN" }],
+      layout: { blocks: [{ bid: "kept", text: "Hello" }], layoutVersion: version, protocol: "blocks-1" }
+    }]
+  };
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => body });
+  const started = Date.now();
+  const probe = fetchLibraryDocument(hash, { store, fetch: fetchImpl, sleep: () => Promise.resolve() });
+  const gate = await waitForFirstZone(hash, { store });
+  assert.equal(gate.reason, "cap");
+  assert.equal(translationWaitsForLibrary(gate), false);
+  const zone = await waitForZoneMigration(hash, gate, {
+    page: 1,
+    version,
+    engine: "local-ocr",
+    fetch: fetchImpl
+  });
+  const doc = await probe;
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < LIBRARY_ZONE_HARD_MS + 800, `translation probe waited ${elapsed}ms`);
+  assert.equal(zone.reason, "stored");
+  assert.equal(zone.document.pages[0].pairs[0].translation, "你好");
+  assert.equal(doc.pages[0].pairs[0].translation, "你好");
+  assert.equal(layoutCurrentForLibrary(doc.pages[0], version, "local-ocr").blocks[0].bid, "kept");
+  let writes = 0;
+  const settled = await settleFreshZone({
+    hash,
+    page: 1,
+    version,
+    reason: "cap",
+    engine: "local-ocr",
+    write: async () => { writes += 1; }
+  });
+  assert.equal(writes, 0);
+  assert.equal(settled.recomputed, false);
+  assert.equal(settled.layout.blocks[0].bid, "kept");
+  const viewer = read("pdf/viewer.js");
+  const savedFn = viewer.slice(
+    viewer.indexOf("async function savedTranslationFor"),
+    viewer.indexOf("function savedPageStatus")
+  );
+  assert.match(savedFn, /zone\?\.reason === "unavailable"/);
+  assert.ok(savedFn.indexOf("unavailable") < savedFn.indexOf("waitForZoneMigration"));
+  assert.match(savedFn, /librarySourceSent\.has\(hash\)/);
+  assert.doesNotMatch(savedFn, /await ensureLibraryDocument\(\)/);
+  assert.doesNotMatch(savedFn, /await libraryProbe/);
+  const ensure = viewer.slice(
+    viewer.indexOf("function ensureLibraryDocument"),
+    viewer.indexOf("function savedTranslationForNav")
+  );
+  const fetchedAt = ensure.indexOf("await fetchLibraryDocument");
+  const keepSession = ensure.lastIndexOf("libraryDoc.hash === hash");
+  const assignDoc = ensure.lastIndexOf("libraryDoc = doc");
+  assert.ok(fetchedAt > 0 && fetchedAt < keepSession && keepSession < assignDoc);
+});
+
+test("a corrected pair is merged with the live blocks even when the layout row is already current", async () => {
+  const misaligned = {
+    bid: "b-mis",
+    sourceId: "p18-s1",
+    label: "text",
+    text: "see ⟦f1⟧ and ⟦f2⟧",
+    sourceText: "see ALPHA and BETA"
+  };
+  const stalePair = {
+    bid: misaligned.bid,
+    sourceId: misaligned.sourceId,
+    text: "see ⟦f9⟧ and BETA",
+    sourceText: misaligned.sourceText,
+    translation: "见⟦f9⟧和乙",
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  };
+  const fresh = {
+    bid: misaligned.bid,
+    text: misaligned.text,
+    sourceText: misaligned.sourceText,
+    translation: "见甲⟦f1⟧和乙⟦f2⟧",
+    targetLang: "zh-CN",
+    provider: "mymemory"
+  };
+  let written = null;
+  const store = {
+    async getPaper() { return { docHash: "h-mis", pageCount: 1, origin: "native" }; },
+    async touchPaper() {},
+    async putPage(_hash, _page, input) {
+      written = mergeStoredPagePairs([stalePair], input.pairs, input.blocks, input.targetLang);
+    },
+    async putLayout() { throw new Error("current layout must stay"); }
+  };
+  await saveLibraryPage({
+    hash: "h-mis",
+    page: 1,
+    pageCount: 1,
+    pairs: [fresh],
+    blocks: [misaligned],
+    targetLang: "zh-CN"
+  }, { store });
+  assert.equal(written[0].translation, fresh.translation);
+  const kept = mergeStoredPagePairs([stalePair], [fresh], null, "zh-CN");
+  assert.equal(kept[0].translation, stalePair.translation);
+  const viewer = read("pdf/viewer.js");
+  const remember = viewer.slice(viewer.indexOf("function rememberTranslation"), viewer.indexOf("function rememberSkipHole"));
+  assert.ok(remember.indexOf("blocks?.length") < remember.indexOf("keepLayout ? { layout }"));
+});
+
+test("a library read that fails after the cap does not overwrite a current layout", async () => {
+  const hash = "zone-read-failed";
+  const version = "rev-keep";
+  const store = {
+    async getPaper() {
+      await new Promise((resolve) => setTimeout(resolve, LIBRARY_ZONE_WAIT_MS + 80));
+      throw new Error("open failed");
+    }
+  };
+  const gate = await waitForFirstZone(hash, { store });
+  assert.equal(gate.reason, "cap");
+  let writes = 0;
+  const settled = await settleFreshZone({
+    hash,
+    page: 1,
+    version,
+    reason: gate.reason,
+    engine: "local-ocr",
+    write: async () => { writes += 1; }
+  });
+  assert.equal(settled.deferred, true);
+  assert.equal(writes, 0);
+  await whenZoneReadSettles(hash);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(writes, 0);
+  assert.equal(currentLayoutIfArrived({ hash, page: 1, version, engine: "local-ocr" }), null);
 });
 
 test("translation does not wait out a blocked library open", async () => {
