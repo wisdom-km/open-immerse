@@ -25,6 +25,7 @@ import {
   clampZoomChipPos,
   collectArticlePages,
   collectReadoutExportNodes,
+  createBackgroundSessions,
   createPageCache,
   createTranslateSession,
   exceedsDragThreshold,
@@ -79,6 +80,7 @@ import {
   textLayerCopy,
   translateDocumentPages,
   translatePageBlocks,
+  translationCacheWhile,
   articleNodeSpec,
   extractPageItems,
   pageCacheKey,
@@ -212,6 +214,7 @@ import {
   shouldFetchCloud,
   startDocumentLayoutRetry,
   createPrioritySerialLane,
+  stampSessionLayout,
   storedLayoutDisplayable
 } from "../lib/pdf-layout-client.js";
 import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
@@ -607,8 +610,8 @@ function init() {
     exportReadout("pdf");
   });
   document.addEventListener("keydown", onKey);
-  window.addEventListener("pagehide", abortInflightLayouts);
-  window.addEventListener("beforeunload", abortInflightLayouts);
+  window.addEventListener("pagehide", closeViewerWork);
+  window.addEventListener("beforeunload", closeViewerWork);
   listenProgress();
 
   const src = readViewerSrc(location.search);
@@ -2646,15 +2649,16 @@ function engineModeOf(layout) {
 }
 
 /**
- * A layout this session just built belongs to the current engine.
- * A library stand-in tagged unknown, and a transient text-layer fallback, keep
- * their existing tag so a legacy page is not relabeled.
+ * A layout the vendor produced on this open belongs to the current engine.
+ * unknown is left alone. A transient fallback is left alone.
  */
 function stampProducedEngine(layout) {
-  if (!layout || layout.fallback) return layout;
-  const mode = pdfEngineMode();
-  if (mode === "text-layer" || mode === "local-ocr" || mode === "cloud-ocr") layout.mode = mode;
-  return layout;
+  return stampSessionLayout(layout, pdfEngineMode());
+}
+
+/** Text-layer geometry, including the quick stand-in and the empty-key path. */
+function stampTextLayerEngine(layout) {
+  return stampSessionLayout(layout, "text-layer");
 }
 
 /**
@@ -7627,10 +7631,17 @@ function runtimeSend(message) {
   return send(message);
 }
 
+const backgroundSessions = createBackgroundSessions();
+
+function abortBackgroundFills() {
+  backgroundSessions.abortAll();
+}
+
 function beginViewerSession() {
-  if (session.aborted) session = createTranslateSession();
+  abortTranslateSession(session);
+  abortBackgroundFills();
+  session = createTranslateSession();
   session.running = true;
-  session.aborted = false;
   return session;
 }
 
@@ -7640,6 +7651,7 @@ function isCurrentWork(work, gen, translatingDoc) {
 
 function stopTranslateWork() {
   abortTranslateSession(session);
+  abortBackgroundFills();
   translatingPage = 0;
   for (const [page, row] of pageStates) {
     if (row.state === "running" || row.state === "layout") {
@@ -8977,8 +8989,8 @@ async function translateWholeDocument() {
     // A translation pause must not abandon layout. Skip pages and any page
     // whose sidecar call failed still get a recompute, then an immediate write-back.
     if (!translatedDoc.aborted && !work.aborted) {
-      await reconcileLockedSkipLayouts(() => !isCurrentWork(work, gen, translatingDoc));
-      const staleWork = () => !isCurrentWork(work, gen, translatingDoc);
+      const staleWork = () => !isCurrentWork(work, gen, translatingDoc) || work.aborted;
+      await reconcileLockedSkipLayouts(staleWork);
       const adoptUpgraded = async (upgraded, info = {}) => {
         const needs = [];
         for (const page of upgraded || []) {
@@ -9002,12 +9014,37 @@ async function translateWholeDocument() {
           needs.push(page);
         }
         if (needs.length && !translatedDoc.paused && !staleWork() && !work.aborted) {
-          const filled = await translateDocumentPages({
-            ...pageJob,
-            ...(info.background ? { session: createTranslateSession() } : {}),
-            preserveSession: true,
-            includePage: (page) => needs.includes(page)
-          });
+          const tracked = info.background ? backgroundSessions.track(createTranslateSession()) : null;
+          if (tracked) updateTranslateControls();
+          const fillAlive = () => !staleWork() && !work.aborted && (!tracked || tracked.current());
+          const guarded = tracked ? {
+            session: tracked.session,
+            cache: translationCacheWhile(pageCache, fillAlive),
+            onPageResult(payload) {
+              if (!fillAlive() || !isCurrentWork(work, gen, translatingDoc)) return;
+              pageJob.onPageResult(payload);
+            },
+            onPageDone(payload) {
+              if (!fillAlive() || !isCurrentWork(work, gen, translatingDoc)) return;
+              pageJob.onPageDone(payload);
+            },
+            onPageError(payload) {
+              if (!fillAlive() || !isCurrentWork(work, gen, translatingDoc)) return;
+              pageJob.onPageError(payload);
+            }
+          } : {};
+          let filled;
+          try {
+            filled = await translateDocumentPages({
+              ...pageJob,
+              ...guarded,
+              preserveSession: true,
+              includePage: (page) => needs.includes(page) && fillAlive()
+            });
+          } finally {
+            tracked?.release();
+            if (tracked) updateTranslateControls();
+          }
           translatedDoc = {
             ok: translatedDoc.ok && filled.ok,
             aborted: translatedDoc.aborted || filled.aborted,
@@ -9181,7 +9218,7 @@ async function forceRetranslateCurrentPage() {
   // Drop the document job's session so its next batch cannot land in this
   // retranslate, and so its save-wait tail cannot clear translatingPage.
   abortTranslateSession(session);
-  session = createTranslateSession();
+  abortBackgroundFills();
   forceReadoutHold = true;
   const work = beginViewerSession();
   translatingPage = targetPage;
@@ -9412,6 +9449,14 @@ const vendorLayoutReason = new Map();
 const vendorLayoutLane = createPrioritySerialLane();
 let layoutAbort = new AbortController();
 let layoutEpoch = 0;
+let layoutClosed = false;
+
+/** Page close: stop fill-ins, the document job, and any layout POST that has not started. */
+function closeViewerWork() {
+  layoutClosed = true;
+  abortTranslateSession(session);
+  abortInflightLayouts();
+}
 
 function abortError() {
   const error = new Error("layout aborted");
@@ -9429,6 +9474,7 @@ function clearLayoutFallbackStatus() {
 
 /** Drop in-flight layout POSTs. The sidecar is one request at a time; a closed tab must not keep it. */
 function abortInflightLayouts() {
+  abortBackgroundFills();
   layoutEpoch += 1;
   try {
     layoutAbort.abort();
@@ -9444,11 +9490,12 @@ function abortInflightLayouts() {
  * page on screen is not stuck behind another page's 429/5xx sleeps.
  */
 function postVendorLayout(page, run) {
+  if (layoutClosed) return Promise.reject(abortError());
   const key = Number(page) || 0;
   const epoch = layoutEpoch;
   let notified = false;
   return runLaneAttempts(vendorLayoutLane, key, (attempt) => {
-    if (epoch !== layoutEpoch || layoutAbort.signal.aborted) throw abortError();
+    if (layoutClosed || epoch !== layoutEpoch || layoutAbort.signal.aborted) throw abortError();
     return run({
       signal: layoutAbort.signal,
       maxAttempts: 1,
@@ -9461,7 +9508,7 @@ function postVendorLayout(page, run) {
   }, {
     priority: key === Number(pageNum),
     abortError,
-    shouldStop: () => epoch !== layoutEpoch || layoutAbort.signal.aborted
+    shouldStop: () => layoutClosed || epoch !== layoutEpoch || layoutAbort.signal.aborted
   });
 }
 
@@ -9613,7 +9660,7 @@ async function ingestVendorLayout(n, mode, isStale) {
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
-  stampProducedEngine(layout);
+  if (recomputed) stampProducedEngine(layout);
   setPageLayout(n, layout);
   if (!isStale()) clearLayoutFallbackStatus();
   if (recomputed) persistPageLayout(n).catch(() => {});
@@ -9697,7 +9744,7 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
-  if (!fallback) stampProducedEngine(layout);
+  if (!fallback) stampTextLayerEngine(layout);
   // The quick stand-in (persist: false) is replaced by the vendor layout.
   // Re-anchoring it marks 位置近似 notes lost, then the real layout writes them back.
   setPageLayout(n, layout, { reanchor: options.persist !== false });
@@ -9858,7 +9905,9 @@ async function adoptDoc(doc, title) {
       /* previous doc may already be destroyed */
     }
   }
+  layoutClosed = false;
   abortTranslateSession(session);
+  abortBackgroundFills();
   pdfDoc = doc;
   pageNum = 1;
   sourceZoomTouched = false;
@@ -10895,6 +10944,10 @@ function updateTranslateControls() {
   if (menuRetranslate) menuRetranslate.disabled = ui.retranslateDisabled;
   $("stopTranslate").hidden = ui.stopHidden;
   $("stopTranslate").disabled = ui.stopDisabled;
+  if (!pdfTranslateBusy(session) && backgroundSessions.active) {
+    $("stopTranslate").hidden = false;
+    $("stopTranslate").disabled = false;
+  }
   syncExportControls();
   syncMirrorZoomButtons();
 }

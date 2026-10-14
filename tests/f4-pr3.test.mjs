@@ -42,7 +42,7 @@ import {
   waitForFirstZone,
   whenZoneReadSettles
 } from "../lib/pdf-library.js";
-import { LAYOUT_RETRY_DELAYS_MS, createPrioritySerialLane, fetchLocalEnvelope, layoutCacheKey, layoutCurrentForEngine, layoutCurrentForLibrary, layoutReadyForZone, layoutRetrySplit, runLaneAttempts, startDocumentLayoutRetry, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
+import { LAYOUT_RETRY_DELAYS_MS, createPrioritySerialLane, fetchLocalEnvelope, layoutCacheKey, layoutCurrentForEngine, layoutCurrentForLibrary, layoutReadyForZone, layoutRetrySplit, runLaneAttempts, stampSessionLayout, startDocumentLayoutRetry, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { readLayoutCache, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
@@ -50,6 +50,7 @@ import { createLibrarySession } from "../lib/library-session.js";
 import { NOTES_PERSIST_HINT_KEY } from "../lib/notes-prefs.js";
 import { NOTES_HINT_DOC_PREFIX } from "../lib/reader-notes-local.js";
 import { bindPendingUnload, createPendingNotes, pendingNotesKey } from "../lib/pending-notes.js";
+import { createBackgroundSessions, createPageCache, createTranslateSession, translateDocumentPages, translationCacheWhile } from "../lib/pdf-viewer.js";
 import { storedLibraryPagesSource } from "./helpers/library-observe.mjs";
 import { mountNotesUi } from "../pdf/notes-panel.js";
 import {
@@ -2586,8 +2587,9 @@ test("a text-layer row is not current for local-ocr, and switching engines zones
   assert.match(ingest, /layoutCurrentForLibrary\(libraryEntry\(n\), version, mode\)/);
   assert.match(viewer, /if \(!layoutServesLibrary\(view, engine\)\) continue/);
   assert.match(viewer, /function stampProducedEngine/);
-  assert.match(viewer, /stampProducedEngine\(layout\)/);
-  assert.match(viewer, /if \(!fallback\) stampProducedEngine\(layout\)/);
+  assert.match(viewer, /if \(recomputed\) stampProducedEngine\(layout\)/);
+  assert.match(viewer, /if \(!fallback\) stampTextLayerEngine\(layout\)/);
+  assert.doesNotMatch(viewer.slice(viewer.indexOf("async function ingestTextLayerLayout"), viewer.indexOf("async function renderPageRaster")), /stampProducedEngine\(layout\)/);
   assert.match(viewer, /engineModeOf\(rawLayout\)/);
   assert.match(viewer, /engineModeOf\(raw\)/);
 });
@@ -2696,6 +2698,194 @@ test("a produced engine tag is stored, and a mode-less save stays unknown", asyn
   assert.equal(layoutCurrentForLibrary(doc.pages[1], version, "local-ocr").blocks[0].bid, "old");
 });
 
+test("selectPageLayout prefers an unknown or mode-less row over a newer explicit mismatch", () => {
+  const version = "rev-current";
+  const rows = [
+    {
+      page: 1,
+      mode: "text-layer",
+      savedAt: 50,
+      protocol: "blocks-1",
+      layoutRev: version,
+      layout: { blocks: [{ bid: "text" }], layoutVersion: version, mode: "text-layer" }
+    },
+    {
+      page: 1,
+      mode: "unknown",
+      savedAt: 10,
+      protocol: "blocks-1",
+      layoutRev: version,
+      layout: { blocks: [{ bid: "old" }], layoutVersion: version }
+    }
+  ];
+  const picked = selectPageLayout(rows, 1, "local-ocr");
+  assert.equal(picked.blocks[0].bid, "old");
+  assert.equal(picked.mode, "unknown");
+  const modeless = [
+    {
+      page: 1,
+      mode: "cloud-ocr",
+      savedAt: 80,
+      protocol: "blocks-1",
+      layout: { blocks: [{ bid: "cloud" }], mode: "cloud-ocr" }
+    },
+    {
+      page: 1,
+      mode: "",
+      savedAt: 5,
+      protocol: "blocks-1",
+      layout: { blocks: [{ bid: "bare" }] }
+    }
+  ];
+  assert.equal(selectPageLayout(modeless, 1, "local-ocr").blocks[0].bid, "bare");
+  const exact = [
+    {
+      page: 1,
+      mode: "local-ocr",
+      savedAt: 1,
+      protocol: "blocks-1",
+      layout: { blocks: [{ bid: "ocr" }], mode: "local-ocr" }
+    },
+    {
+      page: 1,
+      mode: "unknown",
+      savedAt: 99,
+      protocol: "blocks-1",
+      layout: { blocks: [{ bid: "old" }] }
+    }
+  ];
+  assert.equal(selectPageLayout(exact, 1, "local-ocr").blocks[0].bid, "ocr");
+});
+
+test("stampSessionLayout leaves unknown alone and tags text-layer stand-ins as text-layer", () => {
+  const unknown = { mode: "unknown", blocks: [{ bid: "old" }] };
+  stampSessionLayout(unknown, "local-ocr");
+  assert.equal(unknown.mode, "unknown");
+  const quick = { blocks: [{ bid: "q" }] };
+  stampSessionLayout(quick, "text-layer");
+  assert.equal(quick.mode, "text-layer");
+  const emptyKey = { blocks: [{ bid: "e" }] };
+  stampSessionLayout(emptyKey, "text-layer");
+  assert.equal(emptyKey.mode, "text-layer");
+  const vendor = { blocks: [{ bid: "v" }] };
+  stampSessionLayout(vendor, "cloud-ocr");
+  assert.equal(vendor.mode, "cloud-ocr");
+  const fallback = { fallback: { source: "text-layer", reason: "http-502" }, blocks: [] };
+  stampSessionLayout(fallback, "local-ocr");
+  assert.equal(fallback.mode, undefined);
+});
+
+test("Stop during a background fill sends no further translation requests", async () => {
+  const fills = createBackgroundSessions();
+  const sent = [];
+  const done = [];
+  const tracked = fills.track(createTranslateSession());
+  const job = translateDocumentPages({
+    session: tracked.session,
+    preserveSession: true,
+    numPages: 3,
+    docId: 1,
+    batchSize: 1,
+    cache: translationCacheWhile(createPageCache(), () => tracked.current()),
+    includePage: () => tracked.current(),
+    getPageOriginals: async (page) => [{ bid: `p${page}`, original: `page ${page} sentence.` }],
+    send: async (msg) => {
+      sent.push(msg.texts[0]);
+      if (sent.length === 1) fills.abortAll();
+      return { ok: true, translations: msg.texts.map((text) => `译:${text}`) };
+    },
+    onPageDone: ({ page }) => {
+      if (!tracked.current()) return;
+      done.push(page);
+    },
+    onPageError: ({ page }) => {
+      if (!tracked.current()) return;
+      done.push(page);
+    }
+  });
+  await job;
+  assert.deepEqual(sent, ["page 1 sentence."]);
+  assert.deepEqual(done, []);
+  const viewer = read("pdf/viewer.js");
+  const stop = viewer.slice(viewer.indexOf("function stopTranslateWork"), viewer.indexOf("function resumePendingRetranslate"));
+  assert.match(stop, /abortBackgroundFills\(\)/);
+  const begin = viewer.slice(viewer.indexOf("function beginViewerSession"), viewer.indexOf("function isCurrentWork"));
+  assert.match(begin, /abortBackgroundFills\(\)/);
+  const force = viewer.slice(viewer.indexOf("async function forceRetranslateCurrentPage"), viewer.indexOf("function titleStructureFailed"));
+  assert.match(force, /abortBackgroundFills\(\)/);
+  const adopt = viewer.slice(viewer.indexOf("async function adoptDoc"), viewer.indexOf("async function adoptDoc") + 800);
+  assert.match(adopt, /abortBackgroundFills\(\)/);
+  const close = viewer.slice(viewer.indexOf("function abortInflightLayouts"), viewer.indexOf("function postVendorLayout"));
+  assert.match(close, /abortBackgroundFills\(\)/);
+  assert.match(viewer, /window\.addEventListener\("pagehide", closeViewerWork\)/);
+  assert.match(viewer, /function closeViewerWork\(\)/);
+  assert.match(viewer.slice(viewer.indexOf("function closeViewerWork"), viewer.indexOf("function postVendorLayout")), /layoutClosed = true/);
+  assert.match(viewer, /if \(layoutClosed\) return Promise\.reject\(abortError\(\)\)/);
+});
+
+test("retranslating a page during its fill-in translates it once", async () => {
+  const fills = createBackgroundSessions();
+  const cache = createPageCache();
+  const applied = [];
+  const fillSent = [];
+  const tracked = fills.track(createTranslateSession());
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  const fill = translateDocumentPages({
+    session: tracked.session,
+    preserveSession: true,
+    numPages: 1,
+    docId: 7,
+    batchSize: 1,
+    cache: translationCacheWhile(cache, () => tracked.current()),
+    includePage: () => tracked.current(),
+    getPageOriginals: async () => [
+      { bid: "a", original: "Alpha sentence." },
+      { bid: "b", original: "Beta sentence." }
+    ],
+    send: async (msg) => {
+      fillSent.push(msg.texts[0]);
+      if (msg.texts[0].startsWith("Alpha")) {
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      if (!tracked.current()) return { ok: false, translations: [] };
+      return { ok: true, translations: msg.texts.map((text) => `fill:${text}`) };
+    },
+    onPageDone: ({ results }) => {
+      if (!tracked.current()) return;
+      applied.push(results.map((row) => row.translation).join("|"));
+    },
+    onPageError: () => {
+      if (!tracked.current()) return;
+      applied.push("fill-error");
+    }
+  });
+  await hold;
+  fills.abortAll();
+  const again = await translateDocumentPages({
+    session: createTranslateSession(),
+    numPages: 1,
+    docId: 7,
+    batchSize: 8,
+    cache,
+    getPageOriginals: async () => [
+      { bid: "a", original: "Alpha sentence." },
+      { bid: "b", original: "Beta sentence." }
+    ],
+    send: async (msg) => ({ ok: true, translations: msg.texts.map((text) => `译:${text}`) }),
+    onPageDone: ({ results }) => {
+      applied.push(results.map((row) => row.translation).join("|"));
+    }
+  });
+  await fill;
+  assert.deepEqual(fillSent, ["Alpha sentence."]);
+  assert.equal(applied.length, 1);
+  assert.equal(applied[0], "译:Alpha sentence.|译:Beta sentence.");
+  assert.equal(cache.get(7, 1).map((row) => row.translation).join("|"), applied[0]);
+  assert.equal(again.aborted, false);
+});
+
 test("retranslating page 2 does not wait on other stale layouts", async () => {
   const layoutMs = 40;
   const { blocking, background } = layoutRetrySplit(6, 2);
@@ -2737,7 +2927,10 @@ test("retranslating page 2 does not wait on other stale layouts", async () => {
   assert.match(job, /startDocumentLayoutRetry\(/);
   assert.match(job, /await layoutPass\.blocking/);
   assert.match(job, /void layoutPass\.background/);
-  assert.match(job, /info\.background \? \{ session: createTranslateSession\(\) \}/);
+  assert.match(job, /backgroundSessions\.track\(createTranslateSession\(\)\)/);
+  assert.match(job, /needs\.includes\(page\) && fillAlive\(\)/);
+  assert.match(job, /onPageDone\(payload\)/);
+  assert.match(job, /!isCurrentWork\(work, gen, translatingDoc\)/);
   assert.equal(job.includes("void retryPendingVendorLayouts"), false);
   const lanePost = viewer.slice(viewer.indexOf("function postVendorLayout"), viewer.indexOf("async function ingestVendorLayout"));
   assert.match(lanePost, /runLaneAttempts\(/);
