@@ -384,7 +384,7 @@ export function mountNotesUi(api) {
 
   function editorKey(editor) {
     if (!editor.clientId) {
-      editor.clientId = editor.id || `tmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      editor.clientId = editor.id || crypto.randomUUID();
     }
     return editor.clientId;
   }

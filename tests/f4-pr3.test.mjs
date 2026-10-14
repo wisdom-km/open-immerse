@@ -24,6 +24,8 @@ import {
   currentLayoutIfArrived,
   fetchLibraryDocument,
   libraryDocumentFromRecords,
+  migratedLayoutMode,
+  toLibraryRecords,
   flushPendingPages,
   mergeLibraryPairs,
   mergeStoredPagePairs,
@@ -38,7 +40,7 @@ import {
   waitForFirstZone,
   whenZoneReadSettles
 } from "../lib/pdf-library.js";
-import { LAYOUT_RETRY_DELAYS_MS, fetchLocalEnvelope, layoutCacheKey, layoutReadyForZone, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
+import { LAYOUT_RETRY_DELAYS_MS, createPrioritySerialLane, fetchLocalEnvelope, layoutCacheKey, layoutCurrentForEngine, layoutReadyForZone, layoutRetrySplit, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { readLayoutCache, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
@@ -1444,7 +1446,13 @@ test("reader warn contrast stays at least 4.5 on every theme, and dark uses #E2A
   }
   assert.match(notesCss, /#sideSlot[\s\S]*background:\s*var\(--oi-reader-surface\)/);
   assert.match(notesCss, /\.oi-note-card\.is-paperNote[\s\S]*border:\s*1px solid var\(--oi-reader-line\)/);
-  assert.match(notesCss, /\[data-reader-theme="dark"\] \.oi-note-card[\s\S]*border:\s*1px solid var\(--oi-reader-line\)/);
+  const darkCard = notesCss.slice(notesCss.indexOf('[data-reader-theme="dark"] .oi-note-card {'));
+  assert.match(darkCard, /border:\s*1px solid var\(--oi-reader-line\)/);
+  assert.match(darkCard, /border-radius:\s*8px/);
+  const darkHover = notesCss.slice(notesCss.indexOf('[data-reader-theme="dark"] .oi-note-card:hover'));
+  assert.match(darkHover, /border-radius:\s*8px/);
+  assert.doesNotMatch(darkHover.slice(0, darkHover.indexOf("}")), /0 8px 8px 0/);
+  assert.match(notesCss, /\n\.oi-note-card:hover \{\n  background: var\(--oi-reader-hover\);\n  border-radius: 0 8px 8px 0;\n\}/);
   assert.match(notesCss, /\[data-reader-theme="dark"\] \.workspace\[data-notes-open="true"\] > #sideSlot[\s\S]*border-inline-start:\s*1px solid var\(--oi-reader-line\)/);
   assert.match(notesCss, /\[data-notes-side="start"\] > #sideSlot[\s\S]*border-inline-end:\s*1px solid var\(--oi-reader-line\)/);
   const tokens = read("pdf/reader-tokens.css");
@@ -2463,7 +2471,7 @@ test("a migrated layout whose revision sits on the row is current, and a late zo
   assert.equal(layoutReadyForZone({
     layout: { blocks: [{ bid: "inner-old", text: "stale" }], layoutVersion: "source-v3:other", protocol: "blocks-1" },
     layoutRev: version
-  }, version).blocks[0].bid, "inner-old");
+  }, version), null);
   assert.equal(layoutReadyForZone({
     layout: {
       blocks: [{ bid: "fall", text: "stand-in" }],
@@ -2472,33 +2480,167 @@ test("a migrated layout whose revision sits on the row is current, and a late zo
     }
   }, version), null);
 
-  const { store } = memoryStore();
-  await store.putLayout({
-    docHash: "doc-mode",
-    page: 1,
-    mode: "text-layer",
-    protocol: "blocks-1",
-    layoutRev: version,
-    layout: { blocks: [{ bid: "vendor", text: "from service" }], protocol: "blocks-1" }
-  });
-  const key = layoutCacheKey({ hash: "doc-mode", page: 1, mode: "local-ocr" });
-  const read = await readLayoutCache(key, { store });
-  assert.equal(read.blocks[0].bid, "vendor");
-  assert.equal(read.layoutVersion, version);
-  assert.equal(layoutReadyForZone(read, version).blocks[0].bid, "vendor");
+  const modeLess = toLibraryRecords({
+    hash: "doc-mode",
+    pages: [{ page: 1, pairs: [], layout: { blocks: [{ bid: "bare" }], protocol: "blocks-1" } }]
+  }, "doc-mode");
+  assert.equal(modeLess.layouts[0].mode, "unknown");
+  const bareDoc = libraryDocumentFromRecords(
+    { docHash: "doc-mode", title: "无模式", pageCount: 1 },
+    [{ page: 1, pairs: [] }],
+    [{
+      ...modeLess.layouts[0],
+      layoutRev: version,
+      layout: { ...modeLess.layouts[0].layout, layoutVersion: version }
+    }]
+  );
+  assert.equal(bareDoc.pages[0].layout.mode, undefined);
+  assert.equal(layoutCurrentForEngine(bareDoc.pages[0], version, "local-ocr").blocks[0].bid, "bare");
+  assert.equal(migratedLayoutMode({ textSource: "text-layer" }, { blocks: [] }), "unknown");
+  assert.equal(migratedLayoutMode({ source: "local-ocr" }), "local-ocr");
+  assert.equal(migratedLayoutMode({ mode: "local-ocr" }), "local-ocr");
+  assert.equal(toLibraryRecords({
+    pages: [{ page: 1, layout: { blocks: [{ bid: "ocr" }], mode: "cloud-ocr" } }]
+  }, "doc-cloud").layouts[0].mode, "cloud-ocr");
 
+  const kept = doc.pages[0].layout;
   let writes = 0;
   const settled = await settleFreshZone({
     hash: "doc-late",
     page: 1,
     version,
     reason: "stored",
-    cachedRead: () => read,
+    engine: "text-layer",
+    cachedRead: () => kept,
     write: async () => { writes += 1; }
   });
   assert.equal(writes, 0);
   assert.equal(settled.recomputed, false);
-  assert.equal(settled.layout.blocks[0].bid, "vendor");
+  assert.equal(settled.layout.blocks[0].bid, "kept");
+  let switched = 0;
+  const rezoned = await settleFreshZone({
+    hash: "doc-switch",
+    page: 1,
+    version,
+    reason: "stored",
+    engine: "local-ocr",
+    cachedRead: () => kept,
+    write: async () => { switched += 1; }
+  });
+  assert.equal(switched, 1);
+  assert.equal(rezoned.recomputed, true);
+  assert.equal(rezoned.layout, null);
+});
+
+test("a text-layer row is not current for local-ocr, and switching engines zones again", async () => {
+  const version = "rev-current";
+  const { store } = memoryStore();
+  await store.putLayout({
+    docHash: "d",
+    page: 1,
+    mode: "text-layer",
+    protocol: "blocks-1",
+    layoutRev: version,
+    layout: { blocks: [{ bid: "text-layer-block" }], layoutVersion: version, protocol: "blocks-1" }
+  });
+  globalThis.chrome = {
+    storage: {
+      local: {
+        async get(key) {
+          return { [key]: { blocks: [{ bid: "legacy-local-ocr" }], layoutVersion: version } };
+        }
+      }
+    }
+  };
+  const key = layoutCacheKey({ hash: "d", page: 1, mode: "local-ocr" });
+  const got = await readLayoutCache(key, { store });
+  assert.equal(got.blocks[0].bid, "legacy-local-ocr");
+  assert.equal(layoutCurrentForEngine(got, version, "local-ocr").blocks[0].bid, "legacy-local-ocr");
+  assert.notEqual(got.blocks[0].bid, "text-layer-block");
+  const textOnly = {
+    mode: "text-layer",
+    layoutRev: version,
+    layout: { blocks: [{ bid: "text-layer-block" }], layoutVersion: version, mode: "text-layer" }
+  };
+  assert.equal(layoutCurrentForEngine(textOnly, version, "local-ocr"), null);
+  assert.equal(layoutCurrentForEngine(textOnly, version, "text-layer").blocks[0].bid, "text-layer-block");
+  assert.equal(layoutCurrentForEngine({
+    mode: "unknown",
+    layout: { blocks: [{ bid: "bare" }], layoutVersion: version, mode: "unknown" }
+  }, version, "local-ocr"), null);
+  assert.equal(layoutReadyForZone({
+    layout: { blocks: [{ bid: "x" }], layoutVersion: "rev-old" },
+    layoutRev: version
+  }, version), null);
+  const viewer = read("pdf/viewer.js");
+  const ingest = viewer.slice(viewer.indexOf("async function ingestVendorLayout"), viewer.indexOf("async function ingestSkippedSourceLayout"));
+  assert.match(ingest, /layoutCurrentForEngine\(zone\.cached, version, mode\)/);
+  assert.match(ingest, /layoutCurrentForEngine\(libraryEntry\(n\), version, mode\)/);
+  assert.match(viewer, /if \(!layoutServesEngine\(entry, engine\)\) continue/);
+});
+
+test("retranslating page 2 does not wait on other stale layouts", async () => {
+  const layoutMs = 40;
+  const { blocking, background } = layoutRetrySplit(6, 2);
+  assert.deepEqual(blocking, [2]);
+  assert.deepEqual(background, [1, 3, 4, 5, 6]);
+  const lane = createPrioritySerialLane();
+  const order = [];
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const started = performance.now();
+  await Promise.all(blocking.map((page) => lane.run(page, async () => {
+    order.push(page);
+    await sleep(layoutMs);
+  }, { priority: true })));
+  const rest = Promise.all(background.map((page) => lane.run(page, async () => {
+    order.push(page);
+    await sleep(layoutMs);
+  })));
+  await sleep(30);
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < layoutMs + 150, `page 2 retranslate waited ${elapsed}ms`);
+  assert.ok(elapsed < background.length * layoutMs, elapsed);
+  await rest;
+  assert.equal(order[0], 2);
+  const queued = createPrioritySerialLane();
+  const jumped = [];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const first = queued.run(1, async () => {
+    jumped.push(1);
+    await gate;
+  });
+  const later = queued.run(3, async () => { jumped.push(3); });
+  const current = queued.run(2, async () => { jumped.push(2); }, { priority: true });
+  release();
+  await Promise.all([first, later, current]);
+  assert.deepEqual(jumped, [1, 2, 3]);
+  const viewer = read("pdf/viewer.js");
+  const job = viewer.slice(viewer.indexOf("async function translateWholeDocument"), viewer.indexOf("function snapshotForceReadout"));
+  const awaited = job.indexOf("await retryPendingVendorLayouts");
+  const backgroundCall = job.indexOf("void retryPendingVendorLayouts");
+  assert.ok(awaited > 0 && backgroundCall > awaited);
+  assert.match(job.slice(awaited, awaited + 180), /onlyPage: viewing/);
+  assert.match(job.slice(backgroundCall, backgroundCall + 220), /skipPage: viewing/);
+});
+
+test("an update stays an update when the note id used to look temporary", async () => {
+  const pending = createPendingNotes({ tabId: "tab-id", now: () => 40 });
+  const id = crypto.randomUUID();
+  await pending.stage("doc-id", { id, body: "已保存", op: "update", page: 1 });
+  const rows = await pending.list("doc-id");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].op, "update");
+  assert.equal(rows[0].noteId, id);
+  assert.equal(rows[0].tempId, undefined);
+  await pending.stage("doc-tmp", { id: "tmp-old", body: "旧", op: "update" });
+  const legacy = await pending.list("doc-tmp");
+  assert.equal(legacy[0].op, "update");
+  assert.equal(legacy[0].noteId, "tmp-old");
+  const notes = read("pdf/notes-panel.js");
+  const keyFn = notes.slice(notes.indexOf("function editorKey"), notes.indexOf("async function commitEditor"));
+  assert.match(keyFn, /crypto\.randomUUID\(\)/);
+  assert.doesNotMatch(keyFn, /tmp-/);
 });
 
 test("a stopped layout port surfaces the zoning failure before the retry budget ends", async () => {
@@ -2518,7 +2660,9 @@ test("a stopped layout port surfaces the zoning failure before the retry budget 
   assert.equal(sleeps.length, LAYOUT_RETRY_DELAYS_MS.length);
   const viewer = read("pdf/viewer.js");
   assert.match(viewer, /onNetworkFailure\(\) \{[\s\S]*layoutNotice = LAYOUT_FALLBACK_STATUS/);
-  assert.match(viewer, /const stale = Boolean\(entry && hasStored && version && !layoutReadyForZone\(entry, version\)\)/);
+  assert.match(viewer, /function clearLayoutFallbackStatus\(\)/);
+  assert.match(viewer, /textContent === LAYOUT_FALLBACK_STATUS/);
+  assert.match(viewer, /const stale = Boolean\(entry && hasStored && version && !layoutCurrentForEngine\(entry, version, mode\)\)/);
   const retranslate = viewer.slice(
     viewer.indexOf("async function forceRetranslateCurrentPage"),
     viewer.indexOf("function titleStructureFailed")

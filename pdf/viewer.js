@@ -201,12 +201,14 @@ import {
   fetchCloudEnvelope,
   fetchLocalEnvelope,
   layoutCacheKey,
+  layoutCurrentForEngine,
   layoutFallbackOf,
+  layoutRetrySplit,
+  layoutServesEngine,
   normalizePdfLayout,
   resolveLayoutMode,
   shouldFetchCloud,
-  layoutReadyForZone,
-  storedLayoutCurrent,
+  createPrioritySerialLane,
   storedLayoutDisplayable
 } from "../lib/pdf-layout-client.js";
 import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
@@ -7844,6 +7846,7 @@ function layoutFromStored(page, stored) {
     textSource: stored.textSource || "text-layer",
     sourceAudit: stored.sourceAudit || null,
     ...(stored.layoutVersion ? { layoutVersion: String(stored.layoutVersion) } : {}),
+    ...(stored.mode ? { mode: String(stored.mode) } : {}),
     ...(fallback ? { fallback } : {}),
     blocks: stored.blocks,
     itemCount: Number(stored.itemCount) || stored.blocks.length
@@ -7853,10 +7856,12 @@ function layoutFromStored(page, stored) {
 /** Paint the library's current blocks before any pair-only or text-layer stand-in. */
 function installDisplayableLibraryLayouts(version = knownLayoutVersion) {
   if (!version || !libraryDoc?.pages?.length) return false;
+  const engine = pdfEngineMode();
   let changed = false;
   for (const entry of libraryDoc.pages) {
     const page = Number(entry?.page);
     if (!(page >= 1)) continue;
+    if (!layoutServesEngine(entry, engine)) continue;
     const stored = storedLayoutDisplayable(entry, version);
     if (!stored?.blocks?.length) continue;
     if (getPageLayout(page)?.blocks?.length) continue;
@@ -7880,7 +7885,7 @@ function libraryLayoutNeedsWrite(page) {
   const hasLayout = Array.isArray(storedBlocks) && storedBlocks.length > 0;
   const hasVersion = Boolean(entry.layoutVersion || entry.layout?.layoutVersion);
   if (!hasLayout && !hasVersion) return false;
-  return !layoutReadyForZone(entry, version);
+  return !layoutCurrentForEngine(entry, version, pdfEngineMode());
 }
 
 function persistDisplayedLayout(page) {
@@ -8914,42 +8919,55 @@ async function translateWholeDocument() {
     // whose sidecar call failed still get a recompute, then an immediate write-back.
     if (!translatedDoc.aborted && !work.aborted) {
       await reconcileLockedSkipLayouts(() => !isCurrentWork(work, gen, translatingDoc));
-      const upgraded = await retryPendingVendorLayouts(() => !isCurrentWork(work, gen, translatingDoc));
-      const needs = [];
-      for (const page of upgraded || []) {
-        if (!isCurrentWork(work, gen, translatingDoc)) break;
-        const blocks = getPageLayout(page)?.blocks || null;
-        if (!blocks || isSkipOnlyPage(blocks)) continue;
-        const covered = libraryPageRunState({
-          pairs: libraryEntry(page)?.pairs || [],
-          cached: pageCache.get(translatingDoc, page),
-          blocks,
-          targetLang: pdfTargetLang,
-          provider: pdfProvider
-        });
-        if (covered === "done" || covered === "skipped" || covered === "empty") continue;
-        const prior = pageStates.get(page);
-        notePageState(page, {
-          state: countedPageState(prior?.state) ? "partial" : "queued",
-          hasLayout: true
-        });
-        clearSlotPainted(page);
-        needs.push(page);
+      const staleWork = () => !isCurrentWork(work, gen, translatingDoc);
+      const adoptUpgraded = async (upgraded) => {
+        const needs = [];
+        for (const page of upgraded || []) {
+          if (staleWork()) break;
+          const blocks = getPageLayout(page)?.blocks || null;
+          if (!blocks || isSkipOnlyPage(blocks)) continue;
+          const covered = libraryPageRunState({
+            pairs: libraryEntry(page)?.pairs || [],
+            cached: pageCache.get(translatingDoc, page),
+            blocks,
+            targetLang: pdfTargetLang,
+            provider: pdfProvider
+          });
+          if (covered === "done" || covered === "skipped" || covered === "empty") continue;
+          const prior = pageStates.get(page);
+          notePageState(page, {
+            state: countedPageState(prior?.state) ? "partial" : "queued",
+            hasLayout: true
+          });
+          clearSlotPainted(page);
+          needs.push(page);
+        }
+        if (needs.length && !translatedDoc.paused && !staleWork() && !work.aborted) {
+          const filled = await translateDocumentPages({
+            ...pageJob,
+            preserveSession: true,
+            includePage: (page) => needs.includes(page)
+          });
+          translatedDoc = {
+            ok: translatedDoc.ok && filled.ok,
+            aborted: translatedDoc.aborted || filled.aborted,
+            paused: translatedDoc.paused || filled.paused,
+            error: translatedDoc.error || filled.error,
+            missingField: translatedDoc.missingField || filled.missingField,
+            pages: translatedDoc.pages.concat(filled.pages)
+          };
+        }
+      };
+      // Retranslate waits on this job. Only the page on screen may hold it.
+      // The other stale pages keep posting on the vendor lane after the job
+      // releases; waiting for that chain is what made page 2 take over 120s.
+      const viewing = Number(pageNum) || 0;
+      const split = layoutRetrySplit(total, viewing);
+      if (split.blocking.length) {
+        await adoptUpgraded(await retryPendingVendorLayouts(staleWork, { onlyPage: viewing }));
       }
-      if (needs.length && !translatedDoc.paused && isCurrentWork(work, gen, translatingDoc) && !work.aborted) {
-        const filled = await translateDocumentPages({
-          ...pageJob,
-          preserveSession: true,
-          includePage: (page) => needs.includes(page)
-        });
-        translatedDoc = {
-          ok: translatedDoc.ok && filled.ok,
-          aborted: translatedDoc.aborted || filled.aborted,
-          paused: translatedDoc.paused || filled.paused,
-          error: translatedDoc.error || filled.error,
-          missingField: translatedDoc.missingField || filled.missingField,
-          pages: translatedDoc.pages.concat(filled.pages)
-        };
+      if (split.background.length) {
+        void retryPendingVendorLayouts(staleWork, { skipPage: viewing }).catch(() => {});
       }
     }
   }
@@ -9247,19 +9265,28 @@ function emptyPageResults(layout) {
 }
 
 /** Pages still waiting on the sidecar, including ones skipped by a translation pause. */
-async function retryPendingVendorLayouts(isStale) {
+async function retryPendingVendorLayouts(isStale, options = {}) {
   const upgraded = [];
   const mode = pdfEngineMode();
   if (mode !== "local-ocr" && mode !== "cloud-ocr") return upgraded;
   const version = await layoutVersionNow();
   const total = pdfDoc?.numPages || 0;
+  const only = Number(options.onlyPage) || 0;
+  const skip = Number(options.skipPage) || 0;
+  const pages = [];
   for (let page = 1; page <= total; page += 1) {
+    if (only && page !== only) continue;
+    if (skip && page === skip) continue;
+    pages.push(page);
+  }
+  pages.sort((a, b) => Number(b === Number(pageNum)) - Number(a === Number(pageNum)) || a - b);
+  for (const page of pages) {
     if (isStale()) return upgraded;
     const entry = libraryEntry(page);
     const storedBlocks = entry?.layout?.blocks;
     const hasStored = (Array.isArray(storedBlocks) && storedBlocks.length > 0) ||
       Boolean(entry?.layoutVersion || entry?.layout?.layoutVersion);
-    const stale = Boolean(entry && hasStored && version && !layoutReadyForZone(entry, version));
+    const stale = Boolean(entry && hasStored && version && !layoutCurrentForEngine(entry, version, mode));
     if (!stale && !vendorLayoutPending.has(page)) continue;
     try {
       const laid = await ingestPageLayout(page, isStale);
@@ -9320,8 +9347,7 @@ async function writeStoredLayout(key, page) {
 
 const vendorLayoutPending = new Set();
 const vendorLayoutReason = new Map();
-let vendorLayoutChain = Promise.resolve();
-const vendorLayoutInflight = new Map();
+const vendorLayoutLane = createPrioritySerialLane();
 let layoutAbort = new AbortController();
 let layoutEpoch = 0;
 
@@ -9330,6 +9356,13 @@ function abortError() {
   error.name = "AbortError";
   error.code = "aborted";
   return error;
+}
+
+/** A retry that then succeeds must not leave the zoning-failure line up. */
+function clearLayoutFallbackStatus() {
+  const showing = layoutNotice === LAYOUT_FALLBACK_STATUS || $("status")?.textContent === LAYOUT_FALLBACK_STATUS;
+  if (layoutNotice === LAYOUT_FALLBACK_STATUS) layoutNotice = "";
+  if (showing && !pdfTranslateBusy(session)) setStatus("");
 }
 
 /** Drop in-flight layout POSTs. The sidecar is one request at a time; a closed tab must not keep it. */
@@ -9341,30 +9374,18 @@ function abortInflightLayouts() {
     /* already aborted */
   }
   layoutAbort = new AbortController();
-  vendorLayoutInflight.clear();
-  vendorLayoutChain = Promise.resolve();
+  vendorLayoutLane.reset();
 }
 
-/** One sidecar POST at a time. A second caller for the same page shares the first. */
+/** One sidecar POST at a time. The page on screen skips ahead of queued pages. */
 function runVendorLayoutHttp(page, task) {
   const key = Number(page) || 0;
-  const existing = vendorLayoutInflight.get(key);
-  if (existing) return existing;
   const epoch = layoutEpoch;
   const signal = layoutAbort.signal;
-  const run = () => {
+  return vendorLayoutLane.run(key, () => {
     if (epoch !== layoutEpoch || signal.aborted) throw abortError();
     return task(signal);
-  };
-  const job = vendorLayoutChain.then(run, run);
-  vendorLayoutInflight.set(key, job);
-  const settled = job.then(() => {
-    if (vendorLayoutInflight.get(key) === job) vendorLayoutInflight.delete(key);
-  }, () => {
-    if (vendorLayoutInflight.get(key) === job) vendorLayoutInflight.delete(key);
-  });
-  if (epoch === layoutEpoch) vendorLayoutChain = settled;
-  return job;
+  }, { priority: key === Number(pageNum), abortError });
 }
 
 async function ingestVendorLayout(n, mode, isStale) {
@@ -9402,8 +9423,8 @@ async function ingestVendorLayout(n, mode, isStale) {
   }
   // A source-v3 entry with no revision, or an older revision, is not the current
   // block structure. Library page layouts follow the same rule.
-  let mapped = layoutReadyForZone(zone.cached, version)
-    || layoutReadyForZone(libraryEntry(n), version);
+  let mapped = layoutCurrentForEngine(zone.cached, version, mode)
+    || layoutCurrentForEngine(libraryEntry(n), version, mode);
   let recomputed = false;
   if (!mapped) {
     try {
@@ -9443,6 +9464,7 @@ async function ingestVendorLayout(n, mode, isStale) {
         page: n,
         version,
         reason: zone.reason,
+        engine: mode,
         cachedRead: () => (zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null),
         write: () => writeStoredLayout(key, mapped)
       });
@@ -9478,6 +9500,7 @@ async function ingestVendorLayout(n, mode, isStale) {
     hash,
     page: n,
     version,
+    engine: mode,
     cached: zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null
   });
   if (arrived) {
@@ -9490,6 +9513,7 @@ async function ingestVendorLayout(n, mode, isStale) {
     hash,
     page: n,
     version,
+    engine: mode,
     cached: zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null
   });
   if (latePaint) {
@@ -9505,6 +9529,7 @@ async function ingestVendorLayout(n, mode, isStale) {
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
   setPageLayout(n, layout);
+  if (!isStale()) clearLayoutFallbackStatus();
   if (recomputed) persistPageLayout(n).catch(() => {});
   else if (zone.reason === "cap" || zone.reason === "unavailable") {
     void whenZoneReadSettles(hash).then(() => {
@@ -9512,6 +9537,7 @@ async function ingestVendorLayout(n, mode, isStale) {
         hash,
         page: n,
         version,
+        engine: mode,
         cached: zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null
       });
       if (still) return;
@@ -10561,7 +10587,8 @@ async function loadCurrentPageText(explicitPage) {
   if (isStale()) return;
   const version = knownLayoutVersion || await layoutVersionNow();
   const openedStored = getPageLayout(n);
-  if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version)) {
+  const openedEngine = pdfEngineMode();
+  if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version) && layoutServesEngine(openedStored, openedEngine)) {
     if (!showOpenedLayout(openedStored, isStale)) return;
     const saved = await savedTranslationForNav(n);
     if (!libraryDoc) paintLateLibrary(n, ticket);
@@ -10585,7 +10612,7 @@ async function loadCurrentPageText(explicitPage) {
     refreshDocStatus();
     renderArticle();
     updateTranslateControls();
-    if (!layoutReadyForZone(openedStored, version) && (pdfEngineMode() === "local-ocr" || pdfEngineMode() === "cloud-ocr")) {
+    if (!layoutCurrentForEngine(openedStored, version, openedEngine) && (openedEngine === "local-ocr" || openedEngine === "cloud-ocr")) {
       upgradeStoredFallback(n, pdfEngineMode(), isStale).catch(() => {});
     }
     return;

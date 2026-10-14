@@ -372,6 +372,14 @@
 [data-reader-theme="dark"] .oi-note-card {
   background: var(--oi-reader-surface);
   border: 1px solid var(--oi-reader-line);
+  border-radius: 8px;
+}
+[data-reader-theme="dark"] .oi-note-card:hover,
+[data-reader-theme="dark"] .oi-note-card.is-linked,
+[data-reader-theme="dark"] .oi-note-card.linked,
+[data-reader-theme="dark"] .oi-note-card.is-linked:hover,
+[data-reader-theme="dark"] .oi-note-card.linked:hover {
+  border-radius: 8px;
 }
 [data-reader-theme="dark"] .workspace[data-notes-open="true"] > #sideSlot {
   border-inline-start: 1px solid var(--oi-reader-line);
