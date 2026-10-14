@@ -1985,6 +1985,61 @@ test("a deferred zone write swallows rejection", async () => {
   }
 });
 
+test("a page save that created the paper does not block migration of the pages it skipped", async () => {
+  const { store } = memoryStore({ now: () => 80 });
+  await store.putLegacyDocument("doc-fill", {
+    paper: { title: "先存的", pageCount: 2 },
+    pages: [{
+      page: 1,
+      pairs: [{ bid: "a", text: "Keep", sourceText: "Keep", translation: "留下", targetLang: "zh-CN" }]
+    }],
+    layouts: [{
+      docHash: "doc-fill",
+      page: 1,
+      mode: "unknown",
+      protocol: "blocks-1",
+      layoutRev: "rev-a",
+      layout: { blocks: [{ bid: "kept" }], layoutVersion: "rev-a", protocol: "blocks-1" }
+    }]
+  });
+  await store.putLegacyDocument("doc-fill", {
+    paper: { title: "后来的迁移", pageCount: 2 },
+    pages: [
+      {
+        page: 1,
+        pairs: [{ bid: "a", text: "Keep", sourceText: "Keep", translation: "被盖掉", targetLang: "zh-CN" }]
+      },
+      {
+        page: 2,
+        pairs: [{ bid: "b", text: "New", sourceText: "New", translation: "补上", targetLang: "zh-CN" }]
+      }
+    ],
+    layouts: [
+      {
+        docHash: "doc-fill",
+        page: 1,
+        mode: "unknown",
+        protocol: "blocks-1",
+        layoutRev: "rev-b",
+        layout: { blocks: [{ bid: "replaced" }], layoutVersion: "rev-b", protocol: "blocks-1" }
+      },
+      {
+        docHash: "doc-fill",
+        page: 2,
+        mode: "unknown",
+        protocol: "blocks-1",
+        layoutRev: "rev-b",
+        layout: { blocks: [{ bid: "filled" }], layoutVersion: "rev-b", protocol: "blocks-1" }
+      }
+    ]
+  });
+  assert.equal((await store.getPaper("doc-fill")).title, "先存的");
+  assert.equal((await store.getPage("doc-fill", 1)).pairs[0].translation, "留下");
+  assert.equal((await store.getPage("doc-fill", 2)).pairs[0].translation, "补上");
+  assert.equal((await store.getLayout("doc-fill", 1, "unknown", "blocks-1")).layout.blocks[0].bid, "kept");
+  assert.equal((await store.getLayout("doc-fill", 2, "unknown", "blocks-1")).layout.blocks[0].bid, "filled");
+});
+
 test("import keeps the migration record", async () => {
   const { store } = memoryStore({ now: () => 70 });
   await store.putLegacyDocument("doc-migrate", {
@@ -2972,6 +3027,38 @@ test("both a preempted open and the new open recover and announce once", async (
   chip.destroy();
 });
 
+test("an open that outlasts the preempt budget still recovers the chip", async () => {
+  const dom = installDom();
+  const host = dom.document.createElement("div");
+  dom.body.append(host);
+  const timers = createTimers();
+  let release;
+  const chip = createLibraryChip({
+    host,
+    timers,
+    pollMs: 60000,
+    manualRetryMs: 40,
+    openStorage: () => new Promise((resolve) => { release = resolve; })
+  });
+  chip.block(blockedError("blocked"));
+  void chip.autoRetry({ preempt: true });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(chip.opens(), 1);
+  timers.advance(40);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(chip.state.mode, "blocked");
+  release(true);
+  const started = Date.now();
+  while (chip.state.mode !== "recovered" && Date.now() - started < 500) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(chip.state.mode, "recovered");
+  assert.match(dom.text(host), /已恢复/);
+  chip.destroy();
+});
+
 test("a second save replaces the staged create for that note", async () => {
   const pending = createPendingNotes({ tabId: "tab-replace", now: () => 70 });
   const first = await pending.stage("doc-replace", { body: "新建", op: "create", page: 1 });
@@ -3452,7 +3539,8 @@ test("Stop during a background fill sends no further translation requests", asyn
   assert.match(viewer, /window\.addEventListener\("pagehide", closeViewerWork\)/);
   assert.match(viewer, /function closeViewerWork\(\)/);
   assert.match(viewer.slice(viewer.indexOf("function closeViewerWork"), viewer.indexOf("function postVendorLayout")), /layoutClosed = true/);
-  assert.match(viewer, /if \(layoutClosed\) return Promise\.reject\(abortError\(\)\)/);
+  assert.match(viewer, /function layoutAttemptLive\(epoch\)/);
+  assert.match(viewer, /return !layoutClosed && epoch === layoutEpoch && !layoutAbort\.signal\.aborted/);
 });
 
 test("Stop cancels a queued vendor layout POST before it is sent or written", async () => {
@@ -3515,6 +3603,32 @@ test("Stop cancels a queued vendor layout POST before it is sent or written", as
   assert.match(cancel, /layoutAbort\.abort\(\)/);
   assert.match(cancel, /vendorLayoutLane\.reset\(\)/);
   assert.doesNotMatch(cancel, /layoutClosed = true/);
+  const postSource = viewer.slice(viewer.indexOf("function postVendorLayout"), viewer.indexOf("async function ingestVendorLayout"));
+  assert.match(postSource, /function postVendorLayout\(page, run, epoch = layoutEpoch\)/);
+  assert.match(postSource, /if \(!layoutAttemptLive\(epoch\)\) return Promise\.reject\(abortError\(\)\)/);
+  assert.match(postSource, /if \(!layoutAttemptLive\(epoch\)\) throw abortError\(\)/);
+  assert.doesNotMatch(postSource, /const epoch = layoutEpoch/);
+  const ingest = viewer.slice(viewer.indexOf("async function ingestVendorLayout"), viewer.indexOf("async function ingestSkippedSourceLayout"));
+  assert.match(ingest, /if \(!layoutAttemptLive\(epoch\) \|\| isStale\(\)\)/);
+  assert.match(ingest, /postVendorLayout\(n,/);
+  assert.ok(ingest.indexOf("if (!layoutAttemptLive(epoch) || isStale())") < ingest.indexOf("postVendorLayout(n,"));
+  assert.match(ingest, /if \(!layoutAttemptLive\(epoch\)\) return Promise\.resolve\(\)/);
+  assert.match(ingest, /if \(recomputed && !layoutAttemptLive\(epoch\)\) return null/);
+  const retry = viewer.slice(viewer.indexOf("async function retryPendingVendorLayouts"), viewer.indexOf("async function ingestPageLayout"));
+  assert.match(retry, /Number\.isFinite\(options\.epoch\) \? options\.epoch : layoutEpoch/);
+  assert.ok(retry.indexOf("layoutAttemptLive(epoch)") < retry.indexOf("await layoutVersionNow()"));
+  assert.match(viewer, /const layoutScheduled = layoutEpoch/);
+  assert.match(viewer, /!layoutAttemptLive\(layoutScheduled\)/);
+  assert.match(viewer, /retryPendingVendorLayouts\(staleWork, \{ \.\.\.options, epoch: layoutScheduled \}\)/);
+  const zone = viewer.slice(viewer.indexOf("async function zoneForRetranslate"), viewer.indexOf("async function forceRetranslateCurrentPage"));
+  assert.match(zone, /const epoch = layoutEpoch/);
+  assert.match(zone, /ingestVendorLayout\(page, mode,/);
+  const force = viewer.slice(viewer.indexOf("async function forceRetranslateCurrentPage"), viewer.indexOf("function titleStructureFailed"));
+  assert.match(force, /zoneForRetranslate\(targetPage, work\)/);
+  assert.doesNotMatch(force, /layoutClosed = true/);
+  const notes = read("lib/notes-store.js");
+  assert.match(notes, /storageOpenInflight\(NOTES_DB_NAME\)/);
+  assert.match(notes, /await waitForNotesUpgrade\(\)/);
 });
 
 test("retranslating a page during its fill-in translates it once", async () => {
