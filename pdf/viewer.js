@@ -2639,6 +2639,48 @@ function pdfEngineMode() {
   return resolveLayoutMode(cachedPdfLayout, storedEngineOverride());
 }
 
+/** text-layer, local-ocr, or cloud-ocr already recorded on a layout. unknown stays unset. */
+function engineModeOf(layout) {
+  const mode = String(layout?.mode || "");
+  return mode === "text-layer" || mode === "local-ocr" || mode === "cloud-ocr" ? mode : "";
+}
+
+/**
+ * A layout this session just built belongs to the current engine.
+ * A library stand-in tagged unknown, and a transient text-layer fallback, keep
+ * their existing tag so a legacy page is not relabeled.
+ */
+function stampProducedEngine(layout) {
+  if (!layout || layout.fallback) return layout;
+  const mode = pdfEngineMode();
+  if (mode === "text-layer" || mode === "local-ocr" || mode === "cloud-ocr") layout.mode = mode;
+  return layout;
+}
+
+/** The in-memory row for this engine, so a later switch sees the tag before reload. */
+function rememberEngineLayout(page, layout) {
+  const mode = engineModeOf(layout);
+  if (!mode || !libraryDoc) return;
+  if (!Array.isArray(libraryDoc.layoutRows)) libraryDoc.layoutRows = [];
+  const protocol = String(layout?.protocol || "blocks-1");
+  const version = String(layout?.layoutVersion || "");
+  const row = {
+    page: Number(page),
+    mode,
+    protocol,
+    savedAt: Date.now(),
+    layoutRev: version,
+    layout: { ...layout, mode }
+  };
+  const at = libraryDoc.layoutRows.findIndex((item) => (
+    Number(item?.page) === Number(page) &&
+    String(item?.mode || "") === mode &&
+    String(item?.protocol || "blocks-1") === protocol
+  ));
+  if (at >= 0) libraryDoc.layoutRows[at] = { ...libraryDoc.layoutRows[at], ...row };
+  else libraryDoc.layoutRows.push(row);
+}
+
 async function loadPdfLayout() {
   if (cachedPdfLayout) return cachedPdfLayout;
   try {
@@ -7805,7 +7847,7 @@ function rememberTranslation(page, results) {
       blocks,
       targetLang: pdfTargetLang,
       ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
-      ...(pdfEngineMode() === "local-ocr" || pdfEngineMode() === "cloud-ocr" ? { mode: pdfEngineMode() } : {}),
+      ...(engineModeOf(rawLayout) ? { mode: engineModeOf(rawLayout) } : {}),
       sourceBase64,
       ...(skipped ? { skipped: true } : {})
     };
@@ -7816,6 +7858,7 @@ function rememberTranslation(page, results) {
     if (savedPage && layout) {
       savedPage.layout = layout;
       if (layout.layoutVersion) savedPage.layoutVersion = layout.layoutVersion;
+      rememberEngineLayout(page, rawLayout);
     } else if (skipped && libraryDoc && Array.isArray(libraryDoc.pages)) {
       libraryDoc.pages.push({ page, pairs: [], skipped: true, ...(layout ? { layout, layoutVersion: layout.layoutVersion } : {}) });
     }
@@ -7914,6 +7957,7 @@ function persistPageLayout(page) {
     entry.layout = layout;
     entry.layoutVersion = version;
     if (skipped) entry.skipped = true;
+    rememberEngineLayout(page, raw);
   } else if (libraryDoc && Array.isArray(libraryDoc.pages)) {
     libraryDoc.pages.push({ page, pairs, layout, layoutVersion: version, ...(skipped ? { skipped: true } : {}) });
   }
@@ -7933,7 +7977,7 @@ function persistPageLayout(page) {
       blocks: raw.blocks,
       targetLang: pdfTargetLang,
       layoutVersion: version,
-      ...(pdfEngineMode() === "local-ocr" || pdfEngineMode() === "cloud-ocr" ? { mode: pdfEngineMode() } : {}),
+      ...(engineModeOf(raw) ? { mode: engineModeOf(raw) } : {}),
       ...(skipped ? { skipped: true } : {})
     };
     await saveLibraryPage(savedPayload);
@@ -7961,6 +8005,7 @@ function persistPagePairs(saved) {
       targetLang: pdfTargetLang,
       ...(layout ? { layout } : {}),
       ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
+      ...(engineModeOf(rawLayout) ? { mode: engineModeOf(rawLayout) } : {}),
       ...(saved.skipped ? { skipped: true } : {})
     };
     await saveLibraryPage(savedPayload);
@@ -9564,6 +9609,7 @@ async function ingestVendorLayout(n, mode, isStale) {
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
+  stampProducedEngine(layout);
   setPageLayout(n, layout);
   if (!isStale()) clearLayoutFallbackStatus();
   if (recomputed) persistPageLayout(n).catch(() => {});
@@ -9647,6 +9693,7 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
+  if (!fallback) stampProducedEngine(layout);
   // The quick stand-in (persist: false) is replaced by the vendor layout.
   // Re-anchoring it marks 位置近似 notes lost, then the real layout writes them back.
   setPageLayout(n, layout, { reanchor: options.persist !== false });

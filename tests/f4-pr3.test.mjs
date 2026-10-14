@@ -31,6 +31,7 @@ import {
   mergeStoredPagePairs,
   paperFullyInLibrary,
   preferArrivedLayout,
+  recordedLayoutMode,
   saveLibraryPage,
   selectPageLayout,
   shouldProbeLocalService,
@@ -2496,8 +2497,9 @@ test("a migrated layout whose revision sits on the row is current, and a late zo
     }]
   );
   assert.equal(bareDoc.pages[0].layout.mode, "unknown");
-  assert.equal(layoutCurrentForEngine(bareDoc.pages[0], version, "local-ocr"), null);
-  assert.equal(layoutCurrentForLibrary(bareDoc.pages[0], version, "local-ocr"), null);
+  assert.equal(layoutCurrentForEngine(bareDoc.pages[0], version, "local-ocr").blocks[0].bid, "bare");
+  assert.equal(layoutCurrentForLibrary(bareDoc.pages[0], version, "local-ocr").blocks[0].bid, "bare");
+  assert.equal(layoutCurrentForLibrary(bareDoc.pages[0], version, "cloud-ocr").blocks[0].bid, "bare");
   assert.equal(migratedLayoutMode({ textSource: "text-layer" }, { blocks: [] }), "unknown");
   assert.equal(migratedLayoutMode({ source: "local-ocr" }), "local-ocr");
   assert.equal(migratedLayoutMode({ mode: "local-ocr" }), "local-ocr");
@@ -2569,7 +2571,11 @@ test("a text-layer row is not current for local-ocr, and switching engines zones
   assert.equal(layoutCurrentForEngine({
     mode: "unknown",
     layout: { blocks: [{ bid: "bare" }], layoutVersion: version, mode: "unknown" }
-  }, version, "local-ocr"), null);
+  }, version, "local-ocr").blocks[0].bid, "bare");
+  assert.equal(layoutCurrentForLibrary({
+    mode: "unknown",
+    layout: { blocks: [{ bid: "bare" }], layoutVersion: version, mode: "unknown" }
+  }, version, "cloud-ocr").blocks[0].bid, "bare");
   assert.equal(layoutReadyForZone({
     layout: { blocks: [{ bid: "x" }], layoutVersion: "rev-old" },
     layoutRev: version
@@ -2579,9 +2585,14 @@ test("a text-layer row is not current for local-ocr, and switching engines zones
   assert.match(ingest, /layoutCurrentForEngine\(zone\.cached, version, mode\)/);
   assert.match(ingest, /layoutCurrentForLibrary\(libraryEntry\(n\), version, mode\)/);
   assert.match(viewer, /if \(!layoutServesLibrary\(view, engine\)\) continue/);
+  assert.match(viewer, /function stampProducedEngine/);
+  assert.match(viewer, /stampProducedEngine\(layout\)/);
+  assert.match(viewer, /if \(!fallback\) stampProducedEngine\(layout\)/);
+  assert.match(viewer, /engineModeOf\(rawLayout\)/);
+  assert.match(viewer, /engineModeOf\(raw\)/);
 });
 
-test("a mode-less legacy 8765 layout is not current for local-ocr once it is a library document", () => {
+test("a mode-less legacy 8765 layout stays current for every engine, as on main", () => {
   const version = "rev-current";
   const legacy = {
     hash: "d",
@@ -2601,9 +2612,10 @@ test("a mode-less legacy 8765 layout is not current for local-ocr once it is a l
   );
   const page = doc.pages[0];
   assert.equal(page.layout.mode, "unknown");
-  assert.equal(layoutCurrentForEngine(page, version, "local-ocr"), null);
-  assert.equal(layoutCurrentForLibrary(page, version, "local-ocr"), null);
-  assert.equal(Boolean(layoutCurrentForEngine(page, version, "text-layer")), true);
+  for (const engine of ["local-ocr", "text-layer", "cloud-ocr"]) {
+    assert.equal(layoutCurrentForLibrary(page, version, engine).blocks[0].bid, "tl", engine);
+    assert.equal(layoutCurrentForEngine(page, version, engine).blocks[0].bid, "tl", engine);
+  }
   const textRow = libraryDocumentFromRecords(
     { docHash: "e", pageCount: 1 },
     [{ docHash: "e", page: 1, pairs: [] }],
@@ -2617,6 +2629,7 @@ test("a mode-less legacy 8765 layout is not current for local-ocr once it is a l
     }]
   );
   assert.equal(layoutCurrentForLibrary(textRow.pages[0], version, "local-ocr"), null);
+  assert.equal(layoutCurrentForLibrary(textRow.pages[0], version, "text-layer").blocks[0].bid, "x");
   const mixed = [
     {
       page: 1,
@@ -2640,11 +2653,47 @@ test("a mode-less legacy 8765 layout is not current for local-ocr once it is a l
   const bare = layoutCurrentForLibrary({
     layout: { blocks: [{ bid: "bare" }], layoutVersion: version }
   }, version, "local-ocr");
-  assert.equal(bare, null);
+  assert.equal(bare.blocks[0].bid, "bare");
   assert.equal(layoutCurrentForEngine({
     blocks: [{ bid: "cache" }],
     layoutVersion: version
   }, version, "local-ocr").blocks[0].bid, "cache");
+});
+
+test("a produced engine tag is stored, and a mode-less save stays unknown", async () => {
+  const { store } = memoryStore();
+  const version = "rev-current";
+  await saveLibraryPage({
+    hash: "tag",
+    title: "标",
+    pageCount: 2,
+    page: 1,
+    mode: "text-layer",
+    layoutVersion: version,
+    layout: { blocks: [{ bid: "text" }], layoutVersion: version, protocol: "blocks-1" }
+  }, { store });
+  await saveLibraryPage({
+    hash: "tag",
+    page: 2,
+    layoutVersion: version,
+    layout: { blocks: [{ bid: "old" }], layoutVersion: version, protocol: "blocks-1" }
+  }, { store });
+  assert.equal((await store.getLayout("tag", 1, "text-layer", "blocks-1")).mode, "text-layer");
+  assert.equal((await store.getLayout("tag", 2, "unknown", "blocks-1")).mode, "unknown");
+  assert.equal(recordedLayoutMode({ mode: "local-ocr", layout: { mode: "unknown" } }), "local-ocr");
+  assert.equal(recordedLayoutMode({ layout: { mode: "unknown" } }), "unknown");
+  assert.equal(recordedLayoutMode({ layout: { blocks: [] } }), "unknown");
+  const doc = libraryDocumentFromRecords(
+    { docHash: "tag", pageCount: 2 },
+    [{ page: 1, pairs: [] }, { page: 2, pairs: [] }],
+    [
+      { page: 1, mode: "text-layer", protocol: "blocks-1", layoutRev: version, savedAt: 2, layout: { blocks: [{ bid: "text" }], layoutVersion: version } },
+      { page: 2, mode: "unknown", protocol: "blocks-1", layoutRev: version, savedAt: 1, layout: { blocks: [{ bid: "old" }], layoutVersion: version } }
+    ],
+    "local-ocr"
+  );
+  assert.equal(layoutCurrentForLibrary(doc.pages[0], version, "local-ocr"), null);
+  assert.equal(layoutCurrentForLibrary(doc.pages[1], version, "local-ocr").blocks[0].bid, "old");
 });
 
 test("retranslating page 2 does not wait on other stale layouts", async () => {
