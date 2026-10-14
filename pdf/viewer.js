@@ -202,12 +202,15 @@ import {
   fetchLocalEnvelope,
   layoutCacheKey,
   layoutCurrentForEngine,
+  layoutCurrentForLibrary,
   layoutFallbackOf,
-  layoutRetrySplit,
   layoutServesEngine,
+  layoutServesLibrary,
   normalizePdfLayout,
   resolveLayoutMode,
+  runLaneAttempts,
   shouldFetchCloud,
+  startDocumentLayoutRetry,
   createPrioritySerialLane,
   storedLayoutDisplayable
 } from "../lib/pdf-layout-client.js";
@@ -312,7 +315,7 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, saveLibraryPage, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, whenZoneReadSettles } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
@@ -3554,7 +3557,13 @@ function cacheableReuse(units) {
 }
 
 function libraryEntry(page) {
-  return (libraryDoc?.pages || []).find((item) => Number(item.page) === Number(page)) || null;
+  const row = (libraryDoc?.pages || []).find((item) => Number(item.page) === Number(page)) || null;
+  if (!row) return null;
+  const layout = selectPageLayout(libraryDoc?.layoutRows, page, pdfEngineMode());
+  if (!layout) return row;
+  const view = { ...row, layout };
+  if (!view.layoutVersion && layout.layoutVersion) view.layoutVersion = layout.layoutVersion;
+  return view;
 }
 
 function blocksFromLibraryPairs(page, pairs) {
@@ -7861,8 +7870,9 @@ function installDisplayableLibraryLayouts(version = knownLayoutVersion) {
   for (const entry of libraryDoc.pages) {
     const page = Number(entry?.page);
     if (!(page >= 1)) continue;
-    if (!layoutServesEngine(entry, engine)) continue;
-    const stored = storedLayoutDisplayable(entry, version);
+    const view = libraryEntry(page) || entry;
+    if (!layoutServesLibrary(view, engine)) continue;
+    const stored = storedLayoutDisplayable(view, version);
     if (!stored?.blocks?.length) continue;
     if (getPageLayout(page)?.blocks?.length) continue;
     const laid = layoutFromStored(page, stored);
@@ -7885,7 +7895,7 @@ function libraryLayoutNeedsWrite(page) {
   const hasLayout = Array.isArray(storedBlocks) && storedBlocks.length > 0;
   const hasVersion = Boolean(entry.layoutVersion || entry.layout?.layoutVersion);
   if (!hasLayout && !hasVersion) return false;
-  return !layoutCurrentForEngine(entry, version, pdfEngineMode());
+  return !layoutCurrentForLibrary(entry, version, pdfEngineMode());
 }
 
 function persistDisplayedLayout(page) {
@@ -7978,7 +7988,7 @@ function ensureLibraryDocument() {
       const hash = await pdfByteHash();
       if (docId !== stamp || !hash || hash === "nohash") return null;
       if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
-      const doc = await fetchLibraryDocument(hash);
+      const doc = await fetchLibraryDocument(hash, { engine: pdfEngineMode() });
       if (docId !== stamp) return null;
       if (doc) {
         doc.hash = hash;
@@ -8920,7 +8930,7 @@ async function translateWholeDocument() {
     if (!translatedDoc.aborted && !work.aborted) {
       await reconcileLockedSkipLayouts(() => !isCurrentWork(work, gen, translatingDoc));
       const staleWork = () => !isCurrentWork(work, gen, translatingDoc);
-      const adoptUpgraded = async (upgraded) => {
+      const adoptUpgraded = async (upgraded, info = {}) => {
         const needs = [];
         for (const page of upgraded || []) {
           if (staleWork()) break;
@@ -8945,6 +8955,7 @@ async function translateWholeDocument() {
         if (needs.length && !translatedDoc.paused && !staleWork() && !work.aborted) {
           const filled = await translateDocumentPages({
             ...pageJob,
+            ...(info.background ? { session: createTranslateSession() } : {}),
             preserveSession: true,
             includePage: (page) => needs.includes(page)
           });
@@ -8959,16 +8970,18 @@ async function translateWholeDocument() {
         }
       };
       // Retranslate waits on this job. Only the page on screen may hold it.
-      // The other stale pages keep posting on the vendor lane after the job
-      // releases; waiting for that chain is what made page 2 take over 120s.
+      // Other stale pages post after the job releases, and their new blocks
+      // are translated on a side session so they do not mark this job busy.
       const viewing = Number(pageNum) || 0;
-      const split = layoutRetrySplit(total, viewing);
-      if (split.blocking.length) {
-        await adoptUpgraded(await retryPendingVendorLayouts(staleWork, { onlyPage: viewing }));
-      }
-      if (split.background.length) {
-        void retryPendingVendorLayouts(staleWork, { skipPage: viewing }).catch(() => {});
-      }
+      const layoutPass = startDocumentLayoutRetry({
+        total,
+        viewing,
+        isStale: staleWork,
+        retryLayouts: (options) => retryPendingVendorLayouts(staleWork, options),
+        adoptUpgraded
+      });
+      await layoutPass.blocking;
+      void layoutPass.background.catch(() => {});
     }
   }
   if (libraryPass && work === session && !forceReadoutHold) work.running = false;
@@ -9286,7 +9299,7 @@ async function retryPendingVendorLayouts(isStale, options = {}) {
     const storedBlocks = entry?.layout?.blocks;
     const hasStored = (Array.isArray(storedBlocks) && storedBlocks.length > 0) ||
       Boolean(entry?.layoutVersion || entry?.layout?.layoutVersion);
-    const stale = Boolean(entry && hasStored && version && !layoutCurrentForEngine(entry, version, mode));
+    const stale = Boolean(entry && hasStored && version && !layoutCurrentForLibrary(entry, version, mode));
     if (!stale && !vendorLayoutPending.has(page)) continue;
     try {
       const laid = await ingestPageLayout(page, isStale);
@@ -9377,15 +9390,30 @@ function abortInflightLayouts() {
   vendorLayoutLane.reset();
 }
 
-/** One sidecar POST at a time. The page on screen skips ahead of queued pages. */
-function runVendorLayoutHttp(page, task) {
+/**
+ * One sidecar POST at a time. Retry backoff waits outside the lane, so the
+ * page on screen is not stuck behind another page's 429/5xx sleeps.
+ */
+function postVendorLayout(page, run) {
   const key = Number(page) || 0;
   const epoch = layoutEpoch;
-  const signal = layoutAbort.signal;
-  return vendorLayoutLane.run(key, () => {
-    if (epoch !== layoutEpoch || signal.aborted) throw abortError();
-    return task(signal);
-  }, { priority: key === Number(pageNum), abortError });
+  let notified = false;
+  return runLaneAttempts(vendorLayoutLane, key, (attempt) => {
+    if (epoch !== layoutEpoch || layoutAbort.signal.aborted) throw abortError();
+    return run({
+      signal: layoutAbort.signal,
+      maxAttempts: 1,
+      onNetworkFailure: attempt === 0 && !notified
+        ? () => {
+          notified = true;
+        }
+        : undefined
+    });
+  }, {
+    priority: key === Number(pageNum),
+    abortError,
+    shouldStop: () => epoch !== layoutEpoch || layoutAbort.signal.aborted
+  });
 }
 
 async function ingestVendorLayout(n, mode, isStale) {
@@ -9413,7 +9441,8 @@ async function ingestVendorLayout(n, mode, isStale) {
   // refuse to overwrite a layout that arrives later. A blocked open is
   // noticed from the flag and does not sit out the 10s deadline.
   const zoneWait = await waitForFirstZone(hash, {
-    layoutRead: () => readStoredLayout(key)
+    layoutRead: () => readStoredLayout(key),
+    engine: mode
   });
   const zone = await resolveZoneForVendor(hash, zoneWait);
   void ensureLibraryDocument();
@@ -9424,31 +9453,38 @@ async function ingestVendorLayout(n, mode, isStale) {
   // A source-v3 entry with no revision, or an older revision, is not the current
   // block structure. Library page layouts follow the same rule.
   let mapped = layoutCurrentForEngine(zone.cached, version, mode)
-    || layoutCurrentForEngine(libraryEntry(n), version, mode);
+    || layoutCurrentForLibrary(libraryEntry(n), version, mode);
   let recomputed = false;
   if (!mapped) {
     try {
-      const envelope = await runVendorLayoutHttp(n, (signal) => (mode === "cloud-ocr"
-        ? fetchCloudEnvelope({
+      const envelope = await postVendorLayout(n, ({ signal, maxAttempts, onNetworkFailure }) => {
+        const notify = () => {
+          if (typeof onNetworkFailure === "function") onNetworkFailure();
+          if (isStale()) return;
+          layoutNotice = LAYOUT_FALLBACK_STATUS;
+          if (!pdfTranslateBusy(session)) setStatus(layoutNotice);
+        };
+        return mode === "cloud-ocr"
+          ? fetchCloudEnvelope({
             baseUrl: settings.cloudBaseUrl,
             apiKey: settings.cloudApiKey,
             model: settings.cloudModel,
             pngDataUrl: png,
-            signal
+            signal,
+            maxAttempts,
+            onNetworkFailure: notify
           })
-        : fetchLocalEnvelope({
+          : fetchLocalEnvelope({
             baseUrl: settings.localBaseUrl,
             page: n,
             imageBase64: png.replace(/^data:image\/png;base64,/, ""),
             pixelWidth: raster.pixelWidth,
             pixelHeight: raster.pixelHeight,
             signal,
-            onNetworkFailure() {
-              if (isStale()) return;
-              layoutNotice = LAYOUT_FALLBACK_STATUS;
-              if (!pdfTranslateBusy(session)) setStatus(layoutNotice);
-            }
-          })));
+            maxAttempts,
+            onNetworkFailure: notify
+          });
+      });
       let images = null;
       try {
         const ops = await page.getOperatorList();

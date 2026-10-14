@@ -32,6 +32,7 @@ import {
   paperFullyInLibrary,
   preferArrivedLayout,
   saveLibraryPage,
+  selectPageLayout,
   shouldProbeLocalService,
   translationWaitsForLibrary,
   withLibraryDocLock,
@@ -40,7 +41,7 @@ import {
   waitForFirstZone,
   whenZoneReadSettles
 } from "../lib/pdf-library.js";
-import { LAYOUT_RETRY_DELAYS_MS, createPrioritySerialLane, fetchLocalEnvelope, layoutCacheKey, layoutCurrentForEngine, layoutReadyForZone, layoutRetrySplit, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
+import { LAYOUT_RETRY_DELAYS_MS, createPrioritySerialLane, fetchLocalEnvelope, layoutCacheKey, layoutCurrentForEngine, layoutCurrentForLibrary, layoutReadyForZone, layoutRetrySplit, runLaneAttempts, startDocumentLayoutRetry, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { readLayoutCache, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
@@ -1741,7 +1742,7 @@ test("zoning waits only for the IndexedDB read", { timeout: 15000 }, async () =>
   assert.match(fn, /void ensureLibraryDocument\(\)/);
   assert.match(fn, /waitForFirstZone/);
   assert.match(fn, /resolveZoneForVendor/);
-  assert.ok(fn.indexOf("resolveZoneForVendor") < fn.indexOf("runVendorLayoutHttp"));
+  assert.ok(fn.indexOf("resolveZoneForVendor") < fn.indexOf("postVendorLayout"));
   assert.match(fn, /settleFreshZone/);
   assert.match(fn, /currentLayoutIfArrived/);
   const savedFn = viewer.slice(
@@ -2494,8 +2495,9 @@ test("a migrated layout whose revision sits on the row is current, and a late zo
       layout: { ...modeLess.layouts[0].layout, layoutVersion: version }
     }]
   );
-  assert.equal(bareDoc.pages[0].layout.mode, undefined);
-  assert.equal(layoutCurrentForEngine(bareDoc.pages[0], version, "local-ocr").blocks[0].bid, "bare");
+  assert.equal(bareDoc.pages[0].layout.mode, "unknown");
+  assert.equal(layoutCurrentForEngine(bareDoc.pages[0], version, "local-ocr"), null);
+  assert.equal(layoutCurrentForLibrary(bareDoc.pages[0], version, "local-ocr"), null);
   assert.equal(migratedLayoutMode({ textSource: "text-layer" }, { blocks: [] }), "unknown");
   assert.equal(migratedLayoutMode({ source: "local-ocr" }), "local-ocr");
   assert.equal(migratedLayoutMode({ mode: "local-ocr" }), "local-ocr");
@@ -2575,8 +2577,74 @@ test("a text-layer row is not current for local-ocr, and switching engines zones
   const viewer = read("pdf/viewer.js");
   const ingest = viewer.slice(viewer.indexOf("async function ingestVendorLayout"), viewer.indexOf("async function ingestSkippedSourceLayout"));
   assert.match(ingest, /layoutCurrentForEngine\(zone\.cached, version, mode\)/);
-  assert.match(ingest, /layoutCurrentForEngine\(libraryEntry\(n\), version, mode\)/);
-  assert.match(viewer, /if \(!layoutServesEngine\(entry, engine\)\) continue/);
+  assert.match(ingest, /layoutCurrentForLibrary\(libraryEntry\(n\), version, mode\)/);
+  assert.match(viewer, /if \(!layoutServesLibrary\(view, engine\)\) continue/);
+});
+
+test("a mode-less legacy 8765 layout is not current for local-ocr once it is a library document", () => {
+  const version = "rev-current";
+  const legacy = {
+    hash: "d",
+    pageCount: 1,
+    pages: [{
+      page: 1,
+      pairs: [],
+      layout: { blocks: [{ bid: "tl" }], layoutVersion: version, protocol: "blocks-1" }
+    }]
+  };
+  const rec = toLibraryRecords(legacy, "d");
+  assert.deepEqual(rec.layouts.map((row) => row.mode), ["unknown"]);
+  const doc = libraryDocumentFromRecords(
+    { docHash: "d", pageCount: 1 },
+    rec.pages.map((page) => ({ ...page, docHash: "d" })),
+    rec.layouts
+  );
+  const page = doc.pages[0];
+  assert.equal(page.layout.mode, "unknown");
+  assert.equal(layoutCurrentForEngine(page, version, "local-ocr"), null);
+  assert.equal(layoutCurrentForLibrary(page, version, "local-ocr"), null);
+  assert.equal(Boolean(layoutCurrentForEngine(page, version, "text-layer")), true);
+  const textRow = libraryDocumentFromRecords(
+    { docHash: "e", pageCount: 1 },
+    [{ docHash: "e", page: 1, pairs: [] }],
+    [{
+      docHash: "e",
+      page: 1,
+      mode: "text-layer",
+      protocol: "blocks-1",
+      layoutRev: version,
+      layout: { blocks: [{ bid: "x" }] }
+    }]
+  );
+  assert.equal(layoutCurrentForLibrary(textRow.pages[0], version, "local-ocr"), null);
+  const mixed = [
+    {
+      page: 1,
+      mode: "text-layer",
+      savedAt: 50,
+      protocol: "blocks-1",
+      layoutRev: version,
+      layout: { blocks: [{ bid: "text-layer-block" }], layoutVersion: version }
+    },
+    {
+      page: 1,
+      mode: "local-ocr",
+      savedAt: 10,
+      protocol: "blocks-1",
+      layoutRev: version,
+      layout: { blocks: [{ bid: "local-ocr-block" }], layoutVersion: version }
+    }
+  ];
+  assert.equal(selectPageLayout(mixed, 1, "local-ocr").blocks[0].bid, "local-ocr-block");
+  assert.equal(selectPageLayout(mixed, 1, "text-layer").blocks[0].bid, "text-layer-block");
+  const bare = layoutCurrentForLibrary({
+    layout: { blocks: [{ bid: "bare" }], layoutVersion: version }
+  }, version, "local-ocr");
+  assert.equal(bare, null);
+  assert.equal(layoutCurrentForEngine({
+    blocks: [{ bid: "cache" }],
+    layoutVersion: version
+  }, version, "local-ocr").blocks[0].bid, "cache");
 });
 
 test("retranslating page 2 does not wait on other stale layouts", async () => {
@@ -2617,11 +2685,92 @@ test("retranslating page 2 does not wait on other stale layouts", async () => {
   assert.deepEqual(jumped, [1, 2, 3]);
   const viewer = read("pdf/viewer.js");
   const job = viewer.slice(viewer.indexOf("async function translateWholeDocument"), viewer.indexOf("function snapshotForceReadout"));
-  const awaited = job.indexOf("await retryPendingVendorLayouts");
-  const backgroundCall = job.indexOf("void retryPendingVendorLayouts");
-  assert.ok(awaited > 0 && backgroundCall > awaited);
-  assert.match(job.slice(awaited, awaited + 180), /onlyPage: viewing/);
-  assert.match(job.slice(backgroundCall, backgroundCall + 220), /skipPage: viewing/);
+  assert.match(job, /startDocumentLayoutRetry\(/);
+  assert.match(job, /await layoutPass\.blocking/);
+  assert.match(job, /void layoutPass\.background/);
+  assert.match(job, /info\.background \? \{ session: createTranslateSession\(\) \}/);
+  assert.equal(job.includes("void retryPendingVendorLayouts"), false);
+  const lanePost = viewer.slice(viewer.indexOf("function postVendorLayout"), viewer.indexOf("async function ingestVendorLayout"));
+  assert.match(lanePost, /runLaneAttempts\(/);
+  assert.match(lanePost, /maxAttempts: 1/);
+});
+
+test("retranslating page 2 with several stale layouts finishes with the page on screen", async () => {
+  const layoutMs = 40;
+  const session = { running: true };
+  const posts = [];
+  const filled = [];
+  const lane = createPrioritySerialLane();
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const pass = startDocumentLayoutRetry({
+    total: 6,
+    viewing: 2,
+    isStale: () => false,
+    retryLayouts: async ({ onlyPage = 0, skipPage = 0 } = {}) => {
+      const pages = [];
+      for (let page = 1; page <= 6; page += 1) {
+        if (onlyPage && page !== onlyPage) continue;
+        if (skipPage && page === skipPage) continue;
+        pages.push(page);
+      }
+      const upgraded = [];
+      for (const page of pages) {
+        await lane.run(page, async () => {
+          posts.push(page);
+          await sleep(layoutMs);
+        }, { priority: page === 2 });
+        upgraded.push(page);
+      }
+      return upgraded;
+    },
+    adoptUpgraded: async (pages) => {
+      filled.push(...pages);
+    }
+  });
+  const started = performance.now();
+  await pass.blocking;
+  session.running = false;
+  const blockedMs = performance.now() - started;
+  assert.ok(blockedMs < layoutMs + 150, `page 2 waited ${blockedMs}ms`);
+  assert.equal(session.running, false);
+  assert.deepEqual(posts, [2]);
+  assert.deepEqual(filled, [2]);
+  const retranslateStarted = performance.now();
+  await sleep(30);
+  const retranslateMs = performance.now() - retranslateStarted;
+  assert.ok(retranslateMs < layoutMs + 80, `retranslate waited ${retranslateMs}ms`);
+  assert.ok(posts.length < 6, `background finished before retranslate ${posts}`);
+  await pass.background;
+  assert.deepEqual(filled.slice().sort((a, b) => a - b), [1, 2, 3, 4, 5, 6]);
+});
+
+test("a background layout retry does not hold the lane through its backoff", async () => {
+  const lane = createPrioritySerialLane();
+  const order = [];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const background = runLaneAttempts(lane, 1, async (attempt) => {
+    order.push(`bg-${attempt}`);
+    if (attempt === 0) {
+      await gate;
+      const error = new Error("down");
+      error.status = 503;
+      throw error;
+    }
+    return "bg-ok";
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const started = performance.now();
+  const foreground = runLaneAttempts(lane, 2, async () => {
+    order.push("fg");
+    return "fg-ok";
+  }, { priority: true });
+  release();
+  assert.equal(await foreground, "fg-ok");
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < LAYOUT_RETRY_DELAYS_MS[0], `on-screen page waited ${elapsed}ms`);
+  assert.deepEqual(order.slice(0, 2), ["bg-0", "fg"]);
+  assert.equal(await background, "bg-ok");
 });
 
 test("an update stays an update when the note id used to look temporary", async () => {
@@ -2659,10 +2808,10 @@ test("a stopped layout port surfaces the zoning failure before the retry budget 
   assert.equal(noticed, 1);
   assert.equal(sleeps.length, LAYOUT_RETRY_DELAYS_MS.length);
   const viewer = read("pdf/viewer.js");
-  assert.match(viewer, /onNetworkFailure\(\) \{[\s\S]*layoutNotice = LAYOUT_FALLBACK_STATUS/);
+  assert.match(viewer, /const notify = \(\) => \{[\s\S]*layoutNotice = LAYOUT_FALLBACK_STATUS/);
   assert.match(viewer, /function clearLayoutFallbackStatus\(\)/);
   assert.match(viewer, /textContent === LAYOUT_FALLBACK_STATUS/);
-  assert.match(viewer, /const stale = Boolean\(entry && hasStored && version && !layoutCurrentForEngine\(entry, version, mode\)\)/);
+  assert.match(viewer, /const stale = Boolean\(entry && hasStored && version && !layoutCurrentForLibrary\(entry, version, mode\)\)/);
   const retranslate = viewer.slice(
     viewer.indexOf("async function forceRetranslateCurrentPage"),
     viewer.indexOf("function titleStructureFailed")
