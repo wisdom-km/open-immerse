@@ -2668,6 +2668,128 @@ test("translation does not wait out a blocked library open", async () => {
   }
 });
 
+test("a blocked upgrade does not hold the migrated translation for the 10s deadline", { timeout: 8000 }, async () => {
+  const hash = "zone-block-upgrade";
+  const version = "rev-block-mig";
+  const held = hangingFactory();
+  let puts = 0;
+  let pendingOpen = null;
+  const store = {
+    async getPaper() { return null; },
+    async getPages() { return []; },
+    async listLayouts() { return []; },
+    async putLegacyDocument() {
+      puts += 1;
+      pendingOpen = openIndexedDatabase({
+        name: NOTES_DB_NAME,
+        version: 2,
+        indexedDB: held.factory,
+        blockedTimeoutMs: 10000
+      });
+      held.req.onblocked();
+      await new Promise(() => {});
+    }
+  };
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      title: "legacy",
+      pageCount: 1,
+      pages: [{
+        page: 1,
+        pairs: [{ bid: "a", text: "Hello", sourceText: "Hello", translation: "挡住也先译", targetLang: "zh-CN" }],
+        layout: {
+          blocks: [{ bid: "kept", text: "Hello" }],
+          layoutVersion: version,
+          protocol: "blocks-1"
+        }
+      }]
+    })
+  });
+  const started = Date.now();
+  try {
+    const doc = await Promise.race([
+      fetchLibraryDocument(hash, {
+        store,
+        fetch: fetchImpl,
+        sleep: () => Promise.resolve(),
+        locks: { request: async (_name, _options, fn) => fn({}) }
+      }),
+      new Promise((_resolve, reject) => {
+        setTimeout(() => reject(new Error("blocked upgrade held the translation")), 3000);
+      })
+    ]);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 2000, `blocked upgrade held translation for ${elapsed}ms`);
+    assert.equal(puts, 1);
+    assert.equal(doc.pages[0].pairs[0].translation, "挡住也先译");
+    const body = read("lib/pdf-library.js");
+    const fn = body.slice(body.indexOf("async function fetchLibraryDocumentBody"), body.indexOf("export function fetchLibraryDocument"));
+    assert.match(fn, /migrateUnlessBlocked/);
+    assert.doesNotMatch(fn, /await migrateLegacyDocument/);
+  } finally {
+    if (held.req) {
+      held.req.result = { close() {} };
+      held.req.onsuccess();
+    }
+    if (pendingOpen) await pendingOpen.catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+});
+
+test("a blocked zone still adopts the migration GET inside the cap", async () => {
+  const hash = "zone-unavailable-get";
+  const version = "rev-unavail-get";
+  const held = hangingFactory();
+  const pendingOpen = openIndexedDatabase({
+    name: NOTES_DB_NAME,
+    version: 2,
+    indexedDB: held.factory,
+    blockedTimeoutMs: 10000
+  });
+  let calls = 0;
+  try {
+    held.req.onblocked();
+    const started = Date.now();
+    const zone = await waitForZoneMigration(hash, { reason: "unavailable", document: null, waitedMs: 0 }, {
+      page: 1,
+      version,
+      engine: "local-ocr",
+      fetch: async () => {
+        calls += 1;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            title: "legacy",
+            pageCount: 1,
+            pages: [{
+              page: 1,
+              pairs: [{ bid: "a", text: "Hello", sourceText: "Hello", translation: "占用也用旧库", targetLang: "zh-CN" }],
+              layout: {
+                blocks: [{ bid: "kept", text: "Hello" }],
+                layoutVersion: version,
+                protocol: "blocks-1"
+              }
+            }]
+          })
+        };
+      }
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(calls, 1);
+    assert.ok(elapsed < LIBRARY_ZONE_HARD_MS, `blocked zone waited ${elapsed}ms for the GET`);
+    assert.equal(zone.reason, "stored");
+    assert.equal(zone.document.pages[0].pairs[0].translation, "占用也用旧库");
+  } finally {
+    held.req.result = { close() {} };
+    held.req.onsuccess();
+    await pendingOpen;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+});
+
 test("the 8765 preflight runs only when the paper is not fully stored", () => {
   assert.equal(paperFullyInLibrary({ pageCount: 2, pages: [{ page: 1 }, { page: 2 }] }), true);
   assert.equal(paperFullyInLibrary({ pageCount: 2, hash: "partial", pages: [{ page: 1 }] }), false);
@@ -3331,6 +3453,68 @@ test("Stop during a background fill sends no further translation requests", asyn
   assert.match(viewer, /function closeViewerWork\(\)/);
   assert.match(viewer.slice(viewer.indexOf("function closeViewerWork"), viewer.indexOf("function postVendorLayout")), /layoutClosed = true/);
   assert.match(viewer, /if \(layoutClosed\) return Promise\.reject\(abortError\(\)\)/);
+});
+
+test("Stop cancels a queued vendor layout POST before it is sent or written", async () => {
+  const lane = createPrioritySerialLane();
+  const sent = [];
+  const writes = [];
+  let epoch = 0;
+  let controller = new AbortController();
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  const abortError = () => {
+    const error = new Error("layout aborted");
+    error.name = "AbortError";
+    error.code = "aborted";
+    return error;
+  };
+  const post = (page) => {
+    const ticket = epoch;
+    const signal = controller.signal;
+    return runLaneAttempts(lane, page, async () => {
+      if (ticket !== epoch || signal.aborted) throw abortError();
+      sent.push(page);
+      if (page === 1) await hold;
+      if (ticket !== epoch || signal.aborted) throw abortError();
+      writes.push({ page, mode: "local-ocr" });
+      return { page };
+    }, {
+      abortError,
+      shouldStop: () => ticket !== epoch || signal.aborted
+    });
+  };
+  const first = post(1);
+  const waitForSent = Date.now();
+  while (!sent.includes(1) && Date.now() - waitForSent < 500) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const second = post(2);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(sent, [1]);
+  assert.deepEqual(writes, []);
+  epoch += 1;
+  controller.abort();
+  controller = new AbortController();
+  lane.reset();
+  release();
+  const secondResult = await second.catch((error) => error);
+  await first.catch(() => {});
+  assert.equal(secondResult?.name, "AbortError");
+  assert.deepEqual(sent, [1]);
+  assert.deepEqual(writes, []);
+  const again = await post(2);
+  assert.equal(again.page, 2);
+  assert.deepEqual(writes, [{ page: 2, mode: "local-ocr" }]);
+  const viewer = read("pdf/viewer.js");
+  const stop = viewer.slice(viewer.indexOf("function stopTranslateWork"), viewer.indexOf("function resumePendingRetranslate"));
+  assert.match(stop, /cancelQueuedVendorLayouts\(\)/);
+  assert.doesNotMatch(stop, /layoutClosed = true/);
+  const cancel = viewer.slice(viewer.indexOf("function cancelQueuedVendorLayouts"), viewer.indexOf("function abortInflightLayouts"));
+  assert.match(cancel, /layoutEpoch \+= 1/);
+  assert.match(cancel, /layoutAbort\.abort\(\)/);
+  assert.match(cancel, /vendorLayoutLane\.reset\(\)/);
+  assert.doesNotMatch(cancel, /layoutClosed = true/);
 });
 
 test("retranslating a page during its fill-in translates it once", async () => {

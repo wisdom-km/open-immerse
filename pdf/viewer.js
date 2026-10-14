@@ -7652,6 +7652,7 @@ function isCurrentWork(work, gen, translatingDoc) {
 function stopTranslateWork() {
   abortTranslateSession(session);
   abortBackgroundFills();
+  cancelQueuedVendorLayouts();
   translatingPage = 0;
   for (const [page, row] of pageStates) {
     if (row.state === "running" || row.state === "layout") {
@@ -8156,18 +8157,19 @@ async function savedTranslationFor(page) {
     if (!translationWaitsForLibrary(zone)) {
       if (!libraryProbe) void ensureLibraryDocument();
     }
-    if (zone?.reason === "unavailable") {
-      /* the blocked flag already ended the wait */
-    } else if (zone?.document && !savedThisSession) {
-      if (!zone.document.hash) zone.document.hash = hash;
-      libraryDoc = zone.document;
-    } else if (!zone?.document) {
+    if (zone?.reason === "unavailable" || !zone?.document) {
+      // A blocked open used to stop here. The page then paid for a new
+      // batch, and the row on screen waited until the upgrade's 10s
+      // BlockedError. The migration GET is the translation, until the cap.
       if (!libraryProbe) void ensureLibraryDocument();
       const adopted = await waitForZoneMigration(hash, zone, { page, version: knownLayoutVersion, engine: pdfEngineMode() });
       if (adopted?.document && !librarySourceSent.has(hash) && (!libraryDoc || libraryDoc.hash !== hash)) {
         if (!adopted.document.hash) adopted.document.hash = hash;
         libraryDoc = adopted.document;
       }
+    } else if (zone?.document && !savedThisSession) {
+      if (!zone.document.hash) zone.document.hash = hash;
+      libraryDoc = zone.document;
     }
   }
   if (!libraryDoc) return null;
@@ -9517,9 +9519,13 @@ function clearLayoutFallbackStatus() {
   if (showing && !pdfTranslateBusy(session)) setStatus("");
 }
 
-/** Drop in-flight layout POSTs. The sidecar is one request at a time; a closed tab must not keep it. */
-function abortInflightLayouts() {
-  abortBackgroundFills();
+/**
+ * Drop layout POSTs that have not been sent. An in-flight POST keeps the
+ * signal it already started with; this aborts that signal too. The lane
+ * generation fails anything still queued, so Stop cannot leave a later
+ * page to start after the click. The viewer stays open for a retranslate.
+ */
+function cancelQueuedVendorLayouts() {
   layoutEpoch += 1;
   try {
     layoutAbort.abort();
@@ -9528,6 +9534,12 @@ function abortInflightLayouts() {
   }
   layoutAbort = new AbortController();
   vendorLayoutLane.reset();
+}
+
+/** Drop in-flight layout POSTs. The sidecar is one request at a time; a closed tab must not keep it. */
+function abortInflightLayouts() {
+  abortBackgroundFills();
+  cancelQueuedVendorLayouts();
 }
 
 /**

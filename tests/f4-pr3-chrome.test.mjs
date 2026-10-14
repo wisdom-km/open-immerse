@@ -1,7 +1,9 @@
-// Real Chrome paths for the Forge review of 0f4d0a1.
+// Real Chrome paths for the library migration.
 // A same-tab reopen must adopt the translations this tab already saved.
 // A 2s IndexedDB open must not POST page 1, and translation must not sit
 // out the 10s open deadline.
+// A connection left open at v1 blocks the upgrade. Translation still has
+// to arrive from the migration GET inside 2s.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -196,7 +198,79 @@ async function withChrome(t, source, run) {
   return { origin, cdp, sessionId, evaluate, waitFor };
 }
 
-function chromeStub({ mode, slowOpenMs = 0, library = null }) {
+function holdV1OpenSource() {
+  return `
+  const oiRealOpen = indexedDB.open.bind(indexedDB);
+  window.__oiHold = { ready: false, versionchange: false, sawBlocked: false, db: null, version: 0, shownAt: 0 };
+  const oiHoldReq = oiRealOpen("oi-annotations", 1);
+  oiHoldReq.onupgradeneeded = () => {
+    const db = oiHoldReq.result;
+    if (!db.objectStoreNames.contains("notes")) {
+      const notes = db.createObjectStore("notes", { keyPath: "id" });
+      notes.createIndex("byDoc", "docHash", { unique: false });
+      notes.createIndex("byDocPage", ["docHash", "page"], { unique: false });
+      notes.createIndex("byUpdated", "updatedAt", { unique: false });
+    }
+    if (!db.objectStoreNames.contains("docs")) db.createObjectStore("docs", { keyPath: "docHash" });
+    if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta", { keyPath: "key" });
+  };
+  oiHoldReq.onsuccess = () => {
+    const db = oiHoldReq.result;
+    db.onversionchange = () => { window.__oiHold.versionchange = true; };
+    window.__oiHold.db = db;
+    window.__oiHold.ready = true;
+    window.__oiHold.version = db.version;
+  };
+  const oiWatch = setInterval(() => {
+    const text = document.getElementById("readerFlow")?.innerText || "";
+    if (!text.includes("慢开已译")) return;
+    window.__oiHold.shownAt = Date.now();
+    clearInterval(oiWatch);
+  }, 20);
+  indexedDB.open = function(name, version) {
+    window.__oiSlow.opens += 1;
+    if (!window.__oiSlow.openAt) window.__oiSlow.openAt = Date.now();
+    if (!(name === "oi-annotations" && typeof version === "number" && version > 1)) {
+      return version == null ? oiRealOpen(name) : oiRealOpen(name, version);
+    }
+    const real = oiRealOpen(name, version);
+    const stub = {};
+    const hook = (field, fn) => {
+      real[field] = (event) => {
+        if (field === "onblocked") window.__oiHold.sawBlocked = true;
+        try {
+          if (field === "onsuccess" || field === "onupgradeneeded") stub.result = real.result;
+          if (field === "onerror") stub.error = real.error;
+        } catch { /* result throws until success */ }
+        if (typeof fn === "function") fn.call(real, event);
+      };
+    };
+    for (const field of ["onsuccess", "onerror", "onblocked", "onupgradeneeded"]) {
+      let stored = null;
+      Object.defineProperty(stub, field, {
+        configurable: true,
+        enumerable: true,
+        get() { return stored; },
+        set(fn) {
+          stored = fn;
+          hook(field, fn);
+        }
+      });
+    }
+    for (const field of ["result", "error"]) {
+      Object.defineProperty(stub, field, {
+        configurable: true,
+        enumerable: true,
+        get() { try { return real[field]; } catch { return undefined; } },
+        set() {}
+      });
+    }
+    real.addEventListener("blocked", () => { window.__oiHold.sawBlocked = true; });
+    return stub;
+  };`;
+}
+
+function chromeStub({ mode, slowOpenMs = 0, library = null, holdV1 = false }) {
   const libraryJson = JSON.stringify(library);
   return `(() => {
   const params = new URLSearchParams(location.search);
@@ -213,7 +287,8 @@ function chromeStub({ mode, slowOpenMs = 0, library = null }) {
   window.__oiAuto = { messages: [], layouts: [] };
   window.__oiSlow = { opens: 0, openAt: 0, doneAt: 0 };
   const libraryBody = ${libraryJson};
-  ${slowOpenMs > 0 ? `
+  ${holdV1 ? holdV1OpenSource() : ""}
+  ${!holdV1 && slowOpenMs > 0 ? `
   const oiDelayOpen = indexedDB.open.bind(indexedDB);
   indexedDB.open = function(name, version) {
     window.__oiSlow.opens += 1;
@@ -457,5 +532,64 @@ test("a 2s slow open sends no page-1 layout POST and does not hold translation f
   assert.equal(after.layouts.includes(1), false, `late open POSTed page 1 ${JSON.stringify(after.layouts)}`);
   assert.equal(after.messages, 0);
   assert.ok(after.doneAt - after.openAt >= 1800, `open was not slow (${after.doneAt - after.openAt}ms)`);
+  assert.ok(Date.now() - started < 20000, `the page sat for ${Date.now() - started}ms`);
+});
+
+test("a held v1 connection does not hold the first translation for the blocked-open deadline", { timeout: 180000 }, async (t) => {
+  const version = await currentLayoutVersion();
+  const library = await sampleLibrary(version);
+  const session = await withChrome(t, chromeStub({
+    mode: "local-ocr",
+    library,
+    holdV1: true
+  }), async () => {});
+  const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
+  const started = Date.now();
+  await session.cdp.send("Page.navigate", {
+    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=held-v1`
+  }, session.sessionId);
+  const shown = JSON.parse(await session.waitFor(`(() => {
+    const hold = window.__oiHold;
+    const openAt = window.__oiSlow && window.__oiSlow.openAt || 0;
+    if (!hold || !hold.shownAt || !hold.versionchange || !openAt) return "";
+    let alive = false;
+    try {
+      const names = Array.from(hold.db.objectStoreNames || []);
+      if (names.length) hold.db.transaction(names, "readonly");
+      alive = hold.db.version === 1;
+    } catch { alive = false; }
+    if (!alive) return "";
+    return JSON.stringify({
+      elapsed: hold.shownAt - openAt,
+      layouts: window.__oiAuto.layouts.slice(),
+      messages: window.__oiAuto.messages.length,
+      version: hold.db.version,
+      sawBlocked: hold.sawBlocked === true
+    });
+  })()`, "held v1 connection shows the migrated translation", 20000));
+  assert.ok(shown.elapsed < 2000, `translation waited ${shown.elapsed}ms behind the blocked upgrade`);
+  assert.equal(shown.layouts.includes(1), false, `page 1 POSTed ${JSON.stringify(shown.layouts)}`);
+  assert.equal(shown.messages, 0, "the migrated page was translated again");
+  assert.equal(shown.version, 1);
+  await sleep(500);
+  const after = JSON.parse(await session.evaluate(`(() => {
+    const hold = window.__oiHold;
+    let alive = false;
+    try {
+      const names = Array.from(hold.db.objectStoreNames || []);
+      if (names.length) hold.db.transaction(names, "readonly");
+      alive = hold.versionchange === true && hold.db.version === 1;
+    } catch { alive = false; }
+    return JSON.stringify({
+      alive,
+      text: document.getElementById("readerFlow")?.innerText || "",
+      messages: window.__oiAuto.messages.length,
+      layouts: window.__oiAuto.layouts.slice()
+    });
+  })()`));
+  assert.equal(after.alive, true);
+  assert.ok(after.text.includes("慢开已译"));
+  assert.equal(after.messages, 0);
+  assert.equal(after.layouts.includes(1), false, `late block POSTed page 1 ${JSON.stringify(after.layouts)}`);
   assert.ok(Date.now() - started < 20000, `the page sat for ${Date.now() - started}ms`);
 });
