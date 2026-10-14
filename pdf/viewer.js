@@ -2657,10 +2657,14 @@ function stampProducedEngine(layout) {
   return layout;
 }
 
-/** The in-memory row for this engine, so a later switch sees the tag before reload. */
+/**
+ * The in-memory row libraryEntry reads. A known engine is tagged. A mode-less
+ * or unknown layout, including a no-boxes fallback, replaces that unknown row
+ * so a finished answer is not requested again.
+ */
 function rememberEngineLayout(page, layout) {
-  const mode = engineModeOf(layout);
-  if (!mode || !libraryDoc) return;
+  if (!layout || !libraryDoc) return;
+  const mode = engineModeOf(layout) || "unknown";
   if (!Array.isArray(libraryDoc.layoutRows)) libraryDoc.layoutRows = [];
   const protocol = String(layout?.protocol || "blocks-1");
   const version = String(layout?.layoutVersion || "");
@@ -2670,7 +2674,7 @@ function rememberEngineLayout(page, layout) {
     protocol,
     savedAt: Date.now(),
     layoutRev: version,
-    layout: { ...layout, mode }
+    layout: { ...layout, mode: layout.mode || mode }
   };
   const at = libraryDoc.layoutRows.findIndex((item) => (
     Number(item?.page) === Number(page) &&
