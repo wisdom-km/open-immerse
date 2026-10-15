@@ -180,8 +180,8 @@ test("SW and options persist deepThink on the shared translate path", () => {
   const html = readFileSync(join(root, "options/options.html"), "utf8");
   assert.match(sw, /deepThink: settings\.deepThink === true/);
   assert.match(optJs, /deepThink: el\("deepThink"\)\.checked/);
-  assert.match(html, /id="deepThink"[^>]*>\s*深度思考/);
-  assert.match(html, /id="deepThinkHint">\s*关闭可加快 DeepSeek \/ Ark 翻译；默认关。/);
+  assert.match(html, /id="deepThinkLabel">深度思考/);
+  assert.match(html, /id="deepThinkHint">关闭可加快 DeepSeek \/ Ark 翻译</);
   assert.doesNotMatch(sw, /\/responses/);
   assert.doesNotMatch(readFileSync(join(root, "lib/providers.js"), "utf8"), /stream:\s*true/);
 });

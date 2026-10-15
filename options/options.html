@@ -84,20 +84,41 @@
             <span id="testConnectionStatus" class="provider-test-status" role="status"></span>
           </div>
           <h3 class="set-gh">质量与用量</h3>
-          <div class="set-group">
-            <label class="check set-row"><input id="twoStepPolish" type="checkbox" role="switch" /> 先信后润</label>
-            <p class="hint" id="twoStepPolishHint">先忠实直译，再润色一稿；质量更好，更耗 token。默认开。仅 LLM 引擎生效。</p>
-            <label class="check set-row"><input id="deepThink" type="checkbox" role="switch" /> 深度思考</label>
-            <p class="hint" id="deepThinkHint">关闭可加快 DeepSeek / Ark 翻译；默认关。</p>
-            <label class="set-row">每批条数（分批，不是总数）
-              <span class="set-stepper">
-                <button type="button" class="set-step" data-step-for="batchSize" data-dir="-1" aria-label="减少每批条数">−</button>
-                <input id="batchSize" type="number" min="1" max="20" step="1" />
-                <button type="button" class="set-step" data-step-for="batchSize" data-dir="1" aria-label="增加每批条数">+</button>
-              </span>
-            </label>
-            <p class="hint field-hint">「每批条数」只决定一次请求翻几段；本页总共翻多少由「本次翻译」决定。选「仅标题+开头」只翻标题和正文开头，省 token。</p>
+          <div class="set-group set-quality">
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title" id="twoStepPolishLabel">先信后润</p>
+                <p class="set-note" id="twoStepPolishHint">先直译再润色，质量更好，更耗 token</p>
+              </div>
+              <input id="twoStepPolish" type="checkbox" role="switch" aria-labelledby="twoStepPolishLabel" aria-describedby="twoStepPolishHint" />
+            </div>
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title" id="deepThinkLabel">深度思考</p>
+                <p class="set-note" id="deepThinkHint">关闭可加快 DeepSeek / Ark 翻译</p>
+              </div>
+              <input id="deepThink" type="checkbox" role="switch" aria-labelledby="deepThinkLabel" aria-describedby="deepThinkHint" />
+            </div>
+            <div class="set-row set-batch">
+              <div class="set-txt">
+                <p class="set-title" id="batchSizeLabel">每批条数</p>
+                <p class="set-note set-note-ok">一次请求翻几段，1–20；不影响总量</p>
+                <p class="set-note set-note-bad">超出范围：请填 1–20</p>
+              </div>
+              <div class="set-ctl">
+                <span class="set-stepper">
+                  <button type="button" class="set-step" data-step-for="batchSize" data-dir="-1" aria-label="减少每批条数">−</button>
+                  <input id="batchSize" type="number" min="1" max="20" step="1" aria-labelledby="batchSizeLabel" />
+                  <button type="button" class="set-step" data-step-for="batchSize" data-dir="1" aria-label="增加每批条数">+</button>
+                </span>
+                <span class="set-unit">段</span>
+              </div>
+            </div>
           </div>
+          <details class="set-help">
+            <summary>总量由什么决定？</summary>
+            <p>本页翻多少由「本次翻译」决定；选「仅标题+开头」更省 token。</p>
+          </details>
         </section>
 
         <section id="panel-formula" class="set-page" data-panel="mm" role="tabpanel" hidden>

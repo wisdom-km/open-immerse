@@ -158,6 +158,7 @@ async function init() {
   el("mmEnablePdf")?.addEventListener("click", () => enablePdf());
   syncSiteRulesBox();
   bindSteppers();
+  document.addEventListener("click", jumpToProvider);
   bindInstant();
   bindSearch();
   const manifest = chrome.runtime?.getManifest?.();
@@ -194,11 +195,27 @@ function syncSiteRulesBox() {
   if (box) box.hidden = !el("autoOnNewPages")?.checked;
 }
 
+function syncStepperBounds(input) {
+  if (!input?.id) return;
+  const rawMin = input.getAttribute("min");
+  const rawMax = input.getAttribute("max");
+  const min = rawMin == null || rawMin === "" ? -Infinity : Number(rawMin);
+  const max = rawMax == null || rawMax === "" ? Infinity : Number(rawMax);
+  const value = Number(input.value);
+  const finite = Number.isFinite(value);
+  document.querySelectorAll(`[data-step-for="${input.id}"]`).forEach((button) => {
+    const dir = Number(button.getAttribute("data-dir") || 1);
+    button.disabled = finite && (dir < 0 ? value <= min : value >= max);
+  });
+}
+
 function bindSteppers() {
+  const seen = new Set();
   document.querySelectorAll("[data-step-for]").forEach((button) => {
+    const id = button.getAttribute("data-step-for");
     button.addEventListener("click", () => {
-      const input = el(button.getAttribute("data-step-for"));
-      if (!input) return;
+      const input = el(id);
+      if (!input || button.disabled) return;
       const dir = Number(button.getAttribute("data-dir") || 1);
       const rawStep = input.getAttribute("step") || input.step || "1";
       const step = Number(rawStep) * (dir < 0 ? -1 : 1);
@@ -211,8 +228,15 @@ function bindSteppers() {
       const next = Math.min(max, Math.max(min, Math.round((base + step) * 1000) / 1000));
       const places = String(rawStep).split(".")[1]?.length || 0;
       input.value = places ? next.toFixed(places) : String(next);
+      syncStepperBounds(input);
       input.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      const input = el(id);
+      input?.addEventListener("input", () => syncStepperBounds(input));
+      syncStepperBounds(input);
+    }
   });
 }
 
@@ -364,6 +388,21 @@ function enablePdf() {
   void persist(input);
 }
 
+function paintQualityNote(note, llm, provider, ready) {
+  if (!note) return;
+  note.replaceChildren();
+  if (llm) {
+    note.textContent = ready;
+    return;
+  }
+  note.append(document.createTextNode(`当前引擎（${provider?.name || "当前"}）不支持 · `));
+  const link = document.createElement("a");
+  link.className = "set-engine-jump";
+  link.href = "#provider";
+  link.textContent = "换引擎";
+  note.append(link);
+}
+
 function syncQualityLocks() {
   const provider = getProvider(el("provider")?.value);
   const llm = provider?.kind === "llm";
@@ -371,17 +410,20 @@ function syncQualityLocks() {
     const input = el(id);
     if (!input) continue;
     input.disabled = !llm;
+    input.setAttribute("aria-disabled", llm ? "false" : "true");
   }
-  const polish = el("twoStepPolishHint");
-  const think = el("deepThinkHint");
-  if (polish) {
-    polish.textContent = llm
-      ? "先忠实直译，再润色一稿；质量更好，更耗 token。默认开。仅 LLM 引擎生效。"
-      : "当前引擎不支持";
-  }
-  if (think) {
-    think.textContent = llm ? "关闭可加快 DeepSeek / Ark 翻译；默认关。" : "当前引擎不支持";
-  }
+  paintQualityNote(el("twoStepPolishHint"), llm, provider, "先直译再润色，质量更好，更耗 token");
+  paintQualityNote(el("deepThinkHint"), llm, provider, "关闭可加快 DeepSeek / Ark 翻译");
+}
+
+function jumpToProvider(event) {
+  const link = event.target?.closest?.(".set-engine-jump");
+  if (!link) return;
+  event.preventDefault();
+  const select = el("provider");
+  if (!select) return;
+  select.scrollIntoView?.({ block: "center" });
+  select.focus();
 }
 
 function renderFeatures(box, list, features) {

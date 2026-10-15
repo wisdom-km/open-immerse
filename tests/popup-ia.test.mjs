@@ -114,8 +114,8 @@ test("options keep v1 module gates; youtube\/x only in Advanced group", () => {
   assert.doesNotMatch(html, /data-nav="advanced"/);
   assert.doesNotMatch(html, /data-nav="engine"/);
   assert.match(html, /id="featureList"/);
-  assert.match(html, /id="twoStepPolish"[^>]*> 先信后润/);
-  assert.match(html, /id="twoStepPolishHint">先忠实直译，再润色一稿；质量更好，更耗 token。默认开。仅 LLM 引擎生效。/);
+  assert.match(html, /id="twoStepPolishLabel">先信后润/);
+  assert.match(html, /id="twoStepPolishHint">先直译再润色，质量更好，更耗 token</);
   const translatePanel = html.match(/id="panel-translate"[\s\S]*?<\/section>/)[0];
   const labsPanel = html.match(/id="panel-labs"[\s\S]*?<\/section>/)[0];
   const webPanel = html.match(/id="panel-web"[\s\S]*?<\/section>/)[0];
@@ -132,7 +132,9 @@ test("options keep v1 module gates; youtube\/x only in Advanced group", () => {
   assert.doesNotMatch(html, /id="translationStyle"/);
   assert.doesNotMatch(html, /译文样式/);
   assert.doesNotMatch(html, /preview|双语预览|样式说明/i);
-  assert.match(html, /每批条数（分批，不是总数）/);
+  assert.match(html, /id="batchSizeLabel">每批条数</);
+  assert.match(html, /一次请求翻几段，1–20/);
+  assert.doesNotMatch(html, /每批条数（分批，不是总数）/);
   assert.doesNotMatch(readingPanel, /id="fontScale"/);
   assert.match(readingPanel, /id="bodyGlossGap"/);
   assert.match(readingPanel, /正文译文间距/);

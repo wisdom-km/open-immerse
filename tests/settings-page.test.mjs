@@ -681,6 +681,43 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     assert.equal(page.document._focused, page.document.querySelector("[data-nav='mm']"));
     assert.equal(page.document.querySelector("[data-nav='web']").getAttribute("role"), "tab");
     assert.equal(page.document.getElementById("twoStepPolish").getAttribute("role"), "switch");
+    assert.equal(page.document.getElementById("twoStepPolish").disabled, false);
+    assert.equal(page.document.getElementById("twoStepPolishHint").textContent, "先直译再润色，质量更好，更耗 token");
+    const polishTitle = page.document.getElementById("twoStepPolishLabel");
+    const polishInput = page.document.getElementById("twoStepPolish");
+    const polishRow = polishInput.closest(".set-row");
+    assert.equal(polishRow.firstElementChild.contains(polishTitle), true);
+    assert.equal(polishRow.lastElementChild, polishInput);
+    assert.equal(page.document.querySelector(".set-help").hasAttribute("open"), false);
+    assert.match(page.document.querySelector(".set-help").textContent, /总量由什么决定/);
+    const batch = page.document.getElementById("batchSize");
+    const batchMinus = page.document.querySelector("[data-step-for='batchSize'][data-dir='-1']");
+    const batchPlus = page.document.querySelector("[data-step-for='batchSize'][data-dir='1']");
+    batch.value = "1";
+    fire(batch, "input");
+    assert.equal(batchMinus.disabled, true);
+    assert.equal(batchPlus.disabled, false);
+    batch.value = "20";
+    fire(batch, "input");
+    assert.equal(batchPlus.disabled, true);
+    assert.equal(batchMinus.disabled, false);
+    batch.value = "8";
+    fire(batch, "input");
+    const providerSelect = page.document.getElementById("provider");
+    providerSelect.value = "deepl";
+    fire(providerSelect, "change");
+    await flush();
+    assert.equal(polishInput.disabled, true);
+    assert.equal(page.document.getElementById("deepThink").disabled, true);
+    assert.match(page.document.getElementById("twoStepPolishHint").textContent, /当前引擎（DeepL）不支持/);
+    assert.match(page.document.getElementById("deepThinkHint").textContent, /换引擎/);
+    page.document.querySelector(".set-engine-jump").click();
+    assert.equal(page.document._focused, providerSelect);
+    providerSelect.value = "openai";
+    fire(providerSelect, "change");
+    await flush();
+    assert.equal(polishInput.disabled, false);
+    assert.equal(page.document.getElementById("twoStepPolishHint").textContent, "先直译再润色，质量更好，更耗 token");
 
     const readHtml = readFileSync(join(root, "options/options.html"), "utf8").replace(/<script\b[\s\S]*?<\/script>/g, "");
     const readDom = parseHTML(readHtml);
@@ -719,4 +756,17 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
   } finally {
     mock.timers.reset();
   }
+});
+
+test("rows-v2 and skeleton styles stay in the settings stylesheet", () => {
+  const css = readFileSync(join(root, "options/options.css"), "utf8");
+  const js = readFileSync(join(root, "options/options.js"), "utf8");
+  assert.match(css, /\.set-skeleton\[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(css, /width:\s*36px;\s*height:\s*20px/);
+  assert.match(css, /width:\s*16px;\s*height:\s*16px/);
+  assert.match(css, /translateX\(16px\)/);
+  assert.match(css, /\.set-quality \.set-stepper[\s\S]*width:\s*100px;\s*height:\s*28px/);
+  assert.match(css, /#formulaSettingsRoot\s*\{\s*min-width:\s*0;\s*max-width:\s*100%/);
+  assert.match(js, /kind === "llm"/);
+  assert.doesNotMatch(js, /kind === "llm" \|\| kind === "custom"/);
 });
