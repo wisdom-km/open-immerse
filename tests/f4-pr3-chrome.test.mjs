@@ -50,6 +50,11 @@ function serveRepo(extra) {
       const handled = extra(url, res);
       if (handled) return;
     }
+    if (url.pathname === "/oi-notes-probe.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end("<!doctype html><html><body></body></html>");
+      return;
+    }
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "");
     const file = resolve(root, rel);
     if (file !== root && !file.startsWith(`${root}${sep}`)) {
@@ -686,4 +691,130 @@ test("Stop during a page-2 re-zone sends no layout POST, and retranslate of that
   await sleep(1500);
   const settled = JSON.parse(await session.evaluate(SNAPSHOT));
   assert.deepEqual(settled.layouts.filter((page) => page === 2), [2], `retranslate zoned more than once ${JSON.stringify(settled.layouts)}`);
+});
+
+test("notes reopen after versionchange waits for the library upgrade", { timeout: 120000 }, async (t) => {
+  const session = await withChrome(t, `globalThis.chrome = {
+    runtime: { id: "oi-e2e", getURL() { return location.href; }, sendMessage() { return Promise.resolve({ ok: true }); }, onMessage: { addListener() {} } },
+    storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } }
+  };`, async () => {});
+  await session.cdp.send("Page.navigate", {
+    url: `${session.origin}/oi-notes-probe.html`
+  }, session.sessionId);
+  await session.waitFor(`document.body ? "ready" : ""`, "probe document", 15000);
+  const raw = await session.evaluate(`(async () => {
+    const opens = [];
+    const realOpen = indexedDB.open.bind(indexedDB);
+    indexedDB.open = function(name, version) {
+      const rec = {
+        name: String(name || ""),
+        version: version == null ? null : version,
+        blocked: false,
+        success: false,
+        error: "",
+        at: Date.now()
+      };
+      opens.push(rec);
+      const request = version == null ? realOpen(name) : realOpen(name, version);
+      request.addEventListener("blocked", () => { rec.blocked = true; });
+      request.addEventListener("success", () => {
+        rec.success = true;
+        rec.successAt = Date.now();
+        try { rec.doneVersion = request.result.version; } catch { rec.doneVersion = 0; }
+      });
+      request.addEventListener("error", () => {
+        rec.error = request.error && request.error.name || "error";
+      });
+      return request;
+    };
+    const { createNotesStore } = await import("/lib/notes-store.js");
+    const { createLibraryStore } = await import("/lib/library-store.js");
+    const { createLibraryChip } = await import("/lib/library-chip.js");
+    const host = document.createElement("div");
+    host.id = "oiProbeChip";
+    document.body.append(host);
+    const chip = createLibraryChip({ host, pollMs: 60000, manualRetryMs: 60000 });
+    const notes = createNotesStore({
+      persist: false,
+      deviceId: "probe-notes",
+      createId: () => "n-probe"
+    });
+    await notes.put({ docHash: "doc-probe", kind: "note", page: 1, body: "升级前" });
+    const holder = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("oi-annotations", 1);
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onversionchange = () => {
+          setTimeout(() => {
+            try { db.close(); } catch { /* already closed */ }
+          }, 200);
+        };
+        resolve(db);
+      };
+      request.onerror = () => reject(request.error || new Error("holder open failed"));
+    });
+    const originalClose = IDBDatabase.prototype.close;
+    let kicked = false;
+    IDBDatabase.prototype.close = function closeForProbe() {
+      const name = this.name;
+      const version = this.version;
+      const result = originalClose.call(this);
+      if (!kicked && name === "oi-annotations" && version === 1) {
+        kicked = true;
+        queueMicrotask(() => {
+          notes.put({ id: "n-probe", docHash: "doc-probe", kind: "note", page: 1, body: "升级后" }).then(() => {
+            window.__oiReopen = "ok";
+          }, (error) => {
+            window.__oiReopen = String(error && (error.name || error.message) || "error");
+          });
+        });
+      }
+      return result;
+    };
+    const library = createLibraryStore({
+      persist: false,
+      deviceId: "probe-lib",
+      blockedTimeoutMs: 1200
+    });
+    let upgrade = "pending";
+    let upgradeError = "";
+    try {
+      await library.touchPaper("doc-probe", { title: "先存的", pageCount: 2, origin: "native" });
+      upgrade = "done";
+    } catch (error) {
+      upgrade = "failed";
+      upgradeError = String(error && (error.name || error.message) || "error");
+      if (error && (error.name === "BlockedError" || error.type === "blocked")) chip.block(error);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const version = await new Promise((resolve) => {
+      const request = realOpen("oi-annotations");
+      request.onsuccess = () => {
+        const db = request.result;
+        const current = db.version;
+        db.close();
+        resolve(current);
+      };
+      request.onerror = () => resolve(0);
+    });
+    return JSON.stringify({
+      upgrade,
+      upgradeError,
+      kicked,
+      reopen: window.__oiReopen || "",
+      version,
+      chip: host.textContent || "",
+      opens: opens.filter((row) => row.name === "oi-annotations")
+    });
+  })()`);
+  const report = JSON.parse(raw);
+  assert.equal(report.kicked, true, `versionchange did not close the notes connection ${JSON.stringify(report)}`);
+  assert.equal(report.upgrade, "done", `library upgrade did not finish ${JSON.stringify(report)}`);
+  assert.equal(report.version, 2, `database stayed at v1 ${JSON.stringify(report)}`);
+  assert.equal(report.reopen, "ok", `notes write after versionchange failed ${JSON.stringify(report)}`);
+  assert.equal(report.chip.includes("暂时存不了"), false, `chip stayed blocked ${JSON.stringify(report)}`);
+  const v2 = report.opens.find((row) => row.version === 2);
+  assert.ok(v2?.success, `v2 open did not succeed ${JSON.stringify(report.opens)}`);
+  const duringUpgrade = (report.opens || []).filter((row) => row.at > v2.at && row.at < v2.successAt);
+  assert.deepEqual(duringUpgrade, [], `notes reopened while the v2 upgrade was still running ${JSON.stringify(report.opens)}`);
 });

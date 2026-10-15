@@ -7992,10 +7992,12 @@ function persistPageLayout(page) {
   const bytes = pdfBytes;
   const title = document.title;
   const pageCount = pdfDoc?.numPages || 0;
+  const epoch = layoutEpoch;
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
     if (!hash || hash === "nohash") return;
     if (await layoutWriteSuperseded(hash, page, version)) return;
+    if (!layoutAttemptLive(epoch)) return;
     const live = libraryEntry(page);
     if (live) {
       live.layout = layout;
@@ -10834,6 +10836,7 @@ async function loadCurrentPageText(explicitPage) {
   textLoadPage = n;
   const translatingDoc = docId;
   const isStale = () => ticket !== textGen || translatingDoc !== docId;
+  const epoch = layoutEpoch;
   await primeKnownPages();
   if (isStale()) return;
   const version = knownLayoutVersion || await layoutVersionNow();
@@ -10864,7 +10867,6 @@ async function loadCurrentPageText(explicitPage) {
     renderArticle();
     updateTranslateControls();
     if (!layoutCurrentForEngine(openedStored, version, openedEngine) && (openedEngine === "local-ocr" || openedEngine === "cloud-ocr")) {
-      const epoch = layoutEpoch;
       upgradeStoredFallback(n, pdfEngineMode(), () => isStale() || !layoutAttemptLive(epoch), epoch).catch(() => {});
     }
     return;
@@ -10925,7 +10927,6 @@ async function loadCurrentPageText(explicitPage) {
       }
       if (!pdfTranslateBusy(session) && !layoutNotice) setStatus(LAYOUT_STARTING_STATUS);
       updateTranslateControls();
-      const epoch = layoutEpoch;
       const laid = await ingestVendorLayout(n, mode, () => isStale() || !layoutAttemptLive(epoch), epoch);
       if (!laid || isStale()) {
         const reason = vendorLayoutReason.get(n) || "";
@@ -10944,10 +10945,9 @@ async function loadCurrentPageText(explicitPage) {
       updateTranslateControls();
       return;
     }
-    const layoutEpochNow = layoutEpoch;
     const layout = mode === "text-layer" && pdfEngineMode() === "legacy"
       ? await ingestTextLayerLayout(n, isStale)
-      : await ingestPageLayout(n, () => isStale() || !layoutAttemptLive(layoutEpochNow), layoutEpochNow);
+      : await ingestPageLayout(n, () => isStale() || !layoutAttemptLive(epoch), epoch);
     if (!showOpenedLayout(layout, isStale)) return;
     await ensuring;
     const saved = preloadedSaved || await savedTranslationForNav(n);
