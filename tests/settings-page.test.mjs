@@ -1,0 +1,722 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { mock } from "node:test";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseHTML } from "linkedom";
+
+import { FORMULA_SWITCH_KEYS } from "../lib/formula-settings.js";
+import { deliverAsk, renderAskNotice, resolveAskTarget, ASK_EMPTY } from "../lib/ask-route.js";
+import { getSettings, saveSettings, SETTINGS_VERSION } from "../lib/storage.js";
+import { prepareSettingsImport, settingsForExport } from "../lib/settings-secrets.js";
+import { parseSettingsHash, SETTINGS_PAGES } from "../options/route.js";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const OPENAI_KEY = "sk-testKEY3f9a";
+const PDF_KEY = "pdf-secret-99abcd";
+const MM_KEY = "sk-mmmmmmmmWXYZ";
+const OCR_KEY = "sk-ooooooooABCD";
+
+function memoryLocalStorage(seed = {}) {
+  const map = new Map(Object.entries(seed));
+  return {
+    get length() {
+      return map.size;
+    },
+    key(index) {
+      return [...map.keys()][index] ?? null;
+    },
+    getItem(key) {
+      return map.has(key) ? map.get(key) : null;
+    },
+    setItem(key, value) {
+      map.set(String(key), String(value));
+    },
+    removeItem(key) {
+      map.delete(key);
+    },
+    clear() {
+      map.clear();
+    }
+  };
+}
+
+function installChrome(seed = {}) {
+  const sync = { settings: seed.settings || {} };
+  const local = { ...(seed.local || {}) };
+  const listeners = [];
+  const calls = [];
+  const api = {
+    sync,
+    local,
+    calls,
+    failGet: false,
+    failSave: false,
+    localSetThrows: false,
+    holdGet: null
+  };
+  function area(bag, name) {
+    return {
+      async get(key) {
+        if (Array.isArray(key)) {
+          const out = {};
+          for (const item of key) if (Object.prototype.hasOwnProperty.call(bag, item)) out[item] = bag[item];
+          return out;
+        }
+        if (typeof key === "string") return { [key]: bag[key] };
+        return { ...bag };
+      },
+      async set(patch) {
+        if (name === "local" && api.localSetThrows) throw new Error("local quota");
+        Object.assign(bag, patch);
+        const changes = {};
+        for (const [item, value] of Object.entries(patch)) changes[item] = { newValue: value };
+        for (const listener of listeners) listener(changes, name);
+      }
+    };
+  }
+  globalThis.chrome = {
+    runtime: {
+      getManifest: () => ({ version: "0.3.0" }),
+      getURL: (path) => `chrome-extension://oi/${path}`,
+      async sendMessage(message) {
+        calls.push(message);
+        if (message.type === "OI_GET_SETTINGS") {
+          if (api.holdGet) await api.holdGet;
+          if (api.failGet) throw new Error("read failed");
+          const settings = await getSettings();
+          return { ok: true, settings };
+        }
+        if (message.type === "OI_SAVE_SETTINGS") {
+          if (api.failSave) return { ok: false };
+          const settings = await saveSettings(message.patch, message.clear || {});
+          return { ok: settings.settingsSaved !== false, settings };
+        }
+        if (message.type === "OI_TEST_PROVIDER") return { ok: true, text: "probe" };
+        return { ok: false };
+      }
+    },
+    storage: {
+      sync: area(sync, "sync"),
+      local: area(local, "local"),
+      onChanged: {
+        addListener(fn) {
+          listeners.push(fn);
+        }
+      }
+    },
+    tabs: { create() {} }
+  };
+  return api;
+}
+
+function syncHasSecrets(settings) {
+  if (!settings || typeof settings !== "object") return false;
+  for (const cfg of Object.values(settings.providers || {})) {
+    if (cfg && String(cfg.apiKey || "").trim()) return true;
+  }
+  if (String(settings.pdfLayout?.cloudApiKey || "").trim()) return true;
+  const formula = settings.formulaSettings;
+  if (formula && typeof formula === "object") {
+    if (String(formula.multimodal?.apiKey || "").trim()) return true;
+    if (String(formula.ocr?.apiKey || "").trim()) return true;
+  }
+  return false;
+}
+
+function savedSettings() {
+  return {
+    settingsVersion: SETTINGS_VERSION,
+    provider: "openai",
+    sourceLang: "auto",
+    targetLang: "zh-CN",
+    features: { pdf: false },
+    providers: {
+      openai: { apiKey: OPENAI_KEY, baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" }
+    },
+    pdfLayout: {
+      mode: "",
+      localBaseUrl: "http://127.0.0.1:8765",
+      cloudBaseUrl: "https://open.bigmodel.cn/api/paas/v4/layout_parsing",
+      cloudApiKey: PDF_KEY
+    }
+  };
+}
+
+function formulaSeed() {
+  return {
+    [FORMULA_SWITCH_KEYS.tier2]: true,
+    [FORMULA_SWITCH_KEYS.ocr]: true,
+    multimodal: { provider: "openai", apiKey: MM_KEY, model: "gpt-4o", baseUrl: "https://api.openai.com/v1" },
+    ocr: { provider: "zhipu", apiKey: OCR_KEY }
+  };
+}
+
+test("secret migration, import, and rollback stay inside local storage", async () => {
+  const chrome = installChrome({ settings: savedSettings() });
+  const first = await getSettings();
+  assert.equal(first.providers.openai.apiKey, OPENAI_KEY);
+  assert.equal(first.pdfLayout.cloudApiKey, PDF_KEY);
+  assert.equal(syncHasSecrets(chrome.sync.settings), false);
+  assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
+  assert.equal(chrome.local.oiSecrets.pdfCloudApiKey, PDF_KEY);
+  const second = await getSettings();
+  assert.equal(second.providers.openai.apiKey, OPENAI_KEY);
+  assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
+  assert.equal(syncHasSecrets(chrome.sync.settings), false);
+
+  const fresh = installChrome({ settings: savedSettings() });
+  fresh.localSetThrows = true;
+  const rolled = await getSettings();
+  assert.equal(rolled.providers.openai.apiKey, OPENAI_KEY);
+  assert.equal(fresh.sync.settings.providers.openai.apiKey, OPENAI_KEY);
+  assert.equal(fresh.local.oiSecrets, undefined);
+
+  const writing = installChrome({ settings: savedSettings() });
+  await getSettings();
+  writing.localSetThrows = true;
+  const failed = await saveSettings({ fontScale: 1.1, providers: { openai: { apiKey: "sk-should-not-land" } } });
+  assert.equal(failed.settingsSaved, false);
+  assert.equal(writing.sync.settings.fontScale, 0.95);
+  assert.notEqual(writing.sync.settings.fontScale, 1.1);
+  assert.equal(writing.local.oiSecrets.providers.openai, OPENAI_KEY);
+  assert.equal(syncHasSecrets(writing.sync.settings), false);
+
+  const importing = installChrome({
+    settings: { settingsVersion: SETTINGS_VERSION, provider: "openai", providers: { openai: { apiKey: "" } } },
+    local: { oiSecrets: { providers: { openai: OPENAI_KEY }, pdfCloudApiKey: "" } }
+  });
+  await getSettings();
+  const prepared = prepareSettingsImport({
+    settings: {
+      settingsVersion: SETTINGS_VERSION,
+      fontScale: 1.15,
+      providers: { openai: { apiKey: "sk-from-file-9999" } },
+      pdfLayout: { cloudApiKey: "cloud-from-file" },
+      formulaSettings: { multimodal: { apiKey: "mm-from-file" }, ocr: { apiKey: "ocr-from-file" } }
+    }
+  });
+  assert.equal(prepared.ignoredKeys, true);
+  assert.equal(prepared.settings.formulaSettings, undefined);
+  assert.equal(String(prepared.settings.providers.openai.apiKey || ""), "");
+  const imported = await saveSettings(prepared.settings);
+  assert.equal(imported.settingsSaved, true);
+  assert.equal(imported.fontScale, 1.15);
+  assert.equal(imported.providers.openai.apiKey, OPENAI_KEY);
+  assert.equal(importing.local.oiSecrets.providers.openai, OPENAI_KEY);
+  assert.equal(syncHasSecrets(importing.sync.settings), false);
+  const exported = settingsForExport(imported);
+  assert.equal(syncHasSecrets(exported), false);
+  assert.equal(exported.providers.openai.apiKey, "");
+});
+
+test("ask routing never calls the network and does not fall back from multimodal", async () => {
+  const llm = { provider: "openai", providers: { openai: { model: "gpt-4o-mini", baseUrl: "https://api.openai.com/v1" } } };
+  const mm = formulaSeed();
+  const sent = [];
+  const target = resolveAskTarget(llm, mm);
+  assert.equal(target.via, "multimodal");
+  assert.equal(target.provider, "openai");
+  assert.equal(target.model, "gpt-4o");
+  const failed = await deliverAsk(target, async (req) => {
+    sent.push(req);
+    return { ok: false, error: "nope" };
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url.includes("api.openai.com"), true);
+  assert.equal(failed.fallback, false);
+  assert.equal(failed.ok, false);
+
+  const plain = resolveAskTarget(llm, { multimodal: { provider: "", apiKey: "" } });
+  assert.equal(plain.via, "translation");
+  assert.equal(plain.model, "gpt-4o-mini");
+  const custom = resolveAskTarget(
+    { provider: "custom", providers: { custom: { url: "https://example.test/translate" } } },
+    {}
+  );
+  assert.equal(custom.ok, false);
+  assert.equal(custom.message, ASK_EMPTY);
+
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement() {
+      return { textContent: "", href: "" };
+    }
+  };
+  const host = { children: [], replaceChildren() { this.children = []; }, append(...nodes) { this.children.push(...nodes); } };
+  const notice = renderAskNotice(host, custom);
+  assert.equal(notice.children[0].textContent, ASK_EMPTY);
+  assert.equal(notice.children[1].textContent, "去设置");
+  assert.match(notice.children[1].href, /#mm$/);
+  globalThis.document = previousDocument;
+
+  const removed = resolveAskTarget(llm, { ...mm, multimodal: { ...mm.multimodal, apiKey: "" } });
+  assert.equal(removed.via, "translation");
+  const restored = resolveAskTarget(llm, mm);
+  assert.equal(restored.via, "multimodal");
+});
+
+test("settings routes redirect old anchors and keep eight pages", () => {
+  assert.deepEqual(SETTINGS_PAGES.map((page) => page.id), ["translate", "mm", "web", "pdf", "notes", "labs", "data", "about"]);
+  assert.equal(SETTINGS_PAGES.filter((page) => page.group === "常规").map((page) => page.label).join("|"), "翻译|多模态 · OCR");
+  for (const [from, to] of [["engine", "translate"], ["reading", "pdf"], ["features", "web"], ["advanced", "labs"], ["ai", "mm"], ["formula", "mm"]]) {
+    const parsed = parseSettingsHash(`#${from}`);
+    assert.equal(parsed.id, to);
+    assert.equal(parsed.redirected, true);
+    assert.equal(parsed.replace, `#${to}`);
+  }
+  const focus = parseSettingsHash("#data?focus=export");
+  assert.equal(focus.id, "data");
+  assert.equal(focus.focus, "export");
+  assert.equal(focus.replace, "#data");
+  assert.equal(parseSettingsHash("#data?focus=nope").focus, "");
+  assert.equal(parseSettingsHash("#nope").id, "translate");
+  assert.equal(parseSettingsHash("").id, "translate");
+});
+
+function contrast(a, b) {
+  const lum = (hex) => {
+    const n = hex.replace("#", "");
+    const rgb = [0, 2, 4].map((i) => {
+      const c = parseInt(n.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+  };
+  const [hi, lo] = lum(a) > lum(b) ? [lum(a), lum(b)] : [lum(b), lum(a)];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+function mix(base, rgba) {
+  const n = base.replace("#", "");
+  const br = [0, 2, 4].map((i) => parseInt(n.slice(i, i + 2), 16));
+  const parts = rgba.match(/rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)/);
+  const alpha = Number(parts[4]);
+  const fg = [Number(parts[1]), Number(parts[2]), Number(parts[3])];
+  const mixed = br.map((channel, i) => Math.round(fg[i] * alpha + channel * (1 - alpha)));
+  return `#${mixed.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+test("palette A contrast and scope stay on the settings page", () => {
+  const css = readFileSync(join(root, "options/options.css"), "utf8");
+  const block = css.match(/body\.oi-settings\s*\{[^}]+\}/)[0];
+  const tokens = Object.fromEntries([...block.matchAll(/--(oi-[\w-]+):\s*([^;]+);/g)].map((hit) => [hit[1], hit[2].trim()]));
+  const value = (name) => {
+    let current = tokens[name];
+    const ref = current.match(/^var\(--(oi-[\w-]+)\)$/);
+    if (ref) current = tokens[ref[1]];
+    return current;
+  };
+  assert.equal(block.includes("color-scheme: light"), true);
+  const panel = value("oi-panel");
+  const text = value("oi-text");
+  const note = value("oi-text-2");
+  const muted = value("oi-text-muted");
+  const side = value("oi-bg-elevated");
+  const warn = value("oi-warn");
+  const warnBg = mix(panel, value("oi-warn-soft"));
+  assert.ok(contrast(text, panel) >= 4.5);
+  assert.ok(contrast(note, panel) >= 4.5);
+  assert.ok(contrast(muted, panel) >= 4.5);
+  assert.ok(contrast(muted, side) >= 4.5);
+  assert.ok(contrast(value("oi-accent"), panel) >= 4.5);
+  assert.ok(contrast(value("oi-on-accent"), value("oi-primary")) >= 4.5);
+  assert.ok(contrast(warn, warnBg) >= 4.5);
+  assert.ok(contrast(note, warnBg) >= 4.5);
+  assert.ok(contrast(value("oi-line-strong"), value("oi-input")) >= 3);
+  const forbidden = ["#12151c", "#181c26", "#1e2430", "#232a38", "#171b24", "#6b8cff", "#e8a0a0"];
+  for (const color of Object.values(tokens)) {
+    assert.equal(forbidden.includes(color.toLowerCase()), false);
+  }
+  const own = css.replace(/@import[^;]+;/, "").replace(/body\.oi-settings\s*\{[^}]+\}/g, "");
+  for (const color of forbidden) assert.equal(own.toLowerCase().includes(color), false);
+  const diff = execFileSync("git", ["diff", "origin/main", "--", "ui/tokens.css", "pdf", "lib/notes-prefs.js", "lib/reader-notes-local.js"], { encoding: "utf8" });
+  assert.equal(diff, "");
+  for (const path of [
+    "tests/fixtures/Attention_Is_All_You_Need.pdf",
+    "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf",
+    "tests/fixtures/arxiv-src/1706.03762v1.tar.gz",
+    "tests/fixtures/arxiv-src/1706.03762v7.tar.gz"
+  ]) {
+    execFileSync("git", ["check-ignore", "-q", path]);
+  }
+  const status = execFileSync("git", ["status", "--short", "--", "tests/fixtures"], { encoding: "utf8" });
+  assert.equal(status.trim(), "");
+});
+
+function patchSelectValue(document) {
+  const proto = Object.getPrototypeOf(document.createElement("select"));
+  Object.defineProperty(proto, "value", {
+    configurable: true,
+    get() {
+      return this._value ?? "";
+    },
+    set(next) {
+      this._value = String(next ?? "");
+    }
+  });
+}
+
+function mountPage(hash) {
+  const html = readFileSync(join(root, "options/options.html"), "utf8").replace(/<script\b[\s\S]*?<\/script>/g, "");
+  const parsed = parseHTML(html);
+  const { document, window } = parsed;
+  patchSelectValue(document);
+  const location = { hash };
+  const history = {
+    replaceState(_state, _title, url) {
+      if (typeof url === "string") location.hash = url.includes("#") ? url.slice(url.indexOf("#")) : url;
+    }
+  };
+  const focused = [];
+  const proto = document.createElement("div").constructor.prototype;
+  const originalFocus = proto.focus;
+  proto.focus = function focus() {
+    focused.push(this);
+    document._focused = this;
+    if (originalFocus) return originalFocus.call(this);
+  };
+  Object.defineProperty(globalThis, "Event", { configurable: true, writable: true, value: window.Event });
+  Object.defineProperty(globalThis, "CustomEvent", { configurable: true, writable: true, value: window.CustomEvent });
+  globalThis.OI_OPTIONS_MANUAL = true;
+  globalThis.document = document;
+  globalThis.window = window;
+  globalThis.location = location;
+  globalThis.history = history;
+  globalThis.localStorage = memoryLocalStorage({ "reader.follow": "off" });
+  const storageApi = {
+    asked: 0,
+    async persist() {
+      this.asked += 1;
+      return true;
+    }
+  };
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { storage: storageApi }
+  });
+  globalThis.__oiStorage = storageApi;
+  window.location = location;
+  globalThis.URL.createObjectURL = (blob) => {
+    globalThis.__oiBlob = blob;
+    return "blob:oi-settings";
+  };
+  globalThis.URL.revokeObjectURL = () => {};
+  return { document, window, location, focused };
+}
+
+async function flush() {
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+}
+
+function fire(node, type) {
+  node.dispatchEvent(new node.ownerDocument.defaultView.Event(type, { bubbles: true }));
+}
+
+test("settings page behavior covers routing, secrets, notes, and data", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const chrome = installChrome({
+      settings: savedSettings(),
+      local: {
+        formulaSettings: formulaSeed(),
+        "reader.panelWidth": 520,
+        "reader.notesWidth": 400,
+        "reader.notesPaneSide": "start"
+      }
+    });
+    const page = mountPage("#formula");
+    const { startOptions, searchHits } = await import("../options/options.js");
+    const started = startOptions();
+    await flush();
+    mock.timers.tick(160);
+    assert.equal(page.document.getElementById("setSkeleton").hidden, true);
+    await started;
+    await flush();
+
+    const nav = [...page.document.querySelectorAll("[data-nav]")].map((tab) => tab.dataset.nav);
+    assert.deepEqual(nav, ["translate", "mm", "web", "pdf", "notes", "labs", "data", "about"]);
+    assert.equal(page.document.body.textContent.includes("保存设置"), false);
+    assert.equal(page.document.getElementById("save"), null);
+    assert.equal(page.document.querySelector("[data-nav='advanced']"), null);
+    assert.equal(page.document.querySelector("[data-nav='ask']"), null);
+    assert.equal(page.location.hash, "#mm");
+    assert.equal(page.document.getElementById("panel-formula").hidden, false);
+    assert.equal(page.document.getElementById("formulaSettingsRoot").getAttribute("data-reader-theme"), "warm");
+    assert.equal(page.document.getElementById("mmPdfBanner").hidden, false);
+    assert.match(page.document.getElementById("formulaSettingsRoot").textContent, /问 AI 也用这个模型/);
+    assert.match(page.document.getElementById("formulaSettingsRoot").textContent, /问 AI 时还会发送你的问题和引用的段落/);
+    assert.equal(page.document.querySelector("[data-formula-switch='formula.tier2.enabled']").checked, true);
+
+    const confirms = [];
+    page.window.confirm = () => {
+      confirms.push(true);
+      return true;
+    };
+    assert.equal(page.document.querySelector("[data-badge='mm']").hidden, true);
+    const tier2 = page.document.querySelector("[data-formula-switch='formula.tier2.enabled']");
+    tier2.checked = false;
+    fire(tier2, "change");
+    await flush();
+    assert.equal(confirms.length, 0);
+    tier2.checked = true;
+    fire(tier2, "change");
+    await flush();
+    await globalThis.chrome.storage.local.set({
+      formulaSettings: {
+        ...formulaSeed(),
+        multimodal: { ...formulaSeed().multimodal, probe: { ok: false, chip: "密钥无效", at: 1 } }
+      }
+    });
+    await flush();
+    assert.equal(page.document.querySelector("[data-badge='mm']").hidden, false);
+    await globalThis.chrome.storage.local.set({ formulaSettings: formulaSeed() });
+    await flush();
+    assert.equal(page.document.querySelector("[data-badge='mm']").hidden, true);
+
+    for (const hash of ["#engine", "#reading", "#features", "#advanced", "#ai", "#formula", "#unknown"]) {
+      page.location.hash = hash;
+      page.window.dispatchEvent(new page.window.Event("hashchange"));
+      await flush();
+      const expected = parseSettingsHash(hash).id;
+      assert.equal(page.location.hash, `#${expected}`);
+      assert.equal(page.document.querySelector(`[data-panel="${expected}"]`).hidden, false);
+    }
+
+    page.location.hash = "#data?focus=export";
+    page.window.dispatchEvent(new page.window.Event("hashchange"));
+    await flush();
+    assert.equal(page.location.hash, "#data");
+    const exportGroup = page.document.querySelector("[data-focus='export']");
+    assert.equal(page.document._focused, exportGroup);
+    assert.equal(exportGroup.classList.contains("set-flash"), true);
+    mock.timers.tick(1200);
+    assert.equal(exportGroup.classList.contains("set-flash"), false);
+
+    const target = page.document.getElementById("targetLang");
+    const beforeSaves = chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").length;
+    const t0 = Date.now();
+    target.value = "en";
+    fire(target, "change");
+    await flush();
+    assert.ok(Date.now() - t0 < 300);
+    const save = chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").at(-1);
+    assert.equal(chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").length, beforeSaves + 1);
+    assert.equal(save.patch.targetLang, "en");
+    assert.equal(syncHasSecrets(chrome.sync.settings), false);
+    assert.equal(chrome.sync.settings.providers.openai.apiKey, "");
+
+    const key = page.document.querySelector("[data-key-slot='translate'] input");
+    assert.equal(key.value, "sk-••••3f9a");
+    key.value = "";
+    fire(key, "blur");
+    await flush();
+    assert.equal(key.value, "sk-••••3f9a");
+    assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
+    assert.equal(page.document.querySelector("[data-secret-saved]").textContent, "");
+    key.value = "   ";
+    key.dispatchEvent(Object.assign(new page.window.Event("keydown", { bubbles: true }), { key: "Enter" }));
+    await flush();
+    assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
+    key.value = "  sk-new123  ";
+    key.dispatchEvent(new page.window.Event("blur", { bubbles: true }));
+    await flush();
+    assert.equal(chrome.local.oiSecrets.providers.openai, "sk-new123");
+    assert.equal(page.document.querySelector("[data-key-slot='translate'] [data-secret-saved]").textContent, "已保存");
+    const typed = page.document.querySelector("[data-key-slot='translate'] input");
+    typed.value = "sk-typed-only";
+    await flush();
+    assert.equal(chrome.local.oiSecrets.providers.openai, "sk-new123");
+
+    const show = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "显示");
+    show.click();
+    assert.equal(page.document.querySelector("[data-key-slot='translate'] input").value, "sk-new123");
+    mock.timers.tick(30000);
+    assert.equal(page.document.querySelector("[data-key-slot='translate'] input").value, "sk-••••w123");
+
+    const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+    remove.click();
+    await flush();
+    assert.equal(chrome.local.oiSecrets.providers.openai, "");
+    assert.match(page.document.getElementById("setToast").textContent, /已移除 .+ 密钥/);
+    page.document.getElementById("setToast").querySelector("button").click();
+    await flush();
+    assert.equal(chrome.local.oiSecrets.providers.openai, "sk-new123");
+
+    const mmRemove = [...page.document.querySelectorAll("[data-key-slot='mm'] button")].find((button) => button.textContent === "移除密钥");
+    assert.ok(page.document.querySelector("[data-formula-switch='formula.tier2.enabled']"));
+    mmRemove.click();
+    await flush();
+    assert.equal(page.document.querySelector("[data-formula-switch='formula.tier2.enabled']"), null);
+    assert.match(page.document.getElementById("setToast").textContent, /已移除 多模态 密钥/);
+    page.document.getElementById("setToast").querySelector("button").click();
+    await flush();
+    assert.equal(page.document.querySelector("[data-formula-switch='formula.tier2.enabled']").checked, true);
+    mock.timers.tick(5000);
+
+    page.document.getElementById("setSearch").value = "密钥";
+    fire(page.document.getElementById("setSearch"), "input");
+    const hits = searchHits("密钥");
+    assert.deepEqual(hits.map((node) => node.getAttribute("data-key-slot")), ["translate", "mm", "ocr", "pdf"]);
+    const resultButtons = [...page.document.getElementById("setResults").querySelectorAll("button")];
+    assert.equal(resultButtons.length, 4);
+    resultButtons[3].click();
+    assert.equal(page.location.hash, "#pdf");
+    assert.equal(page.document.querySelector("[data-key-slot='pdf']").classList.contains("set-flash"), true);
+    mock.timers.tick(1200);
+
+    for (const [word, focus] of [["导入", "import"], ["导出", "export"], ["备份", "backup"]]) {
+      const found = searchHits(word);
+      assert.equal(found.length, 1);
+      assert.equal(found[0].getAttribute("data-focus"), focus);
+    }
+
+    const notes = page.document.getElementById("panel-notes");
+    assert.equal(notes.textContent.includes("默认布局"), false);
+    assert.equal(notes.textContent.includes("新笔记默认类型"), false);
+    assert.equal([...notes.querySelectorAll(".set-row")].length, 3);
+    page.location.hash = "#notes";
+    page.window.dispatchEvent(new page.window.Event("hashchange"));
+    assert.equal(page.document.getElementById("notesPaneSide").value, "start");
+    assert.equal(page.document.getElementById("panelWidthValue").textContent, "520");
+    assert.equal(page.document.getElementById("restorePanelWidth").disabled, false);
+    page.document.getElementById("restorePanelWidth").click();
+    await flush();
+    assert.equal(page.document.getElementById("panelWidthValue").textContent, "440");
+    assert.equal(page.document.getElementById("restorePanelWidth").disabled, true);
+    assert.equal(String(chrome.local["reader.panelWidth"]), "440");
+    page.document.getElementById("restoreNotesWidth").click();
+    await flush();
+    assert.equal(page.document.getElementById("notesWidthValue").textContent, "360");
+    assert.equal(String(chrome.local["reader.notesWidth"]), "360");
+
+    const mount = page.document.getElementById("dataPanelMount");
+    assert.equal(mount.oiDataPanel.policy.blocksReading, false);
+    assert.equal(mount.oiDataPanel.policy.pausesWhenAllPagesClosed, true);
+    assert.equal(mount.oiDataPanel.policy.settingsImportIsBackground, false);
+    assert.equal(page.document.querySelector("[data-badge='data']").hidden, true);
+    mount.oiDataPanel.applyStatus({ blocked: true, usage: "" });
+    assert.match(mount.textContent, /暂时读不了/);
+    assert.match(mount.textContent, /本机存储暂时打不开，稍后再试/);
+    assert.equal([...mount.querySelectorAll("button")].filter((button) => button.textContent.includes("选择") || button.textContent.includes("导出文献库")).every((button) => button.disabled), true);
+    assert.equal(page.document.getElementById("setReadError").hidden, true);
+    assert.equal(page.document.getElementById("exportSettings").disabled, false);
+    mount.oiDataPanel.applyStatus({ blocked: false, importIncomplete: true, settled: true, usage: "约 12 MB" });
+    assert.equal(page.document.querySelector("[data-badge='data']").hidden, false);
+    assert.match(mount.textContent, /✓/);
+    assert.equal(mount.querySelector("[data-state='settled']").classList.contains("set-done"), true);
+    const again = mount.querySelector("[data-act='persist-again']");
+    again.click();
+    await flush();
+    assert.equal(globalThis.__oiStorage.asked, 1);
+    assert.equal(page.document.body.textContent.includes("不再提示"), false);
+
+    const syncSwitch = page.document.getElementById("keysSync");
+    assert.equal(syncSwitch.disabled, true);
+    assert.equal(syncSwitch.getAttribute("aria-checked"), "false");
+    assert.equal(syncSwitch.checked, false);
+
+    page.document.getElementById("mmEnablePdf").click();
+    await flush();
+    assert.equal(page.document.querySelector("[data-feat='pdf']").checked, true);
+    assert.equal(page.document.getElementById("mmPdfBanner").hidden, true);
+
+    const scale = page.document.getElementById("fontScale");
+    const scaleBefore = scale.value;
+    page.document.querySelector("[data-step-for='fontScale'][data-dir='1']").click();
+    await flush();
+    assert.ok(Number(scale.value) > Number(scaleBefore));
+
+    chrome.failSave = true;
+    const lang = page.document.getElementById("sourceLang");
+    const previous = lang.value;
+    lang.value = previous === "en" ? "ja" : "en";
+    fire(lang, "change");
+    await flush();
+    assert.equal(lang.value, previous);
+    assert.match(lang.parentElement.textContent, /没保存上 · 重试/);
+    chrome.failSave = false;
+
+    const savesBeforeImport = chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").length;
+    const input = page.document.getElementById("importFile");
+    const file = new File([JSON.stringify({
+      settings: {
+        settingsVersion: SETTINGS_VERSION + 1,
+        providers: { openai: { apiKey: "sk-newer" } }
+      }
+    })], "new.json", { type: "application/json" });
+    Object.defineProperty(input, "files", { configurable: true, get: () => [file] });
+    fire(input, "change");
+    await flush();
+    assert.equal(page.document.getElementById("status").textContent, "文件来自更新版本");
+    assert.equal(chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").length, savesBeforeImport);
+
+    const oldFile = new File([JSON.stringify({
+      settings: {
+        settingsVersion: SETTINGS_VERSION,
+        targetLang: "ja",
+        providers: { openai: { apiKey: "sk-file-key-should-ignore" } },
+        pdfLayout: { cloudApiKey: "pdf-file-key" }
+      }
+    })], "old.json", { type: "application/json" });
+    Object.defineProperty(input, "files", { configurable: true, get: () => [oldFile] });
+    fire(input, "change");
+    await flush();
+    assert.equal(page.document.getElementById("status").textContent, "文件里的 API 密钥已忽略，请在本机重新填写。");
+    assert.equal(page.document.getElementById("importKeyNote").hidden, false);
+    assert.equal(syncHasSecrets(chrome.sync.settings), false);
+    assert.equal(chrome.local.oiSecrets.providers.openai, "sk-new123");
+    assert.equal(String(chrome.local.oiSecrets.pdfCloudApiKey || ""), PDF_KEY);
+
+    page.document.getElementById("exportSettings").click();
+    await flush();
+    const exported = JSON.parse(await globalThis.__oiBlob.text());
+    assert.equal(syncHasSecrets(exported.settings), false);
+    assert.equal(page.document.getElementById("status").textContent, "已导出（不含密钥）");
+
+    const down = page.document.querySelector("[data-nav='translate']");
+    down.dispatchEvent(Object.assign(new page.window.Event("keydown", { bubbles: true, cancelable: true }), { key: "ArrowDown" }));
+    assert.equal(page.document._focused, page.document.querySelector("[data-nav='mm']"));
+    assert.equal(page.document.querySelector("[data-nav='web']").getAttribute("role"), "tab");
+    assert.equal(page.document.getElementById("twoStepPolish").getAttribute("role"), "switch");
+
+    const readHtml = readFileSync(join(root, "options/options.html"), "utf8").replace(/<script\b[\s\S]*?<\/script>/g, "");
+    const readDom = parseHTML(readHtml);
+    patchSelectValue(readDom.document);
+    globalThis.document = readDom.document;
+    globalThis.window = readDom.window;
+    const readChrome = installChrome({ settings: savedSettings() });
+    let releaseGet;
+    readChrome.holdGet = new Promise((resolve, reject) => {
+      releaseGet = () => {
+        readChrome.failGet = true;
+        reject(new Error("read failed"));
+      };
+    });
+    readChrome.holdGet.catch(() => {});
+    const readPage = { document: readDom.document, window: readDom.window };
+    Object.defineProperty(globalThis, "Event", { configurable: true, writable: true, value: readDom.window.Event });
+    Object.defineProperty(globalThis, "CustomEvent", { configurable: true, writable: true, value: readDom.window.CustomEvent });
+    globalThis.location = { hash: "#translate" };
+    globalThis.history = { replaceState(_s, _t, url) { globalThis.location.hash = String(url); } };
+    const failing = await import("../options/options.js?read-fail=1");
+    const pending = failing.startOptions();
+    mock.timers.tick(150);
+    assert.equal(readPage.document.getElementById("setSkeleton").hidden, false);
+    releaseGet();
+    await pending;
+    await flush();
+    assert.equal(readPage.document.getElementById("setSkeleton").hidden, true);
+    assert.equal(readPage.document.getElementById("setReadError").hidden, false);
+    assert.match(readPage.document.getElementById("setReadError").textContent, /没能读取已保存的设置/);
+    const reads = readChrome.calls.length;
+    readPage.document.getElementById("targetLang").value = "ja";
+    readPage.document.getElementById("targetLang").dispatchEvent(new readDom.window.Event("change", { bubbles: true }));
+    await flush();
+    assert.equal(readChrome.calls.length, reads);
+  } finally {
+    mock.timers.reset();
+  }
+});

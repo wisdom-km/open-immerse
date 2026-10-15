@@ -206,12 +206,12 @@ test("options page wires 测试连接 as secondary and harvests unsaved form val
   const js = readFileSync(join(root, "options/options.js"), "utf8");
   const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
 
-  assert.match(html, /<h2>引擎<\/h2>/);
+  assert.match(html, /<h2>翻译<\/h2>/);
   assert.match(html, /id="providerFields"/);
   assert.match(html, /class="provider-test-row"/);
   assert.match(html, /id="testConnection"[^>]*class="btn-secondary">测试连接</);
   assert.match(html, /id="testConnectionStatus"[^>]*class="provider-test-status"[^>]*role="status"/);
-  assert.match(html, /id="save"[^>]*class="btn-primary">保存设置</);
+  assert.doesNotMatch(html, /保存设置/);
   assert.equal(html.includes('id="testConnection"') && html.indexOf("provider-test-row") < html.indexOf("actions-bar"), true);
   assert.match(css, /\.provider-test-row\s*\{[^}]*align-items:\s*flex-start/);
   assert.match(css, /\.provider-test-row\s*\{[^}]*gap:\s*12px/);

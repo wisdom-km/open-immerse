@@ -39,9 +39,10 @@ test("shared tokens define V2 brand colors and Dual Line mark", () => {
 test("page stylesheets import tokens and do not redeclare hex tracks", () => {
   for (const rel of pages) {
     const css = readFileSync(join(root, rel), "utf8");
+    const outside = css.replace(/body\.oi-settings\s*\{[^}]*\}/g, "");
     assert.match(css, /@import\s+"\.\.\/ui\/tokens\.css"/, rel);
-    assert.equal(/--oi-bg:\s*#/.test(css), false, rel);
-    assert.equal(/--oi-accent:\s*#/.test(css), false, rel);
+    assert.equal(/--oi-bg:\s*#/.test(outside), false, rel);
+    assert.equal(/--oi-accent:\s*#/.test(outside), false, rel);
   }
 });
 

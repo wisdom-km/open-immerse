@@ -490,13 +490,13 @@ test("settings screen and Aa panel expose the same switch keys", () => {
   const viewer = read("pdf/viewer.html");
   const viewerJs = read("pdf/viewer.js");
   const css = read("pdf/viewer.css");
-  assert.match(html, /data-nav="formula"[^>]*>多模态 · OCR</);
+  assert.match(html, /data-nav="mm"[^>]*>多模态 · OCR</);
   assert.match(html, /id="panel-formula"/);
   assert.doesNotMatch(html, /问 AI 模型/);
   assert.doesNotMatch(html, /引用公式时用「多模态 · OCR」里的模型/);
   assert.doesNotMatch(html, /data-nav="ask"/);
   assert.doesNotMatch(html, /id="panel-ask"/);
-  assert.doesNotMatch(html.match(/id="panel-reading"[\s\S]*?<\/section>/)[0], /formulaSettings|用多模态模型补全公式/);
+  assert.doesNotMatch(html.match(/id="panel-pdf"[\s\S]*?<\/section>/)[0], /formulaSettings|用多模态模型补全公式/);
   assert.match(viewer, /id="aaFormulaSwitches"/);
   assert.match(viewer, /id="aaFormulaSettings"[^>]*>公式设置…/);
   assert.match(viewerJs, /formulaChainFlags\(formulaViewerSettings/);

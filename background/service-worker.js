@@ -117,9 +117,9 @@ async function handleMessage(message, sender) {
     case "OI_GET_SETTINGS":
       return { ok: true, settings: await getSettings() };
     case "OI_SAVE_SETTINGS": {
-      const settings = await saveSettings(message.patch || {});
+      const settings = await saveSettings(message.patch || {}, message.clear || {});
       await rebuildMenus();
-      return { ok: true, settings };
+      return { ok: settings?.settingsSaved !== false, settings };
     }
     case "OI_PDF_STRUCTURE":
       return completePdfStructure(await getSettings(), {
