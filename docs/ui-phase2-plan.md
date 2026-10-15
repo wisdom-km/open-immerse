@@ -303,7 +303,7 @@ Wisdom 的要求（转述，不是逐字原话）：模型除了大语言模型�
 - 导入旧的设置文件时忽略里面的 key，并给出提示。
 - 文献库「持久存储被拒绝」不阻止导入，全局只提示一次（2026-10-13 18:26）。界面上可以并进 NIM-04，不另开一行。关闭记在 `chrome.storage.local` 的 `library.persistHintDismissed`（全局一个键），和笔记的 `reader.notesPersistHintDismissed`（一个键，值是 docHash 到 true 的映射）分开。关掉一边不会关掉另一边。
 - `#data` 页提供「再申请一次」按钮。面板是可挂载模块 `options/data-panel.js` 的 `mountDataPanel(root)`，设置页重设计时换挂载点。
-- 文件夹导入和旧库迁移共用 `oi-library-migrate`。断点在 `meta.import`。还有任意一个 Open Immerse 页面开着就继续；全部关掉才停在当前这篇的边界，下次打开接着导。不加 offscreen。
+- 文件夹导入和旧库迁移共用 `oi-library-migrate`。断点在 `meta.import`，只存清单、游标和目录句柄。还有任意一个 Open Immerse 页面开着就继续；全部关掉才停在当前这篇的边界，下次打开接着导。不加 offscreen。
 - 「完成」状态用中性色加 ✓。
 - 验收是 SET-32、SET-33、SET-34，见 [`settings-spec.md`](./settings-spec.md)。
 

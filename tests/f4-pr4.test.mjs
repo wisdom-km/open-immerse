@@ -4,7 +4,7 @@ import test from "node:test";
 import "fake-indexeddb/auto";
 
 import { createLibraryChip } from "../lib/library-chip.js";
-import { LIBRARY_FORMAT, LIBRARY_SCHEMA, LibraryStoreError, createLibraryStore } from "../lib/library-store.js";
+import { LIBRARY_FORMAT, LIBRARY_SCHEMA, LibraryStoreError, createLibraryStore, stripSecrets } from "../lib/library-store.js";
 import { createImportBus, createMemoryLocks, createPresence } from "../lib/import-run.js";
 import { NOTES_FORMAT } from "../lib/notes-io.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
@@ -17,16 +17,40 @@ const HASH_A = "aaaaaaaaaaaaaaaa";
 const HASH_B = "bbbbbbbbbbbbbbbb";
 const HASH_C = "cccccccccccccccc";
 
+let storeSerial = 0;
 function storeFor(kind, persist = false) {
+  storeSerial += 1;
+  const name = `oi-test-${kind}-${storeSerial}`;
   const kv = createMemoryKv();
   const library = kind === "idb" ? createIdbLibraryFactory() : createMemoryLibraryFactory();
   const store = createLibraryStore({
     platform: { kv, library },
     persist: async () => persist,
-    now: () => 1_700_000_000_000
+    now: () => 1_700_000_000_000,
+    dbName: name
   });
-  store.closeLibrary = () => library.close?.("oi-annotations");
+  store.closeLibrary = () => {
+    try { store._idbNotes?.currentDb?.close?.(); } catch { /* notes were not opened */ }
+    return library.close?.(name);
+  };
   return store;
+}
+
+function eventTarget() {
+  const map = new Map();
+  return {
+    addEventListener(type, fn) {
+      const list = map.get(type) || [];
+      list.push(fn);
+      map.set(type, list);
+    },
+    removeEventListener(type, fn) {
+      map.set(type, (map.get(type) || []).filter((item) => item !== fn));
+    },
+    dispatch(type) {
+      for (const fn of [...(map.get(type) || [])]) fn({ type });
+    }
+  };
 }
 
 function page(no, translation, extra = {}) {
@@ -234,8 +258,8 @@ async function flush(times = 30) {
   for (let i = 0; i < times; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function until(fn) {
-  for (let i = 0; i < 40; i += 1) {
+async function until(fn, turns = 80) {
+  for (let i = 0; i < turns; i += 1) {
     if (fn()) return;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -262,14 +286,46 @@ function runtime(extra = {}) {
   };
 }
 
+function secretLayout(token = "⟦f1⟧") {
+  return {
+    protocol: "blocks-1",
+    layoutVersion: "v1",
+    apiKey: "SECRET",
+    api_key: "SECRET",
+    "api-key": "SECRET",
+    client_secret: "SECRET",
+    clientSecret: "SECRET",
+    secretKey: "DROP",
+    "access-token": "DROP",
+    idToken: "DROP",
+    bearer: "DROP",
+    auth: { token: "TOK" },
+    blocks: [{
+      id: "b1",
+      key: "keep-me",
+      placeholders: [{ token, blockId: "f1" }]
+    }]
+  };
+}
+
 function library(permission = "granted") {
   return dir("files", {
-    [HASH_A]: paper(HASH_A, [page(1, "甲", { apiKey: "SECRET", token: "TOK", key: "DROP" })], {
-      meta: { title: "论文甲", fileName: "a.pdf", rev: 2, updatedAt: 20 },
+    [HASH_A]: paper(HASH_A, [{
+      page: 1,
+      pairs: [{ id: "p1", source: "src 1", translation: "甲", apiKey: "SECRET" }],
+      layoutVersion: "v1",
+      layout: secretLayout()
+    }], {
+      meta: { title: "论文甲", fileName: "a.pdf", rev: 2, updatedAt: 20, client_secret: "SECRET" },
       readout: "# 甲",
       source: Uint8Array.from([1, 2, 3, 4])
     }),
-    [HASH_B]: paper(HASH_B, [page(1, "乙", { token: "TOK", key: "DROP" })], { meta: { title: "论文乙", rev: 2, updatedAt: 20 } }),
+    [HASH_B]: paper(HASH_B, [{
+      page: 1,
+      pairs: [{ id: "p1", source: "src 1", translation: "乙" }],
+      layoutVersion: "v1",
+      layout: secretLayout("⟦f1⟧")
+    }], { meta: { title: "论文乙", rev: 2, updatedAt: 20, arxiv: { key: "1706.03762" } } }),
     "notes.txt": { kind: "file", name: "notes.txt", text: "ignore me" }
   }, permission);
 }
@@ -426,10 +482,25 @@ test("folder import, secrets, merge, and the four wrong folders", async (t) => {
         assert.equal(extra.pairs[0].translation, "多出来的");
         const added = await store.getPaper(HASH_B);
         const addedPage = await store.getPage(HASH_B, 1);
+        const layouts = await store.listLayouts(HASH_B);
+        const layoutText = JSON.stringify(layouts);
+        assert.match(layoutText, /⟦f1⟧/);
+        assert.match(layoutText, /keep-me/);
+        assert.equal(layoutText.includes("TOK"), false);
+        assert.equal(layoutText.includes("DROP"), false);
+        assert.equal(layoutText.includes("SECRET"), false);
         assert.equal(JSON.stringify(addedPage).includes("TOK"), false);
         assert.equal(JSON.stringify(addedPage).includes("DROP"), false);
+        assert.equal(JSON.stringify(addedPage).includes("SECRET"), false);
         assert.equal(added.origin, "import");
         assert.equal(added.title, "论文乙");
+        const meta = await store.readImportMeta();
+        const { directoryHandle, ...rest } = meta;
+        assert.equal(rest.tree, undefined);
+        assert.equal(JSON.stringify(rest).includes("SECRET"), false);
+        assert.equal(JSON.stringify(rest).includes("⟦f1⟧"), false);
+        assert.ok(directoryHandle);
+        assert.equal(rest.paperIds.includes(HASH_B), true);
         assert.match(root.textContent, /另有 1 个文件或文件夹不是旧库论文，已忽略/);
         click(root, "查看忽略的");
         assert.match(root.textContent, /notes\.txt/);
@@ -456,9 +527,10 @@ test("folder import, secrets, merge, and the four wrong folders", async (t) => {
 });
 
 test("DATA-23 DATA-24 DATA-25 empty, unrelated, and parent folder", async () => {
+  for (const kind of ["memory", "idb"]) {
   const restore = installDom();
   try {
-    const store = storeFor("memory");
+    const store = storeFor(kind);
     const root = document.createElement("div");
     const picked = { current: dir("empty-box", {}) };
     const gates = [];
@@ -489,15 +561,18 @@ test("DATA-23 DATA-24 DATA-25 empty, unrelated, and parent folder", async () => 
     panel.destroy();
     while (gates.length) gates.shift()();
     await flush();
+    await store.closeLibrary?.();
   } finally {
     restore();
+  }
   }
 });
 
 test("DATA-08 corrupt, quota, and blocked stop without deleting the folder", async () => {
+  for (const kind of ["memory", "idb"]) {
   const restore = installDom();
   try {
-    const store = storeFor("memory");
+    const store = storeFor(kind);
     const real = store.importBundle.bind(store);
     let mode = "ok";
     store.importBundle = async (bundle) => {
@@ -529,7 +604,7 @@ test("DATA-08 corrupt, quota, and blocked stop without deleting the folder", asy
       [HASH_B]: paper(HASH_B, [page(1, "乙")], { meta: { title: "乙", rev: 1, updatedAt: 1 } })
     });
     const quotaRoot = document.createElement("div");
-    const quotaStore = storeFor("memory");
+    const quotaStore = storeFor(kind);
     const quotaReal = quotaStore.importBundle.bind(quotaStore);
     let quotaLeft = 1;
     quotaStore.importBundle = async (bundle) => {
@@ -551,15 +626,19 @@ test("DATA-08 corrupt, quota, and blocked stop without deleting the folder", asy
     assert.equal(await quotaStore.getPaper(HASH_B), null);
     assert.match(quotaRoot.textContent, /空间不够|失败/);
     void quotaDir;
+    await store.closeLibrary?.();
+    await quotaStore.closeLibrary?.();
   } finally {
     restore();
+  }
   }
 });
 
 test("DATA-06 import continues while a page is open and pauses when all close", async () => {
+  for (const kind of ["memory", "idb"]) {
   const restore = installDom();
   try {
-    const store = storeFor("memory");
+    const store = storeFor(kind);
     const shared = runtime();
     const gates = [];
     shared.beforePaper = () => new Promise((resolve) => gates.push(resolve));
@@ -590,7 +669,7 @@ test("DATA-06 import continues while a page is open and pauses when all close", 
     const again = runtime();
     const stopGates = [];
     again.beforePaper = () => new Promise((resolve) => stopGates.push(resolve));
-    const fresh = storeFor("memory");
+    const fresh = storeFor(kind);
     const solo = document.createElement("div");
     const soloPanel = mountDataPanel(solo, {
       ...again,
@@ -616,15 +695,19 @@ test("DATA-06 import continues while a page is open and pauses when all close", 
     const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
     assert.equal(JSON.stringify(manifest.permissions || []).includes("offscreen"), false);
     reader.destroy();
+    await store.closeLibrary?.();
+    await fresh.closeLibrary?.();
   } finally {
     restore();
+  }
   }
 });
 
 test("F4UI-23 F4UI-24 resume, allow, later, and incomplete", async () => {
+  for (const kind of ["memory", "idb"]) {
   const restore = installDom();
   try {
-    const store = storeFor("memory");
+    const store = storeFor(kind);
     const folder = library();
     const root = document.createElement("div");
     const gates = [];
@@ -642,6 +725,7 @@ test("F4UI-23 F4UI-24 resume, allow, later, and incomplete", async () => {
     gates.shift()();
     await closing;
     const saved = await store.readImportMeta();
+    saved.directoryHandle.permission = "prompt";
     saved.permission = "prompt";
     saved.phase = "interrupted";
     await store.writeImportMeta(saved);
@@ -670,6 +754,7 @@ test("F4UI-23 F4UI-24 resume, allow, later, and incomplete", async () => {
     click(nextRoot, "允许并继续");
     await flush(40);
     assert.equal(await store.getPaper(HASH_B) != null, true);
+    saved.directoryHandle.permission = "denied";
     saved.permission = "denied";
     saved.phase = "interrupted";
     saved.doneDocs = [HASH_A];
@@ -714,18 +799,33 @@ test("F4UI-23 F4UI-24 resume, allow, later, and incomplete", async () => {
     await flush();
     assert.equal(await store.readImportMeta(), null);
     assert.equal(await store.getPaper(HASH_A) != null, true);
+    saved.directoryHandle.unavailable = true;
+    saved.directoryHandle.permission = "granted";
+    saved.phase = "interrupted";
+    await store.writeImportMeta(saved);
+    const movedRoot = document.createElement("div");
+    mountDataPanel(movedRoot, {
+      ...runtime(),
+      store,
+      usage: async () => ({ usage: 1, quota: 2, persisted: true })
+    });
+    await flush(20);
+    assert.match(movedRoot.textContent, /导入没完成/);
     next.destroy();
     reader.destroy();
+    await store.closeLibrary?.();
     void picks;
   } finally {
     restore();
   }
+  }
 });
 
 test("DATA-19 to DATA-22 json import and export", async () => {
+  for (const kind of ["memory", "idb"]) {
   const restore = installDom();
   try {
-    const source = storeFor("memory");
+    const source = storeFor(kind);
     await source.importBundle({
       format: LIBRARY_FORMAT,
       schema: LIBRARY_SCHEMA,
@@ -734,7 +834,7 @@ test("DATA-19 to DATA-22 json import and export", async () => {
         pages: [{ docHash: HASH_A, page: 1, pairs: [{ id: "p", source: "s", translation: "t" }], rev: 1, updatedAt: 1, schema: LIBRARY_SCHEMA }]
       }]
     });
-    const target = storeFor("memory");
+    const target = storeFor(kind);
     const root = document.createElement("div");
     let downloaded = null;
     const panel = mountDataPanel(root, {
@@ -764,7 +864,7 @@ test("DATA-19 to DATA-22 json import and export", async () => {
     assert.equal(JSON.stringify(await target.getPaper(HASH_A)).includes("SECRET"), false);
     assert.match(root.textContent, /新增/);
     const notesRoot = document.createElement("div");
-    const notesStore = storeFor("memory");
+    const notesStore = storeFor(kind);
     mountDataPanel(notesRoot, {
       store: notesStore,
       usage: async () => ({ usage: 1, quota: 2, persisted: true })
@@ -789,7 +889,7 @@ test("DATA-19 to DATA-22 json import and export", async () => {
     await flush(20);
     assert.equal((await notesStore.listPapers()).length, 0);
     assert.match(notesRoot.textContent, /新增 1/);
-    const dropStore = storeFor("memory");
+    const dropStore = storeFor(kind);
     const dropRoot = document.createElement("div");
     mountDataPanel(dropRoot, {
       store: dropStore,
@@ -805,8 +905,9 @@ test("DATA-19 to DATA-22 json import and export", async () => {
     assert.equal(dropRoot.querySelector('[data-focus-group="import"]').textContent, beforeImport);
     assert.equal((await dropStore.listPapers()).length, 0);
     const badRoot = document.createElement("div");
+    const badStore = storeFor(kind);
     mountDataPanel(badRoot, {
-      store: storeFor("memory"),
+      store: badStore,
       usage: async () => ({ usage: 1, quota: 2, persisted: true })
     });
     const bad = badRoot.querySelector('input[type="file"]');
@@ -818,8 +919,9 @@ test("DATA-19 to DATA-22 json import and export", async () => {
     await flush();
     assert.match(badRoot.textContent, /格式 9/);
     const cancelRoot = document.createElement("div");
+    const cancelStore = storeFor(kind);
     mountDataPanel(cancelRoot, {
-      store: storeFor("memory"),
+      store: cancelStore,
       usage: async () => ({ usage: 1, quota: 2, persisted: true }),
       showDirectoryPicker: async () => {
         const error = new Error("cancel");
@@ -858,8 +960,15 @@ test("DATA-19 to DATA-22 json import and export", async () => {
     assert.equal(downloaded.text.includes("SECRET"), false);
     assert.equal(downloaded.bundle.papers.some((item) => item.layouts), false);
     assert.equal(downloaded.bundle.papers.some((item) => item.source), false);
+    await source.closeLibrary?.();
+    await target.closeLibrary?.();
+    await notesStore.closeLibrary?.();
+    await dropStore.closeLibrary?.();
+    await badStore.closeLibrary?.();
+    await cancelStore.closeLibrary?.();
   } finally {
     restore();
+  }
   }
 });
 
@@ -955,5 +1064,313 @@ test("F4UI-02 blocked still outranks import", async () => {
     chip.destroy();
   } finally {
     restore();
+  }
+});
+
+test("credential fields are stripped and formula placeholders stay", () => {
+  const cleaned = stripSecrets({
+    placeholders: [{ token: "⟦f1⟧", blockId: "f" }],
+    arxiv: { key: "1706.03762" },
+    token: "bare-kept",
+    key: "bare-key",
+    client_secret: "LEAK",
+    clientSecret: "LEAK",
+    secretKey: "LEAK",
+    "access-token": "LEAK",
+    idToken: "LEAK",
+    bearer: "LEAK",
+    api_key: "LEAK",
+    "api-key": "LEAK",
+    auth: { token: "LEAK" }
+  });
+  assert.equal(cleaned.placeholders[0].token, "⟦f1⟧");
+  assert.equal(cleaned.arxiv.key, "1706.03762");
+  assert.equal(cleaned.token, "bare-kept");
+  assert.equal(cleaned.key, "bare-key");
+  assert.equal(JSON.stringify(cleaned).includes("LEAK"), false);
+});
+
+test("import meta keeps the directory handle and drops raw secret text", async () => {
+  for (const kind of ["memory", "idb"]) {
+    const store = storeFor(kind);
+    try {
+      await store.writeImportMeta({
+        phase: "interrupted",
+        source: "folder",
+        folderName: "files",
+        paperIds: [HASH_A],
+        doneDocs: [],
+        total: 1,
+        tree: { text: "LEAK-RAW-SECRET", bytes: [1, 2, 3, 4] },
+        papers: [{ docHash: HASH_A, bytes: [9, 9, 9] }],
+        note: "LEAK-RAW-SECRET",
+        errors: [{ docHash: HASH_A, title: "t", reason: "corrupt", at: 1, body: "LEAK-RAW-SECRET" }],
+        directoryHandle: dir("files", {})
+      });
+      const saved = await store.readImportMeta();
+      const { directoryHandle, ...rest } = saved;
+      assert.equal(JSON.stringify(rest).includes("LEAK-RAW-SECRET"), false);
+      assert.equal(rest.tree, undefined);
+      assert.equal(rest.papers, undefined);
+      assert.equal(rest.note, undefined);
+      assert.equal(directoryHandle.name, "files");
+      assert.deepEqual(rest.paperIds, [HASH_A]);
+    } finally {
+      await store.closeLibrary?.();
+    }
+  }
+});
+
+test("a folder file without a timestamp does not overwrite the same rev", async () => {
+  for (const kind of ["memory", "idb"]) {
+    const restore = installDom();
+    try {
+      const store = storeFor(kind);
+      await store.importBundle({
+        format: LIBRARY_FORMAT,
+        schema: LIBRARY_SCHEMA,
+        papers: [{
+          paper: { docHash: HASH_C, title: "本地", origin: "import", rev: 2, updatedAt: 40, lastOpenedAt: 40, schema: LIBRARY_SCHEMA },
+          pages: [{ docHash: HASH_C, page: 1, pairs: [{ id: "p", source: "s", translation: "本地译文" }], rev: 2, updatedAt: 40, schema: LIBRARY_SCHEMA }]
+        }]
+      });
+      const root = document.createElement("div");
+      const panel = mountDataPanel(root, {
+        ...runtime(),
+        store,
+        usage: async () => ({ usage: 1, quota: 2, persisted: true }),
+        showDirectoryPicker: async () => dir("files", {
+          [HASH_C]: paper(HASH_C, [page(1, "文件夹译文")], { meta: { title: "文件夹标题", rev: 2 } })
+        })
+      });
+      click(root, "选择文件夹…");
+      await flush(50);
+      const kept = await store.getPaper(HASH_C);
+      assert.equal(kept.title, "本地");
+      assert.equal(kept.updatedAt, 40);
+      assert.equal((await store.getPage(HASH_C, 1)).pairs[0].translation, "本地译文");
+      const freshRoot = document.createElement("div");
+      mountDataPanel(freshRoot, {
+        ...runtime(),
+        store,
+        usage: async () => ({ usage: 1, quota: 2, persisted: true }),
+        showDirectoryPicker: async () => dir("files", {
+          [HASH_A]: paper(HASH_A, [page(1, "新")], { meta: { title: "无时间", rev: 1 } })
+        })
+      });
+      click(freshRoot, "选择文件夹…");
+      await flush(50);
+      const fresh = await store.getPaper(HASH_A);
+      assert.equal(fresh.title, "无时间");
+      assert.equal(fresh.updatedAt, 0);
+      assert.equal(fresh.lastOpenedAt, 0);
+      assert.equal((await store.listPapers()).some((item) => item.docHash === HASH_A), true);
+      panel.destroy();
+      await store.closeLibrary?.();
+    } finally {
+      restore();
+    }
+  }
+});
+
+test("DATA-06 pagehide on one page lets the other page take the import", async () => {
+  const viewer = readFileSync(new URL("../pdf/viewer.js", import.meta.url), "utf8");
+  const closeFn = viewer.slice(viewer.indexOf("function closeViewerWork"), viewer.indexOf("function abortError"));
+  assert.match(closeFn, /importBinding\?\.close/);
+  const options = readFileSync(new URL("../options/options.js", import.meta.url), "utf8");
+  assert.match(options, /pagehide[\s\S]{0,120}closeData/);
+  for (const kind of ["memory", "idb"]) {
+    const restore = installDom();
+    try {
+      const store = storeFor(kind);
+      const shared = runtime();
+      const gates = [];
+      shared.beforePaper = () => new Promise((resolve) => gates.push(resolve));
+      const dataWindow = eventTarget();
+      const readerWindow = eventTarget();
+      const root = document.createElement("div");
+      const chip = document.createElement("div");
+      const panel = mountDataPanel(root, {
+        ...shared,
+        store,
+        window: dataWindow,
+        usage: async () => ({ usage: 1, quota: 4, persisted: true }),
+        showDirectoryPicker: async () => library()
+      });
+      const reader = attachImportReader(chip, { ...shared, store, window: readerWindow });
+      click(root, "选择文件夹…");
+      await until(() => gates.length >= 1);
+      gates.shift()();
+      await until(() => gates.length >= 1);
+      dataWindow.dispatch("pagehide");
+      gates.shift()();
+      await until(() => gates.length >= 1);
+      assert.match(chip.textContent, /正在导入/);
+      assert.equal(await store.getPaper(HASH_B), null);
+      gates.shift()();
+      await flush(40);
+      assert.equal(await store.getPaper(HASH_B) != null, true);
+      readerWindow.dispatch("pagehide");
+      await flush(10);
+      panel.destroy();
+      reader.destroy();
+      await store.closeLibrary?.();
+    } finally {
+      restore();
+    }
+  }
+});
+
+test("an interrupted json import writes progress without the file body", async () => {
+  for (const kind of ["memory", "idb"]) {
+    const restore = installDom();
+    try {
+      const store = storeFor(kind);
+      const dataWindow = eventTarget();
+      const gates = [];
+      const root = document.createElement("div");
+      mountDataPanel(root, {
+        ...runtime({ beforePaper: () => new Promise((resolve) => gates.push(resolve)) }),
+        store,
+        window: dataWindow,
+        usage: async () => ({ usage: 1, quota: 2, persisted: true })
+      });
+      const bundle = {
+        format: LIBRARY_FORMAT,
+        schema: LIBRARY_SCHEMA,
+        papers: [HASH_A, HASH_B].map((hash) => ({
+          paper: {
+            docHash: hash,
+            title: "甲",
+            rev: 1,
+            updatedAt: 1,
+            lastOpenedAt: 1,
+            schema: LIBRARY_SCHEMA,
+            client_secret: "LEAK-CLIENT"
+          },
+          pages: [{
+            docHash: hash,
+            page: 1,
+            pairs: [{ id: "p", source: "s", translation: "t", "access-token": "LEAK-ACCESS" }],
+            rev: 1,
+            updatedAt: 1,
+            schema: LIBRARY_SCHEMA
+          }]
+        }))
+      };
+      const input = root.querySelector('input[type="file"]');
+      input.files = [{ name: "library.json", async text() { return JSON.stringify(bundle); } }];
+      input.dispatchEvent({ type: "change" });
+      await until(() => gates.length >= 1);
+      gates.shift()();
+      await until(() => gates.length >= 1, 400);
+      dataWindow.dispatch("pagehide");
+      gates.shift()();
+      await flush(40);
+      const meta = await store.readImportMeta();
+      const { directoryHandle, ...rest } = meta;
+      assert.equal(rest.phase, "incomplete");
+      assert.equal(rest.source, "json");
+      assert.deepEqual(rest.doneDocs, [HASH_A]);
+      assert.equal(JSON.stringify(rest).includes("LEAK-CLIENT"), false);
+      assert.equal(JSON.stringify(rest).includes("LEAK-ACCESS"), false);
+      assert.equal(rest.tree, undefined);
+      assert.equal(directoryHandle, undefined);
+      assert.equal((await store.getPaper(HASH_A)).title, "甲");
+      assert.equal(JSON.stringify(await store.getPaper(HASH_A)).includes("LEAK-CLIENT"), false);
+      assert.equal(JSON.stringify(await store.getPage(HASH_A, 1)).includes("LEAK-ACCESS"), false);
+      assert.equal(await store.getPaper(HASH_B), null);
+      assert.match(root.textContent, /导入没完成/);
+      assert.match(root.textContent, /重新选择文件/);
+      await store.closeLibrary?.();
+    } finally {
+      restore();
+    }
+  }
+});
+
+test("a few hundred papers keep each checkpoint bounded", { timeout: 180000 }, async () => {
+  for (const kind of ["memory", "idb"]) {
+    const restore = installDom();
+    try {
+      const count = 200;
+      const secret = "LEAK-RAW-SECRET";
+      const payload = new Uint8Array(4096);
+      payload[0] = 7;
+      const children = {};
+      const second = `p${String(1).padStart(15, "0")}`;
+      for (let index = 0; index < count; index += 1) {
+        const hash = `p${String(index).padStart(15, "0")}`;
+        children[hash] = paper(hash, [{
+          page: 1,
+          pairs: [{ id: "p1", source: "s", translation: "old", client_secret: secret }],
+          layoutVersion: "v1",
+          layout: secretLayout()
+        }], {
+          meta: { title: `t${index}`, rev: 1, updatedAt: 5 },
+          readout: secret,
+          source: payload
+        });
+      }
+      const store = storeFor(kind);
+      const sizes = [];
+      const original = store.writeImportMeta.bind(store);
+      store.writeImportMeta = async (value) => {
+        assert.equal(Object.prototype.hasOwnProperty.call(value, "tree"), false);
+        assert.equal(value.papers, undefined);
+        const plain = { ...value };
+        delete plain.directoryHandle;
+        const text = JSON.stringify(plain);
+        sizes.push(text.length);
+        assert.equal(text.includes(secret), false);
+        assert.ok(text.length < 48000, `checkpoint is ${text.length} bytes`);
+        return original(value);
+      };
+      const root = document.createElement("div");
+      let passed = 0;
+      const panel = mountDataPanel(root, {
+        ...runtime({
+          beforePaper(paperItem) {
+            passed += 1;
+            if (paperItem.docHash === second) {
+              const file = paperItem.handle.children["page-001.json"];
+              const parsed = JSON.parse(file.text);
+              parsed.pairs[0].translation = "from-handle";
+              file.text = JSON.stringify(parsed);
+            }
+          }
+        }),
+        store,
+        usage: async () => ({ usage: 1, quota: 80, persisted: true }),
+        showDirectoryPicker: async () => dir("files", children)
+      });
+      click(root, "选择文件夹…");
+      const started = Date.now();
+      let imported = 0;
+      while (imported < count) {
+        if (Date.now() - started > 90000) throw new Error(`imported ${imported} of ${count}`);
+        imported = (await store.listPapers()).length;
+        if (imported < count) await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+      assert.equal(passed, count);
+      assert.equal((await store.getPage(second, 1)).pairs[0].translation, "from-handle");
+      assert.equal(JSON.stringify(await store.getPage(second, 1)).includes(secret), false);
+      assert.ok(sizes.length >= count, `writes ${sizes.length}`);
+      for (let index = 1; index < sizes.length; index += 1) {
+        const grew = sizes[index] - sizes[index - 1];
+        assert.ok(grew < 800, `checkpoint grew by ${grew}`);
+      }
+      const meta = await store.readImportMeta();
+      const { directoryHandle, ...rest } = meta;
+      assert.equal(JSON.stringify(rest).includes(secret), false);
+      assert.equal(rest.tree, undefined);
+      assert.equal(rest.paperIds.length, count);
+      assert.equal(directoryHandle.name, "files");
+      assert.match(JSON.stringify(await store.listLayouts(second)), /⟦f1⟧/);
+      panel.destroy();
+      await store.closeLibrary?.();
+    } finally {
+      restore();
+    }
   }
 });

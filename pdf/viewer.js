@@ -387,6 +387,7 @@ let libraryProbe = null;
 let notesDocHash = "";
 let notesUi = null;
 let libraryChip = null;
+let importBinding = null;
 let persistCard = null;
 let pendingNotes = null;
 let pendingUnload = () => {};
@@ -2232,7 +2233,6 @@ function installLibraryChrome() {
   } catch {
     /* opened outside the extension */
   }
-  let importBinding = null;
   libraryChip = createLibraryChip({
     host: slot,
     openStorage: async () => {
@@ -9572,6 +9572,7 @@ function closeViewerWork() {
   layoutClosed = true;
   abortTranslateSession(session);
   abortInflightLayouts();
+  void importBinding?.close?.();
 }
 
 function abortError() {

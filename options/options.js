@@ -481,5 +481,8 @@ function bindPanelNav() {
     tab.addEventListener("click", () => showOptionsPanel(tab.dataset.nav));
   });
   window.addEventListener("hashchange", () => showOptionsPanel(location.hash));
+  window.addEventListener("pagehide", () => {
+    void dataPanel?.closeData?.();
+  });
   showOptionsPanel(location.hash.replace("#", "") || "engine");
 }

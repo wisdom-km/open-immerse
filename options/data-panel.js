@@ -88,6 +88,12 @@ export function bindImportChip(chip, deps = {}) {
     chip.setImport(next && next.phase === "rejected" ? null : next);
   });
   coordinator.attach("reader");
+  const pageTarget = deps.window || globalThis;
+  function onPageHide() {
+    void coordinator.detach("reader");
+  }
+  pageTarget.addEventListener?.("pagehide", onPageHide);
+  pageTarget.addEventListener?.("beforeunload", onPageHide);
   const onBus = deps.bus?.listen?.((message) => {
     if (message?.type === "migration-continue") {
       chip.setMigration({ running: true, done: message.done || 0, total: message.total || 0 });
@@ -100,6 +106,8 @@ export function bindImportChip(chip, deps = {}) {
     },
     destroy() {
       stop();
+      pageTarget.removeEventListener?.("pagehide", onPageHide);
+      pageTarget.removeEventListener?.("beforeunload", onPageHide);
       onBus?.();
       void coordinator.detach("reader");
       coordinator.destroy();
@@ -389,6 +397,18 @@ export function mountDataPanel(root, deps = {}) {
     const total = view.total == null ? null : Number(view.total);
     const count = total == null ? `${done} 篇` : `${done} / ${total} 篇`;
     const leave = `可以离开本页去阅读，导入会继续；关掉所有 Open Immerse 页面会暂停，下次打开接着导入。`;
+    if ((phase === "running" || phase === "scanning") && view.source === "json") {
+      group.append(row(
+        "正在从导出文件导入",
+        `已处理 ${count}。${leave}`,
+        button("暂停", "btn-secondary", () => { void coordinator.pause(); })
+      ));
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      const fill = el("span", { "data-pct": String(pct) });
+      if (fill.style) fill.style.width = `${pct}%`;
+      group.append(el("div", { class: "oi-data-bar", role: "progressbar", "aria-valuenow": String(pct) }, [fill]));
+      return;
+    }
     if (phase === "running" || phase === "scanning") {
       const prefix = view.parentAdjusted ? "你选的是上一层，已自动改用里面的「files」文件夹。" : "";
       group.append(row(
@@ -414,6 +434,22 @@ export function mountDataPanel(root, deps = {}) {
       group.append(el("div", { class: "set-actions" }, [
         button("以后再说", "btn-link", () => { void coordinator.later(); }),
         button("允许并继续", "btn-primary", () => { void coordinator.allow(); })
+      ]));
+      return;
+    }
+    if (phase === "incomplete" && view.source === "json") {
+      const fileInput = el("input", { type: "file", accept: "application/json,.json", class: "oi-data-file" });
+      fileInput.addEventListener("change", () => {
+        const file = fileInput.files?.[0];
+        if (file) void readFile(file);
+      });
+      group.append(el("h3", { text: "导入没完成" }));
+      group.append(el("p", { class: "oi-data-safe", text: `已导入的 ${done} 篇都在，可以照常读。` }));
+      group.append(el("p", { text: "上次的导出文件没有导完。重新选一次这个文件就能接着导入，已经导入的会自动跳过。" }));
+      group.append(el("div", { class: "set-actions" }, [
+        button("不再导入", "btn-link", () => { void coordinator.abandon(); }),
+        fileInput,
+        button("重新选择文件…", "btn-primary", () => fileInput.click?.())
       ]));
       return;
     }
@@ -565,6 +601,12 @@ export function mountDataPanel(root, deps = {}) {
     render();
   });
   coordinator.attach("data");
+  const pageTarget = deps.window || globalThis;
+  function onPageHide() {
+    void coordinator.detach("data");
+  }
+  pageTarget.addEventListener?.("pagehide", onPageHide);
+  pageTarget.addEventListener?.("beforeunload", onPageHide);
   render();
   void loadUsage();
   void loadMigration();
@@ -593,6 +635,8 @@ export function mountDataPanel(root, deps = {}) {
     },
     destroy() {
       stop();
+      pageTarget.removeEventListener?.("pagehide", onPageHide);
+      pageTarget.removeEventListener?.("beforeunload", onPageHide);
       if (toastTimer) timers.clearTimeout(toastTimer);
       coordinator.destroy();
       reader?.destroy?.();
