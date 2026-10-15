@@ -2987,3 +2987,191 @@ button:disabled { opacity: 0.45; cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .oi-lib-chip.is-recovered { transition: none; }
 }
+
+.toolbar button.oi-arxiv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: var(--oi-reader-well);
+  color: var(--oi-reader-ink-2);
+  font-family: var(--oi-reader-ui-font);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+.toolbar button.oi-arxiv-chip[hidden] { display: none !important; }
+.oi-arxiv-chip .oi-arxiv-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.oi-arxiv-chip .oi-arxiv-auto[hidden] { display: none !important; }
+.oi-arxiv-chip .oi-arxiv-auto input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--oi-reader-ink);
+}
+.oi-arxiv-menu {
+  position: fixed;
+  z-index: 40;
+}
+
+.oi-pdf-math-row.is-katex {
+  position: relative;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 0;
+  max-width: 100%;
+  margin: var(--oi-reader-display-margin);
+  color: var(--oi-reader-ink);
+  background: transparent;
+  box-shadow: none;
+}
+.reader-flow[data-oi-narrow="1"] .oi-pdf-math-row.is-katex {
+  grid-template-columns: 0 minmax(0, 1fr) 36px;
+}
+.oi-pdf-math-row.is-katex > .oi-formula-reserve {
+  position: static;
+  inset: auto;
+  width: auto;
+  height: auto;
+}
+.oi-pdf-math-row.is-katex .oi-pdf-math-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  min-width: 0;
+  text-align: center;
+  background: transparent;
+  color: var(--oi-reader-ink);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.oi-pdf-math-row.is-katex .oi-pdf-math-scroll:hover {
+  box-shadow: inset 0 0 0 1px var(--oi-reader-line-strong);
+}
+.oi-pdf-math-row.is-katex .oi-pdf-math-scroll:focus-visible {
+  outline: 2px solid var(--oi-reader-focus);
+  outline-offset: 2px;
+}
+.oi-pdf-math-row.is-katex .katex {
+  font-size: 1.1em;
+  color: var(--oi-reader-ink);
+  background: transparent;
+}
+.oi-pdf-math-row.is-katex .katex-display {
+  margin: 0;
+}
+.oi-pdf-math-row.is-katex .oi-pdf-eq-num {
+  justify-self: stretch;
+  width: 100%;
+  text-align: end;
+  color: var(--oi-reader-ink);
+  background: transparent;
+}
+.oi-pdf-math-row.is-katex .oi-pdf-math-scroll.is-overflowing {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.oi-pdf-math-row.is-katex:has(.is-overflowing)::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 48px;
+  width: 24px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--oi-reader-paper));
+}
+.reader-flow[data-oi-narrow="1"] .oi-pdf-math-row.is-katex:has(.is-overflowing)::after {
+  right: 36px;
+}
+.oi-pdf-inline-math.is-katex {
+  display: inline-block;
+  max-width: 100%;
+  overflow: visible;
+  vertical-align: baseline;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--oi-reader-ink);
+  cursor: pointer;
+  line-height: inherit;
+}
+.oi-pdf-inline-math.is-katex.is-overflowing {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.oi-pdf-inline-math.is-katex:hover {
+  box-shadow: inset 0 0 0 1px var(--oi-reader-line-strong);
+}
+.oi-pdf-inline-math.is-katex:focus-visible {
+  outline: 2px solid var(--oi-reader-focus);
+  outline-offset: 2px;
+}
+.oi-pdf-inline-math.is-katex .katex {
+  display: inline-block;
+  font-size: 1em;
+  color: var(--oi-reader-ink);
+  background: transparent;
+}
+.oi-pdf-inline-math.is-katex .katex-html {
+  display: inline-block;
+}
+.oi-latex-copy {
+  position: absolute;
+  top: -12px;
+  right: 48px;
+  z-index: 2;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--oi-reader-line);
+  border-radius: 6px;
+  background: var(--oi-reader-surface);
+  color: var(--oi-reader-ink);
+  box-shadow: var(--oi-reader-popover-shadow);
+  font-family: var(--oi-reader-ui-font);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 22px;
+  opacity: 0;
+  pointer-events: none;
+}
+.oi-pdf-math-row.is-katex:hover .oi-latex-copy,
+.oi-pdf-math-row.is-katex:focus-within .oi-latex-copy {
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 0s linear 300ms;
+}
+.reader-flow[data-oi-narrow="1"] .oi-latex-copy {
+  top: 4px;
+  right: 40px;
+}
+.oi-latex-copy.is-copied {
+  background: var(--oi-reader-ink);
+  color: var(--oi-reader-paper);
+  opacity: 1;
+  pointer-events: auto;
+}
+@keyframes oi-katex-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.oi-pdf-math-row.is-katex.is-enter,
+.oi-pdf-inline-math.is-katex.is-enter {
+  animation: oi-katex-in 200ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .oi-pdf-math-row.is-katex.is-enter,
+  .oi-pdf-inline-math.is-katex.is-enter {
+    animation: none;
+  }
+}
