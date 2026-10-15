@@ -1,11 +1,7 @@
 /*
- * #data panel. Colors are existing tokens only.
- * --oi-warn and --oi-warn-soft are aliases until the settings theme
- * has its own warn pair. Listed in the PR for Loom / Wisdom.
+ * #data panel. Warn colors come from body.oi-settings in options.css.
  */
 .oi-data {
-  --oi-warn: var(--oi-reader-warn);
-  --oi-warn-soft: var(--oi-reader-warn-soft);
   color: var(--oi-text);
   font-family: var(--oi-font);
   max-width: 760px;
