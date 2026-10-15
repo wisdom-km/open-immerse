@@ -2988,9 +2988,10 @@ button:disabled { opacity: 0.45; cursor: default; }
   .oi-lib-chip.is-recovered { transition: none; }
 }
 
-.toolbar button.oi-arxiv-chip {
+.toolbar .oi-arxiv-chip {
   display: inline-flex;
   align-items: center;
+  align-self: center;
   gap: 6px;
   padding: 0 10px;
   border-radius: 12px;
@@ -3002,7 +3003,25 @@ button:disabled { opacity: 0.45; cursor: default; }
   line-height: 1;
   white-space: nowrap;
 }
-.toolbar button.oi-arxiv-chip[hidden] { display: none !important; }
+.toolbar .oi-arxiv-chip[hidden] { display: none !important; }
+.toolbar .oi-arxiv-chip button {
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+.toolbar .oi-arxiv-chip button:hover,
+.toolbar .oi-arxiv-chip button:focus {
+  background: transparent;
+  color: inherit;
+}
 .oi-arxiv-chip .oi-arxiv-auto {
   display: inline-flex;
   align-items: center;
@@ -3017,6 +3036,20 @@ button:disabled { opacity: 0.45; cursor: default; }
   height: 13px;
   margin: 0;
   accent-color: var(--oi-reader-ink);
+}
+.toolbar .oi-arxiv-chip .oi-arxiv-restore {
+  color: var(--oi-reader-focus);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.toolbar .oi-arxiv-chip .oi-arxiv-restore:hover,
+.toolbar .oi-arxiv-chip .oi-arxiv-restore:focus {
+  color: var(--oi-reader-focus);
+}
+.oi-arxiv-chip .oi-arxiv-restore[hidden] { display: none !important; }
+.oi-arxiv-chip .oi-arxiv-restore:focus-visible {
+  outline: 2px solid var(--oi-reader-focus);
+  outline-offset: 2px;
 }
 .oi-arxiv-menu {
   position: fixed;
@@ -3107,8 +3140,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   line-height: inherit;
 }
 .oi-pdf-inline-math.is-katex.is-overflowing {
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: visible;
 }
 .oi-pdf-inline-math.is-katex:hover {
   box-shadow: inset 0 0 0 1px var(--oi-reader-line-strong);
@@ -3131,7 +3163,10 @@ button:disabled { opacity: 0.45; cursor: default; }
   top: -12px;
   right: 48px;
   z-index: 2;
+  box-sizing: border-box;
   height: 24px;
+  min-height: 24px;
+  max-height: 24px;
   padding: 0 8px;
   border: 1px solid var(--oi-reader-line);
   border-radius: 6px;

@@ -8,6 +8,8 @@ import {
   arxivFailSentence,
   chipModel,
   inlineSplicePlans,
+  keptSourceId,
+  normalizeArxivPrefs,
   prepareArxivAlignment,
   shownCounts,
   slotAssignments,
@@ -15,7 +17,7 @@ import {
   spliceInlinePieces,
   verifiedArxivFormula
 } from "../lib/formula-arxiv-session.js";
-import { copyLatexText, katexClickKept, mountArxivDisplay, plainWithInlineMath } from "../lib/formula-arxiv-pane.js";
+import { copyLatexText, failedInlineKind, katexClickKept, mountArxivDisplay, plainWithInlineMath } from "../lib/formula-arxiv-pane.js";
 import { loadAttentionPages, loadKatex, loadSource, SRC_V7, SRC_V7_SHA } from "./helpers/arxiv-paper.mjs";
 
 function loadIsolated(file, stubs) {
@@ -111,7 +113,14 @@ test("chip uses source totals and shortens when the column is narrow", () => {
   assert.equal(chipModel({ phase: "failed", reason: "plain-tex" }).text, "未用 arXiv 源码：无法解析源码");
   assert.equal(chipModel({ phase: "failed", reason: "alignment-below-85" }).text, "未用 arXiv 源码：对齐不足");
   assert.equal(chipModel({ version: "v7", formulas: [], shown: { display: 0, inline: 0 }, phase: "ready" }).text, "公式 · arXiv 源码 v7 · 本文无公式");
+  const skipped = chipModel({ phase: "skipped" });
+  assert.equal(skipped.title, "公式 · 已不用源码 · 改回");
+  assert.equal(skipped.restore, "改回");
+  assert.equal(`${skipped.text} ${skipped.restore}`.replace(/\s+/g, " ").trim(), skipped.title);
   assert.equal(arxivFailSentence("http"), "未用 arXiv 源码：离线");
+  const prefs = normalizeArxivPrefs({ arxivSourceSkip: ["1706.03762"], arxivSourceOn: ["1706.03762", "1706.03762"] });
+  assert.equal(keptSourceId(prefs, "1706.03762"), true);
+  assert.deepEqual(normalizeArxivPrefs({ skip: ["1706.03762"], on: [] }).on, []);
 });
 
 test("splice keeps a group only when every formula passes and none owns a slot", () => {
@@ -271,6 +280,23 @@ test("a KaTeX failure stays off the page and a success path does not assign inne
   assert.equal(painted.includes("E=mc^2"), true);
   assert.equal(painted.includes("$$"), false);
   assert.equal(painted.includes("#e10091"), false);
+
+  const colored = el("div");
+  colored.ownerDocument = doc;
+  const colorKatex = {
+    renderToString() { return "<span>ok</span>"; },
+    render(_latex, node) {
+      const child = doc.createElement("span");
+      child.style.color = "rgb(225, 0, 145)";
+      child.textContent = "x";
+      node.append(child);
+    }
+  };
+  assert.equal(mountArxivDisplay(colored, { ...broken, latex: "x" }, 1, { katex: colorKatex }), "katex-error");
+  assert.equal(colored.childNodes.length, 0);
+  assert.equal(failedInlineKind({ formulaTier: "placeholder", imageUrl: "data:image/png;base64,abc" }), "placeholder");
+  assert.equal(failedInlineKind({ formulaTier: "arxiv", imageUrl: "data:image/png;base64,abc" }), "crop");
+  assert.equal(failedInlineKind({ formulaTier: "arxiv", latex: "x" }), "placeholder");
 });
 
 test("copying a paragraph writes inline source latex between dollar signs", () => {

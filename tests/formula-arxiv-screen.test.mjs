@@ -85,7 +85,7 @@ class PipeCdp {
   }
 }
 
-test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, async (t) => {
+test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, async (t) => {
   const packed = await loadSource(SRC_V7, SRC_V7_SHA, "把 1706.03762v7.tar.gz 放到 tests/fixtures/arxiv-src/。");
   const files = (packed.files || []).map((file) => ({ path: file.path, text: file.text }));
   const hits = [];
@@ -163,7 +163,7 @@ test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, a
   await send("Page.addScriptToEvaluateOnNewDocument", {
     source: `(() => {
       const orig = window.fetch.bind(window);
-      window.__oiArxivMode = "offline";
+      window.__oiArxivMode = localStorage.getItem("oi.f5.arxivMode") || "offline";
       window.__oiAlerted = false;
       window.alert = () => { window.__oiAlerted = true; };
       window.fetch = (input, init) => {
@@ -188,7 +188,23 @@ test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, a
           },
           onMessage: { addListener(fn) { listeners.push(fn); } }
         },
-        storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } }
+        storage: { local: {
+          get(keys) {
+            let bag = {};
+            try { bag = JSON.parse(localStorage.getItem("oi.f5.chromeStorage") || "{}"); } catch { bag = {}; }
+            if (!Array.isArray(keys)) return Promise.resolve(bag);
+            const out = {};
+            keys.forEach((key) => { if (Object.prototype.hasOwnProperty.call(bag, key)) out[key] = bag[key]; });
+            return Promise.resolve(out);
+          },
+          set(patch) {
+            let bag = {};
+            try { bag = JSON.parse(localStorage.getItem("oi.f5.chromeStorage") || "{}"); } catch { bag = {}; }
+            Object.assign(bag, patch || {});
+            localStorage.setItem("oi.f5.chromeStorage", JSON.stringify(bag));
+            return Promise.resolve();
+          }
+        } }
       };
     })();`
   });
@@ -207,7 +223,12 @@ test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, a
     let last = null;
     let logged = 0;
     while (Date.now() - started < timeoutMs) {
-      last = await evaluate(expression);
+      try {
+        last = await evaluate(expression);
+      } catch (error) {
+        last = null;
+        waitFor.lastError = String(error?.message || error);
+      }
       if (last) return last;
       if (Date.now() - logged > 4000) {
         logged = Date.now();
@@ -231,6 +252,7 @@ test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, a
     return chip.querySelector(".oi-arxiv-label")?.textContent || "";
   })()`, "arxiv offer");
   assert.equal(offer, "用 arXiv 源码");
+  assert.equal(await evaluate(`document.getElementById("arxivSourceAuto").closest("button")`), null);
   assert.equal(await evaluate(`document.querySelectorAll(".is-katex").length`), 0);
   assert.equal(hits.some((path) => /arxiv\.org/i.test(path)), false);
 
@@ -384,8 +406,8 @@ test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, a
       probe.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline;padding:0;margin:0;border:0;line-height:0;";
       return probe;
     };
-    const inline = [...document.querySelectorAll(".oi-pdf-inline-math.is-katex")].find((node) => {
-      if (!node.parentElement || !node.querySelector(".katex") || node.classList.contains("is-overflowing")) return false;
+    const shown = (node) => {
+      if (!node?.parentElement || !node.querySelector(".katex")) return false;
       let el = node;
       while (el) {
         const style = getComputedStyle(el);
@@ -393,10 +415,10 @@ test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, a
         el = el.parentElement;
       }
       return true;
-    });
-    let line = null;
-    let math = null;
-    if (inline) {
+    };
+    const inlines = [...document.querySelectorAll(".oi-pdf-inline-math.is-katex")].filter(shown);
+    const deltas = [];
+    for (const inline of inlines) {
       const parent = inline.parentElement;
       const wrap = document.createElement("span");
       wrap.style.whiteSpace = "nowrap";
@@ -405,12 +427,12 @@ test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, a
       parent.insertBefore(wrap, inline);
       wrap.append(lineProbe, inline);
       inline.insertBefore(mathProbe, inline.firstChild);
-      line = lineProbe.getBoundingClientRect().bottom;
-      math = mathProbe.getBoundingClientRect().bottom;
+      deltas.push(Math.abs(lineProbe.getBoundingClientRect().bottom - mathProbe.getBoundingClientRect().bottom));
       mathProbe.remove();
       parent.insertBefore(inline, wrap);
       wrap.remove();
     }
+    const displaced = deltas.filter((delta) => delta > 1).length;
     const flow = document.querySelector(".reader-flow");
     const flowBox = flow.getBoundingClientRect();
     const padL = parseFloat(getComputedStyle(flow).paddingLeft) || 0;
@@ -430,13 +452,17 @@ test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, a
     });
     const quiet = rows.filter((row) => !row.overflow);
     return {
-      baseline: line == null ? null : Math.abs(line - math),
+      baseline: deltas.length ? Math.max(...deltas) : null,
+      displaced,
+      measured: deltas.length,
       quiet: quiet.map((row) => ({ delta: row.delta, num: row.num })),
       badge: rows.some((row) => row.badge),
       numbered: rows.some((row) => row.num.trim())
     };
   })()`);
-  assert.ok(placed.baseline != null && placed.baseline <= 1, JSON.stringify(placed));
+  assert.ok(placed.measured >= 1, JSON.stringify(placed));
+  assert.equal(placed.displaced, 0, JSON.stringify(placed));
+  console.log(`displaced inline formulas ${placed.displaced} of ${placed.measured}`);
   assert.equal(placed.badge, false);
   assert.equal(placed.numbered, true);
   assert.ok(placed.quiet.length >= 1, JSON.stringify(placed.quiet));
@@ -634,9 +660,11 @@ test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, a
       bg: style.backgroundColor,
       border: style.borderTopColor,
       width: style.borderTopWidth,
-      shadow: style.boxShadow
+      shadow: style.boxShadow,
+      height: button.getBoundingClientRect().height
     };
   })()`);
+  assert.equal(darkButton.height, 24);
   assert.equal(darkButton.bg, "rgb(35, 36, 39)");
   assert.equal(darkButton.border, "rgb(58, 60, 64)");
   assert.equal(darkButton.width, "1px");
@@ -696,8 +724,124 @@ test("F5 Attention source formulas reach the right pane", { timeout: 420000 }, a
   const motion = await evaluate(`getComputedStyle(document.querySelector(".oi-pdf-math-row.is-katex")).animationName`);
   assert.equal(motion, "none");
   const magenta = await evaluate(`(() => {
-    const text = [...document.querySelectorAll(".katex")].some((node) => (node.textContent || "").includes("#e10091") || /ParseError|KaTeX parse/.test(node.textContent || ""));
-    return text;
+    return [...document.querySelectorAll(".katex, .katex *")].some((node) => {
+      const color = getComputedStyle(node).color.replace(/\\s+/g, "").toLowerCase();
+      return color === "rgb(225,0,145)" || color === "rgba(225,0,145,1)" || (node.textContent || "").includes("#e10091") || /ParseError|KaTeX parse/.test(node.textContent || "");
+    });
   })()`);
   assert.equal(magenta, false);
+
+  const unlocked = await evaluate(`(() => {
+    const row = [...document.querySelectorAll(".oi-pdf-math-row.is-katex")].find((node) => {
+      let el = node;
+      while (el) {
+        const style = getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        el = el.parentElement;
+      }
+      return true;
+    });
+    row.dataset.oiHeightLock = "1";
+    row.style.minHeight = "48px";
+    row.style.maxHeight = "48px";
+    row.querySelector(".oi-pdf-math-scroll").focus();
+    return row.dataset.oiHeightLock || "";
+  })()`);
+  assert.equal(unlocked, "");
+
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: 1440, height: 900, deviceScaleFactor: 1, mobile: false
+  });
+  await evaluate(`(() => {
+    const flow = document.getElementById("readerFlow");
+    const pane = flow.closest(".pane-translate") || flow.parentElement;
+    pane.style.flex = "";
+    pane.style.width = "";
+    pane.style.maxWidth = "";
+    document.querySelectorAll("[data-reader-theme]").forEach((el) => { el.dataset.readerTheme = "warm"; });
+    window.dispatchEvent(new Event("resize"));
+    return true;
+  })()`);
+  await sleep(80);
+  await evaluate(`document.getElementById("arxivSourceChip").click()`);
+  await evaluate(`document.getElementById("arxivSourceSkip").click()`);
+  const skippedChip = await waitFor(`(() => {
+    const chip = document.getElementById("arxivSourceChip");
+    const label = chip?.querySelector(".oi-arxiv-label")?.textContent || "";
+    const restore = document.getElementById("arxivSourceRestore");
+    const katex = document.querySelectorAll(".is-katex").length;
+    window.__oiF5Wait = { label, hidden: restore ? restore.hidden : null, katex };
+    if (!label.includes("已不用源码") || !restore || restore.hidden || katex !== 0) return null;
+    const probe = document.createElement("span");
+    probe.style.color = "var(--oi-reader-focus)";
+    document.body.append(probe);
+    const accent = getComputedStyle(probe).color;
+    probe.remove();
+    const style = getComputedStyle(restore);
+    restore.focus();
+    return {
+      title: chip.title,
+      label,
+      restore: restore.textContent,
+      active: document.activeElement === restore,
+      color: style.color,
+      accent,
+      underline: style.textDecorationLine || style.textDecoration,
+      chipH: chip.getBoundingClientRect().height
+    };
+  })()`, "skipped chip", 90000);
+  assert.equal(`${skippedChip.label} ${skippedChip.restore}`.replace(/\\s+/g, " ").trim(), "公式 · 已不用源码 · 改回");
+  assert.equal(skippedChip.title, "公式 · 已不用源码 · 改回");
+  assert.equal(skippedChip.active, true);
+  assert.equal(skippedChip.color, skippedChip.accent);
+  assert.match(skippedChip.underline, /underline/);
+  assert.equal(skippedChip.chipH, 30);
+
+  await evaluate(`document.getElementById("arxivSourceRestore").click()`);
+  const restored = await waitFor(`(() => {
+    const shown = (node) => {
+      let el = node;
+      while (el) {
+        const style = getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        el = el.parentElement;
+      }
+      return true;
+    };
+    const display = [...document.querySelectorAll(".oi-pdf-math-row.is-katex")].filter(shown).length;
+    const inline = [...document.querySelectorAll(".oi-pdf-inline-math.is-katex")].filter(shown).length;
+    const label = document.querySelector("#arxivSourceChip .oi-arxiv-label")?.textContent || "";
+    window.__oiF5Wait = { display, inline, label };
+    if (display < 5 || inline < 1 || !label.includes("独立")) return null;
+    return { display, inline, label };
+  })()`, "source restored", 90000);
+  assert.equal(restored.display, 5);
+  assert.ok(restored.inline >= 1);
+
+  await evaluate(`localStorage.setItem("oi.f5.arxivMode", "ok")`);
+  await send("Page.reload", { ignoreCache: true });
+  const afterReload = await waitFor(`(() => {
+    const shown = (node) => {
+      let el = node;
+      while (el) {
+        const style = getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        el = el.parentElement;
+      }
+      return true;
+    };
+    const display = [...document.querySelectorAll(".oi-pdf-math-row.is-katex")].filter(shown).length;
+    const inline = [...document.querySelectorAll(".oi-pdf-inline-math.is-katex")].filter(shown).length;
+    const label = document.querySelector("#arxivSourceChip .oi-arxiv-label")?.textContent || "";
+    let bag = {};
+    try { bag = JSON.parse(localStorage.getItem("oi.f5.chromeStorage") || "{}"); } catch { bag = {}; }
+    window.__oiF5Wait = { display, inline, label, on: bag.arxivSourceOn || [], skip: bag.arxivSourceSkip || [] };
+    if (display < 5 || inline < 1 || !label.includes("独立")) return null;
+    return { display, inline, label, on: bag.arxivSourceOn || [], skip: bag.arxivSourceSkip || [] };
+  })()`, "source after refresh", 120000);
+  assert.equal(afterReload.display, 5);
+  assert.ok(afterReload.inline >= 1);
+  assert.equal(afterReload.skip.includes("1706.03762"), false);
+  assert.equal(afterReload.on.includes("1706.03762"), true);
+  console.log(`after refresh display ${afterReload.display} inline ${afterReload.inline}`);
 });

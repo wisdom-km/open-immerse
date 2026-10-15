@@ -310,9 +310,12 @@ import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import {
   ARXIV_SOURCE_AUTO_KEY,
+  ARXIV_SOURCE_ON_KEY,
   ARXIV_SOURCE_SKIP_KEY,
   chipModel,
   inlineSplicePlans,
+  keptSourceId,
+  normalizeArxivPrefs,
   pageGlyphsFromText,
   prepareArxivAlignment,
   skippedId,
@@ -321,7 +324,9 @@ import {
   verifiedArxivFormula
 } from "../lib/formula-arxiv-session.js";
 import {
+  failedInlineKind,
   flashCopiedLatex,
+  markFormulaOverflow,
   mountArxivDisplay,
   mountArxivInline,
   plainWithInlineMath
@@ -460,7 +465,7 @@ const READER_VIEWS = ["zh", "bi", "src"];
 let formulaViewerSettings = defaultFormulaSettings();
 let formulaSettingsWriting = false;
 let formulaSettingsReady = Promise.resolve();
-let arxivPrefs = { auto: false, skip: [] };
+let arxivPrefs = { auto: false, skip: [], on: [] };
 let arxivPrefsReady = Promise.resolve();
 let arxivIdentity = null;
 let arxivAlignmentMemory = null;
@@ -492,6 +497,7 @@ function toolbarWidthTargets(bar) {
     if (el.matches(".more-item")) return false;
     if (el.classList.contains("tb-primary")) return false;
     if (el.classList.contains("tb-title")) return false;
+    if (el.closest(".oi-arxiv-chip") && !el.classList.contains("oi-arxiv-chip")) return false;
     return true;
   });
 }
@@ -3110,9 +3116,11 @@ function syncArxivColumn() {
     paintArxivChip();
     scheduleToolbarSnap();
   }
-  flow.querySelectorAll(".oi-pdf-math-row.is-katex .oi-pdf-math-scroll, .oi-pdf-inline-math.is-katex").forEach((scroll) => {
-    if (scroll.scrollWidth > scroll.clientWidth + 1) scroll.classList.add("is-overflowing");
-    else scroll.classList.remove("is-overflowing");
+  flow.querySelectorAll(".oi-pdf-math-row.is-katex .oi-pdf-math-scroll").forEach((scroll) => {
+    markFormulaOverflow(scroll);
+  });
+  flow.querySelectorAll(".oi-pdf-inline-math.is-katex").forEach((node) => {
+    node.classList.remove("is-overflowing");
   });
 }
 
@@ -3142,8 +3150,8 @@ function paintArxivChip() {
   if (!chip) return;
   const label = chip.querySelector(".oi-arxiv-label");
   const auto = chip.querySelector(".oi-arxiv-auto");
+  const restore = chip.querySelector(".oi-arxiv-restore");
   const box = $("arxivSourceAuto");
-  const offer = arxivPhase === "offer" || arxivPhase === "failed";
   if (!arxivIdentity || arxivPhase === "off") {
     chip.hidden = true;
     closeArxivMenu();
@@ -3151,7 +3159,17 @@ function paintArxivChip() {
   }
   chip.hidden = false;
   if (auto) auto.hidden = arxivPhase !== "offer";
+  if (restore) restore.hidden = arxivPhase !== "skipped";
   if (box) box.checked = arxivPrefs.auto === true;
+  if (arxivPhase === "skipped") {
+    const model = chipModel({ phase: "skipped" });
+    if (label) label.textContent = model.text;
+    if (restore) restore.textContent = model.restore;
+    chip.title = model.title;
+    closeArxivMenu();
+    scheduleToolbarSnap();
+    return;
+  }
   let text = "用 arXiv 源码";
   let title = "用 arXiv 源码";
   if (arxivPhase === "loading") {
@@ -3200,8 +3218,8 @@ async function loadArxivPrefs() {
   try {
     const store = globalThis.chrome?.storage?.local;
     if (store?.get) {
-      const bag = await store.get([ARXIV_SOURCE_AUTO_KEY, ARXIV_SOURCE_SKIP_KEY]);
-      arxivPrefs = { auto: bag?.[ARXIV_SOURCE_AUTO_KEY] === true, skip: Array.isArray(bag?.[ARXIV_SOURCE_SKIP_KEY]) ? bag[ARXIV_SOURCE_SKIP_KEY].map(String) : [] };
+      const bag = await store.get([ARXIV_SOURCE_AUTO_KEY, ARXIV_SOURCE_SKIP_KEY, ARXIV_SOURCE_ON_KEY]);
+      arxivPrefs = normalizeArxivPrefs(bag);
       fromStore = true;
     }
   } catch {
@@ -3210,9 +3228,9 @@ async function loadArxivPrefs() {
   if (!fromStore) {
     try {
       const raw = JSON.parse(localStorage.getItem("oi.arxivSourcePrefs") || "{}");
-      arxivPrefs = { auto: raw.auto === true, skip: Array.isArray(raw.skip) ? raw.skip.map(String) : [] };
+      arxivPrefs = normalizeArxivPrefs(raw);
     } catch {
-      arxivPrefs = { auto: false, skip: [] };
+      arxivPrefs = { auto: false, skip: [], on: [] };
     }
   }
   arxivPrefsLoaded = true;
@@ -3220,13 +3238,14 @@ async function loadArxivPrefs() {
 }
 
 async function saveArxivPrefs() {
-  const payload = { auto: arxivPrefs.auto === true, skip: arxivPrefs.skip || [] };
+  const payload = { auto: arxivPrefs.auto === true, skip: arxivPrefs.skip || [], on: arxivPrefs.on || [] };
   try {
     const store = globalThis.chrome?.storage?.local;
     if (store?.set) {
       await store.set({
         [ARXIV_SOURCE_AUTO_KEY]: payload.auto,
-        [ARXIV_SOURCE_SKIP_KEY]: payload.skip
+        [ARXIV_SOURCE_SKIP_KEY]: payload.skip,
+        [ARXIV_SOURCE_ON_KEY]: payload.on
       });
       return;
     }
@@ -3243,13 +3262,19 @@ async function saveArxivPrefs() {
 function syncArxivOffer() {
   if (!arxivPrefsLoaded) return;
   const found = currentArxivId();
-  if (!found || skippedId(arxivPrefs, found.id)) {
+  if (!found) {
     if (arxivPhase !== "off") resetArxivSession();
     return;
   }
   arxivIdentity = found;
-  if (arxivPhase === "off") {
-    if (arxivPrefs.auto === true) {
+  if (skippedId(arxivPrefs, found.id)) {
+    setFormulaArxivSourceEnabled(false);
+    if (arxivPhase !== "skipped") arxivPhase = "skipped";
+    paintArxivChip();
+    return;
+  }
+  if (arxivPhase === "off" || arxivPhase === "skipped") {
+    if (arxivPrefs.auto === true || keptSourceId(arxivPrefs, found.id)) {
       startArxivSource();
       return;
     }
@@ -3264,7 +3289,7 @@ function bindArxivChip() {
   const box = $("arxivSourceAuto");
   const skip = $("arxivSourceSkip");
   chip?.addEventListener("click", (event) => {
-    if (event.target?.closest?.(".oi-arxiv-auto")) return;
+    if (event.target?.closest?.(".oi-arxiv-auto, .oi-arxiv-restore")) return;
     if (arxivPhase === "offer" || arxivPhase === "failed") startArxivSource();
     else if (arxivPhase === "ready" || arxivPhase === "empty") openArxivMenu();
   });
@@ -3273,6 +3298,11 @@ function bindArxivChip() {
     arxivPrefs = { ...arxivPrefs, auto: box.checked === true };
     saveArxivPrefs();
     if (box.checked && (arxivPhase === "offer" || arxivPhase === "failed")) startArxivSource();
+  });
+  chip?.querySelector(".oi-arxiv-restore")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    restoreArxivForThisPaper();
   });
   skip?.addEventListener("click", () => {
     closeArxivMenu();
@@ -3286,18 +3316,36 @@ function bindArxivChip() {
 
 function skipArxivForThisPaper() {
   const id = arxivIdentity?.id;
-  if (id && !(arxivPrefs.skip || []).includes(id)) {
-    arxivPrefs = { ...arxivPrefs, skip: [...(arxivPrefs.skip || []), id] };
+  if (id) {
+    arxivPrefs = {
+      ...arxivPrefs,
+      skip: (arxivPrefs.skip || []).includes(id) ? arxivPrefs.skip : [...(arxivPrefs.skip || []), id],
+      on: (arxivPrefs.on || []).filter((item) => item !== id)
+    };
     saveArxivPrefs();
   }
   setFormulaArxivSourceEnabled(false);
   rememberArxivAlignment(null);
-  arxivPhase = "off";
-  arxivIdentity = null;
+  arxivPhase = "skipped";
   restampArxivLayouts().then(() => {
     renderArticle();
     paintArxivChip();
   });
+}
+
+function restoreArxivForThisPaper() {
+  const found = arxivIdentity || currentArxivId();
+  if (!found?.id) return;
+  const id = found.id;
+  arxivPrefs = {
+    ...arxivPrefs,
+    skip: (arxivPrefs.skip || []).filter((item) => item !== id),
+    on: (arxivPrefs.on || []).includes(id) ? arxivPrefs.on : [...(arxivPrefs.on || []), id]
+  };
+  arxivIdentity = found;
+  arxivPhase = "off";
+  saveArxivPrefs();
+  startArxivSource();
 }
 
 async function startArxivSource() {
@@ -3570,7 +3618,27 @@ function captureFormulaBoxes(flow) {
   }).filter((row) => row.id && row.height > 0);
 }
 
+function releaseFormulaHeightLock(row) {
+  if (!row) return;
+  row.style.minHeight = "";
+  row.style.maxHeight = "";
+  delete row.dataset.oiHeightLock;
+}
+
+function ensureFormulaLockRelease(flow) {
+  if (!flow || flow.dataset.oiLockRelease === "1") return;
+  flow.dataset.oiLockRelease = "1";
+  const release = (event) => {
+    const row = event.target?.closest?.("[data-oi-height-lock='1']");
+    if (!row || !flow.contains(row)) return;
+    releaseFormulaHeightLock(row);
+  };
+  flow.addEventListener("click", release);
+  flow.addEventListener("focusin", release);
+}
+
 function lockFormulaHeights(flow, previous) {
+  ensureFormulaLockRelease(flow);
   if (!flow || !previous?.length) return;
   for (const prev of previous) {
     if (!prev.inView) continue;
@@ -3598,9 +3666,7 @@ function unlockOffscreenFormulaHeights() {
     const rect = row.getBoundingClientRect();
     const inView = rect.bottom > view.top + 1 && rect.top < view.bottom - 1;
     if (inView) return;
-    row.style.minHeight = "";
-    row.style.maxHeight = "";
-    delete row.dataset.oiHeightLock;
+    releaseFormulaHeightLock(row);
   });
 }
 
@@ -4131,8 +4197,50 @@ function mountSplicedInline(node, piece, block, layout) {
   if (inlinePage) span.dataset.page = String(inlinePage);
   span.dataset.label = "formula";
   const outcome = mountArxivInline(span, formula, inlinePage, arxivPaneHooks());
-  if (outcome !== "ok") return;
-  node.append(span);
+  if (outcome === "ok") {
+    node.append(span);
+    return;
+  }
+  const matched = (layout?.blocks || []).find((item) => {
+    if (item?.label !== "formula") return false;
+    const unit = String(piece.unitId || "");
+    return unit && (String(item.sourceUnitId || "") === unit || String(item.id || "") === unit);
+  });
+  const failed = matched
+    ? { ...matched, formulaReason: "katex-error" }
+    : {
+      ...formula,
+      id: piece.unitId || formula.id,
+      label: "formula",
+      formulaTier: "placeholder",
+      formulaReason: "katex-error"
+    };
+  mountInlineFormulaFallback(node, failed, inlinePage);
+}
+
+function mountInlineFormulaFallback(node, formula, page) {
+  const shown = { ...formula, label: "formula", formulaReason: formula?.formulaReason || "katex-error" };
+  const host = document.createElement("span");
+  host.className = "oi-pdf-inline-math";
+  if (page) host.dataset.page = String(page);
+  if (shown.id) {
+    host.dataset.blockId = String(shown.id);
+    host.dataset.label = "formula";
+  }
+  if (failedInlineKind(shown) === "crop") {
+    const img = cropImage({ ...shown, formulaTier: "crop" });
+    host.tabIndex = 0;
+    if (img) {
+      img.className = "oi-pdf-math-crop";
+      img.setAttribute("data-oi-reason", "katex-error");
+      host.append(img);
+    }
+    node.append(host);
+    return;
+  }
+  shown.formulaTier = "placeholder";
+  mountFormulaPlaceholder(host, shown, page, true);
+  node.append(host);
 }
 
 function paintRenderPieces(node, pieces, block, layout) {
