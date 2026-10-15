@@ -9,8 +9,9 @@ import { parseHTML } from "linkedom";
 
 import { FORMULA_SWITCH_KEYS } from "../lib/formula-settings.js";
 import { deliverAsk, renderAskNotice, resolveAskTarget, ASK_EMPTY } from "../lib/ask-route.js";
-import { getSettings, saveSettings, SETTINGS_VERSION } from "../lib/storage.js";
-import { prepareSettingsImport, settingsForExport } from "../lib/settings-secrets.js";
+import { getSettings, noteTranslationSucceeded, saveSettings, SETTINGS_VERSION } from "../lib/storage.js";
+import { prepareSettingsImport, sealSettingsPatch, settingsForExport } from "../lib/settings-secrets.js";
+import { normalizeAttention } from "../lib/provider-attention.js";
 import { parseSettingsHash, SETTINGS_PAGES } from "../options/route.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -94,7 +95,10 @@ function installChrome(seed = {}) {
           const settings = await saveSettings(message.patch, message.clear || {});
           return { ok: settings.settingsSaved !== false, settings };
         }
-        if (message.type === "OI_TEST_PROVIDER") return { ok: true, text: "probe" };
+        if (message.type === "OI_TEST_PROVIDER") {
+          const canned = api.testProviderResult;
+          return typeof canned === "function" ? canned() : (canned || { ok: true, text: "probe" });
+        }
         return { ok: false };
       }
     },
@@ -210,6 +214,68 @@ test("secret migration, import, and rollback stay inside local storage", async (
   const exported = settingsForExport(imported);
   assert.equal(syncHasSecrets(exported), false);
   assert.equal(exported.providers.openai.apiKey, "");
+  assert.equal(exported.oiProviderAttention, undefined);
+});
+
+/** 887ecd2 merge: providers are deep-merged, pdfLayout is replaced wholesale. */
+function legacyBackgroundMerge(base, patch) {
+  const out = { ...base, ...patch };
+  if (base.providers || patch.providers) {
+    out.providers = { ...base.providers };
+    const incoming = patch.providers || {};
+    for (const [id, cfg] of Object.entries(incoming)) {
+      out.providers[id] = { ...(base.providers?.[id] || {}), ...cfg };
+    }
+  }
+  return out;
+}
+
+test("export then import keeps keys when the old background is still running", async () => {
+  const stored = savedSettings();
+  const exported = settingsForExport(stored);
+  const prepared = prepareSettingsImport({
+    settings: { ...exported, targetLang: "ja", oiProviderAttention: { openai: OPENAI_KEY } }
+  });
+  const patch = sealSettingsPatch(prepared.settings, { pdfCloudApiKey: PDF_KEY });
+  assert.equal(exported.providers.openai.apiKey, "");
+  assert.equal(exported.pdfLayout.cloudApiKey, "");
+  assert.equal(Object.prototype.hasOwnProperty.call(patch.providers.openai, "apiKey"), false);
+  assert.equal(patch.pdfLayout.cloudApiKey, PDF_KEY);
+  assert.equal(patch.targetLang, "ja");
+  assert.equal(patch.oiProviderAttention, undefined);
+  assert.equal(JSON.stringify(patch).includes(OPENAI_KEY), false);
+
+  const syncBag = { settings: JSON.parse(JSON.stringify(stored)) };
+  const localBag = { oiSecrets: { providers: { openai: OPENAI_KEY }, pdfCloudApiKey: PDF_KEY } };
+  syncBag.settings = legacyBackgroundMerge(syncBag.settings, patch);
+  assert.equal(syncBag.settings.providers.openai.apiKey, OPENAI_KEY);
+  assert.equal(syncBag.settings.pdfLayout.cloudApiKey, PDF_KEY);
+  assert.equal(syncBag.settings.targetLang, "ja");
+  assert.equal(localBag.oiSecrets.providers.openai, OPENAI_KEY);
+  assert.equal(localBag.oiSecrets.pdfCloudApiKey, PDF_KEY);
+
+  const chrome = installChrome({ settings: savedSettings() });
+  await getSettings();
+  const roundTrip = sealSettingsPatch(
+    prepareSettingsImport({ settings: { ...settingsForExport(await getSettings()), targetLang: "ja" } }).settings,
+    { pdfCloudApiKey: PDF_KEY }
+  );
+  const imported = await saveSettings(roundTrip);
+  assert.equal(imported.providers.openai.apiKey, OPENAI_KEY);
+  assert.equal(imported.pdfLayout.cloudApiKey, PDF_KEY);
+  assert.equal(imported.targetLang, "ja");
+  assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
+  assert.equal(chrome.local.oiSecrets.pdfCloudApiKey, PDF_KEY);
+  assert.equal(syncHasSecrets(chrome.sync.settings), false);
+
+  const kept = await saveSettings({ providers: { openai: { apiKey: "" } }, pdfLayout: { cloudApiKey: "" } });
+  assert.equal(kept.providers.openai.apiKey, OPENAI_KEY);
+  assert.equal(kept.pdfLayout.cloudApiKey, PDF_KEY);
+  assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
+  const cleared = await saveSettings({ providers: { openai: { apiKey: "" } } }, { providers: ["openai"] });
+  assert.equal(cleared.providers.openai.apiKey, "");
+  assert.equal(chrome.local.oiSecrets.providers.openai, "");
+  assert.deepEqual(normalizeAttention({ openai: OPENAI_KEY, deepl: true, "": true, custom: 1 }), { deepl: true });
 });
 
 test("ask routing never calls the network and does not fall back from multimodal", async () => {
@@ -806,4 +872,72 @@ test("rows-v2 and skeleton styles stay in the settings stylesheet", () => {
   assert.match(css, /#formulaSettingsRoot\s*\{\s*min-width:\s*0;\s*max-width:\s*100%/);
   assert.match(js, /kind === "llm"/);
   assert.doesNotMatch(js, /kind === "llm" \|\| kind === "custom"/);
+});
+
+test("translate 需处理 badge survives refresh until a successful test or an engine switch", async () => {
+  const chrome = installChrome({ settings: savedSettings() });
+  const queue = [
+    { ok: false, httpStatus: 401, error: "unauthorized" },
+    { ok: true, translation: "你好" }
+  ];
+  chrome.testProviderResult = () => queue.shift();
+  const page = mountPage("#translate");
+  const { startOptions } = await import("../options/options.js?attention=1");
+  await startOptions();
+  await flush();
+  page.document.getElementById("testConnection").click();
+  await flush();
+  assert.equal(page.document.querySelector("[data-badge='translate']").hidden, false);
+  assert.deepEqual(chrome.local.oiProviderAttention, { openai: true });
+  assert.equal(JSON.stringify(chrome.local.oiProviderAttention).includes(OPENAI_KEY), false);
+  const exported = settingsForExport(await getSettings());
+  assert.equal(exported.oiProviderAttention, undefined);
+  assert.equal(syncHasSecrets(exported), false);
+  assert.equal(chrome.sync.settings.oiProviderAttention, undefined);
+
+  const refreshed = mountPage("#translate");
+  await startOptions();
+  await flush();
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, false);
+  assert.equal(refreshed.document.getElementById("testConnectionStatus").textContent, "");
+
+  refreshed.document.getElementById("testConnection").click();
+  await flush();
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, true);
+  assert.deepEqual(chrome.local.oiProviderAttention, {});
+
+  chrome.testProviderResult = () => ({ ok: false, httpStatus: 401, error: "unauthorized" });
+  refreshed.document.getElementById("testConnection").click();
+  await flush();
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, false);
+  assert.deepEqual(chrome.local.oiProviderAttention, { openai: true });
+  const providerSelect = refreshed.document.getElementById("provider");
+  providerSelect.value = "deepl";
+  fire(providerSelect, "change");
+  await flush();
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, true);
+  assert.equal(chrome.local.oiProviderAttention.openai, undefined);
+  assert.equal(JSON.stringify(chrome.local.oiProviderAttention).includes(OPENAI_KEY), false);
+
+  providerSelect.value = "openai";
+  fire(providerSelect, "change");
+  await flush();
+  chrome.testProviderResult = () => ({ ok: false, httpStatus: 401, error: "unauthorized" });
+  refreshed.document.getElementById("testConnection").click();
+  await flush();
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, false);
+  const key = refreshed.document.querySelector("[data-key-slot='translate'] input");
+  key.value = "sk-replaced-key";
+  fire(key, "blur");
+  await flush();
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, true);
+  assert.equal(chrome.local.oiProviderAttention.openai, undefined);
+
+  chrome.local.oiProviderAttention = { openai: true };
+  await noteTranslationSucceeded("openai");
+  assert.deepEqual(chrome.local.oiProviderAttention, {});
+  const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
+  const handler = sw.slice(sw.indexOf('case "OI_TRANSLATE_BATCH"'), sw.indexOf('case "OI_TEST_PROVIDER"'));
+  assert.match(handler, /await translateBatch\([\s\S]*await noteTranslationSucceeded\(settings\.provider\)/);
+  assert.equal(sw.slice(sw.indexOf("async function translateBatch"), sw.indexOf("export { translateBatch")).includes("noteTranslationSucceeded"), false);
 });

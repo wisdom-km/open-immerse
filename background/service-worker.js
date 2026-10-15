@@ -1,5 +1,5 @@
 import { completePdfStructure, getProvider, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
-import { getSettings, saveSettings, matchSiteRule } from "../lib/storage.js";
+import { getSettings, matchSiteRule, noteTranslationSucceeded, saveSettings } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { featureOn, resolveFeatures } from "../lib/features.js";
 import { handleArxivSourceMessage } from "./arxiv-source.js";
@@ -127,6 +127,7 @@ async function handleMessage(message, sender) {
         user: message.user
       });
     case "OI_TRANSLATE_BATCH": {
+      const settings = await getSettings();
       const batchOpts = {
         onProgress: (progress) => emitTranslateProgress(sender, message.requestId, progress),
         polish: message.polish,
@@ -134,6 +135,7 @@ async function handleMessage(message, sender) {
         bypassCache: message.bypassCache === true
       };
       const translations = await translateBatch(message.texts || [], batchOpts);
+      await noteTranslationSucceeded(settings.provider);
       return {
         ok: true,
         translations,

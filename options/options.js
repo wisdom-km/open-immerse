@@ -10,7 +10,8 @@ import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
-import { prepareSettingsImport, settingsForExport } from "../lib/settings-secrets.js";
+import { prepareSettingsImport, sealSettingsPatch, settingsForExport } from "../lib/settings-secrets.js";
+import { clearProviderAttention, markProviderAttention, readProviderAttention } from "../lib/provider-attention.js";
 import { bindSecretInput } from "../lib/secret-field.js";
 import { ASK_TRANSLATION_LINE } from "../lib/ask-route.js";
 import {
@@ -64,6 +65,7 @@ let dataPanel = null;
 let focusMm = false;
 let toastTimer = 0;
 let toastUndo = null;
+let attentionProvider = "";
 
 export function startOptions() {
   return init();
@@ -114,10 +116,16 @@ async function init() {
   bindData();
   bindSecretsList();
   el("provider").addEventListener("change", () => {
+    const left = attentionProvider;
     harvestVisibleProvider();
     renderProviderFields();
     syncQualityLocks();
     invalidateTest("clear");
+    attentionProvider = el("provider").value;
+    void (async () => {
+      if (left && left !== attentionProvider) await clearProviderAttention(chrome.storage?.local, left);
+      await syncAttentionBadge();
+    })();
     void persist(el("provider"));
   });
   el("testConnection").addEventListener("click", () => testConnection());
@@ -134,6 +142,7 @@ async function init() {
   const manifest = chrome.runtime?.getManifest?.();
   if (manifest?.version && el("aboutVersion")) el("aboutVersion").textContent = manifest.version;
   await pinKeySync();
+  await syncAttentionBadge();
 }
 
 function applyStoredForm() {
@@ -180,6 +189,7 @@ function applyStoredForm() {
   syncQualityLocks();
   renderProviderFields();
   paintKeyList();
+  attentionProvider = el("provider")?.value || settings.provider || "";
   for (const id of ["batchSize", "fontScale", "bodyGlossGap", "bodyGlossStackGap"]) syncStepperBounds(el(id));
   const keysSync = el("keysSync");
   if (keysSync) {
@@ -386,7 +396,10 @@ async function importSettingsFile(ev) {
       return;
     }
     const prepared = prepareSettingsImport(raw);
-    const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: prepared.settings });
+    const patch = sealSettingsPatch(prepared.settings, {
+      pdfCloudApiKey: pdfCloudKey || cachedSettings?.pdfLayout?.cloudApiKey || ""
+    });
+    const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch });
     if (!res || res.ok === false) throw new Error("save failed");
     cachedSettings = res.settings || prepared.settings;
     applyStoredForm();
@@ -571,6 +584,30 @@ function invalidateTest(mode) {
   if (mode === "clear") setTestStatus("");
 }
 
+function attentionArea() {
+  return globalThis.chrome?.storage?.local;
+}
+
+async function syncAttentionBadge() {
+  const badge = document.querySelector('[data-badge="translate"]');
+  if (!badge) return;
+  attentionProvider = el("provider")?.value || attentionProvider || "";
+  let flagged = false;
+  try {
+    const flags = await readProviderAttention(attentionArea());
+    flagged = flags[attentionProvider] === true;
+  } catch {
+    flagged = false;
+  }
+  if (flagged) {
+    badge.hidden = false;
+    return;
+  }
+  const status = el("testConnectionStatus");
+  if (status?.classList?.contains("is-err")) return;
+  badge.hidden = true;
+}
+
 function setTestStatus(text, kind) {
   const status = el("testConnectionStatus");
   if (!status) return;
@@ -607,9 +644,13 @@ async function testConnection() {
       texts: [PROVIDER_PROBE_TEXT]
     });
     if (requestId !== testRequestId) return;
-    const kind = res && res.ok ? "ok" : "err";
-    setTestStatus(formatConnectionStatus(res || { ok: false, error: "无响应" }), kind);
+    if (res && res.ok) await clearProviderAttention(attentionArea(), providerId);
+    else await markProviderAttention(attentionArea(), providerId);
+    if (requestId !== testRequestId) return;
+    setTestStatus(formatConnectionStatus(res || { ok: false, error: "无响应" }), res && res.ok ? "ok" : "err");
   } catch (err) {
+    if (requestId !== testRequestId) return;
+    await markProviderAttention(attentionArea(), providerId);
     if (requestId !== testRequestId) return;
     setTestStatus(formatConnectionStatus({ ok: false, error: String(err.message || err) }), "err");
   } finally {
@@ -672,6 +713,10 @@ function renderProviderFields() {
         cachedSettings.providers[provider.id] = Object.assign({}, cachedSettings.providers[provider.id] || {});
         cachedSettings.providers[provider.id][field.key] = result.value;
         bound.showSaved();
+        if (result.changed) {
+          invalidateTest("clear");
+          void clearProviderAttention(attentionArea(), provider.id);
+        }
         void persist(input);
       });
       bound.paint();
@@ -723,6 +768,8 @@ async function clearProviderKey(id) {
     renderProviderFields();
     return;
   }
+  await clearProviderAttention(attentionArea(), id);
+  if (el("provider")?.value === id) invalidateTest("clear");
   const name = getProvider(id).name;
   showToast(`已移除 ${name} 密钥 · 撤销`, () => {
     cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: previous });
@@ -818,9 +865,10 @@ async function persist(control) {
     providers: cachedSettings.providers,
     pdfLayout: readPdfLayout()
   };
+  const sealed = sealSettingsPatch(patch, { pdfCloudApiKey: pdfCloudKey });
   writing = true;
   try {
-    const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: patch });
+    const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: sealed });
     if (!res || res.ok === false) {
       const attempt = snapshotControl(control);
       cachedSettings = before;
