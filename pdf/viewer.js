@@ -7654,6 +7654,7 @@ function stopTranslateWork() {
   abortBackgroundFills();
   cancelQueuedVendorLayouts();
   translatingPage = 0;
+  forceRetranslatePending = false;
   for (const [page, row] of pageStates) {
     if (row.state === "running" || row.state === "layout") {
       notePageState(page, { state: "queued", hasLayout: Boolean(row.hasLayout) });
@@ -7664,7 +7665,6 @@ function stopTranslateWork() {
   setStatus(PDF_COPY.stopped);
   renderArticle();
   updateTranslateControls();
-  resumePendingRetranslate();
 }
 
 function resumePendingRetranslate() {
@@ -7769,7 +7769,7 @@ function documentTranslateSuperseded() {
 }
 
 async function maybeAutoTranslateDocument() {
-  if (!pdfDoc) return;
+  if (!pdfDoc || docPhase === "stopped") return;
   if (documentTranslateSuperseded()) return;
   const adopting = docId;
   if (!(await readAutoTranslateEnabled())) {
@@ -7780,7 +7780,7 @@ async function maybeAutoTranslateDocument() {
     }
     return;
   }
-  if (adopting !== docId || !pdfDoc || documentTranslateSuperseded()) return;
+  if (adopting !== docId || !pdfDoc || docPhase === "stopped" || documentTranslateSuperseded()) return;
   // The retranslate button is enabled while docPhase is still "opening".
   // Settings reads resolve as microtasks, so without a timer the phase
   // flips to running before any click or interval can run. The library
@@ -7788,7 +7788,7 @@ async function maybeAutoTranslateDocument() {
   // already ended; this 16ms only keeps opening observable. A 0ms timer
   // would run before a pending interval and close the gap again.
   await new Promise((resolve) => setTimeout(resolve, 16));
-  if (adopting !== docId || !pdfDoc || documentTranslateSuperseded()) return;
+  if (adopting !== docId || !pdfDoc || docPhase === "stopped" || documentTranslateSuperseded()) return;
   await startTranslate();
 }
 
@@ -9043,7 +9043,13 @@ async function translateWholeDocument() {
     // whose sidecar call failed still get a recompute, then an immediate write-back.
     if (!translatedDoc.aborted && !work.aborted) {
       const layoutScheduled = layoutEpoch;
-      const staleWork = () => !isCurrentWork(work, gen, translatingDoc) || work.aborted || !layoutAttemptLive(layoutScheduled);
+      // Filled in after the blocking page, before this job drops session.running.
+      // Stop stays up for the background re-zone; aborting the session ends that round.
+      let backgroundTracked = null;
+      const staleWork = () => !isCurrentWork(work, gen, translatingDoc)
+        || work.aborted
+        || !layoutAttemptLive(layoutScheduled)
+        || Boolean(backgroundTracked && !backgroundTracked.current());
       await reconcileLockedSkipLayouts(staleWork);
       const adoptUpgraded = async (upgraded, info = {}) => {
         const needs = [];
@@ -9121,7 +9127,19 @@ async function translateWholeDocument() {
         adoptUpgraded
       });
       await layoutPass.blocking;
-      void layoutPass.background.catch(() => {});
+      // Other pages re-zone only after this await. Track that round before
+      // session.running drops, or Stop hides and the POST cannot be cancelled.
+      if ((pdfDoc?.numPages || 0) > 1 && !staleWork()) {
+        backgroundTracked = backgroundSessions.track(createTranslateSession());
+        updateTranslateControls();
+      }
+      void layoutPass.background.finally(() => {
+        const tracked = backgroundTracked;
+        if (!tracked) return;
+        backgroundTracked = null;
+        tracked.release();
+        updateTranslateControls();
+      }).catch(() => {});
     }
   }
   if (libraryPass && work === session && !forceReadoutHold) work.running = false;
@@ -9405,7 +9423,7 @@ async function forceRetranslateCurrentPage() {
     if (translatingPage === targetPage) translatingPage = 0;
     updateTranslateControls();
     resumePendingRetranslate();
-    if (resumeAuto) void maybeAutoTranslateDocument();
+    if (resumeAuto && !work.aborted && docPhase !== "stopped") void maybeAutoTranslateDocument();
   }
 }
 
