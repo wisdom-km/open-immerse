@@ -55,6 +55,8 @@ pdf-layout-sidecar         扩展仓之外（本机示例名）。只负责把�
 
 第零层（REQUIREMENTS §2.7）的联网、解包和缓存放在 `background/`，守住 README「网络与缓存只在 `background/`」；解析、对齐、核对是 `lib/` 里的纯函数。设计见 `docs/arxiv-source-mode.md`。划区请求（上图「划区 HTTP 从 viewer.js 直接 fetch」）和本地库 `lib/pdf-library.js` 是从阅读器页面直接 fetch 的，是 README 这条约定的现有例外，这次不动；第零层不走这个例外（同 `docs/arxiv-source-mode.md` 2.2）。
 
+翻译厂商的 HTTP 和 arXiv 源码下载走 `lib/net/fetch.js`（平台上的 `net`，桌面版以后换 transport）。现有调用不改超时和重试：厂商仍是单次、无客户端超时；arXiv 仍由 `fetchOne` 做 20 秒超时，403/429 仍是 24 小时冷却。划区（`lib/pdf-layout-client.js` 的默认 `fetchImpl`）、本机 1.2 秒探活、用户 PDF 地址、扩展自己的算法文件，以及 `lib/pdf-library.js` 对 8765 本地库的读取仍直接 `fetch`，原因写在各自调用点，避免改掉现有重试或失败文案。F7/F9 直接用这个 `net`。
+
 公式缓存（IndexedDB `oi-formula`）由 service worker 顶部静态导入 `background/formula-cache.js`（`import { handleFormulaCacheMessage } from "./formula-cache.js"`），不从 `background/arxiv-source.js` 再导出。AX-23（2026-10-13 10:36 Wisdom 定）：只放开 viewer；`lib/notes-*` 继续锁定。见 `docs/arxiv-source-mode.md`「AX-23 修订」。
 
 `manifest.json` 的 `host_permissions` 已是 `<all_urls>`。不要为 `127.0.0.1` 再加权限。未填写的基址不要发请求。

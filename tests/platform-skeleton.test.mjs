@@ -21,14 +21,14 @@ globalThis.fetch = () => {
   throw error;
 };
 
-test("platform skeleton exposes only kv and library, and the hint key is global", async () => {
+test("platform skeleton exposes kv, library, and net, and the hint key is global", async () => {
   setPlatform(null);
   const detected = getPlatform();
   assert.equal(detected.target, "memory");
   assert.equal(typeof detected.kv.get, "function");
   assert.equal(typeof detected.library.open, "function");
   assert.equal(detected.library.kind, "memory");
-  assert.equal(Object.hasOwn(detected, "net"), false);
+  assert.equal(typeof detected.net.fetch, "function");
   assert.equal(Object.hasOwn(detected, "files"), false);
 
   const kv = createMemoryKv();
