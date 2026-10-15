@@ -1199,7 +1199,11 @@ test("DATA-06 pagehide on one page lets the other page take the import", async (
       const store = storeFor(kind);
       const shared = runtime();
       const gates = [];
-      shared.beforePaper = () => new Promise((resolve) => gates.push(resolve));
+      const beforePaper = () => new Promise((resolve) => gates.push(resolve));
+      const { modA, modB } = await coordinatorPair(`pagehide-${kind}`);
+      const dataCoordinator = modA.createImportCoordinator({ ...shared, store, beforePaper });
+      const readerCoordinator = modB.createImportCoordinator({ ...shared, store, beforePaper });
+      assert.notEqual(dataCoordinator.id, readerCoordinator.id);
       const dataWindow = eventTarget();
       const readerWindow = eventTarget();
       const root = document.createElement("div");
@@ -1207,11 +1211,17 @@ test("DATA-06 pagehide on one page lets the other page take the import", async (
       const panel = mountDataPanel(root, {
         ...shared,
         store,
+        coordinator: dataCoordinator,
         window: dataWindow,
         usage: async () => ({ usage: 1, quota: 4, persisted: true }),
         showDirectoryPicker: async () => library()
       });
-      const reader = attachImportReader(chip, { ...shared, store, window: readerWindow });
+      const reader = attachImportReader(chip, {
+        ...shared,
+        store,
+        coordinator: readerCoordinator,
+        window: readerWindow
+      });
       click(root, "选择文件夹…");
       await until(() => gates.length >= 1);
       gates.shift()();
@@ -1404,6 +1414,51 @@ function onePaperDir() {
     [HASH_A]: paper(HASH_A, [page(1, "甲")], { meta: { title: "论文甲", rev: 1, updatedAt: 1 } })
   });
 }
+
+test("DATA-06 the reader waits out a paper that still holds the shared lock", { timeout: 20000 }, async () => {
+  const restore = installDom();
+  const gates = [];
+  let data = null;
+  let reader = null;
+  let store = null;
+  try {
+    store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("slow-lock");
+    const locks = createMemoryLocks();
+    const beforePaper = () => new Promise((resolve) => gates.push(resolve));
+    data = modA.createImportCoordinator({ store, locks, beforePaper });
+    reader = modB.createImportCoordinator({ store, locks, beforePaper });
+    assert.notEqual(modA.createImportCoordinator, modB.createImportCoordinator);
+    assert.notEqual(data.id, reader.id);
+    data.attach("data");
+    reader.attach("reader");
+    await flush(20);
+    const job = data.importFolder(library());
+    await until(() => gates.length >= 1);
+    const started = Date.now();
+    await data.detach("data");
+    const waited = Date.now() - started;
+    assert.ok(waited >= 1900, `detach returned in ${waited}ms`);
+    assert.equal(gates.length, 1);
+    assert.equal(await store.getPaper(HASH_A), null);
+    assert.equal(await store.getPaper(HASH_B), null);
+    gates.shift()();
+    await until(() => gates.length >= 1, 200);
+    gates.shift()();
+    await until(() => gates.length >= 1, 200);
+    gates.shift()();
+    await flush(40);
+    assert.notEqual(await store.getPaper(HASH_A), null);
+    assert.notEqual(await store.getPaper(HASH_B), null);
+    await job;
+  } finally {
+    while (gates.length) gates.shift()();
+    data?.destroy();
+    reader?.destroy();
+    await store?.closeLibrary?.();
+    restore();
+  }
+});
 
 test("DATA-06 two module instances hand the import across BroadcastChannel", async () => {
   const restore = installDom();
