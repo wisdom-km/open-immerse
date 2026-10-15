@@ -253,7 +253,9 @@ open-immerse/
 │   ├── viewer.html|js|css
 │   └── vendor/                # pdf.js 4.10.38 · KaTeX 0.18.7
 ├── lib/
-│   ├── providers.js           # 全部引擎 adapter
+│   ├── providers.js           # 全部引擎 adapter（HTTP 经 lib/net）
+│   ├── net/fetch.js           # 统一出口：超时、重试、去重、缓存、日志打码
+│   ├── platform/              # 扩展 / 桌面适配；net 可换 transport
 │   ├── translate-skill.js     # 共用 Skill / 两步提示词
 │   ├── storage.js             # 默认设置与迁移（settingsVersion = 8）
 │   ├── page-scan.js           # 节点收集（与 content.js 保持一致）
@@ -291,7 +293,7 @@ open-immerse/
     → 插入 .oi-translation 或 PDF 通读块
 ```
 
-内容脚本 **不** `fetch` 翻译 API。新增引擎只改 `lib/providers.js` 与 `DEFAULT_SETTINGS.providers`。
+内容脚本 **不** `fetch` 翻译 API。厂商请求从 `lib/providers.js` 进 `lib/net/fetch.js`，不在页面里直连。新增引擎只改 `lib/providers.js` 与 `DEFAULT_SETTINGS.providers`。
 
 ---
 

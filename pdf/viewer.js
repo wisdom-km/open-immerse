@@ -2706,6 +2706,7 @@ let samplePagePromise = null;
 function loadSamplePage() {
   if (!samplePagePromise) {
     const url = new URL("../tests/fixtures/pdf-blocks/sample-page.json", import.meta.url);
+    // P-A whitelist: same-origin fixture JSON. A Net timeout default would change this read.
     samplePagePromise = fetch(url).then((res) => {
       if (!res.ok) throw new Error("sample page missing");
       return res.json();
@@ -7703,6 +7704,7 @@ function extensionRuntimeReady() {
 async function probeLocalService(baseUrl) {
   const root = String(baseUrl || "http://127.0.0.1:8765").replace(/\/$/, "");
   try {
+    // P-A whitelist: 1.2s probe. Any throw means down. Net retry would change that boolean.
     await fetch(root, { method: "GET", signal: AbortSignal.timeout(1200) });
     return true;
   } catch {
@@ -10025,6 +10027,7 @@ async function openFile(file) {
 async function openFromSrc(src) {
   setStatus(PDF_COPY.loading);
   try {
+    // P-A whitelist: one fetch of a user PDF URL. The failure copy depends on that single throw.
     const res = await fetch(src);
     if (!res.ok) throw new Error("fetch");
     await openPdfData(new Uint8Array(await res.arrayBuffer()), src);
