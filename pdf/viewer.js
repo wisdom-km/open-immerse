@@ -25,6 +25,7 @@ import {
   clampZoomChipPos,
   collectArticlePages,
   collectReadoutExportNodes,
+  createBackgroundSessions,
   createPageCache,
   createTranslateSession,
   exceedsDragThreshold,
@@ -79,6 +80,7 @@ import {
   textLayerCopy,
   translateDocumentPages,
   translatePageBlocks,
+  translationCacheWhile,
   articleNodeSpec,
   extractPageItems,
   pageCacheKey,
@@ -201,11 +203,18 @@ import {
   fetchCloudEnvelope,
   fetchLocalEnvelope,
   layoutCacheKey,
+  layoutCurrentForEngine,
+  layoutCurrentForLibrary,
   layoutFallbackOf,
+  layoutServesEngine,
+  layoutServesLibrary,
   normalizePdfLayout,
   resolveLayoutMode,
+  runLaneAttempts,
   shouldFetchCloud,
-  storedLayoutCurrent,
+  startDocumentLayoutRetry,
+  createPrioritySerialLane,
+  stampSessionLayout,
   storedLayoutDisplayable
 } from "../lib/pdf-layout-client.js";
 import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
@@ -309,7 +318,13 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, fetchLibraryDocument, isSkipOnlyPage, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, repairMatrixProjectionPairs, replaceLibraryPagePairs, saveLibraryPage, selectSavedTranslation, storedReadoutBlocks } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
+import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
+import { createLibraryChip } from "../lib/library-chip.js";
+import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
+import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
+import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
+import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
 import { getProvider, missingRequiredField } from "../lib/providers.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -370,6 +385,10 @@ let libraryDoc = null;
 let libraryProbe = null;
 let notesDocHash = "";
 let notesUi = null;
+let libraryChip = null;
+let persistCard = null;
+let pendingNotes = null;
+let pendingUnload = () => {};
 let notesLayoutLatch = "";
 let notesPaintedKind = "";
 let notesUserPin = "";
@@ -574,6 +593,7 @@ function init() {
   watchSourceAvailability();
   bindSelToolbar();
   installNotesUi();
+  installLibraryChrome();
   $("translatePage").addEventListener("click", () => startTranslate());
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("translateMenuRetranslate")?.addEventListener("click", () => {
@@ -590,8 +610,8 @@ function init() {
     exportReadout("pdf");
   });
   document.addEventListener("keydown", onKey);
-  window.addEventListener("pagehide", abortInflightLayouts);
-  window.addEventListener("beforeunload", abortInflightLayouts);
+  window.addEventListener("pagehide", closeViewerWork);
+  window.addEventListener("beforeunload", closeViewerWork);
   listenProgress();
 
   const src = readViewerSrc(location.search);
@@ -2141,14 +2161,142 @@ function notePagesAround(center) {
   return pages;
 }
 
+function noteLibrarySaveError(error) {
+  if (!error) return null;
+  if (isStorageBlocked(error)) {
+    libraryChip?.block(error);
+    notesUi?.setStorageState?.({
+      blocked: true,
+      cause: storageFailureCause(error),
+      since: storageFailureSince(error)
+    });
+    return null;
+  }
+  if (error?.type === "quota") {
+    libraryChip?.writeFailed(error);
+    return null;
+  }
+  return error;
+}
+
+async function persistHiddenThisSession() {
+  try {
+    const get = globalThis.chrome?.storage?.session?.get;
+    if (typeof get !== "function") return false;
+    const bag = await get(PERSIST_CARD_SESSION_KEY);
+    return bag?.[PERSIST_CARD_SESSION_KEY] === true;
+  } catch {
+    return false;
+  }
+}
+
+function flushStagedNotes(hash, options = {}) {
+  if (!hash || hash === "nohash" || !pendingNotes) return Promise.resolve(0);
+  const job = pendingNotes.flush(hash, (item) => sharedNotesStore().put(item), { allTabs: true });
+  // The chip must see a blocked flush and stay on 暂时存不了. Opening
+  // the paper only tries; a failure leaves the staged rows for the next time.
+  if (options.quiet) return job.catch(() => 0);
+  return job;
+}
+
+async function maybeShowPersistCard() {
+  if (!persistCard || persistCard.isOpen()) return;
+  if (await persistHiddenThisSession()) return;
+  let decision = { show: false };
+  try {
+    // Pass the area, not a detached get. Chrome throws Illegal invocation
+    // when storage.local.get is called without its receiver, and the card
+    // then never opens.
+    decision = await readPersistCardState(globalThis.chrome?.storage?.local, notesDocHashNow());
+  } catch {
+    decision = { show: false };
+  }
+  if (decision.show) persistCard.show();
+}
+
+function installLibraryChrome() {
+  const slot = document.getElementById("oiLibSlot");
+  const cardHost = document.createElement("div");
+  cardHost.id = "oiPersistSlot";
+  document.body.append(cardHost);
+  pendingNotes = pendingNotes || createPendingNotes({
+    storage: chromeSessionArea() || undefined,
+    tabId: () => globalThis.__oiReaderTabId || "tab"
+  });
+  try {
+    globalThis.chrome?.tabs?.getCurrent?.((tab) => {
+      if (tab?.id != null) globalThis.__oiReaderTabId = String(tab.id);
+      pendingNotes?.holdLive?.();
+    });
+  } catch {
+    /* opened outside the extension */
+  }
+  libraryChip = createLibraryChip({
+    host: slot,
+    openStorage: async () => {
+      const { sharedLibraryStore } = await import("../lib/library-session.js");
+      return sharedLibraryStore().retryOpen();
+    },
+    flushNotes: () => flushStagedNotes(notesDocHashNow()),
+    flushPages: () => flushPendingPages(),
+    onRecovered() {
+      notesUi?.setStorageState?.(null);
+      void maybeShowPersistCard();
+    }
+  });
+  persistCard = createPersistCard({
+    host: cardHost,
+    onDismiss: () => {
+      globalThis.chrome?.storage?.local?.set?.({ [LIBRARY_PERSIST_HINT_KEY]: true });
+    },
+    onHideSession: () => {
+      globalThis.chrome?.storage?.session?.set?.({ [PERSIST_CARD_SESSION_KEY]: true });
+    },
+    onExport: () => {
+      const url = globalThis.chrome?.runtime?.getURL?.("options/options.html");
+      if (url) globalThis.chrome?.tabs?.create?.({ url: `${url}#data?focus=export` });
+    }
+  });
+  setLibraryUiHooks({
+    onMoveStart() { libraryChip?.startMove({ holds: true }); },
+    onMoveEnd() { libraryChip?.finishMove(); },
+    onStorageBlocked(error) {
+      libraryChip?.block(error);
+      notesUi?.setStorageState?.({
+        blocked: true,
+        cause: storageFailureCause(error),
+        since: storageFailureSince(error)
+      });
+    },
+    onWriteFailed(error) { libraryChip?.writeFailed(error); }
+  });
+  pendingUnload = bindPendingUnload(() => pendingNotes?.pendingNow?.(notesDocHashNow()) || 0);
+}
+
 function installNotesUi() {
+  pendingNotes = pendingNotes || createPendingNotes({
+    storage: chromeSessionArea() || undefined,
+    tabId: () => globalThis.__oiReaderTabId || "tab"
+  });
   notesUi = mountNotesUi({
     hasDoc: () => Boolean(pdfDoc),
     docHash: () => notesDocHashNow(),
     docTitle: () => $("docTitle")?.title || $("docTitle")?.textContent || "笔记",
     list: (hash) => sharedNotesStore().list(hash),
     listTrash: (hash) => sharedNotesStore().listTrash(hash),
-    put: (input) => sharedNotesStore().put(input),
+    put: async (input) => {
+      try {
+        const saved = await sharedNotesStore().put(input);
+        void maybeShowPersistCard();
+        return saved;
+      } catch (error) {
+        if (isStorageBlocked(error)) libraryChip?.block(error);
+        throw error;
+      }
+    },
+    stageNote: (input) => pendingNotes?.stage(notesDocHashNow(), input),
+    onStorageBlocked: (error) => libraryChip?.block(error),
+    sharedPersistCard: true,
     softDelete: (id) => sharedNotesStore().softDelete(id),
     restore: (id) => sharedNotesStore().restore(id),
     purge: (id) => sharedNotesStore().purge(id),
@@ -2492,6 +2640,53 @@ function storedEngineOverride() {
 
 function pdfEngineMode() {
   return resolveLayoutMode(cachedPdfLayout, storedEngineOverride());
+}
+
+/** text-layer, local-ocr, or cloud-ocr already recorded on a layout. unknown stays unset. */
+function engineModeOf(layout) {
+  const mode = String(layout?.mode || "");
+  return mode === "text-layer" || mode === "local-ocr" || mode === "cloud-ocr" ? mode : "";
+}
+
+/**
+ * A layout the vendor produced on this open belongs to the current engine.
+ * unknown is left alone. A transient fallback is left alone.
+ */
+function stampProducedEngine(layout, mode = pdfEngineMode()) {
+  return stampSessionLayout(layout, mode);
+}
+
+/** Text-layer geometry, including the quick stand-in and the empty-key path. */
+function stampTextLayerEngine(layout) {
+  return stampSessionLayout(layout, "text-layer");
+}
+
+/**
+ * The in-memory row libraryEntry reads. A known engine is tagged. A mode-less
+ * or unknown layout, including a no-boxes fallback, replaces that unknown row
+ * so a finished answer is not requested again.
+ */
+function rememberEngineLayout(page, layout) {
+  if (!layout || !libraryDoc) return;
+  const mode = engineModeOf(layout) || "unknown";
+  if (!Array.isArray(libraryDoc.layoutRows)) libraryDoc.layoutRows = [];
+  const protocol = String(layout?.protocol || "blocks-1");
+  const version = String(layout?.layoutVersion || "");
+  const row = {
+    page: Number(page),
+    mode,
+    protocol,
+    savedAt: Date.now(),
+    layoutRev: version,
+    layout: { ...layout, mode: layout.mode || mode }
+  };
+  const at = libraryDoc.layoutRows.findIndex((item) => (
+    Number(item?.page) === Number(page) &&
+    String(item?.mode || "") === mode &&
+    String(item?.protocol || "blocks-1") === protocol
+  ));
+  if (at >= 0) libraryDoc.layoutRows[at] = { ...libraryDoc.layoutRows[at], ...row };
+  else libraryDoc.layoutRows.push(row);
 }
 
 async function loadPdfLayout() {
@@ -3412,7 +3607,13 @@ function cacheableReuse(units) {
 }
 
 function libraryEntry(page) {
-  return (libraryDoc?.pages || []).find((item) => Number(item.page) === Number(page)) || null;
+  const row = (libraryDoc?.pages || []).find((item) => Number(item.page) === Number(page)) || null;
+  if (!row) return null;
+  const layout = selectPageLayout(libraryDoc?.layoutRows, page, pdfEngineMode());
+  if (!layout) return row;
+  const view = { ...row, layout };
+  if (!view.layoutVersion && layout.layoutVersion) view.layoutVersion = layout.layoutVersion;
+  return view;
 }
 
 function blocksFromLibraryPairs(page, pairs) {
@@ -7430,10 +7631,17 @@ function runtimeSend(message) {
   return send(message);
 }
 
+const backgroundSessions = createBackgroundSessions();
+
+function abortBackgroundFills() {
+  backgroundSessions.abortAll();
+}
+
 function beginViewerSession() {
-  if (session.aborted) session = createTranslateSession();
+  abortTranslateSession(session);
+  abortBackgroundFills();
+  session = createTranslateSession();
   session.running = true;
-  session.aborted = false;
   return session;
 }
 
@@ -7443,7 +7651,10 @@ function isCurrentWork(work, gen, translatingDoc) {
 
 function stopTranslateWork() {
   abortTranslateSession(session);
+  abortBackgroundFills();
+  cancelQueuedVendorLayouts();
   translatingPage = 0;
+  forceRetranslatePending = false;
   for (const [page, row] of pageStates) {
     if (row.state === "running" || row.state === "layout") {
       notePageState(page, { state: "queued", hasLayout: Boolean(row.hasLayout) });
@@ -7454,7 +7665,6 @@ function stopTranslateWork() {
   setStatus(PDF_COPY.stopped);
   renderArticle();
   updateTranslateControls();
-  resumePendingRetranslate();
 }
 
 function resumePendingRetranslate() {
@@ -7515,7 +7725,24 @@ async function translatePreflight() {
   const missing = missingRequiredField(getProvider(providerId), settings.providers?.[providerId] || {});
   const layoutMode = pdfEngineMode();
   let localServiceUp = true;
-  if (layoutMode === "local-ocr") localServiceUp = await probeLocalService(cachedPdfLayout?.localBaseUrl);
+  // GET / on 8765 is the library-and-OCR probe, not a /v1/layout failure.
+  // Skip it only when this paper is already fully stored. A read that has
+  // not finished must not probe either: the red banner would flash and then
+  // go away. A real /v1/layout failure keeps its own layout notice.
+  let document = libraryDoc;
+  let zoneReason = "";
+  if (layoutMode === "local-ocr" && !paperFullyInLibrary(document)) {
+    const hash = await pdfByteHash();
+    if (hash && hash !== "nohash") {
+      const gate = await waitForFirstZone(hash);
+      const ready = gate.reason === "cap" ? await resolveZoneForVendor(hash, gate) : gate;
+      zoneReason = ready?.reason || "";
+      if (ready?.document) document = ready.document;
+    }
+  }
+  if (shouldProbeLocalService({ layoutMode, document, zoneReason })) {
+    localServiceUp = await probeLocalService(cachedPdfLayout?.localBaseUrl);
+  }
   return pdfOpenTranslateBlocker({
     runtimeReady: true,
     missingField: missing?.label || "",
@@ -7542,7 +7769,7 @@ function documentTranslateSuperseded() {
 }
 
 async function maybeAutoTranslateDocument() {
-  if (!pdfDoc) return;
+  if (!pdfDoc || docPhase === "stopped") return;
   if (documentTranslateSuperseded()) return;
   const adopting = docId;
   if (!(await readAutoTranslateEnabled())) {
@@ -7553,7 +7780,7 @@ async function maybeAutoTranslateDocument() {
     }
     return;
   }
-  if (adopting !== docId || !pdfDoc || documentTranslateSuperseded()) return;
+  if (adopting !== docId || !pdfDoc || docPhase === "stopped" || documentTranslateSuperseded()) return;
   // The retranslate button is enabled while docPhase is still "opening".
   // Settings reads resolve as microtasks, so without a timer the phase
   // flips to running before any click or interval can run. The library
@@ -7561,7 +7788,7 @@ async function maybeAutoTranslateDocument() {
   // already ended; this 16ms only keeps opening observable. A 0ms timer
   // would run before a pending interval and close the gap again.
   await new Promise((resolve) => setTimeout(resolve, 16));
-  if (adopting !== docId || !pdfDoc || documentTranslateSuperseded()) return;
+  if (adopting !== docId || !pdfDoc || docPhase === "stopped" || documentTranslateSuperseded()) return;
   await startTranslate();
 }
 
@@ -7616,9 +7843,11 @@ function rememberTranslation(page, results) {
   const title = document.title;
   const pageCount = pdfDoc?.numPages || 0;
   const skipped = skipOnly && !pairs.length;
+  const sentFor = docId;
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
     if (!hash || hash === "nohash") return;
+    const keepLayout = !(await layoutWriteSuperseded(hash, page, String(layout?.layoutVersion || "")));
     let sourceBase64 = "";
     if (!librarySourceSent.has(hash) && bytes?.length) {
       let binary = "";
@@ -7627,22 +7856,30 @@ function rememberTranslation(page, results) {
       }
       sourceBase64 = btoa(binary);
     }
-    await saveLibraryPage({
+    const savedPayload = {
       hash,
       title,
       pageCount,
       page,
       pairs,
-      layout,
-      ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
+      // The layout row stays when it is already current. The blocks still have
+      // to ride along, or the page merge keeps a settled but misaligned pair.
+      ...(blocks?.length ? { blocks } : {}),
+      targetLang: pdfTargetLang,
+      ...(keepLayout ? { layout } : {}),
+      ...(keepLayout && layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
+      ...(keepLayout && engineModeOf(rawLayout) ? { mode: engineModeOf(rawLayout) } : {}),
       sourceBase64,
       ...(skipped ? { skipped: true } : {})
-    });
-    librarySourceSent.add(hash);
+    };
+    await saveLibraryPage(savedPayload);
+    void maybeShowPersistCard();
+    if (docId === sentFor) librarySourceSent.add(hash);
     const savedPage = libraryDoc?.pages?.find((item) => item.page === page);
-    if (savedPage && layout) {
+    if (keepLayout && savedPage && layout) {
       savedPage.layout = layout;
       if (layout.layoutVersion) savedPage.layoutVersion = layout.layoutVersion;
+      rememberEngineLayout(page, rawLayout);
     } else if (skipped && libraryDoc && Array.isArray(libraryDoc.pages)) {
       libraryDoc.pages.push({ page, pairs: [], skipped: true, ...(layout ? { layout, layoutVersion: layout.layoutVersion } : {}) });
     }
@@ -7682,6 +7919,7 @@ function layoutFromStored(page, stored) {
     textSource: stored.textSource || "text-layer",
     sourceAudit: stored.sourceAudit || null,
     ...(stored.layoutVersion ? { layoutVersion: String(stored.layoutVersion) } : {}),
+    ...(stored.mode ? { mode: String(stored.mode) } : {}),
     ...(fallback ? { fallback } : {}),
     blocks: stored.blocks,
     itemCount: Number(stored.itemCount) || stored.blocks.length
@@ -7691,11 +7929,14 @@ function layoutFromStored(page, stored) {
 /** Paint the library's current blocks before any pair-only or text-layer stand-in. */
 function installDisplayableLibraryLayouts(version = knownLayoutVersion) {
   if (!version || !libraryDoc?.pages?.length) return false;
+  const engine = pdfEngineMode();
   let changed = false;
   for (const entry of libraryDoc.pages) {
     const page = Number(entry?.page);
     if (!(page >= 1)) continue;
-    const stored = storedLayoutDisplayable(entry, version);
+    const view = libraryEntry(page) || entry;
+    if (!layoutServesLibrary(view, engine)) continue;
+    const stored = storedLayoutDisplayable(view, version);
     if (!stored?.blocks?.length) continue;
     if (getPageLayout(page)?.blocks?.length) continue;
     const laid = layoutFromStored(page, stored);
@@ -7718,13 +7959,28 @@ function libraryLayoutNeedsWrite(page) {
   const hasLayout = Array.isArray(storedBlocks) && storedBlocks.length > 0;
   const hasVersion = Boolean(entry.layoutVersion || entry.layout?.layoutVersion);
   if (!hasLayout && !hasVersion) return false;
-  return !storedLayoutCurrent(entry, version);
+  return !layoutCurrentForLibrary(entry, version, pdfEngineMode());
 }
 
 function persistDisplayedLayout(page) {
   if (!libraryLayoutNeedsWrite(page)) return Promise.resolve();
   return persistPageLayout(page);
 }
+
+/** A current row, including unknown, is already stored. Do not add a text-layer row over it. */
+async function layoutWriteSuperseded(hash, page, version) {
+  const seen = () => currentLayoutIfArrived({
+    hash,
+    page,
+    version,
+    engine: pdfEngineMode()
+  });
+  if (seen()) return true;
+  const flight = libraryFetchInFlight(hash);
+  if (flight) await flight.promise.catch(() => null);
+  return Boolean(seen());
+}
+
 function persistPageLayout(page) {
   const raw = getPageLayout(page);
   const version = String(raw?.layoutVersion || "");
@@ -7733,29 +7989,39 @@ function persistPageLayout(page) {
   const entry = libraryEntry(page);
   const pairs = Array.isArray(entry?.pairs) ? entry.pairs : [];
   const skipped = Boolean(entry?.skipped) || (isSkipOnlyPage(raw.blocks) && !pairs.length);
-  if (entry) {
-    entry.layout = layout;
-    entry.layoutVersion = version;
-    if (skipped) entry.skipped = true;
-  } else if (libraryDoc && Array.isArray(libraryDoc.pages)) {
-    libraryDoc.pages.push({ page, pairs, layout, layoutVersion: version, ...(skipped ? { skipped: true } : {}) });
-  }
   const bytes = pdfBytes;
   const title = document.title;
   const pageCount = pdfDoc?.numPages || 0;
+  const epoch = layoutEpoch;
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
     if (!hash || hash === "nohash") return;
-    await saveLibraryPage({
+    if (await layoutWriteSuperseded(hash, page, version)) return;
+    if (!layoutAttemptLive(epoch)) return;
+    const live = libraryEntry(page);
+    if (live) {
+      live.layout = layout;
+      live.layoutVersion = version;
+      if (skipped) live.skipped = true;
+      rememberEngineLayout(page, raw);
+    } else if (libraryDoc && Array.isArray(libraryDoc.pages)) {
+      libraryDoc.pages.push({ page, pairs, layout, layoutVersion: version, ...(skipped ? { skipped: true } : {}) });
+      rememberEngineLayout(page, raw);
+    }
+    const savedPayload = {
       hash,
       title,
       pageCount,
       page,
       pairs,
       layout,
+      blocks: raw.blocks,
+      targetLang: pdfTargetLang,
       layoutVersion: version,
+      ...(engineModeOf(raw) ? { mode: engineModeOf(raw) } : {}),
       ...(skipped ? { skipped: true } : {})
-    });
+    };
+    await saveLibraryPage(savedPayload);
   });
 }
 
@@ -7770,16 +8036,19 @@ function persistPagePairs(saved) {
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
     if (!hash || hash === "nohash") return;
-    await saveLibraryPage({
+    const keepLayout = layout && !(await layoutWriteSuperseded(hash, page, String(layout.layoutVersion || "")));
+    const savedPayload = {
       hash,
       title,
       pageCount,
       page,
       pairs: saved.pairs,
-      ...(layout ? { layout } : {}),
-      ...(layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
+      ...(rawLayout?.blocks?.length ? { blocks: rawLayout.blocks } : {}),
+      targetLang: pdfTargetLang,
+      ...(keepLayout ? { layout, ...(layout.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}), ...(engineModeOf(rawLayout) ? { mode: engineModeOf(rawLayout) } : {}) } : {}),
       ...(saved.skipped ? { skipped: true } : {})
-    });
+    };
+    await saveLibraryPage(savedPayload);
   });
 }
 
@@ -7804,13 +8073,18 @@ function ensureLibraryDocument() {
       const hash = await pdfByteHash();
       if (docId !== stamp || !hash || hash === "nohash") return null;
       if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
-      const doc = await fetchLibraryDocument(hash);
+      const doc = await fetchLibraryDocument(hash, { engine: pdfEngineMode() });
       if (docId !== stamp) return null;
+      // Translation may already have filled this document while the probe was
+      // still reading. A late legacy snapshot must not replace it, or the next
+      // layout write stores the original pairs over the translation.
+      if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
       if (doc) {
         doc.hash = hash;
         if (doc.sourcePath) librarySourceSent.add(hash);
       }
       libraryDoc = doc || null;
+      if (hash) void pendingNotes?.hydrate?.(hash);
       return libraryDoc;
     } catch {
       // One probe per document. Page turns do not wait for these delays,
@@ -7847,6 +8121,11 @@ function paintLateLibrary(n, ticket) {
     const blocks = layout.blocks || [];
     const covers = libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang, pdfProvider) ||
       libraryCoversLiveBlocks(merged, blocks, pdfTargetLang, pdfProvider);
+    // The probe can resolve after this open has already translated the page.
+    // A thinner library snapshot must not replace that translation or demote
+    // the page, or a one-pair fixture leaves the page partial.
+    const already = pageCache.get(docId, n);
+    if (!covers && (pageStates.get(n)?.state === "done" || pageHasTranslation(already, pdfTargetLang))) return;
     if (n === pageNum || n === textLoadPage) pageResults = merged;
     pageCache.set(docId, n, merged);
     const skipped = skipLocked.has(n) || isSkipOnlyPage(blocks);
@@ -7865,7 +8144,36 @@ function paintLateLibrary(n, ticket) {
 async function savedTranslationFor(page) {
   const hash = await pdfByteHash();
   if (!hash || hash === "nohash") return null;
-  if (!libraryDoc || libraryDoc.hash !== hash) await ensureLibraryDocument();
+  if (!libraryDoc || libraryDoc.hash !== hash) {
+    // A blocked open must not hold translation. A read that is still inside
+    // the cap used to await the probe here, and that probe awaited the
+    // IndexedDB open until the 10s deadline even after the migration GET
+    // had already returned the page. Join that GET, and only until the
+    // zoning cap. Do not await the probe.
+    const zone = await waitForFirstZone(hash);
+    // A finished read is not reused, so this call starts a new IndexedDB read
+    // once the open's first read has settled. That re-read includes pages this
+    // translation just saved. Those pairs have no failed flag. Adopting them
+    // turns the failed batch into a fresh request and drops bypassCache.
+    const savedThisSession = librarySourceSent.has(hash);
+    if (!translationWaitsForLibrary(zone)) {
+      if (!libraryProbe) void ensureLibraryDocument();
+    }
+    if (zone?.reason === "unavailable" || !zone?.document) {
+      // A blocked open used to stop here. The page then paid for a new
+      // batch, and the row on screen waited until the upgrade's 10s
+      // BlockedError. The migration GET is the translation, until the cap.
+      if (!libraryProbe) void ensureLibraryDocument();
+      const adopted = await waitForZoneMigration(hash, zone, { page, version: knownLayoutVersion, engine: pdfEngineMode() });
+      if (adopted?.document && !librarySourceSent.has(hash) && (!libraryDoc || libraryDoc.hash !== hash)) {
+        if (!adopted.document.hash) adopted.document.hash = hash;
+        libraryDoc = adopted.document;
+      }
+    } else if (zone?.document && !savedThisSession) {
+      if (!zone.document.hash) zone.document.hash = hash;
+      libraryDoc = zone.document;
+    }
+  }
   if (!libraryDoc) return null;
   const selected = selectSavedTranslation(libraryDoc, page, getPageLayout(page)?.blocks);
   if (libraryDoc.pages?.length) {
@@ -8140,8 +8448,8 @@ async function translateCurrentPage() {
   if (!aborted) {
     try {
       await rememberTranslation(targetPage, merged);
-    } catch {
-      setStatus("译文已生成，但写入本地库失败。", true);
+    } catch (error) {
+      if (noteLibrarySaveError(error)) setStatus("译文已生成，但写入本地库失败。", true);
     }
   }
   updateTranslateControls();
@@ -8177,9 +8485,8 @@ function installKnownSkipLayout(page, stored) {
 
 async function readStoredLayouts(keys) {
   try {
-    if (!keys?.length || typeof globalThis.chrome?.storage?.local?.get !== "function") return {};
-    const bag = await globalThis.chrome.storage.local.get(keys);
-    return bag && typeof bag === "object" ? bag : {};
+    if (!keys?.length) return {};
+    return await readLayoutCaches(keys);
   } catch {
     return {};
   }
@@ -8239,7 +8546,10 @@ async function seedLegacySkipPages() {
   for (let page = 1; page <= total; page += 1) {
     if (hash && hash !== "nohash") keys.push(legacyLayoutCacheKey({ hash, page, mode }));
   }
-  const bag = await readStoredLayouts(keys);
+  const bag = await Promise.race([
+    readStoredLayouts(keys),
+    new Promise((resolve) => setTimeout(() => resolve({}), LIBRARY_ZONE_WAIT_MS))
+  ]);
   if (stamp !== docId) return false;
   legacySkipSeeded = true;
   let changed = false;
@@ -8272,13 +8582,15 @@ async function seedLegacySkipPages() {
 
 /** New layout may replace skip blocks. It must not take the page out of the done count. */
 async function reconcileLockedSkipLayouts(isStale) {
+  if (docPhase === "stopped") return false;
+  const epoch = layoutEpoch;
   const pages = [...skipLocked].sort((a, b) => a - b);
   for (const page of pages) {
-    if (isStale()) return;
+    if (isStale() || !layoutAttemptLive(epoch)) return;
     const previous = getPageLayout(page);
     let laid = null;
     try {
-      laid = await ingestPageLayout(page, isStale);
+      laid = await ingestPageLayout(page, () => isStale() || !layoutAttemptLive(epoch), epoch);
     } catch {
       laid = null;
     }
@@ -8291,8 +8603,10 @@ async function reconcileLockedSkipLayouts(isStale) {
 }
 
 async function adoptLibraryPages(options = {}) {
+  if (docPhase === "stopped") return false;
   const onlyPage = Number(options.onlyPage) || 0;
   const stamp = docId;
+  const epoch = layoutEpoch;
   const listed = (libraryDoc?.pages || []).map((item) => Number(item?.page)).filter((n) => n >= 1);
   const lastListed = listed.length ? Math.max(...listed) : 0;
   const total = Math.max(Number(pdfDoc?.numPages) || 0, ...listed, 0);
@@ -8313,7 +8627,7 @@ async function adoptLibraryPages(options = {}) {
   if (seedLibraryProgress() && stamp === docId) renderArticle();
   if (await seedLegacySkipPages() && stamp === docId) renderArticle();
   for (let page = start; page <= end; page += 1) {
-    if (stamp !== docId) return true;
+    if (stamp !== docId || docPhase === "stopped") return true;
     const entry = libraryEntry(page);
     let layout = getPageLayout(page);
     let blocks = layout?.blocks || null;
@@ -8330,7 +8644,7 @@ async function adoptLibraryPages(options = {}) {
     }
     if (!layout) {
       try {
-        layout = await ingestPageLayout(page, () => stamp !== docId);
+        layout = await ingestPageLayout(page, () => stamp !== docId || !layoutAttemptLive(epoch), epoch);
       } catch {
         layout = null;
       }
@@ -8728,44 +9042,104 @@ async function translateWholeDocument() {
     // A translation pause must not abandon layout. Skip pages and any page
     // whose sidecar call failed still get a recompute, then an immediate write-back.
     if (!translatedDoc.aborted && !work.aborted) {
-      await reconcileLockedSkipLayouts(() => !isCurrentWork(work, gen, translatingDoc));
-      const upgraded = await retryPendingVendorLayouts(() => !isCurrentWork(work, gen, translatingDoc));
-      const needs = [];
-      for (const page of upgraded || []) {
-        if (!isCurrentWork(work, gen, translatingDoc)) break;
-        const blocks = getPageLayout(page)?.blocks || null;
-        if (!blocks || isSkipOnlyPage(blocks)) continue;
-        const covered = libraryPageRunState({
-          pairs: libraryEntry(page)?.pairs || [],
-          cached: pageCache.get(translatingDoc, page),
-          blocks,
-          targetLang: pdfTargetLang,
-          provider: pdfProvider
-        });
-        if (covered === "done" || covered === "skipped" || covered === "empty") continue;
-        const prior = pageStates.get(page);
-        notePageState(page, {
-          state: countedPageState(prior?.state) ? "partial" : "queued",
-          hasLayout: true
-        });
-        clearSlotPainted(page);
-        needs.push(page);
+      const layoutScheduled = layoutEpoch;
+      // Filled in after the blocking page, before this job drops session.running.
+      // Stop stays up for the background re-zone; aborting the session ends that round.
+      let backgroundTracked = null;
+      const staleWork = () => !isCurrentWork(work, gen, translatingDoc)
+        || work.aborted
+        || !layoutAttemptLive(layoutScheduled)
+        || Boolean(backgroundTracked && !backgroundTracked.current());
+      await reconcileLockedSkipLayouts(staleWork);
+      const adoptUpgraded = async (upgraded, info = {}) => {
+        const needs = [];
+        for (const page of upgraded || []) {
+          if (staleWork()) break;
+          const blocks = getPageLayout(page)?.blocks || null;
+          if (!blocks || isSkipOnlyPage(blocks)) continue;
+          const covered = libraryPageRunState({
+            pairs: libraryEntry(page)?.pairs || [],
+            cached: pageCache.get(translatingDoc, page),
+            blocks,
+            targetLang: pdfTargetLang,
+            provider: pdfProvider
+          });
+          if (covered === "done" || covered === "skipped" || covered === "empty") continue;
+          const prior = pageStates.get(page);
+          notePageState(page, {
+            state: countedPageState(prior?.state) ? "partial" : "queued",
+            hasLayout: true
+          });
+          clearSlotPainted(page);
+          needs.push(page);
+        }
+        if (needs.length && !translatedDoc.paused && !staleWork() && !work.aborted) {
+          const tracked = info.background ? backgroundSessions.track(createTranslateSession()) : null;
+          if (tracked) updateTranslateControls();
+          const fillAlive = () => !staleWork() && !work.aborted && (!tracked || tracked.current());
+          const guarded = tracked ? {
+            session: tracked.session,
+            cache: translationCacheWhile(pageCache, fillAlive),
+            onPageResult(payload) {
+              if (!fillAlive() || !isCurrentWork(work, gen, translatingDoc)) return;
+              pageJob.onPageResult(payload);
+            },
+            onPageDone(payload) {
+              if (!fillAlive() || !isCurrentWork(work, gen, translatingDoc)) return;
+              pageJob.onPageDone(payload);
+            },
+            onPageError(payload) {
+              if (!fillAlive() || !isCurrentWork(work, gen, translatingDoc)) return;
+              pageJob.onPageError(payload);
+            }
+          } : {};
+          let filled;
+          try {
+            filled = await translateDocumentPages({
+              ...pageJob,
+              ...guarded,
+              preserveSession: true,
+              includePage: (page) => needs.includes(page) && fillAlive()
+            });
+          } finally {
+            tracked?.release();
+            if (tracked) updateTranslateControls();
+          }
+          translatedDoc = {
+            ok: translatedDoc.ok && filled.ok,
+            aborted: translatedDoc.aborted || filled.aborted,
+            paused: translatedDoc.paused || filled.paused,
+            error: translatedDoc.error || filled.error,
+            missingField: translatedDoc.missingField || filled.missingField,
+            pages: translatedDoc.pages.concat(filled.pages)
+          };
+        }
+      };
+      // Retranslate waits on this job. Only the page on screen may hold it.
+      // Other stale pages post after the job releases, and their new blocks
+      // are translated on a side session so they do not mark this job busy.
+      const viewing = Number(pageNum) || 0;
+      const layoutPass = startDocumentLayoutRetry({
+        total,
+        viewing,
+        isStale: staleWork,
+        retryLayouts: (options) => retryPendingVendorLayouts(staleWork, { ...options, epoch: layoutScheduled }),
+        adoptUpgraded
+      });
+      await layoutPass.blocking;
+      // Other pages re-zone only after this await. Track that round before
+      // session.running drops, or Stop hides and the POST cannot be cancelled.
+      if ((pdfDoc?.numPages || 0) > 1 && !staleWork()) {
+        backgroundTracked = backgroundSessions.track(createTranslateSession());
+        updateTranslateControls();
       }
-      if (needs.length && !translatedDoc.paused && isCurrentWork(work, gen, translatingDoc) && !work.aborted) {
-        const filled = await translateDocumentPages({
-          ...pageJob,
-          preserveSession: true,
-          includePage: (page) => needs.includes(page)
-        });
-        translatedDoc = {
-          ok: translatedDoc.ok && filled.ok,
-          aborted: translatedDoc.aborted || filled.aborted,
-          paused: translatedDoc.paused || filled.paused,
-          error: translatedDoc.error || filled.error,
-          missingField: translatedDoc.missingField || filled.missingField,
-          pages: translatedDoc.pages.concat(filled.pages)
-        };
-      }
+      void layoutPass.background.finally(() => {
+        const tracked = backgroundTracked;
+        if (!tracked) return;
+        backgroundTracked = null;
+        tracked.release();
+        updateTranslateControls();
+      }).catch(() => {});
     }
   }
   if (libraryPass && work === session && !forceReadoutHold) work.running = false;
@@ -8793,7 +9167,7 @@ async function translateWholeDocument() {
   else if (!clean) setStatus(any ? PDF_COPY.incompletePages : PDF_COPY.noReturnedTranslation, true);
   else setStatus(PDF_COPY.doneDocument);
   finishDocPhase({ aborted, error: Boolean(error) || totals.needsRetry > 0 || totals.n !== total });
-  const saveErrors = await Promise.all(saveTasks);
+  const saveErrors = (await Promise.all(saveTasks)).map((error) => noteLibrarySaveError(error));
   // A retranslate click during the save wait takes a new session. Do not
   // clear its page or start another job over the batches it just sent.
   if (!isCurrentWork(work, gen, translatingDoc) || forceReadoutHold || forceRetranslatePending) return;
@@ -8889,6 +9263,19 @@ function abortForceRetranslate(work, prior, doc, page) {
   updateTranslateControls();
 }
 
+/** Stop leaves layoutClosed false. This capture is the epoch after that bump. */
+async function zoneForRetranslate(page, work) {
+  const mode = pdfEngineMode();
+  if (mode !== "local-ocr" && mode !== "cloud-ocr") return null;
+  const epoch = layoutEpoch;
+  if (docPhase === "stopped" || work?.aborted || !layoutAttemptLive(epoch)) return null;
+  const version = knownLayoutVersion || await layoutVersionNow();
+  if (docPhase === "stopped" || work?.aborted || !layoutAttemptLive(epoch)) return null;
+  const current = getPageLayout(page);
+  if (layoutCurrentForEngine(current, version, mode)) return null;
+  return ingestVendorLayout(page, mode, () => docPhase === "stopped" || Boolean(work?.aborted) || !layoutAttemptLive(epoch), epoch);
+}
+
 async function forceRetranslateCurrentPage() {
   if (!pdfDoc || pdfTranslateBusy(session) || forceReadoutHold) {
     if (pdfDoc) forceRetranslatePending = true;
@@ -8916,7 +9303,7 @@ async function forceRetranslateCurrentPage() {
   // Drop the document job's session so its next batch cannot land in this
   // retranslate, and so its save-wait tail cannot clear translatingPage.
   abortTranslateSession(session);
-  session = createTranslateSession();
+  abortBackgroundFills();
   forceReadoutHold = true;
   const work = beginViewerSession();
   translatingPage = targetPage;
@@ -8950,9 +9337,12 @@ async function forceRetranslateCurrentPage() {
       return;
     }
     if (left()) return;
-    await ensureTitleStructure(targetPage, sourceLayout, { force: true });
+    const refreshed = await zoneForRetranslate(targetPage, work);
     if (left()) return;
-    const pageUnits = liveOriginals(sourceLayout, unitsForForceRetranslate(sourceLayout));
+    const zonedLayout = refreshed || getPageLayout(targetPage) || sourceLayout;
+    await ensureTitleStructure(targetPage, zonedLayout, { force: true });
+    if (left()) return;
+    const pageUnits = liveOriginals(zonedLayout, unitsForForceRetranslate(zonedLayout));
     armTitleRetranslate(translatingDoc, targetPage);
     await translateTitleStructure(work, gen, translatingDoc, batchSize, { bypassCache: true });
     if (left()) return;
@@ -8981,13 +9371,18 @@ async function forceRetranslateCurrentPage() {
       failForceRetranslate(work, prior, translatingDoc, targetPage);
       return;
     }
-    const merged = pageResultsFromTranslation(sourceLayout, translated.results);
+    const merged = pageResultsFromTranslation(zonedLayout, translated.results);
     work.running = true;
     translatingPage = targetPage;
     updateTranslateControls();
     try {
       const pairs = pairsFromResults(merged);
-      await rememberTranslation(targetPage, merged);
+      try {
+        await rememberTranslation(targetPage, merged);
+      } catch (error) {
+        const leftover = noteLibrarySaveError(error);
+        if (leftover) throw leftover;
+      }
       if (!pairs.length) throw new Error("empty retranslation");
       replaceLibraryPagePairs(libraryDoc, targetPage, pairs);
       pageCache.set(translatingDoc, targetPage, merged);
@@ -9028,7 +9423,7 @@ async function forceRetranslateCurrentPage() {
     if (translatingPage === targetPage) translatingPage = 0;
     updateTranslateControls();
     resumePendingRetranslate();
-    if (resumeAuto) void maybeAutoTranslateDocument();
+    if (resumeAuto && !work.aborted && docPhase !== "stopped") void maybeAutoTranslateDocument();
   }
 }
 
@@ -9057,22 +9452,36 @@ function emptyPageResults(layout) {
 }
 
 /** Pages still waiting on the sidecar, including ones skipped by a translation pause. */
-async function retryPendingVendorLayouts(isStale) {
+async function retryPendingVendorLayouts(isStale, options = {}) {
   const upgraded = [];
   const mode = pdfEngineMode();
   if (mode !== "local-ocr" && mode !== "cloud-ocr") return upgraded;
+  // Captured when this pass was scheduled. Stop bumps the epoch, and a pass
+  // that then reaches a page must not start that POST.
+  const epoch = options.epoch;
+  if (docPhase === "stopped" || !Number.isFinite(epoch)) return upgraded;
+  if ((typeof isStale === "function" && isStale()) || !layoutAttemptLive(epoch)) return upgraded;
   const version = await layoutVersionNow();
   const total = pdfDoc?.numPages || 0;
+  const only = Number(options.onlyPage) || 0;
+  const skip = Number(options.skipPage) || 0;
+  const pages = [];
   for (let page = 1; page <= total; page += 1) {
-    if (isStale()) return upgraded;
+    if (only && page !== only) continue;
+    if (skip && page === skip) continue;
+    pages.push(page);
+  }
+  pages.sort((a, b) => Number(b === Number(pageNum)) - Number(a === Number(pageNum)) || a - b);
+  for (const page of pages) {
+    if (isStale() || !layoutAttemptLive(epoch)) return upgraded;
     const entry = libraryEntry(page);
     const storedBlocks = entry?.layout?.blocks;
     const hasStored = (Array.isArray(storedBlocks) && storedBlocks.length > 0) ||
       Boolean(entry?.layoutVersion || entry?.layout?.layoutVersion);
-    const stale = Boolean(entry && hasStored && version && !storedLayoutCurrent(entry, version));
+    const stale = Boolean(entry && hasStored && version && !layoutCurrentForLibrary(entry, version, mode));
     if (!stale && !vendorLayoutPending.has(page)) continue;
     try {
-      const laid = await ingestPageLayout(page, isStale);
+      const laid = await ingestPageLayout(page, () => isStale() || !layoutAttemptLive(epoch), epoch);
       if (laid) {
         vendorLayoutPending.delete(page);
         upgraded.push(page);
@@ -9084,14 +9493,16 @@ async function retryPendingVendorLayouts(isStale) {
   return upgraded;
 }
 
-async function ingestPageLayout(n, isStale) {
+async function ingestPageLayout(n, isStale, epoch) {
+  if (!layoutAttemptLive(epoch)) return null;
   if (!isStale()) layoutNotice = "";
   await loadPdfLayout();
+  if (!layoutAttemptLive(epoch) || isStale()) return null;
   const mode = pdfEngineMode();
   if (mode === "legacy") return ingestReadoutLayout(n, isStale);
   if (mode === "fixture" && n === 1) return ingestFixtureLayout(n, isStale);
   if (mode === "local-ocr" || mode === "cloud-ocr") {
-    const laid = await ingestVendorLayout(n, mode, isStale);
+    const laid = await ingestVendorLayout(n, mode, isStale, epoch);
     if (laid) {
       vendorLayoutReason.delete(n);
       return laid;
@@ -9114,8 +9525,7 @@ async function pdfByteHash(bytes = pdfBytes) {
 
 async function readStoredLayout(key) {
   try {
-    const bag = await chrome.storage.local.get(key);
-    return bag?.[key] || null;
+    return await readLayoutCache(key);
   } catch {
     return null;
   }
@@ -9123,7 +9533,7 @@ async function readStoredLayout(key) {
 
 async function writeStoredLayout(key, page) {
   try {
-    await chrome.storage.local.set({ [key]: cacheableLayout(page) });
+    await writeLayoutCache(key, page);
   } catch {
     /* storage is optional */
   }
@@ -9131,10 +9541,22 @@ async function writeStoredLayout(key, page) {
 
 const vendorLayoutPending = new Set();
 const vendorLayoutReason = new Map();
-let vendorLayoutChain = Promise.resolve();
-const vendorLayoutInflight = new Map();
+const vendorLayoutLane = createPrioritySerialLane();
 let layoutAbort = new AbortController();
 let layoutEpoch = 0;
+let layoutClosed = false;
+
+/** Stop bumps layoutEpoch. An attempt keeps the epoch it was scheduled with. */
+function layoutAttemptLive(epoch) {
+  return !layoutClosed && epoch === layoutEpoch && !layoutAbort.signal.aborted;
+}
+
+/** Page close: stop fill-ins, the document job, and any layout POST that has not started. */
+function closeViewerWork() {
+  layoutClosed = true;
+  abortTranslateSession(session);
+  abortInflightLayouts();
+}
 
 function abortError() {
   const error = new Error("layout aborted");
@@ -9143,8 +9565,20 @@ function abortError() {
   return error;
 }
 
-/** Drop in-flight layout POSTs. The sidecar is one request at a time; a closed tab must not keep it. */
-function abortInflightLayouts() {
+/** A retry that then succeeds must not leave the zoning-failure line up. */
+function clearLayoutFallbackStatus() {
+  const showing = layoutNotice === LAYOUT_FALLBACK_STATUS || $("status")?.textContent === LAYOUT_FALLBACK_STATUS;
+  if (layoutNotice === LAYOUT_FALLBACK_STATUS) layoutNotice = "";
+  if (showing && !pdfTranslateBusy(session)) setStatus("");
+}
+
+/**
+ * Drop layout POSTs that have not been sent. An in-flight POST keeps the
+ * signal it already started with; this aborts that signal too. The lane
+ * generation fails anything still queued, so Stop cannot leave a later
+ * page to start after the click. The viewer stays open for a retranslate.
+ */
+function cancelQueuedVendorLayouts() {
   layoutEpoch += 1;
   try {
     layoutAbort.abort();
@@ -9152,33 +9586,48 @@ function abortInflightLayouts() {
     /* already aborted */
   }
   layoutAbort = new AbortController();
-  vendorLayoutInflight.clear();
-  vendorLayoutChain = Promise.resolve();
+  vendorLayoutLane.reset();
 }
 
-/** One sidecar POST at a time. A second caller for the same page shares the first. */
-function runVendorLayoutHttp(page, task) {
+/** Drop in-flight layout POSTs. The sidecar is one request at a time; a closed tab must not keep it. */
+function abortInflightLayouts() {
+  abortBackgroundFills();
+  cancelQueuedVendorLayouts();
+}
+
+/**
+ * One sidecar POST at a time. Retry backoff waits outside the lane, so the
+ * page on screen is not stuck behind another page's 429/5xx sleeps.
+ */
+function postVendorLayout(page, run, epoch) {
+  const stopped = () => docPhase === "stopped" || !layoutAttemptLive(epoch);
+  if (stopped()) return Promise.reject(abortError());
   const key = Number(page) || 0;
-  const existing = vendorLayoutInflight.get(key);
-  if (existing) return existing;
-  const epoch = layoutEpoch;
-  const signal = layoutAbort.signal;
-  const run = () => {
-    if (epoch !== layoutEpoch || signal.aborted) throw abortError();
-    return task(signal);
-  };
-  const job = vendorLayoutChain.then(run, run);
-  vendorLayoutInflight.set(key, job);
-  const settled = job.then(() => {
-    if (vendorLayoutInflight.get(key) === job) vendorLayoutInflight.delete(key);
-  }, () => {
-    if (vendorLayoutInflight.get(key) === job) vendorLayoutInflight.delete(key);
+  let notified = false;
+  return runLaneAttempts(vendorLayoutLane, key, (attempt) => {
+    if (stopped()) throw abortError();
+    return run({
+      signal: layoutAbort.signal,
+      maxAttempts: 1,
+      shouldStop: stopped,
+      onNetworkFailure: attempt === 0 && !notified
+        ? () => {
+          notified = true;
+        }
+        : undefined
+    });
+  }, {
+    priority: key === Number(pageNum),
+    abortError,
+    shouldStop: stopped
   });
-  if (epoch === layoutEpoch) vendorLayoutChain = settled;
-  return job;
 }
 
-async function ingestVendorLayout(n, mode, isStale) {
+async function ingestVendorLayout(n, mode, isStale, epoch) {
+  if (docPhase === "stopped" || !layoutAttemptLive(epoch)) {
+    vendorLayoutReason.set(n, "aborted");
+    return null;
+  }
   const settings = cachedPdfLayout || normalizePdfLayout(null);
   if (mode === "cloud-ocr" && !shouldFetchCloud(settings)) {
     if (!isStale()) layoutNotice = LAYOUT_EMPTY_KEY_STATUS;
@@ -9196,29 +9645,74 @@ async function ingestVendorLayout(n, mode, isStale) {
   const hash = await pdfByteHash();
   const key = layoutCacheKey({ hash, page: n, mode });
   const version = await layoutVersionNow();
+  // The full probe, including the 8765 retries, keeps running for saved
+  // translations. Zoning waits for the IndexedDB read, and only until
+  // LIBRARY_ZONE_HARD_MS from the start of the open. Past that cap the page
+  // requests zoning. settleFreshZone and the two current-layout checks still
+  // refuse to overwrite a layout that arrives later. A blocked open is
+  // noticed from the flag and does not sit out the 10s deadline.
+  // The migration GET has to be in flight before the zoning decision. A slow
+  // IndexedDB open used to hold that GET past the 1.5s cap, so page 1 was
+  // zoned before the unknown legacy row existed.
+  void ensureLibraryDocument();
+  const zoneWait = await waitForFirstZone(hash, {
+    layoutRead: () => readStoredLayout(key),
+    engine: mode
+  });
+  const zone = await waitForZoneMigration(hash, zoneWait, {
+    page: n,
+    version,
+    engine: mode
+  });
+  if (zone.document && (!libraryDoc || libraryDoc.hash !== hash)) {
+    if (!zone.document.hash) zone.document.hash = hash;
+    libraryDoc = zone.document;
+  }
+  // Stop during the raster or the zone wait. The epoch was captured when this
+  // attempt was scheduled, so a POST that has not been sent does not start.
+  if (docPhase === "stopped" || !layoutAttemptLive(epoch) || isStale()) {
+    vendorLayoutReason.set(n, "aborted");
+    return null;
+  }
   // A source-v3 entry with no revision, or an older revision, is not the current
   // block structure. Library page layouts follow the same rule.
-  let mapped = storedLayoutCurrent(await readStoredLayout(key), version)
-    || storedLayoutCurrent(libraryEntry(n), version);
+  let mapped = layoutCurrentForEngine(zone.cached, version, mode)
+    || layoutCurrentForLibrary(libraryEntry(n), version, mode);
   let recomputed = false;
   if (!mapped) {
     try {
-      const envelope = await runVendorLayoutHttp(n, (signal) => (mode === "cloud-ocr"
-        ? fetchCloudEnvelope({
+      const envelope = await postVendorLayout(n, ({ signal, maxAttempts, onNetworkFailure, shouldStop }) => {
+        if (docPhase === "stopped" || !layoutAttemptLive(epoch)) throw abortError();
+        const notify = () => {
+          if (typeof onNetworkFailure === "function") onNetworkFailure();
+          if (isStale()) return;
+          layoutNotice = LAYOUT_FALLBACK_STATUS;
+          if (!pdfTranslateBusy(session)) setStatus(layoutNotice);
+        };
+        const stop = () => docPhase === "stopped" || (typeof shouldStop === "function" && shouldStop());
+        return mode === "cloud-ocr"
+          ? fetchCloudEnvelope({
             baseUrl: settings.cloudBaseUrl,
             apiKey: settings.cloudApiKey,
             model: settings.cloudModel,
             pngDataUrl: png,
-            signal
+            signal,
+            maxAttempts,
+            shouldStop: stop,
+            onNetworkFailure: notify
           })
-        : fetchLocalEnvelope({
+          : fetchLocalEnvelope({
             baseUrl: settings.localBaseUrl,
             page: n,
             imageBase64: png.replace(/^data:image\/png;base64,/, ""),
             pixelWidth: raster.pixelWidth,
             pixelHeight: raster.pixelHeight,
-            signal
-          })));
+            signal,
+            maxAttempts,
+            shouldStop: stop,
+            onNetworkFailure: notify
+          });
+      }, epoch);
       let images = null;
       try {
         const ops = await page.getOperatorList();
@@ -9229,8 +9723,23 @@ async function ingestVendorLayout(n, mode, isStale) {
       attachFontRealNames(content.items, page.commonObjs);
       mapped = vendorLayoutToBlocks(envelope, { items: content.items, viewport, images, page: n });
       if (version) mapped.layoutVersion = version;
-      await writeStoredLayout(key, mapped);
-      recomputed = true;
+      // The engine that produced this POST. A mismatch re-zone used to skip
+      // the stamp whenever recomputed was false, and the row was saved as text-layer.
+      stampProducedEngine(mapped, mode);
+      const settled = await settleFreshZone({
+        hash,
+        page: n,
+        version,
+        reason: zone.reason,
+        engine: mode,
+        cachedRead: () => (zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null),
+        write: () => {
+          if (!layoutAttemptLive(epoch)) return Promise.resolve();
+          return writeStoredLayout(key, mapped);
+        }
+      });
+      if (settled.layout) mapped = settled.layout;
+      recomputed = settled.recomputed;
       vendorLayoutPending.delete(n);
     } catch (err) {
       if (err?.name === "AbortError" || err?.code === "aborted") {
@@ -9257,8 +9766,31 @@ async function ingestVendorLayout(n, mode, isStale) {
     }
   }
   if (isStale()) return null;
-  const blocks = await cropLayoutBlocks(raster, page, mapped.blocks, n, isStale);
+  const arrived = currentLayoutIfArrived({
+    hash,
+    page: n,
+    version,
+    engine: mode,
+    cached: zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null
+  });
+  if (arrived) {
+    mapped = arrived;
+    recomputed = false;
+  }
+  let blocks = await cropLayoutBlocks(raster, page, mapped.blocks, n, isStale);
   if (!blocks || isStale()) return null;
+  const latePaint = currentLayoutIfArrived({
+    hash,
+    page: n,
+    version,
+    engine: mode,
+    cached: zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null
+  });
+  if (latePaint) {
+    mapped = latePaint;
+    recomputed = false;
+    blocks = latePaint.blocks;
+  }
   const layout = stampBodyFont({
     ...mapped,
     kind: "blocks",
@@ -9266,8 +9798,25 @@ async function ingestVendorLayout(n, mode, isStale) {
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
+  if (recomputed && !layoutAttemptLive(epoch)) return null;
+  if (recomputed) stampProducedEngine(layout);
   setPageLayout(n, layout);
-  if (recomputed) persistPageLayout(n).catch(() => {});
+  if (!isStale()) clearLayoutFallbackStatus();
+  if (recomputed && layoutAttemptLive(epoch)) persistPageLayout(n).catch(() => {});
+  else if (zone.reason === "cap" || zone.reason === "unavailable") {
+    void whenZoneReadSettles(hash).then((entry) => {
+      if (!layoutAttemptLive(epoch) || entry?.state === "error") return;
+      const still = currentLayoutIfArrived({
+        hash,
+        page: n,
+        version,
+        engine: mode,
+        cached: zone.layoutToken?.state === "ok" ? zone.layoutToken.value : null
+      });
+      if (still || !layoutAttemptLive(epoch)) return;
+      persistPageLayout(n).catch(() => {});
+    });
+  }
   return layout;
 }
 
@@ -9335,6 +9884,7 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
     blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
+  if (!fallback) stampTextLayerEngine(layout);
   // The quick stand-in (persist: false) is replaced by the vendor layout.
   // Re-anchoring it marks 位置近似 notes lost, then the real layout writes them back.
   setPageLayout(n, layout, { reanchor: options.persist !== false });
@@ -9344,6 +9894,8 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
 }
 
 async function renderPageRaster(page) {
+  const hold = viewerUnderTest() ? Number(globalThis.__oiHoldRasterMs) || 0 : 0;
+  if (hold > 0) await new Promise((resolve) => setTimeout(resolve, hold));
   const viewport = page.getViewport({ scale: CROP_SCALE });
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.floor(viewport.width));
@@ -9401,8 +9953,10 @@ async function ingestReadoutLayout(n, isStale) {
 
 async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
   if (skipLocked.has(n)) return [];
-  const isStale = () => gen !== restoreGen || translatingDoc !== docId;
-  const layout = getPageLayout(n) || (await ingestPageLayout(n, isStale));
+  const epoch = layoutEpoch;
+  if (docPhase === "stopped" || !layoutAttemptLive(epoch)) return [];
+  const isStale = () => gen !== restoreGen || translatingDoc !== docId || docPhase === "stopped" || !layoutAttemptLive(epoch);
+  const layout = getPageLayout(n) || (await ingestPageLayout(n, isStale, epoch));
   if (!layout || isStale()) return [];
   if (work) {
     await ensureTitleStructure(n, layout);
@@ -9488,6 +10042,11 @@ async function openPdfData(data, title) {
 }
 
 async function adoptDoc(doc, title) {
+  // A new document, including the same PDF opened again in this tab, may
+  // adopt what was saved. The set stays for a retry that does not adopt:
+  // those pages were saved without a failed flag, and adopting them would
+  // drop bypassCache on the failed batch.
+  librarySourceSent.clear();
   if (pdfDoc) {
     try {
       await pdfDoc.destroy();
@@ -9495,7 +10054,9 @@ async function adoptDoc(doc, title) {
       /* previous doc may already be destroyed */
     }
   }
+  layoutClosed = false;
   abortTranslateSession(session);
+  abortBackgroundFills();
   pdfDoc = doc;
   pageNum = 1;
   sourceZoomTouched = false;
@@ -9549,7 +10110,10 @@ async function adoptDoc(doc, title) {
   // Read this document's hint key only. The local area also holds layout
   // cache and notes, so opening must not scan every stored item.
   void resolveNotesDocHash().then(async (hash) => {
-    if (hash && hash !== "nohash") await notesPrefsSession.loadDocHint(hash);
+    if (hash && hash !== "nohash") {
+      await notesPrefsSession.loadDocHint(hash);
+      void flushStagedNotes(hash, { quiet: true });
+    }
     notesUi?.onDocument(hash);
   });
   await buildPages();
@@ -10146,8 +10710,9 @@ function showOpenedLayout(layout, isStale) {
 }
 
 /** A stored text-layer fallback stays on screen while the vendor layout is tried again. */
-async function upgradeStoredFallback(n, mode, isStale) {
-  const laid = await ingestVendorLayout(n, mode, isStale);
+async function upgradeStoredFallback(n, mode, isStale, epoch) {
+  if (docPhase === "stopped" || !layoutAttemptLive(epoch)) return;
+  const laid = await ingestVendorLayout(n, mode, isStale, epoch);
   vendorLayoutReason.delete(n);
   if (!laid || isStale()) return;
   showOpenedLayout(laid, isStale);
@@ -10304,11 +10869,13 @@ async function loadCurrentPageText(explicitPage) {
   textLoadPage = n;
   const translatingDoc = docId;
   const isStale = () => ticket !== textGen || translatingDoc !== docId;
+  const epoch = layoutEpoch;
   await primeKnownPages();
   if (isStale()) return;
   const version = knownLayoutVersion || await layoutVersionNow();
   const openedStored = getPageLayout(n);
-  if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version)) {
+  const openedEngine = pdfEngineMode();
+  if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version) && layoutServesEngine(openedStored, openedEngine)) {
     if (!showOpenedLayout(openedStored, isStale)) return;
     const saved = await savedTranslationForNav(n);
     if (!libraryDoc) paintLateLibrary(n, ticket);
@@ -10332,8 +10899,8 @@ async function loadCurrentPageText(explicitPage) {
     refreshDocStatus();
     renderArticle();
     updateTranslateControls();
-    if (!storedLayoutCurrent(openedStored, version) && (pdfEngineMode() === "local-ocr" || pdfEngineMode() === "cloud-ocr")) {
-      upgradeStoredFallback(n, pdfEngineMode(), isStale).catch(() => {});
+    if (!layoutCurrentForEngine(openedStored, version, openedEngine) && (openedEngine === "local-ocr" || openedEngine === "cloud-ocr")) {
+      upgradeStoredFallback(n, pdfEngineMode(), () => isStale() || !layoutAttemptLive(epoch), epoch).catch(() => {});
     }
     return;
   }
@@ -10393,7 +10960,7 @@ async function loadCurrentPageText(explicitPage) {
       }
       if (!pdfTranslateBusy(session) && !layoutNotice) setStatus(LAYOUT_STARTING_STATUS);
       updateTranslateControls();
-      const laid = await ingestVendorLayout(n, mode, isStale);
+      const laid = await ingestVendorLayout(n, mode, () => isStale() || !layoutAttemptLive(epoch), epoch);
       if (!laid || isStale()) {
         const reason = vendorLayoutReason.get(n) || "";
         vendorLayoutReason.delete(n);
@@ -10413,7 +10980,7 @@ async function loadCurrentPageText(explicitPage) {
     }
     const layout = mode === "text-layer" && pdfEngineMode() === "legacy"
       ? await ingestTextLayerLayout(n, isStale)
-      : await ingestPageLayout(n, isStale);
+      : await ingestPageLayout(n, () => isStale() || !layoutAttemptLive(epoch), epoch);
     if (!showOpenedLayout(layout, isStale)) return;
     await ensuring;
     const saved = preloadedSaved || await savedTranslationForNav(n);
@@ -10528,6 +11095,10 @@ function updateTranslateControls() {
   if (menuRetranslate) menuRetranslate.disabled = ui.retranslateDisabled;
   $("stopTranslate").hidden = ui.stopHidden;
   $("stopTranslate").disabled = ui.stopDisabled;
+  if (!pdfTranslateBusy(session) && backgroundSessions.active) {
+    $("stopTranslate").hidden = false;
+    $("stopTranslate").disabled = false;
+  }
   syncExportControls();
   syncMirrorZoomButtons();
 }

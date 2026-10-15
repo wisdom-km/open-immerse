@@ -2844,3 +2844,146 @@ button:disabled { opacity: 0.45; cursor: default; }
     transition: none;
   }
 }
+
+.oi-lib-slot {
+  display: flex;
+  align-items: center;
+  margin-right: 8px;
+}
+.oi-lib-slot[hidden] { display: none; }
+.toolbar button.oi-lib-chip {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 10px 0 8px;
+  border-radius: 13px;
+  background: var(--oi-reader-well);
+  color: var(--oi-reader-ink-2);
+  font-family: var(--oi-reader-ui-font);
+  font-size: 12px;
+  font-weight: 500;
+  gap: 6px;
+  display: inline-flex;
+  align-items: center;
+}
+.toolbar button.oi-lib-chip:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--oi-reader-hover) 100%, var(--oi-reader-well));
+}
+.toolbar button.oi-lib-chip.is-warn {
+  background: color-mix(in srgb, var(--oi-reader-warn) 10%, transparent);
+  color: var(--oi-reader-warn);
+}
+.toolbar button.oi-lib-chip:focus-visible {
+  outline: 2px solid var(--oi-reader-focus);
+  outline-offset: 2px;
+}
+.oi-lib-label { font-variant-numeric: tabular-nums; }
+.oi-lib-pop {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  z-index: 30;
+  width: 320px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: var(--oi-reader-surface);
+  color: var(--oi-reader-ink);
+  border: 1px solid var(--oi-reader-line);
+  box-shadow: var(--oi-reader-panel-shadow, 0 8px 24px rgba(34, 32, 28, 0.12));
+  font-family: var(--oi-reader-ui-font);
+}
+.oi-lib-pop.is-blocked { width: 340px; }
+.oi-lib-pop h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+.oi-lib-pop .safe { margin: 0 0 12px; font-size: 12px; line-height: 1.5; color: var(--oi-reader-ink); font-weight: 500; }
+.oi-lib-pop .oi-lib-reason,
+.oi-lib-pop .oi-lib-hint,
+.oi-lib-pop .oi-lib-since,
+.oi-lib-pop .oi-lib-poll { font-size: 12px; color: var(--oi-reader-muted); line-height: 1.5; }
+.oi-lib-pop .oi-lib-fail { font-size: 12px; color: var(--oi-reader-warn); }
+.oi-lib-retry-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+.oi-lib-poll { font-size: 11px; }
+.oi-lib-primary {
+  height: 28px;
+  border-radius: 7px;
+  padding: 0 12px;
+  border: 0;
+  background: var(--oi-reader-ink);
+  color: var(--oi-reader-tooltip-fg, var(--oi-reader-paper));
+  font-size: 13px;
+  font-weight: 500;
+}
+.oi-lib-primary:disabled { opacity: 0.45; }
+.oi-persist-card {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  z-index: 28;
+  width: min(320px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--oi-reader-surface);
+  color: var(--oi-reader-ink);
+  border: 1px solid var(--oi-reader-line);
+  border-left: 3px solid var(--oi-reader-warn);
+  box-shadow: var(--oi-reader-panel-shadow, 0 8px 24px rgba(34, 32, 28, 0.12));
+  font-family: var(--oi-reader-ui-font);
+}
+.oi-persist-card h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+.oi-persist-card p { margin: 0 0 10px; font-size: 12px; line-height: 1.5; }
+.oi-persist-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.oi-persist-link {
+  border: 0;
+  background: transparent;
+  color: var(--oi-reader-focus);
+  font-size: 13px;
+  font-weight: 500;
+}
+.oi-persist-primary {
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 12px;
+  background: var(--oi-reader-ink);
+  color: var(--oi-reader-tooltip-fg, var(--oi-reader-paper));
+  font-size: 13px;
+  font-weight: 500;
+}
+.oi-persist-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: var(--oi-reader-muted);
+}
+@media (max-width: 719px) {
+  .oi-lib-slot { flex: 0 0 auto; }
+  .toolbar button.oi-lib-chip {
+    width: 26px;
+    min-width: 26px;
+    flex: 0 0 26px;
+    padding: 0;
+    justify-content: center;
+  }
+  .oi-lib-chip .oi-lib-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .oi-lib-pop.is-sheet {
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 70vh;
+    overflow: auto;
+    border-radius: 14px 14px 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oi-lib-chip.is-recovered { transition: none; }
+}

@@ -108,8 +108,8 @@ test("重译本页 bypasses library early-returns; 翻译 still short-circuits",
   assert.match(force, /isSkipOnlyPage\(/);
   assert.match(force, /blocksForForceRetranslate\(/);
   assert.match(force, /async function forceRetranslateCurrentPage/);
-  assert.match(force, /ensureTitleStructure\(targetPage, sourceLayout, \{ force: true \}\)/);
-  const refresh = force.indexOf("ensureTitleStructure(targetPage, sourceLayout, { force: true })");
+  assert.match(force, /ensureTitleStructure\(targetPage, zonedLayout, \{ force: true \}\)/);
+  const refresh = force.indexOf("ensureTitleStructure(targetPage, zonedLayout, { force: true })");
   const reread = force.indexOf("liveOriginals", refresh);
   const blocksCall = force.indexOf("translatePageBlocks", refresh);
   assert.ok(refresh > 0 && reread > refresh && blocksCall > reread);

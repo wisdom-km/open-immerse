@@ -26,6 +26,7 @@ import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import { cacheableLayout, currentLayoutVersion, layoutCacheKey, storedLayoutCurrent } from "../lib/pdf-layout-client.js";
 import { isSkipOnlyPage, sourceReuseHash } from "../lib/pdf-library.js";
 import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
+import { e2eLibrarySceneResetSource, storedLibraryPagesSource } from "./helpers/library-observe.mjs";
 import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs";
 
 installOwnedTmpGuard(["oi-layout-rev-", "com.google.Chrome.", ".com.google.Chrome."]);
@@ -234,6 +235,7 @@ function stubSource(cache, options = {}) {
   const params = new URLSearchParams(location.search);
   const mode = params.get("oiAuto") || "";
   if (!mode) return;
+  ${e2eLibrarySceneResetSource()}
   const scene = params.get("oiScene") || "";
   if (sessionStorage.getItem("oiLayoutFails") == null) sessionStorage.setItem("oiLayoutFails", "${fails}");
   if (sessionStorage.getItem("oiLayoutGate") == null) sessionStorage.setItem("oiLayoutGate", "${gate}");
@@ -375,6 +377,7 @@ function stubSource(cache, options = {}) {
   };
   globalThis.chrome = {
     runtime: {
+      id: "oi-e2e",
       getURL() { return new URL("./vendor/pdf.worker.min.mjs", location.href).href; },
       sendMessage(message) {
         const type = message && message.type;
@@ -533,7 +536,9 @@ function sleep(ms) {
   return new Promise((done) => setTimeout(done, ms));
 }
 
-const READ = `(() => {
+const READ = `(async () => {
+  ${storedLibraryPagesSource()}
+  const storedPages = await oiStoredLibraryPages();
   const shown = [...document.querySelectorAll("[data-bid]")].map((el) => ({
     bid: el.dataset.bid || "",
     zh: [...el.children].filter((child) => child.classList.contains("rf-zh")).map((child) => child.textContent || "").join("").trim()
@@ -557,8 +562,8 @@ const READ = `(() => {
     caption7: document.querySelector("#readerFlow [data-src-page='7'][data-label='figure'] figcaption .rf-zh, #readerFlow figcaption[data-page='7'] .rf-zh")?.textContent || "",
     batches: (window.__oiAuto && window.__oiAuto.batches || []).length,
     messages: (window.__oiAuto && window.__oiAuto.messages) || [],
-    library: (window.__oiAuto && window.__oiAuto.library) || [],
-    saved: (window.__oiAuto && window.__oiAuto.saved) || [],
+    library: storedPages,
+    saved: storedPages,
     layouts: (window.__oiAuto && window.__oiAuto.layouts) || [],
     layoutAttempts: (window.__oiAuto && window.__oiAuto.layoutAttempts) || [],
     aborted: (window.__oiAuto && window.__oiAuto.aborted) || [],
