@@ -5,13 +5,13 @@ import "fake-indexeddb/auto";
 
 import { createLibraryChip } from "../lib/library-chip.js";
 import { LIBRARY_FORMAT, LIBRARY_SCHEMA, LibraryStoreError, createLibraryStore, stripSecrets } from "../lib/library-store.js";
-import { createImportBus, createMemoryLocks, createPresence } from "../lib/import-run.js";
+import { SESSION_LATER, SESSION_PAUSED, createImportBus, createMemoryLocks, createPresence } from "../lib/import-run.js";
 import { NOTES_FORMAT } from "../lib/notes-io.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
 import { createIdbLibraryFactory } from "../lib/platform/idb-backend.js";
 import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
 import { readPersistCardState } from "../lib/persist-card.js";
-import { attachImportReader, mountDataPanel, readDataFocus } from "../options/data-panel.js";
+import { attachImportReader, bindImportChip, mountDataPanel, readDataFocus } from "../options/data-panel.js";
 
 const HASH_A = "aaaaaaaaaaaaaaaa";
 const HASH_B = "bbbbbbbbbbbbbbbb";
@@ -994,10 +994,24 @@ test("F4UI chip states have no import delay and respect reduced motion", async (
       for (let i = queue.length - 1; i >= 0; i -= 1) if (queue[i].ms <= 0) queue.splice(i, 1);
     }
     const host = document.createElement("div");
-    const chip = createLibraryChip({ host, timers, moveDelay: 800, doneHoldMs: 3000, fadeMs: 200 });
+    const chip = createLibraryChip({ host, timers, moveDelayMs: 800, doneHoldMs: 3000, fadeMs: 200 });
     chip.setImport({ phase: "running", done: 0, total: 4, holds: true });
     assert.match(host.textContent, /正在导入 0\/4/);
     assert.equal(queue.length, 0);
+    chip.startMove();
+    assert.equal(queue.length, 1);
+    assert.equal(queue[0].ms, 800);
+    chip.finishMove();
+    assert.equal(queue.length, 0);
+    chip.setImport({ phase: "incomplete", done: 1, total: 2, holds: true, source: "json" });
+    [...host.querySelectorAll("button")][0].click();
+    assert.match(host.textContent, /上次的导出文件没有导完/);
+    assert.match(host.textContent, /重新选择文件…/);
+    assert.equal(host.textContent.includes("重新选择文件夹"), false);
+    assert.equal(host.textContent.includes("读不到上次的"), false);
+    chip.setImport({ phase: "incomplete", done: 1, total: 2, holds: true, source: "folder", folder: "files" });
+    assert.match(host.textContent, /重新选择文件夹…/);
+    chip.closePop();
     chip.setImport({ phase: "paused", done: 1, total: 4, holds: true });
     assert.match(host.textContent, /已暂停 1\/4/);
     chip.setImport({ phase: "error", done: 1, total: 4, failed: 2, holds: true, errors: [
@@ -1372,5 +1386,247 @@ test("a few hundred papers keep each checkpoint bounded", { timeout: 180000 }, a
     } finally {
       restore();
     }
+  }
+});
+
+async function coordinatorPair(tag) {
+  const stamp = `${tag}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const [modA, modB] = await Promise.all([
+    import(`../lib/import-run.js?${stamp}-a`),
+    import(`../lib/import-run.js?${stamp}-b`)
+  ]);
+  assert.notEqual(modA.createImportCoordinator, modB.createImportCoordinator);
+  return { modA, modB };
+}
+
+function onePaperDir() {
+  return dir("files", {
+    [HASH_A]: paper(HASH_A, [page(1, "甲")], { meta: { title: "论文甲", rev: 1, updatedAt: 1 } })
+  });
+}
+
+test("DATA-06 two module instances hand the import across BroadcastChannel", async () => {
+  const restore = installDom();
+  try {
+    const store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("handoff");
+    const gates = [];
+    const beforePaper = () => new Promise((resolve) => gates.push(resolve));
+    const data = modA.createImportCoordinator({ store, beforePaper });
+    const reader = modB.createImportCoordinator({ store, beforePaper });
+    assert.notEqual(data.id, reader.id);
+    assert.notEqual(data.id, "import-1");
+    assert.notEqual(reader.id, "import-1");
+    data.attach("data");
+    reader.attach("reader");
+    await flush(20);
+    const job = data.importFolder(library());
+    await until(() => gates.length >= 1);
+    gates.shift()();
+    await until(() => gates.length >= 1);
+    const closing = data.detach("data");
+    gates.shift()();
+    await closing;
+    await until(() => gates.length >= 1, 120);
+    assert.equal(await store.getPaper(HASH_B), null);
+    gates.shift()();
+    await flush(40);
+    assert.notEqual(await store.getPaper(HASH_B), null);
+    await job;
+    data.destroy();
+    reader.destroy();
+    await store.closeLibrary?.();
+  } finally {
+    restore();
+  }
+});
+
+test("a running import ignores lock-free instead of clearing its paper list", async () => {
+  const restore = installDom();
+  let releaseWrite = null;
+  let releaseRelist = null;
+  try {
+    const store = storeFor("memory");
+    const children = {
+      [HASH_A]: paper(HASH_A, [page(1, "甲")], { meta: { title: "甲", rev: 1, updatedAt: 1 } }),
+      [HASH_B]: paper(HASH_B, [page(1, "乙")], { meta: { title: "乙", rev: 1, updatedAt: 1 } })
+    };
+    let listings = 0;
+    const handle = {
+      kind: "directory",
+      name: "files",
+      permission: "granted",
+      async queryPermission() { return "granted"; },
+      async requestPermission() { return "granted"; },
+      entries() {
+        listings += 1;
+        const pairs = Object.entries(children).map(([name, child]) => [name, child]);
+        if (listings === 1) return pairs;
+        return {
+          async *[Symbol.asyncIterator]() {
+            await new Promise((resolve) => { releaseRelist = resolve; });
+            for (const pair of pairs) yield pair;
+          }
+        };
+      }
+    };
+    let writes = 0;
+    const original = store.writeImportMeta.bind(store);
+    store.writeImportMeta = async (value) => {
+      const result = await original(value);
+      writes += 1;
+      if (writes === 2) await new Promise((resolve) => { releaseWrite = resolve; });
+      return result;
+    };
+    const { modA, modB } = await coordinatorPair("race");
+    const reader = modA.createImportCoordinator({ store });
+    const other = modB.createImportCoordinator({ store });
+    assert.notEqual(reader.id, other.id);
+    other.attach("data");
+    reader.attach("reader");
+    await flush(20);
+    const job = reader.importFolder(handle);
+    await until(() => typeof releaseWrite === "function");
+    await other.detach("data");
+    await flush(30);
+    assert.equal(listings, 1);
+    releaseWrite();
+    releaseWrite = null;
+    await job;
+    assert.notEqual(await store.getPaper(HASH_B), null);
+    const saved = await store.readImportMeta();
+    assert.equal(saved == null || saved.phase !== "interrupted", true);
+    reader.destroy();
+    other.destroy();
+    await store.closeLibrary?.();
+  } finally {
+    releaseWrite?.();
+    releaseRelist?.();
+    restore();
+  }
+});
+
+test("F4UI-26 the reader chip shows import progress from another page", async () => {
+  const restore = installDom();
+  try {
+    const store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("chip");
+    let release = null;
+    const data = modA.createImportCoordinator({
+      store,
+      beforePaper: () => new Promise((resolve) => { release = resolve; })
+    });
+    const reader = modB.createImportCoordinator({ store });
+    assert.notEqual(data.id, reader.id);
+    const queue = [];
+    let seq = 0;
+    const timers = {
+      setTimeout(fn, ms) {
+        seq += 1;
+        queue.push({ id: seq, fn, ms });
+        return seq;
+      },
+      clearTimeout(id) {
+        const index = queue.findIndex((item) => item.id === id);
+        if (index >= 0) queue.splice(index, 1);
+      }
+    };
+    const host = document.createElement("div");
+    const chip = createLibraryChip({ host, timers, moveDelayMs: 800, doneHoldMs: 30000, fadeMs: 200 });
+    const binding = bindImportChip(chip, { coordinator: reader, store });
+    await flush(20);
+    const startedAt = Date.now();
+    const job = data.importFolder(onePaperDir());
+    await until(() => /正在导入 0\/1|正在导入 0 篇/.test(host.textContent));
+    assert.ok(Date.now() - startedAt < 300, `chip waited ${Date.now() - startedAt}ms`);
+    assert.equal(queue.length, 0);
+    release();
+    await job;
+    await until(() => host.textContent.includes("✓ 已导入 1 篇"));
+    binding.destroy();
+    data.destroy();
+    chip.destroy();
+    await store.closeLibrary?.();
+  } finally {
+    restore();
+  }
+});
+
+test("pause and 以后再说 survive in chrome.storage.session", async () => {
+  const restore = installDom();
+  const previous = globalThis.chrome;
+  const bag = new Map();
+  globalThis.chrome = {
+    storage: {
+      session: {
+        get(keys) {
+          const out = {};
+          const list = Array.isArray(keys) ? keys : (keys == null ? [...bag.keys()] : [keys]);
+          for (const key of list) if (bag.has(key)) out[key] = bag.get(key);
+          return Promise.resolve(out);
+        },
+        set(patch) {
+          for (const [key, value] of Object.entries(patch || {})) bag.set(key, value);
+          return Promise.resolve();
+        }
+      }
+    }
+  };
+  try {
+    const store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("session");
+    const gates = [];
+    const holder = modA.createImportCoordinator({
+      store,
+      beforePaper: () => new Promise((resolve) => gates.push(resolve))
+    });
+    const other = modB.createImportCoordinator({ store });
+    assert.notEqual(holder.id, other.id);
+    const job = holder.importFolder(library());
+    await until(() => gates.length >= 1);
+    await other.pause();
+    gates.shift()();
+    await job;
+    assert.equal(bag.get(SESSION_PAUSED), true);
+    assert.equal(await store.getPaper(HASH_B), null);
+    const reloaded = modB.createImportCoordinator({ store });
+    reloaded.attach("reader");
+    await flush(30);
+    assert.equal(reloaded.state().phase, "paused");
+    assert.equal(await store.getPaper(HASH_B), null);
+    holder.destroy();
+    other.destroy();
+    reloaded.destroy();
+    bag.clear();
+    await store.writeImportMeta({
+      phase: "interrupted",
+      source: "folder",
+      folderName: "files",
+      paperIds: [HASH_A, HASH_B],
+      doneDocs: [HASH_A],
+      total: 2,
+      permission: "granted",
+      directoryHandle: library("granted")
+    });
+    const first = modA.createImportCoordinator({ store });
+    await first.later();
+    assert.equal(bag.get(SESSION_LATER), true);
+    const again = [];
+    const second = modB.createImportCoordinator({
+      store,
+      beforePaper: () => new Promise((resolve) => again.push(resolve))
+    });
+    second.attach("reader");
+    await flush(30);
+    assert.equal(second.state().later, true);
+    assert.notEqual(second.state().phase, "running");
+    assert.equal(again.length, 0);
+    assert.equal(await store.getPaper(HASH_B), null);
+    first.destroy();
+    second.destroy();
+    await store.closeLibrary?.();
+  } finally {
+    globalThis.chrome = previous;
+    restore();
   }
 });
