@@ -27,7 +27,10 @@
         <div id="setResults" class="set-results" hidden></div>
         <nav class="nav-tabs" role="tablist" aria-label="设置页">
           <p class="set-label">常规</p>
-          <button type="button" role="tab" data-nav="translate" aria-selected="true" aria-controls="panel-translate">翻译</button>
+          <div class="set-nav-item">
+            <button type="button" role="tab" data-nav="translate" aria-selected="true" aria-controls="panel-translate">翻译</button>
+            <span class="set-badge" data-badge="translate" hidden>需处理</span>
+          </div>
           <div class="set-nav-item">
             <button type="button" role="tab" data-nav="mm" aria-selected="false" aria-controls="panel-formula">多模态 · OCR</button>
             <span class="set-badge" data-badge="mm" hidden>需处理</span>
@@ -78,7 +81,7 @@
             </div>
           </div>
           <p class="hint">只显示当前默认引擎的配置。改上方下拉框即可换家；其他引擎已保存的 Key 不会丢。</p>
-          <div id="providerFields"></div>
+          <div id="providerFields" class="set-provider-slot"></div>
           <div class="provider-test-row">
             <button id="testConnection" type="button" class="btn-secondary">测试连接</button>
             <span id="testConnectionStatus" class="provider-test-status" role="status"></span>
@@ -131,76 +134,132 @@
         <section id="panel-web" class="set-page" data-panel="web" role="tabpanel" hidden>
           <h2>网页</h2>
           <div class="set-group">
-            <label class="check set-row"><input id="autoOnNewPages" type="checkbox" role="switch" /> 打开网页时自动翻译（默认关闭，需点右下角「翻译」）</label>
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title" id="autoOnNewPagesLabel">打开网页时自动翻译</p>
+                <p class="set-note">默认关闭，需点右下角「翻译」。</p>
+              </div>
+              <input id="autoOnNewPages" type="checkbox" role="switch" aria-labelledby="autoOnNewPagesLabel" />
+            </div>
             <div id="siteRulesBox" hidden>
-              <label class="set-row">自动翻译站点（一行一个域名，仅这些站进页就翻）<textarea id="siteRules" placeholder="nytimes.com"></textarea></label>
+              <div class="set-row">
+                <div class="set-txt">
+                  <p class="set-title">自动翻译站点</p>
+                  <p class="set-note">一行一个域名，仅这些站进页就翻。</p>
+                </div>
+                <div class="set-ctl"><textarea id="siteRules" placeholder="nytimes.com"></textarea></div>
+              </div>
               <p id="siteRulesError" class="set-save-miss" hidden></p>
             </div>
-            <label class="set-row">翻译范围
-              <select id="translateScope">
-                <option value="article">仅正文</option>
-                <option value="page">全页面</option>
-              </select>
-            </label>
-            <p id="translateScopeHint" class="hint field-hint">只译主栏正文，跳过侧栏与导航。</p>
-            <label class="set-row">本次翻译
-              <select id="translateLimit">
-                <option value="all">全部</option>
-                <option value="title_lead">仅标题+开头</option>
-              </select>
-            </label>
-            <label class="check set-row"><input id="skipCode" type="checkbox" role="switch" /> 跳过代码块</label>
-            <label class="set-row">译文字号比例
-              <span class="set-stepper">
-                <button type="button" class="set-step" data-step-for="fontScale" data-dir="-1" aria-label="减小译文字号">−</button>
-                <input id="fontScale" type="number" min="0.7" max="1.3" step="0.05" />
-                <button type="button" class="set-step" data-step-for="fontScale" data-dir="1" aria-label="增大译文字号">+</button>
-              </span>
-            </label>
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title">翻译范围</p>
+                <p class="set-note" id="translateScopeHint">只译主栏正文，跳过侧栏与导航。</p>
+              </div>
+              <div class="set-ctl">
+                <select id="translateScope">
+                  <option value="article">仅正文</option>
+                  <option value="page">全页面</option>
+                </select>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="set-txt"><p class="set-title">本次翻译</p></div>
+              <div class="set-ctl">
+                <select id="translateLimit">
+                  <option value="all">全部</option>
+                  <option value="title_lead">仅标题+开头</option>
+                </select>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title" id="skipCodeLabel">跳过代码块</p>
+              </div>
+              <input id="skipCode" type="checkbox" role="switch" aria-labelledby="skipCodeLabel" />
+            </div>
+            <div class="set-row">
+              <div class="set-txt"><p class="set-title">译文字号比例</p></div>
+              <div class="set-ctl">
+                <span class="set-stepper">
+                  <button type="button" class="set-step" data-step-for="fontScale" data-dir="-1" aria-label="减小译文字号">−</button>
+                  <input id="fontScale" type="number" min="0.7" max="1.3" step="0.05" />
+                  <button type="button" class="set-step" data-step-for="fontScale" data-dir="1" aria-label="增大译文字号">+</button>
+                </span>
+              </div>
+            </div>
           </div>
         </section>
 
         <section id="panel-pdf" class="set-page" data-panel="pdf" role="tabpanel" hidden>
           <h2>PDF 阅读</h2>
           <div class="set-group">
-            <label class="check set-row">
-              <input id="pdfAutoTranslate" type="checkbox" role="switch" checked />
-              打开 PDF 时自动翻译全文
-            </label>
-            <p class="hint">默认开。关掉后，打开 PDF 不会自动开始，需要再点「翻译」。</p>
-            <label class="set-row">正文译文间距
-              <span class="set-stepper">
-                <button type="button" class="set-step" data-step-for="bodyGlossGap" data-dir="-1" aria-label="减小正文译文间距">−</button>
-                <input id="bodyGlossGap" type="number" min="0.10" max="0.70" step="0.05" />
-                <button type="button" class="set-step" data-step-for="bodyGlossGap" data-dir="1" aria-label="增大正文译文间距">+</button>
-              </span>
-            </label>
-            <p class="hint field-hint">原文与其下段落译文的空隙（em）。不影响标题译文。</p>
-            <label class="set-row">译文段间距
-              <span class="set-stepper">
-                <button type="button" class="set-step" data-step-for="bodyGlossStackGap" data-dir="-1" aria-label="减小译文段间距">−</button>
-                <input id="bodyGlossStackGap" type="number" min="0" max="2.5" step="0.05" />
-                <button type="button" class="set-step" data-step-for="bodyGlossStackGap" data-dir="1" aria-label="增大译文段间距">+</button>
-              </span>
-            </label>
-            <p class="hint field-hint">相邻两段正文译文之间的空隙（em，0–2.5，默认 0.25）。不含标题译文、侧栏。</p>
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title" id="pdfAutoTranslateLabel">打开 PDF 时自动翻译全文</p>
+                <p class="set-note">默认开。关掉后，打开 PDF 不会自动开始，需要再点「翻译」。</p>
+              </div>
+              <input id="pdfAutoTranslate" type="checkbox" role="switch" checked aria-labelledby="pdfAutoTranslateLabel" />
+            </div>
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title">正文译文间距</p>
+                <p class="set-note">原文与其下段落译文的空隙（em）。不影响标题译文。</p>
+              </div>
+              <div class="set-ctl">
+                <span class="set-stepper">
+                  <button type="button" class="set-step" data-step-for="bodyGlossGap" data-dir="-1" aria-label="减小正文译文间距">−</button>
+                  <input id="bodyGlossGap" type="number" min="0.10" max="0.70" step="0.05" />
+                  <button type="button" class="set-step" data-step-for="bodyGlossGap" data-dir="1" aria-label="增大正文译文间距">+</button>
+                </span>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title">译文段间距</p>
+                <p class="set-note">相邻两段正文译文之间的空隙（em，0–2.5，默认 0.25）。不含标题译文、侧栏。</p>
+              </div>
+              <div class="set-ctl">
+                <span class="set-stepper">
+                  <button type="button" class="set-step" data-step-for="bodyGlossStackGap" data-dir="-1" aria-label="减小译文段间距">−</button>
+                  <input id="bodyGlossStackGap" type="number" min="0" max="2.5" step="0.05" />
+                  <button type="button" class="set-step" data-step-for="bodyGlossStackGap" data-dir="1" aria-label="增大译文段间距">+</button>
+                </span>
+              </div>
+            </div>
           </div>
           <div id="pdfLayoutBox" hidden>
             <h3 class="set-gh">版面识别</h3>
             <div class="set-group">
-              <label class="set-row">模式
-                <select id="pdfLayoutMode">
-                  <option value="">未设置（文字层）</option>
-                  <option value="local-ocr">本机智谱 GLM-OCR（测试）</option>
-                  <option value="cloud-ocr">OCR API（上线）</option>
-                  <option value="text-layer">文字层兜底</option>
-                </select>
-              </label>
-              <label class="set-row">本机基址<input id="pdfLocalBaseUrl" type="text" spellcheck="false" /></label>
-              <p class="hint">本机基址填划区接口，默认 http://127.0.0.1:8765。7860 是 GLM-OCR 的网页，不是这个接口。模型认字在 5002。</p>
-              <label class="set-row">云端基址<input id="pdfCloudBaseUrl" type="text" spellcheck="false" /></label>
-              <label class="set-row" data-key-slot="pdf">云端密钥<input id="pdfCloudApiKey" type="text" spellcheck="false" autocomplete="off" data-secret="1" /></label>
-              <p class="hint">云端模式会上传每一页的渲染图</p>
+              <div class="set-row">
+                <div class="set-txt"><p class="set-title">模式</p></div>
+                <div class="set-ctl">
+                  <select id="pdfLayoutMode">
+                    <option value="">未设置（文字层）</option>
+                    <option value="local-ocr">本机智谱 GLM-OCR（测试）</option>
+                    <option value="cloud-ocr">OCR API（上线）</option>
+                    <option value="text-layer">文字层兜底</option>
+                  </select>
+                </div>
+              </div>
+              <div class="set-row">
+                <div class="set-txt">
+                  <p class="set-title">本机基址</p>
+                  <p class="set-note">填划区接口，默认 http://127.0.0.1:8765。7860 是 GLM-OCR 的网页，不是这个接口。模型认字在 5002。</p>
+                </div>
+                <div class="set-ctl"><input id="pdfLocalBaseUrl" type="text" spellcheck="false" /></div>
+              </div>
+              <div class="set-row">
+                <div class="set-txt"><p class="set-title">云端基址</p></div>
+                <div class="set-ctl"><input id="pdfCloudBaseUrl" type="text" spellcheck="false" /></div>
+              </div>
+              <div class="set-row" data-key-slot="pdf">
+                <div class="set-txt">
+                  <p class="set-title">云端密钥</p>
+                  <p class="set-note">云端模式会上传每一页的渲染图。</p>
+                </div>
+                <div class="set-ctl"><input id="pdfCloudApiKey" type="text" spellcheck="false" autocomplete="off" data-secret="1" /></div>
+              </div>
             </div>
           </div>
           <div class="bar">
@@ -212,12 +271,15 @@
           <h2>笔记</h2>
           <p class="set-lead">布局按窗口宽度自动切换；宽度在阅读页里拖动即生效，这里只放位置和重置。</p>
           <div class="set-group" id="notesRows">
-            <label class="set-row">笔记位置
-              <select id="notesPaneSide">
-                <option value="start">左侧</option>
-                <option value="end">右侧</option>
-              </select>
-            </label>
+            <div class="set-row">
+              <div class="set-txt"><p class="set-title">笔记位置</p></div>
+              <div class="set-ctl">
+                <select id="notesPaneSide">
+                  <option value="start">左侧</option>
+                  <option value="end">右侧</option>
+                </select>
+              </div>
+            </div>
             <div class="set-row">
               <div class="set-copy">
                 <p class="set-title">侧栏面板宽度</p>
@@ -267,11 +329,13 @@
           <div id="keyList" class="set-group"></div>
           <h3 class="set-gh">同步密钥</h3>
           <div class="set-group">
-            <label class="check set-row">
-              <input id="keysSync" type="checkbox" role="switch" aria-checked="false" disabled />
-              在我的浏览器之间同步密钥
-            </label>
-            <p class="hint">F10 预留 · 本期不可开</p>
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title" id="keysSyncLabel">在我的浏览器之间同步密钥</p>
+                <p class="set-note">F10 预留 · 本期不可开</p>
+              </div>
+              <input id="keysSync" type="checkbox" role="switch" aria-labelledby="keysSyncLabel" aria-checked="false" disabled />
+            </div>
           </div>
         </section>
 

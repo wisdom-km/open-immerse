@@ -167,9 +167,9 @@ test("options keep v1 module gates; youtube\/x only in Advanced group", () => {
   assert.match(featSrc, /PDF 阅读（实验室）/);
   assert.doesNotMatch(html, /pdf\/viewer\.html/);
   const optJs = readFileSync(join(root, "options/options.js"), "utf8");
-  assert.match(optJs, /el\("twoStepPolish"\)\.checked = cachedSettings\.twoStepPolish === true/);
+  assert.match(optJs, /el\("twoStepPolish"\)\.checked = settings\.twoStepPolish === true/);
   assert.match(optJs, /twoStepPolish: el\("twoStepPolish"\)\.checked/);
-  assert.match(optJs, /el\("deepThink"\)\.checked = cachedSettings\.deepThink === true/);
+  assert.match(optJs, /el\("deepThink"\)\.checked = settings\.deepThink === true/);
   assert.match(optJs, /deepThink: el\("deepThink"\)\.checked/);
   assert.match(optJs, /normalizeBodyGlossGap/);
   assert.match(optJs, /normalizeBodyGlossStackGap/);

@@ -51,10 +51,11 @@ let cachedSettings = { providers: {} };
 let readsOk = true;
 let writing = false;
 let testRequestId = 0;
-let testStatusTimer = 0;
 let pdfCloudKey = "";
 let pdfCloudBound = null;
 let formulaSettings = normalizeFormulaSettings(null);
+let formulaSaved = formulaSettings;
+let formulaUndo = null;
 let formulaBusy = "";
 let formulaWriting = false;
 let formulaWrite = Promise.resolve();
@@ -100,49 +101,18 @@ async function init() {
     if (sk) sk.hidden = true;
   }
   cachedSettings = res.settings || { providers: {} };
-  const features = resolveFeatures(cachedSettings);
-  el("provider").value = cachedSettings.provider || "mymemory";
-  el("sourceLang").value = cachedSettings.sourceLang || "auto";
-  el("targetLang").value = cachedSettings.targetLang || "zh-CN";
-  el("batchSize").value = cachedSettings.batchSize || 8;
-  el("translateLimit").value = isTitleLeadLimit(cachedSettings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
-  el("twoStepPolish").checked = cachedSettings.twoStepPolish === true;
-  syncSwitch(el("twoStepPolish"));
-  el("deepThink").checked = cachedSettings.deepThink === true;
-  syncSwitch(el("deepThink"));
-  el("translateScope").value = cachedSettings.translateScope || "article";
-  syncTranslateScopeHint();
+  applyStoredForm();
   el("translateScope").addEventListener("change", () => syncTranslateScopeHint());
   bindPanelNav();
-  el("fontScale").value = cachedSettings.fontScale || 0.95;
-  el("bodyGlossGap").value = String(normalizeBodyGlossGap(cachedSettings.bodyGlossGap));
-  el("bodyGlossStackGap").value = String(normalizeBodyGlossStackGap(cachedSettings.bodyGlossStackGap));
-  el("skipCode").checked = Boolean(cachedSettings.skipCode);
-  syncSwitch(el("skipCode"));
-  el("autoOnNewPages").checked = Boolean(cachedSettings.autoOnNewPages);
-  syncSwitch(el("autoOnNewPages"));
-  if (el("pdfAutoTranslate")) {
-    el("pdfAutoTranslate").checked = normalizePdfAutoTranslate(cachedSettings.pdfAutoTranslate);
-    syncSwitch(el("pdfAutoTranslate"));
-  }
-  el("siteRules").value = (cachedSettings.siteRules || []).map((r) => r.host).join("\n");
-  renderFeatures(el("featureList"), v1Features(), features);
-  renderFeatures(el("laterList"), laterFeatures(), features);
-  fillPdfLayout(cachedSettings.pdfLayout);
-  syncPdfLayoutBox();
-  syncPdfBanner();
-  syncQualityLocks();
   el("laterList")?.addEventListener("change", () => {
     syncPdfLayoutBox();
     syncPdfBanner();
     void persist(el("laterList"));
   });
-  renderProviderFields();
   bindFormulaSettings();
   bindNotes();
   bindData();
   bindSecretsList();
-  paintKeyList();
   el("provider").addEventListener("change", () => {
     harvestVisibleProvider();
     renderProviderFields();
@@ -163,12 +133,73 @@ async function init() {
   bindSearch();
   const manifest = chrome.runtime?.getManifest?.();
   if (manifest?.version && el("aboutVersion")) el("aboutVersion").textContent = manifest.version;
+  await pinKeySync();
+}
+
+function applyStoredForm() {
+  const settings = cachedSettings || {};
+  const features = resolveFeatures(settings);
+  if (el("provider")) el("provider").value = settings.provider || "mymemory";
+  if (el("sourceLang")) el("sourceLang").value = settings.sourceLang || "auto";
+  if (el("targetLang")) el("targetLang").value = settings.targetLang || "zh-CN";
+  if (el("batchSize")) el("batchSize").value = settings.batchSize || 8;
+  if (el("translateLimit")) {
+    el("translateLimit").value = isTitleLeadLimit(settings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
+  }
+  if (el("twoStepPolish")) {
+    el("twoStepPolish").checked = settings.twoStepPolish === true;
+    syncSwitch(el("twoStepPolish"));
+  }
+  if (el("deepThink")) {
+    el("deepThink").checked = settings.deepThink === true;
+    syncSwitch(el("deepThink"));
+  }
+  if (el("translateScope")) el("translateScope").value = settings.translateScope || "article";
+  syncTranslateScopeHint();
+  if (el("fontScale")) el("fontScale").value = settings.fontScale || 0.95;
+  if (el("bodyGlossGap")) el("bodyGlossGap").value = String(normalizeBodyGlossGap(settings.bodyGlossGap));
+  if (el("bodyGlossStackGap")) el("bodyGlossStackGap").value = String(normalizeBodyGlossStackGap(settings.bodyGlossStackGap));
+  if (el("skipCode")) {
+    el("skipCode").checked = Boolean(settings.skipCode);
+    syncSwitch(el("skipCode"));
+  }
+  if (el("autoOnNewPages")) {
+    el("autoOnNewPages").checked = Boolean(settings.autoOnNewPages);
+    syncSwitch(el("autoOnNewPages"));
+  }
+  if (el("pdfAutoTranslate")) {
+    el("pdfAutoTranslate").checked = normalizePdfAutoTranslate(settings.pdfAutoTranslate);
+    syncSwitch(el("pdfAutoTranslate"));
+  }
+  if (el("siteRules")) el("siteRules").value = (settings.siteRules || []).map((rule) => rule.host).join("\n");
+  renderFeatures(el("featureList"), v1Features(), features);
+  renderFeatures(el("laterList"), laterFeatures(), features);
+  fillPdfLayout(settings.pdfLayout);
+  syncPdfLayoutBox();
+  syncPdfBanner();
+  syncQualityLocks();
+  renderProviderFields();
+  paintKeyList();
+  for (const id of ["batchSize", "fontScale", "bodyGlossGap", "bodyGlossStackGap"]) syncStepperBounds(el(id));
   const keysSync = el("keysSync");
   if (keysSync) {
     keysSync.checked = false;
     keysSync.disabled = true;
     keysSync.setAttribute("aria-checked", "false");
   }
+}
+
+async function pinKeySync() {
+  const input = el("keysSync");
+  if (input) {
+    input.checked = false;
+    input.disabled = true;
+    input.setAttribute("aria-checked", "false");
+  }
+  const area = globalThis.chrome?.storage?.local;
+  if (!area || typeof area.get !== "function" || typeof area.set !== "function") return;
+  const bag = await area.get("keys.syncOptIn");
+  if (!bag || bag["keys.syncOptIn"] !== false) await area.set({ "keys.syncOptIn": false });
 }
 
 function fillPageSelect() {
@@ -185,8 +216,7 @@ function fillPageSelect() {
 }
 
 function syncSwitch(input) {
-  if (!input) return;
-  input.setAttribute("role", "switch");
+  if (!input || input.getAttribute("role") !== "switch") return;
   input.setAttribute("aria-checked", input.checked ? "true" : "false");
 }
 
@@ -299,6 +329,7 @@ async function importSettingsFile(ev) {
     const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: prepared.settings });
     if (!res || res.ok === false) throw new Error("save failed");
     cachedSettings = res.settings || prepared.settings;
+    applyStoredForm();
     const note = el("importKeyNote");
     if (note) note.hidden = !prepared.ignoredKeys;
     el("status").textContent = prepared.ignoredKeys ? "文件里的 API 密钥已忽略，请在本机重新填写。" : "已导入";
@@ -395,7 +426,10 @@ function paintQualityNote(note, llm, provider, ready) {
     note.textContent = ready;
     return;
   }
-  note.append(document.createTextNode(`当前引擎（${provider?.name || "当前"}）不支持 · `));
+  const why = document.createElement("span");
+  why.className = "set-why";
+  why.textContent = `当前引擎（${provider?.name || "当前"}）不支持 · `;
+  note.append(why);
   const link = document.createElement("a");
   link.className = "set-engine-jump";
   link.href = "#provider";
@@ -430,17 +464,26 @@ function renderFeatures(box, list, features) {
   if (!box) return;
   box.textContent = "";
   list.forEach((feat) => {
-    const label = document.createElement("label");
-    label.className = "check set-row";
+    const row = document.createElement("div");
+    row.className = "set-row";
+    const txt = document.createElement("div");
+    txt.className = "set-txt";
+    const title = document.createElement("p");
+    title.className = "set-title";
+    title.textContent = feat.label;
+    const note = document.createElement("p");
+    note.className = "set-note";
+    note.textContent = feat.hint;
+    txt.append(title, note);
     const input = document.createElement("input");
     input.type = "checkbox";
     input.dataset.feat = feat.id;
+    input.setAttribute("role", "switch");
     input.checked = Boolean(features[feat.id]);
     syncSwitch(input);
     input.addEventListener("change", () => syncSwitch(input));
-    label.appendChild(input);
-    label.appendChild(document.createTextNode(" " + feat.label + " - " + feat.hint));
-    box.appendChild(label);
+    row.append(txt, input);
+    box.appendChild(row);
   });
 }
 
@@ -471,12 +514,8 @@ function invalidateTest(mode) {
 function setTestStatus(text, kind) {
   const status = el("testConnectionStatus");
   if (!status) return;
-  window.clearTimeout(testStatusTimer);
   status.textContent = redactProviderText(text || "");
   status.className = kind ? `provider-test-status is-${kind}` : "provider-test-status";
-  if (text && kind) {
-    testStatusTimer = window.setTimeout(() => setTestStatus(""), 8000);
-  }
   const badge = document.querySelector('[data-badge="translate"]');
   if (badge) badge.hidden = kind !== "err";
 }
@@ -763,7 +802,7 @@ function bindInstant() {
     if (!node) continue;
     const event = node.type === "checkbox" || node.tagName === "SELECT" ? "change" : "change";
     node.addEventListener(event, () => {
-      syncSwitch(node);
+      if (node.getAttribute("role") === "switch") syncSwitch(node);
       syncSiteRulesBox();
       void persist(node);
     });
@@ -838,18 +877,57 @@ async function removeFormulaSecret(which) {
   });
 }
 
+function showFormulaMiss() {
+  let note = el("formulaSaveMiss");
+  if (!note) {
+    note = document.createElement("p");
+    note.id = "formulaSaveMiss";
+    note.className = "set-save-miss";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "set-inline";
+    button.textContent = "重试";
+    button.addEventListener("click", () => {
+      note.hidden = true;
+      if (formulaUndo) {
+        formulaSettings = formulaUndo;
+        paintFormulaSettings();
+      }
+      void persistFormulaSettings(true);
+    });
+    note.append(document.createTextNode("没保存上 · "), button);
+    el("formulaSettingsRoot")?.insertAdjacentElement("afterend", note);
+  }
+  note.hidden = false;
+}
+
+function hideFormulaMiss() {
+  const note = el("formulaSaveMiss");
+  if (note) note.hidden = true;
+}
+
 function persistFormulaSettings(rerender) {
   const job = formulaWrite.then(async () => {
     formulaWriting = true;
     const snapshot = formulaSettings;
+    let failed = false;
     try {
       await writeFormulaSettings(snapshot, globalThis.chrome?.storage?.local);
+      formulaSaved = snapshot;
+      formulaUndo = null;
+      hideFormulaMiss();
     } catch {
-      /* keep the draft on this page */
+      failed = true;
+      formulaUndo = snapshot;
+      if (formulaSettings === snapshot) {
+        formulaSettings = formulaSaved;
+        paintFormulaSettings();
+      }
+      showFormulaMiss();
     } finally {
       formulaWriting = false;
     }
-    if (rerender && formulaSettings === snapshot) paintFormulaSettings();
+    if (!failed && rerender && formulaSettings === snapshot) paintFormulaSettings();
   });
   formulaWrite = job.catch(() => {});
   return job;
@@ -885,6 +963,7 @@ function bindFormulaSettings() {
   });
   readFormulaSettings(storage?.local).then((stored) => {
     formulaSettings = stored;
+    formulaSaved = stored;
     paintFormulaSettings();
   }).catch(() => paintFormulaSettings());
 }

@@ -509,6 +509,8 @@ body.oi-settings .oi-set-chip.is-ok,
 body.oi-settings .oi-set-chip.is-warn {
   background: var(--oi-warn-soft);
 }
+body.oi-settings .set-provider-slot { min-height: 104px; }
+body.oi-settings .set-why { color: var(--oi-warn); }
 body.oi-settings .provider-card {
   background: var(--oi-panel);
   border: 1px solid var(--oi-line);
@@ -533,9 +535,9 @@ body.oi-settings .actions-bar { position: static; background: transparent; borde
 
 @media (max-width: 519px) {
   body.oi-settings h2 { font-size: 18px; }
-  body.oi-settings .set-row { flex-direction: column; align-items: stretch; }
+  body.oi-settings .set-row:not(:has(> input[role="switch"])) { flex-direction: column; align-items: stretch; }
   body.oi-settings .set-ctl,
-  body.oi-settings .set-group input,
+  body.oi-settings .set-group input:not([role="switch"]),
   body.oi-settings .set-group select,
   body.oi-settings .set-group textarea { width: 100%; min-width: 0; }
   body.oi-settings .set-split { display: flex; width: 100%; }
@@ -543,14 +545,11 @@ body.oi-settings .actions-bar { position: static; background: transparent; borde
 }
 
 body.oi-settings .set-row.check { margin-top: 0; }
-body.oi-settings .set-group input[role="switch"] {
-  min-width: 0;
-  min-height: 0;
-  width: 38px;
-  height: 22px;
-  padding: 0;
-  border: 0;
+body.oi-settings .set-row:has(> input[role="switch"]) {
+  flex-direction: row;
+  align-items: center;
 }
+body.oi-settings .set-row:has(> input[role="switch"]:disabled) .set-title { color: var(--oi-text-muted); }
 body.oi-settings .set-group > .hint {
   margin: 0;
   padding: 0 16px 12px;
@@ -585,8 +584,7 @@ body.oi-settings .set-quality .set-note-bad { display: none; color: var(--oi-war
 body.oi-settings .set-quality .set-batch:has(input:invalid) .set-note-ok { display: none; }
 body.oi-settings .set-quality .set-batch:has(input:invalid) .set-note-bad { display: block; }
 body.oi-settings .set-quality .set-batch:has(input:invalid) .set-stepper {
-  border-color: var(--oi-warn);
-  box-shadow: 0 0 0 2px var(--oi-warn-soft);
+  box-shadow: inset 0 0 0 1px var(--oi-warn), 0 0 0 2px var(--oi-warn-soft);
 }
 body.oi-settings .set-engine-jump {
   color: var(--oi-accent);
@@ -597,7 +595,7 @@ body.oi-settings .set-engine-jump:focus-visible {
   outline: 2px solid var(--oi-focus);
   outline-offset: 2px;
 }
-body.oi-settings .set-group.set-quality input[role="switch"] {
+body.oi-settings .set-row > input[role="switch"] {
   appearance: none;
   -webkit-appearance: none;
   flex: none;
@@ -613,7 +611,7 @@ body.oi-settings .set-group.set-quality input[role="switch"] {
   position: relative;
   cursor: pointer;
 }
-body.oi-settings .set-group.set-quality input[role="switch"]::before {
+body.oi-settings .set-row > input[role="switch"]::before {
   content: "";
   position: absolute;
   top: 2px;
@@ -623,29 +621,30 @@ body.oi-settings .set-group.set-quality input[role="switch"]::before {
   border-radius: 50%;
   background: var(--oi-input);
 }
-body.oi-settings .set-group.set-quality input[role="switch"]:checked { background: var(--oi-accent); }
-body.oi-settings .set-group.set-quality input[role="switch"]:checked::before { transform: translateX(16px); }
-body.oi-settings .set-group.set-quality input[role="switch"]:disabled {
+body.oi-settings .set-row > input[role="switch"]:checked { background: var(--oi-accent); }
+body.oi-settings .set-row > input[role="switch"]:checked::before { transform: translateX(16px); }
+body.oi-settings .set-row > input[role="switch"]:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
-body.oi-settings .set-quality .set-ctl { width: auto; flex: none; }
+body.oi-settings .set-quality .set-ctl { width: auto; flex: none; gap: 6px; }
 body.oi-settings .set-quality .set-stepper {
   display: inline-flex;
   align-items: stretch;
   width: 100px;
   height: 28px;
   box-sizing: border-box;
-  border: 1px solid var(--oi-line-strong);
+  border: 0;
   border-radius: 7px;
   background: var(--oi-input);
-  overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--oi-line-strong);
+  overflow: visible;
   flex: none;
   gap: 0;
 }
 body.oi-settings .set-quality .set-step {
-  width: 27px;
-  flex: 0 0 27px;
+  width: 28px;
+  flex: 0 0 28px;
   height: auto;
   min-height: 0;
   margin: 0;
@@ -657,7 +656,7 @@ body.oi-settings .set-quality .set-step {
   font: inherit;
   font-weight: 500;
   font-size: 14px;
-  line-height: 26px;
+  line-height: 28px;
   cursor: pointer;
 }
 body.oi-settings .set-quality .set-step:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -688,7 +687,7 @@ body.oi-settings .set-quality .set-stepper input::-webkit-inner-spin-button {
   margin: 0;
 }
 body.oi-settings .set-quality .set-unit {
-  margin-left: 6px;
+  margin-left: 0;
   font-size: 12px;
   color: var(--oi-text-muted);
   flex: none;

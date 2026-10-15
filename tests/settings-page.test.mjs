@@ -332,7 +332,7 @@ test("palette A contrast and scope stay on the settings page", () => {
   }
   const own = css.replace(/@import[^;]+;/, "").replace(/body\.oi-settings\s*\{[^}]+\}/g, "");
   for (const color of forbidden) assert.equal(own.toLowerCase().includes(color), false);
-  const diff = execFileSync("git", ["diff", "origin/main", "--", "ui/tokens.css", "pdf", "lib/notes-prefs.js", "lib/reader-notes-local.js"], { encoding: "utf8" });
+  const diff = execFileSync("git", ["diff", "887ecd2bff59ecd993749e47de5a423be0dcaccd", "--", "ui/tokens.css", "pdf", "lib/notes-prefs.js", "lib/reader-notes-local.js"], { encoding: "utf8" });
   assert.equal(diff, "");
   for (const path of [
     "tests/fixtures/Attention_Is_All_You_Need.pdf",
@@ -617,6 +617,20 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     assert.equal(syncSwitch.disabled, true);
     assert.equal(syncSwitch.getAttribute("aria-checked"), "false");
     assert.equal(syncSwitch.checked, false);
+    assert.equal(chrome.local["keys.syncOptIn"], false);
+    const syncRow = syncSwitch.closest(".set-row");
+    assert.equal(syncRow.firstElementChild.querySelector(".set-title").textContent, "在我的浏览器之间同步密钥");
+    assert.equal(syncRow.lastElementChild, syncSwitch);
+    chrome.localSetThrows = true;
+    const formulaSwitch = page.document.querySelector("[data-formula-switch]");
+    assert.ok(formulaSwitch);
+    const formulaWas = formulaSwitch.checked;
+    formulaSwitch.checked = !formulaWas;
+    fire(formulaSwitch, "change");
+    await flush();
+    assert.equal(page.document.querySelector("[data-formula-switch]").checked, formulaWas);
+    assert.match(page.document.getElementById("formulaSaveMiss").textContent, /没保存上 · 重试/);
+    chrome.localSetThrows = false;
 
     page.document.getElementById("mmEnablePdf").click();
     await flush();
@@ -666,6 +680,7 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     await flush();
     assert.equal(page.document.getElementById("status").textContent, "文件里的 API 密钥已忽略，请在本机重新填写。");
     assert.equal(page.document.getElementById("importKeyNote").hidden, false);
+    assert.equal(page.document.getElementById("targetLang").value, "ja");
     assert.equal(syncHasSecrets(chrome.sync.settings), false);
     assert.equal(chrome.local.oiSecrets.providers.openai, "sk-new123");
     assert.equal(String(chrome.local.oiSecrets.pdfCloudApiKey || ""), PDF_KEY);
@@ -703,6 +718,14 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     assert.equal(batchMinus.disabled, false);
     batch.value = "8";
     fire(batch, "input");
+    batchPlus.click();
+    assert.notEqual(batch.getAttribute("role"), "switch");
+    const scope = page.document.getElementById("translateScope");
+    fire(scope, "change");
+    await flush();
+    assert.notEqual(scope.getAttribute("role"), "switch");
+    assert.notEqual(page.document.getElementById("sourceLang").getAttribute("role"), "switch");
+    assert.notEqual(page.document.getElementById("fontScale").getAttribute("role"), "switch");
     const providerSelect = page.document.getElementById("provider");
     providerSelect.value = "deepl";
     fire(providerSelect, "change");
@@ -711,6 +734,13 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     assert.equal(page.document.getElementById("deepThink").disabled, true);
     assert.match(page.document.getElementById("twoStepPolishHint").textContent, /当前引擎（DeepL）不支持/);
     assert.match(page.document.getElementById("deepThinkHint").textContent, /换引擎/);
+    assert.equal(page.document.querySelector("#twoStepPolishHint .set-why")?.className, "set-why");
+    page.document.getElementById("testConnection").click();
+    await flush();
+    assert.equal(page.document.querySelector("[data-badge='translate']").hidden, false);
+    mock.timers.tick(8000);
+    assert.equal(page.document.querySelector("[data-badge='translate']").hidden, false);
+    assert.notEqual(page.document.getElementById("testConnectionStatus").textContent, "");
     page.document.querySelector(".set-engine-jump").click();
     assert.equal(page.document._focused, providerSelect);
     providerSelect.value = "openai";
