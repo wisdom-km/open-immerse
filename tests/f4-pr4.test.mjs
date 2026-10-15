@@ -1409,6 +1409,23 @@ async function coordinatorPair(tag) {
   return { modA, modB };
 }
 
+function watchedLocks() {
+  const locks = createMemoryLocks();
+  let waiting = 0;
+  return {
+    waiting: () => waiting,
+    request(name, options, callback) {
+      const opts = typeof options === "function" ? {} : (options || {});
+      const blocks = typeof options !== "function" && opts.ifAvailable !== true;
+      if (!blocks) return locks.request(name, options, callback);
+      waiting += 1;
+      return locks.request(name, options, callback).finally(() => {
+        waiting -= 1;
+      });
+    }
+  };
+}
+
 function onePaperDir() {
   return dir("files", {
     [HASH_A]: paper(HASH_A, [page(1, "甲")], { meta: { title: "论文甲", rev: 1, updatedAt: 1 } })
@@ -1424,7 +1441,7 @@ test("DATA-06 the reader waits out a paper that still holds the shared lock", { 
   try {
     store = storeFor("memory");
     const { modA, modB } = await coordinatorPair("slow-lock");
-    const locks = createMemoryLocks();
+    const locks = watchedLocks();
     const beforePaper = () => new Promise((resolve) => gates.push(resolve));
     data = modA.createImportCoordinator({ store, locks, beforePaper });
     reader = modB.createImportCoordinator({ store, locks, beforePaper });
@@ -1439,6 +1456,7 @@ test("DATA-06 the reader waits out a paper that still holds the shared lock", { 
     await data.detach("data");
     const waited = Date.now() - started;
     assert.ok(waited >= 1900, `detach returned in ${waited}ms`);
+    await until(() => locks.waiting() >= 1, 200);
     assert.equal(gates.length, 1);
     assert.equal(await store.getPaper(HASH_A), null);
     assert.equal(await store.getPaper(HASH_B), null);
@@ -1453,6 +1471,92 @@ test("DATA-06 the reader waits out a paper that still holds the shared lock", { 
     await job;
   } finally {
     while (gates.length) gates.shift()();
+    data?.destroy();
+    reader?.destroy();
+    await store?.closeLibrary?.();
+    restore();
+  }
+});
+
+test("a detached reader does not import after the shared lock is granted", { timeout: 20000 }, async () => {
+  const restore = installDom();
+  let data = null;
+  let reader = null;
+  let store = null;
+  let releaseHold = null;
+  try {
+    store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("detach-wait");
+    const locks = watchedLocks();
+    let calls = 0;
+    const beforePaper = () => {
+      calls += 1;
+      if (calls === 1) return new Promise((resolve) => { releaseHold = resolve; });
+    };
+    data = modA.createImportCoordinator({ store, locks, beforePaper });
+    reader = modB.createImportCoordinator({ store, locks, beforePaper });
+    data.attach("data");
+    reader.attach("reader");
+    await flush(20);
+    const job = data.importFolder(library());
+    await until(() => calls === 1 && releaseHold);
+    await data.detach("data");
+    await until(() => locks.waiting() >= 1, 200);
+    assert.equal(calls, 1);
+    await reader.detach("reader");
+    releaseHold();
+    releaseHold = null;
+    await flush(40);
+    assert.equal(calls, 1);
+    assert.equal(await store.getPaper(HASH_A), null);
+    assert.equal(await store.getPaper(HASH_B), null);
+    await job;
+  } finally {
+    releaseHold?.();
+    data?.destroy();
+    reader?.destroy();
+    await store?.closeLibrary?.();
+    restore();
+  }
+});
+
+test("以后再说 after the reader queues does not take over the import", { timeout: 20000 }, async () => {
+  const restore = installDom();
+  let data = null;
+  let reader = null;
+  let store = null;
+  let releaseHold = null;
+  try {
+    store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("later-wait");
+    const locks = watchedLocks();
+    let calls = 0;
+    const beforePaper = () => {
+      calls += 1;
+      if (calls === 1) return new Promise((resolve) => { releaseHold = resolve; });
+    };
+    data = modA.createImportCoordinator({ store, locks, beforePaper });
+    reader = modB.createImportCoordinator({ store, locks, beforePaper });
+    data.attach("data");
+    reader.attach("reader");
+    await flush(20);
+    const job = data.importFolder(library());
+    await until(() => calls === 1 && releaseHold);
+    await data.detach("data");
+    await until(() => locks.waiting() >= 1, 200);
+    await reader.later();
+    assert.equal(reader.state().later, true);
+    releaseHold();
+    releaseHold = null;
+    await flush(40);
+    assert.equal(calls, 1);
+    assert.equal(reader.state().later, true);
+    assert.notEqual(reader.state().phase, "done");
+    assert.equal(await store.getPaper(HASH_A), null);
+    assert.equal(await store.getPaper(HASH_B), null);
+    await job;
+  } finally {
+    releaseHold?.();
     data?.destroy();
     reader?.destroy();
     await store?.closeLibrary?.();
