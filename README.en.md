@@ -257,7 +257,9 @@ open-immerse/
 │   ├── viewer.html|js|css
 │   └── vendor/                # pdf.js 4.10.38 · KaTeX 0.18.7
 ├── lib/
-│   ├── providers.js           # all engine adapters
+│   ├── providers.js           # all engine adapters (HTTP via lib/net)
+│   ├── net/fetch.js           # one outbound HTTP entry
+│   ├── platform/              # extension / desktop adapters; net swaps transport
 │   ├── translate-skill.js     # shared Skill / two-step prompts
 │   ├── storage.js             # defaults + migration (settingsVersion = 8)
 │   ├── page-scan.js           # node collection (keep in sync with content.js)
@@ -294,7 +296,7 @@ page / PDF / document
     → insert .oi-translation or PDF readout blocks
 ```
 
-Content scripts do **not** `fetch` translation APIs. Adding an engine means `lib/providers.js` plus `DEFAULT_SETTINGS.providers`.
+Content scripts do **not** `fetch` translation APIs. Provider calls go through `lib/net/fetch.js`. Adding an engine means `lib/providers.js` plus `DEFAULT_SETTINGS.providers`.
 
 ---
 
