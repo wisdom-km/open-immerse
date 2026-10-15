@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="../ui/tokens.css" />
     <link rel="stylesheet" href="../pdf/reader-tokens.css" />
     <link rel="stylesheet" href="options.css" />
+    <link rel="stylesheet" href="data-panel.css" />
   </head>
   <body>
     <div class="options-shell">
@@ -29,6 +30,7 @@
           <button type="button" role="tab" data-nav="features" aria-selected="false" aria-controls="panel-features">功能</button>
           <button type="button" role="tab" data-nav="advanced" aria-selected="false" aria-controls="panel-advanced">高级</button>
           <button type="button" role="tab" data-nav="formula" aria-selected="false" aria-controls="panel-formula">多模态 · OCR</button>
+          <button type="button" role="tab" data-nav="data" aria-selected="false" aria-controls="data">数据</button>
         </nav>
       </aside>
       <main>
@@ -128,6 +130,7 @@
             关闭可加快 DeepSeek / Ark 翻译；默认关。
           </p>
         </section>
+        <section id="data" data-panel="data" role="tabpanel" hidden></section>
       </main>
     </div>
     <footer class="actions-bar" aria-label="保存设置">

@@ -321,6 +321,7 @@ import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
+import { bindImportChip } from "../options/data-panel.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
@@ -2231,6 +2232,7 @@ function installLibraryChrome() {
   } catch {
     /* opened outside the extension */
   }
+  let importBinding = null;
   libraryChip = createLibraryChip({
     host: slot,
     openStorage: async () => {
@@ -2242,7 +2244,21 @@ function installLibraryChrome() {
     onRecovered() {
       notesUi?.setStorageState?.(null);
       void maybeShowPersistCard();
+    },
+    onImportCommand(command) {
+      return importBinding?.command(command);
     }
+  });
+  void import("../lib/library-session.js").then(({ sharedLibraryStore }) => {
+    importBinding = bindImportChip(libraryChip, {
+      store: sharedLibraryStore(),
+      openData({ focus }) {
+        const url = globalThis.chrome?.runtime?.getURL?.("options/options.html");
+        if (url) globalThis.chrome?.tabs?.create?.({ url: `${url}#data?focus=${focus || "import"}` });
+      }
+    });
+  }).catch(() => {
+    importBinding = null;
   });
   persistCard = createPersistCard({
     host: cardHost,

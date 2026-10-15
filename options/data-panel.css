@@ -1,0 +1,89 @@
+/*
+ * #data panel. Colors are existing tokens only.
+ * --oi-warn and --oi-warn-soft are aliases until the settings theme
+ * has its own warn pair. Listed in the PR for Loom / Wisdom.
+ */
+.oi-data {
+  --oi-warn: var(--oi-reader-warn);
+  --oi-warn-soft: var(--oi-reader-warn-soft);
+  color: var(--oi-text);
+  font-family: var(--oi-font);
+  max-width: 760px;
+  overflow-x: hidden;
+}
+.oi-data * { min-width: 0; }
+.oi-data-lead { margin: 0 0 18px; color: var(--oi-text-muted); font-size: 13px; line-height: 1.5; }
+.oi-data .set-group { margin: 0 0 28px; }
+.oi-data .set-group > h2 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+.oi-data .set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--oi-line);
+}
+.oi-data .set-copy { flex: 1; }
+.oi-data .set-copy h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.oi-data .set-copy p,
+.oi-data .set-group > p { margin: 4px 0; color: var(--oi-text-muted); font-size: 13px; line-height: 1.5; }
+.oi-data .set-value { color: var(--oi-text-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.oi-data .set-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.oi-data .btn-link {
+  border: 0;
+  background: transparent;
+  color: var(--oi-accent);
+  font-size: 13px;
+  padding: 0;
+}
+.oi-data .oi-data-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--oi-surface-2);
+  color: var(--oi-text-muted);
+}
+.oi-data .oi-data-chip.is-ok { background: var(--oi-accent-soft); color: var(--oi-accent); }
+.oi-data .oi-data-chip.is-warn { background: var(--oi-warn-soft); color: var(--oi-warn); }
+.oi-data .oi-data-safe { color: var(--oi-text); font-weight: 500; }
+.oi-data .is-danger,
+.oi-data .oi-data-danger { color: var(--oi-danger); }
+.oi-data .oi-data-warn { color: var(--oi-warn); }
+.oi-data .oi-data-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--oi-line);
+  overflow: hidden;
+}
+.oi-data .oi-data-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--oi-text);
+}
+.oi-data .oi-data-bar.is-paused > span { background: var(--oi-line-strong); }
+.oi-data .oi-data-skel {
+  display: inline-block;
+  width: 72px;
+  height: 12px;
+  border-radius: 6px;
+  background: var(--oi-surface-2);
+}
+.oi-data .oi-data-file { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.oi-data .oi-data-toast {
+  margin: 12px 0 0;
+  color: var(--oi-text);
+  font-size: 13px;
+}
+.oi-data .oi-data-ignored,
+.oi-data .oi-data-errors { margin: 6px 0 0; padding: 0; list-style: none; color: var(--oi-text-muted); font-size: 13px; }
+@media (max-width: 519px) {
+  .oi-data .set-row { flex-direction: column; align-items: stretch; }
+  .oi-data .set-actions,
+  .oi-data .btn-primary,
+  .oi-data .set-actions.is-block { width: 100%; }
+  .oi-data .btn-primary.is-block,
+  .oi-data.is-narrow .btn-primary { width: 100%; }
+}
