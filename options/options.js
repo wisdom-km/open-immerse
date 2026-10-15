@@ -280,7 +280,56 @@ function hideReadError() {
   if (row) row.hidden = true;
 }
 
-function showMiss(control) {
+function snapshotControl(control) {
+  if (!control) return null;
+  if (control.id === "featureList" || control.id === "laterList" || control.dataset?.feat) {
+    const features = {};
+    document.querySelectorAll("[data-feat]").forEach((input) => {
+      features[input.dataset.feat] = input.checked;
+    });
+    return { kind: "features", features };
+  }
+  if (control.id === "pdfCloudApiKey") return { kind: "pdfKey", value: pdfCloudKey };
+  if (control.type === "checkbox") return { kind: "check", id: control.id, checked: control.checked };
+  return { kind: "value", id: control.id, value: control.value };
+}
+
+function applySnapshot(snap) {
+  if (!snap) return;
+  if (snap.kind === "features") {
+    document.querySelectorAll("[data-feat]").forEach((input) => {
+      input.checked = snap.features[input.dataset.feat] === true;
+      syncSwitch(input);
+    });
+    syncPdfLayoutBox();
+    syncPdfBanner();
+    return;
+  }
+  if (snap.kind === "pdfKey") {
+    pdfCloudKey = snap.value;
+    pdfCloudBound?.paint();
+    return;
+  }
+  const node = el(snap.id);
+  if (!node) return;
+  if (snap.kind === "check") {
+    node.checked = snap.checked;
+    syncSwitch(node);
+    syncSiteRulesBox();
+    return;
+  }
+  node.value = snap.value;
+  if (snap.id === "batchSize" || snap.id === "fontScale" || snap.id === "bodyGlossGap" || snap.id === "bodyGlossStackGap") {
+    syncStepperBounds(node);
+  }
+}
+
+function hideMiss(control) {
+  const note = control?.parentElement?.querySelector?.(".set-save-miss");
+  if (note) note.hidden = true;
+}
+
+function showMiss(control, retry) {
   if (!control) return;
   let note = control.parentElement?.querySelector?.(".set-save-miss");
   if (!note) {
@@ -288,7 +337,18 @@ function showMiss(control) {
     note.className = "set-save-miss";
     control.insertAdjacentElement?.("afterend", note) || control.parentElement?.appendChild(note);
   }
-  note.textContent = "没保存上 · 重试";
+  note.hidden = false;
+  note.replaceChildren(document.createTextNode("没保存上 · "));
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "set-inline";
+  button.textContent = "重试";
+  button.addEventListener("click", () => {
+    note.hidden = true;
+    if (typeof retry === "function") retry();
+    else void persist(control);
+  });
+  note.append(button);
 }
 
 async function exportSettings() {
@@ -762,19 +822,28 @@ async function persist(control) {
   try {
     const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: patch });
     if (!res || res.ok === false) {
+      const attempt = snapshotControl(control);
       cachedSettings = before;
       pdfCloudKey = beforePdf;
       restoreControl(control);
-      showMiss(control);
+      showMiss(control, () => {
+        applySnapshot(attempt);
+        void persist(control);
+      });
       return;
     }
     cachedSettings = res.settings || cachedSettings;
+    hideMiss(control);
     paintKeyList();
   } catch {
+    const attempt = snapshotControl(control);
     cachedSettings = before;
     pdfCloudKey = beforePdf;
     restoreControl(control);
-    showMiss(control);
+    showMiss(control, () => {
+      applySnapshot(attempt);
+      void persist(control);
+    });
   } finally {
     writing = false;
   }

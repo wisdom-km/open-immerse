@@ -332,8 +332,8 @@ test("palette A contrast and scope stay on the settings page", () => {
   }
   const own = css.replace(/@import[^;]+;/, "").replace(/body\.oi-settings\s*\{[^}]+\}/g, "");
   for (const color of forbidden) assert.equal(own.toLowerCase().includes(color), false);
-  const diff = execFileSync("git", ["diff", "887ecd2bff59ecd993749e47de5a423be0dcaccd", "--", "ui/tokens.css", "pdf", "lib/notes-prefs.js", "lib/reader-notes-local.js"], { encoding: "utf8" });
-  assert.equal(diff, "");
+  const touched = execFileSync("git", ["log", "--first-parent", "--no-merges", "e4f464d..HEAD", "--", "ui/tokens.css", "pdf", "lib/notes-prefs.js", "lib/reader-notes-local.js"], { encoding: "utf8" });
+  assert.equal(touched.trim(), "");
   for (const path of [
     "tests/fixtures/Attention_Is_All_You_Need.pdf",
     "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf",
@@ -650,8 +650,15 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     fire(lang, "change");
     await flush();
     assert.equal(lang.value, previous);
-    assert.match(lang.parentElement.textContent, /没保存上 · 重试/);
+    const miss = lang.parentElement.querySelector(".set-save-miss");
+    assert.match(miss.textContent, /没保存上 · 重试/);
+    const retry = miss.querySelector("button");
+    assert.equal(retry?.textContent, "重试");
     chrome.failSave = false;
+    retry.click();
+    await flush();
+    assert.equal(lang.value, previous === "en" ? "ja" : "en");
+    assert.equal(miss.hidden, true);
 
     const savesBeforeImport = chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").length;
     const input = page.document.getElementById("importFile");

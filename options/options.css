@@ -505,6 +505,23 @@ body.oi-settings .oi-set-switch::before {
 }
 body.oi-settings .oi-set-switch:checked { background: var(--oi-accent); }
 body.oi-settings .oi-set-switch:checked::before { transform: translateX(16px); }
+body.oi-settings #formulaSettingsRoot .oi-set-switch-row { align-items: flex-start; }
+body.oi-settings #formulaSettingsRoot .oi-set-switch,
+body.oi-settings #formulaSettingsRoot .oi-set-dash {
+  order: 2;
+  margin-left: auto;
+}
+body.oi-settings #formulaSettingsRoot .oi-set-switch {
+  width: 36px;
+  height: 20px;
+  flex: 0 0 36px;
+  border-radius: 10px;
+}
+body.oi-settings #formulaSettingsRoot .oi-set-switch::before {
+  width: 16px;
+  height: 16px;
+}
+body.oi-settings #formulaSettingsRoot .oi-set-switch:checked::before { transform: translateX(16px); }
 body.oi-settings .oi-set-chip.is-ok,
 body.oi-settings .oi-set-chip.is-warn {
   background: var(--oi-warn-soft);
@@ -535,7 +552,7 @@ body.oi-settings .actions-bar { position: static; background: transparent; borde
 
 @media (max-width: 519px) {
   body.oi-settings h2 { font-size: 18px; }
-  body.oi-settings .set-row:not(:has(> input[role="switch"])) { flex-direction: column; align-items: stretch; }
+  body.oi-settings :not(.set-quality) > .set-row:not(.set-batch):not(:has(> input[role="switch"])) { flex-direction: column; align-items: stretch; }
   body.oi-settings .set-ctl,
   body.oi-settings .set-group input:not([role="switch"]),
   body.oi-settings .set-group select,
@@ -570,7 +587,7 @@ body.oi-settings #keyList .set-row {
 }
 body.oi-settings #keyList .set-row:first-child { border-top: 0; }
 
-body.oi-settings .set-quality .set-row {
+body.oi-settings .set-group.set-quality > .set-row {
   gap: 16px;
   min-height: 52px;
   padding: 10px 16px;
@@ -628,7 +645,8 @@ body.oi-settings .set-row > input[role="switch"]:disabled {
   cursor: not-allowed;
 }
 body.oi-settings .set-quality .set-ctl { width: auto; flex: none; gap: 6px; }
-body.oi-settings .set-quality .set-stepper {
+body.oi-settings .set-quality .set-stepper,
+body.oi-settings .set-group .set-stepper-b1 {
   display: inline-flex;
   align-items: stretch;
   width: 100px;
@@ -642,7 +660,8 @@ body.oi-settings .set-quality .set-stepper {
   flex: none;
   gap: 0;
 }
-body.oi-settings .set-quality .set-step {
+body.oi-settings .set-quality .set-step,
+body.oi-settings .set-group .set-stepper-b1 .set-step {
   width: 28px;
   flex: 0 0 28px;
   height: auto;
@@ -660,7 +679,15 @@ body.oi-settings .set-quality .set-step {
   cursor: pointer;
 }
 body.oi-settings .set-quality .set-step:disabled { opacity: 0.45; cursor: not-allowed; }
-body.oi-settings .set-quality .set-stepper input {
+body.oi-settings .set-quality .set-step:focus-visible,
+body.oi-settings .set-quality .set-stepper input:focus-visible,
+body.oi-settings .set-group .set-stepper-b1 .set-step:focus-visible,
+body.oi-settings .set-group .set-stepper-b1 input:focus-visible {
+  outline: 2px solid var(--oi-focus);
+  outline-offset: -2px;
+}
+body.oi-settings .set-quality .set-stepper input,
+body.oi-settings .set-group .set-stepper-b1 input {
   width: 44px;
   flex: 1 1 auto;
   min-width: 0;
@@ -682,7 +709,9 @@ body.oi-settings .set-quality .set-stepper input {
   appearance: textfield;
 }
 body.oi-settings .set-quality .set-stepper input::-webkit-outer-spin-button,
-body.oi-settings .set-quality .set-stepper input::-webkit-inner-spin-button {
+body.oi-settings .set-quality .set-stepper input::-webkit-inner-spin-button,
+body.oi-settings .set-group .set-stepper-b1 input::-webkit-outer-spin-button,
+body.oi-settings .set-group .set-stepper-b1 input::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
