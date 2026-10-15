@@ -275,7 +275,7 @@ function holdV1OpenSource() {
   };`;
 }
 
-function chromeStub({ mode, slowOpenMs = 0, library = null, holdV1 = false }) {
+function chromeStub({ mode, slowOpenMs = 0, library = null, holdV1 = false, layoutReply = "ok" }) {
   const libraryJson = JSON.stringify(library);
   return `(() => {
   const params = new URLSearchParams(location.search);
@@ -290,6 +290,7 @@ function chromeStub({ mode, slowOpenMs = 0, library = null, holdV1 = false }) {
     batchSize: 8
   };
   window.__oiAuto = { messages: [], layouts: [] };
+  window.__oiHoldRasterMs = Number(params.get("oiHoldRaster") || 0);
   window.__oiSlow = { opens: 0, openAt: 0, doneAt: 0 };
   const libraryBody = ${libraryJson};
   ${holdV1 ? holdV1OpenSource() : ""}
@@ -325,14 +326,23 @@ function chromeStub({ mode, slowOpenMs = 0, library = null, holdV1 = false }) {
     if (url.includes("/v1/layout")) {
       let body = {};
       try { body = JSON.parse((init && init.body) || "{}"); } catch { body = {}; }
-      window.__oiAuto.layouts.push(Number(body.page) || 0);
+      const page = Number(body.page) || 0;
+      window.__oiAuto.layouts.push(page);
+      window.__oiAuto.layoutAt = window.__oiAuto.layoutAt || [];
+      window.__oiAuto.layoutAt.push({ page, at: Date.now() });
+      window.__oiAuto.layoutStack = window.__oiAuto.layoutStack || [];
+      window.__oiAuto.layoutStack.push(String(new Error("layout-post").stack || "").split("\\n").slice(0, 18).join("\\n"));
+      const reply = ${JSON.stringify(layoutReply)};
+      if (reply === "down") return Promise.reject(new TypeError("network down"));
       return new Response(JSON.stringify({ layoutDetails: [] }), {
         status: 200,
         headers: { "content-type": "application/json" }
       });
     }
     if (url.includes("/v1/library/")) {
-      if (!libraryBody) return new Response("null", { status: 404, headers: { "content-type": "application/json" } });
+      if (!libraryBody || sessionStorage.getItem("oiNoLegacyLibrary") === "1") {
+        return new Response("null", { status: 404, headers: { "content-type": "application/json" } });
+      }
       return new Response(JSON.stringify(libraryBody), {
         status: 200,
         headers: { "content-type": "application/json" }
@@ -347,7 +357,11 @@ function chromeStub({ mode, slowOpenMs = 0, library = null, holdV1 = false }) {
       getURL() { return new URL("./vendor/pdf.worker.min.mjs", location.href).href; },
       sendMessage(message) {
         const type = message && message.type;
-        if (type === "OI_GET_SETTINGS") return Promise.resolve({ settings });
+        if (type === "OI_GET_SETTINGS") {
+          const lag = Number(sessionStorage.getItem("oiSettingsLag") || "0");
+          if (lag > 0) return new Promise((resolve) => setTimeout(() => resolve({ settings }), lag));
+          return Promise.resolve({ settings });
+        }
         if (type === "OI_PDF_STRUCTURE") return Promise.resolve({ ok: false });
         if (type === "OI_ENSURE_GLMOCR") return Promise.resolve({ ok: true });
         if (type === "OI_TRANSLATE_BATCH") {
@@ -818,3 +832,203 @@ test("notes reopen after versionchange waits for the library upgrade", { timeout
   const duringUpgrade = (report.opens || []).filter((row) => row.at > v2.at && row.at < v2.successAt);
   assert.deepEqual(duringUpgrade, [], `notes reopened while the v2 upgrade was still running ${JSON.stringify(report.opens)}`);
 });
+
+async function pageTwoLayouts(session) {
+  return JSON.parse(await session.evaluate(`(async () => {
+    const { sharedLibraryStore } = await import("/lib/library-session.js");
+    const store = sharedLibraryStore();
+    const papers = await store.listPapers();
+    const rows = [];
+    for (const paper of papers || []) {
+      const layouts = typeof store.listLayouts === "function" ? await store.listLayouts(paper.docHash) : [];
+      for (const row of layouts || []) {
+        if (Number(row.page) !== 2) continue;
+        rows.push({
+          mode: String(row.mode || ""),
+          rev: String(row.layoutRev || row.layoutVersion || ""),
+          reason: String(row.layout && row.layout.fallback && row.layout.fallback.reason || "")
+        });
+      }
+    }
+    return JSON.stringify(rows);
+  })()`));
+}
+
+async function stopAsSoonAsShown(session) {
+  return JSON.parse(await session.evaluate(`(async () => {
+    const started = Date.now();
+    while (Date.now() - started < 20000) {
+      const button = document.getElementById("stopTranslate");
+      if (button && !button.hidden && !button.disabled) {
+        const layouts = (window.__oiAuto && window.__oiAuto.layouts || []).slice();
+        const at = Date.now();
+        button.click();
+        return JSON.stringify({
+          waited: at - started,
+          clickedAt: at,
+          layouts,
+          trace: (window.__oiLayoutTrace || []).slice()
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return JSON.stringify({
+      error: "stop button did not appear",
+      layouts: (window.__oiAuto && window.__oiAuto.layouts) || [],
+      trace: window.__oiLayoutTrace || []
+    });
+  })()`));
+}
+
+async function seedLocalOcrLibrary(version) {
+  const library = await sampleLibrary(version);
+  for (const page of library.pages) page.layout.mode = "local-ocr";
+  return library;
+}
+
+async function mutatePageTwo(session, rev) {
+  return JSON.parse(await session.evaluate(`(async () => {
+    const { sharedLibraryStore } = await import("/lib/library-session.js");
+    const store = sharedLibraryStore();
+    const papers = await store.listPapers();
+    const changed = [];
+    for (const paper of papers || []) {
+      const layouts = await store.listLayouts(paper.docHash);
+      for (const row of layouts || []) {
+        if (Number(row.page) !== 2) continue;
+        const layout = { ...(row.layout || {}) };
+        layout.layoutVersion = ${JSON.stringify(rev)};
+        layout.fallback = { source: "text-layer", reason: "http-502" };
+        await store.putLayout({
+          docHash: paper.docHash,
+          page: 2,
+          mode: row.mode,
+          protocol: row.protocol,
+          layoutRev: ${JSON.stringify(rev)},
+          layout
+        });
+        changed.push(row.mode || "");
+      }
+    }
+    sessionStorage.setItem("oiNoLegacyLibrary", "1");
+    return JSON.stringify(changed);
+  })()`));
+}
+
+test("Stop then loading a fallback page does not POST or replace the local-ocr row", { timeout: 180000 }, async (t) => {
+  const version = await currentLayoutVersion();
+  const library = await seedLocalOcrLibrary(version);
+  const session = await withChrome(t, chromeStub({ mode: "local-ocr", library, layoutReply: "ok" }), async () => {});
+  const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
+  const url = `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=stop-fallback-open`;
+  await session.cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: "sessionStorage.setItem('oiSettingsLag','80');"
+  }, session.sessionId);
+  await session.cdp.send("Page.navigate", { url }, session.sessionId);
+  await session.waitFor(`(() => {
+    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    const stop = document.getElementById("stopTranslate");
+    return doc.includes("全文已译") && (!stop || stop.hidden) ? "ready" : "";
+  })()`, "sample finishes translating", 60000);
+  const changed = await mutatePageTwo(session, version);
+  assert.ok(changed.length, `page 2 layout was not stored ${JSON.stringify(changed)}`);
+  await session.cdp.send("Page.navigate", { url }, session.sessionId);
+  const clicked = await stopAsSoonAsShown(session);
+  assert.equal(clicked.error || "", "", JSON.stringify(clicked));
+  assert.equal(clicked.layouts.includes(2), false, `page 2 POSTed before Stop ${JSON.stringify(clicked)}`);
+  const opened = JSON.parse(await session.evaluate(`(async () => {
+    window.__oiAuto.layouts = [];
+    window.__oiAuto.layoutAt = [];
+    const blocks = await globalThis.__oiOpenPage(2);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    return JSON.stringify({
+      blocks,
+      layouts: (window.__oiAuto && window.__oiAuto.layouts) || []
+    });
+  })()`));
+  assert.ok(opened.blocks >= 1, `page 2 did not keep a layout ${JSON.stringify(opened)}`);
+  assert.deepEqual(opened.layouts.filter((page) => page === 2), [], `Stop then load POSTed page 2 ${JSON.stringify(opened)}`);
+  const stored = await pageTwoLayouts(session);
+  assert.ok(stored.some((row) => row.reason === "http-502"), `page 2 lost its fallback ${JSON.stringify(stored)}`);
+  assert.equal(stored.some((row) => row.mode === "local-ocr" && row.reason !== "http-502"), false, `Stop wrote a local-ocr row ${JSON.stringify(stored)}`);
+  const zoned = JSON.parse(await session.evaluate(`(async () => {
+    const button = document.getElementById("retranslatePage");
+    if (!button || button.disabled) return JSON.stringify({ error: "retranslate disabled", layouts: window.__oiAuto.layouts.slice() });
+    window.__oiAuto.layouts = [];
+    button.click();
+    const started = Date.now();
+    while (Date.now() - started < 15000) {
+      const layouts = (window.__oiAuto.layouts || []).filter((page) => page === 2);
+      if (layouts.length) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        return JSON.stringify({ layouts: window.__oiAuto.layouts.slice() });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return JSON.stringify({ error: "no post", layouts: (window.__oiAuto.layouts || []).slice() });
+  })()`));
+  assert.deepEqual(zoned.layouts.filter((page) => page === 2), [2], `retranslate zoned ${JSON.stringify(zoned)}`);
+});
+
+test("Stop then loading a fallback page does not retry when the layout service is down", { timeout: 180000 }, async (t) => {
+  const version = await currentLayoutVersion();
+  const library = await seedLocalOcrLibrary(version);
+  const session = await withChrome(t, chromeStub({ mode: "local-ocr", library, layoutReply: "down" }), async () => {});
+  const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
+  const url = `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=stop-fallback-down`;
+  await session.cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: "sessionStorage.setItem('oiSettingsLag','80');"
+  }, session.sessionId);
+  await session.cdp.send("Page.navigate", { url }, session.sessionId);
+  await session.waitFor(`(() => {
+    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    const stop = document.getElementById("stopTranslate");
+    return doc.includes("全文已译") && (!stop || stop.hidden) ? "ready" : "";
+  })()`, "sample finishes translating", 60000);
+  await mutatePageTwo(session, version);
+  await session.cdp.send("Page.navigate", { url }, session.sessionId);
+  const clicked = await stopAsSoonAsShown(session);
+  assert.equal(clicked.error || "", "", JSON.stringify(clicked));
+  const opened = JSON.parse(await session.evaluate(`(async () => {
+    window.__oiAuto.layouts = [];
+    window.__oiAuto.layoutAt = [];
+    await globalThis.__oiOpenPage(2);
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    return JSON.stringify({
+      layouts: (window.__oiAuto && window.__oiAuto.layouts) || [],
+      layoutAt: (window.__oiAuto && window.__oiAuto.layoutAt) || []
+    });
+  })()`));
+  assert.deepEqual(opened.layouts.filter((page) => page === 2), [], `Stop still retried page 2 ${JSON.stringify(opened)}`);
+  const stored = await pageTwoLayouts(session);
+  assert.equal(stored.some((row) => row.mode === "local-ocr" && row.reason !== "http-502"), false, `Stop wrote a local-ocr row ${JSON.stringify(stored)}`);
+});
+
+test("Stop during an outdated page-2 re-zone sends no layout POST and writes no local-ocr row", { timeout: 180000 }, async (t) => {
+  const version = await currentLayoutVersion();
+  const library = await seedLocalOcrLibrary(version);
+  const session = await withChrome(t, chromeStub({ mode: "local-ocr", library, layoutReply: "ok" }), async () => {});
+  const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
+  const url = `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiHoldRaster=800&oiScene=stop-stale-hold`;
+  await session.cdp.send("Page.navigate", { url }, session.sessionId);
+  await session.waitFor(`(() => {
+    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    const stop = document.getElementById("stopTranslate");
+    return doc.includes("全文已译") && (!stop || stop.hidden) ? "ready" : "";
+  })()`, "sample finishes translating", 60000);
+  await mutatePageTwo(session, "source-v3:bb7f12b6e8bff084");
+  await session.cdp.send("Page.navigate", { url }, session.sessionId);
+  const clicked = await stopAsSoonAsShown(session);
+  assert.equal(clicked.error || "", "", JSON.stringify(clicked));
+  assert.equal(clicked.layouts.includes(2), false, `page 2 POSTed before Stop ${JSON.stringify(clicked)}`);
+  await sleep(2500);
+  const after = JSON.parse(await session.evaluate(`(() => JSON.stringify({
+    layouts: (window.__oiAuto && window.__oiAuto.layouts) || [],
+    layoutAt: (window.__oiAuto && window.__oiAuto.layoutAt) || []
+  }))()`));
+  const late = (after.layoutAt || []).filter((row) => row.page === 2 && row.at >= clicked.clickedAt);
+  assert.deepEqual(late, [], `Stop still POSTed page 2 ${JSON.stringify(after)}`);
+  const stored = await pageTwoLayouts(session);
+  assert.equal(stored.some((row) => row.mode === "local-ocr" && row.reason !== "http-502"), false, `Stop wrote a local-ocr row ${JSON.stringify(stored)}`);
+});
+

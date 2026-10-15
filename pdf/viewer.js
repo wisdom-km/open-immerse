@@ -8582,6 +8582,7 @@ async function seedLegacySkipPages() {
 
 /** New layout may replace skip blocks. It must not take the page out of the done count. */
 async function reconcileLockedSkipLayouts(isStale) {
+  if (docPhase === "stopped") return false;
   const epoch = layoutEpoch;
   const pages = [...skipLocked].sort((a, b) => a - b);
   for (const page of pages) {
@@ -8602,6 +8603,7 @@ async function reconcileLockedSkipLayouts(isStale) {
 }
 
 async function adoptLibraryPages(options = {}) {
+  if (docPhase === "stopped") return false;
   const onlyPage = Number(options.onlyPage) || 0;
   const stamp = docId;
   const epoch = layoutEpoch;
@@ -8625,7 +8627,7 @@ async function adoptLibraryPages(options = {}) {
   if (seedLibraryProgress() && stamp === docId) renderArticle();
   if (await seedLegacySkipPages() && stamp === docId) renderArticle();
   for (let page = start; page <= end; page += 1) {
-    if (stamp !== docId) return true;
+    if (stamp !== docId || docPhase === "stopped") return true;
     const entry = libraryEntry(page);
     let layout = getPageLayout(page);
     let blocks = layout?.blocks || null;
@@ -9247,13 +9249,13 @@ function abortForceRetranslate(work, prior, doc, page) {
 async function zoneForRetranslate(page, work) {
   const mode = pdfEngineMode();
   if (mode !== "local-ocr" && mode !== "cloud-ocr") return null;
+  const epoch = layoutEpoch;
+  if (docPhase === "stopped" || work?.aborted || !layoutAttemptLive(epoch)) return null;
   const version = knownLayoutVersion || await layoutVersionNow();
-  if (work?.aborted) return null;
+  if (docPhase === "stopped" || work?.aborted || !layoutAttemptLive(epoch)) return null;
   const current = getPageLayout(page);
   if (layoutCurrentForEngine(current, version, mode)) return null;
-  const epoch = layoutEpoch;
-  if (!layoutAttemptLive(epoch)) return null;
-  return ingestVendorLayout(page, mode, () => Boolean(work?.aborted) || !layoutAttemptLive(epoch), epoch);
+  return ingestVendorLayout(page, mode, () => docPhase === "stopped" || Boolean(work?.aborted) || !layoutAttemptLive(epoch), epoch);
 }
 
 async function forceRetranslateCurrentPage() {
@@ -9438,7 +9440,8 @@ async function retryPendingVendorLayouts(isStale, options = {}) {
   if (mode !== "local-ocr" && mode !== "cloud-ocr") return upgraded;
   // Captured when this pass was scheduled. Stop bumps the epoch, and a pass
   // that then reaches a page must not start that POST.
-  const epoch = Number.isFinite(options.epoch) ? options.epoch : layoutEpoch;
+  const epoch = options.epoch;
+  if (docPhase === "stopped" || !Number.isFinite(epoch)) return upgraded;
   if ((typeof isStale === "function" && isStale()) || !layoutAttemptLive(epoch)) return upgraded;
   const version = await layoutVersionNow();
   const total = pdfDoc?.numPages || 0;
@@ -9472,7 +9475,7 @@ async function retryPendingVendorLayouts(isStale, options = {}) {
   return upgraded;
 }
 
-async function ingestPageLayout(n, isStale, epoch = layoutEpoch) {
+async function ingestPageLayout(n, isStale, epoch) {
   if (!layoutAttemptLive(epoch)) return null;
   if (!isStale()) layoutNotice = "";
   await loadPdfLayout();
@@ -9578,15 +9581,17 @@ function abortInflightLayouts() {
  * One sidecar POST at a time. Retry backoff waits outside the lane, so the
  * page on screen is not stuck behind another page's 429/5xx sleeps.
  */
-function postVendorLayout(page, run, epoch = layoutEpoch) {
-  if (!layoutAttemptLive(epoch)) return Promise.reject(abortError());
+function postVendorLayout(page, run, epoch) {
+  const stopped = () => docPhase === "stopped" || !layoutAttemptLive(epoch);
+  if (stopped()) return Promise.reject(abortError());
   const key = Number(page) || 0;
   let notified = false;
   return runLaneAttempts(vendorLayoutLane, key, (attempt) => {
-    if (!layoutAttemptLive(epoch)) throw abortError();
+    if (stopped()) throw abortError();
     return run({
       signal: layoutAbort.signal,
       maxAttempts: 1,
+      shouldStop: stopped,
       onNetworkFailure: attempt === 0 && !notified
         ? () => {
           notified = true;
@@ -9596,11 +9601,15 @@ function postVendorLayout(page, run, epoch = layoutEpoch) {
   }, {
     priority: key === Number(pageNum),
     abortError,
-    shouldStop: () => !layoutAttemptLive(epoch)
+    shouldStop: stopped
   });
 }
 
-async function ingestVendorLayout(n, mode, isStale, epoch = layoutEpoch) {
+async function ingestVendorLayout(n, mode, isStale, epoch) {
+  if (docPhase === "stopped" || !layoutAttemptLive(epoch)) {
+    vendorLayoutReason.set(n, "aborted");
+    return null;
+  }
   const settings = cachedPdfLayout || normalizePdfLayout(null);
   if (mode === "cloud-ocr" && !shouldFetchCloud(settings)) {
     if (!isStale()) layoutNotice = LAYOUT_EMPTY_KEY_STATUS;
@@ -9643,7 +9652,7 @@ async function ingestVendorLayout(n, mode, isStale, epoch = layoutEpoch) {
   }
   // Stop during the raster or the zone wait. The epoch was captured when this
   // attempt was scheduled, so a POST that has not been sent does not start.
-  if (!layoutAttemptLive(epoch) || isStale()) {
+  if (docPhase === "stopped" || !layoutAttemptLive(epoch) || isStale()) {
     vendorLayoutReason.set(n, "aborted");
     return null;
   }
@@ -9654,14 +9663,15 @@ async function ingestVendorLayout(n, mode, isStale, epoch = layoutEpoch) {
   let recomputed = false;
   if (!mapped) {
     try {
-      const envelope = await postVendorLayout(n, ({ signal, maxAttempts, onNetworkFailure }) => {
-        if (!layoutAttemptLive(epoch)) throw abortError();
+      const envelope = await postVendorLayout(n, ({ signal, maxAttempts, onNetworkFailure, shouldStop }) => {
+        if (docPhase === "stopped" || !layoutAttemptLive(epoch)) throw abortError();
         const notify = () => {
           if (typeof onNetworkFailure === "function") onNetworkFailure();
           if (isStale()) return;
           layoutNotice = LAYOUT_FALLBACK_STATUS;
           if (!pdfTranslateBusy(session)) setStatus(layoutNotice);
         };
+        const stop = () => docPhase === "stopped" || (typeof shouldStop === "function" && shouldStop());
         return mode === "cloud-ocr"
           ? fetchCloudEnvelope({
             baseUrl: settings.cloudBaseUrl,
@@ -9670,6 +9680,7 @@ async function ingestVendorLayout(n, mode, isStale, epoch = layoutEpoch) {
             pngDataUrl: png,
             signal,
             maxAttempts,
+            shouldStop: stop,
             onNetworkFailure: notify
           })
           : fetchLocalEnvelope({
@@ -9680,6 +9691,7 @@ async function ingestVendorLayout(n, mode, isStale, epoch = layoutEpoch) {
             pixelHeight: raster.pixelHeight,
             signal,
             maxAttempts,
+            shouldStop: stop,
             onNetworkFailure: notify
           });
       }, epoch);
@@ -9864,6 +9876,8 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
 }
 
 async function renderPageRaster(page) {
+  const hold = viewerUnderTest() ? Number(globalThis.__oiHoldRasterMs) || 0 : 0;
+  if (hold > 0) await new Promise((resolve) => setTimeout(resolve, hold));
   const viewport = page.getViewport({ scale: CROP_SCALE });
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.floor(viewport.width));
@@ -9922,7 +9936,8 @@ async function ingestReadoutLayout(n, isStale) {
 async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
   if (skipLocked.has(n)) return [];
   const epoch = layoutEpoch;
-  const isStale = () => gen !== restoreGen || translatingDoc !== docId || !layoutAttemptLive(epoch);
+  if (docPhase === "stopped" || !layoutAttemptLive(epoch)) return [];
+  const isStale = () => gen !== restoreGen || translatingDoc !== docId || docPhase === "stopped" || !layoutAttemptLive(epoch);
   const layout = getPageLayout(n) || (await ingestPageLayout(n, isStale, epoch));
   if (!layout || isStale()) return [];
   if (work) {
@@ -10677,8 +10692,8 @@ function showOpenedLayout(layout, isStale) {
 }
 
 /** A stored text-layer fallback stays on screen while the vendor layout is tried again. */
-async function upgradeStoredFallback(n, mode, isStale, epoch = layoutEpoch) {
-  if (!layoutAttemptLive(epoch)) return;
+async function upgradeStoredFallback(n, mode, isStale, epoch) {
+  if (docPhase === "stopped" || !layoutAttemptLive(epoch)) return;
   const laid = await ingestVendorLayout(n, mode, isStale, epoch);
   vendorLayoutReason.delete(n);
   if (!laid || isStale()) return;

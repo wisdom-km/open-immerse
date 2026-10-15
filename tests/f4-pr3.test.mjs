@@ -2090,44 +2090,6 @@ test("migration fills pages when a page save already created the paper", async (
   assert.equal((await store.getLayout("partial-doc", 2, "unknown", "blocks-1")).layout.blocks[0].bid, "filled");
 });
 
-test("a notes reopen after versionchange waits for the upgrade before opening v1", () => {
-  const notes = read("lib/notes-store.js");
-  const connect = notes.slice(notes.indexOf("connectDatabase()"), notes.indexOf("async database()"));
-  const waited = connect.slice(connect.indexOf("await waitForNotesUpgrade()"));
-  assert.match(connect, /if \(!this\.needsUpgradeWait\) return this\.openConnection\(\)/);
-  assert.ok(waited.indexOf("this.openConnection()") > 0);
-  const database = notes.slice(notes.indexOf("async database()"), notes.indexOf("async databaseExists"));
-  assert.match(database, /this\.connectDatabase\(\)/);
-  assert.doesNotMatch(database, /this\.openConnection\(\)/);
-  assert.match(notes.slice(notes.indexOf("armNotesVersionChange(db"), notes.indexOf("return db;")), /needsUpgradeWait = true/);
-});
-
-test("loadCurrentPageText captures layoutEpoch before it awaits", () => {
-  const viewer = read("pdf/viewer.js");
-  const fn = viewer.slice(viewer.indexOf("async function loadCurrentPageText"), viewer.indexOf("function updatePager"));
-  const scheduled = fn.indexOf("const epoch = layoutEpoch");
-  const firstAwait = fn.indexOf("await ");
-  assert.ok(scheduled >= 0 && scheduled < firstAwait, "epoch is read after an await");
-  assert.equal(fn.indexOf("const epoch = layoutEpoch", scheduled + 1), -1);
-  assert.equal(fn.includes("const layoutEpochNow"), false);
-  assert.match(fn, /upgradeStoredFallback\(n, pdfEngineMode\(\), \(\) => isStale\(\) \|\| !layoutAttemptLive\(epoch\), epoch\)/);
-  assert.match(fn, /ingestVendorLayout\(n, mode, \(\) => isStale\(\) \|\| !layoutAttemptLive\(epoch\), epoch\)/);
-  assert.match(fn, /ingestPageLayout\(n, \(\) => isStale\(\) \|\| !layoutAttemptLive\(epoch\), epoch\)/);
-});
-
-test("persistPageLayout rechecks the scheduled epoch before it writes", () => {
-  const viewer = read("pdf/viewer.js");
-  const fn = viewer.slice(viewer.indexOf("function persistPageLayout"), viewer.indexOf("function persistPagePairs"));
-  const scheduled = fn.indexOf("const epoch = layoutEpoch");
-  const hash = fn.indexOf("await pdfByteHash");
-  const superseded = fn.indexOf("await layoutWriteSuperseded");
-  const live = fn.indexOf("if (!layoutAttemptLive(epoch)) return");
-  const mutate = fn.indexOf("live.layout = layout");
-  const save = fn.indexOf("await saveLibraryPage");
-  assert.ok(scheduled >= 0 && scheduled < hash, "epoch is captured after pdfByteHash");
-  assert.ok(live > superseded && live < mutate && live < save, "epoch is not rechecked before the write");
-});
-
 test("import keeps the migration record", async () => {
   const { store } = memoryStore({ now: () => 70 });
   await store.putLegacyDocument("doc-migrate", {
@@ -3692,18 +3654,18 @@ test("Stop cancels a queued vendor layout POST before it is sent or written", as
   assert.match(cancel, /vendorLayoutLane\.reset\(\)/);
   assert.doesNotMatch(cancel, /layoutClosed = true/);
   const postSource = viewer.slice(viewer.indexOf("function postVendorLayout"), viewer.indexOf("async function ingestVendorLayout"));
-  assert.match(postSource, /function postVendorLayout\(page, run, epoch = layoutEpoch\)/);
-  assert.match(postSource, /if \(!layoutAttemptLive\(epoch\)\) return Promise\.reject\(abortError\(\)\)/);
-  assert.match(postSource, /if \(!layoutAttemptLive\(epoch\)\) throw abortError\(\)/);
-  assert.doesNotMatch(postSource, /const epoch = layoutEpoch/);
+  assert.match(postSource, /function postVendorLayout\(page, run, epoch\)/);
+  assert.doesNotMatch(postSource, /epoch = layoutEpoch/);
+  assert.match(postSource, /docPhase === "stopped" \|\| !layoutAttemptLive\(epoch\)/);
   const ingest = viewer.slice(viewer.indexOf("async function ingestVendorLayout"), viewer.indexOf("async function ingestSkippedSourceLayout"));
-  assert.match(ingest, /if \(!layoutAttemptLive\(epoch\) \|\| isStale\(\)\)/);
+  assert.match(ingest, /docPhase === "stopped" \|\| !layoutAttemptLive\(epoch\) \|\| isStale\(\)/);
   assert.match(ingest, /postVendorLayout\(n,/);
-  assert.ok(ingest.indexOf("if (!layoutAttemptLive(epoch) || isStale())") < ingest.indexOf("postVendorLayout(n,"));
+  assert.ok(ingest.indexOf('if (docPhase === "stopped" || !layoutAttemptLive(epoch) || isStale())') < ingest.indexOf("postVendorLayout(n,"));
   assert.match(ingest, /if \(!layoutAttemptLive\(epoch\)\) return Promise\.resolve\(\)/);
   assert.match(ingest, /if \(recomputed && !layoutAttemptLive\(epoch\)\) return null/);
   const retry = viewer.slice(viewer.indexOf("async function retryPendingVendorLayouts"), viewer.indexOf("async function ingestPageLayout"));
-  assert.match(retry, /Number\.isFinite\(options\.epoch\) \? options\.epoch : layoutEpoch/);
+  assert.match(retry, /docPhase === "stopped" \|\| !Number\.isFinite\(epoch\)/);
+  assert.doesNotMatch(retry, /: layoutEpoch/);
   assert.ok(retry.indexOf("layoutAttemptLive(epoch)") < retry.indexOf("await layoutVersionNow()"));
   assert.match(viewer, /const layoutScheduled = layoutEpoch/);
   assert.match(viewer, /!layoutAttemptLive\(layoutScheduled\)/);
