@@ -34,7 +34,7 @@ F11 拆成：
 - **F4 PR-2**：平台骨架（`kv`、`library`）。文献库的 store 通过 `platform.library.open()` 拿到，不在 `library-store.js` 里直接 `indexedDB.open`。PDF 原文件走 `BlobStore`；桌面版原 PDF 落成文件。`StorageBackend` 只用 IndexedDB 和 SQLite 都能提供的能力，不把 IndexedDB 专有行为漏出接口：事务语义、索引范围和 persist 申请都藏在接口后面，不暴露 `IDBKeyRange`、`versionchange` 这类 IndexedDB 专有对象（persist 是可选能力）。再加一个共用的接口契约测试，IndexedDB 和 SQLite 两份实现都跑这份；这份测试以后要能跑一份 SQLite 实现（SQLite 假实现或 better-sqlite3 夹具）。
 - **F4 PR-3**：版面缓存改读写 IndexedDB 的 `layouts`（经 `platform.library`）。过渡期旧的 `oi-pdf-layout:*` 只经 `kv` 双读。8765 的读取和探测走 `net.fetch`。多标签页广播走 `bus`。
 - **F4 PR-5**（清理）：删掉过渡期经 `kv` 双读的 `oi-pdf-layout:*` 旧键。GLM-OCR 的启动走 `localServices`。
-- **P-A** 统一网络层：`lib/net/fetch.js`，挂在 `platform.net`。超时、重试、缓存、去重；日志里遮住 key；测试里未 mock 的真实请求会失败。厂商请求和 arXiv 下载已改走它，超时和重试次数跟今天一样（厂商无超时、无重试；arXiv 仍是 20 秒，由原来的 `fetchOne` 负责）。划区和阅读器里几处直连留着，原因写在调用点。不改用户可见行为。必须在 F7 之前合入，F7/F9 直接用。
+- **P-A** 统一网络层：`lib/net/fetch.js`，挂在 `platform.net`。超时、重试、缓存、去重；日志里遮住 key；测试里未 mock 的真实请求会失败。厂商请求和 arXiv 下载已改走它，超时和重试次数跟今天一样（厂商无超时、无重试；arXiv 仍是 20 秒，由原来的 `fetchOne` 负责）。划区、阅读器里几处直连，以及 8765 本地库读取留着，原因写在调用点。不改用户可见行为。必须在 F7 之前合入，F7/F9 直接用。
 - **P-B** `secrets`：和设置页重设计一起做。扩展放 `chrome.storage.local`；桌面版放系统钥匙串。
 - **P-C** `bus`。
 - **P-D** 小接口：剪贴板、外链、通知等。

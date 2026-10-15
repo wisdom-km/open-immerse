@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 
 import {
   TIMEOUT_MS,
@@ -22,6 +24,7 @@ test.afterEach(() => {
 });
 
 const SECRET = "sk-secret-should-not-leak-123456";
+const PLAIN_KEY = "plain-key-should-not-leak-987654";
 
 function llmCtx() {
   return {
@@ -96,10 +99,17 @@ function deferredTime() {
 }
 
 test("redaction masks keys, bearer tokens, and secret headers", () => {
-  const url = redactText(`https://example.test/v1?key=${SECRET}&ok=1`);
-  assert.equal(url.includes(SECRET), false);
-  assert.match(url, /key=\*\*\*/);
+  const url = redactText(
+    `https://alice:${PLAIN_KEY}@example.test/v1?key=${PLAIN_KEY}&x-api-key=${PLAIN_KEY}&access_key=${PLAIN_KEY}&ok=1`
+  );
+  assert.equal(url.includes(PLAIN_KEY), false);
+  assert.equal(url.includes("alice"), false);
+  assert.match(url, /\/\/\*\*\*:\*\*\*@example\.test/);
+  assert.match(url, /[?&]key=\*\*\*/);
+  assert.match(url, /x-api-key=\*\*\*/);
+  assert.match(url, /access_key=\*\*\*/);
   assert.match(url, /ok=1/);
+  assert.equal(redactText(`note ${SECRET}`).includes(SECRET), false);
   const headers = redactHeaders({
     Authorization: `Bearer ${SECRET}`,
     "x-api-key": SECRET,
@@ -126,7 +136,7 @@ test("logs drop secrets while the wire request keeps them", async () => {
     }
   });
   const res = await net.fetch({
-    url: `https://example.test/call?api_key=${SECRET}`,
+    url: `https://alice:${PLAIN_KEY}@example.test/call?api_key=${PLAIN_KEY}&x-api-key=${PLAIN_KEY}&access_key=${PLAIN_KEY}`,
     method: "POST",
     headers: { Authorization: `Bearer ${SECRET}`, "Content-Type": "application/json" },
     body: "{}",
@@ -137,10 +147,15 @@ test("logs drop secrets while the wire request keeps them", async () => {
   });
   assert.equal(res.ok, true);
   assert.equal(seen[0].authorization, `Bearer ${SECRET}`);
-  assert.equal(seen[0].url.includes(SECRET), true);
+  assert.equal(seen[0].url.includes(PLAIN_KEY), true);
+  assert.equal(seen[0].url.includes("alice"), true);
   assert.equal(JSON.stringify(logs).includes(SECRET), false);
+  assert.equal(JSON.stringify(logs).includes(PLAIN_KEY), false);
   assert.equal(logs[0].headers.Authorization, "***");
+  assert.match(logs[0].url, /\/\/\*\*\*:\*\*\*@/);
   assert.match(logs[0].url, /api_key=\*\*\*/);
+  assert.match(logs[0].url, /x-api-key=\*\*\*/);
+  assert.match(logs[0].url, /access_key=\*\*\*/);
 });
 
 test("fixtureTransport rejects an unregistered URL without calling fetch", async () => {
@@ -562,12 +577,12 @@ test("an unmocked provider call fails before the real fetch", async () => {
       () => providers.gemini.translate(["Hello"], {
         sourceLang: "en",
         targetLang: "zh-CN",
-        settings: { apiKey: SECRET, model: "gemini-2.0-flash" }
+        settings: { apiKey: PLAIN_KEY, model: "gemini-2.0-flash" }
       }),
       (err) => {
         assert.equal(err.code, "real-network-in-test");
         assert.match(err.message, /real network in test/);
-        assert.equal(err.message.includes(SECRET), false);
+        assert.equal(err.message.includes(PLAIN_KEY), false);
         assert.match(err.message, /key=\*\*\*/);
         return true;
       }
@@ -598,6 +613,53 @@ test("setPlatform swaps the transport used by providers", async () => {
   } finally {
     globalThis.fetch = prev;
   }
+});
+
+test("currentNet fetch runs in a context that has no process", async () => {
+  const sourceUrl = new URL("../lib/net/fetch.js", import.meta.url);
+  const source = readFileSync(sourceUrl, "utf8")
+    .replace(/^export const /gm, "const ")
+    .replace(/^export async function /gm, "async function ")
+    .replace(/^export function /gm, "function ");
+  const script = `${source}\nglobalThis.__net = { createNet, currentNet, installNet };\n`;
+  const calls = [];
+  const sandbox = {
+    AbortController,
+    AbortSignal,
+    URL,
+    URLSearchParams,
+    setTimeout,
+    clearTimeout,
+    structuredClone,
+    fetch(input, init) {
+      calls.push({ input, init });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ delivered: true })
+      };
+    }
+  };
+  vm.createContext(sandbox);
+  assert.equal(vm.runInContext("typeof process", sandbox), "undefined");
+  assert.equal(vm.runInContext("typeof Buffer", sandbox), "undefined");
+  assert.equal(vm.runInContext("typeof require", sandbox), "undefined");
+  vm.runInContext(script, sandbox, { filename: sourceUrl.pathname });
+  const target = "https://example.test/from-chrome?key=visible-on-wire";
+  const result = await sandbox.__net.currentNet().fetch({
+    url: target,
+    method: "POST",
+    purpose: "translate",
+    timeoutMs: false,
+    retry: false,
+    cache: false,
+    dedupeKey: false
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].input, target);
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(result.ok, true);
+  assert.equal(result.data.delivered, true);
 });
 
 test("arxiv production fetch keeps the 20s timeout and does not retry", async () => {
