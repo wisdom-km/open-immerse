@@ -1,6 +1,7 @@
 /** arXiv e-print client. Network, cooldown, and the oi-arxiv-src cache stay here. */
 
 import { unpackSource } from "../lib/arxiv-src-unpack.js";
+import { currentNet } from "../lib/net/fetch.js";
 
 export const ARXIV_DB = "oi-arxiv-src";
 export const MIN_GAP_MS = 3000;
@@ -400,10 +401,44 @@ export function createArxivSourceClient({
 
 let singleton = null;
 
+/**
+ * Production download goes through platform net. fetchOne still owns the 20s
+ * race, so this wrapper does not add a second timeout or a retry. A 403/429
+ * stays a 24h cooldown inside the client, not a net-level retry.
+ */
+export async function arxivNetFetch(url, init = {}) {
+  const result = await currentNet().fetch({
+    url: typeof url === "string" ? url : String(url?.url || url || ""),
+    method: init.method,
+    headers: init.headers,
+    body: init.body,
+    signal: init.signal,
+    purpose: "arxiv",
+    timeoutMs: false,
+    retry: false,
+    cache: false,
+    dedupeKey: false,
+    responseType: "bytes"
+  });
+  return {
+    ok: result.ok,
+    status: result.status,
+    headers: result.headers,
+    async arrayBuffer() {
+      const data = result.data;
+      if (data instanceof ArrayBuffer) return data;
+      if (ArrayBuffer.isView(data)) {
+        return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      }
+      return new ArrayBuffer(0);
+    }
+  };
+}
+
 export function sharedArxivSourceClient() {
   if (!singleton) {
     singleton = createArxivSourceClient({
-      fetch: (...args) => globalThis.fetch(...args),
+      fetch: arxivNetFetch,
       store: createIdbStore(),
       gunzip: gunzipBytes
     });
