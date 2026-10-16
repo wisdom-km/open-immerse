@@ -94,6 +94,19 @@ const providerKeyUi = new Map();
 let providerSecretPaint = null;
 let secretSyncBound = false;
 let secretReadTicket = 0;
+let pageClosed = false;
+let secretChangeListener = null;
+
+function pageAlive() {
+  return pageClosed !== true;
+}
+
+function stopSecretPage() {
+  pageClosed = true;
+  const listener = secretChangeListener;
+  secretChangeListener = null;
+  if (listener && chrome.storage?.onChanged?.removeListener) chrome.storage.onChanged.removeListener(listener);
+}
 
 export function startOptions() {
   return init();
@@ -670,7 +683,8 @@ async function syncAttentionBadge(options = {}) {
 function bindSecretSync() {
   if (secretSyncBound) return;
   secretSyncBound = true;
-  chrome.storage?.onChanged?.addListener((changes, area) => {
+  secretChangeListener = (changes, area) => {
+    if (!pageAlive()) return;
     if (area === "local" && changes[PROVIDER_ATTENTION_KEY]) void syncAttentionBadge({ trustStorage: true });
     const secretWrite = (area === "local" && Object.prototype.hasOwnProperty.call(changes, SECRET_STORAGE_KEY))
       || (area === "sync" && Object.prototype.hasOwnProperty.call(changes, "settings"));
@@ -678,18 +692,20 @@ function bindSecretSync() {
     const busy = new Set([...providerKeyHold, ...providerEdits.keys()]);
     const ticket = ++secretReadTicket;
     void runAfterSecretBagIdle(async () => {
-      if (ticket !== secretReadTicket) return;
+      if (!pageAlive() || ticket !== secretReadTicket) return;
       try {
         await reconcileOpenSecrets(busy);
       } catch {
         // Still paint whatever is stored now.
       }
-      if (ticket !== secretReadTicket) return;
+      if (!pageAlive() || ticket !== secretReadTicket) return;
       const live = await readLiveSecrets(chrome.storage);
-      if (ticket !== secretReadTicket) return;
+      if (!pageAlive() || ticket !== secretReadTicket) return;
       applyLiveSecrets(live, busy);
     }).catch(() => {});
-  });
+  };
+  chrome.storage?.onChanged?.addListener(secretChangeListener);
+  window.addEventListener("pagehide", stopSecretPage);
 }
 
 function applyLiveSecrets(live, busy = new Set()) {
@@ -947,7 +963,7 @@ async function reserveProviderSeq(id, want) {
     const next = Math.max(applied, Number(bag.seq[id]) || 0) + 1;
     bag.applied[id] = applied;
     bag.seq[id] = next;
-    bag.pending[id] = { seq: next, value: String(want ?? "") };
+    bag.pending[id] = { seq: next, value: String(want ?? ""), sent: false };
     await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: normalizeSecrets(bag) });
     return { id, seq: next, snapshot };
   });
@@ -978,10 +994,62 @@ async function commitLocalKey(id, want, seq) {
   });
 }
 
-const reconcileClears = new Set();
+const secretRepairs = new Set();
+
+async function deliverSecretRepair(message) {
+  let last = { ok: false };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!pageAlive()) return last;
+    try {
+      last = await chrome.runtime.sendMessage(message);
+      if (last && last.ok !== false) return last;
+    } catch {
+      last = { ok: false };
+    }
+  }
+  return last;
+}
+
+async function runSecretRepairs(repairs) {
+  for (const item of repairs) {
+    if (!pageAlive() || secretRepairs.has(item.id)) continue;
+    secretRepairs.add(item.id);
+    try {
+      await withEngineLock(item.id, async () => {
+        if (!pageAlive()) return;
+        const bag = await readProviderBag();
+        let syncKey = "";
+        try {
+          const syncBag = await chrome.storage.sync.get("settings");
+          syncKey = String(syncBag?.settings?.providers?.[item.id]?.apiKey || "");
+        } catch {
+          return;
+        }
+        const decision = decideKeyReconcile(bag, item.id, syncKey);
+        if (decision.action !== item.action) return;
+        if (decision.action === "writeSync" && decision.value !== item.value) return;
+        const message = decision.action === "clearSync"
+          ? {
+              type: "OI_SAVE_SETTINGS",
+              patch: { providers: { [item.id]: { apiKey: "" } } },
+              clear: { providers: [item.id] },
+              keySeq: { [item.id]: decision.seq }
+            }
+          : {
+              type: "OI_SAVE_SETTINGS",
+              patch: { providers: { [item.id]: { apiKey: decision.value } } },
+              keySeq: { [item.id]: decision.seq }
+            };
+        await deliverSecretRepair(message);
+      });
+    } finally {
+      secretRepairs.delete(item.id);
+    }
+  }
+}
 
 async function reconcileOpenSecrets(skipIds = new Set()) {
-  const clears = [];
+  const repairs = [];
   const locked = await withSecretBagLock(async () => {
     const bag = await readProviderBag();
     let syncSettings = {};
@@ -1008,32 +1076,25 @@ async function reconcileOpenSecrets(skipIds = new Set()) {
         bag.seq[id] = Math.max(Number(bag.seq[id]) || 0, decision.seq);
         if (bag.pending?.[id]) delete bag.pending[id];
         changed = true;
-      } else if (decision.action === "clearSync") {
-        const token = `${id}:${decision.seq}:${syncKey}`;
-        if (!reconcileClears.has(token)) {
-          reconcileClears.add(token);
-          clears.push({ id, seq: decision.seq });
+      } else if (decision.action === "dropPending") {
+        if (bag.pending?.[id]) {
+          delete bag.pending[id];
+          changed = true;
+        }
+      } else if (decision.action === "clearSync" || decision.action === "writeSync") {
+        repairs.push({ id, action: decision.action, value: decision.value, seq: decision.seq });
+        const pending = bag.pending?.[id];
+        if (pending && pending.sent !== true && String(pending.value ?? "") === "") {
+          delete bag.pending[id];
+          changed = true;
         }
       }
     }
     if (changed) await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: normalizeSecrets(bag) });
     return { ok: true };
   }, { ifAvailable: true });
-  if (!locked || locked.skipped) return;
-  for (const item of clears) {
-    await withEngineLock(item.id, async () => {
-      try {
-        await chrome.runtime.sendMessage({
-          type: "OI_SAVE_SETTINGS",
-          patch: { providers: { [item.id]: { apiKey: "" } } },
-          clear: { providers: [item.id] },
-          keySeq: { [item.id]: item.seq }
-        });
-      } catch {
-        // The next settings read sees the same tombstone if sync still has the key.
-      }
-    });
-  }
+  if (!locked || locked.skipped || !pageAlive()) return;
+  await runSecretRepairs(repairs);
 }
 
 async function overlayLocalKeyOpinion() {
@@ -1072,8 +1133,26 @@ async function verifyProviderKey(id, want, seq) {
   return { ok: false };
 }
 
+async function markPendingSent(id, seq) {
+  await withSecretBagLock(async () => {
+    const bag = await readProviderBag();
+    const pending = bag.pending?.[id];
+    if (!pending || Number(pending.seq) !== seq) return;
+    pending.sent = true;
+    await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: normalizeSecrets(bag) });
+  });
+}
+
 async function sendProviderKey(id, apiKey, clear) {
-  return withEngineLock(id, () => sendProviderKeyLocked(id, apiKey, clear));
+  const res = await withEngineLock(id, () => sendProviderKeyLocked(id, apiKey, clear));
+  if (pageAlive() && res && res.closed !== true && res.ok !== false) {
+    try {
+      await reconcileOpenSecrets();
+    } catch {
+      // The confirmed local key still paints. The next open compares sync again.
+    }
+  }
+  return res;
 }
 
 async function sendProviderKeyLocked(id, apiKey, clear) {
@@ -1084,6 +1163,15 @@ async function sendProviderKeyLocked(id, apiKey, clear) {
   } catch {
     return { ok: false };
   }
+  if (!pageAlive()) return { ok: false, closed: true };
+  try {
+    await markPendingSent(id, reserved.seq);
+  } catch {
+    if (!pageAlive()) return { ok: false, closed: true };
+    await rollbackReservation(reserved);
+    return { ok: false };
+  }
+  if (!pageAlive()) return { ok: false, closed: true };
   let res;
   try {
     res = await chrome.runtime.sendMessage({
@@ -1093,14 +1181,17 @@ async function sendProviderKeyLocked(id, apiKey, clear) {
       keySeq: { [id]: reserved.seq }
     });
   } catch {
+    if (!pageAlive()) return { ok: false, closed: true };
     await rollbackReservation(reserved);
     return { ok: false };
   }
+  if (!pageAlive()) return { ok: false, closed: true };
   if (!res || res.ok === false) {
     await rollbackReservation(reserved);
     return { ok: false };
   }
   const verified = await verifyProviderKey(id, want, reserved.seq);
+  if (!pageAlive()) return { ok: false, closed: true };
   if (!verified.ok) {
     await rollbackReservation(reserved);
     return { ok: false };
@@ -1112,15 +1203,28 @@ async function sendProviderKeyLocked(id, apiKey, clear) {
       return { ok: false };
     }
   }
+  if (!pageAlive()) return { ok: false, closed: true };
   return res;
 }
 
 function queueProviderKey(id, apiKey, clear, before, ticket) {
   return enqueueProviderKey(id, async () => {
     const res = await sendProviderKey(id, apiKey, clear);
-    if (!ownsProviderKey(id, ticket)) return res;
+    if (!ownsProviderKey(id, ticket) || !pageAlive() || res?.closed) return res;
+    const want = clear ? "" : String(apiKey ?? "");
     cachedSettings.providers = cachedSettings.providers || {};
-    if (!res.ok) {
+    let saved = Boolean(res?.ok);
+    if (!saved) {
+      try {
+        await reconcileOpenSecrets();
+        const bag = await readProviderBag();
+        saved = String(bag.providers?.[id] || "") === want;
+      } catch {
+        saved = false;
+      }
+    }
+    if (!pageAlive()) return res;
+    if (!saved) {
       cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: before });
       if (providerEdits.get(id) === apiKey) providerEdits.delete(id);
       renderProviderFields();
@@ -1554,6 +1658,7 @@ function bindData() {
   });
   dataPanel.coordinator?.subscribe?.(() => refreshBadges());
   window.addEventListener("pagehide", () => {
+    stopSecretPage();
     void dataPanel?.closeData?.();
   });
 }

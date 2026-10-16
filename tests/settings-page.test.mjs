@@ -136,6 +136,7 @@ function installChrome(seed = {}) {
     holdNextSyncSet: null,
     failHeldSync: false,
     failNextKeyCommit: false,
+    failClearTimes: 0,
     legacyBackground: false
   };
   function area(bag, name) {
@@ -208,6 +209,10 @@ function installChrome(seed = {}) {
         }
         if (message.type === "OI_SAVE_SETTINGS") {
           if (api.failSave) return { ok: false };
+          if (message.clear?.providers?.length && api.failClearTimes > 0) {
+            api.failClearTimes -= 1;
+            return { ok: false };
+          }
           if (message.keySeq && api.failKeySeq && Object.values(message.keySeq).some((n) => Number(n) === Number(api.failKeySeq))) {
             api.failNextSync = true;
           }
@@ -238,6 +243,10 @@ function installChrome(seed = {}) {
       onChanged: {
         addListener(fn) {
           listeners.push(fn);
+        },
+        removeListener(fn) {
+          const index = listeners.indexOf(fn);
+          if (index >= 0) listeners.splice(index, 1);
         }
       }
     },
@@ -1426,6 +1435,8 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
     myPat: "v-myPat",
     github_pat: "v-github_pat",
     ghPat: "v-ghPat",
+    xpat: "v-xpat",
+    githubpat: "v-githubpat",
     cOoKiEs: "v-cOoKiEs",
     CLOUDAPIKEY: "v-CLOUDAPIKEY",
     aPiKeY: "v-aPiKeY",
@@ -1468,7 +1479,8 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
       maxTokens2: 50,
       comPat: "keep-compat",
       myPatient: "keep-mypatient",
-      xpat: "keep-xpat",
+      xpath: "keep-xpath",
+      token: "keep-bare-token",
       key2: "keep-key-2",
       "Content-Type": "application/json",
       arxiv: { key: "keep-arxiv" },
@@ -1509,7 +1521,8 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
   assert.equal(prepared.settings.maxTokens2, 50);
   assert.equal(prepared.settings.comPat, "keep-compat");
   assert.equal(prepared.settings.myPatient, "keep-mypatient");
-  assert.equal(prepared.settings.xpat, "keep-xpat");
+  assert.equal(prepared.settings.xpath, "keep-xpath");
+  assert.equal(prepared.settings.token, "keep-bare-token");
   assert.equal(prepared.settings.key2, "keep-key-2");
   assert.equal(prepared.settings["Content-Type"], "application/json");
   assert.equal(prepared.settings.arxiv.key, "keep-arxiv");
@@ -1524,7 +1537,7 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
   assert.equal(onlyPdf.ignoredKeys, true);
   assert.equal(onlyPdf.settings.pdfLayout, undefined);
   assert.equal(settingsImportHasChanges(onlyPdf.settings), false);
-  for (const name of ["apiKey2", "api2Key", "password2", "token2", "auth2", "clientSecret2", "jwt", "sessionCookie", "pat", "x-pat", "myPat", "github_pat", "ghPat", "cOoKiEs", "CLOUDAPIKEY", "aPiKeY", "encryptionKey", "aws_access_key_id"]) {
+  for (const name of ["apiKey2", "api2Key", "password2", "token2", "auth2", "clientSecret2", "jwt", "sessionCookie", "pat", "x-pat", "myPat", "github_pat", "ghPat", "xpat", "githubpat", "cOoKiEs", "CLOUDAPIKEY", "aPiKeY", "encryptionKey", "aws_access_key_id"]) {
     const lone = prepareSettingsImport({ settings: { [name]: "only-one" } });
     assert.equal(lone.ignoredKeys, true, name);
     assert.equal(settingsImportHasChanges(lone.settings), false, name);
@@ -1980,6 +1993,7 @@ test("releasing the lock on unload lets a new page remove the key before a stale
     stale.value = "sk-stale-AAAA";
     fire(stale, "blur");
     await flush();
+    pageA.window.dispatchEvent(new pageA.window.Event("pagehide"));
     releaseHeldEngineLocks();
     const pageB = mountPage("#translate");
     const modB = await import(`../options/options.js?unload-lock=${label}-b`);
@@ -2004,6 +2018,7 @@ test("releasing the lock on unload lets a new page remove the key before a stale
       assert.equal(JSON.stringify(chrome.sync.settings).includes("sk-stale-AAAA"), false, label);
       assert.equal(JSON.stringify(chrome.local).includes("sk-stale-AAAA"), false, label);
       assert.equal(pageB.document.querySelector("[data-key-slot='translate'] input").value, "");
+      assert.equal(String(pageA.document.getElementById("setToast").textContent || "").includes("没保存上"), false, `${label} unloaded page kept running`);
     } finally {
       releaseSync();
       releaseHeldEngineLocks();
@@ -2080,7 +2095,7 @@ test("reconcile keeps a tombstone and does not adopt a stale sync key", async ()
     providers: { openai: "" },
     seq: { openai: 3 },
     applied: { openai: 2 },
-    pending: { openai: { seq: 3, value: "" } }
+    pending: { openai: { seq: 3, value: "", sent: true } }
   }, "openai", "sk-stale-AAAA");
   assert.equal(pendingClear.action, "clearSync");
   const tombstone = decideKeyReconcile({
@@ -2103,6 +2118,217 @@ test("reconcile keeps a tombstone and does not adopt a stale sync key", async ()
     applied: { openai: 5 },
     pending: {}
   }, "openai", OPENAI_KEY);
-  assert.equal(staleSync.action, "keep");
-  assert.notEqual(staleSync.action, "clearSync");
+  assert.equal(staleSync.action, "writeSync");
+  assert.equal(staleSync.value, "sk-local-KEEP");
+  const unsentClear = decideKeyReconcile({
+    providers: { openai: OPENAI_KEY },
+    seq: { openai: 2 },
+    applied: { openai: 1 },
+    pending: { openai: { seq: 2, value: "", sent: false } }
+  }, "openai", "");
+  assert.equal(unsentClear.action, "dropPending");
+  assert.notEqual(unsentClear.action, "commit");
+  const sentClear = decideKeyReconcile({
+    providers: { openai: OPENAI_KEY },
+    seq: { openai: 2 },
+    applied: { openai: 1 },
+    pending: { openai: { seq: 2, value: "", sent: true } }
+  }, "openai", "");
+  assert.equal(sentClear.action, "commit");
+  assert.equal(sentClear.value, "");
+});
+
+test("a late stale key on the old background does not stay in sync after a newer key is confirmed", async () => {
+  const chrome = installChrome({ settings: savedSettings() });
+  chrome.legacyBackground = true;
+  const pageA = mountPage("#translate");
+  const modA = await import("../options/options.js?stale-sync=a");
+  await modA.startOptions();
+  await flush();
+  let releaseSync = () => {};
+  chrome.holdNextSyncSet = new Promise((resolve) => {
+    releaseSync = resolve;
+  });
+  const stale = pageA.document.querySelector("[data-key-slot='translate'] input");
+  stale.value = "sk-stale-AAAA";
+  fire(stale, "blur");
+  await flush();
+  pageA.window.dispatchEvent(new pageA.window.Event("pagehide"));
+  releaseHeldEngineLocks();
+  const pageB = mountPage("#translate");
+  const modB = await import("../options/options.js?stale-sync=b");
+  try {
+    await modB.startOptions();
+    await flush();
+    const keyB = pageB.document.querySelector("[data-key-slot='translate'] input");
+    keyB.value = "sk-keep-BBBB";
+    fire(keyB, "blur");
+    await settle();
+    assert.equal(chrome.sync.settings.providers.openai.apiKey, "sk-keep-BBBB");
+    assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), "sk-keep-BBBB");
+    releaseSync();
+    await settle();
+    assert.equal(chrome.sync.settings.providers.openai.apiKey, "sk-keep-BBBB");
+    assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), "sk-keep-BBBB");
+    assert.equal(pageB.document.querySelector("[data-key-slot='translate'] input").value.includes("BBBB"), true);
+    assert.equal(JSON.stringify(chrome.sync.settings).includes("sk-stale-AAAA"), false);
+    const reopened = mountPage("#translate");
+    const modC = await import("../options/options.js?stale-sync=c");
+    await modC.startOptions();
+    await settle();
+    assert.equal(chrome.sync.settings.providers.openai.apiKey, "sk-keep-BBBB");
+    assert.equal(reopened.document.querySelector("[data-key-slot='translate'] input").value.includes("BBBB"), true);
+  } finally {
+    releaseSync();
+    releaseHeldEngineLocks();
+    await settle();
+  }
+});
+
+test("a failed save rolls the pdf cloud key back with the provider keys", async () => {
+  const chrome = installChrome({ settings: savedSettings() });
+  useTestLocks();
+  await getSettings();
+  let release;
+  chrome.holdNextSyncSet = new Promise((resolve) => {
+    release = resolve;
+  });
+  const saving = saveSettings({ pdfLayout: { cloudApiKey: "pdf-new-NOPE" } });
+  await flush();
+  const claude = saveSettings({ providers: { claude: { apiKey: "sk-claude-KEEP" } } }, {}, { claude: 1 });
+  await flush();
+  chrome.failHeldSync = true;
+  release();
+  const saved = await saving;
+  await claude;
+  assert.equal(saved.settingsSaved, false);
+  assert.equal(String(chrome.local.oiSecrets.pdfCloudApiKey || ""), PDF_KEY);
+  assert.equal(JSON.stringify(chrome.local).includes("pdf-new-NOPE"), false);
+  assert.equal(chrome.local.oiSecrets.providers.claude, "sk-claude-KEEP");
+});
+
+test("a reserved removal that was never sent is not applied on the next open", async () => {
+  const chrome = installChrome({
+    settings: {
+      ...savedSettings(),
+      providers: {
+        openai: { apiKey: "", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" }
+      }
+    },
+    local: {
+      oiSecrets: {
+        providers: { openai: OPENAI_KEY },
+        pdfCloudApiKey: PDF_KEY,
+        seq: { openai: 2 },
+        applied: { openai: 1 },
+        pending: { openai: { seq: 2, value: "", sent: false } }
+      }
+    }
+  });
+  const page = mountPage("#translate");
+  const mod = await import("../options/options.js?unsent-clear=1");
+  await mod.startOptions();
+  await settle();
+  assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), OPENAI_KEY);
+  assert.equal(chrome.local.oiSecrets.pending?.openai, undefined);
+  assert.equal(page.document.querySelector("[data-key-slot='translate'] input").value.includes("f9a"), true);
+});
+
+test("a saved key does not toast failure, and a failed clear is retried on the same page", async () => {
+  const newer = "sk-sync-NEW1";
+  const chrome = installChrome({
+    settings: savedSettings(),
+    local: { oiSecrets: { providers: { openai: OPENAI_KEY }, pdfCloudApiKey: PDF_KEY, seq: {}, applied: {} } }
+  });
+  chrome.legacyBackground = true;
+  const page = mountPage("#translate");
+  const mod = await import("../options/options.js?toast-and-retry=1");
+  await mod.startOptions();
+  await flush();
+  chrome.failNextKeyCommit = true;
+  const key = page.document.querySelector("[data-key-slot='translate'] input");
+  key.value = newer;
+  fire(key, "blur");
+  await settle();
+  assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), newer);
+  assert.equal(String(page.document.getElementById("setToast").textContent || "").includes("没保存上"), false);
+
+  chrome.sync.settings.providers.openai.apiKey = "sk-stale-AAAA";
+  chrome.local.oiSecrets.providers.openai = "";
+  chrome.local.oiSecrets.applied = { openai: 3 };
+  chrome.local.oiSecrets.seq = { openai: 3 };
+  chrome.failClearTimes = 1;
+  await globalThis.chrome.storage.local.set({ oiSecrets: chrome.local.oiSecrets });
+  await settle();
+  assert.equal(String(chrome.sync.settings.providers.openai.apiKey || ""), "");
+});
+
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test("seeded secret interleaving keeps each confirmed key for 200 trials", async () => {
+  const { decideKeyReconcile } = await import("../lib/settings-secrets.js");
+  for (let trial = 0; trial < 200; trial += 1) {
+    const rand = mulberry32(0xA11CE + trial);
+    const chrome = installChrome({
+      settings: savedSettings(),
+      local: {
+        oiSecrets: {
+          providers: { openai: OPENAI_KEY },
+          pdfCloudApiKey: PDF_KEY,
+          seq: { openai: 1 },
+          applied: { openai: 1 },
+          pending: {}
+        }
+      }
+    });
+    useTestLocks();
+    await getSettings();
+    let openai = OPENAI_KEY;
+    let openaiSeq = 1;
+    let claude = "";
+    const steps = 3 + Math.floor(rand() * 3);
+    for (let step = 0; step < steps; step += 1) {
+      const kind = rand();
+      if (kind < 0.45) {
+        const key = `sk-o-${trial.toString(16)}-${step}`;
+        openaiSeq += 1;
+        const saved = await saveSettings({ providers: { openai: { apiKey: key } } }, {}, { openai: openaiSeq });
+        if (saved.settingsSaved !== false) openai = key;
+      } else if (kind < 0.7) {
+        const key = `sk-c-${trial.toString(16)}-${step}`;
+        const saved = await saveSettings({ providers: { claude: { apiKey: key } } }, {}, { claude: step + 1 });
+        if (saved.settingsSaved !== false) claude = key;
+      } else if (kind < 0.85) {
+        const next = `pdf-${trial}-${step}`;
+        const before = String(chrome.local.oiSecrets.pdfCloudApiKey || "");
+        chrome.failNextSync = rand() < 0.5;
+        const saved = await saveSettings({ pdfLayout: { mode: "cloud", cloudApiKey: next } });
+        if (saved.settingsSaved === false) {
+          assert.equal(String(chrome.local.oiSecrets.pdfCloudApiKey || ""), before, `trial ${trial} pdf rollback`);
+        }
+      } else {
+        const planted = `sk-stale-${trial}`;
+        chrome.sync.settings.providers.openai.apiKey = planted;
+        chrome.local.oiSecrets.pending = {
+          ...(chrome.local.oiSecrets.pending || {}),
+          openai: { seq: openaiSeq + 1, value: "", sent: false }
+        };
+        const decision = decideKeyReconcile(chrome.local.oiSecrets, "openai", planted);
+        assert.notEqual(decision.action, "commit", `trial ${trial} unsent clear`);
+        assert.equal(decision.action, "writeSync", `trial ${trial} stale sync`);
+        assert.equal(decision.value, openai, `trial ${trial} sync target`);
+        delete chrome.local.oiSecrets.pending.openai;
+      }
+    }
+    assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), openai, `trial ${trial} openai`);
+    if (claude) assert.equal(chrome.local.oiSecrets.providers.claude, claude, `trial ${trial} claude`);
+  }
 });
