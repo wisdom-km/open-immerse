@@ -261,6 +261,13 @@ button {
 }
 @keyframes oi-set-spin { to { transform: rotate(360deg); } }
 
+/* Settings page is light only. Soft is the same translucent treatment
+   as the reader light warn, on this hue. The reader keeps its own warn. */
+body.oi-settings {
+  --oi-warn: #8A4B0F;
+  --oi-warn-soft: rgba(138, 75, 15, 0.08);
+}
+
 @media (max-width: 720px) {
   .options-shell { grid-template-columns: 1fr; padding: 24px 16px 32px; }
   .options-nav { position: static; }

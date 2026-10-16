@@ -22,6 +22,9 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { focusFormulaCard, renderFormulaPanel } from "../lib/formula-settings-ui.js";
+import { mountDataPanel, readDataFocus } from "./data-panel.js";
+import { sharedLibraryStore } from "../lib/library-session.js";
+import { downloadBlob } from "../lib/export.js";
 
 function el(id) {
   return document.getElementById(id);
@@ -431,25 +434,59 @@ function bindFormulaSettings() {
   }).catch(() => paintFormulaSettings());
 }
 
+let dataPanel = null;
+
+function ensureDataPanel(focus) {
+  const root = document.getElementById("data");
+  if (!root) return null;
+  if (!dataPanel) {
+    dataPanel = mountDataPanel(root, {
+      store: sharedLibraryStore(),
+      focus: focus || null,
+      history,
+      hash: "#data",
+      openData({ focus: next }) {
+        showOptionsPanel(`data?focus=${next || "import"}`);
+      },
+      download(filename, text) {
+        return downloadBlob(filename, new Blob([text], { type: "application/json" })) === true;
+      }
+    });
+    return dataPanel;
+  }
+  if (focus) dataPanel.focus(focus);
+  return dataPanel;
+}
+
+function showOptionsPanel(raw) {
+  const tabs = [...document.querySelectorAll("[data-nav]")];
+  const text = String(raw || "").replace(/^#/, "");
+  const focus = readDataFocus(text.startsWith("data") ? `#${text}` : "");
+  const base = text.split("?")[0];
+  const next = ["engine", "reading", "features", "advanced", "formula", "data"].includes(base) ? base : "engine";
+  document.querySelectorAll("[data-panel]").forEach((panel) => {
+    const on = panel.dataset.panel === next;
+    panel.classList.toggle("is-on", on);
+    panel.hidden = !on;
+  });
+  tabs.forEach((tab) => {
+    tab.setAttribute("aria-selected", tab.dataset.nav === next ? "true" : "false");
+  });
+  const footer = document.querySelector(".actions-bar");
+  if (footer) footer.hidden = next === "data";
+  if (next === "data") ensureDataPanel(focus);
+  const wanted = next === "data" ? "#data" : `#${next}`;
+  if (location.hash !== wanted) history.replaceState(null, "", wanted);
+}
+
 function bindPanelNav() {
   const tabs = [...document.querySelectorAll("[data-nav]")];
-  const show = (id) => {
-    const next = ["engine", "reading", "features", "advanced", "formula"].includes(id) ? id : "engine";
-    document.querySelectorAll("[data-panel]").forEach((panel) => {
-      const on = panel.dataset.panel === next;
-      panel.classList.toggle("is-on", on);
-      panel.hidden = !on;
-    });
-    tabs.forEach((tab) => {
-      tab.setAttribute("aria-selected", tab.dataset.nav === next ? "true" : "false");
-    });
-    if (location.hash.replace("#", "") !== next) {
-      history.replaceState(null, "", `#${next}`);
-    }
-  };
   tabs.forEach((tab) => {
-    tab.addEventListener("click", () => show(tab.dataset.nav));
+    tab.addEventListener("click", () => showOptionsPanel(tab.dataset.nav));
   });
-  window.addEventListener("hashchange", () => show(location.hash.replace("#", "")));
-  show(location.hash.replace("#", "") || "engine");
+  window.addEventListener("hashchange", () => showOptionsPanel(location.hash));
+  window.addEventListener("pagehide", () => {
+    void dataPanel?.closeData?.();
+  });
+  showOptionsPanel(location.hash.replace("#", "") || "engine");
 }
