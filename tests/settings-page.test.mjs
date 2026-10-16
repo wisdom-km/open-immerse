@@ -1431,6 +1431,9 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
     sessionCookie: "v-sessionCookie",
     "set-cookie": "v-set-cookie",
     pat: "v-pat",
+    xpat: "v-xpat-run",
+    githubpat: "v-githubpat-run",
+    mypat: "v-mypat-run",
     "x-pat": "v-x-pat",
     myPat: "v-myPat",
     github_pat: "v-github_pat",
@@ -1478,8 +1481,6 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
       comPat: "keep-compat",
       myPatient: "keep-mypatient",
       xpath: "keep-xpath",
-      xpat: "keep-xpat",
-      githubpat: "keep-githubpat",
       browserCompat: "keep-browser-compat",
       cssCompat: "keep-css-compat",
       token: "keep-bare-token",
@@ -1524,8 +1525,8 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
   assert.equal(prepared.settings.comPat, "keep-compat");
   assert.equal(prepared.settings.myPatient, "keep-mypatient");
   assert.equal(prepared.settings.xpath, "keep-xpath");
-  assert.equal(prepared.settings.xpat, "keep-xpat");
-  assert.equal(prepared.settings.githubpat, "keep-githubpat");
+  assert.equal(prepared.settings.xpat, undefined);
+  assert.equal(prepared.settings.githubpat, undefined);
   assert.equal(prepared.settings.browserCompat, "keep-browser-compat");
   assert.equal(prepared.settings.cssCompat, "keep-css-compat");
   assert.equal(prepared.settings.token, "keep-bare-token");
@@ -1543,7 +1544,7 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
   assert.equal(onlyPdf.ignoredKeys, true);
   assert.equal(onlyPdf.settings.pdfLayout, undefined);
   assert.equal(settingsImportHasChanges(onlyPdf.settings), false);
-  for (const name of ["apiKey2", "api2Key", "password2", "token2", "auth2", "clientSecret2", "jwt", "sessionCookie", "pat", "x-pat", "myPat", "github_pat", "ghPat", "cOoKiEs", "CLOUDAPIKEY", "aPiKeY", "encryptionKey", "aws_access_key_id"]) {
+  for (const name of ["apiKey2", "api2Key", "password2", "token2", "auth2", "clientSecret2", "jwt", "sessionCookie", "pat", "xpat", "githubpat", "mypat", "x-pat", "myPat", "github_pat", "ghPat", "cOoKiEs", "CLOUDAPIKEY", "aPiKeY", "encryptionKey", "aws_access_key_id"]) {
     const lone = prepareSettingsImport({ settings: { [name]: "only-one" } });
     assert.equal(lone.ignoredKeys, true, name);
     assert.equal(settingsImportHasChanges(lone.settings), false, name);
@@ -1558,11 +1559,40 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
   assert.equal(onlyLayout.ignoredKeys, true);
   assert.equal(onlyLayout.settings.pdfLayout, undefined);
   assert.equal(settingsImportHasChanges(onlyLayout.settings), false);
-  const exported = settingsForExport({ apiKey2: "export-api-2", jwt: "export-jwt", accessKey: "keep-access", keyCode: "keep-keycode" });
+  const exported = settingsForExport({
+    apiKey2: "export-api-2",
+    jwt: "export-jwt",
+    accessKey: "keep-access",
+    keyCode: "keep-keycode",
+    oiAppliedSeq: 4,
+    providers: { openai: { apiKey: "sk-export", oiAppliedSeq: 9, model: "gpt-4o-mini" } },
+    nested: { oiAppliedSeq: 2, leftpat: "keep-leftpat" }
+  });
   assert.equal(JSON.stringify(exported).includes("export-api-2"), false);
   assert.equal(JSON.stringify(exported).includes("export-jwt"), false);
+  assert.equal(JSON.stringify(exported).includes("oiAppliedSeq"), false);
   assert.equal(exported.accessKey, "keep-access");
   assert.equal(exported.keyCode, "keep-keycode");
+  assert.equal(exported.oiAppliedSeq, undefined);
+  assert.equal(exported.providers.openai.oiAppliedSeq, undefined);
+  assert.equal(exported.providers.openai.apiKey, undefined);
+  assert.equal(exported.providers.openai.model, "gpt-4o-mini");
+  assert.equal(exported.nested.oiAppliedSeq, undefined);
+  assert.equal(exported.nested.leftpat, "keep-leftpat");
+  const importedSeq = prepareSettingsImport({
+    settings: {
+      targetLang: "ja",
+      oiAppliedSeq: 4,
+      providers: { openai: { oiAppliedSeq: 8, baseUrl: "https://api.openai.com/v1" } },
+      list: [{ oiAppliedSeq: 1, patch: "keep-patch" }]
+    }
+  });
+  assert.equal(importedSeq.settings.oiAppliedSeq, undefined);
+  assert.equal(importedSeq.settings.targetLang, "ja");
+  assert.equal(importedSeq.settings.providers.openai.oiAppliedSeq, undefined);
+  assert.equal(importedSeq.settings.providers.openai.baseUrl, "https://api.openai.com/v1");
+  assert.equal(importedSeq.settings.list[0].oiAppliedSeq, undefined);
+  assert.equal(importedSeq.settings.list[0].patch, "keep-patch");
 });
 
 test("a key-only import does not save or clear pdf layout", async () => {
@@ -2542,7 +2572,7 @@ test("a higher pending seq defers a write the recorded sync seq would still allo
   assert.notEqual(sent.seq, 8);
 });
 
-test("pat is a secret only when it is its own segment", async () => {
+test("run-together pat names are stripped and ordinary pat endings stay", async () => {
   const kept = prepareSettingsImport({
     settings: {
       leftpat: "keep-leftpat",
@@ -2555,7 +2585,7 @@ test("pat is a secret only when it is its own segment", async () => {
   assert.equal(kept.settings.wirecompat, "keep-wirecompat");
   assert.equal(kept.settings.browserCompat, "keep-browser-compat");
   assert.equal(kept.settings.cssCompat, "keep-css-compat");
-  for (const name of ["pats", "compatPat", "notAnApiKeyField"]) {
+  for (const name of ["pats", "compatPat", "notAnApiKeyField", "xpat", "githubpat", "mypat"]) {
     const stripped = prepareSettingsImport({ settings: { [name]: "only-one" } });
     assert.equal(stripped.ignoredKeys, true, name);
     assert.equal(settingsImportHasChanges(stripped.settings), false, name);
@@ -2680,6 +2710,11 @@ function assertNewKeyStep(chrome, state, step) {
 
 async function runNewBackgroundSeed(seed) {
   const rand = mulberry32(seed);
+  const pool = ["save", "delete", "unload", "fail"];
+  const tabCount = 2 + Math.floor(rand() * 3);
+  const eventCount = 2 + Math.floor(rand() * 5);
+  const events = [];
+  for (let i = 0; i < eventCount; i += 1) events.push(pool[Math.floor(rand() * pool.length)]);
   const chrome = installChrome({
     settings: savedSettings(),
     local: {
@@ -2707,12 +2742,16 @@ async function runNewBackgroundSeed(seed) {
     return tab;
   }
   const live = () => tabs.filter((tab) => tab.alive);
-  await openTab();
-  await openTab();
+  function pickTab() {
+    const open = live();
+    if (!open.length) return null;
+    return open[Math.floor(rand() * open.length)];
+  }
+  for (let i = 0; i < tabCount; i += 1) await openTab();
   assertNewKeyStep(chrome, state, "open");
 
   async function saveOn(tab, value) {
-    const target = tab?.alive ? tab : (live()[0] || await openTab());
+    const target = tab?.alive ? tab : (pickTab() || await openTab());
     focusTab(target);
     const input = target.page.document.querySelector("[data-key-slot='translate'] input");
     input.value = value;
@@ -2721,20 +2760,13 @@ async function runNewBackgroundSeed(seed) {
     return target;
   }
 
-  const events = ["save", "delete", "unload", "fail"];
-  for (let i = events.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(rand() * (i + 1));
-    const swap = events[i];
-    events[i] = events[j];
-    events[j] = swap;
-  }
   let n = 0;
   for (const event of events) {
     n += 1;
     if (event === "save") {
-      await saveOn(live()[0], `sk-nv-${seed.toString(16)}-${n}-save`);
+      await saveOn(pickTab(), `sk-nv-${seed.toString(16)}-${n}-save`);
     } else if (event === "delete") {
-      const tab = live()[0] || await openTab();
+      const tab = pickTab() || await openTab();
       focusTab(tab);
       const remove = [...tab.page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
       if (remove) {
@@ -2742,7 +2774,7 @@ async function runNewBackgroundSeed(seed) {
         await settle();
       }
     } else if (event === "unload") {
-      const tab = live()[0] || await openTab();
+      const tab = pickTab() || await openTab();
       focusTab(tab);
       let release = () => {};
       chrome.holdNextSyncSet = new Promise((resolve) => {
@@ -2755,7 +2787,7 @@ async function runNewBackgroundSeed(seed) {
       tab.page.window.dispatchEvent(new tab.page.window.Event("pagehide"));
       tab.alive = false;
       releaseHeldEngineLocks();
-      const other = live()[0] || await openTab();
+      const other = pickTab() || await openTab();
       focusTab(other);
       const second = other.page.document.querySelector("[data-key-slot='translate'] input");
       second.value = `sk-nv-${seed.toString(16)}-${n}-next`;
@@ -2764,27 +2796,30 @@ async function runNewBackgroundSeed(seed) {
       release();
       await settle();
     } else {
-      const tab = live()[0] || await openTab();
+      const tab = pickTab() || await openTab();
       chrome.failSave = true;
       await saveOn(tab, `sk-nv-${seed.toString(16)}-${n}-fail`);
       chrome.failSave = false;
-      await saveOn(tab.alive ? tab : live()[0], `sk-nv-${seed.toString(16)}-${n}-retry`);
+      await saveOn(tab.alive ? tab : pickTab(), `sk-nv-${seed.toString(16)}-${n}-retry`);
     }
     assertNewKeyStep(chrome, state, event);
   }
   releaseHeldEngineLocks();
   await settle();
   assertNewKeyStep(chrome, state, "idle");
+  return `${tabCount}|${events.join(",")}`;
 }
 
-test("new background interleaving holds key invariants for 500 seeds", { timeout: 180000 }, async () => {
+test("new background interleaving holds key invariants for 500 seeds", { timeout: 240000 }, async () => {
+  const seen = new Set();
   for (let n = 0; n < 500; n += 1) {
     const seed = (0xA11CE + n) >>> 0;
     try {
-      await runNewBackgroundSeed(seed);
+      seen.add(await runNewBackgroundSeed(seed));
     } catch (error) {
       console.error(`failing seed ${seed}`);
       throw new Error(`failing seed ${seed}: ${error.message}`);
     }
   }
+  assert.ok(seen.size >= 400, `only ${seen.size} distinct interleavings`);
 });
