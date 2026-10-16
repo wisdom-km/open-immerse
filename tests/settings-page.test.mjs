@@ -56,11 +56,17 @@ function installChrome(seed = {}) {
     failGet: false,
     failSave: false,
     localSetThrows: false,
-    holdGet: null
+    holdGet: null,
+    holdNextSecretRead: null
   };
   function area(bag, name) {
     return {
       async get(key) {
+        if (name === "local" && key === "oiSecrets" && api.holdNextSecretRead) {
+          const gate = api.holdNextSecretRead;
+          api.holdNextSecretRead = null;
+          await gate;
+        }
         if (Array.isArray(key)) {
           const out = {};
           for (const item of key) if (Object.prototype.hasOwnProperty.call(bag, item)) out[item] = bag[item];
@@ -218,27 +224,95 @@ test("secret migration, import, and rollback stay inside local storage", async (
   const aliased = prepareSettingsImport({
     settings: {
       targetLang: "ja",
+      tokenLimit: 4096,
+      secretly: "keep-secretly",
+      passwordHint: "keep-hint",
+      tokenizer: "keep-tokenizer",
       pdfCloudApiKey: "top-level-pdf",
       oiSecrets: { providers: { openai: "bag-key" } },
+      client_secret: "top-client",
+      clientSecret: "top-client-camel",
+      bearer: "top-bearer",
+      Bearer: "top-bearer-case",
+      cloud_api_key: "top-cloud",
+      "access-token": "top-access",
+      arxiv: { key: "keep-arxiv" },
+      shortcuts: { key: "keep-hotkey", keys: "keep-keys" },
+      headers: { "Content-Type": "application/json" },
+      placeholders: [{ token: "keep-placeholder-token", client_secret: "array-client" }],
       providers: {
         openai: { apiKey: "sk-file", api_key: "alias-key", baseUrl: "https://api.openai.com/v1" },
-        custom: { headers: { "x-api-key": "header-key", accessToken: "token-key" }, nested: { apiKey: "deep-key" } }
+        custom: {
+          headers: { "x-api-key": "header-key", accessToken: "token-key", authorization: "auth-key" },
+          nested: { apiKey: "deep-key", client_secret: "nested-client", bearer: "nested-bearer", cloud_api_key: "nested-cloud", "access-token": "nested-access" },
+          list: [{ password: "array-password", secret: "array-secret", access_token: "array-access" }],
+          tokenLimit: 2048
+        }
       }
     }
   });
   assert.equal(aliased.ignoredKeys, true);
   assert.equal(aliased.settings.targetLang, "ja");
+  assert.equal(aliased.settings.tokenLimit, 4096);
+  assert.equal(aliased.settings.secretly, "keep-secretly");
+  assert.equal(aliased.settings.passwordHint, "keep-hint");
+  assert.equal(aliased.settings.tokenizer, "keep-tokenizer");
+  assert.equal(aliased.settings.arxiv.key, "keep-arxiv");
+  assert.equal(aliased.settings.shortcuts.key, "keep-hotkey");
+  assert.equal(aliased.settings.shortcuts.keys, "keep-keys");
+  assert.equal(aliased.settings.headers["Content-Type"], "application/json");
+  assert.equal(aliased.settings.placeholders[0].token, "keep-placeholder-token");
+  assert.equal(aliased.settings.placeholders[0].client_secret, undefined);
   assert.equal(aliased.settings.providers.openai.baseUrl, "https://api.openai.com/v1");
+  assert.equal(aliased.settings.providers.custom.tokenLimit, 2048);
   const aliasedText = JSON.stringify(aliased.settings);
-  for (const secret of ["top-level-pdf", "bag-key", "sk-file", "alias-key", "header-key", "token-key", "deep-key"]) {
+  for (const secret of [
+    "top-level-pdf", "bag-key", "sk-file", "alias-key", "header-key", "token-key", "deep-key",
+    "top-client", "top-client-camel", "top-bearer", "top-bearer-case", "top-cloud", "top-access",
+    "array-client", "nested-client", "nested-bearer", "nested-cloud", "nested-access",
+    "auth-key", "array-password", "array-secret", "array-access"
+  ]) {
     assert.equal(aliasedText.includes(secret), false, secret);
   }
+  const onlySecrets = prepareSettingsImport({
+    settings: {
+      client_secret: "only-client",
+      bearer: "only-bearer",
+      cloud_api_key: "only-cloud",
+      "access-token": "only-access",
+      providers: [{ clientSecret: "only-nested" }],
+      list: [{ bearer: "only-array" }]
+    }
+  });
+  assert.equal(onlySecrets.ignoredKeys, true);
+  const onlyText = JSON.stringify(onlySecrets.settings);
+  for (const secret of ["only-client", "only-bearer", "only-cloud", "only-access", "only-nested", "only-array"]) {
+    assert.equal(onlyText.includes(secret), false, secret);
+  }
+  const savedAliases = await saveSettings(aliased.settings);
+  assert.equal(savedAliases.settingsSaved, true);
+  const storedText = JSON.stringify(importing.sync.settings);
+  for (const secret of ["top-client", "top-bearer", "top-cloud", "top-access", "nested-client", "array-password", "alias-key"]) {
+    assert.equal(storedText.includes(secret), false, secret);
+  }
+  assert.equal(importing.sync.settings.tokenLimit, 4096);
+  assert.equal(importing.sync.settings.placeholders[0].token, "keep-placeholder-token");
+  const exportedAliases = settingsForExport(savedAliases);
+  const exportedText = JSON.stringify(exportedAliases);
+  for (const secret of ["top-client", "top-bearer", "top-cloud", "top-access", "nested-bearer", "array-access", OPENAI_KEY]) {
+    assert.equal(exportedText.includes(secret), false, secret);
+  }
+  assert.equal(exportedAliases.tokenLimit, 4096);
+  assert.equal(exportedAliases.placeholders[0].token, "keep-placeholder-token");
+  assert.equal(exportedAliases.secretly, "keep-secretly");
   const round = settingsForExport({
     providers: { openai: { apiKey: "should-not-export", baseUrl: "https://api.openai.com/v1" } },
-    extra: { access_token: "nope" }
+    extra: { access_token: "nope", client_secret: "nope-client", bearer: "nope-bearer", cloud_api_key: "nope-cloud", "access-token": "nope-access" }
   });
-  assert.equal(JSON.stringify(round).includes("should-not-export"), false);
-  assert.equal(JSON.stringify(round).includes("nope"), false);
+  const roundText = JSON.stringify(round);
+  for (const secret of ["should-not-export", "nope", "nope-client", "nope-bearer", "nope-cloud", "nope-access"]) {
+    assert.equal(roundText.includes(secret), false, secret);
+  }
 });
 
 /** 887ecd2 merge: providers are deep-merged, pdfLayout is replaced wholesale. */
@@ -1067,4 +1141,149 @@ test("removed and stale PDF cloud keys are not written back", async () => {
   assert.equal(saved.providers.openai.apiKey, "sk-live-again");
   assert.equal(chrome.local.oiSecrets.pdfCloudApiKey, "pdf-live-again");
   assert.equal(chrome.local.oiSecrets.providers.openai, "sk-live-again");
+});
+
+test("a file of only secret-like names is not reported as imported", async () => {
+  const chrome = installChrome({ settings: savedSettings() });
+  const page = mountPage("#data");
+  const { startOptions } = await import("../options/options.js?only-secrets=1");
+  await startOptions();
+  await flush();
+  const input = page.document.getElementById("importFile");
+  const file = new File([JSON.stringify({
+    settings: {
+      settingsVersion: SETTINGS_VERSION,
+      client_secret: "only-client",
+      bearer: "only-bearer",
+      cloud_api_key: "only-cloud",
+      "access-token": "only-access",
+      nested: { clientSecret: "only-nested" },
+      list: [{ bearer: "only-array", token: "keep-token" }]
+    }
+  })], "secrets.json", { type: "application/json" });
+  Object.defineProperty(input, "files", { configurable: true, get: () => [file] });
+  fire(input, "change");
+  await flush();
+  const status = page.document.getElementById("status").textContent;
+  assert.equal(status, "文件里的 API 密钥已忽略，请在本机重新填写。");
+  assert.notEqual(status, "已导入");
+  const stored = JSON.stringify(chrome.sync.settings);
+  for (const secret of ["only-client", "only-bearer", "only-cloud", "only-access", "only-nested", "only-array"]) {
+    assert.equal(stored.includes(secret), false, secret);
+  }
+  assert.equal(chrome.sync.settings.list[0].token, "keep-token");
+  page.document.getElementById("exportSettings").click();
+  await flush();
+  const exported = JSON.parse(await globalThis.__oiBlob.text());
+  const text = JSON.stringify(exported);
+  for (const secret of ["only-client", "only-bearer", "only-cloud", "only-access", "only-nested", "only-array"]) {
+    assert.equal(text.includes(secret), false, secret);
+  }
+  assert.equal(exported.settings.list[0].token, "keep-token");
+  assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
+});
+
+test("a removed provider key is not written back by a failed or in-flight edit", async () => {
+  const typed = "sk-should-not-return";
+  const chrome = installChrome({ settings: savedSettings() });
+  const page = mountPage("#translate");
+  const { startOptions } = await import("../options/options.js?remove-edit=1");
+  await startOptions();
+  await flush();
+  chrome.failSave = true;
+  const key = page.document.querySelector("[data-key-slot='translate'] input");
+  key.value = typed;
+  fire(key, "blur");
+  await flush();
+  assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
+  chrome.failSave = false;
+  const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+  remove.click();
+  await flush();
+  assert.equal(chrome.local.oiSecrets.providers.openai, "");
+  const input = page.document.getElementById("importFile");
+  const file = new File([JSON.stringify({
+    settings: { settingsVersion: SETTINGS_VERSION, targetLang: "ja", providers: { openai: { apiKey: "file-key" } } }
+  })], "removed.json", { type: "application/json" });
+  Object.defineProperty(input, "files", { configurable: true, get: () => [file] });
+  fire(input, "change");
+  await flush();
+  assert.equal(chrome.local.oiSecrets.providers.openai, "");
+  const mark = chrome.calls.length;
+  const target = page.document.getElementById("targetLang");
+  target.value = "de";
+  fire(target, "change");
+  await flush();
+  assert.equal(chrome.local.oiSecrets.providers.openai, "");
+  const later = chrome.calls.slice(mark).filter((call) => call.type === "OI_SAVE_SETTINGS");
+  assert.ok(later.length >= 1);
+  for (const call of later) assert.equal(JSON.stringify(call.patch).includes(typed), false);
+  const merged = legacyBackgroundMerge({
+    providers: { openai: { apiKey: "", baseUrl: "https://api.openai.com/v1" } },
+    pdfLayout: { cloudApiKey: PDF_KEY }
+  }, later.at(-1).patch);
+  assert.equal(merged.providers.openai.apiKey, "");
+  assert.equal(JSON.stringify(merged).includes(typed), false);
+
+  const racingChrome = installChrome({ settings: savedSettings() });
+  const racingPage = mountPage("#translate");
+  const racing = await import("../options/options.js?remove-race=1");
+  await racing.startOptions();
+  await flush();
+  let release;
+  racingChrome.holdNextSecretRead = new Promise((resolve) => {
+    release = resolve;
+  });
+  const racingKey = racingPage.document.querySelector("[data-key-slot='translate'] input");
+  racingKey.value = typed;
+  fire(racingKey, "blur");
+  await flush();
+  assert.equal(racingChrome.local.oiSecrets.providers.openai, OPENAI_KEY);
+  const racingRemove = [...racingPage.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+  racingRemove.click();
+  await flush();
+  assert.equal(racingChrome.local.oiSecrets.providers.openai, "");
+  const beforeRelease = racingChrome.calls.length;
+  release();
+  await flush();
+  assert.equal(racingChrome.local.oiSecrets.providers.openai, "");
+  for (const call of racingChrome.calls.slice(beforeRelease)) {
+    if (call.type !== "OI_SAVE_SETTINGS") continue;
+    assert.equal(JSON.stringify(call.patch).includes(typed), false);
+    const old = legacyBackgroundMerge({ providers: { openai: { apiKey: "" } } }, call.patch);
+    assert.equal(old.providers.openai.apiKey, "");
+  }
+  const lang = racingPage.document.getElementById("targetLang");
+  lang.value = "ja";
+  fire(lang, "change");
+  await flush();
+  assert.equal(racingChrome.local.oiSecrets.providers.openai, "");
+  const last = racingChrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").at(-1).patch;
+  assert.equal(JSON.stringify(last).includes(typed), false);
+  assert.equal(legacyBackgroundMerge({ providers: { openai: { apiKey: "" } } }, last).providers.openai.apiKey, "");
+});
+
+test("missing-field 需处理 badge survives refresh", async () => {
+  const chrome = installChrome({ settings: savedSettings() });
+  const page = mountPage("#translate");
+  const { startOptions } = await import("../options/options.js?missing-field=1");
+  await startOptions();
+  await flush();
+  const providerSelect = page.document.getElementById("provider");
+  providerSelect.value = "deepl";
+  fire(providerSelect, "change");
+  await flush();
+  page.document.getElementById("testConnection").click();
+  await flush();
+  assert.equal(page.document.querySelector("[data-badge='translate']").hidden, false);
+  assert.equal(chrome.local.oiProviderAttention.deepl, true);
+  assert.equal(JSON.stringify(chrome.local.oiProviderAttention).includes(OPENAI_KEY), false);
+  assert.equal(chrome.sync.settings.oiProviderAttention, undefined);
+
+  const refreshed = mountPage("#translate");
+  await startOptions();
+  await flush();
+  assert.equal(refreshed.document.getElementById("provider").value, "deepl");
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, false);
+  assert.equal(chrome.local.oiProviderAttention.deepl, true);
 });

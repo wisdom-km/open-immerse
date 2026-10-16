@@ -79,6 +79,7 @@ let toastUndo = null;
 let attentionProvider = "";
 let pdfCloudEdit = null;
 let providerEdits = new Map();
+let providerEditEpoch = new Map();
 let providerSecretPaint = null;
 let secretSyncBound = false;
 
@@ -702,6 +703,8 @@ async function testConnection() {
   const targetLang = el("targetLang").value || "zh-CN";
   const missing = missingRequiredField(getProvider(providerId), providerConfig);
   if (missing) {
+    await markProviderAttention(attentionArea(), providerId);
+    if (el("provider")?.value !== providerId) return;
     setTestStatus(formatConnectionStatus({ ok: false, missingField: missing.label }), "err");
     restoreTestButton();
     return;
@@ -834,6 +837,8 @@ function renderProviderFields() {
 
 async function clearProviderKey(id) {
   const previous = (cachedSettings.providers?.[id] || {}).apiKey || "";
+  providerEdits.delete(id);
+  providerEditEpoch.set(id, (providerEditEpoch.get(id) || 0) + 1);
   cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
   renderProviderFields();
   const res = await chrome.runtime.sendMessage({
@@ -945,10 +950,17 @@ async function persist(control) {
     pdfLayout: readPdfLayout()
   };
   const pendingProviders = new Map(providerEdits);
+  const pendingEpoch = new Map(providerEditEpoch);
   const pendingPdf = pdfCloudEdit;
   writing = true;
   try {
     const sealed = await sealOutgoingPatch(patch);
+    const revoked = [...pendingProviders.keys()].filter((id) => providerEditEpoch.get(id) !== pendingEpoch.get(id));
+    if (sealed.providers) {
+      for (const id of revoked) {
+        if (sealed.providers[id] && typeof sealed.providers[id] === "object") delete sealed.providers[id].apiKey;
+      }
+    }
     const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: sealed });
     if (!res || res.ok === false) {
       const attempt = snapshotControl(control);
@@ -964,6 +976,7 @@ async function persist(control) {
     cachedSettings = res.settings || cachedSettings;
     if (pdfCloudEdit === pendingPdf) pdfCloudEdit = null;
     for (const [id, value] of pendingProviders) {
+      if (revoked.includes(id)) continue;
       if (providerEdits.get(id) === value) providerEdits.delete(id);
     }
     hideMiss(control);
