@@ -1019,25 +1019,29 @@ async function runSecretRepairs(repairs) {
         if (!pageAlive()) return;
         const bag = await readProviderBag();
         let syncKey = "";
+        let syncSeq;
         try {
           const syncBag = await chrome.storage.sync.get("settings");
-          syncKey = String(syncBag?.settings?.providers?.[item.id]?.apiKey || "");
+          const syncCfg = syncBag?.settings?.providers?.[item.id];
+          syncKey = String(syncCfg?.apiKey || "");
+          const recorded = Number(syncCfg?.oiAppliedSeq);
+          if (Number.isFinite(recorded)) syncSeq = recorded;
         } catch {
           return;
         }
-        const decision = decideKeyReconcile(bag, item.id, syncKey);
+        const decision = decideKeyReconcile(bag, item.id, syncKey, syncSeq);
         if (decision.action !== item.action) return;
         if (decision.action === "writeSync" && decision.value !== item.value) return;
         const message = decision.action === "clearSync"
           ? {
               type: "OI_SAVE_SETTINGS",
-              patch: { providers: { [item.id]: { apiKey: "" } } },
+              patch: { providers: { [item.id]: { apiKey: "", oiAppliedSeq: decision.seq } } },
               clear: { providers: [item.id] },
               keySeq: { [item.id]: decision.seq }
             }
           : {
               type: "OI_SAVE_SETTINGS",
-              patch: { providers: { [item.id]: { apiKey: decision.value } } },
+              patch: { providers: { [item.id]: { apiKey: decision.value, oiAppliedSeq: decision.seq } } },
               keySeq: { [item.id]: decision.seq }
             };
         await deliverSecretRepair(message);
@@ -1068,8 +1072,10 @@ async function reconcileOpenSecrets(skipIds = new Set()) {
     let changed = false;
     for (const id of ids) {
       if (skipIds.has(id)) continue;
-      const syncKey = String(syncSettings.providers?.[id]?.apiKey || "");
-      const decision = decideKeyReconcile(bag, id, syncKey);
+      const syncCfg = syncSettings.providers?.[id];
+      const syncKey = String(syncCfg?.apiKey || "");
+      const recorded = Number(syncCfg?.oiAppliedSeq);
+      const decision = decideKeyReconcile(bag, id, syncKey, Number.isFinite(recorded) ? recorded : undefined);
       if (decision.action === "commit") {
         bag.providers[id] = decision.value;
         bag.applied[id] = decision.seq;
@@ -1176,7 +1182,7 @@ async function sendProviderKeyLocked(id, apiKey, clear) {
   try {
     res = await chrome.runtime.sendMessage({
       type: "OI_SAVE_SETTINGS",
-      patch: { providers: { [id]: { apiKey: want } } },
+      patch: { providers: { [id]: { apiKey: want, oiAppliedSeq: reserved.seq } } },
       clear: clear ? { providers: [id] } : {},
       keySeq: { [id]: reserved.seq }
     });

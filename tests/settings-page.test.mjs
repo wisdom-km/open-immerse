@@ -1435,8 +1435,6 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
     myPat: "v-myPat",
     github_pat: "v-github_pat",
     ghPat: "v-ghPat",
-    xpat: "v-xpat",
-    githubpat: "v-githubpat",
     cOoKiEs: "v-cOoKiEs",
     CLOUDAPIKEY: "v-CLOUDAPIKEY",
     aPiKeY: "v-aPiKeY",
@@ -1480,6 +1478,10 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
       comPat: "keep-compat",
       myPatient: "keep-mypatient",
       xpath: "keep-xpath",
+      xpat: "keep-xpat",
+      githubpat: "keep-githubpat",
+      browserCompat: "keep-browser-compat",
+      cssCompat: "keep-css-compat",
       token: "keep-bare-token",
       key2: "keep-key-2",
       "Content-Type": "application/json",
@@ -1522,6 +1524,10 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
   assert.equal(prepared.settings.comPat, "keep-compat");
   assert.equal(prepared.settings.myPatient, "keep-mypatient");
   assert.equal(prepared.settings.xpath, "keep-xpath");
+  assert.equal(prepared.settings.xpat, "keep-xpat");
+  assert.equal(prepared.settings.githubpat, "keep-githubpat");
+  assert.equal(prepared.settings.browserCompat, "keep-browser-compat");
+  assert.equal(prepared.settings.cssCompat, "keep-css-compat");
   assert.equal(prepared.settings.token, "keep-bare-token");
   assert.equal(prepared.settings.key2, "keep-key-2");
   assert.equal(prepared.settings["Content-Type"], "application/json");
@@ -1537,7 +1543,7 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
   assert.equal(onlyPdf.ignoredKeys, true);
   assert.equal(onlyPdf.settings.pdfLayout, undefined);
   assert.equal(settingsImportHasChanges(onlyPdf.settings), false);
-  for (const name of ["apiKey2", "api2Key", "password2", "token2", "auth2", "clientSecret2", "jwt", "sessionCookie", "pat", "x-pat", "myPat", "github_pat", "ghPat", "xpat", "githubpat", "cOoKiEs", "CLOUDAPIKEY", "aPiKeY", "encryptionKey", "aws_access_key_id"]) {
+  for (const name of ["apiKey2", "api2Key", "password2", "token2", "auth2", "clientSecret2", "jwt", "sessionCookie", "pat", "x-pat", "myPat", "github_pat", "ghPat", "cOoKiEs", "CLOUDAPIKEY", "aPiKeY", "encryptionKey", "aws_access_key_id"]) {
     const lone = prepareSettingsImport({ settings: { [name]: "only-one" } });
     assert.equal(lone.ignoredKeys, true, name);
     assert.equal(settingsImportHasChanges(lone.settings), false, name);
@@ -2018,7 +2024,8 @@ test("releasing the lock on unload lets a new page remove the key before a stale
       assert.equal(JSON.stringify(chrome.sync.settings).includes("sk-stale-AAAA"), false, label);
       assert.equal(JSON.stringify(chrome.local).includes("sk-stale-AAAA"), false, label);
       assert.equal(pageB.document.querySelector("[data-key-slot='translate'] input").value, "");
-      assert.equal(String(pageA.document.getElementById("setToast").textContent || "").includes("没保存上"), false, `${label} unloaded page kept running`);
+      assert.equal(String(pageA.document.getElementById("setToast").textContent || "").trim(), "", `${label} unloaded page toasted`);
+      assert.notEqual(storedProviderKey(chrome, legacy), OPENAI_KEY, `${label} unloaded page rolled the key back`);
     } finally {
       releaseSync();
       releaseHeldEngineLocks();
@@ -2120,6 +2127,38 @@ test("reconcile keeps a tombstone and does not adopt a stale sync key", async ()
   }, "openai", OPENAI_KEY);
   assert.equal(staleSync.action, "writeSync");
   assert.equal(staleSync.value, "sk-local-KEEP");
+  assert.equal(staleSync.seq, 5);
+  const pendingSave = decideKeyReconcile({
+    providers: { openai: "sk-local-AAAA" },
+    seq: { openai: 4 },
+    applied: { openai: 1 },
+    pending: { openai: { seq: 4, value: "sk-pending-CCCC", sent: true } }
+  }, "openai", "sk-sync-BBBB");
+  assert.equal(pendingSave.action, "keep");
+  assert.notEqual(pendingSave.action, "writeSync");
+  const equalDevice = decideKeyReconcile({
+    providers: { openai: "sk-equal-EEEE" },
+    seq: { openai: 4 },
+    applied: { openai: 4 },
+    pending: {}
+  }, "openai", "sk-sync-BBBB", 4);
+  assert.equal(equalDevice.action, "keep");
+  const olderDevice = decideKeyReconcile({
+    providers: { openai: "sk-older-DDDD" },
+    seq: { openai: 3 },
+    applied: { openai: 3 },
+    pending: {}
+  }, "openai", "sk-sync-BBBB", 4);
+  assert.equal(olderDevice.action, "keep");
+  const newerDevice = decideKeyReconcile({
+    providers: { openai: "sk-newer-CCCC" },
+    seq: { openai: 6 },
+    applied: { openai: 6 },
+    pending: {}
+  }, "openai", "sk-sync-BBBB", 4);
+  assert.equal(newerDevice.action, "writeSync");
+  assert.equal(newerDevice.value, "sk-newer-CCCC");
+  assert.equal(newerDevice.seq, 6);
   const unsentClear = decideKeyReconcile({
     providers: { openai: OPENAI_KEY },
     seq: { openai: 2 },
@@ -2331,4 +2370,153 @@ test("seeded secret interleaving keeps each confirmed key for 200 trials", async
     assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), openai, `trial ${trial} openai`);
     if (claude) assert.equal(chrome.local.oiSecrets.providers.claude, claude, `trial ${trial} claude`);
   }
+});
+
+test("two old-background tabs closed mid-save do not write the older key back", async () => {
+  const appliedKey = "sk-local-AAAA";
+  const chrome = installChrome({
+    settings: {
+      ...savedSettings(),
+      providers: {
+        openai: { apiKey: appliedKey, baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" }
+      }
+    },
+    local: {
+      oiSecrets: {
+        providers: { openai: appliedKey },
+        pdfCloudApiKey: PDF_KEY,
+        seq: { openai: 1 },
+        applied: { openai: 1 },
+        pending: {}
+      }
+    }
+  });
+  chrome.legacyBackground = true;
+  const pageB = mountPage("#translate");
+  const modB = await import("../options/options.js?both-closed=b");
+  await modB.startOptions();
+  await flush();
+  let releaseB = () => {};
+  chrome.holdNextSyncSet = new Promise((resolve) => {
+    releaseB = resolve;
+  });
+  const inputB = pageB.document.querySelector("[data-key-slot='translate'] input");
+  inputB.value = "sk-sync-BBBB";
+  fire(inputB, "blur");
+  await flush();
+  pageB.window.dispatchEvent(new pageB.window.Event("pagehide"));
+  releaseHeldEngineLocks();
+  const pageC = mountPage("#translate");
+  const modC = await import("../options/options.js?both-closed=c");
+  let releaseC = () => {};
+  chrome.holdNextSyncSet = new Promise((resolve) => {
+    releaseC = resolve;
+  });
+  try {
+    await modC.startOptions();
+    await flush();
+    const inputC = pageC.document.querySelector("[data-key-slot='translate'] input");
+    inputC.value = "sk-pending-CCCC";
+    fire(inputC, "blur");
+    await flush();
+    pageC.window.dispatchEvent(new pageC.window.Event("pagehide"));
+    releaseHeldEngineLocks();
+    releaseB();
+    await flush();
+    const pageD = mountPage("#translate");
+    const modD = await import("../options/options.js?both-closed=d");
+    await modD.startOptions();
+    await settle();
+    assert.equal(chrome.sync.settings.providers.openai.apiKey, "sk-sync-BBBB");
+    assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), appliedKey);
+    assert.equal(chrome.calls.some((message) => message?.patch?.providers?.openai?.apiKey === appliedKey && Number(message?.keySeq?.openai) === Number(chrome.local.oiSecrets.pending?.openai?.seq)), false);
+    releaseC();
+    await settle();
+    assert.equal(chrome.sync.settings.providers.openai.apiKey, "sk-pending-CCCC");
+    assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), "sk-pending-CCCC");
+  } finally {
+    releaseB();
+    releaseC();
+    releaseHeldEngineLocks();
+    await settle();
+  }
+});
+
+test("two devices on the old background stop overwriting each other's key", async () => {
+  const { decideKeyReconcile } = await import("../lib/settings-secrets.js");
+  const deviceA = {
+    providers: { openai: "sk-device-AAAA" },
+    applied: { openai: 4 },
+    seq: { openai: 4 },
+    pending: {}
+  };
+  const deviceB = {
+    providers: { openai: "sk-device-BBBB" },
+    applied: { openai: 4 },
+    seq: { openai: 4 },
+    pending: {}
+  };
+  let syncKey = "sk-device-AAAA";
+  let syncSeq;
+  const apply = (bag) => {
+    const decision = decideKeyReconcile(bag, "openai", syncKey, syncSeq);
+    if (decision.action === "writeSync") {
+      if (syncSeq != null) assert.ok(decision.seq > syncSeq);
+      syncKey = decision.value;
+      syncSeq = decision.seq;
+    }
+    return decision.action;
+  };
+  for (let round = 0; round < 6; round += 1) {
+    apply(deviceA);
+    apply(deviceB);
+  }
+  const settledKey = syncKey;
+  const settledSeq = syncSeq;
+  for (let round = 0; round < 4; round += 1) {
+    assert.notEqual(apply(deviceA), "writeSync");
+    assert.notEqual(apply(deviceB), "writeSync");
+  }
+  assert.equal(syncKey, settledKey);
+  assert.equal(syncSeq, settledSeq);
+
+  const chrome = installChrome({
+    settings: {
+      ...savedSettings(),
+      providers: {
+        openai: { apiKey: "sk-sync-BBBB", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" }
+      }
+    },
+    local: {
+      oiSecrets: {
+        providers: { openai: "sk-local-AAAA" },
+        pdfCloudApiKey: PDF_KEY,
+        seq: { openai: 5 },
+        applied: { openai: 5 },
+        pending: {}
+      }
+    }
+  });
+  chrome.legacyBackground = true;
+  const page = mountPage("#translate");
+  const mod = await import("../options/options.js?two-devices=1");
+  await mod.startOptions();
+  await settle();
+  assert.equal(chrome.sync.settings.providers.openai.apiKey, "sk-local-AAAA");
+  assert.equal(Number(chrome.sync.settings.providers.openai.oiAppliedSeq), 5);
+  chrome.local.oiSecrets.providers.openai = "sk-other-BBBB";
+  chrome.local.oiSecrets.applied = { openai: 5 };
+  chrome.local.oiSecrets.seq = { openai: 5 };
+  await globalThis.chrome.storage.local.set({ oiSecrets: chrome.local.oiSecrets });
+  await settle();
+  assert.equal(chrome.sync.settings.providers.openai.apiKey, "sk-local-AAAA");
+  assert.equal(Number(chrome.sync.settings.providers.openai.oiAppliedSeq), 5);
+  chrome.local.oiSecrets.providers.openai = "sk-newer-CCCC";
+  chrome.local.oiSecrets.applied = { openai: 6 };
+  chrome.local.oiSecrets.seq = { openai: 6 };
+  await globalThis.chrome.storage.local.set({ oiSecrets: chrome.local.oiSecrets });
+  await settle();
+  assert.equal(chrome.sync.settings.providers.openai.apiKey, "sk-newer-CCCC");
+  assert.equal(Number(chrome.sync.settings.providers.openai.oiAppliedSeq), 6);
+  assert.equal(page.document.querySelector("[data-key-slot='translate'] input").value.includes("CCCC"), true);
 });
