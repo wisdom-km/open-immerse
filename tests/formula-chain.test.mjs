@@ -790,6 +790,24 @@ test("F3-17 KaTeX rendering stays untrusted and does not use innerHTML", () => {
   assert.equal(verdict.pass, true);
 });
 
+test("a passing formula cannot stretch with hspace or expand a macro forever", () => {
+  assert.equal(Number.isFinite(KATEX_RENDER_OPTIONS.maxSize), true);
+  assert.equal(KATEX_RENDER_OPTIONS.maxSize > 0 && KATEX_RENDER_OPTIONS.maxSize < 1000, true);
+  assert.equal(Number.isFinite(KATEX_RENDER_OPTIONS.maxExpand), true);
+  assert.equal(KATEX_RENDER_OPTIONS.maxExpand > 0, true);
+  const huge = "\\hspace{100000em}x";
+  assert.equal(canRenderLatex(huge, false, katex).pass, true);
+  const capped = katex.renderToString(huge, { ...KATEX_RENDER_OPTIONS, displayMode: false });
+  assert.equal(capped.includes("100000"), false);
+  assert.equal(capped.includes(`${KATEX_RENDER_OPTIONS.maxSize}em`), true);
+  const modest = katex.renderToString("\\hspace{2em}x", { ...KATEX_RENDER_OPTIONS, displayMode: false });
+  assert.equal(modest.includes("2em"), true);
+  assert.equal(canRenderLatex("\\alpha+\\beta", true, katex).pass, true);
+  const bomb = canRenderLatex("\\gdef\\a{\\a a}\\a", false, katex);
+  assert.equal(bomb.pass, false);
+  assert.match(bomb.error, /maxExpand|Too many expansions/);
+});
+
 test("F3-15 arXiv tier reads the stored Attention alignment", async () => {
   const {
     ATTENTION_PDF_SHA,

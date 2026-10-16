@@ -194,7 +194,7 @@
 
 ## 八、以后的计划（已记下，这一轮不做）
 
-- **可复制源码 LaTeX（重要）**：arXiv 源码模式第一版不做（2026-10-04 你的第 12 条决定）。有了第零层以后很容易做：过了核对的公式可以复制作者原稿里的 LaTeX。排在 P6，做之前要改 REQUIREMENTS §2.3「可复制 LaTeX 不做」。见 `docs/arxiv-source-mode.md` 第 3 节。
+- **可复制源码 LaTeX（重要）**：已在 F5 做（2026-10-15 Q2）。过了核对的公式可以悬停「复制 LaTeX」、右键或聚焦后按 C，复制作者原稿里的 LaTeX。见 `docs/arxiv-source-mode.md` P6 行。
 - arXiv 源码模式 P6 的其他项：用源码修结构（补被吞的标题和词、改错标的题注）、出版社 PDF 按题名反查 arXiv（默认关）、arXiv HTML 作备用来源。等 P1–P5 的数据再定。
 - **ArXivHub 备忘，待融合（Wisdom 2026-10-12）。顺序见路线图 v2**（`docs/ui-phase2-plan.md`）。见 [`docs/research-arxivhub.md`](research-arxivhub.md)。它是链接导航站，不是阅读器。可借的是编号识别（归 F2）。F2 不做元数据 API（Wisdom 2026-10-13 00:25 决定），元数据和 BibTeX 留到文献库阶段（F4/F8）再做。另可借 KaTeX 安全渲染、外部请求的超时、缓存、去重和退避；「在…中打开」和引用次数排在打磨池之后的「以后」。不抄第三方代理。
 
