@@ -58,6 +58,19 @@
           <span class="doc-text" aria-hidden="true"></span>
           <span class="sr-only" role="status" aria-live="polite"></span>
         </div>
+        <div id="arxivSourceChip" class="oi-arxiv-chip" data-tb="text" hidden>
+          <button type="button" class="oi-arxiv-main">
+            <span class="oi-arxiv-label"></span>
+          </button>
+          <label class="oi-arxiv-auto">
+            <input type="checkbox" id="arxivSourceAuto" />
+            <span>以后自动</span>
+          </label>
+          <button type="button" class="oi-arxiv-restore" id="arxivSourceRestore" hidden>改回</button>
+        </div>
+        <div id="arxivSourceMenu" class="more-menu oi-arxiv-menu" role="menu" hidden>
+          <button type="button" id="arxivSourceSkip" class="more-item" role="menuitem">这篇不用源码</button>
+        </div>
         <button type="button" id="pick" class="btn-secondary" data-tb="text">打开 PDF</button>
         <input id="file" class="file-input" type="file" accept="application/pdf,.pdf" tabindex="-1" aria-hidden="true" />
         <div class="tb-primary-slot">
