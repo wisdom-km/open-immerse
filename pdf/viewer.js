@@ -306,6 +306,7 @@ import {
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { detectArxivId } from "../lib/arxiv-id.js";
+import { KATEX_RENDER_OPTIONS } from "../lib/formula-katex.js";
 import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import {
@@ -2656,7 +2657,7 @@ function renderFormulaNode(node, latex, display) {
     return;
   }
   try {
-    katex.render(latex, node, { throwOnError: false, displayMode: Boolean(display), output: "html" });
+    katex.render(latex, node, { ...KATEX_RENDER_OPTIONS, displayMode: Boolean(display) });
   } catch {
     node.textContent = wrapLatexMarkdown(latex, display);
   }

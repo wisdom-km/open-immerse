@@ -787,7 +787,8 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
       color: style.color,
       accent,
       underline: style.textDecorationLine || style.textDecoration,
-      chipH: chip.getBoundingClientRect().height
+      chipH: chip.getBoundingClientRect().height,
+      restoreH: restore.getBoundingClientRect().height
     };
   })()`, "skipped chip", 90000);
   assert.equal(`${skippedChip.label} ${skippedChip.restore}`.replace(/\\s+/g, " ").trim(), "公式 · 已不用源码 · 改回");
@@ -796,6 +797,7 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
   assert.equal(skippedChip.color, skippedChip.accent);
   assert.match(skippedChip.underline, /underline/);
   assert.equal(skippedChip.chipH, 30);
+  assert.ok(skippedChip.restoreH >= 30, JSON.stringify(skippedChip));
 
   await evaluate(`document.getElementById("arxivSourceRestore").click()`);
   const restored = await waitFor(`(() => {

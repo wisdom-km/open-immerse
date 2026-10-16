@@ -3038,6 +3038,15 @@ button:disabled { opacity: 0.45; cursor: default; }
   accent-color: var(--oi-reader-ink);
 }
 .toolbar .oi-arxiv-chip .oi-arxiv-restore {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: var(--oi-reader-topbar-btn-h);
+  min-height: var(--oi-reader-topbar-btn-h);
+  max-height: var(--oi-reader-topbar-btn-h);
+  padding: 0;
+  line-height: 1;
   color: var(--oi-reader-focus);
   text-decoration: underline;
   text-underline-offset: 2px;
