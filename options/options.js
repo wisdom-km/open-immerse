@@ -17,7 +17,12 @@ import {
   sealSettingsPatch,
   settingsForExport,
   settingsImportHasChanges,
-  SECRET_STORAGE_KEY
+  SECRET_STORAGE_KEY,
+  captureEngineSlice,
+  decideKeyReconcile,
+  restoreEngineSlice,
+  runAfterSecretBagIdle,
+  withSecretBagLock
 } from "../lib/settings-secrets.js";
 import {
   PROVIDER_ATTENTION_KEY,
@@ -126,6 +131,14 @@ async function init() {
     if (sk) sk.hidden = true;
   }
   cachedSettings = JSON.parse(JSON.stringify(res.settings || { providers: {} }));
+  if (readsOk) {
+    try {
+      await reconcileOpenSecrets();
+      await overlayLocalKeyOpinion();
+    } catch {
+      // The form still opens with what the background returned.
+    }
+  }
   applyStoredForm();
   el("translateScope").addEventListener("change", () => syncTranslateScopeHint());
   bindData();
@@ -664,7 +677,15 @@ function bindSecretSync() {
     if (!secretWrite) return;
     const busy = new Set([...providerKeyHold, ...providerEdits.keys()]);
     const ticket = ++secretReadTicket;
-    void readLiveSecrets(chrome.storage).then((live) => {
+    void runAfterSecretBagIdle(async () => {
+      if (ticket !== secretReadTicket) return;
+      try {
+        await reconcileOpenSecrets(busy);
+      } catch {
+        // Still paint whatever is stored now.
+      }
+      if (ticket !== secretReadTicket) return;
+      const live = await readLiveSecrets(chrome.storage);
       if (ticket !== secretReadTicket) return;
       applyLiveSecrets(live, busy);
     }).catch(() => {});
@@ -918,31 +939,117 @@ async function withEngineLocks(ids, run) {
   return withEngineLock(names[0], () => withEngineLocks(names.slice(1), run));
 }
 
-async function reserveProviderSeq(id) {
-  const bag = await readProviderBag();
-  const snapshot = JSON.parse(JSON.stringify(bag));
-  const applied = appliedProviderSeq(bag, id);
-  const next = Math.max(applied, Number(bag.seq[id]) || 0) + 1;
-  bag.applied[id] = applied;
-  bag.seq[id] = next;
-  await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: bag });
-  return { id, seq: next, snapshot };
+async function reserveProviderSeq(id, want) {
+  return withSecretBagLock(async () => {
+    const bag = await readProviderBag();
+    const snapshot = captureEngineSlice(bag, id);
+    const applied = appliedProviderSeq(bag, id);
+    const next = Math.max(applied, Number(bag.seq[id]) || 0) + 1;
+    bag.applied[id] = applied;
+    bag.seq[id] = next;
+    bag.pending[id] = { seq: next, value: String(want ?? "") };
+    await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: normalizeSecrets(bag) });
+    return { id, seq: next, snapshot };
+  });
 }
 
 async function rollbackReservation(reserved) {
   if (!reserved) return;
-  const bag = await readProviderBag();
-  if ((Number(bag.seq[reserved.id]) || 0) !== reserved.seq) return;
-  await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: reserved.snapshot });
+  await withSecretBagLock(async () => {
+    const bag = await readProviderBag();
+    if ((Number(bag.seq[reserved.id]) || 0) !== reserved.seq) return;
+    const pending = bag.pending?.[reserved.id];
+    if (pending && Number(pending.seq) !== reserved.seq) return;
+    await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: restoreEngineSlice(bag, reserved.snapshot) });
+  });
 }
 
 async function commitLocalKey(id, want, seq) {
+  await withSecretBagLock(async () => {
+    const bag = await readProviderBag();
+    if ((Number(bag.seq[id]) || 0) > seq) return;
+    const pending = bag.pending?.[id];
+    if (pending && Number(pending.seq) > seq) return;
+    bag.providers[id] = want;
+    bag.applied[id] = seq;
+    bag.seq[id] = Math.max(Number(bag.seq[id]) || 0, seq);
+    if (bag.pending?.[id] && Number(bag.pending[id].seq) <= seq) delete bag.pending[id];
+    await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: normalizeSecrets(bag) });
+  });
+}
+
+const reconcileClears = new Set();
+
+async function reconcileOpenSecrets(skipIds = new Set()) {
+  const clears = [];
+  const locked = await withSecretBagLock(async () => {
+    const bag = await readProviderBag();
+    let syncSettings = {};
+    try {
+      const syncBag = await chrome.storage.sync.get("settings");
+      syncSettings = syncBag?.settings && typeof syncBag.settings === "object" ? syncBag.settings : {};
+    } catch {
+      return;
+    }
+    const ids = new Set([
+      ...Object.keys(bag.providers || {}),
+      ...Object.keys(bag.pending || {}),
+      ...Object.keys(bag.applied || {}),
+      ...Object.keys(syncSettings.providers || {})
+    ]);
+    let changed = false;
+    for (const id of ids) {
+      if (skipIds.has(id)) continue;
+      const syncKey = String(syncSettings.providers?.[id]?.apiKey || "");
+      const decision = decideKeyReconcile(bag, id, syncKey);
+      if (decision.action === "commit") {
+        bag.providers[id] = decision.value;
+        bag.applied[id] = decision.seq;
+        bag.seq[id] = Math.max(Number(bag.seq[id]) || 0, decision.seq);
+        if (bag.pending?.[id]) delete bag.pending[id];
+        changed = true;
+      } else if (decision.action === "clearSync") {
+        const token = `${id}:${decision.seq}:${syncKey}`;
+        if (!reconcileClears.has(token)) {
+          reconcileClears.add(token);
+          clears.push({ id, seq: decision.seq });
+        }
+      }
+    }
+    if (changed) await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: normalizeSecrets(bag) });
+    return { ok: true };
+  }, { ifAvailable: true });
+  if (!locked || locked.skipped) return;
+  for (const item of clears) {
+    await withEngineLock(item.id, async () => {
+      try {
+        await chrome.runtime.sendMessage({
+          type: "OI_SAVE_SETTINGS",
+          patch: { providers: { [item.id]: { apiKey: "" } } },
+          clear: { providers: [item.id] },
+          keySeq: { [item.id]: item.seq }
+        });
+      } catch {
+        // The next settings read sees the same tombstone if sync still has the key.
+      }
+    });
+  }
+}
+
+async function overlayLocalKeyOpinion() {
   const bag = await readProviderBag();
-  if ((Number(bag.seq[id]) || 0) > seq) return;
-  bag.providers[id] = want;
-  bag.applied[id] = seq;
-  bag.seq[id] = Math.max(Number(bag.seq[id]) || 0, seq);
-  await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: bag });
+  cachedSettings.providers = cachedSettings.providers || {};
+  const ids = new Set([
+    ...Object.keys(bag.providers || {}),
+    ...Object.keys(bag.applied || {}),
+    ...Object.keys(bag.pending || {})
+  ]);
+  for (const id of ids) {
+    const opinion = Object.prototype.hasOwnProperty.call(bag.applied || {}, id) || Boolean(bag.pending?.[id]);
+    const local = String(bag.providers[id] || "");
+    if (!opinion && !local.trim()) continue;
+    cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: local });
+  }
 }
 
 async function syncProviderKey(id) {
@@ -973,7 +1080,7 @@ async function sendProviderKeyLocked(id, apiKey, clear) {
   const want = clear ? "" : String(apiKey ?? "");
   let reserved = null;
   try {
-    reserved = await reserveProviderSeq(id);
+    reserved = await reserveProviderSeq(id, want);
   } catch {
     return { ok: false };
   }
