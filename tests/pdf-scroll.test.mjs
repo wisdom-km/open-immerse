@@ -261,8 +261,8 @@ test("viewer sync path has no smooth fight and no fixed 360ms lock", () => {
 });
 
 test("options no longer expose page follow; pdf layout stays with the PDF feature", () => {
-  const features = optionsHtml.match(/id="panel-features"[\s\S]*?<\/section>/)[0];
-  const advanced = optionsHtml.match(/id="panel-advanced"[\s\S]*?<\/section>/)[0];
+  const features = optionsHtml.match(/id="panel-pdf"[\s\S]*?<\/section>/)[0];
+  const advanced = optionsHtml.match(/id="panel-labs"[\s\S]*?<\/section>/)[0];
   assert.doesNotMatch(features, /id="pdfSoftPageFollow"/);
   assert.doesNotMatch(features, /左右栏换页跟随/);
   assert.doesNotMatch(optionsHtml, /id="pdfSoftPageFollow"/);

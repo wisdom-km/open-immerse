@@ -485,7 +485,7 @@ test("options copy describes sidebar + header H1 without the old 顶栏-only lin
   const popupHtml = readFileSync(join(root, "popup/popup.html"), "utf8");
   assert.match(optionsHtml, /value="article">仅正文</);
   assert.match(optionsHtml, /value="page">全页面</);
-  assert.match(optionsHtml, /id="translateScopeHint" class="hint field-hint"/);
+  assert.match(optionsHtml, /class="set-note" id="translateScopeHint"/);
   assert.match(optionsHtml, /只译主栏正文，跳过侧栏与导航。/);
   assert.match(optionsJs, /含侧栏短目录；主标题（含页头 H1）必译。顶栏导航链仍可跳过。/);
   assert.match(optionsJs, /function syncTranslateScopeHint\(/);

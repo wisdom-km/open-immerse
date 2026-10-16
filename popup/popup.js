@@ -11,7 +11,12 @@ const PRIMARY_STOP = "停止";
 init();
 
 async function init() {
-  const openOptions = () => chrome.runtime.openOptionsPage();
+  const openOptionsPage = () => {
+    const url = chrome.runtime.getURL("options/options.html#translate");
+    if (url && chrome.tabs?.create) chrome.tabs.create({ url });
+    else chrome.runtime.openOptionsPage();
+  };
+  const openOptions = () => openOptionsPage();
   $("engineLink").addEventListener("click", (ev) => {
     ev.preventDefault();
     openOptions();
