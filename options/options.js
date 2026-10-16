@@ -11,7 +11,9 @@ import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
+  committedProviderKey,
   currentProviderKeyEpoch,
+  noteCommittedProviderKey,
   noteProviderKeyEpoch,
   prepareSettingsImport,
   readLiveSecrets,
@@ -855,6 +857,7 @@ async function clearProviderKey(id) {
   const nextEpoch = Math.max(providerEditEpoch.get(id) || 0, currentProviderKeyEpoch(id)) + 1;
   providerEditEpoch.set(id, nextEpoch);
   noteProviderKeyEpoch({ [id]: nextEpoch });
+  noteCommittedProviderKey(id, "", nextEpoch);
   cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
   renderProviderFields();
   const res = await chrome.runtime.sendMessage({
@@ -999,23 +1002,31 @@ async function persist(control) {
     }
     const revoked = [...pendingProviders.keys()].filter((id) => (providerEditEpoch.get(id) || 0) !== (pendingEpoch.get(id) || 0) && !providerEdits.has(id));
     if (revoked.length) {
-      const clearEpoch = {};
-      for (const id of revoked) clearEpoch[id] = providerEditEpoch.get(id) || 0;
-      noteProviderKeyEpoch(clearEpoch);
+      const repairEpoch = {};
+      const repairProviders = {};
+      const clearIds = [];
+      for (const id of revoked) {
+        const newest = committedProviderKey(id) ?? "";
+        repairEpoch[id] = Math.max(providerEditEpoch.get(id) || 0, currentProviderKeyEpoch(id));
+        repairProviders[id] = { apiKey: newest };
+        if (!String(newest).trim()) clearIds.push(id);
+      }
+      noteProviderKeyEpoch(repairEpoch);
       try {
-        const cleared = await chrome.runtime.sendMessage({
+        const repaired = await chrome.runtime.sendMessage({
           type: "OI_SAVE_SETTINGS",
-          patch: { providers: Object.fromEntries(revoked.map((id) => [id, { apiKey: "" }])) },
-          clear: { providers: revoked },
-          keyEpoch: clearEpoch
+          patch: { providers: repairProviders },
+          clear: clearIds.length ? { providers: clearIds } : {},
+          keyEpoch: repairEpoch
         });
-        if (cleared?.settings) cachedSettings = cleared.settings;
+        if (repaired?.settings) cachedSettings = repaired.settings;
       } catch {
         cachedSettings = res.settings || cachedSettings;
       }
       cachedSettings.providers = cachedSettings.providers || {};
       for (const id of revoked) {
-        cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
+        const newest = committedProviderKey(id) ?? "";
+        cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: newest });
       }
       renderProviderFields();
     } else {
@@ -1024,7 +1035,10 @@ async function persist(control) {
     if (pdfCloudEdit === pendingPdf) pdfCloudEdit = null;
     for (const [id, value] of pendingProviders) {
       if (revoked.includes(id)) continue;
-      if (providerEdits.get(id) === value) providerEdits.delete(id);
+      if (providerEdits.get(id) === value) {
+        noteCommittedProviderKey(id, value, providerEditEpoch.get(id) || 0);
+        providerEdits.delete(id);
+      }
     }
     hideMiss(control);
     paintKeyList();

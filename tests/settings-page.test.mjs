@@ -1315,7 +1315,30 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
     aws_secret_access_key: "v-aws_secret_access_key",
     signing_key: "v-signing_key",
     session_key: "v-session_key",
-    auth_key: "v-auth_key"
+    auth_key: "v-auth_key",
+    apiKey2: "v-apiKey2",
+    apiKey1: "v-apiKey1",
+    api_key2: "v-api_key2",
+    api2Key: "v-api2Key",
+    password2: "v-password2",
+    secret2: "v-secret2",
+    token2: "v-token2",
+    auth2: "v-auth2",
+    clientSecret2: "v-clientSecret2",
+    jwt: "v-jwt",
+    cookies: "v-cookies",
+    sessionCookie: "v-sessionCookie",
+    "set-cookie": "v-set-cookie",
+    pat: "v-pat",
+    aPiKeY: "v-aPiKeY",
+    encryptionKey: "v-encryptionKey",
+    masterKey: "v-masterKey",
+    serviceAccountKey: "v-serviceAccountKey",
+    aws_access_key_id: "v-aws_access_key_id",
+    oauth: "v-oauth",
+    sessionId: "v-sessionId",
+    "\uff41\uff50\uff49Key": "v-fullwidth-apiKey",
+    "\u0430piKey": "v-cyrillic-apiKey"
   };
   const prepared = prepareSettingsImport({
     settings: {
@@ -1329,6 +1352,12 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
       authorName: "keep-author",
       secretMode: "keep-mode",
       client_id: "keep-client",
+      keyCode: "keep-keycode",
+      singleKey: "keep-single",
+      authorMode: "keep-author-mode",
+      patch: "keep-patch",
+      patient: "keep-patient",
+      path: "keep-path",
       "Content-Type": "application/json",
       arxiv: { key: "keep-arxiv" },
       shortcuts: { keys: "keep-keys", key: "keep-hotkey" },
@@ -1352,6 +1381,12 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
   assert.equal(prepared.settings.authorName, "keep-author");
   assert.equal(prepared.settings.secretMode, "keep-mode");
   assert.equal(prepared.settings.client_id, "keep-client");
+  assert.equal(prepared.settings.keyCode, "keep-keycode");
+  assert.equal(prepared.settings.singleKey, "keep-single");
+  assert.equal(prepared.settings.authorMode, "keep-author-mode");
+  assert.equal(prepared.settings.patch, "keep-patch");
+  assert.equal(prepared.settings.patient, "keep-patient");
+  assert.equal(prepared.settings.path, "keep-path");
   assert.equal(prepared.settings["Content-Type"], "application/json");
   assert.equal(prepared.settings.arxiv.key, "keep-arxiv");
   assert.equal(prepared.settings.shortcuts.keys, "keep-keys");
@@ -1365,6 +1400,26 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
   assert.equal(onlyPdf.ignoredKeys, true);
   assert.equal(onlyPdf.settings.pdfLayout, undefined);
   assert.equal(settingsImportHasChanges(onlyPdf.settings), false);
+  for (const name of ["apiKey2", "api2Key", "password2", "token2", "auth2", "clientSecret2", "jwt", "sessionCookie", "pat", "aPiKeY", "encryptionKey", "aws_access_key_id"]) {
+    const lone = prepareSettingsImport({ settings: { [name]: "only-one" } });
+    assert.equal(lone.ignoredKeys, true, name);
+    assert.equal(settingsImportHasChanges(lone.settings), false, name);
+    const layout = prepareSettingsImport({ settings: { pdfLayout: { [name]: "only-layout", mode: "local", localBaseUrl: "http://127.0.0.1:9999", cloudModel: "glm-ocr" } } });
+    assert.equal(layout.ignoredKeys, true, name);
+    assert.equal(layout.settings.pdfLayout.mode, "local", name);
+    assert.equal(layout.settings.pdfLayout.localBaseUrl, "http://127.0.0.1:9999", name);
+    assert.equal(layout.settings.pdfLayout.cloudModel, "glm-ocr", name);
+    assert.equal(JSON.stringify(layout.settings).includes("only-layout"), false, name);
+  }
+  const onlyLayout = prepareSettingsImport({ settings: { pdfLayout: { apiKey2: "only-layout-key" } } });
+  assert.equal(onlyLayout.ignoredKeys, true);
+  assert.equal(onlyLayout.settings.pdfLayout, undefined);
+  assert.equal(settingsImportHasChanges(onlyLayout.settings), false);
+  const exported = settingsForExport({ apiKey2: "export-api-2", jwt: "export-jwt", accessKey: "keep-access", keyCode: "keep-keycode" });
+  assert.equal(JSON.stringify(exported).includes("export-api-2"), false);
+  assert.equal(JSON.stringify(exported).includes("export-jwt"), false);
+  assert.equal(exported.accessKey, "keep-access");
+  assert.equal(exported.keyCode, "keep-keycode");
 });
 
 test("a key-only import does not save or clear pdf layout", async () => {
@@ -1425,6 +1480,87 @@ test("a key edit already sent does not land after the key is removed", async () 
     const shown = page.document.querySelector("[data-key-slot='translate'] input").value;
     assert.equal(shown.includes("should-not-return"), false);
     assert.equal(shown.includes("turn"), false);
+  }
+});
+
+test("a newer key wins when an older edit lands after it was saved", async () => {
+  const stale = "sk-should-not-return";
+  const newest = "sk-newest-bbbb";
+  for (const legacy of [false, true]) {
+    const chrome = installChrome({ settings: savedSettings() });
+    chrome.legacyBackground = legacy;
+    const page = mountPage("#translate");
+    const mod = await import(`../options/options.js?defer-ab=${legacy ? "old" : "new"}`);
+    await mod.startOptions();
+    await flush();
+    let release;
+    chrome.holdNextWrite = new Promise((resolve) => {
+      release = resolve;
+    });
+    const key = page.document.querySelector("[data-key-slot='translate'] input");
+    key.value = stale;
+    fire(key, "blur");
+    await flush();
+    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, OPENAI_KEY);
+    else assert.equal(String(chrome.local.oiSecrets.providers.openai), OPENAI_KEY);
+    const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+    remove.click();
+    await flush();
+    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, "");
+    else assert.equal(String(chrome.local.oiSecrets.providers.openai), "");
+    const next = page.document.querySelector("[data-key-slot='translate'] input");
+    next.value = newest;
+    fire(next, "blur");
+    await flush();
+    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, newest);
+    else assert.equal(String(chrome.local.oiSecrets.providers.openai), newest);
+    release();
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
+    await flush();
+    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, newest);
+    else assert.equal(String(chrome.local.oiSecrets.providers.openai), newest);
+    assert.equal(JSON.stringify(chrome.sync.settings).includes(stale), false);
+    assert.equal(JSON.stringify(chrome.local).includes(stale), false);
+    const shown = page.document.querySelector("[data-key-slot='translate'] input").value;
+    assert.equal(shown.includes("should-not-return"), false);
+    assert.equal(shown.includes("turn"), false);
+    assert.notEqual(shown, "");
+    assert.equal(shown.includes("bbbb"), true);
+  }
+});
+
+test("numbered and token names in a key-only file are not imported", async () => {
+  const chrome = installChrome({ settings: savedSettings() });
+  const page = mountPage("#data");
+  const { startOptions } = await import("../options/options.js?digit-key-import=1");
+  await startOptions();
+  await flush();
+  chrome.sync.settings.pdfLayout.mode = "local";
+  chrome.sync.settings.pdfLayout.localBaseUrl = "http://127.0.0.1:9999";
+  chrome.sync.settings.pdfLayout.cloudModel = "glm-ocr";
+  const saves = () => chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").length;
+  const before = saves();
+  async function load(settings) {
+    const input = page.document.getElementById("importFile");
+    const file = new File([JSON.stringify({ settings })], "keys.json", { type: "application/json" });
+    Object.defineProperty(input, "files", { configurable: true, get: () => [file] });
+    fire(input, "change");
+    await flush();
+  }
+  await load({ apiKey2: "only-api-key-2" });
+  assert.equal(page.document.getElementById("status").textContent, "文件里的 API 密钥已忽略，请在本机重新填写。");
+  assert.notEqual(page.document.getElementById("status").textContent, "已导入");
+  await load({ pdfLayout: { apiKey2: "only-layout-2" } });
+  assert.equal(page.document.getElementById("status").textContent, "文件里的 API 密钥已忽略，请在本机重新填写。");
+  await load({ jwt: "only-jwt", cookies: "only-cookies", sessionCookie: "only-session", pat: "only-pat" });
+  assert.equal(page.document.getElementById("status").textContent, "文件里的 API 密钥已忽略，请在本机重新填写。");
+  assert.equal(saves(), before);
+  assert.equal(chrome.sync.settings.pdfLayout.mode, "local");
+  assert.equal(chrome.sync.settings.pdfLayout.localBaseUrl, "http://127.0.0.1:9999");
+  assert.equal(chrome.sync.settings.pdfLayout.cloudModel, "glm-ocr");
+  const stored = JSON.stringify(chrome.sync.settings);
+  for (const secret of ["only-api-key-2", "only-layout-2", "only-jwt", "only-cookies", "only-session", "only-pat"]) {
+    assert.equal(stored.includes(secret), false, secret);
   }
 });
 
