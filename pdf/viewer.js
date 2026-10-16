@@ -345,7 +345,8 @@ import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
 import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
-import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
+import { bindImportChip } from "../options/data-panel.js";
+import { PERSIST_CARD_SESSION_KEY, createPersistCard, persistCardHiddenThisSession, readPersistCardState } from "../lib/persist-card.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
@@ -410,6 +411,7 @@ let libraryProbe = null;
 let notesDocHash = "";
 let notesUi = null;
 let libraryChip = null;
+let importBinding = null;
 let persistCard = null;
 let pendingNotes = null;
 let pendingUnload = () => {};
@@ -2218,10 +2220,7 @@ function noteLibrarySaveError(error) {
 
 async function persistHiddenThisSession() {
   try {
-    const get = globalThis.chrome?.storage?.session?.get;
-    if (typeof get !== "function") return false;
-    const bag = await get(PERSIST_CARD_SESSION_KEY);
-    return bag?.[PERSIST_CARD_SESSION_KEY] === true;
+    return await persistCardHiddenThisSession(globalThis.chrome?.storage?.session);
   } catch {
     return false;
   }
@@ -2279,7 +2278,21 @@ function installLibraryChrome() {
     onRecovered() {
       notesUi?.setStorageState?.(null);
       void maybeShowPersistCard();
+    },
+    onImportCommand(command) {
+      return importBinding?.command(command);
     }
+  });
+  void import("../lib/library-session.js").then(({ sharedLibraryStore }) => {
+    importBinding = bindImportChip(libraryChip, {
+      store: sharedLibraryStore(),
+      openData({ focus }) {
+        const url = globalThis.chrome?.runtime?.getURL?.("options/options.html");
+        if (url) globalThis.chrome?.tabs?.create?.({ url: `${url}#data?focus=${focus || "import"}` });
+      }
+    });
+  }).catch(() => {
+    importBinding = null;
   });
   persistCard = createPersistCard({
     host: cardHost,
@@ -2305,9 +2318,11 @@ function installLibraryChrome() {
         since: storageFailureSince(error)
       });
     },
-    onWriteFailed(error) { libraryChip?.writeFailed(error); }
+    onWriteFailed(error) { libraryChip?.writeFailed(error); },
+    onLibraryPageSaved() { void maybeShowPersistCard(); }
   });
   pendingUnload = bindPendingUnload(() => pendingNotes?.pendingNow?.(notesDocHashNow()) || 0);
+  void maybeShowPersistCard();
 }
 
 function installNotesUi() {
@@ -8670,8 +8685,14 @@ function rememberTranslation(page, results) {
   );
   const skipOnly = isSkipOnlyPage(blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
-  if (!verified.length && !skipOnly) return Promise.resolve();
-  if (!verified.length && existing && (existing.pairs?.length || existing.skipped)) return Promise.resolve();
+  if (!verified.length && !skipOnly) {
+    void maybeShowPersistCard();
+    return Promise.resolve();
+  }
+  if (!verified.length && existing && (existing.pairs?.length || existing.skipped)) {
+    void maybeShowPersistCard();
+    return Promise.resolve();
+  }
   const keptPairs = pairsWithoutUnalignedSlots(existing?.pairs, blocks, savedPairSettings());
   const pairs = verified.length
     ? mergeLibraryPairs(keptPairs, verified, blocks, pdfTargetLang)
@@ -8686,7 +8707,10 @@ function rememberTranslation(page, results) {
   const sentFor = docId;
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
-    if (!hash || hash === "nohash") return;
+    if (!hash || hash === "nohash") {
+      void maybeShowPersistCard();
+      return;
+    }
     const keepLayout = !(await layoutWriteSuperseded(hash, page, String(layout?.layoutVersion || "")));
     let sourceBase64 = "";
     if (!librarySourceSent.has(hash) && bytes?.length) {
@@ -8862,6 +8886,7 @@ function persistPageLayout(page) {
       ...(skipped ? { skipped: true } : {})
     };
     await saveLibraryPage(savedPayload);
+    void maybeShowPersistCard();
   });
 }
 
@@ -8889,6 +8914,7 @@ function persistPagePairs(saved) {
       ...(saved.skipped ? { skipped: true } : {})
     };
     await saveLibraryPage(savedPayload);
+    void maybeShowPersistCard();
   });
 }
 
@@ -9285,11 +9311,13 @@ async function translateCurrentPage() {
     setStatus(pdfTranslateFailureCopy({ error: "没有返回译文" }), true);
   } else setStatus(PDF_COPY.done);
   translatingPage = 0;
-  if (!aborted) {
+    if (!aborted) {
     try {
       await rememberTranslation(targetPage, merged);
     } catch (error) {
       if (noteLibrarySaveError(error)) setStatus("译文已生成，但写入本地库失败。", true);
+    } finally {
+      void maybeShowPersistCard();
     }
   }
   updateTranslateControls();
@@ -10222,6 +10250,8 @@ async function forceRetranslateCurrentPage() {
       } catch (error) {
         const leftover = noteLibrarySaveError(error);
         if (leftover) throw leftover;
+      } finally {
+        void maybeShowPersistCard();
       }
       if (!pairs.length) throw new Error("empty retranslation");
       replaceLibraryPagePairs(libraryDoc, targetPage, pairs);
@@ -10396,6 +10426,7 @@ function closeViewerWork() {
   layoutClosed = true;
   abortTranslateSession(session);
   abortInflightLayouts();
+  void importBinding?.close?.();
 }
 
 function abortError() {
@@ -10954,6 +10985,7 @@ async function adoptDoc(doc, title) {
     setDocTitle(title);
   }
   setHasDoc(true);
+  void maybeShowPersistCard();
   // Read this document's hint key only. The local area also holds layout
   // cache and notes, so opening must not scan every stored item.
   void resolveNotesDocHash().then(async (hash) => {

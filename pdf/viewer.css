@@ -2984,8 +2984,36 @@ button:disabled { opacity: 0.45; cursor: default; }
     border-radius: 14px 14px 0 0;
   }
 }
+.oi-lib-ring {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--oi-reader-line);
+  border-top-color: var(--oi-reader-ink);
+  animation: oi-lib-spin 1s linear infinite;
+}
+.oi-lib-ring.is-static,
+.oi-lib-chip.is-reduced .oi-lib-ring { animation: none; }
+@keyframes oi-lib-spin { to { transform: rotate(360deg); } }
+.oi-lib-chip.is-paused,
+.oi-lib-chip.is-running { color: var(--oi-reader-muted); }
+.oi-lib-chip.is-done { color: var(--oi-reader-ink-2); }
+.oi-lib-chip.is-fading { opacity: 0; transition: opacity 200ms ease; }
+.oi-lib-pop .oi-lib-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 12px; }
+.oi-lib-pop .oi-lib-link {
+  border: 0;
+  background: transparent;
+  color: var(--oi-reader-focus);
+  font-size: 13px;
+}
+.oi-lib-pop .oi-lib-note { margin: 8px 0 0; font-size: 12px; color: var(--oi-reader-muted); }
+.oi-lib-pop .oi-lib-err-head { display: flex; justify-content: space-between; gap: 8px; }
+.oi-lib-pop .oi-lib-err-name { margin: 2px 0; font-size: 12px; color: var(--oi-reader-muted); }
 @media (prefers-reduced-motion: reduce) {
-  .oi-lib-chip.is-recovered { transition: none; }
+  .oi-lib-chip.is-recovered,
+  .oi-lib-chip.is-done,
+  .oi-lib-chip.is-fading { transition: none; }
+  .oi-lib-ring { animation: none; }
 }
 
 .toolbar .oi-arxiv-chip {

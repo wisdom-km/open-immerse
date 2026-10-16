@@ -42,6 +42,8 @@ import {
 import { focusFormulaCard, renderFormulaPanel } from "../lib/formula-settings-ui.js";
 import { createNotesPrefsSession } from "../lib/reader-notes-local.js";
 import { NOTES_PANEL_WIDTH_DEFAULT, NOTES_PANE_WIDTH_DEFAULT } from "../lib/notes-prefs.js";
+import { downloadBlob } from "../lib/export.js";
+import { sharedLibraryStore } from "../lib/library-session.js";
 import { mountDataPanel } from "./data-panel.js";
 import { SETTINGS_PAGES, parseSettingsHash } from "./route.js";
 
@@ -126,6 +128,7 @@ async function init() {
   cachedSettings = JSON.parse(JSON.stringify(res.settings || { providers: {} }));
   applyStoredForm();
   el("translateScope").addEventListener("change", () => syncTranslateScopeHint());
+  bindData();
   bindPanelNav();
   el("laterList")?.addEventListener("change", () => {
     syncPdfLayoutBox();
@@ -134,7 +137,6 @@ async function init() {
   });
   bindFormulaSettings();
   bindNotes();
-  bindData();
   bindSecretsList();
   el("provider").addEventListener("change", () => {
     const left = attentionProvider;
@@ -899,37 +901,109 @@ async function readProviderBag() {
   }
 }
 
-async function rememberProviderSeq(id, seq, apiKey) {
+function appliedProviderSeq(bag, id) {
+  if (bag?.applied && Object.prototype.hasOwnProperty.call(bag.applied, id)) return Number(bag.applied[id]) || 0;
+  return Number(bag?.seq?.[id]) || 0;
+}
+
+function withEngineLock(id, run) {
+  const locks = globalThis.navigator?.locks;
+  if (!locks || typeof locks.request !== "function") return run();
+  return locks.request(`oi-secret-${id}`, () => run());
+}
+
+async function withEngineLocks(ids, run) {
+  const names = [...new Set(ids.filter(Boolean))].sort();
+  if (!names.length) return run();
+  return withEngineLock(names[0], () => withEngineLocks(names.slice(1), run));
+}
+
+async function reserveProviderSeq(id) {
   const bag = await readProviderBag();
-  const stored = Number(bag.seq[id]) || 0;
-  const key = String(apiKey ?? "");
-  if (stored > seq) return;
-  if (stored === seq && String(bag.providers[id] ?? "") === key) return;
-  bag.seq[id] = seq;
-  bag.providers[id] = key;
+  const snapshot = JSON.parse(JSON.stringify(bag));
+  const applied = appliedProviderSeq(bag, id);
+  const next = Math.max(applied, Number(bag.seq[id]) || 0) + 1;
+  bag.applied[id] = applied;
+  bag.seq[id] = next;
+  await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: bag });
+  return { id, seq: next, snapshot };
+}
+
+async function rollbackReservation(reserved) {
+  if (!reserved) return;
+  const bag = await readProviderBag();
+  if ((Number(bag.seq[reserved.id]) || 0) !== reserved.seq) return;
+  await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: reserved.snapshot });
+}
+
+async function commitLocalKey(id, want, seq) {
+  const bag = await readProviderBag();
+  if ((Number(bag.seq[id]) || 0) > seq) return;
+  bag.providers[id] = want;
+  bag.applied[id] = seq;
+  bag.seq[id] = Math.max(Number(bag.seq[id]) || 0, seq);
   await chrome.storage.local.set({ [SECRET_STORAGE_KEY]: bag });
 }
 
+async function syncProviderKey(id) {
+  try {
+    const bag = await chrome.storage.sync.get("settings");
+    return String(bag?.settings?.providers?.[id]?.apiKey || "");
+  } catch {
+    return null;
+  }
+}
+
+async function verifyProviderKey(id, want, seq) {
+  const local = await readProviderBag();
+  const localKey = String(local.providers[id] || "");
+  const applied = appliedProviderSeq(local, id);
+  if (localKey === want && applied >= seq) return { ok: true, needsLocalCommit: false };
+  const syncKey = await syncProviderKey(id);
+  if (syncKey == null) return { ok: false };
+  if (syncKey === want && applied < seq) return { ok: true, needsLocalCommit: true };
+  return { ok: false };
+}
+
 async function sendProviderKey(id, apiKey, clear) {
-  const seq = (Number((await readProviderBag()).seq[id]) || 0) + 1;
-  const stored = Number((await readProviderBag()).seq[id]) || 0;
-  if (seq < stored) return { ok: true, skipped: true };
+  return withEngineLock(id, () => sendProviderKeyLocked(id, apiKey, clear));
+}
+
+async function sendProviderKeyLocked(id, apiKey, clear) {
+  const want = clear ? "" : String(apiKey ?? "");
+  let reserved = null;
+  try {
+    reserved = await reserveProviderSeq(id);
+  } catch {
+    return { ok: false };
+  }
   let res;
   try {
     res = await chrome.runtime.sendMessage({
       type: "OI_SAVE_SETTINGS",
-      patch: { providers: { [id]: { apiKey } } },
+      patch: { providers: { [id]: { apiKey: want } } },
       clear: clear ? { providers: [id] } : {},
-      keySeq: { [id]: seq }
+      keySeq: { [id]: reserved.seq }
     });
   } catch {
+    await rollbackReservation(reserved);
     return { ok: false };
   }
-  if (!res || res.ok === false) return { ok: false };
-  try {
-    await rememberProviderSeq(id, seq, clear ? "" : apiKey);
-  } catch {
-    /* a failed bookkeeping write must not report the key save as failed */
+  if (!res || res.ok === false) {
+    await rollbackReservation(reserved);
+    return { ok: false };
+  }
+  const verified = await verifyProviderKey(id, want, reserved.seq);
+  if (!verified.ok) {
+    await rollbackReservation(reserved);
+    return { ok: false };
+  }
+  if (verified.needsLocalCommit) {
+    try {
+      await commitLocalKey(id, want, reserved.seq);
+    } catch {
+      return { ok: false };
+    }
   }
   return res;
 }
@@ -943,6 +1017,7 @@ function queueProviderKey(id, apiKey, clear, before, ticket) {
       cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: before });
       if (providerEdits.get(id) === apiKey) providerEdits.delete(id);
       renderProviderFields();
+      showToast("密钥没保存上");
       return res;
     }
     if (clear) {
@@ -1021,7 +1096,7 @@ function restoreControl(control) {
 }
 
 function persist(control) {
-  return enqueueSave(() => persistNow(control));
+  return enqueueSave(() => withEngineLocks(Object.keys(cachedSettings.providers || {}), () => persistNow(control)));
 }
 
 async function persistNow(control) {
@@ -1356,14 +1431,23 @@ function restoreReaderPrefs() {
 
 function bindData() {
   const root = el("dataPanelMount");
-  if (!root) return;
-  dataPanel = mountDataPanel(root);
-  root.addEventListener("oi-data-status", () => refreshBadges());
-  root.addEventListener("click", (ev) => {
-    const button = ev.target?.closest?.("[data-act='persist-again']");
-    if (!button) return;
-    const persist = globalThis.navigator?.storage?.persist;
-    if (typeof persist === "function") persist.call(globalThis.navigator.storage).catch(() => {});
+  if (!root || dataPanel) return;
+  const parsed = parseSettingsHash(location.hash);
+  dataPanel = mountDataPanel(root, {
+    store: sharedLibraryStore(),
+    focus: parsed.id === "data" ? (parsed.focus || null) : null,
+    history,
+    hash: "#data",
+    openData({ focus: next }) {
+      showPage("data", next || "import");
+    },
+    download(filename, text) {
+      return downloadBlob(filename, new Blob([text], { type: "application/json" })) === true;
+    }
+  });
+  dataPanel.coordinator?.subscribe?.(() => refreshBadges());
+  window.addEventListener("pagehide", () => {
+    void dataPanel?.closeData?.();
   });
 }
 
@@ -1407,7 +1491,7 @@ function refreshBadges() {
   const probeBad = [formulaSettings?.multimodal?.probe, formulaSettings?.ocr?.probe].some((probe) => probe && probe.ok === false && probe.chip);
   if (mm) mm.hidden = !probeBad;
   const data = document.querySelector('[data-badge="data"]');
-  if (data) data.hidden = !dataPanel?.needsAttention?.();
+  if (data) data.hidden = dataPanel?.state?.()?.phase !== "incomplete";
 }
 
 function searchHits(query) {
@@ -1420,7 +1504,8 @@ function searchHits(query) {
   }
   const focusOf = { 导入: "import", 导出: "export", 备份: "backup" };
   if (Object.prototype.hasOwnProperty.call(focusOf, q)) {
-    const group = document.querySelector(`[data-focus="${focusOf[q]}"]`);
+    const name = focusOf[q];
+    const group = document.querySelector(`[data-focus-group="${name}"]`) || document.querySelector(`[data-focus="${name}"]`);
     return group ? [group] : [];
   }
   const nodes = [...document.querySelectorAll("[data-key-slot], .set-row, .set-gh, .oi-set-field, h3, label")];
@@ -1511,7 +1596,7 @@ function showPage(id, focus) {
   if (location.hash !== `#${next}`) history.replaceState(null, "", `#${next}`);
   if (next === "mm") focusMm = true;
   if (focus && next === "data") {
-    const group = document.querySelector(`[data-focus="${focus}"]`);
+    const group = document.querySelector(`[data-focus-group="${focus}"]`) || document.querySelector(`[data-focus="${focus}"]`);
     if (group) {
       group.tabIndex = -1;
       group.scrollIntoView?.({ block: "center" });

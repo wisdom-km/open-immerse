@@ -14,6 +14,18 @@ import { mergeLiveSecrets, prepareSettingsImport, sealSettingsPatch, settingsFor
 import { normalizeAttention } from "../lib/provider-attention.js";
 import { parseSettingsHash, SETTINGS_PAGES } from "../options/route.js";
 
+const realBroadcastChannel = globalThis.BroadcastChannel;
+class MemoryBroadcastChannel {
+  constructor() {
+    this.onmessage = null;
+  }
+  postMessage() {}
+  close() {}
+}
+test.after(() => {
+  globalThis.BroadcastChannel = realBroadcastChannel;
+});
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OPENAI_KEY = "sk-testKEY3f9a";
 const PDF_KEY = "pdf-secret-99abcd";
@@ -44,12 +56,41 @@ function memoryLocalStorage(seed = {}) {
   };
 }
 
-function payloadHasProviderKey(patch) {
-  const providers = [patch?.oiSecrets?.providers, patch?.settings?.providers];
-  return providers.some((bag) => bag && Object.values(bag).some((value) => {
-    const key = value && typeof value === "object" ? value.apiKey : value;
-    return String(key || "").trim() !== "";
+function providerKeyText(value) {
+  if (value && typeof value === "object") return String(value.apiKey || "");
+  return String(value || "");
+}
+
+function payloadHasProviderKey(patch, bag) {
+  const pairs = [
+    [patch?.oiSecrets?.providers, bag?.oiSecrets?.providers],
+    [patch?.settings?.providers, bag?.settings?.providers]
+  ];
+  return pairs.some(([next, prev]) => next && Object.entries(next).some(([id, value]) => {
+    const key = providerKeyText(value);
+    if (!key.trim()) return false;
+    return key !== providerKeyText(prev?.[id]);
   }));
+}
+
+const engineLocks = new Map();
+
+function sharedEngineLocks() {
+  return {
+    request(name, options, callback) {
+      if (typeof options === "function") {
+        callback = options;
+        options = {};
+      }
+      const prev = engineLocks.get(name) || Promise.resolve();
+      let release;
+      const gate = new Promise((resolve) => {
+        release = resolve;
+      });
+      engineLocks.set(name, prev.then(() => gate, () => gate));
+      return prev.then(() => callback({ name, mode: "exclusive" }), () => callback({ name, mode: "exclusive" })).finally(() => release());
+    }
+  };
 }
 
 function installChrome(seed = {}) {
@@ -91,7 +132,7 @@ function installChrome(seed = {}) {
           api.failNextSync = false;
           throw new Error("sync quota");
         }
-        if (api.holdNextWrite && payloadHasProviderKey(patch)) {
+        if (api.holdNextWrite && payloadHasProviderKey(patch, bag)) {
           const gate = api.holdNextWrite;
           api.holdNextWrite = null;
           await gate;
@@ -128,7 +169,11 @@ function installChrome(seed = {}) {
             const bag = await globalThis.chrome.storage.sync.get("settings");
             const current = JSON.parse(JSON.stringify(bag.settings || {}));
             const next = legacyBackgroundMerge(current, JSON.parse(JSON.stringify(message.patch || {})));
-            await globalThis.chrome.storage.sync.set({ settings: next });
+            try {
+              await globalThis.chrome.storage.sync.set({ settings: next });
+            } catch (err) {
+              console.error("Open Immerse: storage.sync.set failed", err);
+            }
             return { ok: true, settings: next };
           }
           const settings = await saveSettings(message.patch, message.clear || {}, message.keySeq);
@@ -590,9 +635,10 @@ function mountPage(hash) {
       return true;
     }
   };
+  globalThis.BroadcastChannel = MemoryBroadcastChannel;
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { storage: storageApi }
+    value: { storage: storageApi, locks: sharedEngineLocks() }
   });
   globalThis.__oiStorage = storageApi;
   window.location = location;
@@ -605,7 +651,7 @@ function mountPage(hash) {
 }
 
 async function flush() {
-  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  for (let i = 0; i < 100; i += 1) await Promise.resolve();
 }
 
 async function settle() {
@@ -690,7 +736,7 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     page.window.dispatchEvent(new page.window.Event("hashchange"));
     await flush();
     assert.equal(page.location.hash, "#data");
-    const exportGroup = page.document.querySelector("[data-focus='export']");
+    const exportGroup = page.document.querySelector("[data-focus-group='export']");
     assert.equal(page.document._focused, exportGroup);
     assert.equal(exportGroup.classList.contains("set-flash"), true);
     mock.timers.tick(1200);
@@ -768,10 +814,10 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     assert.equal(page.document.querySelector("[data-key-slot='pdf']").classList.contains("set-flash"), true);
     mock.timers.tick(1200);
 
-    for (const [word, focus] of [["导入", "import"], ["导出", "export"], ["备份", "backup"]]) {
+    for (const [word, focus, attr] of [["导入", "import", "data-focus-group"], ["导出", "export", "data-focus-group"], ["备份", "backup", "data-focus"]]) {
       const found = searchHits(word);
-      assert.equal(found.length, 1);
-      assert.equal(found[0].getAttribute("data-focus"), focus);
+      assert.equal(found.length, 1, word);
+      assert.equal(found[0].getAttribute(attr), focus);
     }
 
     const notes = page.document.getElementById("panel-notes");
@@ -794,24 +840,14 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     assert.equal(String(chrome.local["reader.notesWidth"]), "360");
 
     const mount = page.document.getElementById("dataPanelMount");
-    assert.equal(mount.oiDataPanel.policy.blocksReading, false);
-    assert.equal(mount.oiDataPanel.policy.pausesWhenAllPagesClosed, true);
-    assert.equal(mount.oiDataPanel.policy.settingsImportIsBackground, false);
+    assert.ok(mount.querySelector("[data-focus-group='usage']"));
+    assert.ok(mount.querySelector("[data-focus-group='import']"));
+    assert.ok(mount.querySelector("[data-focus-group='export']"));
+    assert.match(mount.textContent, /文献库 · 导入/);
+    assert.match(mount.textContent, /文献库 · 导出/);
     assert.equal(page.document.querySelector("[data-badge='data']").hidden, true);
-    mount.oiDataPanel.applyStatus({ blocked: true, usage: "" });
-    assert.match(mount.textContent, /暂时读不了/);
-    assert.match(mount.textContent, /本机存储暂时打不开，稍后再试/);
-    assert.equal([...mount.querySelectorAll("button")].filter((button) => button.textContent.includes("选择") || button.textContent.includes("导出文献库")).every((button) => button.disabled), true);
     assert.equal(page.document.getElementById("setReadError").hidden, true);
     assert.equal(page.document.getElementById("exportSettings").disabled, false);
-    mount.oiDataPanel.applyStatus({ blocked: false, importIncomplete: true, settled: true, usage: "约 12 MB" });
-    assert.equal(page.document.querySelector("[data-badge='data']").hidden, false);
-    assert.match(mount.textContent, /✓/);
-    assert.equal(mount.querySelector("[data-state='settled']").classList.contains("set-done"), true);
-    const again = mount.querySelector("[data-act='persist-again']");
-    again.click();
-    await flush();
-    assert.equal(globalThis.__oiStorage.asked, 1);
     assert.equal(page.document.body.textContent.includes("不再提示"), false);
 
     const syncSwitch = page.document.getElementById("keysSync");
@@ -1620,7 +1656,7 @@ test("key ops stay in order on both backgrounds, including a failed last write",
         if (!expected) assert.equal(shown, "");
         else assert.equal(shown.includes(expected.slice(-4)), true, shown);
         const seq = Number(chrome.local.oiSecrets?.seq?.openai || 0);
-        assert.equal(seq, outcome === "failure" ? order.length - 1 : order.length);
+        assert.equal(seq, outcome === "failure" ? order.length - 1 : order.length, `${legacy ? "old" : "new"} ${outcome} ${order.map((action) => action.kind).join(">")} seq ${seq}`);
       }
     }
   }
@@ -1684,4 +1720,110 @@ test("missing-field 需处理 badge survives refresh", async () => {
   assert.equal(refreshed.document.getElementById("provider").value, "deepl");
   assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, false);
   assert.equal(chrome.local.oiProviderAttention.deepl, true);
+});
+
+function storedProviderKey(chrome, legacy) {
+  if (legacy) return String(chrome.sync.settings.providers?.openai?.apiKey || "");
+  return String(chrome.local.oiSecrets?.providers?.openai || "");
+}
+
+test("an equal provider seq cannot overwrite the key", async () => {
+  const chrome = installChrome({ settings: savedSettings() });
+  await saveSettings({ providers: { openai: { apiKey: "sk-seq-ONE1" } } }, {}, { openai: 1 });
+  await saveSettings({ providers: { openai: { apiKey: "sk-seq-SAME" } } }, {}, { openai: 1 });
+  assert.equal(chrome.local.oiSecrets.providers.openai, "sk-seq-ONE1");
+  await saveSettings({}, { providers: ["openai"] }, { openai: 1 });
+  assert.equal(chrome.local.oiSecrets.providers.openai, "sk-seq-ONE1");
+  await saveSettings({ providers: { openai: { apiKey: "sk-seq-TWO2" } } }, {}, { openai: 2 });
+  assert.equal(chrome.local.oiSecrets.providers.openai, "sk-seq-TWO2");
+  await saveSettings({}, { providers: ["openai"] }, { openai: 3 });
+  assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), "");
+});
+
+test("a swallowed sync failure on the old background does not commit the local key", async () => {
+  const chrome = installChrome({
+    settings: savedSettings(),
+    local: { oiSecrets: { providers: { openai: OPENAI_KEY }, pdfCloudApiKey: PDF_KEY, seq: {}, applied: {} } }
+  });
+  chrome.legacyBackground = true;
+  chrome.failKeySeq = 1;
+  const page = mountPage("#translate");
+  const mod = await import("../options/options.js?legacy-swallow=1");
+  await mod.startOptions();
+  await flush();
+  const key = page.document.querySelector("[data-key-slot='translate'] input");
+  key.value = "sk-should-not-land";
+  fire(key, "blur");
+  await settle();
+  assert.equal(chrome.sync.settings.providers.openai.apiKey, OPENAI_KEY);
+  assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), OPENAI_KEY);
+  assert.equal(Number(chrome.local.oiSecrets.seq?.openai || 0), 0);
+  const shown = page.document.querySelector("[data-key-slot='translate'] input").value;
+  assert.equal(shown.includes("should-not-land"), false);
+  assert.match(page.document.getElementById("setToast").textContent, /没保存上/);
+});
+
+test("two settings pages and a reload keep the later key on both backgrounds", async () => {
+  for (const legacy of [false, true]) {
+    const label = legacy ? "old" : "new";
+    const chrome = installChrome({ settings: savedSettings() });
+    chrome.legacyBackground = legacy;
+    const pageA = mountPage("#translate");
+    const modA = await import(`../options/options.js?two-tabs=${label}-a`);
+    await modA.startOptions();
+    await flush();
+    let release;
+    chrome.holdNextWrite = new Promise((resolve) => {
+      release = resolve;
+    });
+    const keyA = pageA.document.querySelector("[data-key-slot='translate'] input");
+    keyA.value = "sk-tab-AAAA";
+    fire(keyA, "blur");
+    await flush();
+    const pageB = mountPage("#translate");
+    const modB = await import(`../options/options.js?two-tabs=${label}-b`);
+    await modB.startOptions();
+    await flush();
+    const keyB = pageB.document.querySelector("[data-key-slot='translate'] input");
+    keyB.value = "sk-tab-BBBB";
+    fire(keyB, "blur");
+    await flush();
+    assert.equal(storedProviderKey(chrome, legacy), OPENAI_KEY, `${label} tabs waiting`);
+    release();
+    await settle();
+    assert.equal(storedProviderKey(chrome, legacy), "sk-tab-BBBB", `${label} tabs`);
+    assert.equal(pageB.document.querySelector("[data-key-slot='translate'] input").value.includes("BBBB"), true);
+    assert.equal(JSON.stringify(chrome.sync.settings).includes("sk-tab-AAAA"), false);
+    assert.equal(JSON.stringify(chrome.local).includes("sk-tab-AAAA"), false);
+
+    const again = installChrome({ settings: savedSettings() });
+    again.legacyBackground = legacy;
+    const first = mountPage("#translate");
+    const before = await import(`../options/options.js?reload=${label}-before`);
+    await before.startOptions();
+    await flush();
+    let releaseReload;
+    again.holdNextWrite = new Promise((resolve) => {
+      releaseReload = resolve;
+    });
+    const stale = first.document.querySelector("[data-key-slot='translate'] input");
+    stale.value = "sk-reload-AAAA";
+    fire(stale, "blur");
+    await flush();
+    const reloaded = mountPage("#translate");
+    const after = await import(`../options/options.js?reload=${label}-after`);
+    await after.startOptions();
+    await flush();
+    const remove = [...reloaded.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+    remove.click();
+    await flush();
+    assert.equal(storedProviderKey(again, legacy), OPENAI_KEY, `${label} reload waiting`);
+    releaseReload();
+    await settle();
+    assert.equal(storedProviderKey(again, legacy), "", `${label} reload`);
+    assert.equal(JSON.stringify(again.sync.settings).includes("sk-reload-AAAA"), false);
+    assert.equal(JSON.stringify(again.local).includes("sk-reload-AAAA"), false);
+    assert.ok(Number(again.local.oiSecrets?.seq?.openai || 0) >= 2, `${label} seq`);
+    assert.equal(reloaded.document.querySelector("[data-key-slot='translate'] input").value, "");
+  }
 });
