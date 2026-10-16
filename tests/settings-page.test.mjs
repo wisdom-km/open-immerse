@@ -2520,3 +2520,271 @@ test("two devices on the old background stop overwriting each other's key", asyn
   assert.equal(Number(chrome.sync.settings.providers.openai.oiAppliedSeq), 6);
   assert.equal(page.document.querySelector("[data-key-slot='translate'] input").value.includes("CCCC"), true);
 });
+
+test("a higher pending seq defers a write the recorded sync seq would still allow", async () => {
+  const { decideKeyReconcile } = await import("../lib/settings-secrets.js");
+  const deferred = decideKeyReconcile({
+    providers: { openai: "sk-applied-AAAA" },
+    seq: { openai: 8 },
+    applied: { openai: 5 },
+    pending: { openai: { seq: 8, value: "sk-pending-HHHH", sent: false } }
+  }, "openai", "sk-sync-BBBB", 2);
+  assert.equal(deferred.action, "keep");
+  assert.notEqual(deferred.value, "sk-applied-AAAA");
+  assert.notEqual(deferred.seq, 8);
+  const sent = decideKeyReconcile({
+    providers: { openai: "sk-applied-AAAA" },
+    seq: { openai: 8 },
+    applied: { openai: 5 },
+    pending: { openai: { seq: 8, value: "sk-pending-HHHH", sent: true } }
+  }, "openai", "sk-sync-BBBB", 2);
+  assert.equal(sent.action, "keep");
+  assert.notEqual(sent.seq, 8);
+});
+
+test("pat is a secret only when it is its own segment", async () => {
+  const kept = prepareSettingsImport({
+    settings: {
+      leftpat: "keep-leftpat",
+      wirecompat: "keep-wirecompat",
+      browserCompat: "keep-browser-compat",
+      cssCompat: "keep-css-compat"
+    }
+  });
+  assert.equal(kept.settings.leftpat, "keep-leftpat");
+  assert.equal(kept.settings.wirecompat, "keep-wirecompat");
+  assert.equal(kept.settings.browserCompat, "keep-browser-compat");
+  assert.equal(kept.settings.cssCompat, "keep-css-compat");
+  for (const name of ["pats", "compatPat", "notAnApiKeyField"]) {
+    const stripped = prepareSettingsImport({ settings: { [name]: "only-one" } });
+    assert.equal(stripped.ignoredKeys, true, name);
+    assert.equal(settingsImportHasChanges(stripped.settings), false, name);
+  }
+});
+
+test("a queued repair does not send the old key after a higher pending appears", async () => {
+  const chrome = installChrome({
+    settings: savedSettings(),
+    local: {
+      oiSecrets: {
+        providers: { openai: OPENAI_KEY },
+        pdfCloudApiKey: PDF_KEY,
+        seq: { openai: 1 },
+        applied: { openai: 1 },
+        pending: {}
+      }
+    }
+  });
+  const page = mountPage("#translate");
+  const mod = await import("../options/options.js?repair-interrupt=1");
+  await mod.startOptions();
+  await flush();
+  let releaseLock = () => {};
+  const held = globalThis.navigator.locks.request("oi-secret-openai", () => new Promise((resolve) => {
+    releaseLock = resolve;
+  }));
+  await flush();
+  const planted = JSON.parse(JSON.stringify(chrome.sync.settings));
+  planted.providers.openai.apiKey = "sk-sync-BBBB";
+  delete planted.providers.openai.oiAppliedSeq;
+  await globalThis.chrome.storage.sync.set({ settings: planted });
+  await flush();
+  const bag = JSON.parse(JSON.stringify(chrome.local.oiSecrets));
+  bag.seq.openai = 4;
+  bag.pending.openai = { seq: 4, value: "sk-pending-CCCC", sent: true };
+  const before = chrome.calls.filter((message) => message?.type === "OI_SAVE_SETTINGS").length;
+  await globalThis.chrome.storage.local.set({ oiSecrets: bag });
+  await flush();
+  releaseLock();
+  await held;
+  await settle();
+  const saves = chrome.calls.slice(before).filter((message) => message?.type === "OI_SAVE_SETTINGS");
+  assert.equal(saves.some((message) => message?.patch?.providers?.openai?.apiKey === OPENAI_KEY), false);
+  assert.equal(saves.some((message) => Number(message?.keySeq?.openai) === 4 && message?.patch?.providers?.openai?.apiKey === OPENAI_KEY), false);
+  assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), OPENAI_KEY);
+  assert.equal(String(page.document.getElementById("setToast").textContent || "").trim(), "");
+});
+
+test("an in-flight save stamps its own seq and a closed page does not roll it back", async () => {
+  const newer = "sk-stamp-NEW1";
+  const chrome = installChrome({
+    settings: savedSettings(),
+    local: {
+      oiSecrets: {
+        providers: { openai: OPENAI_KEY },
+        pdfCloudApiKey: PDF_KEY,
+        seq: { openai: 1 },
+        applied: { openai: 1 },
+        pending: {}
+      }
+    }
+  });
+  const page = mountPage("#translate");
+  const mod = await import("../options/options.js?stamp-interrupt=1");
+  await mod.startOptions();
+  await flush();
+  let release = () => {};
+  chrome.holdNextSyncSet = new Promise((resolve) => {
+    release = resolve;
+  });
+  try {
+    const input = page.document.querySelector("[data-key-slot='translate'] input");
+    input.value = newer;
+    fire(input, "blur");
+    await flush();
+    const stamped = chrome.calls.filter((message) => message?.type === "OI_SAVE_SETTINGS" && message?.patch?.providers?.openai?.apiKey === newer).at(-1);
+    assert.ok(stamped);
+    assert.equal(Number(stamped.keySeq.openai), Number(stamped.patch.providers.openai.oiAppliedSeq));
+    assert.equal(Number(stamped.keySeq.openai), Number(chrome.local.oiSecrets.pending?.openai?.seq || chrome.local.oiSecrets.applied?.openai));
+    assert.notEqual(stamped.patch.providers.openai.apiKey, OPENAI_KEY);
+    page.window.dispatchEvent(new page.window.Event("pagehide"));
+    release();
+    await settle();
+    assert.equal(String(page.document.getElementById("setToast").textContent || "").trim(), "");
+    assert.equal(String(chrome.local.oiSecrets.providers.openai || ""), newer);
+    assert.equal(String(chrome.sync.settings.providers.openai.apiKey || ""), "");
+  } finally {
+    release();
+    releaseHeldEngineLocks();
+    await settle();
+  }
+});
+
+function focusTab(tab) {
+  globalThis.document = tab.page.document;
+  globalThis.window = tab.page.window;
+}
+
+function assertNewKeyStep(chrome, state, step) {
+  const bag = chrome.local.oiSecrets || {};
+  const applied = Number(bag.applied?.openai || 0);
+  const localKey = String(bag.providers?.openai || "");
+  const where = `seed ${state.seed} ${step}`;
+  assert.ok(applied >= state.applied, `${where} applied ${applied} went down from ${state.applied}`);
+  if (state.deletedAt > 0 && localKey && applied <= state.deletedAt) {
+    assert.fail(`${where} deletion resurrected ${localKey}`);
+  }
+  const pending = bag.pending?.openai;
+  if (pending && String(pending.value || "") !== "" && Number(pending.seq) > applied) {
+    const labeled = chrome.calls.some((message) => message?.type === "OI_SAVE_SETTINGS"
+      && message?.patch?.providers?.openai?.apiKey === localKey
+      && localKey !== String(pending.value)
+      && Number(message?.keySeq?.openai) === Number(pending.seq));
+    assert.equal(labeled, false, `${where} old key labeled with pending seq`);
+  }
+  assert.equal(syncHasSecrets(chrome.sync.settings), false, `${where} key leaked into sync`);
+  state.applied = applied;
+  if (!localKey && applied > 0) state.deletedAt = applied;
+  else if (localKey && applied > state.deletedAt) state.deletedAt = 0;
+}
+
+async function runNewBackgroundSeed(seed) {
+  const rand = mulberry32(seed);
+  const chrome = installChrome({
+    settings: savedSettings(),
+    local: {
+      oiSecrets: {
+        providers: { openai: OPENAI_KEY },
+        pdfCloudApiKey: PDF_KEY,
+        seq: { openai: 1 },
+        applied: { openai: 1 },
+        pending: {}
+      }
+    }
+  });
+  const state = { seed, applied: 1, deletedAt: 0 };
+  const tabs = [];
+  let serial = 0;
+  async function openTab() {
+    const page = mountPage("#translate");
+    serial += 1;
+    const mod = await import(`../options/options.js?nvseed=${seed}-t${serial}`);
+    await mod.startOptions();
+    await flush();
+    const tab = { page, alive: true };
+    tabs.push(tab);
+    focusTab(tab);
+    return tab;
+  }
+  const live = () => tabs.filter((tab) => tab.alive);
+  await openTab();
+  await openTab();
+  assertNewKeyStep(chrome, state, "open");
+
+  async function saveOn(tab, value) {
+    const target = tab?.alive ? tab : (live()[0] || await openTab());
+    focusTab(target);
+    const input = target.page.document.querySelector("[data-key-slot='translate'] input");
+    input.value = value;
+    fire(input, "blur");
+    await settle();
+    return target;
+  }
+
+  const events = ["save", "delete", "unload", "fail"];
+  for (let i = events.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rand() * (i + 1));
+    const swap = events[i];
+    events[i] = events[j];
+    events[j] = swap;
+  }
+  let n = 0;
+  for (const event of events) {
+    n += 1;
+    if (event === "save") {
+      await saveOn(live()[0], `sk-nv-${seed.toString(16)}-${n}-save`);
+    } else if (event === "delete") {
+      const tab = live()[0] || await openTab();
+      focusTab(tab);
+      const remove = [...tab.page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+      if (remove) {
+        remove.click();
+        await settle();
+      }
+    } else if (event === "unload") {
+      const tab = live()[0] || await openTab();
+      focusTab(tab);
+      let release = () => {};
+      chrome.holdNextSyncSet = new Promise((resolve) => {
+        release = resolve;
+      });
+      const input = tab.page.document.querySelector("[data-key-slot='translate'] input");
+      input.value = `sk-nv-${seed.toString(16)}-${n}-hold`;
+      fire(input, "blur");
+      await flush();
+      tab.page.window.dispatchEvent(new tab.page.window.Event("pagehide"));
+      tab.alive = false;
+      releaseHeldEngineLocks();
+      const other = live()[0] || await openTab();
+      focusTab(other);
+      const second = other.page.document.querySelector("[data-key-slot='translate'] input");
+      second.value = `sk-nv-${seed.toString(16)}-${n}-next`;
+      fire(second, "blur");
+      await flush();
+      release();
+      await settle();
+    } else {
+      const tab = live()[0] || await openTab();
+      chrome.failSave = true;
+      await saveOn(tab, `sk-nv-${seed.toString(16)}-${n}-fail`);
+      chrome.failSave = false;
+      await saveOn(tab.alive ? tab : live()[0], `sk-nv-${seed.toString(16)}-${n}-retry`);
+    }
+    assertNewKeyStep(chrome, state, event);
+  }
+  releaseHeldEngineLocks();
+  await settle();
+  assertNewKeyStep(chrome, state, "idle");
+}
+
+test("new background interleaving holds key invariants for 500 seeds", { timeout: 180000 }, async () => {
+  for (let n = 0; n < 500; n += 1) {
+    const seed = (0xA11CE + n) >>> 0;
+    try {
+      await runNewBackgroundSeed(seed);
+    } catch (error) {
+      console.error(`failing seed ${seed}`);
+      throw new Error(`failing seed ${seed}: ${error.message}`);
+    }
+  }
+});
