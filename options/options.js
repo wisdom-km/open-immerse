@@ -24,6 +24,7 @@ import {
 import { focusFormulaCard, renderFormulaPanel } from "../lib/formula-settings-ui.js";
 import { mountDataPanel, readDataFocus } from "./data-panel.js";
 import { sharedLibraryStore } from "../lib/library-session.js";
+import { downloadBlob } from "../lib/export.js";
 
 function el(id) {
   return document.getElementById(id);
@@ -446,6 +447,10 @@ function ensureDataPanel(focus) {
       hash: "#data",
       openData({ focus: next }) {
         showOptionsPanel(`data?focus=${next || "import"}`);
+      },
+      download(filename, text) {
+        downloadBlob(filename, new Blob([text], { type: "application/json" }));
+        return true;
       }
     });
     return dataPanel;

@@ -10,7 +10,8 @@ import { NOTES_FORMAT } from "../lib/notes-io.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
 import { createIdbLibraryFactory } from "../lib/platform/idb-backend.js";
 import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
-import { readPersistCardState } from "../lib/persist-card.js";
+import { createPersistCard, readPersistCardState } from "../lib/persist-card.js";
+import { saveLibraryPage, setLibraryUiHooks } from "../lib/pdf-library.js";
 import { attachImportReader, bindImportChip, mountDataPanel, readDataFocus } from "../options/data-panel.js";
 
 const HASH_A = "aaaaaaaaaaaaaaaa";
@@ -1409,6 +1410,44 @@ async function coordinatorPair(tag) {
   return { modA, modB };
 }
 
+function documentLocks() {
+  const core = watchedLocks();
+  return {
+    waiting: () => core.waiting(),
+    open() {
+      let dead = false;
+      const abandoners = new Set();
+      return {
+        request(name, options, callback) {
+          if (dead) {
+            const error = new Error("The document was destroyed");
+            error.name = "AbortError";
+            return Promise.reject(error);
+          }
+          let abandon = () => {};
+          const abandoned = new Promise((resolve) => { abandon = resolve; });
+          abandoners.add(abandon);
+          return core.request(name, options, (lock) => {
+            if (!lock || dead) return callback(lock);
+            // Document destruction settles the browser lock while the page's
+            // callback never runs again. Promise.race does that here.
+            return Promise.race([
+              Promise.resolve().then(() => callback(lock)),
+              abandoned
+            ]);
+          }).finally(() => abandoners.delete(abandon));
+        },
+        destroy() {
+          if (dead) return;
+          dead = true;
+          for (const abandon of abandoners) abandon();
+          abandoners.clear();
+        }
+      };
+    }
+  };
+}
+
 function watchedLocks() {
   const locks = createMemoryLocks();
   let waiting = 0;
@@ -1438,6 +1477,7 @@ test("DATA-06 the reader waits out a paper that still holds the shared lock", { 
   let data = null;
   let reader = null;
   let store = null;
+  let spy = null;
   try {
     store = storeFor("memory");
     const { modA, modB } = await coordinatorPair("slow-lock");
@@ -1450,10 +1490,18 @@ test("DATA-06 the reader waits out a paper that still holds the shared lock", { 
     data.attach("data");
     reader.attach("reader");
     await flush(20);
+    const heard = [];
+    spy = new BroadcastChannel("oi-library");
+    spy.onmessage = (event) => {
+      if (event?.data?.type === "import-lock-free") heard.push(Date.now());
+    };
     const job = data.importFolder(library());
     await until(() => gates.length >= 1);
     const started = Date.now();
-    await data.detach("data");
+    const detaching = data.detach("data");
+    await until(() => heard.length >= 1, 80);
+    assert.ok(Date.now() - started < 500, `lock-free arrived after ${Date.now() - started}ms`);
+    await detaching;
     const waited = Date.now() - started;
     assert.ok(waited >= 1900, `detach returned in ${waited}ms`);
     await until(() => locks.waiting() >= 1, 200);
@@ -1471,6 +1519,7 @@ test("DATA-06 the reader waits out a paper that still holds the shared lock", { 
     await job;
   } finally {
     while (gates.length) gates.shift()();
+    spy?.close();
     data?.destroy();
     reader?.destroy();
     await store?.closeLibrary?.();
@@ -1564,6 +1613,70 @@ test("以后再说 after the reader queues does not take over the import", { tim
   }
 });
 
+test("a destroyed page hands the import to the reader that already queued", { timeout: 20000 }, async () => {
+  const restore = installDom();
+  let data = null;
+  let reader = null;
+  let store = null;
+  let page = null;
+  try {
+    store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("destroyed-page");
+    const locks = documentLocks();
+    page = locks.open();
+    const readerPage = locks.open();
+    let calls = 0;
+    let lockFree = 0;
+    let dead = false;
+    const raw = createImportBus();
+    const bus = {
+      post(message) {
+        if (message?.type === "import-lock-free") lockFree += 1;
+        if (dead) return;
+        raw.post(message);
+      },
+      listen: (fn) => raw.listen(fn),
+      close() { raw.close?.(); }
+    };
+    data = modA.createImportCoordinator({
+      store,
+      bus,
+      locks: page,
+      beforePaper() {
+        calls += 1;
+        return new Promise(() => {});
+      }
+    });
+    reader = modB.createImportCoordinator({ store, bus, locks: readerPage });
+    data.attach("data");
+    reader.attach("reader");
+    await flush(20);
+    const job = data.importFolder(library());
+    await until(() => calls === 1 && locks.waiting() >= 1, 200);
+    assert.equal(await store.getPaper(HASH_A), null);
+    assert.equal(await store.getPaper(HASH_B), null);
+    dead = true;
+    page.destroy();
+    let handed = false;
+    for (let turn = 0; turn < 400 && !handed; turn += 1) {
+      handed = Boolean(await store.getPaper(HASH_A)) && Boolean(await store.getPaper(HASH_B));
+      if (!handed) await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    assert.equal(handed, true);
+    assert.equal(calls, 1);
+    assert.equal(lockFree, 0);
+    assert.notEqual(await store.getPaper(HASH_A), null);
+    assert.notEqual(await store.getPaper(HASH_B), null);
+    void job;
+  } finally {
+    page?.destroy();
+    data?.destroy();
+    reader?.destroy();
+    await store?.closeLibrary?.();
+    restore();
+  }
+});
+
 test("DATA-06 two module instances hand the import across BroadcastChannel", async () => {
   const restore = installDom();
   try {
@@ -1638,8 +1751,9 @@ test("a running import ignores lock-free instead of clearing its paper list", as
       return result;
     };
     const { modA, modB } = await coordinatorPair("race");
-    const reader = modA.createImportCoordinator({ store });
-    const other = modB.createImportCoordinator({ store });
+    const locks = createMemoryLocks();
+    const reader = modA.createImportCoordinator({ store, locks });
+    const other = modB.createImportCoordinator({ store, locks });
     assert.notEqual(reader.id, other.id);
     other.attach("data");
     reader.attach("reader");
@@ -1671,11 +1785,13 @@ test("F4UI-26 the reader chip shows import progress from another page", async ()
     const store = storeFor("memory");
     const { modA, modB } = await coordinatorPair("chip");
     let release = null;
+    const locks = createMemoryLocks();
     const data = modA.createImportCoordinator({
       store,
+      locks,
       beforePaper: () => new Promise((resolve) => { release = resolve; })
     });
-    const reader = modB.createImportCoordinator({ store });
+    const reader = modB.createImportCoordinator({ store, locks });
     assert.notEqual(data.id, reader.id);
     const queue = [];
     let seq = 0;
@@ -1786,6 +1902,161 @@ test("pause and 以后再说 survive in chrome.storage.session", async () => {
     await store.closeLibrary?.();
   } finally {
     globalThis.chrome = previous;
+    restore();
+  }
+});
+
+test("a refused persist grant shows the library card on load and after a page save", async () => {
+  const restore = installDom();
+  const previous = globalThis.chrome;
+  const bag = new Map([["libraryPersistGranted", false]]);
+  globalThis.chrome = {
+    storage: {
+      local: {
+        get(keys) {
+          const out = {};
+          const list = Array.isArray(keys) ? keys : [keys];
+          for (const key of list) if (bag.has(key)) out[key] = bag.get(key);
+          return Promise.resolve(out);
+        },
+        set(patch) {
+          for (const [key, value] of Object.entries(patch || {})) bag.set(key, value);
+          return Promise.resolve();
+        }
+      },
+      session: {
+        get() { return Promise.resolve({}); },
+        set() { return Promise.resolve(); }
+      }
+    }
+  };
+  const host = document.createElement("div");
+  const card = createPersistCard({ host });
+  async function showIfRefused() {
+    if (card.isOpen()) return;
+    const hidden = await globalThis.chrome.storage.session.get(["oiPersistCardHidden"]);
+    if (hidden?.oiPersistCardHidden === true) return;
+    const decision = await readPersistCardState(globalThis.chrome.storage.local);
+    if (decision.show) card.show();
+  }
+  try {
+    assert.equal((await readPersistCardState(globalThis.chrome.storage.local)).show, true);
+    assert.equal(card.isOpen(), false);
+    await showIfRefused();
+    assert.equal(card.isOpen(), true);
+    assert.match(host.textContent, /文献库和笔记可能会被浏览器清掉/);
+    card.hide();
+    assert.equal(card.isOpen(), false);
+    const store = storeFor("memory");
+    let saved = 0;
+    setLibraryUiHooks({
+      onLibraryPageSaved() {
+        saved += 1;
+        return showIfRefused();
+      }
+    });
+    await saveLibraryPage({
+      hash: HASH_A,
+      title: "论文甲",
+      page: 1,
+      pageCount: 1,
+      pairs: [{ id: "p", source: "s", translation: "甲" }],
+      targetLang: "zh-CN"
+    }, { store });
+    assert.equal(saved, 1);
+    assert.equal(card.isOpen(), true);
+    await store.closeLibrary?.();
+    const viewer = readFileSync(new URL("../pdf/viewer.js", import.meta.url), "utf8");
+    const install = viewer.slice(viewer.indexOf("function installLibraryChrome"), viewer.indexOf("function installNotesUi"));
+    assert.match(install, /onLibraryPageSaved\(\) \{\s*void maybeShowPersistCard\(\)/);
+    assert.match(install, /void maybeShowPersistCard\(\);\n\}/);
+    const adopt = viewer.slice(viewer.indexOf("async function adoptDoc"), viewer.indexOf("function shortTitle"));
+    assert.match(adopt, /setHasDoc\(true\);\n\s*void maybeShowPersistCard\(\)/);
+    const layoutFn = viewer.slice(viewer.indexOf("function persistPageLayout"), viewer.indexOf("function persistPagePairs"));
+    const pairsFn = viewer.slice(viewer.indexOf("function persistPagePairs"), viewer.indexOf("function bindSavedPairs"));
+    assert.match(layoutFn, /await saveLibraryPage\(savedPayload\);\n\s*void maybeShowPersistCard\(\)/);
+    assert.match(pairsFn, /await saveLibraryPage\(savedPayload\);\n\s*void maybeShowPersistCard\(\)/);
+    const remember = viewer.slice(viewer.indexOf("function rememberTranslation"), viewer.indexOf("function rememberSkipHole"));
+    const early = remember.indexOf("return Promise.resolve()");
+    assert.ok(early > 0 && remember.lastIndexOf("maybeShowPersistCard", early) > 0);
+    assert.match(remember, /hash === "nohash"\) \{\n\s*void maybeShowPersistCard\(\)/);
+    const retranslate = viewer.slice(
+      viewer.indexOf("async function forceRetranslateCurrentPage"),
+      viewer.indexOf("function titleStructureFailed")
+    );
+    const rememberAt = retranslate.indexOf("await rememberTranslation(");
+    const finallyAt = retranslate.indexOf("finally {", rememberAt);
+    assert.ok(finallyAt > rememberAt);
+    assert.match(retranslate.slice(finallyAt, finallyAt + 160), /maybeShowPersistCard/);
+  } finally {
+    setLibraryUiHooks({});
+    globalThis.chrome = previous;
+    restore();
+  }
+});
+
+test("library export downloads the file and stays quiet when the download is refused", async () => {
+  const restore = installDom();
+  const previousCreate = URL.createObjectURL;
+  const previousRevoke = URL.revokeObjectURL;
+  const blobs = [];
+  URL.createObjectURL = (blob) => {
+    blobs.push(blob);
+    return "blob:library-export";
+  };
+  URL.revokeObjectURL = () => {};
+  try {
+    const store = storeFor("memory");
+    await store.importBundle({
+      format: LIBRARY_FORMAT,
+      schema: LIBRARY_SCHEMA,
+      papers: [{
+        paper: { docHash: HASH_A, title: "甲", origin: "local", rev: 1, updatedAt: 1, lastOpenedAt: 1, schema: LIBRARY_SCHEMA, apiKey: "SECRET" },
+        pages: [{ docHash: HASH_A, page: 1, pairs: [{ id: "p", source: "s", translation: "t" }], rev: 1, updatedAt: 1, schema: LIBRARY_SCHEMA }]
+      }]
+    });
+    const root = document.createElement("div");
+    const anchors = [];
+    const orig = document.createElement.bind(document);
+    document.createElement = (tag) => {
+      const node = orig(tag);
+      if (String(tag).toLowerCase() === "a") anchors.push(node);
+      return node;
+    };
+    const panel = mountDataPanel(root, {
+      store,
+      usage: async () => ({ usage: 1, quota: 2, persisted: true }),
+      now: () => Date.UTC(2026, 9, 15, 8, 5)
+    });
+    await panel.reload();
+    click(root, "导出文献库");
+    await flush(20);
+    assert.equal(anchors.length, 1);
+    assert.match(anchors[0].download, /^open-immerse-library-\d{8}-\d{4}\.json$/);
+    assert.equal(anchors[0].href, "blob:library-export");
+    assert.equal(blobs.length, 1);
+    const text = await blobs[0].text();
+    assert.equal(text.includes("SECRET"), false);
+    assert.equal(JSON.parse(text).papers[0].paper.title, "甲");
+    assert.match(root.textContent, /已导出/);
+    const options = readFileSync(new URL("../options/options.js", import.meta.url), "utf8");
+    assert.match(options, /download\(filename, text\) \{\n\s*downloadBlob\(filename, new Blob\(\[text\]/);
+    const refused = document.createElement("div");
+    const quiet = mountDataPanel(refused, {
+      store,
+      usage: async () => ({ usage: 1, quota: 2, persisted: true }),
+      download: async () => false
+    });
+    await quiet.reload();
+    click(refused, "导出文献库");
+    await flush(20);
+    assert.equal(refused.textContent.includes("已导出"), false);
+    panel.destroy();
+    quiet.destroy();
+    await store.closeLibrary?.();
+  } finally {
+    URL.createObjectURL = previousCreate;
+    URL.revokeObjectURL = previousRevoke;
     restore();
   }
 });

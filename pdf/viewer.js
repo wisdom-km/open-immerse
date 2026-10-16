@@ -2321,9 +2321,11 @@ function installLibraryChrome() {
         since: storageFailureSince(error)
       });
     },
-    onWriteFailed(error) { libraryChip?.writeFailed(error); }
+    onWriteFailed(error) { libraryChip?.writeFailed(error); },
+    onLibraryPageSaved() { void maybeShowPersistCard(); }
   });
   pendingUnload = bindPendingUnload(() => pendingNotes?.pendingNow?.(notesDocHashNow()) || 0);
+  void maybeShowPersistCard();
 }
 
 function installNotesUi() {
@@ -8686,8 +8688,14 @@ function rememberTranslation(page, results) {
   );
   const skipOnly = isSkipOnlyPage(blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
-  if (!verified.length && !skipOnly) return Promise.resolve();
-  if (!verified.length && existing && (existing.pairs?.length || existing.skipped)) return Promise.resolve();
+  if (!verified.length && !skipOnly) {
+    void maybeShowPersistCard();
+    return Promise.resolve();
+  }
+  if (!verified.length && existing && (existing.pairs?.length || existing.skipped)) {
+    void maybeShowPersistCard();
+    return Promise.resolve();
+  }
   const keptPairs = pairsWithoutUnalignedSlots(existing?.pairs, blocks, savedPairSettings());
   const pairs = verified.length
     ? mergeLibraryPairs(keptPairs, verified, blocks, pdfTargetLang)
@@ -8702,7 +8710,10 @@ function rememberTranslation(page, results) {
   const sentFor = docId;
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
-    if (!hash || hash === "nohash") return;
+    if (!hash || hash === "nohash") {
+      void maybeShowPersistCard();
+      return;
+    }
     const keepLayout = !(await layoutWriteSuperseded(hash, page, String(layout?.layoutVersion || "")));
     let sourceBase64 = "";
     if (!librarySourceSent.has(hash) && bytes?.length) {
@@ -8878,6 +8889,7 @@ function persistPageLayout(page) {
       ...(skipped ? { skipped: true } : {})
     };
     await saveLibraryPage(savedPayload);
+    void maybeShowPersistCard();
   });
 }
 
@@ -8905,6 +8917,7 @@ function persistPagePairs(saved) {
       ...(saved.skipped ? { skipped: true } : {})
     };
     await saveLibraryPage(savedPayload);
+    void maybeShowPersistCard();
   });
 }
 
@@ -9301,11 +9314,13 @@ async function translateCurrentPage() {
     setStatus(pdfTranslateFailureCopy({ error: "没有返回译文" }), true);
   } else setStatus(PDF_COPY.done);
   translatingPage = 0;
-  if (!aborted) {
+    if (!aborted) {
     try {
       await rememberTranslation(targetPage, merged);
     } catch (error) {
       if (noteLibrarySaveError(error)) setStatus("译文已生成，但写入本地库失败。", true);
+    } finally {
+      void maybeShowPersistCard();
     }
   }
   updateTranslateControls();
@@ -10238,6 +10253,8 @@ async function forceRetranslateCurrentPage() {
       } catch (error) {
         const leftover = noteLibrarySaveError(error);
         if (leftover) throw leftover;
+      } finally {
+        void maybeShowPersistCard();
       }
       if (!pairs.length) throw new Error("empty retranslation");
       replaceLibraryPagePairs(libraryDoc, targetPage, pairs);
@@ -10971,6 +10988,7 @@ async function adoptDoc(doc, title) {
     setDocTitle(title);
   }
   setHasDoc(true);
+  void maybeShowPersistCard();
   // Read this document's hint key only. The local area also holds layout
   // cache and notes, so opening must not scan every stored item.
   void resolveNotesDocHash().then(async (hash) => {

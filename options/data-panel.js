@@ -8,6 +8,7 @@
 import { createLibraryChip } from "../lib/library-chip.js";
 import { createLibraryStore } from "../lib/library-store.js";
 import { createImportCoordinator } from "../lib/import-run.js";
+import { downloadBlob } from "../lib/export.js";
 import { formatApproxBytes, formatQuotaLabel, formatUsageLabel } from "../lib/usage-format.js";
 
 export function readDataFocus(hash) {
@@ -327,9 +328,15 @@ export function mountDataPanel(root, deps = {}) {
       render();
       const filename = `open-immerse-library-${stamp(now())}.json`;
       const text = JSON.stringify(bundle);
-      let saved = true;
-      if (typeof deps.download === "function") saved = (await deps.download(filename, text, bundle)) !== false;
-      if (saved) toast(`已导出 · ${formatApproxBytes(new TextEncoder().encode(text).length) || formatApproxBytes(text.length)}`);
+      const bytes = new TextEncoder().encode(text);
+      let saved = false;
+      if (typeof deps.download === "function") {
+        saved = (await deps.download(filename, text, bundle)) !== false;
+      } else {
+        downloadBlob(filename, new Blob([bytes], { type: "application/json" }));
+        saved = true;
+      }
+      if (saved) toast(`已导出 · ${formatApproxBytes(bytes.length) || formatApproxBytes(text.length)}`);
     } catch (error) {
       toastText = "";
       packing = false;
