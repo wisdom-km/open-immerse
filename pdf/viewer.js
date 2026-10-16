@@ -346,7 +346,7 @@ import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutI
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { bindImportChip } from "../options/data-panel.js";
-import { PERSIST_CARD_SESSION_KEY, createPersistCard, readPersistCardState } from "../lib/persist-card.js";
+import { PERSIST_CARD_SESSION_KEY, createPersistCard, persistCardHiddenThisSession, readPersistCardState } from "../lib/persist-card.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
@@ -2220,10 +2220,7 @@ function noteLibrarySaveError(error) {
 
 async function persistHiddenThisSession() {
   try {
-    const get = globalThis.chrome?.storage?.session?.get;
-    if (typeof get !== "function") return false;
-    const bag = await get(PERSIST_CARD_SESSION_KEY);
-    return bag?.[PERSIST_CARD_SESSION_KEY] === true;
+    return await persistCardHiddenThisSession(globalThis.chrome?.storage?.session);
   } catch {
     return false;
   }

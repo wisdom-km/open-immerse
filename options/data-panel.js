@@ -331,10 +331,9 @@ export function mountDataPanel(root, deps = {}) {
       const bytes = new TextEncoder().encode(text);
       let saved = false;
       if (typeof deps.download === "function") {
-        saved = (await deps.download(filename, text, bundle)) !== false;
+        saved = (await deps.download(filename, text, bundle)) === true;
       } else {
-        downloadBlob(filename, new Blob([bytes], { type: "application/json" }));
-        saved = true;
+        saved = downloadBlob(filename, new Blob([bytes], { type: "application/json" })) === true;
       }
       if (saved) toast(`已导出 · ${formatApproxBytes(bytes.length) || formatApproxBytes(text.length)}`);
     } catch (error) {

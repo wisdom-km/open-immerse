@@ -449,8 +449,7 @@ function ensureDataPanel(focus) {
         showOptionsPanel(`data?focus=${next || "import"}`);
       },
       download(filename, text) {
-        downloadBlob(filename, new Blob([text], { type: "application/json" }));
-        return true;
+        return downloadBlob(filename, new Blob([text], { type: "application/json" })) === true;
       }
     });
     return dataPanel;

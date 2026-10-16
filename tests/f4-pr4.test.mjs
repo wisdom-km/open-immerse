@@ -10,7 +10,8 @@ import { NOTES_FORMAT } from "../lib/notes-io.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
 import { createIdbLibraryFactory } from "../lib/platform/idb-backend.js";
 import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
-import { createPersistCard, readPersistCardState } from "../lib/persist-card.js";
+import { PERSIST_CARD_SESSION_KEY, createPersistCard, persistCardHiddenThisSession, readPersistCardState } from "../lib/persist-card.js";
+import { downloadBlob } from "../lib/export.js";
 import { saveLibraryPage, setLibraryUiHooks } from "../lib/pdf-library.js";
 import { attachImportReader, bindImportChip, mountDataPanel, readDataFocus } from "../options/data-panel.js";
 
@@ -1827,6 +1828,266 @@ test("F4UI-26 the reader chip shows import progress from another page", async ()
   }
 });
 
+function grantMarkedLocks() {
+  const inner = createMemoryLocks();
+  let readerGranted = false;
+  return {
+    readerGranted: () => readerGranted,
+    request(name, options, callback) {
+      const opts = typeof options === "function" ? {} : (options || {});
+      const waits = typeof options !== "function" && opts.ifAvailable !== true;
+      return inner.request(name, options, (lock) => {
+        if (waits && lock) readerGranted = true;
+        return callback(lock);
+      });
+    }
+  };
+}
+
+test("a queued reader keeps mirroring progress, pause, and done", { timeout: 20000 }, async () => {
+  const restore = installDom();
+  const gates = [];
+  let data = null;
+  let reader = null;
+  let store = null;
+  try {
+    store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("mirror-wait");
+    const locks = grantMarkedLocks();
+    const beforePaper = () => new Promise((resolve) => gates.push(resolve));
+    data = modA.createImportCoordinator({ store, locks, beforePaper });
+    reader = modB.createImportCoordinator({ store, locks });
+    let mid = false;
+    let paused = false;
+    let doneWhileQueued = false;
+    reader.subscribe((view) => {
+      if (locks.readerGranted()) return;
+      if (view.phase === "running" && view.done === 1) mid = true;
+      if (view.phase === "paused") paused = true;
+      if (view.phase === "done") doneWhileQueued = true;
+    });
+    const host = document.createElement("div");
+    const chip = createLibraryChip({ host, moveDelayMs: 800, doneHoldMs: 30000, fadeMs: 200 });
+    const binding = bindImportChip(chip, { coordinator: reader, store });
+    data.attach("data");
+    await flush(10);
+    const job = data.importFolder(library());
+    await until(() => gates.length >= 1 && /正在导入 0\/2/.test(host.textContent));
+    assert.equal(locks.readerGranted(), false);
+    gates.shift()();
+    await until(() => mid && /正在导入 1\/2/.test(host.textContent));
+    assert.equal(locks.readerGranted(), false);
+    await data.pause();
+    await until(() => paused && /已暂停 1\/2/.test(host.textContent));
+    assert.equal(locks.readerGranted(), false);
+    gates.shift()();
+    await job;
+    binding.destroy();
+    data.destroy();
+    reader.destroy();
+    chip.destroy();
+    await store.closeLibrary?.();
+
+    const store2 = storeFor("memory");
+    store = store2;
+    const pair = await coordinatorPair("mirror-done");
+    const locks2 = grantMarkedLocks();
+    const bus2 = createImportBus();
+    const gates2 = [];
+    data = pair.modA.createImportCoordinator({
+      store: store2,
+      locks: locks2,
+      bus: bus2,
+      beforePaper: () => new Promise((resolve) => gates2.push(resolve))
+    });
+    reader = pair.modB.createImportCoordinator({ store: store2, locks: locks2, bus: bus2 });
+    doneWhileQueued = false;
+    reader.subscribe((view) => {
+      if (locks2.readerGranted()) return;
+      if (view.phase === "done") doneWhileQueued = true;
+    });
+    const host2 = document.createElement("div");
+    const chip2 = createLibraryChip({ host: host2, moveDelayMs: 800, doneHoldMs: 30000, fadeMs: 200 });
+    const binding2 = bindImportChip(chip2, { coordinator: reader, store: store2 });
+    data.attach("data");
+    const job2 = data.importFolder(library());
+    await until(() => gates2.length >= 1);
+    gates2.shift()();
+    await until(() => gates2.length >= 1);
+    gates2.shift()();
+    await until(() => doneWhileQueued && /✓ 已导入/.test(host2.textContent), 200);
+    assert.equal(doneWhileQueued, true);
+    await job2;
+    binding2.destroy();
+    data.destroy();
+    reader.destroy();
+    chip2.destroy();
+    await store2.closeLibrary?.();
+    store = null;
+  } finally {
+    while (gates.length) gates.shift()();
+    data?.destroy();
+    reader?.destroy();
+    await store?.closeLibrary?.();
+    restore();
+  }
+});
+
+test("closing a queued reader does not rewrite the holder's checkpoint", { timeout: 20000 }, async () => {
+  const restore = installDom();
+  let data = null;
+  let reader = null;
+  let store = null;
+  let release = null;
+  try {
+    store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("stale-meta");
+    const locks = watchedLocks();
+    let n = 0;
+    data = modA.createImportCoordinator({
+      store,
+      locks,
+      beforePaper() {
+        n += 1;
+        if (n >= 2) return new Promise((resolve) => { release = resolve; });
+      }
+    });
+    reader = modB.createImportCoordinator({ store, locks });
+    data.attach("data");
+    reader.attach("reader");
+    const job = data.importFolder(library());
+    await until(() => n >= 2 && locks.waiting() >= 1, 200);
+    assert.notEqual(await store.getPaper(HASH_A), null);
+    assert.equal(await store.getPaper(HASH_B), null);
+    const before = await store.readImportMeta();
+    assert.deepEqual(before.doneDocs, [HASH_A]);
+    await reader.detach("reader");
+    const after = await store.readImportMeta();
+    assert.equal(after.phase, "running");
+    assert.deepEqual(after.doneDocs, [HASH_A]);
+    release();
+    release = null;
+    await job;
+    assert.notEqual(await store.getPaper(HASH_B), null);
+  } finally {
+    release?.();
+    data?.destroy();
+    reader?.destroy();
+    await store?.closeLibrary?.();
+    restore();
+  }
+});
+
+test("detach during the post-grant later check does not import", { timeout: 20000 }, async () => {
+  const restore = installDom();
+  let data = null;
+  let reader = null;
+  let store = null;
+  let releaseHold = null;
+  let releaseLater = null;
+  try {
+    store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("later-gap");
+    const locks = watchedLocks();
+    let arm = false;
+    let laterAfter = 0;
+    const session = {
+      async get(keys) {
+        const list = Array.isArray(keys) ? keys : [];
+        if (arm && list.includes(SESSION_LATER)) {
+          laterAfter += 1;
+          if (laterAfter === 2) await new Promise((resolve) => { releaseLater = resolve; });
+        }
+        return {};
+      },
+      async set() {}
+    };
+    let calls = 0;
+    data = modA.createImportCoordinator({
+      store,
+      locks,
+      beforePaper() {
+        calls += 1;
+        return new Promise((resolve) => { releaseHold = resolve; });
+      }
+    });
+    reader = modB.createImportCoordinator({ store, locks, session });
+    data.attach("data");
+    reader.attach("reader");
+    const job = data.importFolder(library());
+    await until(() => calls === 1 && locks.waiting() >= 1, 200);
+    arm = true;
+    const closingHolder = data.detach("data");
+    releaseHold();
+    releaseHold = null;
+    await closingHolder;
+    await until(() => typeof releaseLater === "function", 200);
+    const closingReader = reader.detach("reader");
+    releaseLater();
+    releaseLater = null;
+    await closingReader;
+    await flush(40);
+    assert.equal(calls, 1);
+    assert.equal(await store.getPaper(HASH_A), null);
+    assert.equal(await store.getPaper(HASH_B), null);
+    void job;
+  } finally {
+    releaseHold?.();
+    releaseLater?.();
+    data?.destroy();
+    reader?.destroy();
+    await store?.closeLibrary?.();
+    restore();
+  }
+});
+
+test("a reader that attaches mid-paper queues a blocking request", { timeout: 20000 }, async () => {
+  const restore = installDom();
+  let data = null;
+  let reader = null;
+  let store = null;
+  let page = null;
+  try {
+    store = storeFor("memory");
+    const { modA, modB } = await coordinatorPair("attach-mid");
+    const locks = documentLocks();
+    page = locks.open();
+    const readerPage = locks.open();
+    let calls = 0;
+    data = modA.createImportCoordinator({
+      store,
+      locks: page,
+      beforePaper() {
+        calls += 1;
+        return new Promise(() => {});
+      }
+    });
+    reader = modB.createImportCoordinator({ store, locks: readerPage });
+    data.attach("data");
+    const job = data.importFolder(library());
+    await until(() => calls === 1);
+    reader.attach("reader");
+    await until(() => locks.waiting() >= 1, 200);
+    assert.equal(calls, 1);
+    assert.equal(await store.getPaper(HASH_A), null);
+    page.destroy();
+    let handed = false;
+    for (let turn = 0; turn < 400 && !handed; turn += 1) {
+      handed = Boolean(await store.getPaper(HASH_A)) && Boolean(await store.getPaper(HASH_B));
+      if (!handed) await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    assert.equal(handed, true);
+    assert.equal(calls, 1);
+    void job;
+  } finally {
+    page?.destroy();
+    data?.destroy();
+    reader?.destroy();
+    await store?.closeLibrary?.();
+    restore();
+  }
+});
+
 test("pause and 以后再说 survive in chrome.storage.session", async () => {
   const restore = installDom();
   const previous = globalThis.chrome;
@@ -1925,8 +2186,18 @@ test("a refused persist grant shows the library card on load and after a page sa
         }
       },
       session: {
-        get() { return Promise.resolve({}); },
-        set() { return Promise.resolve(); }
+        get(keys) {
+          if (this !== globalThis.chrome.storage.session) throw new TypeError("Illegal invocation");
+          const list = Array.isArray(keys) ? keys : [keys];
+          const out = {};
+          for (const key of list) if (bag.has(key)) out[key] = bag.get(key);
+          return Promise.resolve(out);
+        },
+        set(patch) {
+          if (this !== globalThis.chrome.storage.session) throw new TypeError("Illegal invocation");
+          for (const [key, value] of Object.entries(patch || {})) bag.set(key, value);
+          return Promise.resolve();
+        }
       }
     }
   };
@@ -1934,8 +2205,7 @@ test("a refused persist grant shows the library card on load and after a page sa
   const card = createPersistCard({ host });
   async function showIfRefused() {
     if (card.isOpen()) return;
-    const hidden = await globalThis.chrome.storage.session.get(["oiPersistCardHidden"]);
-    if (hidden?.oiPersistCardHidden === true) return;
+    if (await persistCardHiddenThisSession(globalThis.chrome.storage.session)) return;
     const decision = await readPersistCardState(globalThis.chrome.storage.local);
     if (decision.show) card.show();
   }
@@ -1965,8 +2235,17 @@ test("a refused persist grant shows the library card on load and after a page sa
     }, { store });
     assert.equal(saved, 1);
     assert.equal(card.isOpen(), true);
+    card.hide();
+    bag.set(PERSIST_CARD_SESSION_KEY, true);
+    await showIfRefused();
+    assert.equal(card.isOpen(), false);
+    const area = globalThis.chrome.storage.session;
+    assert.throws(() => area.get.call(undefined, PERSIST_CARD_SESSION_KEY), /Illegal invocation/);
     await store.closeLibrary?.();
     const viewer = readFileSync(new URL("../pdf/viewer.js", import.meta.url), "utf8");
+    const hiddenFn = viewer.slice(viewer.indexOf("async function persistHiddenThisSession"), viewer.indexOf("function flushStagedNotes"));
+    assert.match(hiddenFn, /persistCardHiddenThisSession\(globalThis\.chrome\?\.storage\?\.session\)/);
+    assert.equal(/\.get\(/.test(hiddenFn), false);
     const install = viewer.slice(viewer.indexOf("function installLibraryChrome"), viewer.indexOf("function installNotesUi"));
     assert.match(install, /onLibraryPageSaved\(\) \{\s*void maybeShowPersistCard\(\)/);
     assert.match(install, /void maybeShowPersistCard\(\);\n\}/);
@@ -2040,7 +2319,7 @@ test("library export downloads the file and stays quiet when the download is ref
     assert.equal(JSON.parse(text).papers[0].paper.title, "甲");
     assert.match(root.textContent, /已导出/);
     const options = readFileSync(new URL("../options/options.js", import.meta.url), "utf8");
-    assert.match(options, /download\(filename, text\) \{\n\s*downloadBlob\(filename, new Blob\(\[text\]/);
+    assert.match(options, /download\(filename, text\) \{\n\s*return downloadBlob\(filename, new Blob\(\[text\]/);
     const refused = document.createElement("div");
     const quiet = mountDataPanel(refused, {
       store,
@@ -2051,8 +2330,19 @@ test("library export downloads the file and stays quiet when the download is ref
     click(refused, "导出文献库");
     await flush(20);
     assert.equal(refused.textContent.includes("已导出"), false);
+    const silent = document.createElement("div");
+    const missing = mountDataPanel(silent, {
+      store,
+      usage: async () => ({ usage: 1, quota: 2, persisted: true }),
+      download: async () => undefined
+    });
+    await missing.reload();
+    click(silent, "导出文献库");
+    await flush(20);
+    assert.equal(silent.textContent.includes("已导出"), false);
     panel.destroy();
     quiet.destroy();
+    missing.destroy();
     await store.closeLibrary?.();
   } finally {
     URL.createObjectURL = previousCreate;
