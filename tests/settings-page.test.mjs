@@ -87,6 +87,10 @@ function installChrome(seed = {}) {
       },
       async set(patch) {
         if (name === "local" && api.localSetThrows) throw new Error("local quota");
+        if (name === "sync" && api.failNextSync) {
+          api.failNextSync = false;
+          throw new Error("sync quota");
+        }
         if (api.holdNextWrite && payloadHasProviderKey(patch)) {
           const gate = api.holdNextWrite;
           api.holdNextWrite = null;
@@ -117,6 +121,9 @@ function installChrome(seed = {}) {
         }
         if (message.type === "OI_SAVE_SETTINGS") {
           if (api.failSave) return { ok: false };
+          if (message.keySeq && api.failKeySeq && Object.values(message.keySeq).some((n) => Number(n) === Number(api.failKeySeq))) {
+            api.failNextSync = true;
+          }
           if (api.legacyBackground) {
             const bag = await globalThis.chrome.storage.sync.get("settings");
             const current = JSON.parse(JSON.stringify(bag.settings || {}));
@@ -124,7 +131,7 @@ function installChrome(seed = {}) {
             await globalThis.chrome.storage.sync.set({ settings: next });
             return { ok: true, settings: next };
           }
-          const settings = await saveSettings(message.patch, message.clear || {}, message.keyEpoch);
+          const settings = await saveSettings(message.patch, message.clear || {}, message.keySeq);
           return { ok: settings.settingsSaved !== false, settings };
         }
         if (message.type === "OI_TEST_PROVIDER") {
@@ -601,6 +608,10 @@ async function flush() {
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
 }
 
+async function settle() {
+  for (let i = 0; i < 12; i += 1) await flush();
+}
+
 function fire(node, type) {
   node.dispatchEvent(new node.ownerDocument.defaultView.Event(type, { bubbles: true }));
 }
@@ -728,7 +739,7 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
 
     const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
     remove.click();
-    await flush();
+    await settle();
     assert.equal(chrome.local.oiSecrets.providers.openai, "");
     assert.match(page.document.getElementById("setToast").textContent, /已移除 .+ 密钥/);
     page.document.getElementById("setToast").querySelector("button").click();
@@ -1268,17 +1279,16 @@ test("a removed provider key is not written back by a failed or in-flight edit",
   const racingRemove = [...racingPage.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
   racingRemove.click();
   await flush();
-  assert.equal(racingChrome.local.oiSecrets.providers.openai, "");
+  assert.equal(racingChrome.local.oiSecrets.providers.openai, OPENAI_KEY);
   const beforeRelease = racingChrome.calls.length;
   release();
-  await flush();
+  await settle();
   assert.equal(racingChrome.local.oiSecrets.providers.openai, "");
-  for (const call of racingChrome.calls.slice(beforeRelease)) {
-    if (call.type !== "OI_SAVE_SETTINGS") continue;
-    assert.equal(JSON.stringify(call.patch).includes(typed), false);
-    const old = legacyBackgroundMerge({ providers: { openai: { apiKey: "" } } }, call.patch);
-    assert.equal(old.providers.openai.apiKey, "");
-  }
+  const after = racingChrome.calls.slice(beforeRelease).filter((call) => call.type === "OI_SAVE_SETTINGS" && call.keySeq);
+  const clear = after.at(-1);
+  assert.equal(clear.clear.providers.includes("openai"), true);
+  assert.equal(JSON.stringify(clear.patch).includes(typed), false);
+  assert.equal(legacyBackgroundMerge({ providers: { openai: { apiKey: typed } } }, clear.patch).providers.openai.apiKey, "");
   const lang = racingPage.document.getElementById("targetLang");
   lang.value = "ja";
   fire(lang, "change");
@@ -1338,7 +1348,9 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
     oauth: "v-oauth",
     sessionId: "v-sessionId",
     "\uff41\uff50\uff49Key": "v-fullwidth-apiKey",
-    "\u0430piKey": "v-cyrillic-apiKey"
+    "\u0430piKey": "v-cyrillic-apiKey",
+    csrf: "v-csrf",
+    CSRF: "v-CSRF"
   };
   const prepared = prepareSettingsImport({
     settings: {
@@ -1358,6 +1370,16 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
       patch: "keep-patch",
       patient: "keep-patient",
       path: "keep-path",
+      oauthScope: "keep-oauth-scope",
+      oauthClientId: "keep-oauth-client",
+      cookieConsent: "keep-cookie-consent",
+      cookieName: "keep-cookie-name",
+      tokenLimit2: 2048,
+      passwordHint2: "keep-hint-2",
+      secretMode2: "keep-mode-2",
+      maxTokens2: 50,
+      comPat: "keep-compat",
+      key2: "keep-key-2",
       "Content-Type": "application/json",
       arxiv: { key: "keep-arxiv" },
       shortcuts: { keys: "keep-keys", key: "keep-hotkey" },
@@ -1387,6 +1409,16 @@ test("secret-like names are stripped by word and allow-listed settings stay", ()
   assert.equal(prepared.settings.patch, "keep-patch");
   assert.equal(prepared.settings.patient, "keep-patient");
   assert.equal(prepared.settings.path, "keep-path");
+  assert.equal(prepared.settings.oauthScope, "keep-oauth-scope");
+  assert.equal(prepared.settings.oauthClientId, "keep-oauth-client");
+  assert.equal(prepared.settings.cookieConsent, "keep-cookie-consent");
+  assert.equal(prepared.settings.cookieName, "keep-cookie-name");
+  assert.equal(prepared.settings.tokenLimit2, 2048);
+  assert.equal(prepared.settings.passwordHint2, "keep-hint-2");
+  assert.equal(prepared.settings.secretMode2, "keep-mode-2");
+  assert.equal(prepared.settings.maxTokens2, 50);
+  assert.equal(prepared.settings.comPat, "keep-compat");
+  assert.equal(prepared.settings.key2, "keep-key-2");
   assert.equal(prepared.settings["Content-Type"], "application/json");
   assert.equal(prepared.settings.arxiv.key, "keep-arxiv");
   assert.equal(prepared.settings.shortcuts.keys, "keep-keys");
@@ -1469,10 +1501,10 @@ test("a key edit already sent does not land after the key is removed", async () 
     const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
     remove.click();
     await flush();
-    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, "");
-    else assert.equal(String(chrome.local.oiSecrets.providers.openai), "");
+    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, OPENAI_KEY);
+    else assert.equal(String(chrome.local.oiSecrets.providers.openai), OPENAI_KEY);
     release();
-    for (let i = 0; i < 40; i += 1) await Promise.resolve();
+    await settle();
     if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, "");
     else assert.equal(String(chrome.local.oiSecrets.providers.openai), "");
     assert.equal(JSON.stringify(chrome.sync.settings).includes(typed), false);
@@ -1506,17 +1538,16 @@ test("a newer key wins when an older edit lands after it was saved", async () =>
     const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
     remove.click();
     await flush();
-    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, "");
-    else assert.equal(String(chrome.local.oiSecrets.providers.openai), "");
+    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, OPENAI_KEY);
+    else assert.equal(String(chrome.local.oiSecrets.providers.openai), OPENAI_KEY);
     const next = page.document.querySelector("[data-key-slot='translate'] input");
     next.value = newest;
     fire(next, "blur");
     await flush();
-    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, newest);
-    else assert.equal(String(chrome.local.oiSecrets.providers.openai), newest);
+    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, OPENAI_KEY);
+    else assert.equal(String(chrome.local.oiSecrets.providers.openai), OPENAI_KEY);
     release();
-    for (let i = 0; i < 40; i += 1) await Promise.resolve();
-    await flush();
+    await settle();
     if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, newest);
     else assert.equal(String(chrome.local.oiSecrets.providers.openai), newest);
     assert.equal(JSON.stringify(chrome.sync.settings).includes(stale), false);
@@ -1526,6 +1557,72 @@ test("a newer key wins when an older edit lands after it was saved", async () =>
     assert.equal(shown.includes("turn"), false);
     assert.notEqual(shown, "");
     assert.equal(shown.includes("bbbb"), true);
+  }
+});
+
+function permute(items) {
+  if (items.length <= 1) return [items];
+  const out = [];
+  for (let i = 0; i < items.length; i += 1) {
+    const head = items[i];
+    for (const tail of permute(items.filter((_, index) => index !== i))) out.push([head, ...tail]);
+  }
+  return out;
+}
+
+test("key ops stay in order on both backgrounds, including a failed last write", async () => {
+  const actions = [
+    { kind: "edit", value: "sk-action-AAAA" },
+    { kind: "remove", value: "" },
+    { kind: "edit", value: "sk-action-BBBB" }
+  ];
+  let caseNo = 0;
+  for (const legacy of [false, true]) {
+    for (const outcome of ["success", "failure"]) {
+      for (const order of permute(actions)) {
+        caseNo += 1;
+        const chrome = installChrome({ settings: savedSettings() });
+        chrome.legacyBackground = legacy;
+        if (outcome === "failure") chrome.failKeySeq = order.length;
+        const page = mountPage("#translate");
+        const mod = await import(`../options/options.js?key-queue=${caseNo}`);
+        await mod.startOptions();
+        await flush();
+        let release = () => {};
+        chrome.holdNextWrite = new Promise((resolve) => {
+          release = resolve;
+        });
+        for (const action of order) {
+          if (action.kind === "remove") {
+            const button = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((node) => node.textContent === "移除密钥");
+            button.click();
+          } else {
+            const input = page.document.querySelector("[data-key-slot='translate'] input");
+            input.value = action.value;
+            fire(input, "blur");
+          }
+        }
+        await flush();
+        release();
+        await settle();
+        const previous = order[order.length - 2];
+        const last = order[order.length - 1];
+        const produced = (action) => (action.kind === "remove" ? "" : action.value);
+        const expected = outcome === "failure" ? produced(previous) : produced(last);
+        const stored = legacy
+          ? String(chrome.sync.settings.providers.openai.apiKey || "")
+          : String(chrome.local.oiSecrets.providers.openai || "");
+        assert.equal(stored, expected, `${legacy ? "old" : "new"} ${outcome} ${order.map((action) => action.kind).join(">")}`);
+        const dropped = order.map(produced).filter((value) => value && value !== expected);
+        const bag = JSON.stringify(legacy ? chrome.sync.settings : chrome.local);
+        for (const value of dropped) assert.equal(bag.includes(value), false, value);
+        const shown = page.document.querySelector("[data-key-slot='translate'] input").value;
+        if (!expected) assert.equal(shown, "");
+        else assert.equal(shown.includes(expected.slice(-4)), true, shown);
+        const seq = Number(chrome.local.oiSecrets?.seq?.openai || 0);
+        assert.equal(seq, outcome === "failure" ? order.length - 1 : order.length);
+      }
+    }
   }
 });
 

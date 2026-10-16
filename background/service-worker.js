@@ -119,7 +119,7 @@ async function handleMessage(message, sender) {
     case "OI_GET_SETTINGS":
       return { ok: true, settings: await getSettings() };
     case "OI_SAVE_SETTINGS": {
-      const settings = await saveSettings(message.patch || {}, message.clear || {}, message.keyEpoch);
+      const settings = await saveSettings(message.patch || {}, message.clear || {}, message.keySeq);
       await rebuildMenus();
       return { ok: settings?.settingsSaved !== false, settings };
     }
