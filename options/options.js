@@ -11,10 +11,13 @@ import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
+  currentProviderKeyEpoch,
+  noteProviderKeyEpoch,
   prepareSettingsImport,
   readLiveSecrets,
   sealSettingsPatch,
   settingsForExport,
+  settingsImportHasChanges,
   SECRET_STORAGE_KEY
 } from "../lib/settings-secrets.js";
 import {
@@ -82,6 +85,7 @@ let providerEdits = new Map();
 let providerEditEpoch = new Map();
 let providerSecretPaint = null;
 let secretSyncBound = false;
+let secretReadTicket = 0;
 
 export function startOptions() {
   return init();
@@ -417,6 +421,12 @@ async function importSettingsFile(ev) {
       return;
     }
     const prepared = prepareSettingsImport(raw);
+    if (!settingsImportHasChanges(prepared.settings)) {
+      const note = el("importKeyNote");
+      if (note) note.hidden = !prepared.ignoredKeys;
+      el("status").textContent = prepared.ignoredKeys ? "文件里的 API 密钥已忽略，请在本机重新填写。" : "已导入";
+      return;
+    }
     const live = await readLiveSecrets(chrome.storage);
     const patch = sealSettingsPatch(prepared.settings, { pdfCloudApiKey: live.pdfCloudApiKey });
     const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch });
@@ -647,7 +657,11 @@ function bindSecretSync() {
     const secretWrite = (area === "local" && Object.prototype.hasOwnProperty.call(changes, SECRET_STORAGE_KEY))
       || (area === "sync" && Object.prototype.hasOwnProperty.call(changes, "settings"));
     if (!secretWrite) return;
-    void readLiveSecrets(chrome.storage).then((live) => applyLiveSecrets(live)).catch(() => {});
+    const ticket = ++secretReadTicket;
+    void readLiveSecrets(chrome.storage).then((live) => {
+      if (ticket !== secretReadTicket) return;
+      applyLiveSecrets(live);
+    }).catch(() => {});
   });
 }
 
@@ -838,13 +852,16 @@ function renderProviderFields() {
 async function clearProviderKey(id) {
   const previous = (cachedSettings.providers?.[id] || {}).apiKey || "";
   providerEdits.delete(id);
-  providerEditEpoch.set(id, (providerEditEpoch.get(id) || 0) + 1);
+  const nextEpoch = Math.max(providerEditEpoch.get(id) || 0, currentProviderKeyEpoch(id)) + 1;
+  providerEditEpoch.set(id, nextEpoch);
+  noteProviderKeyEpoch({ [id]: nextEpoch });
   cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
   renderProviderFields();
   const res = await chrome.runtime.sendMessage({
     type: "OI_SAVE_SETTINGS",
     patch: { providers: { [id]: { apiKey: "" } } },
-    clear: { providers: [id] }
+    clear: { providers: [id] },
+    keyEpoch: { [id]: nextEpoch }
   });
   if (!res || res.ok === false) {
     cachedSettings.providers[id].apiKey = previous;
@@ -952,16 +969,23 @@ async function persist(control) {
   const pendingProviders = new Map(providerEdits);
   const pendingEpoch = new Map(providerEditEpoch);
   const pendingPdf = pdfCloudEdit;
+  const keyEpoch = {};
+  for (const id of pendingProviders.keys()) {
+    const current = Math.max(pendingEpoch.get(id) || 0, currentProviderKeyEpoch(id));
+    providerEditEpoch.set(id, current);
+    pendingEpoch.set(id, current);
+    keyEpoch[id] = current;
+  }
   writing = true;
   try {
     const sealed = await sealOutgoingPatch(patch);
-    const revoked = [...pendingProviders.keys()].filter((id) => providerEditEpoch.get(id) !== pendingEpoch.get(id));
+    const dropped = [...pendingProviders.keys()].filter((id) => (providerEditEpoch.get(id) || 0) !== (pendingEpoch.get(id) || 0));
     if (sealed.providers) {
-      for (const id of revoked) {
+      for (const id of dropped) {
         if (sealed.providers[id] && typeof sealed.providers[id] === "object") delete sealed.providers[id].apiKey;
       }
     }
-    const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: sealed });
+    const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: sealed, keyEpoch });
     if (!res || res.ok === false) {
       const attempt = snapshotControl(control);
       cachedSettings = before;
@@ -973,7 +997,30 @@ async function persist(control) {
       });
       return;
     }
-    cachedSettings = res.settings || cachedSettings;
+    const revoked = [...pendingProviders.keys()].filter((id) => (providerEditEpoch.get(id) || 0) !== (pendingEpoch.get(id) || 0) && !providerEdits.has(id));
+    if (revoked.length) {
+      const clearEpoch = {};
+      for (const id of revoked) clearEpoch[id] = providerEditEpoch.get(id) || 0;
+      noteProviderKeyEpoch(clearEpoch);
+      try {
+        const cleared = await chrome.runtime.sendMessage({
+          type: "OI_SAVE_SETTINGS",
+          patch: { providers: Object.fromEntries(revoked.map((id) => [id, { apiKey: "" }])) },
+          clear: { providers: revoked },
+          keyEpoch: clearEpoch
+        });
+        if (cleared?.settings) cachedSettings = cleared.settings;
+      } catch {
+        cachedSettings = res.settings || cachedSettings;
+      }
+      cachedSettings.providers = cachedSettings.providers || {};
+      for (const id of revoked) {
+        cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
+      }
+      renderProviderFields();
+    } else {
+      cachedSettings = res.settings || cachedSettings;
+    }
     if (pdfCloudEdit === pendingPdf) pdfCloudEdit = null;
     for (const [id, value] of pendingProviders) {
       if (revoked.includes(id)) continue;

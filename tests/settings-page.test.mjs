@@ -10,7 +10,7 @@ import { parseHTML } from "linkedom";
 import { FORMULA_SWITCH_KEYS } from "../lib/formula-settings.js";
 import { deliverAsk, renderAskNotice, resolveAskTarget, ASK_EMPTY } from "../lib/ask-route.js";
 import { getSettings, noteTranslationSucceeded, saveSettings, SETTINGS_VERSION } from "../lib/storage.js";
-import { mergeLiveSecrets, prepareSettingsImport, sealSettingsPatch, settingsForExport } from "../lib/settings-secrets.js";
+import { mergeLiveSecrets, prepareSettingsImport, sealSettingsPatch, settingsForExport, settingsImportHasChanges } from "../lib/settings-secrets.js";
 import { normalizeAttention } from "../lib/provider-attention.js";
 import { parseSettingsHash, SETTINGS_PAGES } from "../options/route.js";
 
@@ -44,6 +44,14 @@ function memoryLocalStorage(seed = {}) {
   };
 }
 
+function payloadHasProviderKey(patch) {
+  const providers = [patch?.oiSecrets?.providers, patch?.settings?.providers];
+  return providers.some((bag) => bag && Object.values(bag).some((value) => {
+    const key = value && typeof value === "object" ? value.apiKey : value;
+    return String(key || "").trim() !== "";
+  }));
+}
+
 function installChrome(seed = {}) {
   const sync = { settings: seed.settings || {} };
   const local = { ...(seed.local || {}) };
@@ -57,7 +65,9 @@ function installChrome(seed = {}) {
     failSave: false,
     localSetThrows: false,
     holdGet: null,
-    holdNextSecretRead: null
+    holdNextSecretRead: null,
+    holdNextWrite: null,
+    legacyBackground: false
   };
   function area(bag, name) {
     return {
@@ -77,6 +87,11 @@ function installChrome(seed = {}) {
       },
       async set(patch) {
         if (name === "local" && api.localSetThrows) throw new Error("local quota");
+        if (api.holdNextWrite && payloadHasProviderKey(patch)) {
+          const gate = api.holdNextWrite;
+          api.holdNextWrite = null;
+          await gate;
+        }
         Object.assign(bag, patch);
         const changes = {};
         for (const [item, value] of Object.entries(patch)) changes[item] = { newValue: value };
@@ -93,12 +108,23 @@ function installChrome(seed = {}) {
         if (message.type === "OI_GET_SETTINGS") {
           if (api.holdGet) await api.holdGet;
           if (api.failGet) throw new Error("read failed");
+          if (api.legacyBackground) {
+            const bag = await globalThis.chrome.storage.sync.get("settings");
+            return { ok: true, settings: JSON.parse(JSON.stringify(bag.settings || {})) };
+          }
           const settings = await getSettings();
           return { ok: true, settings };
         }
         if (message.type === "OI_SAVE_SETTINGS") {
           if (api.failSave) return { ok: false };
-          const settings = await saveSettings(message.patch, message.clear || {});
+          if (api.legacyBackground) {
+            const bag = await globalThis.chrome.storage.sync.get("settings");
+            const current = JSON.parse(JSON.stringify(bag.settings || {}));
+            const next = legacyBackgroundMerge(current, JSON.parse(JSON.stringify(message.patch || {})));
+            await globalThis.chrome.storage.sync.set({ settings: next });
+            return { ok: true, settings: next };
+          }
+          const settings = await saveSettings(message.patch, message.clear || {}, message.keyEpoch);
           return { ok: settings.settingsSaved !== false, settings };
         }
         if (message.type === "OI_TEST_PROVIDER") {
@@ -210,7 +236,7 @@ test("secret migration, import, and rollback stay inside local storage", async (
   });
   assert.equal(prepared.ignoredKeys, true);
   assert.equal(prepared.settings.formulaSettings, undefined);
-  assert.equal(String(prepared.settings.providers.openai.apiKey || ""), "");
+  assert.equal(String(prepared.settings.providers?.openai?.apiKey || ""), "");
   const imported = await saveSettings(prepared.settings);
   assert.equal(imported.settingsSaved, true);
   assert.equal(imported.fontScale, 1.15);
@@ -1261,6 +1287,145 @@ test("a removed provider key is not written back by a failed or in-flight edit",
   const last = racingChrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").at(-1).patch;
   assert.equal(JSON.stringify(last).includes(typed), false);
   assert.equal(legacyBackgroundMerge({ providers: { openai: { apiKey: "" } } }, last).providers.openai.apiKey, "");
+});
+
+test("secret-like names are stripped by word and allow-listed settings stay", () => {
+  const secrets = {
+    auth: "v-auth",
+    authToken: "v-authToken",
+    auth_token: "v-auth_token",
+    "auth-token": "v-auth-token",
+    AUTH_TOKEN: "v-AUTH_TOKEN",
+    credential: "v-credential",
+    credentials: "v-credentials",
+    apiKeys: ["v-apiKeys"],
+    api_keys: { primary: "v-api_keys" },
+    session_token: "v-session_token",
+    sessionToken: "v-sessionToken",
+    secretKey: "v-secretKey",
+    secret_key: "v-secret_key",
+    passphrase: "v-passphrase",
+    api_token: "v-api_token",
+    id_token: "v-id_token",
+    bearer_token: "v-bearer_token",
+    oauth_token: "v-oauth_token",
+    botToken: "v-botToken",
+    privateKeys: "v-privateKeys",
+    passwords: "v-passwords",
+    aws_secret_access_key: "v-aws_secret_access_key",
+    signing_key: "v-signing_key",
+    session_key: "v-session_key",
+    auth_key: "v-auth_key"
+  };
+  const prepared = prepareSettingsImport({
+    settings: {
+      ...secrets,
+      tokenLimit: 4096,
+      tokenizer: "keep-tokenizer",
+      passwordHint: "keep-hint",
+      secretly: "keep-secretly",
+      maxTokens: 100,
+      accessKey: "keep-access",
+      authorName: "keep-author",
+      secretMode: "keep-mode",
+      client_id: "keep-client",
+      "Content-Type": "application/json",
+      arxiv: { key: "keep-arxiv" },
+      shortcuts: { keys: "keep-keys", key: "keep-hotkey" },
+      placeholders: [{ token: "keep-placeholder-token" }],
+      nested: { ...secrets },
+      list: [{ ...secrets, token: "keep-row-token" }]
+    }
+  });
+  assert.equal(prepared.ignoredKeys, true);
+  const text = JSON.stringify(prepared.settings);
+  for (const [name, value] of Object.entries(secrets)) {
+    const samples = Array.isArray(value) ? value : value && typeof value === "object" ? Object.values(value) : [value];
+    for (const sample of samples) assert.equal(text.includes(String(sample)), false, name);
+  }
+  assert.equal(prepared.settings.tokenLimit, 4096);
+  assert.equal(prepared.settings.tokenizer, "keep-tokenizer");
+  assert.equal(prepared.settings.passwordHint, "keep-hint");
+  assert.equal(prepared.settings.secretly, "keep-secretly");
+  assert.equal(prepared.settings.maxTokens, 100);
+  assert.equal(prepared.settings.accessKey, "keep-access");
+  assert.equal(prepared.settings.authorName, "keep-author");
+  assert.equal(prepared.settings.secretMode, "keep-mode");
+  assert.equal(prepared.settings.client_id, "keep-client");
+  assert.equal(prepared.settings["Content-Type"], "application/json");
+  assert.equal(prepared.settings.arxiv.key, "keep-arxiv");
+  assert.equal(prepared.settings.shortcuts.keys, "keep-keys");
+  assert.equal(prepared.settings.shortcuts.key, "keep-hotkey");
+  assert.equal(prepared.settings.placeholders[0].token, "keep-placeholder-token");
+  assert.equal(prepared.settings.list[0].token, "keep-row-token");
+  const only = prepareSettingsImport({ settings: secrets });
+  assert.equal(only.ignoredKeys, true);
+  assert.equal(settingsImportHasChanges(only.settings), false);
+  const onlyPdf = prepareSettingsImport({ settings: { pdfLayout: { cloudApiKey: "only-pdf-cloud" } } });
+  assert.equal(onlyPdf.ignoredKeys, true);
+  assert.equal(onlyPdf.settings.pdfLayout, undefined);
+  assert.equal(settingsImportHasChanges(onlyPdf.settings), false);
+});
+
+test("a key-only import does not save or clear pdf layout", async () => {
+  const chrome = installChrome({ settings: savedSettings() });
+  const page = mountPage("#pdf");
+  const { startOptions } = await import("../options/options.js?key-only-import=1");
+  await startOptions();
+  await flush();
+  chrome.sync.settings.pdfLayout.mode = "local";
+  chrome.sync.settings.pdfLayout.localBaseUrl = "http://127.0.0.1:9999";
+  const saves = chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").length;
+  const input = page.document.getElementById("importFile");
+  const file = new File([JSON.stringify({
+    settings: { pdfLayout: { cloudApiKey: "only-pdf-cloud" }, auth: "only-auth", passphrase: "only-pass" }
+  })], "keys-only.json", { type: "application/json" });
+  Object.defineProperty(input, "files", { configurable: true, get: () => [file] });
+  fire(input, "change");
+  await flush();
+  assert.equal(page.document.getElementById("status").textContent, "文件里的 API 密钥已忽略，请在本机重新填写。");
+  assert.notEqual(page.document.getElementById("status").textContent, "已导入");
+  assert.equal(chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").length, saves);
+  assert.equal(chrome.sync.settings.pdfLayout.mode, "local");
+  assert.equal(chrome.sync.settings.pdfLayout.localBaseUrl, "http://127.0.0.1:9999");
+  assert.equal(JSON.stringify(chrome.sync.settings).includes("only-pdf-cloud"), false);
+  assert.equal(JSON.stringify(chrome.sync.settings).includes("only-auth"), false);
+});
+
+test("a key edit already sent does not land after the key is removed", async () => {
+  const typed = "sk-should-not-return";
+  for (const legacy of [false, true]) {
+    const chrome = installChrome({ settings: savedSettings() });
+    chrome.legacyBackground = legacy;
+    const page = mountPage("#translate");
+    const mod = await import(`../options/options.js?defer-write=${legacy ? "old" : "new"}`);
+    await mod.startOptions();
+    await flush();
+    let release;
+    chrome.holdNextWrite = new Promise((resolve) => {
+      release = resolve;
+    });
+    const key = page.document.querySelector("[data-key-slot='translate'] input");
+    key.value = typed;
+    fire(key, "blur");
+    await flush();
+    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, OPENAI_KEY);
+    else assert.equal(String(chrome.local.oiSecrets.providers.openai), OPENAI_KEY);
+    const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+    remove.click();
+    await flush();
+    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, "");
+    else assert.equal(String(chrome.local.oiSecrets.providers.openai), "");
+    release();
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
+    if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, "");
+    else assert.equal(String(chrome.local.oiSecrets.providers.openai), "");
+    assert.equal(JSON.stringify(chrome.sync.settings).includes(typed), false);
+    assert.equal(JSON.stringify(chrome.local).includes(typed), false);
+    const shown = page.document.querySelector("[data-key-slot='translate'] input").value;
+    assert.equal(shown.includes("should-not-return"), false);
+    assert.equal(shown.includes("turn"), false);
+  }
 });
 
 test("missing-field 需处理 badge survives refresh", async () => {
