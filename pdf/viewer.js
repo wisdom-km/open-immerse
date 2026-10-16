@@ -306,8 +306,32 @@ import {
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { detectArxivId } from "../lib/arxiv-id.js";
+import { KATEX_RENDER_OPTIONS } from "../lib/formula-katex.js";
 import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
+import {
+  ARXIV_SOURCE_AUTO_KEY,
+  ARXIV_SOURCE_ON_KEY,
+  ARXIV_SOURCE_SKIP_KEY,
+  chipModel,
+  inlineSplicePlans,
+  keptSourceId,
+  normalizeArxivPrefs,
+  pageGlyphsFromText,
+  prepareArxivAlignment,
+  skippedId,
+  slotAssignments,
+  spliceInlinePieces,
+  verifiedArxivFormula
+} from "../lib/formula-arxiv-session.js";
+import {
+  failedInlineKind,
+  flashCopiedLatex,
+  markFormulaOverflow,
+  mountArxivDisplay,
+  mountArxivInline,
+  plainWithInlineMath
+} from "../lib/formula-arxiv-pane.js";
 import {
   FORMULA_SETTINGS_KEY,
   defaultFormulaSettings,
@@ -442,6 +466,17 @@ const READER_VIEWS = ["zh", "bi", "src"];
 let formulaViewerSettings = defaultFormulaSettings();
 let formulaSettingsWriting = false;
 let formulaSettingsReady = Promise.resolve();
+let arxivPrefs = { auto: false, skip: [], on: [] };
+let arxivPrefsReady = Promise.resolve();
+let arxivIdentity = null;
+let arxivAlignmentMemory = null;
+let arxivSlotMap = new Map();
+let arxivSpliceByBlock = new Map();
+let arxivPhase = "off";
+let arxivFailReason = "";
+let arxivJob = 0;
+let page1TextItems = null;
+let page1Viewport = null;
 
 init();
 
@@ -463,6 +498,7 @@ function toolbarWidthTargets(bar) {
     if (el.matches(".more-item")) return false;
     if (el.classList.contains("tb-primary")) return false;
     if (el.classList.contains("tb-title")) return false;
+    if (el.closest(".oi-arxiv-chip") && !el.classList.contains("oi-arxiv-chip")) return false;
     return true;
   });
 }
@@ -592,6 +628,7 @@ function init() {
   bindSourcePointer();
   watchSourceAvailability();
   bindSelToolbar();
+  bindArxivChip();
   installNotesUi();
   installLibraryChrome();
   $("translatePage").addEventListener("click", () => startTranslate());
@@ -2620,7 +2657,7 @@ function renderFormulaNode(node, latex, display) {
     return;
   }
   try {
-    katex.render(latex, node, { throwOnError: false, displayMode: Boolean(display), output: "html" });
+    katex.render(latex, node, { ...KATEX_RENDER_OPTIONS, displayMode: Boolean(display) });
   } catch {
     node.textContent = wrapLatexMarkdown(latex, display);
   }
@@ -3005,7 +3042,638 @@ async function withRasterCrop(raster, page, block, pageNumber, options = {}) {
   return next;
 }
 
+function arxivPaneHooks() {
+  return {
+    onJump: jumpFormulaFromUi,
+    onCopy: (latex, button) => copyArxivLatex(latex, button),
+    onMenu: (latex, event, node) => openArxivLatexMenu(latex, event, node),
+    katex: globalThis.katex
+  };
+}
+
+function arxivMemoryFor(query) {
+  const memory = arxivAlignmentMemory;
+  if (!memory) return null;
+  const wantId = String(query?.id || "");
+  if (wantId && memory.id && wantId !== memory.id) return null;
+  const wantHash = String(query?.pdfSha256 || "");
+  if (wantHash && memory.pdfSha256 && wantHash !== memory.pdfSha256) return null;
+  return memory;
+}
+
+function arxivSourceUnitFor(block) {
+  if (!block || block.label !== "formula") return "";
+  const row = arxivSlotMap.get(String(block.id || ""));
+  return row?.unitId ? String(row.unitId) : "";
+}
+
+function rememberArxivAlignment(alignment) {
+  arxivAlignmentMemory = alignment || null;
+  arxivSlotMap = alignment ? slotAssignments(alignment.formulas) : new Map();
+  arxivSpliceByBlock = new Map();
+  if (!alignment || !formulaArxivSourceEnabled()) return;
+  for (const plan of inlineSplicePlans(alignment.formulas)) {
+    const list = arxivSpliceByBlock.get(plan.blockId) || [];
+    list.push(plan);
+    arxivSpliceByBlock.set(plan.blockId, list);
+  }
+}
+
+function resetArxivSession() {
+  arxivJob += 1;
+  arxivIdentity = null;
+  arxivAlignmentMemory = null;
+  arxivSlotMap = new Map();
+  arxivSpliceByBlock = new Map();
+  arxivPhase = "off";
+  arxivFailReason = "";
+  page1TextItems = null;
+  page1Viewport = null;
+  setFormulaArxivSourceEnabled(false);
+  paintArxivChip();
+}
+
+function currentArxivId() {
+  return detectArxivId({
+    url: sourceUrl,
+    page1Items: page1TextItems,
+    page: page1Viewport
+  });
+}
+
+function arxivColumnNarrow() {
+  const flow = readerFlowEl();
+  const width = flow?.clientWidth || 0;
+  return width > 0 && width < 560;
+}
+
+function syncArxivColumn() {
+  const flow = readerFlowEl();
+  if (!flow) return;
+  const narrow = arxivColumnNarrow();
+  const prev = flow.dataset.oiNarrow === "1";
+  flow.dataset.oiNarrow = narrow ? "1" : "0";
+  if (prev !== narrow && arxivPhase === "ready") {
+    paintArxivChip();
+    scheduleToolbarSnap();
+  }
+  flow.querySelectorAll(".oi-pdf-math-row.is-katex .oi-pdf-math-scroll").forEach((scroll) => {
+    markFormulaOverflow(scroll);
+  });
+  flow.querySelectorAll(".oi-pdf-inline-math.is-katex").forEach((node) => {
+    node.classList.remove("is-overflowing");
+  });
+}
+
+function arxivFormulaShown(node) {
+  if (!node || node.closest?.("[hidden]")) return false;
+  let el = node;
+  while (el && el.nodeType === 1) {
+    const view = el.ownerDocument?.defaultView;
+    const style = view?.getComputedStyle?.(el);
+    if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+    el = el.parentElement;
+  }
+  return true;
+}
+
+function arxivDomCounts() {
+  const flow = readerFlowEl();
+  if (!flow) return { display: 0, inline: 0 };
+  return {
+    display: [...flow.querySelectorAll(".oi-pdf-math-row.is-katex")].filter(arxivFormulaShown).length,
+    inline: [...flow.querySelectorAll(".oi-pdf-inline-math.is-katex")].filter(arxivFormulaShown).length
+  };
+}
+
+function paintArxivChip() {
+  const chip = $("arxivSourceChip");
+  if (!chip) return;
+  const label = chip.querySelector(".oi-arxiv-label");
+  const auto = chip.querySelector(".oi-arxiv-auto");
+  const restore = chip.querySelector(".oi-arxiv-restore");
+  const box = $("arxivSourceAuto");
+  if (!arxivIdentity || arxivPhase === "off") {
+    chip.hidden = true;
+    closeArxivMenu();
+    return;
+  }
+  chip.hidden = false;
+  if (auto) auto.hidden = arxivPhase !== "offer";
+  if (restore) restore.hidden = arxivPhase !== "skipped";
+  if (box) box.checked = arxivPrefs.auto === true;
+  if (arxivPhase === "skipped") {
+    const model = chipModel({ phase: "skipped" });
+    if (label) label.textContent = model.text;
+    if (restore) restore.textContent = model.restore;
+    chip.title = model.title;
+    closeArxivMenu();
+    scheduleToolbarSnap();
+    return;
+  }
+  let text = "用 arXiv 源码";
+  let title = "用 arXiv 源码";
+  if (arxivPhase === "loading") {
+    const model = chipModel({ phase: "loading" });
+    text = model.text;
+    title = model.title;
+  } else if (arxivPhase === "failed") {
+    const model = chipModel({ phase: "failed", reason: arxivFailReason });
+    text = model.text;
+    title = model.title;
+  } else if (arxivPhase === "ready" || arxivPhase === "empty") {
+    const model = chipModel({
+      version: arxivIdentity.version,
+      formulas: arxivAlignmentMemory?.formulas,
+      shown: arxivDomCounts(),
+      narrow: arxivColumnNarrow(),
+      phase: "ready"
+    });
+    text = model.text;
+    title = model.title;
+  }
+  if (label) label.textContent = text;
+  chip.title = title;
+  scheduleToolbarSnap();
+}
+
+function closeArxivMenu() {
+  const menu = $("arxivSourceMenu");
+  if (menu) menu.hidden = true;
+}
+
+function openArxivMenu() {
+  const menu = $("arxivSourceMenu");
+  const chip = $("arxivSourceChip");
+  if (!menu || !chip) return;
+  menu.hidden = false;
+  const rect = chip.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${Math.max(8, rect.left)}px`;
+}
+
+let arxivPrefsLoaded = false;
+
+async function loadArxivPrefs() {
+  let fromStore = false;
+  try {
+    const store = globalThis.chrome?.storage?.local;
+    if (store?.get) {
+      const bag = await store.get([ARXIV_SOURCE_AUTO_KEY, ARXIV_SOURCE_SKIP_KEY, ARXIV_SOURCE_ON_KEY]);
+      arxivPrefs = normalizeArxivPrefs(bag);
+      fromStore = true;
+    }
+  } catch {
+    /* local fallback */
+  }
+  if (!fromStore) {
+    try {
+      const raw = JSON.parse(localStorage.getItem("oi.arxivSourcePrefs") || "{}");
+      arxivPrefs = normalizeArxivPrefs(raw);
+    } catch {
+      arxivPrefs = { auto: false, skip: [], on: [] };
+    }
+  }
+  arxivPrefsLoaded = true;
+  syncArxivOffer();
+}
+
+async function saveArxivPrefs() {
+  const payload = { auto: arxivPrefs.auto === true, skip: arxivPrefs.skip || [], on: arxivPrefs.on || [] };
+  try {
+    const store = globalThis.chrome?.storage?.local;
+    if (store?.set) {
+      await store.set({
+        [ARXIV_SOURCE_AUTO_KEY]: payload.auto,
+        [ARXIV_SOURCE_SKIP_KEY]: payload.skip,
+        [ARXIV_SOURCE_ON_KEY]: payload.on
+      });
+      return;
+    }
+  } catch {
+    /* local fallback */
+  }
+  try {
+    localStorage.setItem("oi.arxivSourcePrefs", JSON.stringify(payload));
+  } catch {
+    /* private mode */
+  }
+}
+
+function syncArxivOffer() {
+  if (!arxivPrefsLoaded) return;
+  const found = currentArxivId();
+  if (!found) {
+    if (arxivPhase !== "off") resetArxivSession();
+    return;
+  }
+  arxivIdentity = found;
+  if (skippedId(arxivPrefs, found.id)) {
+    setFormulaArxivSourceEnabled(false);
+    if (arxivPhase !== "skipped") arxivPhase = "skipped";
+    paintArxivChip();
+    return;
+  }
+  if (arxivPhase === "off" || arxivPhase === "skipped") {
+    if (arxivPrefs.auto === true || keptSourceId(arxivPrefs, found.id)) {
+      startArxivSource();
+      return;
+    }
+    arxivPhase = "offer";
+  }
+  paintArxivChip();
+}
+
+function bindArxivChip() {
+  arxivPrefsReady = loadArxivPrefs();
+  const chip = $("arxivSourceChip");
+  const box = $("arxivSourceAuto");
+  const skip = $("arxivSourceSkip");
+  chip?.addEventListener("click", (event) => {
+    if (event.target?.closest?.(".oi-arxiv-auto, .oi-arxiv-restore")) return;
+    if (arxivPhase === "offer" || arxivPhase === "failed") startArxivSource();
+    else if (arxivPhase === "ready" || arxivPhase === "empty") openArxivMenu();
+  });
+  box?.addEventListener("click", (event) => event.stopPropagation());
+  box?.addEventListener("change", () => {
+    arxivPrefs = { ...arxivPrefs, auto: box.checked === true };
+    saveArxivPrefs();
+    if (box.checked && (arxivPhase === "offer" || arxivPhase === "failed")) startArxivSource();
+  });
+  chip?.querySelector(".oi-arxiv-restore")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    restoreArxivForThisPaper();
+  });
+  skip?.addEventListener("click", () => {
+    closeArxivMenu();
+    skipArxivForThisPaper();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (event.target?.closest?.("#arxivSourceChip, #arxivSourceMenu")) return;
+    closeArxivMenu();
+  });
+}
+
+function skipArxivForThisPaper() {
+  const id = arxivIdentity?.id;
+  if (id) {
+    arxivPrefs = {
+      ...arxivPrefs,
+      skip: (arxivPrefs.skip || []).includes(id) ? arxivPrefs.skip : [...(arxivPrefs.skip || []), id],
+      on: (arxivPrefs.on || []).filter((item) => item !== id)
+    };
+    saveArxivPrefs();
+  }
+  setFormulaArxivSourceEnabled(false);
+  rememberArxivAlignment(null);
+  arxivPhase = "skipped";
+  restampArxivLayouts().then(() => {
+    renderArticle();
+    paintArxivChip();
+  });
+}
+
+function restoreArxivForThisPaper() {
+  const found = arxivIdentity || currentArxivId();
+  if (!found?.id) return;
+  const id = found.id;
+  arxivPrefs = {
+    ...arxivPrefs,
+    skip: (arxivPrefs.skip || []).filter((item) => item !== id),
+    on: (arxivPrefs.on || []).includes(id) ? arxivPrefs.on : [...(arxivPrefs.on || []), id]
+  };
+  arxivIdentity = found;
+  arxivPhase = "off";
+  saveArxivPrefs();
+  startArxivSource();
+}
+
+async function startArxivSource() {
+  const found = arxivIdentity || currentArxivId();
+  if (!found || skippedId(arxivPrefs, found.id)) return;
+  if (arxivPhase === "loading") return;
+  arxivIdentity = found;
+  const job = ++arxivJob;
+  arxivPhase = "loading";
+  arxivFailReason = "";
+  paintArxivChip();
+  let downloaded = null;
+  try {
+    downloaded = await runtimeSend({
+      type: "OI_ARXIV_SOURCE",
+      id: found.id,
+      version: found.version || "",
+      userTriggered: true,
+      pdfSha256: notesDocHashNow()
+    });
+  } catch {
+    downloaded = { ok: false, reason: "offline" };
+  }
+  if (job !== arxivJob) return;
+  if (!downloaded || downloaded.ok === false) {
+    arxivPhase = "failed";
+    arxivFailReason = downloaded?.reason || "offline";
+    setFormulaArxivSourceEnabled(false);
+    paintArxivChip();
+    return;
+  }
+  try {
+    await ensureMissingLayouts();
+  } catch {
+    /* pages that fail to lay out stay on the crop path */
+  }
+  if (job !== arxivJob) return;
+  let pages = [];
+  try {
+    pages = await collectAlignPages();
+  } catch {
+    pages = [];
+  }
+  if (job !== arxivJob) return;
+  let prepared = null;
+  try {
+    prepared = prepareArxivAlignment({
+      files: downloaded.files || [],
+      pages,
+      katex: globalThis.katex,
+      id: found.id,
+      version: found.version || "",
+      pdfSha256: notesDocHashNow()
+    });
+  } catch {
+    prepared = { ok: false, reason: "no-main" };
+  }
+  if (!prepared.ok) {
+    arxivPhase = "failed";
+    arxivFailReason = prepared.reason || "no-main";
+    setFormulaArxivSourceEnabled(false);
+    paintArxivChip();
+    return;
+  }
+  rememberArxivAlignment(prepared.alignment);
+  setFormulaArxivSourceEnabled(true);
+  rememberArxivAlignment(prepared.alignment);
+  try {
+    await runtimeSend({
+      type: "OI_ARXIV_SOURCE",
+      action: "save-alignment",
+      id: found.id,
+      version: found.version || "",
+      pdfSha256: notesDocHashNow(),
+      alignment: prepared.alignment
+    });
+  } catch {
+    /* this session still uses the in-memory alignment */
+  }
+  if (job !== arxivJob) return;
+  try {
+    await restampArxivLayouts();
+  } catch {
+    /* a page that fails to restamp stays on the crop path */
+  }
+  if (job !== arxivJob) return;
+  arxivPhase = "ready";
+  if (viewerUnderTest()) {
+    const tiers = new Map();
+    for (let n = 1; n <= (pdfDoc?.numPages || 0); n += 1) {
+      const blocks = getPageLayout(n)?.blocks || [];
+      const formulas = blocks.filter((block) => block?.label === "formula");
+      tiers.set(n, {
+        blocks: blocks.length,
+        formulas: formulas.length,
+        arxiv: formulas.filter((block) => block?.formulaTier === "arxiv").length
+      });
+    }
+    globalThis.__oiF5Align = {
+      slotCount: arxivSlotMap.size,
+      spliceBlocks: arxivSpliceByBlock.size,
+      displays: (arxivAlignmentMemory?.formulas || []).filter((row) => row?.kind === "display").map((row) => ({
+        page: row.page || 0,
+        pass: row.pass === true,
+        slot: String(row.slotId || ""),
+        unit: String(row.unitId || "")
+      })),
+      pages: [...tiers.entries()].map(([page, row]) => ({ page, ...row }))
+    };
+  }
+  renderArticle();
+  paintArxivChip();
+}
+
+async function ensureMissingLayouts() {
+  const total = pdfDoc?.numPages || 0;
+  for (let n = 1; n <= total; n += 1) {
+    if (getPageLayout(n)?.blocks?.length) continue;
+    try {
+      await ingestTextLayerLayout(n, () => false);
+    } catch {
+      /* this page stays without a layout */
+    }
+  }
+}
+
+async function collectAlignPages() {
+  const total = pdfDoc?.numPages || 0;
+  const pages = [];
+  for (let n = 1; n <= total; n += 1) {
+    const page = await pdfDoc.getPage(n);
+    const viewport = page.getViewport({ scale: 1 });
+    const content = await page.getTextContent();
+    if (n === 1) {
+      page1TextItems = content.items;
+      page1Viewport = viewport;
+      syncArxivOffer();
+    }
+    const stored = getPageLayout(n)?.blocks;
+    let blocks = stored?.length ? stored : null;
+    if (!blocks) {
+      let images = null;
+      try {
+        const ops = await page.getOperatorList();
+        images = { fnArray: ops.fnArray, argsArray: ops.argsArray };
+      } catch {
+        images = null;
+      }
+      blocks = textLayerToBlocks({ items: content.items, viewport, images, page: n }).blocks;
+    }
+    pages.push({
+      page: n,
+      blocks,
+      glyphs: pageGlyphsFromText(content.items, viewport)
+    });
+  }
+  return pages;
+}
+
+async function restampArxivLayouts() {
+  const total = pdfDoc?.numPages || 0;
+  for (let n = 1; n <= total; n += 1) {
+    if (!getPageLayout(n)) continue;
+    try {
+      await restampArxivPage(n);
+    } catch {
+      /* this page stays on the crop path */
+    }
+  }
+}
+
+async function restampArxivPage(pageNumber) {
+  const layout = getPageLayout(pageNumber);
+  if (!layout?.blocks) return;
+  const flags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: formulaArxivSourceEnabled() });
+  const next = [];
+  for (const block of layout.blocks) {
+    if (block?.label !== "formula") {
+      next.push(block);
+      continue;
+    }
+    const stamped = { ...block };
+    const sourceUnitId = formulaArxivSourceEnabled() ? arxivSourceUnitFor(stamped) : "";
+    if (sourceUnitId) stamped.sourceUnitId = sourceUnitId;
+    else delete stamped.sourceUnitId;
+    next.push(await scheduleFormulaBlock(stamped, {
+      withRasterCrop: async (item) => item,
+      isStale: () => false,
+      arxivEnabled: formulaArxivSourceEnabled(),
+      multimodalEnabled: flags.multimodalEnabled,
+      multimodalConfigured: flags.multimodalConfigured,
+      ocrEnabled: flags.ocrEnabled,
+      ocrConfigured: flags.ocrConfigured,
+      placeholderEnabled: flags.placeholderEnabled,
+      arxivId: arxivIdentity?.id || "",
+      arxivVersion: arxivIdentity?.version || "",
+      readAlignment: async () => arxivAlignmentMemory,
+      docHash: notesDocHashNow(),
+      page: pageNumber,
+      katex: globalThis.katex,
+      cache: null
+    }));
+  }
+  layout.blocks = next;
+  clearSlotPainted(pageNumber);
+}
+
+async function copyArxivLatex(latex, button) {
+  const writeText = async (text) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      /* fall through */
+    }
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.left = "-1000px";
+      document.body.append(area);
+      area.select();
+      const ok = document.execCommand("copy");
+      area.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  };
+  const ok = await flashCopiedLatex(button, latex, writeText);
+  if (ok) showToast("已复制 LaTeX");
+}
+
+function openArxivLatexMenu(latex, event, node) {
+  const rect = node?.getBoundingClientRect?.() || { left: 0, top: 0, width: 0, height: 0 };
+  const root = translateScrollRoot();
+  const rootBox = root?.getBoundingClientRect?.() || { left: 0, top: 0 };
+  showSelToolbar({
+    bids: [node?.dataset?.blockId || ""],
+    pairIds: [],
+    srcPage: Number(node?.dataset?.page) || 0,
+    text: String(latex || ""),
+    arxivLatex: String(latex || ""),
+    anchor: {
+      x: rect.left - rootBox.left,
+      y: rect.top - rootBox.top,
+      width: rect.width,
+      height: rect.height
+    },
+    key: `latex::${latex || ""}`
+  });
+}
+
+function captureFormulaBoxes(flow) {
+  if (!flow) return [];
+  const pane = translateScrollRoot();
+  const view = pane?.getBoundingClientRect();
+  return [...flow.querySelectorAll(".oi-pdf-math-row, .oi-pdf-inline-math")].map((el) => {
+    const rect = el.getBoundingClientRect();
+    const host = el.closest("[data-block-id]") || el;
+    const inView = view ? rect.bottom > view.top + 1 && rect.top < view.bottom - 1 : false;
+    return {
+      id: host.dataset.blockId || el.dataset.blockId || "",
+      height: rect.height,
+      inView
+    };
+  }).filter((row) => row.id && row.height > 0);
+}
+
+function releaseFormulaHeightLock(row) {
+  if (!row) return;
+  row.style.minHeight = "";
+  row.style.maxHeight = "";
+  delete row.dataset.oiHeightLock;
+}
+
+function ensureFormulaLockRelease(flow) {
+  if (!flow || flow.dataset.oiLockRelease === "1") return;
+  flow.dataset.oiLockRelease = "1";
+  const release = (event) => {
+    const row = event.target?.closest?.("[data-oi-height-lock='1']");
+    if (!row || !flow.contains(row)) return;
+    releaseFormulaHeightLock(row);
+  };
+  flow.addEventListener("click", release);
+  flow.addEventListener("focusin", release);
+}
+
+function lockFormulaHeights(flow, previous) {
+  ensureFormulaLockRelease(flow);
+  if (!flow || !previous?.length) return;
+  for (const prev of previous) {
+    if (!prev.inView) continue;
+    const host = flow.querySelector(`[data-block-id="${cssEscape(prev.id)}"]`);
+    if (!host) continue;
+    const row = host.classList.contains("oi-pdf-math-row") || host.classList.contains("oi-pdf-inline-math")
+      ? host
+      : host.querySelector(".oi-pdf-math-row.is-katex, .oi-pdf-inline-math.is-katex");
+    if (!row) continue;
+    const next = row.getBoundingClientRect().height;
+    if (!(next > 0) || Math.abs(next - prev.height) <= 2) continue;
+    const px = `${Math.round(prev.height * 100) / 100}px`;
+    row.style.minHeight = px;
+    row.style.maxHeight = px;
+    row.dataset.oiHeightLock = "1";
+  }
+}
+
+function unlockOffscreenFormulaHeights() {
+  const flow = readerFlowEl();
+  const pane = translateScrollRoot();
+  if (!flow || !pane) return;
+  const view = pane.getBoundingClientRect();
+  flow.querySelectorAll("[data-oi-height-lock='1']").forEach((row) => {
+    const rect = row.getBoundingClientRect();
+    const inView = rect.bottom > view.top + 1 && rect.top < view.bottom - 1;
+    if (inView) return;
+    releaseFormulaHeightLock(row);
+  });
+}
+
 async function readCachedArxivAlignment(query) {
+  const memory = arxivMemoryFor(query);
+  if (memory) return memory;
   try {
     const res = await runtimeSend({
       type: "OI_ARXIV_SOURCE",
@@ -3025,7 +3693,11 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
   try { await formulaSettingsReady; } catch { /* defaults stay off */ }
   const cropped = [];
   const arxivOn = formulaArxivSourceEnabled();
-  const arxiv = arxivOn ? detectArxivId({ url: sourceUrl }) : null;
+  const arxiv = arxivOn ? detectArxivId({
+    url: sourceUrl,
+    page1Items: page1TextItems,
+    page: page1Viewport
+  }) || arxivIdentity : null;
   const formulaFlags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: arxivOn });
   for (const block of blocks || []) {
     if (isStale()) return null;
@@ -3033,6 +3705,8 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
       cropped.push(await withRasterCrop(raster, page, block, pageNumber, options));
       continue;
     }
+    const sourceUnitId = arxivOn ? arxivSourceUnitFor(block) : "";
+    if (sourceUnitId) block.sourceUnitId = sourceUnitId;
     cropped.push(await scheduleFormulaBlock(block, {
       withRasterCrop: (item) => withRasterCrop(raster, page, item, pageNumber, options),
       isStale,
@@ -3209,6 +3883,12 @@ function placeholderIcon() {
   return svg;
 }
 
+function jumpFormulaFromUi(button) {
+  const jump = globalThis.__oiJumpFormula;
+  if (typeof jump === "function") jump(button);
+  else jumpFormulaPlaceholder(button);
+}
+
 function mountFormulaPlaceholder(parent, block, page, inline) {
   const shown = { ...block, page: page ?? block?.page };
   const copy = placeholderCopy(shown, { inline, kind: "formula" });
@@ -3239,7 +3919,7 @@ function mountFormulaPlaceholder(parent, block, page, inline) {
   button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    jumpFormulaPlaceholder(button);
+    jumpFormulaFromUi(button);
   });
   if (inline) {
     stampPlaceholderBox(button, lengths);
@@ -3264,8 +3944,10 @@ function jumpFormulaPlaceholder(button) {
   const presented = presentSourceForJump(button);
   const run = () => {
     if (!hasBbox) {
-      if (page >= 1) revealSourcePage(page);
-      else if (host?.dataset?.pairId) jumpTranslationToSource(host);
+      if (page >= 1) {
+        revealSourcePage(page);
+        if (button.dataset.oiTier === "arxiv") showToast(`已到第 ${page} 页`);
+      } else if (host?.dataset?.pairId) jumpTranslationToSource(host);
       return;
     }
     if (host?.dataset?.pairId) jumpTranslationToSource(host);
@@ -3281,7 +3963,13 @@ function appendCropOrNotice(node, block, imageClass, page) {
     mountFormulaPlaceholder(node, block, shownPage, false);
     return;
   }
+  if (block?.label === "formula" && verifiedArxivFormula(block)) {
+    const outcome = mountArxivDisplay(node, block, shownPage, arxivPaneHooks());
+    if (outcome !== "katex-error") return;
+    block = { ...block, formulaTier: "crop", formulaReason: "katex-error" };
+  }
   const img = cropImage(block);
+  if (img && block?.formulaReason === "katex-error") img.setAttribute("data-oi-reason", "katex-error");
   if (img) {
     img.className = imageClass || "oi-pdf-math-crop";
     if (block.label === "formula") {
@@ -3463,8 +4151,102 @@ function writeBlockPieces(node, block, layout) {
   // A failed empty translation is not done, but the paragraph still has to
   // show. Use the source sentence and its formula crops rather than an empty box.
   const pending = block?.failed === true && !String(block.translation || "").trim();
-  const pieces = blockRenderPieces(pending ? { ...block, translation: "", failed: false } : block, layout.blocks || []);
+  const view = pending ? { ...block, translation: "", failed: false } : block;
+  const showingSource = !String(view.translation || "").trim();
+  if (showingSource && formulaArxivSourceEnabled()) {
+    const plans = arxivSpliceByBlock.get(String(block.id || "")) || [];
+    const spliced = plans.length ? spliceInlinePieces(String(view.text || block.text || ""), plans) : null;
+    if (spliced) {
+      paintSplicedPieces(node, spliced, block, layout);
+      return;
+    }
+  }
+  const pieces = blockRenderPieces(view, layout.blocks || []);
+  paintRenderPieces(node, pieces, view, layout);
+}
+
+function paintSplicedPieces(node, pieces, block, layout) {
+  pieces.forEach((piece) => {
+    if (piece.type === "math") {
+      mountSplicedInline(node, piece, block, layout);
+      return;
+    }
+    const text = String(piece.text || "");
+    if (!text) return;
+    if (/⟦f\d+⟧/.test(text)) {
+      const sub = blockRenderPieces({ ...block, translation: "", failed: false, text }, layout.blocks || []);
+      paintRenderPieces(node, sub, block, layout);
+      return;
+    }
+    node.append(document.createTextNode(text));
+  });
+}
+
+function mountSplicedInline(node, piece, block, layout) {
+  const inlinePage = layout?.page ?? node.dataset.page ?? piece.page;
+  const formula = {
+    id: piece.unitId || "",
+    latex: piece.latex,
+    latexSource: "arxiv-src",
+    verified: true,
+    formulaTier: "arxiv",
+    page: piece.page || inlinePage,
+    eqLabel: piece.number || "",
+    display: false
+  };
+  const span = document.createElement("span");
+  if (inlinePage) span.dataset.page = String(inlinePage);
+  span.dataset.label = "formula";
+  const outcome = mountArxivInline(span, formula, inlinePage, arxivPaneHooks());
+  if (outcome === "ok") {
+    node.append(span);
+    return;
+  }
+  const matched = (layout?.blocks || []).find((item) => {
+    if (item?.label !== "formula") return false;
+    const unit = String(piece.unitId || "");
+    return unit && (String(item.sourceUnitId || "") === unit || String(item.id || "") === unit);
+  });
+  const failed = matched
+    ? { ...matched, formulaReason: "katex-error" }
+    : {
+      ...formula,
+      id: piece.unitId || formula.id,
+      label: "formula",
+      formulaTier: "placeholder",
+      formulaReason: "katex-error"
+    };
+  mountInlineFormulaFallback(node, failed, inlinePage);
+}
+
+function mountInlineFormulaFallback(node, formula, page) {
+  const shown = { ...formula, label: "formula", formulaReason: formula?.formulaReason || "katex-error" };
+  const host = document.createElement("span");
+  host.className = "oi-pdf-inline-math";
+  if (page) host.dataset.page = String(page);
+  if (shown.id) {
+    host.dataset.blockId = String(shown.id);
+    host.dataset.label = "formula";
+  }
+  if (failedInlineKind(shown) === "crop") {
+    const img = cropImage({ ...shown, formulaTier: "crop" });
+    host.tabIndex = 0;
+    if (img) {
+      img.className = "oi-pdf-math-crop";
+      img.setAttribute("data-oi-reason", "katex-error");
+      host.append(img);
+    }
+    node.append(host);
+    return;
+  }
+  shown.formulaTier = "placeholder";
+  mountFormulaPlaceholder(host, shown, page, true);
+  node.append(host);
+}
+
+function paintRenderPieces(node, pieces, block, layout) {
   if (!pieces.length) {
+    const pending = block?.failed === true && !String(block.translation || "").trim();
     const fallback = String((pending ? block.text : block.translation) || block.text || "");
     if (fallback) node.append(document.createTextNode(fallback));
     return;
@@ -3476,6 +4258,20 @@ function writeBlockPieces(node, block, layout) {
     }
     const formula = (layout.blocks || []).find((item) => item.id === piece.blockId);
     const inlinePage = layout?.page ?? node.dataset.page;
+    if (verifiedArxivFormula(formula)) {
+      const span = document.createElement("span");
+      if (formula.id) {
+        span.dataset.blockId = String(formula.id);
+        span.dataset.label = "formula";
+        if (inlinePage) span.dataset.page = String(inlinePage);
+      }
+      const outcome = mountArxivInline(span, formula, inlinePage, arxivPaneHooks());
+      if (outcome === "ok") {
+        node.append(span);
+        return;
+      }
+      if (outcome === "katex-error") formula.formulaReason = "katex-error";
+    }
     if (formula?.formulaTier === "placeholder") {
       const span = document.createElement("span");
       span.className = "oi-pdf-inline-math";
@@ -3507,6 +4303,7 @@ function writeBlockPieces(node, block, layout) {
     }
     if (img) {
       img.className = "oi-pdf-math-crop";
+      if (formula?.formulaReason === "katex-error") img.setAttribute("data-oi-reason", "katex-error");
       const keep = Number(formula?.eqKeep);
       if (keep > 0 && keep < 1) {
         const clip = document.createElement("span");
@@ -3576,6 +4373,7 @@ function publishViewerTestHooks() {
     text: String(block.text || "")
   }));
   exposeNotesProbe();
+  globalThis.__oiJumpFormula = jumpFormulaPlaceholder;
 }
 
 function landedText(translation, source = "") {
@@ -5487,6 +6285,15 @@ function bindSelToolbar() {
   registerSelAction({ id: "jump-source", run: (ctx) => jumpSourceForSelection(ctx) });
   registerSelAction({ id: "copy", run: (ctx) => copySelectionText(ctx) });
   registerSelAction({
+    id: "copy-latex",
+    slot: "overflow",
+    order: 18,
+    label: "复制 LaTeX",
+    enabled: (ctx) => Boolean(ctx?.arxivLatex),
+    run: (ctx) => copyArxivLatex(ctx?.arxivLatex, null)
+  });
+  document.addEventListener("copy", onCopyWithInlineLatex);
+  registerSelAction({
     id: "note",
     enabled: () => Boolean(pdfDoc),
     run: (ctx) => notesFromSel(ctx, "note")
@@ -5938,10 +6745,35 @@ function readSelContext() {
     pairIds: hits.map((hit) => hit.pairId || ""),
     srcPage: hits[0].srcPage,
     text,
+    arxivLatex: arxivLatexFromSelection(range, el),
     range: range.cloneRange(),
     anchor,
     key: `${bids.join("|")}::${text}`
   };
+}
+
+function arxivLatexFromSelection(range, el) {
+  const host = el?.closest?.(".is-katex");
+  if (host?.dataset?.oiTier === "arxiv" && host.dataset.latex) return host.dataset.latex;
+  let frag = null;
+  try { frag = range?.cloneContents?.(); } catch { frag = null; }
+  const nodes = frag?.querySelectorAll?.(".is-katex") || [];
+  if (nodes.length === 1 && nodes[0].dataset?.oiTier === "arxiv" && nodes[0].dataset.latex) {
+    return nodes[0].dataset.latex;
+  }
+  return "";
+}
+
+function onCopyWithInlineLatex(event) {
+  const sel = window.getSelection?.();
+  if (!sel || sel.isCollapsed || sel.rangeCount < 1) return;
+  let frag = null;
+  try { frag = sel.getRangeAt(0).cloneContents(); } catch { return; }
+  if (!frag?.querySelector?.(".oi-pdf-inline-math.is-katex")) return;
+  const text = plainWithInlineMath(frag);
+  if (!text) return;
+  event.clipboardData?.setData("text/plain", text);
+  event.preventDefault();
 }
 
 function clientBox(rect) {
@@ -6254,6 +7086,7 @@ function applyToolbarBand() {
   placeViewSegment(chrome.viewInSubbar);
   applySourceLayout(false);
   refreshDocStatus();
+  syncArxivColumn();
   scheduleToolbarSnap();
 }
 
@@ -6967,6 +7800,7 @@ function renderArticle() {
   const pin = flow && flow.offsetHeight > 0 ? flow.offsetHeight : 0;
   if (flow && pin) flow.style.minHeight = `${pin}px`;
   const formulaScrolls = captureFormulaScrolls(flow);
+  const formulaBoxes = captureFormulaBoxes(flow);
   applyViewMode();
   const total = pdfDoc?.numPages || 0;
   for (let n = 1; n <= total; n += 1) paintPageSlot(n);
@@ -7000,6 +7834,9 @@ function renderArticle() {
   settlePairChrome();
   updateTranslateControls();
   refreshDocStatus();
+  lockFormulaHeights(readerFlowEl(), formulaBoxes);
+  syncArxivColumn();
+  syncArxivOffer();
   noteAutoProgress();
   notesUi?.paint();
 }
@@ -7561,6 +8398,7 @@ async function exportReadout(kind) {
 }
 
 function onTranslateScroll() {
+  unlockOffscreenFormulaHeights();
   noteSelToolbarScroll();
   updatePageCapsule();
   updateReaderFade();
@@ -9157,7 +9995,6 @@ async function translateWholeDocument() {
       clearSlotPainted(entry.page);
     }
   }
-  renderArticle();
   const totals = pageTotals();
   const any = pages.some((entry) => pageHasTranslation(entry.results, pdfTargetLang) ||
     pageHasTranslation(pageCache.get(translatingDoc, entry.page), pdfTargetLang) ||
@@ -9169,6 +10006,7 @@ async function translateWholeDocument() {
   else if (!clean) setStatus(any ? PDF_COPY.incompletePages : PDF_COPY.noReturnedTranslation, true);
   else setStatus(PDF_COPY.doneDocument);
   finishDocPhase({ aborted, error: Boolean(error) || totals.needsRetry > 0 || totals.n !== total });
+  renderArticle();
   const saveErrors = (await Promise.all(saveTasks)).map((error) => noteLibrarySaveError(error));
   // A retranslate click during the save wait takes a new session. Do not
   // clear its page or start another job over the batches it just sent.
@@ -9868,6 +10706,11 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
   }
   if (isStale()) return null;
   attachFontRealNames(content.items, page.commonObjs);
+  if (n === 1) {
+    page1TextItems = content.items;
+    page1Viewport = viewport;
+    syncArxivOffer();
+  }
   const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
@@ -10045,6 +10888,7 @@ async function openPdfData(data, title) {
 }
 
 async function adoptDoc(doc, title) {
+  resetArxivSession();
   // A new document, including the same PDF opened again in this tab, may
   // adopt what was saved. The set stays for a retry that does not adopt:
   // those pages were saved without a failed flag, and adopting them would
