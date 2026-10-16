@@ -48,7 +48,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const features = resolveFeatures(await getSettings());
   if (info.menuItemId === "oi-save-selection" && features.learning) {
     try {
-      const [translated] = await translateBatch([text]);
+      const batchOpts = {};
+      const [translated] = await translateBatch([text], batchOpts);
       await saveItem({
         original: text,
         translation: translated,
@@ -56,6 +57,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         title: tab.title,
         context: text
       });
+      if (batchOpts.providerCalled) await noteTranslationSucceeded(batchOpts.providerId);
       await chrome.tabs.sendMessage(tab.id, { type: "OI_TOAST", message: "已收藏到学习中心" });
     } catch (err) {
       await chrome.tabs.sendMessage(tab.id, { type: "OI_ERROR", message: String(err.message || err) });
@@ -127,7 +129,6 @@ async function handleMessage(message, sender) {
         user: message.user
       });
     case "OI_TRANSLATE_BATCH": {
-      const settings = await getSettings();
       const batchOpts = {
         onProgress: (progress) => emitTranslateProgress(sender, message.requestId, progress),
         polish: message.polish,
@@ -135,7 +136,7 @@ async function handleMessage(message, sender) {
         bypassCache: message.bypassCache === true
       };
       const translations = await translateBatch(message.texts || [], batchOpts);
-      await noteTranslationSucceeded(settings.provider);
+      if (batchOpts.providerCalled) await noteTranslationSucceeded(batchOpts.providerId);
       return {
         ok: true,
         translations,
@@ -232,6 +233,8 @@ function resolveBatchPolish(message = {}, settings = {}) {
 
 async function translateBatch(texts, options = {}) {
   const settings = await getSettings();
+  options.providerId = settings.provider;
+  options.providerCalled = false;
   const provider = getProvider(settings.provider);
   const providerSettings = {
     ...(settings.providers?.[settings.provider] || {}),
@@ -251,6 +254,7 @@ async function translateBatch(texts, options = {}) {
     const chunk = pending.slice(i, i + size);
     let translated;
     try {
+      options.providerCalled = true;
       translated = await provider.translate(chunk.map((c) => c.text), {
         sourceLang: settings.sourceLang,
         targetLang: settings.targetLang,

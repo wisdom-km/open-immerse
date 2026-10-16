@@ -559,6 +559,110 @@ test("polish failure keeps draft, skips cache, and returns short polishError", a
   }
 });
 
+test("attention stays for an empty batch or a cache hit and clears after a real call", async () => {
+  const local = {};
+  const sync = {
+    settings: {
+      provider: "openai",
+      sourceLang: "en",
+      targetLang: "zh-CN",
+      twoStepPolish: false,
+      batchSize: 8,
+      settingsVersion: 7,
+      articleScopeMigrated: true,
+      providers: {
+        openai: { apiKey: "sk-test", baseUrl: "https://api.example.com/v1", model: "test-model", prompt: "" }
+      }
+    }
+  };
+  function area(bag) {
+    return {
+      async get(key) {
+        if (typeof key === "string") return { [key]: bag[key] };
+        return { ...bag };
+      },
+      async set(patch) {
+        Object.assign(bag, patch);
+      }
+    };
+  }
+  let menuHandler = null;
+  let messageHandler = null;
+  globalThis.chrome = {
+    storage: {
+      sync: area(sync),
+      local: area(local),
+      onChanged: { addListener() {} }
+    },
+    runtime: {
+      onInstalled: { addListener() {} },
+      onStartup: { addListener() {} },
+      onMessage: { addListener(fn) { messageHandler = fn; } },
+      getURL: (path) => path,
+      async sendMessage() {}
+    },
+    contextMenus: {
+      onClicked: { addListener(fn) { menuHandler = fn; } },
+      async removeAll() {},
+      create() {}
+    },
+    commands: { onCommand: { addListener() {} } },
+    tabs: { async query() { return []; }, async sendMessage() {}, async create() {} }
+  };
+  let calls = 0;
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { choices: [{ message: { content: "1. 你好" } }] };
+      }
+    };
+  };
+  try {
+    await import(`../background/service-worker.js?attention=${Date.now()}`);
+    const send = (message) => new Promise((resolve, reject) => {
+      const ok = messageHandler(message, { tab: { id: 1 }, frameId: 0, url: "https://example.com/a" }, resolve);
+      if (!ok) reject(new Error("listener must return true"));
+    });
+    local.oiProviderAttention = { openai: true };
+    const empty = await send({ type: "OI_TRANSLATE_BATCH", texts: [], requestId: "empty" });
+    assert.deepEqual(empty.translations, []);
+    assert.deepEqual(local.oiProviderAttention, { openai: true });
+    assert.equal(calls, 0);
+
+    const first = await send({ type: "OI_TRANSLATE_BATCH", texts: ["Hello"], requestId: "real" });
+    assert.deepEqual(first.translations, ["你好"]);
+    assert.deepEqual(local.oiProviderAttention, {});
+    assert.equal(calls, 1);
+
+    local.oiProviderAttention = { openai: true };
+    const cached = await send({ type: "OI_TRANSLATE_BATCH", texts: ["Hello"], requestId: "cached" });
+    assert.deepEqual(cached.translations, ["你好"]);
+    assert.deepEqual(local.oiProviderAttention, { openai: true });
+    assert.equal(calls, 1);
+
+    await menuHandler(
+      { menuItemId: "oi-save-selection", selectionText: "Hello again", pageUrl: "https://example.com/a" },
+      { id: 1, url: "https://example.com/a", title: "t" }
+    );
+    assert.deepEqual(local.oiProviderAttention, {});
+    assert.equal(calls, 2);
+
+    local.oiProviderAttention = { openai: true };
+    await menuHandler(
+      { menuItemId: "oi-save-selection", selectionText: "Hello again", pageUrl: "https://example.com/a" },
+      { id: 1, url: "https://example.com/a", title: "t" }
+    );
+    assert.deepEqual(local.oiProviderAttention, { openai: true });
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = prevFetch;
+  }
+});
+
 test("SW lib graph evaluates under chrome stubs", async () => {
   stubChrome(async () => {});
   await import(`../lib/features.js?sw=${Date.now()}`);

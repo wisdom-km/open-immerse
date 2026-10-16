@@ -10,7 +10,7 @@ import { parseHTML } from "linkedom";
 import { FORMULA_SWITCH_KEYS } from "../lib/formula-settings.js";
 import { deliverAsk, renderAskNotice, resolveAskTarget, ASK_EMPTY } from "../lib/ask-route.js";
 import { getSettings, noteTranslationSucceeded, saveSettings, SETTINGS_VERSION } from "../lib/storage.js";
-import { prepareSettingsImport, sealSettingsPatch, settingsForExport } from "../lib/settings-secrets.js";
+import { mergeLiveSecrets, prepareSettingsImport, sealSettingsPatch, settingsForExport } from "../lib/settings-secrets.js";
 import { normalizeAttention } from "../lib/provider-attention.js";
 import { parseSettingsHash, SETTINGS_PAGES } from "../options/route.js";
 
@@ -213,8 +213,32 @@ test("secret migration, import, and rollback stay inside local storage", async (
   assert.equal(syncHasSecrets(importing.sync.settings), false);
   const exported = settingsForExport(imported);
   assert.equal(syncHasSecrets(exported), false);
-  assert.equal(exported.providers.openai.apiKey, "");
+  assert.equal(exported.providers.openai.apiKey, undefined);
   assert.equal(exported.oiProviderAttention, undefined);
+  const aliased = prepareSettingsImport({
+    settings: {
+      targetLang: "ja",
+      pdfCloudApiKey: "top-level-pdf",
+      oiSecrets: { providers: { openai: "bag-key" } },
+      providers: {
+        openai: { apiKey: "sk-file", api_key: "alias-key", baseUrl: "https://api.openai.com/v1" },
+        custom: { headers: { "x-api-key": "header-key", accessToken: "token-key" }, nested: { apiKey: "deep-key" } }
+      }
+    }
+  });
+  assert.equal(aliased.ignoredKeys, true);
+  assert.equal(aliased.settings.targetLang, "ja");
+  assert.equal(aliased.settings.providers.openai.baseUrl, "https://api.openai.com/v1");
+  const aliasedText = JSON.stringify(aliased.settings);
+  for (const secret of ["top-level-pdf", "bag-key", "sk-file", "alias-key", "header-key", "token-key", "deep-key"]) {
+    assert.equal(aliasedText.includes(secret), false, secret);
+  }
+  const round = settingsForExport({
+    providers: { openai: { apiKey: "should-not-export", baseUrl: "https://api.openai.com/v1" } },
+    extra: { access_token: "nope" }
+  });
+  assert.equal(JSON.stringify(round).includes("should-not-export"), false);
+  assert.equal(JSON.stringify(round).includes("nope"), false);
 });
 
 /** 887ecd2 merge: providers are deep-merged, pdfLayout is replaced wholesale. */
@@ -237,8 +261,8 @@ test("export then import keeps keys when the old background is still running", a
     settings: { ...exported, targetLang: "ja", oiProviderAttention: { openai: OPENAI_KEY } }
   });
   const patch = sealSettingsPatch(prepared.settings, { pdfCloudApiKey: PDF_KEY });
-  assert.equal(exported.providers.openai.apiKey, "");
-  assert.equal(exported.pdfLayout.cloudApiKey, "");
+  assert.equal(exported.providers.openai.apiKey, undefined);
+  assert.equal(exported.pdfLayout.cloudApiKey, undefined);
   assert.equal(Object.prototype.hasOwnProperty.call(patch.providers.openai, "apiKey"), false);
   assert.equal(patch.pdfLayout.cloudApiKey, PDF_KEY);
   assert.equal(patch.targetLang, "ja");
@@ -856,6 +880,13 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     readPage.document.getElementById("targetLang").dispatchEvent(new readDom.window.Event("change", { bubbles: true }));
     await flush();
     assert.equal(readChrome.calls.length, reads);
+    const blocked = readPage.document.getElementById("importFile");
+    const blockedFile = new File([JSON.stringify({ settings: { settingsVersion: SETTINGS_VERSION, targetLang: "de" } })], "blocked.json", { type: "application/json" });
+    Object.defineProperty(blocked, "files", { configurable: true, get: () => [blockedFile] });
+    blocked.dispatchEvent(new readDom.window.Event("change", { bubbles: true }));
+    await flush();
+    assert.equal(readChrome.calls.length, reads);
+    assert.match(readPage.document.getElementById("status").textContent, /先重试再导入/);
   } finally {
     mock.timers.reset();
   }
@@ -938,6 +969,102 @@ test("translate 需处理 badge survives refresh until a successful test or an e
   assert.deepEqual(chrome.local.oiProviderAttention, {});
   const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
   const handler = sw.slice(sw.indexOf('case "OI_TRANSLATE_BATCH"'), sw.indexOf('case "OI_TEST_PROVIDER"'));
-  assert.match(handler, /await translateBatch\([\s\S]*await noteTranslationSucceeded\(settings\.provider\)/);
+  assert.match(handler, /await translateBatch\([\s\S]*if \(batchOpts\.providerCalled\) await noteTranslationSucceeded\(batchOpts\.providerId\)/);
+  assert.match(sw, /options\.providerId = settings\.provider/);
   assert.equal(sw.slice(sw.indexOf("async function translateBatch"), sw.indexOf("export { translateBatch")).includes("noteTranslationSucceeded"), false);
+  const menu = sw.slice(sw.indexOf("oi-save-selection"), sw.indexOf("chrome.commands.onCommand"));
+  assert.match(menu, /translateBatch\(\[text\], batchOpts\)[\s\S]*if \(batchOpts\.providerCalled\) await noteTranslationSucceeded\(batchOpts\.providerId\)/);
+
+  await globalThis.chrome.storage.local.set({ oiProviderAttention: { openai: true } });
+  await flush();
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, false);
+  refreshed.document.getElementById("testConnectionStatus").className = "provider-test-status is-err";
+  await globalThis.chrome.storage.local.set({ oiProviderAttention: {} });
+  await flush();
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, true);
+});
+
+test("removed and stale PDF cloud keys are not written back", async () => {
+  const live = mergeLiveSecrets(null, {
+    providers: { openai: { apiKey: "sk-live-sync" } },
+    pdfLayout: { cloudApiKey: "pdf-live-sync" }
+  });
+  assert.equal(live.pdfCloudApiKey, "pdf-live-sync");
+  assert.equal(live.providers.openai, "sk-live-sync");
+  const localWins = mergeLiveSecrets(
+    { providers: { openai: "sk-live-local" }, pdfCloudApiKey: "pdf-live-local" },
+    { providers: { openai: { apiKey: "sk-live-sync" } }, pdfLayout: { cloudApiKey: "pdf-live-sync" } }
+  );
+  assert.equal(localWins.pdfCloudApiKey, "pdf-live-local");
+  assert.equal(localWins.providers.openai, "sk-live-local");
+
+  const chrome = installChrome({ settings: savedSettings() });
+  const page = mountPage("#pdf");
+  const { startOptions } = await import("../options/options.js?freshness=1");
+  await startOptions();
+  await flush();
+  const pdfRemove = [...page.document.querySelectorAll("button")].find((button) => {
+    return button.textContent === "移除密钥" && button.parentElement?.querySelector("#pdfCloudApiKey");
+  });
+  pdfRemove.click();
+  await flush();
+  assert.equal(chrome.local.oiSecrets.pdfCloudApiKey, "");
+  const input = page.document.getElementById("importFile");
+  const file = new File([JSON.stringify({
+    settings: {
+      settingsVersion: SETTINGS_VERSION,
+      targetLang: "ja",
+      pdfLayout: { mode: "cloud", cloudApiKey: "from-file" },
+      providers: { openai: { apiKey: "from-file" } }
+    }
+  })], "back.json", { type: "application/json" });
+  Object.defineProperty(input, "files", { configurable: true, get: () => [file] });
+  fire(input, "change");
+  await flush();
+  assert.equal(chrome.local.oiSecrets.pdfCloudApiKey, "");
+  assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
+  const removedPatch = chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").at(-1).patch;
+  assert.equal(JSON.stringify(removedPatch).includes(PDF_KEY), false);
+
+  chrome.local.oiSecrets = {
+    providers: { openai: "sk-live-from-storage" },
+    pdfCloudApiKey: "pdf-live-from-storage"
+  };
+  fire(input, "change");
+  await flush();
+  const importPatch = chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").at(-1).patch;
+  assert.equal(importPatch.pdfLayout.cloudApiKey, "pdf-live-from-storage");
+  assert.equal(Object.prototype.hasOwnProperty.call(importPatch.providers?.openai || {}, "apiKey"), false);
+  assert.equal(JSON.stringify(importPatch).includes(PDF_KEY), false);
+  assert.equal(JSON.stringify(importPatch).includes(OPENAI_KEY), false);
+  const imported = legacyBackgroundMerge({
+    providers: { openai: { apiKey: "sk-live-from-storage", baseUrl: "https://api.openai.com/v1" } },
+    pdfLayout: { mode: "cloud", cloudApiKey: "pdf-live-from-storage" }
+  }, importPatch);
+  assert.equal(imported.pdfLayout.cloudApiKey, "pdf-live-from-storage");
+  assert.equal(imported.providers.openai.apiKey, "sk-live-from-storage");
+  assert.equal(chrome.local.oiSecrets.pdfCloudApiKey, "pdf-live-from-storage");
+  assert.equal(chrome.local.oiSecrets.providers.openai, "sk-live-from-storage");
+
+  chrome.local.oiSecrets = {
+    providers: { openai: "sk-live-again" },
+    pdfCloudApiKey: "pdf-live-again"
+  };
+  const target = page.document.getElementById("targetLang");
+  target.value = "de";
+  fire(target, "change");
+  await flush();
+  const savePatch = chrome.calls.filter((call) => call.type === "OI_SAVE_SETTINGS").at(-1).patch;
+  assert.equal(savePatch.pdfLayout.cloudApiKey, "pdf-live-again");
+  assert.equal(Object.prototype.hasOwnProperty.call(savePatch.providers?.openai || {}, "apiKey"), false);
+  assert.equal(JSON.stringify(savePatch).includes("pdf-live-from-storage"), false);
+  assert.equal(JSON.stringify(savePatch).includes(OPENAI_KEY), false);
+  const saved = legacyBackgroundMerge({
+    providers: { openai: { apiKey: "sk-live-again", baseUrl: "https://api.openai.com/v1" } },
+    pdfLayout: { mode: "", cloudApiKey: "pdf-live-again" }
+  }, savePatch);
+  assert.equal(saved.pdfLayout.cloudApiKey, "pdf-live-again");
+  assert.equal(saved.providers.openai.apiKey, "sk-live-again");
+  assert.equal(chrome.local.oiSecrets.pdfCloudApiKey, "pdf-live-again");
+  assert.equal(chrome.local.oiSecrets.providers.openai, "sk-live-again");
 });

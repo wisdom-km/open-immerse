@@ -10,8 +10,19 @@ import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
-import { prepareSettingsImport, sealSettingsPatch, settingsForExport } from "../lib/settings-secrets.js";
-import { clearProviderAttention, markProviderAttention, readProviderAttention } from "../lib/provider-attention.js";
+import {
+  prepareSettingsImport,
+  readLiveSecrets,
+  sealSettingsPatch,
+  settingsForExport,
+  SECRET_STORAGE_KEY
+} from "../lib/settings-secrets.js";
+import {
+  PROVIDER_ATTENTION_KEY,
+  clearProviderAttention,
+  markProviderAttention,
+  readProviderAttention
+} from "../lib/provider-attention.js";
 import { bindSecretInput } from "../lib/secret-field.js";
 import { ASK_TRANSLATION_LINE } from "../lib/ask-route.js";
 import {
@@ -66,6 +77,10 @@ let focusMm = false;
 let toastTimer = 0;
 let toastUndo = null;
 let attentionProvider = "";
+let pdfCloudEdit = null;
+let providerEdits = new Map();
+let providerSecretPaint = null;
+let secretSyncBound = false;
 
 export function startOptions() {
   return init();
@@ -141,6 +156,7 @@ async function init() {
   bindSearch();
   const manifest = chrome.runtime?.getManifest?.();
   if (manifest?.version && el("aboutVersion")) el("aboutVersion").textContent = manifest.version;
+  bindSecretSync();
   await pinKeySync();
   await syncAttentionBadge();
 }
@@ -387,6 +403,10 @@ async function importSettingsFile(ev) {
   const file = ev.target.files && ev.target.files[0];
   ev.target.value = "";
   if (!file) return;
+  if (!readsOk) {
+    el("status").textContent = "没能读取已保存的设置，先重试再导入。";
+    return;
+  }
   try {
     const raw = JSON.parse(await file.text());
     const incoming = raw.settings || raw;
@@ -396,9 +416,8 @@ async function importSettingsFile(ev) {
       return;
     }
     const prepared = prepareSettingsImport(raw);
-    const patch = sealSettingsPatch(prepared.settings, {
-      pdfCloudApiKey: pdfCloudKey || cachedSettings?.pdfLayout?.cloudApiKey || ""
-    });
+    const live = await readLiveSecrets(chrome.storage);
+    const patch = sealSettingsPatch(prepared.settings, { pdfCloudApiKey: live.pdfCloudApiKey });
     const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch });
     if (!res || res.ok === false) throw new Error("save failed");
     cachedSettings = res.settings || prepared.settings;
@@ -425,6 +444,9 @@ function fillPdfLayout(value) {
       const result = pdfCloudBound.commit();
       if (result.ignored) return;
       pdfCloudKey = result.value;
+      if (!cachedSettings.pdfLayout || typeof cachedSettings.pdfLayout !== "object") cachedSettings.pdfLayout = {};
+      cachedSettings.pdfLayout.cloudApiKey = result.value;
+      if (result.changed) pdfCloudEdit = result.value;
       pdfCloudBound.showSaved();
       void persist(input);
     });
@@ -448,9 +470,16 @@ function readPdfLayout() {
   };
 }
 
+function rememberPdfCloud(value) {
+  pdfCloudKey = value || "";
+  if (!cachedSettings.pdfLayout || typeof cachedSettings.pdfLayout !== "object") cachedSettings.pdfLayout = {};
+  cachedSettings.pdfLayout.cloudApiKey = pdfCloudKey;
+}
+
 async function clearPdfCloud() {
   const previous = pdfCloudKey;
-  pdfCloudKey = "";
+  pdfCloudEdit = null;
+  rememberPdfCloud("");
   pdfCloudBound?.paint();
   const res = await chrome.runtime.sendMessage({
     type: "OI_SAVE_SETTINGS",
@@ -458,12 +487,13 @@ async function clearPdfCloud() {
     clear: { pdfCloud: true }
   });
   if (!res || res.ok === false) {
-    pdfCloudKey = previous;
+    rememberPdfCloud(previous);
     pdfCloudBound?.paint();
     return;
   }
   showToast("已移除 PDF 云端密钥 · 撤销", () => {
-    pdfCloudKey = previous;
+    rememberPdfCloud(previous);
+    pdfCloudEdit = previous;
     pdfCloudBound?.paint();
     void persist();
   });
@@ -588,7 +618,7 @@ function attentionArea() {
   return globalThis.chrome?.storage?.local;
 }
 
-async function syncAttentionBadge() {
+async function syncAttentionBadge(options = {}) {
   const badge = document.querySelector('[data-badge="translate"]');
   if (!badge) return;
   attentionProvider = el("provider")?.value || attentionProvider || "";
@@ -604,8 +634,54 @@ async function syncAttentionBadge() {
     return;
   }
   const status = el("testConnectionStatus");
-  if (status?.classList?.contains("is-err")) return;
+  if (!options.trustStorage && status?.classList?.contains("is-err")) return;
   badge.hidden = true;
+}
+
+function bindSecretSync() {
+  if (secretSyncBound) return;
+  secretSyncBound = true;
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    if (area === "local" && changes[PROVIDER_ATTENTION_KEY]) void syncAttentionBadge({ trustStorage: true });
+    const secretWrite = (area === "local" && Object.prototype.hasOwnProperty.call(changes, SECRET_STORAGE_KEY))
+      || (area === "sync" && Object.prototype.hasOwnProperty.call(changes, "settings"));
+    if (!secretWrite) return;
+    void readLiveSecrets(chrome.storage).then((live) => applyLiveSecrets(live)).catch(() => {});
+  });
+}
+
+function applyLiveSecrets(live) {
+  const stored = live || { providers: {}, pdfCloudApiKey: "" };
+  cachedSettings.providers = cachedSettings.providers || {};
+  const ids = new Set([...Object.keys(cachedSettings.providers), ...Object.keys(stored.providers || {})]);
+  for (const id of ids) {
+    if (providerEdits.has(id)) continue;
+    const key = stored.providers?.[id] || "";
+    cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: key });
+  }
+  if (pdfCloudEdit == null) {
+    rememberPdfCloud(stored.pdfCloudApiKey || "");
+    const pdfInput = el("pdfCloudApiKey");
+    if (pdfInput && document.activeElement !== pdfInput) pdfCloudBound?.paint();
+  }
+  const current = el("provider")?.value || "";
+  const providerInput = document.querySelector("[data-key-slot='translate'] input");
+  if (providerInput && document.activeElement !== providerInput && !providerEdits.has(current)) providerSecretPaint?.();
+}
+
+async function sealOutgoingPatch(patch) {
+  const live = await readLiveSecrets(chrome.storage);
+  const next = JSON.parse(JSON.stringify(patch || {}));
+  if (next.providers && typeof next.providers === "object") {
+    for (const [id, cfg] of Object.entries(next.providers)) {
+      if (!cfg || typeof cfg !== "object") continue;
+      if (providerEdits.has(id)) cfg.apiKey = providerEdits.get(id);
+      else delete cfg.apiKey;
+    }
+  }
+  const cloud = pdfCloudEdit != null ? pdfCloudEdit : live.pdfCloudApiKey;
+  if (next.pdfLayout && typeof next.pdfLayout === "object") next.pdfLayout.cloudApiKey = cloud || "";
+  return sealSettingsPatch(next, { pdfCloudApiKey: cloud });
 }
 
 function setTestStatus(text, kind) {
@@ -714,12 +790,14 @@ function renderProviderFields() {
         cachedSettings.providers[provider.id][field.key] = result.value;
         bound.showSaved();
         if (result.changed) {
+          providerEdits.set(provider.id, result.value);
           invalidateTest("clear");
           void clearProviderAttention(attentionArea(), provider.id);
         }
         void persist(input);
       });
       bound.paint();
+      providerSecretPaint = () => bound.paint();
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = "set-inline";
@@ -773,6 +851,7 @@ async function clearProviderKey(id) {
   const name = getProvider(id).name;
   showToast(`已移除 ${name} 密钥 · 撤销`, () => {
     cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: previous });
+    providerEdits.set(id, previous);
     renderProviderFields();
     void persist();
   });
@@ -865,9 +944,11 @@ async function persist(control) {
     providers: cachedSettings.providers,
     pdfLayout: readPdfLayout()
   };
-  const sealed = sealSettingsPatch(patch, { pdfCloudApiKey: pdfCloudKey });
+  const pendingProviders = new Map(providerEdits);
+  const pendingPdf = pdfCloudEdit;
   writing = true;
   try {
+    const sealed = await sealOutgoingPatch(patch);
     const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: sealed });
     if (!res || res.ok === false) {
       const attempt = snapshotControl(control);
@@ -881,6 +962,10 @@ async function persist(control) {
       return;
     }
     cachedSettings = res.settings || cachedSettings;
+    if (pdfCloudEdit === pendingPdf) pdfCloudEdit = null;
+    for (const [id, value] of pendingProviders) {
+      if (providerEdits.get(id) === value) providerEdits.delete(id);
+    }
     hideMiss(control);
     paintKeyList();
   } catch {
