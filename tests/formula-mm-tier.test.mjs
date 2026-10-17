@@ -15,7 +15,9 @@
  * ③ 关开关、移除密钥、换厂商或模型之后，不为旧配置再发请求，在途结果作废；
  * ④ 缓存命中的记录属于当前 model + cropHash + mm-1；
  * ⑤ 已经核对通过的公式不会被更旧的结果降级，也不会被更早采样的已核对行盖掉。
- *    仍存活调用者的已核对决策必须有对应 tier 行；后写入的过期回滚要恢复被它换掉的行。
+ *    仍存活调用者的已核对决策，其 tier 行 latex 与该决策一致；被换掉的已核对行留在
+ *    存储行的 prev 链上，过期回滚只摘掉自己或恢复链上最近一个仍在的行，不丢行，
+ *    也不让更旧的行盖住更新的已提交行。
  * ⑥ 问 AI 不和公式队列互相等待，也不改对方的状态；
  * ⑦ 只接了多模态这一家时，核对不过或调用失败不会去跑自研算法或矢量重绘。
  */
@@ -1231,6 +1233,9 @@ test("a rollback does not delete another tab's newer verified row", async () => 
     async deleteTier(key, decidedAt) {
       return real.deleteTier(key, decidedAt);
     },
+    async rollbackTier(key, writeId, displaced) {
+      return real.rollbackTier(key, writeId, displaced);
+    },
     async getDecision(key) {
       return real.getDecision(key);
     },
@@ -1321,6 +1326,9 @@ test("a same-tab rollback does not delete the other caller's newer verified row"
       },
       async deleteTier(key, writeId) {
         return real.deleteTier(key, writeId);
+      },
+      async rollbackTier(key, writeId, displaced) {
+        return real.rollbackTier(key, writeId, displaced);
       },
       async getDecision(key) {
         decisions += 1;
@@ -2147,6 +2155,7 @@ test("guard: going stale during putDecision refuses the decision and rolls the t
       return scheduled.commitTier(key, record);
     },
     async deleteTier(key, writeId) { return scheduled.deleteTier(key, writeId); },
+    async rollbackTier(key, writeId, displaced) { return scheduled.rollbackTier(key, writeId, displaced); },
     async getDecision(key) { return scheduled.getDecision(key); },
     async putDecision(key, record) {
       const stored = await scheduled.putDecision(key, record);
@@ -2740,6 +2749,600 @@ test("500 seeds keep a live verified decision paired with its tier row", async (
   }
   for (const [key, count] of Object.entries(cover)) {
     assert.ok(count > 0, key);
+  }
+  assert.ok(paired > 100, `paired decisions ${paired}`);
+});
+
+const CHAIN_LATEX = ["x+y", "y+x", "x+y+x"];
+
+function cloningFormulaSend(store) {
+  return async (message) => {
+    const req = structuredClone(message);
+    const res = await handleFormulaCacheMessage(req, store);
+    return res == null ? null : structuredClone(res);
+  };
+}
+
+function chainRecord(latex, extra) {
+  return verifiedTierRecord(latex, extra);
+}
+
+test("three writers restore the live verified latex in both rollback orders", async () => {
+  const other = await import("../lib/formula-cache.js?realm=chain");
+  const cases = [];
+  for (const backend of ["memory", "idb", "message"]) {
+    for (const rollbackOrder of [[1, 2], [2, 1]]) {
+      cases.push({ backend, rollbackOrder, cross: false });
+    }
+  }
+  cases.push({ backend: "memory", rollbackOrder: [1, 2], cross: true });
+  cases.push({ backend: "idb", rollbackOrder: [2, 1], cross: true });
+  cases.push({ backend: "message", rollbackOrder: [1, 2], cross: true });
+  for (const item of cases) {
+    const label = `${item.backend} ${item.rollbackOrder.join(">")}${item.cross ? " cross" : ""}`;
+    await runThreeWriters({
+      ...item,
+      createOther: other.createFormulaCache,
+      label
+    });
+  }
+});
+
+async function runThreeWriters({ backend, rollbackOrder, cross, createOther, label }) {
+  const real = backend === "memory"
+    ? createMemoryStore()
+    : createIdbFormulaStore({ indexedDB: new IDBFactory() });
+  const settings = settingsFor("openai");
+  const docHash = `doc-trio-${label.replace(/\W+/g, "-")}`;
+  let reads = 0;
+  let releaseReads;
+  const threeReads = new Promise((resolve) => {
+    releaseReads = resolve;
+  });
+  let openReads;
+  const readsHold = new Promise((resolve) => {
+    openReads = resolve;
+  });
+  const seenRead = [false, false, false];
+  let arrived = 0;
+  let releaseArrived;
+  const allArrived = new Promise((resolve) => {
+    releaseArrived = resolve;
+  });
+  const commitTurn = [0, 1, 2].map(() => {
+    let go;
+    const gate = new Promise((resolve) => {
+      go = resolve;
+    });
+    return { gate, go };
+  });
+  let committed = 0;
+  let releaseCommitted;
+  const allCommitted = new Promise((resolve) => {
+    releaseCommitted = resolve;
+  });
+  const rollbackTurn = [0, 1, 2].map(() => {
+    let go;
+    const gate = new Promise((resolve) => {
+      go = resolve;
+    });
+    return { gate, go };
+  });
+  const writeIds = [null, null, null];
+  let tierKey = "";
+  const stale = [false, false, false];
+  const sw = {
+    async getTier(key) {
+      return real.getTier(key);
+    },
+    async commitTier(key, record) {
+      const index = CHAIN_LATEX.indexOf(record?.result?.latex);
+      assert.ok(index >= 0, `${label} latex`);
+      tierKey = key;
+      arrived += 1;
+      if (arrived === 3) releaseArrived();
+      await allArrived;
+      await commitTurn[index].gate;
+      const ok = await real.commitTier(key, record);
+      if (ok) writeIds[index] = record.writeId;
+      committed += 1;
+      if (committed === 3) releaseCommitted();
+      if (index < 2) commitTurn[index + 1].go();
+      return ok;
+    },
+    async rollbackTier(key, writeId, displaced) {
+      return real.rollbackTier(key, writeId, displaced);
+    },
+    async deleteTier(key, writeId) {
+      return real.deleteTier(key, writeId);
+    },
+    async getDecision(key) {
+      return real.getDecision(key);
+    },
+    async putDecision(key, record) {
+      return real.putDecision(key, record);
+    }
+  };
+  const surface = backend === "message"
+    ? createMessageFormulaStore(cloningFormulaSend(sw))
+    : sw;
+  function face(index) {
+    const factory = cross && index !== 0 ? createOther : createFormulaCache;
+    const store = {
+      async getTier(key) {
+        if (!seenRead[index]) {
+          seenRead[index] = true;
+          reads += 1;
+          if (reads === 3) releaseReads();
+          await readsHold;
+        }
+        return surface.getTier(key);
+      },
+      async commitTier(key, record) {
+        return surface.commitTier(key, record);
+      },
+      async rollbackTier(key, writeId, displaced) {
+        return surface.rollbackTier(key, writeId, displaced);
+      },
+      async deleteTier(key, writeId) {
+        return surface.deleteTier(key, writeId);
+      },
+      async getDecision(key) {
+        if (index !== 0) {
+          await allCommitted;
+          await rollbackTurn[index].gate;
+          stale[index] = true;
+        }
+        return surface.getDecision(key);
+      },
+      async putDecision(key, record) {
+        return surface.putDecision(key, record);
+      }
+    };
+    return factory(store, { now: () => 1000, gate: createCallGate() });
+  }
+  const caches = [0, 1, 2].map((index) => face(index));
+  const call = (index) => scheduleFormulaBlock(formulaBlock({ bid: "trio", text: "x+y" }), {
+    ...formulaChainFlags(settings),
+    docHash,
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache: caches[index],
+    model: "m",
+    isStale: () => stale[index],
+    cropPngFor: async () => ({ mime: "image/png", base64: "trio", w: 1, h: 1, hash: "trio" }),
+    sendVision: async () => ({ ok: true, text: CHAIN_LATEX[index] }),
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  const jobs = [];
+  jobs[0] = call(0);
+  for (let i = 0; i < 60 && reads < 1; i += 1) await Promise.resolve();
+  assert.equal(reads, 1, `${label} first read`);
+  jobs[1] = call(1);
+  for (let i = 0; i < 60 && reads < 2; i += 1) await Promise.resolve();
+  assert.equal(reads, 2, `${label} second read`);
+  jobs[2] = call(2);
+  for (let i = 0; i < 60 && reads < 3; i += 1) await Promise.resolve();
+  assert.equal(reads, 3, `${label} third read`);
+  openReads();
+  for (let i = 0; i < 80 && arrived < 3; i += 1) await Promise.resolve();
+  assert.equal(arrived, 3, `${label} commits arrived`);
+  commitTurn[0].go();
+  await allCommitted;
+  assert.equal(writeIds[0] != null && writeIds[1] != null && writeIds[2] != null, true, `${label} all stored`);
+  const midway = [];
+  for (const index of rollbackOrder) {
+    rollbackTurn[index].go();
+    await jobs[index];
+    const row = await real.getTier(tierKey);
+    midway.push(row?.result?.latex ?? null);
+  }
+  const live = await jobs[0];
+  const row = await real.getTier(tierKey);
+  const decision = await real.getDecision(`${docHash}:trio`);
+  const expectedMid = rollbackOrder[0] === 1
+    ? [CHAIN_LATEX[2], CHAIN_LATEX[0]]
+    : [CHAIN_LATEX[1], CHAIN_LATEX[0]];
+  assert.deepEqual(midway, expectedMid, `${label} midway`);
+  assert.equal(live.latexSource, "vlm", `${label} live`);
+  assert.equal(row?.result?.latex, CHAIN_LATEX[0], `${label} tier`);
+  assert.equal(row?.writeId, writeIds[0], `${label} write id`);
+  assert.equal(decision?.decision?.chosen?.latex, CHAIN_LATEX[0], `${label} decision`);
+  assert.notEqual(row?.result?.latex, CHAIN_LATEX[1], `${label} not the middle row`);
+}
+
+test("two stale writers do not resurrect the one who already rolled back", async () => {
+  async function both(real, label) {
+    const key = `doc:both-stale:${label}`;
+    const first = chainRecord("x+y", { writeId: "a:1", decidedAt: 1000 });
+    const second = chainRecord("y+x", { writeId: "b:1", decidedAt: 1000 });
+    assert.equal(await real.commitTier(key, first), true, label);
+    assert.equal(await real.commitTier(key, second), true, label);
+    assert.equal(await real.rollbackTier(key, "a:1", first), true, `${label} splice`);
+    assert.equal((await real.getTier(key))?.writeId, "b:1", `${label} current stays`);
+    assert.equal(await real.rollbackTier(key, "b:1", second), true, `${label} current`);
+    assert.equal(await real.getTier(key), null, `${label} nobody left`);
+
+    const third = chainRecord("x+y", { writeId: "a:2", decidedAt: 1000 });
+    const fourth = chainRecord("y+x", { writeId: "b:2", decidedAt: 1000 });
+    assert.equal(await real.commitTier(key, third), true, label);
+    assert.equal(await real.commitTier(key, fourth), true, label);
+    assert.equal(await real.rollbackTier(key, "b:2", fourth), true, `${label} restore`);
+    assert.equal((await real.getTier(key))?.writeId, "a:2", `${label} restored`);
+    assert.equal(await real.rollbackTier(key, "a:2", third), true, `${label} follow`);
+    assert.equal(await real.getTier(key), null, `${label} other order`);
+  }
+  await both(createMemoryStore(), "memory");
+  await both(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "idb");
+  const memory = createMemoryStore();
+  await both(createMessageFormulaStore(cloningFormulaSend(memory)), "message");
+});
+
+test("a legacy verified row without writeId is restored when the replacement rolls back", async () => {
+  async function legacy(real, label) {
+    const key = `doc:legacy-chain:${label}`;
+    const row = chainRecord("x+y", { decidedAt: 1000 });
+    delete row.writeId;
+    const next = chainRecord("y+x", { writeId: "w:1", decidedAt: 1001 });
+    assert.equal(await real.commitTier(key, row), true, label);
+    assert.equal(await real.commitTier(key, next), true, label);
+    assert.equal(next.displacedTier?.result?.latex, "x+y", label);
+    assert.equal(next.displacedTier?.writeId ?? null, null, label);
+    assert.equal(await real.rollbackTier(key, "w:1", next.displacedTier), true, label);
+    const restored = await real.getTier(key);
+    assert.equal(restored?.result?.latex, "x+y", label);
+    assert.equal(restored?.writeId ?? null, null, label);
+  }
+  await legacy(createMemoryStore(), "memory");
+  await legacy(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "idb");
+  const memory = createMemoryStore();
+  await legacy(createMessageFormulaStore(cloningFormulaSend(memory)), "message");
+});
+
+test("a chain longer than the cap is not stored and the current row stays", async () => {
+  async function cap(real, label) {
+    const key = `doc:cap:${label}`;
+    const first = chainRecord("x+y", { writeId: "w:1", decidedAt: 1000 });
+    first.prev = [{ writeId: "fake", result: { status: "ok", render: "katex", latex: "nope", tier: "multimodal" } }];
+    assert.equal(await real.commitTier(key, first), true, label);
+    assert.equal((await real.getTier(key))?.prev, undefined, `${label} client prev`);
+    let current = "w:1";
+    for (let i = 2; i <= 9; i += 1) {
+      const row = chainRecord(`y+x${i}`, { writeId: `w:${i}`, decidedAt: 1000 + i });
+      assert.equal(await real.commitTier(key, row), true, `${label} ${i}`);
+      current = row.writeId;
+    }
+    const stored = await real.getTier(key);
+    assert.equal(stored?.writeId, current, label);
+    assert.equal(stored?.prev?.length, 8, label);
+    const overflow = chainRecord("x+y+x", { writeId: "w:10", decidedAt: 1020 });
+    assert.equal(await real.commitTier(key, overflow), false, label);
+    assert.equal(overflow.displacedTier ?? null, null, `${label} not displaced`);
+    const after = await real.getTier(key);
+    assert.equal(after?.writeId, current, `${label} stays`);
+    assert.equal(after?.prev?.length, 8, `${label} chain stays`);
+  }
+  await cap(createMemoryStore(), "memory");
+  await cap(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "idb");
+});
+
+test("a commit that goes stale inside commitTier passes the displaced row and restores it", async () => {
+  async function interrupt(real, label) {
+    const key = `doc:rs10:${label}`;
+    let armed = false;
+    let seen = null;
+    const store = {
+      async getTier(id) {
+        return real.getTier(id);
+      },
+      async commitTier(id, record) {
+        const ok = await real.commitTier(id, record);
+        if (record?.result?.latex === "y+x") armed = true;
+        return ok;
+      },
+      async rollbackTier(id, writeId, displaced) {
+        seen = displaced;
+        return real.rollbackTier(id, writeId, displaced);
+      }
+    };
+    const cache = createFormulaCache(store, { now: () => 1000 });
+    const verified = (latex) => ({
+      tier: "multimodal",
+      status: "ok",
+      render: "katex",
+      latex,
+      meta: { version: "mm-1", epoch: 1 }
+    });
+    assert.equal(await cache.writeTier(key, verified("x+y"), {
+      docHash: "doc",
+      model: "m",
+      stillCurrent: () => true
+    }), true, label);
+    assert.equal(await cache.writeTier(key, verified("y+x"), {
+      docHash: "doc",
+      model: "m",
+      stillCurrent: () => !armed
+    }), false, label);
+    assert.equal(seen?.result?.latex, "x+y", `${label} displaced`);
+    assert.equal((await real.getTier(key))?.result?.latex, "x+y", `${label} restored`);
+  }
+  await interrupt(createMemoryStore(), "memory");
+  await interrupt(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "idb");
+});
+
+test("a verified row committed during rollbackTier's read survives", async () => {
+  const factory = new IDBFactory();
+  const real = createIdbFormulaStore({ indexedDB: factory });
+  const key = "doc:rollwin:multimodal:mm-1:m:crop";
+  const older = chainRecord("x+y", { writeId: "a", decidedAt: 1000 });
+  const current = chainRecord("y+x", { writeId: "b", decidedAt: 1001 });
+  assert.equal(await real.commitTier(key, older), true);
+  assert.equal(await real.commitTier(key, current), true);
+  const seeded = await real.getTier(key);
+  assert.equal(seeded?.writeId, "b");
+  assert.equal(seeded?.prev?.[0]?.writeId, "a");
+  const opener = factory.open(FORMULA_DB, 1);
+  const dbB = await new Promise((resolve, reject) => {
+    opener.onsuccess = () => resolve(opener.result);
+    opener.onerror = () => reject(opener.error);
+  });
+  const probe = dbB.transaction("tierResults", "readonly");
+  const proto = Object.getPrototypeOf(probe.objectStore("tierResults"));
+  await new Promise((resolve) => {
+    probe.oncomplete = resolve;
+  });
+  const newer = chainRecord("x+y+x", { writeId: "c", decidedAt: 2000 });
+  newer.key = key;
+  let armed = false;
+  let landed;
+  const original = proto.get;
+  proto.get = function patchedGet(query) {
+    const request = original.call(this, query);
+    if (!armed && this.name === "tierResults" && query === key) {
+      armed = true;
+      request.addEventListener("success", () => {
+        const tx = dbB.transaction("tierResults", "readwrite");
+        tx.objectStore("tierResults").put(newer, key);
+        landed = new Promise((resolve, reject) => {
+          tx.oncomplete = () => resolve(true);
+          tx.onabort = () => reject(tx.error || new Error("b aborted"));
+          tx.onerror = () => reject(tx.error || new Error("b failed"));
+        });
+      });
+    }
+    return request;
+  };
+  try {
+    assert.equal(await real.rollbackTier(key, "b", current.displacedTier), true);
+    assert.equal(armed, true);
+    await landed;
+    const row = await real.getTier(key);
+    assert.equal(row?.result?.latex, "x+y+x");
+    assert.equal(row?.writeId, "c");
+    assert.equal(row?.decidedAt, 2000);
+  } finally {
+    proto.get = original;
+    dbB.close();
+  }
+});
+
+test("a store without rollbackTier does not delete on rollback", async () => {
+  const real = createMemoryStore();
+  let deleted = 0;
+  let armed = false;
+  const store = {
+    async getTier(key) {
+      return real.getTier(key);
+    },
+    async commitTier(key, record) {
+      const ok = await real.commitTier(key, record);
+      armed = true;
+      return ok;
+    },
+    async deleteTier(key, writeId) {
+      deleted += 1;
+      return real.deleteTier(key, writeId);
+    }
+  };
+  const cache = createFormulaCache(store, { now: () => 1000 });
+  const key = "doc:noroll:multimodal:mm-1:m:crop";
+  assert.equal(await cache.writeTier(key, {
+    tier: "multimodal",
+    status: "ok",
+    render: "katex",
+    latex: "x+y",
+    meta: { version: "mm-1", epoch: 1 }
+  }, {
+    docHash: "doc",
+    model: "m",
+    stillCurrent: () => !armed
+  }), false);
+  assert.equal(deleted, 0);
+  assert.equal((await real.getTier(key))?.result?.latex, "x+y");
+});
+
+test("rollback rejects a displaced row whose key does not match", async () => {
+  const memory = createMemoryStore();
+  const key = "doc:keycheck:a";
+  const older = chainRecord("x+y", { writeId: "tab:1", decidedAt: 1000 });
+  const newer = chainRecord("y+x", { writeId: "tab:2", decidedAt: 1001 });
+  assert.equal(await memory.commitTier(key, older), true);
+  assert.equal(await memory.commitTier(key, newer), true);
+  const mismatched = await handleFormulaCacheMessage({
+    action: "rollback",
+    key,
+    writeId: "tab:2",
+    displaced: {
+      key: "doc:other",
+      writeId: "tab:1",
+      result: { tier: "multimodal", status: "ok", render: "katex", latex: "x+y" }
+    }
+  }, memory);
+  assert.equal(mismatched.rolled, false);
+  assert.equal((await memory.getTier(key))?.writeId, "tab:2");
+  const nested = await handleFormulaCacheMessage({
+    action: "rollback",
+    key,
+    writeId: "tab:2",
+    displaced: {
+      key,
+      writeId: "tab:1",
+      prev: [{
+        key: "doc:other",
+        writeId: "tab:1",
+        result: { tier: "multimodal", status: "ok", render: "katex", latex: "x+y" }
+      }]
+    }
+  }, memory);
+  assert.equal(nested.rolled, false);
+  assert.equal((await memory.getTier(key))?.result?.latex, "y+x");
+  assert.equal(await memory.rollbackTier(key, "tab:2", null), true);
+  assert.equal((await memory.getTier(key))?.writeId, "tab:1");
+});
+
+function shuffleChain(rand, items) {
+  const copy = items.slice();
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rand() * (i + 1));
+    const swap = copy[i];
+    copy[i] = copy[j];
+    copy[j] = swap;
+  }
+  return copy;
+}
+
+function checkChainStep(row, remaining, decision, where) {
+  if (!remaining.length) {
+    assert.equal(row, null, where);
+    assert.equal(decision, null, where);
+    return;
+  }
+  const latest = remaining[remaining.length - 1];
+  const older = remaining.slice(0, -1).reverse();
+  assert.equal(row?.writeId, latest.writeId, where);
+  assert.equal(row?.result?.latex, latest.latex, where);
+  const prev = Array.isArray(row?.prev) ? row.prev : [];
+  assert.equal(prev.length, older.length, `${where} depth`);
+  for (let i = 0; i < older.length; i += 1) {
+    assert.equal(prev[i]?.writeId, older[i].writeId, `${where} prev`);
+    assert.equal(prev[i]?.result?.latex, older[i].latex, `${where} prev latex`);
+  }
+  const present = new Set([row.writeId, ...prev.map((entry) => entry?.writeId)]);
+  for (const writer of remaining) {
+    assert.equal(present.has(writer.writeId), true, `${where} lost ${writer.writeId}`);
+  }
+  if (!latest.stale) {
+    assert.equal(decision, latest.latex, `${where} decision`);
+    assert.equal(row.result.latex, decision, `${where} pair`);
+  }
+}
+
+test("500 seeds keep a verified chain consistent for two to four writers", async () => {
+  const formulas = ["x+y+z", "y+z+x", "z+x+y", "x+z+y"];
+  const cover = {
+    memory: 0,
+    idb: 0,
+    message: 0,
+    same: 0,
+    cross: 0,
+    w2: 0,
+    w3: 0,
+    w4: 0,
+    earliest: 0,
+    later: 0,
+    allStale: 0,
+    skew0: 0,
+    skew1: 0
+  };
+  let paired = 0;
+  for (let seed = 1; seed <= 500; seed += 1) {
+    const rand = mulberry32(seed);
+    const n = 2 + (Math.floor(seed / 12) % 3);
+    const backend = ["memory", "idb", "message"][seed % 3];
+    const cross = Math.floor(seed / 3) % 2 === 1;
+    const skew = Math.floor(seed / 6) % 2;
+    const force = seed % 4;
+    const identities = Array.from({ length: n }, (_, index) => index);
+    let commitOrder;
+    if (force === 0) commitOrder = [0, ...shuffleChain(rand, identities.filter((index) => index !== 0))];
+    else if (force === 1) commitOrder = [...shuffleChain(rand, identities.filter((index) => index !== n - 1)), n - 1];
+    else commitOrder = shuffleChain(rand, identities);
+    const stale = new Set();
+    if (force === 0) identities.forEach((index) => { if (index !== 0) stale.add(index); });
+    else if (force === 1) identities.forEach((index) => { if (index !== n - 1) stale.add(index); });
+    else if (force === 2) identities.forEach((index) => stale.add(index));
+    else identities.forEach((index) => { if (rand() < 0.5) stale.add(index); });
+    const rollbackOrder = shuffleChain(rand, [...stale]);
+    const writers = identities.map((index) => ({
+      index,
+      latex: formulas[index],
+      writeId: cross ? `r${index}:${index + 1}` : `same:${index + 1}`,
+      decidedAt: 1000 + index * skew,
+      stale: stale.has(index)
+    }));
+    const where = `seed=${seed} ${backend} n=${n} cross=${cross} skew=${skew}`;
+    try {
+      const real = backend === "memory"
+        ? createMemoryStore()
+        : createIdbFormulaStore({ indexedDB: new IDBFactory() });
+      const store = backend === "message"
+        ? createMessageFormulaStore(cloningFormulaSend(real))
+        : real;
+      const key = `doc:chain:${seed}`;
+      const remaining = [];
+      let decision = null;
+      for (const index of commitOrder) {
+        const writer = writers[index];
+        const before = (await store.getTier(key))?.writeId ?? null;
+        const ok = await store.commitTier(key, chainRecord(writer.latex, {
+          writeId: writer.writeId,
+          decidedAt: writer.decidedAt,
+          docHash: "doc-chain"
+        }));
+        if (!ok) {
+          assert.equal((await store.getTier(key))?.writeId ?? null, before, `${where} refused`);
+        } else {
+          remaining.push(writer);
+          if (!writer.stale) decision = writer.latex;
+        }
+        checkChainStep(await store.getTier(key), remaining, decision, `${where} commit ${writer.writeId}`);
+      }
+      const committed = remaining.slice();
+      for (const index of rollbackOrder) {
+        const writer = writers[index];
+        const at = remaining.findIndex((item) => item.writeId === writer.writeId);
+        const rolled = await store.rollbackTier(key, writer.writeId, null);
+        if (at >= 0) remaining.splice(at, 1);
+        assert.equal(rolled, at >= 0, `${where} rollback ${writer.writeId}`);
+        checkChainStep(await store.getTier(key), remaining, decision, `${where} rollback ${writer.writeId}`);
+      }
+      const row = await store.getTier(key);
+      const survivors = remaining.filter((writer) => !writer.stale);
+      if (!survivors.length) {
+        assert.equal(row, null, `${where} final`);
+        assert.equal(decision, null, `${where} final decision`);
+      } else {
+        const last = survivors[survivors.length - 1];
+        assert.equal(row?.result?.latex, last.latex, `${where} final latex`);
+        assert.equal(row?.writeId, last.writeId, `${where} final id`);
+        assert.equal(decision, last.latex, `${where} final decision`);
+        paired += 1;
+        if (committed[0]?.writeId === last.writeId) cover.earliest += 1;
+        if (committed.findIndex((writer) => writer.writeId === last.writeId) > 0) cover.later += 1;
+      }
+      if (!survivors.length) cover.allStale += 1;
+      cover[backend] += 1;
+      cover[cross ? "cross" : "same"] += 1;
+      cover[`w${n}`] += 1;
+      cover[skew === 0 ? "skew0" : "skew1"] += 1;
+    } catch (err) {
+      console.error(`mm-tier chain failed seed=${seed} backend=${backend} writers=${n} cross=${cross} skew=${skew} force=${force} commit=${commitOrder.join(",")} rollback=${rollbackOrder.join(",")} stale=${[...stale].join(",")}`);
+      throw err;
+    }
+  }
+  for (const [name, count] of Object.entries(cover)) {
+    assert.ok(count > 0, name);
   }
   assert.ok(paired > 100, `paired decisions ${paired}`);
 });

@@ -10,10 +10,9 @@ import {
   evictionKeys,
   isCacheableFormulaRecord,
   stripFormulaImageUrl,
-  tierCommitAllowed,
   decisionCommitAllowed,
-  displacedVerifiedTier,
-  tierRollbackPlan
+  nextCommittedTier,
+  applyTierRollback
 } from "../lib/formula-cache.js";
 
 export { FORMULA_DB };
@@ -161,17 +160,17 @@ export function createIdbFormulaStore({
           getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
           getReq.onsuccess = () => {
             const existing = getReq.result || null;
-            if (!tierCommitAllowed(existing, record)) {
+            const planned = nextCommittedTier(existing, record);
+            if (!planned.ok) {
               resolve(false);
               return;
             }
-            const displaced = displacedVerifiedTier(existing);
-            const next = prepareRecord(key, record);
+            const next = prepareRecord(key, planned.draft);
             delete next.displacedTier;
             const putReq = objectStore.put(next, key);
             putReq.onerror = () => reject(putReq.error || tx.error || new Error("indexedDB request failed"));
             putReq.onsuccess = () => {
-              if (displaced && record && typeof record === "object") record.displacedTier = displaced;
+              if (planned.displaced && record && typeof record === "object") record.displacedTier = planned.displaced;
               resolve(true);
             };
           };
@@ -207,7 +206,7 @@ export function createIdbFormulaStore({
         db.close();
       }
     },
-    async rollbackTier(key, writeId, displaced) {
+    async rollbackTier(key, writeId, _displaced) {
       const db = await openExisting();
       if (!db) return false;
       try {
@@ -217,16 +216,17 @@ export function createIdbFormulaStore({
           const getReq = objectStore.get(key);
           getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
           getReq.onsuccess = () => {
-            const plan = tierRollbackPlan(getReq.result, writeId, displaced);
-            if (plan === "restore") {
-              const next = prepareRecord(key, displaced);
+            // guard:rollback-tx — read, splice or restore, and write stay in this transaction
+            const plan = applyTierRollback(getReq.result, writeId);
+            if (plan.action === "restore" || plan.action === "rewrite") {
+              const next = prepareRecord(key, plan.row);
               delete next.displacedTier;
               const putReq = objectStore.put(next, key);
               putReq.onerror = () => reject(putReq.error || tx.error || new Error("indexedDB request failed"));
               putReq.onsuccess = () => resolve(true);
               return;
             }
-            if (plan === "delete") {
+            if (plan.action === "delete") {
               const delReq = objectStore.delete(key);
               delReq.onerror = () => reject(delReq.error || tx.error || new Error("indexedDB request failed"));
               delReq.onsuccess = () => resolve(true);
@@ -297,6 +297,18 @@ export function createIdbFormulaStore({
   };
 }
 
+function displacedKeysMatch(key, displaced) {
+  if (displaced == null) return true;
+  if (typeof displaced !== "object") return false;
+  if (displaced.key != null && displaced.key !== key) return false;
+  if (Array.isArray(displaced.prev)) {
+    for (const entry of displaced.prev) {
+      if (entry && entry.key != null && entry.key !== key) return false;
+    }
+  }
+  return true;
+}
+
 let shared = null;
 
 export function sharedFormulaStore() {
@@ -328,6 +340,7 @@ export async function handleFormulaCacheMessage(message = {}, store = sharedForm
     }
     if (action === "rollback") {
       if (typeof store.rollbackTier !== "function") return { ok: true, rolled: false };
+      if (!displacedKeysMatch(message.key, message.displaced || null)) return { ok: true, rolled: false };
       const rolled = await store.rollbackTier(message.key, message.writeId, message.displaced || null);
       return { ok: true, rolled: rolled === true };
     }
