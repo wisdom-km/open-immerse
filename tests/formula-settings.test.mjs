@@ -17,6 +17,7 @@ import { multimodalTier } from "../lib/formula-tiers/multimodal.js";
 import { ocrTier } from "../lib/formula-tiers/ocr.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import {
+  FORMULA_BASE_URL_NOTE,
   FORMULA_ORDER,
   FORMULA_PRIVACY_NOTE,
   FORMULA_SETTINGS_AREA,
@@ -351,6 +352,8 @@ test("F7-PR1 a typed model is kept and the vendor base URL is only a placeholder
   });
   assert.ok(placeholders.includes("https://dashscope.aliyuncs.com/compatible-mode/v1"));
   assert.equal(typed.multimodal.baseUrl, "");
+  assert.match(textOf(panel), /不要把密钥写进地址/);
+  assert.equal(FORMULA_BASE_URL_NOTE.includes("不要把密钥写进地址"), true);
 });
 
 test("FUI-04 custom base URL is required before the vision probe can run", () => {

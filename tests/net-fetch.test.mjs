@@ -734,6 +734,37 @@ test("arxiv production fetch forwards status, signal, and bytes", async () => {
   assert.equal(blocked.status, 429);
 });
 
+test("multimodal error logs redact the sent key and other purposes do not", async () => {
+  const key = "AIzaSyD-plain-probe-key-0123456789";
+  const padded = ` \n${key}\n `;
+  async function capture(purpose, header) {
+    const logs = [];
+    const net = createNet({
+      log: (row) => logs.push(row),
+      random: () => 0,
+      sleep: () => Promise.resolve(),
+      transport() {
+        throw new Error(`fetch failed ${key}`);
+      }
+    });
+    await assert.rejects(() => net.fetch({
+      url: "https://example.test/log",
+      purpose,
+      method: "POST",
+      headers: { "x-goog-api-key": header },
+      timeoutMs: false,
+      retry: false
+    }));
+    return logs;
+  }
+  const multimodal = await capture("multimodal", padded);
+  assert.equal(JSON.stringify(multimodal).includes(key), false);
+  assert.match(multimodal[0].error, /fetch failed/);
+  const probe = await capture("probe", padded);
+  assert.equal(probe[0].error.includes(key), true);
+  assert.equal(probe[0].headers["x-goog-api-key"], "***");
+});
+
 test("error bodies stay unread unless the caller opts in", async () => {
   const body = JSON.stringify({ error: { message: "This model does not support image input" } });
   function transport() {

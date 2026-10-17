@@ -681,27 +681,94 @@ test("a real error Response is classified as no-vision and the echoed key is red
   assert.equal(unauthorized.error.summary.toLowerCase().includes(key), false);
 });
 
-test("error summaries redact short keys, different case, and a key seen when reading fails", async () => {
+test("a padded stored key is redacted when the vendor echoes the trimmed key", async () => {
+  const trimmed = "ab12cd";
+  const padded = ` \n${trimmed}\n `;
+  const box = harness(() => new Response(
+    JSON.stringify({ error: { message: `bad key ${trimmed}` } }),
+    { status: 401, headers: { "content-type": "application/json" } }
+  ));
+  const storage = {
+    async get(key) {
+      assert.equal(key, "formulaSettings");
+      return {
+        formulaSettings: {
+          multimodal: { provider: "openai", apiKey: padded, model: "gpt-5.6-luna" }
+        }
+      };
+    },
+    async set() {
+      throw new Error("storage must not be written");
+    }
+  };
+  const result = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0], padded)),
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    storage,
+    net: box.net
+  });
+  assert.equal(box.seen[0].headers.Authorization, `Bearer ${trimmed}`);
+  assert.equal(result.error.code, "401");
+  assert.match(result.error.summary, /bad key/);
+  assert.equal(result.error.summary.includes(trimmed), false);
+  assert.equal(result.error.summary.includes(padded.trim()), false);
+  assertNoSecret(box.logs, trimmed);
+});
+
+test("a failed key read uses a fixed summary and does not echo the thrown text", async () => {
   const held = "k9x2";
-  const decoy = "DECOY-ONLY-99";
   const box = harness(() => chatOrGemini(VENDORS[0], "no"));
   const failed = await sendVision({
     target: multimodalTarget(settingsFor(VENDORS[0])),
     text: "x",
     images: [{ mime: "image/png", base64: PNG }],
-    secret: decoy,
     readSecret: async () => {
-      const error = new Error(`storage failed ${held.toUpperCase()}`);
-      error.secret = held;
-      throw error;
+      throw new Error(`disk read failed ${held}`);
     },
     net: box.net
   });
   assert.equal(box.seen.length, 0);
   assert.equal(failed.error.code, "http");
-  assert.match(failed.error.summary, /storage failed/);
-  assert.equal(failed.error.summary.toLowerCase().includes(held), false);
-  assert.equal(failed.error.summary.includes(decoy), false);
+  assert.equal(failed.error.summary, "读取密钥失败");
+  assert.equal(failed.error.summary.includes(held), false);
+  assert.equal(failed.error.summary.includes("disk read failed"), false);
+});
+
+test("a failed key read that is already aborted stays aborted", async () => {
+  const held = "k9x2";
+  const controller = new AbortController();
+  const box = harness(() => chatOrGemini(VENDORS[0], "no"));
+  const failed = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0])),
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    signal: controller.signal,
+    readSecret: async () => {
+      controller.abort();
+      throw new Error(`disk read failed ${held}`);
+    },
+    net: box.net
+  });
+  assert.equal(box.seen.length, 0);
+  assert.equal(failed.error.code, "aborted");
+  assert.equal(failed.error.summary.includes(held), false);
+  assert.equal(failed.error.summary.includes("disk read failed"), false);
+});
+
+test("api_key_id and hash fragments are stripped, and a path key is left in place", () => {
+  const leaked = "url-key-99";
+  const target = multimodalTarget(normalizeFormulaSettings({
+    multimodal: {
+      provider: "custom",
+      model: "m",
+      baseUrl: `https://vendor.example/v1/${leaked}/chat/completions?api_key_id=${leaked}&ok=1#${leaked}`
+    }
+  }));
+  assert.equal(target.url.includes("#"), false);
+  assert.equal(target.url.includes("api_key_id"), false);
+  assert.match(target.url, /ok=1/);
+  assert.equal(target.url, `https://vendor.example/v1/${leaked}/chat/completions?ok=1`);
 });
 
 test("secret query keys are stripped without a scheme, including x-goog-api-key and auth", () => {
@@ -721,6 +788,24 @@ test("secret query keys are stripped without a scheme, including x-goog-api-key 
   assert.match(target.url, /ok=1/);
   assert.equal(target.url.startsWith("https://"), false);
   assert.equal(target.url, "vendor.example/v1/chat/completions?ok=1");
+});
+
+test("eight non-PNG bytes are rejected by the magic check", async () => {
+  const bytes = Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+  assert.ok(bytes.length >= 8);
+  assert.notDeepEqual([...bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const box = harness(() => chatOrGemini(VENDORS[0], "SENT"));
+  const result = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0])),
+    text: "x",
+    images: [{ mime: "image/png", base64: bytes.toString("base64") }],
+    secret: SECRET,
+    net: box.net
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error.summary, /PNG/);
+  assert.equal(box.seen.length, 0);
+  assert.equal(JSON.stringify(result).includes("SENT"), false);
 });
 
 test("PNG bytes, exact mime, and the 10MiB cap are enforced before any request", async () => {
