@@ -309,6 +309,9 @@ import { detectArxivId } from "../lib/arxiv-id.js";
 import { KATEX_RENDER_OPTIONS } from "../lib/formula-katex.js";
 import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
+import { createFormulaCache } from "../lib/formula-cache.js";
+import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
+import { beginMmPage } from "../lib/formula-mm-ledger.js";
 import {
   ARXIV_SOURCE_AUTO_KEY,
   ARXIV_SOURCE_ON_KEY,
@@ -466,6 +469,14 @@ let readerBlend = readerImageBlend({ supportsMultiply: true, forcedColors: false
 let toolbarSnapFrame = 0;
 const READER_VIEWS = ["zh", "bi", "src"];
 let formulaViewerSettings = defaultFormulaSettings();
+let formulaViewerCache = null;
+
+function viewerFormulaCache() {
+  if (!formulaViewerCache) {
+    formulaViewerCache = createFormulaCache(createMessageFormulaStore((message) => runtimeSend(message)));
+  }
+  return formulaViewerCache;
+}
 let formulaSettingsWriting = false;
 let formulaSettingsReady = Promise.resolve();
 let arxivPrefs = { auto: false, skip: [], on: [] };
@@ -3537,6 +3548,7 @@ async function restampArxivPage(pageNumber) {
   const layout = getPageLayout(pageNumber);
   if (!layout?.blocks) return;
   const flags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: formulaArxivSourceEnabled() });
+  const mmLedger = beginMmPage(pageNumber);
   const next = [];
   for (const block of layout.blocks) {
     if (block?.label !== "formula") {
@@ -3562,7 +3574,11 @@ async function restampArxivPage(pageNumber) {
       docHash: notesDocHashNow(),
       page: pageNumber,
       katex: globalThis.katex,
-      cache: null
+      settings: formulaViewerSettings,
+      readSettings: () => formulaViewerSettings,
+      model: formulaViewerSettings?.multimodal?.model || "",
+      mmLedger,
+      cache: viewerFormulaCache()
     }));
   }
   layout.blocks = next;
@@ -3714,6 +3730,7 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
     page: page1Viewport
   }) || arxivIdentity : null;
   const formulaFlags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: arxivOn });
+  const mmLedger = beginMmPage(pageNumber);
   for (const block of blocks || []) {
     if (isStale()) return null;
     if (block?.label !== "formula") {
@@ -3738,7 +3755,12 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
       readAlignment: readCachedArxivAlignment,
       docHash: notesDocHashNow(),
       page: pageNumber,
-      cache: null // TODO(F7): 接上公式缓存
+      katex: globalThis.katex,
+      settings: formulaViewerSettings,
+      readSettings: () => formulaViewerSettings,
+      model: formulaViewerSettings?.multimodal?.model || "",
+      mmLedger,
+      cache: viewerFormulaCache()
     }));
   }
   return cropped;
