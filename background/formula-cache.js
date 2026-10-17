@@ -174,18 +174,19 @@ export function createIdbFormulaStore({
         db.close();
       }
     },
-    async deleteTier(key, decidedAt) {
+    async deleteTier(key, writeId) {
       const db = await openExisting();
       if (!db) return false;
       try {
         return await new Promise((resolve, reject) => {
+          // guard:write-id — read, compare, and delete stay in this one transaction
           const tx = db.transaction("tierResults", "readwrite");
           const objectStore = tx.objectStore("tierResults");
           const getReq = objectStore.get(key);
           getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
           getReq.onsuccess = () => {
             const row = getReq.result;
-            if (!row || (decidedAt != null && row.decidedAt !== decidedAt)) {
+            if (!row || row.writeId !== writeId) {
               resolve(false);
               return;
             }
@@ -285,7 +286,7 @@ export async function handleFormulaCacheMessage(message = {}, store = sharedForm
     }
     if (action === "delete") {
       if (typeof store.deleteTier !== "function") return { ok: true, deleted: false };
-      const deleted = await store.deleteTier(message.key, message.decidedAt);
+      const deleted = await store.deleteTier(message.key, message.writeId);
       return { ok: true, deleted: deleted === true };
     }
     if (action === "clearDoc") {

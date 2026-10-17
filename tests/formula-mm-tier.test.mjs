@@ -14,7 +14,7 @@
  * ② 中止或过期的结果不写缓存，块上也不留下 vlm；
  * ③ 关开关、移除密钥、换厂商或模型之后，不为旧配置再发请求，在途结果作废；
  * ④ 缓存命中的记录属于当前 model + cropHash + mm-1；
- * ⑤ 已经核对通过的公式不会被更旧的结果降级；
+ * ⑤ 已经核对通过的公式不会被更旧的结果降级，也不会被更早采样的已核对行盖掉；回滚只删自己的 writeId；
  * ⑥ 问 AI 不和公式队列互相等待，也不改对方的状态；
  * ⑦ 只接了多模态这一家时，核对不过或调用失败不会去跑自研算法或矢量重绘。
  */
@@ -128,10 +128,10 @@ function wrapStore(inner, state) {
       if (stored) state.saved.push({ ...structuredClone(record), key });
       return stored;
     },
-    async deleteTier(key, decidedAt) {
-      const removed = await inner.deleteTier(key, decidedAt);
+    async deleteTier(key, writeId) {
+      const removed = await inner.deleteTier(key, writeId);
       if (removed) {
-        const index = state.saved.findIndex((row) => row.key === key && row.decidedAt === decidedAt);
+        const index = state.saved.findIndex((row) => row.key === key && row.writeId === writeId);
         if (index >= 0) state.saved.splice(index, 1);
       }
       return removed;
@@ -1245,10 +1245,11 @@ test("a same-tab rollback does not delete the other caller's newer verified row"
   const settings = settingsFor("openai");
   async function overlap(real, pixelsA, pixelsB, label) {
     const same = pixelsA === pixelsB;
-    let clock = 1000;
     let commits = 0;
     let bKey = "";
-    let bAt = null;
+    let bWriteId = null;
+    const seenAt = [];
+    const seenId = [];
     let releaseSecond;
     const secondCommit = new Promise((resolve) => {
       releaseSecond = resolve;
@@ -1281,15 +1282,17 @@ test("a same-tab rollback does not delete the other caller's newer verified row"
       async commitTier(key, record) {
         const stored = await real.commitTier(key, record);
         commits += 1;
+        seenAt.push(record.decidedAt);
+        seenId.push(record.writeId);
         if (commits === 2) {
           bKey = key;
-          bAt = record.decidedAt;
+          bWriteId = record.writeId;
           releaseSecond();
         }
         return stored;
       },
-      async deleteTier(key, decidedAt) {
-        return real.deleteTier(key, decidedAt);
+      async deleteTier(key, writeId) {
+        return real.deleteTier(key, writeId);
       },
       async getDecision(key) {
         decisions += 1;
@@ -1303,7 +1306,7 @@ test("a same-tab rollback does not delete the other caller's newer verified row"
         return real.putDecision(key, record);
       }
     };
-    const cache = createFormulaCache(store, { now: () => (clock += 10), gate });
+    const cache = createFormulaCache(store, { now: () => 1000, gate });
     let sends = 0;
     let releaseSend;
     const sendHold = new Promise((resolve) => {
@@ -1346,14 +1349,62 @@ test("a same-tab rollback does not delete the other caller's newer verified row"
     assert.equal(shownB.latexSource, "vlm", `${label} other verified`);
     assert.equal(shownA.latexSource, undefined, `${label} caller went stale`);
     assert.ok(bKey, `${label} other committed`);
+    assert.deepEqual(seenAt, [1000, 1000], `${label} same millisecond`);
+    assert.equal(typeof seenId[0], "string", `${label} write id`);
+    assert.notEqual(seenId[0], seenId[1], `${label} distinct write id`);
     const row = await real.getTier(bKey);
-    assert.equal(row?.decidedAt, bAt, `${label} decidedAt`);
+    assert.equal(row?.writeId, bWriteId, `${label} write id`);
+    assert.equal(row?.decidedAt, 1000, `${label} decidedAt`);
     assert.equal(row?.result?.latex, "x", `${label} latex`);
   }
   await overlap(createMemoryStore(), "crop-same", "crop-same", "memory same crop");
   await overlap(createMemoryStore(), "crop-a", "crop-b", "memory other crop");
   await overlap(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "crop-same", "crop-same", "idb same crop");
   await overlap(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "crop-a", "crop-b", "idb other crop");
+});
+
+test("an earlier verified sample cannot overwrite a newer one", async () => {
+  async function race(real, label) {
+    let held = 0;
+    let release;
+    const hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    const store = {
+      async getTier(key) {
+        held += 1;
+        if (held === 1) await hold;
+        return real.getTier(key);
+      },
+      async commitTier(key, record) {
+        return real.commitTier(key, record);
+      },
+      async deleteTier(key, writeId) {
+        return real.deleteTier(key, writeId);
+      }
+    };
+    const cache = createFormulaCache(store, { now: () => 1000 });
+    const key = `doc:early:${label}`;
+    const verified = (latex) => ({
+      tier: "multimodal",
+      status: "ok",
+      render: "katex",
+      latex,
+      meta: { version: "mm-1", epoch: 1 }
+    });
+    const first = cache.writeTier(key, verified("A"), { docHash: "doc", model: "m" });
+    for (let i = 0; i < 20 && held < 1; i += 1) await Promise.resolve();
+    assert.equal(held, 1, `${label} held`);
+    assert.equal(await cache.writeTier(key, verified("B"), { docHash: "doc", model: "m" }), true, label);
+    release();
+    assert.equal(await first, false, `${label} earlier sample`);
+    const row = await real.getTier(key);
+    assert.equal(row?.result?.latex, "B", label);
+    assert.equal(row?.decidedAt, 1000, label);
+    assert.equal(typeof row?.writeId, "string", label);
+  }
+  await race(createMemoryStore(), "memory");
+  await race(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "idb");
 });
 
 test("a verified row committed during deleteTier's read survives", async () => {
@@ -1363,6 +1414,7 @@ test("a verified row committed during deleteTier's read survives", async () => {
   const older = {
     docHash: "doc",
     decidedAt: 1010,
+    writeId: 1,
     chainVersion: "f3-1",
     tier: "multimodal",
     model: "m",
@@ -1389,6 +1441,7 @@ test("a verified row committed during deleteTier's read survives", async () => {
     ...older,
     key,
     decidedAt: 2000,
+    writeId: 2,
     result: { ...older.result, latex: "B", meta: { version: "mm-1", epoch: 2 } }
   };
   let armed = false;
@@ -1411,11 +1464,12 @@ test("a verified row committed during deleteTier's read survives", async () => {
     return request;
   };
   try {
-    await real.deleteTier(key, 1010);
+    await real.deleteTier(key, 1);
     assert.equal(armed, true);
     await landed;
     const row = await real.getTier(key);
     assert.equal(row?.result?.latex, "B");
+    assert.equal(row?.writeId, 2);
     assert.equal(row?.decidedAt, 2000);
   } finally {
     proto.get = original;
@@ -1547,6 +1601,80 @@ test("live joiners share one retry after a stale shared result", async () => {
   await joiners(3);
 });
 
+test("a live waiter takes over when the retry initiator goes stale", async () => {
+  const settings = settingsFor("openai");
+  const gate = createCallGate();
+  const run = gate.run.bind(gate);
+  let joins = 0;
+  gate.run = (key, fn, signal) => {
+    if (gate.has(key)) joins += 1;
+    return run(key, fn, signal);
+  };
+  const cache = createFormulaCache(createMemoryStore(), { gate, now: () => 1000 });
+  let sends = 0;
+  let releaseA;
+  const holdA = new Promise((resolve) => {
+    releaseA = resolve;
+  });
+  let aStale = false;
+  let bStale = false;
+  const hooks = {
+    ...formulaChainFlags(settings),
+    docHash: "doc-takeover",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache,
+    model: settings.multimodal.model,
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  };
+  const first = scheduleFormulaBlock(formulaBlock({ bid: "takeover", text: "x" }), {
+    ...hooks,
+    isStale: () => aStale,
+    sendVision: async () => {
+      sends += 1;
+      aStale = true;
+      await holdA;
+      return { ok: true, text: "x" };
+    }
+  });
+  for (let i = 0; i < 30 && sends < 1; i += 1) await Promise.resolve();
+  assert.equal(sends, 1);
+  const second = scheduleFormulaBlock(formulaBlock({ bid: "takeover", text: "x" }), {
+    ...hooks,
+    isStale: () => bStale,
+    sendVision: async () => {
+      sends += 1;
+      assert.equal(sends, 2, "retry owner");
+      for (let i = 0; i < 40 && joins < 3; i += 1) await Promise.resolve();
+      assert.equal(joins, 3, "waiter joined the retry");
+      bStale = true;
+      return { ok: true, text: "x" };
+    }
+  });
+  for (let i = 0; i < 40 && joins < 1; i += 1) await Promise.resolve();
+  assert.equal(joins, 1, "retry initiator joined");
+  const third = scheduleFormulaBlock(formulaBlock({ bid: "takeover", text: "x" }), {
+    ...hooks,
+    isStale: () => false,
+    sendVision: async () => {
+      sends += 1;
+      return { ok: true, text: "x" };
+    }
+  });
+  for (let i = 0; i < 40 && joins < 2; i += 1) await Promise.resolve();
+  assert.equal(joins, 2, "waiter joined the first call");
+  releaseA();
+  const shownA = await first;
+  const shownB = await second;
+  const shownC = await third;
+  assert.equal(shownA.latexSource, undefined);
+  assert.equal(shownB.latexSource, undefined);
+  assert.equal(shownC.latex, "x");
+  assert.equal(shownC.latexSource, "vlm");
+  assert.equal(sends, 3);
+});
+
 test("k from an in-flight request lands on the page ledger after it is replaced", async () => {
   const settings = settingsFor("openai");
   const first = beginMmPage(11);
@@ -1618,21 +1746,27 @@ test("viewer restamp, crop, and adoptDoc stay wired to the page lifetime", () =>
   const crop = sourceBetween(viewer, "async function cropLayoutBlocks", "function readFormulaCropImage");
   const adoptAt = viewer.indexOf("async function adoptDoc");
   const adopt = viewer.slice(adoptAt, adoptAt + 400);
+  const firstAwait = viewer.indexOf("await ", adoptAt);
+  const abortAt = viewer.indexOf("abortInflightLayouts();", adoptAt);
   assert.match(restamp, /const mmLedger = mmPageLedger\(pageNumber\)/);
   assert.equal(restamp.includes("beginMmPage"), false);
   assert.match(restamp, /isStale:\s*\(\)\s*=>\s*restampFormulaStale\(/);
   assert.match(restamp, /publishRestampedBlocks\(\s*layout,\s*next,\s*restampFormulaStale\(/);
   assert.match(crop, /const mmLedger = mmPageLedger\(pageNumber\)/);
   assert.equal(crop.includes("beginMmPage"), false);
-  assert.match(adopt, /resetMmPages\(\)/);
+  assert.equal(adopt.includes("resetMmPages()"), false);
+  assert.ok(abortAt > firstAwait);
+  assert.equal(viewer.slice(adoptAt, abortAt).includes("resetMmPages()"), false);
+  assert.match(viewer.slice(abortAt, abortAt + 80), /^abortInflightLayouts\(\);\n  resetMmPages\(\);/);
 });
 
-test("memory deleteTier keeps a row whose decidedAt is newer", async () => {
+test("deleteTier removes only the matching write id", async () => {
   const store = createMemoryStore();
   const key = "doc:memdel:multimodal:mm-1:m:crop";
   assert.equal(await store.commitTier(key, {
     docHash: "doc",
-    decidedAt: 1010,
+    decidedAt: 1000,
+    writeId: 1,
     chainVersion: "f3-1",
     tier: "multimodal",
     model: "m",
@@ -1644,10 +1778,13 @@ test("memory deleteTier keeps a row whose decidedAt is newer", async () => {
       meta: { version: "mm-1", epoch: 1 }
     }
   }), true);
-  assert.equal(await store.deleteTier(key, 1020), false);
-  assert.equal((await store.getTier(key)).decidedAt, 1010);
+  assert.equal(await store.deleteTier(key, 2), false);
+  assert.equal((await store.getTier(key)).writeId, 1);
   assert.equal((await store.getTier(key)).result.latex, "A");
-  assert.equal(await store.deleteTier(key, 1010), true);
+  const remote = createMessageFormulaStore((message) => handleFormulaCacheMessage(message, store));
+  assert.equal(await remote.deleteTier(key, 2), false);
+  assert.equal((await store.getTier(key)).result.latex, "A");
+  assert.equal(await remote.deleteTier(key, 1), true);
   assert.equal(await store.getTier(key), null);
 });
 
@@ -1710,6 +1847,69 @@ test("guard: a settings change during the decision read is not stored", async ()
   }, { model: "m", stillCurrent: () => current });
   assert.equal(wrote, false);
   assert.equal(await store.getDecision("doc:still"), null);
+});
+
+test("guard: going stale during putDecision refuses the decision and rolls the tier back", async () => {
+  const settings = settingsFor("openai");
+  const real = createMemoryStore();
+  let current = true;
+  const direct = {
+    async getTier(key) { return real.getTier(key); },
+    async commitTier(key, record) { return real.commitTier(key, record); },
+    async deleteTier(key, writeId) { return real.deleteTier(key, writeId); },
+    async getDecision(key) { return real.getDecision(key); },
+    async putDecision(key, record) {
+      const stored = await real.putDecision(key, record);
+      current = false;
+      return stored;
+    }
+  };
+  const cache = createFormulaCache(direct, { now: () => 1000 });
+  const wrote = await cache.rememberDecision({ docHash: "doc", bid: "after" }, {
+    chosen: {
+      tier: "multimodal",
+      status: "ok",
+      render: "katex",
+      latex: "x",
+      meta: { version: "mm-1" }
+    }
+  }, { model: "m", stillCurrent: () => current });
+  assert.equal(wrote, false);
+  assert.equal((await real.getDecision("doc:after"))?.decision?.chosen?.latex, "x");
+
+  const scheduled = createMemoryStore();
+  let stale = false;
+  let tierKey = "";
+  const store = {
+    async getTier(key) { return scheduled.getTier(key); },
+    async commitTier(key, record) {
+      tierKey = key;
+      return scheduled.commitTier(key, record);
+    },
+    async deleteTier(key, writeId) { return scheduled.deleteTier(key, writeId); },
+    async getDecision(key) { return scheduled.getDecision(key); },
+    async putDecision(key, record) {
+      const stored = await scheduled.putDecision(key, record);
+      stale = true;
+      return stored;
+    }
+  };
+  const shown = await scheduleFormulaBlock(formulaBlock({ bid: "afterput", text: "x" }), {
+    ...formulaChainFlags(settings),
+    docHash: "doc-after",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache: createFormulaCache(store, { now: () => 1000 }),
+    model: settings.multimodal.model,
+    isStale: () => stale,
+    sendVision: async () => ({ ok: true, text: "x" }),
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  assert.equal(shown.latexSource, undefined);
+  assert.ok(tierKey);
+  assert.equal(await scheduled.getTier(tierKey), null);
+  assert.equal((await scheduled.getDecision("doc-after:afterput"))?.decision?.chosen?.latex, "x");
 });
 
 test("a verified decision is not replaced on memory or indexedDB", async () => {
@@ -1847,6 +2047,22 @@ async function assertWorld(world, seed, step) {
     assert.equal(String(row.image?.base64 || "").startsWith("http"), false);
     assert.equal(String(row.image?.base64 || "").startsWith("data:"), false);
   }
+  const seenWrite = new Set();
+  for (const row of world.state.saved) {
+    assert.equal(typeof row.writeId, "string", `seed ${seed} step ${step} write id`);
+    assert.equal(seenWrite.has(row.writeId), false, `seed ${seed} step ${step} duplicate write id`);
+    seenWrite.add(row.writeId);
+    assert.equal(row.decidedAt, 1000, `seed ${seed} step ${step} colliding clock`);
+  }
+  const checkedLive = new Set();
+  for (const row of world.state.saved) {
+    if (checkedLive.has(row.key)) continue;
+    checkedLive.add(row.key);
+    const live = await world.inner.getTier(row.key);
+    if (!live?.writeId) continue;
+    assert.equal(await world.inner.deleteTier(row.key, `${live.writeId}:other`), false, `seed ${seed} step ${step} other write id`);
+    assert.equal((await world.inner.getTier(row.key))?.writeId, live.writeId, `seed ${seed} step ${step} write id kept`);
+  }
   for (const row of world.state.saved) {
     assert.equal(row.key, `${row.unitKey}:${row.tier}:${MM_TIER_VERSION}:${row.model}:${row.cropHash}`, `seed ${seed} step ${step} inv4`);
     assert.equal(row.model.includes("#"), true, `seed ${seed} step ${step} fingerprint`);
@@ -1895,7 +2111,7 @@ async function runSeed(seed, cover) {
   const secret = `sk-seed-${seed}-SECRET-KEY`;
   const state = { saved: [], decisions: [], boom: false, boomDecision: false };
   const inner = createMemoryStore();
-  const cache = createFormulaCache(wrapStore(inner, state));
+  const cache = createFormulaCache(wrapStore(inner, state), { now: () => 1000 });
   const world = {
     secret,
     state,

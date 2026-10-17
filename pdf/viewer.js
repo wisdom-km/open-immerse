@@ -11280,7 +11280,6 @@ async function openPdfData(data, title) {
 
 async function adoptDoc(doc, title) {
   resetArxivSession();
-  resetMmPages();
   // A new document, including the same PDF opened again in this tab, may
   // adopt what was saved. The set stays for a retry that does not adopt:
   // those pages were saved without a failed flag, and adopting them would
@@ -11321,6 +11320,7 @@ async function adoptDoc(doc, title) {
   }
   visualCropPendingPages.clear();
   abortInflightLayouts();
+  resetMmPages();
   vendorLayoutPending.clear();
   vendorLayoutReason.clear();
   docPhase = "opening";
