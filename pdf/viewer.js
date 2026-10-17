@@ -1877,6 +1877,41 @@ function warnViewerStorage(scope, err) {
 }
 
 /**
+ * Chrome reports quota and other storage failures as a rejected promise.
+ * A sync try/catch does not see that rejection. On failure the stale chrome
+ * value is removed so the next read uses the localStorage write from this call.
+ * A promise that never settles is left alone: it may still land.
+ */
+function commitViewerLocal(scope, values) {
+  const local = globalThis.chrome?.storage?.local;
+  const set = local?.set;
+  if (typeof set !== "function") return;
+  let pending;
+  try {
+    pending = set.call(local, values);
+  } catch (err) {
+    warnViewerStorage(scope, err);
+    return;
+  }
+  if (!pending || typeof pending.catch !== "function") return;
+  pending.catch((err) => {
+    warnViewerStorage(scope, err);
+    const remove = local?.remove;
+    if (typeof remove !== "function") return;
+    let dropped;
+    try {
+      dropped = remove.call(local, Object.keys(values));
+    } catch (removeErr) {
+      warnViewerStorage(scope, removeErr);
+      return;
+    }
+    if (dropped && typeof dropped.catch === "function") {
+      dropped.catch((removeErr) => warnViewerStorage(scope, removeErr));
+    }
+  });
+}
+
+/**
  * Interrupt points: local missing; get throws; bag undefined or not an object;
  * stored position malformed; localStorage missing or unreadable.
  * A throw logs the error name only. This read does not write either store.
@@ -1884,7 +1919,7 @@ function warnViewerStorage(scope, err) {
 async function readZoomChipPos() {
   try {
     const local = globalThis.chrome?.storage?.local;
-    const get = globalThis.chrome?.storage?.local?.get;
+    const get = local?.get;
     if (typeof get === "function") {
       const bag = await get.call(local, ZOOM_CHIP_STORAGE_KEY);
       const stored = normalizeZoomChipPos(bag?.[ZOOM_CHIP_STORAGE_KEY]);
@@ -1903,11 +1938,11 @@ async function readZoomChipPos() {
 
 /**
  * Interrupt points: position rejected before any write; localStorage set throws;
- * onBeforeChrome throws (unload after the local write); chrome set throws.
- * A storage throw logs the error name only and leaves the other store as it was.
- * Only pdfZoomChipPos is written.
+ * chrome set rejects after the local write; chrome set never settles.
+ * A rejection logs the error name only and drops that chrome key. The next
+ * read then uses localStorage. Only pdfZoomChipPos is written.
  */
-function persistZoomChipPos(pos, onBeforeChrome) {
+function persistZoomChipPos(pos) {
   const payload = normalizeZoomChipPos(pos);
   if (!payload) return;
   zoomChipCustom = true;
@@ -1916,14 +1951,7 @@ function persistZoomChipPos(pos, onBeforeChrome) {
   } catch (err) {
     warnViewerStorage("zoom chip", err);
   }
-  if (typeof onBeforeChrome === "function") onBeforeChrome();
-  try {
-    const local = globalThis.chrome?.storage?.local;
-    const set = globalThis.chrome?.storage?.local?.set;
-    if (typeof set === "function") set.call(local, { [ZOOM_CHIP_STORAGE_KEY]: payload });
-  } catch (err) {
-    warnViewerStorage("zoom chip", err);
-  }
+  commitViewerLocal("zoom chip", { [ZOOM_CHIP_STORAGE_KEY]: payload });
 }
 
 function bindZoomChipDrag(chip, pane) {
@@ -2083,7 +2111,7 @@ function placeMirrorZoomChip(pos, { persist = false } = {}) {
 async function readMirrorZoomChipPos() {
   try {
     const local = globalThis.chrome?.storage?.local;
-    const get = globalThis.chrome?.storage?.local?.get;
+    const get = local?.get;
     if (typeof get === "function") {
       const bag = await get.call(local, MIRROR_ZOOM_CHIP_POS_KEY);
       const stored = normalizeZoomChipPos(bag?.[MIRROR_ZOOM_CHIP_POS_KEY]);
@@ -2102,10 +2130,11 @@ async function readMirrorZoomChipPos() {
 
 /**
  * Interrupt points: position rejected before any write; localStorage set throws;
- * onBeforeChrome throws (unload after the local write); chrome set throws.
- * A storage throw logs the error name only. Only pdfMirrorZoomChipPos is written.
+ * chrome set rejects after the local write; chrome set never settles.
+ * A rejection logs the error name only and drops that chrome key.
+ * Only pdfMirrorZoomChipPos is written.
  */
-function persistMirrorZoomChipPos(pos, onBeforeChrome) {
+function persistMirrorZoomChipPos(pos) {
   const payload = normalizeZoomChipPos(pos);
   if (!payload) return;
   mirrorZoomChipCustom = true;
@@ -2114,14 +2143,7 @@ function persistMirrorZoomChipPos(pos, onBeforeChrome) {
   } catch (err) {
     warnViewerStorage("mirror zoom chip", err);
   }
-  if (typeof onBeforeChrome === "function") onBeforeChrome();
-  try {
-    const local = globalThis.chrome?.storage?.local;
-    const set = globalThis.chrome?.storage?.local?.set;
-    if (typeof set === "function") set.call(local, { [MIRROR_ZOOM_CHIP_POS_KEY]: payload });
-  } catch (err) {
-    warnViewerStorage("mirror zoom chip", err);
-  }
+  commitViewerLocal("mirror zoom chip", { [MIRROR_ZOOM_CHIP_POS_KEY]: payload });
 }
 
 function bindMirrorZoomChipDrag(chip, pane) {
@@ -2207,7 +2229,7 @@ function followMirrorZoomChip(chip, pane, clientX, clientY, grabX, grabY) {
 async function readMirrorZoom() {
   try {
     const local = globalThis.chrome?.storage?.local;
-    const get = globalThis.chrome?.storage?.local?.get;
+    const get = local?.get;
     if (typeof get === "function") {
       const bag = await get.call(local, MIRROR_ZOOM_STORAGE_KEY);
       const stored = clampZoom(bag?.[MIRROR_ZOOM_STORAGE_KEY]);
@@ -2227,25 +2249,18 @@ async function readMirrorZoom() {
 }
 
 /**
- * Interrupt points: localStorage set throws; onBeforeChrome throws (unload
- * after the local write); chrome set throws. A storage throw logs the error
- * name only. Only pdfMirrorZoom is written.
+ * Interrupt points: localStorage set throws; chrome set rejects after the
+ * local write; chrome set never settles. A rejection logs the error name
+ * only and drops that chrome key. Only pdfMirrorZoom is written.
  */
-function persistMirrorZoom(scale, onBeforeChrome) {
+function persistMirrorZoom(scale) {
   const next = clampZoom(scale);
   try {
     localStorage.setItem(MIRROR_ZOOM_STORAGE_KEY, String(next));
   } catch (err) {
     warnViewerStorage("mirror zoom", err);
   }
-  if (typeof onBeforeChrome === "function") onBeforeChrome();
-  try {
-    const local = globalThis.chrome?.storage?.local;
-    const set = globalThis.chrome?.storage?.local?.set;
-    if (typeof set === "function") set.call(local, { [MIRROR_ZOOM_STORAGE_KEY]: next });
-  } catch (err) {
-    warnViewerStorage("mirror zoom", err);
-  }
+  commitViewerLocal("mirror zoom", { [MIRROR_ZOOM_STORAGE_KEY]: next });
 }
 
 function layoutKey(page) {
@@ -2409,7 +2424,7 @@ function installLibraryChrome() {
 async function readStoredPersistDenied() {
   try {
     const local = globalThis.chrome?.storage?.local;
-    const get = globalThis.chrome?.storage?.local?.get;
+    const get = local?.get;
     if (typeof get !== "function") return false;
     const bag = await get.call(local, "notesPersistGranted");
     if (!bag || !Object.prototype.hasOwnProperty.call(bag, "notesPersistGranted")) return false;

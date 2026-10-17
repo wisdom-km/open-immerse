@@ -17,7 +17,6 @@ import {
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const viewerSrc = readFileSync(join(root, "pdf/viewer.js"), "utf8");
-const layoutSrc = readFileSync(join(root, "lib/pdf-layout-cache.js"), "utf8");
 const SECRET = "SECRET_LAYOUT_TEXT";
 const KEYS = [ZOOM_CHIP_STORAGE_KEY, MIRROR_ZOOM_CHIP_POS_KEY, MIRROR_ZOOM_STORAGE_KEY, "notesPersistGranted"];
 
@@ -47,6 +46,7 @@ function extractFunction(source, name) {
 function loadViewerStorage(localStorage) {
   const names = [
     "warnViewerStorage",
+    "commitViewerLocal",
     "readZoomChipPos",
     "persistZoomChipPos",
     "readMirrorZoomChipPos",
@@ -77,18 +77,28 @@ function loadViewerStorage(localStorage) {
   );
 }
 
+function quotaError() {
+  const error = new Error("do-not-log-this-value");
+  error.name = "QuotaExceededError";
+  return error;
+}
+
+function settleStorage() {
+  return Promise.resolve()
+    .then(() => Promise.resolve())
+    .then(() => Promise.resolve());
+}
+
 function chromeLike(seed = {}) {
   const bag = { ...seed };
-  const state = { failGet: 0, failSet: 0, undefinedGet: 0, malformedGet: 0, setCalls: 0, getCalls: 0 };
+  const state = { failGet: 0, failSet: 0, hangSet: 0, undefinedGet: 0, malformedGet: 0, setCalls: 0, getCalls: 0 };
   const local = {
     get(key) {
       if (this !== local) throw new TypeError("Illegal invocation");
       state.getCalls += 1;
       if (state.failGet > 0) {
         state.failGet -= 1;
-        const error = new Error("do-not-log-this-value");
-        error.name = "QuotaExceededError";
-        throw error;
+        return Promise.reject(quotaError());
       }
       if (state.undefinedGet > 0) {
         state.undefinedGet -= 1;
@@ -108,11 +118,13 @@ function chromeLike(seed = {}) {
     set(values) {
       if (this !== local) throw new TypeError("Illegal invocation");
       state.setCalls += 1;
+      if (state.hangSet > 0) {
+        state.hangSet -= 1;
+        return new Promise(() => {});
+      }
       if (state.failSet > 0) {
         state.failSet -= 1;
-        const error = new Error("do-not-log-this-value");
-        error.name = "QuotaExceededError";
-        throw error;
+        return Promise.resolve().then(() => Promise.reject(quotaError()));
       }
       Object.assign(bag, values || {});
       return Promise.resolve();
@@ -245,10 +257,6 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
     await assert.rejects(Promise.resolve().then(() => detachedGet(ZOOM_CHIP_STORAGE_KEY)), /Illegal invocation/);
     await assert.rejects(Promise.resolve().then(() => detachedSet({ [ZOOM_CHIP_STORAGE_KEY]: { left: 3, top: 4 } })), /Illegal invocation/);
     assert.deepEqual(area.bag[ZOOM_CHIP_STORAGE_KEY], { left: 1, top: 2 });
-    assert.match(layoutSrc, /get\.call\(local,/);
-    assert.match(viewerSrc, /get\.call\(local,/);
-    assert.match(viewerSrc, /set\.call\(local,/);
-    assert.equal(viewerSrc.includes("const get = globalThis.chrome?.storage?.local?.get;\n    if (typeof get === \"function\") {\n      const bag = await get("), false);
   }));
 
   test("layout cache reads a stored legacy layout through a bound get", () => exclusive(async () => {
@@ -459,8 +467,10 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
       assert.deepEqual(area.bag[ZOOM_CHIP_STORAGE_KEY], { left: 3, top: 4 });
       area.state.failSet = 1;
       api.persistZoomChipPos({ left: 20, top: 21 });
-      assert.deepEqual(area.bag[ZOOM_CHIP_STORAGE_KEY], { left: 3, top: 4 });
+      await settleStorage();
+      assert.equal(Object.prototype.hasOwnProperty.call(area.bag, ZOOM_CHIP_STORAGE_KEY), false);
       assert.equal(web.data[ZOOM_CHIP_STORAGE_KEY], JSON.stringify({ left: 20, top: 21 }));
+      assert.deepEqual(await api.readZoomChipPos(), { left: 20, top: 21 });
       assert.match(warnings.seen[1], /QuotaExceededError/);
       assertRedacted(warnings.seen[1]);
       web.fail = true;
@@ -499,25 +509,90 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
     }
   }));
 
-  test("zoom chip unload after localStorage write leaves chrome unchanged", () => exclusive(async () => {
+  test("rejected chrome set after the localStorage write returns the new value", () => exclusive(async () => {
+    const area = chromeLike({
+      [ZOOM_CHIP_STORAGE_KEY]: { left: 3, top: 4 },
+      [MIRROR_ZOOM_CHIP_POS_KEY]: { left: 1, top: 2 },
+      [MIRROR_ZOOM_STORAGE_KEY]: clampZoom(1)
+    });
+    const web = memoryWeb();
+    const restore = useChrome(area);
+    const warnings = captureWarn();
+    const unhandled = [];
+    const onUnhandled = (err) => unhandled.push(err);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const api = loadViewerStorage(web);
+      area.state.failSet = 1;
+      api.persistZoomChipPos({ left: 20, top: 21 });
+      await settleStorage();
+      assert.equal(unhandled.length, 0);
+      assert.equal(warnings.seen.length, 1);
+      assert.match(warnings.seen[0], /QuotaExceededError/);
+      assertRedacted(warnings.seen[0]);
+      assert.equal(Object.prototype.hasOwnProperty.call(area.bag, ZOOM_CHIP_STORAGE_KEY), false);
+      assert.deepEqual(area.bag[MIRROR_ZOOM_CHIP_POS_KEY], { left: 1, top: 2 });
+      assert.equal(area.bag[MIRROR_ZOOM_STORAGE_KEY], clampZoom(1));
+      assert.equal(web.data[ZOOM_CHIP_STORAGE_KEY], JSON.stringify({ left: 20, top: 21 }));
+      assert.deepEqual(await api.readZoomChipPos(), { left: 20, top: 21 });
+      assert.deepEqual(await api.readMirrorZoomChipPos(), { left: 1, top: 2 });
+
+      warnings.seen.length = 0;
+      area.state.failSet = 1;
+      api.persistMirrorZoomChipPos({ left: 4, top: 5 });
+      await settleStorage();
+      assert.equal(unhandled.length, 0);
+      assert.equal(warnings.seen.length, 1);
+      assertRedacted(warnings.seen[0]);
+      assert.equal(Object.prototype.hasOwnProperty.call(area.bag, MIRROR_ZOOM_CHIP_POS_KEY), false);
+      assert.equal(area.bag[MIRROR_ZOOM_STORAGE_KEY], clampZoom(1));
+      assert.equal(web.data[MIRROR_ZOOM_CHIP_POS_KEY], JSON.stringify({ left: 4, top: 5 }));
+      assert.deepEqual(await api.readMirrorZoomChipPos(), { left: 4, top: 5 });
+      assert.equal(await api.readMirrorZoom(), clampZoom(1));
+
+      warnings.seen.length = 0;
+      area.state.failSet = 1;
+      api.persistMirrorZoom(2);
+      await settleStorage();
+      assert.equal(unhandled.length, 0);
+      assert.equal(warnings.seen.length, 1);
+      assert.match(warnings.seen[0], /QuotaExceededError/);
+      assertRedacted(warnings.seen[0]);
+      assert.equal(Object.prototype.hasOwnProperty.call(area.bag, MIRROR_ZOOM_STORAGE_KEY), false);
+      assert.equal(web.data[MIRROR_ZOOM_STORAGE_KEY], String(clampZoom(2)));
+      assert.equal(await api.readMirrorZoom(), clampZoom(2));
+      assert.deepEqual(await api.readZoomChipPos(), { left: 20, top: 21 });
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      warnings.restore();
+      restore();
+    }
+  }));
+
+  test("zoom chip in-flight chrome set keeps the previous chrome value", () => exclusive(async () => {
     const area = chromeLike({ [ZOOM_CHIP_STORAGE_KEY]: { left: 1, top: 2 } });
     const web = memoryWeb();
     const restore = useChrome(area);
     const warnings = captureWarn();
+    const unhandled = [];
+    const onUnhandled = (err) => unhandled.push(err);
+    process.on("unhandledRejection", onUnhandled);
     try {
       const api = loadViewerStorage(web);
-      const sets = area.state.setCalls;
-      assert.throws(() => api.persistZoomChipPos({ left: 9, top: 11 }, () => {
-        throw new Error("unload");
-      }), /unload/);
-      assert.equal(area.state.setCalls, sets);
+      area.state.hangSet = 1;
+      api.persistZoomChipPos({ left: 9, top: 11 });
+      await settleStorage();
+      assert.equal(area.state.setCalls, 1);
+      assert.equal(area.state.hangSet, 0);
       assert.deepEqual(area.bag[ZOOM_CHIP_STORAGE_KEY], { left: 1, top: 2 });
       assert.equal(web.data[ZOOM_CHIP_STORAGE_KEY], JSON.stringify({ left: 9, top: 11 }));
       assert.deepEqual(await api.readZoomChipPos(), { left: 1, top: 2 });
       delete area.bag[ZOOM_CHIP_STORAGE_KEY];
       assert.deepEqual(await api.readZoomChipPos(), { left: 9, top: 11 });
       assert.equal(warnings.seen.length, 0);
+      assert.equal(unhandled.length, 0);
     } finally {
+      process.off("unhandledRejection", onUnhandled);
       warnings.restore();
       restore();
     }
@@ -541,12 +616,16 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
       assertRedacted(warnings.seen[0]);
       area.state.failSet = 1;
       api.persistMirrorZoomChipPos({ left: 4, top: 5 });
-      assert.deepEqual(area.bag[MIRROR_ZOOM_CHIP_POS_KEY], { left: 15, top: 25 });
+      await settleStorage();
+      assert.equal(Object.prototype.hasOwnProperty.call(area.bag, MIRROR_ZOOM_CHIP_POS_KEY), false);
       assert.equal(web.data[MIRROR_ZOOM_CHIP_POS_KEY], JSON.stringify({ left: 4, top: 5 }));
-      assert.throws(() => api.persistMirrorZoomChipPos({ left: 6, top: 7 }, () => {
-        throw new Error("unload");
-      }), /unload/);
+      assert.deepEqual(await api.readMirrorZoomChipPos(), { left: 4, top: 5 });
+      area.bag[MIRROR_ZOOM_CHIP_POS_KEY] = { left: 15, top: 25 };
+      area.state.hangSet = 1;
+      api.persistMirrorZoomChipPos({ left: 6, top: 7 });
+      await settleStorage();
       assert.deepEqual(area.bag[MIRROR_ZOOM_CHIP_POS_KEY], { left: 15, top: 25 });
+      assert.equal(web.data[MIRROR_ZOOM_CHIP_POS_KEY], JSON.stringify({ left: 6, top: 7 }));
     } finally {
       warnings.restore();
       restore();
@@ -575,15 +654,17 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
       area.state.failGet = 1;
       assert.equal(await api.readMirrorZoom(), clampZoom("1.5"));
       assertRedacted(warnings.seen[0]);
-      const kept = area.bag[MIRROR_ZOOM_STORAGE_KEY];
       area.state.failSet = 1;
       api.persistMirrorZoom(2);
-      assert.equal(area.bag[MIRROR_ZOOM_STORAGE_KEY], kept);
+      await settleStorage();
+      assert.equal(Object.prototype.hasOwnProperty.call(area.bag, MIRROR_ZOOM_STORAGE_KEY), false);
       assert.equal(web.data[MIRROR_ZOOM_STORAGE_KEY], String(clampZoom(2)));
-      assert.throws(() => api.persistMirrorZoom(3, () => {
-        throw new Error("unload");
-      }), /unload/);
-      assert.equal(area.bag[MIRROR_ZOOM_STORAGE_KEY], kept);
+      assert.equal(await api.readMirrorZoom(), clampZoom(2));
+      area.bag[MIRROR_ZOOM_STORAGE_KEY] = clampZoom(1.24);
+      area.state.hangSet = 1;
+      api.persistMirrorZoom(3);
+      await settleStorage();
+      assert.equal(area.bag[MIRROR_ZOOM_STORAGE_KEY], clampZoom(1.24));
       assert.equal(web.data[MIRROR_ZOOM_STORAGE_KEY], String(clampZoom(3)));
       web.data[MIRROR_ZOOM_STORAGE_KEY] = "";
       delete area.bag[MIRROR_ZOOM_STORAGE_KEY];
@@ -681,6 +762,7 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
           throw new Error(`seed ${seed} step ${step}: ${message}`);
         };
         const check = async (step) => {
+          await settleStorage();
           const names = Object.keys(area.bag);
           for (const name of names) {
             if (!KEYS.includes(name) || name === "notesPersistGranted") fail(step, `unexpected chrome key ${name}`);
@@ -741,20 +823,17 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
                 oracle.chrome.zoom = payload;
               }
             } else if (kind === "zoom" && mode === 1) {
-              area.state.failSet = 1;
               const payload = normalizeZoomChipPos(point);
+              if (payload) area.state.failSet = 1;
               tab.persistZoomChipPos(point);
-              if (payload) oracle.local.zoom = payload;
+              if (payload) {
+                oracle.local.zoom = payload;
+                oracle.chrome.zoom = undefined;
+              }
             } else if (kind === "zoom" && mode === 2) {
               const payload = normalizeZoomChipPos(point);
-              try {
-                tab.persistZoomChipPos(point, () => {
-                  throw new Error("unload");
-                });
-                fail(step, "unload did not interrupt");
-              } catch (err) {
-                if (!/unload/.test(err.message)) fail(step, err.message);
-              }
+              if (payload) area.state.hangSet = 1;
+              tab.persistZoomChipPos(point);
               if (payload) oracle.local.zoom = payload;
             } else if (kind === "zoom" && mode === 3) {
               web.fail = true;
@@ -769,20 +848,17 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
                 oracle.chrome.chip = payload;
               }
             } else if (kind === "chip" && mode === 1) {
-              area.state.failSet = 1;
               const payload = normalizeZoomChipPos(point);
+              if (payload) area.state.failSet = 1;
               tab.persistMirrorZoomChipPos(point);
-              if (payload) oracle.local.chip = payload;
+              if (payload) {
+                oracle.local.chip = payload;
+                oracle.chrome.chip = undefined;
+              }
             } else if (kind === "chip" && mode === 2) {
               const payload = normalizeZoomChipPos(point);
-              try {
-                tab.persistMirrorZoomChipPos(point, () => {
-                  throw new Error("unload");
-                });
-                fail(step, "unload did not interrupt");
-              } catch (err) {
-                if (!/unload/.test(err.message)) fail(step, err.message);
-              }
+              if (payload) area.state.hangSet = 1;
+              tab.persistMirrorZoomChipPos(point);
               if (payload) oracle.local.chip = payload;
             } else if (kind === "chip" && mode === 3) {
               web.fail = true;
@@ -798,15 +874,10 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
               area.state.failSet = 1;
               tab.persistMirrorZoom(scale);
               oracle.local.mirror = clampZoom(scale);
+              oracle.chrome.mirror = undefined;
             } else if (kind === "mirror" && mode === 2) {
-              try {
-                tab.persistMirrorZoom(scale, () => {
-                  throw new Error("unload");
-                });
-                fail(step, "unload did not interrupt");
-              } catch (err) {
-                if (!/unload/.test(err.message)) fail(step, err.message);
-              }
+              area.state.hangSet = 1;
+              tab.persistMirrorZoom(scale);
               oracle.local.mirror = clampZoom(scale);
             } else if (kind === "mirror" && mode === 3) {
               web.fail = true;
