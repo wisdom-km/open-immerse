@@ -4,10 +4,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { extname, join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
 import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs";
@@ -16,36 +15,10 @@ const PREFIXES = ["oi-ask-actions-chrome-", "com.google.Chrome.", ".com.google.C
 installOwnedTmpGuard(PREFIXES);
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".woff2": "font/woff2",
-  ".js": "text/javascript; charset=utf-8"
-};
-
-function serveRepo() {
-  const server = createServer((req, res) => {
-    const url = new URL(req.url || "/", "http://127.0.0.1");
-    const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "");
-    const file = resolve(root, rel);
-    if (file !== root && !file.startsWith(`${root}${sep}`)) {
-      res.writeHead(403);
-      res.end();
-      return;
-    }
-    try {
-      if (!statSync(file).isFile()) throw new Error("not a file");
-      res.writeHead(200, { "content-type": MIME[extname(file)] || "application/octet-stream", "cache-control": "no-store" });
-      res.end(readFileSync(file));
-    } catch {
-      res.writeHead(404);
-      res.end();
-    }
-  });
-  return new Promise((done) => server.listen(0, "127.0.0.1", () => done(server)));
-}
 
 function launchChrome(userDataDir, scratchDir) {
+  const env = { ...process.env, TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir };
+  for (const key of ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) delete env[key];
   const child = spawn("google-chrome", [
     "--headless=new",
     "--disable-gpu",
@@ -56,10 +29,21 @@ function launchChrome(userDataDir, scratchDir) {
     `--user-data-dir=${userDataDir}`,
     "--window-size=800,900",
     "--no-first-run",
-    "--no-default-browser-check"
+    "--no-default-browser-check",
+    "--no-proxy-server",
+    "--proxy-server=direct://",
+    "--proxy-bypass-list=*",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-sync",
+    "--disable-domain-reliability",
+    "--disable-client-side-phishing-detection",
+    "--safebrowsing-disable-auto-update",
+    "--allow-file-access-from-files",
+    "--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider"
   ], {
     detached: true,
-    env: { ...process.env, TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir },
+    env,
     stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"]
   });
   child.stderr.on("data", () => {});
@@ -200,8 +184,7 @@ const MEASURE = `(() => {
   };
 })()`;
 
-test("F6UI-33/34 action row stays one line at 360 and icons under 280", { timeout: 60000 }, async (t) => {
-  const server = await serveRepo();
+test("F6UI-33/34 action row stays one line at 360 and icons under 280", { timeout: 90000 }, async (t) => {
   const ownedDir = mkdtempSync(join(tmpdir(), "oi-ask-actions-chrome-"));
   rememberOwnedTemp(ownedDir);
   const userDataDir = join(ownedDir, "profile");
@@ -211,10 +194,9 @@ test("F6UI-33/34 action row stays one line at 360 and icons under 280", { timeou
   const handle = { child: null, cdp: null };
   t.after(async () => {
     try { handle.cdp?.dispose(); } finally {
-      await cleanupChrome({ t, child: handle.child, server, ownedDir, userDataDir });
+      await cleanupChrome({ t, child: handle.child, server: null, ownedDir, userDataDir });
     }
   });
-  const origin = `http://127.0.0.1:${server.address().port}`;
   handle.child = launchChrome(userDataDir, scratchDir);
   const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
   handle.cdp = cdp;
@@ -230,11 +212,12 @@ test("F6UI-33/34 action row stays one line at 360 and icons under 280", { timeou
     deviceScaleFactor: 1,
     mobile: false
   }, sessionId);
-  await cdp.send("Page.navigate", { url: `${origin}/tests/fixtures/ask-actions-row.html` }, sessionId);
-  const evaluate = async (expression) => {
+  const pageUrl = `file://${join(root, "tests/fixtures/ask-actions-row.html")}`;
+  await cdp.send("Page.navigate", { url: pageUrl }, sessionId);
+  const evaluate = async (expression, timeoutMs = 25000) => {
     const started = Date.now();
     let last = null;
-    while (Date.now() - started < 10000) {
+    while (Date.now() - started < timeoutMs) {
       const result = await cdp.send("Runtime.evaluate", {
         expression,
         awaitPromise: true,
@@ -243,9 +226,19 @@ test("F6UI-33/34 action row stays one line at 360 and icons under 280", { timeou
       if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || "evaluate failed");
       last = result.result?.value;
       if (last) return last;
-      await new Promise((done) => setTimeout(done, 50));
+      await new Promise((done) => setTimeout(done, 100));
     }
-    throw new Error(`measure timed out: ${JSON.stringify(last)}`);
+    let where = "";
+    try {
+      const probe = await cdp.send("Runtime.evaluate", {
+        expression: "location.href + ' ready=' + document.readyState",
+        returnByValue: true
+      }, sessionId);
+      where = probe.result?.value || "";
+    } catch (err) {
+      where = err.message;
+    }
+    throw new Error(`measure timed out: ${JSON.stringify(last)} page=${where} url=${pageUrl}`);
   };
   await evaluate(`document.documentElement.dataset.ready === "1" ? true : null`);
   const sample = await evaluate(MEASURE);

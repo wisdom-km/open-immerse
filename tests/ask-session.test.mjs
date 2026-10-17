@@ -27,10 +27,11 @@ import {
   noteInputFromTurn,
   retryTurn,
   sessionInvariants,
+  sessionSnapshot,
   settleTurn,
   stopTurn
 } from "../lib/ask-session.js";
-import { performAsk } from "../lib/ask-transport.js";
+import { askRequestBody, performAsk } from "../lib/ask-transport.js";
 import { createNotesStore } from "../lib/notes-store.js";
 import { noteMatchesFilter } from "../lib/notes-view-model.js";
 
@@ -157,28 +158,37 @@ test("A3 the third turn still carries the first turn", () => {
   assert.equal(third.messages.filter((item) => item.role === "user").length, 3);
 });
 
-test("formula image stays on the multimodal request and text is used for translation", () => {
+test("formula citation is text only and never attaches an image", () => {
   const image = "data:image/png;base64,QUJD";
-  const seen = citationPayload({ kind: "formula", text: "E=mc^2", image, page: 4 }, "multimodal");
-  assert.equal(seen.mode, "image");
-  assert.equal(seen.text, "");
-  const messages = buildAskMessages({
-    question: "这是什么？",
-    citation: { kind: "formula", page: 4, image },
-    nearby: [{ bid: "n", page: 4, text: "附近一句" }],
-    history: [],
-    payload: seen
-  });
-  const blob = JSON.stringify(messages);
-  assert.match(blob, /QUJD/);
-  assert.equal(blob.includes("E=mc^2"), false);
-  assert.match(blob, /附近一句/);
-  assert.equal(blob.includes("FULLPAGE"), false);
-
-  const text = citationPayload({ kind: "formula", text: "E=mc^2", image }, "translation");
-  assert.equal(text.mode, "text");
-  assert.match(text.note, /不看图/);
-  assert.equal(text.image, null);
+  const cite = { kind: "formula", text: "E=mc^2", latex: "\\frac{a}{b}", image, page: 4 };
+  for (const via of ["multimodal", "translation"]) {
+    const seen = citationPayload(cite, via);
+    assert.equal(seen.mode, "text");
+    assert.equal(seen.image, null);
+    assert.equal(seen.text, "E=mc^2");
+    assert.match(seen.note, /不看图/);
+    const messages = buildAskMessages({
+      question: "这是什么？",
+      citation: cite,
+      nearby: [{ bid: "n", page: 4, text: "附近一句" }],
+      history: [],
+      payload: seen
+    });
+    const blob = JSON.stringify(messages);
+    assert.equal(blob.includes("QUJD"), false);
+    assert.equal(blob.includes("image_url"), false);
+    assert.equal(blob.includes("inline_data"), false);
+    assert.equal(blob.includes("\\frac"), false);
+    assert.match(blob, /E=mc\^2/);
+    assert.match(blob, /附近一句/);
+    assert.equal(blob.includes("FULLPAGE"), false);
+    for (const provider of ["openai", "gemini", "claude"]) {
+      const body = JSON.stringify(askRequestBody({ provider, model: "gpt-4o" }, messages));
+      assert.equal(body.includes("QUJD"), false, provider);
+      assert.equal(body.includes("image_url"), false, provider);
+      assert.equal(body.includes("inline_data"), false, provider);
+    }
+  }
 });
 
 test("interrupt: a second begin is busy and a late settle cannot overwrite a stop", () => {
@@ -248,17 +258,34 @@ test("reload mid-save keeps the stored note and does not write a second copy", a
   });
   assert.equal(input.author, "ai");
   assert.equal(input.kind, "note");
+  assert.equal(input.id, `ask:${begun.turn.id}`);
   assert.equal(input.qa.model, "gpt-4o");
+  assert.equal(input.body, "因为方差。\n第二行");
   assert.equal(JSON.stringify(input).includes("sk-mm-secret"), false);
-  const saved = await store.put(input);
+  let release;
+  const gate = new Promise((done) => { release = done; });
+  const writing = (async () => {
+    await gate;
+    return store.put(input);
+  })();
+  assert.equal((await store.list("doc-attn")).length, 0);
   const unloaded = createAskSession({ ids: () => "reload-2" });
-  const notes = await store.list("doc-attn");
-  const found = noteForTurn(notes, begun.turn.id);
-  assert.equal(found.id, saved.id);
-  assert.equal(noteMatchesFilter(found, "ai"), true);
   const late = finishNoteSave(unloaded, begun.turn.id, claim.ticket, { ok: true, noteId: "other" });
   assert.equal(late.stale, true);
+  assert.equal((await store.list("doc-attn")).length, 0);
+  release();
+  const saved = await writing;
+  const notes = await store.list("doc-attn");
+  assert.equal(notes.length, 1);
+  const found = noteForTurn(notes, begun.turn.id);
+  assert.equal(found.id, saved.id);
+  assert.equal(found.body, input.body);
+  assert.equal(found.author, "ai");
+  assert.equal(found.qa.turnId, begun.turn.id);
+  assert.equal(noteMatchesFilter(found, "ai"), true);
+  await store.put({ ...input, body: input.body });
   assert.equal((await store.list("doc-attn")).length, 1);
+  assert.equal(noteForTurn(await store.list("doc-attn"), begun.turn.id).id, saved.id);
 
   const paper = noteInputFromTurn({ ...begun.turn, id: "reload:free", answer: "自由" }, { docHash: "doc-attn" });
   assert.equal(paper.kind, "paperNote");
@@ -286,8 +313,10 @@ test("boundary inputs stay intact and empty questions do not send", () => {
   assert.equal(askActionsUseIcons(279), true);
   assert.equal(askActionsUseIcons(280), false);
   assert.equal(askActionsUseIcons(0), false);
-  assert.match(askPreviewLine({ citation: { page: 4 }, host: "api.openai.com", images: 1 }), /附近 2 段/);
-  assert.match(askPreviewLine({ citation: { page: 4 }, host: "api.openai.com", images: 1 }), /1 张裁图/);
+  const preview = askPreviewLine({ citation: { page: 4, kind: "formula", image: "data:image/png;base64,QUJD" }, host: "api.openai.com", images: 1 });
+  assert.match(preview, /附近 2 段/);
+  assert.equal(preview.includes("裁图"), false);
+  assert.equal(preview.includes("QUJD"), false);
   assert.equal(askPreviewLine({}).includes("问整页"), false);
   clearTurns(session);
   assert.equal(session.turns.length, 0);
@@ -339,71 +368,156 @@ function mulberry32(seed) {
   };
 }
 
+function openTab(seed, tab, step) {
+  const session = createAskSession({ ids: () => `s${seed}t${tab}x${step}` });
+  session.draft = `草稿${seed}-${tab}`;
+  session.citation = { bid: "b3", page: 4, text: `引用${tab}` };
+  return session;
+}
+
 test("adversarial interleaving keeps ask invariants across 500 seeds", () => {
   const routes = [routeOf(llm, mm), routeOf(llm, {})];
+  let crossRouteFlights = 0;
   for (let seed = 1; seed <= 500; seed += 1) {
     const random = mulberry32(seed);
     const store = [];
-    let session = createAskSession({ ids: () => `s${seed}` });
-    let flips = 0;
+    const tabs = [0, 1, 2].map((tab) => openTab(seed, tab, 0));
+    const previous = tabs.map((session) => sessionSnapshot(session));
+    let routeChoice = 0;
     try {
       for (let step = 0; step < 24; step += 1) {
         const roll = random();
-        const route = routes[flips % 2];
-        if (roll < 0.18) {
-          const question = roll < 0.02 ? "" : (roll < 0.04 ? `  \t` : `问${seed}-${step} √ "<>"`);
-          beginTurn(session, { question, route, nearby: nearbyBlocks(attention, "b3"), citation: { bid: "b3", page: 4, text: "引用" } });
-        } else if (roll < 0.34 && session.flight) {
+        const tab = Math.floor(random() * tabs.length);
+        let session = tabs[tab];
+        const route = routes[routeChoice];
+        let replaced = false;
+        if (roll < 0.16) {
+          const question = roll < 0.02 ? "" : (roll < 0.04 ? `  \t` : `问${seed}-${tab}-${step} √ "<>"`);
+          beginTurn(session, {
+            question,
+            route,
+            nearby: nearbyBlocks(attention, "b3"),
+            citation: { bid: "b3", page: 4, text: "引用", image: "data:image/png;base64,QUJD" }
+          });
+        } else if (roll < 0.3 && session.flight) {
           settleTurn(session, session.flight.generation, { ok: true, body: `答${step}` });
-        } else if (roll < 0.46 && session.flight) {
+        } else if (roll < 0.4 && session.flight) {
           const generation = session.flight.generation;
           stopTurn(session, generation, "部分");
           settleTurn(session, generation, { ok: true, body: "迟到的成功" });
-        } else if (roll < 0.58 && session.flight) {
+        } else if (roll < 0.5 && session.flight) {
+          const via = session.flight.via;
+          const before = session.turns.length;
           settleTurn(session, session.flight.generation, { ok: false, status: 500 });
-        } else if (roll < 0.68) {
-          flips += 1;
-          const flightVia = session.flight?.via || "";
-          if (flightVia) assert.equal(session.flight.via, flightVia);
-        } else if (roll < 0.8) {
+          if (via === "multimodal" && session.turns.length !== before) {
+            throw new Error("multimodal failure allocated another turn");
+          }
+        } else if (roll < 0.62) {
+          const before = session.flight ? {
+            via: session.flight.via,
+            url: session.flight.url,
+            host: session.flight.host
+          } : null;
+          routeChoice = routeChoice === 0 ? 1 : 0;
+          const next = routes[routeChoice];
+          if (before) {
+            if (session.flight.via !== before.via || session.flight.url !== before.url || session.flight.host !== before.host) {
+              throw new Error("route flip retargeted the flight");
+            }
+            if (before.via !== next.via) {
+              crossRouteFlights += 1;
+              if (session.flight.via === next.via) throw new Error("flight adopted the new route");
+            }
+          }
+        } else if (roll < 0.76) {
           const turn = session.turns.find((item) => item.status === "done" && !item.noteId && !item.saving);
           if (turn) {
             const claim = claimNoteSave(session, turn.id);
             if (claim.ok) {
               if (noteForTurn(store, turn.id)) {
                 finishNoteSave(session, turn.id, claim.ticket, { ok: false, reason: "exists" });
-              } else if (random() < 0.2) {
+              } else if (random() < 0.25) {
                 finishNoteSave(session, turn.id, claim.ticket, { ok: false, reason: "failed" });
               } else {
-                const note = { id: `n-${seed}-${step}`, qa: { turnId: turn.id }, author: "ai", deletedAt: 0 };
+                const note = {
+                  id: `ask:${turn.id}`,
+                  qa: { turnId: turn.id },
+                  author: "ai",
+                  body: `答${step}`,
+                  deletedAt: 0
+                };
                 store.push(note);
                 finishNoteSave(session, turn.id, claim.ticket, { ok: true, noteId: note.id });
                 finishNoteSave(session, turn.id, claim.ticket, { ok: true, noteId: "nope" });
               }
             }
           }
-        } else if (roll < 0.9 && session.flight) {
-          const generation = session.flight.generation;
-          session = createAskSession({ ids: () => `s${seed}b` });
-          settleTurn(session, generation, { ok: true, body: "卸载后的回写" });
+        } else if (roll < 0.9) {
+          const saving = session.turns.find((item) => item.saving);
+          if (saving) {
+            const ticket = saving.saveTicket;
+            const turnId = saving.id;
+            const fresh = openTab(seed, tab, step + 1);
+            const late = finishNoteSave(fresh, turnId, ticket, { ok: true, noteId: `ghost-${seed}-${step}` });
+            if (late.ok) throw new Error("reloaded tab accepted an in-flight save");
+            if (store.some((note) => note.id === `ghost-${seed}-${step}`)) throw new Error("ghost note landed");
+            if (!noteForTurn(store, turnId)) {
+              const note = {
+                id: `ask:${turnId}`,
+                qa: { turnId },
+                author: "ai",
+                body: "完整",
+                deletedAt: 0
+              };
+              store.push(note);
+              finishNoteSave(session, turnId, ticket, { ok: true, noteId: note.id });
+            }
+            const copies = store.filter((note) => note.qa?.turnId === turnId);
+            if (copies.length !== 1) throw new Error(`note copies ${copies.length} for ${turnId}`);
+            if (!copies[0].id || !copies[0].author || !copies[0].body || !copies[0].qa.turnId) {
+              throw new Error(`partial note ${turnId}`);
+            }
+            tabs[tab] = fresh;
+            previous[tab] = null;
+            replaced = true;
+            session = fresh;
+          } else if (session.flight) {
+            const generation = session.flight.generation;
+            const fresh = openTab(seed, tab, step + 1);
+            const late = settleTurn(fresh, generation, { ok: true, body: "卸载后的回写" });
+            if (!late.stale || fresh.turns.length) throw new Error("unloaded settle wrote a turn");
+            tabs[tab] = fresh;
+            previous[tab] = null;
+            replaced = true;
+            session = fresh;
+          }
         } else {
-          const errored = [...session.turns].reverse().find((item) => item.status === "error");
-          if (errored && !session.flight) retryTurn(session, errored.id);
+          const errored = [...session.turns].reverse().find((item) => item.status === "error" || item.status === "stopped");
+          if (errored && !session.flight && errored.status === "error") retryTurn(session, errored.id);
         }
-        const problems = sessionInvariants(session);
-        if (problems.length) throw new Error(problems.join(";"));
+        if (!replaced) tabs[tab] = session;
+        for (let index = 0; index < tabs.length; index += 1) {
+          const problems = sessionInvariants(tabs[index], previous[index]);
+          if (problems.length) throw new Error(`tab ${index}: ${problems.join(";")}`);
+          previous[index] = sessionSnapshot(tabs[index]);
+          for (const turn of tabs[index].turns) {
+            if (JSON.stringify(turn).includes("sk-")) throw new Error(`key on ${turn.id}`);
+            if (turn.noteId) {
+              const note = store.find((item) => item.qa.turnId === turn.id);
+              if (note && note.id !== turn.noteId) throw new Error(`noteId mismatch ${turn.id}`);
+            }
+          }
+        }
         const seen = new Set();
         for (const note of store) {
+          if (!note.id || !note.author || !note.body || !note.qa?.turnId) throw new Error("partial note");
           if (seen.has(note.qa.turnId)) throw new Error(`dup note ${note.qa.turnId}`);
           seen.add(note.qa.turnId);
-        }
-        for (const turn of session.turns) {
-          if (turn.noteId && seen.has(turn.id)) assert.equal(store.find((note) => note.qa.turnId === turn.id).id, turn.noteId);
-          assert.equal(JSON.stringify(turn).includes("sk-"), false);
         }
       }
     } catch (err) {
       throw new Error(`seed ${seed}: ${err.message}`);
     }
   }
+  assert.ok(crossRouteFlights > 0, "route flip never observed a live flight against a different route");
 });

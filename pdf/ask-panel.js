@@ -504,11 +504,9 @@ export function mountAskUi(api = {}) {
     if (!session.flight && (!configured() || !draft.trim())) send.disabled = true;
     field.append(area, send);
     form.append(field);
-    const images = session.citation?.kind === "formula" && state.route?.via === "multimodal" && session.citation?.image ? 1 : 0;
     const line = h("p", { class: "oi-ask-sendline" });
     line.append(h("span", { "data-ask": "preview-line", text: askPreviewLine({
       citation: session.citation,
-      images,
       host: state.route?.host || ""
     }) }));
     const full = h("button", { type: "button", text: "看完整内容" });
@@ -537,8 +535,7 @@ export function mountAskUi(api = {}) {
     send.disabled = !configured() || !String(area?.value || "").trim();
     const line = root.querySelector("[data-ask='preview-line']");
     if (line) {
-      const images = session.citation?.kind === "formula" && state.route?.via === "multimodal" && session.citation?.image ? 1 : 0;
-      line.textContent = askPreviewLine({ citation: session.citation, images, host: state.route?.host || "" });
+      line.textContent = askPreviewLine({ citation: session.citation, host: state.route?.host || "" });
     }
   }
 
@@ -594,9 +591,7 @@ export function mountAskUi(api = {}) {
       }
     }
     let citation = session.citation ? { ...session.citation } : null;
-    if (citation?.kind === "formula" && state.route?.via === "multimodal" && !citation.image && !forceText && api.imageForCitation) {
-      try { citation.image = await api.imageForCitation(citation) || ""; } catch { citation.image = ""; }
-    }
+    if (citation) delete citation.image;
     const begun = beginTurn(session, {
       question,
       citation,

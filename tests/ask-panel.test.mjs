@@ -52,6 +52,8 @@ function harness(options = {}) {
   let formula = options.formula === undefined ? mm : options.formula;
   let settings = options.settings || llm;
   let confirm = options.confirm === true;
+  let saveError = options.saveError === true;
+  let saveGate = null;
   const ui = mountAskUi({
     chrome: options.chrome,
     hasDoc: () => true,
@@ -76,8 +78,13 @@ function harness(options = {}) {
       return { ok: true, status: 200, body: options.answer || "点积要除以 $\\sqrt{d_k}$。" };
     },
     saveNote: async (input) => {
-      if (options.saveError) throw new Error("disk");
-      const note = { id: `note-${notes.length + 1}`, ...input };
+      if (saveGate) await saveGate;
+      if (saveError) throw new Error("disk");
+      const id = input.id || `note-${notes.length + 1}`;
+      const prior = notes.find((note) => note.id === id || (input.qa?.turnId && note.qa?.turnId === input.qa.turnId));
+      if (prior) return prior;
+      const note = { ...input, id };
+      if (!note.author || !note.body || !note.qa?.turnId) throw new Error("partial");
       notes.push(note);
       return note;
     },
@@ -103,6 +110,15 @@ function harness(options = {}) {
     settingsOpens,
     opens,
     get confirm() { return confirm; },
+    holdSave() {
+      let release;
+      saveGate = new Promise((done) => { release = done; });
+      return () => {
+        saveGate = null;
+        release();
+      };
+    },
+    set saveError(value) { saveError = value === true; },
     set formula(value) { formula = value; },
     set settings(value) { settings = value; },
     get settings() { return settings; }
@@ -323,22 +339,48 @@ test("first send confirms once, then stays quiet", async () => {
   assert.equal(box.ui.root.querySelector(".oi-ask-confirm"), null);
 });
 
-test("save failure rolls back only that turn and a second save does not duplicate", async () => {
+test("save failure toasts 没有写入笔记 and retry of the same turn does not duplicate", async () => {
   const box = harness({ saveError: true });
   await typeAndSend(box.ui, "写失败");
   const turn = box.ui.session.turns[0];
   const first = await box.ui.saveNote(turn);
   assert.equal(first.ok, false);
+  assert.match(box.toasts.join("\n"), /没有写入笔记/);
   assert.equal(turn.noteId, "");
   assert.equal(turn.saving, false);
   assert.equal(box.notes.length, 0);
-  box.ui.root.querySelector("[data-ask-act='save']");
-  const restored = harness();
-  await typeAndSend(restored.ui, "写成功");
-  await restored.ui.saveNote(restored.ui.session.turns[0]);
-  const again = await restored.ui.saveNote(restored.ui.session.turns[0]);
+  box.saveError = false;
+  const saved = await box.ui.saveNote(turn);
+  assert.equal(saved.ok, true);
+  const again = await box.ui.saveNote(turn);
   assert.equal(again.reason, "exists");
-  assert.equal(restored.notes.length, 1);
+  assert.equal(box.notes.length, 1);
+  assert.equal(box.notes[0].qa.turnId, turn.id);
+  assert.equal(box.notes[0].author, "ai");
+  assert.ok(box.notes[0].body);
+});
+
+test("pagehide during an in-flight note write leaves no partial and no duplicate", async () => {
+  const box = harness();
+  await typeAndSend(box.ui, "写入中");
+  const release = box.holdSave();
+  const pending = box.ui.saveNote(box.ui.session.turns[0]);
+  await new Promise((done) => setTimeout(done, 0));
+  assert.equal(box.notes.length, 0);
+  window.dispatchEvent(new Event("pagehide"));
+  assert.equal(box.notes.length, 0);
+  release();
+  const done = await pending;
+  assert.equal(done.ok, true);
+  assert.equal(box.notes.length, 1);
+  const note = box.notes[0];
+  assert.equal(note.author, "ai");
+  assert.equal(note.qa.turnId, box.ui.session.turns[0].id);
+  assert.ok(note.body);
+  assert.ok(note.id);
+  const again = await box.ui.saveNote(box.ui.session.turns[0]);
+  assert.equal(again.reason, "exists");
+  assert.equal(box.notes.length, 1);
 });
 
 test("no-anchor answer is a paper note and repeat saves do not multiply", async () => {
@@ -376,16 +418,22 @@ test("cited sentence uses the ai outline class", async () => {
 test("preview line matches the request and suggestions do not send", async () => {
   const box = harness();
   await box.ui.askCitation({ bid: "b3", page: 4, kind: "formula", text: "E=mc^2", image: "data:image/png;base64,QUJD" }, { fresh: true });
-  assert.match(box.ui.root.querySelector("[data-ask='preview-line']").textContent, /附近 2 段/);
-  assert.match(box.ui.root.querySelector("[data-ask='preview-line']").textContent, /裁图/);
+  const preview = box.ui.root.querySelector("[data-ask='preview-line']").textContent;
+  assert.match(preview, /附近 2 段/);
+  assert.equal(preview.includes("裁图"), false);
   box.ui.root.querySelector(".oi-ask-suggest button").click();
   assert.equal(box.sent.length, 0);
   assert.match(box.ui.root.querySelector("textarea").value, /这段在说什么/);
   await box.ui.submit({ confirmed: true });
   const blob = JSON.stringify(box.sent[0].messages);
-  assert.match(blob, /QUJD/);
+  assert.equal(blob.includes("QUJD"), false);
+  assert.equal(blob.includes("image_url"), false);
+  assert.equal(blob.includes("inline_data"), false);
+  assert.match(blob, /E=mc\^2/);
   assert.equal(blob.includes("FULLPAGE"), false);
-  assert.match(box.ui.root.textContent, /不看图|裁图/);
+  assert.match(box.ui.root.textContent, /不看图/);
+  assert.equal(box.ui.root.textContent.includes("裁图"), false);
+  assert.equal(box.ui.root.querySelector("[data-ask='preview-line']").textContent.includes("裁图"), false);
 });
 
 test("viewer ask entry no longer toasts 即将推出 for the ask button", () => {

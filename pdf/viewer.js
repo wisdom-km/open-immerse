@@ -2446,7 +2446,6 @@ function installAskUi() {
     anchorFor: (citation) => anchorForAsk(citation),
     revealNote: (id) => notesUi?.revealNote?.(id),
     showSource: (citation) => showAskSource(citation),
-    imageForCitation: (citation) => imageForAskCitation(citation),
     openSettings: (href) => openAskSettings(href),
     toast: (text) => showToast(text),
     writeText: (text) => navigator.clipboard?.writeText?.(text),
@@ -2595,14 +2594,6 @@ function anchorForAsk(citation) {
     preview: firstLineQuote(citation.text || "")
   };
   return anchorForParagraph(current);
-}
-
-function imageForAskCitation(citation) {
-  if (citation?.image) return citation.image;
-  if (citation?.kind !== "formula" || !citation.bid) return "";
-  const img = readerFlowEl()?.querySelector(`.rf-block[data-bid="${cssEscape(citation.bid)}"] img`);
-  const src = img?.getAttribute?.("src") || "";
-  return src.startsWith("data:image/") ? src : "";
 }
 
 function showAskSource(citation) {
