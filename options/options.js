@@ -40,6 +40,7 @@ import {
   customBaseUrlError,
   multimodalTestDisabled,
   normalizeFormulaSettings,
+  normalizedBaseUrl,
   ocrTestDisabled,
   readFormulaSettings,
   removeFormulaKey,
@@ -112,9 +113,12 @@ let pdfCloudKey = "";
 let pdfCloudBound = null;
 let formulaSettings = normalizeFormulaSettings(null);
 let formulaSaved = formulaSettings;
+let formulaCommitted = formulaSettings;
 let formulaUndo = null;
 let formulaBusy = "";
 let formulaWriting = false;
+let formulaEcho = false;
+let formulaExternal = null;
 let formulaWrite = Promise.resolve();
 // Interrupt points for this page's probe generation:
 // - updateFormulaPart drops the open probe before a provider, key, model, or Base URL patch is applied.
@@ -1490,7 +1494,12 @@ function bindInstant() {
 function paintFormulaSettings() {
   const root = el("formulaSettingsRoot");
   if (!root) return;
-  renderFormulaPanel(root, formulaSettings, {
+  const savedProbe = formulaSaved?.multimodal?.probe ?? null;
+  const view = {
+    ...formulaSettings,
+    multimodal: { ...formulaSettings.multimodal, probe: savedProbe }
+  };
+  renderFormulaPanel(root, view, {
     busy: formulaBusy,
     onMultimodal: (patch, opts) => updateFormulaPart("multimodal", patch, opts),
     onOcr: (patch, opts) => updateFormulaPart("ocr", patch, opts),
@@ -1541,40 +1550,77 @@ function invalidateFormulaProbe() {
   if (wasBusy) releaseProbeButtons();
 }
 
+function persistFormulaKeyOnly(which) {
+  const part = which === "ocr" ? "ocr" : "multimodal";
+  const apiKey = String(formulaSettings?.[part]?.apiKey ?? "");
+  const base = formulaSaved || formulaSettings;
+  formulaCommitted = acceptStoredFormulaSettings({
+    ...formulaCommitted,
+    [part]: { ...(formulaCommitted[part] || {}), apiKey }
+  });
+  const snapshot = acceptStoredFormulaSettings({
+    ...base,
+    [part]: { ...(base[part] || {}), apiKey }
+  });
+  return persistFormulaSettings(false, snapshot);
+}
+
 function updateFormulaPart(which, patch, opts = {}) {
   const watch = ["provider", "apiKey", "model", "baseUrl", "customModel"];
   if (watch.some((key) => Object.prototype.hasOwnProperty.call(patch || {}, key))) invalidateFormulaProbe();
-  const prevProbe = which === "multimodal" ? formulaSettings?.multimodal?.probe : null;
-  formulaSettings = applyFormulaPart(formulaSettings, which, patch);
-  if (which === "multimodal" && customBaseUrlError(formulaSettings)) {
-    if (opts.live) {
-      syncFormulaDerived();
-      return;
-    }
-    paintFormulaSettings();
-    if (Object.prototype.hasOwnProperty.call(patch || {}, "apiKey")) {
-      return persistFormulaSettings(false, formulaSettings);
-    }
-    return;
+  const savedBefore = formulaSaved;
+  // The provider control echoes the on-screen Base URL. That echo is the draft.
+  // A vendor switch keeps the last committed URL, or clears it for a fixed vendor.
+  if (
+    !opts.live
+    && patch
+    && which !== "ocr"
+    && Object.prototype.hasOwnProperty.call(patch, "provider")
+    && Object.prototype.hasOwnProperty.call(patch, "baseUrl")
+  ) {
+    patch = {
+      ...patch,
+      baseUrl: patch.provider === "custom" ? String(formulaCommitted?.multimodal?.baseUrl ?? "") : ""
+    };
   }
+  formulaSettings = applyFormulaPart(formulaSettings, which, patch);
+  // Interrupt: each keystroke updates the draft only. The chip stays with storage until change.
   if (opts.live) {
     syncFormulaDerived();
     return;
   }
+  // Interrupt: saving a key writes that key onto the stored card, not the draft.
+  if (Object.prototype.hasOwnProperty.call(patch || {}, "apiKey")) return persistFormulaKeyOnly(which);
+  formulaCommitted = applyFormulaPart(formulaCommitted, which, patch);
+  if (customBaseUrlError(formulaCommitted)) {
+    paintFormulaSettings();
+    return;
+  }
+  const beforeMm = savedBefore?.multimodal;
+  const afterMm = formulaCommitted.multimodal;
+  const cleared = !!beforeMm?.probe && !afterMm?.probe && !(
+    beforeMm.provider === afterMm.provider
+    && beforeMm.model === afterMm.model
+    && normalizedBaseUrl(beforeMm.baseUrl) === normalizedBaseUrl(afterMm.baseUrl)
+  );
   const structural = Object.prototype.hasOwnProperty.call(patch, "provider")
     || Object.prototype.hasOwnProperty.call(patch, "customModel");
-  const cleared = !!prevProbe && !formulaSettings.multimodal?.probe;
-  return persistFormulaSettings(structural || cleared);
+  const beforeProbe = beforeMm?.probe || null;
+  const afterProbe = afterMm?.probe || null;
+  const probeChanged = (beforeProbe?.chip || "") !== (afterProbe?.chip || "")
+    || (beforeProbe?.at || 0) !== (afterProbe?.at || 0);
+  const job = persistFormulaSettings(false, formulaCommitted);
+  if (cleared || structural || probeChanged) return job.then(() => paintFormulaSettings());
+  return job;
 }
 
 async function updateFormulaSwitch(key, enabled) {
   invalidateFormulaProbe();
-  const draft = acceptStoredFormulaSettings({ ...formulaSettings, [key]: enabled === true });
-  formulaSettings = draft;
-  if (customBaseUrlError(draft)) {
+  const memory = acceptStoredFormulaSettings({ ...formulaSettings, [key]: enabled === true });
+  if (customBaseUrlError(memory)) {
     // An unsaved「自定义」with no URL must not turn the previous vendor's switch on.
     const sameUnusableCard = customBaseUrlError(formulaSaved)
-      && formulaSaved.multimodal.provider === draft.multimodal.provider;
+      && formulaSaved.multimodal.provider === memory.multimodal.provider;
     if (!sameUnusableCard) {
       formulaSettings = formulaSaved;
       paintFormulaSettings();
@@ -1586,26 +1632,35 @@ async function updateFormulaSwitch(key, enabled) {
     await persistFormulaSettings(false, stored);
     return;
   }
+  formulaCommitted = acceptStoredFormulaSettings({ ...formulaCommitted, [key]: enabled === true });
+  // Persist the saved card plus this switch. formulaSettings is that snapshot so a
+  // failed write restores the previous switch (formulaSettings === snapshot).
+  const stored = acceptStoredFormulaSettings({ ...formulaSaved, [key]: enabled === true });
+  formulaSettings = stored;
   await persistFormulaSettings(true);
+  if (formulaSettings === stored) {
+    formulaSettings = memory;
+    paintFormulaSettings();
+  }
 }
 
 async function removeFormulaSecret(which) {
   invalidateFormulaProbe();
-  const snapshot = formulaSettings;
+  const memorySnapshot = formulaSettings;
+  const savedSnapshot = formulaSaved;
+  const committedSnapshot = formulaCommitted;
   formulaSettings = removeFormulaKey(formulaSettings, which);
+  formulaCommitted = removeFormulaKey(formulaCommitted, which);
   paintFormulaSettings();
-  if (customBaseUrlError(formulaSettings)) {
-    await persistFormulaSettings(false, removeFormulaKey(formulaSaved, which));
-  } else {
-    await persistFormulaSettings(false);
-  }
+  await persistFormulaSettings(false, removeFormulaKey(formulaSaved, which));
   const name = which === "ocr" ? "OCR" : "多模态";
   showToast(`已移除 ${name} 密钥 · 撤销`, async () => {
     // Interrupt: undo lands while a later probe is still in flight.
     invalidateFormulaProbe();
-    formulaSettings = snapshot;
-    if (customBaseUrlError(snapshot)) await persistFormulaSettings(true, snapshot);
-    else await persistFormulaSettings(true);
+    formulaSettings = memorySnapshot;
+    formulaCommitted = committedSnapshot;
+    await persistFormulaSettings(false, savedSnapshot);
+    paintFormulaSettings();
   });
 }
 
@@ -1638,18 +1693,46 @@ function hideFormulaMiss() {
   if (note) note.hidden = true;
 }
 
+function adoptFormulaRecord(stored) {
+  formulaSettings = stored;
+  formulaSaved = stored;
+  formulaCommitted = stored;
+  invalidateFormulaProbe();
+  paintFormulaSettings();
+}
+
 function persistFormulaSettings(rerender, explicit) {
   const job = formulaWrite.then(async () => {
     formulaWriting = true;
+    formulaExternal = null;
     const snapshot = explicit || formulaSettings;
     if (!explicit && customBaseUrlError(snapshot)) {
       formulaWriting = false;
       if (rerender) paintFormulaSettings();
       return;
     }
+    const storage = globalThis.chrome?.storage?.local;
+    const wrapped = storage && {
+      get: (key) => storage.get(key),
+      set: (patch) => {
+        formulaEcho = true;
+        try {
+          return storage.set(patch);
+        } finally {
+          formulaEcho = false;
+        }
+      }
+    };
     let failed = false;
     try {
-      const saved = await writeFormulaSettings(snapshot, globalThis.chrome?.storage?.local);
+      const saved = await writeFormulaSettings(snapshot, wrapped || storage);
+      if (formulaExternal) {
+        const incoming = formulaExternal;
+        formulaExternal = null;
+        formulaWriting = false;
+        adoptFormulaRecord(incoming);
+        return;
+      }
       formulaSaved = explicit ? saved : snapshot;
       formulaUndo = null;
       hideFormulaMiss();
@@ -1684,17 +1767,19 @@ export function classifyUnexpectedProbe(err) {
 async function testFormulaConnection(kind) {
   if (formulaBusy) return;
   const which = kind === "ocr" ? "ocr" : "multimodal";
-  if (which === "multimodal" && (multimodalTestDisabled(formulaSettings) || customBaseUrlError(formulaSettings))) return;
-  const fingerprint = formulaProbeFingerprint(formulaSettings);
+  // Keystrokes stay on formulaSettings. The probe and its write use the last commit.
+  const cardSource = formulaCommitted;
+  if (which === "multimodal" && (multimodalTestDisabled(cardSource) || customBaseUrlError(cardSource))) return;
+  const fingerprint = formulaProbeFingerprint(cardSource);
   const run = formulaProbeCtl.open();
   formulaBusy = which === "ocr" ? "ocr" : "mm";
   paintFormulaSettings();
-  const card = formulaSettings[which];
-  const still = () => run.current() && formulaProbeFingerprint(formulaSettings) === fingerprint;
+  const card = cardSource[which];
+  const still = () => run.current() && formulaProbeFingerprint(formulaCommitted) === fingerprint;
   let probe;
   try {
     probe = which === "multimodal"
-      ? await probeMultimodal(formulaSettings, {
+      ? await probeMultimodal(cardSource, {
         signal: run.signal,
         stillCurrent: still,
         secret: card.apiKey
@@ -1714,36 +1799,45 @@ async function testFormulaConnection(kind) {
   await Promise.resolve();
   await Promise.resolve();
   const settled = which === "multimodal"
-    ? settleProbeResult(formulaSettings, probe, { still: still() })
+    ? settleProbeResult(formulaCommitted, probe, { still: still() })
     : { write: still() && probe?.code !== "aborted", settings: normalizeFormulaSettings({
-      ...formulaSettings,
-      [which]: { ...formulaSettings[which], probe }
+      ...formulaCommitted,
+      [which]: { ...formulaCommitted[which], probe }
     }) };
   if (!settled.write) {
-    if (run.current() && formulaProbeFingerprint(formulaSettings) === fingerprint) {
+    if (run.current() && formulaProbeFingerprint(formulaCommitted) === fingerprint) {
       formulaBusy = "";
       paintFormulaSettings();
     }
     return;
   }
-  formulaSettings = settled.settings;
+  formulaCommitted = settled.settings;
+  const part = which === "ocr" ? "ocr" : "multimodal";
+  formulaSettings = {
+    ...formulaSettings,
+    [part]: { ...(formulaSettings[part] || {}), probe: settled.settings[part]?.probe ?? null }
+  };
   formulaBusy = "";
-  await persistFormulaSettings(true);
+  await persistFormulaSettings(false, formulaCommitted);
+  paintFormulaSettings();
 }
 
 function bindFormulaSettings() {
   const storage = globalThis.chrome?.storage;
   window.addEventListener("pagehide", () => invalidateFormulaProbe());
   storage?.onChanged?.addListener((changes, area) => {
-    if (formulaWriting || area !== "local" || !changes[FORMULA_SETTINGS_KEY]) return;
-    formulaSettings = acceptStoredFormulaSettings(changes[FORMULA_SETTINGS_KEY].newValue);
-    formulaSaved = formulaSettings;
-    invalidateFormulaProbe();
-    paintFormulaSettings();
+    if (formulaEcho || area !== "local" || !changes[FORMULA_SETTINGS_KEY]) return;
+    const incoming = acceptStoredFormulaSettings(changes[FORMULA_SETTINGS_KEY].newValue);
+    if (formulaWriting) {
+      formulaExternal = incoming;
+      return;
+    }
+    adoptFormulaRecord(incoming);
   });
   readFormulaSettings(storage?.local).then((stored) => {
     formulaSettings = stored;
     formulaSaved = stored;
+    formulaCommitted = stored;
     paintFormulaSettings();
   }).catch(() => paintFormulaSettings());
 }
