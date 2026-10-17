@@ -1567,7 +1567,16 @@ async function updateFormulaSwitch(key, enabled) {
   const draft = acceptStoredFormulaSettings({ ...formulaSettings, [key]: enabled === true });
   formulaSettings = draft;
   if (customBaseUrlError(draft)) {
+    // An unsaved「自定义」with no URL must not turn the previous vendor's switch on.
+    const sameUnusableCard = customBaseUrlError(formulaSaved)
+      && formulaSaved.multimodal.provider === draft.multimodal.provider;
+    if (!sameUnusableCard) {
+      formulaSettings = formulaSaved;
+      paintFormulaSettings();
+      return;
+    }
     const stored = acceptStoredFormulaSettings({ ...formulaSaved, [key]: enabled === true });
+    formulaSettings = stored;
     paintFormulaSettings();
     await persistFormulaSettings(false, stored);
     return;
@@ -1660,6 +1669,12 @@ function persistFormulaSettings(rerender, explicit) {
   return job;
 }
 
+/** A throw that escapes the probe is not a network error. Chip stays 「暂不可用」. */
+export function classifyUnexpectedProbe(err) {
+  if (err?.code === "real-network-in-test") throw err;
+  return classifyFormulaProbe({ ok: false, code: "http", summary: "请求失败" });
+}
+
 async function testFormulaConnection(kind) {
   if (formulaBusy) return;
   const which = kind === "ocr" ? "ocr" : "multimodal";
@@ -1686,8 +1701,7 @@ async function testFormulaConnection(kind) {
         apiKey: card.apiKey
       }, stubFormulaProbe);
   } catch (err) {
-    if (err?.code === "real-network-in-test") throw err;
-    probe = classifyFormulaProbe({ ok: false, code: "network", summary: "网络错误" });
+    probe = classifyUnexpectedProbe(err);
   }
   // Interrupt: the result is in hand. A settings change queued on this turn
   // must be visible to still() before anything is written.

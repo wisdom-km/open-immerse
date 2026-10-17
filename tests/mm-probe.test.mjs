@@ -39,6 +39,9 @@ import {
   settleProbeResult
 } from "../lib/mm-probe.js";
 import { resolveAskTarget } from "../lib/ask-route.js";
+import * as askRoute from "../lib/ask-route.js";
+import * as mmProbe from "../lib/mm-probe.js";
+import { createAskSession } from "../lib/ask-session.js";
 import { multimodalTier } from "../lib/formula-tiers/multimodal.js";
 import { selfTier } from "../lib/formula-tiers/self.js";
 import { vectorTier } from "../lib/formula-tiers/vector.js";
@@ -53,6 +56,7 @@ import {
   defaultFormulaSettings,
   formulaChainFlags,
   httpBaseUrl,
+  normalizedBaseUrl,
   isProvenVisionProvider,
   multimodalReady,
   readFormulaSettings,
@@ -390,15 +394,33 @@ test("probe classifies 401, 403, 404, 429, no-vision, timeout, and network from 
   assert.equal(network.summary.includes(SECRET), false);
 });
 
-test("a 200 is connected only when the reply contains SEEN", async () => {
+test("a 200 is connected only when the whole reply is SEEN", async () => {
   const replies = [
     ["", "这个模型不能看图"],
     ["I cannot see the image.", "这个模型不能看图"],
     ["我看不到图片", "这个模型不能看图"],
     ["NO_IMAGE.", "这个模型不能看图"],
     ["Sorry, I can only process text.", "这个模型不能看图"],
+    ["not seen", "这个模型不能看图"],
+    ["I have not seen the image", "这个模型不能看图"],
+    ["Seen? No.", "这个模型不能看图"],
+    ["No, not SEEN", "这个模型不能看图"],
+    ["Not SEEN.", "这个模型不能看图"],
+    ["never seen", "这个模型不能看图"],
+    ["I haven't seen any image", "这个模型不能看图"],
+    ["seen: false", "这个模型不能看图"],
+    ["SEEN NO_IMAGE", "这个模型不能看图"],
+    ["NO_IMAGE SEEN", "这个模型不能看图"],
+    ["没有 SEEN", "这个模型不能看图"],
+    ["我无法看到图片，所以不能回复 SEEN", "这个模型不能看图"],
+    ["If I could see it I would say SEEN, but NO_IMAGE", "这个模型不能看图"],
+    ["UNSEEN", "这个模型不能看图"],
+    ["SEENING", "这个模型不能看图"],
+    ["I have seen it", "这个模型不能看图"],
+    ["SEEN（看见了）", "这个模型不能看图"],
     ["SEEN", "已连通"],
-    ["  SeEn!  ", "已连通"]
+    ["  SeEn!  ", "已连通"],
+    ["seen.", "已连通"]
   ];
   for (const [text, chip] of replies) {
     const box = responseNet(() => jsonResponse(200, { choices: [{ message: { content: text } }] }));
@@ -409,6 +431,8 @@ test("a 200 is connected only when the reply contains SEEN", async () => {
   }
   assert.equal(confirmsSeen("seen."), true);
   assert.equal(confirmsSeen("unseen"), false);
+  assert.equal(confirmsSeen("SEENING"), false);
+  assert.equal(confirmsSeen("not seen"), false);
 });
 
 test("a key-read failure is not classified as a network error", async () => {
@@ -506,6 +530,10 @@ test("a local server receives the probe PNG and a 401 Response is not a shortcut
         return;
       }
       throw err;
+    }
+    if (captured == null && probe?.code === "network") {
+      t.skip(`loopback 不可用，连接 127.0.0.1:${port} 没有到达本地服务（${probe.summary || "网络错误"}），本沙箱不能连 127.0.0.1，跳过本地服务探测。`);
+      return;
     }
     assert.equal(captured.raw.includes(PNG), true);
     assert.equal(captured.raw.includes(SECRET), false);
@@ -869,9 +897,104 @@ test("a saved connection is dropped when the vendor or model changes", async () 
   assert.equal(local.bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
 });
 
+test("a saved connection is dropped when the Base URL changes", async () => {
+  const connected = {
+    "formula.tier2.enabled": true,
+    multimodal: {
+      provider: "custom",
+      apiKey: SECRET,
+      model: "local-vision",
+      customModel: true,
+      baseUrl: "https://vendor.example/v1",
+      probe: { ok: true, chip: "已连通", code: "ok", summary: "", at: 5 }
+    }
+  };
+  const moved = applyFormulaPart(connected, "multimodal", { baseUrl: "https://other.example/v1" });
+  assert.equal(moved.multimodal.baseUrl, "https://other.example/v1");
+  assert.equal(moved.multimodal.probe, null);
+  const slash = applyFormulaPart(connected, "multimodal", { baseUrl: "https://vendor.example/v1/" });
+  assert.equal(slash.multimodal.probe.chip, "已连通");
+  assert.equal(normalizedBaseUrl("https://vendor.example/v1/"), normalizedBaseUrl("https://vendor.example/v1"));
+  const local = memoryStorage({ [FORMULA_SETTINGS_KEY]: connected });
+  const written = await writeFormulaSettings({
+    ...connected,
+    multimodal: { ...connected.multimodal, baseUrl: "https://other.example/v1" }
+  }, local);
+  assert.equal(written.multimodal.probe, null);
+  assert.equal(written.multimodal.baseUrl, "https://other.example/v1");
+  assert.equal(httpBaseUrl("https:///x"), "");
+});
+
+test("a stored empty custom URL accepts switch toggles only", async () => {
+  const already = memoryStorage({
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: {
+        provider: "custom",
+        apiKey: SECRET,
+        model: "m",
+        customModel: true,
+        baseUrl: "",
+        probe: null
+      }
+    }
+  });
+  const written = await writeFormulaSettings({
+    multimodal: {
+      provider: "custom",
+      apiKey: "sk-other",
+      model: "other-model",
+      customModel: true,
+      baseUrl: "vendor.example/v1",
+      probe: { ok: true, chip: "已连通", code: "ok", summary: "", at: 9 }
+    },
+    "formula.tier2.enabled": true,
+    "formula.ocr.enabled": true
+  }, already);
+  assert.equal(written["formula.tier2.enabled"], true);
+  assert.equal(written["formula.ocr.enabled"], true);
+  assert.equal(written.multimodal.provider, "custom");
+  assert.equal(written.multimodal.model, "m");
+  assert.equal(written.multimodal.apiKey, SECRET);
+  assert.equal(written.multimodal.baseUrl, "");
+  assert.equal(written.multimodal.probe, null);
+  assert.equal(customBaseUrlError(written), CUSTOM_BASE_URL_ERROR);
+});
+
+test("a bearer token that crosses the summary clip is fully redacted", async () => {
+  const token = `tok_LIVE_${"abc".repeat(30)}`;
+  const secret = `Bearer ${token}`;
+  const box = responseNet(() => jsonResponse(401, {
+    error: { message: `${"n".repeat(70)}${token}` }
+  }));
+  const probe = await probeMultimodal(openaiSettings({ apiKey: secret }), { secret, net: box.net });
+  assert.equal(probe.summary.length <= 80, true);
+  assert.equal(probe.summary.includes("tok_"), false);
+  assert.equal(probe.summary.toLowerCase().includes(token.slice(0, 8).toLowerCase()), false);
+});
+
+test("only a fetch TypeError is a network failure", async () => {
+  const fetched = await probeMultimodal(openaiSettings(), {
+    secret: SECRET,
+    sendVision: async () => {
+      throw new TypeError("fetch failed");
+    }
+  });
+  assert.equal(fetched.code, "network");
+  assert.equal(fetched.chip, "网络错误");
+  const bug = await probeMultimodal(openaiSettings(), {
+    secret: SECRET,
+    sendVision: async () => {
+      throw new TypeError("Cannot read private member #state");
+    }
+  });
+  assert.notEqual(bug.code, "network");
+  assert.notEqual(bug.chip, "网络错误");
+  assert.equal(bug.chip, "暂不可用");
+});
+
 test("an empty or schemeless custom Base URL is not a ready multimodal card", async () => {
   const llm = { provider: "openai", providers: { openai: { model: "gpt-4o-mini", baseUrl: "https://api.openai.com/v1" } } };
-  for (const baseUrl of ["", "   ", "vendor.example/v1", "/v1", "ftp://vendor.example/v1"]) {
+  for (const baseUrl of ["", "   ", "vendor.example/v1", "/v1", "ftp://vendor.example/v1", "https:///x"]) {
     const settings = {
       [FORMULA_SWITCH_KEYS.tier2]: true,
       multimodal: { provider: "custom", apiKey: SECRET, model: "m", customModel: true, baseUrl }
@@ -942,8 +1065,8 @@ function mulberry32(seed) {
 
 function fingerprint(settings) {
   const mm = settings?.multimodal || {};
-  // apiKey edits keep a stored 「已连通」. Vendor, model, and Base URL do not.
-  return [mm.provider, mm.model, mm.baseUrl].join("\n");
+  // apiKey edits keep a stored 「已连通」. Vendor, model, and normalized Base URL do not.
+  return [mm.provider, mm.model, normalizedBaseUrl(mm.baseUrl)].join("\n");
 }
 
 const optionsHtml = read("options/options.html").replace(/<script\b[\s\S]*?<\/script>/g, "");
@@ -1117,7 +1240,7 @@ async function settleHit(hit, kind, secret) {
   await flush();
 }
 
-function assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, known, tierCalls) {
+function assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, known, tierCalls, askSession) {
   const stored = bag[FORMULA_SETTINGS_KEY];
   const provider = stored?.multimodal?.provider || "";
   if (provider && !isProvenVisionProvider(provider)) {
@@ -1135,10 +1258,37 @@ function assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, kno
       throw new Error(`seed ${seed} step ${step} key outside apiKey`);
     }
   }
-  const dump = JSON.stringify({ syncBag, logs, urls: requests.map((hit) => hit.url), bodies: requests.map((hit) => hit.body), summary });
+  const publicHeaders = requests.map((hit) => {
+    const headers = { ...(hit.headers || {}) };
+    delete headers.Authorization;
+    delete headers.authorization;
+    return headers;
+  });
+  const dump = JSON.stringify({
+    syncBag,
+    logs,
+    urls: requests.map((hit) => hit.url),
+    bodies: requests.map((hit) => hit.body),
+    headers: publicHeaders,
+    summary,
+    askTurns: askSession?.turns || []
+  });
   if (dump.toLowerCase().includes(secret.toLowerCase())) throw new Error(`seed ${seed} step ${step} secret in public dump`);
   for (const hit of requests) {
     if (!hit.body.includes(PNG)) throw new Error(`seed ${seed} step ${step} non-probe request`);
+  }
+  const cacheKey = Object.keys(bag).find((key) => /formula.?cache|probeCache|visionCache/i.test(key));
+  if (cacheKey) throw new Error(`seed ${seed} step ${step} wrote a formula cache ${cacheKey}`);
+  if (stored && Object.prototype.hasOwnProperty.call(stored, "cache")) {
+    throw new Error(`seed ${seed} step ${step} stored a formula cache`);
+  }
+  if (!askSession || askSession.turns.length !== 0 || askSession.flight) {
+    throw new Error(`seed ${seed} step ${step} probe touched the ask queue`);
+  }
+  const probeQueue = mmProbe.queue || mmProbe.pending;
+  const askQueue = askRoute.queue || askRoute.pending;
+  if ((probeQueue && askQueue && probeQueue === askQueue) || (probeQueue && probeQueue.length)) {
+    throw new Error(`seed ${seed} step ${step} probe and ask share a queue`);
   }
   const probe = stored?.multimodal?.probe;
   if (probe?.ok) {
@@ -1159,7 +1309,14 @@ function assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, kno
 test("changing Base URL during a probe aborts that request and clears the button", async () => {
   const bag = {
     [FORMULA_SETTINGS_KEY]: {
-      multimodal: { provider: "custom", apiKey: SECRET, model: "local-vision", customModel: true, baseUrl: "https://vendor.example/v1" }
+      multimodal: {
+        provider: "custom",
+        apiKey: SECRET,
+        model: "local-vision",
+        customModel: true,
+        baseUrl: "https://vendor.example/v1",
+        probe: { ok: true, chip: "已连通", code: "ok", summary: "", at: 5 }
+      }
     }
   };
   const listeners = [];
@@ -1184,6 +1341,9 @@ test("changing Base URL during a probe aborts that request and clears the button
     await flush();
     assert.equal(pending[0].signal.aborted, true);
     assert.equal(probeButton(tab).textContent, "测试连通");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://other.example/v1");
+    assert.notEqual(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, true);
+    assert.notEqual(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.chip, "已连通");
     pending[0].resolve(jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] }));
     await flush();
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://other.example/v1");
@@ -1232,7 +1392,7 @@ test("a 200 that arrives after the card changed is not written onto the new card
               return body;
             };
           }
-          const value = Reflect.get(target, prop, receiver);
+          const value = Reflect.get(target, prop, target);
           return typeof value === "function" ? value.bind(target) : value;
         }
       });
@@ -1290,6 +1450,48 @@ test("another tab's formula write drops the in-flight probe", async () => {
     installNet(null);
     restoreGlobals(previous);
   }
+});
+
+test("choosing custom without a Base URL does not turn tier 2 on for the previous vendor", async () => {
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      "formula.tier2.enabled": false,
+      multimodal: { provider: "openai", apiKey: SECRET, model: "gpt-5.6-luna", baseUrl: "" }
+    }
+  };
+  const listeners = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, listeners);
+  installNet(createNet({
+    log: () => {},
+    random: () => 0,
+    sleep: () => Promise.resolve(),
+    transport() { return jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] }); }
+  }));
+  try {
+    const tab = await openOptionsTab("guard-custom-switch");
+    assert.equal(providerSelect(tab).value, "openai");
+    changeProvider(tab, "custom");
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "openai");
+    toggleTier2(tab);
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "openai");
+    assert.equal(bag[FORMULA_SETTINGS_KEY]["formula.tier2.enabled"], false);
+    assert.equal(providerSelect(tab).value, "openai");
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+test("an unexpected probe failure is unavailable, not a network error", async () => {
+  const mod = await import(pathToFileURL(join(root, "options/options.js")).href);
+  const probe = mod.classifyUnexpectedProbe(new Error("probe send failed"));
+  assert.equal(probe.chip, "暂不可用");
+  assert.notEqual(probe.code, "network");
+  assert.notEqual(probe.chip, "网络错误");
+  assert.throws(() => mod.classifyUnexpectedProbe(Object.assign(new Error("net"), { code: "real-network-in-test" })));
 });
 
 test("undo during a probe restores the button and drops the result", async () => {
@@ -1358,6 +1560,37 @@ function restoreGlobals(previous) {
   }
 }
 
+async function settleLateSuccess(seed, tab, arm, bag, secret) {
+  tab.window.dispatchEvent(new tab.window.Event("pagehide"));
+  changeProvider(tab, "openai");
+  await flush();
+  changeModel(tab, "gpt-5.6-luna");
+  await flush();
+  commitKey(tab, secret);
+  await flush();
+  if (!await clickProbe(tab, arm)) throw new Error(`seed ${seed} late probe did not start`);
+  const hit = arm.pending[arm.pending.length - 1];
+  await settleHit(hit, "ok", secret);
+  const index = arm.pending.indexOf(hit);
+  if (index >= 0) arm.pending.splice(index, 1);
+  const saved = bag[FORMULA_SETTINGS_KEY]?.multimodal?.probe;
+  if (!saved?.ok) throw new Error(`seed ${seed} late setup did not store 已连通`);
+  const at = saved.at;
+  if (!await clickProbe(tab, arm)) throw new Error(`seed ${seed} second probe did not start`);
+  const late = arm.pending[arm.pending.length - 1];
+  commitKey(tab, `${secret}-late`);
+  await flush();
+  await settleHit(late, "ok", secret);
+  const lateIndex = arm.pending.indexOf(late);
+  if (lateIndex >= 0) arm.pending.splice(lateIndex, 1);
+  const after = bag[FORMULA_SETTINGS_KEY]?.multimodal;
+  if (after?.probe?.ok !== true || after.probe.at !== at || after.probe.chip !== "已连通") {
+    throw new Error(`seed ${seed} late result replaced the stored success`);
+  }
+  commitKey(tab, secret);
+  await flush();
+}
+
 async function runSeed(seed, tierCalls) {
   const rand = mulberry32(seed);
   const secret = `probe-secret-${seed}-zz`;
@@ -1372,6 +1605,7 @@ async function runSeed(seed, tierCalls) {
   const requests = [];
   const pending = [];
   const known = { probe: null };
+  const askSession = createAskSession({ docHash: `seed-${seed}`, nonce: "probe" });
   const arm = { pending, current: null };
   const previous = captureGlobals();
   installChromeHarness(bag, syncBag, listeners);
@@ -1388,7 +1622,7 @@ async function runSeed(seed, tierCalls) {
         tab: arm.current,
         seq: requests.length
       };
-      requests.push({ url: hit.url, body: hit.body });
+      requests.push({ url: hit.url, body: hit.body, headers: hit.headers });
       pending.push(hit);
       return new Promise((resolve, reject) => {
         hit.resolve = resolve;
@@ -1401,9 +1635,9 @@ async function runSeed(seed, tierCalls) {
     tabs.push(await openOptionsTab(`seed-${seed}-a`));
     tabs.push(await openOptionsTab(`seed-${seed}-b`));
     const events = [
-      "openai", "key", "model", "probe", "ok", "401", "429", "novision", "timeout", "network",
-      "deepseek-select", "url", "empty-url", "schemeless", "remove-key", "undo",
-      "toggle", "unload", "retry", "other-tab"
+      "openai", "key", "model", "probe", "both", "ok", "401", "429", "novision", "timeout", "network",
+      "deepseek-select", "url", "url-b", "empty-url", "schemeless", "remove-key", "undo",
+      "toggle", "unload", "retry", "other-tab", "late"
     ];
     for (let step = 0; step < 24; step += 1) {
       const tab = tabs[Math.floor(rand() * tabs.length)];
@@ -1412,17 +1646,23 @@ async function runSeed(seed, tierCalls) {
       if (event === "openai") changeProvider(tab, "openai");
       else if (event === "key") commitKey(tab, secret);
       else if (event === "model") changeModel(tab, rand() < 0.5 ? "gpt-5.4-mini" : "gpt-5.6-luna");
-      else if (event === "probe" || event === "retry") await clickProbe(tab, arm);
+      else if (event === "probe" || event === "retry" || event === "both") {
+        await clickProbe(tab, arm);
+        if (event === "both" || rand() < 0.5) await clickProbe(other, arm);
+      }
       else if (event === "deepseek-select") {
         const before = providerSelect(tab).value;
         changeProvider(tab, "deepseek");
         await flush();
         assert.notEqual(providerSelect(tab).value, "deepseek");
         assert.equal(providerSelect(tab).value, before);
-      } else if (event === "url") {
-        changeProvider(tab, "custom");
-        await flush();
-        changeBaseUrl(tab, "https://vendor.example/v1");
+      } else if (event === "url" || event === "url-b") {
+        const mm = bag[FORMULA_SETTINGS_KEY]?.multimodal;
+        if (mm?.provider !== "custom") {
+          changeProvider(tab, "custom");
+          await flush();
+        }
+        changeBaseUrl(tab, event === "url" ? "https://vendor.example/v1" : "https://other.example/v1");
       } else if (event === "empty-url" || event === "schemeless") {
         changeProvider(tab, "custom");
         await flush();
@@ -1437,6 +1677,7 @@ async function runSeed(seed, tierCalls) {
       else if (event === "toggle") toggleTier2(tab);
       else if (event === "unload") tab.window.dispatchEvent(new tab.window.Event("pagehide"));
       else if (event === "other-tab") changeModel(other, "gpt-5.4-mini");
+      else if (event === "late") await settleLateSuccess(seed, tab, arm, bag, secret);
       else if (pending.length) {
         const hit = pending.splice(Math.floor(rand() * pending.length), 1)[0];
         const before = structuredClone(bag[FORMULA_SETTINGS_KEY] || null);
@@ -1460,7 +1701,7 @@ async function runSeed(seed, tierCalls) {
           throw new Error(`seed ${seed} step ${step} live probe left the button`);
         }
       }
-      assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, known, tierCalls);
+      assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, known, tierCalls, askSession);
     }
     for (const hit of pending.splice(0)) {
       const aborted = hit.signal?.aborted === true;
@@ -1471,7 +1712,7 @@ async function runSeed(seed, tierCalls) {
         assert.equal(bag[FORMULA_SETTINGS_KEY]?.multimodal?.probe?.at, before.multimodal.probe.at);
       }
     }
-    assertStoredProbe(seed, "end", bag, secret, requests, logs, syncBag, known, tierCalls);
+    assertStoredProbe(seed, "end", bag, secret, requests, logs, syncBag, known, tierCalls, askSession);
     assert.equal(isProvenVisionProvider("deepseek"), false);
     if (!multimodalReady(bag[FORMULA_SETTINGS_KEY] || {})) {
       assert.notEqual(resolveAskTarget(llmSettings, bag[FORMULA_SETTINGS_KEY] || {}).via, "multimodal");
