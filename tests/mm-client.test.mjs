@@ -756,6 +756,28 @@ test("a failed key read that is already aborted stays aborted", async () => {
   assert.equal(failed.error.summary.includes("disk read failed"), false);
 });
 
+test("a failed key read after settings change is discarded", async () => {
+  const held = "k9x2";
+  let live = true;
+  const box = harness(() => chatOrGemini(VENDORS[0], "no"));
+  const failed = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0])),
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    readSecret: async () => {
+      live = false;
+      throw new Error(`disk read failed ${held}`);
+    },
+    stillCurrent: () => live,
+    net: box.net
+  });
+  assert.equal(box.seen.length, 0);
+  assert.equal(failed.error.code, "aborted");
+  assert.equal(failed.error.summary, "设置已变，结果作废");
+  assert.equal(failed.error.summary.includes(held), false);
+  assert.equal(failed.error.summary.includes("disk read failed"), false);
+});
+
 test("api_key_id and hash fragments are stripped, and a path key is left in place", () => {
   const leaked = "url-key-99";
   const target = multimodalTarget(normalizeFormulaSettings({

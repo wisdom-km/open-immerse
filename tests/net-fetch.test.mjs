@@ -765,6 +765,53 @@ test("multimodal error logs redact the sent key and other purposes do not", asyn
   assert.equal(probe[0].headers["x-goog-api-key"], "***");
 });
 
+test("multimodal error logs redact a bare key carried by Authorization Bearer", async () => {
+  const key = "AIzaSyD-bare-bearer-key-0123456789";
+  const logs = [];
+  const net = createNet({
+    log: (row) => logs.push(row),
+    random: () => 0,
+    sleep: () => Promise.resolve(),
+    transport() {
+      throw new Error(`fetch failed ${key}`);
+    }
+  });
+  await assert.rejects(() => net.fetch({
+    url: "https://example.test/bearer",
+    purpose: "multimodal",
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}` },
+    timeoutMs: false,
+    retry: false
+  }));
+  assert.equal(JSON.stringify(logs).includes(key), false);
+  assert.match(logs[0].error, /fetch failed/);
+  assert.equal(logs[0].headers.Authorization, "***");
+});
+
+test("a Bearer token with leading whitespace is still redacted in multimodal error logs", async () => {
+  const key = "AIzaSyD-spaced-bearer-key-0123456789";
+  const logs = [];
+  const net = createNet({
+    log: (row) => logs.push(row),
+    random: () => 0,
+    sleep: () => Promise.resolve(),
+    transport() {
+      throw new Error(`fetch failed ${key}`);
+    }
+  });
+  await assert.rejects(() => net.fetch({
+    url: "https://example.test/bearer-space",
+    purpose: "multimodal",
+    method: "POST",
+    headers: { Authorization: `  Bearer ${key}` },
+    timeoutMs: false,
+    retry: false
+  }));
+  assert.equal(JSON.stringify(logs).includes(key), false);
+  assert.match(logs[0].error, /fetch failed/);
+});
+
 test("error bodies stay unread unless the caller opts in", async () => {
   const body = JSON.stringify({ error: { message: "This model does not support image input" } });
   function transport() {
