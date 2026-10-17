@@ -54,7 +54,7 @@ Intent card: primary **翻译此页** (becomes **停止** while a job runs), **�
 
 **Settings four groups: 引擎 / 阅读 / 功能 / 高级**
 
-Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages; page names are in [`docs/settings-spec.md`](docs/settings-spec.md) (`#translate`, `#mm`, `#web`, `#pdf`, `#notes`, `#labs`, `#data`, `#about`). 多模态 · OCR is a top-level page (`#mm`, second item in the 常规 group), not a section inside another page. Ask AI is no longer its own page (2026-10-13 12:19–12:23, spec approved by Wisdom at 13:01, SET-01…SET-34). Landed in #137. The four groups and the screenshots below are the UI from before that redesign. Lab PDF is still enabled under **Settings → Advanced**.
+Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages; page names are in [`docs/settings-spec.md`](docs/settings-spec.md) (`#translate`, `#mm`, `#web`, `#pdf`, `#notes`, `#labs`, `#data`, `#about`). 多模态 · OCR is a top-level page (`#mm`, second item in the 常规 group), not a section inside another page. Ask AI is no longer its own page (2026-10-13 12:19–12:23, spec approved by Wisdom at 13:01, SET-01…SET-34). Landed in #137. The four groups and the screenshots below are the UI from before that redesign. The lab PDF entry follows the settings-page spec.
 
 ![Options: default engine and test connection](docs/screenshots/03-options-engine.png)
 
