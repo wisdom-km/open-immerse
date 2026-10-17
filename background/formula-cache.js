@@ -11,7 +11,9 @@ import {
   isCacheableFormulaRecord,
   stripFormulaImageUrl,
   tierCommitAllowed,
-  decisionCommitAllowed
+  decisionCommitAllowed,
+  displacedVerifiedTier,
+  tierRollbackPlan
 } from "../lib/formula-cache.js";
 
 export { FORMULA_DB };
@@ -158,14 +160,20 @@ export function createIdbFormulaStore({
           const getReq = objectStore.get(key);
           getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
           getReq.onsuccess = () => {
-            if (!tierCommitAllowed(getReq.result || null, record)) {
+            const existing = getReq.result || null;
+            if (!tierCommitAllowed(existing, record)) {
               resolve(false);
               return;
             }
+            const displaced = displacedVerifiedTier(existing);
             const next = prepareRecord(key, record);
+            delete next.displacedTier;
             const putReq = objectStore.put(next, key);
             putReq.onerror = () => reject(putReq.error || tx.error || new Error("indexedDB request failed"));
-            putReq.onsuccess = () => resolve(true);
+            putReq.onsuccess = () => {
+              if (displaced && record && typeof record === "object") record.displacedTier = displaced;
+              resolve(true);
+            };
           };
         });
         if (stored) await evict(db, record?.docHash || "");
@@ -186,13 +194,45 @@ export function createIdbFormulaStore({
           getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
           getReq.onsuccess = () => {
             const row = getReq.result;
-            if (!row || row.writeId !== writeId) {
+            if (writeId == null || !row || row.writeId == null || row.writeId !== writeId) {
               resolve(false);
               return;
             }
             const delReq = objectStore.delete(key);
             delReq.onerror = () => reject(delReq.error || tx.error || new Error("indexedDB request failed"));
             delReq.onsuccess = () => resolve(true);
+          };
+        });
+      } finally {
+        db.close();
+      }
+    },
+    async rollbackTier(key, writeId, displaced) {
+      const db = await openExisting();
+      if (!db) return false;
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = db.transaction("tierResults", "readwrite");
+          const objectStore = tx.objectStore("tierResults");
+          const getReq = objectStore.get(key);
+          getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
+          getReq.onsuccess = () => {
+            const plan = tierRollbackPlan(getReq.result, writeId, displaced);
+            if (plan === "restore") {
+              const next = prepareRecord(key, displaced);
+              delete next.displacedTier;
+              const putReq = objectStore.put(next, key);
+              putReq.onerror = () => reject(putReq.error || tx.error || new Error("indexedDB request failed"));
+              putReq.onsuccess = () => resolve(true);
+              return;
+            }
+            if (plan === "delete") {
+              const delReq = objectStore.delete(key);
+              delReq.onerror = () => reject(delReq.error || tx.error || new Error("indexedDB request failed"));
+              delReq.onsuccess = () => resolve(true);
+              return;
+            }
+            resolve(false);
           };
         });
       } finally {
@@ -282,7 +322,14 @@ export async function handleFormulaCacheMessage(message = {}, store = sharedForm
     if (action === "commit") {
       if (typeof store.commitTier !== "function") return { ok: false, stored: false };
       const stored = await store.commitTier(message.key, message.value);
-      return { ok: true, stored: stored === true };
+      const displaced = message.value?.displacedTier || null;
+      if (message.value && typeof message.value === "object") delete message.value.displacedTier;
+      return { ok: true, stored: stored === true, displaced };
+    }
+    if (action === "rollback") {
+      if (typeof store.rollbackTier !== "function") return { ok: true, rolled: false };
+      const rolled = await store.rollbackTier(message.key, message.writeId, message.displaced || null);
+      return { ok: true, rolled: rolled === true };
     }
     if (action === "delete") {
       if (typeof store.deleteTier !== "function") return { ok: true, deleted: false };

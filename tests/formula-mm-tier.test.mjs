@@ -14,7 +14,8 @@
  * ② 中止或过期的结果不写缓存，块上也不留下 vlm；
  * ③ 关开关、移除密钥、换厂商或模型之后，不为旧配置再发请求，在途结果作废；
  * ④ 缓存命中的记录属于当前 model + cropHash + mm-1；
- * ⑤ 已经核对通过的公式不会被更旧的结果降级，也不会被更早采样的已核对行盖掉；回滚只删自己的 writeId；
+ * ⑤ 已经核对通过的公式不会被更旧的结果降级，也不会被更早采样的已核对行盖掉。
+ *    仍存活调用者的已核对决策必须有对应 tier 行；后写入的过期回滚要恢复被它换掉的行。
  * ⑥ 问 AI 不和公式队列互相等待，也不改对方的状态；
  * ⑦ 只接了多模态这一家时，核对不过或调用失败不会去跑自研算法或矢量重绘。
  */
@@ -125,8 +126,35 @@ function wrapStore(inner, state) {
         throw new Error("cache write interrupted");
       }
       const stored = await inner.commitTier(key, record);
-      if (stored) state.saved.push({ ...structuredClone(record), key });
+      if (stored) {
+        const copy = { ...record };
+        delete copy.displacedTier;
+        state.saved.push({ ...structuredClone(copy), key });
+      }
       return stored;
+    },
+    async rollbackTier(key, writeId, displaced) {
+      const rolled = typeof inner.rollbackTier === "function"
+        ? await inner.rollbackTier(key, writeId, displaced)
+        : false;
+      if (rolled) {
+        const kept = await inner.getTier(key);
+        const next = [];
+        let seen = false;
+        for (const row of state.saved) {
+          if (row.key !== key) {
+            next.push(row);
+            continue;
+          }
+          if (kept && row.writeId === kept.writeId && !seen) {
+            next.push(row);
+            seen = true;
+          }
+        }
+        if (kept && !seen) next.push({ ...structuredClone(kept) });
+        state.saved = next;
+      }
+      return rolled;
     },
     async deleteTier(key, writeId) {
       const removed = await inner.deleteTier(key, writeId);
@@ -1363,6 +1391,197 @@ test("a same-tab rollback does not delete the other caller's newer verified row"
   await overlap(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "crop-a", "crop-b", "idb other crop");
 });
 
+function verifiedTierRecord(latex, extra = {}) {
+  return {
+    docHash: extra.docHash || "doc",
+    unitKey: extra.unitKey || "doc:b",
+    decidedAt: extra.decidedAt ?? 1000,
+    writeId: extra.writeId,
+    chainVersion: "f3-1",
+    tier: "multimodal",
+    model: extra.model || "m",
+    result: {
+      tier: "multimodal",
+      status: "ok",
+      render: "katex",
+      latex,
+      meta: { version: "mm-1", epoch: extra.epoch ?? 1 }
+    }
+  };
+}
+
+test("rollback of a later verified write restores the row it replaced", async () => {
+  async function restore(real, label) {
+    const key = `doc:restore:${label}`;
+    const older = verifiedTierRecord("x", { writeId: "tab:1", unitKey: "doc:restore" });
+    const newer = verifiedTierRecord("x", { writeId: "tab:2", unitKey: "doc:restore" });
+    assert.equal(await real.commitTier(key, older), true, label);
+    assert.equal(await real.commitTier(key, newer), true, label);
+    assert.equal(newer.displacedTier?.writeId, "tab:1", label);
+    assert.equal(await real.rollbackTier(key, "tab:2", newer.displacedTier), true, label);
+    const row = await real.getTier(key);
+    assert.equal(row?.writeId, "tab:1", label);
+    assert.equal(row?.result?.latex, "x", label);
+  }
+  await restore(createMemoryStore(), "memory");
+  await restore(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "idb");
+  const memory = createMemoryStore();
+  const remote = createMessageFormulaStore((message) => handleFormulaCacheMessage(message, memory));
+  const key = "doc:restore:message";
+  const older = verifiedTierRecord("x", { writeId: "tab:1", unitKey: "doc:restore" });
+  const newer = verifiedTierRecord("x", { writeId: "tab:2", unitKey: "doc:restore" });
+  assert.equal(await remote.commitTier(key, older), true);
+  assert.equal(await remote.commitTier(key, newer), true);
+  assert.equal(newer.displacedTier?.writeId, "tab:1");
+  assert.equal(await remote.rollbackTier(key, newer.writeId, newer.displacedTier), true);
+  assert.equal((await memory.getTier(key))?.writeId, "tab:1");
+});
+
+test("a stale later commit restores the live caller's verified row", async () => {
+  const settings = settingsFor("openai");
+  const other = await import("../lib/formula-cache.js?realm=b");
+  async function swapped(real, createOther, skew, label) {
+    const shown = await runOverlappedPair(real, {
+      settings,
+      createCache: createFormulaCache,
+      createOther,
+      staleWho: 1,
+      swap: false,
+      skew,
+      docHash: `doc-swap-${label}`,
+      label
+    });
+    assert.equal(shown.live.latexSource, "vlm", `${label} live`);
+    assert.equal(shown.stale.latexSource, undefined, `${label} stale`);
+    assert.equal(shown.decision?.decision?.chosen?.latex, "x", `${label} decision`);
+    assert.equal(shown.row?.result?.latex, "x", `${label} tier`);
+    assert.equal(shown.row?.writeId, shown.liveWriteId, `${label} restored id`);
+  }
+  await swapped(createMemoryStore(), null, 0, "memory same ms");
+  await swapped(createIdbFormulaStore({ indexedDB: new IDBFactory() }), null, 0, "idb same ms");
+  await swapped(createMemoryStore(), other.createFormulaCache, 0, "memory cross nonce");
+  await swapped(createMemoryStore(), other.createFormulaCache, 1, "memory cross nonce +1ms");
+  await swapped(createIdbFormulaStore({ indexedDB: new IDBFactory() }), other.createFormulaCache, 0, "idb cross nonce");
+  await swapped(createIdbFormulaStore({ indexedDB: new IDBFactory() }), other.createFormulaCache, 1, "idb cross nonce +1ms");
+});
+
+async function runOverlappedPair(real, options) {
+  const {
+    settings,
+    createCache,
+    createOther = null,
+    staleWho,
+    swap,
+    skew,
+    docHash,
+    label
+  } = options;
+  const callers = [
+    { index: 0, stale: false, shown: null },
+    { index: 1, stale: false, shown: null }
+  ];
+  let reads = 0;
+  let releaseLoads;
+  const loadsSeen = new Promise((resolve) => {
+    releaseLoads = resolve;
+  });
+  let openLoads;
+  const loadsHold = new Promise((resolve) => {
+    openLoads = resolve;
+  });
+  let commits = 0;
+  let liveWriteId = null;
+  let tierKey = "";
+  let releaseFirst;
+  const firstHeld = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  let resolveBoth;
+  const bothCommitted = new Promise((resolve) => {
+    resolveBoth = resolve;
+  });
+  const gate = createCallGate();
+  function face(caller) {
+    return {
+      async getTier(key) {
+        reads += 1;
+        if (reads === 2) releaseLoads();
+        if (reads <= 2) await loadsHold;
+        return real.getTier(key);
+      },
+      async commitTier(key, record) {
+        const arrival = commits;
+        commits += 1;
+        tierKey = key;
+        if (caller.index !== staleWho) liveWriteId = record.writeId;
+        if (commits === 2) {
+          resolveBoth();
+          releaseFirst();
+        }
+        if (arrival === 0 && swap) await firstHeld;
+        return real.commitTier(key, record);
+      },
+      async rollbackTier(key, writeId, displaced) {
+        return real.rollbackTier(key, writeId, displaced);
+      },
+      async deleteTier(key, writeId) {
+        return real.deleteTier(key, writeId);
+      },
+      async getDecision(key) {
+        if (caller.index === staleWho) {
+          await bothCommitted;
+          caller.stale = true;
+        }
+        return real.getDecision(key);
+      },
+      async putDecision(key, record) {
+        return real.putDecision(key, record);
+      }
+    };
+  }
+  const nowA = () => 1000;
+  const nowB = () => 1000 + skew;
+  const cacheA = createCache(face(callers[0]), { now: nowA, gate });
+  const cacheB = (createOther || createCache)(face(callers[1]), { now: nowB, gate });
+  const caches = [cacheA, cacheB];
+  let sends = 0;
+  const call = (caller) => scheduleFormulaBlock(formulaBlock({ bid: "pair", text: "x" }), {
+    ...formulaChainFlags(settings),
+    docHash,
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache: caches[caller.index],
+    model: "m",
+    isStale: () => caller.stale,
+    cropPngFor: async () => ({ mime: "image/png", base64: "crop-same", w: 1, h: 1, hash: "crop-same" }),
+    sendVision: async () => {
+      sends += 1;
+      if (sends === 1) {
+        for (let i = 0; i < 40 && sends < 1; i += 1) await Promise.resolve();
+      }
+      return { ok: true, text: "x" };
+    },
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  const first = call(callers[0]);
+  const second = call(callers[1]);
+  for (let i = 0; i < 40 && reads < 2; i += 1) await Promise.resolve();
+  assert.equal(reads, 2, `${label} both read`);
+  openLoads();
+  const [shownA, shownB] = await Promise.all([first, second]);
+  callers[0].shown = shownA;
+  callers[1].shown = shownB;
+  return {
+    live: callers[staleWho === 0 ? 1 : 0].shown,
+    stale: callers[staleWho].shown,
+    decision: await real.getDecision(`${docHash}:pair`),
+    row: tierKey ? await real.getTier(tierKey) : null,
+    liveWriteId,
+    sends
+  };
+}
+
 test("an earlier verified sample cannot overwrite a newer one", async () => {
   async function race(real, label) {
     let held = 0;
@@ -1786,6 +2005,47 @@ test("deleteTier removes only the matching write id", async () => {
   assert.equal((await store.getTier(key)).result.latex, "A");
   assert.equal(await remote.deleteTier(key, 1), true);
   assert.equal(await store.getTier(key), null);
+});
+
+test("an older cross-nonce sample cannot replace a newer verified row", async () => {
+  async function older(real, label) {
+    const key = `doc:wo2:${label}`;
+    assert.equal(await real.commitTier(key, verifiedTierRecord("x", { writeId: "tab1:1", decidedAt: 2000 })), true, label);
+    assert.equal(await real.commitTier(key, verifiedTierRecord("y", { writeId: "tab2:9", decidedAt: 1999 })), false, label);
+    assert.equal((await real.getTier(key))?.result?.latex, "x", label);
+    assert.equal(await real.commitTier(key, verifiedTierRecord("z", { writeId: "tab1:4", decidedAt: 1500 })), false, `${label} clock back`);
+    assert.equal((await real.getTier(key))?.writeId, "tab1:1", `${label} clock back`);
+  }
+  await older(createMemoryStore(), "memory");
+  await older(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "idb");
+});
+
+test("a newer cross-nonce sample replaces a verified row even when its serial is lower", async () => {
+  async function newer(real, label) {
+    const key = `doc:wo4:${label}`;
+    assert.equal(await real.commitTier(key, verifiedTierRecord("x", { writeId: "tab1:5", decidedAt: 1000 })), true, label);
+    assert.equal(await real.commitTier(key, verifiedTierRecord("y", { writeId: "tab2:1", decidedAt: 1001 })), true, label);
+    const row = await real.getTier(key);
+    assert.equal(row?.writeId, "tab2:1", label);
+    assert.equal(row?.result?.latex, "y", label);
+    assert.equal(row?.decidedAt, 1001, label);
+  }
+  await newer(createMemoryStore(), "memory");
+  await newer(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "idb");
+});
+
+test("deleteTier does not remove a row that has no write id", async () => {
+  async function legacy(real, label) {
+    const key = `doc:legacy:${label}`;
+    const row = verifiedTierRecord("x", { decidedAt: 1000 });
+    delete row.writeId;
+    assert.equal(await real.commitTier(key, row), true, label);
+    assert.equal(await real.deleteTier(key, undefined), false, label);
+    assert.equal(await real.deleteTier(key), false, label);
+    assert.equal((await real.getTier(key))?.result?.latex, "x", label);
+  }
+  await legacy(createMemoryStore(), "memory");
+  await legacy(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "idb");
 });
 
 test("guard: a stale read does not return the cached hit", async () => {
@@ -2416,6 +2676,73 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
   assert.equal(counts.vector || 0, 0, `seed ${seed} vector`);
   assert.equal(JSON.stringify(shown || {}).includes(world.secret), false, `seed ${seed} block`);
 }
+
+test("500 seeds keep a live verified decision paired with its tier row", async () => {
+  const other = await import("../lib/formula-cache.js?realm=pair");
+  const idb = createIdbFormulaStore({ indexedDB: new IDBFactory() });
+  const settings = settingsFor("openai");
+  const cover = {
+    memory: 0,
+    idb: 0,
+    same: 0,
+    cross: 0,
+    ms: 0,
+    plus: 0,
+    minus: 0,
+    staleFirst: 0,
+    staleSecond: 0,
+    swap: 0,
+    natural: 0
+  };
+  let paired = 0;
+  for (let seed = 1; seed <= 500; seed += 1) {
+    const rng = mulberry32(seed);
+    const useIdb = rng() < 0.5;
+    const cross = rng() < 0.5;
+    const skewPick = rng();
+    const skew = skewPick < 0.34 ? 0 : skewPick < 0.67 ? 1 : -1;
+    const staleWho = rng() < 0.5 ? 0 : 1;
+    const swap = rng() < 0.5;
+    const real = useIdb ? idb : createMemoryStore();
+    const label = `seed ${seed}`;
+    try {
+      const shown = await runOverlappedPair(real, {
+        settings,
+        createCache: createFormulaCache,
+        createOther: cross ? other.createFormulaCache : null,
+        staleWho,
+        swap,
+        skew,
+        docHash: `doc-pair-${seed}-${useIdb ? "idb" : "mem"}`,
+        label
+      });
+      const chosen = shown.decision?.decision?.chosen;
+      const verified = chosen?.status === "ok" && chosen.render === "katex" && chosen.latex;
+      if (verified) {
+        paired += 1;
+        assert.ok(shown.row, `${label} live decision missing tier`);
+        assert.equal(shown.row.result?.latex, chosen.latex, `${label} latex`);
+        assert.equal(shown.row.result?.status, "ok", `${label} status`);
+        assert.equal(shown.row.result?.render, "katex", `${label} render`);
+      }
+      if (shown.live?.latexSource === "vlm" && verified) {
+        assert.ok(shown.row, `${label} surviving caller missing tier`);
+      }
+      cover[useIdb ? "idb" : "memory"] += 1;
+      cover[cross ? "cross" : "same"] += 1;
+      cover[skew === 0 ? "ms" : skew === 1 ? "plus" : "minus"] += 1;
+      cover[staleWho === 0 ? "staleFirst" : "staleSecond"] += 1;
+      cover[swap ? "swap" : "natural"] += 1;
+    } catch (err) {
+      console.error(`mm-tier pair failed seed=${seed} idb=${useIdb} cross=${cross} skew=${skew} staleWho=${staleWho} swap=${swap}`);
+      throw err;
+    }
+  }
+  for (const [key, count] of Object.entries(cover)) {
+    assert.ok(count > 0, key);
+  }
+  assert.ok(paired > 100, `paired decisions ${paired}`);
+});
 
 test("500 seeds pause inside read, send, and write", async () => {
   const cover = {};
