@@ -10,12 +10,13 @@ import {
   buildAskMessages,
   citationPayload,
   clearTurns,
+  bindAskDoc,
   claimNoteSave,
   createAskSession,
   finishNoteSave,
   nearbyBlocks,
-  noteForTurn,
   noteInputFromTurn,
+  planNoteSave,
   retryTurn,
   settleTurn,
   stopTurn
@@ -106,7 +107,7 @@ export function mountAskUi(api = {}) {
   });
   slot.append(root);
 
-  const session = createAskSession();
+  const session = createAskSession({ docHash: api.docHash?.() || "" });
   const saveControllers = new Map();
   const state = {
     open: false,
@@ -592,6 +593,7 @@ export function mountAskUi(api = {}) {
   }
 
   async function submit({ confirmed = false, forceText = false } = {}) {
+    bindAskDoc(session, api.docHash?.() || "");
     if (session.flight) return { ok: false, reason: "busy" };
     const question = String(session.draft || "");
     if (!question.trim()) return { ok: false, reason: "empty" };
@@ -704,24 +706,31 @@ export function mountAskUi(api = {}) {
     api.toast?.("已复制");
   }
 
+  // Interrupt point: listNotes is read before the put. A memory row left by a
+  // failed write is not durable, so ✓ waits until saveNote resolves.
   async function saveNote(turn) {
-    if (turn.noteId) {
-      root.querySelector(`[data-turn="${cssEscape(turn.id)}"] [data-ask-act="view"]`)?.focus();
-      return { ok: false, reason: "exists", noteId: turn.noteId };
-    }
+    const docHash = String(api.docHash?.() || "");
     const listed = await api.listNotes?.() || [];
-    const prior = noteForTurn(listed, turn.id);
-    if (prior) {
-      turn.noteId = prior.id;
+    const durableIds = typeof api.durableNoteIds === "function" ? await api.durableNoteIds() : null;
+    const plan = planNoteSave(turn, listed, docHash, durableIds);
+    if (plan.action === "missing") return { ok: false, reason: "missing" };
+    if (plan.action === "exists") {
+      root.querySelector(`[data-turn="${cssEscape(turn.id)}"] [data-ask-act="view"]`)?.focus();
+      return { ok: false, reason: "exists", noteId: plan.noteId };
+    }
+    if (plan.action === "reuse") {
+      turn.noteId = plan.noteId;
+      turn.pendingDisk = false;
       render();
       root.querySelector(`[data-turn="${cssEscape(turn.id)}"] [data-ask-act="view"]`)?.focus();
-      return { ok: true, noteId: prior.id, reused: true };
+      return { ok: true, noteId: plan.noteId, reused: true };
     }
     const claim = claimNoteSave(session, turn.id);
     if (!claim.ok) {
       if (claim.noteId) root.querySelector(`[data-turn="${cssEscape(turn.id)}"] [data-ask-act="view"]`)?.focus();
       return claim;
     }
+    turn.pendingDisk = true;
     const cite = turn.citation || turn.askedParagraph || null;
     const anchor = await api.anchorFor?.(cite) || null;
     const input = noteInputFromTurn(turn, { docHash: api.docHash?.() || "", anchor, page: cite?.page || 0 });

@@ -8,6 +8,7 @@ import { parseHTML } from "linkedom";
 import { askTarget } from "../lib/ask-model.js";
 import { BID_VERSION, blockSrcHash } from "../lib/pdf-block-id.js";
 import { firstLineQuote, noteMatchesFilter } from "../lib/notes-view-model.js";
+import { createNotesStore } from "../lib/notes-store.js";
 import { mountAskUi } from "../pdf/ask-panel.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -75,7 +76,7 @@ function harness(options = {}) {
     currentCitation: () => (Object.prototype.hasOwnProperty.call(options, "currentCitation")
       ? options.currentCitation
       : { bid: "b3", page: 4, kind: "text", text: "我们怀疑当 d_k 较大时。" }),
-    docHash: () => "doc-attn",
+    docHash: () => options.docHash || "doc-attn",
     readRoute: async () => {
       const target = askTarget(settings, formula);
       const apiKey = target?.via === "multimodal"
@@ -91,9 +92,10 @@ function harness(options = {}) {
       if (options.fail) return options.fail(req);
       return { ok: true, status: 200, body: options.answer || "点积要除以 $\\sqrt{d_k}$。" };
     },
-    saveNote: async (input, options) => {
+    saveNote: async (input, saveOptions) => {
+      if (options.backend) return options.backend.save(input, saveOptions);
       if (saveGate) await saveGate;
-      if (options?.signal?.aborted) return null;
+      if (saveOptions?.signal?.aborted) return null;
       if (saveError) throw new Error("disk");
       const id = input.id || `note-${notes.length + 1}`;
       const prior = notes.find((note) => note.id === id || (input.qa?.turnId && note.qa?.turnId === input.qa.turnId));
@@ -103,7 +105,10 @@ function harness(options = {}) {
       notes.push(note);
       return note;
     },
-    listNotes: async () => notes.slice(),
+    listNotes: async () => (options.backend
+      ? options.backend.list(options.docHash || "doc-attn")
+      : notes.slice()),
+    durableNoteIds: () => (options.backend ? options.backend.durableIds() : null),
     anchorFor: async (citation) => {
       if (!citation?.bid) return null;
       const quote = firstLineQuote(citation.text || "");
@@ -661,6 +666,109 @@ test("preview line matches the request and suggestions do not send", async () =>
   assert.match(user2, /E=mc\^2/);
   assert.match(user2, /输入由维度/);
   assert.match(user2, /乘以/);
+});
+
+function persistentNotes() {
+  const store = createNotesStore({ memory: true, persist: false });
+  const volatile = new Map();
+  const backend = {
+    writes: 0,
+    fail: 0,
+    async save(input) {
+      backend.writes += 1;
+      volatile.set(input.id, { ...input });
+      if (backend.fail > 0) {
+        backend.fail -= 1;
+        const error = new Error("QuotaExceededError");
+        error.name = "QuotaExceededError";
+        throw error;
+      }
+      volatile.delete(input.id);
+      return store.put(input);
+    },
+    async list(docHash) {
+      const rows = await store.list(docHash);
+      const extra = [...volatile.values()].filter((note) => note.docHash === docHash && !rows.some((row) => row.id === note.id));
+      return rows.concat(extra);
+    },
+    durableIds() {
+      return new Set(store.notes.keys());
+    },
+    reload() {
+      volatile.clear();
+    },
+    store
+  };
+  return backend;
+}
+
+test("reload then ask and save keeps both notes", async () => {
+  const backend = persistentNotes();
+  const first = harness({ backend, docHash: "bdfaa68d89", answer: "回答甲" });
+  await typeAndSend(first.ui, "第一问");
+  const saved = await first.ui.saveNote(first.ui.session.turns[0]);
+  assert.equal(saved.ok, true);
+  assert.equal(backend.store.notes.size, 1);
+  const firstId = first.ui.session.turns[0].id;
+  backend.reload();
+  const second = harness({ backend, docHash: "bdfaa68d89", answer: "回答乙" });
+  await typeAndSend(second.ui, "第二问");
+  const again = await second.ui.saveNote(second.ui.session.turns[0]);
+  assert.equal(again.ok, true);
+  assert.notEqual(second.ui.session.id, first.ui.session.id);
+  assert.notEqual(second.ui.session.turns[0].id, firstId);
+  assert.equal(backend.store.notes.size, 2);
+  const notes = await backend.store.list("bdfaa68d89");
+  assert.deepEqual(new Set(notes.map((note) => note.body)), new Set(["回答甲", "回答乙"]));
+  assert.equal(new Set(notes.map((note) => note.id)).size, 2);
+});
+
+test("a save in another document keeps the first document's note", async () => {
+  const backend = persistentNotes();
+  const attention = harness({ backend, docHash: "bdfaa68d89", answer: "回答甲" });
+  await typeAndSend(attention.ui, "Attention");
+  await attention.ui.saveNote(attention.ui.session.turns[0]);
+  const kept = [...backend.store.notes.values()][0];
+  backend.reload();
+  const dpo = harness({ backend, docHash: "92cb3a2b71", answer: "回答乙" });
+  await typeAndSend(dpo.ui, "DPO");
+  const saved = await dpo.ui.saveNote(dpo.ui.session.turns[0]);
+  assert.equal(saved.ok, true);
+  const attentionNotes = await backend.store.list("bdfaa68d89");
+  const dpoNotes = await backend.store.list("92cb3a2b71");
+  assert.equal(attentionNotes.length, 1);
+  assert.equal(attentionNotes[0].id, kept.id);
+  assert.equal(attentionNotes[0].body, "回答甲");
+  assert.equal(attentionNotes[0].docHash, "bdfaa68d89");
+  assert.equal(dpoNotes.length, 1);
+  assert.equal(dpoNotes[0].body, "回答乙");
+  assert.notEqual(dpoNotes[0].id, kept.id);
+});
+
+test("a failed save retries onto disk and survives a reload", async () => {
+  const backend = persistentNotes();
+  backend.fail = 1;
+  const box = harness({ backend, docHash: "bdfaa68d89", answer: "回答甲" });
+  await typeAndSend(box.ui, "会失败一次");
+  const turn = box.ui.session.turns[0];
+  const failed = await box.ui.saveNote(turn);
+  assert.equal(failed.ok, false);
+  assert.equal(turn.noteId, "");
+  assert.equal(turn.pendingDisk, true);
+  assert.equal(box.ui.root.querySelector(".is-added"), null);
+  assert.match(box.ui.root.textContent, /添加到笔记/);
+  assert.equal(backend.store.notes.size, 0);
+  assert.equal((await backend.list("bdfaa68d89")).length, 1);
+  const retried = await box.ui.saveNote(turn);
+  assert.equal(retried.ok, true);
+  assert.equal(backend.writes, 2);
+  assert.equal(backend.store.notes.size, 1);
+  assert.equal(turn.noteId, [...backend.store.notes.keys()][0]);
+  assert.match(box.ui.root.textContent, /已添加/);
+  backend.reload();
+  assert.equal(backend.store.notes.size, 1);
+  assert.equal([...backend.store.notes.values()][0].body, "回答甲");
+  assert.equal((await backend.list("bdfaa68d89")).length, 1);
 });
 
 test("viewer ask entry no longer toasts 即将推出 for the ask button", () => {

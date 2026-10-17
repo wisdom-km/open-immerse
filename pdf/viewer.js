@@ -195,6 +195,7 @@ import { mountAskUi } from "./ask-panel.js";
 import { performAsk } from "../lib/ask-transport.js";
 import { currentNet } from "../lib/net/fetch.js";
 import { ASK_CONFIRM_KEY, askTarget } from "../lib/ask-model.js";
+import { readStoredAskConfirm, writeStoredAskConfirm } from "../lib/ask-confirm.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
@@ -2500,24 +2501,12 @@ async function readAskRoute() {
   return { settings, target, apiKey };
 }
 
-async function readAskConfirm() {
-  try {
-    const get = globalThis.chrome?.storage?.local?.get;
-    if (typeof get !== "function") return false;
-    const bag = await get(ASK_CONFIRM_KEY);
-    if (!bag || !Object.prototype.hasOwnProperty.call(bag, ASK_CONFIRM_KEY)) return true;
-    return bag[ASK_CONFIRM_KEY] !== false;
-  } catch {
-    return true;
-  }
+function readAskConfirm() {
+  return readStoredAskConfirm(globalThis.chrome?.storage, ASK_CONFIRM_KEY);
 }
 
-async function writeAskConfirm(value) {
-  try {
-    await globalThis.chrome?.storage?.local?.set?.({ [ASK_CONFIRM_KEY]: value !== false });
-  } catch {
-    /* the next send asks again */
-  }
+function writeAskConfirm(value) {
+  return writeStoredAskConfirm(globalThis.chrome?.storage, ASK_CONFIRM_KEY, value);
 }
 
 async function sendAsk(req) {
