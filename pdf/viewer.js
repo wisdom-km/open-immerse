@@ -191,6 +191,10 @@ import {
 import { recordedPersistDenied } from "../lib/notes-store.js";
 import { firstLineQuote } from "../lib/notes-view-model.js";
 import { mountNotesUi, textRangeOffsets } from "./notes-panel.js";
+import { mountAskUi } from "./ask-panel.js";
+import { performAsk } from "../lib/ask-transport.js";
+import { currentNet } from "../lib/net/fetch.js";
+import { ASK_CONFIRM_KEY, askTarget } from "../lib/ask-model.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import { redrawFormulaGlyphs } from "../lib/pdf-formula-redraw.js";
 import {
@@ -410,6 +414,7 @@ let libraryDoc = null;
 let libraryProbe = null;
 let notesDocHash = "";
 let notesUi = null;
+let askUi = null;
 let libraryChip = null;
 let importBinding = null;
 let persistCard = null;
@@ -632,6 +637,7 @@ function init() {
   bindSelToolbar();
   bindArxivChip();
   installNotesUi();
+  installAskUi();
   installLibraryChrome();
   $("translatePage").addEventListener("click", () => startTranslate());
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
@@ -724,6 +730,10 @@ function onKey(event) {
     return;
   }
   if (event.key === "Escape" && closeSourcePop(true)) {
+    event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && askUi?.consumeEscape()) {
     event.preventDefault();
     return;
   }
@@ -852,6 +862,16 @@ function onKey(event) {
     if (event.key === "m" || event.key === "M") {
       event.preventDefault();
       notesUi?.toggle();
+      return;
+    }
+    if (event.key === "a" || event.key === "A") {
+      event.preventDefault();
+      askUi?.toggle();
+      return;
+    }
+    if (event.key === "q" || event.key === "Q") {
+      event.preventDefault();
+      askFromKey();
       return;
     }
     if (event.key === "n" || event.key === "N") {
@@ -1544,11 +1564,11 @@ function startSplitDrag(event, workspace, handle) {
     if (mode === "mini") endMiniFitDrag();
     if (workspace.dataset.layout === "3") persistSplitRatio(workspace);
     else if (workspace.dataset.sourceMode === "mini") {
-      if (workspace.dataset.notesOpen === "true") persistSlotPanelWidth(workspace);
+      if (sideChromeOn(workspace)) persistSlotPanelWidth(workspace);
       else persistMiniWidth(workspace);
     } else {
       persistSplitRatio(workspace);
-      if (workspace.dataset.notesOpen === "true") persistSlotPanelWidth(workspace);
+      if (sideChromeOn(workspace)) persistSlotPanelWidth(workspace);
     }
   };
   handle.addEventListener("pointermove", onMove);
@@ -1692,7 +1712,7 @@ function onSplitKey(event, workspace) {
     else if (step.to === "reset") next = MINI_WIDTH_DEFAULT;
     else if (Number.isFinite(step.delta)) next = normalizeMiniWidth(next + step.delta);
     else return;
-    if (workspace.dataset.notesOpen === "true") {
+    if (sideChromeOn(workspace)) {
       writeNotesPanelPrefs({ panelWidth: next });
       paintMiniWidth(workspace, next);
       syncZoomChip();
@@ -2393,12 +2413,242 @@ function installNotesUi() {
     blockOrder: () => noteBlockOrder(),
     jumpPage: (page) => jumpToNotePage(page),
     jumpAnchor: (note) => jumpToNoteAnchor(note),
-    onOpenChange: (open) => {
-      if (open) syncNotesChrome({ opening: true });
-      else closeNotesChrome();
+    onOpenChange: (open, meta) => {
+      if (open) {
+        if (askUi?.isOpen()) askUi.close({ handoff: true, focus: false });
+        syncNotesChrome({ opening: true });
+      } else if (meta?.handoff || sideChromeOn()) {
+        /* Ask still holds the shared column. */
+      } else closeNotesChrome();
     },
     setNotesPaneSide: (side) => setNotesPaneSide(side)
   });
+}
+
+function sideChromeOn(workspace = document.querySelector(".workspace")) {
+  return workspace?.dataset.notesOpen === "true" || workspace?.dataset.askOpen === "true";
+}
+
+function installAskUi() {
+  askUi = mountAskUi({
+    hasDoc: () => Boolean(pdfDoc),
+    width: () => readerWidth(),
+    flow: () => readerFlowEl(),
+    blocks: () => askBlocks(),
+    currentCitation: () => citationFromCurrent(),
+    docHash: () => notesDocHashNow(),
+    readRoute: () => readAskRoute(),
+    readConfirm: () => readAskConfirm(),
+    writeConfirm: (value) => writeAskConfirm(value),
+    send: (req) => sendAsk(req),
+    saveNote: (input) => sharedNotesStore().put(input),
+    listNotes: () => sharedNotesStore().list(notesDocHashNow()),
+    anchorFor: (citation) => anchorForAsk(citation),
+    revealNote: (id) => notesUi?.revealNote?.(id),
+    showSource: (citation) => showAskSource(citation),
+    imageForCitation: (citation) => imageForAskCitation(citation),
+    openSettings: (href) => openAskSettings(href),
+    toast: (text) => showToast(text),
+    writeText: (text) => navigator.clipboard?.writeText?.(text),
+    onOpenChange: (open, meta) => onAskOpenChange(open, meta)
+  });
+}
+
+function onAskOpenChange(open, meta) {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  if (open) {
+    workspace.dataset.askOpen = "true";
+    const slot = document.getElementById("sideSlot");
+    if (slot) {
+      slot.hidden = false;
+      slot.dataset.open = "true";
+      slot.setAttribute("aria-hidden", "false");
+    }
+    if (notesUi?.isOpen()) notesUi.close(false, { handoff: true });
+    const opening = workspace.dataset.layout !== "3" && workspace.dataset.layout !== "pair";
+    syncNotesChrome({ opening });
+    return;
+  }
+  delete workspace.dataset.askOpen;
+  if (meta?.handoff || workspace.dataset.notesOpen === "true") return;
+  closeNotesChrome();
+  const slot = document.getElementById("sideSlot");
+  if (slot && workspace.dataset.notesOpen !== "true") {
+    slot.hidden = true;
+    delete slot.dataset.open;
+    slot.setAttribute("aria-hidden", "true");
+  }
+}
+
+async function readAskRoute() {
+  let settings = {};
+  try {
+    const res = await runtimeSend({ type: "OI_GET_SETTINGS" });
+    settings = res?.settings || {};
+  } catch {
+    settings = {};
+  }
+  const target = askTarget(settings, formulaViewerSettings);
+  const apiKey = target?.via === "multimodal"
+    ? String(formulaViewerSettings?.multimodal?.apiKey || "")
+    : String(settings?.providers?.[target?.provider]?.apiKey || "");
+  return { settings, target, apiKey };
+}
+
+async function readAskConfirm() {
+  try {
+    const get = globalThis.chrome?.storage?.local?.get;
+    if (typeof get !== "function") return false;
+    const bag = await get(ASK_CONFIRM_KEY);
+    if (!bag || !Object.prototype.hasOwnProperty.call(bag, ASK_CONFIRM_KEY)) return true;
+    return bag[ASK_CONFIRM_KEY] !== false;
+  } catch {
+    return true;
+  }
+}
+
+async function writeAskConfirm(value) {
+  try {
+    await globalThis.chrome?.storage?.local?.set?.({ [ASK_CONFIRM_KEY]: value !== false });
+  } catch {
+    /* the next send asks again */
+  }
+}
+
+async function sendAsk(req) {
+  return performAsk({
+    target: req,
+    messages: req.messages,
+    apiKey: req.apiKey,
+    signal: req.signal,
+    fetchImpl: async (url, init) => {
+      const result = await currentNet().fetch({
+        url,
+        method: init.method,
+        headers: init.headers,
+        body: init.body,
+        signal: init.signal,
+        purpose: "ask",
+        timeoutMs: false,
+        retry: false,
+        cache: false,
+        dedupeKey: false,
+        responseType: "json"
+      });
+      return {
+        ok: result.ok,
+        status: result.status,
+        async json() { return result.data; }
+      };
+    }
+  });
+}
+
+function askBlocks() {
+  const flow = readerFlowEl();
+  if (!flow) return [];
+  return [...flow.querySelectorAll(".rf-block[data-bid]")].map((el) => ({
+    bid: el.dataset.bid,
+    page: Number(el.dataset.srcPage) || Number(el.dataset.page) || 0,
+    text: el.querySelector(".rf-zh")?.textContent || "",
+    label: el.dataset.label || ""
+  }));
+}
+
+function citationFromElement(el, text) {
+  if (!el) return null;
+  const page = Number(el.dataset.srcPage) || Number(el.dataset.page) || 0;
+  return {
+    bid: el.dataset.bid || "",
+    page,
+    text: text || el.querySelector(".rf-zh")?.textContent || "",
+    kind: el.dataset.label === "formula" ? "formula" : "text",
+    section: el.dataset.section || ""
+  };
+}
+
+function citationFromCurrent() {
+  const current = currentNoteParagraph();
+  if (!current?.el) return null;
+  return citationFromElement(current.el, current.translation);
+}
+
+function citationFromSel(ctx) {
+  const bid = ctx?.bids?.[0] || "";
+  const el = bid ? readerFlowEl()?.querySelector(`.rf-block[data-bid="${cssEscape(bid)}"]`) : null;
+  return citationFromElement(el, ctx?.text || "") || {
+    bid,
+    page: Number(ctx?.srcPage) || 0,
+    text: ctx?.text || "",
+    kind: "text",
+    section: ""
+  };
+}
+
+function anchorForAsk(citation) {
+  if (!citation?.bid) return null;
+  const current = {
+    bid: citation.bid,
+    page: citation.page || 0,
+    translation: citation.text || "",
+    preview: firstLineQuote(citation.text || "")
+  };
+  return anchorForParagraph(current);
+}
+
+function imageForAskCitation(citation) {
+  if (citation?.image) return citation.image;
+  if (citation?.kind !== "formula" || !citation.bid) return "";
+  const img = readerFlowEl()?.querySelector(`.rf-block[data-bid="${cssEscape(citation.bid)}"] img`);
+  const src = img?.getAttribute?.("src") || "";
+  return src.startsWith("data:image/") ? src : "";
+}
+
+function showAskSource(citation) {
+  const pane = translateScrollRoot();
+  const before = pane?.scrollTop;
+  const el = citation?.bid ? readerFlowEl()?.querySelector(`.rf-block[data-bid="${cssEscape(citation.bid)}"]`) : null;
+  if (!el) return;
+  if (el.dataset.pairId) {
+    dismissSeeSource();
+    currentPairId = el.dataset.pairId;
+    jumpPairId = "";
+    paintPairChrome();
+  }
+  const presented = presentSourceForJump(el);
+  const run = () => {
+    const rect = decodeSrcRects(el.dataset.srcRects)[0];
+    if (rect) scrollSourceToRect(rect);
+    else {
+      const page = Number(el.dataset.page || el.dataset.srcPage);
+      if (page >= 1) revealSourcePage(page);
+    }
+    if (pane && Number.isFinite(before)) pane.scrollTop = before;
+  };
+  if (presented === "ready") run();
+  else requestAnimationFrame(() => requestAnimationFrame(run));
+}
+
+function openAskSettings(href) {
+  const path = String(href || "options/options.html#mm");
+  const url = globalThis.chrome?.runtime?.getURL?.(path.replace(/^\//, ""));
+  if (url && globalThis.chrome?.tabs?.create) {
+    globalThis.chrome.tabs.create({ url });
+    return;
+  }
+  window.open(url || path);
+}
+
+function askFromKey() {
+  if (!pdfDoc || !askUi) return;
+  const ctx = readSelContext();
+  if (ctx) {
+    closeSelToolbar({ restore: false });
+    void askUi.askCitation(citationFromSel(ctx), { fresh: true });
+    return;
+  }
+  void askUi.askCitation(citationFromCurrent(), { fresh: true });
 }
 
 function currentNoteParagraph() {
@@ -5426,13 +5676,15 @@ function bindMoreMenu() {
     closeMoreMenu(true);
     notesUi?.toggle();
   });
-  for (const id of ["menuAsk", "menuLibrary"]) {
-    $(id)?.addEventListener("click", () => {
-      closeMoreMenu(true);
-      notesUi?.close();
-      showSoonToast();
-    });
-  }
+  $("menuAsk")?.addEventListener("click", () => {
+    closeMoreMenu(true);
+    askUi?.toggle();
+  });
+  $("menuLibrary")?.addEventListener("click", () => {
+    closeMoreMenu(true);
+    notesUi?.close();
+    showSoonToast();
+  });
   $("menuAa")?.addEventListener("click", () => {
     closeMoreMenu(false);
     openAaPanel();
@@ -5505,12 +5757,13 @@ function bindViewChrome() {
     setReaderView(button.dataset.view);
   });
   bindSourceModeChrome();
-  for (const id of ["tocButton", "askButton", "libraryButton"]) {
+  for (const id of ["tocButton", "libraryButton"]) {
     $(id)?.addEventListener("click", () => {
-      if (id === "askButton" || id === "libraryButton") notesUi?.close();
+      if (id === "libraryButton") notesUi?.close();
       showSoonToast();
     });
   }
+  $("askButton")?.addEventListener("click", () => askUi?.toggle());
   $("notesButton")?.addEventListener("click", () => notesUi?.toggle());
   setReaderView(document.querySelector(".workspace")?.dataset.view || "zh");
 }
@@ -5656,7 +5909,7 @@ function commitSourceMode(mode) {
     showToast(SOURCE_MODE_NARROW_HINT);
     return;
   }
-  if (document.querySelector(".workspace")?.dataset.notesOpen === "true") {
+  if (sideChromeOn()) {
     chooseNotesSourceMode(next);
     return;
   }
@@ -5706,7 +5959,7 @@ function measuredWorkspaceWidth(workspace) {
 }
 
 function persistSlotPanelWidth(workspace) {
-  if (workspace?.dataset.notesOpen !== "true") return;
+  if (!sideChromeOn(workspace)) return;
   if (workspace.dataset.layout === "3" || workspace.dataset.layout === "pair") return;
   if (workspace.dataset.sourceMode === "mini") {
     const raw = parseFloat(workspace.style.getPropertyValue("--oi-mini-width"));
@@ -5942,7 +6195,7 @@ function applyNotesChrome(kind) {
 
 function syncNotesChrome({ opening = false } = {}) {
   const workspace = document.querySelector(".workspace");
-  if (!workspace || workspace.dataset.notesOpen !== "true") return;
+  if (!workspace || !sideChromeOn(workspace)) return;
   if (opening) {
     const implied = notesSideFromSource(readerPrefs.sourceSide);
     const prefs = readNotesPanelPrefs();
@@ -5971,11 +6224,12 @@ function syncNotesChrome({ opening = false } = {}) {
 function scheduleNotesChrome() {
   window.clearTimeout(notesResizeTimer);
   notesResizeTimer = window.setTimeout(() => {
-    if (document.querySelector(".workspace")?.dataset.notesOpen === "true") syncNotesChrome({ opening: false });
+    if (sideChromeOn()) syncNotesChrome({ opening: false });
   }, NOTES_PANE_RESIZE_DEBOUNCE_MS);
 }
 
 function closeNotesChrome() {
+  if (document.querySelector(".workspace")?.dataset.askOpen === "true") return;
   window.clearTimeout(notesResizeTimer);
   notesPaintedKind = "";
   notesLayoutLatch = "";
@@ -6022,7 +6276,7 @@ function setNotesPaneSide(side) {
   syncSwapCheck();
   const workspace = document.querySelector(".workspace");
   const layout = workspace?.dataset.layout || "";
-  const open = workspace?.dataset.notesOpen === "true";
+  const open = sideChromeOn(workspace);
   if (open && (layout === "3" || layout === "pair")) {
     workspace.dataset.sourceSide = sourceSide;
     workspace.dataset.notesSide = notesPaneSide;
@@ -6041,9 +6295,9 @@ function applySourceLayout(anchor) {
   if (!workspace) return;
   const width = readerWidth();
   let mode = effectiveSourceMode({ width, stored: readerPrefs.sourceMode });
-  if (workspace.dataset.notesOpen === "true" && notesPaintedKind === "three") mode = "side";
-  else if (workspace.dataset.notesOpen === "true" && notesPaintedKind === "pair") mode = "hidden";
-  else if (workspace.dataset.notesOpen === "true" && notesUserPin === "mini") mode = "mini";
+  if (sideChromeOn(workspace) && notesPaintedKind === "three") mode = "side";
+  else if (sideChromeOn(workspace) && notesPaintedKind === "pair") mode = "hidden";
+  else if (sideChromeOn(workspace) && notesUserPin === "mini") mode = "mini";
   const prev = workspace.dataset.sourceMode || "";
   const changed = Boolean(prev) && prev !== mode;
   const token = anchor || changed ? captureReaderAnchor() : null;
@@ -6055,7 +6309,7 @@ function applySourceLayout(anchor) {
   if (mode === "mini" && !collapsed) paintMiniWidth(workspace, px);
   // Notes in mini occupy the source column at reader.panelWidth. Apply after
   // paintMiniWidth so the stored source width (and its aria) stay untouched.
-  if (workspace.dataset.notesOpen === "true" && mode === "mini") {
+  if (sideChromeOn(workspace) && mode === "mini") {
     workspace.style.setProperty("--oi-mini-width", `${readNotesPanelPrefs().panelWidth}px`);
   }
   else if (mode === "side") {
@@ -6086,7 +6340,7 @@ function applySourceLayout(anchor) {
       requestAnimationFrame(() => restoreReaderAnchor(token));
     });
   }
-  if (!notesChromeLock && workspace.dataset.notesOpen === "true" && notesPaintedKind) scheduleNotesChrome();
+  if (!notesChromeLock && sideChromeOn(workspace) && notesPaintedKind) scheduleNotesChrome();
 }
 
 function syncSourceModeControls() {
@@ -6139,7 +6393,7 @@ function paintMiniWidth(workspace, width) {
 
 function persistMiniWidth(workspace) {
   // While notes are open the column shows reader.panelWidth, not the source mini width.
-  if (workspace.dataset.notesOpen === "true") return;
+  if (sideChromeOn(workspace)) return;
   const raw = parseFloat(workspace.style.getPropertyValue("--oi-mini-width"));
   const width = normalizeMiniWidth(raw);
   readerPrefs = { ...readerPrefs, miniWidth: width };
@@ -6312,6 +6566,15 @@ function bindSelToolbar() {
     id: "note",
     enabled: () => Boolean(pdfDoc),
     run: (ctx) => notesFromSel(ctx, "note")
+  });
+  registerSelAction({
+    id: "ask",
+    label: "问 AI",
+    enabled: () => Boolean(pdfDoc),
+    run: (ctx) => {
+      closeSelToolbar({ restore: false });
+      void askUi?.askCitation(citationFromSel(ctx), { fresh: true });
+    }
   });
   registerSelAction({
     id: "highlight",
