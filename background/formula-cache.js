@@ -10,7 +10,8 @@ import {
   evictionKeys,
   isCacheableFormulaRecord,
   stripFormulaImageUrl,
-  tierCommitAllowed
+  tierCommitAllowed,
+  decisionCommitAllowed
 } from "../lib/formula-cache.js";
 
 export { FORMULA_DB };
@@ -177,17 +178,52 @@ export function createIdbFormulaStore({
       const db = await openExisting();
       if (!db) return false;
       try {
-        const row = await requestOf(db, "tierResults", "readonly", (store) => store.get(key));
-        if (!row) return false;
-        if (decidedAt != null && row.decidedAt !== decidedAt) return false;
-        await requestOf(db, "tierResults", "readwrite", (store) => store.delete(key));
-        return true;
+        return await new Promise((resolve, reject) => {
+          const tx = db.transaction("tierResults", "readwrite");
+          const objectStore = tx.objectStore("tierResults");
+          const getReq = objectStore.get(key);
+          getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
+          getReq.onsuccess = () => {
+            const row = getReq.result;
+            if (!row || (decidedAt != null && row.decidedAt !== decidedAt)) {
+              resolve(false);
+              return;
+            }
+            const delReq = objectStore.delete(key);
+            delReq.onerror = () => reject(delReq.error || tx.error || new Error("indexedDB request failed"));
+            delReq.onsuccess = () => resolve(true);
+          };
+        });
       } finally {
         db.close();
       }
     },
-    putDecision(key, record) {
-      return put("decisions", key, record);
+    async putDecision(key, record) {
+      if (!isCacheableFormulaRecord(record)) return false;
+      const db = await openCreating();
+      try {
+        const stored = await new Promise((resolve, reject) => {
+          const tx = db.transaction("decisions", "readwrite");
+          const objectStore = tx.objectStore("decisions");
+          const getReq = objectStore.get(key);
+          getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
+          getReq.onsuccess = () => {
+            // guard:idb-decision
+            if (!decisionCommitAllowed(getReq.result || null, record)) {
+              resolve(false);
+              return;
+            }
+            const next = prepareRecord(key, record);
+            const putReq = objectStore.put(next, key);
+            putReq.onerror = () => reject(putReq.error || tx.error || new Error("indexedDB request failed"));
+            putReq.onsuccess = () => resolve(true);
+          };
+        });
+        if (stored) await evict(db, record?.docHash || "");
+        return stored;
+      } finally {
+        db.close();
+      }
     },
     async clearDoc(docHash) {
       const db = await openExisting();

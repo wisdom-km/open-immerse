@@ -25,17 +25,18 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { handleFormulaCacheMessage } from "../background/formula-cache.js";
+import { handleFormulaCacheMessage, createIdbFormulaStore } from "../background/formula-cache.js";
+import { IDBFactory } from "fake-indexeddb";
 import { deliverAsk } from "../lib/ask-route.js";
 import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
-import { createFormulaCache, createMemoryStore, tierRecordKey } from "../lib/formula-cache.js";
+import { createCallGate, createFormulaCache, createMemoryStore, tierRecordKey } from "../lib/formula-cache.js";
 import { decideFormula } from "../lib/formula-chain.js";
 import { cropHashOf, contractViolations, unitKeyOf } from "../lib/formula-contract.js";
 import { cropPngFor } from "../lib/formula-crop-png.js";
-import { classifyMmDecision, createMmLedger, mmPageStatsFor, beginMmPage } from "../lib/formula-mm-ledger.js";
+import { classifyMmDecision, createMmLedger, mmPageStatsFor, beginMmPage, mmPageLedger } from "../lib/formula-mm-ledger.js";
 import { verifyCandidate as verifyFromArbiter } from "../lib/formula-arbiter.js";
 import { parseLatexCandidate, verifyCandidate } from "../lib/formula-verify.js";
-import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
+import { publishRestampedBlocks, scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import {
   FORMULA_SWITCH_KEYS,
   formulaChainFlags,
@@ -49,6 +50,8 @@ import {
   multimodalTier,
   runMultimodal
 } from "../lib/formula-tiers/multimodal.js";
+import { buildVisionRequest } from "../lib/mm-client.js";
+import { redactHeaders } from "../lib/net/fetch.js";
 import { createDefaultTiers } from "../lib/formula-tiers/index.js";
 import { loadKatex } from "./helpers/arxiv-paper.mjs";
 
@@ -311,7 +314,18 @@ test("a verified crop becomes vlm data and the reader still shows the crop", asy
   assert.equal(inline.latexSource, "vlm");
   assert.equal(read("pdf/viewer.js").includes("oi-vlm-mark"), false);
   assert.equal(read("pdf/viewer.js").includes("oi-mm-chip"), false);
-  assert.equal(read("pdf/viewer.js").includes("isStale: () => false"), false);
+  const layout = { blocks: [{ bid: "old" }] };
+  let painted = 0;
+  assert.equal(publishRestampedBlocks(layout, [{ bid: "new" }], true, () => {
+    painted += 1;
+  }), false);
+  assert.equal(layout.blocks[0].bid, "old");
+  assert.equal(painted, 0);
+  assert.equal(publishRestampedBlocks(layout, [{ bid: "new" }], false, () => {
+    painted += 1;
+  }), true);
+  assert.equal(layout.blocks[0].bid, "new");
+  assert.equal(painted, 1);
 });
 
 test("tier 0 does not send and stays out of the denominator", async () => {
@@ -560,7 +574,7 @@ test("interrupt: before return, going stale drops the katex fields", async () =>
   assert.equal(ledger.stats().n, 0);
 });
 
-test("interrupt: a cache write that throws keeps the decision and leaves no partial row", async () => {
+test("interrupt: a cache write that throws leaves neither the tier nor the decision", async () => {
   const settings = settingsFor("openai");
   const state = { saved: [], boom: true };
   const inner = createMemoryStore();
@@ -1124,6 +1138,295 @@ test("two tabs cannot replace a verified row with a late reject", async () => {
   assert.equal((await real.getTier(key)).result.latex, "x");
 });
 
+test("two tabs cannot replace a verified row on indexedDB", async () => {
+  const real = createIdbFormulaStore({ indexedDB: new IDBFactory() });
+  let waits = 0;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const slow = {
+    async getTier(key) {
+      return real.getTier(key);
+    },
+    async commitTier(key, record) {
+      waits += 1;
+      if (waits === 1) await gate;
+      return real.commitTier(key, record);
+    },
+    async deleteTier(key, decidedAt) {
+      return real.deleteTier(key, decidedAt);
+    },
+    async getDecision(key) {
+      return real.getDecision(key);
+    },
+    async putDecision(key, record) {
+      return real.putDecision(key, record);
+    }
+  };
+  const cacheA = createFormulaCache(slow);
+  const cacheB = createFormulaCache(slow);
+  const key = "doc:idb-tabs:multimodal:mm-1:m:crop";
+  const reject = {
+    tier: "multimodal",
+    status: "reject",
+    reason: "katex-error",
+    meta: { epoch: 5, version: "mm-1" }
+  };
+  const verified = {
+    tier: "multimodal",
+    status: "ok",
+    render: "katex",
+    latex: "x",
+    meta: { epoch: 1, version: "mm-1" }
+  };
+  const pending = cacheA.writeTier(key, reject, { docHash: "doc", model: "m" });
+  for (let i = 0; i < 20 && waits < 1; i += 1) await Promise.resolve();
+  assert.equal(waits, 1);
+  assert.equal(await cacheB.writeTier(key, verified, { docHash: "doc", model: "m" }), true);
+  release();
+  assert.equal(await pending, false);
+  assert.equal((await real.getTier(key)).result.latex, "x");
+});
+
+test("a rollback does not delete another tab's newer verified row", async () => {
+  const real = createIdbFormulaStore({ indexedDB: new IDBFactory() });
+  let tierKey = "";
+  const store = {
+    async getTier(key) {
+      return real.getTier(key);
+    },
+    async commitTier(key, record) {
+      tierKey = key;
+      return real.commitTier(key, record);
+    },
+    async deleteTier(key, decidedAt) {
+      return real.deleteTier(key, decidedAt);
+    },
+    async getDecision(key) {
+      return real.getDecision(key);
+    },
+    async putDecision() {
+      await real.commitTier(tierKey, {
+        docHash: "doc-roll",
+        decidedAt: Date.now() + 50,
+        chainVersion: "f3-1",
+        tier: "multimodal",
+        model: "m",
+        result: {
+          tier: "multimodal",
+          status: "ok",
+          render: "katex",
+          latex: "B",
+          meta: { version: "mm-1", epoch: 3 }
+        }
+      });
+      return false;
+    }
+  };
+  const settings = settingsFor("openai");
+  const shown = await scheduleFormulaBlock(formulaBlock({ bid: "rollrace", text: "x" }), {
+    ...formulaChainFlags(settings),
+    docHash: "doc-roll",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache: createFormulaCache(store),
+    model: "m",
+    sendVision: async () => ({ ok: true, text: "x" }),
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  assert.equal(shown.latexSource, "vlm");
+  const row = await real.getTier(tierKey);
+  assert.equal(row?.result?.latex, "B");
+});
+
+test("a live caller retries when the shared in-flight result is stale", async () => {
+  const settings = settingsFor("openai");
+  const gate = createCallGate();
+  const run = gate.run.bind(gate);
+  let joins = 0;
+  gate.run = (key, fn, signal) => {
+    if (gate.has(key)) joins += 1;
+    return run(key, fn, signal);
+  };
+  const cache = createFormulaCache(createMemoryStore(), { gate });
+  let sends = 0;
+  let release;
+  const hold = new Promise((resolve) => {
+    release = resolve;
+  });
+  let firstStale = false;
+  const hooks = {
+    ...formulaChainFlags(settings),
+    docHash: "doc-join",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache,
+    model: settings.multimodal.model,
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  };
+  const first = scheduleFormulaBlock(formulaBlock({ bid: "join", text: "x" }), {
+    ...hooks,
+    isStale: () => firstStale,
+    sendVision: async () => {
+      sends += 1;
+      firstStale = true;
+      await hold;
+      return { ok: true, text: "x" };
+    }
+  });
+  for (let i = 0; i < 30 && sends < 1; i += 1) await Promise.resolve();
+  assert.equal(sends, 1);
+  const second = scheduleFormulaBlock(formulaBlock({ bid: "join", text: "x" }), {
+    ...hooks,
+    isStale: () => false,
+    sendVision: async () => {
+      sends += 1;
+      return { ok: true, text: "x" };
+    }
+  });
+  for (let i = 0; i < 40 && joins < 1; i += 1) await Promise.resolve();
+  assert.equal(joins, 1);
+  release();
+  const staleShown = await first;
+  const liveShown = await second;
+  assert.equal(staleShown.latexSource, undefined);
+  assert.equal(liveShown.latex, "x");
+  assert.equal(liveShown.latexSource, "vlm");
+  assert.equal(sends, 2);
+});
+
+test("k from an in-flight request lands on the page ledger after it is replaced", async () => {
+  const settings = settingsFor("openai");
+  const first = beginMmPage(11);
+  let release;
+  const hold = new Promise((resolve) => {
+    release = resolve;
+  });
+  let started = false;
+  const job = scheduleFormulaBlock(formulaBlock({ bid: "pagek", text: "x" }), {
+    ...formulaChainFlags(settings),
+    docHash: "doc-k",
+    page: 11,
+    settings,
+    readSettings: () => settings,
+    katex,
+    mmLedger: first,
+    sendVision: async () => {
+      started = true;
+      await hold;
+      return { ok: true, text: "x" };
+    },
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  for (let i = 0; i < 20 && !started; i += 1) await Promise.resolve();
+  assert.equal(started, true);
+  const second = beginMmPage(11);
+  assert.notEqual(first, second);
+  release();
+  const shown = await job;
+  assert.equal(shown.latexSource, "vlm");
+  assert.equal(first.stats().k, 0);
+  assert.equal(second.stats().k, 1);
+  assert.equal(mmPageStatsFor(11).k, 1);
+  const again = mmPageLedger(11);
+  assert.equal(again, second);
+  again.note("kept", { candidate: true, sent: 1 });
+  assert.equal(mmPageStatsFor(11).k, 2);
+});
+
+test("guard: a stale read does not return the cached hit", async () => {
+  const settings = settingsFor("openai");
+  const model = cachedModel(settings);
+  let stale = false;
+  const inner = createMemoryStore();
+  const state = {
+    saved: [],
+    onGet: () => {
+      stale = true;
+    }
+  };
+  const cache = createFormulaCache(wrapStore(inner, state));
+  const unit = {
+    docHash: "doc-stalehit",
+    bid: "stalehit",
+    bbox: [0.1, 0.2, 0.4, 0.3],
+    crop: { pixels: PNG }
+  };
+  state.onGet = null;
+  await cache.writeTier(tierRecordKey(unit, multimodalTier, model), {
+    tier: "multimodal",
+    status: "ok",
+    render: "katex",
+    latex: "x",
+    meta: { version: "mm-1" }
+  }, { docHash: "doc-stalehit", model });
+  state.onGet = () => {
+    stale = true;
+  };
+  const result = await cache.loadTier(multimodalTier, unit, { model, isStale: () => stale });
+  assert.equal(result.reason, "stale");
+  assert.equal(result.latex ?? null, null);
+});
+
+test("guard: a settings change during the decision read is not stored", async () => {
+  const store = createMemoryStore();
+  let current = true;
+  const wrapped = {
+    async getTier(key) { return store.getTier(key); },
+    async commitTier(key, record) { return store.commitTier(key, record); },
+    async deleteTier(key, decidedAt) { return store.deleteTier(key, decidedAt); },
+    async getDecision(key) {
+      current = false;
+      return store.getDecision(key);
+    },
+    async putDecision(key, record) { return store.putDecision(key, record); }
+  };
+  const cache = createFormulaCache(wrapped);
+  const wrote = await cache.rememberDecision({ docHash: "doc", bid: "still" }, {
+    chosen: {
+      tier: "multimodal",
+      status: "ok",
+      render: "katex",
+      latex: "x",
+      meta: { version: "mm-1" }
+    }
+  }, { model: "m", stillCurrent: () => current });
+  assert.equal(wrote, false);
+  assert.equal(await store.getDecision("doc:still"), null);
+});
+
+test("a verified decision is not replaced on memory or indexedDB", async () => {
+  const verified = {
+    tier: "multimodal",
+    docHash: "doc",
+    decidedAt: 2,
+    epoch: 2,
+    decision: {
+      chosen: { tier: "multimodal", status: "ok", render: "katex", latex: "x" }
+    }
+  };
+  const reject = {
+    tier: "multimodal",
+    docHash: "doc",
+    decidedAt: 9,
+    epoch: 9,
+    decision: {
+      chosen: { tier: "multimodal", status: "reject", reason: "katex-error", render: null, latex: null }
+    }
+  };
+  const memory = createMemoryStore();
+  assert.equal(await memory.putDecision("doc:keep", verified), true);
+  assert.equal(await memory.putDecision("doc:keep", reject), false);
+  assert.equal((await memory.getDecision("doc:keep")).decision.chosen.latex, "x");
+  const idb = createIdbFormulaStore({ indexedDB: new IDBFactory() });
+  assert.equal(await idb.putDecision("doc:keep", verified), true);
+  assert.equal(await idb.putDecision("doc:keep", reject), false);
+  assert.equal((await idb.getDecision("doc:keep")).decision.chosen.latex, "x");
+});
+
 test("createMessageFormulaStore drops a failed commit and beginMmPage replaces the page", async () => {
   const broken = createMessageFormulaStore(async () => {
     throw new Error("sw down");
@@ -1189,6 +1492,24 @@ function askTarget() {
   };
 }
 
+async function loggedVision(req, fallbackSecret) {
+  const live = typeof req.readSecret === "function" ? String(await req.readSecret() || "") : fallbackSecret;
+  const wire = buildVisionRequest(req.target || {}, {
+    system: req.system,
+    text: req.text,
+    images: req.images,
+    secret: live
+  });
+  const rawAuth = String(wire.headers?.Authorization || wire.headers?.["x-goog-api-key"] || "");
+  if (!live || !rawAuth.includes(live)) throw new Error("vision auth header did not carry the key");
+  return {
+    headers: redactHeaders(wire.headers),
+    target: req.target,
+    text: req.text,
+    image: req.images?.[0]
+  };
+}
+
 async function assertWorld(world, seed, step) {
   const dump = JSON.stringify({
     saved: world.state.saved,
@@ -1204,6 +1525,8 @@ async function assertWorld(world, seed, step) {
   });
   assert.equal(dump.includes(world.secret), false, `seed ${seed} step ${step} inv1`);
   for (const row of world.requests) {
+    const auth = row.headers?.Authorization || row.headers?.["x-goog-api-key"] || "";
+    assert.equal(auth, "***", `seed ${seed} step ${step} auth`);
     assert.equal(JSON.stringify(row.headers || {}).includes(world.secret), false, `seed ${seed} step ${step} auth`);
     assert.equal(JSON.stringify(row.target || {}).includes(world.secret), false, `seed ${seed} step ${step} target`);
     assert.equal(row.image?.mime, "image/png");
@@ -1228,14 +1551,21 @@ async function assertWorld(world, seed, step) {
       assert.equal(row.decision.chosen.status, "ok");
     }
   }
+  for (const row of world.state.saved) {
+    if (row.result?.render === "katex" && row.result.latex) world.verified.set(row.key, row.result.latex);
+  }
   for (const [key, latex] of world.verified) {
+    const denied = await world.cache.writeTier(key, {
+      tier: "multimodal",
+      status: "reject",
+      reason: "katex-error",
+      meta: { epoch: 99, version: "mm-1" }
+    }, { docHash: "probe", model: "probe" });
+    assert.equal(denied, false, `seed ${seed} step ${step} inv5 write ${key}`);
     const row = await world.inner.getTier(key);
     assert.equal(row?.result?.latex, latex, `seed ${seed} step ${step} inv5 ${key}`);
     assert.equal(row?.result?.status, "ok");
     assert.equal(row?.result?.render, "katex");
-  }
-  for (const row of world.state.saved) {
-    if (row.result?.render === "katex" && row.result.latex) world.verified.set(row.key, row.result.latex);
   }
   for (const tab of world.tabs) {
     const stats = tab.ledger.stats();
@@ -1305,9 +1635,10 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
   world.state.onCommit = async () => {
     if (stage === "write") await pause();
   };
+  const savedAtStart = world.state.saved.length;
   const beforeK = tab.ledger.stats().k;
   const controller = new AbortController();
-  const bid = `s${seed}-t${tab.id}-n${step}`;
+  const bid = seed === 1 ? `s${seed}-t${tab.id}-n${step}` : `t${tab.id}-slot${step % 2}`;
   const fingerprintAtStart = mmConfigFingerprint(tab.settings);
   const counts = {};
   let fail = "";
@@ -1333,13 +1664,7 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
         step,
         bid,
         fingerprint: mmConfigFingerprint(tab.settings),
-        headers: {
-          Authorization: req.headers?.Authorization || "",
-          "x-goog-api-key": req.headers?.["x-goog-api-key"] || ""
-        },
-        image: req.images?.[0],
-        target: req.target,
-        text: req.text
+        ...(await loggedVision(req, world.secret))
       });
       if (stage === "send") await pause();
       if (controller.signal.aborted) {
@@ -1371,11 +1696,28 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
     enteredPromise.then(() => "paused"),
     job.then(() => "finished")
   ]);
+  if (which === "finished") {
+    resolveHold();
+    const shown = await job;
+    world.stage = "off";
+    world.blocks.push({ bid, latexSource: shown?.latexSource || "" });
+    return;
+  }
   assert.equal(which, "paused", `seed ${seed} ${stage}:${event} was not in flight`);
+  world.formulaPhase = "inflight";
   const savedBeforeAsk = world.state.saved.length;
   const ledgerBeforeAsk = JSON.stringify(tab.ledger.stats());
-  const asked = await deliverAsk(askTarget(), async () => ({ ok: true, body: "ask-body" }));
-  if (asked.body !== "ask-body" || JSON.stringify(tab.ledger.stats()) !== ledgerBeforeAsk || world.state.saved.length !== savedBeforeAsk) {
+  let askSawPhase = "";
+  let askSawSaved = -1;
+  let askSawLedger = "";
+  const asked = await deliverAsk(askTarget(), async () => {
+    await Promise.resolve();
+    askSawPhase = world.formulaPhase;
+    askSawSaved = world.state.saved.length;
+    askSawLedger = JSON.stringify(tab.ledger.stats());
+    return { ok: true, body: "ask-body" };
+  });
+  if (asked.body !== "ask-body" || askSawPhase !== "inflight" || askSawSaved !== savedBeforeAsk || askSawLedger !== ledgerBeforeAsk) {
     world.askTouchedFormula = true;
   }
   if (event === "page-turn") {
@@ -1416,10 +1758,7 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
           step,
           bid: `s${seed}-other-${step}`,
           fingerprint: mmConfigFingerprint(other.settings),
-          headers: { Authorization: req.headers?.Authorization || "", "x-goog-api-key": "" },
-          image: req.images?.[0],
-          target: req.target,
-          text: req.text
+          ...(await loggedVision(req, world.secret))
         });
         return { ok: true, text: "x" };
       },
@@ -1439,7 +1778,7 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
   const voided = event === "settings" || event === "page-turn" || event === "unload";
   if (voided || event === "arxiv") {
     assert.notEqual(shown.latexSource, "vlm", `seed ${seed} ${stage}:${event} stamped`);
-    assert.equal(world.state.saved.some((row) => String(row.key || "").includes(bid)), false, `seed ${seed} void cached`);
+    assert.equal(world.state.saved.length, savedAtStart, `seed ${seed} void cached`);
   }
   if (event === "arxiv") {
     assert.equal(shown.latexSource, "arxiv-src", `seed ${seed} arxiv`);
@@ -1448,10 +1787,15 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
     assert.equal(counts.vector || 0, 0);
     return;
   }
+  const sentHere = world.requests.filter((row) => row.step === step && row.bid === bid).length;
   if (event === "fail-retry") {
+    if (sentHere === 0) {
+      assert.equal(shown.latexSource, "vlm", `seed ${seed} reused hit`);
+      assert.equal(kDelta, 0, `seed ${seed} reused k`);
+    } else {
     assert.equal(kDelta, 1, `seed ${seed} timeout counted`);
     const beforeRetry = world.requests.length;
-    const retry = await scheduleFormulaBlock(formulaBlock({ bid, text: "x" }), {
+    const retry = await scheduleFormulaBlock(formulaBlock({ bid: `${bid}-retry-${step}`, text: "x" }), {
       ...formulaChainFlags(tab.settings),
       docHash: `doc-${tab.id}`,
       settings: tab.settings,
@@ -1463,12 +1807,9 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
       sendVision: async (req) => {
         world.requests.push({
           step,
-          bid: `${bid}-retry`,
+          bid: `${bid}-retry-${step}`,
           fingerprint: mmConfigFingerprint(tab.settings),
-          headers: { Authorization: req.headers?.Authorization || "", "x-goog-api-key": "" },
-          image: req.images?.[0],
-          target: req.target,
-          text: req.text
+          ...(await loggedVision(req, world.secret))
         });
         return { ok: true, text: "x" };
       },
@@ -1478,28 +1819,37 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
     assert.equal(retry.latexSource, "vlm");
     assert.equal(tab.ledger.stats().k - beforeK, 2, `seed ${seed} retry k`);
     tab.accountedK += 2;
+    }
   } else if (event === "cache-interrupt") {
-    assert.equal(shown.latexSource, "vlm");
-    assert.equal(kDelta, 1, `seed ${seed} interrupt k`);
-    tab.accountedK += 1;
-    const key = tierRecordKey({
-      docHash: `doc-${tab.id}`,
-      bid,
-      bbox: [0.1, 0.2, 0.4, 0.3],
-      crop: { pixels: PNG }
-    }, multimodalTier, cachedModel(tab.settings));
-    assert.equal(await world.inner.getTier(key), null, `seed ${seed} torn tier`);
-    assert.equal(await world.inner.getDecision(`doc-${tab.id}:${bid}`), null, `seed ${seed} torn decision`);
+    if (sentHere === 0) {
+      assert.equal(shown.latexSource, "vlm", `seed ${seed} reused hit`);
+      assert.equal(kDelta, 0, `seed ${seed} reused k`);
+    } else {
+      assert.equal(shown.latexSource, "vlm");
+      assert.equal(kDelta, 1, `seed ${seed} interrupt k`);
+      tab.accountedK += 1;
+      const key = tierRecordKey({
+        docHash: `doc-${tab.id}`,
+        bid,
+        bbox: [0.1, 0.2, 0.4, 0.3],
+        crop: { pixels: PNG }
+      }, multimodalTier, cachedModel(tab.settings));
+      assert.equal(await world.inner.getTier(key), null, `seed ${seed} torn tier`);
+      assert.equal(await world.inner.getDecision(`doc-${tab.id}:${bid}`), null, `seed ${seed} torn decision`);
+    }
   } else if (event === "multitab") {
     assert.equal(shown.latexSource, "vlm");
-    assert.equal(kDelta, 1, `seed ${seed} multitab k`);
-    tab.accountedK += 1;
+    if (sentHere === 0) assert.equal(kDelta, 0, `seed ${seed} reused k`);
+    else {
+      assert.equal(kDelta, 1, `seed ${seed} multitab k`);
+      tab.accountedK += 1;
+    }
   } else if (event === "settings") {
     assert.equal(kDelta, 0, `seed ${seed} settings k`);
     const oldReqs = world.requests.filter((row) => row.step === step && row.fingerprint === fingerprintAtStart && row.bid === bid);
     if (stage === "read") assert.equal(oldReqs.length, 0, `seed ${seed} read sent old`);
     else assert.equal(oldReqs.length, 1, `seed ${seed} in-flight old`);
-    const nextBid = `${bid}-next`;
+    const nextBid = `${bid}-next-${step}`;
     const beforeNext = world.requests.length;
     await scheduleFormulaBlock(formulaBlock({ bid: nextBid, text: "x" }), {
       ...formulaChainFlags(tab.settings),
@@ -1515,10 +1865,7 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
           step,
           bid: nextBid,
           fingerprint: mmConfigFingerprint(tab.settings),
-          headers: { Authorization: req.headers?.Authorization || "", "x-goog-api-key": "" },
-          image: req.images?.[0],
-          target: req.target,
-          text: req.text
+          ...(await loggedVision(req, world.secret))
         });
         return { ok: true, text: "x" };
       },

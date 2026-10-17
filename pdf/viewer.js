@@ -313,10 +313,10 @@ import {
 import { detectArxivId } from "../lib/arxiv-id.js";
 import { KATEX_RENDER_OPTIONS } from "../lib/formula-katex.js";
 import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
-import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
+import { scheduleFormulaBlock, publishRestampedBlocks } from "../lib/formula-schedule.js";
 import { createFormulaCache } from "../lib/formula-cache.js";
 import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
-import { beginMmPage } from "../lib/formula-mm-ledger.js";
+import { mmPageLedger } from "../lib/formula-mm-ledger.js";
 import {
   ARXIV_SOURCE_AUTO_KEY,
   ARXIV_SOURCE_ON_KEY,
@@ -3791,7 +3791,7 @@ async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob)
   const layout = getPageLayout(pageNumber);
   if (!layout?.blocks) return;
   const flags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: formulaArxivSourceEnabled() });
-  const mmLedger = beginMmPage(pageNumber);
+  const mmLedger = mmPageLedger(pageNumber);
   const next = [];
   for (const block of layout.blocks) {
     if (block?.label !== "formula") {
@@ -3824,8 +3824,9 @@ async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob)
       cache: viewerFormulaCache()
     }));
   }
-  layout.blocks = next;
-  clearSlotPainted(pageNumber);
+  publishRestampedBlocks(layout, next, restampFormulaStale(pageNumber, epoch, job, layout), () => {
+    clearSlotPainted(pageNumber);
+  });
 }
 
 async function copyArxivLatex(latex, button) {
@@ -3973,7 +3974,7 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
     page: page1Viewport
   }) || arxivIdentity : null;
   const formulaFlags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: arxivOn });
-  const mmLedger = beginMmPage(pageNumber);
+  const mmLedger = mmPageLedger(pageNumber);
   for (const block of blocks || []) {
     if (isStale()) return null;
     if (block?.label !== "formula") {
