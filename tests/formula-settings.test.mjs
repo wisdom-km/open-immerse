@@ -17,6 +17,7 @@ import { multimodalTier } from "../lib/formula-tiers/multimodal.js";
 import { ocrTier } from "../lib/formula-tiers/ocr.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import {
+  FORMULA_BASE_URL_NOTE,
   FORMULA_ORDER,
   FORMULA_PRIVACY_NOTE,
   FORMULA_SETTINGS_AREA,
@@ -29,12 +30,14 @@ import {
   defaultFormulaSettings,
   formulaChainFlags,
   formulaOrderText,
+  modelChoice,
   multimodalReady,
   multimodalTestDisabled,
   normalizeFormulaSettings,
   ocrSwitchState,
   placeholderCopy,
   probeClock,
+  providerSwitchState,
   readFormulaSettings,
   runFormulaProbe,
   stubFormulaProbe,
@@ -296,24 +299,61 @@ test("F3-20 an unconfigured multimodal model hides the tier-2 switch", () => {
   assert.equal(multimodalReady(picked), false);
 });
 
-test("FUI-03 providers list six vendors plus custom, and DeepSeek cannot be chosen", () => {
-  assert.equal(MULTIMODAL_PROVIDERS.length, 7);
+test("FUI-03 providers list vision vendors plus custom, and DeepSeek stays unproven", () => {
+  assert.equal(MULTIMODAL_PROVIDERS.length, 8);
   assert.deepEqual(MULTIMODAL_PROVIDERS.map((item) => item.id), [
-    "openai", "gemini", "deepseek", "doubao", "kimi", "grok", "custom"
+    "openai", "gemini", "deepseek", "doubao", "kimi", "grok", "qwen", "custom"
   ]);
   const deepseek = MULTIMODAL_PROVIDERS.find((item) => item.id === "deepseek");
   assert.equal(deepseek.vision, false);
-  assert.equal(deepseek.unavailable, "DeepSeek · 暂不可用（不能看图）");
+  assert.equal(deepseek.visionBasis, "docs");
+  assert.equal(deepseek.unavailable, "DeepSeek · 待实测");
+  assert.deepEqual(deepseek.models, ["deepseek-flash"]);
+  const gemini = MULTIMODAL_PROVIDERS.find((item) => item.id === "gemini");
+  assert.equal(gemini.models.includes("gemini-2.0-flash"), false);
+  assert.equal(gemini.models[0], "gemini-3.8-flash");
+  const qwen = MULTIMODAL_PROVIDERS.find((item) => item.id === "qwen");
+  assert.equal(qwen.label, "千问");
+  assert.equal(qwen.vision, true);
+  assert.deepEqual(qwen.models, ["qwen3-vl-plus", "qwen3-vl-flash"]);
+  for (const item of MULTIMODAL_PROVIDERS) {
+    if (item.id === "custom") assert.deepEqual(item.models, []);
+    else assert.ok(item.models.length >= 1 && item.models.length <= 2, item.id);
+  }
   installDocument();
   const panel = new DomEl("div");
   renderFormulaPanel(panel, defaultFormulaSettings(), {});
   const labels = [];
   walk(panel, (node) => {
-    if (node.tagName === "OPTION" && node.value === "deepseek") labels.push(node);
+    if (node.tagName === "OPTION" && (node.value === "deepseek" || node.value === "qwen")) labels.push(node);
   });
-  assert.equal(labels.length, 1);
-  assert.equal(labels[0].disabled, true);
-  assert.equal(labels[0].textContent, "DeepSeek · 暂不可用（不能看图）");
+  const deepseekOpt = labels.find((node) => node.value === "deepseek");
+  const qwenOpt = labels.find((node) => node.value === "qwen");
+  assert.equal(deepseekOpt.disabled, true);
+  assert.equal(deepseekOpt.textContent, "DeepSeek · 待实测");
+  assert.equal(qwenOpt.disabled, false);
+  assert.equal(qwenOpt.textContent, "千问");
+});
+
+test("F7-PR1 a typed model is kept and the vendor base URL is only a placeholder", () => {
+  const typed = normalizeFormulaSettings({
+    multimodal: { provider: "qwen", apiKey: "sk", model: "qwen-vl-user-typed", customModel: true }
+  });
+  assert.equal(typed.multimodal.model, "qwen-vl-user-typed");
+  assert.deepEqual(modelChoice(typed), { mode: "select", select: "__custom", custom: "qwen-vl-user-typed" });
+  installDocument();
+  const panel = new DomEl("div");
+  renderFormulaPanel(panel, normalizeFormulaSettings({
+    multimodal: { provider: "qwen", apiKey: "sk", model: "qwen3-vl-plus" }
+  }), {});
+  const placeholders = [];
+  walk(panel, (node) => {
+    if (node.placeholder) placeholders.push(node.placeholder);
+  });
+  assert.ok(placeholders.includes("https://dashscope.aliyuncs.com/compatible-mode/v1"));
+  assert.equal(typed.multimodal.baseUrl, "");
+  assert.match(textOf(panel), /不要把密钥写进地址/);
+  assert.equal(FORMULA_BASE_URL_NOTE.includes("不要把密钥写进地址"), true);
 });
 
 test("FUI-04 custom base URL is required before the vision probe can run", () => {
@@ -352,12 +392,16 @@ test("FUI-07 and FUI-08 probe copy is classified without a network call", async 
 
 test("FUI-09 FUI-10 FUI-11 FUI-12 switch visibility follows configuration, not a failed probe", () => {
   installDocument();
-  const blind = normalizeFormulaSettings({
-    multimodal: { provider: "deepseek", apiKey: "sk-secret" },
+  const pending = normalizeFormulaSettings({
+    multimodal: { provider: "deepseek", apiKey: "sk-secret", model: "deepseek-flash" },
     [FORMULA_SWITCH_KEYS.tier2]: true
   });
-  assert.equal(tier2SwitchState(blind).visible, false);
-  assert.match(tier2SwitchState(blind).message, /不支持看图/);
+  assert.equal(tier2SwitchState(pending).visible, false);
+  assert.equal(multimodalReady(pending), false);
+  assert.match(tier2SwitchState(pending).message, /待实测/);
+  const blind = providerSwitchState({ id: "blind", vision: false }, "sk-secret", "mm");
+  assert.equal(blind.visible, false);
+  assert.match(blind.message, /不支持看图/);
   const ready = normalizeFormulaSettings({
     multimodal: { provider: "openai", apiKey: "sk-secret", model: "gpt-4o" },
     ocr: { provider: "zhipu", apiKey: "ocr-key" },
