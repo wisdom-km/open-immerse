@@ -6,7 +6,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseHTML } from "linkedom";
 import { askTarget } from "../lib/ask-model.js";
-import { noteMatchesFilter } from "../lib/notes-view-model.js";
+import { BID_VERSION, blockSrcHash } from "../lib/pdf-block-id.js";
+import { firstLineQuote, noteMatchesFilter } from "../lib/notes-view-model.js";
 import { mountAskUi } from "../pdf/ask-panel.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -58,7 +59,7 @@ function harness(options = {}) {
   const opens = [];
   let formula = options.formula === undefined ? mm : options.formula;
   let settings = options.settings || llm;
-  let confirm = options.confirm === true;
+  let confirm = options.confirm !== false;
   let saveError = options.saveError === true;
   let saveGate = null;
   const ui = mountAskUi({
@@ -75,7 +76,13 @@ function harness(options = {}) {
       ? options.currentCitation
       : { bid: "b3", page: 4, kind: "text", text: "我们怀疑当 d_k 较大时。" }),
     docHash: () => "doc-attn",
-    readRoute: async () => ({ settings, target: askTarget(settings, formula), apiKey: formula?.multimodal?.apiKey || "sk-translate" }),
+    readRoute: async () => {
+      const target = askTarget(settings, formula);
+      const apiKey = target?.via === "multimodal"
+        ? String(formula?.multimodal?.apiKey || "")
+        : String(settings?.providers?.[target?.provider]?.apiKey || "");
+      return { settings, target, apiKey };
+    },
     readConfirm: async () => confirm,
     writeConfirm: async (value) => { confirm = value !== false; },
     send: async (req) => {
@@ -97,10 +104,23 @@ function harness(options = {}) {
       return note;
     },
     listNotes: async () => notes.slice(),
-    anchorFor: async (citation) => (citation?.bid ? {
-      anchor: { bid: citation.bid, page: citation.page || 0, quote: citation.text || "" },
-      anchorState: { status: "exact", layoutRev: "layout-1", checkedAt: 0 }
-    } : null),
+    anchorFor: async (citation) => {
+      if (!citation?.bid) return null;
+      const quote = firstLineQuote(citation.text || "");
+      return {
+        anchor: {
+          bid: citation.bid,
+          bidV: BID_VERSION,
+          page: Number(citation.page) || 0,
+          srcHash: blockSrcHash(citation.text || ""),
+          quote,
+          offset: { start: 0, end: quote.length },
+          quoteSrc: { quote, prefix: "", suffix: "" },
+          srcRects: [[0, 0, 12, 8]]
+        },
+        anchorState: { status: "exact", layoutRev: "layout-1", checkedAt: 0 }
+      };
+    },
     revealNote: async (id) => ({ ok: true, id }),
     showSource: (citation) => { options.onSource?.(citation); },
     openSettings: (href) => settingsOpens.push(href),
@@ -340,7 +360,8 @@ test("F6UI-33/34 action row is one nowrap line and collapses to icons under 280"
   assert.match(css, /\.oi-ask-act\.is-added\s*\{[^}]*opacity:\s*1/);
   assert.match(css, /\.oi-ask-act\.is-added\s*\{[^}]*color:\s*var\(--oi-reader-mine\)/);
   assert.match(css, /\.oi-ask-act\.is-view\s*\{[^}]*color:\s*var\(--oi-reader-ai\)/);
-  assert.match(css, /\.oi-ask-act:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-reader-focus\)/);
+  assert.match(css, /\.oi-ask-act\.is-added:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-reader-focus\)/);
+  assert.equal(/\.oi-ask-act\.is-added:focus\s*\{[^}]*outline:\s*none/.test(css), false);
   assert.match(css, /@container oi-ask-bubble \(max-width:\s*279px\)/);
   assert.match(css, /\.oi-ask-disclaimer\s*\{[^}]*font-size:\s*11px/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
@@ -388,8 +409,64 @@ test("stop keeps partial text and escape stops before close", async () => {
   assert.equal(box.ui.isOpen(), false);
 });
 
+function declaredWidth(block, prop) {
+  const hit = String(block || "").match(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`));
+  return hit ? hit[1].trim() : "";
+}
+
+test("save and added actions declare 98px, not 96px", () => {
+  const added = css.match(/\.oi-ask-act\.is-added\s*\{([^}]*)\}/);
+  const save = css.match(/\.oi-ask-act\.is-save\s*\{([^}]*)\}/);
+  assert.ok(added && save);
+  assert.equal(declaredWidth(added[1], "width"), "98px");
+  assert.equal(declaredWidth(added[1], "min-width"), "98px");
+  assert.equal(declaredWidth(save[1], "min-width"), "98px");
+});
+
+test("readRoute uses the multimodal key only on that route", async () => {
+  const translateSettings = {
+    provider: "openai",
+    providers: { openai: { model: "gpt-4o-mini", baseUrl: "https://api.openai.com/v1", apiKey: "sk-route-translate" } }
+  };
+  const translate = harness({
+    formula: { multimodal: { provider: "", apiKey: "" } },
+    settings: translateSettings
+  });
+  await translate.ui.open();
+  translate.ui.session.draft = "翻译密钥";
+  await translate.ui.submit({ confirmed: true });
+  assert.equal(translate.sent[0].via, "translation");
+  assert.equal(translate.sent[0].apiKey, "sk-route-translate");
+
+  const multi = harness({
+    formula: mm,
+    settings: translateSettings
+  });
+  await multi.ui.open();
+  multi.ui.session.draft = "多模态密钥";
+  await multi.ui.submit({ confirmed: true });
+  assert.equal(multi.sent[0].via, "multimodal");
+  assert.equal(multi.sent[0].apiKey, "sk-mm-secret");
+});
+
+test("anchorFor keeps the viewer block-anchor fields and a first-line quote", async () => {
+  const box = harness({
+    currentCitation: { bid: "b3", page: 4, kind: "text", text: "第一行有锚\n第二行不进 quote" }
+  });
+  await typeAndSend(box.ui, "多行引用");
+  await box.ui.saveNote(box.ui.session.turns[0]);
+  const anchor = box.notes[0].anchor;
+  assert.equal(anchor.quote, "第一行有锚");
+  assert.equal(anchor.bidV, BID_VERSION);
+  assert.equal(anchor.srcHash, blockSrcHash("第一行有锚\n第二行不进 quote"));
+  assert.deepEqual(anchor.offset, { start: 0, end: anchor.quote.length });
+  assert.equal(anchor.quoteSrc.quote, "第一行有锚");
+  assert.equal(Array.isArray(anchor.srcRects) && anchor.srcRects.length > 0, true);
+  assert.equal(noteMatchesFilter(box.notes[0], "ai"), true);
+});
+
 test("first send confirms once, then stays quiet", async () => {
-  const box = harness({ confirm: true });
+  const box = harness();
   await box.ui.open();
   box.ui.session.draft = "确认一下";
   const held = await box.ui.submit();

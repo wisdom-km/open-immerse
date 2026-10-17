@@ -253,11 +253,11 @@
 .oi-ask-act.is-view:hover:not(:disabled) { background: var(--oi-reader-ai-soft); }
 .oi-ask-act.is-added:hover,
 .oi-ask-act:disabled:hover { background: transparent; }
-.oi-ask-act:focus-visible {
+.oi-ask-act:focus-visible,
+.oi-ask-act.is-added:focus-visible {
   outline: 2px solid var(--oi-reader-focus);
   outline-offset: 1px;
 }
-.oi-ask-act.is-added:focus { outline: none; }
 .oi-ask-disclaimer {
   margin: 4px 0 0;
   padding-left: 10px;

@@ -322,7 +322,7 @@ test("F6UI-33/34 action row stays one line at 360 and icons under 280", { timeou
   const addedNode = await cdp.send("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#wide .is-added" }, sessionId);
   await cdp.send("CSS.forcePseudoState", { nodeId: copy.nodeId, forcedPseudoClasses: ["hover", "focus-visible"] }, sessionId);
   await cdp.send("CSS.forcePseudoState", { nodeId: viewNode.nodeId, forcedPseudoClasses: ["hover"] }, sessionId);
-  await cdp.send("CSS.forcePseudoState", { nodeId: addedNode.nodeId, forcedPseudoClasses: ["hover"] }, sessionId);
+  await cdp.send("CSS.forcePseudoState", { nodeId: addedNode.nodeId, forcedPseudoClasses: ["hover", "focus", "focus-visible"] }, sessionId);
   const hover = await evaluate(`(() => {
     const copy = getComputedStyle(document.querySelector("#wide .is-copy"));
     const view = getComputedStyle(document.querySelector("#wide .is-view"));
@@ -332,7 +332,9 @@ test("F6UI-33/34 action row stays one line at 360 and icons under 280", { timeou
       view: view.backgroundColor,
       added: added.backgroundColor,
       outline: copy.outlineStyle + " " + copy.outlineWidth + " " + copy.outlineColor,
-      offset: copy.outlineOffset
+      offset: copy.outlineOffset,
+      addedOutline: added.outlineStyle + " " + added.outlineWidth + " " + added.outlineColor,
+      addedOffset: added.outlineOffset
     };
   })()`);
   if (!rgbaClose(hover.copy, [34, 32, 28, 0.06])) problems.push(`copy hover ${hover.copy}`);
@@ -340,6 +342,8 @@ test("F6UI-33/34 action row stays one line at 360 and icons under 280", { timeou
   if (!rgbaClose(hover.added, [0, 0, 0, 0])) problems.push(`added hover ${hover.added}`);
   if (!/solid/.test(hover.outline) || !/2px/.test(hover.outline)) problems.push(`focus ring ${hover.outline}`);
   if (hover.offset !== "1px") problems.push(`focus offset ${hover.offset}`);
+  if (!/solid/.test(hover.addedOutline) || !/2px/.test(hover.addedOutline)) problems.push(`added focus ring ${hover.addedOutline}`);
+  if (hover.addedOffset !== "1px") problems.push(`added focus offset ${hover.addedOffset}`);
 
   assert.deepEqual(problems, [], problems.join("\n"));
 });
