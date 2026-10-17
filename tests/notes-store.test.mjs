@@ -164,7 +164,8 @@ test("a re-anchor put can skip persist(), and a recorded refusal is explicit", a
   const anchorSrc = readFileSync(join(root, "lib/notes-anchor.js"), "utf8");
   assert.match(anchorSrc, /store\.put\(outcome\.note, \{ persist: false \}\)/);
   assert.match(viewer, /recordedPersistDenied/);
-  assert.match(viewer, /chrome\?\.storage\?\.local\?\.get/);
+  assert.match(viewer, /chrome\?\.storage\?\.local/);
+  assert.match(viewer, /get\.call\(local/);
   assert.equal(viewer.includes("navigator.storage.persist"), false);
 });
 

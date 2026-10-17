@@ -1867,38 +1867,91 @@ function placeZoomChip(pos, { persist = false } = {}) {
   return next;
 }
 
+function warnViewerStorage(scope, err) {
+  const raw = err && typeof err.name === "string" ? err.name : "Error";
+  const name = raw.replace(/[^\w]/g, "").slice(0, 40) || "Error";
+  const label = String(scope || "storage").replace(/[^\w ]/g, "").slice(0, 40) || "storage";
+  const log = globalThis.console?.warn;
+  if (typeof log !== "function") return;
+  log.call(globalThis.console, `${label} storage failed (${name})`);
+}
+
+/**
+ * Chrome reports quota and other storage failures as a rejected promise.
+ * A sync try/catch does not see that rejection. On failure the stale chrome
+ * value is removed so the next read uses the localStorage write from this call.
+ * A promise that never settles is left alone: it may still land.
+ */
+function commitViewerLocal(scope, values) {
+  const local = globalThis.chrome?.storage?.local;
+  const set = local?.set;
+  if (typeof set !== "function") return;
+  let pending;
+  try {
+    pending = set.call(local, values);
+  } catch (err) {
+    warnViewerStorage(scope, err);
+    return;
+  }
+  if (!pending || typeof pending.catch !== "function") return;
+  pending.catch((err) => {
+    warnViewerStorage(scope, err);
+    const remove = local?.remove;
+    if (typeof remove !== "function") return;
+    let dropped;
+    try {
+      dropped = remove.call(local, Object.keys(values));
+    } catch (removeErr) {
+      warnViewerStorage(scope, removeErr);
+      return;
+    }
+    if (dropped && typeof dropped.catch === "function") {
+      dropped.catch((removeErr) => warnViewerStorage(scope, removeErr));
+    }
+  });
+}
+
+/**
+ * Interrupt points: local missing; get throws; bag undefined or not an object;
+ * stored position malformed; localStorage missing or unreadable.
+ * A throw logs the error name only. This read does not write either store.
+ */
 async function readZoomChipPos() {
   try {
-    const get = globalThis.chrome?.storage?.local?.get;
+    const local = globalThis.chrome?.storage?.local;
+    const get = local?.get;
     if (typeof get === "function") {
-      const bag = await get(ZOOM_CHIP_STORAGE_KEY);
+      const bag = await get.call(local, ZOOM_CHIP_STORAGE_KEY);
       const stored = normalizeZoomChipPos(bag?.[ZOOM_CHIP_STORAGE_KEY]);
       if (stored) return stored;
     }
-  } catch {
-    /* opened outside the extension */
+  } catch (err) {
+    warnViewerStorage("zoom chip", err);
   }
   try {
     return normalizeZoomChipPos(JSON.parse(localStorage.getItem(ZOOM_CHIP_STORAGE_KEY)));
-  } catch {
+  } catch (err) {
+    warnViewerStorage("zoom chip", err);
     return null;
   }
 }
 
+/**
+ * Interrupt points: position rejected before any write; localStorage set throws;
+ * chrome set rejects after the local write; chrome set never settles.
+ * A rejection logs the error name only and drops that chrome key. The next
+ * read then uses localStorage. Only pdfZoomChipPos is written.
+ */
 function persistZoomChipPos(pos) {
   const payload = normalizeZoomChipPos(pos);
   if (!payload) return;
   zoomChipCustom = true;
   try {
     localStorage.setItem(ZOOM_CHIP_STORAGE_KEY, JSON.stringify(payload));
-  } catch {
-    /* private mode / quota */
+  } catch (err) {
+    warnViewerStorage("zoom chip", err);
   }
-  try {
-    globalThis.chrome?.storage?.local?.set?.({ [ZOOM_CHIP_STORAGE_KEY]: payload });
-  } catch {
-    /* opened outside the extension */
-  }
+  commitViewerLocal("zoom chip", { [ZOOM_CHIP_STORAGE_KEY]: payload });
 }
 
 function bindZoomChipDrag(chip, pane) {
@@ -2050,38 +2103,47 @@ function placeMirrorZoomChip(pos, { persist = false } = {}) {
   return next;
 }
 
+/**
+ * Interrupt points: local missing; get throws; bag undefined or malformed;
+ * localStorage missing or unreadable. A throw logs the error name only.
+ * This read does not write either store.
+ */
 async function readMirrorZoomChipPos() {
   try {
-    const get = globalThis.chrome?.storage?.local?.get;
+    const local = globalThis.chrome?.storage?.local;
+    const get = local?.get;
     if (typeof get === "function") {
-      const bag = await get(MIRROR_ZOOM_CHIP_POS_KEY);
+      const bag = await get.call(local, MIRROR_ZOOM_CHIP_POS_KEY);
       const stored = normalizeZoomChipPos(bag?.[MIRROR_ZOOM_CHIP_POS_KEY]);
       if (stored) return stored;
     }
-  } catch {
-    /* opened outside the extension */
+  } catch (err) {
+    warnViewerStorage("mirror zoom chip", err);
   }
   try {
     return normalizeZoomChipPos(JSON.parse(localStorage.getItem(MIRROR_ZOOM_CHIP_POS_KEY)));
-  } catch {
+  } catch (err) {
+    warnViewerStorage("mirror zoom chip", err);
     return null;
   }
 }
 
+/**
+ * Interrupt points: position rejected before any write; localStorage set throws;
+ * chrome set rejects after the local write; chrome set never settles.
+ * A rejection logs the error name only and drops that chrome key.
+ * Only pdfMirrorZoomChipPos is written.
+ */
 function persistMirrorZoomChipPos(pos) {
   const payload = normalizeZoomChipPos(pos);
   if (!payload) return;
   mirrorZoomChipCustom = true;
   try {
     localStorage.setItem(MIRROR_ZOOM_CHIP_POS_KEY, JSON.stringify(payload));
-  } catch {
-    /* private mode / quota */
+  } catch (err) {
+    warnViewerStorage("mirror zoom chip", err);
   }
-  try {
-    globalThis.chrome?.storage?.local?.set?.({ [MIRROR_ZOOM_CHIP_POS_KEY]: payload });
-  } catch {
-    /* opened outside the extension */
-  }
+  commitViewerLocal("mirror zoom chip", { [MIRROR_ZOOM_CHIP_POS_KEY]: payload });
 }
 
 function bindMirrorZoomChipDrag(chip, pane) {
@@ -2159,38 +2221,46 @@ function followMirrorZoomChip(chip, pane, clientX, clientY, grabX, grabY) {
   );
 }
 
+/**
+ * Interrupt points: local missing; get throws; bag undefined; key absent;
+ * localStorage empty or unreadable. A throw logs the error name only.
+ * This read does not write either store.
+ */
 async function readMirrorZoom() {
   try {
-    const get = globalThis.chrome?.storage?.local?.get;
+    const local = globalThis.chrome?.storage?.local;
+    const get = local?.get;
     if (typeof get === "function") {
-      const bag = await get(MIRROR_ZOOM_STORAGE_KEY);
+      const bag = await get.call(local, MIRROR_ZOOM_STORAGE_KEY);
       const stored = clampZoom(bag?.[MIRROR_ZOOM_STORAGE_KEY]);
       if (bag?.[MIRROR_ZOOM_STORAGE_KEY] != null && stored) return stored;
     }
-  } catch {
-    /* opened outside the extension */
+  } catch (err) {
+    warnViewerStorage("mirror zoom", err);
   }
   try {
     const raw = localStorage.getItem(MIRROR_ZOOM_STORAGE_KEY);
     if (raw == null || raw === "") return null;
     return clampZoom(raw);
-  } catch {
+  } catch (err) {
+    warnViewerStorage("mirror zoom", err);
     return null;
   }
 }
 
+/**
+ * Interrupt points: localStorage set throws; chrome set rejects after the
+ * local write; chrome set never settles. A rejection logs the error name
+ * only and drops that chrome key. Only pdfMirrorZoom is written.
+ */
 function persistMirrorZoom(scale) {
   const next = clampZoom(scale);
   try {
     localStorage.setItem(MIRROR_ZOOM_STORAGE_KEY, String(next));
-  } catch {
-    /* private mode / quota */
+  } catch (err) {
+    warnViewerStorage("mirror zoom", err);
   }
-  try {
-    globalThis.chrome?.storage?.local?.set?.({ [MIRROR_ZOOM_STORAGE_KEY]: next });
-  } catch {
-    /* opened outside the extension */
-  }
+  commitViewerLocal("mirror zoom", { [MIRROR_ZOOM_STORAGE_KEY]: next });
 }
 
 function layoutKey(page) {
@@ -2346,6 +2416,25 @@ function installLibraryChrome() {
   void maybeShowPersistCard();
 }
 
+/**
+ * Interrupt points: local missing; get throws; bag undefined; key absent;
+ * stored true or false. A throw logs the error name only and returns false.
+ * This read does not write.
+ */
+async function readStoredPersistDenied() {
+  try {
+    const local = globalThis.chrome?.storage?.local;
+    const get = local?.get;
+    if (typeof get !== "function") return false;
+    const bag = await get.call(local, "notesPersistGranted");
+    if (!bag || !Object.prototype.hasOwnProperty.call(bag, "notesPersistGranted")) return false;
+    return recordedPersistDenied(null, bag.notesPersistGranted);
+  } catch (err) {
+    warnViewerStorage("notes persist", err);
+    return false;
+  }
+}
+
 function installNotesUi() {
   pendingNotes = pendingNotes || createPendingNotes({
     storage: chromeSessionArea() || undefined,
@@ -2396,15 +2485,7 @@ function installNotesUi() {
       if (record && Object.prototype.hasOwnProperty.call(record, "notesPersistGranted")) {
         return recordedPersistDenied(record, undefined);
       }
-      try {
-        const get = globalThis.chrome?.storage?.local?.get;
-        if (typeof get !== "function") return false;
-        const bag = await get("notesPersistGranted");
-        if (!bag || !Object.prototype.hasOwnProperty.call(bag, "notesPersistGranted")) return false;
-        return recordedPersistDenied(null, bag.notesPersistGranted);
-      } catch {
-        return false;
-      }
+      return readStoredPersistDenied();
     },
     flow: () => readerFlowEl(),
     pane: () => translateScrollRoot(),
