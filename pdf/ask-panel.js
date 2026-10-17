@@ -107,6 +107,7 @@ export function mountAskUi(api = {}) {
   slot.append(root);
 
   const session = createAskSession();
+  const saveControllers = new Map();
   const state = {
     open: false,
     route: null,
@@ -249,6 +250,15 @@ export function mountAskUi(api = {}) {
       nearby: nearbyNow(),
       history: session.turns.filter((turn) => turn.status === "done"),
       payload
+    });
+  }
+
+  function previewLineText() {
+    return askPreviewLine({
+      citation: session.citation,
+      host: state.route?.host || "",
+      nearby: nearbyNow(),
+      history: session.turns
     });
   }
 
@@ -505,10 +515,7 @@ export function mountAskUi(api = {}) {
     field.append(area, send);
     form.append(field);
     const line = h("p", { class: "oi-ask-sendline" });
-    line.append(h("span", { "data-ask": "preview-line", text: askPreviewLine({
-      citation: session.citation,
-      host: state.route?.host || ""
-    }) }));
+    line.append(h("span", { "data-ask": "preview-line", text: previewLineText() }));
     const full = h("button", { type: "button", text: "看完整内容" });
     full.addEventListener("click", () => {
       state.previewOpen = !state.previewOpen;
@@ -535,7 +542,7 @@ export function mountAskUi(api = {}) {
     send.disabled = !configured() || !String(area?.value || "").trim();
     const line = root.querySelector("[data-ask='preview-line']");
     if (line) {
-      line.textContent = askPreviewLine({ citation: session.citation, host: state.route?.host || "" });
+      line.textContent = previewLineText();
     }
   }
 
@@ -711,16 +718,26 @@ export function mountAskUi(api = {}) {
     const cite = turn.citation || turn.askedParagraph || null;
     const anchor = await api.anchorFor?.(cite) || null;
     const input = noteInputFromTurn(turn, { docHash: api.docHash?.() || "", anchor, page: cite?.page || 0 });
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    if (controller) saveControllers.set(turn.id, controller);
     try {
-      const saved = await api.saveNote?.(input);
+      const saved = await api.saveNote?.(input, { signal: controller?.signal });
+      if (controller?.signal.aborted || turn.saveTicket !== claim.ticket) {
+        return { ok: false, reason: "aborted", stale: turn.saveTicket !== claim.ticket };
+      }
       const done = finishNoteSave(session, turn.id, claim.ticket, { ok: Boolean(saved?.id), noteId: saved?.id || "" });
       if (state.open) render();
       return done;
     } catch (err) {
+      if (controller?.signal.aborted || turn.saveTicket !== claim.ticket) {
+        return { ok: false, reason: "aborted" };
+      }
       finishNoteSave(session, turn.id, claim.ticket, { ok: false, reason: "failed" });
       api.toast?.("没有写入笔记");
       if (state.open) render();
       return { ok: false, reason: String(err?.message || err) };
+    } finally {
+      if (controller && saveControllers.get(turn.id) === controller) saveControllers.delete(turn.id);
     }
   }
 
@@ -761,7 +778,19 @@ export function mountAskUi(api = {}) {
     if (document.visibilityState === "visible" && state.open) void refreshRoute({ toast: false });
   });
   window.addEventListener("pagehide", () => {
+    const hadFlight = Boolean(session.flight);
+    const hadSave = session.turns.some((turn) => turn.saving);
     if (session.flight) stopTurn(session, session.flight.generation, "");
+    for (const controller of saveControllers.values()) {
+      try { controller.abort(); } catch { /* already aborted */ }
+    }
+    for (const turn of session.turns) {
+      if (!turn.saving) continue;
+      turn.saveTicket += 1;
+      turn.saving = false;
+    }
+    if (hadFlight) clearTimers();
+    if (state.open && (hadFlight || hadSave)) render();
   });
   window.addEventListener("resize", () => {
     if (state.open) {

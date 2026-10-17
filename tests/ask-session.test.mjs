@@ -313,11 +313,38 @@ test("boundary inputs stay intact and empty questions do not send", () => {
   assert.equal(askActionsUseIcons(279), true);
   assert.equal(askActionsUseIcons(280), false);
   assert.equal(askActionsUseIcons(0), false);
-  const preview = askPreviewLine({ citation: { page: 4, kind: "formula", image: "data:image/png;base64,QUJD" }, host: "api.openai.com", images: 1 });
-  assert.match(preview, /附近 2 段/);
+  const nearOne = [{ bid: "b2", text: "只有一段" }];
+  const prior = [{ status: "done", question: "上一问", answer: "上一答" }];
+  const preview = askPreviewLine({
+    citation: { page: 4, kind: "formula", image: "data:image/png;base64,QUJD", text: "E=mc^2" },
+    host: "api.openai.com",
+    nearby: nearOne,
+    history: prior
+  });
+  const messages = buildAskMessages({
+    question: "这句呢",
+    citation: { page: 4, kind: "formula", text: "E=mc^2" },
+    nearby: nearOne,
+    history: prior,
+    payload: { text: "E=mc^2" }
+  });
+  const user = messages.filter((item) => item.role === "user").pop().content;
+  const sentNear = (user.split("附近段落：\n")[1] || "").split("\n\n问题：")[0];
+  const sentCount = sentNear.split("\n\n").map((part) => part.trim()).filter(Boolean).length;
+  const assistants = messages.filter((item) => item.role === "assistant").length;
+  assert.equal(sentCount, 1);
+  assert.equal(assistants, 1);
+  assert.match(preview, new RegExp(`附近 ${sentCount} 段`));
+  assert.match(preview, new RegExp(`历史 ${assistants} 轮`));
+  assert.match(user, /E=mc\^2/);
+  assert.match(user, /只有一段/);
+  assert.match(messages.filter((item) => item.role === "assistant").pop().content, /上一答/);
+  assert.equal(preview.includes("附近 2 段"), false);
   assert.equal(preview.includes("裁图"), false);
   assert.equal(preview.includes("QUJD"), false);
   assert.equal(askPreviewLine({}).includes("问整页"), false);
+  assert.equal(askPreviewLine({}).includes("附近"), false);
+  assert.equal(askPreviewLine({}).includes("历史"), false);
   clearTurns(session);
   assert.equal(session.turns.length, 0);
 });
@@ -372,33 +399,119 @@ function openTab(seed, tab, step) {
   const session = createAskSession({ ids: () => `s${seed}t${tab}x${step}` });
   session.draft = `草稿${seed}-${tab}`;
   session.citation = { bid: "b3", page: 4, text: `引用${tab}` };
+  session.route = {
+    ok: true,
+    via: "multimodal",
+    provider: "openai",
+    model: "gpt-4o",
+    url: "https://api.openai.com/v1/chat/completions",
+    host: "api.openai.com"
+  };
   return session;
 }
 
+const OTHER_ROUTE = {
+  via: "translation",
+  provider: "deepseek",
+  model: "deepseek-chat",
+  url: "https://api.deepseek.com/v1/chat/completions",
+  host: "api.deepseek.com"
+};
+
+function writeRoute(target, source) {
+  target.ok = true;
+  target.via = source.via;
+  target.provider = source.provider;
+  target.model = source.model;
+  target.url = source.url;
+  target.host = source.host;
+}
+
+test("in-flight request keeps its route snapshot when the live route url and host change", () => {
+  const session = createAskSession({ ids: () => "flip" });
+  const live = {
+    ok: true,
+    via: "multimodal",
+    provider: "openai",
+    model: "gpt-4o",
+    url: "https://api.openai.com/v1/chat/completions",
+    host: "api.openai.com"
+  };
+  session.route = live;
+  const begun = beginTurn(session, {
+    question: "飞行中",
+    route: session.route,
+    nearby: [{ bid: "b2", text: "附近" }]
+  });
+  assert.equal(begun.ok, true);
+  const started = { via: begun.route.via, url: begun.route.url, host: begun.route.host };
+  writeRoute(live, OTHER_ROUTE);
+  assert.equal(session.flight.url, started.url);
+  assert.equal(session.flight.host, started.host);
+  assert.equal(session.flight.via, started.via);
+  assert.equal(begun.turn.route.url, started.url);
+  assert.equal(begun.turn.route.host, started.host);
+  assert.notEqual(begun.turn.route.url, live.url);
+  assert.notEqual(begun.turn.route.host, live.host);
+  assert.notEqual(begun.turn.route, live);
+  settleTurn(session, begun.generation, { ok: true, body: "答" });
+  const next = beginTurn(session, { question: "下一轮", route: session.route, nearby: [] });
+  assert.equal(next.ok, true);
+  assert.equal(next.route.url, live.url);
+  assert.equal(next.route.host, live.host);
+  assert.equal(next.route.via, "translation");
+  assert.equal(begun.turn.route.url, started.url);
+  assert.equal(begun.turn.route.host, started.host);
+});
+
+test("session invariants reject an in-flight host change", () => {
+  const session = createAskSession({ ids: () => "host" });
+  beginTurn(session, {
+    question: "主机",
+    route: {
+      ok: true,
+      via: "multimodal",
+      provider: "openai",
+      model: "gpt-4o",
+      url: "https://api.openai.com/v1/chat/completions",
+      host: "api.openai.com"
+    },
+    nearby: []
+  });
+  const previous = sessionSnapshot(session);
+  assert.deepEqual(sessionInvariants(session, previous), []);
+  session.flight.host = "api.deepseek.com";
+  assert.ok(sessionInvariants(session, previous).includes("inflight retargeted"));
+});
+
 test("adversarial interleaving keeps ask invariants across 500 seeds", () => {
-  const routes = [routeOf(llm, mm), routeOf(llm, {})];
   let crossRouteFlights = 0;
+  let midSaveUnloads = 0;
   for (let seed = 1; seed <= 500; seed += 1) {
     const random = mulberry32(seed);
     const store = [];
     const tabs = [0, 1, 2].map((tab) => openTab(seed, tab, 0));
     const previous = tabs.map((session) => sessionSnapshot(session));
-    let routeChoice = 0;
     try {
       for (let step = 0; step < 24; step += 1) {
         const roll = random();
         const tab = Math.floor(random() * tabs.length);
         let session = tabs[tab];
-        const route = routes[routeChoice];
         let replaced = false;
         if (roll < 0.16) {
           const question = roll < 0.02 ? "" : (roll < 0.04 ? `  \t` : `问${seed}-${tab}-${step} √ "<>"`);
-          beginTurn(session, {
+          const begun = beginTurn(session, {
             question,
-            route,
+            route: session.route,
             nearby: nearbyBlocks(attention, "b3"),
             citation: { bid: "b3", page: 4, text: "引用", image: "data:image/png;base64,QUJD" }
           });
+          if (begun.ok) {
+            if (begun.route.url !== session.route.url || begun.route.host !== session.route.host || begun.route.via !== session.route.via) {
+              throw new Error("next turn ignored the live route");
+            }
+            if (begun.turn.route === session.route) throw new Error("turn stored the live route object");
+          }
         } else if (roll < 0.3 && session.flight) {
           settleTurn(session, session.flight.generation, { ok: true, body: `答${step}` });
         } else if (roll < 0.4 && session.flight) {
@@ -413,48 +526,71 @@ test("adversarial interleaving keeps ask invariants across 500 seeds", () => {
             throw new Error("multimodal failure allocated another turn");
           }
         } else if (roll < 0.62) {
-          const before = session.flight ? {
-            via: session.flight.via,
-            url: session.flight.url,
-            host: session.flight.host
+          const inflight = session.flight
+            ? session.turns.find((item) => item.id === session.flight.turnId)
+            : null;
+          const started = inflight ? {
+            via: inflight.route.via,
+            url: inflight.route.url,
+            host: inflight.route.host
           } : null;
-          routeChoice = routeChoice === 0 ? 1 : 0;
-          const next = routes[routeChoice];
-          if (before) {
-            if (session.flight.via !== before.via || session.flight.url !== before.url || session.flight.host !== before.host) {
+          const liveBefore = {
+            via: session.route.via,
+            url: session.route.url,
+            host: session.route.host
+          };
+          const next = liveBefore.host === OTHER_ROUTE.host ? {
+            via: "multimodal",
+            provider: "openai",
+            model: "gpt-4o",
+            url: "https://api.openai.com/v1/chat/completions",
+            host: "api.openai.com"
+          } : OTHER_ROUTE;
+          writeRoute(session.route, next);
+          if (session.route.url !== next.url || session.route.host !== next.host || session.route.via !== next.via) {
+            throw new Error("new route was not applied to the session");
+          }
+          if (next.url === liveBefore.url || next.host === liveBefore.host) {
+            throw new Error("new route did not change url and host");
+          }
+          if (started) {
+            if (session.flight.via !== started.via || session.flight.url !== started.url || session.flight.host !== started.host) {
               throw new Error("route flip retargeted the flight");
             }
-            if (before.via !== next.via) {
-              crossRouteFlights += 1;
-              if (session.flight.via === next.via) throw new Error("flight adopted the new route");
+            if (inflight.route.via !== started.via || inflight.route.url !== started.url || inflight.route.host !== started.host) {
+              throw new Error("route flip retargeted the snapshotted turn");
             }
+            if (inflight.route === session.route) throw new Error("turn stored the live route object");
+            crossRouteFlights += 1;
           }
         } else if (roll < 0.76) {
-          const turn = session.turns.find((item) => item.status === "done" && !item.noteId && !item.saving);
-          if (turn) {
-            const claim = claimNoteSave(session, turn.id);
-            if (claim.ok) {
-              if (noteForTurn(store, turn.id)) {
-                finishNoteSave(session, turn.id, claim.ticket, { ok: false, reason: "exists" });
-              } else if (random() < 0.25) {
-                finishNoteSave(session, turn.id, claim.ticket, { ok: false, reason: "failed" });
-              } else {
-                const note = {
-                  id: `ask:${turn.id}`,
-                  qa: { turnId: turn.id },
-                  author: "ai",
-                  body: `答${step}`,
-                  deletedAt: 0
-                };
-                store.push(note);
-                finishNoteSave(session, turn.id, claim.ticket, { ok: true, noteId: note.id });
-                finishNoteSave(session, turn.id, claim.ticket, { ok: true, noteId: "nope" });
-              }
+          const saving = session.turns.find((item) => item.saving);
+          if (saving) {
+            const ticket = saving.saveTicket;
+            if (noteForTurn(store, saving.id)) {
+              finishNoteSave(session, saving.id, ticket, { ok: false, reason: "exists" });
+            } else if (random() < 0.25) {
+              finishNoteSave(session, saving.id, ticket, { ok: false, reason: "failed" });
+            } else {
+              const note = {
+                id: `ask:${saving.id}`,
+                qa: { turnId: saving.id },
+                author: "ai",
+                body: saving.answer || `答${step}`,
+                deletedAt: 0
+              };
+              store.push(note);
+              finishNoteSave(session, saving.id, ticket, { ok: true, noteId: note.id });
+              finishNoteSave(session, saving.id, ticket, { ok: true, noteId: "nope" });
             }
+          } else {
+            const turn = session.turns.find((item) => item.status === "done" && !item.noteId && !item.saving);
+            if (turn) claimNoteSave(session, turn.id);
           }
         } else if (roll < 0.9) {
           const saving = session.turns.find((item) => item.saving);
           if (saving) {
+            midSaveUnloads += 1;
             const ticket = saving.saveTicket;
             const turnId = saving.id;
             const fresh = openTab(seed, tab, step + 1);
@@ -520,4 +656,5 @@ test("adversarial interleaving keeps ask invariants across 500 seeds", () => {
     }
   }
   assert.ok(crossRouteFlights > 0, "route flip never observed a live flight against a different route");
+  assert.ok(midSaveUnloads > 0, "unload never landed while a note save was in progress");
 });

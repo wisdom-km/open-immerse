@@ -2441,7 +2441,12 @@ function installAskUi() {
     readConfirm: () => readAskConfirm(),
     writeConfirm: (value) => writeAskConfirm(value),
     send: (req) => sendAsk(req),
-    saveNote: (input) => sharedNotesStore().put(input),
+    saveNote: async (input, options) => {
+      if (options?.signal?.aborted) return null;
+      const saved = await sharedNotesStore().put(input);
+      if (options?.signal?.aborted) return null;
+      return saved;
+    },
     listNotes: () => sharedNotesStore().list(notesDocHashNow()),
     anchorFor: (citation) => anchorForAsk(citation),
     revealNote: (id) => notesUi?.revealNote?.(id),

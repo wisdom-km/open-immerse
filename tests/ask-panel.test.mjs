@@ -77,8 +77,9 @@ function harness(options = {}) {
       if (options.fail) return options.fail(req);
       return { ok: true, status: 200, body: options.answer || "点积要除以 $\\sqrt{d_k}$。" };
     },
-    saveNote: async (input) => {
+    saveNote: async (input, options) => {
       if (saveGate) await saveGate;
+      if (options?.signal?.aborted) return null;
       if (saveError) throw new Error("disk");
       const id = input.id || `note-${notes.length + 1}`;
       const prior = notes.find((note) => note.id === id || (input.qa?.turnId && note.qa?.turnId === input.qa.turnId));
@@ -341,44 +342,105 @@ test("first send confirms once, then stays quiet", async () => {
 
 test("save failure toasts 没有写入笔记 and retry of the same turn does not duplicate", async () => {
   const box = harness({ saveError: true });
+  await typeAndSend(box.ui, "先写好");
   await typeAndSend(box.ui, "写失败");
-  const turn = box.ui.session.turns[0];
+  const kept = box.ui.session.turns[0];
+  const turn = box.ui.session.turns[1];
+  const sibling = { status: kept.status, answer: kept.answer, noteId: kept.noteId, question: kept.question };
+  const failedAnswer = turn.answer;
   const first = await box.ui.saveNote(turn);
   assert.equal(first.ok, false);
   assert.match(box.toasts.join("\n"), /没有写入笔记/);
   assert.equal(turn.noteId, "");
   assert.equal(turn.saving, false);
+  assert.equal(turn.status, "done");
   assert.equal(box.notes.length, 0);
+  assert.equal(kept.status, sibling.status);
+  assert.equal(kept.answer, sibling.answer);
+  assert.equal(kept.noteId, sibling.noteId);
+  assert.equal(kept.question, sibling.question);
+  assert.equal(kept.question, "先写好");
   box.saveError = false;
+  const savedSibling = await box.ui.saveNote(kept);
+  assert.equal(savedSibling.ok, true);
+  assert.equal(box.notes.length, 1);
+  assert.equal(box.notes[0].qa.turnId, kept.id);
+  assert.equal(turn.noteId, "");
+  assert.equal(turn.answer, failedAnswer);
+  assert.equal(turn.status, "done");
   const saved = await box.ui.saveNote(turn);
   assert.equal(saved.ok, true);
   const again = await box.ui.saveNote(turn);
   assert.equal(again.reason, "exists");
-  assert.equal(box.notes.length, 1);
-  assert.equal(box.notes[0].qa.turnId, turn.id);
-  assert.equal(box.notes[0].author, "ai");
-  assert.ok(box.notes[0].body);
+  assert.equal(box.notes.length, 2);
+  assert.equal(box.notes.filter((note) => note.qa.turnId === turn.id).length, 1);
+  assert.equal(box.notes.filter((note) => note.qa.turnId === kept.id).length, 1);
+  assert.equal(kept.noteId, savedSibling.noteId);
+  assert.equal(kept.answer, sibling.answer);
+  assert.equal(box.notes.find((note) => note.qa.turnId === turn.id).author, "ai");
+  assert.ok(box.notes.find((note) => note.qa.turnId === turn.id).body);
 });
 
-test("pagehide during an in-flight note write leaves no partial and no duplicate", async () => {
+test("pagehide during an in-flight request drops the late answer", async () => {
+  let release;
+  const gate = new Promise((done) => { release = done; });
+  const box = harness({
+    send: async () => {
+      await gate;
+      return { ok: true, status: 200, body: "不该落地" };
+    }
+  });
+  const pending = typeAndSend(box.ui, "飞行中");
+  await new Promise((done) => setTimeout(done, 0));
+  assert.ok(box.ui.session.flight);
+  assert.equal(box.ui.session.turns[0].status, "pending");
+  const draft = box.ui.session.draft;
+  try {
+    window.dispatchEvent(new Event("pagehide"));
+    assert.equal(box.ui.session.flight, null);
+    assert.equal(box.ui.session.turns[0].status, "stopped");
+  } finally {
+    release();
+  }
+  const settled = await pending;
+  assert.equal(settled.stale, true);
+  assert.equal(box.ui.session.turns[0].status, "stopped");
+  assert.notEqual(box.ui.session.turns[0].answer, "不该落地");
+  assert.equal(box.ui.session.draft, draft);
+  assert.equal(box.ui.session.draft, "飞行中");
+});
+
+test("pagehide before a note write lands leaves no note and a later save writes one", async () => {
   const box = harness();
   await typeAndSend(box.ui, "写入中");
+  const turn = box.ui.session.turns[0];
   const release = box.holdSave();
-  const pending = box.ui.saveNote(box.ui.session.turns[0]);
+  const pending = box.ui.saveNote(turn);
   await new Promise((done) => setTimeout(done, 0));
+  assert.equal(turn.saving, true);
   assert.equal(box.notes.length, 0);
-  window.dispatchEvent(new Event("pagehide"));
+  try {
+    window.dispatchEvent(new Event("pagehide"));
+    assert.equal(turn.saving, false);
+  } finally {
+    release();
+  }
+  const dropped = await pending;
+  assert.equal(dropped.ok, false);
   assert.equal(box.notes.length, 0);
-  release();
-  const done = await pending;
-  assert.equal(done.ok, true);
+  assert.equal(turn.noteId, "");
+  assert.equal(turn.saving, false);
+  assert.equal(turn.status, "done");
+  assert.ok(turn.answer);
+  const saved = await box.ui.saveNote(turn);
+  assert.equal(saved.ok, true);
   assert.equal(box.notes.length, 1);
   const note = box.notes[0];
   assert.equal(note.author, "ai");
-  assert.equal(note.qa.turnId, box.ui.session.turns[0].id);
-  assert.ok(note.body);
+  assert.equal(note.qa.turnId, turn.id);
+  assert.equal(note.body, turn.answer);
   assert.ok(note.id);
-  const again = await box.ui.saveNote(box.ui.session.turns[0]);
+  const again = await box.ui.saveNote(turn);
   assert.equal(again.reason, "exists");
   assert.equal(box.notes.length, 1);
 });
@@ -420,6 +482,7 @@ test("preview line matches the request and suggestions do not send", async () =>
   await box.ui.askCitation({ bid: "b3", page: 4, kind: "formula", text: "E=mc^2", image: "data:image/png;base64,QUJD" }, { fresh: true });
   const preview = box.ui.root.querySelector("[data-ask='preview-line']").textContent;
   assert.match(preview, /附近 2 段/);
+  assert.equal(preview.includes("历史"), false);
   assert.equal(preview.includes("裁图"), false);
   box.ui.root.querySelector(".oi-ask-suggest button").click();
   assert.equal(box.sent.length, 0);
@@ -431,9 +494,29 @@ test("preview line matches the request and suggestions do not send", async () =>
   assert.equal(blob.includes("inline_data"), false);
   assert.match(blob, /E=mc\^2/);
   assert.equal(blob.includes("FULLPAGE"), false);
+  const user = box.sent[0].messages.filter((item) => item.role === "user").pop().content;
+  const sentNear = (user.split("附近段落：\n")[1] || "").split("\n\n问题：")[0];
+  const sentCount = sentNear.split("\n\n").map((part) => part.trim()).filter(Boolean).length;
+  assert.equal(sentCount, 2);
+  assert.match(preview, new RegExp(`附近 ${sentCount} 段`));
+  assert.equal(box.sent[0].messages.filter((item) => item.role === "assistant").length, 0);
   assert.match(box.ui.root.textContent, /不看图/);
   assert.equal(box.ui.root.textContent.includes("裁图"), false);
-  assert.equal(box.ui.root.querySelector("[data-ask='preview-line']").textContent.includes("裁图"), false);
+  const after = box.ui.root.querySelector("[data-ask='preview-line']").textContent;
+  assert.equal(after.includes("裁图"), false);
+  assert.match(after, /历史 1 轮/);
+  assert.match(after, /附近 2 段/);
+  box.ui.session.draft = "追问一句";
+  await box.ui.submit({ confirmed: true });
+  const second = box.sent[1].messages;
+  const assistants = second.filter((item) => item.role === "assistant").length;
+  assert.equal(assistants, 1);
+  assert.match(after, new RegExp(`历史 ${assistants} 轮`));
+  const user2 = second.filter((item) => item.role === "user").pop().content;
+  assert.match(user2, /追问一句/);
+  assert.match(user2, /E=mc\^2/);
+  assert.match(user2, /输入由维度/);
+  assert.match(user2, /乘以/);
 });
 
 test("viewer ask entry no longer toasts 即将推出 for the ask button", () => {
