@@ -3533,18 +3533,26 @@ async function collectAlignPages() {
 }
 
 async function restampArxivLayouts() {
+  const epoch = layoutEpoch;
+  const job = arxivJob;
   const total = pdfDoc?.numPages || 0;
   for (let n = 1; n <= total; n += 1) {
     if (!getPageLayout(n)) continue;
     try {
-      await restampArxivPage(n);
+      await restampArxivPage(n, epoch, job);
     } catch {
       /* this page stays on the crop path */
     }
   }
 }
 
-async function restampArxivPage(pageNumber) {
+function restampFormulaStale(pageNumber, epoch, job, layout) {
+  return layout !== getPageLayout(pageNumber)
+    || job !== arxivJob
+    || !layoutAttemptLive(epoch);
+}
+
+async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob) {
   const layout = getPageLayout(pageNumber);
   if (!layout?.blocks) return;
   const flags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: formulaArxivSourceEnabled() });
@@ -3561,7 +3569,7 @@ async function restampArxivPage(pageNumber) {
     else delete stamped.sourceUnitId;
     next.push(await scheduleFormulaBlock(stamped, {
       withRasterCrop: async (item) => item,
-      isStale: () => false,
+      isStale: () => restampFormulaStale(pageNumber, epoch, job, layout),
       arxivEnabled: formulaArxivSourceEnabled(),
       multimodalEnabled: flags.multimodalEnabled,
       multimodalConfigured: flags.multimodalConfigured,

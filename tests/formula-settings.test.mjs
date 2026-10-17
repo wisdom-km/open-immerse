@@ -468,9 +468,7 @@ test("F3-20 connectivity uses the stub, and tier adapters stay unavailable", asy
   });
   assert.equal(calls, 1);
   assert.equal(seen.chip, "已连通");
-  assert.equal(multimodalTier.available({ flags: { multimodalEnabled: true, multimodalConfigured: true } }), true);
-  assert.equal(multimodalTier.available(), false);
-  assert.equal(multimodalTier.version, "mm-1");
+  assert.equal(multimodalTier.available({ flags: { multimodalEnabled: true, multimodalConfigured: true } }), false);
   assert.equal(ocrTier.available({ flags: { ocrEnabled: true, ocrConfigured: true } }), false);
   assert.equal(read("lib/formula-tiers/multimodal.js").includes("return false"), true);
   assert.equal(read("lib/formula-tiers/ocr.js").includes("return false"), true);

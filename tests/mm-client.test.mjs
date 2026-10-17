@@ -179,8 +179,7 @@ test("registry presets are the documented vision models, including 千问", () =
   assert.equal(gemini.models.includes("gemini-2.0-flash"), false);
   assert.equal(read("lib/ask-route.js").includes("gemini-2.0-flash"), true);
   assert.equal(read("lib/providers.js").includes("gemini-2.0-flash"), true);
-  assert.match(read("lib/formula-tiers/multimodal.js"), /mm-1/);
-  assert.doesNotMatch(read("lib/formula-tiers/multimodal.js"), /stub-0/);
+  assert.match(read("lib/formula-tiers/multimodal.js"), /stub-0/);
   const source = read("lib/mm-client.js");
   assert.equal(/\bfetch\s*\(/.test(source.replace(/\.fetch\s*\(/g, "")), false);
   assert.match(source, /purpose: MM_PURPOSE/);

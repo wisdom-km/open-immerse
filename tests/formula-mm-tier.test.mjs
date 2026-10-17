@@ -25,6 +25,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { handleFormulaCacheMessage } from "../background/formula-cache.js";
+import { deliverAsk } from "../lib/ask-route.js";
+import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
 import { createFormulaCache, createMemoryStore, tierRecordKey } from "../lib/formula-cache.js";
 import { decideFormula } from "../lib/formula-chain.js";
 import { cropHashOf, contractViolations, unitKeyOf } from "../lib/formula-contract.js";
@@ -42,6 +45,7 @@ import {
   FORMULA_VISION_SYSTEM,
   MM_TIER_VERSION,
   formulaVisionText,
+  mmConfigFingerprint,
   multimodalTier,
   runMultimodal
 } from "../lib/formula-tiers/multimodal.js";
@@ -96,33 +100,60 @@ function countingTiers(counts) {
   return wrapped;
 }
 
+function modelKey(settings, named = settings.multimodal.model) {
+  return `${named}#${mmConfigFingerprint(settings)}`;
+}
+
 function wrapStore(inner, state) {
   return {
     kind: "memory",
     saved: state.saved,
     async getTier(key) {
+      if (typeof state.onGet === "function") await state.onGet(key);
       return inner.getTier(key);
     },
     async putTier(key, record) {
+      return inner.putTier(key, record);
+    },
+    async commitTier(key, record) {
+      if (typeof state.onCommit === "function") await state.onCommit(key, record);
       if (state.boom) {
         state.boom = false;
         throw new Error("cache write interrupted");
       }
-      const stored = await inner.putTier(key, record);
+      const stored = await inner.commitTier(key, record);
       if (stored) state.saved.push({ ...structuredClone(record), key });
       return stored;
+    },
+    async deleteTier(key, decidedAt) {
+      const removed = await inner.deleteTier(key, decidedAt);
+      if (removed) {
+        const index = state.saved.findIndex((row) => row.key === key && row.decidedAt === decidedAt);
+        if (index >= 0) state.saved.splice(index, 1);
+      }
+      return removed;
     },
     async getDecision(key) {
       return inner.getDecision(key);
     },
     async putDecision(key, record) {
-      return inner.putDecision(key, record);
+      if (state.boomDecision) {
+        state.boomDecision = false;
+        throw new Error("decision write interrupted");
+      }
+      const stored = await inner.putDecision(key, record);
+      if (stored) {
+        state.decisions = state.decisions || [];
+        state.decisions.push({ ...structuredClone(record), key });
+      }
+      return stored;
     },
     async clearDoc(docHash) {
       return inner.clearDoc(docHash);
     },
     async clearAll() {
       state.saved.length = 0;
+      if (state.decisions) state.decisions.length = 0;
       return inner.clearAll();
     }
   };
@@ -146,7 +177,9 @@ test("parseLatexCandidate keeps one formula and rejects the rest", () => {
   assert.equal(parseLatexCandidate("公式是 $x$ 另一行").reason, "multi");
   assert.equal(parseLatexCandidate("the formula is x").reason, "multi");
   assert.equal(parseLatexCandidate("x\n\ny").reason, "multi");
-  assert.equal(parseLatexCandidate(`${"x".repeat(20)} + ${"y".repeat(20)}`).ok, true);
+  const longLatex = Array.from({ length: 1500 }, () => "x").join("+");
+  assert.equal(parseLatexCandidate(longLatex).ok, true);
+  assert.ok(parseLatexCandidate(longLatex).latex.length > 1000);
   assert.equal(parseLatexCandidate("UNREADABLE because it is blurry").reason, "multi");
   assert.equal(verifyFromArbiter, verifyCandidate);
 });
@@ -257,7 +290,8 @@ test("a verified crop becomes vlm data and the reader still shows the crop", asy
   assert.equal(shown.formulaReason, undefined);
   const stats = ledger.stats();
   assert.equal(stats.m, 1);
-  assert.equal(stats.n, 1);
+  assert.equal(stats.n, 0);
+  assert.equal(stats.ready, 1);
   assert.equal(stats.k, 1);
   const inlineSeen = [];
   const inline = await scheduleFormulaBlock(formulaBlock({ bid: "in", display: false, text: "x", inlineOf: "p" }), {
@@ -277,6 +311,7 @@ test("a verified crop becomes vlm data and the reader still shows the crop", asy
   assert.equal(inline.latexSource, "vlm");
   assert.equal(read("pdf/viewer.js").includes("oi-vlm-mark"), false);
   assert.equal(read("pdf/viewer.js").includes("oi-mm-chip"), false);
+  assert.equal(read("pdf/viewer.js").includes("isStale: () => false"), false);
 });
 
 test("tier 0 does not send and stays out of the denominator", async () => {
@@ -395,12 +430,15 @@ test("cache hits use mm-1 plus the model and do not send again", async () => {
     bbox: [0.1, 0.2, 0.4, 0.3],
     crop: { pixels: PNG }
   };
-  const key = tierRecordKey(unit, { id: "multimodal", version: MM_TIER_VERSION }, "gpt-5.6-luna");
-  assert.equal(key.includes(`:multimodal:${MM_TIER_VERSION}:gpt-5.6-luna:`), true);
-  assert.equal(key.includes(cropHashOf(unit)), true);
+  const named = modelKey(settings);
+  const key = tierRecordKey(unit, { id: "multimodal", version: MM_TIER_VERSION }, named);
+  assert.equal(key, `doc-cache:c1:multimodal:${MM_TIER_VERSION}:${named}:${cropHashOf(unit)}`);
+  assert.equal(named.endsWith(mmConfigFingerprint(settings)), true);
+  assert.equal(named.includes(SECRET), false);
   const row = await cache.store.getTier(key);
   assert.equal(row.result.latex, "x");
   assert.equal(row.result.meta.version, MM_TIER_VERSION);
+  assert.equal(row.configFingerprint, mmConfigFingerprint(settings));
   assert.equal(JSON.stringify(row).includes(SECRET), false);
   assert.equal(JSON.stringify(row).includes(PNG), false);
   const other = settingsFor("openai", { model: "gpt-5.4-mini" });
@@ -541,8 +579,9 @@ test("interrupt: a cache write that throws keeps the decision and leaves no part
   assert.equal(shown.latexSource, "vlm");
   assert.equal(state.saved.length, 0);
   const unit = { docHash: "doc-half", bid: "half", bbox: [0.1, 0.2, 0.4, 0.3], crop: { pixels: PNG } };
-  const key = tierRecordKey(unit, multimodalTier, "gpt-5.6-luna");
+  const key = tierRecordKey(unit, multimodalTier, modelKey(settings));
   assert.equal(await inner.getTier(key), null);
+  assert.equal(await inner.getDecision("doc-half:half"), null);
   let sends = 0;
   await scheduleFormulaBlock(formulaBlock({ bid: "half" }), {
     ...formulaChainFlags(settings),
@@ -560,6 +599,7 @@ test("interrupt: a cache write that throws keeps the decision and leaves no part
   });
   assert.equal(sends, 1);
   assert.equal((await inner.getTier(key)).result.latex, "x");
+  assert.equal((await inner.getDecision("doc-half:half")).decision.chosen.latex, "x");
 });
 
 test("interrupt: before stamp, a page turn does not leave vlm on the block", async () => {
@@ -597,9 +637,10 @@ test("a newer verified row is not replaced by an older failure", async () => {
   }, { docHash: "doc", model: "m" });
   const wrote = await cache.writeTier(tierRecordKey(unit, tier, "m"), {
     tier: "multimodal",
-    status: "error",
-    reason: "http",
-    meta: { epoch: 1 }
+    status: "reject",
+    reason: "katex-error",
+    latex: "\\href{https://evil.test}{x}",
+    meta: { epoch: 9, version: "mm-1" }
   }, { docHash: "doc", model: "m" });
   assert.equal(wrote, false);
   assert.equal((await store.getTier(tierRecordKey(unit, tier, "m"))).result.latex, "x");
@@ -615,8 +656,8 @@ test("a newer verified row is not replaced by an older failure", async () => {
 });
 
 test("ask and formula calls do not wait on each other", async () => {
-  const ask = { marker: "ask-queue", runs: 0 };
   const settings = settingsFor("openai");
+  const ledger = createMmLedger();
   let release;
   const hold = new Promise((resolve) => {
     release = resolve;
@@ -628,7 +669,7 @@ test("ask and formula calls do not wait on each other", async () => {
     settings,
     readSettings: () => settings,
     katex,
-    ask,
+    mmLedger: ledger,
     sendVision: async () => {
       formulaStarted = true;
       await hold;
@@ -638,13 +679,26 @@ test("ask and formula calls do not wait on each other", async () => {
   });
   for (let i = 0; i < 30 && !formulaStarted; i += 1) await Promise.resolve();
   assert.equal(formulaStarted, true);
-  ask.runs += 1;
-  assert.equal(ask.marker, "ask-queue");
+  const before = JSON.stringify(ledger.stats());
+  const asked = await deliverAsk({
+    ok: true,
+    via: "multimodal",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    url: "https://api.openai.com/v1/chat/completions",
+    host: "api.openai.com"
+  }, async () => {
+    assert.equal(formulaStarted, true);
+    return { ok: true, body: "ask-body" };
+  });
+  assert.equal(asked.ok, true);
+  assert.equal(asked.body, "ask-body");
+  assert.equal(JSON.stringify(ledger.stats()), before);
   release();
   const shown = await formula;
   assert.equal(shown.latexSource, "vlm");
-  assert.equal(ask.runs, 1);
-  assert.equal(ask.marker, "ask-queue");
+  assert.equal(ledger.stats().ready, 1);
+  assert.equal(ledger.stats().n, 0);
 });
 
 test("one joined multimodal failure never reaches self, even through decideFormula", async () => {
@@ -670,6 +724,432 @@ test("one joined multimodal failure never reaches self, even through decideFormu
   assert.equal(counts.vector || 0, 0);
 });
 
+function cachedModel(settings) {
+  return modelKey(settings);
+}
+
+test("a timeout is not cached and the next load sends again", async () => {
+  const settings = settingsFor("openai");
+  const cache = createFormulaCache(createMemoryStore());
+  let sends = 0;
+  const hooks = {
+    ...formulaChainFlags(settings),
+    docHash: "doc-timeout",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache,
+    model: settings.multimodal.model,
+    sendVision: async () => {
+      sends += 1;
+      return { ok: false, error: { code: "timeout", status: 0, summary: "超时" } };
+    },
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  };
+  await scheduleFormulaBlock(formulaBlock({ bid: "to" }), hooks);
+  await scheduleFormulaBlock(formulaBlock({ bid: "to" }), hooks);
+  assert.equal(sends, 2);
+});
+
+test("a 401 is not reused after the key changes", async () => {
+  let current = settingsFor("openai", { apiKey: SECRET });
+  const cache = createFormulaCache(createMemoryStore());
+  let sends = 0;
+  const run = () => scheduleFormulaBlock(formulaBlock({ bid: "auth" }), {
+    ...formulaChainFlags(current),
+    docHash: "doc-auth",
+    settings: current,
+    readSettings: () => current,
+    katex,
+    cache,
+    model: current.multimodal.model,
+    sendVision: async () => {
+      sends += 1;
+      if (sends === 1) return { ok: false, error: { code: "401", status: 401, summary: `bad ${current.multimodal.apiKey}` } };
+      return { ok: true, text: "x" };
+    },
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  const first = await run();
+  assert.equal(first.latexSource, undefined);
+  current = settingsFor("openai", { apiKey: `${SECRET}-rotated` });
+  const second = await run();
+  assert.equal(sends, 2);
+  assert.equal(second.latexSource, "vlm");
+  const rows = [];
+  assert.equal(JSON.stringify(second).includes(SECRET), false);
+  void rows;
+});
+
+test("a cached success is not reused after the key changes", async () => {
+  let current = settingsFor("openai", { apiKey: SECRET });
+  const inner = createMemoryStore();
+  const cache = createFormulaCache(inner);
+  let sends = 0;
+  const run = () => scheduleFormulaBlock(formulaBlock({ bid: "fp" }), {
+    ...formulaChainFlags(current),
+    docHash: "doc-fp",
+    settings: current,
+    readSettings: () => current,
+    katex,
+    cache,
+    model: current.multimodal.model,
+    sendVision: async () => {
+      sends += 1;
+      return { ok: true, text: "x" };
+    },
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  await run();
+  await run();
+  assert.equal(sends, 1);
+  const firstKey = tierRecordKey({
+    docHash: "doc-fp",
+    bid: "fp",
+    bbox: [0.1, 0.2, 0.4, 0.3],
+    crop: { pixels: PNG }
+  }, multimodalTier, cachedModel(current));
+  current = settingsFor("openai", { apiKey: `${SECRET}-next` });
+  await run();
+  assert.equal(sends, 2);
+  const secondKey = tierRecordKey({
+    docHash: "doc-fp",
+    bid: "fp",
+    bbox: [0.1, 0.2, 0.4, 0.3],
+    crop: { pixels: PNG }
+  }, multimodalTier, cachedModel(current));
+  assert.notEqual(firstKey, secondKey);
+  assert.equal((await inner.getTier(firstKey)).result.latex, "x");
+  assert.equal((await inner.getTier(secondKey)).result.latex, "x");
+  assert.equal(JSON.stringify(await inner.getTier(firstKey)).includes(SECRET), false);
+});
+
+test("a vendor that cannot see images is cached and not asked again", async () => {
+  const settings = settingsFor("openai");
+  const cache = createFormulaCache(createMemoryStore());
+  let sends = 0;
+  const hooks = {
+    ...formulaChainFlags(settings),
+    docHash: "doc-nv",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache,
+    model: settings.multimodal.model,
+    sendVision: async () => {
+      sends += 1;
+      return { ok: false, error: { code: "no-vision", status: 400, summary: "cannot see" } };
+    },
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  };
+  await scheduleFormulaBlock(formulaBlock({ bid: "nv" }), hooks);
+  await scheduleFormulaBlock(formulaBlock({ bid: "nv" }), hooks);
+  assert.equal(sends, 1);
+});
+
+test("a rejected href is not stored in the cache row", async () => {
+  const settings = settingsFor("openai");
+  const counts = {};
+  const inner = createMemoryStore();
+  const cache = createFormulaCache(inner);
+  const shown = await scheduleFormulaBlock(formulaBlock({ bid: "href", text: "x" }), {
+    ...formulaChainFlags(settings),
+    docHash: "doc-href",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache,
+    tiers: countingTiers(counts),
+    model: settings.multimodal.model,
+    sendVision: async () => ({ ok: true, text: "\\href{https://evil.test/a}{x}" }),
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  assert.equal(counts.lastMm.reason, "unknown-command");
+  assert.equal(counts.lastMm.latex, null);
+  assert.equal(shown.latex, undefined);
+  const key = tierRecordKey({
+    docHash: "doc-href",
+    bid: "href",
+    bbox: [0.1, 0.2, 0.4, 0.3],
+    crop: { pixels: PNG }
+  }, multimodalTier, cachedModel(settings));
+  const row = await inner.getTier(key);
+  assert.equal(row.result.latex, null);
+  assert.equal(JSON.stringify(row).includes("evil.test"), false);
+});
+
+test("guard: a settings change during the cache read does not commit or stamp vlm", async () => {
+  let current = settingsFor("openai", { model: "gpt-5.6-luna" });
+  const state = { saved: [], boom: false, gets: 0, commits: 0 };
+  const inner = createMemoryStore();
+  state.onGet = async () => {
+    state.gets += 1;
+    if (state.gets === 2) current = settingsFor("openai", { model: "gpt-5.4-mini" });
+  };
+  state.onCommit = async () => {
+    state.commits += 1;
+  };
+  const cache = createFormulaCache(wrapStore(inner, state));
+  const shown = await scheduleFormulaBlock(formulaBlock({ bid: "mid" }), {
+    ...formulaChainFlags(current),
+    docHash: "doc-mid",
+    settings: current,
+    readSettings: () => current,
+    katex,
+    cache,
+    model: "gpt-5.6-luna",
+    sendVision: async () => ({ ok: true, text: "x" }),
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  assert.equal(state.commits, 0);
+  assert.equal(shown.latexSource, undefined);
+  assert.equal(state.saved.length, 0);
+});
+
+test("guard: a settings change during the commit rolls the row back", async () => {
+  let current = settingsFor("openai");
+  const state = { saved: [], boom: false };
+  const inner = createMemoryStore();
+  state.onCommit = async () => {
+    current = settingsFor("openai", { apiKey: `${SECRET}-during-commit` });
+  };
+  const cache = createFormulaCache(wrapStore(inner, state));
+  const shown = await scheduleFormulaBlock(formulaBlock({ bid: "roll" }), {
+    ...formulaChainFlags(settingsFor("openai")),
+    docHash: "doc-roll",
+    settings: current,
+    readSettings: () => current,
+    katex,
+    cache,
+    model: current.multimodal.model,
+    sendVision: async () => ({ ok: true, text: "x" }),
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  assert.equal(shown.latexSource, undefined);
+  assert.equal(state.saved.length, 0);
+  const key = tierRecordKey({
+    docHash: "doc-roll",
+    bid: "roll",
+    bbox: [0.1, 0.2, 0.4, 0.3],
+    crop: { pixels: PNG }
+  }, multimodalTier, cachedModel(settingsFor("openai")));
+  assert.equal(await inner.getTier(key), null);
+});
+
+test("guard: meta.cache false is not stored", async () => {
+  const cache = createFormulaCache(createMemoryStore());
+  const key = "doc:cache-false:multimodal:mm-1:m:crop";
+  const wrote = await cache.writeTier(key, {
+    tier: "multimodal",
+    status: "ok",
+    render: "katex",
+    latex: "x",
+    meta: { cache: false, version: "mm-1" }
+  }, { docHash: "doc", model: "m" });
+  assert.equal(wrote, false);
+  assert.equal(await cache.store.getTier(key), null);
+});
+
+test("guard: an aborted decision is not stored", async () => {
+  const store = createMemoryStore();
+  const cache = createFormulaCache(store);
+  const unit = { docHash: "doc", bid: "ab" };
+  const chosen = {
+    tier: "multimodal",
+    status: "ok",
+    render: "katex",
+    latex: "x",
+    reason: "aborted",
+    meta: { version: "mm-1" }
+  };
+  const wrote = await cache.rememberDecision(unit, { chosen }, { model: "m" });
+  assert.equal(wrote, false);
+  assert.equal(await store.getDecision("doc:ab"), null);
+  const tierKey = "doc:ab:multimodal:mm-1:m:crop";
+  assert.equal(await cache.writeTier(tierKey, chosen, { docHash: "doc", model: "m" }), false);
+  assert.equal(await store.getTier(tierKey), null);
+});
+
+test("guard: a key echoed by the model is not stored", async () => {
+  const echoed = "k9z";
+  const settings = settingsFor("openai", { apiKey: echoed });
+  const inner = createMemoryStore();
+  const cache = createFormulaCache(inner);
+  const counts = {};
+  const shown = await scheduleFormulaBlock(formulaBlock({ bid: "echo", text: echoed }), {
+    ...formulaChainFlags(settings),
+    docHash: "doc-echo",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache,
+    tiers: countingTiers(counts),
+    model: settings.multimodal.model,
+    sendVision: async () => ({ ok: true, text: echoed }),
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  assert.equal(counts.lastMm.reason, "unreadable");
+  assert.equal(counts.lastMm.latex, null);
+  assert.equal(JSON.stringify(counts.lastMm).includes(echoed), false);
+  assert.equal(shown.latex, undefined);
+  const key = tierRecordKey({
+    docHash: "doc-echo",
+    bid: "echo",
+    bbox: [0.1, 0.2, 0.4, 0.3],
+    crop: { pixels: PNG }
+  }, multimodalTier, cachedModel(settings));
+  assert.equal(await inner.getTier(key), null);
+});
+
+test("guard: an http crop is not sent", async () => {
+  const settings = settingsFor("openai");
+  let sends = 0;
+  const shown = await scheduleFormulaBlock(formulaBlock({ bid: "http" }), {
+    ...formulaChainFlags(settings),
+    docHash: "doc-http",
+    settings,
+    readSettings: () => settings,
+    katex,
+    sendVision: async () => {
+      sends += 1;
+      return { ok: true, text: "x" };
+    },
+    cropPngFor: async () => ({ mime: "image/png", base64: "https://evil.test/a.png", w: 1, h: 1, hash: "abcdabcdabcd" }),
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  assert.equal(sends, 0);
+  assert.equal(shown.latexSource, undefined);
+});
+
+test("guard: sendVision receives a stillCurrent that fails after a settings change", async () => {
+  let current = settingsFor("openai");
+  const flags = formulaChainFlags(current);
+  let saw = false;
+  let before = false;
+  let after = false;
+  await runMultimodal(formulaBlock({ crop: { url: PNG_URL, pixels: PNG } }), {
+    flags,
+    settings: current,
+    readSettings: () => current,
+    katex,
+    sendVision: async (req) => {
+      saw = true;
+      before = typeof req.stillCurrent === "function" && req.stillCurrent() === true;
+      current = settingsFor("openai", { apiKey: `${SECRET}-other` });
+      after = typeof req.stillCurrent === "function" && req.stillCurrent() === false;
+      return { ok: true, text: "x" };
+    }
+  });
+  assert.equal(saw, true);
+  assert.equal(before, true);
+  assert.equal(after, true);
+});
+
+test("a torn tier write does not leave a decision, and a torn decision drops the tier", async () => {
+  const settings = settingsFor("openai");
+  const state = { saved: [], boom: false, boomDecision: true };
+  const inner = createMemoryStore();
+  const cache = createFormulaCache(wrapStore(inner, state));
+  const shown = await scheduleFormulaBlock(formulaBlock({ bid: "pair" }), {
+    ...formulaChainFlags(settings),
+    docHash: "doc-pair",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache,
+    model: settings.multimodal.model,
+    sendVision: async () => ({ ok: true, text: "x" }),
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  assert.equal(shown.latexSource, "vlm");
+  const key = tierRecordKey({
+    docHash: "doc-pair",
+    bid: "pair",
+    bbox: [0.1, 0.2, 0.4, 0.3],
+    crop: { pixels: PNG }
+  }, multimodalTier, cachedModel(settings));
+  assert.equal(await inner.getTier(key), null);
+  assert.equal(await inner.getDecision("doc-pair:pair"), null);
+});
+
+test("two tabs cannot replace a verified row with a late reject", async () => {
+  const real = createMemoryStore();
+  let waits = 0;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const slow = {
+    async getTier(key) {
+      return real.getTier(key);
+    },
+    async commitTier(key, record) {
+      waits += 1;
+      if (waits === 1) await gate;
+      return real.commitTier(key, record);
+    },
+    async deleteTier(key, decidedAt) {
+      return real.deleteTier(key, decidedAt);
+    },
+    async getDecision(key) {
+      return real.getDecision(key);
+    },
+    async putDecision(key, record) {
+      return real.putDecision(key, record);
+    }
+  };
+  const send = (message) => handleFormulaCacheMessage(message, slow);
+  const cacheA = createFormulaCache(createMessageFormulaStore(send));
+  const cacheB = createFormulaCache(createMessageFormulaStore(send));
+  const key = "doc:tabs:multimodal:mm-1:m:crop";
+  const reject = {
+    tier: "multimodal",
+    status: "reject",
+    reason: "katex-error",
+    meta: { epoch: 5, version: "mm-1" }
+  };
+  const verified = {
+    tier: "multimodal",
+    status: "ok",
+    render: "katex",
+    latex: "x",
+    meta: { epoch: 1, version: "mm-1" }
+  };
+  const pending = cacheA.writeTier(key, reject, { docHash: "doc", model: "m" });
+  for (let i = 0; i < 20 && waits < 1; i += 1) await Promise.resolve();
+  assert.equal(waits, 1);
+  assert.equal(await cacheB.writeTier(key, verified, { docHash: "doc", model: "m" }), true);
+  release();
+  assert.equal(await pending, false);
+  assert.equal((await real.getTier(key)).result.latex, "x");
+});
+
+test("createMessageFormulaStore drops a failed commit and beginMmPage replaces the page", async () => {
+  const broken = createMessageFormulaStore(async () => {
+    throw new Error("sw down");
+  });
+  assert.equal(await broken.getTier("k"), null);
+  assert.equal(await broken.commitTier("k", { tier: "multimodal", result: { tier: "multimodal" } }), false);
+  assert.equal(await broken.putDecision("k", { tier: "multimodal" }), false);
+  const quiet = createMessageFormulaStore(async () => ({ ok: false }));
+  assert.equal(await quiet.commitTier("k", { tier: "multimodal" }), false);
+
+  const first = beginMmPage(9);
+  first.note("a", { candidate: true, ready: true, sent: 2 });
+  const second = beginMmPage(9);
+  assert.notEqual(first, second);
+  assert.equal(mmPageStatsFor(9).m, 0);
+  assert.equal(mmPageStatsFor(9).k, 0);
+  assert.equal(first.stats().m, 1);
+  second.note("b", { candidate: true, ready: true, painted: true, sent: 1 });
+  assert.equal(mmPageStatsFor(9).ready, 1);
+  assert.equal(mmPageStatsFor(9).n, 1);
+  second.note("b", { candidate: true, ready: false, painted: false, sent: 0 });
+  assert.equal(mmPageStatsFor(9).ready, 1);
+  assert.equal(mmPageStatsFor(9).n, 1);
+  assert.equal(mmPageStatsFor(99).m, 0);
+});
+
 function mulberry32(seed) {
   let a = seed >>> 0;
   return () => {
@@ -680,226 +1160,387 @@ function mulberry32(seed) {
   };
 }
 
-const EVENTS = ["multitab", "page-turn", "settings", "unload", "fail-retry", "cache-interrupt", "arxiv"];
+const PAIRS = [
+  ["read", "settings"],
+  ["read", "page-turn"],
+  ["read", "unload"],
+  ["read", "multitab"],
+  ["send", "settings"],
+  ["send", "page-turn"],
+  ["send", "unload"],
+  ["send", "multitab"],
+  ["send", "fail-retry"],
+  ["write", "settings"],
+  ["write", "page-turn"],
+  ["write", "unload"],
+  ["write", "cache-interrupt"],
+  ["write", "multitab"],
+  ["align", "arxiv"]
+];
 
-function assertWorld(world, seed, step) {
+function askTarget() {
+  return {
+    ok: true,
+    via: "multimodal",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    url: "https://api.openai.com/v1/chat/completions",
+    host: "api.openai.com"
+  };
+}
+
+async function assertWorld(world, seed, step) {
   const dump = JSON.stringify({
     saved: world.state.saved,
+    decisions: world.state.decisions || [],
     requests: world.requests.map((row) => ({
-      model: row.model,
-      gen: row.gen,
+      headers: row.headers,
+      target: row.target,
       text: row.text,
       image: row.image
     })),
-    stats: world.tabs.map((tab) => tab.ledger.stats()),
-    ask: world.ask
+    blocks: world.blocks,
+    stats: world.tabs.map((tab) => tab.ledger.stats())
   });
-  assert.equal(dump.includes(world.secret), false, `seed ${seed} step ${step} key`);
-  for (const row of world.state.saved) {
-    assert.notEqual(row.result?.reason, "aborted", `seed ${seed} aborted cached`);
-    assert.notEqual(row.result?.reason, "stale", `seed ${seed} stale cached`);
-    assert.equal(String(row.key || "").includes(":mm-1:"), true, `seed ${seed} key ${row.key}`);
-    assert.equal(JSON.stringify(row).includes(world.secret), false, `seed ${seed} row`);
-  }
+  assert.equal(dump.includes(world.secret), false, `seed ${seed} step ${step} inv1`);
   for (const row of world.requests) {
+    assert.equal(JSON.stringify(row.headers || {}).includes(world.secret), false, `seed ${seed} step ${step} auth`);
+    assert.equal(JSON.stringify(row.target || {}).includes(world.secret), false, `seed ${seed} step ${step} target`);
     assert.equal(row.image?.mime, "image/png");
     assert.equal(String(row.image?.base64 || "").startsWith("http"), false);
     assert.equal(String(row.image?.base64 || "").startsWith("data:"), false);
-    assert.equal(JSON.stringify(row).includes(world.secret), false, `seed ${seed} request`);
   }
-  assert.equal(world.ask.marker, "ask-queue", `seed ${seed} ask`);
+  for (const row of world.state.saved) {
+    assert.equal(row.key, `${row.unitKey}:${row.tier}:${MM_TIER_VERSION}:${row.model}:${row.cropHash}`, `seed ${seed} step ${step} inv4`);
+    assert.equal(row.model.includes("#"), true, `seed ${seed} step ${step} fingerprint`);
+    assert.equal(row.configFingerprint.length, 16);
+    assert.equal(row.model.endsWith(`#${row.configFingerprint}`), true);
+    assert.equal(row.result?.meta?.version, MM_TIER_VERSION);
+    assert.notEqual(row.result?.reason, "aborted", `seed ${seed} aborted`);
+    assert.notEqual(row.result?.reason, "stale", `seed ${seed} stale`);
+    assert.notEqual(row.result?.reason, "timeout", `seed ${seed} timeout`);
+    assert.equal(["401", "403", "429", "timeout"].includes(row.result?.meta?.visionCode), false);
+    assert.equal(JSON.stringify(row).includes(world.secret), false);
+  }
+  for (const row of world.state.decisions || []) {
+    assert.equal(JSON.stringify(row).includes(world.secret), false, `seed ${seed} decision`);
+    if (row.decision?.chosen?.render === "katex") {
+      assert.equal(row.decision.chosen.status, "ok");
+    }
+  }
+  for (const [key, latex] of world.verified) {
+    const row = await world.inner.getTier(key);
+    assert.equal(row?.result?.latex, latex, `seed ${seed} step ${step} inv5 ${key}`);
+    assert.equal(row?.result?.status, "ok");
+    assert.equal(row?.result?.render, "katex");
+  }
+  for (const row of world.state.saved) {
+    if (row.result?.render === "katex" && row.result.latex) world.verified.set(row.key, row.result.latex);
+  }
   for (const tab of world.tabs) {
     const stats = tab.ledger.stats();
-    assert.ok(stats.n <= stats.m, `seed ${seed} n/m`);
-    assert.ok(stats.k >= 0, `seed ${seed} k`);
+    assert.equal(stats.n, 0, `seed ${seed} step ${step} painted`);
+    assert.ok(stats.ready <= stats.m, `seed ${seed} ready/m`);
+    assert.equal(stats.k, tab.accountedK, `seed ${seed} step ${step} k`);
   }
-  if (world.lastJoined && world.lastJoined.status !== "skip") {
-    assert.equal(world.deltaSelf, 0, `seed ${seed} self`);
-    assert.equal(world.deltaVector, 0, `seed ${seed} vector`);
-  }
+  assert.equal(world.askTouchedFormula, false, `seed ${seed} step ${step} inv6`);
 }
 
 async function runSeed(seed, cover) {
   const rng = mulberry32(seed);
   const secret = `sk-seed-${seed}-SECRET-KEY`;
-  const state = { saved: [], boom: false };
-  const store = wrapStore(createMemoryStore(), state);
-  const cache = createFormulaCache(store);
-  const ask = { marker: "ask-queue", runs: 0 };
+  const state = { saved: [], decisions: [], boom: false, boomDecision: false };
+  const inner = createMemoryStore();
+  const cache = createFormulaCache(wrapStore(inner, state));
   const world = {
     secret,
     state,
     cache,
-    ask,
+    inner,
     requests: [],
-    generation: 1,
-    tabs: [],
-    counts: {},
-    lastJoined: null,
-    deltaSelf: 0,
-    deltaVector: 0
-  };
-  for (let id = 0; id < 2; id += 1) {
-    world.tabs.push({
+    blocks: [],
+    verified: new Map(),
+    askTouchedFormula: false,
+    tabs: [0, 1].map((id) => ({
       id,
       ledger: createMmLedger(),
       stale: false,
       settings: settingsFor("openai", { apiKey: secret, model: "gpt-5.6-luna" }),
-      gen: 1
-    });
-  }
-  const steps = 8;
+      accountedK: 0
+    }))
+  };
+  const steps = seed === 1 ? PAIRS.length : 4;
   for (let step = 0; step < steps; step += 1) {
-    const name = step < EVENTS.length && seed === 1 ? EVENTS[step] : EVENTS[Math.floor(rng() * EVENTS.length)];
-    cover[name] = (cover[name] || 0) + 1;
-    const tab = world.tabs[Math.floor(rng() * world.tabs.length)];
-    await runEvent(world, tab, name, rng, seed, step);
-    assertWorld(world, seed, step);
+    const pair = seed === 1 ? PAIRS[step] : PAIRS[Math.floor(rng() * PAIRS.length)];
+    await runStep(world, pair[0], pair[1], rng, seed, step, cover);
+    await assertWorld(world, seed, step);
   }
 }
 
-async function runEvent(world, tab, name, rng, seed, step) {
-  if (name !== "page-turn") tab.stale = false;
-  world.counts.lastMm = null;
-  if (name === "settings") {
-    tab.settings = settingsFor(rng() < 0.5 ? "openai" : "qwen", {
-      apiKey: rng() < 0.3 ? "" : world.secret,
-      model: rng() < 0.5 ? "gpt-5.6-luna" : "qwen3-vl-plus",
-      enabled: rng() < 0.2 ? false : true
-    });
-    if (tab.settings.multimodal.provider === "qwen" && !tab.settings.multimodal.model) {
-      tab.settings = settingsFor("qwen", { apiKey: world.secret, model: "qwen3-vl-plus" });
-    }
-    world.generation += 1;
-    tab.gen = world.generation;
-    tab.stale = false;
-  }
-  if (name === "page-turn") {
-    tab.stale = true;
-    tab.ledger.bump();
-  }
-  if (name === "cache-interrupt") world.state.boom = true;
-  const beforeSelf = world.counts.self || 0;
-  const beforeVector = world.counts.vector || 0;
-  const fail = name === "fail-retry" ? ["401", "429", "timeout"][Math.floor(rng() * 3)] : "";
-  const controller = new AbortController();
-  let release;
+async function runStep(world, stage, event, rng, seed, step, cover) {
+  cover[`${stage}:${event}`] = (cover[`${stage}:${event}`] || 0) + 1;
+  const tab = world.tabs[step % world.tabs.length];
+  tab.stale = false;
+  let resolveHold;
   const hold = new Promise((resolve) => {
-    release = resolve;
+    resolveHold = resolve;
   });
-  const generation = tab.gen;
-  const modelAtStart = tab.settings.multimodal.model;
-  const flags = formulaChainFlags(tab.settings, { arxivEnabled: name === "arxiv" });
+  const entered = { done: false };
+  let markEntered;
+  const enteredPromise = new Promise((resolve) => {
+    markEntered = resolve;
+  });
+  let used = false;
+  world.stage = stage;
+  const pause = async () => {
+    if (used || world.stage !== stage) return;
+    used = true;
+    entered.done = true;
+    markEntered();
+    await hold;
+  };
+  world.state.onGet = async () => {
+    if (stage === "read") await pause();
+  };
+  world.state.onCommit = async () => {
+    if (stage === "write") await pause();
+  };
+  const beforeK = tab.ledger.stats().k;
+  const controller = new AbortController();
+  const bid = `s${seed}-t${tab.id}-n${step}`;
+  const fingerprintAtStart = mmConfigFingerprint(tab.settings);
+  const counts = {};
+  let fail = "";
   const job = scheduleFormulaBlock(formulaBlock({
-    bid: `s${seed}-t${tab.id}`,
-    id: `s${seed}-t${tab.id}`,
+    bid,
+    id: bid,
     text: "x",
     display: rng() < 0.5
   }), {
-    ...flags,
+    ...formulaChainFlags(tab.settings, { arxivEnabled: event === "arxiv" }),
     docHash: `doc-${tab.id}`,
     settings: tab.settings,
     readSettings: () => tab.settings,
     katex,
     cache: world.cache,
     mmLedger: tab.ledger,
-    tiers: countingTiers(world.counts),
+    tiers: countingTiers(counts),
     signal: controller.signal,
     isStale: () => tab.stale,
-    model: modelAtStart,
+    model: tab.settings.multimodal.model,
     sendVision: async (req) => {
-      const image = req.images?.[0];
-      const accepted = generation === world.generation && !controller.signal.aborted && !tab.stale
-        && tab.settings.multimodal.model === modelAtStart
-        && formulaChainFlags(tab.settings).multimodalEnabled === true;
       world.requests.push({
-        model: req.target?.model,
-        gen: generation,
-        text: req.text,
-        image,
-        accepted
+        step,
+        bid,
+        fingerprint: mmConfigFingerprint(tab.settings),
+        headers: {
+          Authorization: req.headers?.Authorization || "",
+          "x-goog-api-key": req.headers?.["x-goog-api-key"] || ""
+        },
+        image: req.images?.[0],
+        target: req.target,
+        text: req.text
       });
-      await hold;
-      if (controller.signal.aborted || tab.stale || generation !== world.generation) {
+      if (stage === "send") await pause();
+      if (controller.signal.aborted) {
         return { ok: false, error: { code: "aborted", status: 0, summary: "已中止" } };
       }
-      if (fail) return { ok: false, error: { code: fail, status: fail === "timeout" ? 0 : Number(fail), summary: `no ${world.secret}` } };
+      if (fail) {
+        const liveKey = tab.settings.multimodal.apiKey;
+        return { ok: false, error: { code: fail, status: fail === "timeout" ? 0 : Number(fail), summary: `no ${liveKey}` } };
+      }
       return { ok: true, text: "x" };
     },
-    readAlignment: async () => (name === "arxiv" ? {
-      useSource: true,
-      stats: { wordRate: 1 },
-      formulas: [{
-        bid: `s${seed}-t${tab.id}`,
-        kind: "display",
-        latex: "x",
-        checks: { position: true, chars: true, number: true, render: true }
-      }]
-    } : null),
+    readAlignment: async () => {
+      if (stage === "align") await pause();
+      if (event !== "arxiv") return null;
+      return {
+        useSource: true,
+        stats: { wordRate: 1 },
+        formulas: [{
+          bid,
+          kind: "display",
+          latex: "x",
+          checks: { position: true, chars: true, number: true, render: true }
+        }]
+      };
+    },
     withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
   });
-  if (name === "page-turn") tab.ledger.bump();
-  if (name === "settings") {
-    tab.settings = settingsFor("openai", { apiKey: world.secret, model: "gpt-5.4-mini" });
-    world.generation += 1;
-    tab.gen = world.generation;
+  const which = await Promise.race([
+    enteredPromise.then(() => "paused"),
+    job.then(() => "finished")
+  ]);
+  assert.equal(which, "paused", `seed ${seed} ${stage}:${event} was not in flight`);
+  const savedBeforeAsk = world.state.saved.length;
+  const ledgerBeforeAsk = JSON.stringify(tab.ledger.stats());
+  const asked = await deliverAsk(askTarget(), async () => ({ ok: true, body: "ask-body" }));
+  if (asked.body !== "ask-body" || JSON.stringify(tab.ledger.stats()) !== ledgerBeforeAsk || world.state.saved.length !== savedBeforeAsk) {
+    world.askTouchedFormula = true;
   }
-  if (name === "unload") controller.abort();
-  if (name === "multitab") {
-    world.ask.runs += 1;
-  }
-  release();
-  const shown = await job;
-  world.state.boom = false;
-  world.lastJoined = world.counts.lastMm || null;
-  world.deltaSelf = (world.counts.self || 0) - beforeSelf;
-  world.deltaVector = (world.counts.vector || 0) - beforeVector;
-  if (shown?.latexSource === "vlm") {
-    const prev = world.verifiedEpoch?.get?.(shown.bid) || 0;
-    const epoch = tab.ledger.epoch;
-    if (prev && epoch < prev) {
-      assert.fail(`seed ${seed} step ${step} downgraded ${shown.bid}`);
-    }
-    if (!world.verifiedEpoch) world.verifiedEpoch = new Map();
-    world.verifiedEpoch.set(shown.bid, Math.max(prev, epoch));
-  }
-  if (name === "fail-retry") {
-    const retry = await scheduleFormulaBlock(formulaBlock({
-      bid: `s${seed}-t${tab.id}-retry`,
+  if (event === "page-turn") {
+    tab.stale = true;
+    tab.ledger.bump();
+    tab.accountedK = 0;
+  } else if (event === "settings") {
+    const flip = tab.settings.multimodal.model === "gpt-5.6-luna";
+    tab.settings = settingsFor(flip ? "qwen" : "openai", {
+      apiKey: `${world.secret}-step-${step}`,
+      model: flip ? "qwen3-vl-plus" : "gpt-5.6-luna"
+    });
+  } else if (event === "unload") {
+    controller.abort();
+    tab.stale = true;
+  } else if (event === "fail-retry") {
+    fail = "timeout";
+  } else if (event === "cache-interrupt") {
+    world.state.boom = true;
+  } else if (event === "multitab") {
+    const other = world.tabs[1 - tab.id];
+    const savedStage = world.stage;
+    world.stage = "off";
+    await scheduleFormulaBlock(formulaBlock({
+      bid: `s${seed}-other-${step}`,
       text: "x"
     }), {
-      ...formulaChainFlags(tab.settings),
-      docHash: `doc-retry-${tab.id}`,
-      settings: tab.settings,
-      readSettings: () => tab.settings,
+      ...formulaChainFlags(other.settings),
+      docHash: `doc-${other.id}`,
+      settings: other.settings,
+      readSettings: () => other.settings,
       katex,
       cache: world.cache,
-      mmLedger: tab.ledger,
-      tiers: countingTiers(world.counts),
-      isStale: () => false,
-      model: tab.settings.multimodal.model,
+      mmLedger: other.ledger,
+      model: other.settings.multimodal.model,
       sendVision: async (req) => {
         world.requests.push({
-          model: req.target?.model,
-          gen: world.generation,
-          text: req.text,
+          step,
+          bid: `s${seed}-other-${step}`,
+          fingerprint: mmConfigFingerprint(other.settings),
+          headers: { Authorization: req.headers?.Authorization || "", "x-goog-api-key": "" },
           image: req.images?.[0],
-          accepted: true
+          target: req.target,
+          text: req.text
         });
         return { ok: true, text: "x" };
       },
       withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
     });
-    if (formulaChainFlags(tab.settings).multimodalEnabled) {
-      assert.equal(retry.latexSource === "vlm" || retry.formulaTier === "crop", true);
-    }
-    assert.equal(JSON.stringify(retry).includes(world.secret), false);
+    other.accountedK += 1;
+    world.stage = savedStage;
   }
+  resolveHold();
+  const shown = await job;
+  world.stage = "off";
+  world.state.onGet = null;
+  world.state.onCommit = null;
+  world.state.boom = false;
+  world.blocks.push({ bid, latexSource: shown?.latexSource || "" });
+  const kDelta = tab.ledger.stats().k - beforeK;
+  const voided = event === "settings" || event === "page-turn" || event === "unload";
+  if (voided || event === "arxiv") {
+    assert.notEqual(shown.latexSource, "vlm", `seed ${seed} ${stage}:${event} stamped`);
+    assert.equal(world.state.saved.some((row) => String(row.key || "").includes(bid)), false, `seed ${seed} void cached`);
+  }
+  if (event === "arxiv") {
+    assert.equal(shown.latexSource, "arxiv-src", `seed ${seed} arxiv`);
+    assert.equal(kDelta, 0);
+    assert.equal(counts.self || 0, 0);
+    assert.equal(counts.vector || 0, 0);
+    return;
+  }
+  if (event === "fail-retry") {
+    assert.equal(kDelta, 1, `seed ${seed} timeout counted`);
+    const beforeRetry = world.requests.length;
+    const retry = await scheduleFormulaBlock(formulaBlock({ bid, text: "x" }), {
+      ...formulaChainFlags(tab.settings),
+      docHash: `doc-${tab.id}`,
+      settings: tab.settings,
+      readSettings: () => tab.settings,
+      katex,
+      cache: world.cache,
+      mmLedger: tab.ledger,
+      model: tab.settings.multimodal.model,
+      sendVision: async (req) => {
+        world.requests.push({
+          step,
+          bid: `${bid}-retry`,
+          fingerprint: mmConfigFingerprint(tab.settings),
+          headers: { Authorization: req.headers?.Authorization || "", "x-goog-api-key": "" },
+          image: req.images?.[0],
+          target: req.target,
+          text: req.text
+        });
+        return { ok: true, text: "x" };
+      },
+      withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+    });
+    assert.equal(world.requests.length, beforeRetry + 1, `seed ${seed} retry sent`);
+    assert.equal(retry.latexSource, "vlm");
+    assert.equal(tab.ledger.stats().k - beforeK, 2, `seed ${seed} retry k`);
+    tab.accountedK += 2;
+  } else if (event === "cache-interrupt") {
+    assert.equal(shown.latexSource, "vlm");
+    assert.equal(kDelta, 1, `seed ${seed} interrupt k`);
+    tab.accountedK += 1;
+    const key = tierRecordKey({
+      docHash: `doc-${tab.id}`,
+      bid,
+      bbox: [0.1, 0.2, 0.4, 0.3],
+      crop: { pixels: PNG }
+    }, multimodalTier, cachedModel(tab.settings));
+    assert.equal(await world.inner.getTier(key), null, `seed ${seed} torn tier`);
+    assert.equal(await world.inner.getDecision(`doc-${tab.id}:${bid}`), null, `seed ${seed} torn decision`);
+  } else if (event === "multitab") {
+    assert.equal(shown.latexSource, "vlm");
+    assert.equal(kDelta, 1, `seed ${seed} multitab k`);
+    tab.accountedK += 1;
+  } else if (event === "settings") {
+    assert.equal(kDelta, 0, `seed ${seed} settings k`);
+    const oldReqs = world.requests.filter((row) => row.step === step && row.fingerprint === fingerprintAtStart && row.bid === bid);
+    if (stage === "read") assert.equal(oldReqs.length, 0, `seed ${seed} read sent old`);
+    else assert.equal(oldReqs.length, 1, `seed ${seed} in-flight old`);
+    const nextBid = `${bid}-next`;
+    const beforeNext = world.requests.length;
+    await scheduleFormulaBlock(formulaBlock({ bid: nextBid, text: "x" }), {
+      ...formulaChainFlags(tab.settings),
+      docHash: `doc-${tab.id}`,
+      settings: tab.settings,
+      readSettings: () => tab.settings,
+      katex,
+      cache: world.cache,
+      mmLedger: tab.ledger,
+      model: tab.settings.multimodal.model,
+      sendVision: async (req) => {
+        world.requests.push({
+          step,
+          bid: nextBid,
+          fingerprint: mmConfigFingerprint(tab.settings),
+          headers: { Authorization: req.headers?.Authorization || "", "x-goog-api-key": "" },
+          image: req.images?.[0],
+          target: req.target,
+          text: req.text
+        });
+        return { ok: true, text: "x" };
+      },
+      withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+    });
+    assert.equal(world.requests.length, beforeNext + 1, `seed ${seed} new key sent`);
+    const follow = world.requests.find((row) => row.bid === nextBid);
+    assert.notEqual(follow.fingerprint, fingerprintAtStart, `seed ${seed} inv3 fingerprint`);
+    assert.equal(follow.fingerprint, mmConfigFingerprint(tab.settings));
+    tab.accountedK += 1;
+  } else if (event === "page-turn") {
+    assert.equal(tab.ledger.stats().k, 0, `seed ${seed} page-turn k`);
+    tab.accountedK = 0;
+  } else {
+    assert.equal(kDelta, 0, `seed ${seed} ${event} k`);
+  }
+  assert.equal(counts.self || 0, 0, `seed ${seed} self`);
+  assert.equal(counts.vector || 0, 0, `seed ${seed} vector`);
   assert.equal(JSON.stringify(shown || {}).includes(world.secret), false, `seed ${seed} block`);
-  void step;
 }
 
-test("500 seeds cover tabs, paging, settings, unload, retry, and a torn cache write", async () => {
+test("500 seeds pause inside read, send, and write", async () => {
   const cover = {};
   for (let seed = 1; seed <= 500; seed += 1) {
     try {
@@ -909,7 +1550,7 @@ test("500 seeds cover tabs, paging, settings, unload, retry, and a torn cache wr
       throw err;
     }
   }
-  for (const name of EVENTS) {
-    assert.ok(cover[name] > 0, name);
+  for (const [stage, event] of PAIRS) {
+    assert.ok(cover[`${stage}:${event}`] > 0, `${stage}:${event}`);
   }
 });

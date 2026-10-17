@@ -9,7 +9,8 @@ import {
   FORMULA_DOC_LIMIT,
   evictionKeys,
   isCacheableFormulaRecord,
-  stripFormulaImageUrl
+  stripFormulaImageUrl,
+  tierCommitAllowed
 } from "../lib/formula-cache.js";
 
 export { FORMULA_DB };
@@ -146,6 +147,45 @@ export function createIdbFormulaStore({
     putTier(key, record) {
       return put("tierResults", key, record);
     },
+    async commitTier(key, record) {
+      if (!isCacheableFormulaRecord(record)) return false;
+      const db = await openCreating();
+      try {
+        const stored = await new Promise((resolve, reject) => {
+          const tx = db.transaction("tierResults", "readwrite");
+          const objectStore = tx.objectStore("tierResults");
+          const getReq = objectStore.get(key);
+          getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
+          getReq.onsuccess = () => {
+            if (!tierCommitAllowed(getReq.result || null, record)) {
+              resolve(false);
+              return;
+            }
+            const next = prepareRecord(key, record);
+            const putReq = objectStore.put(next, key);
+            putReq.onerror = () => reject(putReq.error || tx.error || new Error("indexedDB request failed"));
+            putReq.onsuccess = () => resolve(true);
+          };
+        });
+        if (stored) await evict(db, record?.docHash || "");
+        return stored;
+      } finally {
+        db.close();
+      }
+    },
+    async deleteTier(key, decidedAt) {
+      const db = await openExisting();
+      if (!db) return false;
+      try {
+        const row = await requestOf(db, "tierResults", "readonly", (store) => store.get(key));
+        if (!row) return false;
+        if (decidedAt != null && row.decidedAt !== decidedAt) return false;
+        await requestOf(db, "tierResults", "readwrite", (store) => store.delete(key));
+        return true;
+      } finally {
+        db.close();
+      }
+    },
     putDecision(key, record) {
       return put("decisions", key, record);
     },
@@ -201,6 +241,16 @@ export async function handleFormulaCacheMessage(message = {}, store = sharedForm
         ? await store.putDecision(message.key, message.value)
         : await store.putTier(message.key, message.value);
       return { ok: true, stored: stored === true };
+    }
+    if (action === "commit") {
+      if (typeof store.commitTier !== "function") return { ok: false, stored: false };
+      const stored = await store.commitTier(message.key, message.value);
+      return { ok: true, stored: stored === true };
+    }
+    if (action === "delete") {
+      if (typeof store.deleteTier !== "function") return { ok: true, deleted: false };
+      const deleted = await store.deleteTier(message.key, message.decidedAt);
+      return { ok: true, deleted: deleted === true };
     }
     if (action === "clearDoc") {
       await store.clearDoc(message.docHash);
