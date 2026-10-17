@@ -8,6 +8,7 @@ import {
   LIBRARY_COLLECTIONS,
   NOTES_DB_NAME,
   createNotesStore,
+  NotesStoreError,
   recordedPersistDenied,
   upgradeNotesDatabase,
   wrapStoreError
@@ -372,4 +373,35 @@ test("database v1 creates the notes, docs, and meta stores", () => {
   assert.equal(stores.meta.keyPath, "key");
   upgradeNotesDatabase(db, 1);
   assert.equal(Object.keys(stores).length, 3);
+});
+
+test("a save cannot move an existing note onto another document", async () => {
+  const { store } = make();
+  const original = await store.put({
+    id: "ask:ask-1:1",
+    docHash: "bdfaa68d89",
+    kind: "note",
+    author: "ai",
+    body: "回答甲",
+    qa: { turnId: "ask-1:1", question: "问", answer: "回答甲", model: "gpt-4o-mini" }
+  });
+  await assert.rejects(
+    () => store.put({
+      id: original.id,
+      docHash: "92cb3a2b71",
+      kind: "note",
+      author: "ai",
+      body: "回答乙",
+      qa: { turnId: "ask-1:1", question: "问", answer: "回答乙", model: "gpt-4o-mini" }
+    }),
+    (err) => err instanceof NotesStoreError && err.type === "doc"
+  );
+  const still = await store.get(original.id);
+  assert.equal(still.docHash, "bdfaa68d89");
+  assert.equal(still.body, "回答甲");
+  assert.equal((await store.list("bdfaa68d89")).length, 1);
+  assert.equal((await store.list("92cb3a2b71")).length, 0);
+  const edited = await store.put({ id: original.id, body: "回答甲改" });
+  assert.equal(edited.docHash, "bdfaa68d89");
+  assert.equal(edited.body, "回答甲改");
 });
