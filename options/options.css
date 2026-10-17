@@ -253,11 +253,16 @@ button {
 .oi-set-chip {
   display: inline-flex;
   align-items: center;
-  height: 18px;
+  height: 20px;
   padding: 0 8px;
-  border-radius: 9px;
+  border-radius: 10px;
   font-size: 11px;
 }
+.oi-set-error,
+.oi-set-probe-summary { margin: 4px 0 0; font-size: 12px; }
+.oi-set-error { color: var(--oi-reader-warn); }
+.oi-set-probe-summary { color: var(--oi-reader-muted); }
+.oi-set-field input[aria-invalid="true"] { border-color: var(--oi-reader-warn); }
 .oi-set-chip.is-ok { color: var(--oi-success); }
 .oi-set-chip.is-warn { color: var(--oi-reader-warn); }
 .oi-set-chip.is-off { color: var(--oi-reader-disabled); }
@@ -529,7 +534,9 @@ body.oi-settings #formulaSettingsRoot .oi-set-switch::before {
   height: 16px;
 }
 body.oi-settings #formulaSettingsRoot .oi-set-switch:checked::before { transform: translateX(16px); }
-body.oi-settings .oi-set-chip.is-ok,
+body.oi-settings .oi-set-chip.is-ok {
+  background: color-mix(in srgb, var(--oi-success) 16%, transparent);
+}
 body.oi-settings .oi-set-chip.is-warn {
   background: var(--oi-warn-soft);
 }
