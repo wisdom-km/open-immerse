@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>F6UI-33/34 action row</title>
+  <link rel="stylesheet" href="../../pdf/reader-tokens.css">
+  <link rel="stylesheet" href="../../pdf/viewer.css">
+  <link rel="stylesheet" href="../../pdf/ask-panel.css">
+  <style>
+    html, body { margin: 0; background: #fff; }
+    .wide-col { width: 360px; }
+    .wide-col .oi-ask-stream { height: auto; overflow: visible; }
+    .probe { box-sizing: border-box; }
+    #at279 { width: 279px; }
+    #at280 { width: 280px; }
+    #icons-attr { width: 360px; }
+    .probe .oi-ask-bubble { width: 100%; }
+  </style>
+</head>
+<body class="oi-reader-app" data-reader-theme="warm">
+  <div class="oi-ask">
+  <section id="wide" class="wide-col">
+    <div class="oi-ask-stream">
+      <div class="oi-ask-bubble" id="wide-bubble"></div>
+    </div>
+  </section>
+  <section id="at279" class="probe"><div class="oi-ask-bubble"></div></section>
+  <section id="at280" class="probe"><div class="oi-ask-bubble"></div></section>
+  <section id="icons-attr" class="probe"><div class="oi-ask-bubble"></div></section>
+  <script>
+    const ICONS = {
+      copy: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.4"></rect><path d="M3.2 9.2V2.8h6.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>',
+      doc: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3.2 1.8h5.1L11 4.4v7.8H3.2V1.8z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path><path d="M8.1 1.9v2.6H11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path></svg>',
+      check: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2.6 7.2 5.5 10.1 11.4 3.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>',
+      arrow: '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2.4 7h8.2M7.6 3.6 11.2 7 7.6 10.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
+    };
+    function button(spec) {
+      const node = document.createElement("button");
+      node.type = "button";
+      node.className = "oi-ask-act is-" + spec.id + (spec.view ? " is-view" : "") + (spec.added ? " is-added" : "");
+      node.setAttribute("aria-label", spec.aria);
+      node.title = spec.aria;
+      if (spec.inert) node.setAttribute("aria-disabled", "true");
+      const icon = document.createElement("span");
+      icon.className = "oi-ask-act-icon";
+      icon.innerHTML = ICONS[spec.icon];
+      const text = document.createElement("span");
+      text.className = "oi-ask-act-text";
+      text.textContent = spec.label;
+      if (spec.iconSide === "end") node.append(text, icon);
+      else node.append(icon, text);
+      return node;
+    }
+    function row(mode) {
+      const actions = document.createElement("div");
+      actions.className = "oi-ask-actions";
+      actions.setAttribute("role", "group");
+      actions.setAttribute("aria-label", "回答操作");
+      actions.append(button({ id: "copy", label: "复制", aria: "复制", icon: "copy" }));
+      if (mode === "added") {
+        actions.append(button({ id: "added", label: "已添加", aria: "✓ 已添加", icon: "check", added: true, inert: true }));
+        actions.append(button({ id: "view", label: "查看笔记", aria: "查看笔记", icon: "arrow", iconSide: "end", view: true }));
+      } else {
+        actions.append(button({ id: "save", label: "添加到笔记", aria: "添加到笔记", icon: "doc" }));
+      }
+      return actions;
+    }
+    function mount(selector, mode, icons) {
+      const bubble = document.querySelector(selector);
+      const actions = row(mode);
+      if (icons) actions.dataset.icons = "1";
+      bubble.append(actions);
+      if (mode === "added") {
+        const note = document.createElement("p");
+        note.className = "oi-ask-disclaimer";
+        note.textContent = "模型回答，可能有误";
+        bubble.append(note);
+      }
+    }
+    mount("#wide-bubble", "added", false);
+    mount("#at279 .oi-ask-bubble", "save", false);
+    mount("#at280 .oi-ask-bubble", "save", false);
+    mount("#icons-attr .oi-ask-bubble", "added", true);
+    document.documentElement.dataset.ready = "1";
+  </script>
+  </div>
+</body>
+</html>

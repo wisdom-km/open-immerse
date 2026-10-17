@@ -143,7 +143,8 @@ export function mountNotesUi(api) {
     return paperNotes(state.notes);
   }
 
-  function syncChrome() {
+  function syncChrome(options = {}) {
+    const handoff = options.handoff === true;
     const button = document.getElementById("notesButton");
     const menu = document.getElementById("menuNotes");
     if (button) {
@@ -156,17 +157,20 @@ export function mountNotesUi(api) {
       if (text) text.nodeValue = state.open ? "✓ 笔记" : "笔记";
     }
     workspace.dataset.notesOpen = state.open ? "true" : "false";
-    if (state.open) {
+    const askHolds = workspace.dataset.askOpen === "true";
+    if (state.open) root.hidden = false;
+    if (state.open || (handoff && askHolds)) {
       slot.hidden = false;
       slot.dataset.open = "true";
       slot.setAttribute("aria-hidden", "false");
+      if (handoff && !state.open) root.hidden = true;
     } else {
       slot.hidden = true;
       delete slot.dataset.open;
       slot.setAttribute("aria-hidden", "true");
     }
     syncPlace();
-    api.onOpenChange?.(state.open);
+    api.onOpenChange?.(state.open, { handoff });
   }
 
   function syncPlace() {
@@ -215,12 +219,12 @@ export function mountNotesUi(api) {
     if (focus) root.querySelector("[data-notes-segment]")?.focus();
   }
 
-  function close(focusButton = true) {
+  function close(focusButton = true, options = {}) {
     void closeEditor({ save: true });
     state.menuOpen = false;
     state.view = "list";
     state.open = false;
-    syncChrome();
+    syncChrome({ handoff: options?.handoff === true });
     clearGhost();
     if (focusButton) document.getElementById("notesButton")?.focus();
   }
@@ -1321,6 +1325,10 @@ export function mountNotesUi(api) {
       h("span", { class: "oi-note-glyph", "aria-hidden": "true", text: kindGlyph(note.kind) }),
       h("span", { text: kindLabel(note.kind) })
     );
+    if (note.author === "ai") {
+      const model = note.qa?.model || "";
+      label.append(h("span", { class: "oi-note-ai-tag", text: model ? `AI · ${model}` : "AI" }));
+    }
     if (note.kind === "question" && pres.kind !== "lost") label.append(h("span", { class: "oi-note-quiet", text: "· 待回答" }));
     if (pres.label) {
       const tag = h("span", {
@@ -1822,6 +1830,38 @@ export function mountNotesUi(api) {
     openAt(id);
   });
 
+  async function revealNote(id, options = {}) {
+    const flashMs = Math.max(1500, Number(options.flashMs) || 1500);
+    if (!api.hasDoc?.()) return { ok: false, reason: "nodoc" };
+    const key = String(id || "");
+    if (!key) return { ok: false, reason: "missing" };
+    state.open = true;
+    syncChrome();
+    ensureSubscribed();
+    await reload({ quiet: state.notes.some((note) => note.id === key) });
+    const note = state.notes.find((item) => item.id === key);
+    if (!note) {
+      render();
+      return { ok: false, reason: "missing" };
+    }
+    if (note.kind === "paperNote") state.segment = "paper";
+    else {
+      state.segment = "notes";
+      if (note.author === "ai") state.filter = "ai";
+    }
+    render();
+    const card = root.querySelector(`[data-note-id="${cssEscape(key)}"]`);
+    if (!card) return { ok: false, reason: "unpainted" };
+    card.dataset.flash = "1";
+    const label = card.querySelector(".oi-note-label");
+    if (label && !label.querySelector(".oi-note-just")) label.append(h("span", { class: "oi-note-just", text: "刚添加" }));
+    if (typeof card.scrollIntoView === "function") card.scrollIntoView({ block: "nearest" });
+    window.setTimeout(() => {
+      if (card.isConnected && card.dataset.flash === "1") delete card.dataset.flash;
+    }, flashMs);
+    return { ok: true, id: key, flashMs };
+  }
+
   window.addEventListener("resize", () => {
     if (state.open) syncPlace();
     paint();
@@ -1863,6 +1903,7 @@ export function mountNotesUi(api) {
     composeCurrent,
     composePaper,
     openAt,
+    revealNote,
     setStorageState(info) {
       state.storage = info && info.blocked ? info : null;
       if (!state.storage) state.notesUnread = false;
