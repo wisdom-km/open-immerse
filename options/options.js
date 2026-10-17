@@ -56,6 +56,38 @@ import { sharedLibraryStore } from "../lib/library-session.js";
 import { mountDataPanel } from "./data-panel.js";
 import { SETTINGS_PAGES, parseSettingsHash } from "./route.js";
 
+let hostDocument = null;
+let hostWindow = null;
+
+function liveHost(read) {
+  return new Proxy({}, {
+    get(_target, prop) {
+      const target = read();
+      if (!target) return undefined;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    set(_target, prop, value) {
+      const target = read();
+      if (!target) return false;
+      return Reflect.set(target, prop, value, target);
+    },
+    has(_target, prop) {
+      const target = read();
+      return target ? prop in target : false;
+    }
+  });
+}
+
+const document = liveHost(() => hostDocument || globalThis.document);
+const window = liveHost(() => hostWindow || globalThis.window);
+
+/** Bind this module instance to one tab's document. Tests load one instance per tab. */
+export function attachOptionsHost(page = {}) {
+  hostDocument = page.document || null;
+  hostWindow = page.window || null;
+}
+
 function el(id) {
   return document.getElementById(id);
 }
@@ -1555,6 +1587,8 @@ async function removeFormulaSecret(which) {
   }
   const name = which === "ocr" ? "OCR" : "多模态";
   showToast(`已移除 ${name} 密钥 · 撤销`, async () => {
+    // Interrupt: undo lands while a later probe is still in flight.
+    invalidateFormulaProbe();
     formulaSettings = snapshot;
     await persistFormulaSettings(true);
   });
@@ -1655,6 +1689,10 @@ async function testFormulaConnection(kind) {
     if (err?.code === "real-network-in-test") throw err;
     probe = classifyFormulaProbe({ ok: false, code: "network", summary: "网络错误" });
   }
+  // Interrupt: the result is in hand. A settings change queued on this turn
+  // must be visible to still() before anything is written.
+  await Promise.resolve();
+  await Promise.resolve();
   const settled = which === "multimodal"
     ? settleProbeResult(formulaSettings, probe, { still: still() })
     : { write: still() && probe?.code !== "aborted", settings: normalizeFormulaSettings({

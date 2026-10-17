@@ -26,28 +26,39 @@ import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseHTML } from "linkedom";
 
 import { createNet, installNet } from "../lib/net/fetch.js";
 import { sendVision } from "../lib/mm-client.js";
 import {
   PROBE_PNG_BASE64,
+  confirmsSeen,
   createProbeController,
   probeMultimodal,
   settleProbeResult
 } from "../lib/mm-probe.js";
+import { resolveAskTarget } from "../lib/ask-route.js";
+import { multimodalTier } from "../lib/formula-tiers/multimodal.js";
+import { selfTier } from "../lib/formula-tiers/self.js";
+import { vectorTier } from "../lib/formula-tiers/vector.js";
 import {
   CUSTOM_BASE_URL_ERROR,
   FORMULA_SETTINGS_KEY,
+  FORMULA_SWITCH_KEYS,
   MULTIMODAL_PROVIDERS,
   acceptStoredFormulaSettings,
   applyFormulaPart,
   customBaseUrlError,
   defaultFormulaSettings,
+  formulaChainFlags,
+  httpBaseUrl,
   isProvenVisionProvider,
+  multimodalReady,
   readFormulaSettings,
+  redactProbeText,
   removeFormulaKey,
+  tierActive,
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { commitProviderSelect, renderFormulaPanel } from "../lib/formula-settings-ui.js";
@@ -379,7 +390,71 @@ test("probe classifies 401, 403, 404, 429, no-vision, timeout, and network from 
   assert.equal(network.summary.includes(SECRET), false);
 });
 
-test("a local server receives the probe PNG and a 401 Response is not a shortcut object", async () => {
+test("a 200 is connected only when the reply contains SEEN", async () => {
+  const replies = [
+    ["", "这个模型不能看图"],
+    ["I cannot see the image.", "这个模型不能看图"],
+    ["我看不到图片", "这个模型不能看图"],
+    ["NO_IMAGE.", "这个模型不能看图"],
+    ["Sorry, I can only process text.", "这个模型不能看图"],
+    ["SEEN", "已连通"],
+    ["  SeEn!  ", "已连通"]
+  ];
+  for (const [text, chip] of replies) {
+    const box = responseNet(() => jsonResponse(200, { choices: [{ message: { content: text } }] }));
+    const probe = await probeMultimodal(openaiSettings(), { secret: SECRET, net: box.net });
+    assert.equal(probe.chip, chip, JSON.stringify(text));
+    assert.equal(probe.ok, chip === "已连通", JSON.stringify(text));
+    assert.equal(probe.summary.includes(SECRET), false);
+  }
+  assert.equal(confirmsSeen("seen."), true);
+  assert.equal(confirmsSeen("unseen"), false);
+});
+
+test("a key-read failure is not classified as a network error", async () => {
+  const probe = await probeMultimodal(openaiSettings(), {
+    secret: SECRET,
+    readSecret: async () => {
+      throw new Error(`cannot read ${SECRET}`);
+    }
+  });
+  assert.notEqual(probe.code, "network");
+  assert.notEqual(probe.chip, "网络错误");
+  assert.equal(probe.chip, "暂不可用");
+  assert.equal(probe.summary.includes(SECRET), false);
+});
+
+test("a thrown send stays a failure", async () => {
+  const probe = await probeMultimodal(openaiSettings(), {
+    secret: SECRET,
+    sendVision: async () => {
+      throw new Error("probe send failed");
+    }
+  });
+  assert.equal(probe.ok, false);
+  assert.notEqual(probe.chip, "已连通");
+  assert.notEqual(probe.code, "network");
+});
+
+test("Bearer keys and mixed-case secrets are stripped from the summary", async () => {
+  const token = "sk-Live-Token";
+  const secret = `Bearer ${token}`;
+  const box = responseNet(() => jsonResponse(200, {
+    choices: [{ message: { content: `NO_IMAGE ${token} ${token.toUpperCase()}` } }]
+  }));
+  const probe = await probeMultimodal(openaiSettings({ apiKey: secret }), { secret, net: box.net });
+  assert.equal(probe.code, "no-vision");
+  assert.equal(probe.summary.toLowerCase().includes(token.toLowerCase()), false);
+  const mixed = "AbCsecret";
+  assert.equal(redactProbeText(`prefix ${mixed} ABCSECRET suffix`, mixed).toLowerCase().includes("abcsecret"), false);
+});
+
+function loopbackUnavailable(err) {
+  const code = String(err?.code || err?.cause?.code || "");
+  return ["EPERM", "EACCES", "EADDRNOTAVAIL", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "EAFNOSUPPORT", "EINVAL"].includes(code);
+}
+
+test("a local server receives the probe PNG and a 401 Response is not a shortcut object", async (t) => {
   let captured = null;
   const server = createServer((req, res) => {
     const chunks = [];
@@ -393,7 +468,15 @@ test("a local server receives the probe PNG and a 401 Response is not a shortcut
       res.end(JSON.stringify({ error: { message: `bad ${SECRET}` } }));
     });
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+  } catch (err) {
+    t.skip(`loopback 不可用（${err?.code || err?.message}），本沙箱不能开 127.0.0.1 套接字，跳过本地服务探测。`);
+    return;
+  }
   const { port } = server.address();
   try {
     const seen = [];
@@ -406,15 +489,24 @@ test("a local server receives the probe PNG and a 401 Response is not a shortcut
         return fetchLocal(url, init);
       }
     });
-    const probe = await probeMultimodal({
-      multimodal: {
-        provider: "custom",
-        apiKey: SECRET,
-        model: "local-vision",
-        customModel: true,
-        baseUrl: `http://127.0.0.1:${port}/v1`
+    let probe;
+    try {
+      probe = await probeMultimodal({
+        multimodal: {
+          provider: "custom",
+          apiKey: SECRET,
+          model: "local-vision",
+          customModel: true,
+          baseUrl: `http://127.0.0.1:${port}/v1`
+        }
+      }, { secret: SECRET, net });
+    } catch (err) {
+      if (loopbackUnavailable(err)) {
+        t.skip(`loopback 不可用（${err.code || err.message}），本沙箱不能连接 127.0.0.1，跳过本地服务探测。`);
+        return;
       }
-    }, { secret: SECRET, net });
+      throw err;
+    }
     assert.equal(captured.raw.includes(PNG), true);
     assert.equal(captured.raw.includes(SECRET), false);
     assert.equal(captured.authorization, `Bearer ${SECRET}`);
@@ -746,6 +838,98 @@ test("options page: selectOption, empty Base URL, probe, and unload", async () =
   }
 });
 
+test("a saved connection is dropped when the vendor or model changes", async () => {
+  const connected = {
+    ...openaiSettings(),
+    "formula.tier2.enabled": true,
+    multimodal: {
+      ...openaiSettings().multimodal,
+      probe: { ok: true, chip: "已连通", code: "ok", summary: "", at: 5 }
+    }
+  };
+  const otherModel = applyFormulaPart(connected, "multimodal", { model: "gpt-5.4-mini", customModel: false });
+  assert.equal(otherModel.multimodal.probe, null);
+  assert.equal(otherModel.multimodal.model, "gpt-5.4-mini");
+  const otherVendor = applyFormulaPart(connected, "multimodal", {
+    provider: "qwen",
+    model: "qwen3-vl-plus",
+    customModel: false,
+    baseUrl: ""
+  });
+  assert.equal(otherVendor.multimodal.provider, "qwen");
+  assert.equal(otherVendor.multimodal.probe, null);
+  const sameKey = applyFormulaPart(connected, "multimodal", { apiKey: `${SECRET}-2` });
+  assert.equal(sameKey.multimodal.probe.chip, "已连通");
+  const local = memoryStorage({ [FORMULA_SETTINGS_KEY]: connected });
+  const written = await writeFormulaSettings({
+    ...connected,
+    multimodal: { ...connected.multimodal, model: "gpt-5.4-mini" }
+  }, local);
+  assert.equal(written.multimodal.probe, null);
+  assert.equal(local.bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+});
+
+test("an empty or schemeless custom Base URL is not a ready multimodal card", async () => {
+  const llm = { provider: "openai", providers: { openai: { model: "gpt-4o-mini", baseUrl: "https://api.openai.com/v1" } } };
+  for (const baseUrl of ["", "   ", "vendor.example/v1", "/v1", "ftp://vendor.example/v1"]) {
+    const settings = {
+      [FORMULA_SWITCH_KEYS.tier2]: true,
+      multimodal: { provider: "custom", apiKey: SECRET, model: "m", customModel: true, baseUrl }
+    };
+    assert.equal(httpBaseUrl(baseUrl.trim()), "");
+    assert.equal(multimodalReady(settings), false, baseUrl);
+    assert.equal(tierActive("multimodal", settings), false, baseUrl);
+    const flags = formulaChainFlags(settings, { arxivEnabled: false });
+    assert.equal(flags.multimodalEnabled, false, baseUrl);
+    assert.equal(flags.multimodalConfigured, false, baseUrl);
+    const ask = resolveAskTarget(llm, settings);
+    assert.equal(ask.via, "translation", baseUrl);
+    assert.notEqual(ask.provider, "custom");
+  }
+  const ready = {
+    [FORMULA_SWITCH_KEYS.tier2]: true,
+    multimodal: { provider: "custom", apiKey: SECRET, model: "m", customModel: true, baseUrl: "https://vendor.example/v1" }
+  };
+  assert.equal(multimodalReady(ready), true);
+  assert.equal(tierActive("multimodal", ready), true);
+  assert.equal(formulaChainFlags(ready, { arxivEnabled: false }).multimodalEnabled, true);
+  assert.equal(resolveAskTarget(llm, ready).via, "multimodal");
+  let calls = 0;
+  const blocked = await probeMultimodal({
+    multimodal: { provider: "custom", apiKey: SECRET, model: "m", baseUrl: "vendor.example/v1" }
+  }, {
+    secret: SECRET,
+    sendVision: async () => {
+      calls += 1;
+      return { ok: true, text: "SEEN" };
+    }
+  });
+  assert.equal(calls, 0);
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.summary, /Base URL/);
+});
+
+test("the settings summary redacts a key regardless of case", () => {
+  const { document } = parseHTML("<!doctype html><div id='root'></div>");
+  const previous = globalThis.document;
+  globalThis.document = document;
+  patchSelectValue(document);
+  try {
+    const panel = document.getElementById("root");
+    renderFormulaPanel(panel, {
+      ...openaiSettings(),
+      "formula.tier2.enabled": true,
+      multimodal: {
+        ...openaiSettings().multimodal,
+        probe: { ok: false, chip: "密钥无效 (401)", code: "401", summary: `bad ${SECRET.toUpperCase()} tail`, at: 1 }
+      }
+    }, {});
+    assert.equal(panel.textContent.toLowerCase().includes(SECRET.toLowerCase()), false);
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
 function mulberry32(seed) {
   let a = seed >>> 0;
   return () => {
@@ -758,263 +942,569 @@ function mulberry32(seed) {
 
 function fingerprint(settings) {
   const mm = settings?.multimodal || {};
-  return [mm.provider, mm.model, mm.baseUrl, mm.apiKey].join("\n");
+  // apiKey edits keep a stored 「已连通」. Vendor, model, and Base URL do not.
+  return [mm.provider, mm.model, mm.baseUrl].join("\n");
 }
 
-async function runSeed(seed) {
-  const rand = mulberry32(seed);
-  const secret = `probe-secret-${seed}-zz`;
-  const bag = {};
-  const syncBag = {};
-  const logs = [];
-  const requests = [];
-  const storage = {
-    async get(key) {
-      if (typeof key !== "string") return { ...bag };
-      return { [key]: bag[key] };
+const optionsHtml = read("options/options.html").replace(/<script\b[\s\S]*?<\/script>/g, "");
+const llmSettings = { provider: "openai", providers: { openai: { model: "gpt-4o-mini", baseUrl: "https://api.openai.com/v1" } } };
+
+function installChromeHarness(bag, sync, listeners) {
+  globalThis.OI_OPTIONS_MANUAL = true;
+  globalThis.location = { hash: "#mm" };
+  globalThis.history = { replaceState(_state, _title, url) {
+    if (typeof url === "string" && url.includes("#")) globalThis.location.hash = url.slice(url.indexOf("#"));
+  } };
+  globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {}, key: () => null, length: 0 };
+  globalThis.BroadcastChannel = class { postMessage() {} close() {} };
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      locks: {
+        request(_name, options, callback) {
+          if (typeof options === "function") callback = options;
+          return Promise.resolve(callback({ name: "formula", mode: "exclusive" }));
+        }
+      }
+    }
+  });
+  function area(store, name) {
+    return {
+      async get(key) {
+        if (typeof key !== "string") return structuredClone(store);
+        return { [key]: structuredClone(store[key]) };
+      },
+      async set(patch) {
+        Object.assign(store, structuredClone(patch));
+        const changes = {};
+        for (const [item, value] of Object.entries(patch)) changes[item] = { newValue: structuredClone(value) };
+        if (name === "local") {
+          for (const listener of [...listeners]) listener(changes, name);
+        }
+      }
+    };
+  }
+  globalThis.chrome = {
+    runtime: {
+      getManifest: () => ({ version: "0.0.0" }),
+      getURL: (path) => path,
+      async sendMessage(message) {
+        if (message?.type === "OI_GET_SETTINGS") return { ok: true, settings: sync.settings };
+        if (message?.type === "OI_SAVE_SETTINGS") return { ok: true, settings: sync.settings };
+        return { ok: true };
+      }
     },
-    async set(patch) {
-      Object.assign(bag, structuredClone(patch));
+    storage: {
+      local: area(bag, "local"),
+      sync: area(sync, "sync"),
+      onChanged: { addListener(fn) { listeners.push(fn); } }
+    },
+    tabs: { create() {} }
+  };
+}
+
+async function flush(times = 40) {
+  for (let i = 0; i < times; i += 1) await Promise.resolve();
+}
+
+async function openOptionsTab(id) {
+  const { document, window } = parseHTML(optionsHtml);
+  patchSelectValue(document);
+  globalThis.document = document;
+  globalThis.window = window;
+  globalThis.Event = window.Event;
+  globalThis.CustomEvent = window.CustomEvent;
+  window.location = globalThis.location;
+  window.history = globalThis.history;
+  const url = pathToFileURL(join(root, "options/options.js"));
+  url.searchParams.set("instance", id);
+  const mod = await import(url.href);
+  mod.attachOptionsHost({ document, window });
+  await mod.startOptions();
+  await flush();
+  return { id, document, window };
+}
+
+function mmRoot(tab) {
+  return tab.document.querySelector("[data-formula-card='mm']");
+}
+
+function probeButton(tab) {
+  return mmRoot(tab).querySelector("[data-formula-action='mm']");
+}
+
+function providerSelect(tab) {
+  return mmRoot(tab).querySelector("select");
+}
+
+async function clickProbe(tab, arm) {
+  const button = probeButton(tab);
+  if (!button || button.disabled) return false;
+  const before = arm.pending.length;
+  arm.current = tab;
+  button.click();
+  for (let i = 0; i < 40 && arm.pending.length === before; i += 1) await Promise.resolve();
+  arm.current = null;
+  await flush();
+  return arm.pending.length > before;
+}
+
+function changeBaseUrl(tab, value) {
+  const input = tab.document.querySelector("[data-base-url]");
+  input.value = value;
+  input.dispatchEvent(new tab.window.Event("change", { bubbles: true }));
+}
+
+function changeProvider(tab, value) {
+  const select = providerSelect(tab);
+  select.value = value;
+  select.dispatchEvent(new tab.window.Event("change", { bubbles: true }));
+}
+
+function changeModel(tab, value) {
+  const selects = [...mmRoot(tab).querySelectorAll("select")];
+  const model = selects[1];
+  if (!model) {
+    const typed = [...mmRoot(tab).querySelectorAll("input[type='text']")].find((node) => (
+      !node.hasAttribute("data-secret") && !node.hasAttribute("data-base-url")
+    ));
+    if (!typed) return;
+    typed.value = value;
+    typed.dispatchEvent(new tab.window.Event("change", { bubbles: true }));
+    return;
+  }
+  model.value = value;
+  model.dispatchEvent(new tab.window.Event("change", { bubbles: true }));
+}
+
+function commitKey(tab, value) {
+  const input = tab.document.querySelector("[data-key-slot='mm'] input");
+  input.value = value;
+  input.dispatchEvent(new tab.window.Event("blur", { bubbles: true }));
+}
+
+function clickRemoveKey(tab) {
+  const button = [...tab.document.querySelectorAll("[data-key-slot='mm'] button")].find((node) => node.textContent === "移除密钥");
+  button?.click();
+}
+
+function clickUndo(tab) {
+  const button = tab.document.querySelector("#setToast button");
+  if (!button) return false;
+  button.click();
+  return true;
+}
+
+function toggleTier2(tab) {
+  const input = tab.document.querySelector(`[data-formula-switch="${FORMULA_SWITCH_KEYS.tier2}"]`);
+  if (!input) return;
+  input.checked = !input.checked;
+  input.dispatchEvent(new tab.window.Event("change", { bubbles: true }));
+}
+
+function responseFor(kind, secret) {
+  if (kind === "ok") return jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] });
+  if (kind === "401") return jsonResponse(401, { error: { message: `bad ${secret}` } });
+  if (kind === "429") return jsonResponse(429, { error: { message: "slow down" } });
+  if (kind === "novision") return jsonResponse(400, { error: { message: "does not support image input" } });
+  return null;
+}
+
+async function settleHit(hit, kind, secret) {
+  if (kind === "timeout") hit.reject(Object.assign(new Error("timeout"), { name: "TimeoutError", code: "timeout" }));
+  else if (kind === "network") hit.reject(Object.assign(new TypeError("fetch failed"), { code: "ECONNRESET" }));
+  else hit.resolve(responseFor(kind, secret));
+  await flush();
+}
+
+function assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, known, tierCalls) {
+  const stored = bag[FORMULA_SETTINGS_KEY];
+  const provider = stored?.multimodal?.provider || "";
+  if (provider && !isProvenVisionProvider(provider)) {
+    throw new Error(`seed ${seed} step ${step} unproven provider ${provider}`);
+  }
+  const summary = String(stored?.multimodal?.probe?.summary || "");
+  if (summary.toLowerCase().includes(secret.toLowerCase()) || summary.length > 80) {
+    throw new Error(`seed ${seed} step ${step} summary leak`);
+  }
+  if (stored) {
+    const clone = structuredClone(stored);
+    if (clone.multimodal) clone.multimodal.apiKey = "";
+    if (clone.ocr) clone.ocr.apiKey = "";
+    if (JSON.stringify(clone).toLowerCase().includes(secret.toLowerCase())) {
+      throw new Error(`seed ${seed} step ${step} key outside apiKey`);
+    }
+  }
+  const dump = JSON.stringify({ syncBag, logs, urls: requests.map((hit) => hit.url), bodies: requests.map((hit) => hit.body), summary });
+  if (dump.toLowerCase().includes(secret.toLowerCase())) throw new Error(`seed ${seed} step ${step} secret in public dump`);
+  for (const hit of requests) {
+    if (!hit.body.includes(PNG)) throw new Error(`seed ${seed} step ${step} non-probe request`);
+  }
+  const probe = stored?.multimodal?.probe;
+  if (probe?.ok) {
+    const fp = fingerprint(stored);
+    if (!known.probe || known.probe.at !== probe.at) known.probe = { at: probe.at, fp, chip: probe.chip };
+    else if (known.probe.fp !== fp || known.probe.chip !== probe.chip) {
+      throw new Error(`seed ${seed} step ${step} connected probe moved onto ${fp}`);
+    }
+  }
+  if (!multimodalReady(stored || {})) {
+    const ask = resolveAskTarget(llmSettings, stored || {});
+    if (ask.via === "multimodal") throw new Error(`seed ${seed} step ${step} ask used an unready card`);
+  }
+  if (tierCalls.n !== 0) throw new Error(`seed ${seed} step ${step} called a formula tier`);
+  if (multimodalTier.version !== "stub-0") throw new Error(`seed ${seed} step ${step} multimodal tier changed`);
+}
+
+test("changing Base URL during a probe aborts that request and clears the button", async () => {
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: { provider: "custom", apiKey: SECRET, model: "local-vision", customModel: true, baseUrl: "https://vendor.example/v1" }
     }
   };
-  const net = createNet({
+  const listeners = [];
+  const pending = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, listeners);
+  installNet(createNet({
+    log: () => {},
+    random: () => 0,
+    sleep: (ms) => (ms < 1000 ? Promise.resolve() : new Promise(() => {})),
+    transport(_url, init) {
+      const hit = { signal: init?.signal };
+      pending.push(hit);
+      return new Promise((resolve) => { hit.resolve = resolve; });
+    }
+  }));
+  try {
+    const tab = await openOptionsTab("guard-url");
+    assert.equal(await clickProbe(tab, { pending, current: null }), true);
+    assert.equal(probeButton(tab).textContent, "测试中…");
+    changeBaseUrl(tab, "https://other.example/v1");
+    await flush();
+    assert.equal(pending[0].signal.aborted, true);
+    assert.equal(probeButton(tab).textContent, "测试连通");
+    pending[0].resolve(jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] }));
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://other.example/v1");
+    assert.notEqual(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, true);
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+test("a 200 that arrives after the card changed is not written onto the new card", async () => {
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: { provider: "custom", apiKey: SECRET, model: "local-vision", customModel: true, baseUrl: "https://vendor.example/v1" }
+    }
+  };
+  const listeners = [];
+  const pending = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, listeners);
+  let tab = null;
+  installNet(createNet({
+    log: () => {},
+    random: () => 0,
+    sleep: (ms) => (ms < 1000 ? Promise.resolve() : new Promise(() => {})),
+    transport() {
+      pending.push(true);
+      // The body is parsed, then four turns pass before classification and one
+      // during the probe yield. The sixth turn is after that success has been
+      // returned and before settle reads still().
+      const response = jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] });
+      return new Proxy(response, {
+        get(target, prop, receiver) {
+          if (prop === "json") {
+            return () => {
+              const body = target.json();
+              body.then(() => {
+                let left = 0;
+                const step = () => {
+                  left += 1;
+                  if (left === 6) changeBaseUrl(tab, "https://other.example/v1");
+                  else queueMicrotask(step);
+                };
+                queueMicrotask(step);
+              });
+              return body;
+            };
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+      });
+    }
+  }));
+  try {
+    tab = await openOptionsTab("guard-still");
+    assert.equal(await clickProbe(tab, { pending, current: null }), true);
+    await flush();
+    const saved = bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(saved.baseUrl, "https://other.example/v1");
+    assert.notEqual(saved.probe?.ok, true);
+    assert.notEqual(saved.probe?.chip, "已连通");
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+test("another tab's formula write drops the in-flight probe", async () => {
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: { provider: "openai", apiKey: SECRET, model: "gpt-5.6-luna", baseUrl: "" }
+    }
+  };
+  const listeners = [];
+  const pending = [];
+  const arm = { pending, current: null };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, listeners);
+  installNet(createNet({
+    log: () => {},
+    random: () => 0,
+    sleep: (ms) => (ms < 1000 ? Promise.resolve() : new Promise(() => {})),
+    transport(_url, init) {
+      const hit = { signal: init?.signal, resolve: null };
+      pending.push(hit);
+      return new Promise((resolve) => { hit.resolve = resolve; });
+    }
+  }));
+  try {
+    const first = await openOptionsTab("guard-tab-a");
+    const second = await openOptionsTab("guard-tab-b");
+    assert.equal(await clickProbe(first, arm), true);
+    changeModel(second, "gpt-5.4-mini");
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "gpt-5.4-mini");
+    assert.equal(pending[0].signal.aborted, true);
+    pending[0].resolve(jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] }));
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "gpt-5.4-mini");
+    assert.notEqual(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, true);
+    assert.equal(second.document.querySelector("[data-formula-card='mm'] select")?.value || providerSelect(second).value, "openai");
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+test("undo during a probe restores the button and drops the result", async () => {
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: { provider: "openai", apiKey: SECRET, model: "gpt-5.6-luna", baseUrl: "" }
+    }
+  };
+  const listeners = [];
+  const pending = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, listeners);
+  installNet(createNet({
+    log: () => {},
+    random: () => 0,
+    sleep: (ms) => (ms < 1000 ? Promise.resolve() : new Promise(() => {})),
+    transport() {
+      return new Promise((resolve) => { pending.push(resolve); });
+    }
+  }));
+  try {
+    const tab = await openOptionsTab("guard-undo");
+    clickRemoveKey(tab);
+    await flush();
+    commitKey(tab, SECRET);
+    await flush();
+    assert.equal(await clickProbe(tab, { pending, current: null }), true);
+    assert.equal(probeButton(tab).textContent, "测试中…");
+    assert.equal(clickUndo(tab), true);
+    await flush();
+    assert.equal(probeButton(tab).textContent, "测试连通");
+    pending[0](jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] }));
+    await flush();
+    assert.notEqual(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, true);
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+function captureGlobals() {
+  return {
+    document: globalThis.document,
+    window: globalThis.window,
+    location: globalThis.location,
+    history: globalThis.history,
+    localStorage: globalThis.localStorage,
+    chrome: globalThis.chrome,
+    navigator: globalThis.navigator,
+    Event: globalThis.Event,
+    BroadcastChannel: globalThis.BroadcastChannel
+  };
+}
+
+function restoreGlobals(previous) {
+  globalThis.document = previous.document;
+  globalThis.window = previous.window;
+  globalThis.location = previous.location;
+  globalThis.history = previous.history;
+  globalThis.localStorage = previous.localStorage;
+  globalThis.chrome = previous.chrome;
+  globalThis.Event = previous.Event;
+  globalThis.BroadcastChannel = previous.BroadcastChannel;
+  if (previous.navigator) {
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: previous.navigator });
+  }
+}
+
+async function runSeed(seed, tierCalls) {
+  const rand = mulberry32(seed);
+  const secret = `probe-secret-${seed}-zz`;
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: { provider: "openai", apiKey: secret, model: "gpt-5.6-luna", baseUrl: "" }
+    }
+  };
+  const syncBag = { settings: llmSettings };
+  const listeners = [];
+  const logs = [];
+  const requests = [];
+  const pending = [];
+  const known = { probe: null };
+  const arm = { pending, current: null };
+  const previous = captureGlobals();
+  installChromeHarness(bag, syncBag, listeners);
+  installNet(createNet({
     log: (row) => logs.push(row),
     random: () => 0,
     sleep: (ms) => (ms < 1000 ? Promise.resolve() : new Promise(() => {})),
     transport(url, init) {
-      const hit = { url, body: String(init?.body || ""), headers: { ...(init?.headers || {}) } };
-      requests.push({ url: hit.url, body: hit.body });
-      return new Promise((resolve, reject) => {
-        if (!world.inflight) {
-          reject(Object.assign(new Error("no inflight"), { code: "http" }));
-          return;
-        }
-        world.inflight.pending.push({ resolve, reject, hit });
-      });
-    }
-  });
-  const tabs = [0, 1].map(() => ({
-    memory: defaultFormulaSettings(),
-    ctl: createProbeController()
-  }));
-  const world = { inflight: null, writes: [] };
-
-  function assertStep(step) {
-    const stored = bag[FORMULA_SETTINGS_KEY];
-    const provider = stored?.multimodal?.provider || "";
-    if (provider && !isProvenVisionProvider(provider)) {
-      throw new Error(`seed ${seed} step ${step} unproven provider ${provider}`);
-    }
-    const summary = stored?.multimodal?.probe?.summary || "";
-    if (summary.includes(secret) || summary.length > 80) {
-      throw new Error(`seed ${seed} step ${step} summary leak`);
-    }
-    if (stored) {
-      const clone = structuredClone(stored);
-      if (clone.multimodal) clone.multimodal.apiKey = "";
-      if (clone.ocr) clone.ocr.apiKey = "";
-      if (JSON.stringify(clone).includes(secret)) throw new Error(`seed ${seed} step ${step} key outside apiKey`);
-    }
-    const dump = JSON.stringify({ syncBag, logs, requests, summary });
-    if (dump.includes(secret)) throw new Error(`seed ${seed} step ${step} secret in public dump`);
-    for (const tab of tabs) {
-      if (tab.memory?.multimodal?.provider === "deepseek") {
-        throw new Error(`seed ${seed} step ${step} tab holds deepseek`);
-      }
-    }
-  }
-
-  async function drainInflight() {
-    const flight = world.inflight;
-    if (!flight) return;
-    for (let guard = 0; guard < 6; guard += 1) {
-      const queued = flight.pending.splice(0);
-      if (!queued.length) break;
-      for (const hit of queued) {
-        hit.reject(Object.assign(new Error("aborted"), { name: "AbortError", code: "aborted" }));
-      }
-      await Promise.resolve();
-    }
-    flight.tab.ctl.drop();
-    await flight.task;
-    world.inflight = null;
-  }
-
-  async function finish(kind) {
-    const flight = world.inflight;
-    if (!flight || !flight.pending.length) return;
-    const hit = flight.pending.shift();
-    if (kind === "ok") hit.resolve(jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] }));
-    else if (kind === "401") hit.resolve(jsonResponse(401, { error: { message: `bad ${secret}` } }));
-    else if (kind === "429") hit.resolve(jsonResponse(429, { error: { message: "slow down" } }));
-    else if (kind === "novision") hit.resolve(jsonResponse(400, { error: { message: "does not support image input" } }));
-    else if (kind === "timeout") hit.reject(Object.assign(new Error("timeout"), { name: "TimeoutError", code: "timeout" }));
-    else hit.reject(Object.assign(new Error("fetch failed"), { code: "ECONNRESET" }));
-    for (let i = 0; i < 12; i += 1) await Promise.resolve();
-    if (!flight.pending.length) {
-      await flight.task;
-      if (world.inflight === flight) world.inflight = null;
-    }
-  }
-
-  const events = [
-    "openai", "key", "model", "probe", "ok", "401", "429", "novision", "timeout", "network",
-    "deepseek-select", "deepseek-write", "read", "custom-empty", "custom-url", "remove-key",
-    "toggle", "unload", "retry", "other-tab"
-  ];
-
-  for (let step = 0; step < 24; step += 1) {
-    const index = Math.floor(rand() * tabs.length);
-    const tab = tabs[index];
-    const event = events[Math.floor(rand() * events.length)];
-    if (event === "openai") {
-      tab.ctl.drop();
-      tab.memory = applyFormulaPart(tab.memory, "multimodal", { provider: "openai", model: "gpt-5.6-luna", customModel: false, baseUrl: "" });
-      await writeFormulaSettings(tab.memory, storage);
-    } else if (event === "key") {
-      tab.ctl.drop();
-      tab.memory = applyFormulaPart(tab.memory, "multimodal", { apiKey: secret });
-      if (!customBaseUrlError(tab.memory)) await writeFormulaSettings(tab.memory, storage);
-    } else if (event === "model") {
-      tab.ctl.drop();
-      tab.memory = applyFormulaPart(tab.memory, "multimodal", { model: rand() < 0.5 ? "gpt-5.4-mini" : "typed-model", customModel: true });
-      if (!customBaseUrlError(tab.memory)) await writeFormulaSettings(tab.memory, storage);
-    } else if (event === "probe") {
-      if (!world.inflight) {
-        const fp = fingerprint(tab.memory);
-        const run = tab.ctl.open();
-        const flight = { tab, pending: [], task: null };
-        world.inflight = flight;
-        flight.task = probeMultimodal(tab.memory, {
-          signal: run.signal,
-          stillCurrent: () => run.current() && fingerprint(tab.memory) === fp,
-          secret: tab.memory.multimodal.apiKey || secret,
-          net
-        }).then(async (probe) => {
-          const before = structuredClone(bag[FORMULA_SETTINGS_KEY] || null);
-          const settled = settleProbeResult(tab.memory, probe, {
-            still: run.current() && fingerprint(tab.memory) === fp
-          });
-          if (!settled.write) {
-            if (before && bag[FORMULA_SETTINGS_KEY]) {
-              assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal?.probe?.at, before.multimodal?.probe?.at);
-            }
-            return;
-          }
-          tab.memory = settled.settings;
-          try {
-            await writeFormulaSettings(settled.settings, storage);
-            world.writes.push({
-              provider: settled.settings.multimodal.provider,
-              baseUrl: settled.settings.multimodal.baseUrl,
-              introduced: false,
-              at: probe.at
-            });
-          } catch (err) {
-            if (err?.code !== "base-url-required") throw err;
-          }
-        });
-        for (let i = 0; i < 16 && flight.pending.length === 0; i += 1) await Promise.resolve();
-        if (!flight.pending.length) {
-          await flight.task;
-          if (world.inflight === flight) world.inflight = null;
-        }
-      }
-    } else if (event === "ok" || event === "401" || event === "429" || event === "novision" || event === "timeout" || event === "network" || event === "retry") {
-      const kind = event === "retry" ? "401" : event;
-      await finish(kind);
-    } else if (event === "deepseek-select") {
-      tab.ctl.drop();
-      const next = applyFormulaPart(tab.memory, "multimodal", { provider: "deepseek", model: "", customModel: false, baseUrl: "" });
-      assert.notEqual(next.multimodal.provider, "deepseek");
-      tab.memory = next;
-    } else if (event === "deepseek-write") {
-      tab.ctl.drop();
-      await writeFormulaSettings({
-        ...tab.memory,
-        multimodal: { ...tab.memory.multimodal, provider: "deepseek", apiKey: secret }
-      }, storage);
-      const readBack = await readFormulaSettings(storage);
-      assert.notEqual(readBack.multimodal.provider, "deepseek");
-      tab.memory = readBack;
-    } else if (event === "read") {
-      bag[FORMULA_SETTINGS_KEY] = {
-        multimodal: { provider: "deepseek", apiKey: secret, model: "deepseek-flash", baseUrl: "" }
+      const hit = {
+        url,
+        body: String(init?.body || ""),
+        headers: { ...(init?.headers || {}) },
+        signal: init?.signal,
+        tab: arm.current,
+        seq: requests.length
       };
-      const readBack = await readFormulaSettings(storage);
-      assert.equal(readBack.multimodal.provider, "");
-      tab.memory = readBack;
-      if (world.inflight) world.inflight.tab.memory = readBack;
-      await writeFormulaSettings(readBack, storage);
-    } else if (event === "custom-empty") {
-      tab.ctl.drop();
-      const before = structuredClone(bag[FORMULA_SETTINGS_KEY] || null);
-      const draft = applyFormulaPart(tab.memory, "multimodal", { provider: "custom", model: "m", customModel: true, baseUrl: "   " });
-      assert.equal(customBaseUrlError(draft), CUSTOM_BASE_URL_ERROR);
-      tab.memory = draft;
-      try {
-        await writeFormulaSettings(draft, storage);
-      } catch (err) {
-        if (err?.code !== "base-url-required") throw err;
-      }
-      const after = bag[FORMULA_SETTINGS_KEY];
-      const introduced = after?.multimodal?.provider === "custom"
-        && !String(after?.multimodal?.baseUrl || "").trim()
-        && !(before?.multimodal?.provider === "custom" && !String(before?.multimodal?.baseUrl || "").trim());
-      if (introduced) throw new Error(`seed ${seed} step ${step} empty base url saved`);
-    } else if (event === "custom-url") {
-      tab.ctl.drop();
-      tab.memory = applyFormulaPart(tab.memory, "multimodal", {
-        provider: "custom",
-        model: "m",
-        customModel: true,
-        baseUrl: "https://vendor.example/v1"
+      requests.push({ url: hit.url, body: hit.body });
+      pending.push(hit);
+      return new Promise((resolve, reject) => {
+        hit.resolve = resolve;
+        hit.reject = reject;
       });
-      await writeFormulaSettings(tab.memory, storage);
-    } else if (event === "remove-key") {
-      tab.ctl.drop();
-      tab.memory = removeFormulaKey(tab.memory, "multimodal");
-      if (!customBaseUrlError(tab.memory)) await writeFormulaSettings(tab.memory, storage);
-    } else if (event === "toggle") {
-      tab.ctl.drop();
-      const enabled = rand() < 0.5;
-      const draft = acceptStoredFormulaSettings({ ...tab.memory, "formula.tier2.enabled": enabled });
-      tab.memory = draft;
-      const toWrite = customBaseUrlError(draft)
-        ? acceptStoredFormulaSettings({ ...(await readFormulaSettings(storage)), "formula.tier2.enabled": enabled })
-        : draft;
-      try {
-        await writeFormulaSettings(toWrite, storage);
-      } catch (err) {
-        if (err?.code !== "base-url-required") throw err;
-      }
-    } else if (event === "unload") {
-      tab.ctl.drop();
-      await drainInflight();
-    } else if (event === "other-tab") {
-      const other = tabs[1 - index];
-      other.ctl.drop();
-      other.memory = applyFormulaPart(other.memory, "multimodal", { provider: "qwen", model: "qwen3-vl-plus", customModel: false, baseUrl: "" });
-      await writeFormulaSettings({ ...other.memory, multimodal: { ...other.memory.multimodal, apiKey: secret } }, storage);
-      tab.memory = await readFormulaSettings(storage);
-      if (world.inflight) world.inflight.tab.memory = tab.memory;
     }
-    assertStep(step);
+  }));
+  const tabs = [];
+  try {
+    tabs.push(await openOptionsTab(`seed-${seed}-a`));
+    tabs.push(await openOptionsTab(`seed-${seed}-b`));
+    const events = [
+      "openai", "key", "model", "probe", "ok", "401", "429", "novision", "timeout", "network",
+      "deepseek-select", "url", "empty-url", "schemeless", "remove-key", "undo",
+      "toggle", "unload", "retry", "other-tab"
+    ];
+    for (let step = 0; step < 24; step += 1) {
+      const tab = tabs[Math.floor(rand() * tabs.length)];
+      const other = tabs[0] === tab ? tabs[1] : tabs[0];
+      const event = events[Math.floor(rand() * events.length)];
+      if (event === "openai") changeProvider(tab, "openai");
+      else if (event === "key") commitKey(tab, secret);
+      else if (event === "model") changeModel(tab, rand() < 0.5 ? "gpt-5.4-mini" : "gpt-5.6-luna");
+      else if (event === "probe" || event === "retry") await clickProbe(tab, arm);
+      else if (event === "deepseek-select") {
+        const before = providerSelect(tab).value;
+        changeProvider(tab, "deepseek");
+        await flush();
+        assert.notEqual(providerSelect(tab).value, "deepseek");
+        assert.equal(providerSelect(tab).value, before);
+      } else if (event === "url") {
+        changeProvider(tab, "custom");
+        await flush();
+        changeBaseUrl(tab, "https://vendor.example/v1");
+      } else if (event === "empty-url" || event === "schemeless") {
+        changeProvider(tab, "custom");
+        await flush();
+        const before = bag[FORMULA_SETTINGS_KEY]?.multimodal?.baseUrl || "";
+        changeBaseUrl(tab, event === "empty-url" ? "   " : "vendor.example/v1");
+        await flush();
+        const after = bag[FORMULA_SETTINGS_KEY]?.multimodal?.baseUrl || "";
+        if (httpBaseUrl(before)) assert.equal(after, before);
+        else assert.equal(httpBaseUrl(after), "");
+      } else if (event === "remove-key") clickRemoveKey(tab);
+      else if (event === "undo") clickUndo(tab);
+      else if (event === "toggle") toggleTier2(tab);
+      else if (event === "unload") tab.window.dispatchEvent(new tab.window.Event("pagehide"));
+      else if (event === "other-tab") changeModel(other, "gpt-5.4-mini");
+      else if (pending.length) {
+        const hit = pending.splice(Math.floor(rand() * pending.length), 1)[0];
+        const before = structuredClone(bag[FORMULA_SETTINGS_KEY] || null);
+        const aborted = hit.signal?.aborted === true;
+        await settleHit(hit, event, secret);
+        const after = bag[FORMULA_SETTINGS_KEY];
+        if (aborted) {
+          if (before?.multimodal?.probe?.ok === true) {
+            assert.equal(after?.multimodal?.probe?.ok, true);
+            assert.equal(after?.multimodal?.probe?.at, before.multimodal.probe.at);
+            assert.equal(after?.multimodal?.probe?.chip, "已连通");
+          } else {
+            assert.notEqual(after?.multimodal?.probe?.ok, true);
+          }
+        }
+      }
+      await flush();
+      for (const open of pending) {
+        if (open.signal?.aborted) continue;
+        if (open.tab && probeButton(open.tab).textContent !== "测试中…") {
+          throw new Error(`seed ${seed} step ${step} live probe left the button`);
+        }
+      }
+      assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, known, tierCalls);
+    }
+    for (const hit of pending.splice(0)) {
+      const aborted = hit.signal?.aborted === true;
+      const before = structuredClone(bag[FORMULA_SETTINGS_KEY] || null);
+      hit.reject(Object.assign(new Error("aborted"), { name: "AbortError", code: "aborted" }));
+      await flush();
+      if (aborted && before?.multimodal?.probe?.ok === true) {
+        assert.equal(bag[FORMULA_SETTINGS_KEY]?.multimodal?.probe?.at, before.multimodal.probe.at);
+      }
+    }
+    assertStoredProbe(seed, "end", bag, secret, requests, logs, syncBag, known, tierCalls);
+    assert.equal(isProvenVisionProvider("deepseek"), false);
+    if (!multimodalReady(bag[FORMULA_SETTINGS_KEY] || {})) {
+      assert.notEqual(resolveAskTarget(llmSettings, bag[FORMULA_SETTINGS_KEY] || {}).via, "multimodal");
+    }
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
   }
-  for (const tab of tabs) tab.ctl.drop();
-  await drainInflight();
-  assertStep("end");
-  assert.equal(isProvenVisionProvider("deepseek"), false);
 }
 
-test("500 seeds cover two tabs, in-flight edits, unload, and retry", async () => {
-  for (let seed = 1; seed <= 500; seed += 1) {
-    try {
-      await runSeed(seed);
-    } catch (err) {
-      err.message = `seed ${seed}: ${err.message}`;
-      throw err;
+test("500 seeds drive two real settings pages, including concurrent probes", async () => {
+  const tierCalls = { n: 0 };
+  const originals = [selfTier, vectorTier, multimodalTier].map((tier) => tier.run);
+  for (const tier of [selfTier, vectorTier, multimodalTier]) {
+    const run = tier.run;
+    tier.run = async (...args) => {
+      tierCalls.n += 1;
+      return run.apply(tier, args);
+    };
+  }
+  try {
+    for (let seed = 1; seed <= 500; seed += 1) {
+      try {
+        await runSeed(seed, tierCalls);
+      } catch (err) {
+        err.message = `seed ${seed}: ${err.message}`;
+        throw err;
+      }
     }
+  } finally {
+    [selfTier, vectorTier, multimodalTier].forEach((tier, index) => {
+      tier.run = originals[index];
+    });
   }
 });
 
@@ -1022,11 +1512,10 @@ test("default probe client is sendVision, not a private shortcut", () => {
   const src = read("lib/mm-probe.js");
   assert.match(src, /deps\.sendVision \|\| sendVision/);
   assert.match(src, /PROBE_PNG_BASE64/);
+  assert.match(src, /confirmsSeen/);
   assert.equal(sendVision.name, "sendVision");
   const options = read("options/options.js");
   assert.match(options, /probeMultimodal\(formulaSettings/);
   assert.match(options, /settleProbeResult\(/);
-  assert.match(options, /customBaseUrlError\(formulaSettings\)/);
-  assert.match(options, /acceptStoredFormulaSettings\(changes\[FORMULA_SETTINGS_KEY\]\.newValue\)/);
   assert.match(options, /pagehide/);
 });
