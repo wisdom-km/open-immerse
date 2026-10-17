@@ -313,7 +313,10 @@ import {
 import { detectArxivId } from "../lib/arxiv-id.js";
 import { KATEX_RENDER_OPTIONS } from "../lib/formula-katex.js";
 import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
-import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
+import { scheduleFormulaBlock, publishRestampedBlocks } from "../lib/formula-schedule.js";
+import { createFormulaCache } from "../lib/formula-cache.js";
+import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
+import { mmPageLedger, resetMmPages } from "../lib/formula-mm-ledger.js";
 import {
   ARXIV_SOURCE_AUTO_KEY,
   ARXIV_SOURCE_ON_KEY,
@@ -472,6 +475,14 @@ let readerBlend = readerImageBlend({ supportsMultiply: true, forcedColors: false
 let toolbarSnapFrame = 0;
 const READER_VIEWS = ["zh", "bi", "src"];
 let formulaViewerSettings = defaultFormulaSettings();
+let formulaViewerCache = null;
+
+function viewerFormulaCache() {
+  if (!formulaViewerCache) {
+    formulaViewerCache = createFormulaCache(createMessageFormulaStore((message) => runtimeSend(message)));
+  }
+  return formulaViewerCache;
+}
 let formulaSettingsWriting = false;
 let formulaSettingsReady = Promise.resolve();
 let arxivPrefs = { auto: false, skip: [], on: [] };
@@ -3838,21 +3849,30 @@ async function collectAlignPages() {
 }
 
 async function restampArxivLayouts() {
+  const epoch = layoutEpoch;
+  const job = arxivJob;
   const total = pdfDoc?.numPages || 0;
   for (let n = 1; n <= total; n += 1) {
     if (!getPageLayout(n)) continue;
     try {
-      await restampArxivPage(n);
+      await restampArxivPage(n, epoch, job);
     } catch {
       /* this page stays on the crop path */
     }
   }
 }
 
-async function restampArxivPage(pageNumber) {
+function restampFormulaStale(pageNumber, epoch, job, layout) {
+  return layout !== getPageLayout(pageNumber)
+    || job !== arxivJob
+    || !layoutAttemptLive(epoch);
+}
+
+async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob) {
   const layout = getPageLayout(pageNumber);
   if (!layout?.blocks) return;
   const flags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: formulaArxivSourceEnabled() });
+  const mmLedger = mmPageLedger(pageNumber);
   const next = [];
   for (const block of layout.blocks) {
     if (block?.label !== "formula") {
@@ -3865,7 +3885,7 @@ async function restampArxivPage(pageNumber) {
     else delete stamped.sourceUnitId;
     next.push(await scheduleFormulaBlock(stamped, {
       withRasterCrop: async (item) => item,
-      isStale: () => false,
+      isStale: () => restampFormulaStale(pageNumber, epoch, job, layout),
       arxivEnabled: formulaArxivSourceEnabled(),
       multimodalEnabled: flags.multimodalEnabled,
       multimodalConfigured: flags.multimodalConfigured,
@@ -3878,11 +3898,16 @@ async function restampArxivPage(pageNumber) {
       docHash: notesDocHashNow(),
       page: pageNumber,
       katex: globalThis.katex,
-      cache: null
+      settings: formulaViewerSettings,
+      readSettings: () => formulaViewerSettings,
+      model: formulaViewerSettings?.multimodal?.model || "",
+      mmLedger,
+      cache: viewerFormulaCache()
     }));
   }
-  layout.blocks = next;
-  clearSlotPainted(pageNumber);
+  publishRestampedBlocks(layout, next, restampFormulaStale(pageNumber, epoch, job, layout), () => {
+    clearSlotPainted(pageNumber);
+  });
 }
 
 async function copyArxivLatex(latex, button) {
@@ -4030,6 +4055,7 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
     page: page1Viewport
   }) || arxivIdentity : null;
   const formulaFlags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: arxivOn });
+  const mmLedger = mmPageLedger(pageNumber);
   for (const block of blocks || []) {
     if (isStale()) return null;
     if (block?.label !== "formula") {
@@ -4054,7 +4080,12 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
       readAlignment: readCachedArxivAlignment,
       docHash: notesDocHashNow(),
       page: pageNumber,
-      cache: null // TODO(F7): 接上公式缓存
+      katex: globalThis.katex,
+      settings: formulaViewerSettings,
+      readSettings: () => formulaViewerSettings,
+      model: formulaViewerSettings?.multimodal?.model || "",
+      mmLedger,
+      cache: viewerFormulaCache()
     }));
   }
   return cropped;
@@ -11289,6 +11320,7 @@ async function adoptDoc(doc, title) {
   }
   visualCropPendingPages.clear();
   abortInflightLayouts();
+  resetMmPages();
   vendorLayoutPending.clear();
   vendorLayoutReason.clear();
   docPhase = "opening";
