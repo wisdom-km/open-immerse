@@ -262,19 +262,15 @@ test("reload mid-save keeps the stored note and does not write a second copy", a
   assert.equal(input.qa.model, "gpt-4o");
   assert.equal(input.body, "因为方差。\n第二行");
   assert.equal(JSON.stringify(input).includes("sk-mm-secret"), false);
-  let release;
-  const gate = new Promise((done) => { release = done; });
-  const writing = (async () => {
-    await gate;
-    return store.put(input);
-  })();
-  assert.equal((await store.list("doc-attn")).length, 0);
-  const unloaded = createAskSession({ ids: () => "reload-2" });
-  const late = finishNoteSave(unloaded, begun.turn.id, claim.ticket, { ok: true, noteId: "other" });
+  const reloaded = createAskSession({ ids: () => "reload-2" });
+  reloaded.turns.push({ ...begun.turn, noteId: "", saving: false, saveTicket: 0 });
+  const late = finishNoteSave(reloaded, begun.turn.id, claim.ticket, { ok: true, noteId: "ghost-reload" });
+  assert.equal(late.ok, false);
   assert.equal(late.stale, true);
-  assert.equal((await store.list("doc-attn")).length, 0);
-  release();
-  const saved = await writing;
+  assert.equal(reloaded.turns[0].noteId, "");
+  if (late.ok) await store.put({ ...input, id: "ghost-reload" });
+  assert.equal((await store.list("doc-attn")).some((note) => note.id === "ghost-reload"), false);
+  const saved = await store.put(input);
   const notes = await store.list("doc-attn");
   assert.equal(notes.length, 1);
   const found = noteForTurn(notes, begun.turn.id);
@@ -345,6 +341,23 @@ test("boundary inputs stay intact and empty questions do not send", () => {
   assert.equal(askPreviewLine({}).includes("问整页"), false);
   assert.equal(askPreviewLine({}).includes("附近"), false);
   assert.equal(askPreviewLine({}).includes("历史"), false);
+  const bare = { bid: "b3", page: 4, kind: "text", text: "" };
+  const bareLine = askPreviewLine({
+    citation: bare,
+    nearby: [{ bid: "b2", text: "" }, { bid: "b4", text: "有字的附近段" }]
+  });
+  const bareMessages = buildAskMessages({
+    question: "空引用",
+    citation: bare,
+    nearby: [{ bid: "b2", text: "" }, { bid: "b4", text: "有字的附近段" }],
+    history: [],
+    payload: citationPayload(bare, "translation")
+  });
+  const bareUser = bareMessages.filter((item) => item.role === "user").pop().content;
+  assert.equal(bareUser.includes("引用（"), false);
+  assert.equal(bareLine.includes("引用"), false);
+  assert.match(bareUser, /有字的附近段/);
+  assert.match(bareLine, /附近 1 段/);
   clearTurns(session);
   assert.equal(session.turns.length, 0);
 });
@@ -370,7 +383,7 @@ test("error copy covers 401, 429, timeout, and offline without a fallback button
     [{ via: "translation", status: 429 }, /429/, false],
     [{ via: "translation", timeout: true, host: "api.openai.com" }, /60 秒没有回应/, false],
     [{ via: "translation", offline: true }, /网络断开/, false],
-    [{ via: "multimodal", status: 401 }, /多模态模型调用失败/, true]
+    [{ via: "multimodal", status: 401 }, /多模态模型调用失败（401）/, true]
   ];
   for (const [input, pattern, settings] of rows) {
     const model = askErrorModel(input);
@@ -382,6 +395,12 @@ test("error copy covers 401, 429, timeout, and offline without a fallback button
   const vision = askErrorModel({ via: "multimodal", visionRejected: true });
   assert.match(vision.text, /改为文字/);
   assert.equal(vision.fallback, false);
+  const multi500 = askErrorModel({ via: "multimodal", status: 500 });
+  assert.equal(multi500.text, "多模态模型调用失败（500）");
+  assert.equal(multi500.text.includes(" · "), false);
+  const timed = askErrorModel({ via: "multimodal", timeout: true, host: "api.openai.com" });
+  assert.equal(timed.text, "多模态模型调用失败 · api.openai.com 60 秒没有回应");
+  assert.equal(timed.text.includes("（错误）"), false);
 });
 
 function mulberry32(seed) {
@@ -594,9 +613,14 @@ test("adversarial interleaving keeps ask invariants across 500 seeds", () => {
             const ticket = saving.saveTicket;
             const turnId = saving.id;
             const fresh = openTab(seed, tab, step + 1);
-            const late = finishNoteSave(fresh, turnId, ticket, { ok: true, noteId: `ghost-${seed}-${step}` });
-            if (late.ok) throw new Error("reloaded tab accepted an in-flight save");
-            if (store.some((note) => note.id === `ghost-${seed}-${step}`)) throw new Error("ghost note landed");
+            fresh.turns.push({ ...saving, noteId: "", saving: false, saveTicket: 0 });
+            const ghostId = `ghost-${seed}-${step}`;
+            const late = finishNoteSave(fresh, turnId, ticket, { ok: true, noteId: ghostId });
+            if (late.ok || fresh.turns.some((item) => item.noteId === ghostId)) {
+              store.push({ id: ghostId, qa: { turnId }, author: "ai", body: "ghost", deletedAt: 0 });
+              throw new Error("reloaded tab accepted an in-flight save");
+            }
+            if (store.some((note) => note.id === ghostId)) throw new Error("ghost note landed");
             if (!noteForTurn(store, turnId)) {
               const note = {
                 id: `ask:${turnId}`,

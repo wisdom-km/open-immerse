@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseHTML } from "linkedom";
 import { askTarget } from "../lib/ask-model.js";
+import { noteMatchesFilter } from "../lib/notes-view-model.js";
 import { mountAskUi } from "../pdf/ask-panel.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,6 +40,12 @@ function installDom() {
   globalThis.Event = parsed.window.Event;
   globalThis.KeyboardEvent = parsed.window.KeyboardEvent;
   globalThis.getComputedStyle = () => ({ getPropertyValue: () => "" });
+  let active = parsed.document.body;
+  parsed.window.HTMLElement.prototype.focus = function focus() { active = this; };
+  Object.defineProperty(parsed.document, "activeElement", {
+    configurable: true,
+    get() { return active; }
+  });
   return parsed;
 }
 
@@ -90,7 +97,10 @@ function harness(options = {}) {
       return note;
     },
     listNotes: async () => notes.slice(),
-    anchorFor: async (citation) => citation?.bid ? { bid: citation.bid, page: citation.page, quote: citation.text } : null,
+    anchorFor: async (citation) => (citation?.bid ? {
+      anchor: { bid: citation.bid, page: citation.page || 0, quote: citation.text || "" },
+      anchorState: { status: "exact", layoutRev: "layout-1", checkedAt: 0 }
+    } : null),
     revealNote: async (id) => ({ ok: true, id }),
     showSource: (citation) => { options.onSource?.(citation); },
     openSettings: (href) => settingsOpens.push(href),
@@ -184,11 +194,15 @@ test("F6UI core: unconfigured, one answer, copy, save stays, view notes leaves",
   assert.equal(box.opens.length, openCount);
   assert.equal(box.notes[0].author, "ai");
   assert.equal(box.notes[0].qa.model, "gpt-4o");
+  assert.equal(box.notes[0].kind, "note");
   assert.equal(box.notes[0].anchor.bid, "b3");
+  assert.equal(box.notes[0].anchorState.status, "exact");
+  assert.equal(noteMatchesFilter(box.notes[0], "ai"), true);
   const added = box.ui.root.querySelector("[data-ask-act='added']");
   assert.equal(added.getAttribute("aria-label"), "✓ 已添加");
-  assert.equal(added.disabled, true);
+  assert.equal(added.disabled, false);
   assert.equal(added.getAttribute("aria-disabled"), "true");
+  assert.equal(document.activeElement?.getAttribute("data-ask-act"), "view");
   const view = box.ui.root.querySelector("[data-ask-act='view']");
   assert.equal(view.textContent.includes("查看笔记"), true);
   assert.equal(view.className.includes("is-view"), true);
@@ -209,7 +223,9 @@ test("F6UI-14 multimodal 500 does not call the translation host", async () => {
   assert.equal(box.sent[0].host, "api.openai.com");
   assert.equal(box.sent[0].model, "gpt-4o");
   const err = box.ui.root.querySelector(".oi-ask-err");
-  assert.match(err.textContent, /多模态模型调用失败/);
+  assert.match(err.textContent, /多模态模型调用失败（500）/);
+  assert.equal((err.textContent.match(/调用失败（500）/g) || []).length, 1);
+  assert.equal((err.textContent.match(/500/g) || []).length, 1);
   assert.match(err.textContent, /重试/);
   assert.match(err.textContent, /去设置/);
   assert.equal(/改用翻译|回退/.test(err.textContent), false);
@@ -221,6 +237,55 @@ test("F6UI-14 multimodal 500 does not call the translation host", async () => {
   assert.equal(box.sent.length, 2);
   assert.equal(JSON.stringify(box.sent[1].messages), body);
   assert.equal(box.sent[1].via, "multimodal");
+});
+
+test("cited answer saves an anchored note that the AI filter can see", async () => {
+  const box = harness();
+  await typeAndSend(box.ui, "带引用存笔记");
+  const saved = await box.ui.saveNote(box.ui.session.turns[0]);
+  assert.equal(saved.ok, true);
+  const note = box.notes[0];
+  assert.equal(note.kind, "note");
+  assert.equal(note.anchor.bid, "b3");
+  assert.match(note.anchor.quote, /d_k/);
+  assert.equal(note.anchorState.status, "exact");
+  assert.equal(noteMatchesFilter(note, "ai"), true);
+  const added = box.ui.root.querySelector("[data-ask-act='added']");
+  const before = box.notes.length;
+  added.click();
+  assert.equal(box.notes.length, before);
+  assert.equal(document.activeElement?.getAttribute("data-ask-act"), "view");
+});
+
+test("a route change clears the stale failure mark", async () => {
+  const listeners = [];
+  const chrome = { storage: { onChanged: { addListener(fn) { listeners.push(fn); } } } };
+  const box = harness({
+    chrome,
+    fail: async () => ({ ok: false, status: 500 })
+  });
+  await typeAndSend(box.ui, "失败后换路由");
+  assert.match(box.ui.root.querySelector(".oi-ask-model").textContent, /上次失败/);
+  box.formula = { multimodal: { provider: "", apiKey: "" } };
+  listeners[0]({ formulaSettings: { newValue: {} } }, "local");
+  await new Promise((done) => setTimeout(done, 0));
+  const chip = box.ui.root.querySelector(".oi-ask-model").textContent;
+  assert.match(chip, /翻译模型/);
+  assert.equal(chip.includes("上次失败"), false);
+});
+
+test("narrow sheet stacks above the page capsule and the back control stays one line", async () => {
+  const box = harness({ width: 860 });
+  await box.ui.open();
+  const back = box.ui.root.querySelector("[data-ask='back']");
+  assert.equal(back.hidden, false);
+  assert.equal(back.classList.contains("oi-ask-back"), true);
+  assert.equal(back.textContent, "← 返回译文");
+  assert.match(css, /\.oi-ask-back\s*\{[^}]*width:\s*auto/);
+  assert.match(css, /\.oi-ask-back\s*\{[^}]*white-space:\s*nowrap/);
+  const sheet = css.slice(css.indexOf("@media (max-width: 899px)"));
+  assert.match(sheet, /:not\(\[data-layout="3"\]\):not\(\[data-layout="pair"\]\)\s*>\s*#sideSlot/);
+  assert.match(sheet, /z-index:\s*40/);
 });
 
 test("F6UI-10 custom engine is the unconfigured state", async () => {
@@ -270,7 +335,9 @@ test("F6UI-33/34 action row is one nowrap line and collapses to icons under 280"
   assert.match(css, /\.oi-ask-act\s*\{[^}]*border-radius:\s*7px/);
   assert.match(css, /\.oi-ask-act\s*\{[^}]*font:\s*500 12px\/28px/);
   assert.match(css, /\.oi-ask-act\s*\{[^}]*white-space:\s*nowrap/);
-  assert.match(css, /\.oi-ask-act\.is-added\s*\{[^}]*width:\s*96px/);
+  assert.match(css, /\.oi-ask button\s*\{[^}]*min-height:\s*0/);
+  assert.match(css, /\.oi-ask-act\.is-added\s*\{[^}]*width:\s*98px/);
+  assert.match(css, /\.oi-ask-act\.is-added\s*\{[^}]*opacity:\s*1/);
   assert.match(css, /\.oi-ask-act\.is-added\s*\{[^}]*color:\s*var\(--oi-reader-mine\)/);
   assert.match(css, /\.oi-ask-act\.is-view\s*\{[^}]*color:\s*var\(--oi-reader-ai\)/);
   assert.match(css, /\.oi-ask-act:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-reader-focus\)/);

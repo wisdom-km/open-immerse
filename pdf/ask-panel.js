@@ -209,6 +209,7 @@ export function mountAskUi(api = {}) {
       state.settings = read?.settings || state.settings;
       state.route = read?.target || state.route || { ok: false };
       if (read && Object.prototype.hasOwnProperty.call(read, "apiKey")) state.apiKey = read.apiKey || "";
+      if ((previous?.via || "") !== (state.route?.via || "")) state.failedRoute = false;
       if (toast && state.open) {
         const text = askRouteToast(previous, state.route);
         if (text) api.toast?.(text);
@@ -275,7 +276,13 @@ export function mountAskUi(api = {}) {
       "aria-label": spec.aria,
       title: spec.aria
     });
-    if (spec.disabled) {
+    if (spec.inert) {
+      button.setAttribute("aria-disabled", "true");
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+    } else if (spec.disabled) {
       button.disabled = true;
       button.setAttribute("aria-disabled", "true");
     }
@@ -306,7 +313,7 @@ export function mountAskUi(api = {}) {
         aria: "✓ 已添加",
         icon: "check",
         added: true,
-        disabled: true
+        inert: true
       }));
       row.append(actionButton({
         id: "view",
@@ -450,7 +457,7 @@ export function mountAskUi(api = {}) {
       clearTurns(session);
       render();
     });
-    const back = h("button", { type: "button", class: "oi-ask-icon", "data-ask": "back", text: "← 返回译文", hidden: !sheet });
+    const back = h("button", { type: "button", class: "oi-ask-icon oi-ask-back", "data-ask": "back", text: "← 返回译文", hidden: !sheet });
     back.addEventListener("click", () => close());
     const closer = h("button", { type: "button", class: "oi-ask-icon", "data-ask": "close", "aria-label": "关闭", title: "关闭", text: "×", hidden: sheet });
     closer.addEventListener("click", () => close());
@@ -727,6 +734,7 @@ export function mountAskUi(api = {}) {
       }
       const done = finishNoteSave(session, turn.id, claim.ticket, { ok: Boolean(saved?.id), noteId: saved?.id || "" });
       if (state.open) render();
+      if (done.ok) root.querySelector(`[data-turn="${cssEscape(turn.id)}"] [data-ask-act="view"]`)?.focus();
       return done;
     } catch (err) {
       if (controller?.signal.aborted || turn.saveTicket !== claim.ticket) {

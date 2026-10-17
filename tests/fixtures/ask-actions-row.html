@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>F6UI-33/34 action row</title>
   <link rel="stylesheet" href="../../pdf/reader-tokens.css">
+  <link rel="stylesheet" href="../../pdf/viewer.css">
   <link rel="stylesheet" href="../../pdf/ask-panel.css">
   <style>
     html, body { margin: 0; background: #fff; }
@@ -17,6 +18,7 @@
   </style>
 </head>
 <body class="oi-reader-app" data-reader-theme="warm">
+  <div class="oi-ask">
   <section id="wide" class="wide-col">
     <div class="oi-ask-stream">
       <div class="oi-ask-bubble" id="wide-bubble"></div>
@@ -38,10 +40,7 @@
       node.className = "oi-ask-act is-" + spec.id + (spec.view ? " is-view" : "") + (spec.added ? " is-added" : "");
       node.setAttribute("aria-label", spec.aria);
       node.title = spec.aria;
-      if (spec.disabled) {
-        node.disabled = true;
-        node.setAttribute("aria-disabled", "true");
-      }
+      if (spec.inert) node.setAttribute("aria-disabled", "true");
       const icon = document.createElement("span");
       icon.className = "oi-ask-act-icon";
       icon.innerHTML = ICONS[spec.icon];
@@ -59,7 +58,7 @@
       actions.setAttribute("aria-label", "回答操作");
       actions.append(button({ id: "copy", label: "复制", aria: "复制", icon: "copy" }));
       if (mode === "added") {
-        actions.append(button({ id: "added", label: "已添加", aria: "✓ 已添加", icon: "check", added: true, disabled: true }));
+        actions.append(button({ id: "added", label: "已添加", aria: "✓ 已添加", icon: "check", added: true, inert: true }));
         actions.append(button({ id: "view", label: "查看笔记", aria: "查看笔记", icon: "arrow", iconSide: "end", view: true }));
       } else {
         actions.append(button({ id: "save", label: "添加到笔记", aria: "添加到笔记", icon: "doc" }));
@@ -84,5 +83,6 @@
     mount("#icons-attr .oi-ask-bubble", "added", true);
     document.documentElement.dataset.ready = "1";
   </script>
+  </div>
 </body>
 </html>

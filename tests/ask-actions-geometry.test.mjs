@@ -158,6 +158,8 @@ const MEASURE = `(() => {
         aria: el.getAttribute("aria-label"),
         title: el.getAttribute("title"),
         disabled: el.disabled,
+        ariaDisabled: el.getAttribute("aria-disabled"),
+        opacity: getComputedStyle(el).opacity,
         className: el.className,
         lines: range.getClientRects().length,
         stroke: icon.getAttribute("stroke-width") || icon.querySelector("[stroke-width]")?.getAttribute("stroke-width") || "",
@@ -272,8 +274,10 @@ test("F6UI-33/34 action row stays one line at 360 and icons under 280", { timeou
   }
   const added = wide.buttons[1];
   const view = wide.buttons[2];
-  if (!near(added.box.width, 96)) problems.push(`added width ${added.box.width}`);
-  if (!added.disabled || added.aria !== "✓ 已添加") problems.push("added is still actionable");
+  if (!near(added.box.width, 98)) problems.push(`added width ${added.box.width}`);
+  if (added.disabled) problems.push("added uses native disabled");
+  if (added.ariaDisabled !== "true" || added.aria !== "✓ 已添加") problems.push("added is still actionable");
+  if (added.opacity !== "1") problems.push(`added opacity ${added.opacity}`);
   if (!rgbaClose(added.box.color, [122, 74, 134, 1])) problems.push(`added color ${added.box.color}`);
   if (!rgbaClose(added.box.background, [0, 0, 0, 0])) problems.push(`added background ${added.box.background}`);
   if (!rgbaClose(view.box.color, [42, 102, 112, 1])) problems.push(`view color ${view.box.color}`);
