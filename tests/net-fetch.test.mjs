@@ -733,3 +733,38 @@ test("arxiv production fetch forwards status, signal, and bytes", async () => {
   const blocked = await arxivNetFetch("https://arxiv.org/src/1");
   assert.equal(blocked.status, 429);
 });
+
+test("error bodies stay unread unless the caller opts in", async () => {
+  const body = JSON.stringify({ error: { message: "This model does not support image input" } });
+  function transport() {
+    return new Response(body, { status: 400, headers: { "content-type": "application/json" } });
+  }
+  const hidden = createNet({
+    transport,
+    random: () => 0,
+    sleep: () => Promise.resolve()
+  });
+  const plain = await hidden.fetch({
+    url: "https://example.test/hidden",
+    purpose: "probe",
+    timeoutMs: false,
+    retry: false
+  });
+  assert.equal(plain.ok, false);
+  assert.equal(plain.status, 400);
+  assert.equal(plain.data, null);
+  const shown = createNet({
+    transport,
+    random: () => 0,
+    sleep: () => Promise.resolve()
+  });
+  const opted = await shown.fetch({
+    url: "https://example.test/shown",
+    purpose: "multimodal",
+    timeoutMs: false,
+    retry: false,
+    errorBody: true
+  });
+  assert.equal(opted.ok, false);
+  assert.equal(opted.data.error.message, "This model does not support image input");
+});

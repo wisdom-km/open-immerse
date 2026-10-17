@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 
 import { createNet } from "../lib/net/fetch.js";
 import {
+  MAX_PNG_BYTES,
   MM_PURPOSE,
   VISION_ERROR_CODES,
   buildVisionRequest,
@@ -170,7 +171,8 @@ test("registry presets are the documented vision models, including 千问", () =
     "openai", "gemini", "deepseek", "doubao", "kimi", "grok", "qwen", "custom"
   ]);
   const deepseek = MULTIMODAL_PROVIDERS.find((item) => item.id === "deepseek");
-  assert.equal(deepseek.vision, true);
+  assert.equal(deepseek.vision, false);
+  assert.equal(deepseek.unavailable, "DeepSeek · 待实测");
   assert.equal(deepseek.visionBasis, "docs");
   assert.notEqual(deepseek.visionBasis, "probe");
   const gemini = MULTIMODAL_PROVIDERS.find((item) => item.id === "gemini");
@@ -315,12 +317,12 @@ test("Gemini drops thought parts and a custom model string is sent as typed", as
 
 test("error statuses are classified and the summary never contains the key", async () => {
   const cases = [
-    [401, "bad", "401"],
+    [401, `bad ${PLAIN}`, "401"],
     [403, "no", "403"],
     [404, "missing", "404"],
     [429, "slow", "429"],
     [400, "This model does not support image input", "no-vision"],
-    [500, "x".repeat(200) + SECRET, "http"],
+    [500, `${PLAIN} ${"x".repeat(40)}`, "http"],
     [408, "late", "timeout"]
   ];
   for (const [status, message, code] of cases) {
@@ -340,8 +342,10 @@ test("error statuses are classified and the summary never contains the key", asy
     assert.equal(result.error.code, code);
     assert.equal(result.error.status, status);
     assert.ok(result.error.summary.length <= 80);
-    assert.equal(result.error.summary.includes(PLAIN), false);
+    assert.equal(result.error.summary.toLowerCase().includes(PLAIN.toLowerCase()), false);
     assert.equal(result.error.summary.includes(SECRET), false);
+    if (status === 401) assert.match(result.error.summary, /bad/);
+    if (status === 500) assert.match(result.error.summary, /x{8}/);
     assert.equal(result.text, undefined);
     assert.equal(hits, status === 429 || status === 500 ? 2 : 1, String(status));
     assertNoSecret(box.logs, PLAIN);
@@ -349,26 +353,46 @@ test("error statuses are classified and the summary never contains the key", asy
   }
 });
 
-test("timeout is classified after the single retry and abort is not retried", async () => {
+test("timeout follows the 90s clock and one retry, and abort is not retried", async () => {
+  let clock = 0;
+  const waits = [];
   let timeouts = 0;
-  const timeoutBox = harness(() => {
-    timeouts += 1;
-    const error = new Error("timeout");
-    error.code = "timeout";
-    error.name = "TimeoutError";
-    throw error;
+  const logs = [];
+  const net = createNet({
+    log: (row) => logs.push(row),
+    clock: () => clock,
+    random: () => 0,
+    sleep(ms) {
+      waits.push(ms);
+      clock += ms;
+      return Promise.resolve();
+    },
+    transport(_url, init) {
+      timeouts += 1;
+      return new Promise((_resolve, reject) => {
+        const fail = () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        };
+        if (init?.signal?.aborted) fail();
+        else init?.signal?.addEventListener("abort", fail, { once: true });
+      });
+    }
   });
   const timed = await sendVision({
     target: multimodalTarget(settingsFor(VENDORS[0])),
     text: "x",
     images: [{ mime: "image/png", base64: PNG }],
     secret: SECRET,
-    net: timeoutBox.net
+    net
   });
   assert.equal(timed.error.code, "timeout");
   assert.equal(timed.error.summary, "超时");
   assert.equal(timeouts, 2);
-  assertNoSecret(timeoutBox.logs, SECRET);
+  assert.deepEqual(waits, [90_000, 200, 90_000]);
+  assert.equal(clock, 180_200);
+  assertNoSecret(logs, SECRET);
 
   const controller = new AbortController();
   let aborts = 0;
@@ -620,6 +644,203 @@ test("non-PNG and public URLs never leave the process", async () => {
   assert.equal(svg.error.ok, false);
   assert.equal(box.seen.length, 0);
   assert.equal(JSON.stringify(jpeg).includes(SECRET), false);
+});
+
+test("a real error Response is classified as no-vision and the echoed key is redacted", async () => {
+  const key = "ab12cd";
+  const box = harness(() => new Response(
+    JSON.stringify({ error: { message: `${key.toUpperCase()} does not support image input` } }),
+    { status: 400, headers: { "content-type": "application/json" } }
+  ));
+  const denied = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0])),
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    secret: key,
+    net: box.net
+  });
+  assert.equal(box.calls[0].errorBody, true);
+  assert.equal(denied.error.code, "no-vision");
+  assert.match(denied.error.summary, /does not support image/);
+  assert.equal(denied.error.summary.toLowerCase().includes(key), false);
+  assertNoSecret(box.logs, key.toUpperCase());
+
+  const authBox = harness(() => new Response(
+    JSON.stringify({ error: { message: `rejected ${key.toUpperCase()}` } }),
+    { status: 401, headers: { "content-type": "application/json" } }
+  ));
+  const unauthorized = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0])),
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    secret: key,
+    net: authBox.net
+  });
+  assert.equal(unauthorized.error.code, "401");
+  assert.match(unauthorized.error.summary, /rejected/);
+  assert.equal(unauthorized.error.summary.toLowerCase().includes(key), false);
+});
+
+test("error summaries redact short keys, different case, and a key seen when reading fails", async () => {
+  const held = "k9x2";
+  const decoy = "DECOY-ONLY-99";
+  const box = harness(() => chatOrGemini(VENDORS[0], "no"));
+  const failed = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0])),
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    secret: decoy,
+    readSecret: async () => {
+      const error = new Error(`storage failed ${held.toUpperCase()}`);
+      error.secret = held;
+      throw error;
+    },
+    net: box.net
+  });
+  assert.equal(box.seen.length, 0);
+  assert.equal(failed.error.code, "http");
+  assert.match(failed.error.summary, /storage failed/);
+  assert.equal(failed.error.summary.toLowerCase().includes(held), false);
+  assert.equal(failed.error.summary.includes(decoy), false);
+});
+
+test("secret query keys are stripped without a scheme, including x-goog-api-key and auth", () => {
+  const leaked = "url-key-99";
+  const target = multimodalTarget(normalizeFormulaSettings({
+    multimodal: {
+      provider: "custom",
+      model: "m",
+      baseUrl: `alice:${leaked}@vendor.example/v1?x-goog-api-key=${leaked}&auth=${leaked}&password=${leaked}&ok=1`
+    }
+  }));
+  assert.equal(target.url.includes(leaked), false);
+  assert.equal(target.url.includes("alice"), false);
+  assert.equal(target.url.includes("x-goog-api-key"), false);
+  assert.equal(/[?&]auth=/.test(target.url), false);
+  assert.equal(/[?&]password=/.test(target.url), false);
+  assert.match(target.url, /ok=1/);
+  assert.equal(target.url.startsWith("https://"), false);
+  assert.equal(target.url, "vendor.example/v1/chat/completions?ok=1");
+});
+
+test("PNG bytes, exact mime, and the 10MiB cap are enforced before any request", async () => {
+  assert.equal(MAX_PNG_BYTES, 10 * 1024 * 1024);
+  const box = harness(() => chatOrGemini(VENDORS[0], "no"));
+  const cases = [
+    [{ mime: "image/pngfoo", base64: PNG }, /PNG/],
+    [{ mime: "image/png;foo", base64: PNG }, /PNG/],
+    [{ mime: "image/png", base64: `data:image/png;charset=utf-8;base64,${PNG}` }, /PNG/],
+    [{ mime: "image/png", base64: "data:image/png;base64," }, /PNG/],
+    [{ mime: "image/png", base64: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64") }, /PNG/],
+    [{ mime: "image/png", base64: "A".repeat(Math.ceil((MAX_PNG_BYTES + 3) / 3) * 4) }, /10MB/]
+  ];
+  for (const [image, pattern] of cases) {
+    const result = await sendVision({
+      target: multimodalTarget(settingsFor(VENDORS[0])),
+      text: "x",
+      images: [image],
+      secret: SECRET,
+      net: box.net
+    });
+    assert.match(result.error.summary, pattern, result.error.summary);
+    assert.equal(/网址/.test(result.error.summary), false, result.error.summary);
+    assert.equal(result.error.summary.includes(SECRET), false);
+  }
+  assert.equal(box.seen.length, 0);
+});
+
+test("a base URL that already ends in chat completions is not doubled", () => {
+  const doubled = multimodalTarget(normalizeFormulaSettings({
+    multimodal: { provider: "openai", model: "gpt-5.6-luna", baseUrl: "https://api.openai.com/v1/chat/completions///" }
+  }));
+  assert.equal(doubled.url, "https://api.openai.com/v1/chat/completions");
+  const slashes = multimodalTarget(normalizeFormulaSettings({
+    multimodal: { provider: "openai", model: "gpt-5.6-luna", baseUrl: "https://api.openai.com/v1///" }
+  }));
+  assert.equal(slashes.url, "https://api.openai.com/v1/chat/completions");
+});
+
+test("a custom Google endpoint stays on the selected OpenAI shape", async () => {
+  const target = multimodalTarget(normalizeFormulaSettings({
+    multimodal: {
+      provider: "custom",
+      model: "compat-model",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai"
+    }
+  }));
+  assert.equal(target.shape, "openai");
+  assert.equal(target.url, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
+  const box = harness(() => chatOrGemini({ shape: "openai" }, "ok"));
+  const result = await sendVision({
+    target,
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    secret: SECRET,
+    net: box.net
+  });
+  assert.equal(result.ok, true);
+  assert.equal(box.seen[0].headers.Authorization, `Bearer ${SECRET}`);
+  assert.equal(box.seen[0].headers["x-goog-api-key"], undefined);
+  const body = JSON.parse(box.seen[0].body);
+  assert.ok(body.messages);
+  assert.equal(body.contents, undefined);
+  const forced = buildVisionRequest({
+    provider: "custom",
+    model: "m",
+    url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+    shape: "openai"
+  }, {
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    secret: SECRET
+  });
+  assert.equal(forced.shape, "openai");
+  assert.equal(forced.headers.Authorization, `Bearer ${SECRET}`);
+  assert.ok(forced.json.messages);
+});
+
+test("dropping either pre-send interrupt check would send a stale call", async () => {
+  let live = true;
+  const box = harness(() => chatOrGemini(VENDORS[0], "SHOULD-NOT-SEND"));
+  const result = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0])),
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    secret: SECRET,
+    stillCurrent: () => {
+      const now = live;
+      if (live) queueMicrotask(() => { live = false; });
+      return now;
+    },
+    net: box.net
+  });
+  assert.equal(box.seen.length, 0);
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "aborted");
+  assert.equal(result.text, undefined);
+  assert.equal(JSON.stringify(result).includes("SHOULD-NOT-SEND"), false);
+  assertNoSecret(result, SECRET);
+});
+
+test("a transport error after settings change is discarded in the catch", async () => {
+  let live = true;
+  const box = harness(() => {
+    live = false;
+    throw new Error(`boom ${SECRET}`);
+  });
+  const result = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0])),
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    secret: SECRET,
+    stillCurrent: () => live,
+    net: box.net
+  });
+  assert.ok(box.seen.length >= 1);
+  assert.equal(result.error.code, "aborted");
+  assert.equal(JSON.stringify(result).includes("boom"), false);
+  assertNoSecret(result, SECRET);
+  assertNoSecret(box.logs, SECRET);
 });
 
 function mulberry32(seed) {

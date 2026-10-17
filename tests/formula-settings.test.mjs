@@ -298,15 +298,15 @@ test("F3-20 an unconfigured multimodal model hides the tier-2 switch", () => {
   assert.equal(multimodalReady(picked), false);
 });
 
-test("FUI-03 providers list vision vendors plus custom, and DeepSeek can be chosen", () => {
+test("FUI-03 providers list vision vendors plus custom, and DeepSeek stays unproven", () => {
   assert.equal(MULTIMODAL_PROVIDERS.length, 8);
   assert.deepEqual(MULTIMODAL_PROVIDERS.map((item) => item.id), [
     "openai", "gemini", "deepseek", "doubao", "kimi", "grok", "qwen", "custom"
   ]);
   const deepseek = MULTIMODAL_PROVIDERS.find((item) => item.id === "deepseek");
-  assert.equal(deepseek.vision, true);
+  assert.equal(deepseek.vision, false);
   assert.equal(deepseek.visionBasis, "docs");
-  assert.equal(deepseek.unavailable, undefined);
+  assert.equal(deepseek.unavailable, "DeepSeek · 待实测");
   assert.deepEqual(deepseek.models, ["deepseek-flash"]);
   const gemini = MULTIMODAL_PROVIDERS.find((item) => item.id === "gemini");
   assert.equal(gemini.models.includes("gemini-2.0-flash"), false);
@@ -328,8 +328,8 @@ test("FUI-03 providers list vision vendors plus custom, and DeepSeek can be chos
   });
   const deepseekOpt = labels.find((node) => node.value === "deepseek");
   const qwenOpt = labels.find((node) => node.value === "qwen");
-  assert.equal(deepseekOpt.disabled, false);
-  assert.equal(deepseekOpt.textContent, "DeepSeek");
+  assert.equal(deepseekOpt.disabled, true);
+  assert.equal(deepseekOpt.textContent, "DeepSeek · 待实测");
   assert.equal(qwenOpt.disabled, false);
   assert.equal(qwenOpt.textContent, "千问");
 });
@@ -389,12 +389,13 @@ test("FUI-07 and FUI-08 probe copy is classified without a network call", async 
 
 test("FUI-09 FUI-10 FUI-11 FUI-12 switch visibility follows configuration, not a failed probe", () => {
   installDocument();
-  const documented = normalizeFormulaSettings({
+  const pending = normalizeFormulaSettings({
     multimodal: { provider: "deepseek", apiKey: "sk-secret", model: "deepseek-flash" },
     [FORMULA_SWITCH_KEYS.tier2]: true
   });
-  assert.equal(tier2SwitchState(documented).visible, true);
-  assert.equal(multimodalReady(documented), true);
+  assert.equal(tier2SwitchState(pending).visible, false);
+  assert.equal(multimodalReady(pending), false);
+  assert.match(tier2SwitchState(pending).message, /待实测/);
   const blind = providerSwitchState({ id: "blind", vision: false }, "sk-secret", "mm");
   assert.equal(blind.visible, false);
   assert.match(blind.message, /不支持看图/);
