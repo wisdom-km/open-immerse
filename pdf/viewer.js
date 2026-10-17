@@ -316,7 +316,7 @@ import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/
 import { scheduleFormulaBlock, publishRestampedBlocks } from "../lib/formula-schedule.js";
 import { createFormulaCache } from "../lib/formula-cache.js";
 import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
-import { mmPageLedger } from "../lib/formula-mm-ledger.js";
+import { mmPageLedger, resetMmPages } from "../lib/formula-mm-ledger.js";
 import {
   ARXIV_SOURCE_AUTO_KEY,
   ARXIV_SOURCE_ON_KEY,
@@ -11199,6 +11199,7 @@ async function openPdfData(data, title) {
 
 async function adoptDoc(doc, title) {
   resetArxivSession();
+  resetMmPages();
   // A new document, including the same PDF opened again in this tab, may
   // adopt what was saved. The set stays for a retry that does not adopt:
   // those pages were saved without a failed flag, and adopting them would

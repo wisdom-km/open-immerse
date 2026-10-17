@@ -25,7 +25,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { handleFormulaCacheMessage, createIdbFormulaStore } from "../background/formula-cache.js";
+import { FORMULA_DB, handleFormulaCacheMessage, createIdbFormulaStore } from "../background/formula-cache.js";
 import { IDBFactory } from "fake-indexeddb";
 import { deliverAsk } from "../lib/ask-route.js";
 import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
@@ -33,7 +33,7 @@ import { createCallGate, createFormulaCache, createMemoryStore, tierRecordKey } 
 import { decideFormula } from "../lib/formula-chain.js";
 import { cropHashOf, contractViolations, unitKeyOf } from "../lib/formula-contract.js";
 import { cropPngFor } from "../lib/formula-crop-png.js";
-import { classifyMmDecision, createMmLedger, mmPageStatsFor, beginMmPage, mmPageLedger } from "../lib/formula-mm-ledger.js";
+import { classifyMmDecision, createMmLedger, mmPageStatsFor, beginMmPage, mmPageLedger, resetMmPages } from "../lib/formula-mm-ledger.js";
 import { verifyCandidate as verifyFromArbiter } from "../lib/formula-arbiter.js";
 import { parseLatexCandidate, verifyCandidate } from "../lib/formula-verify.js";
 import { publishRestampedBlocks, scheduleFormulaBlock } from "../lib/formula-schedule.js";
@@ -1241,6 +1241,188 @@ test("a rollback does not delete another tab's newer verified row", async () => 
   assert.equal(row?.result?.latex, "B");
 });
 
+test("a same-tab rollback does not delete the other caller's newer verified row", async () => {
+  const settings = settingsFor("openai");
+  async function overlap(real, pixelsA, pixelsB, label) {
+    const same = pixelsA === pixelsB;
+    let clock = 1000;
+    let commits = 0;
+    let bKey = "";
+    let bAt = null;
+    let releaseSecond;
+    const secondCommit = new Promise((resolve) => {
+      releaseSecond = resolve;
+    });
+    let aStale = false;
+    let decisions = 0;
+    const gate = createCallGate();
+    const run = gate.run.bind(gate);
+    let joins = 0;
+    gate.run = (key, fn, signal) => {
+      if (gate.has(key)) joins += 1;
+      return run(key, fn, signal);
+    };
+    let releaseLoads;
+    const loadsSeen = new Promise((resolve) => {
+      releaseLoads = resolve;
+    });
+    let openLoads;
+    const loadsHold = new Promise((resolve) => {
+      openLoads = resolve;
+    });
+    let loadReads = 0;
+    const store = {
+      async getTier(key) {
+        loadReads += 1;
+        if (loadReads === 2) releaseLoads();
+        if (loadReads <= 2) await loadsHold;
+        return real.getTier(key);
+      },
+      async commitTier(key, record) {
+        const stored = await real.commitTier(key, record);
+        commits += 1;
+        if (commits === 2) {
+          bKey = key;
+          bAt = record.decidedAt;
+          releaseSecond();
+        }
+        return stored;
+      },
+      async deleteTier(key, decidedAt) {
+        return real.deleteTier(key, decidedAt);
+      },
+      async getDecision(key) {
+        decisions += 1;
+        if (decisions === 1) {
+          await secondCommit;
+          aStale = true;
+        }
+        return real.getDecision(key);
+      },
+      async putDecision(key, record) {
+        return real.putDecision(key, record);
+      }
+    };
+    const cache = createFormulaCache(store, { now: () => (clock += 10), gate });
+    let sends = 0;
+    let releaseSend;
+    const sendHold = new Promise((resolve) => {
+      releaseSend = resolve;
+    });
+    const call = (pixels, stale) => scheduleFormulaBlock(formulaBlock({ bid: "same", text: "x" }), {
+      ...formulaChainFlags(settings),
+      docHash: "doc-same",
+      settings,
+      readSettings: () => settings,
+      katex,
+      cache,
+      model: "m",
+      isStale: stale,
+      cropPngFor: async () => ({ mime: "image/png", base64: pixels, w: 1, h: 1, hash: pixels }),
+      sendVision: async () => {
+        sends += 1;
+        if (!same) {
+          if (sends === 2) releaseSend();
+          await sendHold;
+        } else if (sends === 1) {
+          for (let i = 0; i < 40 && joins < 1; i += 1) await Promise.resolve();
+          assert.equal(joins, 1, `${label} joined`);
+        }
+        return { ok: true, text: "x" };
+      },
+      withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+    });
+    const first = call(pixelsA, () => aStale);
+    const second = call(pixelsB, () => false);
+    for (let i = 0; i < 40 && loadReads < 2; i += 1) await Promise.resolve();
+    assert.equal(loadReads, 2, `${label} both read`);
+    openLoads();
+    if (!same) {
+      for (let i = 0; i < 40 && sends < 2; i += 1) await Promise.resolve();
+      assert.equal(sends, 2, `${label} both sent`);
+      releaseSend();
+    }
+    const [shownA, shownB] = await Promise.all([first, second]);
+    assert.equal(shownB.latexSource, "vlm", `${label} other verified`);
+    assert.equal(shownA.latexSource, undefined, `${label} caller went stale`);
+    assert.ok(bKey, `${label} other committed`);
+    const row = await real.getTier(bKey);
+    assert.equal(row?.decidedAt, bAt, `${label} decidedAt`);
+    assert.equal(row?.result?.latex, "x", `${label} latex`);
+  }
+  await overlap(createMemoryStore(), "crop-same", "crop-same", "memory same crop");
+  await overlap(createMemoryStore(), "crop-a", "crop-b", "memory other crop");
+  await overlap(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "crop-same", "crop-same", "idb same crop");
+  await overlap(createIdbFormulaStore({ indexedDB: new IDBFactory() }), "crop-a", "crop-b", "idb other crop");
+});
+
+test("a verified row committed during deleteTier's read survives", async () => {
+  const factory = new IDBFactory();
+  const real = createIdbFormulaStore({ indexedDB: factory });
+  const key = "doc:delwin:multimodal:mm-1:m:crop";
+  const older = {
+    docHash: "doc",
+    decidedAt: 1010,
+    chainVersion: "f3-1",
+    tier: "multimodal",
+    model: "m",
+    result: {
+      tier: "multimodal",
+      status: "ok",
+      render: "katex",
+      latex: "A",
+      meta: { version: "mm-1", epoch: 1 }
+    }
+  };
+  assert.equal(await real.commitTier(key, older), true);
+  const opener = factory.open(FORMULA_DB, 1);
+  const dbB = await new Promise((resolve, reject) => {
+    opener.onsuccess = () => resolve(opener.result);
+    opener.onerror = () => reject(opener.error);
+  });
+  const probe = dbB.transaction("tierResults", "readonly");
+  const proto = Object.getPrototypeOf(probe.objectStore("tierResults"));
+  await new Promise((resolve) => {
+    probe.oncomplete = resolve;
+  });
+  const newer = {
+    ...older,
+    key,
+    decidedAt: 2000,
+    result: { ...older.result, latex: "B", meta: { version: "mm-1", epoch: 2 } }
+  };
+  let armed = false;
+  let landed;
+  const original = proto.get;
+  proto.get = function patchedGet(query) {
+    const request = original.call(this, query);
+    if (!armed && this.name === "tierResults" && query === key) {
+      armed = true;
+      request.addEventListener("success", () => {
+        const tx = dbB.transaction("tierResults", "readwrite");
+        tx.objectStore("tierResults").put(newer, key);
+        landed = new Promise((resolve, reject) => {
+          tx.oncomplete = () => resolve(true);
+          tx.onabort = () => reject(tx.error || new Error("b aborted"));
+          tx.onerror = () => reject(tx.error || new Error("b failed"));
+        });
+      });
+    }
+    return request;
+  };
+  try {
+    await real.deleteTier(key, 1010);
+    assert.equal(armed, true);
+    await landed;
+    const row = await real.getTier(key);
+    assert.equal(row?.result?.latex, "B");
+    assert.equal(row?.decidedAt, 2000);
+  } finally {
+    proto.get = original;
+    dbB.close();
+  }
+});
+
 test("a live caller retries when the shared in-flight result is stale", async () => {
   const settings = settingsFor("openai");
   const gate = createCallGate();
@@ -1298,6 +1480,73 @@ test("a live caller retries when the shared in-flight result is stale", async ()
   assert.equal(sends, 2);
 });
 
+test("live joiners share one retry after a stale shared result", async () => {
+  const settings = settingsFor("openai");
+  async function joiners(count) {
+    const gate = createCallGate();
+    const run = gate.run.bind(gate);
+    let joins = 0;
+    gate.run = (key, fn, signal) => {
+      if (gate.has(key)) joins += 1;
+      return run(key, fn, signal);
+    };
+    const cache = createFormulaCache(createMemoryStore(), { gate });
+    let sends = 0;
+    let release;
+    const hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    let firstStale = false;
+    const hooks = {
+      ...formulaChainFlags(settings),
+      docHash: "doc-joiners",
+      settings,
+      readSettings: () => settings,
+      katex,
+      cache,
+      model: settings.multimodal.model,
+      withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+    };
+    const first = scheduleFormulaBlock(formulaBlock({ bid: "joiners", text: "x" }), {
+      ...hooks,
+      isStale: () => firstStale,
+      sendVision: async () => {
+        sends += 1;
+        firstStale = true;
+        await hold;
+        return { ok: true, text: "x" };
+      }
+    });
+    for (let i = 0; i < 30 && sends < 1; i += 1) await Promise.resolve();
+    assert.equal(sends, 1, `${count} started`);
+    const rest = [];
+    for (let n = 0; n < count; n += 1) {
+      rest.push(scheduleFormulaBlock(formulaBlock({ bid: "joiners", text: "x" }), {
+        ...hooks,
+        isStale: () => false,
+        sendVision: async () => {
+          sends += 1;
+          return { ok: true, text: "x" };
+        }
+      }));
+    }
+    for (let i = 0; i < 50 && joins < count; i += 1) await Promise.resolve();
+    assert.equal(joins, count, `${count} joined`);
+    release();
+    const staleShown = await first;
+    const shown = await Promise.all(rest);
+    assert.equal(staleShown.latexSource, undefined, `${count} stale`);
+    for (const block of shown) {
+      assert.equal(block.latex, "x", `${count} latex`);
+      assert.equal(block.latexSource, "vlm", `${count} source`);
+    }
+    assert.equal(sends, 2, `${count} sends`);
+  }
+  await joiners(1);
+  await joiners(2);
+  await joiners(3);
+});
+
 test("k from an in-flight request lands on the page ledger after it is replaced", async () => {
   const settings = settingsFor("openai");
   const first = beginMmPage(11);
@@ -1335,6 +1584,71 @@ test("k from an in-flight request lands on the page ledger after it is replaced"
   assert.equal(again, second);
   again.note("kept", { candidate: true, sent: 1 });
   assert.equal(mmPageStatsFor(11).k, 2);
+});
+
+test("a new document starts from an empty page ledger", () => {
+  resetMmPages();
+  const first = mmPageLedger(1);
+  first.note("a", { candidate: true, ready: true, sent: 1 });
+  first.note("b", { candidate: true, ready: true, sent: 1 });
+  first.note("c", { candidate: true, sent: 1 });
+  assert.equal(mmPageStatsFor(1).m, 3);
+  assert.equal(mmPageStatsFor(1).ready, 2);
+  assert.equal(mmPageStatsFor(1).k, 3);
+  resetMmPages();
+  const second = mmPageLedger(1);
+  assert.notEqual(second, first);
+  second.note("d", { candidate: true, sent: 1 });
+  assert.equal(mmPageStatsFor(1).m, 1);
+  assert.equal(mmPageStatsFor(1).ready, 0);
+  assert.equal(mmPageStatsFor(1).k, 1);
+  resetMmPages();
+});
+
+function sourceBetween(source, start, end) {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from + start.length);
+  assert.ok(from >= 0 && to > from, start);
+  return source.slice(from, to);
+}
+
+test("viewer restamp, crop, and adoptDoc stay wired to the page lifetime", () => {
+  const viewer = read("pdf/viewer.js");
+  const restamp = sourceBetween(viewer, "async function restampArxivPage", "async function copyArxivLatex");
+  const crop = sourceBetween(viewer, "async function cropLayoutBlocks", "function readFormulaCropImage");
+  const adoptAt = viewer.indexOf("async function adoptDoc");
+  const adopt = viewer.slice(adoptAt, adoptAt + 400);
+  assert.match(restamp, /const mmLedger = mmPageLedger\(pageNumber\)/);
+  assert.equal(restamp.includes("beginMmPage"), false);
+  assert.match(restamp, /isStale:\s*\(\)\s*=>\s*restampFormulaStale\(/);
+  assert.match(restamp, /publishRestampedBlocks\(\s*layout,\s*next,\s*restampFormulaStale\(/);
+  assert.match(crop, /const mmLedger = mmPageLedger\(pageNumber\)/);
+  assert.equal(crop.includes("beginMmPage"), false);
+  assert.match(adopt, /resetMmPages\(\)/);
+});
+
+test("memory deleteTier keeps a row whose decidedAt is newer", async () => {
+  const store = createMemoryStore();
+  const key = "doc:memdel:multimodal:mm-1:m:crop";
+  assert.equal(await store.commitTier(key, {
+    docHash: "doc",
+    decidedAt: 1010,
+    chainVersion: "f3-1",
+    tier: "multimodal",
+    model: "m",
+    result: {
+      tier: "multimodal",
+      status: "ok",
+      render: "katex",
+      latex: "A",
+      meta: { version: "mm-1", epoch: 1 }
+    }
+  }), true);
+  assert.equal(await store.deleteTier(key, 1020), false);
+  assert.equal((await store.getTier(key)).decidedAt, 1010);
+  assert.equal((await store.getTier(key)).result.latex, "A");
+  assert.equal(await store.deleteTier(key, 1010), true);
+  assert.equal(await store.getTier(key), null);
 });
 
 test("guard: a stale read does not return the cached hit", async () => {
@@ -1608,7 +1922,6 @@ async function runSeed(seed, cover) {
 }
 
 async function runStep(world, stage, event, rng, seed, step, cover) {
-  cover[`${stage}:${event}`] = (cover[`${stage}:${event}`] || 0) + 1;
   const tab = world.tabs[step % world.tabs.length];
   tab.stale = false;
   let resolveHold;
@@ -1703,6 +2016,7 @@ async function runStep(world, stage, event, rng, seed, step, cover) {
     world.blocks.push({ bid, latexSource: shown?.latexSource || "" });
     return;
   }
+  cover[`${stage}:${event}`] = (cover[`${stage}:${event}`] || 0) + 1;
   assert.equal(which, "paused", `seed ${seed} ${stage}:${event} was not in flight`);
   world.formulaPhase = "inflight";
   const savedBeforeAsk = world.state.saved.length;
