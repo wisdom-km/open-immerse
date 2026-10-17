@@ -24,6 +24,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
+import { connect as connectTcp } from "node:net";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -418,9 +419,16 @@ test("a 200 is connected only when the whole reply is SEEN", async () => {
     ["SEENING", "这个模型不能看图"],
     ["I have seen it", "这个模型不能看图"],
     ["SEEN（看见了）", "这个模型不能看图"],
+    ["¬SEEN", "这个模型不能看图"],
+    ["SEEN 👍", "这个模型不能看图"],
     ["SEEN", "已连通"],
     ["  SeEn!  ", "已连通"],
-    ["seen.", "已连通"]
+    ["seen.", "已连通"],
+    ["**SEEN**", "已连通"],
+    ["`SEEN`", "已连通"],
+    ["「SEEN」", "已连通"],
+    ["- SEEN", "已连通"],
+    ["SEEN\n", "已连通"]
   ];
   for (const [text, chip] of replies) {
     const box = responseNet(() => jsonResponse(200, { choices: [{ message: { content: text } }] }));
@@ -433,6 +441,9 @@ test("a 200 is connected only when the whole reply is SEEN", async () => {
   assert.equal(confirmsSeen("unseen"), false);
   assert.equal(confirmsSeen("SEENING"), false);
   assert.equal(confirmsSeen("not seen"), false);
+  assert.equal(confirmsSeen("¬SEEN"), false);
+  assert.equal(confirmsSeen("**SEEN**"), true);
+  assert.equal(confirmsSeen("「SEEN」"), true);
 });
 
 test("a key-read failure is not classified as a network error", async () => {
@@ -503,6 +514,15 @@ test("a local server receives the probe PNG and a 401 Response is not a shortcut
   }
   const { port } = server.address();
   try {
+    try {
+      await preflightLoopback(port);
+    } catch (err) {
+      if (loopbackUnavailable(err)) {
+        t.skip(`loopback 不可用（${err.code || err.message}），本沙箱不能连接 127.0.0.1，跳过本地服务探测。`);
+        return;
+      }
+      throw err;
+    }
     const seen = [];
     const net = createNet({
       log: (row) => seen.push(row),
@@ -513,28 +533,15 @@ test("a local server receives the probe PNG and a 401 Response is not a shortcut
         return fetchLocal(url, init);
       }
     });
-    let probe;
-    try {
-      probe = await probeMultimodal({
-        multimodal: {
-          provider: "custom",
-          apiKey: SECRET,
-          model: "local-vision",
-          customModel: true,
-          baseUrl: `http://127.0.0.1:${port}/v1`
-        }
-      }, { secret: SECRET, net });
-    } catch (err) {
-      if (loopbackUnavailable(err)) {
-        t.skip(`loopback 不可用（${err.code || err.message}），本沙箱不能连接 127.0.0.1，跳过本地服务探测。`);
-        return;
+    const probe = await probeMultimodal({
+      multimodal: {
+        provider: "custom",
+        apiKey: SECRET,
+        model: "local-vision",
+        customModel: true,
+        baseUrl: `http://127.0.0.1:${port}/v1`
       }
-      throw err;
-    }
-    if (captured == null && probe?.code === "network") {
-      t.skip(`loopback 不可用，连接 127.0.0.1:${port} 没有到达本地服务（${probe.summary || "网络错误"}），本沙箱不能连 127.0.0.1，跳过本地服务探测。`);
-      return;
-    }
+    }, { secret: SECRET, net });
     assert.equal(captured.raw.includes(PNG), true);
     assert.equal(captured.raw.includes(SECRET), false);
     assert.equal(captured.authorization, `Bearer ${SECRET}`);
@@ -545,6 +552,21 @@ test("a local server receives the probe PNG and a 401 Response is not a shortcut
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+function preflightLoopback(port) {
+  return new Promise((resolve, reject) => {
+    const socket = connectTcp({ host: "127.0.0.1", port });
+    const fail = (err) => {
+      socket.destroy();
+      reject(err);
+    };
+    socket.once("connect", () => {
+      socket.end();
+      resolve();
+    });
+    socket.once("error", fail);
+  });
+}
 
 function fetchLocal(url, init) {
   return new Promise((resolve, reject) => {
@@ -915,6 +937,13 @@ test("a saved connection is dropped when the Base URL changes", async () => {
   const slash = applyFormulaPart(connected, "multimodal", { baseUrl: "https://vendor.example/v1/" });
   assert.equal(slash.multimodal.probe.chip, "已连通");
   assert.equal(normalizedBaseUrl("https://vendor.example/v1/"), normalizedBaseUrl("https://vendor.example/v1"));
+  const queried = applyFormulaPart(connected, "multimodal", { baseUrl: "https://vendor.example/v1?" });
+  assert.equal(queried.multimodal.probe, null);
+  assert.notEqual(normalizedBaseUrl("https://vendor.example/v1?"), normalizedBaseUrl("https://vendor.example/v1"));
+  assert.equal(httpBaseUrl("https:///x"), "");
+  assert.equal(httpBaseUrl("https://."), "");
+  assert.equal(httpBaseUrl("http://0"), "");
+  assert.equal(httpBaseUrl("https://127.0.0.1/v1"), "https://127.0.0.1/v1");
   const local = memoryStorage({ [FORMULA_SETTINGS_KEY]: connected });
   const written = await writeFormulaSettings({
     ...connected,
@@ -922,10 +951,9 @@ test("a saved connection is dropped when the Base URL changes", async () => {
   }, local);
   assert.equal(written.multimodal.probe, null);
   assert.equal(written.multimodal.baseUrl, "https://other.example/v1");
-  assert.equal(httpBaseUrl("https:///x"), "");
 });
 
-test("a stored empty custom URL accepts switch toggles only", async () => {
+test("a stored empty custom URL accepts switch toggles and key edits only", async () => {
   const already = memoryStorage({
     [FORMULA_SETTINGS_KEY]: {
       multimodal: {
@@ -954,10 +982,24 @@ test("a stored empty custom URL accepts switch toggles only", async () => {
   assert.equal(written["formula.ocr.enabled"], true);
   assert.equal(written.multimodal.provider, "custom");
   assert.equal(written.multimodal.model, "m");
-  assert.equal(written.multimodal.apiKey, SECRET);
+  assert.equal(written.multimodal.apiKey, "sk-other");
   assert.equal(written.multimodal.baseUrl, "");
   assert.equal(written.multimodal.probe, null);
   assert.equal(customBaseUrlError(written), CUSTOM_BASE_URL_ERROR);
+  const cleared = await writeFormulaSettings({
+    ...written,
+    multimodal: {
+      ...written.multimodal,
+      apiKey: "",
+      model: "nope",
+      baseUrl: "",
+      probe: { ok: true, chip: "已连通", code: "ok", summary: "", at: 11 }
+    }
+  }, already);
+  assert.equal(cleared.multimodal.apiKey, "");
+  assert.equal(cleared.multimodal.model, "m");
+  assert.equal(cleared.multimodal.baseUrl, "");
+  assert.equal(cleared.multimodal.probe, null);
 });
 
 test("a bearer token that crosses the summary clip is fully redacted", async () => {
@@ -994,7 +1036,7 @@ test("only a fetch TypeError is a network failure", async () => {
 
 test("an empty or schemeless custom Base URL is not a ready multimodal card", async () => {
   const llm = { provider: "openai", providers: { openai: { model: "gpt-4o-mini", baseUrl: "https://api.openai.com/v1" } } };
-  for (const baseUrl of ["", "   ", "vendor.example/v1", "/v1", "ftp://vendor.example/v1", "https:///x"]) {
+  for (const baseUrl of ["", "   ", "vendor.example/v1", "/v1", "ftp://vendor.example/v1", "https:///x", "https://.", "http://0"]) {
     const settings = {
       [FORMULA_SWITCH_KEYS.tier2]: true,
       multimodal: { provider: "custom", apiKey: SECRET, model: "m", customModel: true, baseUrl }
@@ -1030,6 +1072,42 @@ test("an empty or schemeless custom Base URL is not a ready multimodal card", as
   assert.equal(calls, 0);
   assert.equal(blocked.ok, false);
   assert.match(blocked.summary, /Base URL/);
+});
+
+test("a stored summary is redacted before it is clipped", () => {
+  const token = `sk-Stored-${"Abc".repeat(20)}`;
+  const summary = `${"n".repeat(70)}${token}`;
+  const { document } = parseHTML("<!doctype html><div id='root'></div>");
+  const previous = globalThis.document;
+  globalThis.document = document;
+  patchSelectValue(document);
+  try {
+    const panel = document.getElementById("root");
+    renderFormulaPanel(panel, {
+      ...openaiSettings(),
+      multimodal: {
+        ...openaiSettings().multimodal,
+        apiKey: token,
+        probe: { ok: false, chip: "密钥无效 (401)", code: "401", summary, at: 1 }
+      }
+    }, {});
+    const shown = panel.querySelector("[data-probe-summary]")?.textContent || "";
+    assert.equal(shown.length <= 80, true);
+    assert.equal(shown.includes("sk-"), false);
+    assert.equal(shown.toLowerCase().includes(token.slice(0, 12).toLowerCase()), false);
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test("a colon bearer token is stripped from a 401 echo", async () => {
+  const token = "tok_colon_live_edge";
+  const secret = `Bearer:${token}`;
+  const box = responseNet(() => jsonResponse(401, { error: { message: `bad ${token}` } }));
+  const probe = await probeMultimodal(openaiSettings({ apiKey: secret }), { secret, net: box.net });
+  assert.equal(probe.chip, "密钥无效 (401)");
+  assert.equal(probe.summary.includes(token), false);
+  assert.equal(redactProbeText(`echo ${token}`, secret).includes(token), false);
 });
 
 test("the settings summary redacts a key regardless of case", () => {
@@ -1305,6 +1383,113 @@ function assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, kno
   if (tierCalls.n !== 0) throw new Error(`seed ${seed} step ${step} called a formula tier`);
   if (multimodalTier.version !== "stub-0") throw new Error(`seed ${seed} step ${step} multimodal tier changed`);
 }
+
+test("editing Base URL or the typed model clears the on-screen 已连通 chip", async () => {
+  const stamp = { ok: true, chip: "已连通", code: "ok", summary: "", at: Date.now() };
+  const connected = () => ({
+    multimodal: {
+      provider: "custom",
+      apiKey: SECRET,
+      model: "local-vision",
+      customModel: true,
+      baseUrl: "https://vendor.example/v1",
+      probe: { ...stamp }
+    }
+  });
+  const bag = { [FORMULA_SETTINGS_KEY]: connected() };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  const chipOf = (tab) => mmRoot(tab).querySelector(".oi-set-chip")?.textContent || "";
+  try {
+    const tab = await openOptionsTab("chip-url");
+    assert.match(chipOf(tab), /已连通/);
+    changeBaseUrl(tab, "https://vendor.example/v1/");
+    await flush();
+    assert.match(chipOf(tab), /已连通/);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe.ok, true);
+    changeBaseUrl(tab, "https://VENDOR.example/v1");
+    await flush();
+    assert.match(chipOf(tab), /已连通/);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe.ok, true);
+    changeBaseUrl(tab, "https://other.example/v1");
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(chipOf(tab).includes("已连通"), false);
+    tab.document.querySelector("[data-nav='data']").click();
+    tab.document.querySelector("[data-nav='mm']").click();
+    assert.equal(chipOf(tab).includes("已连通"), false);
+
+    bag[FORMULA_SETTINGS_KEY] = connected();
+    const path = await openOptionsTab("chip-path");
+    assert.match(chipOf(path), /已连通/);
+    changeBaseUrl(path, "https://vendor.example/v2");
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(chipOf(path).includes("已连通"), false);
+
+    bag[FORMULA_SETTINGS_KEY] = connected();
+    const modelTab = await openOptionsTab("chip-model");
+    assert.match(chipOf(modelTab), /已连通/);
+    changeModel(modelTab, "other-vision");
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "other-vision");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(chipOf(modelTab).includes("已连通"), false);
+    modelTab.document.querySelector("[data-nav='pdf']").click();
+    modelTab.document.querySelector("[data-nav='mm']").click();
+    assert.equal(chipOf(modelTab).includes("已连通"), false);
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("移除密钥 and a replacement key persist on a stored empty custom card", async () => {
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: {
+        provider: "custom",
+        apiKey: SECRET,
+        model: "m",
+        customModel: true,
+        baseUrl: "",
+        probe: null
+      }
+    }
+  };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  const storedKey = () => bag[FORMULA_SETTINGS_KEY].multimodal.apiKey;
+  const keyInput = (tab) => tab.document.querySelector("[data-key-slot='mm'] input");
+  try {
+    const tab = await openOptionsTab("empty-key");
+    assert.equal(storedKey(), SECRET);
+    assert.notEqual(keyInput(tab).value, "");
+    clickRemoveKey(tab);
+    await flush();
+    assert.match(tab.document.getElementById("setToast").textContent, /已移除/);
+    assert.equal(storedKey(), "");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "m");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+    const reopened = await openOptionsTab("empty-key-again");
+    assert.equal(keyInput(reopened).value, "");
+    assert.equal(clickUndo(tab), true);
+    await flush();
+    assert.equal(storedKey(), SECRET);
+    clickRemoveKey(tab);
+    await flush();
+    assert.equal(storedKey(), "");
+    commitKey(tab, "sk-replaced-key");
+    await flush();
+    assert.equal(storedKey(), "sk-replaced-key");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "m");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+    const replaced = await openOptionsTab("empty-key-replaced");
+    assert.notEqual(keyInput(replaced).value, "");
+    assert.equal(keyInput(replaced).value.includes(SECRET), false);
+  } finally {
+    restoreGlobals(previous);
+  }
+});
 
 test("changing Base URL during a probe aborts that request and clears the button", async () => {
   const bag = {
@@ -1589,6 +1774,14 @@ async function settleLateSuccess(seed, tab, arm, bag, secret) {
   }
   commitKey(tab, secret);
   await flush();
+  const kept = bag[FORMULA_SETTINGS_KEY]?.multimodal;
+  if (kept?.probe?.ok) {
+    const next = normalizedBaseUrl(kept.baseUrl) === normalizedBaseUrl("https://other.example/v1")
+      ? "https://vendor.example/v2"
+      : "https://other.example/v1";
+    changeBaseUrl(tab, next);
+    await flush();
+  }
 }
 
 async function runSeed(seed, tierCalls) {
@@ -1636,7 +1829,7 @@ async function runSeed(seed, tierCalls) {
     tabs.push(await openOptionsTab(`seed-${seed}-b`));
     const events = [
       "openai", "key", "model", "probe", "both", "ok", "401", "429", "novision", "timeout", "network",
-      "deepseek-select", "url", "url-b", "empty-url", "schemeless", "remove-key", "undo",
+      "deepseek-select", "url", "url-b", "url-only", "empty-url", "schemeless", "remove-key", "undo",
       "toggle", "unload", "retry", "other-tab", "late"
     ];
     for (let step = 0; step < 24; step += 1) {
@@ -1663,6 +1856,14 @@ async function runSeed(seed, tierCalls) {
           await flush();
         }
         changeBaseUrl(tab, event === "url" ? "https://vendor.example/v1" : "https://other.example/v1");
+      } else if (event === "url-only") {
+        const mm = bag[FORMULA_SETTINGS_KEY]?.multimodal;
+        if (mm?.probe?.ok) {
+          const next = normalizedBaseUrl(mm.baseUrl) === normalizedBaseUrl("https://vendor.example/v2")
+            ? "https://other.example/v1"
+            : "https://vendor.example/v2";
+          changeBaseUrl(tab, next);
+        }
       } else if (event === "empty-url" || event === "schemeless") {
         changeProvider(tab, "custom");
         await flush();

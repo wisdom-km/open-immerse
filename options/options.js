@@ -1544,6 +1544,7 @@ function invalidateFormulaProbe() {
 function updateFormulaPart(which, patch, opts = {}) {
   const watch = ["provider", "apiKey", "model", "baseUrl", "customModel"];
   if (watch.some((key) => Object.prototype.hasOwnProperty.call(patch || {}, key))) invalidateFormulaProbe();
+  const prevProbe = which === "multimodal" ? formulaSettings?.multimodal?.probe : null;
   formulaSettings = applyFormulaPart(formulaSettings, which, patch);
   if (which === "multimodal" && customBaseUrlError(formulaSettings)) {
     if (opts.live) {
@@ -1551,6 +1552,9 @@ function updateFormulaPart(which, patch, opts = {}) {
       return;
     }
     paintFormulaSettings();
+    if (Object.prototype.hasOwnProperty.call(patch || {}, "apiKey")) {
+      return persistFormulaSettings(false, formulaSettings);
+    }
     return;
   }
   if (opts.live) {
@@ -1559,7 +1563,8 @@ function updateFormulaPart(which, patch, opts = {}) {
   }
   const structural = Object.prototype.hasOwnProperty.call(patch, "provider")
     || Object.prototype.hasOwnProperty.call(patch, "customModel");
-  return persistFormulaSettings(structural);
+  const cleared = !!prevProbe && !formulaSettings.multimodal?.probe;
+  return persistFormulaSettings(structural || cleared);
 }
 
 async function updateFormulaSwitch(key, enabled) {
@@ -1599,7 +1604,8 @@ async function removeFormulaSecret(which) {
     // Interrupt: undo lands while a later probe is still in flight.
     invalidateFormulaProbe();
     formulaSettings = snapshot;
-    await persistFormulaSettings(true);
+    if (customBaseUrlError(snapshot)) await persistFormulaSettings(true, snapshot);
+    else await persistFormulaSettings(true);
   });
 }
 
