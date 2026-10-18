@@ -315,6 +315,7 @@ import { detectArxivId } from "../lib/arxiv-id.js";
 import { KATEX_RENDER_OPTIONS } from "../lib/formula-katex.js";
 import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
 import { scheduleFormulaBlock, publishRestampedBlocks } from "../lib/formula-schedule.js";
+import { cropPngFor } from "../lib/formula-crop-png.js";
 import { createFormulaCache } from "../lib/formula-cache.js";
 import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
 import { mmPageLedger, resetMmPages } from "../lib/formula-mm-ledger.js";
@@ -3886,6 +3887,7 @@ async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob)
     else delete stamped.sourceUnitId;
     next.push(await scheduleFormulaBlock(stamped, {
       withRasterCrop: async (item) => item,
+      cropPngFor: (block, hooks) => formulaModelPng(pageNumber, block, hooks),
       isStale: () => restampFormulaStale(pageNumber, epoch, job, layout),
       arxivEnabled: formulaArxivSourceEnabled(),
       multimodalEnabled: flags.multimodalEnabled,
@@ -4046,7 +4048,31 @@ async function readCachedArxivAlignment(query) {
   }
 }
 
+// Page-raster PNG keyed by the stable bid. Display may later swap imageUrl
+// for a zoom-dependent redraw; the model cache keeps this URL.
+const formulaModelCrops = new Map();
+
+function formulaModelCropId(pageNumber, block) {
+  const id = String(block?.bid || block?.id || "");
+  if (!id) return "";
+  return `${docId}:${pageNumber}:${id}`;
+}
+
+function rememberFormulaModelCrop(pageNumber, block) {
+  const id = formulaModelCropId(pageNumber, block);
+  if (!id || block?.label !== "formula" || !block.imageUrl) return;
+  formulaModelCrops.set(id, block.imageUrl);
+}
+
+function formulaModelPng(pageNumber, block, hooks) {
+  const stable = formulaModelCrops.get(formulaModelCropId(pageNumber, block));
+  return cropPngFor(stable ? { ...block, imageUrl: stable } : block, hooks);
+}
+
 async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, options = {}) {
+  // Reopen hydrates with sharp:false. The vision cache must use that same
+  // page-raster PNG, not the CSS-sized redraw.
+  const cropOptions = { ...options, sharp: false };
   try { await formulaSettingsReady; } catch { /* defaults stay off */ }
   const cropped = [];
   const arxivOn = formulaArxivSourceEnabled();
@@ -4060,13 +4086,18 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
   for (const block of blocks || []) {
     if (isStale()) return null;
     if (block?.label !== "formula") {
-      cropped.push(await withRasterCrop(raster, page, block, pageNumber, options));
+      cropped.push(await withRasterCrop(raster, page, block, pageNumber, cropOptions));
       continue;
     }
     const sourceUnitId = arxivOn ? arxivSourceUnitFor(block) : "";
     if (sourceUnitId) block.sourceUnitId = sourceUnitId;
     cropped.push(await scheduleFormulaBlock(block, {
-      withRasterCrop: (item) => withRasterCrop(raster, page, item, pageNumber, options),
+      withRasterCrop: async (item) => {
+        const croppedBlock = await withRasterCrop(raster, page, item, pageNumber, cropOptions);
+        rememberFormulaModelCrop(pageNumber, croppedBlock);
+        return croppedBlock;
+      },
+      cropPngFor: (block, hooks) => formulaModelPng(pageNumber, block, hooks),
       isStale,
       signal: options.signal,
       arxivEnabled: arxivOn,
@@ -11009,7 +11040,8 @@ async function ingestVendorLayout(n, mode, isStale, epoch) {
     mapped = arrived;
     recomputed = false;
   }
-  let blocks = await cropLayoutBlocks(raster, page, mapped.blocks, n, isStale);
+  stampLayoutBids(n, mapped);
+  let blocks = await cropLayoutBlocks(raster, page, mapped.blocks, n, isStale, { sharp: false });
   if (!blocks || isStale()) return null;
   const latePaint = currentLayoutIfArrived({
     hash,
@@ -11106,7 +11138,8 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
   const built = textLayerToBlocks({ items: content.items, viewport, images, page: n });
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
-  const blocks = await cropLayoutBlocks(raster, page, built.blocks, n, isStale);
+  stampLayoutBids(n, built);
+  const blocks = await cropLayoutBlocks(raster, page, built.blocks, n, isStale, { sharp: false });
   if (!blocks || isStale()) return null;
   const version = await layoutVersionNow();
   const fallback = options.fallback?.reason
@@ -11153,7 +11186,8 @@ async function ingestFixtureLayout(n, isStale) {
   const viewport = page.getViewport({ scale: 1 });
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
-  const blocks = await cropLayoutBlocks(raster, page, sample.blocks, n, isStale);
+  stampLayoutBids(n, sample);
+  const blocks = await cropLayoutBlocks(raster, page, sample.blocks, n, isStale, { sharp: false });
   if (!blocks || isStale()) return null;
   const layout = stampBodyFont({
     kind: "blocks",
@@ -11306,6 +11340,7 @@ async function adoptDoc(doc, title) {
     innerWidth: miniPagesInnerWidth()
   });
   docId += 1;
+  formulaModelCrops.clear();
   restoreGen += 1;
   textGen += 1;
   renderGen += 1;
