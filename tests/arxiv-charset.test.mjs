@@ -35,6 +35,8 @@ test("AX-21 mapping table, unknown commands, and NFKC", () => {
   assert.equal(charsetEqual(latexToCharset("\\mathbb{R}"), pdfTextCharset("ℝ")), true);
   assert.equal(charsetEqual(latexToCharset("\\mathbb{R}"), pdfTextCharset("R")), true);
   assert.equal(charsetEqual(latexToCharset("\\frac{1}{2}"), pdfTextCharset("12")), true);
+  assert.equal(charsetEqual(latexToCharset("p^*"), pdfTextCharset("p∗")), true);
+  assert.equal(charsetEqual(latexToCharset("p^{*}"), pdfTextCharset("p∗")), true);
   assert.equal(latexToCharset("\\frac{1}{2}").chars.has("f"), false);
   const unknown = latexToCharset("\\SI{1}{m}");
   assert.ok(unknown.unknownCommands.includes("\\SI"));
