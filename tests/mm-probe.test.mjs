@@ -68,6 +68,7 @@ import {
   isProvenVisionProvider,
   multimodalReady,
   readFormulaSettings,
+  probeChipTone,
   redactProbeText,
   removeFormulaKey,
   tierActive,
@@ -2847,6 +2848,7 @@ test("CHIP-02 an unrecognized failure is 测试失败 plus the service summary",
     await flush();
     const chip = chipNode(tab);
     assert.match(chip?.textContent || "", /^测试失败 · \d{2}:\d{2}$/);
+    assert.equal(chip.className.includes("is-warn"), true);
     assert.equal(chip.hasAttribute("title"), false);
     assert.equal(mmRoot(tab).querySelector("[data-probe-summary]")?.textContent, "upstream exploded");
     assert.equal(mmBadge(tab).hidden, false);
@@ -3011,6 +3013,37 @@ test("CHIP-07 chips stay on one line and the note does not sit inside the chip",
     installNet(null);
     restoreGlobals(previous);
   }
+});
+
+test("failure chips use --oi-warn and 待测试 keeps chip geometry", () => {
+  const css = read("options/options.css");
+  const warn = css.match(/body\.oi-settings \.oi-set-chip\.is-warn\s*\{[^}]*\}/);
+  assert.equal(warn != null, true);
+  assert.equal(/color:\s*var\(--oi-warn\)/.test(warn[0]), true);
+  assert.equal(/background:\s*var\(--oi-warn-soft\)/.test(warn[0]), true);
+  assert.equal(/--oi-reader-warn|--oi-text\b|#22201C/.test(warn[0]), false);
+  assert.equal(/--oi-warn:\s*#8A4B0F/.test(css), true);
+  assert.equal(/--oi-warn-soft:\s*rgba\(138,\s*75,\s*15/.test(css), true);
+  const off = css.match(/body\.oi-settings \[data-formula-card\] \.oi-set-chip\.is-off\s*\{[^}]*\}/);
+  assert.equal(off != null, true);
+  assert.equal(/background:\s*var\(--oi-line\)/.test(off[0]), true);
+  assert.equal(/color:\s*var\(--oi-text-muted\)/.test(off[0]), true);
+  assert.equal(/color-mix\(/.test(off[0]), false);
+  assert.equal(/height:\s*20px/.test(off[0]), true);
+  assert.equal(/border-radius:\s*10px/.test(off[0]), true);
+  const chip = css.match(/\.oi-set-chip\s*\{[^}]*\}/);
+  assert.equal(/height:\s*20px/.test(chip[0]), true);
+  assert.equal(/border-radius:\s*10px/.test(chip[0]), true);
+  assert.equal(/white-space:\s*nowrap/.test(chip[0]), true);
+  assert.equal(/flex-shrink:\s*0/.test(chip[0]), true);
+  const failures = ["401", "403", "404", "429", "timeout", "no-vision", "network", "length", "unavailable"];
+  for (const code of failures) {
+    const tone = probeChipTone({ ok: false, chip: "x", code });
+    assert.equal(tone.includes("is-warn"), true);
+    assert.equal(tone.includes("is-off"), false);
+  }
+  assert.equal(probeChipTone({ ok: false, chip: "待测试", code: "pending" }), "oi-set-chip is-off");
+  assert.equal(probeChipTone({ ok: true, chip: "已连通", code: "ok" }).includes("is-ok"), true);
 });
 
 test("500 seeds drive two real settings pages, including concurrent probes", async () => {

@@ -544,11 +544,14 @@ body.oi-settings .oi-set-chip.is-ok {
   background: color-mix(in srgb, var(--oi-success) 16%, transparent);
 }
 body.oi-settings .oi-set-chip.is-warn {
+  color: var(--oi-warn);
   background: var(--oi-warn-soft);
 }
 body.oi-settings [data-formula-card] .oi-set-chip.is-off {
-  color: var(--oi-reader-muted);
-  background: color-mix(in srgb, var(--oi-reader-muted) 16%, transparent);
+  color: var(--oi-text-muted);
+  background: var(--oi-line);
+  height: 20px;
+  border-radius: 10px;
 }
 body.oi-settings .set-provider-slot { min-height: 104px; }
 body.oi-settings .set-why { color: var(--oi-warn); }
