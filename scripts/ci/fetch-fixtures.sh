@@ -75,7 +75,7 @@ for row in "${fixtures[@]}"; do
   # so keep the body in the partial file and the status on a side channel.
   meta="$(mktemp)"
   set +e
-  curl --silent --show-error --fail --location --retry 3 --retry-delay 2 \
+  curl --proto =https --silent --show-error --fail --location --retry 3 --retry-delay 2 \
     --user-agent "$ua" \
     --output "$tmp" \
     --write-out "%{http_code} %{url_effective}\n" \
