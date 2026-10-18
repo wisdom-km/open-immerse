@@ -9,7 +9,8 @@
  * 5. 边界输入 — 未实测厂商、空 Base URL、超长摘要、密钥混进摘要、大小写厂商名、SEEN。、短密钥。
  * 6. 交付要求 — 先红后绿。删掉保存端或读取端的校验、空地址拒绝、过期结果丢弃，对应测试变红。
  * 7. 逐字输入 — input 只改草稿，change 才写入；芯片与存储里的探测一致。
- * 8. 编辑中保存密钥 — 只写密钥本身，草稿里的地址、模型和厂商不进存储。
+ * 8. 编辑中保存密钥 — 只写密钥本身，草稿里的地址、模型和厂商不进存储。保存密钥会清掉「已连通」。
+ * 9. 已提交卡片是唯一写入来源。同一拍的提交和点击都从最新卡片出队。被拒的 URL 回滚并提示。草稿不进存储。
  *
  * 不变量（随机测试每一步都检查）:
  * ① 密钥不出现在 sync、日志、探测摘要、请求 URL 和去掉 apiKey 之后的存储里。
@@ -19,6 +20,8 @@
  * ⑤ 一次成功的探测不会被更早那次的迟到结果覆盖。
  * ⑥ 探测不和问 AI 共用可变队列（mm-probe 没有队列）。
  * ⑦ 本 PR 不调用自研算法或矢量重绘。
+ * ⑧ 队列排空后，存储等于已提交卡片；屏幕上的已保存值等于存储；芯片等于存储里的探测；草稿不进存储。
+ * ⑨ 保存或移除密钥（含换回同一把）之后，存储里不再是「已连通」。更晚返回的旧探测不能写回。
  *
  * 中断点见 lib/mm-probe.js 文件头。每个点在下面有单独的对抗测试。
  */
@@ -27,6 +30,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { connect as connectTcp } from "node:net";
+import { inflateSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,6 +42,7 @@ import {
   PROBE_PNG_BASE64,
   confirmsSeen,
   createProbeController,
+  PROBE_OUTPUT_TOKENS,
   probeMultimodal,
   settleProbeResult
 } from "../lib/mm-probe.js";
@@ -922,7 +927,10 @@ test("a saved connection is dropped when the vendor or model changes", async () 
   assert.equal(otherVendor.multimodal.provider, "qwen");
   assert.equal(otherVendor.multimodal.probe, null);
   const sameKey = applyFormulaPart(connected, "multimodal", { apiKey: `${SECRET}-2` });
-  assert.equal(sameKey.multimodal.probe.chip, "已连通");
+  assert.equal(sameKey.multimodal.probe, null);
+  const again = applyFormulaPart(connected, "multimodal", { apiKey: SECRET });
+  assert.equal(again.multimodal.apiKey, SECRET);
+  assert.equal(again.multimodal.probe, null);
   const local = memoryStorage({ [FORMULA_SETTINGS_KEY]: connected });
   const written = await writeFormulaSettings({
     ...connected,
@@ -1223,7 +1231,8 @@ function mulberry32(seed) {
 
 function fingerprint(settings) {
   const mm = settings?.multimodal || {};
-  // apiKey edits keep a stored 「已连通」. Vendor, model, and normalized Base URL do not.
+  // A connected probe belongs to one vendor, model, and normalized Base URL.
+  // A key commit clears it, so the seed tracks that separately.
   return [mm.provider, mm.model, normalizedBaseUrl(mm.baseUrl)].join("\n");
 }
 
@@ -1404,7 +1413,9 @@ function changeOcrProvider(tab, value) {
 
 function clickRemoveKey(tab) {
   const button = [...tab.document.querySelectorAll("[data-key-slot='mm'] button")].find((node) => node.textContent === "移除密钥");
-  button?.click();
+  if (!button) return false;
+  button.click();
+  return true;
 }
 
 function clickUndo(tab) {
@@ -1488,11 +1499,17 @@ function assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, kno
   }
   const probe = stored?.multimodal?.probe;
   if (probe?.ok) {
+    if (known.boundEpoch == null) known.boundEpoch = known.mmEpoch || 0;
+    else if (known.boundEpoch !== known.mmEpoch) {
+      throw new Error(`seed ${seed} step ${step} 已连通 survived a key change`);
+    }
     const fp = fingerprint(stored);
     if (!known.probe || known.probe.at !== probe.at) known.probe = { at: probe.at, fp, chip: probe.chip };
     else if (known.probe.fp !== fp || known.probe.chip !== probe.chip) {
       throw new Error(`seed ${seed} step ${step} connected probe moved onto ${fp}`);
     }
+  } else {
+    known.boundEpoch = null;
   }
   if (!multimodalReady(stored || {})) {
     const ask = resolveAskTarget(llmSettings, stored || {});
@@ -1626,8 +1643,8 @@ test("saving a key while a Base URL draft is open does not store the draft", asy
     assert.equal(after.multimodal.baseUrl, before.multimodal.baseUrl);
     assert.equal(after.multimodal.model, before.multimodal.model);
     assert.equal(after.ocr.provider, before.ocr.provider);
-    assert.equal(after.multimodal.probe.ok, true);
-    assert.equal(after.multimodal.probe.at, before.multimodal.probe.at);
+    assert.equal(after.multimodal.probe, null);
+    assert.equal(mmRoot(tab).querySelector(".oi-set-chip") == null, true);
     assert.equal(tab.document.querySelector("[data-base-url]").value, "");
     assert.equal(modelTextInput(tab).value, "sneaky-model");
   } finally {
@@ -2030,13 +2047,14 @@ function restoreGlobals(previous) {
   }
 }
 
-async function settleLateSuccess(seed, tab, arm, bag, secret) {
+async function settleLateSuccess(seed, tab, arm, bag, secret, known) {
   tab.window.dispatchEvent(new tab.window.Event("pagehide"));
   changeProvider(tab, "openai");
   await flush();
   changeModel(tab, "gpt-5.6-luna");
   await flush();
   commitKey(tab, secret);
+  known.mmEpoch += 1;
   await flush();
   if (!await clickProbe(tab, arm)) throw new Error(`seed ${seed} late probe did not start`);
   const hit = arm.pending[arm.pending.length - 1];
@@ -2049,15 +2067,19 @@ async function settleLateSuccess(seed, tab, arm, bag, secret) {
   if (!await clickProbe(tab, arm)) throw new Error(`seed ${seed} second probe did not start`);
   const late = arm.pending[arm.pending.length - 1];
   commitKey(tab, `${secret}-late`);
+  known.mmEpoch += 1;
   await flush();
   await settleHit(late, "ok", secret);
   const lateIndex = arm.pending.indexOf(late);
   if (lateIndex >= 0) arm.pending.splice(lateIndex, 1);
   const after = bag[FORMULA_SETTINGS_KEY]?.multimodal;
-  if (after?.probe?.ok !== true || after.probe.at !== at || after.probe.chip !== "已连通") {
-    throw new Error(`seed ${seed} late result replaced the stored success`);
+  if (after?.probe?.ok === true || after?.probe?.chip === "已连通") {
+    throw new Error(`seed ${seed} late result wrote 已连通 after the key changed`);
   }
+  if (after?.apiKey !== `${secret}-late`) throw new Error(`seed ${seed} key change did not land`);
+  if (after?.probe?.at === at) throw new Error(`seed ${seed} kept the previous 已连通 timestamp`);
   commitKey(tab, secret);
+  known.mmEpoch += 1;
   await flush();
   const kept = bag[FORMULA_SETTINGS_KEY]?.multimodal;
   if (kept?.probe?.ok) {
@@ -2100,6 +2122,76 @@ function assertSurface(seed, step, tabs, bag) {
   }
 }
 
+function assertCommittedScreen(seed, step, tabs, bag) {
+  const stored = bag[FORMULA_SETTINGS_KEY] || {};
+  const mm = stored.multimodal || {};
+  for (const tab of tabs) {
+    if (!mmRoot(tab)) continue;
+    const url = tab.document.querySelector("[data-base-url]");
+    const select = providerSelect(tab);
+    // 选了自定义但还没存成这张卡时，屏幕上的厂家、模型和地址都还是草稿。
+    const unsavedCustom = select?.value === "custom" && mm.provider !== "custom";
+    const openUrl = typeof tab._draftUrl === "string" && tab._draftUrl !== (tab._urlWhenTyped ?? "");
+    const lingeringDraft = url && url.value !== (mm.baseUrl || "") && (
+      url.value === "https://late-echo.example/v1" || url.value === "https://pagehide.example/v1"
+    );
+    const refusedBlank = Boolean(tab.document.querySelector("[data-base-url-error]"))
+      && !String(url?.value || "").trim()
+      && Boolean(httpBaseUrl(mm.baseUrl || ""));
+    if (!unsavedCustom && !refusedBlank && !lingeringDraft && url && !openUrl && (url.value || "") !== (mm.baseUrl || "")) {
+      throw new Error(`seed ${seed} step ${step} Base URL ${url.value} != stored ${mm.baseUrl || ""}`);
+    }
+    const model = modelTextInput(tab);
+    const openModel = typeof tab._draftModel === "string" && tab._draftModel !== (tab._modelWhenTyped ?? "");
+    if (!unsavedCustom && model && !openModel && (model.value || "") !== (mm.model || "")) {
+      throw new Error(`seed ${seed} step ${step} model ${model.value} != stored ${mm.model || ""}`);
+    }
+    if (select && !unsavedCustom && (select.value || "") !== (mm.provider || "")) {
+      throw new Error(`seed ${seed} step ${step} provider ${select.value} != stored ${mm.provider || ""}`);
+    }
+    const tier = tab.document.querySelector(`[data-formula-switch="${FORMULA_SWITCH_KEYS.tier2}"]`);
+    if (tier && tier.checked !== (stored[FORMULA_SWITCH_KEYS.tier2] === true)) {
+      throw new Error(`seed ${seed} step ${step} tier2 != stored`);
+    }
+    if (typeof tab._expectUrl === "string") {
+      if (mm.baseUrl !== tab._expectUrl) {
+        throw new Error(`seed ${seed} step ${step} stored ${mm.baseUrl} != committed ${tab._expectUrl}`);
+      }
+      if (url && (url.value || "") !== mm.baseUrl) {
+        throw new Error(`seed ${seed} step ${step} screen URL != stored`);
+      }
+      tab._expectUrl = undefined;
+    }
+    if (tab._expectKeyCleared) {
+      if (mm.apiKey) throw new Error(`seed ${seed} step ${step} key was not removed`);
+      if (mm.probe?.ok) throw new Error(`seed ${seed} step ${step} remove kept 已连通`);
+      tab._expectKeyCleared = false;
+    }
+    if (typeof tab._expectRefused === "string") {
+      if ((mm.baseUrl || "") !== tab._expectRefused) {
+        throw new Error(`seed ${seed} step ${step} refused URL was stored`);
+      }
+      if (url && url.value !== tab._expectRefused) {
+        throw new Error(`seed ${seed} step ${step} refused URL stayed on screen`);
+      }
+      const miss = tab.document.getElementById("formulaSaveMiss");
+      if (!miss || miss.hidden || !/没保存上/.test(miss.textContent || "")) {
+        throw new Error(`seed ${seed} step ${step} refused URL has no 没保存上`);
+      }
+      tab._expectRefused = undefined;
+    }
+    if (typeof tab._expectLateDraft === "string") {
+      if (url && url.value !== tab._expectLateDraft) {
+        throw new Error(`seed ${seed} step ${step} late echo snapped the draft`);
+      }
+      tab._expectLateDraft = undefined;
+    }
+    if (tab._draftUrl === "https://pagehide.example/v1" && (mm.baseUrl || "") === tab._draftUrl) {
+      throw new Error(`seed ${seed} step ${step} pagehide stored the draft`);
+    }
+  }
+}
+
 async function runSeed(seed, tierCalls) {
   const rand = mulberry32(seed);
   const secret = `probe-secret-${seed}-zz`;
@@ -2113,7 +2205,7 @@ async function runSeed(seed, tierCalls) {
   const logs = [];
   const requests = [];
   const pending = [];
-  const known = { probe: null };
+  const known = { probe: null, mmEpoch: 0, boundEpoch: null };
   const askSession = createAskSession({ docHash: `seed-${seed}`, nonce: "probe" });
   const arm = { pending, current: null };
   const previous = captureGlobals();
@@ -2147,14 +2239,18 @@ async function runSeed(seed, tierCalls) {
       "openai", "key", "model", "probe", "both", "ok", "401", "429", "novision", "timeout", "network",
       "deepseek-select", "url", "url-b", "url-only", "empty-url", "schemeless", "remove-key", "undo",
       "toggle", "unload", "retry", "other-tab", "late",
-      "type-url", "type-model", "key-draft", "ocr-key"
+      "type-url", "type-model", "key-draft", "ocr-key",
+      "commit-toggle", "commit-remove", "refused-url", "late-echo", "pagehide-draft", "rekey"
     ];
     for (let step = 0; step < 24; step += 1) {
       const tab = tabs[Math.floor(rand() * tabs.length)];
       const other = tabs[0] === tab ? tabs[1] : tabs[0];
       const event = events[Math.floor(rand() * events.length)];
       if (event === "openai") changeProvider(tab, "openai");
-      else if (event === "key") commitKey(tab, secret);
+      else if (event === "key") {
+        commitKey(tab, secret);
+        known.mmEpoch += 1;
+      }
       else if (event === "model") changeModel(tab, rand() < 0.5 ? "gpt-5.4-mini" : "gpt-5.6-luna");
       else if (event === "probe" || event === "retry" || event === "both") {
         await clickProbe(tab, arm);
@@ -2217,15 +2313,68 @@ async function runSeed(seed, tierCalls) {
           typeValue(tab, model, "sneaky-model");
         }
         commitKey(tab, `${secret}-d`);
+        known.mmEpoch += 1;
         await flush();
         commitKey(tab, secret);
+        known.mmEpoch += 1;
       } else if (event === "ocr-key") commitOcrKey(tab, `ocr-${secret}`);
-      else if (event === "remove-key") clickRemoveKey(tab);
+      else if (event === "remove-key") {
+        if (clickRemoveKey(tab)) known.mmEpoch += 1;
+      } else if (event === "rekey") {
+        commitKey(tab, secret);
+        known.mmEpoch += 1;
+      } else if (event === "commit-toggle") {
+        const next = `https://seed-${seed}-${step}.example/v2`;
+        changeBaseUrl(tab, next);
+        toggleTier2(tab);
+        tab._draftUrl = undefined;
+        tab._expectUrl = next;
+      } else if (event === "commit-remove") {
+        const next = `https://seed-${seed}-${step}.example/v3`;
+        changeBaseUrl(tab, next);
+        if (clickRemoveKey(tab)) {
+          known.mmEpoch += 1;
+          tab._expectKeyCleared = true;
+        }
+        tab._draftUrl = undefined;
+        tab._expectUrl = next;
+      } else if (event === "refused-url") {
+        const mm = bag[FORMULA_SETTINGS_KEY]?.multimodal;
+        if (mm?.provider !== "custom" || !httpBaseUrl(mm?.baseUrl || "")) {
+          changeProvider(tab, "custom");
+          await flush();
+          changeBaseUrl(tab, "https://vendor.example/v1");
+          await flush();
+        }
+        const before = bag[FORMULA_SETTINGS_KEY]?.multimodal?.baseUrl || "";
+        changeBaseUrl(tab, "https://.");
+        tab._draftUrl = undefined;
+        tab._expectRefused = before;
+      } else if (event === "late-echo") {
+        const input = tab.document.querySelector("[data-base-url]");
+        tab._urlWhenTyped = bag[FORMULA_SETTINGS_KEY]?.multimodal?.baseUrl || "";
+        tab._draftUrl = "https://late-echo.example/v1";
+        typeValue(tab, input, tab._draftUrl);
+        commitKey(tab, secret);
+        known.mmEpoch += 1;
+        await flush();
+        const storedNow = bag[FORMULA_SETTINGS_KEY];
+        for (const listener of listeners) {
+          listener({ [FORMULA_SETTINGS_KEY]: { newValue: structuredClone(storedNow) } }, "local");
+        }
+        tab._expectLateDraft = tab._draftUrl;
+      } else if (event === "pagehide-draft") {
+        const input = tab.document.querySelector("[data-base-url]");
+        tab._urlWhenTyped = bag[FORMULA_SETTINGS_KEY]?.multimodal?.baseUrl || "";
+        tab._draftUrl = "https://pagehide.example/v1";
+        typeValue(tab, input, tab._draftUrl);
+        tab.window.dispatchEvent(new tab.window.Event("pagehide"));
+      }
       else if (event === "undo") clickUndo(tab);
       else if (event === "toggle") toggleTier2(tab);
       else if (event === "unload") tab.window.dispatchEvent(new tab.window.Event("pagehide"));
       else if (event === "other-tab") changeModel(other, "gpt-5.4-mini");
-      else if (event === "late") await settleLateSuccess(seed, tab, arm, bag, secret);
+      else if (event === "late") await settleLateSuccess(seed, tab, arm, bag, secret, known);
       else if (pending.length) {
         const hit = pending.splice(Math.floor(rand() * pending.length), 1)[0];
         const before = structuredClone(bag[FORMULA_SETTINGS_KEY] || null);
@@ -2251,6 +2400,7 @@ async function runSeed(seed, tierCalls) {
       }
       assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, known, tierCalls, askSession);
       assertSurface(seed, step, tabs, bag);
+      assertCommittedScreen(seed, step, tabs, bag);
     }
     for (const hit of pending.splice(0)) {
       const aborted = hit.signal?.aborted === true;
@@ -2271,6 +2421,360 @@ async function runSeed(seed, tierCalls) {
     restoreGlobals(previous);
   }
 }
+
+function connectedCard(url = "https://vendor.example/v1") {
+  return {
+    multimodal: {
+      provider: "custom",
+      apiKey: SECRET,
+      model: "local-vision",
+      customModel: true,
+      baseUrl: url,
+      probe: { ok: true, chip: "已连通", code: "ok", summary: "", at: 5 }
+    }
+  };
+}
+
+function pngSize(b64) {
+  const buf = Buffer.from(b64, "base64");
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  const idat = [];
+  while (offset + 8 <= buf.length) {
+    const len = buf.readUInt32BE(offset);
+    const type = buf.toString("ascii", offset + 4, offset + 8);
+    const data = buf.subarray(offset + 8, offset + 8 + len);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+    } else if (type === "IDAT") idat.push(data);
+    else if (type === "IEND") break;
+    offset += 12 + len;
+  }
+  return { width, height, raw: inflateSync(Buffer.concat(idat)) };
+}
+
+test("QA5a blur-commit URL then same-turn tier2 toggle keeps the new URL", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: connectedCard() };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const tab = await openOptionsTab("qa5a");
+    changeBaseUrl(tab, "https://other.example/v2");
+    toggleTier2(tab);
+    await flush();
+    const stored = bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(stored.baseUrl, "https://other.example/v2");
+    assert.equal(tab.document.querySelector("[data-base-url]").value, stored.baseUrl);
+    assert.equal(stored.probe, null);
+    assert.equal(bag[FORMULA_SETTINGS_KEY][FORMULA_SWITCH_KEYS.tier2], true);
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("QA5b blur-commit URL then same-turn 移除密钥 keeps the new URL", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: connectedCard() };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const tab = await openOptionsTab("qa5b");
+    changeBaseUrl(tab, "https://other.example/v3");
+    assert.equal(clickRemoveKey(tab), true);
+    await flush();
+    const stored = bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(stored.baseUrl, "https://other.example/v3");
+    assert.equal(stored.apiKey, "");
+    assert.equal(stored.probe, null);
+    assert.equal(tab.document.querySelector("[data-base-url]").value, stored.baseUrl);
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("QA5c refused URL rolls the input back and shows 没保存上", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: connectedCard() };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const tab = await openOptionsTab("qa5c");
+    changeBaseUrl(tab, "https://.");
+    await flush();
+    const stored = bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(stored.baseUrl, "https://vendor.example/v1");
+    assert.equal(stored.probe.ok, true);
+    assert.equal(stored.probe.at, 5);
+    assert.equal(tab.document.querySelector("[data-base-url]").value, stored.baseUrl);
+    const miss = tab.document.getElementById("formulaSaveMiss");
+    assert.match(miss?.textContent || "", /没保存上/);
+    assert.equal(miss.hidden, false);
+    assert.match(mmRoot(tab).querySelector(".oi-set-chip")?.textContent || "", /已连通/);
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("a late storage echo does not snap an open Base URL draft", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: connectedCard() };
+  const listeners = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, listeners);
+  try {
+    const tab = await openOptionsTab("late-echo");
+    const input = tab.document.querySelector("[data-base-url]");
+    typeValue(tab, input, "https://draft.example/v9");
+    commitKey(tab, "sk-late-echo");
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, "sk-late-echo");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    for (const listener of listeners) {
+      listener({
+        [FORMULA_SETTINGS_KEY]: { newValue: structuredClone(bag[FORMULA_SETTINGS_KEY]) }
+      }, "local");
+    }
+    await flush();
+    assert.equal(tab.document.querySelector("[data-base-url]").value, "https://draft.example/v9");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("pagehide does not store an uncommitted Base URL", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: connectedCard() };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const tab = await openOptionsTab("pagehide-draft");
+    const input = tab.document.querySelector("[data-base-url]");
+    typeValue(tab, input, "https://pagehide.example/v1");
+    tab.window.dispatchEvent(new tab.window.Event("pagehide"));
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe.ok, true);
+    assert.equal(input.value, "https://pagehide.example/v1");
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("saving a key, the same key again, or removing it clears 已连通", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: connectedCard() };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  const chip = (tab) => mmRoot(tab).querySelector(".oi-set-chip")?.textContent || "";
+  try {
+    const tab = await openOptionsTab("rekey");
+    assert.match(chip(tab), /已连通/);
+    commitKey(tab, "sk-other-value");
+    toggleTier2(tab);
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, "sk-other-value");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(bag[FORMULA_SETTINGS_KEY][FORMULA_SWITCH_KEYS.tier2], true);
+    assert.equal(chip(tab).includes("已连通"), false);
+    commitKey(tab, SECRET);
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, SECRET);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(chip(tab).includes("已连通"), false);
+    bag[FORMULA_SETTINGS_KEY] = connectedCard();
+    const removed = await openOptionsTab("rekey-remove");
+    assert.equal(clickRemoveKey(removed), true);
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, "");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("a probe that returns after the key is saved again is discarded", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: connectedCard() };
+  const pending = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  installNet(createNet({
+    log: () => {},
+    random: () => 0,
+    sleep: (ms) => (ms < 1000 ? Promise.resolve() : new Promise(() => {})),
+    transport(_url, init) {
+      const hit = { signal: init?.signal };
+      pending.push(hit);
+      return new Promise((resolve) => { hit.resolve = resolve; });
+    }
+  }));
+  try {
+    const tab = await openOptionsTab("late-key");
+    const arm = { pending, current: null };
+    assert.equal(await clickProbe(tab, arm), true);
+    commitKey(tab, SECRET);
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, SECRET);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    pending[0].resolve(jsonResponse(200, {
+      choices: [{ message: { content: "SEEN", reasoning_content: "SEEN" }, finish_reason: "stop" }]
+    }));
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal((mmRoot(tab).querySelector(".oi-set-chip")?.textContent || "").includes("已连通"), false);
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+test("the probe image is 64 by 64 with a visible mark", () => {
+  const old = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  assert.notEqual(PROBE_PNG_BASE64, old);
+  const { width, height, raw } = pngSize(PROBE_PNG_BASE64);
+  assert.equal(width, 64);
+  assert.equal(height, 64);
+  assert.ok(width > 14 && height > 14 && width * height >= 196);
+  const stride = 1 + width * 3;
+  const at = (x, y) => {
+    const i = y * stride + 1 + x * 3;
+    return [raw[i], raw[i + 1], raw[i + 2]];
+  };
+  assert.deepEqual(at(0, 0), [255, 255, 255]);
+  const mark = at(32, 32);
+  assert.ok(mark[0] > 180 && mark[1] < 80 && mark[2] < 80);
+});
+
+test("a probe request caps output and custom endpoints only send max_tokens", async () => {
+  assert.equal(PROBE_OUTPUT_TOKENS, 1024);
+  const openaiReply = () => jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] });
+  const geminiReply = () => jsonResponse(200, {
+    candidates: [{ content: { parts: [{ text: "SEEN" }] }, finishReason: "STOP" }]
+  });
+  const cases = [
+    {
+      settings: openaiSettings(),
+      reply: openaiReply,
+      expect: (body) => {
+        assert.equal(body.max_completion_tokens, 1024);
+        assert.equal(body.max_tokens, undefined);
+      }
+    },
+    {
+      settings: {
+        multimodal: {
+          provider: "doubao",
+          apiKey: SECRET,
+          model: "doubao-seed-2-1-pro-260915",
+          baseUrl: ""
+        }
+      },
+      reply: openaiReply,
+      expect: (body) => {
+        assert.equal(body.max_tokens, 1024);
+        assert.equal(body.max_completion_tokens, undefined);
+        assert.equal(body.messages.at(-1).content[1].image_url.url, `data:image/png;base64,${PROBE_PNG_BASE64}`);
+      }
+    },
+    {
+      settings: {
+        multimodal: {
+          provider: "custom",
+          apiKey: SECRET,
+          model: "local-vision",
+          customModel: true,
+          baseUrl: "https://vendor.example/v1"
+        }
+      },
+      reply: openaiReply,
+      expect: (body) => {
+        assert.equal(body.max_tokens, 1024);
+        assert.equal(body.max_completion_tokens, undefined);
+      }
+    },
+    {
+      settings: {
+        multimodal: { provider: "gemini", apiKey: SECRET, model: "gemini-3.8-flash" }
+      },
+      reply: geminiReply,
+      expect: (body) => {
+        assert.equal(body.generation_config.maxOutputTokens, 1024);
+        assert.equal(body.contents[0].parts[1].inline_data.data, PROBE_PNG_BASE64);
+      }
+    }
+  ];
+  for (const item of cases) {
+    const box = responseNet(item.reply);
+    const probe = await probeMultimodal(item.settings, { secret: SECRET, net: box.net });
+    assert.equal(probe.ok, true, item.settings.multimodal.provider);
+    item.expect(JSON.parse(box.seen[0].body));
+    assert.equal(box.seen[0].body.includes(SECRET), false);
+  }
+});
+
+test("empty content cut off at length is not 不能看图 and reasoning_content is not SEEN", async () => {
+  const cut = responseNet(() => jsonResponse(200, {
+    choices: [{ message: { content: "", reasoning_content: "SEEN" }, finish_reason: "length" }]
+  }));
+  const truncated = await probeMultimodal(openaiSettings(), { secret: SECRET, net: cut.net });
+  assert.equal(truncated.code, "length");
+  assert.equal(truncated.chip, "回答被截断");
+  assert.notEqual(truncated.chip, "这个模型不能看图");
+  assert.equal(truncated.ok, false);
+
+  const stopped = responseNet(() => jsonResponse(200, {
+    choices: [{ message: { content: "", reasoning_content: "SEEN" }, finish_reason: "stop" }]
+  }));
+  const blind = await probeMultimodal(openaiSettings(), { secret: SECRET, net: stopped.net });
+  assert.equal(blind.chip, "这个模型不能看图");
+  assert.equal(blind.ok, false);
+
+  const seen = responseNet(() => jsonResponse(200, {
+    choices: [{ message: { content: "SEEN", reasoning_content: "NO_IMAGE" }, finish_reason: "length" }]
+  }));
+  const ok = await probeMultimodal(openaiSettings(), { secret: SECRET, net: seen.net });
+  assert.equal(ok.chip, "已连通");
+});
+
+test("a fullwidth colon bearer token is stripped from a 401 echo", async () => {
+  const token = "tok_fullwidth_colon";
+  const secret = `Bearer：${token}`;
+  const box = responseNet(() => jsonResponse(401, { error: { message: `bad ${token}` } }));
+  const settings = openaiSettings({ apiKey: secret });
+  const sent = await sendVision({
+    target: multimodalTarget(settings),
+    system: "check",
+    text: "look",
+    images: [{ mime: "image/png", base64: PROBE_PNG_BASE64 }],
+    secret,
+    net: box.net,
+    purpose: "multimodal"
+  });
+  assert.equal(sent.ok, false);
+  assert.equal(String(sent.error?.summary || "").includes(token), false);
+  const probe = await probeMultimodal(settings, { secret, net: box.net });
+  assert.equal(probe.summary.includes(token), false);
+  assert.equal(redactProbeText(`echo ${token}`, secret).includes(token), false);
+});
+
+test("a six-character key is redacted and a shorter needle is not", async () => {
+  assert.equal(redactProbeText("echo ab12cd tail", "ab12cd").includes("ab12cd"), false);
+  assert.equal(redactProbeText("unavailable from the endpoint", "abcde").includes("unavailable"), true);
+  assert.equal(redactProbeText("unavailable from the endpoint", "a").includes("***"), false);
+  const box = responseNet(() => jsonResponse(401, { error: { message: "unavailable from the endpoint" } }));
+  const settings = openaiSettings({ apiKey: "a" });
+  const sent = await sendVision({
+    target: multimodalTarget(settings),
+    text: "look",
+    images: [{ mime: "image/png", base64: PROBE_PNG_BASE64 }],
+    secret: "a",
+    net: box.net,
+    purpose: "multimodal"
+  });
+  assert.equal(sent.ok, false);
+  assert.equal(String(sent.error?.summary || "").includes("unavailable"), true);
+  assert.equal(String(sent.error?.summary || "").includes("***"), false);
+});
 
 test("500 seeds drive two real settings pages, including concurrent probes", async () => {
   const tierCalls = { n: 0 };
