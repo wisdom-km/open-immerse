@@ -13,7 +13,7 @@
  * ① key 不出现在缓存、trace、账本、请求体摘要里；
  * ② 中止或过期的结果不写缓存，块上也不留下 vlm；
  * ③ 关开关、移除密钥、换厂商或模型之后，不为旧配置再发请求，在途结果作废；
- * ④ 缓存命中的记录属于当前 model + cropHash + mm-1；
+ * ④ 缓存命中的记录属于当前 model + cropHash + mm-2；
  * ⑤ 已经核对通过的公式不会被更旧的结果降级，也不会被更早采样的已核对行盖掉。
  *    仍存活调用者的已核对决策，其 tier 行 latex 与该决策一致；被换掉的已核对行留在
  *    存储行的 prev 链上，过期回滚只摘掉自己或恢复链上最近一个仍在的行，不丢行，
@@ -34,7 +34,7 @@ import { deliverAsk } from "../lib/ask-route.js";
 import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
 import { createCallGate, createFormulaCache, createMemoryStore, tierRecordKey } from "../lib/formula-cache.js";
 import { decideFormula } from "../lib/formula-chain.js";
-import { cropHashOf, contractViolations, unitKeyOf } from "../lib/formula-contract.js";
+import { CHAIN_VERSION, cropHashOf, contractViolations, unitKeyOf } from "../lib/formula-contract.js";
 import { cropPngFor } from "../lib/formula-crop-png.js";
 import { classifyMmDecision, createMmLedger, mmPageStatsFor, beginMmPage, mmPageLedger, resetMmPages } from "../lib/formula-mm-ledger.js";
 import { verifyCandidate as verifyFromArbiter } from "../lib/formula-arbiter.js";
@@ -445,7 +445,7 @@ test("a failed check or a call failure falls back to the crop and skips self and
   }
 });
 
-test("cache hits use mm-1 plus the model and do not send again", async () => {
+test("cache hits use mm-2 plus the model and do not send again", async () => {
   const settings = settingsFor("openai", { model: "gpt-5.6-luna" });
   const flags = formulaChainFlags(settings);
   const state = { saved: [], boom: false };
@@ -496,6 +496,83 @@ test("cache hits use mm-1 plus the model and do not send again", async () => {
   assert.equal(sends, 2);
   const staleKey = tierRecordKey(unit, { id: "multimodal", version: "stub-0" }, "gpt-5.6-luna");
   assert.equal(await cache.store.getTier(staleKey), null);
+});
+
+test("a verified mm-1 row is not adopted", async () => {
+  assert.equal(MM_TIER_VERSION, "mm-2");
+  assert.equal(CHAIN_VERSION, "f3-1");
+  const settings = settingsFor("openai", { model: "gpt-5.6-luna" });
+  const cache = createFormulaCache(createMemoryStore());
+  const named = modelKey(settings);
+  const unit = {
+    docHash: "doc-old",
+    bid: "old1",
+    bbox: [0.1, 0.2, 0.4, 0.3],
+    crop: { pixels: PNG }
+  };
+  const oldKey = tierRecordKey(unit, { id: "multimodal", version: "mm-1" }, named);
+  const liveKey = tierRecordKey(unit, { id: "multimodal", version: MM_TIER_VERSION }, named);
+  assert.notEqual(oldKey, liveKey);
+  const wrote = await cache.writeTier(oldKey, {
+    tier: "multimodal",
+    status: "ok",
+    render: "katex",
+    latex: "\\quad",
+    confidence: 1,
+    checks: {},
+    reason: null,
+    meta: { version: "mm-1", latexSource: "vlm" }
+  }, {
+    docHash: unit.docHash,
+    unitKey: unitKeyOf(unit),
+    cropHash: cropHashOf(unit),
+    model: named
+  });
+  assert.equal(wrote, true);
+  let sends = 0;
+  const shown = await scheduleFormulaBlock(formulaBlock({ bid: "old1", id: "old1" }), {
+    ...formulaChainFlags(settings),
+    docHash: "doc-old",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache,
+    model: "gpt-5.6-luna",
+    sendVision: async () => {
+      sends += 1;
+      return { ok: true, text: "x" };
+    },
+    cropPngFor: async () => ({ mime: "image/png", base64: PNG }),
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  assert.equal(sends, 1);
+  assert.notEqual(shown.latex, "\\quad");
+  assert.equal((await cache.store.getTier(oldKey)).result.latex, "\\quad");
+});
+
+test("an uncheckable text layer does not call the model", async () => {
+  const settings = settingsFor("openai");
+  let sends = 0;
+  const result = await runMultimodal({
+    pdfText: "\u0012\u0013",
+    display: true,
+    glyphs: [],
+    equationNumber: null,
+    crop: { url: PNG_URL }
+  }, {
+    flags: formulaChainFlags(settings),
+    settings,
+    readSettings: () => settings,
+    katex,
+    sendVision: async () => {
+      sends += 1;
+      return { ok: true, text: "x" };
+    },
+    cropPngFor: async () => ({ mime: "image/png", base64: PNG })
+  });
+  assert.equal(sends, 0);
+  assert.equal(result.reason, "uncheckable-glyph");
+  assert.equal(result.status, "reject");
 });
 
 test("interrupt: after settings are read, a removed key sends nothing and writes nothing", async () => {

@@ -168,6 +168,7 @@ import {
   visualAlt
 } from "../lib/pdf-blocks.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
+import { blocksForNotes } from "../lib/note-page-blocks.js";
 import { createBlockAnchor, injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
 import { exportMarkdown } from "../lib/notes-io.js";
 import { NOTES_PANE_WIDTH_DEFAULT, NOTES_PANE_WIDTH_MIN, dismissPersistHint, persistHintDismissed } from "../lib/notes-prefs.js";
@@ -2297,7 +2298,7 @@ function notePagesAround(center) {
     const layout = getPageLayout(n);
     if (!layout?.blocks?.length) continue;
     const rows = pageCache.get(docId, n) || (n === pageNum ? pageResults : null) || [];
-    pages.push({ page: n, blocks: applyBlockTranslations(layout.blocks, rows) });
+    pages.push({ page: n, blocks: blocksForNotes(applyBlockTranslations(layout.blocks, rows)) });
   }
   return pages;
 }
