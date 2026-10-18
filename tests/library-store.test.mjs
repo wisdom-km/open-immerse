@@ -501,12 +501,12 @@ test("deletePaperData removes only the asked collections and keeps other papers"
   assert.equal(report.layouts, 1);
   assert.equal(report.groups, 1);
   assert.equal(report.notes, 0);
-  assert.equal(report.sources, 0);
+  assert.equal(report.sources, 1);
   assert.equal(report.arxiv, true);
   assert.equal(arxiv, 1);
   assert.equal(await hooked.getPage("doc-a", 1), null);
   assert.equal(await hooked.getLayout("doc-a", 1, "local", "v"), null);
-  assert.equal((await hooked.getSource("doc-a")) instanceof Blob, true);
+  assert.equal(await hooked.getSource("doc-a"), null);
   assert.equal((await hooked.listPapers()).map((item) => item.docHash).includes("doc-a"), false);
   assert.equal((await hooked.listPapers({ includeDeleted: true })).some((item) => item.docHash === "doc-a"), true);
   assert.equal((await hooked.getPaper("doc-b")).title, "B");
@@ -599,12 +599,13 @@ test("touchPaper, putPage, and putGroup read the previous rev inside the write",
   await store.putGroup({ docHash: "doc-a", groupId: "g", startPage: 1, memberBids: [] });
   assert.deepEqual(events, [
     "tx:papers", "get:papers", "put:papers",
-    "tx:pages", "get:pages", "put:pages",
+    "tx:pages+papers", "get:pages", "put:pages", "get:papers", "put:papers",
     "tx:groups", "get:groups", "put:groups"
   ]);
-  assert.equal((await store.getPaper("doc-a")).rev, 1);
-  await store.touchPaper("doc-a", { title: "A2" });
   assert.equal((await store.getPaper("doc-a")).rev, 2);
+  assert.equal((await store.getPaper("doc-a")).pagesTranslated, 1);
+  await store.touchPaper("doc-a", { title: "A2" });
+  assert.equal((await store.getPaper("doc-a")).rev, 3);
 });
 
 const BASE64_PROBE = 40000;

@@ -23,3 +23,5 @@ tests/net-body-timeout.test.mjs
 tests/formula-pdftext.test.mjs
 # Cold start and reopen share the formula cache key. Sent PNG bytes hash to that cropHash at DPR 1 and 2. No network.
 tests/formula-reopen-cache.test.mjs
+# F8-PR0 library data: pagesTranslated, lastOpenedAt, source blob, delete. No network.
+tests/f8-pr0-library.test.mjs

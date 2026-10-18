@@ -228,9 +228,9 @@ export function mountDataPanel(root, deps = {}) {
       let sources = 0;
       let hasSource = false;
       for (const paper of papers) {
-        const blob = await store.getSource(paper.docHash);
-        if (blob && Number(blob.size) > 0) {
-          sources += Number(blob.size);
+        const size = Number(paper.sourceSize) || 0;
+        if (size > 0) {
+          sources += size;
           hasSource = true;
         }
       }
