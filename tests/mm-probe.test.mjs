@@ -37,7 +37,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseHTML } from "linkedom";
 
 import { createNet, installNet } from "../lib/net/fetch.js";
-import { multimodalTarget, sendVision } from "../lib/mm-client.js";
+import { buildVisionRequest, multimodalTarget, sendVision } from "../lib/mm-client.js";
 import {
   PROBE_PNG_BASE64,
   confirmsSeen,
@@ -284,19 +284,18 @@ test("an empty custom Base URL renders an inline error", () => {
   }
 });
 
-test("write refuses to store an empty custom Base URL", async () => {
+test("a custom card with no Base URL is stored as custom and does not wipe a saved URL", async () => {
   const local = memoryStorage({
     [FORMULA_SETTINGS_KEY]: {
       multimodal: { provider: "openai", apiKey: SECRET, model: "gpt-5.6-luna", baseUrl: "" }
     }
   });
-  await assert.rejects(
-    () => writeFormulaSettings({
-      multimodal: { provider: "custom", apiKey: SECRET, model: "m", customModel: true, baseUrl: "  " }
-    }, local),
-    (err) => err?.code === "base-url-required"
-  );
-  assert.equal(local.bag[FORMULA_SETTINGS_KEY].multimodal.provider, "openai");
+  const drafted = await writeFormulaSettings({
+    multimodal: { provider: "custom", apiKey: SECRET, model: "m", customModel: true, baseUrl: "  " }
+  }, local);
+  assert.equal(drafted.multimodal.provider, "custom");
+  assert.equal(drafted.multimodal.baseUrl, "");
+  assert.equal(local.bag[FORMULA_SETTINGS_KEY].multimodal.provider, "custom");
   const kept = memoryStorage({
     [FORMULA_SETTINGS_KEY]: {
       multimodal: { provider: "custom", apiKey: SECRET, model: "m", baseUrl: "https://vendor.example/v1" }
@@ -1012,11 +1011,10 @@ test("a stored empty custom URL accepts switch toggles and key edits only", asyn
   assert.equal(written["formula.tier2.enabled"], true);
   assert.equal(written["formula.ocr.enabled"], true);
   assert.equal(written.multimodal.provider, "custom");
-  assert.equal(written.multimodal.model, "m");
+  assert.equal(written.multimodal.model, "other-model");
   assert.equal(written.multimodal.apiKey, "sk-other");
   assert.equal(written.multimodal.baseUrl, "");
-  assert.equal(written.multimodal.probe?.code, "pending");
-  assert.equal(written.multimodal.probe?.chip, "待测试");
+  assert.equal(written.multimodal.probe, null);
   assert.equal(customBaseUrlError(written), CUSTOM_BASE_URL_ERROR);
   const cleared = await writeFormulaSettings({
     ...written,
@@ -1029,7 +1027,7 @@ test("a stored empty custom URL accepts switch toggles and key edits only", asyn
     }
   }, already);
   assert.equal(cleared.multimodal.apiKey, "");
-  assert.equal(cleared.multimodal.model, "m");
+  assert.equal(cleared.multimodal.model, "nope");
   assert.equal(cleared.multimodal.baseUrl, "");
   assert.equal(cleared.multimodal.probe, null);
   const kept = await writeFormulaSettings({
@@ -1601,8 +1599,10 @@ test("switching to custom does not store a typed Base URL draft", async () => {
     changeProvider(tab, "custom");
     await flush();
     assert.notEqual(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://draft.example/v1");
-    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "openai");
-    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe.ok, true);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "custom");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(providerSelect(tab).value, "custom");
   } finally {
     restoreGlobals(previous);
   }
@@ -1945,7 +1945,7 @@ test("another tab's formula write drops the in-flight probe", async () => {
   }
 });
 
-test("choosing custom without a Base URL does not turn tier 2 on for the previous vendor", async () => {
+test("choosing custom without a Base URL does not enable the previous vendor", async () => {
   const bag = {
     [FORMULA_SETTINGS_KEY]: {
       "formula.tier2.enabled": false,
@@ -1966,12 +1966,16 @@ test("choosing custom without a Base URL does not turn tier 2 on for the previou
     assert.equal(providerSelect(tab).value, "openai");
     changeProvider(tab, "custom");
     await flush();
-    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "openai");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "custom");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
     toggleTier2(tab);
     await flush();
-    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "openai");
-    assert.equal(bag[FORMULA_SETTINGS_KEY]["formula.tier2.enabled"], false);
-    assert.equal(providerSelect(tab).value, "openai");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "custom");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+    assert.equal(bag[FORMULA_SETTINGS_KEY]["formula.tier2.enabled"], true);
+    assert.equal(providerSelect(tab).value, "custom");
+    assert.equal(multimodalReady(bag[FORMULA_SETTINGS_KEY]), false);
+    assert.notEqual(resolveAskTarget(llmSettings, bag[FORMULA_SETTINGS_KEY]).via, "multimodal");
   } finally {
     installNet(null);
     restoreGlobals(previous);
@@ -2704,6 +2708,22 @@ test("a probe request caps output and custom endpoints only send max_tokens", as
     },
     {
       settings: {
+        multimodal: {
+          provider: "custom",
+          apiKey: SECRET,
+          model: "gpt-5.6-luna",
+          customModel: true,
+          baseUrl: "https://api.openai.com/v1"
+        }
+      },
+      reply: openaiReply,
+      expect: (body) => {
+        assert.equal(body.max_completion_tokens, 1024);
+        assert.equal(body.max_tokens, undefined);
+      }
+    },
+    {
+      settings: {
         multimodal: { provider: "gemini", apiKey: SECRET, model: "gemini-3.8-flash" }
       },
       reply: geminiReply,
@@ -2769,6 +2789,7 @@ test("a fullwidth colon bearer token is stripped from a 401 echo", async () => {
 
 test("a six-character key is redacted and a shorter needle is not", async () => {
   assert.equal(redactProbeText("echo ab12cd tail", "ab12cd").includes("ab12cd"), false);
+  assert.equal(redactProbeText("code abcde stays", "abcde"), "code abcde stays");
   assert.equal(redactProbeText("unavailable from the endpoint", "abcde").includes("unavailable"), true);
   assert.equal(redactProbeText("unavailable from the endpoint", "a").includes("***"), false);
   const box = responseNet(() => jsonResponse(401, { error: { message: "unavailable from the endpoint" } }));
@@ -3044,6 +3065,434 @@ test("failure chips use --oi-warn and 待测试 keeps chip geometry", () => {
   }
   assert.equal(probeChipTone({ ok: false, chip: "待测试", code: "pending" }), "oi-set-chip is-off");
   assert.equal(probeChipTone({ ok: true, chip: "已连通", code: "ok" }).includes("is-ok"), true);
+});
+
+function qa6openai() {
+  return {
+    multimodal: {
+      provider: "openai",
+      apiKey: SECRET,
+      model: "gpt-5.6-luna",
+      baseUrl: "",
+      probe: { ok: true, chip: "已连通", code: "ok", summary: "", at: 5 }
+    }
+  };
+}
+
+async function qa6page(card, id, { deferEcho = false, failSetOnce = false } = {}) {
+  const bag = { [FORMULA_SETTINGS_KEY]: card };
+  const listeners = [];
+  const pending = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, listeners);
+  installNet(createNet({
+    log: () => {},
+    random: () => 0,
+    sleep: (ms) => (ms < 1000 ? Promise.resolve() : new Promise(() => {})),
+    transport(_url, init) {
+      const hit = { signal: init?.signal, body: String(init?.body || ""), headers: init?.headers || {} };
+      pending.push(hit);
+      return new Promise((resolve) => { hit.resolve = resolve; });
+    }
+  }));
+  const tab = await openOptionsTab(id);
+  if (deferEcho) {
+    for (let i = 0; i < listeners.length; i += 1) {
+      const orig = listeners[i];
+      listeners[i] = (changes, area) => setTimeout(() => orig(changes, area), 5);
+    }
+  }
+  if (failSetOnce) {
+    const local = globalThis.chrome.storage.local;
+    const set = local.set.bind(local);
+    let armed = true;
+    local.set = async (patch) => {
+      if (armed && patch && Object.prototype.hasOwnProperty.call(patch, FORMULA_SETTINGS_KEY)) {
+        armed = false;
+        throw new Error("quota");
+      }
+      return set(patch);
+    };
+  }
+  return {
+    bag,
+    tab,
+    pending,
+    listeners,
+    done() {
+      installNet(null);
+      restoreGlobals(previous);
+    }
+  };
+}
+
+const qa6wait = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("QA6-1 自定义 with no URL keeps a committed model", async () => {
+  const page = await qa6page(qa6openai(), "qa6-1");
+  try {
+    changeProvider(page.tab, "custom");
+    await flush();
+    const model = modelTextInput(page.tab);
+    typeValue(page.tab, model, "my-vision");
+    commitInput(page.tab, model);
+    await flush();
+    const miss = page.tab.document.getElementById("formulaSaveMiss");
+    assert.equal(modelTextInput(page.tab)?.value, "my-vision");
+    assert.equal(!miss || miss.hidden, true);
+    const url = page.tab.document.querySelector("[data-base-url]");
+    typeValue(page.tab, url, "https://vendor.example/v1");
+    commitInput(page.tab, url);
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(stored.provider, "custom");
+    assert.equal(stored.model, "my-vision");
+    assert.equal(stored.baseUrl, "https://vendor.example/v1");
+  } finally {
+    page.done();
+  }
+});
+
+test("QA6-2 自定义 with no URL keeps the provider when the key is committed first", async () => {
+  const page = await qa6page(qa6openai(), "qa6-2");
+  try {
+    changeProvider(page.tab, "custom");
+    await flush();
+    commitKey(page.tab, "sk-qa6-two-newkey");
+    await flush();
+    await qa6wait();
+    assert.equal(providerSelect(page.tab).value, "custom");
+    const url = page.tab.document.querySelector("[data-base-url]");
+    typeValue(page.tab, url, "https://vendor.example/v1");
+    commitInput(page.tab, url);
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(stored.provider, "custom");
+    assert.equal(stored.baseUrl, "https://vendor.example/v1");
+    assert.equal(stored.apiKey, "sk-qa6-two-newkey");
+    assert.equal(providerSelect(page.tab).value, "custom");
+  } finally {
+    page.done();
+  }
+});
+
+test("QA6-3 自定义 key commit and a same-turn tier2 toggle keep the key", async () => {
+  const page = await qa6page(qa6openai(), "qa6-3");
+  try {
+    changeProvider(page.tab, "custom");
+    await flush();
+    commitKey(page.tab, "sk-qa6-three-newkey");
+    toggleTier2(page.tab);
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY];
+    assert.equal(stored.multimodal.apiKey, "sk-qa6-three-newkey");
+    assert.equal(stored.multimodal.provider, "custom");
+    assert.notEqual(stored.multimodal.probe?.ok, true);
+    assert.equal(stored[FORMULA_SWITCH_KEYS.tier2], true);
+  } finally {
+    page.done();
+  }
+});
+
+test("QA6-10 a committed model survives a blank URL and a same-turn switch", async () => {
+  const page = await qa6page(connectedCard(), "qa6-10");
+  try {
+    const model = modelTextInput(page.tab);
+    typeValue(page.tab, model, "other-vision");
+    commitInput(page.tab, model);
+    const url = page.tab.document.querySelector("[data-base-url]");
+    typeValue(page.tab, url, "");
+    commitInput(page.tab, url);
+    toggleTier2(page.tab);
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY];
+    assert.equal(stored.multimodal.model, "other-vision");
+    assert.equal(stored.multimodal.baseUrl, "https://vendor.example/v1");
+    assert.equal(stored[FORMULA_SWITCH_KEYS.tier2], true);
+    assert.equal(modelTextInput(page.tab)?.value, "other-vision");
+  } finally {
+    page.done();
+  }
+});
+
+test("QA6-12 a custom key is not stored on the OpenAI card", async () => {
+  const card = qa6openai();
+  card[FORMULA_SWITCH_KEYS.tier2] = true;
+  const page = await qa6page(card, "qa6-12");
+  try {
+    changeProvider(page.tab, "custom");
+    await flush();
+    commitKey(page.tab, "ark-key-qa6-twelve-998877");
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY];
+    const target = multimodalTarget(stored);
+    const request = buildVisionRequest(target, {
+      text: "t",
+      images: [{ mime: "image/png", base64: PROBE_PNG_BASE64 }],
+      secret: stored.multimodal.apiKey
+    });
+    assert.equal(stored.multimodal.provider, "custom");
+    assert.equal(stored.multimodal.apiKey, "ark-key-qa6-twelve-998877");
+    assert.equal(multimodalReady(stored), false);
+    assert.notEqual(target.host, "api.openai.com");
+    assert.equal(request.error != null, true);
+    assert.equal(resolveAskTarget(llmSettings, stored).via === "multimodal", false);
+  } finally {
+    page.done();
+  }
+});
+
+test("an uncommitted Base URL stays in the field when the tier switch is toggled", async () => {
+  const page = await qa6page(qa6openai(), "qa6-draft-url");
+  try {
+    changeProvider(page.tab, "custom");
+    await flush();
+    const url = page.tab.document.querySelector("[data-base-url]");
+    typeValue(page.tab, url, "https://draft.example/v9");
+    toggleTier2(page.tab);
+    await flush();
+    await qa6wait();
+    assert.equal(providerSelect(page.tab).value, "custom");
+    assert.equal(page.tab.document.querySelector("[data-base-url]").value, "https://draft.example/v9");
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.provider, "custom");
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+  } finally {
+    page.done();
+  }
+});
+
+test("QA6-4 a late own echo does not snap a draft typed after two writes", async () => {
+  const page = await qa6page(connectedCard(), "qa6-4", { deferEcho: true });
+  try {
+    changeBaseUrl(page.tab, "https://other.example/v2");
+    toggleTier2(page.tab);
+    await flush();
+    const url = page.tab.document.querySelector("[data-base-url]");
+    typeValue(page.tab, url, "https://draft.example/v9");
+    await qa6wait(50);
+    await flush();
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://other.example/v2");
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY][FORMULA_SWITCH_KEYS.tier2], true);
+    assert.equal(page.tab.document.querySelector("[data-base-url]").value, "https://draft.example/v9");
+  } finally {
+    page.done();
+  }
+});
+
+test("QA6-11 a late own echo does not snap 自定义 back to OpenAI", async () => {
+  const page = await qa6page(qa6openai(), "qa6-11", { deferEcho: true });
+  try {
+    commitKey(page.tab, "sk-qa6-eleven-key");
+    await flush();
+    changeProvider(page.tab, "custom");
+    await flush();
+    assert.equal(providerSelect(page.tab).value, "custom");
+    await qa6wait(50);
+    await flush();
+    assert.equal(providerSelect(page.tab).value, "custom");
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.provider, "custom");
+  } finally {
+    page.done();
+  }
+});
+
+test("QA6-9 retry does not write back an older failed URL", async () => {
+  const page = await qa6page(connectedCard(), "qa6-9", { failSetOnce: true });
+  try {
+    changeBaseUrl(page.tab, "https://other.example/v2");
+    await flush();
+    await qa6wait();
+    changeBaseUrl(page.tab, "https://.");
+    await flush();
+    await qa6wait();
+    const miss = page.tab.document.getElementById("formulaSaveMiss");
+    miss?.querySelector("button")?.click();
+    await flush();
+    await qa6wait();
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
+    assert.notEqual(page.bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://other.example/v2");
+  } finally {
+    page.done();
+  }
+});
+
+test("a failed write does not cover a newer committed URL", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: connectedCard() };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  const local = globalThis.chrome.storage.local;
+  const set = local.set.bind(local);
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  let armed = true;
+  local.set = async (patch) => {
+    if (armed && patch && Object.prototype.hasOwnProperty.call(patch, FORMULA_SETTINGS_KEY)) {
+      armed = false;
+      await gate;
+      throw new Error("quota");
+    }
+    return set(patch);
+  };
+  try {
+    const tab = await openOptionsTab("qa6-retry-newer");
+    changeBaseUrl(tab, "https://old-fail.example/v1");
+    await Promise.resolve();
+    changeBaseUrl(tab, "https://newer.example/v2");
+    release();
+    await flush();
+    await qa6wait();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://newer.example/v2");
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+test("QA6-8 retry stores the URL whose write failed", async () => {
+  const page = await qa6page(connectedCard(), "qa6-8", { failSetOnce: true });
+  try {
+    changeBaseUrl(page.tab, "https://other.example/v2");
+    await flush();
+    await qa6wait();
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
+    page.tab.document.getElementById("formulaSaveMiss")?.querySelector("button")?.click();
+    await flush();
+    await qa6wait();
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://other.example/v2");
+  } finally {
+    page.done();
+  }
+});
+
+test("Q2 the first dequeued write already includes a same-turn switch", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: connectedCard() };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  const writes = [];
+  const local = globalThis.chrome.storage.local;
+  const set = local.set.bind(local);
+  local.set = async (patch) => {
+    if (patch && patch[FORMULA_SETTINGS_KEY]) writes.push(structuredClone(patch[FORMULA_SETTINGS_KEY]));
+    return set(patch);
+  };
+  try {
+    const tab = await openOptionsTab("q2");
+    writes.length = 0;
+    changeBaseUrl(tab, "https://queued.example/v2");
+    toggleTier2(tab);
+    await flush();
+    assert.equal(writes.length >= 1, true);
+    assert.equal(writes[0].multimodal.baseUrl, "https://queued.example/v2");
+    assert.equal(writes[0][FORMULA_SWITCH_KEYS.tier2], true);
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("K2 a multimodal key change at the write drops 已连通", async () => {
+  const connected = connectedCard();
+  const local = memoryStorage({ [FORMULA_SETTINGS_KEY]: connected });
+  const written = await writeFormulaSettings({
+    ...connected,
+    multimodal: { ...connected.multimodal, apiKey: "sk-k2-other-key" }
+  }, local);
+  assert.equal(written.multimodal.probe?.code, "pending");
+  assert.equal(written.multimodal.probe?.chip, "待测试");
+  assert.notEqual(written.multimodal.probe?.ok, true);
+});
+
+test("K3 an OCR key change at the write drops 已连通", async () => {
+  const stored = {
+    ...connectedCard(),
+    ocr: {
+      provider: "baidu",
+      apiKey: SECRET,
+      probe: { ok: true, chip: "已连通", code: "ok", summary: "", at: 4 }
+    }
+  };
+  const local = memoryStorage({ [FORMULA_SETTINGS_KEY]: stored });
+  const written = await writeFormulaSettings({
+    ...stored,
+    ocr: { ...stored.ocr, apiKey: "ocr-k3-other-key" }
+  }, local);
+  assert.equal(written.ocr.probe?.code, "pending");
+  assert.equal(written.ocr.probe?.chip, "待测试");
+  assert.equal(written.multimodal.probe?.ok, true);
+});
+
+test("K5 a draft card does not carry 已连通 onto a new key", async () => {
+  const stored = {
+    multimodal: {
+      provider: "custom",
+      apiKey: SECRET,
+      model: "m",
+      customModel: true,
+      baseUrl: "",
+      probe: { ok: true, chip: "已连通", code: "ok", summary: "", at: 3 }
+    }
+  };
+  const local = memoryStorage({ [FORMULA_SETTINGS_KEY]: stored });
+  const written = await writeFormulaSettings({
+    ...stored,
+    multimodal: {
+      ...stored.multimodal,
+      apiKey: "sk-k5-other-key",
+      probe: stored.multimodal.probe
+    }
+  }, local);
+  assert.equal(written.multimodal.apiKey, "sk-k5-other-key");
+  assert.equal(written.multimodal.probe?.code, "pending");
+  assert.notEqual(written.multimodal.probe?.chip, "已连通");
+});
+
+test("L3 Gemini MAX_TOKENS with empty text is 回答被截断", async () => {
+  const box = responseNet(() => jsonResponse(200, {
+    candidates: [{ content: { parts: [{ text: "" }] }, finishReason: "MAX_TOKENS" }]
+  }));
+  const probe = await probeMultimodal({
+    multimodal: { provider: "gemini", apiKey: SECRET, model: "gemini-3.8-flash" }
+  }, { secret: SECRET, net: box.net });
+  assert.equal(probe.code, "length");
+  assert.equal(probe.chip, "回答被截断");
+});
+
+test("L4 non-empty text cut off at length is still 不能看图", async () => {
+  const box = responseNet(() => jsonResponse(200, {
+    choices: [{ message: { content: "I cannot see the image." }, finish_reason: "length" }]
+  }));
+  const probe = await probeMultimodal(openaiSettings(), { secret: SECRET, net: box.net });
+  assert.equal(probe.code, "no-vision");
+  assert.equal(probe.chip, "这个模型不能看图");
+});
+
+test("a refusal field with empty content cut off at length is 回答被截断", async () => {
+  const box = responseNet(() => jsonResponse(200, {
+    choices: [{ message: { content: null, refusal: "I cannot see the image." }, finish_reason: "length" }]
+  }));
+  const probe = await probeMultimodal(openaiSettings(), { secret: SECRET, net: box.net });
+  assert.equal(probe.code, "length");
+  assert.equal(probe.chip, "回答被截断");
+});
+
+test("O5 a normal vision call does not cap output at 1024", async () => {
+  const box = responseNet(() => jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] }));
+  const sent = await sendVision({
+    target: multimodalTarget(openaiSettings()),
+    text: "look",
+    images: [{ mime: "image/png", base64: PROBE_PNG_BASE64 }],
+    secret: SECRET,
+    net: box.net
+  });
+  assert.equal(sent.ok, true);
+  const body = JSON.parse(box.seen[0].body);
+  assert.equal(body.max_completion_tokens, undefined);
+  assert.equal(body.max_tokens, undefined);
+  assert.equal(body.generation_config, undefined);
 });
 
 test("500 seeds drive two real settings pages, including concurrent probes", async () => {
