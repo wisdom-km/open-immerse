@@ -50,7 +50,7 @@ import { resolveAskTarget } from "../lib/ask-route.js";
 import * as askRoute from "../lib/ask-route.js";
 import * as mmProbe from "../lib/mm-probe.js";
 import { createAskSession } from "../lib/ask-session.js";
-import { multimodalTier } from "../lib/formula-tiers/multimodal.js";
+import { MM_TIER_VERSION, multimodalTier } from "../lib/formula-tiers/multimodal.js";
 import { selfTier } from "../lib/formula-tiers/self.js";
 import { vectorTier } from "../lib/formula-tiers/vector.js";
 import {
@@ -1521,7 +1521,7 @@ function assertStoredProbe(seed, step, bag, secret, requests, logs, syncBag, kno
     if (ask.via === "multimodal") throw new Error(`seed ${seed} step ${step} ask used an unready card`);
   }
   if (tierCalls.n !== 0) throw new Error(`seed ${seed} step ${step} called a formula tier`);
-  if (multimodalTier.version !== "stub-0") throw new Error(`seed ${seed} step ${step} multimodal tier changed`);
+  if (multimodalTier.version !== MM_TIER_VERSION) throw new Error(`seed ${seed} step ${step} multimodal tier changed`);
 }
 
 test("real keystrokes then change clear the on-screen 已连通 chip", async () => {

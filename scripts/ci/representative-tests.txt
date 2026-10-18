@@ -15,6 +15,8 @@ tests/library-store.test.mjs
 tests/unbound-storage.test.mjs
 # Vision client. A fixed-vendor host guard must not hide a red test here.
 tests/mm-client.test.mjs
+# Settings-page probe, including 500 seeds. The tier version must stay the exported constant.
+tests/mm-probe.test.mjs
 # Fetch body timeout against 127.0.0.1. A down loopback fails the file.
 tests/net-body-timeout.test.mjs
 # Formula source from the DPO text layer through to the unit. No network.
