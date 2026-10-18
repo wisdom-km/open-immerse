@@ -5,7 +5,7 @@
  * 不变量（每个种子、每一步）:
  * ① 超时把读 body 算进去。先到响应头、body 随后到，结果是 200，不是 AbortError。
  * ② body 一直不结束并超过超时，报 timeout（TimeoutError），不报 AbortError。
- * ③ 调用方自己的 abort 仍是 AbortError，并且不重试。
+ * ③ 响应头已经到客户端、body 还在读时，调用方 abort 仍是 AbortError，并且不重试。
  * ④ timeoutMs:false 不武装计时器，延迟的 body 照常返回。
  * ⑤ 401 的错误正文留在失败结果里，能画进「最近失败」，并让「需处理」挂出来。
  * ⑥ 核对通过的多模态结果写进存储；同一页再开，请求数是 0。
@@ -60,6 +60,11 @@ async function loopbackUp() {
 }
 
 const loopback = await loopbackUp();
+if (!loopback) {
+  throw new Error(
+    "tests/net-body-timeout.test.mjs: cannot bind 127.0.0.1 (loopback is down). This file must run; it does not skip."
+  );
+}
 
 function listen(handler) {
   const server = http.createServer((req, res) => {
@@ -246,10 +251,7 @@ function installDocument() {
   };
 }
 
-describe("real response body stays inside the timeout", {
-  concurrency: 1,
-  skip: loopback ? false : "loopback is down"
-}, () => {
+describe("real response body stays inside the timeout", { concurrency: 1 }, () => {
   test("headers then a later body succeed under an active timeout", async () => {
     let hits = 0;
     const server = await listen(async (req, res) => {
@@ -322,17 +324,27 @@ describe("real response body stays inside the timeout", {
     }
   });
 
-  test("a caller abort during the body is AbortError and is not retried", async () => {
+  test("a caller abort during the body read, after headers arrive, is AbortError and is not retried", async () => {
     let hits = 0;
-    let headers = false;
+    let releaseHeaders;
+    const headersInClient = new Promise((resolve) => {
+      releaseHeaders = resolve;
+    });
+    const impl = getNativeFetch();
+    const net = createNet({
+      transport(url, init) {
+        return impl(url, init).then((response) => {
+          releaseHeaders();
+          return response;
+        });
+      }
+    });
     const server = await listen(async (req, res) => {
       hits += 1;
       await consume(req);
       hold(req, res);
-      headers = true;
     });
     try {
-      const net = nativeNet();
       const ctrl = new AbortController();
       const pending = net.fetch({
         url: `${server.url}/v1/chat/completions`,
@@ -342,10 +354,11 @@ describe("real response body stays inside the timeout", {
         cache: false,
         dedupeKey: false,
         retry: { max: 4, on: [429, 500], backoffMs: [200, 2000], honorRetryAfter: true },
-        timeoutMs: 2000,
+        timeoutMs: 5000,
         signal: ctrl.signal
       });
-      await waitUntil(() => headers, "abort");
+      await headersInClient;
+      await new Promise((resolve) => setTimeout(resolve, 30));
       ctrl.abort();
       await assert.rejects(pending, (err) => {
         assert.equal(err.name, "AbortError");
@@ -414,6 +427,69 @@ describe("real response body stays inside the timeout", {
         }
       );
       assert.equal(hits, 1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a successful body read clears the timeout timer", async () => {
+    const server = await listen(async (req, res) => {
+      await consume(req);
+      split(res, 200, JSON.stringify({ ok: true }), 30);
+    });
+    try {
+      const pending = () => process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
+      const before = pending();
+      const net = nativeNet();
+      const result = await net.fetch({
+        url: `${server.url}/ok`,
+        method: "POST",
+        json: { ping: 1 },
+        purpose: "probe",
+        cache: false,
+        dedupeKey: false,
+        retry: false,
+        timeoutMs: 60_000
+      });
+      assert.equal(result.status, 200);
+      assert.equal(result.data.ok, true);
+      assert.equal(pending(), before);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a retryable status is decided before the body is read", { timeout: 2500 }, async () => {
+    let hits = 0;
+    const server = await listen(async (req, res) => {
+      hits += 1;
+      await consume(req);
+      if (hits === 1) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.write("{\"error\":\"busy\"");
+        return;
+      }
+      split(res, 200, JSON.stringify({ ok: true, hit: hits }), 15);
+    });
+    try {
+      const net = nativeNet();
+      const started = Date.now();
+      const result = await net.fetch({
+        url: `${server.url}/stuck`,
+        method: "POST",
+        json: { ping: 1 },
+        purpose: "probe",
+        cache: false,
+        dedupeKey: false,
+        errorBody: true,
+        timeoutMs: 5000,
+        retry: { max: 1, on: [503, 500], backoffMs: [10, 20], honorRetryAfter: false }
+      });
+      const elapsed = Date.now() - started;
+      assert.equal(result.status, 200);
+      assert.equal(result.data.ok, true);
+      assert.equal(hits, 2);
+      assert.equal(elapsed < 2000, true, `elapsed ${elapsed}`);
     } finally {
       await server.close();
     }

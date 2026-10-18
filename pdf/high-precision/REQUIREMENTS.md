@@ -206,6 +206,9 @@ LaTeX 命令先映射成字符再进集合。下面是初始映射表。运行�
 | `\rightarrow` `\to` `\leftarrow` `\Rightarrow` `\mapsto` | → ← ⇒ ↦；`\to` 与 `\rightarrow` 都是 → |
 | `\in` `\subset` `\forall` `\exists` `\cup` `\cap` | ∈ ⊂ ∀ ∃ ∪ ∩ |
 | `\langle` `\rangle` `\prime` `'` `\|` | ⟨ ⟩ ′。`'` 与 `\prime` 都是 ′。`\|` 同时接受 ‖（U+2016）和 ∥（U+2225） |
+| `\mid` `\vert` `\lvert` `\rvert` | 竖线（U+007C）。条件竖线在 PDF 文字层里是这个字符 |
+| `\Vert` `\lVert` `\rVert` | ‖（U+2016）；与 `\|` 一样同时接受 ∥（U+2225） |
+| `\prec` `\succ` `\preceq` `\succeq` | ≺ ≻ ≼ ≽ |
 | `\{` `\}` | { } |
 | `\cdots` `\ldots` `\dots` | `\cdots` → ⋯；`\ldots` 与 `\dots` → … |
 | `\hat` `\bar` `\tilde` `\vec` `\overline` | 只取底字，命令名不计入 |

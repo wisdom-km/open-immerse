@@ -13,3 +13,5 @@ tests/settings-page.test.mjs
 tests/library-store.test.mjs
 # chrome.storage this-binding. No browser process.
 tests/unbound-storage.test.mjs
+# Fetch body timeout against 127.0.0.1. A down loopback fails the file.
+tests/net-body-timeout.test.mjs
