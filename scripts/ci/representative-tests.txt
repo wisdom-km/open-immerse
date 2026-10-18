@@ -1,0 +1,16 @@
+# Representative files for the first CI pass. One path per line.
+# settings-page.test.mjs is omitted: on main@678dc86 the file already fails
+# "palette A contrast and scope stay on the settings page" because
+# `git log e4f464d..HEAD -- pdf` is not empty. The test file is not modified.
+# Chrome/CDP, opens the Attention v7 PDF through the local viewer.
+tests/pdf-topbar-geometry.test.mjs
+# PDF text-layer formula detection, including the DPO v3 PDF.
+tests/pdf-formula-detect.test.mjs
+# arXiv source tarballs v1 and v7. Live fetch is blocked inside the file.
+tests/arxiv-src-unpack.test.mjs
+# LaTeX units and KaTeX counts from the v7 source package.
+tests/arxiv-latex.test.mjs
+# Library storage. The file stubs fetch so it cannot reach the network.
+tests/library-store.test.mjs
+# chrome.storage this-binding. No browser process.
+tests/unbound-storage.test.mjs

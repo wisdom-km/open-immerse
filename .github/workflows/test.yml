@@ -1,0 +1,103 @@
+# First CI pass: the files listed in scripts/ci/representative-tests.txt.
+# Fixture bytes are downloaded only by scripts/ci/fetch-fixtures.sh, then checked
+# against pinned sha256 values. A mismatch fails the job. This workflow does not
+# set an API key. The selected tests do not call arXiv or a translation provider.
+
+name: test
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - feature/ci-actions
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  representative:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.2
+          cache: npm
+
+      - name: 记录 Node 版本
+        run: node --version
+
+      - name: npm ci
+        run: npm ci
+
+      - name: 检查 runner 上的 Chrome
+        id: runner-chrome
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "runner Chrome: $(google-chrome --version)"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "runner PATH 上没有 google-chrome"
+          fi
+
+      - name: 安装 Chrome
+        if: steps.runner-chrome.outputs.present != 'true'
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-dependencies: true
+
+      - name: 链接 google-chrome
+        if: steps.runner-chrome.outputs.present != 'true'
+        run: |
+          set -euo pipefail
+          sudo ln -sfn "${{ steps.setup-chrome.outputs.chrome-path }}" /usr/local/bin/google-chrome
+
+      - name: 记录 Chrome 版本
+        run: google-chrome --version
+
+      - name: 安装 CJK 字体
+        run: |
+          set -euo pipefail
+          # pdf-topbar-geometry renders Chinese toolbar labels and compares baselines.
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fonts-noto-cjk
+          fc-cache -f >/dev/null
+          echo "CJK families:"
+          fc-list :lang=zh family | sort -u
+
+      - name: 缓存夹具
+        id: fixture-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            tests/fixtures/Attention_Is_All_You_Need.pdf
+            tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf
+            tests/fixtures/arxiv-src/1706.03762v1.tar.gz
+            tests/fixtures/arxiv-src/1706.03762v7.tar.gz
+          key: fixtures-bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697-92cb3a2b71362acda98a789b03d88688fd33cf5fcf13f81d2b1de30ee7d3b67a-377b47ecf3cd8638f7214184cc445cb378b37b5f0ddb42981b1ad288b3a1c03b-2e7a7d9ee2520d22eb23dae0cb148e167be02a30d6cb3f11b1c67723194339c6
+
+      - name: 准备夹具
+        run: |
+          set -euo pipefail
+          echo "fixture-cache-hit=${{ steps.fixture-cache.outputs.cache-hit }}"
+          bash scripts/ci/fetch-fixtures.sh
+
+      - name: 代表性测试
+        run: bash scripts/ci/run-representative.sh
