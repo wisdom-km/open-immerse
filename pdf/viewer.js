@@ -3137,10 +3137,15 @@ function imageForVisualBlock(raster, block) {
   if (block?.label === "formula") {
     // Crop ink is a raster measurement. setPageLayout hashes the layout-stage
     // 0–1 box frozen here, never the trimmed box or a DOM rect.
+    // The stored bbox is already trimmed. Measuring it again walks the
+    // pixel round trip and shifts about one edge in twenty by 1px.
     if (!Array.isArray(block.layoutBbox) && Array.isArray(block.bbox)) {
       block.layoutBbox = block.bbox.slice(0, 4);
     }
-    block.bbox = formulaInkBbox(raster?.canvas, block);
+    const probe = { ...block, bbox: block.layoutBbox };
+    const trimmed = formulaInkBbox(raster?.canvas, probe);
+    if (probe.inkShare) block.inkShare = probe.inkShare;
+    block.bbox = trimmed;
   }
   return cropFormulaImage(raster?.canvas, block);
 }
@@ -4070,9 +4075,9 @@ function formulaModelPng(pageNumber, block, hooks) {
 }
 
 async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, options = {}) {
-  // Reopen hydrates with sharp:false. The vision cache must use that same
-  // page-raster PNG, not the CSS-sized redraw.
-  const cropOptions = { ...options, sharp: false };
+  // The PNG sent to the model is always the CROP_SCALE page raster.
+  // Display keeps the pre-fix redraw. Reopen hydrate opts out, then refreshes
+  // the screen without scheduling another formula request.
   try { await formulaSettingsReady; } catch { /* defaults stay off */ }
   const cropped = [];
   const arxivOn = formulaArxivSourceEnabled();
@@ -4086,16 +4091,19 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
   for (const block of blocks || []) {
     if (isStale()) return null;
     if (block?.label !== "formula") {
-      cropped.push(await withRasterCrop(raster, page, block, pageNumber, cropOptions));
+      cropped.push(await withRasterCrop(raster, page, block, pageNumber, options));
       continue;
     }
     const sourceUnitId = arxivOn ? arxivSourceUnitFor(block) : "";
     if (sourceUnitId) block.sourceUnitId = sourceUnitId;
     cropped.push(await scheduleFormulaBlock(block, {
       withRasterCrop: async (item) => {
-        const croppedBlock = await withRasterCrop(raster, page, item, pageNumber, cropOptions);
-        rememberFormulaModelCrop(pageNumber, croppedBlock);
-        return croppedBlock;
+        const pageCrop = await withRasterCrop(raster, page, item, pageNumber, { ...options, sharp: false });
+        rememberFormulaModelCrop(pageNumber, pageCrop);
+        if (options.sharp === false || !pageCrop.imageUrl) return pageCrop;
+        const sharp = await renderSharpVisualCrop(page, raster, pageCrop, pageNumber);
+        if (!sharp) return pageCrop;
+        return { ...pageCrop, imageUrl: sharp, surface: "redraw" };
       },
       cropPngFor: (block, hooks) => formulaModelPng(pageNumber, block, hooks),
       isStale,
@@ -11041,7 +11049,7 @@ async function ingestVendorLayout(n, mode, isStale, epoch) {
     recomputed = false;
   }
   stampLayoutBids(n, mapped);
-  let blocks = await cropLayoutBlocks(raster, page, mapped.blocks, n, isStale, { sharp: false });
+  let blocks = await cropLayoutBlocks(raster, page, mapped.blocks, n, isStale);
   if (!blocks || isStale()) return null;
   const latePaint = currentLayoutIfArrived({
     hash,
@@ -11139,7 +11147,7 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
   stampLayoutBids(n, built);
-  const blocks = await cropLayoutBlocks(raster, page, built.blocks, n, isStale, { sharp: false });
+  const blocks = await cropLayoutBlocks(raster, page, built.blocks, n, isStale);
   if (!blocks || isStale()) return null;
   const version = await layoutVersionNow();
   const fallback = options.fallback?.reason
@@ -11187,7 +11195,7 @@ async function ingestFixtureLayout(n, isStale) {
   const raster = await renderPageRaster(page);
   if (isStale()) return null;
   stampLayoutBids(n, sample);
-  const blocks = await cropLayoutBlocks(raster, page, sample.blocks, n, isStale, { sharp: false });
+  const blocks = await cropLayoutBlocks(raster, page, sample.blocks, n, isStale);
   if (!blocks || isStale()) return null;
   const layout = stampBodyFont({
     kind: "blocks",
