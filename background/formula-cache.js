@@ -9,7 +9,10 @@ import {
   FORMULA_DOC_LIMIT,
   evictionKeys,
   isCacheableFormulaRecord,
-  stripFormulaImageUrl
+  stripFormulaImageUrl,
+  decisionCommitAllowed,
+  nextCommittedTier,
+  applyTierRollback
 } from "../lib/formula-cache.js";
 
 export { FORMULA_DB };
@@ -146,8 +149,122 @@ export function createIdbFormulaStore({
     putTier(key, record) {
       return put("tierResults", key, record);
     },
-    putDecision(key, record) {
-      return put("decisions", key, record);
+    async commitTier(key, record) {
+      if (!isCacheableFormulaRecord(record)) return false;
+      const db = await openCreating();
+      try {
+        const stored = await new Promise((resolve, reject) => {
+          const tx = db.transaction("tierResults", "readwrite");
+          const objectStore = tx.objectStore("tierResults");
+          const getReq = objectStore.get(key);
+          getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
+          getReq.onsuccess = () => {
+            const existing = getReq.result || null;
+            const planned = nextCommittedTier(existing, record);
+            if (!planned.ok) {
+              resolve(false);
+              return;
+            }
+            const next = prepareRecord(key, planned.draft);
+            delete next.displacedTier;
+            const putReq = objectStore.put(next, key);
+            putReq.onerror = () => reject(putReq.error || tx.error || new Error("indexedDB request failed"));
+            putReq.onsuccess = () => {
+              if (planned.displaced && record && typeof record === "object") record.displacedTier = planned.displaced;
+              resolve(true);
+            };
+          };
+        });
+        if (stored) await evict(db, record?.docHash || "");
+        return stored;
+      } finally {
+        db.close();
+      }
+    },
+    async deleteTier(key, writeId) {
+      const db = await openExisting();
+      if (!db) return false;
+      try {
+        return await new Promise((resolve, reject) => {
+          // guard:write-id — read, compare, and delete stay in this one transaction
+          const tx = db.transaction("tierResults", "readwrite");
+          const objectStore = tx.objectStore("tierResults");
+          const getReq = objectStore.get(key);
+          getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
+          getReq.onsuccess = () => {
+            const row = getReq.result;
+            if (writeId == null || !row || row.writeId == null || row.writeId !== writeId) {
+              resolve(false);
+              return;
+            }
+            const delReq = objectStore.delete(key);
+            delReq.onerror = () => reject(delReq.error || tx.error || new Error("indexedDB request failed"));
+            delReq.onsuccess = () => resolve(true);
+          };
+        });
+      } finally {
+        db.close();
+      }
+    },
+    async rollbackTier(key, writeId, _displaced) {
+      const db = await openExisting();
+      if (!db) return false;
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = db.transaction("tierResults", "readwrite");
+          const objectStore = tx.objectStore("tierResults");
+          const getReq = objectStore.get(key);
+          getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
+          getReq.onsuccess = () => {
+            // guard:rollback-tx — read, splice or restore, and write stay in this transaction
+            const plan = applyTierRollback(getReq.result, writeId);
+            if (plan.action === "restore" || plan.action === "rewrite") {
+              const next = prepareRecord(key, plan.row);
+              delete next.displacedTier;
+              const putReq = objectStore.put(next, key);
+              putReq.onerror = () => reject(putReq.error || tx.error || new Error("indexedDB request failed"));
+              putReq.onsuccess = () => resolve(true);
+              return;
+            }
+            if (plan.action === "delete") {
+              const delReq = objectStore.delete(key);
+              delReq.onerror = () => reject(delReq.error || tx.error || new Error("indexedDB request failed"));
+              delReq.onsuccess = () => resolve(true);
+              return;
+            }
+            resolve(false);
+          };
+        });
+      } finally {
+        db.close();
+      }
+    },
+    async putDecision(key, record) {
+      if (!isCacheableFormulaRecord(record)) return false;
+      const db = await openCreating();
+      try {
+        const stored = await new Promise((resolve, reject) => {
+          const tx = db.transaction("decisions", "readwrite");
+          const objectStore = tx.objectStore("decisions");
+          const getReq = objectStore.get(key);
+          getReq.onerror = () => reject(getReq.error || tx.error || new Error("indexedDB request failed"));
+          getReq.onsuccess = () => {
+            // guard:idb-decision
+            if (!decisionCommitAllowed(getReq.result || null, record)) {
+              resolve(false);
+              return;
+            }
+            const next = prepareRecord(key, record);
+            const putReq = objectStore.put(next, key);
+            putReq.onerror = () => reject(putReq.error || tx.error || new Error("indexedDB request failed"));
+            putReq.onsuccess = () => resolve(true);
+          };
+        });
+        if (stored) await evict(db, record?.docHash || "");
+        return stored;
+      } finally {
+        db.close();
+      }
     },
     async clearDoc(docHash) {
       const db = await openExisting();
@@ -180,6 +297,18 @@ export function createIdbFormulaStore({
   };
 }
 
+function displacedKeysMatch(key, displaced) {
+  if (displaced == null) return true;
+  if (typeof displaced !== "object") return false;
+  if (displaced.key != null && displaced.key !== key) return false;
+  if (Array.isArray(displaced.prev)) {
+    for (const entry of displaced.prev) {
+      if (entry && entry.key != null && entry.key !== key) return false;
+    }
+  }
+  return true;
+}
+
 let shared = null;
 
 export function sharedFormulaStore() {
@@ -201,6 +330,24 @@ export async function handleFormulaCacheMessage(message = {}, store = sharedForm
         ? await store.putDecision(message.key, message.value)
         : await store.putTier(message.key, message.value);
       return { ok: true, stored: stored === true };
+    }
+    if (action === "commit") {
+      if (typeof store.commitTier !== "function") return { ok: false, stored: false };
+      const stored = await store.commitTier(message.key, message.value);
+      const displaced = message.value?.displacedTier || null;
+      if (message.value && typeof message.value === "object") delete message.value.displacedTier;
+      return { ok: true, stored: stored === true, displaced };
+    }
+    if (action === "rollback") {
+      if (typeof store.rollbackTier !== "function") return { ok: true, rolled: false };
+      if (!displacedKeysMatch(message.key, message.displaced || null)) return { ok: true, rolled: false };
+      const rolled = await store.rollbackTier(message.key, message.writeId, message.displaced || null);
+      return { ok: true, rolled: rolled === true };
+    }
+    if (action === "delete") {
+      if (typeof store.deleteTier !== "function") return { ok: true, deleted: false };
+      const deleted = await store.deleteTier(message.key, message.writeId);
+      return { ok: true, deleted: deleted === true };
     }
     if (action === "clearDoc") {
       await store.clearDoc(message.docHash);
