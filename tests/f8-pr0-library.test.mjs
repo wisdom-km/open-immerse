@@ -30,6 +30,7 @@ import {
   createLibraryStore
 } from "../lib/library-store.js";
 import {
+  fetchLibraryDocument,
   flushPendingPages,
   libraryDocumentFromRecords,
   markLibraryOpened,
@@ -641,11 +642,20 @@ test("the viewer saves a Blob and a clean title, and the data panel reads source
   assert.match(saved, /libraryPayloadFields/);
   assert.doesNotMatch(saved, /sourceBase64/);
   assert.doesNotMatch(saved, /btoa\(/);
-  const blobFn = viewer.slice(viewer.indexOf("function librarySourceBlob"), viewer.indexOf("function rememberLibrarySourceAttempt"));
+  const blobFn = viewer.slice(viewer.indexOf("function librarySourceBlob"), viewer.indexOf("function rememberLibraryOriginal"));
   assert.match(blobFn, /new Blob\(\[bytes\], \{ type: "application\/pdf" \}\)/);
+  assert.match(blobFn, /libraryOriginalStored\.has\(hash\)/);
+  assert.doesNotMatch(blobFn, /librarySourceSent/);
   assert.match(viewer, /librarySourceSent\.has\(hash\)/);
   assert.match(viewer, /librarySourceSent\.clear\(\)/);
-  assert.match(viewer, /await storeOpenedPdf\(docId\)/);
+  const adoptHead = viewer.slice(viewer.indexOf("async function adoptDoc"), viewer.indexOf("async function adoptDoc") + 800);
+  assert.match(adoptHead, /librarySourceSent\.clear\(\)/);
+  const adoptTail = viewer.slice(viewer.indexOf("syncZoomChip();"), viewer.indexOf("function shortTitle"));
+  assert.match(adoptTail, /scheduleOpenedPdf\(docId\)/);
+  assert.doesNotMatch(adoptTail, /await storeOpenedPdf/);
+  const opened = viewer.slice(viewer.indexOf("function storeOpenedPdf"), viewer.indexOf("function scheduleOpenedPdf"));
+  assert.doesNotMatch(opened, /librarySourceSent/);
+  assert.doesNotMatch(opened, /rememberLibrarySourceAttempt/);
   assert.match(viewer, /openLibraryPdf\(/);
   const ensure = viewer.slice(viewer.indexOf("function ensureLibraryDocument"), viewer.indexOf("function savedTranslationForNav"));
   assert.doesNotMatch(ensure, /librarySourceSent\.add/);
@@ -819,6 +829,10 @@ test("sourceUrl drops userinfo and fragment in the row, the list, the change log
 test("file and blob source URLs are stripped from the default export", async () => {
   const { store, library, dbName } = memoryStore({ dbName: "f8-export-local-url" });
   const backend = await library.open(dbName, ANNOTATIONS_SCHEMA);
+  // The one-shot sweep runs first. These rows are inserted after the flag,
+  // so only the export itself can strip them. Deleting that strip fails here.
+  await store.touchPaper("arm", { title: "占位", pageCount: 1, origin: "native", opened: true });
+  await store.listPapers();
   await backend.put("papers", {
     docHash: "file-row",
     schema: LIBRARY_SCHEMA,
@@ -851,8 +865,55 @@ test("file and blob source URLs are stripped from the default export", async () 
   assert.equal(exported.papers.find((item) => item.paper.docHash === "blob-row").paper.sourceUrl, undefined);
   assert.equal(body.includes("file:"), false);
   assert.equal(body.includes("blob:"), false);
-  assert.equal((await store.getPaper("file-row")).sourceUrl, undefined);
-  assert.equal((await store.getPaper("blob-row")).sourceUrl, undefined);
+  assert.equal((await store.getPaper("file-row")).sourceUrl, "file:///tmp/secret.pdf");
+  assert.equal(String((await store.getPaper("blob-row")).sourceUrl).startsWith("blob:"), true);
+});
+
+test("an open that lands before migration keeps the legacy readout", async () => {
+  const { store } = memoryStore({ dbName: "f8-open-then-migrate", now: () => 40 });
+  const opened = await store.markOpened("readout-first", {
+    title: "先打开",
+    pageCount: 0,
+    origin: "native"
+  });
+  assert.equal(opened.origin, "native");
+  assert.equal(opened.readout, undefined);
+  const openedAt = opened.lastOpenedAt;
+  let gets = 0;
+  const fetchLegacy = async () => {
+    gets += 1;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        title: "旧库",
+        fileName: "old.pdf",
+        pageCount: 0,
+        readout: "旧导读",
+        pages: []
+      })
+    };
+  };
+  const doc = await fetchLibraryDocument("readout-first", { store, fetch: fetchLegacy, sleep: () => {} });
+  assert.equal(gets, 1);
+  const paper = await store.getPaper("readout-first");
+  assert.equal(paper.readout, "旧导读");
+  assert.equal(paper.origin, "local-service");
+  assert.equal(paper.fileName, "old.pdf");
+  assert.equal(paper.title, "先打开");
+  assert.equal(paper.lastOpenedAt, openedAt);
+  assert.equal((await store.migrationStatus()).doneDocs.includes("readout-first"), true);
+  assert.equal(doc.readout, "旧导读");
+  const again = await fetchLibraryDocument("readout-first", {
+    store,
+    fetch: async () => {
+      gets += 1;
+      throw new Error("8765 was fetched again");
+    },
+    sleep: () => {}
+  });
+  assert.equal(gets, 1);
+  assert.equal(again.readout, "旧导读");
 });
 
 test("putSource writes no blob when the paper was deleted in the same window", async () => {

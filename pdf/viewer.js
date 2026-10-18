@@ -438,7 +438,20 @@ let notesResizeTimer = 0;
 let notesChromeLock = false;
 let titleStructure = null;
 const librarySourceSent = new Set();
-const enqueueLibraryWrite = createLibraryWriteQueue();
+// The original PDF was stored. This is not "pages written this session":
+// savedTranslationFor uses librarySourceSent for that, and an open must not
+// join it or a slow library read refuses the stored translation.
+const libraryOriginalStored = new Set();
+let libraryWritesPending = 0;
+const enqueueLibraryWrite = (() => {
+  const enqueue = createLibraryWriteQueue();
+  return (write) => {
+    libraryWritesPending += 1;
+    return enqueue(() => Promise.resolve().then(write).finally(() => {
+      libraryWritesPending -= 1;
+    }));
+  };
+})();
 const layoutCache = new Map();
 // Pages the library or a previous layout cache already marked skip-only.
 // They count as done before the new layout, and must not take a layout slot
@@ -9109,27 +9122,36 @@ function captureLibraryIdentity() {
 }
 
 function librarySourceBlob(hash, bytes) {
-  if (librarySourceSent.has(hash) || !bytes?.byteLength) return null;
+  if (libraryOriginalStored.has(hash) || !bytes?.byteLength) return null;
   return new Blob([bytes], { type: "application/pdf" });
+}
+
+function rememberLibraryOriginal(hash, sentFor, saved) {
+  if (docId !== sentFor) return;
+  const status = saved?.source;
+  if (status !== "saved" && status !== "exists") return;
+  libraryOriginalStored.add(hash);
 }
 
 function rememberLibrarySourceAttempt(hash, sentFor, saved) {
   if (docId !== sentFor) return;
   // Stick only when a source blob was actually stored. Quota, a missing
   // paper, and any other miss must try again on the next open.
+  // This set means pages were written this session. Opening does not call it.
   const status = saved?.source;
   if (status !== "saved" && status !== "exists") return;
   librarySourceSent.add(hash);
+  libraryOriginalStored.add(hash);
 }
 
-function storeOpenedPdf(openedStamp) {
-  const bytes = pdfBytes;
-  const pageCount = pdfDoc?.numPages || 0;
+function storeOpenedPdf(openedStamp, captured = null) {
+  const bytes = captured?.bytes || pdfBytes;
+  const pageCount = captured?.pageCount ?? (pdfDoc?.numPages || 0);
+  const identity = captured?.identity || captureLibraryIdentity();
   return (async () => {
     try {
       const hash = await pdfByteHash(bytes);
       if (docId !== openedStamp || !hash || hash === "nohash") return;
-      const identity = captureLibraryIdentity();
       const saved = await openLibraryPdf({
         hash,
         title: identity.title,
@@ -9138,11 +9160,34 @@ function storeOpenedPdf(openedStamp) {
         pageCount,
         source: librarySourceBlob(hash, bytes)
       });
-      rememberLibrarySourceAttempt(hash, openedStamp, saved);
+      rememberLibraryOriginal(hash, openedStamp, saved);
     } catch {
       /* the PDF stays open when the library record cannot be written */
     }
   })();
+}
+
+function scheduleOpenedPdf(openedStamp) {
+  const captured = {
+    bytes: pdfBytes,
+    pageCount: pdfDoc?.numPages || 0,
+    identity: captureLibraryIdentity()
+  };
+  const startedAt = Date.now();
+  const arm = () => {
+    if (docId !== openedStamp) return;
+    const quiet = !pdfTranslateBusy(session) && libraryWritesPending === 0;
+    const translating = docPhase === "opening" || docPhase === "running";
+    // Do not open IndexedDB here. A blob write started before the page save
+    // holds the paper transaction, and the row is still missing when the
+    // same-tab reopen reads it. The record is written once that settles.
+    if (!quiet || (translating && Date.now() - startedAt < 15000)) {
+      setTimeout(arm, 40);
+      return;
+    }
+    void storeOpenedPdf(openedStamp, captured);
+  };
+  setTimeout(arm, 40);
 }
 
 function libraryPayloadFields(identity, hash, bytes) {
@@ -11401,6 +11446,7 @@ async function adoptDoc(doc, title) {
   // those pages were saved without a failed flag, and adopting them would
   // drop bypassCache on the failed batch.
   librarySourceSent.clear();
+  libraryOriginalStored.clear();
   if (pdfDoc) {
     try {
       await pdfDoc.destroy();
@@ -11489,10 +11535,10 @@ async function adoptDoc(doc, title) {
     endPageNav();
   }
   syncZoomChip();
-  // The original is stored before translation. A blob write started in parallel
-  // holds the paper transaction and the page row is still missing when the
-  // same-tab reopen reads it.
-  await storeOpenedPdf(docId);
+  // The original is stored after translation has a chance to write the page.
+  // Starting that blob write now holds the paper transaction, and the row is
+  // still missing when the same-tab reopen reads it.
+  scheduleOpenedPdf(docId);
   await maybeAutoTranslateDocument();
 }
 

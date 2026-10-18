@@ -294,7 +294,9 @@ function chromeStub({ mode, slowOpenMs = 0, library = null, holdV1 = false, layo
   window.__oiSlow = { opens: 0, openAt: 0, doneAt: 0 };
   const libraryBody = ${libraryJson};
   ${holdV1 ? holdV1OpenSource() : ""}
-  ${!holdV1 && slowOpenMs > 0 ? `
+  ${!holdV1 ? `
+  const oiSlowMs = Number(params.get("oiSlowOpen") || "0") || ${Number(slowOpenMs) || 0};
+  if (oiSlowMs > 0) {
   const oiDelayOpen = indexedDB.open.bind(indexedDB);
   indexedDB.open = function(name, version) {
     window.__oiSlow.opens += 1;
@@ -317,9 +319,11 @@ function chromeStub({ mode, slowOpenMs = 0, library = null, holdV1 = false, layo
           if (typeof stub[field] === "function") stub[field](event);
         };
       }
-    }, ${slowOpenMs});
+    }, oiSlowMs);
     return stub;
-  };` : ""}
+  };
+  }
+` : ""}
   const origFetch = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const url = typeof input === "string" ? input : (input && input.url) || "";
@@ -354,13 +358,21 @@ function chromeStub({ mode, slowOpenMs = 0, library = null, holdV1 = false, layo
       });
     }
     if (url.includes("/v1/library/")) {
-      if (!libraryBody || sessionStorage.getItem("oiNoLegacyLibrary") === "1") {
-        return new Response("null", { status: 404, headers: { "content-type": "application/json" } });
-      }
-      return new Response(JSON.stringify(libraryBody), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      });
+      const oiLegacyDelay = Number(params.get("oiLegacyDelay") || "0");
+      window.__oiLegacy = window.__oiLegacy || { hits: 0, delay: 0 };
+      window.__oiLegacy.hits += 1;
+      window.__oiLegacy.delay = oiLegacyDelay;
+      const oiLegacyResponse = () => {
+        if (!libraryBody || sessionStorage.getItem("oiNoLegacyLibrary") === "1") {
+          return new Response("null", { status: 404, headers: { "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify(libraryBody), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      };
+      if (!(oiLegacyDelay > 0)) return oiLegacyResponse();
+      return new Promise((resolve) => setTimeout(() => resolve(oiLegacyResponse()), oiLegacyDelay));
     }
     if (url.includes("127.0.0.1:8765")) return new Response("ok", { status: 200 });
     return origFetch(input, init);
@@ -528,6 +540,101 @@ test("reopening the same PDF in the same tab adopts the saved translation", { ti
   assert.equal(after.messages, before.messages, `reopen paid again ${JSON.stringify(after)}`);
   assert.ok(after.text.includes("同页已译:"));
   assert.equal(after.layouts.includes(1), false);
+});
+
+test("a new tab reuses stored pages when the 8765 404 and the library read are slow", { timeout: 180000 }, async (t) => {
+  const session = await withChrome(t, chromeStub({ mode: "text-layer", library: null }), async () => {});
+  const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
+  await session.cdp.send("Page.navigate", {
+    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=slow-legacy`
+  }, session.sessionId);
+  await session.waitFor(`(async () => {
+    ${storedLibraryPagesSource()}
+    const pages = await oiStoredLibraryPages();
+    const stop = document.getElementById("stopTranslate");
+    if (!pages.some((page) => String((page.pairs || [])[0]?.translation || "").includes("同页已译:"))) return "";
+    if (pages.length < 2) return "";
+    if (stop && stop.hidden !== true) return "";
+    return "seeded";
+  })()`, "first open stores more than one page", 90000);
+  const seeded = JSON.parse(await session.evaluate(`(async () => {
+    const req = indexedDB.open("oi-annotations");
+    const db = await new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    const kept = [];
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("pages", "readwrite");
+      const store = tx.objectStore("pages");
+      const cursor = store.openCursor();
+      cursor.onerror = () => reject(cursor.error);
+      cursor.onsuccess = () => {
+        const row = cursor.result;
+        if (!row) return;
+        const page = Number(row.value && row.value.page) || 0;
+        if (page > 1) row.delete();
+        else {
+          for (const pair of row.value.pairs || []) {
+            const text = String(pair.text || pair.sourceText || "").trim();
+            if (text) kept.push(text);
+          }
+        }
+        row.continue();
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+    return JSON.stringify(kept);
+  })()`));
+  assert.ok(seeded.length > 0, "page 1 has no stored source text");
+  for (const delay of [1000, 3000]) {
+    await session.evaluate(`(async () => {
+      const req = indexedDB.open("oi-annotations");
+      const db = await new Promise((resolve, reject) => {
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("pages", "readwrite");
+        const store = tx.objectStore("pages");
+        const cursor = store.openCursor();
+        cursor.onerror = () => reject(cursor.error);
+        cursor.onsuccess = () => {
+          const row = cursor.result;
+          if (!row) return;
+          if ((Number(row.value && row.value.page) || 0) > 1) row.delete();
+          row.continue();
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      return true;
+    })()`);
+    await session.cdp.send("Page.navigate", {
+      url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=slow-legacy&oiLegacyDelay=${delay}&oiSlowOpen=1000`
+    }, session.sessionId);
+    const shown = await session.waitFor(`(() => {
+      const text = document.getElementById("readerFlow")?.innerText || "";
+      if (!text.includes("同页已译:")) return "";
+      const messages = (window.__oiAuto && window.__oiAuto.messages) || [];
+      const paid = messages.some((item) => ${JSON.stringify(seeded)}.includes(String(item.head || "")));
+      if (paid) return JSON.stringify({ delay: ${delay}, paid: messages });
+      const slow = window.__oiSlow || {};
+      const legacy = window.__oiLegacy || {};
+      if (!(legacy.hits >= 1) || legacy.delay !== ${delay}) return "";
+      if (!(slow.opens >= 1) || !(slow.doneAt - slow.openAt >= 800)) return "";
+      return "reused";
+    })()`, `delay ${delay} reuses the stored page`, 90000);
+    assert.equal(shown, "reused", shown);
+    await sleep(delay === 3000 ? 2500 : 1200);
+    const after = JSON.parse(await session.evaluate(SNAPSHOT));
+    const repaid = JSON.parse(await session.evaluate(`(() => JSON.stringify((window.__oiAuto && window.__oiAuto.messages) || []))()`));
+    assert.equal(repaid.some((item) => seeded.includes(String(item.head || ""))), false, `delay ${delay} paid again ${JSON.stringify(repaid)}`);
+    assert.ok(after.text.includes("同页已译:"), `delay ${delay} dropped the stored page`);
+  }
 });
 
 test("a 2s slow open sends no page-1 layout POST and does not hold translation for 10s", { timeout: 180000 }, async (t) => {
