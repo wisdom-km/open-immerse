@@ -18,7 +18,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: test-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  # github.ref is refs/heads/<branch> for push and refs/pull/<n>/merge for a
+  # pull request. A new commit cancels the previous run of that same ref.
+  group: test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -96,7 +98,7 @@ jobs:
       - name: 准备夹具
         run: |
           set -euo pipefail
-          echo "fixture-cache-hit=${{ steps.fixture-cache.outputs.cache-hit }}"
+          echo "fixture-cache-hit=${{ steps.fixture-cache.outputs.cache-hit || 'false' }}"
           bash scripts/ci/fetch-fixtures.sh
 
       - name: 代表性测试
