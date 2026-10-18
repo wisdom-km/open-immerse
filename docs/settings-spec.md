@@ -9,7 +9,7 @@
 >
 > 另外，2026-10-13 12:19 起不设「问 AI」设置页。
 >
-> 实现顺序：F3 PR3 已合入（#128，`6eb6486`），开关和公式占位卡照 FUI 规格先做完了。设置页重设计 PR 再换皮，并补 `#mm` 锚点。导入、导出和密钥迁移见 §2。
+> 实现顺序：F3 PR3 已合入（#128，`6eb6486`），开关和公式占位卡照 FUI 规格先做完了。设置页重设计已合（#137），换了皮，并补了 `#mm` 锚点。导入、导出和密钥迁移见 §2。
 
 ## 1 一级页与锚点（8 页 = 8 个深链）
 | 顺序 | 分组 | 中文名 | 锚点 | 内容 |
@@ -20,7 +20,7 @@
 | 4 | 阅读 | PDF 阅读 | `#pdf` | 打开时自动翻译、正文译文间距、译文段间距、版面识别（原「PDF 划区」）、「恢复阅读偏好默认值」 |
 | 5 | 阅读 | 笔记 | `#notes` | 笔记位置（左 / 右）、侧栏面板宽度（恢复 440）、三栏笔记宽度（恢复 360）。不做「默认布局」「新笔记默认类型」（Wisdom 2026-10-15 22:00） |
 | 6 | 更多 | 功能与实验室 | `#labs` | 功能开关（网页翻译 / 学习中心 / 文档翻译 / 页面开关按钮），实验室（悬浮 / 划词 / YouTube / X / PDF 阅读） |
-| 7 | 更多 | 数据与隐私 | `#data` | 密钥存放位置一览、同步密钥（F10 预留，置灰）、导出 / 导入（「文献库」和「设置」两个文件，都不含 API key，见 §2）。导入旧的设置文件时忽略里面的 key，并给出提示。文献库持久存储被拒绝时不阻止导入，全局只提示一次（界面可并进 NIM-04；关闭记在 `library.persistHintDismissed`，与笔记按篇的 `reader.notesPersistHintDismissed.<docHash>` 分开；阅读页只显示文献库卡，见 SET-33）；本页提供「再申请一次」。分组顺序：存储用量 → 文献库 · 导入 → 文献库 · 导出（这三组由 PR-4 的 `mountDataPanel` 提供，规格见 F4 界面规格 DATA-01…26）→ 设置 · 备份与恢复 → 密钥存在哪儿 → 同步密钥。迁移和导入在任一 Open Immerse 页面开着时继续，「完成」用中性色加 ✓（SET-32…SET-34） |
+| 7 | 更多 | 数据与隐私 | `#data` | 密钥存放位置一览、同步密钥（并入 F11，本期置灰）、导出 / 导入（「文献库」和「设置」两个文件，都不含 API key，见 §2）。导入旧的设置文件时忽略里面的 key，并给出提示。文献库持久存储被拒绝时不阻止导入，全局只提示一次（界面可并进 NIM-04；关闭记在 `library.persistHintDismissed`，与笔记按篇的 `reader.notesPersistHintDismissed.<docHash>` 分开；阅读页只显示文献库卡，见 SET-33）；本页提供「再申请一次」。分组顺序：存储用量 → 文献库 · 导入 → 文献库 · 导出（这三组由 PR-4 的 `mountDataPanel` 提供，规格见 F4 界面规格 DATA-01…26）→ 设置 · 备份与恢复 → 密钥存在哪儿 → 同步密钥。迁移和导入在任一 Open Immerse 页面开着时继续，「完成」用中性色加 ✓（SET-32…SET-34） |
 | 8 | 更多 | 关于 | `#about` | 版本、学习中心 / 文档翻译入口 |
 
 - 没有「高级」页，也没有「问 AI」页。
@@ -49,7 +49,7 @@
 | 所有密钥：翻译引擎 `providers.*.apiKey`、PDF 云端 `pdfLayout.cloudApiKey`、多模态、OCR | `chrome.storage.local` | 从 `settings` 中移出。上线时做一次性迁移（sync → local，迁完后删除 sync 中的副本）。迁移、导入和回滚都要有测试。导出和导入见下面 |
 | 公式开关 | `chrome.storage.local` 的 `formulaSettings` 记录（已合入 #128，`6eb6486`） | `formula.tier2.enabled`、`formula.ocr.enabled`、`formula.tier3.enabled`，默认都是 `false` |
 | 文献库提示 | `chrome.storage.local` / `chrome.storage.session` | `library.persistHintDismissed`（全局，「不再提示」）；会话内 × 记在 session 的 `oiPersistCardHidden`。设置页不读写 |
-| 同步密钥（F10 预留） | `chrome.storage.local` | `keys.syncOptIn`，本期恒为 `false`，只读 |
+| 同步密钥（并入 F11，2026-10-18；本期置灰） | `chrome.storage.local` | `keys.syncOptIn`，本期恒为 `false`，只读。F10 不在插件上做，到 F11 再接 |
 | 笔记面板偏好 | `chrome.storage.local` | `reader.panelWidth`（侧栏面板，默认 440，360–640）、`reader.notesWidth`（三栏笔记栏，默认 360，320–480）、`reader.notesPaneSide`（`start`/`end`，默认 `end`）、按篇的 `reader.notesPersistHintDismissed.<docHash>`（不带后缀的同名键是旧数据块，只在迁移时读；`lib/reader-notes-local.js`）。设置页只读写前 3 个。这些键从 `localStorage` 迁入（2026-10-13 11:55 定，12:00 确认，已合入 #130，`4e0a705`）。笔记筛选没有存储键：`pdf/notes-panel.js` 的 `state.filter` 只在内存里，默认 `"all"`，不写入 `chrome.storage.local`，也不进 `chrome.storage.sync` |
 | 阅读页偏好 | `localStorage` | `reader.*`（不含上面 4 个笔记键：`reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`（一个键，值是 docHash 到 true 的映射），这 4 个改存 `chrome.storage.local`）、`oi.reader.cjk`、`oi.rfSrcFold`。这些是就地设置；设置页只提供「恢复默认值」 |
 | 作废 | — | `ask.model`（不再读写）。`ask.contextNearby` 固定为 2；`ask.confirmSend` 只在问 AI 面板首次发送确认框里修改 |
