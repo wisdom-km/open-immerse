@@ -9,7 +9,7 @@ import "fake-indexeddb/auto";
 import { IDBObjectStore } from "fake-indexeddb";
 import { parseHTML } from "linkedom";
 import { askTarget } from "../lib/ask-model.js";
-import { renderAskAnswer } from "../lib/ask-render.js";
+import { ASK_KATEX_OPTIONS, ASK_MATH_MAX_FORMULAS, ASK_MATH_MAX_TEX, renderAskAnswer, texIsDisplayable } from "../lib/ask-render.js";
 import { buildAskMessages, resetAskSession } from "../lib/ask-session.js";
 import { performAsk } from "../lib/ask-transport.js";
 import { exportMarkdown } from "../lib/notes-io.js";
@@ -157,7 +157,7 @@ test("A1 KaTeX does not execute HTML and a failed formula stays plain text", () 
   for (const command of ["\\url{javascript:alert(1)}", "\\htmlClass{x}{y}", "\\htmlId{i}{y}", "\\htmlStyle{color:red}{y}", "\\htmlData{a=1}{y}"]) {
     const html = renderAskAnswer(`$${command}$`, katex);
     assert.equal(html.includes("class=\"katex\""), false, command);
-    assert.equal(html.includes("<"), false, command);
+    assert.equal(/<\s*(?:script|a|img|iframe)\b|onerror\s*=/i.test(html), false, command);
     assert.match(html, /\$/, command);
   }
 
@@ -176,7 +176,10 @@ test("A1 KaTeX does not execute HTML and a failed formula stays plain text", () 
       throw new Error("parse");
     }
   };
-  assert.equal(renderAskAnswer("行内 $a+b$ 结束", broken).includes("<"), false);
+  const plain = renderAskAnswer("行内 $a+b$ 结束", broken);
+  assert.equal(plain.includes("class=\"katex\""), false);
+  assert.match(plain, /\$a\+b\$/);
+  assert.equal(/<\s*(?:script|a|img)\b/.test(plain), false);
 });
 
 test("A2 copy writes the model text, not the rendered HTML", async () => {
@@ -427,7 +430,143 @@ test("a document conflict has its own message and does not drop the answer", asy
 test("the panel no longer adopts notes through durableNoteIds", () => {
   const panel = readFileSync(join(root, "pdf/ask-panel.js"), "utf8");
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const session = readFileSync(join(root, "lib/ask-session.js"), "utf8");
   assert.equal(panel.includes("durableNoteIds"), false);
   assert.equal(panel.includes("reused"), false);
   assert.equal(viewer.includes("durableNoteIds"), false);
+  assert.equal(session.includes("durableIds"), false);
+  assert.equal(session.includes('action: "reuse"'), false);
+  assert.equal(session.includes("durableNoteIds"), false);
+});
+
+function assertNoActiveHtml(node) {
+  assert.equal(node.querySelector("script, a, img, iframe, link, object, embed, form"), null);
+  for (const el of [node, ...node.querySelectorAll("*")]) {
+    for (const attr of [...el.attributes]) {
+      assert.equal(/^on/i.test(attr.name), false, attr.name);
+      assert.equal(/javascript\s*:/i.test(attr.value), false, attr.value);
+      assert.equal(attr.name.toLowerCase() === "href", false, attr.value);
+    }
+  }
+}
+
+test("markdown subset renders and refuses raw HTML, links, and images", () => {
+  const page = parseHTML("<!doctype html><html><body><div id='out'></div></body></html>");
+  const node = page.document.getElementById("out");
+  const source = [
+    "第一段 **粗体** 与 $E=mc^2$。",
+    "",
+    "同一段换行",
+    "还在这一段",
+    "",
+    "- 列表 `行内 $不是公式$`",
+    "- <img src=x onerror=\"alert(1)\">",
+    "",
+    "1. 有序",
+    "2. 第二项",
+    "",
+    "[x](javascript:alert(1))",
+    "",
+    "![](javascript:alert(1))",
+    "",
+    "```",
+    "const price = $5;",
+    "<img src=x onerror=\"alert(1)\">",
+    "```",
+    "",
+    "````",
+    "```",
+    "$nested$",
+    "<img src=x onerror=\"alert(1)\">",
+    "```",
+    "````",
+    "",
+    "**见 $x$**",
+    "",
+    "*不是斜体* # 不是标题"
+  ].join("\n");
+  node.innerHTML = renderAskAnswer(source, katex);
+  assertNoActiveHtml(node);
+  assert.equal(node.querySelector("strong").textContent, "粗体");
+  assert.equal(node.querySelectorAll("ul li").length, 2);
+  assert.equal(node.querySelectorAll("ol li").length, 2);
+  assert.equal(node.querySelector("code").textContent, "行内 $不是公式$");
+  assert.equal(node.querySelector("em"), null);
+  assert.equal(node.querySelector("h1, h2, h3"), null);
+  const pres = [...node.querySelectorAll("pre")];
+  assert.equal(pres.length, 2);
+  assert.match(pres[0].textContent, /\$5/);
+  assert.match(pres[0].textContent, /onerror/);
+  assert.equal(pres[0].querySelector(".katex"), null);
+  assert.match(pres[1].textContent, /\$nested\$/);
+  assert.match(pres[1].textContent, /```/);
+  assert.equal(pres[1].querySelector(".katex, img"), null);
+  assert.ok(node.querySelectorAll("p").length >= 3);
+  assert.ok([...node.querySelectorAll("p")].some((para) => para.innerHTML.includes("<br>")));
+  const katexNodes = [...node.querySelectorAll(".katex")];
+  assert.equal(katexNodes.length, 2);
+  assert.equal(node.querySelectorAll("strong").length, 2);
+  assert.equal(node.querySelectorAll("strong")[1].querySelector(".katex") != null, true);
+  assert.match(node.textContent, /\*不是斜体\*/);
+  assert.match(node.textContent, /# 不是标题/);
+  assert.match(node.textContent, /\[x\]\(javascript:alert\(1\)\)/);
+  assert.match(node.textContent, /!\[\]\(javascript:alert\(1\)\)/);
+});
+
+test("M1 trust:false blocks \\href when the command prefilter is skipped", () => {
+  assert.equal(ASK_KATEX_OPTIONS.trust, false);
+  const html = katex.renderToString("\\href{https://example.com}{x}", {
+    ...ASK_KATEX_OPTIONS,
+    displayMode: false
+  });
+  assert.equal(/<\s*a\b/i.test(html), false);
+  assert.equal(html.includes("https://example.com"), false);
+  assert.match(html, new RegExp(ASK_KATEX_OPTIONS.errorColor, "i"));
+});
+
+test("M2 the command prefilter stops \\href before KaTeX runs", () => {
+  for (const command of ["\\href{https://example.com}{x}", "\\url{https://example.com}", "\\htmlClass{x}{y}", "\\htmlId{i}{y}", "\\htmlStyle{color:red}{y}", "\\htmlData{a=1}{y}"]) {
+    assert.equal(texIsDisplayable(command), false, command);
+  }
+  assert.equal(texIsDisplayable("\\scriptstyle x"), true);
+  const calls = [];
+  const engine = {
+    renderToString(tex) {
+      calls.push(tex);
+      return `<span class="katex">${tex}</span>`;
+    }
+  };
+  const html = renderAskAnswer("前文 $\\href{https://example.com}{x}$ 后文", engine);
+  assert.deepEqual(calls, []);
+  assert.equal(html.includes("class=\"katex\""), false);
+  assert.match(html, /\\href\{https:\/\/example.com\}\{x\}/);
+  const shown = renderAskAnswer("$\\scriptstyle x$", engine);
+  assert.deepEqual(calls, ["\\scriptstyle x"]);
+  assert.match(shown, /class="katex"/);
+});
+
+test("formulas past the count or length cap stay escaped text", () => {
+  assert.ok(ASK_MATH_MAX_FORMULAS <= 80);
+  assert.ok(ASK_MATH_MAX_TEX < 20000);
+  const calls = [];
+  const engine = {
+    renderToString(tex) {
+      calls.push(tex);
+      return `<span class="katex">${tex}</span>`;
+    }
+  };
+  const many = Array.from({ length: ASK_MATH_MAX_FORMULAS + 1 }, (_, index) => `$x_{${index}}$`).join(" ");
+  const html = renderAskAnswer(many, engine);
+  assert.equal(calls.length, ASK_MATH_MAX_FORMULAS);
+  assert.match(html, new RegExp(`\\$x_\\{${ASK_MATH_MAX_FORMULAS}\\}\\$`));
+  assert.equal((html.match(/class="katex"/g) || []).length, ASK_MATH_MAX_FORMULAS);
+  const huge = `$${ "a".repeat(50000) }$ 然后 $z$`;
+  const started = Date.now();
+  const big = renderAskAnswer(huge, engine);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 200, `huge formula took ${elapsed}ms`);
+  assert.equal(calls.length, ASK_MATH_MAX_FORMULAS + 1);
+  assert.equal(calls.at(-1), "z");
+  assert.match(big, /\$a{100,}\$/);
+  assert.match(big, /class="katex"/);
 });

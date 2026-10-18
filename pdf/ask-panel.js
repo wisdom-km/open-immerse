@@ -686,13 +686,10 @@ export function mountAskUi(api = {}) {
     api.toast?.("已复制");
   }
 
-  // Interrupt point: listNotes is read before the put. The viewer does not
-  // pass a durable-id set, so a listed row is not adopted here. ✓ waits
-  // until this put resolves. A doc conflict uses its own toast.
+  // ✓ waits until this put resolves. A doc conflict uses its own toast.
+  // A listed row is not adopted. Only a note id already on the turn counts.
   async function saveNote(turn) {
-    const docHash = String(api.docHash?.() || "");
-    const listed = await api.listNotes?.() || [];
-    const plan = planNoteSave(turn, listed, docHash);
+    const plan = planNoteSave(turn);
     if (plan.action === "missing") return { ok: false, reason: "missing" };
     if (plan.action === "exists") {
       root.querySelector(`[data-turn="${cssEscape(turn.id)}"] [data-ask-act="view"]`)?.focus();

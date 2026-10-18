@@ -60,21 +60,22 @@ test("session ids differ on every load and keep the document scope", () => {
   assert.equal(forced.id, "ask-1");
 });
 
-test("planNoteSave ignores another document, a prefix, and a failed row", () => {
+test("planNoteSave does not adopt a listed row from a disk id set", () => {
   const turn = { id: "ask-1:1", noteId: "", pendingDisk: false };
   const other = { id: "n-other", docHash: "doc-b", qa: { turnId: "ask-1:1" }, deletedAt: 0 };
   const prefix = { id: "n-prefix", docHash: "doc-a", qa: { turnId: "ask-1" }, deletedAt: 0 };
   const longer = { id: "n-long", docHash: "doc-a", qa: { turnId: "ask-1:10" }, deletedAt: 0 };
   const same = { id: "n-same", docHash: "doc-a", qa: { turnId: "ask-1:1" }, deletedAt: 0 };
   const durable = new Set(["n-other", "n-prefix", "n-long", "n-same"]);
-  assert.equal(planNoteSave(turn, [other, prefix, longer], "doc-a", durable).action, "write");
   assert.equal(noteForTurn([other, prefix, longer, same], "ask-1:1", "doc-a").id, "n-same");
   assert.equal(noteForTurn([same], "ask-1:1", "doc-b"), null);
-  assert.equal(planNoteSave(turn, [same], "doc-a", durable).action, "reuse");
+  assert.equal(planNoteSave(turn, [same], "doc-a", durable).action, "write");
   turn.pendingDisk = true;
   assert.equal(planNoteSave(turn, [same], "doc-a", durable).action, "write");
   turn.pendingDisk = false;
-  assert.equal(planNoteSave(turn, [same], "doc-a", new Set()).action, "write");
+  turn.noteId = "n-same";
+  assert.deepEqual(planNoteSave(turn), { action: "exists", noteId: "n-same" });
+  assert.equal(planNoteSave.length, 1);
 });
 
 function openIdbStore() {
@@ -185,8 +186,7 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
         } else if (roll < 0.38) {
           const turn = [...session.turns].reverse().find((item) => item.status === "done" && !item.noteId && !item.saving && !item.pendingDisk);
           if (turn) {
-            const diskIds = new Set((await diskRows(store)).map((note) => note.id));
-            const plan = planNoteSave(turn, await store.list(docHash), docHash, diskIds);
+            const plan = planNoteSave(turn);
             if (plan.action !== "write") throw new Error(`fresh save planned ${plan.action}`);
             const claim = claimNoteSave(session, turn.id);
             if (!claim.ok) throw new Error(`claim ${claim.reason}`);
@@ -228,16 +228,14 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
             const failed = finishNoteSave(session, turn.id, claim.ticket, { ok: false, reason: "failed" });
             if (failed.ok || turn.noteId || !turn.pendingDisk) throw new Error("failure confirmed");
             if (turn.answer !== kept) throw new Error("failure dropped the answer");
-            const diskIds = new Set((await diskRows(store)).map((note) => note.id));
-            const plan = planNoteSave(turn, await store.list(docHash), docHash, diskIds);
+            const plan = planNoteSave(turn);
             if (plan.action !== "write") throw new Error(`failed row planned ${plan.action}`);
           }
         } else if (roll < 0.66) {
           const turn = [...session.turns].reverse().find((item) => item.pendingDisk && !item.noteId && !item.saving);
           if (turn) {
             retries += 1;
-            const diskIds = new Set((await diskRows(store)).map((note) => note.id));
-            const plan = planNoteSave(turn, await store.list(docHash), docHash, diskIds);
+            const plan = planNoteSave(turn);
             if (plan.action !== "write") throw new Error(`retry planned ${plan.action}`);
             const claim = claimNoteSave(session, turn.id);
             if (!claim.ok) throw new Error(`retry claim ${claim.reason}`);
