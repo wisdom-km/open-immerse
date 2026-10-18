@@ -3,8 +3,8 @@
  *
  * 不变量（每一步都查）：
  * 1. pagesTranslated 等于非空译文或 skipped 的页数，两个标签交错也一样。
- * 2. 写页不改 lastOpenedAt。lastOpenedAt 只在新建第一页（opened）或 markOpened 时变。
- * 3. markOpened 不给没翻译过的 PDF 建记录，也不复活墓碑。
+ * 2. 写页不改 lastOpenedAt。lastOpenedAt 只在打开时变，包括没翻译过的 PDF。
+ * 3. 打开没翻译过的 PDF 就建库记录，并保存原 PDF。墓碑不复活。
  * 4. 原 PDF 以 Blob 进 sources；默认导出不含原文。
  * 5. 删除后列表里没有这篇，pages 为空，sources 里没有 blob。墓碑仍在（F4 同步）。
  * 6. 打开顺序：本机 blob → 注入的 sourceUrl / arXiv 重下并校验 hash → 重新选文件。默认不调用 fetch。
@@ -31,7 +31,9 @@ import {
 } from "../lib/library-store.js";
 import {
   flushPendingPages,
+  libraryDocumentFromRecords,
   markLibraryOpened,
+  openLibraryPdf,
   resolveLibraryOpen,
   saveLibraryPage,
   saveLibrarySource
@@ -148,13 +150,17 @@ test("titles drop the prefix, fileName is kept, and old rows display through cle
   assert.equal(migrated.sourceUrl, undefined);
 });
 
-test("page writes do not move lastOpenedAt, and markOpened does not create an empty paper", async () => {
+test("page writes do not move lastOpenedAt, and opening an untranslated PDF creates a paper", async () => {
   const { store } = memoryStore({ now: () => Date.now() });
   let clock = 100;
   store.now = () => ++clock;
-  assert.equal(await store.markOpened("missing"), null);
-  assert.equal(await store.getPaper("missing"), null);
-  assert.deepEqual(await store.listPapers(), []);
+  const createdMissing = await store.markOpened("missing", { title: "未译.pdf", fileName: "未译.pdf" });
+  assert.ok(createdMissing && !createdMissing.deletedAt);
+  assert.equal(createdMissing.pagesTranslated, 0);
+  assert.equal(createdMissing.title, "未译.pdf");
+  assert.ok(createdMissing.lastOpenedAt > 0);
+  assert.equal(await store.getSource("missing"), null);
+  assert.equal((await store.listPapers()).some((item) => item.docHash === "missing"), true);
 
   await saveLibraryPage({
     hash: "g3",
@@ -284,14 +290,15 @@ test("a source failure keeps the page, and a recount abort keeps the previous pa
     return originalPut(...args);
   };
   const bytes = new Uint8Array([9, 9, 9]);
-  await assert.rejects(() => saveLibraryPage({
+  const failed = await saveLibraryPage({
     hash: "before",
     title: "前",
     pageCount: 1,
     page: 1,
     pairs: [{ translation: "甲" }],
     source: new Blob([bytes])
-  }, { store: before.store }));
+  }, { store: before.store });
+  assert.equal(failed.source, "error");
   assert.equal((await before.store.getPage("before", 1)).pairs[0].translation, "甲");
   assert.equal(await before.store.getSource("before"), null);
   const opened = (await before.store.getPaper("before")).lastOpenedAt;
@@ -393,17 +400,15 @@ test("a blocked source write is queued, and a failed blob delete can be retried"
     return original(...args);
   };
   const bytes = new Uint8Array([4, 5]);
-  await assert.rejects(
-    () => saveLibraryPage({
-      hash: "blk",
-      title: "阻",
-      pageCount: 1,
-      page: 1,
-      pairs: [{ translation: "甲" }],
-      source: new Blob([bytes])
-    }, { store }),
-    (error) => error.type === "blocked" || error.name === "BlockedError"
-  );
+  const blockedSave = await saveLibraryPage({
+    hash: "blk",
+    title: "阻",
+    pageCount: 1,
+    page: 1,
+    pairs: [{ translation: "甲" }],
+    source: new Blob([bytes])
+  }, { store });
+  assert.equal(blockedSave.source, "blocked");
   assert.equal((await store.getPage("blk", 1)).pairs[0].translation, "甲");
   assert.equal(await store.getSource("blk"), null);
   blocked = false;
@@ -596,7 +601,10 @@ test("opening prefers the local blob, then an injected download checked by hash,
   await store.touchPaper("nofile", { title: "无地址", pageCount: 1, origin: "native", opened: true });
   assert.equal((await resolveLibraryOpen("nofile", { store })).status, "needs-file");
   assert.equal((await resolveLibraryOpen("absent", { store })).status, "missing");
-  assert.equal(await markLibraryOpened("absent", { store }), null);
+  const openedAbsent = await markLibraryOpened("absent", { store });
+  assert.ok(openedAbsent && !openedAbsent.deletedAt);
+  assert.equal(openedAbsent.pagesTranslated, 0);
+  assert.equal((await store.getPages("absent")).length, 0);
   assert.equal(fetchCalls, before);
 });
 
@@ -637,7 +645,13 @@ test("the viewer saves a Blob and a clean title, and the data panel reads source
   assert.match(blobFn, /new Blob\(\[bytes\], \{ type: "application\/pdf" \}\)/);
   assert.match(viewer, /librarySourceSent\.has\(hash\)/);
   assert.match(viewer, /librarySourceSent\.clear\(\)/);
-  assert.match(viewer, /void markLibraryOpened\(hash\)/);
+  assert.match(viewer, /await storeOpenedPdf\(docId\)/);
+  assert.match(viewer, /openLibraryPdf\(/);
+  const ensure = viewer.slice(viewer.indexOf("function ensureLibraryDocument"), viewer.indexOf("function savedTranslationForNav"));
+  assert.doesNotMatch(ensure, /librarySourceSent\.add/);
+  assert.doesNotMatch(ensure, /sourcePath/);
+  const remember = viewer.slice(viewer.indexOf("function rememberLibrarySourceAttempt"), viewer.indexOf("function storeOpenedPdf"));
+  assert.match(remember, /status !== "saved" && status !== "exists"/);
   assert.equal(viewer.includes("unlimitedStorage"), false);
   assert.equal(readFileSync(join(root, "manifest.json"), "utf8").includes("unlimitedStorage"), false);
 
@@ -676,6 +690,286 @@ test("two IndexedDB tabs recount together and leave lastOpenedAt alone", async (
   }
 });
 
+test("opening an untranslated PDF stores the paper and the original PDF", async () => {
+  const { store } = memoryStore({ dbName: "f8-open-untranslated" });
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const hash = sha256HexOf(bytes);
+  const opened = await openLibraryPdf({
+    hash,
+    title: "PDF 阅读 · fresh.pdf",
+    fileName: "fresh.pdf",
+    sourceUrl: "https://user:pass@example.test/fresh.pdf?x=1#p=2",
+    pageCount: 4,
+    source: new Blob([bytes], { type: "application/pdf" })
+  }, { store });
+  assert.equal(opened.source, "saved");
+  const paper = await store.getPaper(hash);
+  assert.equal(paper.title, "fresh.pdf");
+  assert.equal(paper.fileName, "fresh.pdf");
+  assert.equal(paper.pageCount, 4);
+  assert.equal(paper.pagesTranslated, 0);
+  assert.ok(paper.lastOpenedAt > 0);
+  assert.equal(paper.sourceUrl, "https://example.test/fresh.pdf?x=1");
+  assert.equal((await store.getPages(hash)).length, 0);
+  assert.deepEqual(new Uint8Array(await (await store.getSource(hash)).arrayBuffer()), bytes);
+  const again = await openLibraryPdf({
+    hash,
+    source: new Blob([bytes], { type: "application/pdf" })
+  }, { store });
+  assert.equal(again.source, "exists");
+  assert.equal((await store.getPaper(hash)).pagesTranslated, 0);
+});
+
+test("an old paper without a blob stores the original on open, and quota retries on the next open", async () => {
+  const { store } = memoryStore({ dbName: "f8-backfill" });
+  const bytes = new Uint8Array([8, 8, 8, 8]);
+  const hash = sha256HexOf(bytes);
+  await store.touchPaper(hash, { title: "134.pdf", pageCount: 2, origin: "native", opened: true });
+  const existing = await store.getPaper(hash);
+  assert.equal(libraryDocumentFromRecords(existing, [], [], "local").sourcePath, "idb");
+  assert.equal(await store.getSource(hash), null);
+
+  let quota = true;
+  const original = store.putSource.bind(store);
+  store.putSource = async (...args) => {
+    if (quota) {
+      const error = new Error("quota");
+      error.name = "QuotaExceededError";
+      throw error;
+    }
+    return original(...args);
+  };
+  const first = await openLibraryPdf({
+    hash,
+    title: "134.pdf",
+    pageCount: 2,
+    source: new Blob([bytes], { type: "application/pdf" })
+  }, { store });
+  assert.equal(first.source, "quota");
+  assert.equal(first.paper?.docHash, hash);
+  assert.equal(await store.getSource(hash), null);
+
+  quota = false;
+  const second = await openLibraryPdf({
+    hash,
+    title: "134.pdf",
+    pageCount: 2,
+    source: new Blob([bytes], { type: "application/pdf" })
+  }, { store });
+  assert.equal(second.source, "saved");
+  assert.deepEqual(new Uint8Array(await (await store.getSource(hash)).arrayBuffer()), bytes);
+  assert.equal((await store.getPaper(hash)).sourceSize, bytes.byteLength);
+});
+
+test("sourceUrl drops userinfo and fragment in the row, the list, the change log, and the export", async () => {
+  const { store, library, dbName } = memoryStore({ dbName: "f8-url-secret" });
+  const dirty = "https://user:secret@arxiv.org/pdf/1706.03762v7?x=1#page=2";
+  const clean = "https://arxiv.org/pdf/1706.03762v7?x=1";
+  await saveLibraryPage({
+    hash: "cred",
+    title: "带凭证",
+    sourceUrl: dirty,
+    pageCount: 1,
+    page: 1,
+    pairs: [{ translation: "甲" }]
+  }, { store });
+  assert.equal((await store.getPaper("cred")).sourceUrl, clean);
+
+  const backend = await library.open(dbName, ANNOTATIONS_SCHEMA);
+  await backend.put("papers", {
+    docHash: "raw-url",
+    schema: LIBRARY_SCHEMA,
+    title: "旧地址",
+    pageCount: 1,
+    pagesTranslated: 0,
+    lastOpenedAt: 4,
+    createdAt: 4,
+    updatedAt: 4,
+    rev: 1,
+    deviceId: "old",
+    sourceUrl: dirty
+  });
+  await backend.put("changes", {
+    collection: "papers",
+    docHash: "raw-url",
+    key: "raw-url",
+    rev: 1,
+    op: "put",
+    at: 4,
+    deviceId: "old",
+    record: { docHash: "raw-url", sourceUrl: dirty }
+  });
+  const listed = await store.listPapers();
+  assert.equal(listed.find((item) => item.docHash === "cred").sourceUrl, clean);
+  assert.equal(listed.find((item) => item.docHash === "raw-url").sourceUrl, clean);
+  assert.equal((await store.getPaper("raw-url")).sourceUrl, clean);
+  assert.equal((await store.getPaper("raw-url")).lastOpenedAt, 4);
+  const log = JSON.stringify(await store.changes(0));
+  assert.equal(log.includes("user:secret"), false);
+  assert.equal(log.includes("#page=2"), false);
+  assert.equal(log.includes("?x=1"), true);
+  const exported = await store.exportLibrary({ exportedAt: 1, appVersion: "0.0.0" });
+  const body = JSON.stringify(exported);
+  assert.equal(body.includes("user:secret"), false);
+  assert.equal(body.includes("#page=2"), false);
+  assert.equal(exported.papers.find((item) => item.paper.docHash === "raw-url").paper.sourceUrl, clean);
+  assert.equal(exported.papers.find((item) => item.paper.docHash === "cred").paper.sourceUrl, clean);
+});
+
+test("file and blob source URLs are stripped from the default export", async () => {
+  const { store, library, dbName } = memoryStore({ dbName: "f8-export-local-url" });
+  const backend = await library.open(dbName, ANNOTATIONS_SCHEMA);
+  await backend.put("papers", {
+    docHash: "file-row",
+    schema: LIBRARY_SCHEMA,
+    title: "本地",
+    pageCount: 1,
+    pagesTranslated: 0,
+    lastOpenedAt: 1,
+    createdAt: 1,
+    updatedAt: 1,
+    rev: 1,
+    deviceId: "old",
+    sourceUrl: "file:///tmp/secret.pdf"
+  });
+  await backend.put("papers", {
+    docHash: "blob-row",
+    schema: LIBRARY_SCHEMA,
+    title: "内存",
+    pageCount: 1,
+    pagesTranslated: 0,
+    lastOpenedAt: 2,
+    createdAt: 2,
+    updatedAt: 2,
+    rev: 1,
+    deviceId: "old",
+    sourceUrl: "blob:https://example.test/11111111-1111-1111-1111-111111111111"
+  });
+  const exported = await store.exportLibrary({ exportedAt: 1, appVersion: "0.0.0" });
+  const body = JSON.stringify(exported);
+  assert.equal(exported.papers.find((item) => item.paper.docHash === "file-row").paper.sourceUrl, undefined);
+  assert.equal(exported.papers.find((item) => item.paper.docHash === "blob-row").paper.sourceUrl, undefined);
+  assert.equal(body.includes("file:"), false);
+  assert.equal(body.includes("blob:"), false);
+  assert.equal((await store.getPaper("file-row")).sourceUrl, undefined);
+  assert.equal((await store.getPaper("blob-row")).sourceUrl, undefined);
+});
+
+test("putSource writes no blob when the paper was deleted in the same window", async () => {
+  const bytes = new Uint8Array([1, 2, 3]);
+  const { store } = memoryStore({ dbName: "f8-orphan-seq" });
+  await store.touchPaper("gone", { title: "删", pageCount: 1, origin: "native", opened: true });
+  await store.putPage("gone", 1, { pairs: [{ translation: "甲" }] });
+  await store.deletePaperData("gone");
+  assert.equal(await store.putSource("gone", new Blob([bytes])), false);
+  assert.equal(await store.getSource("gone"), null);
+
+  await store.touchPaper("live", { title: "留", pageCount: 1, origin: "native", opened: true });
+  assert.equal(await store.putSource("live", new Blob([bytes])), bytes.byteLength);
+  assert.equal((await store.getSource("live")).size, bytes.byteLength);
+  assert.equal((await store.getPaper("live")).sourceSize, bytes.byteLength);
+
+  const factory = createIdbLibraryFactory();
+  for (let round = 0; round < 20; round += 1) {
+    const name = `f8-orphan-${round}`;
+    const make = (id) => createLibraryStore({
+      platform: { target: "idb", kv: createMemoryKv(), library: factory },
+      persist: false,
+      deviceId: id,
+      now: () => 90 + round,
+      dbName: name
+    });
+    const left = make("left");
+    const right = make("right");
+    await left.touchPaper("p", { title: "交错", pageCount: 1, origin: "native", opened: true });
+    await left.putPage("p", 1, { pairs: [{ translation: "甲" }] });
+    await Promise.all([
+      left.deletePaperData("p"),
+      right.putSource("p", new Blob([bytes], { type: "application/pdf" }))
+    ]);
+    const paper = await left.getPaper("p");
+    const blob = await right.getSource("p");
+    assert.ok(paper?.deletedAt, `round ${round} tombstone`);
+    assert.equal(blob, null, `round ${round} orphan`);
+    await factory.close(name);
+  }
+});
+
+function stalePaper(docHash, extra = {}) {
+  return {
+    docHash,
+    schema: LIBRARY_SCHEMA,
+    title: "PDF 阅读 · stale.pdf",
+    pageCount: 2,
+    pagesTranslated: 0,
+    lastOpenedAt: 3,
+    createdAt: 3,
+    updatedAt: 3,
+    rev: 1,
+    deviceId: "old",
+    ...extra
+  };
+}
+
+test("the first list or open recounts pagesTranslated that was left at 0", async () => {
+  const listed = memoryStore({ dbName: "f8-recount-list" });
+  const listedBackend = await listed.library.open(listed.dbName, ANNOTATIONS_SCHEMA);
+  await listedBackend.put("papers", stalePaper("stale"));
+  await listedBackend.put("papers", stalePaper("other", { lastOpenedAt: 4, rev: 2 }));
+  await listedBackend.put("pages", {
+    docHash: "stale",
+    page: 1,
+    schema: LIBRARY_SCHEMA,
+    pairs: [{ translation: "有" }],
+    rev: 1,
+    updatedAt: 1,
+    deviceId: "old"
+  });
+  await listedBackend.put("pages", {
+    docHash: "other",
+    page: 2,
+    schema: LIBRARY_SCHEMA,
+    pairs: [],
+    skipped: true,
+    rev: 1,
+    updatedAt: 1,
+    deviceId: "old"
+  });
+  const rows = await listed.store.listPapers();
+  assert.equal(rows.find((item) => item.docHash === "stale").pagesTranslated, 1);
+  assert.equal(rows.find((item) => item.docHash === "other").pagesTranslated, 1);
+  const stale = await listed.store.getPaper("stale");
+  assert.equal(stale.pagesTranslated, 1);
+  assert.equal(stale.lastOpenedAt, 3);
+  assert.equal(stale.title, "PDF 阅读 · stale.pdf");
+  const rev = stale.rev;
+  await listed.store.listPapers();
+  assert.equal((await listed.store.getPaper("stale")).rev, rev);
+  assert.equal((await listed.store.getPaper("other")).rev, 3);
+
+  const opened = memoryStore({ dbName: "f8-recount-open" });
+  const openedBackend = await opened.library.open(opened.dbName, ANNOTATIONS_SCHEMA);
+  await openedBackend.put("papers", stalePaper("left"));
+  await openedBackend.put("pages", {
+    docHash: "left",
+    page: 1,
+    schema: LIBRARY_SCHEMA,
+    pairs: [{ translation: "乙" }],
+    rev: 1,
+    updatedAt: 1,
+    deviceId: "old"
+  });
+  const marked = await opened.store.markOpened("fresh");
+  assert.equal(marked.pagesTranslated, 0);
+  const left = await opened.store.getPaper("left");
+  assert.equal(left.pagesTranslated, 1);
+  assert.equal(left.lastOpenedAt, 3);
+  const leftRev = left.rev;
+  await opened.store.markOpened("fresh");
+  assert.equal((await opened.store.getPaper("left")).rev, leftRev);
+  assert.equal((await opened.store.getPaper("left")).pagesTranslated, 1);
+});
+
 test("500 seeds of open, write, skip, delete, and reopen across two tabs", async () => {
   const pool = ["open", "write", "skip", "delete", "reopen"];
   for (let seed = 1; seed <= 500; seed += 1) {
@@ -695,9 +989,11 @@ test("500 seeds of open, write, skip, delete, and reopen across two tabs", async
       const hash = `h${seed.toString(16).padStart(4, "0")}`;
       const bytes = new Uint8Array([seed & 255, (seed >> 8) & 255, 3, 4, 5]);
       const rng = mulberry32(seed);
-      const script = ["write", "open", "skip", "write", "delete", "reopen", "write", "open"];
+      const script = ["open", "write", "skip", "write", "delete", "reopen", "write", "open"];
       while (script.length < 16) script.push(pool[Math.floor(rng() * pool.length)]);
       let pageSerial = 1;
+      let named = false;
+      let sourceLive = false;
       for (let step = 0; step < script.length; step += 1) {
         const tab = tabs[Math.floor(rng() * tabs.length)];
         const op = script[step];
@@ -706,10 +1002,20 @@ test("500 seeds of open, write, skip, delete, and reopen across two tabs", async
         const openedBefore = before?.lastOpenedAt;
         if (op === "open" || op === "reopen") {
           const marked = await tab.markOpened(hash);
-          if (!liveBefore) assert.equal(marked, null);
+          if (before?.deletedAt) assert.equal(marked, null);
+          else if (!before) {
+            assert.ok(marked && !marked.deletedAt);
+            assert.equal(marked.pagesTranslated, 0);
+            assert.ok(marked.lastOpenedAt > 0);
+          } else {
+            assert.ok(marked.lastOpenedAt > openedBefore);
+          }
         } else if (op === "delete") {
           await tab.deletePaperData(hash);
+          sourceLive = false;
         } else {
+          named = true;
+          sourceLive = true;
           const page = (pageSerial % 3) + 1;
           pageSerial += 1;
           const skipped = op === "skip";
@@ -733,8 +1039,14 @@ test("500 seeds of open, write, skip, delete, and reopen across two tabs", async
           if (liveBefore || before?.deletedAt) assert.equal(paper.lastOpenedAt, openedBefore);
           else assert.ok(paper.lastOpenedAt > 0);
         } else if (!liveBefore) {
-          if (!before) assert.equal(paper, null);
-          else {
+          if (!before) {
+            if (op === "open" || op === "reopen") {
+              assert.ok(paper && !paper.deletedAt);
+              assert.equal(paper.pagesTranslated, 0);
+            } else {
+              assert.equal(paper, null);
+            }
+          } else {
             assert.ok(paper.deletedAt);
             assert.equal(paper.lastOpenedAt, openedBefore);
           }
@@ -745,13 +1057,19 @@ test("500 seeds of open, write, skip, delete, and reopen across two tabs", async
         }
         if (live) {
           assert.equal(paper.pagesTranslated, countTranslated(pages));
-          assert.equal(paper.title, `paper-${seed}.pdf`);
-          assert.equal(paper.fileName, `paper-${seed}.pdf`);
+          if (named) {
+            assert.equal(paper.title, `paper-${seed}.pdf`);
+            assert.equal(paper.fileName, `paper-${seed}.pdf`);
+          }
           const blob = await tabs[0].getSource(hash);
-          assert.equal(blob instanceof Blob, true);
-          assert.equal(blob.size, bytes.byteLength);
-          assert.equal(paper.sourceSize, bytes.byteLength);
-          assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), bytes);
+          if (sourceLive) {
+            assert.equal(blob instanceof Blob, true);
+            assert.equal(blob.size, bytes.byteLength);
+            assert.equal(paper.sourceSize, bytes.byteLength);
+            assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), bytes);
+          } else {
+            assert.equal(blob, null);
+          }
         } else {
           assert.equal(pages.length, 0);
           assert.equal(await tabs[0].getSource(hash), null);

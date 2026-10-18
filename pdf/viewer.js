@@ -352,12 +352,12 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, markLibraryOpened, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, openLibraryPdf, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { bindImportChip } from "../options/data-panel.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, persistCardHiddenThisSession, readPersistCardState } from "../lib/persist-card.js";
-import { cleanTitle } from "../lib/library-record.js";
+import { cleanTitle, httpSourceUrl } from "../lib/library-record.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
@@ -9094,13 +9094,7 @@ async function resolveBatchSize() {
 
 function rememberLibraryIdentity(value) {
   const raw = String(value || "");
-  let http = "";
-  try {
-    const url = new URL(raw);
-    if (url.protocol === "http:" || url.protocol === "https:") http = url.toString();
-  } catch {
-    /* a local file name is not a URL */
-  }
+  const http = httpSourceUrl(raw);
   libraryHttpUrl = http;
   libraryFileName = http ? "" : (shortTitle(raw) || "");
   libraryTitle = cleanTitle(shortTitle(raw) || raw);
@@ -9121,8 +9115,34 @@ function librarySourceBlob(hash, bytes) {
 
 function rememberLibrarySourceAttempt(hash, sentFor, saved) {
   if (docId !== sentFor) return;
-  if (saved?.source === "quota") return;
+  // Stick only when a source blob was actually stored. Quota, a missing
+  // paper, and any other miss must try again on the next open.
+  const status = saved?.source;
+  if (status !== "saved" && status !== "exists") return;
   librarySourceSent.add(hash);
+}
+
+function storeOpenedPdf(openedStamp) {
+  const bytes = pdfBytes;
+  const pageCount = pdfDoc?.numPages || 0;
+  return (async () => {
+    try {
+      const hash = await pdfByteHash(bytes);
+      if (docId !== openedStamp || !hash || hash === "nohash") return;
+      const identity = captureLibraryIdentity();
+      const saved = await openLibraryPdf({
+        hash,
+        title: identity.title,
+        fileName: identity.fileName,
+        sourceUrl: identity.sourceUrl,
+        pageCount,
+        source: librarySourceBlob(hash, bytes)
+      });
+      rememberLibrarySourceAttempt(hash, openedStamp, saved);
+    } catch {
+      /* the PDF stays open when the library record cannot be written */
+    }
+  })();
 }
 
 function libraryPayloadFields(identity, hash, bytes) {
@@ -9400,12 +9420,8 @@ function ensureLibraryDocument() {
       // still reading. A late legacy snapshot must not replace it, or the next
       // layout write stores the original pairs over the translation.
       if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
-      if (doc) {
-        doc.hash = hash;
-        if (doc.sourcePath) librarySourceSent.add(hash);
-      }
+      if (doc) doc.hash = hash;
       libraryDoc = doc || null;
-      if (doc) void markLibraryOpened(hash).catch(() => {});
       if (hash) void pendingNotes?.hydrate?.(hash);
       return libraryDoc;
     } catch {
@@ -11473,6 +11489,10 @@ async function adoptDoc(doc, title) {
     endPageNav();
   }
   syncZoomChip();
+  // The original is stored before translation. A blob write started in parallel
+  // holds the paper transaction and the page row is still missing when the
+  // same-tab reopen reads it.
+  await storeOpenedPdf(docId);
   await maybeAutoTranslateDocument();
 }
 
