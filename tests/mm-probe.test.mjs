@@ -68,6 +68,7 @@ import {
   normalizedBaseUrl,
   isProvenVisionProvider,
   multimodalReady,
+  multimodalTestDisabled,
   readFormulaSettings,
   probeChipTone,
   redactProbeText,
@@ -3850,6 +3851,200 @@ test("a fixed vendor key is not attached when the Base URL host is another vendo
   assert.equal(fixedVendorHostMismatch(stored), true);
   assert.equal(multimodalReady(stored), false);
   assert.notEqual(resolveAskTarget(llmSettings, stored).via, "multimodal");
+});
+
+function clickMissRetry(tab) {
+  const button = tab.document.getElementById("formulaSaveMiss")?.querySelector("button");
+  if (!button) return false;
+  button.click();
+  return true;
+}
+
+test("D4a retry does not put a failed URL back over a newer probe", async () => {
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  const page = await qa6page(q7arkCard(), "d4a", {
+    failSet: (i) => i === 1,
+    gateSet: async (i) => { if (i === 2) await gate; }
+  });
+  try {
+    changeBaseUrl(page.tab, "https://fail-d4a.example/v1");
+    await flush();
+    await qa6wait();
+    probeButton(page.tab).click();
+    await flush();
+    const hit = page.pending[page.pending.length - 1];
+    hit.resolve(jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] }));
+    await flush();
+    assert.equal(clickMissRetry(page.tab), true);
+    release();
+    await flush();
+    await qa6wait();
+    await flush();
+    assert.notEqual(page.bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://fail-d4a.example/v1");
+  } finally {
+    page.done();
+  }
+});
+
+test("D4b switching vendor retires a failed URL", async () => {
+  const page = await qa6page(q7arkCard(), "d4b", { failSet: (i) => i === 1 });
+  try {
+    changeBaseUrl(page.tab, "https://fail-d4b.example/v1");
+    await flush();
+    await qa6wait();
+    changeProvider(page.tab, "doubao");
+    await flush();
+    await qa6wait();
+    clickMissRetry(page.tab);
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(stored.provider, "doubao");
+    assert.notEqual(stored.baseUrl, "https://fail-d4b.example/v1");
+  } finally {
+    page.done();
+  }
+});
+
+test("D4c saving a new key retires a failed URL", async () => {
+  const page = await qa6page(q7arkCard(), "d4c", { failSet: (i) => i === 1 });
+  try {
+    changeBaseUrl(page.tab, "https://fail-d4c.example/v1");
+    await flush();
+    await qa6wait();
+    commitKey(page.tab, "ark-d4c-new-key-778899");
+    await flush();
+    await qa6wait();
+    clickMissRetry(page.tab);
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(stored.apiKey, "ark-d4c-new-key-778899");
+    assert.notEqual(stored.baseUrl, "https://fail-d4c.example/v1");
+  } finally {
+    page.done();
+  }
+});
+
+test("D2s a failed write does not keep a retry that a newer URL already replaced", async () => {
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  const page = await qa6page(q7arkCard(), "d2s", {
+    failSet: (i) => i === 1 || i === 2,
+    gateSet: async (i) => { if (i === 2) await gate; }
+  });
+  try {
+    changeBaseUrl(page.tab, "https://fail-d2s.example/v1");
+    await flush();
+    await qa6wait();
+    assert.equal(clickMissRetry(page.tab), true);
+    await flush();
+    changeBaseUrl(page.tab, "https://newer-d2s.example/v1");
+    release();
+    await flush();
+    await qa6wait();
+    await flush();
+    clickMissRetry(page.tab);
+    await flush();
+    await qa6wait();
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://newer-d2s.example/v1");
+  } finally {
+    page.done();
+  }
+});
+
+test("C4b a custom URL committed after load is restored when the vendor changes back", async () => {
+  const page = await qa6page(q7oaCard(), "c4b");
+  try {
+    changeProvider(page.tab, "custom");
+    await flush();
+    changeBaseUrl(page.tab, "https://kept-c4b.example/v1");
+    await flush();
+    await qa6wait();
+    changeProvider(page.tab, "doubao");
+    changeProvider(page.tab, "custom");
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY].multimodal;
+    const screen = page.tab.document.querySelector("[data-base-url]").value;
+    assert.equal(stored.provider, "custom");
+    assert.equal(stored.baseUrl, "https://kept-c4b.example/v1");
+    assert.equal(screen, stored.baseUrl);
+  } finally {
+    page.done();
+  }
+});
+
+test("R8-2 retyping the same key in the turn the vendor changes keeps that key", async () => {
+  const page = await qa6page(q7oaCard(), "r8-2");
+  try {
+    changeProvider(page.tab, "doubao");
+    commitKey(page.tab, OAI_KEY);
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(stored.provider, "doubao");
+    assert.equal(stored.apiKey, OAI_KEY);
+    assert.equal(page.tab.document.querySelector("[data-key-slot='mm'] [data-secret-saved]")?.textContent, "已保存");
+  } finally {
+    page.done();
+  }
+});
+
+test("H2 the derive layer disables the probe when a fixed vendor host mismatches", () => {
+  assert.equal(multimodalTestDisabled({
+    multimodal: {
+      provider: "openai",
+      apiKey: "sk-h2-derive",
+      model: "gpt-5.6-luna",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3"
+    }
+  }), true);
+  assert.equal(multimodalTestDisabled({
+    multimodal: { provider: "openai", apiKey: "sk-h2-derive", model: "gpt-5.6-luna", baseUrl: "" }
+  }), false);
+});
+
+test("H3 the probe returns before its own send when the fixed vendor host mismatches", async () => {
+  let calls = 0;
+  const result = await probeMultimodal({
+    multimodal: {
+      provider: "openai",
+      apiKey: OAI_KEY,
+      model: "gpt-5.6-luna",
+      baseUrl: "https://left.example/v1"
+    }
+  }, {
+    at: 9,
+    sendVision: async () => {
+      calls += 1;
+      return { ok: true, text: "SEEN" };
+    }
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.ok, false);
+});
+
+test("a fixed vendor on http does not attach the key", () => {
+  const built = buildVisionRequest({
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    url: "http://api.openai.com/v1/chat/completions",
+    shape: "openai"
+  }, {
+    text: "hi",
+    images: [{ mime: "image/png", base64: PROBE_PNG_BASE64 }],
+    secret: OAI_KEY
+  });
+  assert.equal(built.headers, undefined);
+  assert.equal(JSON.stringify(built).includes(OAI_KEY), false);
+  assert.equal(fixedVendorHostMismatch({
+    multimodal: { provider: "openai", apiKey: "x", model: "gpt-5.6-luna", baseUrl: "http://api.openai.com/v1" }
+  }), true);
+  assert.equal(fixedVendorHostMismatch({
+    multimodal: { provider: "custom", apiKey: "x", model: "m", baseUrl: "http://vendor.example/v1" }
+  }), false);
 });
 
 test("500 seeds drive two real settings pages, including concurrent probes", async () => {

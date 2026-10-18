@@ -50,10 +50,11 @@ import {
   removeFormulaKey,
   runFormulaProbe,
   stubFormulaProbe,
+  tier2SwitchState,
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { createProbeController, probeMultimodal, settleProbeResult } from "../lib/mm-probe.js";
-import { focusFormulaCard, renderFormulaPanel } from "../lib/formula-settings-ui.js";
+import { focusFormulaCard, renderFormulaPanel, renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
 import { createNotesPrefsSession } from "../lib/reader-notes-local.js";
 import { NOTES_PANEL_WIDTH_DEFAULT, NOTES_PANE_WIDTH_DEFAULT } from "../lib/notes-prefs.js";
 import { downloadBlob } from "../lib/export.js";
@@ -123,6 +124,7 @@ let formulaBusy = "";
 let formulaWriting = false;
 let formulaCustomUrl = "";
 let formulaQueued = 0;
+let formulaKeyFor = { multimodal: "", ocr: "" };
 const formulaEchoKeys = new Set();
 let formulaEchoSeq = 0;
 let formulaExternal = null;
@@ -132,11 +134,11 @@ let formulaWrite = Promise.resolve();
 // 2. 所有存储写入进同一条队列。出队时才读 formulaCommitted，不读入队时的旧快照。
 // 3. 新的提交不用 formulaSaved 当底稿。只有队列里没有更晚的写入、且失败的仍是当前快照时，才退回 formulaSaved。自定义卡在 Base URL 有效前照样以 provider:custom 落盘，运行时未配置，不发请求。
 // 4. 芯片只画 formulaSaved.probe。队列排空后，存储等于已提交卡片。未提交的地址留在输入框，不进存储。
-// 5. 只有提交了无效 URL 才回滚输入并显示「没保存上」。提交模型、密钥、开关都不走这条。新的提交会作废上一笔失败快照，重试不会盖掉它。
+// 5. 只有提交了无效 URL 才回滚输入并显示「没保存上」。提交模型、密钥、开关都不走这条。新的提交会作废上一笔失败快照。重试只在已提交卡片仍是上次成功的那份时才写回失败快照。
 // 6. 每笔写入带一个本页记得的 formulaEcho。迟到的自写回声不把草稿弹回去；另一页写出同样内容仍会落下来。采纳别的页的卡片时清掉这组回声。
 // 7. pagehide 只中止探测，不提交未保存的地址。
 // 8. 保存密钥（含换回同一把）把该卡改成「待测试」；移除密钥不留芯片。旧探测被 drop() 作废。
-// 9. 换厂商清空该卡密钥和探测。固定厂商的请求主机必须是它自己的地址。自定义卡记得上一次提交的 Base URL，同页切走再切回来时写回输入框。
+// 9. 换厂商清空该卡密钥和探测。同一拍里重新输入的密钥算这一家的，不会被上一条存储记录清掉。固定厂商只走 https 上的自家主机。自定义卡记得上一次提交的 Base URL，同页切走再切回来时写回输入框。
 function nextFormulaEcho() {
   formulaEchoSeq += 1;
   return `${formulaEchoSeq}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1532,6 +1534,43 @@ function paintFormulaSettings(savedSlot = "") {
   }
 }
 
+function formulaSwitchHandlers(root) {
+  return {
+    onToggle: (key, enabled) => updateFormulaSwitch(key, enabled),
+    onConfigure: (target) => focusFormulaCard(root, target)
+  };
+}
+
+function paintFormulaSwitches() {
+  const root = el("formulaSettingsRoot");
+  const list = root?.querySelector(".oi-set-switches");
+  if (!list) {
+    paintFormulaSettings();
+    return;
+  }
+  const savedProbe = formulaSaved?.multimodal?.probe ?? null;
+  const view = {
+    ...formulaSettings,
+    multimodal: { ...formulaSettings.multimodal, probe: savedProbe }
+  };
+  renderFormulaSwitchList(list, view, formulaSwitchHandlers(root));
+  const card = root.querySelector("[data-formula-card='mm']");
+  const empty = card?.querySelector(".oi-set-empty");
+  if (empty && tier2SwitchState(view).visible) empty.remove();
+  syncFormulaDerived();
+  refreshBadges();
+}
+
+function markKeySaved(slot) {
+  const note = el("formulaSettingsRoot")?.querySelector(`[data-key-slot='${slot}'] [data-secret-saved]`);
+  if (!note) return;
+  if (note._savedTimer) clearTimeout(note._savedTimer);
+  note.textContent = "已保存";
+  note._savedTimer = setTimeout(() => {
+    if (note.textContent === "已保存") note.textContent = "";
+  }, 1200);
+}
+
 function syncFormulaDerived() {
   const root = el("formulaSettingsRoot");
   if (!root || formulaBusy) return;
@@ -1610,7 +1649,9 @@ function queueFormulaWrite({ rerender = false, clearProbe = "", savedSlot = "" }
   formulaQueued += 1;
   const job = formulaWrite.then(() => {
     formulaQueued -= 1;
-    return flushCommitted({ rerender, clearProbe, savedSlot, moreQueued: formulaQueued > 0 });
+    // Read the key owner at dequeue. A same-turn retype lands before this runs.
+    const keyFor = { multimodal: formulaKeyFor.multimodal, ocr: formulaKeyFor.ocr };
+    return flushCommitted({ rerender, clearProbe, savedSlot, keyFor, moreQueued: formulaQueued > 0 });
   });
   formulaWrite = job.catch(() => {});
   return job;
@@ -1621,13 +1662,24 @@ function rememberCustomUrl(settings) {
   if (mm?.provider === "custom" && httpBaseUrl(mm.baseUrl)) formulaCustomUrl = mm.baseUrl;
 }
 
+function rememberCommittedUrl() {
+  rememberCustomUrl(formulaCommitted);
+}
+
+function syncKeyOwner(settings) {
+  formulaKeyFor = {
+    multimodal: settings?.multimodal?.apiKey ? String(settings.multimodal.provider || "") : "",
+    ocr: settings?.ocr?.apiKey ? String(settings.ocr.provider || "") : ""
+  };
+}
+
 function dropCarriedKey(settings, part, beforeProvider) {
   const card = settings?.[part];
   if (!card || String(card.provider || "") === String(beforeProvider || "")) return settings;
   return { ...settings, [part]: { ...card, apiKey: "", probe: null } };
 }
 
-async function flushCommitted({ rerender = false, clearProbe = "", savedSlot = "", moreQueued = false } = {}) {
+async function flushCommitted({ rerender = false, clearProbe = "", savedSlot = "", keyFor = null, moreQueued = false } = {}) {
   formulaWriting = true;
   formulaExternal = null;
   const snapshot = formulaCommitted;
@@ -1648,17 +1700,17 @@ async function flushCommitted({ rerender = false, clearProbe = "", savedSlot = "
   };
   let failed = false;
   try {
-    const saved = await writeFormulaSettings(snapshot, wrapped || storage);
+    const saved = await writeFormulaSettings(snapshot, wrapped || storage, { keyFor });
     if (formulaExternal) {
       const incoming = formulaExternal;
       formulaExternal = null;
       formulaWriting = false;
       adoptFormulaRecord(incoming);
-      return;
+      return "saved";
     }
     formulaSaved = saved;
     if (formulaCommitted === snapshot) formulaCommitted = saved;
-    formulaUndo = null;
+    else formulaUndo = null;
     hideFormulaMiss();
   } catch (err) {
     failed = true;
@@ -1677,13 +1729,16 @@ async function flushCommitted({ rerender = false, clearProbe = "", savedSlot = "
   } finally {
     formulaWriting = false;
   }
-  if (failed) return;
-  if (rerender) paintFormulaSettings(savedSlot);
+  if (failed) return "failed";
+  if (rerender === "switches") paintFormulaSwitches();
+  else if (rerender) paintFormulaSettings(savedSlot);
   else if (clearProbe) {
     const part = clearProbe === "ocr" ? "ocr" : "multimodal";
     syncProbeChrome(clearProbe, formulaSaved?.[part]?.probe, formulaSaved?.[part]?.apiKey);
     refreshBadges();
   }
+  if (savedSlot) markKeySaved(savedSlot);
+  return "saved";
 }
 
 function updateFormulaPart(which, patch, opts = {}) {
@@ -1702,7 +1757,7 @@ function updateFormulaPart(which, patch, opts = {}) {
   ) {
     const leaving = String(formulaCommitted?.multimodal?.provider || "");
     const committedUrl = String(formulaCommitted?.multimodal?.baseUrl || "");
-    if (leaving === "custom" && httpBaseUrl(committedUrl)) formulaCustomUrl = committedUrl;
+    rememberCommittedUrl();
     let baseUrl = "";
     if (patch.provider === "custom") {
       if (leaving === "custom" && httpBaseUrl(committedUrl)) baseUrl = committedUrl;
@@ -1739,22 +1794,29 @@ function updateFormulaPart(which, patch, opts = {}) {
   // A blank field is not a commit. The same key again still counts.
   if (Object.prototype.hasOwnProperty.call(patch || {}, "apiKey")) {
     if (!String(patch.apiKey ?? "").trim()) return;
-    formulaUndo = null;
+    if (!formulaWriting) {
+      formulaUndo = null;
+    }
     // Key commits always start from the committed card, including when its URL is still invalid.
-    // The first key reveals the tier switch, so that paint has to rebuild the card.
-    // Replacing a key only clears the chip; rebuilding would wipe the 「已保存」 flash.
+    // The first key only repaints the tier switches, so the field and its 「已保存」 flash stay.
+    // Replacing a key only clears the chip; rebuilding the card would wipe that flash.
     const hadKey = String(formulaCommitted?.[part]?.apiKey || "").trim() !== "";
     formulaCommitted = applyFormulaPart(formulaCommitted, which, { apiKey: patch.apiKey });
     formulaSettings = applyFormulaPart(formulaSettings, which, { apiKey: patch.apiKey });
-    if (hadKey) return queueFormulaWrite({ clearProbe: part });
-    return queueFormulaWrite({ rerender: true, savedSlot: part === "ocr" ? "ocr" : "mm" });
+    formulaKeyFor[part] = String(formulaCommitted?.[part]?.provider || "");
+    const slot = part === "ocr" ? "ocr" : "mm";
+    if (hadKey) return queueFormulaWrite({ clearProbe: part, savedSlot: slot });
+    return queueFormulaWrite({ rerender: "switches", savedSlot: slot });
   }
   const beforeProvider = String(formulaCommitted?.[part]?.provider || "");
   const beforeMm = formulaCommitted.multimodal;
-  formulaUndo = null;
+  if (!formulaWriting) {
+    formulaUndo = null;
+  }
   formulaSettings = dropCarriedKey(applyFormulaPart(formulaSettings, which, patch), part, beforeProvider);
   formulaCommitted = dropCarriedKey(applyFormulaPart(formulaCommitted, which, patch), part, beforeProvider);
-  rememberCustomUrl(formulaCommitted);
+  if (String(formulaCommitted?.[part]?.provider || "") !== beforeProvider) formulaKeyFor[part] = "";
+  rememberCommittedUrl();
   const afterMm = formulaCommitted.multimodal;
   const structural = Object.prototype.hasOwnProperty.call(patch, "provider")
     || Object.prototype.hasOwnProperty.call(patch, "customModel");
@@ -1832,7 +1894,8 @@ function adoptFormulaRecord(stored) {
   formulaSettings = clean;
   formulaSaved = clean;
   formulaCommitted = clean;
-  rememberCustomUrl(clean);
+  rememberCommittedUrl();
+  syncKeyOwner(clean);
   invalidateFormulaProbe();
   paintFormulaSettings();
 }
@@ -1893,14 +1956,14 @@ async function testFormulaConnection(kind) {
     return;
   }
   formulaCommitted = settled.settings;
-  formulaUndo = null;
   const part = which === "ocr" ? "ocr" : "multimodal";
   formulaSettings = {
     ...formulaSettings,
     [part]: { ...(formulaSettings[part] || {}), probe: settled.settings[part]?.probe ?? null }
   };
   formulaBusy = "";
-  await queueFormulaWrite({ rerender: true });
+  const status = await queueFormulaWrite({ rerender: true });
+  if (status === "saved") formulaUndo = null;
 }
 
 function bindFormulaSettings() {
@@ -1928,7 +1991,8 @@ function bindFormulaSettings() {
     formulaSettings = stored;
     formulaSaved = stored;
     formulaCommitted = stored;
-    rememberCustomUrl(stored);
+    rememberCommittedUrl();
+    syncKeyOwner(stored);
     paintFormulaSettings();
   }).catch(() => paintFormulaSettings());
 }

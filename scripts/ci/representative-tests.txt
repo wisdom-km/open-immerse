@@ -13,3 +13,5 @@ tests/settings-page.test.mjs
 tests/library-store.test.mjs
 # chrome.storage this-binding. No browser process.
 tests/unbound-storage.test.mjs
+# Vision client. A fixed-vendor host guard must not hide a red test here.
+tests/mm-client.test.mjs

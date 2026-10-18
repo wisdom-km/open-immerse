@@ -520,14 +520,14 @@ test("concurrent sends keep their own secret, body, and reply", async () => {
   });
   const image = [{ mime: "image/png", base64: PNG }];
   const pendingLeft = sendVision({
-    target: { provider: "openai", model: "left-model", url: "https://left.example/v1/chat/completions", host: "left.example" },
+    target: { provider: "custom", model: "left-model", url: "https://left.example/v1/chat/completions", host: "left.example" },
     text: "L",
     images: image,
     secret: SECRET,
     net: box.net
   });
   const pendingRight = sendVision({
-    target: { provider: "openai", model: "right-model", url: "https://right.example/v1/chat/completions", host: "right.example" },
+    target: { provider: "custom", model: "right-model", url: "https://right.example/v1/chat/completions", host: "right.example" },
     text: "R",
     images: image,
     secret: PLAIN,
