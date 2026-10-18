@@ -5,6 +5,7 @@
  */
 
 import { ASK_CONFIRM_KEY, ASK_TIMEOUT_MS, ASK_WAIT_HINT_MS, askActionsUseIcons, askChipModel, askErrorModel, askPreviewLine, askRouteInputsChanged, askRouteToast, unconfiguredModel } from "../lib/ask-model.js";
+import { renderAskAnswer } from "../lib/ask-render.js";
 import {
   beginTurn,
   buildAskMessages,
@@ -17,10 +18,20 @@ import {
   nearbyBlocks,
   noteInputFromTurn,
   planNoteSave,
+  resetAskSession,
   retryTurn,
   settleTurn,
   stopTurn
 } from "../lib/ask-session.js";
+import { NotesStoreError } from "../lib/notes-io.js";
+
+export { renderAskAnswer };
+
+/** A doc-guard refusal is not a disk blip. Retrying the same id fails again. */
+export function askSaveErrorText(err) {
+  if (err instanceof NotesStoreError && err.type === "doc") return "这条笔记属于另一篇文档。";
+  return "没有写入笔记";
+}
 
 const SUGGESTIONS = Object.freeze([
   "这段在说什么？用大白话讲一遍",
@@ -46,37 +57,6 @@ function h(tag, attrs, children) {
   }
   for (const child of children || []) if (child) node.append(child);
   return node;
-}
-
-function escapeHtml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-export function renderAskAnswer(source) {
-  const raw = String(source || "");
-  const katex = globalThis.katex;
-  if (!katex?.renderToString) return escapeHtml(raw);
-  const parts = [];
-  const re = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
-  let cursor = 0;
-  let match = re.exec(raw);
-  while (match) {
-    parts.push(escapeHtml(raw.slice(cursor, match.index)));
-    const tex = match[1] != null ? match[1] : match[2];
-    const display = match[1] != null;
-    try {
-      parts.push(katex.renderToString(tex, { throwOnError: false, trust: false, displayMode: display }));
-    } catch {
-      parts.push(escapeHtml(match[0]));
-    }
-    cursor = match.index + match[0].length;
-    match = re.exec(raw);
-  }
-  parts.push(escapeHtml(raw.slice(cursor)));
-  return parts.join("");
 }
 
 function chipText(citation) {
@@ -706,24 +686,17 @@ export function mountAskUi(api = {}) {
     api.toast?.("已复制");
   }
 
-  // Interrupt point: listNotes is read before the put. A memory row left by a
-  // failed write is not durable, so ✓ waits until saveNote resolves.
+  // Interrupt point: listNotes is read before the put. The viewer does not
+  // pass a durable-id set, so a listed row is not adopted here. ✓ waits
+  // until this put resolves. A doc conflict uses its own toast.
   async function saveNote(turn) {
     const docHash = String(api.docHash?.() || "");
     const listed = await api.listNotes?.() || [];
-    const durableIds = typeof api.durableNoteIds === "function" ? await api.durableNoteIds() : null;
-    const plan = planNoteSave(turn, listed, docHash, durableIds);
+    const plan = planNoteSave(turn, listed, docHash);
     if (plan.action === "missing") return { ok: false, reason: "missing" };
     if (plan.action === "exists") {
       root.querySelector(`[data-turn="${cssEscape(turn.id)}"] [data-ask-act="view"]`)?.focus();
       return { ok: false, reason: "exists", noteId: plan.noteId };
-    }
-    if (plan.action === "reuse") {
-      turn.noteId = plan.noteId;
-      turn.pendingDisk = false;
-      render();
-      root.querySelector(`[data-turn="${cssEscape(turn.id)}"] [data-ask-act="view"]`)?.focus();
-      return { ok: true, noteId: plan.noteId, reused: true };
     }
     const claim = claimNoteSave(session, turn.id);
     if (!claim.ok) {
@@ -749,13 +722,27 @@ export function mountAskUi(api = {}) {
       if (controller?.signal.aborted || turn.saveTicket !== claim.ticket) {
         return { ok: false, reason: "aborted" };
       }
-      finishNoteSave(session, turn.id, claim.ticket, { ok: false, reason: "failed" });
-      api.toast?.("没有写入笔记");
+      finishNoteSave(session, turn.id, claim.ticket, { ok: false, reason: err?.type === "doc" ? "doc" : "failed" });
+      api.toast?.(askSaveErrorText(err));
       if (state.open) render();
       return { ok: false, reason: String(err?.message || err) };
     } finally {
       if (controller && saveControllers.get(turn.id) === controller) saveControllers.delete(turn.id);
     }
+  }
+
+  function onDocumentReset() {
+    for (const controller of saveControllers.values()) {
+      try { controller.abort(); } catch { /* already aborted */ }
+    }
+    saveControllers.clear();
+    clearTimers();
+    resetAskSession(session, api.docHash?.() || "");
+    state.confirmOpen = false;
+    state.previewOpen = false;
+    state.modelPop = false;
+    state.failedRoute = false;
+    if (state.open) render();
   }
 
   async function viewNote(turn) {
@@ -840,6 +827,7 @@ export function mountAskUi(api = {}) {
     submit,
     saveNote,
     syncActionDensity,
+    onDocumentReset,
     getState: () => state
   };
 }

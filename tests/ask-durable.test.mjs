@@ -1,6 +1,8 @@
 // Shared ask/note state. No network. Each seed prints its number on failure.
+import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { IDBObjectStore } from "fake-indexeddb";
 import {
   askScope,
   beginTurn,
@@ -14,7 +16,7 @@ import {
   sessionInvariants,
   settleTurn
 } from "../lib/ask-session.js";
-import { NotesStoreError, createNotesStore } from "../lib/notes-store.js";
+import { NOTES_DB_NAME, NotesStoreError, createNotesStore } from "../lib/notes-store.js";
 
 const ROUTE = {
   ok: true,
@@ -75,16 +77,51 @@ test("planNoteSave ignores another document, a prefix, and a failed row", () => 
   assert.equal(planNoteSave(turn, [same], "doc-a", new Set()).action, "write");
 });
 
+function openIdbStore() {
+  return createNotesStore({ persist: false, capture: false, deviceId: "ask-seed" });
+}
+
+function diskRows(store) {
+  const db = store.currentDb;
+  if (!db) return Promise.resolve([]);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("notes", "readonly");
+    const req = tx.objectStore("notes").getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error || new Error("disk read failed"));
+  });
+}
+
+async function wipeNotesDb() {
+  await new Promise((resolve) => {
+    const req = indexedDB.deleteDatabase(NOTES_DB_NAME);
+    req.onsuccess = () => resolve();
+    req.onerror = () => resolve();
+    req.onblocked = () => resolve();
+  });
+}
+
 test("durable ask saves keep doc identity across 500 seeds", async () => {
+  const originalPut = IDBObjectStore.prototype.put;
+  let notePutFailures = 0;
+  IDBObjectStore.prototype.put = function put(value, key) {
+    if (notePutFailures > 0 && this.name === "notes") {
+      notePutFailures -= 1;
+      const error = new Error("injected put failure");
+      error.name = "UnknownError";
+      throw error;
+    }
+    return originalPut.call(this, value, key);
+  };
   let reloads = 0;
   let failures = 0;
   let retries = 0;
   let unloads = 0;
   let refusals = 0;
+  try {
   for (let seed = 1; seed <= 500; seed += 1) {
     const random = mulberry32(seed);
-    const store = createNotesStore({ memory: true, persist: false });
-    const volatile = new Map();
+    let store = openIdbStore();
     const docOf = new Map();
     const seenSession = new Set();
     const seenTurn = new Set();
@@ -102,15 +139,10 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
 
     sessions.push(open(DOCS[0]), open(DOCS[1]), open(DOCS[0]));
 
-    async function visible(docHash) {
-      const rows = await store.list(docHash);
-      const extra = [...volatile.values()].filter((note) => note.docHash === docHash && !rows.some((row) => row.id === note.id));
-      return rows.concat(extra);
-    }
-
     async function check() {
+      const disk = await diskRows(store);
       const durableTurns = new Set();
-      for (const note of store.notes.values()) {
+      for (const note of disk) {
         if (docOf.get(note.id) !== note.docHash) throw new Error(`docId changed ${note.id}`);
         if (durableTurns.has(note.qa?.turnId)) throw new Error(`dup durable turn ${note.qa?.turnId}`);
         durableTurns.add(note.qa?.turnId);
@@ -121,12 +153,13 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
         for (const turn of session.turns) {
           if (seenTurn.has(turn.id) === false) throw new Error(`turn escaped the set ${turn.id}`);
           if (turn.noteId) {
-            const note = await store.get(turn.noteId);
+            const note = disk.find((item) => item.id === turn.noteId);
             if (!note) throw new Error(`check without disk ${turn.id}`);
             if (note.docHash !== session.doc) throw new Error(`check doc ${turn.id}`);
             if (note.qa?.turnId !== turn.id) throw new Error(`check turn ${turn.id}`);
-            if (volatile.has(turn.noteId)) throw new Error(`check still volatile ${turn.id}`);
             if (turn.pendingDisk) throw new Error(`checked while pending ${turn.id}`);
+          } else if (turn.pendingDisk && disk.some((item) => item.id === `ask:${turn.id}`)) {
+            throw new Error(`pending row reached disk ${turn.id}`);
           }
         }
       }
@@ -152,7 +185,8 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
         } else if (roll < 0.38) {
           const turn = [...session.turns].reverse().find((item) => item.status === "done" && !item.noteId && !item.saving && !item.pendingDisk);
           if (turn) {
-            const plan = planNoteSave(turn, await visible(docHash), docHash, new Set(store.notes.keys()));
+            const diskIds = new Set((await diskRows(store)).map((note) => note.id));
+            const plan = planNoteSave(turn, await store.list(docHash), docHash, diskIds);
             if (plan.action !== "write") throw new Error(`fresh save planned ${plan.action}`);
             const claim = claimNoteSave(session, turn.id);
             if (!claim.ok) throw new Error(`claim ${claim.reason}`);
@@ -164,14 +198,15 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
             const saved = await store.put(input);
             if (docOf.has(saved.id) && docOf.get(saved.id) !== saved.docHash) throw new Error("put moved doc");
             docOf.set(saved.id, saved.docHash);
-            volatile.delete(saved.id);
             const done = finishNoteSave(session, turn.id, claim.ticket, { ok: true, noteId: saved.id });
             if (!done.ok || turn.pendingDisk || turn.noteId !== saved.id) throw new Error("save did not confirm");
+            if (!(await diskRows(store)).some((note) => note.id === saved.id)) throw new Error("save missed disk");
           }
         } else if (roll < 0.52) {
           const turn = [...session.turns].reverse().find((item) => item.status === "done" && !item.noteId && !item.saving);
           if (turn) {
             failures += 1;
+            const kept = turn.answer;
             const claim = claimNoteSave(session, turn.id);
             if (!claim.ok) throw new Error(`fail claim ${claim.reason}`);
             const input = noteInputFromTurn(turn, {
@@ -179,19 +214,30 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
               anchor: { bid: "b1", page: 1, quote: "引用" },
               page: 1
             });
-            volatile.set(input.id, input);
-            turn.pendingDisk = true;
+            notePutFailures = 1;
+            let threw = false;
+            try {
+              await store.put(input);
+            } catch (err) {
+              if (!(err instanceof NotesStoreError) || err.type === "doc") throw err;
+              threw = true;
+            }
+            if (!threw) throw new Error("put did not fail");
+            if ((await diskRows(store)).some((note) => note.id === input.id)) throw new Error("failed put reached disk");
+            if (!store.memory.notes.has(input.id)) throw new Error("failed put dropped the memory row");
             const failed = finishNoteSave(session, turn.id, claim.ticket, { ok: false, reason: "failed" });
             if (failed.ok || turn.noteId || !turn.pendingDisk) throw new Error("failure confirmed");
-            if (store.notes.has(input.id)) throw new Error("failed put reached disk");
-            const plan = planNoteSave(turn, await visible(docHash), docHash, new Set(store.notes.keys()));
+            if (turn.answer !== kept) throw new Error("failure dropped the answer");
+            const diskIds = new Set((await diskRows(store)).map((note) => note.id));
+            const plan = planNoteSave(turn, await store.list(docHash), docHash, diskIds);
             if (plan.action !== "write") throw new Error(`failed row planned ${plan.action}`);
           }
         } else if (roll < 0.66) {
           const turn = [...session.turns].reverse().find((item) => item.pendingDisk && !item.noteId && !item.saving);
           if (turn) {
             retries += 1;
-            const plan = planNoteSave(turn, await visible(docHash), docHash, new Set(store.notes.keys()));
+            const diskIds = new Set((await diskRows(store)).map((note) => note.id));
+            const plan = planNoteSave(turn, await store.list(docHash), docHash, diskIds);
             if (plan.action !== "write") throw new Error(`retry planned ${plan.action}`);
             const claim = claimNoteSave(session, turn.id);
             if (!claim.ok) throw new Error(`retry claim ${claim.reason}`);
@@ -202,9 +248,10 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
             });
             const saved = await store.put(input);
             docOf.set(saved.id, saved.docHash);
-            volatile.delete(saved.id);
             const done = finishNoteSave(session, turn.id, claim.ticket, { ok: true, noteId: saved.id });
             if (!done.ok || turn.pendingDisk) throw new Error("retry did not confirm");
+            const copies = (await diskRows(store)).filter((note) => note.qa?.turnId === turn.id);
+            if (copies.length !== 1) throw new Error(`retry duplicated ${copies.length}`);
           }
         } else if (roll < 0.78) {
           reloads += 1;
@@ -212,14 +259,13 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
           const fresh = open(docHash);
           if (saving) {
             unloads += 1;
-            const before = store.notes.size;
+            const before = (await diskRows(store)).length;
             const late = finishNoteSave(fresh, saving.id, saving.saveTicket, { ok: true, noteId: "ghost" });
             if (late.ok || fresh.turns.some((item) => item.noteId)) throw new Error("reloaded tab accepted an in-flight save");
-            if (store.notes.size !== before) throw new Error("reload wrote disk");
+            if ((await diskRows(store)).length !== before) throw new Error("reload wrote disk");
           }
-          for (const [id, note] of [...volatile]) {
-            if (note.docHash === docHash) volatile.delete(id);
-          }
+          const durable = (await diskRows(store)).filter((note) => note.docHash === docHash);
+          store.memory.replaceDocNotes(docHash, durable);
           sessions[index] = fresh;
           session = fresh;
         } else if (roll < 0.9) {
@@ -228,18 +274,18 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
             const claim = claimNoteSave(session, turn.id);
             if (claim.ok) {
               unloads += 1;
-              const before = store.notes.size;
+              const before = (await diskRows(store)).length;
               const fresh = open(docHash);
               fresh.turns.push({ ...turn, noteId: "", saving: false, saveTicket: 0, pendingDisk: false });
               const late = finishNoteSave(fresh, turn.id, claim.ticket, { ok: true, noteId: "ghost" });
               if (late.ok || fresh.turns.some((item) => item.noteId === "ghost")) throw new Error("unloaded save landed");
-              if (store.notes.size !== before) throw new Error("unload wrote disk");
+              if ((await diskRows(store)).length !== before) throw new Error("unload wrote disk");
               sessions[index] = fresh;
               session = fresh;
             }
           }
         } else {
-          const note = [...store.notes.values()][0];
+          const note = [...store.memory.notes.values()][0];
           if (note) {
             refusals += 1;
             const other = note.docHash === DOCS[0] ? DOCS[1] : DOCS[0];
@@ -262,7 +308,13 @@ test("durable ask saves keep doc identity across 500 seeds", async () => {
       }
     } catch (err) {
       throw new Error(`seed ${seed}: ${err.message}`);
+    } finally {
+      try { store.currentDb?.close(); } catch { /* already closed */ }
+      await wipeNotesDb();
     }
+  }
+  } finally {
+    IDBObjectStore.prototype.put = originalPut;
   }
   assert.ok(reloads > 0, "reload never ran");
   assert.ok(failures > 0, "failed save never ran");
