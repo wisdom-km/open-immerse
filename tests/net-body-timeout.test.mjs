@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 
 import { createFormulaCache, createMemoryStore } from "../lib/formula-cache.js";
-import { classifyFormulaProbe, FORMULA_SWITCH_KEYS, formulaChainFlags, normalizeFormulaSettings } from "../lib/formula-settings.js";
+import { classifyFormulaProbe, FORMULA_SWITCH_KEYS, formulaChainFlags, multimodalReady, normalizeFormulaSettings } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
 import { createMmLedger } from "../lib/formula-mm-ledger.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
@@ -141,11 +141,13 @@ function chat(text) {
   return JSON.stringify({ choices: [{ message: { content: text } }] });
 }
 
+// Only the two formula-path cases call this. A fixed vendor cannot use this
+// loopback address; custom may, and the mock does not care which vendor it is.
 function localSettings(origin) {
   return normalizeFormulaSettings({
     [FORMULA_SWITCH_KEYS.tier2]: true,
     multimodal: {
-      provider: "openai",
+      provider: "custom",
       apiKey: SECRET,
       model: "gpt-5.6-luna",
       baseUrl: `${origin}/v1`
@@ -550,6 +552,17 @@ describe("real response body stays inside the timeout", { concurrency: 1 }, () =
     } finally {
       await server.close();
     }
+  });
+
+  test("a fixed vendor aimed at loopback is not ready", () => {
+    assert.equal(multimodalReady({
+      multimodal: {
+        provider: "openai",
+        apiKey: SECRET,
+        model: "gpt-5.6-luna",
+        baseUrl: "http://127.0.0.1:9/v1"
+      }
+    }), false);
   });
 
   test("a 401 error body reaches 最近失败 and 需处理", async () => {
