@@ -17,6 +17,7 @@ import {
   spliceInlinePieces,
   verifiedArxivFormula
 } from "../lib/formula-arxiv-session.js";
+import { MAX_FORMULA_LATEX_CHARS } from "../lib/formula-katex.js";
 import { copyLatexText, failedInlineKind, katexClickKept, mountArxivDisplay, plainWithInlineMath } from "../lib/formula-arxiv-pane.js";
 import { loadAttentionPages, loadKatex, loadSource, SRC_V7, SRC_V7_SHA } from "./helpers/arxiv-paper.mjs";
 
@@ -296,6 +297,16 @@ test("a KaTeX failure stays off the page and a success path does not assign inne
   coloredParent.ownerDocument = doc;
   assert.equal(mountArxivDisplay(coloredParent, { ...broken, latex: "\\color{red}{x}" }, 1, { katex }), "ok");
   assert.equal(textOf(coloredParent).includes("\\color"), false);
+  let longRenders = 0;
+  const longKatex = {
+    render() { longRenders += 1; }
+  };
+  const longParent = el("div");
+  longParent.ownerDocument = doc;
+  const longLatex = "y".repeat(MAX_FORMULA_LATEX_CHARS + 1);
+  assert.equal(mountArxivDisplay(longParent, { ...broken, latex: longLatex }, 1, { katex: longKatex }), "katex-error");
+  assert.equal(longRenders, 0);
+  assert.equal(longParent.childNodes.length, 0);
 
   const colored = el("div");
   colored.ownerDocument = doc;

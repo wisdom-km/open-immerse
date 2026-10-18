@@ -6,8 +6,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decideFormula } from "../lib/formula-chain.js";
 import { TIER_ORDER } from "../lib/formula-contract.js";
-import { prepareFormulaLatex, stripLatexColor } from "../lib/latex-units.js";
-import { canRenderLatex, MAX_FORMULA_LATEX_CHARS } from "../lib/formula-katex.js";
+import { parseLatexSource, prepareFormulaLatex, stripLatexColor } from "../lib/latex-units.js";
+import { canRenderLatex, KATEX_RENDER_OPTIONS, MAX_FORMULA_LATEX_CHARS } from "../lib/formula-katex.js";
 import { formulaArxivSourceEnabled } from "../lib/formula-flags.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import { formulaChainFlags } from "../lib/formula-settings.js";
@@ -409,8 +409,8 @@ test("viewer keeps the tier-0 wiring that the screen depends on", () => {
   assert.equal((start.match(/rememberArxivAlignment\(resolved\.alignment\)/g) || []).length, 2);
   assert.ok(first >= 0 && first < flagAt && flagAt < second);
   assert.doesNotMatch(start.slice(0, start.indexOf("resolveArxivSession")), /!found\.version|version-uncertain/);
-  assert.match(viewer, /pdfVersion:\s*arxivOn\s*\?\s*\(arxiv\?\.version\s*\|\|\s*""\)\s*:\s*undefined/);
-  assert.match(viewer, /pdfVersion:\s*formulaArxivSourceEnabled\(\)\s*\?\s*\(arxivIdentity\?\.version\s*\|\|\s*""\)\s*:\s*undefined/);
+  assert.match(viewer, /arxivVersion:\s*arxiv\?\.version\s*\|\|\s*""/);
+  assert.match(viewer, /arxivVersion:\s*arxivIdentity\?\.version\s*\|\|\s*""/);
   const offer = viewer.slice(viewer.indexOf("function syncArxivOffer"), viewer.indexOf("function bindArxivChip"));
   assert.doesNotMatch(offer, /!found\.version|version-uncertain/);
 });
@@ -476,6 +476,56 @@ test("overlong latex falls back and a repeated check does not render twice", asy
   const painted = await screen(colored, colored.formulas[0], "v7");
   assert.equal(painted.chosen.tier, "arxiv");
   assert.equal(painted.trace[0].status, "ok");
+});
+
+test("color commands keep their text and alignment refuses an overlong formula", () => {
+  const cases = [
+    ["\\color{red}{E=mc^2}", "{E=mc^2}", "E=mc2"],
+    ["\\textcolor{red}{x}", "x", "x"],
+    ["\\colorbox{yellow}{x}", "x", "x"],
+    ["\\fcolorbox{blue}{yellow}{x}", "x", "x"],
+    ["\\textcolor{red}{a{b}c}", "a{b}c", "abc"],
+    ["\\textcolor[rgb]{1,0,0}{\\colorbox{yellow}{q}}", "q", "q"]
+  ];
+  for (const [src, stripped, visible] of cases) {
+    const shown = stripLatexColor(prepareFormulaLatex(src, false));
+    assert.equal(shown, stripped, src);
+    assert.equal(copyLatexText(src), prepareFormulaLatex(src, false), src);
+    assert.match(copyLatexText(src), /\\(?:color|textcolor|colorbox|fcolorbox)/, src);
+    const html = katex.renderToString(shown, { ...KATEX_RENDER_OPTIONS, displayMode: false });
+    assert.equal(/background(?:-color)?\s*:/i.test(html), false, src);
+    assert.equal(/border(?:-color|-width|-style)?\s*:/i.test(html), false, src);
+    assert.equal(/(?:^|[^-\w])color\s*:/i.test(html), false, src);
+    assert.equal(html.includes("boxed"), false, src);
+    assert.equal(html.replace(/<[^>]+>/g, ""), visible, src);
+  }
+  assert.equal(stripLatexColor("\\textcolor{red} hello"), "\\textcolor{red} hello");
+  assert.equal(stripLatexColor("\\textcolor"), "\\textcolor");
+  assert.equal(stripLatexColor("\\fcolorbox{a}{b"), "\\fcolorbox{a}{b");
+  assert.equal(stripLatexColor("\\colorbox{y}{a{b}"), "\\colorbox{y}{a{b}");
+  const huge = "z".repeat(MAX_FORMULA_LATEX_CHARS + 1);
+  let calls = 0;
+  const spy = {
+    renderToString(src, options) {
+      calls += 1;
+      return katex.renderToString(src, options);
+    }
+  };
+  const parsed = parseLatexSource([{
+    path: "m.tex",
+    text: `\\documentclass{article}\\begin{document}$${huge}$\\end{document}`
+  }], { katex: spy });
+  const inlines = (parsed.units || []).flatMap((unit) => (unit.parts || []).filter((part) => part.type === "inline"));
+  assert.equal(inlines.length, 1);
+  assert.equal(inlines[0].katexOk, false);
+  assert.equal(calls, 0);
+  const fitted = parseLatexSource([{
+    path: "m.tex",
+    text: "\\documentclass{article}\\begin{document}$x$\\end{document}"
+  }], { katex: spy });
+  const short = (fitted.units || []).flatMap((unit) => (unit.parts || []).filter((part) => part.type === "inline"));
+  assert.equal(short[0].katexOk, true);
+  assert.equal(calls, 1);
 });
 
 test("these invariants did not fetch arxiv.org", () => {

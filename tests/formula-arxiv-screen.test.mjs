@@ -213,7 +213,11 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
           getURL(path) { return location.origin + "/" + String(path || "").replace(/^\\/+/, ""); },
           sendMessage(message) {
             if (!message || message.type !== "OI_ARXIV_SOURCE") return Promise.resolve({ ok: false });
-            if (/arxiv\\.org/i.test(JSON.stringify(message))) window.__oiArxivFetches += 1;
+            // A download is any OI_ARXIV_SOURCE message with no action.
+            // The payload never contains "arxiv.org", so that string is not a counter.
+            if (message.action == null || message.action === "") {
+              window.__oiSourceGets = (window.__oiSourceGets || 0) + 1;
+            }
             if (message.action === "save-alignment") {
               return orig(location.origin + "/__oi/align", {
                 method: "POST",
@@ -306,10 +310,11 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
     return chip.querySelector(".oi-arxiv-label")?.textContent || "";
   })()`, "arxiv offer");
   assert.equal(offer, "用 arXiv 源码");
+  assert.equal(await evaluate(`window.__oiSourceGets || 0`), 0);
+  assert.equal(downloads, 0);
   assert.equal(await evaluate(`window.__oiArxivFetches || 0`), 0);
   assert.equal(await evaluate(`document.getElementById("arxivSourceAuto").closest("button")`), null);
   assert.equal(await evaluate(`document.querySelectorAll(".is-katex").length`), 0);
-  assert.equal(await evaluate(`window.__oiArxivFetches || 0`), 0);
 
   await evaluate(`document.getElementById("arxivSourceChip").click()`);
   const failed = await waitFor(`(() => {
