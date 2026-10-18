@@ -6,7 +6,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decideFormula } from "../lib/formula-chain.js";
 import { TIER_ORDER } from "../lib/formula-contract.js";
-import { prepareFormulaLatex } from "../lib/latex-units.js";
+import { prepareFormulaLatex, stripLatexColor } from "../lib/latex-units.js";
+import { canRenderLatex, MAX_FORMULA_LATEX_CHARS } from "../lib/formula-katex.js";
+import { formulaArxivSourceEnabled } from "../lib/formula-flags.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import { formulaChainFlags } from "../lib/formula-settings.js";
 import { copyLatexText } from "../lib/formula-arxiv-pane.js";
@@ -15,8 +17,7 @@ import {
   canonicalArxivVersion,
   equationLabelDigits,
   equationNumbersAgree,
-  resolveArxivSession,
-  versionScreenGate
+  resolveArxivSession
 } from "../lib/formula-arxiv-gate.js";
 import { alignSourceToBlocks } from "../lib/source-align.js";
 import {
@@ -81,6 +82,14 @@ function unitFor(row) {
 
 async function screen(alignment, row, pdfVersion, extra = {}) {
   const block = blockFor(row);
+  const ctx = {
+    katex,
+    flags: { arxivEnabled: extra.arxivEnabled !== false },
+    arxivId: "1706.03762",
+    arxivVersion: alignment.version || "",
+    readAlignment: async () => alignment
+  };
+  if (extra.omitPdfVersion !== true) ctx.pdfVersion = pdfVersion;
   return decideFormula({
     docHash: ATTENTION_PDF_SHA,
     bid: row.bid || row.unitId,
@@ -91,71 +100,62 @@ async function screen(alignment, row, pdfVersion, extra = {}) {
     pdfText: block?.text || "",
     equationNumber: block?.eqLabel || "",
     crop: { url: PNG }
-  }, {
-    katex,
-    flags: { arxivEnabled: extra.arxivEnabled !== false },
-    arxivId: "1706.03762",
-    arxivVersion: alignment.version || "",
-    pdfVersion,
-    readAlignment: async () => alignment
-  });
+  }, ctx);
 }
 
-test("version numbers agree only when both sides name the same version", () => {
+test("version strings are cache keys and the tier order stays put", () => {
   assert.equal(canonicalArxivVersion("V7"), "v7");
   assert.equal(canonicalArxivVersion("7"), "v7");
   assert.equal(canonicalArxivVersion(""), "");
-  assert.deepEqual(versionScreenGate("v7", "v7"), { screen: true, reason: null });
-  assert.equal(versionScreenGate("v7", "v1").reason, "version-mismatch");
-  assert.equal(versionScreenGate("v7", "").reason, "version-uncertain");
-  assert.equal(versionScreenGate("", "v7").reason, "version-uncertain");
   assert.equal(equationNumbersAgree({ number: "1" }, { equationNumber: "(1)" }), true);
   assert.equal(equationNumbersAgree({ number: "1" }, { equationNumber: "(2)" }), false);
   assert.equal(equationNumbersAgree({ number: "" }, { equationNumber: "" }), true);
   assert.deepEqual(TIER_ORDER, ["arxiv", "multimodal", "ocr", "self", "vector", "crop", "placeholder"]);
+  assert.equal(formulaArxivSourceEnabled(), false);
+  const flagsSrc = readFileSync(join(root, "lib/formula-flags.js"), "utf8");
+  assert.match(flagsSrc, /let arxivSourceEnabled = false/);
 });
 
-test("a version mismatch or an uncertain version does not screen and falls back to the crop", async () => {
+test("a missing version downloads the latest source and a different package is checked formula by formula", async () => {
   const displays = alignedV7.formulas.filter((row) => row.kind === "display" && row.pass === true);
   assert.equal(displays.length, 5);
   const sample = displays[0];
-  const mismatched = await screen(alignedV1, sample, "v7");
-  assert.equal(mismatched.trace[0].tier, "arxiv");
-  assert.equal(mismatched.trace[0].reason, "version-mismatch");
-  assert.notEqual(mismatched.chosen.tier, "arxiv");
-  assert.equal(mismatched.trace.map((item) => item.tier).includes("crop"), true);
-
-  const uncertain = await screen({ ...alignedV7, version: "" }, sample, "v7");
-  assert.equal(uncertain.trace[0].reason, "version-uncertain");
-  assert.notEqual(uncertain.chosen.tier, "arxiv");
-
+  const otherStamp = await screen(alignedV7, sample, "v1");
+  assert.equal(otherStamp.chosen.tier, "arxiv");
+  assert.notEqual(otherStamp.trace[0].reason, "version-mismatch");
   const missingPdf = await screen(alignedV7, sample, "");
-  assert.equal(missingPdf.trace[0].reason, "version-uncertain");
-  assert.notEqual(missingPdf.chosen.tier, "arxiv");
+  assert.equal(missingPdf.chosen.tier, "arxiv");
+  assert.notEqual(missingPdf.trace[0].reason, "version-uncertain");
 
-  const shown = await scheduleFormulaBlock({
-    label: "formula",
-    id: sample.slotId || sample.bid,
-    bid: sample.bid,
-    sourceUnitId: sample.unitId,
-    display: true,
-    eqLabel: blockFor(sample)?.eqLabel || `(${sample.number})`,
-    bbox: [0.1, 0.2, 0.4, 0.25],
-    text: "x"
-  }, {
-    arxivEnabled: true,
-    arxivId: "1706.03762",
-    arxivVersion: "v1",
-    pdfVersion: "v7",
-    katex,
-    docHash: ATTENTION_PDF_SHA,
-    readAlignment: async () => alignedV1,
-    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG, surface: "png" })
+  let requested = null;
+  const latest = await resolveArxivSession({
+    id: "1706.03762",
+    pdfVersion: "",
+    pdfSha256: ATTENTION_PDF_SHA,
+    readAlignment: async () => null,
+    download: async (query) => {
+      requested = query;
+      return { ok: true, version: "v7", files: packedV7.files };
+    },
+    prepare: async ({ version }) => ({ ok: true, alignment: { ...alignedV7, version } })
   });
-  assert.notEqual(shown.formulaTier, "arxiv");
-  assert.equal(shown.verified, undefined);
-  assert.equal(shown.latex, undefined);
-  assert.equal(shown.imageUrl, PNG);
+  assert.equal(latest.ok, true);
+  assert.equal(latest.downloaded, true);
+  assert.equal(latest.parsed, true);
+  assert.equal(requested.version, "");
+  assert.notEqual(latest.reason, "version-uncertain");
+
+  const echoed = await resolveArxivSession({
+    id: "1706.03762",
+    pdfVersion: "v7",
+    pdfSha256: ATTENTION_PDF_SHA,
+    readAlignment: async () => null,
+    download: async () => ({ ok: true, version: "v1", files: packedV7.files }),
+    prepare: async () => ({ ok: true, alignment: { ...alignedV1, version: "v1" } })
+  });
+  assert.equal(echoed.ok, true);
+  assert.equal(echoed.parsed, true);
+  assert.equal(echoed.alignment.version, "v1");
 });
 
 test("Attention v7 equation numbers stay on their PDF labels and a shifted number stays off", async () => {
@@ -179,9 +179,11 @@ test("Attention v7 equation numbers stay on their PDF labels and a shifted numbe
     ...alignedV7,
     formulas: alignedV7.formulas.map((row) => (row.unitId === shiftedRow.unitId ? shiftedRow : row))
   };
-  const rejected = await screen(shifted, shiftedRow, "v7");
+  const rejected = await screen(shifted, shiftedRow, undefined, { omitPdfVersion: true });
   assert.equal(rejected.trace[0].reason, "number-mismatch");
   assert.notEqual(rejected.chosen.tier, "arxiv");
+  const rejectedWithStamp = await screen(shifted, shiftedRow, "v7");
+  assert.equal(rejectedWithStamp.trace[0].reason, "number-mismatch");
 });
 
 test("untrusted KaTeX commands are not painted and the crop stays on the block", async () => {
@@ -326,18 +328,23 @@ test("reopening a screened paper does not download or parse again", async () => 
     pdfVersion: "v7",
     pdfSha256: ATTENTION_PDF_SHA,
     readAlignment: async () => ({ ...alignedV1, version: "v1" }),
-    download: async () => {
+    download: async (query) => {
       downloads += 1;
-      return { ok: true, version: "v1", files: [] };
+      assert.equal(query.version, "v7");
+      return { ok: true, version: query.version, files: packedV7.files };
     },
     prepare: async () => {
       parses += 1;
-      return { ok: true, alignment: alignedV1 };
+      return { ok: true, alignment: alignedV7 };
     }
   });
-  assert.equal(drifted.ok, false);
-  assert.equal(drifted.reason, "version-mismatch");
-  assert.equal(drifted.parsed, false);
+  assert.equal(drifted.ok, true);
+  assert.equal(drifted.reused, false);
+  assert.equal(drifted.parsed, true);
+  assert.equal(downloads, 2);
+  assert.equal(parses, 2);
+  const latestAlignment = { ...alignedV7, version: "" };
+  store.set(`1706.03762@:${ATTENTION_PDF_SHA}`, latestAlignment);
   const unknown = await resolveArxivSession({
     id: "1706.03762",
     pdfVersion: "",
@@ -345,15 +352,36 @@ test("reopening a screened paper does not download or parse again", async () => 
     readAlignment,
     download: async () => {
       downloads += 1;
-      return { ok: true, version: "v7", files: [] };
+      return { ok: true, version: "", files: packedV7.files };
     },
-    prepare
+    prepare: async () => {
+      parses += 1;
+      return { ok: true, alignment: latestAlignment };
+    }
   });
-  assert.equal(unknown.reason, "version-uncertain");
+  assert.equal(unknown.ok, true);
+  assert.equal(unknown.reused, true);
   assert.equal(unknown.downloaded, false);
   assert.equal(unknown.parsed, false);
   assert.equal(downloads, 2);
-  assert.equal(parses, 1);
+  assert.equal(parses, 2);
+  const forced = await resolveArxivSession({
+    id: "1706.03762",
+    pdfVersion: "",
+    pdfSha256: ATTENTION_PDF_SHA,
+    download: async (query) => {
+      downloads += 1;
+      assert.equal(query.version, "");
+      return { ok: true, files: packedV7.files };
+    },
+    prepare: async () => {
+      parses += 1;
+      return { ok: true, alignment: latestAlignment };
+    }
+  });
+  assert.equal(forced.downloaded, true);
+  assert.equal(downloads, 3);
+  assert.equal(parses, 3);
 });
 
 test("clicking a source formula and a placeholder call the same jump", () => {
@@ -363,6 +391,91 @@ test("clicking a source formula and a placeholder call the same jump", () => {
   const placeholder = viewer.slice(viewer.indexOf("function mountFormulaPlaceholder"));
   assert.match(placeholder.slice(0, 1800), /jumpFormulaFromUi\(button\)/);
   assert.equal(viewer.includes("innerHTML"), false);
+});
+
+test("viewer keeps the tier-0 wiring that the screen depends on", () => {
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const start = viewer.slice(
+    viewer.indexOf("async function startArxivSource"),
+    viewer.indexOf("async function ensureMissingLayouts")
+  );
+  assert.match(start, /pdfVersion:\s*found\.version\s*\|\|\s*""/);
+  assert.match(start, /version:\s*found\.version\s*\|\|\s*""/);
+  assert.match(start, /readAlignment:\s*\(query\)\s*=>\s*readCachedArxivAlignment\(query\)/);
+  assert.match(start, /if\s*\(\s*!resolved\.reused\s*\)\s*\{[\s\S]*?action:\s*"save-alignment"/);
+  const flagAt = start.indexOf("setFormulaArxivSourceEnabled(true)");
+  const first = start.indexOf("rememberArxivAlignment(resolved.alignment)");
+  const second = start.indexOf("rememberArxivAlignment(resolved.alignment)", first + 1);
+  assert.equal((start.match(/rememberArxivAlignment\(resolved\.alignment\)/g) || []).length, 2);
+  assert.ok(first >= 0 && first < flagAt && flagAt < second);
+  assert.doesNotMatch(start.slice(0, start.indexOf("resolveArxivSession")), /!found\.version|version-uncertain/);
+  assert.match(viewer, /pdfVersion:\s*arxivOn\s*\?\s*\(arxiv\?\.version\s*\|\|\s*""\)\s*:\s*undefined/);
+  assert.match(viewer, /pdfVersion:\s*formulaArxivSourceEnabled\(\)\s*\?\s*\(arxivIdentity\?\.version\s*\|\|\s*""\)\s*:\s*undefined/);
+  const offer = viewer.slice(viewer.indexOf("function syncArxivOffer"), viewer.indexOf("function bindArxivChip"));
+  assert.doesNotMatch(offer, /!found\.version|version-uncertain/);
+});
+
+test("overlong latex falls back and a repeated check does not render twice", async () => {
+  const host = alignedV7.formulas.find((row) => row.kind === "display" && row.pass === true);
+  const latex = "x".repeat(MAX_FORMULA_LATEX_CHARS + 1);
+  const alignment = {
+    ...alignedV7,
+    formulas: [{
+      ...host,
+      latex,
+      checks: { position: true, chars: true, number: true, render: true },
+      pass: true
+    }]
+  };
+  const decision = await screen(alignment, alignment.formulas[0], "v7");
+  assert.equal(decision.trace[0].reason, "latex-too-long");
+  assert.notEqual(decision.chosen.tier, "arxiv");
+  assert.equal(decision.chosen.render, "image");
+  const shown = await scheduleFormulaBlock({
+    label: "formula",
+    id: host.slotId || host.unitId,
+    sourceUnitId: host.unitId,
+    display: true,
+    eqLabel: blockFor(host)?.eqLabel || "(1)",
+    bbox: [0.1, 0.2, 0.4, 0.25],
+    text: "x"
+  }, {
+    arxivEnabled: true,
+    pdfVersion: "v7",
+    katex,
+    docHash: ATTENTION_PDF_SHA,
+    readAlignment: async () => alignment,
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG, surface: "png" })
+  });
+  assert.equal(shown.formulaReason, "latex-too-long");
+  assert.equal(shown.imageUrl, PNG);
+  assert.equal(shown.latex, undefined);
+  let renders = 0;
+  const spy = {
+    renderToString(src, options) {
+      renders += 1;
+      return katex.renderToString(src, options);
+    }
+  };
+  const once = "y+z+1";
+  assert.equal(canRenderLatex(once, false, spy).pass, true);
+  assert.equal(canRenderLatex(once, false, spy).pass, true);
+  assert.equal(renders, 1);
+  assert.equal(stripLatexColor("\\color{red}{E=mc^2}"), "{E=mc^2}");
+  assert.equal(stripLatexColor("\\color[rgb]{1,0,0}x"), "x");
+  assert.match(copyLatexText("\\color{red}{E=mc^2}"), /\\color/);
+  const colored = {
+    ...alignedV7,
+    formulas: [{
+      ...host,
+      latex: "\\color{red}{E=mc^2}",
+      checks: { position: true, chars: true, number: true, render: true },
+      pass: true
+    }]
+  };
+  const painted = await screen(colored, colored.formulas[0], "v7");
+  assert.equal(painted.chosen.tier, "arxiv");
+  assert.equal(painted.trace[0].status, "ok");
 });
 
 test("these invariants did not fetch arxiv.org", () => {

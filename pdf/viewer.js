@@ -3770,6 +3770,7 @@ async function startArxivSource() {
   }
   rememberArxivAlignment(resolved.alignment);
   setFormulaArxivSourceEnabled(true);
+  rememberArxivAlignment(resolved.alignment);
   if (!resolved.reused) {
     try {
       await runtimeSend({

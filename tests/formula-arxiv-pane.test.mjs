@@ -60,11 +60,12 @@ test("new arxiv modules evaluate with no process, Buffer, or require", () => {
 test("pane helpers evaluate with no process and keep click slop", () => {
   const pane = loadIsolated(new URL("../lib/formula-arxiv-pane.js", import.meta.url), {
     "./formula-katex.js": {
-      canRenderLatex() { return { pass: true, error: null }; },
+      MAX_FORMULA_LATEX_CHARS: 8000,
       renderLatexInto(node, latex) { node.rendered = latex; }
     },
     "./latex-units.js": {
-      prepareFormulaLatex(latex) { return String(latex ?? "").replace(/\\tag\*?\{[^}]*\}/g, "").replace(/\\label\{[^}]*\}/g, "").trim(); }
+      prepareFormulaLatex(latex) { return String(latex ?? "").replace(/\\tag\*?\{[^}]*\}/g, "").replace(/\\label\{[^}]*\}/g, "").trim(); },
+      stripLatexColor(latex) { return String(latex ?? ""); }
     },
     "./formula-settings.js": {
       placeholderCopy() { return { aria: "公式 · 点击查看原公式", visible: [] }; }
@@ -262,6 +263,7 @@ test("a KaTeX failure stays off the page and a success path does not assign inne
       return "<span>ok</span>";
     },
     render(latex, node) {
+      if (String(latex).includes("\\bad")) throw new Error("bad latex");
       const child = doc.createElement("span");
       child.textContent = String(latex);
       node.append(child);
@@ -284,6 +286,16 @@ test("a KaTeX failure stays off the page and a success path does not assign inne
   assert.equal(painted.includes("E=mc^2"), true);
   assert.equal(painted.includes("$$"), false);
   assert.equal(painted.includes("#e10091"), false);
+  const labeledParent = el("div");
+  labeledParent.ownerDocument = doc;
+  const labeledLatex = "\\label{eq:a} E=mc^2 \\tag{9}";
+  assert.equal(mountArxivDisplay(labeledParent, { ...broken, latex: labeledLatex }, 1, { katex }), "ok");
+  assert.equal(labeledParent.childNodes[0].dataset.latex, "E=mc^2");
+  assert.equal(labeledParent.childNodes[0].dataset.latex.includes("\\label"), false);
+  const coloredParent = el("div");
+  coloredParent.ownerDocument = doc;
+  assert.equal(mountArxivDisplay(coloredParent, { ...broken, latex: "\\color{red}{x}" }, 1, { katex }), "ok");
+  assert.equal(textOf(coloredParent).includes("\\color"), false);
 
   const colored = el("div");
   colored.ownerDocument = doc;
