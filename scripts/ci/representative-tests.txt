@@ -1,0 +1,15 @@
+# Representative files for the first CI pass. One path per line.
+# Chrome/CDP, opens the Attention v7 PDF through the local viewer.
+tests/pdf-topbar-geometry.test.mjs
+# PDF text-layer formula detection, including the DPO v3 PDF.
+tests/pdf-formula-detect.test.mjs
+# arXiv source tarballs v1 and v7. Live fetch is blocked inside the file.
+tests/arxiv-src-unpack.test.mjs
+# LaTeX units and KaTeX counts from the v7 source package.
+tests/arxiv-latex.test.mjs
+# Settings page. Needs the full git history (checkout fetch-depth: 0).
+tests/settings-page.test.mjs
+# Library storage. The file stubs fetch so it cannot reach the network.
+tests/library-store.test.mjs
+# chrome.storage this-binding. No browser process.
+tests/unbound-storage.test.mjs
