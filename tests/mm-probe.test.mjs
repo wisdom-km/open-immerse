@@ -5,11 +5,11 @@
  * 1. 并发 — 两个标签页交错写 formulaSettings，探测结果只落到还没过期的那一页。
  * 2. 页面生命周期 — pagehide / drop() 中止在途探测，回来的结果不写存储。
  * 3. 新旧版本兼容 — 不适用（Wisdom 决定不做旧后台兼容）。
- * 4. 失败与回滚 — 401/403/404/429/超时/不能看图/网络错误；空 Base URL 不写入；失败芯片留下。
+ * 4. 失败与回滚 — 401/403/404/429/超时/不能看图/无法连接；空 Base URL 不写入；失败芯片留下。
  * 5. 边界输入 — 未实测厂商、空 Base URL、超长摘要、密钥混进摘要、大小写厂商名、SEEN。、短密钥。
  * 6. 交付要求 — 先红后绿。删掉保存端或读取端的校验、空地址拒绝、过期结果丢弃，对应测试变红。
  * 7. 逐字输入 — input 只改草稿，change 才写入；芯片与存储里的探测一致。
- * 8. 编辑中保存密钥 — 只写密钥本身，草稿里的地址、模型和厂商不进存储。保存密钥会清掉「已连通」。
+ * 8. 编辑中保存密钥 — 只写密钥本身，草稿里的地址、模型和厂商不进存储。保存密钥后芯片是「待测试」。
  * 9. 已提交卡片是唯一写入来源。同一拍的提交和点击都从最新卡片出队。被拒的 URL 回滚并提示。草稿不进存储。
  *
  * 不变量（随机测试每一步都检查）:
@@ -21,7 +21,7 @@
  * ⑥ 探测不和问 AI 共用可变队列（mm-probe 没有队列）。
  * ⑦ 本 PR 不调用自研算法或矢量重绘。
  * ⑧ 队列排空后，存储等于已提交卡片；屏幕上的已保存值等于存储；芯片等于存储里的探测；草稿不进存储。
- * ⑨ 保存或移除密钥（含换回同一把）之后，存储里不再是「已连通」。更晚返回的旧探测不能写回。
+ * ⑨ 保存密钥（含换回同一把）之后存储里不再是「已连通」，芯片是「待测试」。移除密钥不留芯片。更晚返回的旧探测不能写回。
  *
  * 中断点见 lib/mm-probe.js 文件头。每个点在下面有单独的对抗测试。
  */
@@ -398,7 +398,7 @@ test("probe classifies 401, 403, 404, 429, no-vision, timeout, and network from 
     throw error;
   });
   const network = await probeMultimodal(openaiSettings(), { secret: SECRET, net: broken.net });
-  assert.equal(network.chip, "网络错误");
+  assert.equal(network.chip, "无法连接");
   assert.equal(network.code, "network");
   assert.equal(network.summary.includes(SECRET), false);
 });
@@ -472,8 +472,8 @@ test("a key-read failure is not classified as a network error", async () => {
     }
   });
   assert.notEqual(probe.code, "network");
-  assert.notEqual(probe.chip, "网络错误");
-  assert.equal(probe.chip, "暂不可用");
+  assert.notEqual(probe.chip, "无法连接");
+  assert.equal(probe.chip, "测试失败");
   assert.equal(probe.summary.includes(SECRET), false);
 });
 
@@ -927,10 +927,13 @@ test("a saved connection is dropped when the vendor or model changes", async () 
   assert.equal(otherVendor.multimodal.provider, "qwen");
   assert.equal(otherVendor.multimodal.probe, null);
   const sameKey = applyFormulaPart(connected, "multimodal", { apiKey: `${SECRET}-2` });
-  assert.equal(sameKey.multimodal.probe, null);
+  assert.equal(sameKey.multimodal.probe?.code, "pending");
+  assert.equal(sameKey.multimodal.probe?.ok, false);
   const again = applyFormulaPart(connected, "multimodal", { apiKey: SECRET });
   assert.equal(again.multimodal.apiKey, SECRET);
-  assert.equal(again.multimodal.probe, null);
+  assert.equal(again.multimodal.probe?.code, "pending");
+  assert.equal(again.multimodal.probe?.chip, "待测试");
+  assert.equal(again.multimodal.probe?.ok, false);
   const local = memoryStorage({ [FORMULA_SETTINGS_KEY]: connected });
   const written = await writeFormulaSettings({
     ...connected,
@@ -1011,7 +1014,8 @@ test("a stored empty custom URL accepts switch toggles and key edits only", asyn
   assert.equal(written.multimodal.model, "m");
   assert.equal(written.multimodal.apiKey, "sk-other");
   assert.equal(written.multimodal.baseUrl, "");
-  assert.equal(written.multimodal.probe, null);
+  assert.equal(written.multimodal.probe?.code, "pending");
+  assert.equal(written.multimodal.probe?.chip, "待测试");
   assert.equal(customBaseUrlError(written), CUSTOM_BASE_URL_ERROR);
   const cleared = await writeFormulaSettings({
     ...written,
@@ -1064,7 +1068,7 @@ test("only a fetch TypeError is a network failure", async () => {
     }
   });
   assert.equal(fetched.code, "network");
-  assert.equal(fetched.chip, "网络错误");
+  assert.equal(fetched.chip, "无法连接");
   const bug = await probeMultimodal(openaiSettings(), {
     secret: SECRET,
     sendVision: async () => {
@@ -1072,8 +1076,8 @@ test("only a fetch TypeError is a network failure", async () => {
     }
   });
   assert.notEqual(bug.code, "network");
-  assert.notEqual(bug.chip, "网络错误");
-  assert.equal(bug.chip, "暂不可用");
+  assert.notEqual(bug.chip, "无法连接");
+  assert.equal(bug.chip, "测试失败");
 });
 
 test("an empty or schemeless custom Base URL is not a ready multimodal card", async () => {
@@ -1643,8 +1647,9 @@ test("saving a key while a Base URL draft is open does not store the draft", asy
     assert.equal(after.multimodal.baseUrl, before.multimodal.baseUrl);
     assert.equal(after.multimodal.model, before.multimodal.model);
     assert.equal(after.ocr.provider, before.ocr.provider);
-    assert.equal(after.multimodal.probe, null);
-    assert.equal(mmRoot(tab).querySelector(".oi-set-chip") == null, true);
+    assert.equal(after.multimodal.probe?.code, "pending");
+    assert.equal(after.multimodal.probe?.ok, false);
+    assert.equal(mmRoot(tab).querySelector(".oi-set-chip")?.textContent, "待测试");
     assert.equal(tab.document.querySelector("[data-base-url]").value, "");
     assert.equal(modelTextInput(tab).value, "sneaky-model");
   } finally {
@@ -1975,9 +1980,9 @@ test("choosing custom without a Base URL does not turn tier 2 on for the previou
 test("an unexpected probe failure is unavailable, not a network error", async () => {
   const mod = await import(pathToFileURL(join(root, "options/options.js")).href);
   const probe = mod.classifyUnexpectedProbe(new Error("probe send failed"));
-  assert.equal(probe.chip, "暂不可用");
+  assert.equal(probe.chip, "测试失败");
   assert.notEqual(probe.code, "network");
-  assert.notEqual(probe.chip, "网络错误");
+  assert.notEqual(probe.chip, "无法连接");
   assert.throws(() => mod.classifyUnexpectedProbe(Object.assign(new Error("net"), { code: "real-network-in-test" })));
 });
 
@@ -2528,7 +2533,8 @@ test("a late storage echo does not snap an open Base URL draft", async () => {
     await flush();
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, "sk-late-echo");
-    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.code, "pending");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, false);
     for (const listener of listeners) {
       listener({
         [FORMULA_SETTINGS_KEY]: { newValue: structuredClone(bag[FORMULA_SETTINGS_KEY]) }
@@ -2573,14 +2579,15 @@ test("saving a key, the same key again, or removing it clears 已连通", async 
     await flush();
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, "sk-other-value");
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
-    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.code, "pending");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, false);
     assert.equal(bag[FORMULA_SETTINGS_KEY][FORMULA_SWITCH_KEYS.tier2], true);
-    assert.equal(chip(tab).includes("已连通"), false);
+    assert.equal(chip(tab), "待测试");
     commitKey(tab, SECRET);
     await flush();
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, SECRET);
-    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
-    assert.equal(chip(tab).includes("已连通"), false);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.code, "pending");
+    assert.equal(chip(tab), "待测试");
     bag[FORMULA_SETTINGS_KEY] = connectedCard();
     const removed = await openOptionsTab("rekey-remove");
     assert.equal(clickRemoveKey(removed), true);
@@ -2615,12 +2622,14 @@ test("a probe that returns after the key is saved again is discarded", async () 
     commitKey(tab, SECRET);
     await flush();
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, SECRET);
-    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.code, "pending");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, false);
     pending[0].resolve(jsonResponse(200, {
       choices: [{ message: { content: "SEEN", reasoning_content: "SEEN" }, finish_reason: "stop" }]
     }));
     await flush();
-    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.code, "pending");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, false);
     assert.equal((mmRoot(tab).querySelector(".oi-set-chip")?.textContent || "").includes("已连通"), false);
   } finally {
     installNet(null);
@@ -2774,6 +2783,234 @@ test("a six-character key is redacted and a shorter needle is not", async () => 
   assert.equal(sent.ok, false);
   assert.equal(String(sent.error?.summary || "").includes("unavailable"), true);
   assert.equal(String(sent.error?.summary || "").includes("***"), false);
+});
+
+function mmBadge(tab) {
+  return tab.document.querySelector("[data-badge='mm']");
+}
+
+function chipNode(tab) {
+  return mmRoot(tab).querySelector(".oi-set-chip");
+}
+
+function installProbeNet(pending, respond) {
+  installNet(createNet({
+    log: () => {},
+    random: () => 0,
+    sleep: (ms) => (ms < 1000 ? Promise.resolve() : new Promise(() => {})),
+    transport() {
+      const hit = {};
+      pending.push(hit);
+      return Promise.resolve().then(() => respond());
+    }
+  }));
+}
+
+test("CHIP-01 network shows 无法连接 and the check-network line", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: openaiSettings() };
+  const pending = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  installProbeNet(pending, () => {
+    const error = new TypeError("fetch failed");
+    error.code = "ECONNRESET";
+    throw error;
+  });
+  try {
+    const tab = await openOptionsTab("chip-01");
+    const arm = { pending, current: null };
+    assert.equal(await clickProbe(tab, arm), true);
+    await flush();
+    const chip = chipNode(tab);
+    assert.match(chip?.textContent || "", /^无法连接 · \d{2}:\d{2}$/);
+    assert.equal(chip.className.includes("is-warn"), true);
+    assert.equal(chip.hasAttribute("title"), false);
+    assert.equal(mmRoot(tab).querySelector("[data-probe-summary]")?.textContent, "检查网络或服务地址后重新测试");
+    assert.equal(mmBadge(tab).hidden, false);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.code, "network");
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+test("CHIP-02 an unrecognized failure is 测试失败 plus the service summary", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: openaiSettings() };
+  const pending = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  installProbeNet(pending, () => jsonResponse(500, { error: { message: "upstream exploded" } }));
+  try {
+    const tab = await openOptionsTab("chip-02");
+    const arm = { pending, current: null };
+    assert.equal(await clickProbe(tab, arm), true);
+    await flush();
+    const chip = chipNode(tab);
+    assert.match(chip?.textContent || "", /^测试失败 · \d{2}:\d{2}$/);
+    assert.equal(chip.hasAttribute("title"), false);
+    assert.equal(mmRoot(tab).querySelector("[data-probe-summary]")?.textContent, "upstream exploded");
+    assert.equal(mmBadge(tab).hidden, false);
+    for (const node of tab.document.querySelectorAll(".oi-set-chip")) {
+      assert.equal(String(node.textContent || "").includes("暂不可用"), false);
+    }
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+test("CHIP-03 aborted draws no chip and does not add 需处理", async () => {
+  const aborted = {
+    ...openaiSettings(),
+    multimodal: {
+      ...openaiSettings().multimodal,
+      probe: { ok: false, chip: "已中止", code: "aborted", summary: "已中止", at: Date.now() }
+    }
+  };
+  const bag = { [FORMULA_SETTINGS_KEY]: aborted };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const storedAbort = await openOptionsTab("chip-03-stored");
+    assert.equal(chipNode(storedAbort) == null, true);
+    assert.equal(mmBadge(storedAbort).hidden, true);
+    assert.equal(storedAbort.document.body.textContent.includes("已中止"), false);
+
+    bag[FORMULA_SETTINGS_KEY] = connectedCard();
+    const pending = [];
+    installNet(createNet({
+      log: () => {},
+      random: () => 0,
+      sleep: (ms) => (ms < 1000 ? Promise.resolve() : new Promise(() => {})),
+      transport() {
+        const hit = {};
+        pending.push(hit);
+        return new Promise((resolve) => { hit.resolve = resolve; });
+      }
+    }));
+    const tab = await openOptionsTab("chip-03-live");
+    assert.match(chipNode(tab)?.textContent || "", /已连通/);
+    const arm = { pending, current: null };
+    assert.equal(await clickProbe(tab, arm), true);
+    tab.window.dispatchEvent(new tab.window.Event("pagehide"));
+    pending[0].resolve(jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] }));
+    await flush();
+    assert.match(chipNode(tab)?.textContent || "", /^已连通 · \d{2}:\d{2}$/);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, true);
+    assert.equal(mmBadge(tab).hidden, true);
+    assert.equal(tab.document.body.textContent.includes("已中止"), false);
+    assert.equal(tab.document.body.textContent.includes("需处理") && mmBadge(tab).hidden === false, false);
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+test("CHIP-04 length is 回答被截断 and not 不能看图", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: openaiSettings() };
+  const pending = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  installProbeNet(pending, () => jsonResponse(200, {
+    choices: [{ message: { content: "", reasoning_content: "SEEN" }, finish_reason: "length" }]
+  }));
+  try {
+    const tab = await openOptionsTab("chip-04");
+    const arm = { pending, current: null };
+    assert.equal(await clickProbe(tab, arm), true);
+    await flush();
+    const chip = chipNode(tab);
+    assert.match(chip?.textContent || "", /^回答被截断 · \d{2}:\d{2}$/);
+    assert.equal(chip.className.includes("is-warn"), true);
+    assert.equal(chip.hasAttribute("title"), false);
+    assert.equal(mmRoot(tab).querySelector("[data-probe-summary]")?.textContent, "推理模型把输出额度用在了思考上，换个非推理模型再测");
+    assert.equal(String(chip.textContent).includes("不能看图"), false);
+    assert.equal(mmRoot(tab).textContent.includes("这个模型不能看图"), false);
+    assert.equal(mmBadge(tab).hidden, false);
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
+});
+
+test("CHIP-05 saving a key shows a grey 待测试 chip without 需处理", async () => {
+  const failed = connectedCard();
+  failed.multimodal.probe = { ok: false, chip: "密钥无效 (401)", code: "401", summary: "nope", at: Date.now() };
+  const bag = { [FORMULA_SETTINGS_KEY]: failed };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const tab = await openOptionsTab("chip-05");
+    assert.equal(mmBadge(tab).hidden, false);
+    commitKey(tab, "sk-other-value");
+    await flush();
+    const chip = chipNode(tab);
+    assert.equal(chip?.textContent, "待测试");
+    assert.equal(chip.className.includes("is-off"), true);
+    assert.equal(chip.className.includes("is-warn"), false);
+    assert.equal(chip.hasAttribute("title"), false);
+    assert.equal(mmRoot(tab).querySelector("[data-probe-summary]") == null, true);
+    assert.equal(mmBadge(tab).hidden, true);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.code, "pending");
+    commitKey(tab, "sk-other-value");
+    await flush();
+    assert.equal(chipNode(tab)?.textContent, "待测试");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.code, "pending");
+    assert.equal(mmBadge(tab).hidden, true);
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("CHIP-06 removing a key leaves no chip", async () => {
+  const bag = { [FORMULA_SETTINGS_KEY]: connectedCard() };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const tab = await openOptionsTab("chip-06");
+    assert.match(chipNode(tab)?.textContent || "", /已连通/);
+    assert.equal(clickRemoveKey(tab), true);
+    await flush();
+    assert.equal(chipNode(tab) == null, true);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe, null);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, "");
+    assert.equal(mmBadge(tab).hidden, true);
+    assert.equal(mmRoot(tab).querySelector("[data-probe-summary]") == null, true);
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("CHIP-07 chips stay on one line and the note does not sit inside the chip", async () => {
+  const summary = "服务摘要".repeat(20).slice(0, 80);
+  const bag = { [FORMULA_SETTINGS_KEY]: openaiSettings() };
+  const pending = [];
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  installProbeNet(pending, () => jsonResponse(500, { error: { message: summary } }));
+  try {
+    const tab = await openOptionsTab("chip-07");
+    const arm = { pending, current: null };
+    assert.equal(await clickProbe(tab, arm), true);
+    await flush();
+    const chip = chipNode(tab);
+    assert.match(chip?.textContent || "", /^测试失败 · \d{2}:\d{2}$/);
+    assert.equal(chip.textContent.includes("\n"), false);
+    assert.equal(chip.childNodes.length, 1);
+    assert.equal(chip.parentElement?.className.includes("oi-set-card-head"), true);
+    const note = mmRoot(tab).querySelector("[data-probe-summary]");
+    assert.equal(note?.textContent, summary);
+    assert.equal(note.parentElement === chip, false);
+    assert.equal(chip.contains(note), false);
+    assert.equal(chip.hasAttribute("title"), false);
+    const css = read("options/options.css");
+    assert.equal(/\.oi-set-chip\s*\{[^}]*white-space:\s*nowrap/s.test(css), true);
+    assert.equal(/\.oi-set-chip\s*\{[^}]*flex-shrink:\s*0/s.test(css), true);
+    assert.equal(/\.oi-set-probe-summary\s*\{[^}]*overflow-wrap:\s*anywhere/s.test(css), true);
+  } finally {
+    installNet(null);
+    restoreGlobals(previous);
+  }
 });
 
 test("500 seeds drive two real settings pages, including concurrent probes", async () => {

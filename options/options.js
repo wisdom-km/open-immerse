@@ -41,6 +41,10 @@ import {
   multimodalTestDisabled,
   normalizeFormulaSettings,
   ocrTestDisabled,
+  probeChipText,
+  probeChipTone,
+  probeExplanation,
+  probeNeedsAttention,
   readFormulaSettings,
   removeFormulaKey,
   runFormulaProbe,
@@ -129,7 +133,7 @@ let formulaSecretEpoch = { multimodal: 0, ocr: 0 };
 // 5. 被拒绝的 URL 不改 formulaCommitted，输入回滚到已提交值，并显示「没保存上」。
 // 6. 自己的 storage 回声用写入时的 JSON 识别，迟到的 onChanged 也不把草稿弹回。
 // 7. pagehide 只中止探测，不提交未保存的地址。
-// 8. 保存或移除密钥（含换回同一把）清掉该卡的「已连通」，并增加写入序号。旧探测晚到时序号对不上就丢弃。
+// 8. 保存密钥（含换回同一把）把该卡改成「待测试」；移除密钥不留芯片。旧探测晚到时序号对不上就丢弃。
 const formulaProbeCtl = createProbeController();
 let notesSession = null;
 let dataPanel = null;
@@ -1563,13 +1567,36 @@ function invalidateFormulaProbe() {
   if (wasBusy) releaseProbeButtons();
 }
 
-function clearFormulaProbeChrome(which) {
+function syncProbeChrome(which, probe, secret) {
   const root = el("formulaSettingsRoot");
   const id = which === "ocr" ? "ocr" : "mm";
+  const part = which === "ocr" ? "ocr" : "multimodal";
   const card = root?.querySelector?.(`[data-formula-card="${id}"]`);
   if (!card) return;
   for (const node of [...card.querySelectorAll(".oi-set-chip, .oi-set-probe-summary")]) {
     node.parentNode?.removeChild(node);
+  }
+  const text = probeChipText(probe);
+  const head = card.querySelector(".oi-set-card-head");
+  if (text && head) {
+    const node = document.createElement("span");
+    node.className = probeChipTone(probe);
+    node.textContent = text;
+    head.appendChild(node);
+    const note = probeExplanation(probe, secret);
+    if (note) {
+      const line = document.createElement("p");
+      line.className = "oi-set-probe-summary";
+      line.setAttribute("data-probe-summary", "1");
+      line.textContent = note;
+      if (head.nextSibling) head.parentNode.insertBefore(line, head.nextSibling);
+      else head.parentNode.appendChild(line);
+    }
+  }
+  if (!probeNeedsAttention(probe)) {
+    for (const node of [...(root.querySelectorAll?.(`[data-probe-fail="${part}"]`) || [])]) {
+      node.parentNode?.removeChild(node);
+    }
   }
 }
 
@@ -1621,7 +1648,11 @@ async function flushCommitted({ rerender = false, clearProbe = "" } = {}) {
   }
   if (failed) return;
   if (rerender) paintFormulaSettings();
-  else if (clearProbe) clearFormulaProbeChrome(clearProbe);
+  else if (clearProbe) {
+    const part = clearProbe === "ocr" ? "ocr" : "multimodal";
+    syncProbeChrome(clearProbe, formulaSaved?.[part]?.probe, formulaSaved?.[part]?.apiKey);
+    refreshBadges();
+  }
 }
 
 function updateFormulaPart(which, patch, opts = {}) {
@@ -1784,7 +1815,7 @@ function adoptFormulaRecord(stored) {
   paintFormulaSettings();
 }
 
-/** A throw that escapes the probe is not a network error. Chip stays 「暂不可用」. */
+/** A throw that escapes the probe is not a network error. Chip stays 「测试失败」. */
 export function classifyUnexpectedProbe(err) {
   if (err?.code === "real-network-in-test") throw err;
   return classifyFormulaProbe({ ok: false, code: "http", summary: "请求失败" });
@@ -1857,12 +1888,11 @@ function bindFormulaSettings() {
     const raw = changes[FORMULA_SETTINGS_KEY].newValue;
     const rawJson = JSON.stringify(raw);
     if (formulaEchoKey && rawJson === formulaEchoKey) {
-      // This tab already wrote the record. If the chip is still the old 「已连通」, drop it
-      // without repainting, so an open Base URL draft stays put.
-      const shown = document.querySelector("[data-formula-card='mm'] .oi-set-chip");
-      if (!raw?.multimodal?.probe && shown) clearFormulaProbeChrome("multimodal");
-      const ocrShown = document.querySelector("[data-formula-card='ocr'] .oi-set-chip");
-      if (!raw?.ocr?.probe && ocrShown) clearFormulaProbeChrome("ocr");
+      // This tab already wrote the record. Match the stored chip without repainting,
+      // so an open Base URL draft stays put.
+      syncProbeChrome("multimodal", raw?.multimodal?.probe, raw?.multimodal?.apiKey);
+      syncProbeChrome("ocr", raw?.ocr?.probe, raw?.ocr?.apiKey);
+      refreshBadges();
       return;
     }
     const incoming = acceptStoredFormulaSettings(raw);
@@ -1993,7 +2023,7 @@ function bindSecretsList() {
 
 function refreshBadges() {
   const mm = document.querySelector('[data-badge="mm"]');
-  const probeBad = [formulaSettings?.multimodal?.probe, formulaSettings?.ocr?.probe].some((probe) => probe && probe.ok === false && probe.chip);
+  const probeBad = [formulaSettings?.multimodal?.probe, formulaSettings?.ocr?.probe].some((probe) => probeNeedsAttention(probe));
   if (mm) mm.hidden = !probeBad;
   const data = document.querySelector('[data-badge="data"]');
   if (data) data.hidden = dataPanel?.state?.()?.phase !== "incomplete";
