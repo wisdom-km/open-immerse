@@ -33,7 +33,9 @@ while IFS= read -r file || [[ -n "${file:-}" ]]; do
   skipped="$(summary skipped "$log")"
   duration="$(summary duration_ms "$log")"
   echo "RESULT $file pass=${pass:-0} fail=${failed:-0} skipped=${skipped:-0} duration_ms=${duration:-0} exit=$status"
-  if [[ "$status" -ne 0 ]]; then
+  # A describe-level skip exits 0 with an empty pass count. Any listed file
+  # that passed nothing, or that skipped, is a failure.
+  if [[ "$status" -ne 0 || "${pass:-0}" -eq 0 || "${skipped:-0}" -gt 0 ]]; then
     fail=1
   fi
   rm -f "$log"

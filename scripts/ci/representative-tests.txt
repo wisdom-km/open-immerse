@@ -15,3 +15,9 @@ tests/library-store.test.mjs
 tests/unbound-storage.test.mjs
 # Vision client. A fixed-vendor host guard must not hide a red test here.
 tests/mm-client.test.mjs
+# Fetch body timeout against 127.0.0.1. A down loopback fails the file.
+tests/net-body-timeout.test.mjs
+# Formula source from the DPO text layer through to the unit. No network.
+tests/formula-pdftext.test.mjs
+# Cold start and reopen share the formula cache key. Sent PNG bytes hash to that cropHash at DPR 1 and 2. No network.
+tests/formula-reopen-cache.test.mjs
