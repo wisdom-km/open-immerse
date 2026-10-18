@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { mock } from "node:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -629,8 +629,33 @@ test("palette A contrast and scope stay on the settings page", () => {
   }
   const own = css.replace(/@import[^;]+;/, "").replace(/body\.oi-settings\s*\{[^}]+\}/g, "");
   for (const color of forbidden) assert.equal(own.toLowerCase().includes(color), false);
-  const touched = execFileSync("git", ["log", "--first-parent", "--no-merges", "e4f464d..HEAD", "--", "ui/tokens.css", "pdf", "lib/notes-prefs.js", "lib/reader-notes-local.js"], { encoding: "utf8" });
-  assert.equal(touched.trim(), "");
+  // SET-41 checks content. History on pdf/ stays red after the five approved
+  // viewer.js changes, so that directory is read instead of filtered by log.
+  // `git diff A B` compares two commits and ignores the worktree. The second
+  // call compares the files on disk with e4f464d, so an uncommitted edit fails.
+  const scope = ["ui/tokens.css", "lib/notes-prefs.js", "lib/reader-notes-local.js"];
+  execFileSync("git", ["diff", "--quiet", "e4f464d", "HEAD", "--", ...scope]);
+  execFileSync("git", ["diff", "--quiet", "e4f464d", "--", ...scope]);
+  const shared = new Set([...readFileSync(join(root, "ui/tokens.css"), "utf8").matchAll(/--(oi-[\w-]+)\s*:/g)].map((hit) => hit[1]));
+  const settingsPalette = Object.keys(tokens).filter((name) => !shared.has(name));
+  assert.ok(settingsPalette.length > 0);
+  const walk = (dir) => {
+    const found = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) found.push(...walk(path));
+      else if (entry.isFile() && /\.(?:css|js|mjs|html)$/.test(entry.name)) found.push(path);
+    }
+    return found;
+  };
+  for (const file of walk(join(root, "pdf"))) {
+    const src = readFileSync(file, "utf8");
+    const rel = file.slice(root.length + 1);
+    assert.equal(/body\.oi-settings/.test(src), false, `${rel} has a body.oi-settings selector`);
+    for (const name of settingsPalette) {
+      assert.equal(src.includes(`--${name}`), false, `${rel} has settings palette --${name}`);
+    }
+  }
   for (const path of [
     "tests/fixtures/Attention_Is_All_You_Need.pdf",
     "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf",
