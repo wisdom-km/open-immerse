@@ -531,6 +531,9 @@
   --oi-reader-focus: #8FA8FF;
   --oi-reader-warn: #E2A86A;
   --oi-reader-warn-soft: rgba(226, 168, 106, 0.14);
+  --oi-reader-ai: #6FB3BC;
+  --oi-reader-ai-soft: rgba(111, 179, 188, 0.16);
+  --oi-reader-mine: #B98CC6;
   --oi-reader-panel-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.3);
   --oi-reader-popover-shadow: var(--oi-reader-panel-shadow);
 }

@@ -142,6 +142,7 @@ test("A1 KaTeX does not execute HTML and a failed formula stays plain text", () 
   assert.equal(node.querySelector("a"), null);
   assert.equal(node.innerHTML.includes("<script"), false);
   assert.equal(node.innerHTML.includes("javascript:"), false);
+  assert.equal(userSourceAngles(node.innerHTML).includes("<"), false);
   assert.match(node.innerHTML, /class="katex"/);
   assert.match(node.innerHTML, /sqrt/);
   assert.equal(node.textContent.includes("$\\sqrt"), false);
@@ -151,6 +152,7 @@ test("A1 KaTeX does not execute HTML and a failed formula stays plain text", () 
   assert.equal(node.querySelector("script, a, iframe, img"), null);
   assert.equal(node.innerHTML.includes("class=\"katex\""), false);
   assert.equal(/<\s*script\b|<\s*a\b|onerror\s*=/i.test(node.innerHTML), false);
+  assert.equal(userSourceAngles(node.innerHTML).includes("<"), false);
   assert.match(node.textContent, /\\href\{javascript:alert\(1\)\}/);
   assert.match(node.textContent, /\$/);
 
@@ -158,6 +160,7 @@ test("A1 KaTeX does not execute HTML and a failed formula stays plain text", () 
     const html = renderAskAnswer(`$${command}$`, katex);
     assert.equal(html.includes("class=\"katex\""), false, command);
     assert.equal(/<\s*(?:script|a|img|iframe)\b|onerror\s*=/i.test(html), false, command);
+    assert.equal(userSourceAngles(html).includes("<"), false, command);
     assert.match(html, /\$/, command);
   }
 
@@ -180,6 +183,8 @@ test("A1 KaTeX does not execute HTML and a failed formula stays plain text", () 
   assert.equal(plain.includes("class=\"katex\""), false);
   assert.match(plain, /\$a\+b\$/);
   assert.equal(/<\s*(?:script|a|img)\b/.test(plain), false);
+  assert.equal(userSourceAngles(plain).includes("<"), false);
+  assert.equal(userSourceAngles(blocked).includes("<"), false);
 });
 
 test("A2 copy writes the model text, not the rendered HTML", async () => {
@@ -439,6 +444,24 @@ test("the panel no longer adopts notes through durableNoteIds", () => {
   assert.equal(session.includes("durableNoteIds"), false);
 });
 
+function userSourceAngles(html) {
+  const page = parseHTML(`<!doctype html><body><div id="o">${html}</div></body>`);
+  const node = page.document.getElementById("o");
+  for (const el of node.querySelectorAll(".katex")) el.remove();
+  return node.innerHTML.replace(/<\/?(?:p|br|strong|code|pre|ul|ol|li)\b[^>]*>/gi, "");
+}
+
+function contrastRatio(foreground, background) {
+  const channel = (hex, offset) => {
+    const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const lum = (hex) => 0.2126 * channel(hex, 1) + 0.7152 * channel(hex, 3) + 0.0722 * channel(hex, 5);
+  const lighter = Math.max(lum(foreground), lum(background));
+  const darker = Math.min(lum(foreground), lum(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 function assertNoActiveHtml(node) {
   assert.equal(node.querySelector("script, a, img, iframe, link, object, embed, form"), null);
   for (const el of [node, ...node.querySelectorAll("*")]) {
@@ -569,4 +592,146 @@ test("formulas past the count or length cap stay escaped text", () => {
   assert.equal(calls.at(-1), "z");
   assert.match(big, /\$a{100,}\$/);
   assert.match(big, /class="katex"/);
+});
+
+const PAYLOAD = "<img src=x onerror=alert(1)>";
+
+test("inline code escapes an img onerror payload", () => {
+  const html = renderAskAnswer("`" + PAYLOAD + "`", katex);
+  assert.equal(html.includes("<img"), false);
+  assert.match(html, /<code>&lt;img src=x onerror=alert\(1\)&gt;<\/code>/);
+  assert.equal(userSourceAngles(html).includes("<"), false);
+});
+
+test("a rejected formula escapes an img onerror payload", () => {
+  const html = renderAskAnswer("$" + PAYLOAD + "\\href{https://example.com}{x}$", katex);
+  assert.equal(html.includes("<img"), false);
+  assert.equal(html.includes("class=\"katex\""), false);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(html, /\\href\{https:\/\/example.com\}/);
+  assert.equal(userSourceAngles(html).includes("<"), false);
+});
+
+test("an over-limit formula escapes an img onerror payload", () => {
+  const html = renderAskAnswer("$" + "a".repeat(ASK_MATH_MAX_TEX) + PAYLOAD + "$", katex);
+  assert.equal(html.includes("<img"), false);
+  assert.equal(html.includes("class=\"katex\""), false);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.equal(userSourceAngles(html).includes("<"), false);
+});
+
+test("the panel renders the answer instead of writing turn.answer as HTML", async () => {
+  const box = harness({ answer: PAYLOAD });
+  await ask(box.ui, "原文标签");
+  const answer = box.ui.root.querySelector(".oi-ask-answer");
+  assert.equal(answer.querySelector("img, script"), null);
+  assert.equal(answer.innerHTML.includes("<img"), false);
+  assert.match(answer.innerHTML, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.equal(answer.textContent.includes(PAYLOAD), true);
+});
+
+test("a formula keeps backticks and the letters inside them", () => {
+  const html = renderAskAnswer("$a `b` c$", katex);
+  const page = parseHTML(`<!doctype html><body><div id="o">${html}</div></body>`);
+  const text = page.document.getElementById("o").textContent;
+  assert.match(html, /class="katex"/);
+  assert.match(text, /b/);
+  assert.equal(text.includes("\uE000"), false);
+  assert.equal(html.includes("\uE000"), false);
+  assert.equal(html.includes("\uE010"), false);
+  assert.equal(/\$a\s+0\s+c\$/.test(text), false);
+});
+
+test("an ordered list keeps its start number", () => {
+  const html = renderAskAnswer("3. 三\n4. 四");
+  assert.match(html, /<ol start="3"><li>三<\/li><li>四<\/li><\/ol>/);
+  const one = renderAskAnswer("1. 一\n2. 二");
+  assert.match(one, /<ol><li>一<\/li><li>二<\/li><\/ol>/);
+});
+
+test("private-use characters stay literal and the renderer always advances", { timeout: 2000 }, () => {
+  const source = readFileSync(join(root, "lib/ask-render.js"), "utf8");
+  assert.equal(source.includes("\\uE000"), false);
+  assert.equal(source.includes("\\uE001"), false);
+  assert.equal(source.includes("\\uE010"), false);
+  assert.equal(source.includes("\\uE011"), false);
+  renderAskAnswer("$x$", katex);
+  const marks = ["\uE000", "\uE001", "\uE010", "\uE011"];
+  const cases = [
+    ...marks,
+    ...marks.map((mark) => mark + mark),
+    "\uE0000\uE001",
+    "\uE0100\uE011",
+    "\uE000\uE011",
+    "\uE010\uE001",
+    "\uE000`code \uE001` $x$",
+    "- \uE000 一项\n- `\uE010`",
+    "$\uE000$",
+    "$$\uE010$$",
+    "```\n\uE000 $not$\n```"
+  ];
+  for (const sample of cases) {
+    const started = performance.now();
+    const html = renderAskAnswer(sample, katex);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 50, `${JSON.stringify(sample)} took ${elapsed}ms`);
+    const page = parseHTML(`<!doctype html><body><div id="o">${html}</div></body>`);
+    const text = page.document.getElementById("o").textContent;
+    for (const mark of marks) {
+      if (sample.includes(mark)) assert.equal(text.includes(mark), true, JSON.stringify(sample));
+    }
+    assert.equal(userSourceAngles(html).includes("<"), false, JSON.stringify(sample));
+  }
+});
+
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let value = Math.imul(state ^ (state >>> 15), 1 | state);
+    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test("random answers stay bounded and do not emit raw user markup", { timeout: 30000 }, () => {
+  const alphabet = ["\uE000", "\uE001", "\uE010", "\uE011", "`", "$", "*", "<", ">", "a", "\n", " ", "3. ", "- ", "**", PAYLOAD];
+  for (let seed = 1; seed <= 500; seed += 1) {
+    const random = mulberry32(seed);
+    const length = 1 + Math.floor(random() * 40);
+    let source = "";
+    for (let index = 0; index < length; index += 1) source += alphabet[Math.floor(random() * alphabet.length)];
+    const started = performance.now();
+    let html = "";
+    try {
+      html = renderAskAnswer(source, katex);
+    } catch (err) {
+      throw new Error(`seed ${seed} threw ${err.message} on ${JSON.stringify(source)}`);
+    }
+    const elapsed = performance.now() - started;
+    if (elapsed > 100) throw new Error(`seed ${seed} took ${elapsed.toFixed(1)}ms on ${JSON.stringify(source)}`);
+    const left = userSourceAngles(html);
+    if (left.includes("<")) throw new Error(`seed ${seed} raw < in ${JSON.stringify(left.slice(0, 180))} from ${JSON.stringify(source)}`);
+    if (/<\s*(?:script|img|iframe)\b/i.test(html)) {
+      throw new Error(`seed ${seed} active html from ${JSON.stringify(source)}`);
+    }
+  }
+});
+
+test("dark theme raises the AI and mine colors", () => {
+  const css = readFileSync(join(root, "pdf/reader-tokens.css"), "utf8");
+  const start = css.indexOf('.oi-reader-app[data-reader-theme="dark"]');
+  const end = css.indexOf(".oi-reader-app[data-reader-fs-band", start);
+  const dark = css.slice(start, end);
+  const light = css.slice(end);
+  assert.match(dark, /--oi-reader-ai:\s*#6FB3BC/i);
+  assert.match(dark, /--oi-reader-ai-soft:\s*rgba\(111,\s*179,\s*188,\s*0?\.16\)/);
+  assert.match(dark, /--oi-reader-mine:\s*#B98CC6/i);
+  assert.match(light, /--oi-reader-ai:\s*#2A6670/i);
+  assert.match(light, /--oi-reader-ai-soft:\s*rgba\(42,\s*102,\s*112,\s*0?\.08\)/);
+  assert.match(light, /--oi-reader-mine:\s*#7A4A86/i);
+  assert.equal(light.includes("#6FB3BC"), false);
+  assert.equal(light.includes("#B98CC6"), false);
+  assert.ok(contrastRatio("#6FB3BC", "#232427") >= 4.5);
+  assert.ok(contrastRatio("#B98CC6", "#232427") >= 4.5);
 });
