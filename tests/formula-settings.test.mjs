@@ -384,7 +384,7 @@ test("FUI-07 and FUI-08 probe copy is classified without a network call", async 
   assert.equal(classifyFormulaProbe({ status: 500, summary: long }, at).summary.length, 80);
   const stub = await runFormulaProbe({ provider: "openai" }, stubFormulaProbe, at);
   assert.equal(stub.ok, false);
-  assert.equal(stub.chip, "暂不可用");
+  assert.equal(stub.chip, "测试失败");
   const src = read("lib/formula-settings.js") + read("lib/formula-settings-ui.js");
   assert.equal(/\bfetch\s*\(/.test(src), false);
   assert.equal(src.includes("confirm("), false);

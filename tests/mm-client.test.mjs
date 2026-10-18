@@ -31,6 +31,7 @@ import {
   sendVision
 } from "../lib/mm-client.js";
 import { MULTIMODAL_PROVIDERS, normalizeFormulaSettings } from "../lib/formula-settings.js";
+import { MM_TIER_VERSION, RETIRED_MM_VERSION, multimodalTier } from "../lib/formula-tiers/multimodal.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path) => readFileSync(join(root, path), "utf8");
@@ -179,7 +180,11 @@ test("registry presets are the documented vision models, including 千问", () =
   assert.equal(gemini.models.includes("gemini-2.0-flash"), false);
   assert.equal(read("lib/ask-route.js").includes("gemini-2.0-flash"), true);
   assert.equal(read("lib/providers.js").includes("gemini-2.0-flash"), true);
-  assert.match(read("lib/formula-tiers/multimodal.js"), /stub-0/);
+  const tierSrc = read("lib/formula-tiers/multimodal.js");
+  assert.match(tierSrc, /export const MM_TIER_VERSION = /);
+  assert.match(tierSrc, /export const RETIRED_MM_VERSION = /);
+  assert.equal(multimodalTier.version, MM_TIER_VERSION);
+  assert.notEqual(MM_TIER_VERSION, RETIRED_MM_VERSION);
   const source = read("lib/mm-client.js");
   assert.equal(/\bfetch\s*\(/.test(source.replace(/\.fetch\s*\(/g, "")), false);
   assert.match(source, /purpose: MM_PURPOSE/);
@@ -520,14 +525,14 @@ test("concurrent sends keep their own secret, body, and reply", async () => {
   });
   const image = [{ mime: "image/png", base64: PNG }];
   const pendingLeft = sendVision({
-    target: { provider: "openai", model: "left-model", url: "https://left.example/v1/chat/completions", host: "left.example" },
+    target: { provider: "custom", model: "left-model", url: "https://left.example/v1/chat/completions", host: "left.example" },
     text: "L",
     images: image,
     secret: SECRET,
     net: box.net
   });
   const pendingRight = sendVision({
-    target: { provider: "openai", model: "right-model", url: "https://right.example/v1/chat/completions", host: "right.example" },
+    target: { provider: "custom", model: "right-model", url: "https://right.example/v1/chat/completions", host: "right.example" },
     text: "R",
     images: image,
     secret: PLAIN,
