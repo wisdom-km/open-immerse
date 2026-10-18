@@ -4057,6 +4057,13 @@ async function readCachedArxivAlignment(query) {
 // for a zoom-dependent redraw; the model cache keeps this URL.
 const formulaModelCrops = new Map();
 
+function modelPngPayloadUrl(block) {
+  const pixels = block?.crop?.pixels;
+  if (typeof pixels !== "string" || !pixels) return "";
+  if (/^https?:/i.test(pixels) || /^data:/i.test(pixels)) return "";
+  return `data:image/png;base64,${pixels}`;
+}
+
 function formulaModelCropId(pageNumber, block) {
   const id = String(block?.bid || block?.id || "");
   if (!id) return "";
@@ -4070,8 +4077,21 @@ function rememberFormulaModelCrop(pageNumber, block) {
 }
 
 function formulaModelPng(pageNumber, block, hooks) {
+  // The hash was taken from crop.pixels. A second lookup must not substitute
+  // another bitmap, including the display redraw now sitting on imageUrl.
+  const carried = modelPngPayloadUrl(block);
+  if (carried) return cropPngFor({ ...block, imageUrl: carried }, hooks);
   const stable = formulaModelCrops.get(formulaModelCropId(pageNumber, block));
   return cropPngFor(stable ? { ...block, imageUrl: stable } : block, hooks);
+}
+
+async function formulaModelDisplayCrop(raster, page, item, pageNumber, options = {}) {
+  const pageCrop = await withRasterCrop(raster, page, item, pageNumber, { ...options, sharp: false });
+  rememberFormulaModelCrop(pageNumber, pageCrop);
+  if (options.sharp === false || !pageCrop.imageUrl) return pageCrop;
+  const sharp = await renderSharpVisualCrop(page, raster, pageCrop, pageNumber);
+  if (!sharp) return pageCrop;
+  return { ...pageCrop, imageUrl: sharp, surface: "redraw" };
 }
 
 async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, options = {}) {
@@ -4097,14 +4117,7 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
     const sourceUnitId = arxivOn ? arxivSourceUnitFor(block) : "";
     if (sourceUnitId) block.sourceUnitId = sourceUnitId;
     cropped.push(await scheduleFormulaBlock(block, {
-      withRasterCrop: async (item) => {
-        const pageCrop = await withRasterCrop(raster, page, item, pageNumber, { ...options, sharp: false });
-        rememberFormulaModelCrop(pageNumber, pageCrop);
-        if (options.sharp === false || !pageCrop.imageUrl) return pageCrop;
-        const sharp = await renderSharpVisualCrop(page, raster, pageCrop, pageNumber);
-        if (!sharp) return pageCrop;
-        return { ...pageCrop, imageUrl: sharp, surface: "redraw" };
-      },
+      withRasterCrop: (item) => formulaModelDisplayCrop(raster, page, item, pageNumber, options),
       cropPngFor: (block, hooks) => formulaModelPng(pageNumber, block, hooks),
       isStale,
       signal: options.signal,

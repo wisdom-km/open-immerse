@@ -17,5 +17,5 @@ tests/unbound-storage.test.mjs
 tests/net-body-timeout.test.mjs
 # Formula source from the DPO text layer through to the unit. No network.
 tests/formula-pdftext.test.mjs
-# Cold start and reopen share the formula cache key, including a 1px ink trim. No network.
+# Cold start and reopen share the formula cache key. Sent PNG bytes hash to that cropHash at DPR 1 and 2. No network.
 tests/formula-reopen-cache.test.mjs

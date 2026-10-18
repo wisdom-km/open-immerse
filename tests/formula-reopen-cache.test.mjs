@@ -10,13 +10,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
-import { measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { FORMULA_INK_PAD_PX, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { cacheableLayout } from "../lib/pdf-layout-client.js";
 import { createFormulaCache, createMemoryStore, tierRecordKey } from "../lib/formula-cache.js";
 import { cropHashOf, unitKeyOf } from "../lib/formula-contract.js";
+import { sha256Hex } from "../lib/sha256.js";
 import { formulaUnitFromBlock, scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import { cropPngFor } from "../lib/formula-crop-png.js";
 import { rasterCropRect, CROP_SCALE } from "../lib/pdf-blocks.js";
@@ -150,11 +151,12 @@ test("viewer stamps before it crops, and the model crop stays sharp:false", () =
   }
   const hydrate = functionBody("hydrateMissingVisualCrops");
   assert.match(hydrate.slice(hydrate.indexOf("cropLayoutBlocks("), hydrate.indexOf("cropLayoutBlocks(") + 240), /sharp:\s*false/);
-  const crop = functionBody("cropLayoutBlocks");
+  const crop = functionBody("formulaModelDisplayCrop");
   const rememberAt = crop.indexOf("rememberFormulaModelCrop");
   const sharpAt = crop.indexOf("renderSharpVisualCrop");
   const pinnedAt = crop.indexOf("{ ...options, sharp: false }");
   assert.ok(pinnedAt >= 0 && rememberAt > pinnedAt && sharpAt > rememberAt);
+  assert.match(functionBody("cropLayoutBlocks"), /formulaModelDisplayCrop\(/);
   assert.match(functionBody("restampArxivPage"), /formulaModelPng\(/);
   assert.equal(functionBody("refreshFormulaCropsForDisplay").includes("scheduleFormulaBlock"), false);
   assert.equal(MM_TIER_VERSION, "mm-2");
@@ -253,11 +255,11 @@ test("a cold start and a reopen share unitId and cropHash and send once", async 
   assert.equal(MM_TIER_VERSION, "mm-2");
 });
 
-// This layout box trims cleanly once. Measuring the stored trim again
-// shifts the crop by 1px (286×63 → 287×63) on a 1224×1584 raster.
-const DRIFT_W = 1224;
-const DRIFT_H = 1584;
+// Letter page at the page-raster scale. A second measure of the stored trim
+// moves the pixel rect; the numbers come from that measurement, not literals.
 const DRIFT_LAYOUT = [0.2075, 0.1975, 0.44, 0.23625];
+const PAGE_PNG = { w: 80, h: 40 };
+const SHARP_PNG = { 1: { w: 12, h: 8 }, 2: { w: 160, h: 80 } };
 
 function extractFunction(source, name) {
   const start = source.indexOf(`function ${name}(`);
@@ -288,8 +290,8 @@ function pngDataUrl(width, height) {
 }
 
 function driftRaster() {
-  const width = DRIFT_W;
-  const height = DRIFT_H;
+  const width = 612 * CROP_SCALE;
+  const height = 792 * CROP_SCALE;
   const data = new Uint8ClampedArray(width * height * 4);
   data.fill(255);
   const left = Math.floor(DRIFT_LAYOUT[0] * width) + 4;
@@ -337,64 +339,104 @@ function loadImageForVisualBlock(source) {
   });
 }
 
-function asyncSlice(source, name) {
-  const start = source.indexOf(`async function ${name}`);
+function scanPast(source, from, openCh, closeCh) {
+  let depth = 0;
+  let quote = "";
+  let escape = false;
+  for (let i = from; i < source.length; i += 1) {
+    const ch = source[i];
+    if (quote) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "'" || ch === "\"" || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === openCh) depth += 1;
+    else if (ch === closeCh) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function extractAny(source, name) {
+  const asyncAt = source.indexOf(`async function ${name}(`);
+  const syncAt = source.indexOf(`function ${name}(`);
+  const start = asyncAt >= 0 && (syncAt < 0 || asyncAt <= syncAt) ? asyncAt : syncAt;
   assert.ok(start >= 0, name);
-  const next = source.indexOf("\nasync function ", start + 10);
-  assert.ok(next > start, name);
-  return source.slice(start, next);
+  const paramsAt = source.indexOf("(", start);
+  const paramsEnd = scanPast(source, paramsAt, "(", ")");
+  assert.ok(paramsEnd > paramsAt, name);
+  const bodyAt = source.indexOf("{", paramsEnd);
+  const bodyEnd = scanPast(source, bodyAt, "{", "}");
+  assert.ok(bodyEnd > bodyAt, name);
+  return source.slice(start, bodyEnd + 1);
 }
 
-function stampsBeforeCrop(source) {
-  return ["ingestVendorLayout", "ingestTextLayerLayout", "ingestFixtureLayout"].every((name) => {
-    const body = asyncSlice(source, name);
-    const stampAt = body.indexOf("stampLayoutBids(");
-    const cropAt = body.indexOf("cropLayoutBlocks(");
-    return stampAt >= 0 && cropAt > stampAt;
-  });
+function pngSize(dataUrl) {
+  const base64 = String(dataUrl).split(",")[1] || "";
+  const buf = Buffer.from(base64, "base64");
+  return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
 }
 
-function reopenHashesPageRaster(source) {
-  const hydrate = asyncSlice(source, "hydrateMissingVisualCrops");
-  const callAt = hydrate.indexOf("cropLayoutBlocks(");
-  if (!/\{ sharp: false \}/.test(hydrate.slice(callAt, callAt + 240))) return false;
-  const crop = asyncSlice(source, "cropLayoutBlocks");
-  const pinnedAt = crop.indexOf("{ ...options, sharp: false }");
-  const rememberAt = crop.indexOf("rememberFormulaModelCrop");
-  const sharpAt = crop.indexOf("renderSharpVisualCrop");
-  return pinnedAt >= 0 && rememberAt > pinnedAt && sharpAt > rememberAt;
+function loadFormulaCropRuntime(source, stubs) {
+  const body = [
+    "modelPngPayloadUrl",
+    "formulaModelCropId",
+    "rememberFormulaModelCrop",
+    "formulaModelPng",
+    "formulaModelDisplayCrop"
+  ].map((name) => extractAny(source, name)).join("\n");
+  const factory = new Function(
+    "cropPngFor",
+    "withRasterCrop",
+    "renderSharpVisualCrop",
+    `let docId = 1;\nconst formulaModelCrops = new Map();\n${body}\nreturn { formulaModelPng, formulaModelDisplayCrop, formulaModelCrops, setDocId(n) { docId = n; } };`
+  );
+  return factory(cropPngFor, stubs.withRasterCrop, stubs.renderSharpVisualCrop);
 }
 
-function coldStartDisplayIsSharp(source) {
-  const ingestSharp = ["ingestVendorLayout", "ingestTextLayerLayout", "ingestFixtureLayout"].every((name) => {
-    const body = asyncSlice(source, name);
-    const cropAt = body.indexOf("cropLayoutBlocks(");
-    return cropAt >= 0 && !/sharp:\s*false/.test(body.slice(cropAt, cropAt + 200));
-  });
-  return ingestSharp && reopenHashesPageRaster(source) && /options\.sharp === false/.test(asyncSlice(source, "cropLayoutBlocks"));
+function watchStore(inner, keys) {
+  return {
+    ...inner,
+    async commitTier(key, record) {
+      keys.push(String(key));
+      return inner.commitTier(key, record);
+    }
+  };
 }
 
 test("a 1px ink trim round trip sends once", async () => {
   const source = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   const { image, raster } = driftRaster();
+  const pad = FORMULA_INK_PAD_PX.display;
   const once = measureFormulaCrop(DRIFT_LAYOUT, image).bbox;
   const twice = measureFormulaCrop(once, image).bbox;
   const onceRect = rasterCropRect(once, image.width, image.height);
   const twiceRect = rasterCropRect(twice, image.width, image.height);
-  assert.notEqual(`${onceRect.sw}x${onceRect.sh}`, `${twiceRect.sw}x${twiceRect.sh}`);
-  assert.deepEqual([onceRect.sw, onceRect.sh], [286, 63]);
-  assert.deepEqual([twiceRect.sw, twiceRect.sh], [287, 63]);
+  assert.notEqual(
+    `${onceRect.sw}x${onceRect.sh}`,
+    `${twiceRect.sw}x${twiceRect.sh}`,
+    `ink trim round trip did not move a pixel at ${image.width}×${image.height}, CROP_SCALE=${CROP_SCALE}, pad=${pad}`
+  );
 
   const trim = loadImageForVisualBlock(source);
-  let cold = {
-    id: "p3-b12",
-    label: "formula",
-    bbox: DRIFT_LAYOUT.slice(),
-    display: true,
-    sourceText: "E=mc^2"
-  };
-  if (stampsBeforeCrop(source)) cold = stampLayoutBids(3, { blocks: [cold] }).blocks[0];
+  const cold = stampLayoutBids(3, {
+    blocks: [{
+      id: "p3-b12",
+      label: "formula",
+      bbox: DRIFT_LAYOUT.slice(),
+      display: true,
+      sourceText: "E=mc^2"
+    }]
+  }).blocks[0];
   trim(raster, cold);
+  assert.deepEqual([cold.cropRect.sw, cold.cropRect.sh], [onceRect.sw, onceRect.sh], "crop pixels");
   cold.imageUrl = pngDataUrl(cold.cropRect.sw, cold.cropRect.sh);
   const sends = { count: 0 };
   const settings = settingsFor(true);
@@ -405,8 +447,6 @@ test("a 1px ink trim round trip sends once", async () => {
   };
   await scheduleFormulaBlock(cold, { ...hooks, page: 3 });
   assert.equal(sends.count, 1, "cold");
-  const coldId = cold.bid || cold.id;
-  const coldHash = cropHashOf({ crop: { pixels: (await cropPngFor(cold)).base64 } });
 
   const stored = cacheableLayout({
     page: 3,
@@ -415,19 +455,18 @@ test("a 1px ink trim round trip sends once", async () => {
   }).blocks[0];
   const reopen = stampLayoutBids(3, { blocks: [{ ...stored }] }).blocks[0];
   trim(raster, reopen);
-  const pagePng = pngDataUrl(reopen.cropRect.sw, reopen.cropRect.sh);
-  const sharpPng = pngDataUrl(reopen.cropRect.sw + 48, reopen.cropRect.sh + 24);
-  reopen.imageUrl = reopenHashesPageRaster(source) ? pagePng : sharpPng;
+  assert.deepEqual([reopen.cropRect.sw, reopen.cropRect.sh], [onceRect.sw, onceRect.sh], "crop pixels");
+  assert.notDeepEqual([reopen.cropRect.sw, reopen.cropRect.sh], [twiceRect.sw, twiceRect.sh], "crop pixels");
+  assert.equal(reopen.bid, cold.bid, "unit id");
+  reopen.imageUrl = pngDataUrl(reopen.cropRect.sw, reopen.cropRect.sh);
   await scheduleFormulaBlock(reopen, { ...hooks, page: 3 });
-
-  assert.deepEqual([reopen.cropRect.sw, reopen.cropRect.sh], [cold.cropRect.sw, cold.cropRect.sh], "crop pixels");
-  assert.equal(reopen.bid || reopen.id, coldId, "unit id");
-  const reopenHash = cropHashOf({ crop: { pixels: (await cropPngFor({ imageUrl: reopen.imageUrl })).base64 } });
+  const reopenHash = cropHashOf({ crop: { pixels: (await cropPngFor(reopen)).base64 } });
+  const coldHash = cropHashOf({ crop: { pixels: (await cropPngFor(cold)).base64 } });
   assert.equal(reopenHash, coldHash, "crop hash");
   assert.equal(sends.count, 1, "reopen sends");
 });
 
-test("cold start display ratio stays on the sharp redraw", () => {
+test("cold start display ratio stays on the sharp redraw", async () => {
   const source = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   const bbox = [0.2, 0.4, 0.8, 0.43];
   const css = formulaDisplayCssSize({
@@ -450,8 +489,90 @@ test("cold start display ratio stays on the sharp redraw", () => {
   const sharpRatio = plan.pixelHeight / css.cssHeight;
   const pageRatio = (css.pdfHeight * CROP_SCALE) / css.cssHeight;
   assert.ok(Math.abs(sharpRatio - pageRatio) > 0.2, `sharp ${sharpRatio} page ${pageRatio}`);
-  const shown = coldStartDisplayIsSharp(source) ? sharpRatio : pageRatio;
-  assert.equal(Number(shown.toFixed(3)), Number(sharpRatio.toFixed(3)), "cold start display ratio");
-  const refresh = asyncSlice(source, "refreshFormulaCropsForDisplay");
-  assert.equal(refresh.includes("scheduleFormulaBlock"), false);
+  const pageW = Math.max(1, Math.round(css.pdfWidth * CROP_SCALE));
+  const pageH = Math.max(1, Math.round(css.pdfHeight * CROP_SCALE));
+  const runtime = loadFormulaCropRuntime(source, {
+    withRasterCrop: async (_raster, _page, item) => ({
+      ...item,
+      imageUrl: pngDataUrl(pageW, pageH),
+      surface: "png"
+    }),
+    renderSharpVisualCrop: async () => pngDataUrl(plan.pixelWidth, plan.pixelHeight)
+  });
+  const shown = await runtime.formulaModelDisplayCrop(null, null, {
+    id: "p1-b1",
+    bid: "b1-p1-mdisplay",
+    label: "formula",
+    bbox,
+    display: true
+  }, 1, {});
+  const shownRatio = pngSize(shown.imageUrl).h / css.cssHeight;
+  assert.equal(Number(shownRatio.toFixed(3)), Number(sharpRatio.toFixed(3)), "cold start display ratio");
+  assert.equal(shown.surface, "redraw", "display redraw");
+  assert.equal(functionBody("refreshFormulaCropsForDisplay").includes("scheduleFormulaBlock"), false);
+});
+
+test("bytes sent to the model hash to the cache cropHash at DPR1 and DPR2", async () => {
+  const source = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const settings = settingsFor(true);
+  const sentByDpr = {};
+  for (const dpr of [1, 2]) {
+    const pagePng = pngDataUrl(PAGE_PNG.w, PAGE_PNG.h);
+    const sharpPng = pngDataUrl(SHARP_PNG[dpr].w, SHARP_PNG[dpr].h);
+    const runtime = loadFormulaCropRuntime(source, {
+      withRasterCrop: async (_raster, _page, item) => ({ ...item, imageUrl: pagePng, surface: "png" }),
+      renderSharpVisualCrop: async () => sharpPng
+    });
+    const keys = [];
+    const sends = { count: 0 };
+    const images = [];
+    const cache = createFormulaCache(watchStore(createMemoryStore(), keys));
+    const block = stampLayoutBids(3, {
+      blocks: [{
+        id: "p3-b12",
+        label: "formula",
+        bbox: [0.2, 0.4, 0.8, 0.43],
+        display: true,
+        sourceText: "E=mc^2"
+      }]
+    }).blocks[0];
+    const hooks = {
+      ...scheduleHooks(settings, cache, sends, `doc-dpr-${dpr}`),
+      withRasterCrop: (item) => runtime.formulaModelDisplayCrop(null, null, item, 3, {}),
+      cropPngFor: (item, cropHooks) => runtime.formulaModelPng(3, item, cropHooks),
+      sendVision: async (req) => {
+        sends.count += 1;
+        images.push(req.images[0].base64);
+        return { ok: true, text: "x" };
+      }
+    };
+    const shown = await scheduleFormulaBlock(block, { ...hooks, page: 3 });
+    assert.equal(shown.imageUrl, sharpPng, "display redraw");
+    assert.equal(shown.surface, "redraw", "display redraw");
+    assert.equal(sends.count, 1, "cold");
+    const sent = images[0];
+    const sentHash = sha256Hex(sent).slice(0, 12);
+    const keyHash = keys[0]?.split(":").at(-1);
+    assert.equal(sentHash, keyHash, "cropHash");
+    assert.equal(sentHash, sha256Hex(pagePng.split(",")[1]).slice(0, 12), "sent hash");
+    const size = pngSize(`data:image/png;base64,${sent}`);
+    assert.deepEqual([size.w, size.h], [PAGE_PNG.w, PAGE_PNG.h], "sent pixels");
+    assert.ok(size.w > 14 && size.h > 14, "short side");
+    sentByDpr[dpr] = { sentHash, runtime, hooks, shown, sends };
+    runtime.formulaModelCrops.clear();
+    runtime.setDocId(2);
+    const stored = cacheableLayout({
+      page: 3,
+      blocks: [shown],
+      layoutVersion: "source-v3:5285c7689aa0b873"
+    }).blocks[0];
+    const reopened = stampLayoutBids(3, { blocks: [{ ...stored }] }).blocks[0];
+    await scheduleFormulaBlock(reopened, {
+      ...hooks,
+      page: 3,
+      withRasterCrop: (item) => runtime.formulaModelDisplayCrop(null, null, item, 3, { sharp: false })
+    });
+    assert.equal(sends.count, 1, "reopen sends");
+  }
+  assert.equal(sentByDpr[1].sentHash, sentByDpr[2].sentHash, "dpr");
 });
