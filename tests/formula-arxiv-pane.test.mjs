@@ -63,6 +63,9 @@ test("pane helpers evaluate with no process and keep click slop", () => {
       canRenderLatex() { return { pass: true, error: null }; },
       renderLatexInto(node, latex) { node.rendered = latex; }
     },
+    "./latex-units.js": {
+      prepareFormulaLatex(latex) { return String(latex ?? "").replace(/\\tag\*?\{[^}]*\}/g, "").replace(/\\label\{[^}]*\}/g, "").trim(); }
+    },
     "./formula-settings.js": {
       placeholderCopy() { return { aria: "公式 · 点击查看原公式", visible: [] }; }
     },
@@ -74,6 +77,7 @@ test("pane helpers evaluate with no process and keep click slop", () => {
     }
   });
   assert.equal(pane.copyLatexText("E=mc^2"), "E=mc^2");
+  assert.equal(pane.copyLatexText("\\label{eq:a} E=mc^2 \\tag{9}"), "E=mc^2");
   assert.equal(pane.copyLatexText("E=mc^2").includes("$$"), false);
   assert.equal(pane.katexClickKept(3, 0), true);
   assert.equal(pane.katexClickKept(4, 0), true);
