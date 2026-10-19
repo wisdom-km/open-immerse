@@ -89,9 +89,40 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
   const packed = await loadSource(SRC_V7, SRC_V7_SHA, "把 1706.03762v7.tar.gz 放到 tests/fixtures/arxiv-src/。");
   const files = (packed.files || []).map((file) => ({ path: file.path, text: file.text }));
   const hits = [];
+  const alignments = new Map();
+  let downloads = 0;
   const server = createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     hits.push(url.pathname);
+    if (url.pathname === "/__oi/align" && req.method === "POST") {
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        let body = {};
+        try { body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { body = {}; }
+        if (body.key) alignments.set(body.key, body.alignment || null);
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    if (url.pathname === "/__oi/align") {
+      const alignment = alignments.get(url.searchParams.get("key") || "") || null;
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      res.end(JSON.stringify({ alignment }));
+      return;
+    }
+    if (url.pathname === "/__oi/downloads" && req.method === "POST") {
+      downloads += 1;
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ downloads }));
+      return;
+    }
+    if (url.pathname === "/__oi/downloads") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ downloads }));
+      return;
+    }
     if (url.pathname === "/__oi/arxiv-src-v7.json") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
       res.end(JSON.stringify({ files }));
@@ -165,26 +196,53 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
       const orig = window.fetch.bind(window);
       window.__oiArxivMode = localStorage.getItem("oi.f5.arxivMode") || "offline";
       window.__oiAlerted = false;
+      window.__oiArxivFetches = 0;
       window.alert = () => { window.__oiAlerted = true; };
       window.fetch = (input, init) => {
         const url = String(input && input.url || input || "");
-        if (/arxiv\\.org/i.test(url)) return Promise.reject(new Error("blocked-arxiv"));
+        if (/arxiv\\.org/i.test(url)) {
+          window.__oiArxivFetches += 1;
+          return Promise.reject(new Error("blocked-arxiv"));
+        }
         return orig(input, init);
       };
+      const alignKey = (message) => String(message.id || "") + "@" + String(message.version || "") + ":" + String(message.pdfSha256 || "");
       const listeners = [];
       window.chrome = {
         runtime: {
           getURL(path) { return location.origin + "/" + String(path || "").replace(/^\\/+/, ""); },
           sendMessage(message) {
             if (!message || message.type !== "OI_ARXIV_SOURCE") return Promise.resolve({ ok: false });
-            if (message.action === "read-alignment" || message.action === "save-alignment" || message.action === "status" || message.action === "clear" || message.action === "asset") {
-              return Promise.resolve(message.action === "read-alignment" ? null : { ok: true });
+            // A download is any OI_ARXIV_SOURCE message with no action.
+            // The payload never contains "arxiv.org", so that string is not a counter.
+            if (message.action == null || message.action === "") {
+              window.__oiSourceGets = (window.__oiSourceGets || 0) + 1;
+            }
+            if (message.action === "save-alignment") {
+              return orig(location.origin + "/__oi/align", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ key: alignKey(message), alignment: message.alignment })
+              }).then(() => ({ ok: true })).catch(() => ({ ok: false }));
+            }
+            if (message.action === "read-alignment") {
+              const reads = Number(localStorage.getItem("oi.f5.alignReads") || "0") + 1;
+              localStorage.setItem("oi.f5.alignReads", String(reads));
+              return orig(location.origin + "/__oi/align?key=" + encodeURIComponent(alignKey(message)))
+                .then((res) => res.json())
+                .then((body) => body.alignment || null)
+                .catch(() => null);
+            }
+            if (message.action === "status" || message.action === "clear" || message.action === "asset") {
+              return Promise.resolve({ ok: true });
             }
             if (message.userTriggered !== true) return Promise.resolve({ ok: false, reason: "not-triggered" });
-            if (window.__oiArxivMode === "offline") return Promise.resolve({ ok: false, reason: "offline" });
-            return orig(location.origin + "/__oi/arxiv-src-v7.json").then((res) => res.json()).then((body) => ({
-              ok: true, files: body.files || [], assets: [], skipped: [], id: message.id, version: message.version || null
-            })).catch(() => ({ ok: false, reason: "offline" }));
+            return orig(location.origin + "/__oi/downloads", { method: "POST" }).then(() => {
+              if (window.__oiArxivMode === "offline") return { ok: false, reason: "offline" };
+              return orig(location.origin + "/__oi/arxiv-src-v7.json").then((res) => res.json()).then((body) => ({
+                ok: true, files: body.files || [], assets: [], skipped: [], id: message.id, version: message.version || null
+              }));
+            }).catch(() => ({ ok: false, reason: "offline" }));
           },
           onMessage: { addListener(fn) { listeners.push(fn); } }
         },
@@ -252,9 +310,11 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
     return chip.querySelector(".oi-arxiv-label")?.textContent || "";
   })()`, "arxiv offer");
   assert.equal(offer, "用 arXiv 源码");
+  assert.equal(await evaluate(`window.__oiSourceGets || 0`), 0);
+  assert.equal(downloads, 0);
+  assert.equal(await evaluate(`window.__oiArxivFetches || 0`), 0);
   assert.equal(await evaluate(`document.getElementById("arxivSourceAuto").closest("button")`), null);
   assert.equal(await evaluate(`document.querySelectorAll(".is-katex").length`), 0);
-  assert.equal(hits.some((path) => /arxiv\.org/i.test(path)), false);
 
   await evaluate(`document.getElementById("arxivSourceChip").click()`);
   const failed = await waitFor(`(() => {
@@ -298,7 +358,7 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
       eq: row.querySelector(".oi-pdf-eq-num")?.textContent || ""
     }));
     window.__oiF5Wait = { display, inline, label, rows };
-    if (display < 5 || inline < 1 || !label.includes("独立")) return null;
+    if (display < 5 || inline < 71 || !label.includes("独立")) return null;
     return { display, inline, label, title: chip.title };
   })()`, "katex on screen", 90000);
   console.log(`Attention on screen display ${counts.display} inline ${counts.inline} chip ${counts.label}`);
@@ -318,6 +378,7 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
     assert.ok(Math.abs(now.height - prev.height) <= 2, `${prev.id} height ${prev.height} -> ${now.height}`);
   }
   assert.equal(counts.display, 5);
+  assert.ok(counts.inline >= 71, `inline ${counts.inline}`);
   assert.match(counts.label, new RegExp(`独立 ${counts.display}/5`));
   assert.match(counts.label, new RegExp(`行内 ${counts.inline}/87`));
   assert.equal(counts.title, counts.label);
@@ -326,7 +387,34 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
     return nodes.every((node) => node.dataset.oiTier === "arxiv" || node.closest("[data-oi-tier='arxiv']"));
   })()`);
   assert.equal(tiered, true);
-  assert.equal(hits.some((path) => /arxiv\.org/i.test(path)), false);
+  assert.equal(await evaluate(`window.__oiArxivFetches || 0`), 0);
+  const tabOrder = await evaluate(`(() => {
+    const formulas = [...document.querySelectorAll(".oi-pdf-math-row.is-katex .oi-pdf-math-scroll, .oi-pdf-inline-math.is-katex")];
+    const tabbable = [...document.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")].filter((el) => {
+      if (el.tabIndex < 0) return false;
+      if (el.closest("[hidden]")) return false;
+      const style = getComputedStyle(el);
+      return style.display !== "none" && style.visibility !== "hidden";
+    });
+    const indexes = formulas.map((el) => tabbable.indexOf(el));
+    return {
+      formulas: formulas.length,
+      missing: indexes.filter((index) => index < 0).length,
+      ordered: indexes.every((index, i) => index >= 0 && (i === 0 || index > indexes[i - 1]))
+    };
+  })()`);
+  assert.equal(tabOrder.missing, 0, JSON.stringify(tabOrder));
+  assert.equal(tabOrder.ordered, true, JSON.stringify(tabOrder));
+  assert.ok(tabOrder.formulas >= counts.inline + counts.display, JSON.stringify(tabOrder));
+  await evaluate(`document.querySelector(".oi-pdf-math-row.is-katex .oi-pdf-math-scroll, .oi-pdf-inline-math.is-katex").focus()`);
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+  const tabbed = await evaluate(`(() => {
+    const formulas = [...document.querySelectorAll(".oi-pdf-math-row.is-katex .oi-pdf-math-scroll, .oi-pdf-inline-math.is-katex")];
+    const active = document.activeElement;
+    return { landed: formulas[1] === active, index: formulas.indexOf(active), count: formulas.length };
+  })()`);
+  assert.equal(tabbed.landed, true, JSON.stringify(tabbed));
 
   const type = await evaluate(`(() => {
     const row = document.querySelector(".oi-pdf-math-row.is-katex");
@@ -814,14 +902,19 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
     const inline = [...document.querySelectorAll(".oi-pdf-inline-math.is-katex")].filter(shown).length;
     const label = document.querySelector("#arxivSourceChip .oi-arxiv-label")?.textContent || "";
     window.__oiF5Wait = { display, inline, label };
-    if (display < 5 || inline < 1 || !label.includes("独立")) return null;
+    if (display < 5 || inline < 71 || !label.includes("独立")) return null;
     return { display, inline, label };
   })()`, "source restored", 90000);
   assert.equal(restored.display, 5);
-  assert.ok(restored.inline >= 1);
+  assert.ok(restored.inline >= 71, `restored inline ${restored.inline}`);
+  console.log(`restored display ${restored.display} inline ${restored.inline}`);
 
   await evaluate(`localStorage.setItem("oi.f5.arxivMode", "ok")`);
+  const downloadsBeforeRefresh = downloads;
+  const readsBeforeRefresh = await evaluate(`Number(localStorage.getItem("oi.f5.alignReads") || "0")`);
+  await evaluate(`document.documentElement.dataset.oiGen = "before-refresh"`);
   await send("Page.reload", { ignoreCache: true });
+  await waitFor(`document.documentElement.dataset.oiGen === "before-refresh" ? "" : "reloaded"`, "refresh navigation");
   const afterReload = await waitFor(`(() => {
     const shown = (node) => {
       let el = node;
@@ -838,12 +931,54 @@ test("F5 Attention source formulas reach the right pane", { timeout: 600000 }, a
     let bag = {};
     try { bag = JSON.parse(localStorage.getItem("oi.f5.chromeStorage") || "{}"); } catch { bag = {}; }
     window.__oiF5Wait = { display, inline, label, on: bag.arxivSourceOn || [], skip: bag.arxivSourceSkip || [] };
-    if (display < 5 || inline < 1 || !label.includes("独立")) return null;
+    if (display < 5 || inline < 71 || !label.includes("独立")) return null;
     return { display, inline, label, on: bag.arxivSourceOn || [], skip: bag.arxivSourceSkip || [] };
   })()`, "source after refresh", 120000);
   assert.equal(afterReload.display, 5);
-  assert.ok(afterReload.inline >= 1);
+  assert.ok(afterReload.inline >= 71, `refresh inline ${afterReload.inline}`);
   assert.equal(afterReload.skip.includes("1706.03762"), false);
   assert.equal(afterReload.on.includes("1706.03762"), true);
-  console.log(`after refresh display ${afterReload.display} inline ${afterReload.inline}`);
+  const readsAfterRefresh = await evaluate(`Number(localStorage.getItem("oi.f5.alignReads") || "0")`);
+  assert.equal(downloads, downloadsBeforeRefresh);
+  assert.ok(readsAfterRefresh > readsBeforeRefresh, `align reads ${readsBeforeRefresh} -> ${readsAfterRefresh}`);
+  console.log(`after refresh display ${afterReload.display} inline ${afterReload.inline} downloads ${downloads}`);
+
+  await evaluate(`(() => {
+    localStorage.setItem("oi.f5.arxivMode", "ok");
+    const bag = JSON.parse(localStorage.getItem("oi.f5.chromeStorage") || "{}");
+    bag.arxivSourceAuto = true;
+    bag.arxivSourceOn = [];
+    bag.arxivSourceSkip = [];
+    localStorage.setItem("oi.f5.chromeStorage", JSON.stringify(bag));
+    return true;
+  })()`);
+  const downloadsBeforeAuto = downloads;
+  const readsBeforeAuto = await evaluate(`Number(localStorage.getItem("oi.f5.alignReads") || "0")`);
+  await evaluate(`document.documentElement.dataset.oiGen = "before-auto"`);
+  await send("Page.reload", { ignoreCache: true });
+  await waitFor(`document.documentElement.dataset.oiGen === "before-auto" ? "" : "reloaded"`, "auto navigation");
+  const auto = await waitFor(`(() => {
+    const shown = (node) => {
+      let el = node;
+      while (el) {
+        const style = getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        el = el.parentElement;
+      }
+      return true;
+    };
+    const display = [...document.querySelectorAll(".oi-pdf-math-row.is-katex")].filter(shown).length;
+    const inline = [...document.querySelectorAll(".oi-pdf-inline-math.is-katex")].filter(shown).length;
+    const label = document.querySelector("#arxivSourceChip .oi-arxiv-label")?.textContent || "";
+    const autoBox = document.getElementById("arxivSourceAuto");
+    window.__oiF5Wait = { display, inline, label, auto: autoBox ? autoBox.checked : null };
+    if (display < 5 || inline < 71 || !label.includes("独立") || !autoBox || autoBox.checked !== true) return null;
+    return { display, inline, label, auto: true };
+  })()`, "source with auto", 120000);
+  assert.equal(auto.display, 5);
+  assert.ok(auto.inline >= 71, `auto inline ${auto.inline}`);
+  const readsAfterAuto = await evaluate(`Number(localStorage.getItem("oi.f5.alignReads") || "0")`);
+  assert.equal(downloads, downloadsBeforeAuto);
+  assert.ok(readsAfterAuto > readsBeforeAuto, `auto reads ${readsBeforeAuto} -> ${readsAfterAuto}`);
+  console.log(`auto display ${auto.display} inline ${auto.inline}`);
 });

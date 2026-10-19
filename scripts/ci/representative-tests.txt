@@ -25,3 +25,7 @@ tests/net-body-timeout.test.mjs
 tests/formula-pdftext.test.mjs
 # Cold start and reopen share the formula cache key. Sent PNG bytes hash to that cropHash at DPR 1 and 2. No network.
 tests/formula-reopen-cache.test.mjs
+# Tier-0 screen invariants: latest source when the version is missing, equation numbers, safe KaTeX, reopen without a second parse. No network.
+tests/formula-arxiv-invariants.test.mjs
+# Right pane. Headless Chrome. Inline splice stays at least 71, and a refresh does not download again.
+tests/formula-arxiv-screen.test.mjs
