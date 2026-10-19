@@ -58,6 +58,8 @@ test("scrubDiagMessage masks header credentials that are not stored secrets", ()
     "api-key: shortk2",
     "x-goog-api-key: AIzaShort",
     "DeepL-Auth-Key abc:fx",
+    "Authorization: DeepL-Auth-Key abc:fx",
+    "Authorization: Digest username=\"u\", response=\"RESP99\"",
     "Proxy-Authorization: Basic Zm9vOmJhcg==",
     "Cookie: sid=SID99xx"
   ];
@@ -69,6 +71,7 @@ test("scrubDiagMessage masks header credentials that are not stored secrets", ()
     assert.equal(msg.includes("shortk2"), false, sample);
     assert.equal(msg.includes("AIzaShort"), false, sample);
     assert.equal(msg.includes("abc:fx"), false, sample);
+    assert.equal(msg.includes("RESP99"), false, sample);
     assert.equal(msg.includes("Zm9vOmJhcg=="), false, sample);
     assert.equal(msg.includes("SID99xx"), false, sample);
   }

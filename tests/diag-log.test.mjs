@@ -254,6 +254,25 @@ test("a caller timestamp in the future is not stored", async () => {
   assert.ok(saved.t <= now + 1000);
 });
 
+test("same-context history keeps more than 200 events inside 7 days and 2 MB", async () => {
+  const storage = memoryArea();
+  let clock = Date.now() - 864e5;
+  const writer = createDiagWriter({ storage, debounceMs: -1, now: () => clock });
+  writer.log({ type: "translate.error", ctx: "sw", code: "YESTERDAY" });
+  await writer.flush();
+  clock = Date.now();
+  for (let i = 0; i < 250; i += 1) {
+    writer.log({ type: "translate.error", ctx: "sw", code: "401", count: i });
+    if (i % 50 === 49) await writer.flush();
+  }
+  await writer.flush();
+  const events = stored(storage);
+  assert.equal(events.length, 251);
+  assert.equal(events.some((event) => event.code === "YESTERDAY"), true);
+  assert.equal(events.filter((event) => event.code === "401").length, 250);
+  assert.ok(diagByteLength(events) < DIAG_BYTE_CAP);
+});
+
 test("content spam cannot evict a service-worker error", async () => {
   const storage = memoryArea();
   const writer = createDiagWriter({ storage, debounceMs: -1 });
@@ -303,6 +322,76 @@ test("content-script senders cannot export or forge a service-worker event", asy
     });
     assert.equal(spoofed.ok, false);
     assert.equal(JSON.stringify(stored(storage)).includes("spoofed"), false);
+  } finally {
+    globalThis.chrome = previous;
+  }
+});
+
+test("a query string cannot make the viewer look like the options page", async () => {
+  const storage = memoryArea();
+  const previous = globalThis.chrome;
+  globalThis.chrome = { runtime: { id: "extid" }, storage: { local: storage, sync: memoryArea() } };
+  const writer = createDiagWriter({ storage, debounceMs: -1 });
+  const trick = {
+    id: "extid",
+    tab: { id: 4 },
+    url: "chrome-extension://extid/pdf/viewer.html?src=/options/"
+  };
+  try {
+    const stats = await handleDiagMessage({ type: "OI_DIAG_STATS" }, { writer, sender: trick });
+    assert.equal(stats.ok, false);
+    const logged = await handleDiagMessage(
+      { type: "OI_DIAG_LOG", event: { type: "mm.error", ctx: "options", code: "401" } },
+      { writer, sender: trick }
+    );
+    assert.equal(logged.ok, true);
+    await writer.flush();
+    assert.equal(stored(storage)[0].ctx, "viewer");
+  } finally {
+    globalThis.chrome = previous;
+  }
+});
+
+test("the arXiv route rejects diagnostic actions from a content script", async () => {
+  const listeners = [];
+  const storage = memoryArea();
+  const previous = globalThis.chrome;
+  globalThis.chrome = {
+    storage: { local: storage, sync: memoryArea(), session: memoryArea() },
+    runtime: {
+      id: "extid",
+      onInstalled: { addListener() {} },
+      onStartup: { addListener() {} },
+      onMessage: { addListener(fn) { listeners.push(fn); } },
+      getURL: (path) => `chrome-extension://extid/${path}`,
+      getManifest: () => ({ version: "9.9.9" })
+    },
+    contextMenus: {
+      onClicked: { addListener() {} },
+      async removeAll() {},
+      create() {}
+    },
+    commands: { onCommand: { addListener() {} } },
+    tabs: { async query() { return []; }, async sendMessage() {}, async create() {} }
+  };
+  const page = { id: "extid", tab: { id: 1, url: "https://evil.example/" }, url: "https://evil.example/", frameId: 0 };
+  try {
+    await import(`../background/service-worker.js?diag-gate=${Date.now()}`);
+    assert.equal(listeners.length, 1);
+    const send = (message, sender) => new Promise((resolve) => {
+      listeners[0](message, sender, resolve);
+    });
+    const cleared = await send(
+      { type: "OI_ARXIV_SOURCE", action: "diag", message: { type: "OI_DIAG_CLEAR" } },
+      page
+    );
+    assert.equal(cleared.ok, false);
+    const noted = await send(
+      { type: "OI_ARXIV_SOURCE", action: "diag-note", failure: { code: "999", message: "page text" } },
+      page
+    );
+    assert.equal(noted.ok, false);
+    assert.equal(JSON.stringify(stored(storage)).includes("999"), false);
   } finally {
     globalThis.chrome = previous;
   }
