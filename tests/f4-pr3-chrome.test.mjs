@@ -1158,6 +1158,175 @@ test("Stop stays enabled while a background page-2 layout fetch is hung", { time
   assert.equal(stored.some((row) => row.mode === "local-ocr" && row.reason !== "http-502"), false, `Stop wrote a local-ocr row ${JSON.stringify(stored)}`);
 });
 
+test("auto-translate still writes the library paper before the first batch and the slow library read", { timeout: 180000 }, async (t) => {
+  const session = await withChrome(t, chromeStub({ mode: "text-layer", library: null }), async () => {});
+  await session.cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(() => {
+      const params = new URLSearchParams(location.search);
+      if (params.get("oiScene") !== "open-record-now") return;
+      const delay = Number(params.get("oiBatchDelay") || "0");
+      const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+      chrome.runtime.sendMessage = (message) => {
+        if (delay > 0 && message && message.type === "OI_TRANSLATE_BATCH") {
+          return new Promise((resolve, reject) => {
+            setTimeout(() => {
+              Promise.resolve(orig(message)).then(resolve, reject);
+            }, delay);
+          });
+        }
+        return orig(message);
+      };
+      const tick = async () => {
+        if (window.__oiOpenSeen) return;
+        try {
+          const { sharedLibraryStore } = await import("/lib/library-session.js");
+          const store = sharedLibraryStore();
+          const papers = await store.listPapers();
+          const paper = papers && papers[0];
+          if (!paper || !paper.docHash) return;
+          const pages = await store.getPages(paper.docHash);
+          window.__oiOpenSeen = {
+            docHash: paper.docHash,
+            title: paper.title || "",
+            fileName: paper.fileName || "",
+            sourceUrl: paper.sourceUrl || "",
+            lastOpenedAt: Number(paper.lastOpenedAt) || 0,
+            pagesTranslated: Number(paper.pagesTranslated) || 0,
+            pageRows: Array.isArray(pages) ? pages.length : 0,
+            messages: (window.__oiAuto && window.__oiAuto.messages || []).length,
+            legacySettled: window.__oiLegacy && window.__oiLegacy.settled === true,
+            sent: typeof window.__oiLibrarySourceSentHas === "function" && window.__oiLibrarySourceSentHas(paper.docHash)
+          };
+        } catch (error) {
+          window.__oiOpenSeenError = String(error && error.message || error);
+        }
+      };
+      setInterval(() => { void tick(); }, 25);
+    })();`
+  }, session.sessionId);
+  const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
+  await session.cdp.send("Page.navigate", {
+    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=open-record-now&oiBatchDelay=5000&oiLegacyDelay=8000`
+  }, session.sessionId);
+  const seen = JSON.parse(await session.waitFor(`(() => {
+    if (window.__oiOpenSeen) return JSON.stringify(window.__oiOpenSeen);
+    if (window.__oiOpenSeenError) return JSON.stringify({ error: window.__oiOpenSeenError });
+    return "";
+  })()`, "open writes a paper before translation", 8000));
+  assert.equal(seen.error || "", "", JSON.stringify(seen));
+  assert.equal(seen.title, "sample-m1.pdf");
+  assert.equal(seen.fileName, "");
+  assert.ok(String(seen.sourceUrl).includes("/tests/fixtures/sample-m1.pdf"), seen.sourceUrl);
+  assert.equal(String(seen.sourceUrl).includes("?"), false, seen.sourceUrl);
+  assert.ok(seen.lastOpenedAt > 0);
+  assert.equal(seen.pagesTranslated, 0);
+  assert.equal(seen.pageRows, 0, "open stored a page before the paper record");
+  assert.equal(seen.messages, 0, "open waited for the first translate batch");
+  assert.equal(seen.legacySettled, false, "open waited for the slow library read");
+  assert.equal(seen.sent, false, "open wrote the hash into librarySourceSent");
+});
+
+test("a fresh library lookup after open still reuses the stored page", { timeout: 180000 }, async (t) => {
+  const session = await withChrome(t, chromeStub({ mode: "text-layer", library: null }), async () => {});
+  const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
+  await session.cdp.send("Page.navigate", {
+    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=r1-fresh-lookup`
+  }, session.sessionId);
+  await session.waitFor(`(async () => {
+    ${storedLibraryPagesSource()}
+    const pages = await oiStoredLibraryPages();
+    const stop = document.getElementById("stopTranslate");
+    if (!pages.some((page) => String((page.pairs || [])[0]?.translation || "").includes("同页已译:"))) return "";
+    if (pages.length < 2) return "";
+    if (stop && stop.hidden !== true) return "";
+    return "seeded";
+  })()`, "first open stores more than one page", 90000);
+  const seeded = JSON.parse(await session.evaluate(`(async () => {
+    const req = indexedDB.open("oi-annotations");
+    const db = await new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    const kept = [];
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("pages", "readwrite");
+      const store = tx.objectStore("pages");
+      const cursor = store.openCursor();
+      cursor.onerror = () => reject(cursor.error);
+      cursor.onsuccess = () => {
+        const row = cursor.result;
+        if (!row) return;
+        const page = Number(row.value && row.value.page) || 0;
+        if (page > 1) row.delete();
+        else {
+          for (const pair of row.value.pairs || []) {
+            const text = String(pair.text || pair.sourceText || "").trim();
+            if (text) kept.push(text);
+          }
+        }
+        row.continue();
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+    return JSON.stringify(kept);
+  })()`));
+  assert.ok(seeded.length > 0, "page 1 has no stored source text");
+  const seedOpenedAt = Number(await session.evaluate(`(async () => {
+    const { sharedLibraryStore } = await import("/lib/library-session.js");
+    const papers = await sharedLibraryStore().listPapers();
+    return papers && papers[0] ? papers[0].lastOpenedAt : 0;
+  })()`)) || 0;
+  await session.cdp.send("Page.navigate", {
+    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=r1-fresh-lookup&oiAutoTranslate=0&oiLegacyDelay=8000`
+  }, session.sessionId);
+  const hash = await session.waitFor(`(async () => {
+    const button = document.getElementById("translatePage");
+    if (!button || button.disabled) return "";
+    const text = document.getElementById("readerFlow")?.innerText || "";
+    if (text.includes("同页已译:")) return "";
+    const legacy = window.__oiLegacy || {};
+    if (!(legacy.hits >= 1) || legacy.settled === true) return "";
+    const { sharedLibraryStore } = await import("/lib/library-session.js");
+    const papers = await sharedLibraryStore().listPapers();
+    const paper = (papers || [])[0];
+    if (!paper || !(Number(paper.lastOpenedAt) > ${seedOpenedAt})) return "";
+    return paper.docHash || "";
+  })()`, "open record landed before the legacy read finished", 20000);
+  await sleep(800);
+  await session.evaluate(`(() => {
+    if (typeof window.__oiDropLibraryDoc === "function") window.__oiDropLibraryDoc();
+    return true;
+  })()`);
+  const gate = JSON.parse(await session.evaluate(`(() => JSON.stringify({
+    hasFn: typeof window.__oiLibrarySourceSentHas === "function",
+    dropFn: typeof window.__oiDropLibraryDoc === "function",
+    sent: typeof window.__oiLibrarySourceSentHas === "function" && window.__oiLibrarySourceSentHas(${JSON.stringify(hash)}),
+    hits: window.__oiLegacy && window.__oiLegacy.hits || 0,
+    settled: window.__oiLegacy && window.__oiLegacy.settled === true,
+    messages: (window.__oiAuto && window.__oiAuto.messages || []).length
+  }))()`));
+  assert.equal(gate.hasFn, true, "the open-set hook is missing");
+  assert.equal(gate.dropFn, true, "the library-doc hook is missing");
+  assert.equal(gate.sent, false, "open wrote the hash into librarySourceSent before the library read");
+  assert.equal(gate.settled, false, "the legacy read already finished before manual translate");
+  assert.equal(gate.messages, 0, "auto-translate paid before the manual click");
+  assert.ok(gate.hits >= 1, "8765 was not requested");
+  await session.evaluate(`(() => { document.getElementById("translatePage").click(); return true; })()`);
+  const shown = await session.waitFor(`(() => {
+    const text = document.getElementById("readerFlow")?.innerText || "";
+    if (!text.includes("同页已译:")) return "";
+    const messages = (window.__oiAuto && window.__oiAuto.messages) || [];
+    const paid = messages.some((item) => ${JSON.stringify(seeded)}.includes(String(item.head || "")));
+    if (paid) return JSON.stringify({ paid: messages });
+    return "reused";
+  })()`, "manual translate reuses the stored page", 30000);
+  assert.equal(shown, "reused", shown);
+  const after = JSON.parse(await session.evaluate(`(() => JSON.stringify((window.__oiAuto && window.__oiAuto.messages) || []))()`));
+  assert.equal(after.some((item) => seeded.includes(String(item.head || ""))), false, `stored page was paid ${JSON.stringify(after)}`);
+});
+
 test("Stop during a down background layout does not retry page 2", { timeout: 180000 }, async (t) => {
   const session = await openStalePageTwo(t, "down", "stop-background-down");
   const ready = await waitForPageTwoStop(session);

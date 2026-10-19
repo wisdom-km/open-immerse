@@ -319,6 +319,38 @@ test("preparePage translates the current hole before later pages are prepared", 
   assert.equal(result.paused, false);
 });
 
+test("retry still reads originals when the cached body is already complete", async () => {
+  const prep = viewer.slice(viewer.indexOf("const prepareLibraryPage"), viewer.indexOf("let translatedDoc"));
+  assert.match(prep, /titleStructureFailed\(page\)/);
+  assert.match(prep, /pageNeedsBypass\(priorCache, pdfTargetLang\)/);
+  assert.ok(prep.indexOf("pageNeedsBypass") < prep.indexOf("await adoptLibraryPages"));
+  assert.match(prep, /if \(failedBody && priorCache\) pageCache\.set\(translatingDoc, page, priorCache\)/);
+  assert.match(prep, /titleStructureFailed\(page\) \|\| failedBody\) return "retry"/);
+  assert.equal(prep.includes("documentTranslateSuperseded"), false);
+  const originals = viewer.slice(viewer.indexOf("async function originalsForPage"), viewer.indexOf("/** 原文: view toggle only."));
+  assert.match(originals, /titleStructureFailed\(n\)/);
+  assert.match(originals, /skipLocked\.has\(n\) && !retryFailedTitle/);
+  const cache = createPageCache();
+  cache.set(1, 1, [{ original: "Body sentence.", translation: "正文已经落地。", role: "paragraph" }]);
+  const log = [];
+  const result = await translateDocumentPages({
+    numPages: 1,
+    docId: 1,
+    cache,
+    session: createTranslateSession(),
+    preparePage: async () => "retry",
+    getPageOriginals: async () => {
+      log.push("originals");
+      return [];
+    },
+    pageSkipReason: () => "cached",
+    send: async () => ({ ok: true, translations: [] })
+  });
+  assert.deepEqual(log, ["originals"]);
+  assert.equal(result.pages[0].skipped, true);
+  assert.equal(result.pages[0].reason, "cached");
+});
+
 test("one failed page stays failed and the next page still translates", async () => {
   const sent = [];
   const errors = [];
