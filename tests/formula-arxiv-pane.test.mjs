@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { parseHTML } from "linkedom";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import {
   arxivFailSentence,
@@ -37,6 +38,20 @@ function loadIsolated(file, stubs) {
   assert.equal("Buffer" in context, false);
   assert.equal("require" in context, false);
   return exported;
+}
+
+function spyVendorKatex(real) {
+  const counts = { render: 0 };
+  return {
+    counts,
+    renderToString(latex, options) {
+      return real.renderToString(latex, options);
+    },
+    render(latex, node, options) {
+      counts.render += 1;
+      return real.render(latex, node, options);
+    }
+  };
 }
 
 test("new arxiv modules evaluate with no process, Buffer, or require", () => {
@@ -297,16 +312,28 @@ test("a KaTeX failure stays off the page and a success path does not assign inne
   coloredParent.ownerDocument = doc;
   assert.equal(mountArxivDisplay(coloredParent, { ...broken, latex: "\\color{red}{x}" }, 1, { katex }), "ok");
   assert.equal(textOf(coloredParent).includes("\\color"), false);
-  let longRenders = 0;
-  const longKatex = {
-    render() { longRenders += 1; }
-  };
-  const longParent = el("div");
-  longParent.ownerDocument = doc;
-  const longLatex = "y".repeat(MAX_FORMULA_LATEX_CHARS + 1);
-  assert.equal(mountArxivDisplay(longParent, { ...broken, latex: longLatex }, 1, { katex: longKatex }), "katex-error");
-  assert.equal(longRenders, 0);
-  assert.equal(longParent.childNodes.length, 0);
+  const lengthDoc = parseHTML("<!doctype html><html><body></body></html>").document;
+  Object.defineProperty(lengthDoc, "compatMode", { value: "CSS1Compat" });
+  const previousDocument = globalThis.document;
+  globalThis.document = lengthDoc;
+  try {
+    const vendor = loadKatex();
+    const shortEngine = spyVendorKatex(vendor);
+    const shortParent = lengthDoc.createElement("div");
+    assert.equal(mountArxivDisplay(shortParent, { ...broken, latex: "x" }, 1, { katex: shortEngine }), "ok");
+    assert.equal(shortEngine.counts.render, 1);
+    const longEngine = spyVendorKatex(vendor);
+    const longParent = lengthDoc.createElement("div");
+    const longLatex = "y".repeat(MAX_FORMULA_LATEX_CHARS + 1);
+    assert.equal(MAX_FORMULA_LATEX_CHARS, 8000);
+    assert.equal(longLatex.length, 8001);
+    assert.equal(mountArxivDisplay(longParent, { ...broken, latex: longLatex }, 1, { katex: longEngine }), "katex-error");
+    assert.equal(longEngine.counts.render, 0);
+    assert.equal(longParent.childNodes.length, 0);
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
 
   const colored = el("div");
   colored.ownerDocument = doc;
