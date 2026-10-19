@@ -2644,15 +2644,24 @@ function askBlocks() {
   }));
 }
 
+function formulaCropSrc(el) {
+  const img = el?.querySelector?.("img");
+  const src = String(img?.getAttribute?.("src") || "");
+  return /^data:image\/png;base64,[A-Za-z0-9+/=\s]+$/i.test(src) ? src.trim() : "";
+}
+
 function citationFromElement(el, text) {
   if (!el) return null;
   const page = Number(el.dataset.srcPage) || Number(el.dataset.page) || 0;
+  const kind = el.dataset.label === "formula" ? "formula" : "text";
+  const image = kind === "formula" ? formulaCropSrc(el) : "";
   return {
     bid: el.dataset.bid || "",
     page,
     text: text || el.querySelector(".rf-zh")?.textContent || "",
-    kind: el.dataset.label === "formula" ? "formula" : "text",
-    section: el.dataset.section || ""
+    kind,
+    section: el.dataset.section || "",
+    ...(image ? { image } : {})
   };
 }
 

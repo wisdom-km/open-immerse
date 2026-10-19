@@ -140,7 +140,7 @@ export function mountNotesUi(api) {
   }
 
   function papers() {
-    return paperNotes(state.notes);
+    return paperNotes(state.notes).filter((note) => note.author !== "ai");
   }
 
   function syncChrome(options = {}) {
@@ -1844,11 +1844,11 @@ export function mountNotesUi(api) {
       render();
       return { ok: false, reason: "missing" };
     }
-    if (note.kind === "paperNote") state.segment = "paper";
-    else {
+    if (note.author === "ai") {
       state.segment = "notes";
-      if (note.author === "ai") state.filter = "ai";
-    }
+      state.filter = "ai";
+    } else if (note.kind === "paperNote") state.segment = "paper";
+    else state.segment = "notes";
     render();
     const card = root.querySelector(`[data-note-id="${cssEscape(key)}"]`);
     if (!card) return { ok: false, reason: "unpainted" };

@@ -1,0 +1,13 @@
+markdown-it 14.1.0
+https://github.com/markdown-it/markdown-it
+MIT
+
+Vendored for Ask AI and notes (zero-build MV3). One minified UMD file.
+CommonMark, plus the tables and strikethrough that this build already includes.
+Task lists are a small rule in lib/markdown-render.js.
+
+markdown-it.min.js  123618
+gzip                 44868
+
+The published min file is about 121KB and gzips to about 44KB
+(the brief's 126KB / 46KB figure).

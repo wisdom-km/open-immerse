@@ -201,14 +201,49 @@
 .oi-ask-answer p,
 .oi-ask-answer ul,
 .oi-ask-answer ol,
-.oi-ask-answer pre {
+.oi-ask-answer pre,
+.oi-ask-answer table,
+.oi-ask-answer blockquote,
+.oi-ask-answer h1,
+.oi-ask-answer h2,
+.oi-ask-answer h3,
+.oi-ask-answer h4,
+.oi-ask-answer h5,
+.oi-ask-answer h6 {
   margin: 0 0 0.4em;
 }
 .oi-ask-answer p:last-child,
 .oi-ask-answer ul:last-child,
 .oi-ask-answer ol:last-child,
-.oi-ask-answer pre:last-child {
+.oi-ask-answer pre:last-child,
+.oi-ask-answer table:last-child,
+.oi-ask-answer blockquote:last-child,
+.oi-ask-answer h1:last-child,
+.oi-ask-answer h2:last-child,
+.oi-ask-answer h3:last-child,
+.oi-ask-answer h4:last-child,
+.oi-ask-answer h5:last-child,
+.oi-ask-answer h6:last-child {
   margin-bottom: 0;
+}
+.oi-ask-answer h1 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer h2 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer h3 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer h4 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer h5 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer h6 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer a {
+  color: var(--oi-reader-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.oi-ask-answer a:hover,
+.oi-ask-answer a:focus {
+  color: var(--oi-reader-link-hover);
+}
+.oi-ask-answer a:focus {
+  outline: 2px solid var(--oi-reader-link);
+  outline-offset: 2px;
 }
 .oi-ask-answer code,
 .oi-ask-answer pre {
@@ -222,6 +257,27 @@
   font-size: 1em;
 }
 .oi-ask-answer .katex { font-size: 1em; }
+.oi-ask-answer table {
+  border-collapse: collapse;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.oi-ask-answer th,
+.oi-ask-answer td {
+  border: 1px solid var(--oi-reader-line);
+  padding: 6px 10px;
+  font-size: 13px;
+  vertical-align: top;
+}
+.oi-ask-answer th {
+  background: var(--oi-reader-well);
+  font-weight: 600;
+}
+.oi-ask-answer blockquote {
+  padding-left: 0.8em;
+  border-left: 2px solid var(--oi-reader-line);
+}
 .oi-ask-dots {
   color: var(--oi-reader-muted);
   font-size: 13px;

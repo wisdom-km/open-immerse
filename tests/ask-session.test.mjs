@@ -191,6 +191,79 @@ test("formula citation is text only and never attaches an image", () => {
   }
 });
 
+test("F6UI-21 a real formula crop is sent only on a multimodal route", () => {
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const cite = { kind: "formula", text: "E=mc^2", latex: "\\frac{a}{b}", image: png, page: 4 };
+  const session = createAskSession({ ids: () => "crop" });
+  const begun = beginTurn(session, {
+    question: "这是什么？",
+    route: routeOf(llm, mm),
+    nearby: [{ bid: "n", page: 4, text: "附近一句" }],
+    citation: cite
+  });
+  assert.equal(begun.turn.payload.mode, "image");
+  assert.equal(begun.turn.payload.note, "");
+  assert.equal(begun.turn.payload.image.mime, "image/png");
+  assert.match(begun.turn.payload.image.base64, /^iVBORw0KGgo/);
+  assert.equal(begun.turn.citation.image, undefined);
+  assert.equal(cite.image, png);
+  const stored = JSON.stringify(begun.turn.messages);
+  assert.match(stored, /"type":"image"/);
+  assert.match(stored, /iVBORw0KGgo/);
+  assert.equal(stored.includes("image_url"), false);
+  assert.equal(stored.includes("inline_data"), false);
+  assert.equal(stored.includes("\\frac"), false);
+  assert.equal(sessionInvariants(session).length, 0);
+  const openai = JSON.stringify(askRequestBody({ provider: "openai", model: "gpt-4o" }, begun.turn.messages));
+  assert.match(openai, /image_url/);
+  assert.match(openai, /data:image\/png;base64,iVBORw0KGgo/);
+  const gemini = JSON.stringify(askRequestBody({ provider: "gemini", model: "gemini" }, begun.turn.messages));
+  assert.match(gemini, /inline_data/);
+  assert.match(gemini, /iVBORw0KGgo/);
+  const claude = JSON.stringify(askRequestBody({ provider: "claude", model: "claude" }, begun.turn.messages));
+  assert.match(claude, /"media_type":"image\/png"/);
+  assert.match(claude, /"type":"base64"/);
+  assert.equal(JSON.stringify(begun.turn.messages).includes("image_url"), false);
+
+  const text = beginTurn(createAskSession({ ids: () => "textcrop" }), {
+    question: "文字模型",
+    route: routeOf(llm, {}),
+    nearby: [],
+    citation: { ...cite }
+  });
+  assert.equal(text.turn.payload.mode, "text");
+  assert.equal(text.turn.payload.image, null);
+  assert.match(text.turn.payload.note, /不看图/);
+  assert.equal(JSON.stringify(text.turn.messages).includes("iVBORw0KGgo"), false);
+
+  const forced = beginTurn(createAskSession({ ids: () => "forcecrop" }), {
+    question: "强制文字",
+    route: routeOf(llm, mm),
+    nearby: [],
+    citation: { ...cite },
+    forceText: true
+  });
+  assert.equal(forced.turn.payload.mode, "text");
+  assert.match(forced.turn.payload.note, /公式改为文字发送/);
+  assert.equal(JSON.stringify(forced.turn.messages).includes("iVBORw0KGgo"), false);
+
+  const plain = citationPayload({ kind: "text", text: "句子", image: png }, "multimodal");
+  assert.equal(plain.mode, "text");
+  assert.equal(plain.image, null);
+  const smuggled = sessionInvariants({
+    generation: 1,
+    turns: [{
+      id: "x:1",
+      payload: { mode: "image", image: { mime: "image/png", base64: "abc" } },
+      citation: { kind: "text" },
+      route: { via: "multimodal" },
+      messages: []
+    }],
+    flight: null
+  });
+  assert.ok(smuggled.some((item) => item.includes("image")));
+});
+
 test("interrupt: a second begin is busy and a late settle cannot overwrite a stop", () => {
   const session = createAskSession({ ids: () => "race" });
   const route = routeOf(llm, mm);
