@@ -12,11 +12,13 @@ import { fetchLocalEnvelope } from "../lib/pdf-layout-client.js";
 import { resolveArxivSession } from "../lib/formula-arxiv-gate.js";
 import {
   DIAG_BYTE_CAP,
+  DIAG_CTX_CAP,
   DIAG_RETENTION_MS,
   DIAG_STORAGE_KEY,
   createDiagWriter,
   diagByteLength,
   diagLog,
+  handleDiagMessage,
   installDiagWriter,
   noteTranslateFailure,
   noteViewerNetwork,
@@ -229,10 +231,100 @@ test("translate failures reach the log through the arxiv message bridge", async 
     assert.equal(translated.code, "503");
     assert.equal(translated.provider, "openai");
     assert.equal(translated.count, 4);
-    assert.equal(translated.msg.includes("upstream"), true);
+    assert.equal(translated.msg, undefined);
+    assert.equal(JSON.stringify(stored(local)).includes("upstream"), false);
   } finally {
     globalThis.chrome = previous;
   }
+});
+
+test("a caller timestamp in the future is not stored", async () => {
+  const now = Date.now();
+  const kept = retainDiagEvents([
+    { t: now + 365 * 864e5, type: "mm.error", code: "future" },
+    { t: now, type: "mm.error", code: "now" }
+  ], now);
+  assert.deepEqual(kept.map((event) => event.code), ["now"]);
+  const storage = memoryArea();
+  const writer = createDiagWriter({ storage, debounceMs: -1, now: () => now });
+  writer.log({ type: "mm.error", code: "stamped", t: now + 400 * 864e5 });
+  await writer.flush();
+  const saved = stored(storage)[0];
+  assert.equal(saved.code, "stamped");
+  assert.ok(saved.t <= now + 1000);
+});
+
+test("content spam cannot evict a service-worker error", async () => {
+  const storage = memoryArea();
+  const writer = createDiagWriter({ storage, debounceMs: -1 });
+  writer.log({ type: "translate.error", ctx: "sw", code: "REAL" });
+  await writer.flush();
+  const msg = "lorem ipsum dolor sit ".repeat(20);
+  for (let i = 0; i < 6000; i += 1) writer.log({ type: "content.spam", ctx: "content", msg });
+  await writer.flush();
+  const events = stored(storage);
+  assert.ok(events.some((event) => event.code === "REAL"));
+  assert.ok(events.filter((event) => event.ctx === "content").length <= DIAG_CTX_CAP);
+});
+
+test("content-script senders cannot export or forge a service-worker event", async () => {
+  const storage = memoryArea();
+  const previous = globalThis.chrome;
+  globalThis.chrome = { runtime: { id: "extid" }, storage: { local: storage, sync: memoryArea() } };
+  const writer = createDiagWriter({ storage, debounceMs: -1 });
+  const content = { id: "extid", tab: { id: 1 }, url: "https://example.com/paper" };
+  const viewer = { id: "extid", tab: { id: 2 }, url: "chrome-extension://extid/pdf/viewer.html" };
+  const options = { id: "extid", tab: { id: 3 }, url: "chrome-extension://extid/options/options.html" };
+  try {
+    const denied = await handleDiagMessage(
+      { type: "OI_DIAG_LOG", event: { type: "translate.error", ctx: "sw", msg: "spoofed paper", t: Date.now() + 864e5 } },
+      { writer, sender: content }
+    );
+    assert.equal(denied.ok, false);
+    const logged = await handleDiagMessage(
+      { type: "OI_DIAG_LOG", event: { type: "mm.error", ctx: "sw", code: "401" } },
+      { writer, sender: viewer }
+    );
+    assert.equal(logged.ok, true);
+    await writer.flush();
+    assert.equal(stored(storage)[0].ctx, "viewer");
+    assert.equal(stored(storage)[0].code, "401");
+    const cleared = await handleDiagMessage({ type: "OI_DIAG_CLEAR" }, { writer, sender: viewer });
+    assert.equal(cleared.ok, false);
+    const exported = await handleDiagMessage({ type: "OI_DIAG_EXPORT" }, { writer, sender: content });
+    assert.equal(exported.ok, false);
+    const allowed = await handleDiagMessage({ type: "OI_DIAG_STATS" }, { writer, sender: options });
+    assert.equal(allowed.ok, true);
+    const spoofed = await handleArxivSourceMessage({
+      action: "diag-note",
+      sender: content,
+      failure: { message: "spoofed by page", code: "999" },
+      fields: { provider: "openai", count: 5 }
+    });
+    assert.equal(spoofed.ok, false);
+    assert.equal(JSON.stringify(stored(storage)).includes("spoofed"), false);
+  } finally {
+    globalThis.chrome = previous;
+  }
+});
+
+test("a failed write during export still returns events that can be read", async () => {
+  const now = Date.now();
+  const storage = memoryArea({
+    [DIAG_STORAGE_KEY]: [{ t: now, type: "mm.error", ctx: "sw", code: "kept" }]
+  });
+  storage.set = async () => {
+    throw Object.assign(new Error("quota"), { name: "QuotaExceededError" });
+  };
+  const writer = createDiagWriter({ storage, sync: memoryArea(), debounceMs: -1 });
+  writer.log({ type: "mm.error", code: "new" });
+  const result = await writer.exportPackage({
+    extVersion: "1.0.0",
+    browser: { brand: "Chrome", version: "1", platform: "Linux" },
+    locale: "zh-CN"
+  });
+  assert.notEqual(result.code, "storage-unreadable");
+  assert.ok(result.package.events.some((event) => event.code === "kept"));
 });
 
 test("service worker reaches the diagnostic log without a dynamic import", () => {

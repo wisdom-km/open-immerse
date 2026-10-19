@@ -98,6 +98,38 @@ test("export json hides url query tokens that are not stored secrets", async () 
   assert.equal(packed.includes("data:text"), false);
 });
 
+test("export hides keys stored as oiSecrets provider strings", async () => {
+  const shortKey = "myLocalKey.2026";
+  const dotted = "0123456789abcdef0123456789abcdef.AbCdEfGhIjKlMnOp";
+  const legacy = "legacyKey.9z";
+  resetDiagForTests();
+  const local = memoryArea({
+    oiSecrets: {
+      providers: { openai: shortKey, custom: dotted },
+      pdfCloudApiKey: "pdfkey.123"
+    }
+  });
+  const sync = memoryArea({
+    settings: {
+      provider: "openai",
+      providers: { openai: { apiKey: "" }, deepl: { apiKey: legacy } }
+    }
+  });
+  const writer = createDiagWriter({ storage: local, sync, debounceMs: -1 });
+  writer.log({
+    type: "translate.error",
+    ctx: "sw",
+    code: "401",
+    msg: `401 invalid api key ${shortKey}; zhipu ${dotted}; deepl ${legacy}`
+  });
+  const packed = JSON.stringify((await writer.exportPackage(env)).package);
+  assert.equal(packed.includes(shortKey), false);
+  assert.equal(packed.includes("AbCdEfGhIjKlMnOp"), false);
+  assert.equal(packed.includes(dotted), false);
+  assert.equal(packed.includes(legacy), false);
+  assert.equal(packed.includes("pdfkey.123"), false);
+});
+
 test("export json hides short secret values that provider redaction keeps", async () => {
   const packed = await exportLeak();
   assert.equal(packed.includes(SECRET), false);

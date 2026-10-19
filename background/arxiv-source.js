@@ -466,8 +466,12 @@ export function sharedArxivSourceClient() {
 export function handleArxivSourceMessage(message = {}, client = sharedArxivSourceClient()) {
   // The service worker's import list and its ban on import() are both locked.
   // Diagnostic messages and translate failures arrive through this function.
-  if (message.action === "diag") return handleDiagMessage(message.message || {});
+  if (message.action === "diag") {
+    return handleDiagMessage(message.message || {}, { sender: message.sender || null });
+  }
   if (message.action === "diag-note") {
+    // Only the service worker's own translate catch calls this, with no sender.
+    if (message.sender) return { ok: false };
     try {
       installServiceWorkerDiag();
       noteTranslateFailure(message.failure, message.fields || {});

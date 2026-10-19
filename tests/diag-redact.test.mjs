@@ -49,6 +49,47 @@ test("scrubDiagMessage removes short secret values that provider redaction keeps
   assert.match(msg, /\*\*\*/);
 });
 
+test("scrubDiagMessage masks header credentials that are not stored secrets", () => {
+  const samples = [
+    "{\"headers\":{\"Authorization\":\"Basic dXNlcjpwYXNz\"}}",
+    "Authorization=Basic dXNlcjpwYXNz",
+    "authorization:  Token abc.def.ghi",
+    "\"x-api-key\": \"shortk1\"",
+    "api-key: shortk2",
+    "x-goog-api-key: AIzaShort",
+    "DeepL-Auth-Key abc:fx",
+    "Proxy-Authorization: Basic Zm9vOmJhcg==",
+    "Cookie: sid=SID99xx"
+  ];
+  for (const sample of samples) {
+    const msg = scrubDiagMessage(sample, []);
+    assert.equal(msg.includes("dXNlcjpwYXNz"), false, sample);
+    assert.equal(msg.includes("abc.def.ghi"), false, sample);
+    assert.equal(msg.includes("shortk1"), false, sample);
+    assert.equal(msg.includes("shortk2"), false, sample);
+    assert.equal(msg.includes("AIzaShort"), false, sample);
+    assert.equal(msg.includes("abc:fx"), false, sample);
+    assert.equal(msg.includes("Zm9vOmJhcg=="), false, sample);
+    assert.equal(msg.includes("SID99xx"), false, sample);
+  }
+});
+
+test("scrub clips raw text before url and header scans", () => {
+  const marker = "TAILMARK99";
+  const blob = `https://user:pw@example.com/a?token=${"x".repeat(3000)} ${marker}`;
+  const msg = scrubDiagMessage(blob, []);
+  assert.equal(msg.includes(marker), false);
+  assert.equal(msg.includes("user:pw"), false);
+});
+
+test("scrubDiagUrl reduces ws, ftp, and scheme-relative userinfo", () => {
+  assert.equal(scrubDiagUrl("ws://user:pw97@x.example/?token=WSTOK99"), "ws:");
+  assert.equal(scrubDiagUrl("ftp://user:pw96@x.example/f"), "ftp:");
+  const relative = scrubDiagMessage("see //user:pw98@x.example/a?token=PRTOK99 end", []);
+  assert.equal(relative.includes("pw98"), false);
+  assert.equal(relative.includes("PRTOK99"), false);
+});
+
 test("redactDiagEvent drops paper text fields", () => {
   const event = redactDiagEvent({
     t: 10,

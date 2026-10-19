@@ -200,6 +200,8 @@ async function handleMessage(message, sender) {
       return { ok: true, settings: await saveSettings({ siteRules: rules }) };
     }
     case "OI_ARXIV_SOURCE":
+      // AX-11 and sw-startup lock this file's imports. Diagnostic actions are not arXiv.
+      if (message?.action === "diag" || message?.action === "diag-note") return { ok: false };
       return handleArxivSourceMessage(message);
     case "OI_FORMULA_CACHE":
       return handleFormulaCacheMessage(message);
@@ -207,7 +209,7 @@ async function handleMessage(message, sender) {
     case "OI_DIAG_EXPORT":
     case "OI_DIAG_CLEAR":
     case "OI_DIAG_STATS":
-      return handleArxivSourceMessage({ action: "diag", message });
+      return handleArxivSourceMessage({ action: "diag", message, sender });
     default:
       return { ok: false, error: "unknown message" };
   }
