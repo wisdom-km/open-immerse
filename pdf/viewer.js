@@ -353,11 +353,12 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
+import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, openLibraryPdf, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { bindImportChip } from "../options/data-panel.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, persistCardHiddenThisSession, readPersistCardState } from "../lib/persist-card.js";
+import { cleanTitle, httpSourceUrl } from "../lib/library-record.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
@@ -393,6 +394,9 @@ let zoom = DEFAULT_ZOOM;
 let pdfPageWidth = 0;
 let sourceZoomTouched = false;
 let sourceUrl = "";
+let libraryFileName = "";
+let libraryHttpUrl = "";
+let libraryTitle = "";
 let docId = 0;
 let restoreGen = 0;
 let textGen = 0;
@@ -435,7 +439,20 @@ let notesResizeTimer = 0;
 let notesChromeLock = false;
 let titleStructure = null;
 const librarySourceSent = new Set();
-const enqueueLibraryWrite = createLibraryWriteQueue();
+// The original PDF was stored. This is not "pages written this session":
+// savedTranslationFor uses librarySourceSent for that, and an open must not
+// join it or a slow library read refuses the stored translation.
+const libraryOriginalStored = new Set();
+let libraryWritesPending = 0;
+const enqueueLibraryWrite = (() => {
+  const enqueue = createLibraryWriteQueue();
+  return (write) => {
+    libraryWritesPending += 1;
+    return enqueue(() => Promise.resolve().then(write).finally(() => {
+      libraryWritesPending -= 1;
+    }));
+  };
+})();
 const layoutCache = new Map();
 // Pages the library or a previous layout cache already marked skip-only.
 // They count as done before the new layout, and must not take a layout slot
@@ -4785,6 +4802,7 @@ function viewerUnderTest() {
 
 function publishViewerTestHooks() {
   if (!viewerUnderTest()) return;
+  globalThis.__oiLibrarySourceSentHas = (hash) => librarySourceSent.has(String(hash || ""));
   globalThis.__oiRenderArticle = () => renderArticle();
   globalThis.__oiOpenPage = async (page) => {
     const n = Number(page);
@@ -9115,6 +9133,101 @@ async function resolveBatchSize() {
   return Math.max(1, Number(settingsRes?.settings?.batchSize) || 8);
 }
 
+function rememberLibraryIdentity(value) {
+  const raw = String(value || "");
+  const http = httpSourceUrl(raw);
+  libraryHttpUrl = http;
+  libraryFileName = http ? "" : (shortTitle(raw) || "");
+  libraryTitle = cleanTitle(shortTitle(raw) || raw);
+}
+
+function captureLibraryIdentity() {
+  return {
+    title: libraryTitle || cleanTitle(document.title),
+    fileName: libraryFileName,
+    sourceUrl: libraryHttpUrl
+  };
+}
+
+function librarySourceBlob(hash, bytes) {
+  if (libraryOriginalStored.has(hash) || !bytes?.byteLength) return null;
+  return new Blob([bytes], { type: "application/pdf" });
+}
+
+function rememberLibraryOriginal(hash, sentFor, saved) {
+  if (docId !== sentFor) return;
+  const status = saved?.source;
+  if (status !== "saved" && status !== "exists") return;
+  libraryOriginalStored.add(hash);
+}
+
+function rememberLibrarySourceAttempt(hash, sentFor, saved) {
+  if (docId !== sentFor) return;
+  // Stick only when a source blob was actually stored. Quota, a missing
+  // paper, and any other miss must try again on the next open.
+  // This set means pages were written this session. Opening does not call it.
+  const status = saved?.source;
+  if (status !== "saved" && status !== "exists") return;
+  librarySourceSent.add(hash);
+  libraryOriginalStored.add(hash);
+}
+
+function storeOpenedPdf(openedStamp, captured = null) {
+  const bytes = captured?.bytes || pdfBytes;
+  const pageCount = captured?.pageCount ?? (pdfDoc?.numPages || 0);
+  const identity = captured?.identity || captureLibraryIdentity();
+  return (async () => {
+    try {
+      const hash = await pdfByteHash(bytes);
+      if (docId !== openedStamp || !hash || hash === "nohash") return;
+      const saved = await openLibraryPdf({
+        hash,
+        title: identity.title,
+        fileName: identity.fileName,
+        sourceUrl: identity.sourceUrl,
+        pageCount,
+        source: librarySourceBlob(hash, bytes)
+      });
+      rememberLibraryOriginal(hash, openedStamp, saved);
+    } catch {
+      /* the PDF stays open when the library record cannot be written */
+    }
+  })();
+}
+
+function scheduleOpenedPdf(openedStamp) {
+  const captured = {
+    bytes: pdfBytes,
+    pageCount: pdfDoc?.numPages || 0,
+    identity: captureLibraryIdentity()
+  };
+  const startedAt = Date.now();
+  const arm = () => {
+    if (docId !== openedStamp) return;
+    const quiet = !pdfTranslateBusy(session) && libraryWritesPending === 0;
+    const translating = docPhase === "opening" || docPhase === "running";
+    // Do not open IndexedDB here. A blob write started before the page save
+    // holds the paper transaction, and the row is still missing when the
+    // same-tab reopen reads it. The record is written once that settles.
+    if (!quiet || (translating && Date.now() - startedAt < 15000)) {
+      setTimeout(arm, 40);
+      return;
+    }
+    void storeOpenedPdf(openedStamp, captured);
+  };
+  setTimeout(arm, 40);
+}
+
+function libraryPayloadFields(identity, hash, bytes) {
+  const source = librarySourceBlob(hash, bytes);
+  return {
+    ...(identity.title ? { title: identity.title } : {}),
+    ...(identity.fileName ? { fileName: identity.fileName } : {}),
+    ...(identity.sourceUrl ? { sourceUrl: identity.sourceUrl } : {}),
+    ...(source ? { source } : {})
+  };
+}
+
 function rememberTranslation(page, results) {
   const rawLayout = getPageLayout(page);
   const layout = cacheableLayout(rawLayout);
@@ -9141,7 +9254,7 @@ function rememberTranslation(page, results) {
   // Capture this document before queuing: the user may open another PDF while
   // earlier pages are still being saved.
   const bytes = pdfBytes;
-  const title = document.title;
+  const identity = captureLibraryIdentity();
   const pageCount = pdfDoc?.numPages || 0;
   const skipped = skipOnly && !pairs.length;
   const sentFor = docId;
@@ -9152,17 +9265,8 @@ function rememberTranslation(page, results) {
       return;
     }
     const keepLayout = !(await layoutWriteSuperseded(hash, page, String(layout?.layoutVersion || "")));
-    let sourceBase64 = "";
-    if (!librarySourceSent.has(hash) && bytes?.length) {
-      let binary = "";
-      for (let offset = 0; offset < bytes.length; offset += 32768) {
-        binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
-      }
-      sourceBase64 = btoa(binary);
-    }
     const savedPayload = {
       hash,
-      title,
       pageCount,
       page,
       pairs,
@@ -9173,12 +9277,12 @@ function rememberTranslation(page, results) {
       ...(keepLayout ? { layout } : {}),
       ...(keepLayout && layout?.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}),
       ...(keepLayout && engineModeOf(rawLayout) ? { mode: engineModeOf(rawLayout) } : {}),
-      sourceBase64,
+      ...libraryPayloadFields(identity, hash, bytes),
       ...(skipped ? { skipped: true } : {})
     };
-    await saveLibraryPage(savedPayload);
+    const saved = await saveLibraryPage(savedPayload);
     void maybeShowPersistCard();
-    if (docId === sentFor) librarySourceSent.add(hash);
+    rememberLibrarySourceAttempt(hash, sentFor, saved);
     const savedPage = libraryDoc?.pages?.find((item) => item.page === page);
     if (keepLayout && savedPage && layout) {
       savedPage.layout = layout;
@@ -9294,9 +9398,10 @@ function persistPageLayout(page) {
   const pairs = Array.isArray(entry?.pairs) ? entry.pairs : [];
   const skipped = Boolean(entry?.skipped) || (isSkipOnlyPage(raw.blocks) && !pairs.length);
   const bytes = pdfBytes;
-  const title = document.title;
+  const identity = captureLibraryIdentity();
   const pageCount = pdfDoc?.numPages || 0;
   const epoch = layoutEpoch;
+  const sentFor = docId;
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
     if (!hash || hash === "nohash") return;
@@ -9314,7 +9419,6 @@ function persistPageLayout(page) {
     }
     const savedPayload = {
       hash,
-      title,
       pageCount,
       page,
       pairs,
@@ -9323,10 +9427,12 @@ function persistPageLayout(page) {
       targetLang: pdfTargetLang,
       layoutVersion: version,
       ...(engineModeOf(raw) ? { mode: engineModeOf(raw) } : {}),
-      ...(skipped ? { skipped: true } : {})
+      ...(skipped ? { skipped: true } : {}),
+      ...libraryPayloadFields(identity, hash, bytes)
     };
-    await saveLibraryPage(savedPayload);
+    const saved = await saveLibraryPage(savedPayload);
     void maybeShowPersistCard();
+    rememberLibrarySourceAttempt(hash, sentFor, saved);
   });
 }
 
@@ -9336,25 +9442,27 @@ function persistPagePairs(saved) {
   const rawLayout = getPageLayout(page);
   const layout = rawLayout ? cacheableLayout(rawLayout) : null;
   const bytes = pdfBytes;
-  const title = document.title;
+  const identity = captureLibraryIdentity();
   const pageCount = pdfDoc?.numPages || 0;
+  const sentFor = docId;
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
     if (!hash || hash === "nohash") return;
     const keepLayout = layout && !(await layoutWriteSuperseded(hash, page, String(layout.layoutVersion || "")));
     const savedPayload = {
       hash,
-      title,
       pageCount,
       page,
       pairs: saved.pairs,
       ...(rawLayout?.blocks?.length ? { blocks: rawLayout.blocks } : {}),
       targetLang: pdfTargetLang,
       ...(keepLayout ? { layout, ...(layout.layoutVersion ? { layoutVersion: layout.layoutVersion } : {}), ...(engineModeOf(rawLayout) ? { mode: engineModeOf(rawLayout) } : {}) } : {}),
-      ...(saved.skipped ? { skipped: true } : {})
+      ...(saved.skipped ? { skipped: true } : {}),
+      ...libraryPayloadFields(identity, hash, bytes)
     };
-    await saveLibraryPage(savedPayload);
+    const savedPage = await saveLibraryPage(savedPayload);
     void maybeShowPersistCard();
+    rememberLibrarySourceAttempt(hash, sentFor, savedPage);
   });
 }
 
@@ -9385,10 +9493,7 @@ function ensureLibraryDocument() {
       // still reading. A late legacy snapshot must not replace it, or the next
       // layout write stores the original pairs over the translation.
       if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
-      if (doc) {
-        doc.hash = hash;
-        if (doc.sourcePath) librarySourceSent.add(hash);
-      }
+      if (doc) doc.hash = hash;
       libraryDoc = doc || null;
       if (hash) void pendingNotes?.hydrate?.(hash);
       return libraryDoc;
@@ -11355,6 +11460,7 @@ async function openFromSrc(src) {
 }
 
 async function openPdfData(data, title) {
+  rememberLibraryIdentity(title);
   setStatus(PDF_COPY.loading);
   pdfBytes = data instanceof Uint8Array ? data.slice() : new Uint8Array(data || []);
   const loading = getDocument({ data, verbosity: 0 });
@@ -11368,6 +11474,7 @@ async function adoptDoc(doc, title) {
   // those pages were saved without a failed flag, and adopting them would
   // drop bypassCache on the failed batch.
   librarySourceSent.clear();
+  libraryOriginalStored.clear();
   if (pdfDoc) {
     try {
       await pdfDoc.destroy();
@@ -11457,6 +11564,10 @@ async function adoptDoc(doc, title) {
     endPageNav();
   }
   syncZoomChip();
+  // The original is stored after translation has a chance to write the page.
+  // Starting that blob write now holds the paper transaction, and the row is
+  // still missing when the same-tab reopen reads it.
+  scheduleOpenedPdf(docId);
   await maybeAutoTranslateDocument();
 }
 
