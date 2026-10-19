@@ -1207,3 +1207,152 @@ test("500 seeds of open, write, skip, delete, and reopen across two tabs", async
     }
   }
 });
+
+test("opening writes the paper before the original blob and does not move lastOpenedAt again", async () => {
+  const before = fetchCalls;
+  let now = 10;
+  const { store } = memoryStore({ dbName: "f8-open-record-first", now: () => now });
+  const bytes = new Uint8Array([9, 9, 9, 9]);
+  const hash = sha256HexOf(bytes);
+  const opened = await openLibraryPdf({
+    hash,
+    title: "PDF 阅读 · fresh.pdf",
+    fileName: "fresh.pdf",
+    sourceUrl: "https://user:pass@example.test/fresh.pdf?x=1#p=2",
+    pageCount: 3
+  }, { store });
+  assert.equal(opened.source, "absent");
+  const paper = await store.getPaper(hash);
+  assert.equal(paper.title, "fresh.pdf");
+  assert.equal(paper.fileName, "fresh.pdf");
+  assert.equal(paper.pageCount, 3);
+  assert.equal(paper.pagesTranslated, 0);
+  assert.equal(paper.lastOpenedAt, 10);
+  assert.equal(paper.sourceUrl, "https://example.test/fresh.pdf?x=1");
+  assert.equal((await store.getPages(hash)).length, 0);
+  assert.equal(await store.getSource(hash), null);
+
+  now = 80;
+  const sourced = await openLibraryPdf({
+    hash,
+    source: new Blob([bytes], { type: "application/pdf" })
+  }, { store, record: false });
+  assert.equal(sourced.source, "saved");
+  const after = await store.getPaper(hash);
+  assert.equal(after.lastOpenedAt, 10);
+  assert.equal(after.pagesTranslated, 0);
+  assert.equal((await store.getPages(hash)).length, 0);
+  assert.deepEqual(new Uint8Array(await (await store.getSource(hash)).arrayBuffer()), bytes);
+  assert.equal(fetchCalls, before);
+
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const scheduled = viewer.slice(
+    viewer.indexOf("function scheduleOpenedPdf"),
+    viewer.indexOf("function libraryPayloadFields")
+  );
+  const recordCall = scheduled.indexOf('storeOpenedPdf(openedStamp, captured, "record")');
+  const arm = scheduled.indexOf("const arm = ()");
+  const sourceCall = scheduled.indexOf('storeOpenedPdf(openedStamp, captured, "source")');
+  assert.ok(recordCall > 0 && arm > recordCall && sourceCall > arm, "the paper record waits for the blob arm");
+  assert.doesNotMatch(scheduled, /librarySourceSent\.add/);
+  assert.doesNotMatch(scheduled, /rememberLibrarySourceAttempt/);
+  const openedFn = viewer.slice(viewer.indexOf("function storeOpenedPdf"), viewer.indexOf("function scheduleOpenedPdf"));
+  assert.match(openedFn, /recordOnly \? \{\} : \{ source: librarySourceBlob/);
+  assert.doesNotMatch(openedFn, /librarySourceSent/);
+  assert.match(viewer, /globalThis\.__oiLibrarySourceSentHas = /);
+  assert.match(viewer, /globalThis\.__oiDropLibraryDoc = /);
+});
+
+test("sourceUrl strips underscore Amz keys, extra secret names, matrix params, and keeps the remaining query", async () => {
+  const cases = [
+    {
+      name: "amz-underscore",
+      dirty: "https://cdn.example/paper.pdf?x_amz_signature=dead&X_Amz_Credential=AKIA&lang=zh",
+      clean: "https://cdn.example/paper.pdf?lang=zh",
+      gone: ["dead", "AKIA", "x_amz_signature", "X_Amz_Credential"]
+    },
+    {
+      name: "amz-hyphen",
+      dirty: "https://cdn.example/paper.pdf?X-Amz-Signature=deadbeef&q=1",
+      clean: "https://cdn.example/paper.pdf?q=1",
+      gone: ["deadbeef", "X-Amz-Signature"]
+    },
+    {
+      name: "extra-keys",
+      dirty: "https://cdn.example/paper.pdf?key=AIza&code=authcode&access_key=AKIA&access-key=AKIA2&otp=123456&hmac=abcd&q=1",
+      clean: "https://cdn.example/paper.pdf?q=1",
+      gone: ["AIza", "authcode", "AKIA", "AKIA2", "123456", "abcd"]
+    },
+    {
+      name: "keep-encoding",
+      dirty: "https://cdn.example/paper.pdf?a%20b=1&keep=~&token=sekret&q",
+      clean: "https://cdn.example/paper.pdf?a%20b=1&keep=~&q",
+      gone: ["sekret"]
+    },
+    {
+      name: "bare-q",
+      dirty: "https://cdn.example/paper.pdf?sig&q",
+      clean: "https://cdn.example/paper.pdf?q",
+      gone: ["sig"]
+    },
+    {
+      name: "encoded-token-key",
+      dirty: "https://cdn.example/paper.pdf?%74oken=sekret&q=1",
+      clean: "https://cdn.example/paper.pdf?q=1",
+      gone: ["sekret", "%74oken"]
+    },
+    {
+      name: "matrix-token",
+      dirty: "https://user:secret@cdn.example/paper.pdf;token=sekret;lang=zh?a%20b=1&q#page=2",
+      clean: "https://cdn.example/paper.pdf;lang=zh?a%20b=1&q",
+      gone: ["sekret", "user:secret", "#page=2"]
+    },
+    {
+      name: "path-token",
+      dirty: "https://cdn.example/foo/token=sekret/bar.pdf?x=1",
+      clean: "https://cdn.example/foo/bar.pdf?x=1",
+      gone: ["sekret"]
+    },
+    {
+      name: "encoded-path-token",
+      dirty: "https://cdn.example/foo/token%3Dsekret/bar.pdf?x=1",
+      clean: "https://cdn.example/foo/bar.pdf?x=1",
+      gone: ["sekret", "token%3Dsekret"]
+    },
+    {
+      name: "path-hmac",
+      dirty: "https://cdn.example/files;hmac=abcd;page=2/paper.pdf?lang=zh",
+      clean: "https://cdn.example/files;page=2/paper.pdf?lang=zh",
+      gone: ["abcd"]
+    }
+  ];
+  for (const item of cases) {
+    assert.equal(httpSourceUrl(item.dirty), item.clean, item.name);
+  }
+  const { store } = memoryStore({ dbName: "f8-url-nits" });
+  for (const item of cases) {
+    await saveLibraryPage({
+      hash: item.name,
+      title: item.name,
+      sourceUrl: item.dirty,
+      pageCount: 1,
+      page: 1,
+      pairs: [{ translation: "甲" }]
+    }, { store });
+    assert.equal((await store.getPaper(item.name)).sourceUrl, item.clean, `${item.name} stored`);
+  }
+  const exported = await store.exportLibrary({ exportedAt: 1, appVersion: "0.0.0" });
+  const body = JSON.stringify(exported);
+  const log = JSON.stringify(await store.changes(0));
+  for (const item of cases) {
+    const row = exported.papers.find((entry) => entry.paper.docHash === item.name);
+    assert.equal(row.paper.sourceUrl, item.clean, `${item.name} export`);
+    for (const secret of item.gone) {
+      assert.equal(body.includes(secret), false, `${item.name} export leaked ${secret}`);
+      assert.equal(log.includes(secret), false, `${item.name} change log leaked ${secret}`);
+    }
+  }
+  const listed = await store.listPapers();
+  assert.equal(listed.find((paper) => paper.docHash === "keep-encoding").sourceUrl, "https://cdn.example/paper.pdf?a%20b=1&keep=~&q");
+  assert.equal(listed.find((paper) => paper.docHash === "matrix-token").sourceUrl, "https://cdn.example/paper.pdf;lang=zh?a%20b=1&q");
+});

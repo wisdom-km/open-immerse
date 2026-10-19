@@ -443,6 +443,12 @@ const librarySourceSent = new Set();
 // savedTranslationFor uses librarySourceSent for that, and an open must not
 // join it or a slow library read refuses the stored translation.
 const libraryOriginalStored = new Set();
+// Readable without the oiAuto gate. Opening must not add the hash here.
+globalThis.__oiLibrarySourceSentHas = (hash) => librarySourceSent.has(String(hash || ""));
+globalThis.__oiDropLibraryDoc = () => {
+  libraryDoc = null;
+  libraryProbe = null;
+};
 let libraryWritesPending = 0;
 const enqueueLibraryWrite = (() => {
   const enqueue = createLibraryWriteQueue();
@@ -9172,23 +9178,26 @@ function rememberLibrarySourceAttempt(hash, sentFor, saved) {
   libraryOriginalStored.add(hash);
 }
 
-function storeOpenedPdf(openedStamp, captured = null) {
+function storeOpenedPdf(openedStamp, captured = null, mode = "") {
   const bytes = captured?.bytes || pdfBytes;
   const pageCount = captured?.pageCount ?? (pdfDoc?.numPages || 0);
   const identity = captured?.identity || captureLibraryIdentity();
+  const recordOnly = mode === "record";
   return (async () => {
     try {
       const hash = await pdfByteHash(bytes);
       if (docId !== openedStamp || !hash || hash === "nohash") return;
+      // The record call does not store the blob and does not revive a
+      // tombstone. The later source call must not move lastOpenedAt.
       const saved = await openLibraryPdf({
         hash,
         title: identity.title,
         fileName: identity.fileName,
         sourceUrl: identity.sourceUrl,
         pageCount,
-        source: librarySourceBlob(hash, bytes)
-      });
-      rememberLibraryOriginal(hash, openedStamp, saved);
+        ...(recordOnly ? {} : { source: librarySourceBlob(hash, bytes) })
+      }, recordOnly ? {} : { record: false });
+      if (!recordOnly) rememberLibraryOriginal(hash, openedStamp, saved);
     } catch {
       /* the PDF stays open when the library record cannot be written */
     }
@@ -9201,19 +9210,21 @@ function scheduleOpenedPdf(openedStamp) {
     pageCount: pdfDoc?.numPages || 0,
     identity: captureLibraryIdentity()
   };
+  // Paper row first. Auto-translate and a slow 8765 read must not hold it.
+  // The original blob still waits until page writes settle: a blob
+  // transaction opened earlier holds the paper row the same-tab reopen reads.
+  // Neither call treats the open as a saved page.
+  void storeOpenedPdf(openedStamp, captured, "record");
   const startedAt = Date.now();
   const arm = () => {
     if (docId !== openedStamp) return;
     const quiet = !pdfTranslateBusy(session) && libraryWritesPending === 0;
     const translating = docPhase === "opening" || docPhase === "running";
-    // Do not open IndexedDB here. A blob write started before the page save
-    // holds the paper transaction, and the row is still missing when the
-    // same-tab reopen reads it. The record is written once that settles.
     if (!quiet || (translating && Date.now() - startedAt < 15000)) {
       setTimeout(arm, 40);
       return;
     }
-    void storeOpenedPdf(openedStamp, captured);
+    void storeOpenedPdf(openedStamp, captured, "source");
   };
   setTimeout(arm, 40);
 }
@@ -11564,9 +11575,8 @@ async function adoptDoc(doc, title) {
     endPageNav();
   }
   syncZoomChip();
-  // The original is stored after translation has a chance to write the page.
-  // Starting that blob write now holds the paper transaction, and the row is
-  // still missing when the same-tab reopen reads it.
+  // The paper row is written as soon as the hash is known. The original
+  // blob still waits until page writes settle.
   scheduleOpenedPdf(docId);
   await maybeAutoTranslateDocument();
 }
