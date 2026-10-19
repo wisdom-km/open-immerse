@@ -420,6 +420,36 @@ test("timeout follows the 90s clock and one retry, and abort is not retried", as
   assertNoSecret(abortBox.logs, SECRET);
 });
 
+test("an empty key is empty-key, and retry false sends one POST", async () => {
+  const empty = harness(() => {
+    throw new Error("sent");
+  });
+  const missing = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0])),
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    secret: "   ",
+    net: empty.net
+  });
+  assert.equal(empty.seen.length, 0);
+  assert.equal(missing.error.code, "empty-key");
+  assert.equal(missing.error.status, 0);
+  assert.equal(missing.error.summary, "请先填写密钥");
+  assert.ok(VISION_ERROR_CODES.includes("empty-key"));
+
+  const once = harness(() => httpError(500, "down"));
+  const probed = await sendVision({
+    target: multimodalTarget(settingsFor(VENDORS[0])),
+    text: "x",
+    images: [{ mime: "image/png", base64: PNG }],
+    secret: SECRET,
+    retry: false,
+    net: once.net
+  });
+  assert.equal(once.seen.length, 1);
+  assert.equal(probed.error.code, "http");
+});
+
 test("abort after the key is read does not send, and a removed key does not reuse the old one", async () => {
   const controller = new AbortController();
   let reads = 0;
@@ -460,7 +490,8 @@ test("abort after the key is read does not send, and a removed key does not reus
     secret: SECRET,
     net: secondBox.net
   });
-  assert.equal(second.error.code, "401");
+  assert.equal(second.error.code, "empty-key");
+  assert.equal(second.error.summary, "请先填写密钥");
   assert.equal(secondBox.seen.length, 0);
   assert.equal(JSON.stringify(second).includes("late"), false);
 });
@@ -617,7 +648,8 @@ test("a key on the target or in the URL is ignored; storage is read only when no
     storage,
     net: emptyBox.net
   });
-  assert.equal(empty.error.code, "401");
+  assert.equal(empty.error.code, "empty-key");
+  assert.equal(empty.error.summary, "请先填写密钥");
   assert.equal(emptyBox.seen.length, 0);
   assert.equal(writes, 0);
 });

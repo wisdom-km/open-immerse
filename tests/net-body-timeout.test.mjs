@@ -10,6 +10,7 @@
  * ⑤ 401 的错误正文留在失败结果里，能画进「最近失败」，并让「需处理」挂出来。
  * ⑥ 核对通过的多模态结果写进存储；同一页再开，请求数是 0。
  * ⑦ 状态码重试不读 body；读 body 失败（不是超时、不是调用方 abort）不重试；
+ *    响应头已到、body 随后超时，也不再发第二次 POST。头还没到的超时仍按策略重试。
  *    GET 在途去重仍然只打一次。
  */
 
@@ -291,6 +292,55 @@ describe("real response body stays inside the timeout", { concurrency: 1 }, () =
     } finally {
       await server.close();
     }
+  });
+
+  test("a timeout after headers does not send a second POST", async () => {
+    let hits = 0;
+    const net = createNet({
+      random: () => 0,
+      transport(_url, init) {
+        hits += 1;
+        const signal = init?.signal;
+        return {
+          ok: true,
+          status: 200,
+          headers: { "content-type": "application/json" },
+          json() {
+            return new Promise((_resolve, reject) => {
+              const fail = () => {
+                const error = new Error("aborted");
+                error.name = "AbortError";
+                reject(error);
+              };
+              if (signal?.aborted) {
+                fail();
+                return;
+              }
+              signal?.addEventListener("abort", fail, { once: true });
+            });
+          }
+        };
+      }
+    });
+    await assert.rejects(
+      () => net.fetch({
+        url: "https://vendor.example/v1/chat/completions",
+        method: "POST",
+        json: { ping: 1 },
+        purpose: "multimodal",
+        cache: false,
+        dedupeKey: false,
+        timeoutMs: 40
+      }),
+      (err) => {
+        assert.equal(err.code, "timeout");
+        assert.equal(err.name, "TimeoutError");
+        assert.equal(err.bodyRead, true);
+        return true;
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(hits, 1);
   });
 
   test("a body that outlasts the timeout reports timeout", async () => {

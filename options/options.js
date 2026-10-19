@@ -33,6 +33,7 @@ import {
 import { bindSecretInput } from "../lib/secret-field.js";
 import { ASK_TRANSLATION_LINE } from "../lib/ask-route.js";
 import {
+  EMPTY_KEY_HINT,
   FORMULA_SETTINGS_KEY,
   acceptStoredFormulaSettings,
   applyFormulaPart,
@@ -1557,8 +1558,39 @@ function paintFormulaSwitches() {
   const card = root.querySelector("[data-formula-card='mm']");
   const empty = card?.querySelector(".oi-set-empty");
   if (empty && tier2SwitchState(view).visible) empty.remove();
+  // The first key does not rebuild the card, so the draft and 「已保存」 stay.
+  // The empty-key line lives on that card and has to follow the key by itself.
+  syncEmptyKeyHints(root, formulaSettings);
   syncFormulaDerived();
   refreshBadges();
+}
+
+function syncEmptyKeyHints(root, settings) {
+  if (!root) return;
+  const cards = [
+    ["mm", settings?.multimodal?.provider, settings?.multimodal?.apiKey],
+    ["ocr", settings?.ocr?.provider, settings?.ocr?.apiKey]
+  ];
+  for (const [slot, provider, apiKey] of cards) {
+    const card = root.querySelector(`[data-formula-card='${slot}']`);
+    if (!card) continue;
+    const hint = card.querySelector(`[data-key-hint='${slot}']`);
+    const show = Boolean(String(provider || "").trim()) && !String(apiKey || "").trim();
+    if (!show) {
+      if (hint?.remove) hint.remove();
+      else hint?.parentNode?.removeChild(hint);
+      continue;
+    }
+    if (hint) continue;
+    const note = document.createElement("p");
+    note.className = "oi-set-note";
+    note.setAttribute("data-key-hint", slot);
+    note.textContent = EMPTY_KEY_HINT;
+    const slotNode = card.querySelector(`[data-key-slot='${slot}']`);
+    const anchor = slotNode?.parentElement || slotNode;
+    if (anchor?.parentNode) anchor.parentNode.insertBefore(note, anchor.nextSibling);
+    else card.appendChild(note);
+  }
 }
 
 function markKeySaved(slot) {
@@ -1978,6 +2010,8 @@ function bindFormulaSettings() {
       // so an open Base URL draft stays put.
       syncProbeChrome("multimodal", raw?.multimodal?.probe, raw?.multimodal?.apiKey);
       syncProbeChrome("ocr", raw?.ocr?.probe, raw?.ocr?.apiKey);
+      // Use the card on screen, not this echo. A newer clear must keep the hint.
+      syncEmptyKeyHints(el("formulaSettingsRoot"), formulaSettings);
       refreshBadges();
       return;
     }
