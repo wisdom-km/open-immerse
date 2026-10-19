@@ -1,4 +1,4 @@
-import { getProvider, isProviderConfigured } from "../lib/providers.js";
+import { getProvider, isProviderConfigured, resolveOutboundProvider } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { featureOn } from "../lib/features.js";
@@ -114,7 +114,8 @@ async function syncPrimary(tab) {
 }
 
 function renderEngine(settings) {
-  const provider = getProvider(settings.provider);
+  const outbound = resolveOutboundProvider(settings);
+  const provider = getProvider(outbound.providerId);
   const shortName = {
     openai: "OpenAI",
     openrouter: "OpenRouter",
@@ -131,11 +132,16 @@ function renderEngine(settings) {
     custom: "Custom"
   }[provider.id] || provider.name.split("/")[0].trim();
   const link = $("engineLink");
-  link.textContent = `引擎：${shortName}`;
+  link.textContent = provider.id === "mymemory" ? `引擎：${shortName}（免费）` : `引擎：${shortName}`;
   link.title = provider.name;
-  const cfg = settings.providers?.[provider.id] || {};
-  const ok = isProviderConfigured(provider, cfg);
-  $("engineWarn").hidden = ok;
+  if (provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
+  const selected = getProvider(settings.provider);
+  const cfg = settings.providers?.[selected.id] || {};
+  const ok = !outbound.fallback && isProviderConfigured(selected, cfg);
+  const warn = $("engineWarn");
+  const warnText = $("engineWarnText");
+  if (outbound.fallback && warnText) warnText.textContent = outbound.notice;
+  warn.hidden = ok;
 }
 
 function hostOf(url) {

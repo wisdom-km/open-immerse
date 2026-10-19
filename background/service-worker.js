@@ -1,4 +1,4 @@
-import { completePdfStructure, getProvider, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, testProviderConnection } from "../lib/providers.js";
+import { completePdfStructure, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, resolveOutboundProvider, testProviderConnection } from "../lib/providers.js";
 import { getSettings, matchSiteRule, noteTranslationSucceeded, saveSettings } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { featureOn, resolveFeatures } from "../lib/features.js";
@@ -233,11 +233,13 @@ function resolveBatchPolish(message = {}, settings = {}) {
 
 async function translateBatch(texts, options = {}) {
   const settings = await getSettings();
-  options.providerId = settings.provider;
+  const outbound = resolveOutboundProvider(settings);
+  options.providerId = outbound.providerId;
+  options.outboundFallback = outbound.fallback === true;
   options.providerCalled = false;
-  const provider = getProvider(settings.provider);
+  const provider = outbound.provider;
   const providerSettings = {
-    ...(settings.providers?.[settings.provider] || {}),
+    ...(settings.providers?.[outbound.providerId] || {}),
     twoStepPolish: resolveBatchPolish(options, settings),
     deepThink: settings.deepThink === true,
     promptAddendum: String(options.promptAddendum || "")
@@ -245,7 +247,7 @@ async function translateBatch(texts, options = {}) {
   const pending = [];
   const results = new Array(texts.length);
   texts.forEach((text, index) => {
-    const key = cacheKey(settings.provider, settings.sourceLang, settings.targetLang, text, providerSettings);
+    const key = cacheKey(outbound.providerId, settings.sourceLang, settings.targetLang, text, providerSettings);
     if (!options.bypassCache && cache.has(key)) results[index] = readCachedTranslation(key, text, settings.targetLang);
     else pending.push({ text, index, key });
   });

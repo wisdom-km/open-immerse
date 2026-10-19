@@ -609,11 +609,12 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   const missing = JSON.parse(await waitFor(`(() => {
     const row = ${SNAPSHOT};
     const data = JSON.parse(row);
-    if (!data.status.includes("API Key") || !data.status.includes("设置")) return "";
-    return row;
-  })()`, "missing: 状态栏说明要填写密钥"));
-  assert.equal(missing.batches, 0);
-  assert.match(missing.status, /引擎/);
+    const outbound = document.documentElement.dataset.oiOutbound || "";
+    if (outbound !== "mymemory-free") return "";
+    return JSON.stringify({ ...data, outbound });
+  })()`, "missing: 未配置引擎时改用免费 MyMemory"));
+  assert.equal(missing.outbound, "mymemory-free");
+  assert.equal(missing.status.includes("API Key"), false);
   assert.equal(missing.label, "翻译");
 
   await openMode("local");

@@ -138,7 +138,10 @@ test("chip uses source totals and shortens when the column is narrow", () => {
   assert.equal(skipped.title, "公式 · 已不用源码 · 改回");
   assert.equal(skipped.restore, "改回");
   assert.equal(`${skipped.text} ${skipped.restore}`.replace(/\s+/g, " ").trim(), skipped.title);
-  assert.equal(arxivFailSentence("http"), "未用 arXiv 源码：离线");
+  assert.equal(arxivFailSentence("http"), "未用 arXiv 源码：下载失败");
+  assert.equal(arxivFailSentence("timeout"), "未用 arXiv 源码：超时");
+  assert.equal(arxivFailSentence("error"), "未用 arXiv 源码：下载失败");
+  assert.equal(arxivFailSentence("mystery"), "未用 arXiv 源码：未能取得源码");
   const prefs = normalizeArxivPrefs({ arxivSourceSkip: ["1706.03762"], arxivSourceOn: ["1706.03762", "1706.03762"] });
   assert.equal(keptSourceId(prefs, "1706.03762"), true);
   assert.deepEqual(normalizeArxivPrefs({ skip: ["1706.03762"], on: [] }).on, []);

@@ -1197,7 +1197,7 @@ test("translate 需处理 badge survives refresh until a successful test or an e
   const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
   const handler = sw.slice(sw.indexOf('case "OI_TRANSLATE_BATCH"'), sw.indexOf('case "OI_TEST_PROVIDER"'));
   assert.match(handler, /await translateBatch\([\s\S]*if \(batchOpts\.providerCalled\) await noteTranslationSucceeded\(batchOpts\.providerId\)/);
-  assert.match(sw, /options\.providerId = settings\.provider/);
+  assert.match(sw, /options\.providerId = outbound\.providerId/);
   assert.equal(sw.slice(sw.indexOf("async function translateBatch"), sw.indexOf("export { translateBatch")).includes("noteTranslationSucceeded"), false);
   const menu = sw.slice(sw.indexOf("oi-save-selection"), sw.indexOf("chrome.commands.onCommand"));
   assert.match(menu, /translateBatch\(\[text\], batchOpts\)[\s\S]*if \(batchOpts\.providerCalled\) await noteTranslationSucceeded\(batchOpts\.providerId\)/);
