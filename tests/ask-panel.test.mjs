@@ -108,7 +108,6 @@ function harness(options = {}) {
     listNotes: async () => (options.backend
       ? options.backend.list(options.docHash || "doc-attn")
       : notes.slice()),
-    durableNoteIds: () => (options.backend ? options.backend.durableIds() : null),
     anchorFor: async (citation) => {
       if (!citation?.bid) return null;
       const quote = firstLineQuote(citation.text || "");
@@ -690,9 +689,6 @@ function persistentNotes() {
       const rows = await store.list(docHash);
       const extra = [...volatile.values()].filter((note) => note.docHash === docHash && !rows.some((row) => row.id === note.id));
       return rows.concat(extra);
-    },
-    durableIds() {
-      return new Set(store.notes.keys());
     },
     reload() {
       volatile.clear();
