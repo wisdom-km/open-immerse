@@ -2,6 +2,7 @@
 
 import { unpackSource } from "../lib/arxiv-src-unpack.js";
 import { currentNet } from "../lib/net/fetch.js";
+import { diagLog, handleDiagMessage, installServiceWorkerDiag, noteTranslateFailure } from "../lib/diag-log.js";
 
 export const ARXIV_DB = "oi-arxiv-src";
 export const MIN_GAP_MS = 3000;
@@ -330,6 +331,7 @@ export function createArxivSourceClient({
       sessionFailed.add(key);
       const line = typeof online === "function" ? online() : online;
       const reason = arxivFailureReason(err, line);
+      if (reason === "offline") diagLog("net.offline", { ctx: "sw", code: "offline" });
       return { ok: false, reason, id, version: version || null };
     }
     if (outcome.reason === "pdf-only") {
@@ -462,6 +464,18 @@ export function sharedArxivSourceClient() {
 }
 
 export function handleArxivSourceMessage(message = {}, client = sharedArxivSourceClient()) {
+  // The service worker's import list and its ban on import() are both locked.
+  // Diagnostic messages and translate failures arrive through this function.
+  if (message.action === "diag") return handleDiagMessage(message.message || {});
+  if (message.action === "diag-note") {
+    try {
+      installServiceWorkerDiag();
+      noteTranslateFailure(message.failure, message.fields || {});
+    } catch {
+      /* diag is best-effort */
+    }
+    return { ok: true };
+  }
   if (message.action === "clear") return client.clear();
   if (message.action === "status") {
     return Promise.resolve(typeof client.ready === "function" ? client.ready() : null).then(() => client.status());

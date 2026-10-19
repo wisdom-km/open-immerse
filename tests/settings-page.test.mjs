@@ -234,6 +234,14 @@ function installChrome(seed = {}) {
           const canned = api.testProviderResult;
           return typeof canned === "function" ? canned() : (canned || { ok: true, text: "probe" });
         }
+        if (message.type === "OI_DIAG_LOG" || message.type === "OI_DIAG_EXPORT" || message.type === "OI_DIAG_CLEAR" || message.type === "OI_DIAG_STATS") {
+          const diag = await import("../lib/diag-log.js");
+          diag.installServiceWorkerDiag({
+            storage: globalThis.chrome.storage.local,
+            sync: globalThis.chrome.storage.sync
+          });
+          return diag.handleDiagMessage(message);
+        }
         return { ok: false };
       }
     },
@@ -2847,4 +2855,196 @@ test("new background interleaving holds key invariants for 500 seeds", { timeout
     }
   }
   assert.ok(seen.size >= 400, `only ${seen.size} distinct interleavings`);
+});
+
+test("about diag focus hash keeps eight pages", () => {
+  const focus = parseSettingsHash("#about?focus=diag");
+  assert.equal(focus.id, "about");
+  assert.equal(focus.focus, "diag");
+  assert.equal(focus.replace, "#about");
+  assert.equal(SETTINGS_PAGES.length, 8);
+});
+
+test("about diagnostic panel matches the diagnostic states", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const previousCreate = globalThis.URL.createObjectURL;
+  const hits = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = () => {
+    hits.push("fetch");
+    throw new Error("offline");
+  };
+  try {
+    const chrome = installChrome({ settings: savedSettings() });
+    const page = mountPage("#about?focus=diag");
+    const { document } = page;
+    const blobs = [];
+    globalThis.URL.createObjectURL = (blob) => {
+      blobs.push(blob);
+      return "blob:oi-diag";
+    };
+    const { startOptions, searchHits } = await import("../options/options.js?diag-ui=1");
+    const started = startOptions();
+    await flush();
+    mock.timers.tick(160);
+    await started;
+    await flush();
+
+    assert.equal(page.location.hash, "#about");
+    assert.equal(document._focused?.id, "diagExport");
+    const nav = [...document.querySelectorAll("[data-nav]")].map((tab) => tab.dataset.nav);
+    assert.deepEqual(nav, ["translate", "mm", "web", "pdf", "notes", "labs", "data", "about"]);
+    const diag = document.getElementById("diagGroup");
+    assert.match(diag.previousElementSibling.textContent, /版本/);
+    const titles = [...diag.querySelectorAll(".set-row > .set-copy > .set-title")].map((node) => node.textContent);
+    assert.deepEqual(titles, ["导出诊断包", "清空日志"]);
+    assert.equal(document.getElementById("diagInclude").textContent, "包含最近 7 天的运行记录、出错原因、版本和浏览器信息。");
+    assert.equal(document.getElementById("diagExclude").textContent, "已去掉 API 密钥、网址里的 token 和论文正文。不会自动上传，导出后由你决定发给谁。");
+    assert.equal(document.getElementById("diagStatusText").textContent, "最近 7 天没有记录");
+    assert.equal(document.getElementById("diagExport").disabled, false);
+    assert.equal(searchHits("诊断")[0]?.id, "diagGroup");
+    assert.equal(searchHits("日志")[0]?.id, "diagGroup");
+    assert.equal(searchHits("报告问题")[0]?.id, "diagGroup");
+    const exported = searchHits("导出");
+    assert.equal(exported.length, 1);
+    assert.notEqual(exported[0].id, "diagGroup");
+
+    const css = readFileSync(join(root, "options/options.css"), "utf8");
+    assert.match(css, /\.diag-export\s*\{[^}]*white-space:\s*nowrap/);
+    assert.match(css, /\.diag-export\s*\{[^}]*min-width:\s*8em/);
+    assert.match(css, /\.diag-export\s*\{[^}]*color:\s*#fff/);
+    assert.match(css, /\.diag-status\.is-warn\s*\{[^}]*background:\s*none/);
+    assert.match(css, /@media \(max-width:\s*519px\)[\s\S]*\.diag-export\s*\{\s*width:\s*100%/);
+    assert.match(css, /\.set-split button\s*\{\s*flex:\s*1 1 50%/);
+    assert.match(css, /\.diag-export:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-focus\)/);
+    const block = css.match(/body\.oi-settings\s*\{[^}]+\}/)[0];
+    const tokens = Object.fromEntries([...block.matchAll(/--(oi-[\w-]+):\s*([^;]+);/g)].map((hit) => [hit[1], hit[2].trim()]));
+    assert.ok(contrast("#ffffff", tokens["oi-accent"]) >= 4.5);
+    assert.ok(contrast(tokens["oi-warn"], tokens["oi-panel"]) >= 4.5);
+
+    const exportBtn = document.getElementById("diagExport");
+    const before = hits.length;
+    exportBtn.click();
+    await flush();
+    assert.equal(exportBtn.textContent, "导出诊断包");
+    assert.equal(document.getElementById("diagStatusText").textContent, "最近 7 天没有记录");
+    assert.equal(document.querySelector("[data-diag-retry]"), null);
+    assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
+    assert.equal(blobs.length, 1);
+    const emptyPack = JSON.parse(await blobs[0].text());
+    assert.equal(emptyPack.format, 1);
+    assert.deepEqual(emptyPack.events, []);
+    assert.equal(emptyPack.extVersion, "0.3.0");
+    assert.equal(hits.length, before);
+
+    await globalThis.chrome.runtime.sendMessage({
+      type: "OI_DIAG_LOG",
+      event: { type: "mm.error", code: "401", t: Date.now() }
+    });
+    let releasePack;
+    const holdPack = new Promise((resolve) => {
+      releasePack = resolve;
+    });
+    const origSend = globalThis.chrome.runtime.sendMessage.bind(globalThis.chrome.runtime);
+    globalThis.chrome.runtime.sendMessage = async (message) => {
+      if (message?.type === "OI_DIAG_EXPORT") await holdPack;
+      return origSend(message);
+    };
+    exportBtn.click();
+    await flush();
+    assert.equal(exportBtn.textContent, "正在打包…");
+    assert.equal(exportBtn.disabled, true);
+    assert.equal(document.getElementById("diagClear").disabled, true);
+    releasePack();
+    await flush();
+    assert.equal(exportBtn.textContent, "导出诊断包");
+    assert.equal(exportBtn.disabled, false);
+    const savedPack = JSON.parse(await blobs.at(-1).text());
+    assert.equal(savedPack.events.length, 1);
+    assert.equal(savedPack.events[0].code, "401");
+    assert.match(document.getElementById("diagStatusText").textContent, /^✓ 已导出 open-immerse-diagnostics-0\.3\.0-\d{8}-\d{6}\.json$/);
+    assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
+    assert.equal(document.getElementById("diagStatus").classList.contains("set-done"), true);
+
+    globalThis.URL.createObjectURL = () => "";
+    exportBtn.click();
+    await flush();
+    assert.equal(document.getElementById("diagStatusText").textContent, "没能导出：文件没保存下来，检查一下下载设置或磁盘空间。");
+    assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), true);
+    const retry = document.querySelector("[data-diag-retry]");
+    assert.equal(retry.textContent, "再试一次");
+    assert.equal(retry.classList.contains("diag-warn"), true);
+
+    globalThis.URL.createObjectURL = () => {
+      const error = new Error("cancel");
+      error.name = "AbortError";
+      throw error;
+    };
+    retry.click();
+    await flush();
+    assert.equal(document.querySelector("[data-diag-retry]"), null);
+    assert.match(document.getElementById("diagStatusText").textContent, /^已记录 \d+ 条 · 约 /);
+    assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
+
+    const origGet = globalThis.chrome.storage.local.get.bind(globalThis.chrome.storage.local);
+    globalThis.chrome.storage.local.get = async () => { throw new Error("unread"); };
+    globalThis.URL.createObjectURL = (blob) => {
+      blobs.push(blob);
+      return "blob:oi-diag";
+    };
+    exportBtn.click();
+    await flush();
+    assert.equal(document.getElementById("diagStatusText").textContent, "暂时读不了日志，导出的包只含版本和环境信息。");
+    assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), true);
+    assert.equal(document.querySelector("[data-diag-retry]"), null);
+    const unread = JSON.parse(await blobs.at(-1).text());
+    assert.equal(unread.extVersion, "0.3.0");
+    assert.deepEqual(unread.events, []);
+    globalThis.chrome.storage.local.get = origGet;
+
+    globalThis.chrome.runtime.sendMessage = async (message) => {
+      if (message?.type === "OI_DIAG_EXPORT") return { ok: false, code: "serialize-failed" };
+      return origSend(message);
+    };
+    exportBtn.click();
+    await flush();
+    assert.equal(document.getElementById("diagStatusText").textContent, "没能导出：打包时出错。");
+    assert.equal(document.querySelector("[data-diag-retry]").textContent, "再试一次");
+    const idleOrder = ["diagExport", "diagClear"];
+    assert.deepEqual(
+      [...diag.querySelectorAll("button")].map((button) => button.id).filter((id) => idleOrder.includes(id)),
+      idleOrder
+    );
+
+    document.getElementById("diagClear").click();
+    assert.equal(document.querySelector(".diag-confirm-label").textContent, "确定清空？");
+    assert.equal(document.getElementById("diagClearConfirm").textContent, "清空");
+    assert.equal(document.getElementById("diagClearCancel").textContent, "取消");
+    const confirming = [...diag.querySelectorAll("button")].map((button) => button.id).filter(Boolean);
+    assert.deepEqual(confirming, ["diagExport", "diagClearConfirm", "diagClearCancel"]);
+    const escape = new page.window.Event("keydown", { bubbles: true });
+    Object.defineProperty(escape, "key", { value: "Escape" });
+    document.dispatchEvent(escape);
+    assert.equal(document.getElementById("diagClear").textContent, "清空");
+    assert.equal(document.getElementById("diagClearConfirm"), null);
+
+    document.getElementById("diagClear").click();
+    mock.timers.tick(4999);
+    assert.equal(document.getElementById("diagClearConfirm").textContent, "清空");
+    mock.timers.tick(1);
+    assert.equal(document.getElementById("diagClear").textContent, "清空");
+
+    document.getElementById("diagClear").click();
+    document.getElementById("diagClearConfirm").click();
+    await flush();
+    assert.equal(document.getElementById("diagStatusText").textContent, "已清空");
+    assert.equal(document.getElementById("diagStatus").classList.contains("set-done"), true);
+    assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
+    const events = chrome.local[ "diag.events" ];
+    assert.deepEqual(events, []);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.URL.createObjectURL = previousCreate;
+    mock.timers.reset();
+  }
 });

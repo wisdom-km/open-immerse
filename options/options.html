@@ -356,6 +356,29 @@
               <div class="set-ctl"><a href="../documents/documents.html">打开</a></div>
             </div>
           </div>
+          <section class="set-group" id="diagGroup" data-focus-group="diag" aria-labelledby="diagHeading">
+            <h3 class="diag-heading" id="diagHeading">问题诊断</h3>
+            <div class="set-row" id="diagExportRow">
+              <div class="set-copy">
+                <p class="set-title">导出诊断包</p>
+                <p class="set-note" id="diagInclude">包含最近 7 天的运行记录、出错原因、版本和浏览器信息。</p>
+                <p class="set-note" id="diagExclude">已去掉 API 密钥、网址里的 token 和论文正文。不会自动上传，导出后由你决定发给谁。</p>
+                <p class="diag-status set-note" id="diagStatus" role="status"><span id="diagStatusText">最近 7 天没有记录</span></p>
+              </div>
+              <div class="set-ctl">
+                <button type="button" class="btn-primary diag-export" id="diagExport" data-diag-export>导出诊断包</button>
+              </div>
+            </div>
+            <div class="set-row" id="diagClearRow">
+              <div class="set-copy">
+                <p class="set-title">清空日志</p>
+                <p class="set-note">删除本机保存的所有诊断记录。</p>
+              </div>
+              <div class="set-ctl" id="diagClearCtl">
+                <button type="button" class="set-inline" id="diagClear">清空</button>
+              </div>
+            </div>
+          </section>
         </section>
         <section id="data" data-panel="data" role="tabpanel" hidden></section>
       </main>

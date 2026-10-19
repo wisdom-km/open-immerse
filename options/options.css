@@ -449,6 +449,49 @@ body.oi-settings .set-inline {
   font: inherit;
   cursor: pointer;
 }
+body.oi-settings .diag-heading {
+  margin: 0;
+  padding: 10px 16px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--oi-text);
+}
+body.oi-settings .set-group > .diag-heading + .set-row { border-top: 0; }
+body.oi-settings .diag-status {
+  font-size: 12px;
+  color: var(--oi-text-2, var(--oi-text-muted));
+  background: none;
+}
+body.oi-settings .diag-status.is-warn {
+  color: var(--oi-warn);
+  background: none;
+}
+body.oi-settings .diag-export {
+  white-space: nowrap;
+  min-width: 8em;
+  height: 28px;
+  min-height: 28px;
+  border-radius: 7px;
+  padding: 0 12px;
+  background: var(--oi-accent);
+  color: #fff;
+}
+body.oi-settings .diag-export:focus-visible {
+  outline: 2px solid var(--oi-focus);
+  outline-offset: 2px;
+}
+body.oi-settings .diag-warn { color: var(--oi-warn); }
+body.oi-settings .diag-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+body.oi-settings .diag-confirm-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 body.oi-settings .set-flash { background: var(--oi-accent-subtle); }
 body.oi-settings .set-done { color: var(--oi-success); }
 body.oi-settings .set-save-miss { color: var(--oi-warn); font-size: 12px; }
@@ -586,6 +629,11 @@ body.oi-settings .actions-bar { position: static; background: transparent; borde
   body.oi-settings .set-group textarea { width: 100%; min-width: 0; }
   body.oi-settings .set-split { display: flex; width: 100%; }
   body.oi-settings .set-split button { flex: 1 1 50%; }
+  body.oi-settings .diag-export { width: 100%; }
+  body.oi-settings .diag-confirm,
+  body.oi-settings .diag-confirm-actions { width: 100%; }
+  body.oi-settings #diagExportRow .set-note,
+  body.oi-settings #diagClearRow .set-note { white-space: normal; overflow: visible; }
 }
 
 body.oi-settings .set-row.check { margin-top: 0; }

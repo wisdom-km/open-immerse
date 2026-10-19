@@ -203,9 +203,26 @@ async function handleMessage(message, sender) {
       return handleArxivSourceMessage(message);
     case "OI_FORMULA_CACHE":
       return handleFormulaCacheMessage(message);
+    case "OI_DIAG_LOG":
+    case "OI_DIAG_EXPORT":
+    case "OI_DIAG_CLEAR":
+    case "OI_DIAG_STATS":
+      return handleArxivSourceMessage({ action: "diag", message });
     default:
       return { ok: false, error: "unknown message" };
   }
+}
+
+function reportTranslateFailure(err, fields) {
+  Promise.resolve(handleArxivSourceMessage({
+    action: "diag-note",
+    failure: {
+      message: String(err?.message || err || ""),
+      httpStatus: err?.httpStatus,
+      code: err?.code
+    },
+    fields: fields || {}
+  })).catch(() => {});
 }
 
 function emitTranslateProgress(sender, requestId, progress) {
@@ -295,6 +312,10 @@ async function translateBatch(texts, options = {}) {
         options.polishFailed = true;
         continue;
       }
+      reportTranslateFailure(err, {
+        provider: options.providerId || "",
+        count: chunk.length
+      });
       throw err;
     }
     const guarded = guardZhTranslations(
