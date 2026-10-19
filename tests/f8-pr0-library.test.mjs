@@ -21,6 +21,7 @@ import {
   LIBRARY_SOURCE_MAX_BYTES,
   cleanTitle,
   countTranslated,
+  httpSourceUrl,
   sha256HexOf
 } from "../lib/library-record.js";
 import {
@@ -824,6 +825,64 @@ test("sourceUrl drops userinfo and fragment in the row, the list, the change log
   assert.equal(body.includes("#page=2"), false);
   assert.equal(exported.papers.find((item) => item.paper.docHash === "raw-url").paper.sourceUrl, clean);
   assert.equal(exported.papers.find((item) => item.paper.docHash === "cred").paper.sourceUrl, clean);
+});
+
+test("sourceUrl drops userinfo, fragment, and sensitive query keys, and keeps an ordinary query", async () => {
+  const cases = [
+    {
+      name: "userinfo",
+      dirty: "https://user:secret@cdn.example/paper.pdf?x=1",
+      clean: "https://cdn.example/paper.pdf?x=1",
+      gone: ["user:secret"]
+    },
+    {
+      name: "fragment",
+      dirty: "https://cdn.example/paper.pdf?x=1#page=4",
+      clean: "https://cdn.example/paper.pdf?x=1",
+      gone: ["#page=4", "page=4"]
+    },
+    {
+      name: "sensitive-query",
+      dirty: "https://cdn.example/paper.pdf?x=1&token=sekret&sig=abc&X-Amz-Credential=AKIA&X-Amz-Signature=deadbeef",
+      clean: "https://cdn.example/paper.pdf?x=1",
+      gone: ["sekret", "sig=abc", "X-Amz-Credential", "X-Amz-Signature", "deadbeef", "AKIA"]
+    },
+    {
+      name: "ordinary-query",
+      dirty: "https://cdn.example/paper.pdf?x=1&lang=zh",
+      clean: "https://cdn.example/paper.pdf?x=1&lang=zh",
+      gone: []
+    }
+  ];
+  for (const item of cases) {
+    assert.equal(httpSourceUrl(item.dirty), item.clean, item.name);
+  }
+  const { store } = memoryStore({ dbName: "f8-url-query" });
+  for (const item of cases) {
+    await saveLibraryPage({
+      hash: item.name,
+      title: item.name,
+      sourceUrl: item.dirty,
+      pageCount: 1,
+      page: 1,
+      pairs: [{ translation: "甲" }]
+    }, { store });
+    assert.equal((await store.getPaper(item.name)).sourceUrl, item.clean, `${item.name} stored`);
+  }
+  const exported = await store.exportLibrary({ exportedAt: 1, appVersion: "0.0.0" });
+  const body = JSON.stringify(exported);
+  for (const item of cases) {
+    const row = exported.papers.find((entry) => entry.paper.docHash === item.name);
+    assert.equal(row.paper.sourceUrl, item.clean, `${item.name} export`);
+    for (const secret of item.gone) assert.equal(body.includes(secret), false, `${item.name} export leaked`);
+  }
+  const listed = await store.listPapers();
+  assert.equal(listed.find((paper) => paper.docHash === "ordinary-query").sourceUrl, "https://cdn.example/paper.pdf?x=1&lang=zh");
+  const log = JSON.stringify(await store.changes(0));
+  assert.equal(log.includes("sekret"), false);
+  assert.equal(log.includes("user:secret"), false);
+  assert.equal(log.includes("X-Amz-Signature"), false);
+  assert.equal(log.includes("lang=zh"), true);
 });
 
 test("file and blob source URLs are stripped from the default export", async () => {

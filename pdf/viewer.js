@@ -4775,6 +4775,7 @@ function viewerUnderTest() {
 
 function publishViewerTestHooks() {
   if (!viewerUnderTest()) return;
+  globalThis.__oiLibrarySourceSentHas = (hash) => librarySourceSent.has(String(hash || ""));
   globalThis.__oiRenderArticle = () => renderArticle();
   globalThis.__oiOpenPage = async (page) => {
     const n = Number(page);
