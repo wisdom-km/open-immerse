@@ -226,16 +226,12 @@
 .oi-ask-answer h6:last-child {
   margin-bottom: 0;
 }
-.oi-ask-answer h1,
-.oi-ask-answer h2,
-.oi-ask-answer h3,
-.oi-ask-answer h4,
-.oi-ask-answer h5,
-.oi-ask-answer h6 {
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.45;
-}
+.oi-ask-answer h1 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer h2 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer h3 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer h4 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer h5 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-ask-answer h6 { font-size: 15px; font-weight: 600; line-height: 1.45; }
 .oi-ask-answer a {
   color: var(--oi-reader-link);
   text-decoration: underline;

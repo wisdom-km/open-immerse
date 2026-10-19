@@ -469,16 +469,12 @@
 .oi-note-body h4,
 .oi-note-body h5,
 .oi-note-body h6 { margin: 0 0 0.4em; }
-.oi-note-body h1,
-.oi-note-body h2,
-.oi-note-body h3,
-.oi-note-body h4,
-.oi-note-body h5,
-.oi-note-body h6 {
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.45;
-}
+.oi-note-body h1 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-note-body h2 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-note-body h3 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-note-body h4 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-note-body h5 { font-size: 15px; font-weight: 600; line-height: 1.45; }
+.oi-note-body h6 { font-size: 15px; font-weight: 600; line-height: 1.45; }
 .oi-note-body a {
   color: var(--oi-reader-link);
   text-decoration: underline;

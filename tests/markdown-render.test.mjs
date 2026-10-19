@@ -47,11 +47,22 @@ test("L-02 bold, italic, and strikethrough", () => {
   assert.equal(node.querySelector("s").textContent, "删");
 });
 
-test("L-03 headings", () => {
-  const node = page(renderMarkdown("# 标题\n\n段中 # 不是标题"));
-  assert.equal(node.querySelector("h1").textContent, "标题");
-  assert.equal(node.querySelector("h2, h3"), null);
+test("L-03 headings, including ###, are 15px/600", () => {
+  const node = page(renderMarkdown("# 一级\n\n## 二级\n\n### 三级\n\n#### 四级\n\n##### 五级\n\n###### 六级\n\n段中 # 不是标题"));
+  for (const [level, text] of [[1, "一级"], [2, "二级"], [3, "三级"], [4, "四级"], [5, "五级"], [6, "六级"]]) {
+    assert.equal(node.querySelector(`h${level}`).textContent, text);
+  }
   assert.match(node.textContent, /# 不是标题/);
+  for (const [file, scope] of [["pdf/ask-panel.css", ".oi-ask-answer"], ["pdf/notes-panel.css", ".oi-note-body"]]) {
+    const css = readFileSync(join(root, file), "utf8");
+    for (let level = 1; level <= 6; level += 1) {
+      assert.match(
+        css,
+        new RegExp(`${scope.replace(".", "\\.")} h${level}\\s*\\{[^}]*font-size:\\s*15px;[^}]*font-weight:\\s*600`),
+        `${file} h${level}`
+      );
+    }
+  }
 });
 
 test("L-04 lists keep a start number", () => {
@@ -283,6 +294,8 @@ test("A1 structural tags keep safe attributes and drop handlers", () => {
 
 test("A1 a synchronous infinite loop is aborted by terminating the worker", { timeout: 5000 }, async (t) => {
   const worker = openHangWorker();
+  let exited = false;
+  worker.once("exit", () => { exited = true; });
   let settled = false;
   const stop = () => {
     if (settled) return Promise.resolve();
@@ -297,6 +310,8 @@ test("A1 a synchronous infinite loop is aborted by terminating the worker", { ti
   try {
     const elapsed = await Promise.race([abortWorker(worker, 400), deadline]);
     assert.ok(elapsed < 2000, `hang lived ${elapsed.toFixed(0)}ms`);
+    if (!exited) await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(exited, true, "abort resolved without terminating the worker");
   } finally {
     clearTimeout(timer);
     await stop();
@@ -315,7 +330,7 @@ test("markdown-it leaves HTML off and does not emit img", () => {
   assert.match(html, /图片：示意图/);
 });
 
-test("L-01 and L-16 headings and links are styled in both panels", () => {
+test("L-16 links have color, hover, and focus in both panels", () => {
   const tokens = readFileSync(join(root, "pdf/reader-tokens.css"), "utf8");
   const darkStart = tokens.indexOf('.oi-reader-app[data-reader-theme="dark"]');
   const dark = tokens.slice(darkStart, tokens.indexOf(".oi-reader-app[data-reader-fs-band", darkStart));
@@ -333,8 +348,6 @@ test("L-01 and L-16 headings and links are styled in both panels", () => {
   }
   for (const file of ["pdf/ask-panel.css", "pdf/notes-panel.css"]) {
     const css = readFileSync(join(root, file), "utf8");
-    for (const level of [1, 2, 3, 4, 5, 6]) assert.match(css, new RegExp(`h${level}\\b`), file);
-    assert.match(css, /h1,\s*[\s\S]*h6\s*\{[^}]*font-size:\s*15px;[^}]*font-weight:\s*600/, file);
     assert.match(css, /a:hover/, file);
     assert.match(css, /a:focus/, file);
     assert.match(css, /color:\s*var\(--oi-reader-link\)/, file);
