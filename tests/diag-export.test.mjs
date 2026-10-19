@@ -217,15 +217,6 @@ test("only serialize and download failures ask the user to retry", () => {
   const saved = describeDiagExportResult({ ok: true, code: "", count: 2, filename: "pack.json" }, { count: 2, bytes: 40 });
   assert.equal(saved.failure, false);
   assert.equal(saved.text, diagExportedLine("pack.json"));
-
-  const cancelled = describeDiagExportResult({ ok: true, cancelled: true, count: 2 }, { count: 2, bytes: 40 });
-  assert.equal(cancelled.failure, false);
-  assert.equal(cancelled.retry, false);
-  assert.equal(cancelled.text, diagRecordedLine(2, 40));
-
-  const cancelledEmpty = describeDiagExportResult({ cancelled: true }, { count: 0, bytes: 0 });
-  assert.equal(cancelledEmpty.failure, false);
-  assert.equal(cancelledEmpty.text, DIAG_TEXT.empty);
 });
 
 test("performDiagExport downloads an environment package when storage cannot be read", async () => {
@@ -249,22 +240,26 @@ test("performDiagExport downloads an environment package when storage cannot be 
   assert.match(saved[0].filename, /^open-immerse-diagnostics-1\.2\.3-\d{8}-\d{6}\.json$/);
 });
 
-test("performDiagExport reports download and serialize failures and treats cancel as success", async () => {
+test("performDiagExport reports download and serialize failures", async () => {
   const request = async () => buildDiagPackage({ events: [{ t: 1, type: "mm.error", code: "x" }], now: 1, env });
   const missed = await performDiagExport({
     request,
     download: async () => false
   });
+  assert.equal(missed.ok, false);
   assert.equal(missed.code, "download-failed");
   assert.equal(missed.failure, true);
+  assert.equal(describeDiagExportResult(missed, { count: 1, bytes: 8 }).text, "没能导出：文件没保存下来，检查一下下载设置或磁盘空间。");
 
-  const cancelled = await performDiagExport({
+  const thrown = await performDiagExport({
     request,
     download: async () => { throw Object.assign(new Error("cancel"), { name: "AbortError" }); }
   });
-  assert.equal(cancelled.ok, true);
-  assert.equal(cancelled.cancelled, true);
-  assert.equal(cancelled.failure, undefined);
+  assert.equal(thrown.ok, false);
+  assert.equal(thrown.cancelled, undefined);
+  assert.equal(thrown.code, "download-failed");
+  assert.equal(thrown.failure, true);
+  assert.equal(describeDiagExportResult(thrown, { count: 1, bytes: 8 }).retry, true);
 
   const loop = {};
   loop.self = loop;

@@ -1,15 +1,14 @@
 /**
  * About › 问题诊断. Export and clear go through the service-worker writer.
- * The download itself is a local anchor; cancelling the save dialog is not an error.
+ * The file is a browser download (Blob + a[download]). A cancelled save dialog
+ * cannot be observed, so a completed click is reported as exported.
  */
 
 import {
   DIAG_TEXT,
   describeDiagExportResult,
-  diagFilename,
   diagRecordedLine,
-  performDiagExport,
-  readDiagEnvironment
+  performDiagExport
 } from "../lib/diag-log.js";
 
 export function bindDiagPanel(doc = globalThis.document, deps = {}) {
@@ -83,56 +82,16 @@ export function bindDiagPanel(doc = globalThis.document, deps = {}) {
     status.append(retry);
   }
 
-  async function pickSaveFile() {
-    const picker = deps.pickSave || globalThis.showSaveFilePicker;
-    if (typeof picker !== "function" || deps.download) return null;
-    const now = typeof deps.now === "function" ? deps.now() : (Number(deps.now) || Date.now());
-    const env = deps.env || readDiagEnvironment();
-    try {
-      const handle = await picker({
-        suggestedName: diagFilename(env.extVersion || "0", now),
-        types: [{ description: "JSON", accept: { "application/json": [".json"] } }]
-      });
-      return { handle, now };
-    } catch (err) {
-      if (err?.name === "AbortError") return "cancelled";
-      return null;
-    }
-  }
-
   async function runExport() {
     if (busy) return;
-    const picked = await pickSaveFile();
-    if (picked === "cancelled") {
-      exportBtn.focus();
-      return;
-    }
     restoreClear(false);
     cleared = false;
     setBusy("export");
     const locked = exportBtn.offsetWidth;
     if (locked) exportBtn.style.minWidth = `${locked}px`;
     exportBtn.textContent = DIAG_TEXT.packing;
-    const download = picked
-      ? async (_filename, text) => {
-        try {
-          const writable = await picked.handle.createWritable();
-          await writable.write(text);
-          await writable.close();
-          return { ok: true, filename: picked.handle.name || undefined };
-        } catch (err) {
-          if (err?.name === "AbortError") return { cancelled: true };
-          return false;
-        }
-      }
-      : deps.download;
     try {
-      const result = await performDiagExport({
-        request,
-        download,
-        now: picked?.now ?? deps.now,
-        env: deps.env
-      });
+      const result = await performDiagExport({ request, download: deps.download, now: deps.now, env: deps.env });
       if (Number.isFinite(Number(result?.count))) view.count = Number(result.count) || 0;
       const described = describeDiagExportResult(result, view);
       if (described.retry) showFailure(described.text);

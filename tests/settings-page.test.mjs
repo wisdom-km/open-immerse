@@ -2910,6 +2910,13 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     assert.notEqual(exported[0].id, "diagGroup");
 
     const css = readFileSync(join(root, "options/options.css"), "utf8");
+    const panelSrc = readFileSync(join(root, "options/diag-panel.js"), "utf8");
+    const logSrc = readFileSync(join(root, "lib/diag-log.js"), "utf8");
+    assert.equal(panelSrc.includes("showSaveFilePicker"), false);
+    assert.equal(logSrc.includes("showSaveFilePicker"), false);
+    assert.equal(diag.tagName, "DIV");
+    assert.equal(diag.getAttribute("role"), "group");
+    assert.equal(diag.getAttribute("aria-labelledby"), "diagHeading");
     assert.match(css, /\.diag-export\s*\{[^}]*white-space:\s*nowrap/);
     assert.match(css, /\.diag-export\s*\{[^}]*min-width:\s*8em/);
     assert.match(css, /\.diag-export\s*\{[^}]*color:\s*#fff/);
@@ -2922,30 +2929,35 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     assert.ok(contrast("#ffffff", tokens["oi-accent"]) >= 4.5);
     assert.ok(contrast(tokens["oi-warn"], tokens["oi-panel"]) >= 4.5);
 
+    const downloads = [];
+    const origCreate = document.createElement.bind(document);
+    document.createElement = (tag, options) => {
+      const el = origCreate(tag, options);
+      if (String(tag).toLowerCase() === "a") {
+        const click = el.click.bind(el);
+        el.click = () => {
+          downloads.push({ download: el.download, href: String(el.href || "") });
+          return click();
+        };
+      }
+      return el;
+    };
     const exportBtn = document.getElementById("diagExport");
     const before = hits.length;
-    globalThis.showSaveFilePicker = async () => {
-      const error = new Error("cancel");
-      error.name = "AbortError";
-      throw error;
-    };
-    exportBtn.click();
-    await flush();
-    assert.equal(document.getElementById("diagStatusText").textContent, "最近 7 天没有记录");
-    assert.equal(document.querySelector("[data-diag-retry]"), null);
-    assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
-    assert.equal(document._focused?.id, "diagExport");
-    assert.equal(blobs.length, 0);
-    delete globalThis.showSaveFilePicker;
-
     exportBtn.click();
     await flush();
     assert.equal(exportBtn.textContent, "导出诊断包");
     assert.match(document.getElementById("diagStatusText").textContent, /^✓ 已导出 open-immerse-diagnostics-0\.3\.0-\d{8}-\d{6}\.json$/);
+    const exportedName = document.getElementById("diagStatusText").textContent.slice("✓ 已导出 ".length);
+    assert.equal(downloads.length, 1);
+    assert.equal(downloads[0].download, exportedName);
+    assert.match(exportedName, /^open-immerse-diagnostics-0\.3\.0-\d{8}-\d{6}\.json$/);
+    assert.ok(downloads[0].href.includes("blob:oi-diag"));
     assert.equal(document._focused?.id, "diagExport");
     assert.equal(document.querySelector("[data-diag-retry]"), null);
     assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
     assert.equal(blobs.length, 1);
+    assert.ok(blobs[0].size > 0);
     const emptyPack = JSON.parse(await blobs[0].text());
     assert.equal(emptyPack.format, 1);
     assert.deepEqual(emptyPack.events, []);
@@ -2978,6 +2990,8 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     assert.equal(savedPack.events.length, 1);
     assert.equal(savedPack.events[0].code, "401");
     assert.match(document.getElementById("diagStatusText").textContent, /^✓ 已导出 open-immerse-diagnostics-0\.3\.0-\d{8}-\d{6}\.json$/);
+    assert.equal(downloads.at(-1).download, document.getElementById("diagStatusText").textContent.slice("✓ 已导出 ".length));
+    assert.ok(blobs.at(-1).size > 0);
     assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
     assert.equal(document.getElementById("diagStatus").classList.contains("set-done"), true);
     assert.equal(document._focused?.id, "diagExport");
@@ -2996,7 +3010,11 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     assert.match(css, /\.diag-retry:hover\s*\{\s*text-decoration:\s*underline/);
     assert.match(css, /@media \(max-width:\s*519px\)[\s\S]*\.diag-confirm-label\s*\{\s*font-size:\s*13px/);
     assert.equal(diag.tagName, "DIV");
+    assert.equal(diag.getAttribute("role"), "group");
+    assert.equal(diag.getAttribute("aria-labelledby"), "diagHeading");
 
+    const blobsBeforeAbort = blobs.length;
+    const downloadsBeforeAbort = downloads.length;
     globalThis.URL.createObjectURL = () => {
       const error = new Error("cancel");
       error.name = "AbortError";
@@ -3004,10 +3022,12 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     };
     retry.click();
     await flush();
-    assert.equal(document.querySelector("[data-diag-retry]"), null);
-    assert.match(document.getElementById("diagStatusText").textContent, /^已记录 \d+ 条 · 约 /);
-    assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
+    assert.equal(document.getElementById("diagStatusText").textContent, "没能导出：文件没保存下来，检查一下下载设置或磁盘空间。");
+    assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), true);
+    assert.equal(document.querySelector("[data-diag-retry]").textContent, "再试一次");
     assert.equal(document._focused?.id, "diagExport");
+    assert.equal(blobs.length, blobsBeforeAbort);
+    assert.equal(downloads.length, downloadsBeforeAbort);
 
     const origGet = globalThis.chrome.storage.local.get.bind(globalThis.chrome.storage.local);
     globalThis.chrome.storage.local.get = async () => { throw new Error("unread"); };
