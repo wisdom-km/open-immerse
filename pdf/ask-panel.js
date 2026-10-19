@@ -586,8 +586,7 @@ export function mountAskUi(api = {}) {
         return { ok: false, reason: "confirm" };
       }
     }
-    let citation = session.citation ? { ...session.citation } : null;
-    if (citation) delete citation.image;
+    const citation = session.citation ? { ...session.citation } : null;
     const begun = beginTurn(session, {
       question,
       citation,

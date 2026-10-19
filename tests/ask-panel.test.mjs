@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseHTML } from "linkedom";
+import "./helpers/load-markdown-it.mjs";
 import { askTarget } from "../lib/ask-model.js";
 import { BID_VERSION, blockSrcHash } from "../lib/pdf-block-id.js";
 import { firstLineQuote, noteMatchesFilter } from "../lib/notes-view-model.js";
@@ -665,6 +666,25 @@ test("preview line matches the request and suggestions do not send", async () =>
   assert.match(user2, /E=mc\^2/);
   assert.match(user2, /输入由维度/);
   assert.match(user2, /乘以/);
+});
+
+test("a valid formula crop is sent on the multimodal route", async () => {
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const box = harness();
+  await box.ui.askCitation({ bid: "b3", page: 4, kind: "formula", text: "E=mc^2", image: png }, { fresh: true });
+  box.ui.session.draft = "这是什么？";
+  await box.ui.submit({ confirmed: true });
+  const user = box.sent[0].messages.filter((item) => item.role === "user").pop();
+  assert.equal(Array.isArray(user.content), true);
+  const image = user.content.find((part) => part.type === "image");
+  assert.equal(image.mime, "image/png");
+  assert.match(image.base64, /^iVBORw0KGgo/);
+  const blob = JSON.stringify(box.sent[0].messages);
+  assert.equal(blob.includes("image_url"), false);
+  assert.equal(blob.includes("inline_data"), false);
+  assert.equal(box.ui.root.textContent.includes("不看图"), false);
+  assert.equal(box.ui.session.turns[0].citation.image, undefined);
+  assert.equal(box.ui.session.citation.image, png);
 });
 
 function persistentNotes() {

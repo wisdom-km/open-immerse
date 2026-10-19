@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import "fake-indexeddb/auto";
 import { IDBObjectStore } from "fake-indexeddb";
 import { parseHTML } from "linkedom";
+import "./helpers/load-markdown-it.mjs";
+import { renderGuarded } from "./helpers/render-guard.mjs";
 import { askTarget } from "../lib/ask-model.js";
 import { ASK_KATEX_OPTIONS, ASK_MATH_MAX_FORMULAS, ASK_MATH_MAX_TEX, renderAskAnswer, texIsDisplayable } from "../lib/ask-render.js";
 import { buildAskMessages, resetAskSession } from "../lib/ask-session.js";
@@ -281,7 +283,7 @@ test("A4 and A5 a custom engine is not a fallback, and the key stays out of note
   const askSend = viewer.slice(viewer.indexOf("async function sendAsk"), viewer.indexOf("function openAskSettings"));
   assert.match(askSend, /cache:\s*false/);
   assert.equal(/console\./.test(askSend), false);
-  for (const name of ["pdf/ask-panel.js", "lib/ask-session.js", "lib/ask-transport.js", "lib/ask-render.js"]) {
+  for (const name of ["pdf/ask-panel.js", "lib/ask-session.js", "lib/ask-transport.js", "lib/ask-render.js", "lib/markdown-render.js"]) {
     const src = readFileSync(join(root, name), "utf8");
     assert.equal(src.includes(KEY), false, name);
     assert.equal(/console\.(log|debug|info|warn)\s*\(/.test(src), false, name);
@@ -447,8 +449,8 @@ test("the panel no longer adopts notes through durableNoteIds", () => {
 function userSourceAngles(html) {
   const page = parseHTML(`<!doctype html><body><div id="o">${html}</div></body>`);
   const node = page.document.getElementById("o");
-  for (const el of node.querySelectorAll(".katex")) el.remove();
-  return node.innerHTML.replace(/<\/?(?:p|br|strong|code|pre|ul|ol|li)\b[^>]*>/gi, "");
+  for (const el of node.querySelectorAll(".katex-display, .katex")) el.remove();
+  return node.innerHTML.replace(/<\/?(?:p|br|hr|strong|em|s|del|code|pre|ul|ol|li|blockquote|h[1-6]|table|thead|tbody|tr|th|td|a|input)\b[^>]*>/gi, "");
 }
 
 function contrastRatio(foreground, background) {
@@ -514,7 +516,7 @@ test("markdown subset renders and refuses raw HTML, links, and images", () => {
   assert.equal(node.querySelectorAll("ul li").length, 2);
   assert.equal(node.querySelectorAll("ol li").length, 2);
   assert.equal(node.querySelector("code").textContent, "行内 $不是公式$");
-  assert.equal(node.querySelector("em"), null);
+  assert.equal(node.querySelector("em").textContent, "不是斜体");
   assert.equal(node.querySelector("h1, h2, h3"), null);
   const pres = [...node.querySelectorAll("pre")];
   assert.equal(pres.length, 2);
@@ -530,7 +532,6 @@ test("markdown subset renders and refuses raw HTML, links, and images", () => {
   assert.equal(katexNodes.length, 2);
   assert.equal(node.querySelectorAll("strong").length, 2);
   assert.equal(node.querySelectorAll("strong")[1].querySelector(".katex") != null, true);
-  assert.match(node.textContent, /\*不是斜体\*/);
   assert.match(node.textContent, /# 不是标题/);
   assert.match(node.textContent, /\[x\]\(javascript:alert\(1\)\)/);
   assert.match(node.textContent, /!\[\]\(javascript:alert\(1\)\)/);
@@ -643,19 +644,22 @@ test("a formula keeps backticks and the letters inside them", () => {
 });
 
 test("an ordered list keeps its start number", () => {
-  const html = renderAskAnswer("3. 三\n4. 四");
+  const html = renderAskAnswer("3. 三\n4. 四").replace(/>\s+</g, "><");
   assert.match(html, /<ol start="3"><li>三<\/li><li>四<\/li><\/ol>/);
-  const one = renderAskAnswer("1. 一\n2. 二");
+  const one = renderAskAnswer("1. 一\n2. 二").replace(/>\s+</g, "><");
   assert.match(one, /<ol><li>一<\/li><li>二<\/li><\/ol>/);
 });
 
-test("private-use characters stay literal and the renderer always advances", { timeout: 2000 }, () => {
-  const source = readFileSync(join(root, "lib/ask-render.js"), "utf8");
-  assert.equal(source.includes("\\uE000"), false);
-  assert.equal(source.includes("\\uE001"), false);
-  assert.equal(source.includes("\\uE010"), false);
-  assert.equal(source.includes("\\uE011"), false);
-  renderAskAnswer("$x$", katex);
+test("private-use characters stay literal and the renderer always advances", { timeout: 10000 }, async () => {
+  // node:test's timeout does not interrupt a synchronous loop. The worker
+  // terminate (totalMs) is what stops a hang.
+  for (const name of ["lib/ask-render.js", "lib/markdown-render.js"]) {
+    const source = readFileSync(join(root, name), "utf8");
+    assert.equal(source.includes("\\uE000"), false, name);
+    assert.equal(source.includes("\\uE001"), false, name);
+    assert.equal(source.includes("\\uE010"), false, name);
+    assert.equal(source.includes("\\uE011"), false, name);
+  }
   const marks = ["\uE000", "\uE001", "\uE010", "\uE011"];
   const cases = [
     ...marks,
@@ -670,17 +674,18 @@ test("private-use characters stay literal and the renderer always advances", { t
     "$$\uE010$$",
     "```\n\uE000 $not$\n```"
   ];
-  for (const sample of cases) {
-    const started = performance.now();
-    const html = renderAskAnswer(sample, katex);
-    const elapsed = performance.now() - started;
-    assert.ok(elapsed < 50, `${JSON.stringify(sample)} took ${elapsed}ms`);
-    const page = parseHTML(`<!doctype html><body><div id="o">${html}</div></body>`);
+  const results = await renderGuarded(cases, { totalMs: 4000 });
+  assert.equal(results.length, cases.length);
+  for (const result of results) {
+    const sample = cases[result.index];
+    assert.equal(result.error, undefined, JSON.stringify(sample));
+    assert.ok(result.ms < 50, `${JSON.stringify(sample)} took ${result.ms}ms`);
+    const page = parseHTML(`<!doctype html><body><div id="o">${result.html}</div></body>`);
     const text = page.document.getElementById("o").textContent;
     for (const mark of marks) {
       if (sample.includes(mark)) assert.equal(text.includes(mark), true, JSON.stringify(sample));
     }
-    assert.equal(userSourceAngles(html).includes("<"), false, JSON.stringify(sample));
+    assert.equal(userSourceAngles(result.html).includes("<"), false, JSON.stringify(sample));
   }
 });
 
@@ -694,25 +699,26 @@ function mulberry32(seed) {
   };
 }
 
-test("random answers stay bounded and do not emit raw user markup", { timeout: 30000 }, () => {
+test("random answers stay bounded and do not emit raw user markup", { timeout: 30000 }, async () => {
   const alphabet = ["\uE000", "\uE001", "\uE010", "\uE011", "`", "$", "*", "<", ">", "a", "\n", " ", "3. ", "- ", "**", PAYLOAD];
+  const sources = [];
   for (let seed = 1; seed <= 500; seed += 1) {
     const random = mulberry32(seed);
     const length = 1 + Math.floor(random() * 40);
     let source = "";
     for (let index = 0; index < length; index += 1) source += alphabet[Math.floor(random() * alphabet.length)];
-    const started = performance.now();
-    let html = "";
-    try {
-      html = renderAskAnswer(source, katex);
-    } catch (err) {
-      throw new Error(`seed ${seed} threw ${err.message} on ${JSON.stringify(source)}`);
-    }
-    const elapsed = performance.now() - started;
-    if (elapsed > 100) throw new Error(`seed ${seed} took ${elapsed.toFixed(1)}ms on ${JSON.stringify(source)}`);
-    const left = userSourceAngles(html);
+    sources.push(source);
+  }
+  const results = await renderGuarded(sources, { totalMs: 20000 });
+  assert.equal(results.length, sources.length);
+  for (const result of results) {
+    const seed = result.index + 1;
+    const source = sources[result.index];
+    if (result.error) throw new Error(`seed ${seed} threw ${result.error} on ${JSON.stringify(source)}`);
+    if (result.ms > 100) throw new Error(`seed ${seed} took ${result.ms.toFixed(1)}ms on ${JSON.stringify(source)}`);
+    const left = userSourceAngles(result.html);
     if (left.includes("<")) throw new Error(`seed ${seed} raw < in ${JSON.stringify(left.slice(0, 180))} from ${JSON.stringify(source)}`);
-    if (/<\s*(?:script|img|iframe)\b/i.test(html)) {
+    if (/<\s*(?:script|img|iframe)\b/i.test(result.html)) {
       throw new Error(`seed ${seed} active html from ${JSON.stringify(source)}`);
     }
   }

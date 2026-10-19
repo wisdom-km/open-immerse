@@ -201,13 +201,17 @@
 .oi-ask-answer p,
 .oi-ask-answer ul,
 .oi-ask-answer ol,
-.oi-ask-answer pre {
+.oi-ask-answer pre,
+.oi-ask-answer table,
+.oi-ask-answer blockquote {
   margin: 0 0 0.4em;
 }
 .oi-ask-answer p:last-child,
 .oi-ask-answer ul:last-child,
 .oi-ask-answer ol:last-child,
-.oi-ask-answer pre:last-child {
+.oi-ask-answer pre:last-child,
+.oi-ask-answer table:last-child,
+.oi-ask-answer blockquote:last-child {
   margin-bottom: 0;
 }
 .oi-ask-answer code,
@@ -222,6 +226,22 @@
   font-size: 1em;
 }
 .oi-ask-answer .katex { font-size: 1em; }
+.oi-ask-answer table {
+  border-collapse: collapse;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.oi-ask-answer th,
+.oi-ask-answer td {
+  border: 1px solid var(--oi-reader-line);
+  padding: 2px 6px;
+  vertical-align: top;
+}
+.oi-ask-answer blockquote {
+  padding-left: 0.8em;
+  border-left: 2px solid var(--oi-reader-line);
+}
 .oi-ask-dots {
   color: var(--oi-reader-muted);
   font-size: 13px;

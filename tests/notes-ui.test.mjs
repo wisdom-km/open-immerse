@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import "./helpers/load-markdown-it.mjs";
 import { exportMarkdown, mergeNotesBundle, NOTES_FORMAT, NOTE_SCHEMA } from "../lib/notes-io.js";
 import { readReaderPrefs } from "../lib/pdf-reader-flow.js";
 import {
@@ -31,6 +32,7 @@ import {
   filterCounts,
   firstLineQuote,
   groupNotes,
+  isUnanchoredAiNote,
   importResultModel,
   kindGlyph,
   lostSectionCopy,
@@ -230,7 +232,9 @@ test("markdown heading gains a section only when a section source is passed", ()
 test("empty copy, filenames, and markdown stay local to the notes model", () => {
   assert.equal(emptyState("all").title, "还没有笔记");
   assert.equal(emptyState("highlight").title, "没有「划线」");
-  assert.equal(emptyState("ai").title, "AI 条目还没有上线");
+  assert.equal(emptyState("ai").title, "没有 AI 回答");
+  assert.equal(emptyState("ai").body, "在问 AI 里点「添加到笔记」，回答会出现在这里");
+  assert.equal(emptyState("ai").action, "看全部");
   assert.equal(emptyState("pending").title, "没有待回答的问题");
   assert.equal(paperEmptyState().title, "还没有论文笔记");
   assert.equal(trashEmptyState().title, "回收站是空的");
@@ -240,6 +244,34 @@ test("empty copy, filenames, and markdown stay local to the notes model", () => 
   const html = renderNoteMarkdown("**<script>** 与 $x$");
   assert.equal(html.includes("<script>"), false);
   assert.match(html, /class="oi-note-math"/);
+});
+
+test("an unanchored AI answer is listed only in the AI filter", () => {
+  const ai = note("saved", {
+    kind: "paperNote",
+    author: "ai",
+    anchor: null,
+    page: 0,
+    body: "回答"
+  });
+  const human = note("paper", { kind: "paperNote", author: "me", anchor: null, page: 0 });
+  assert.equal(isUnanchoredAiNote(ai), true);
+  assert.equal(isUnanchoredAiNote(human), false);
+  assert.equal(noteMatchesFilter(ai, "ai"), true);
+  assert.equal(noteMatchesFilter(ai, "all"), false);
+  assert.equal(noteMatchesFilter(ai, "mine"), false);
+  assert.equal(noteMatchesFilter(human, "ai"), false);
+  assert.equal(noteMatchesFilter(human, "all"), false);
+  const counts = filterCounts([ai, human]);
+  assert.equal(counts.ai, 1);
+  assert.equal(counts.all, 0);
+  const listed = notesListModel([ai, human]);
+  assert.deepEqual(listed.groups.map((group) => group.heading), ["未分页"]);
+  assert.deepEqual(listed.groups[0].notes.map((item) => item.id), ["saved"]);
+  assert.deepEqual(listed.lost, []);
+  assert.match(panelSrc, /note\.author === "ai"/);
+  assert.match(panelSrc, /state\.filter = "ai"/);
+  assert.match(panelSrc, /author !== "ai"/);
 });
 
 test("panel width and the persist hint live beside the locked reader prefs", () => {
