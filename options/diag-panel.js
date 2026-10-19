@@ -6,8 +6,10 @@
 import {
   DIAG_TEXT,
   describeDiagExportResult,
+  diagFilename,
   diagRecordedLine,
-  performDiagExport
+  performDiagExport,
+  readDiagEnvironment
 } from "../lib/diag-log.js";
 
 export function bindDiagPanel(doc = globalThis.document, deps = {}) {
@@ -74,23 +76,63 @@ export function bindDiagPanel(doc = globalThis.document, deps = {}) {
     setStatus(text, "warn");
     const retry = doc.createElement("button");
     retry.type = "button";
-    retry.className = "set-inline diag-warn";
+    retry.className = "set-inline diag-retry";
     retry.dataset.diagRetry = "1";
     retry.textContent = DIAG_TEXT.retry;
     retry.addEventListener("click", () => { void runExport(); });
     status.append(retry);
   }
 
+  async function pickSaveFile() {
+    const picker = deps.pickSave || globalThis.showSaveFilePicker;
+    if (typeof picker !== "function" || deps.download) return null;
+    const now = typeof deps.now === "function" ? deps.now() : (Number(deps.now) || Date.now());
+    const env = deps.env || readDiagEnvironment();
+    try {
+      const handle = await picker({
+        suggestedName: diagFilename(env.extVersion || "0", now),
+        types: [{ description: "JSON", accept: { "application/json": [".json"] } }]
+      });
+      return { handle, now };
+    } catch (err) {
+      if (err?.name === "AbortError") return "cancelled";
+      return null;
+    }
+  }
+
   async function runExport() {
     if (busy) return;
+    const picked = await pickSaveFile();
+    if (picked === "cancelled") {
+      exportBtn.focus();
+      return;
+    }
     restoreClear(false);
     cleared = false;
     setBusy("export");
     const locked = exportBtn.offsetWidth;
     if (locked) exportBtn.style.minWidth = `${locked}px`;
     exportBtn.textContent = DIAG_TEXT.packing;
+    const download = picked
+      ? async (_filename, text) => {
+        try {
+          const writable = await picked.handle.createWritable();
+          await writable.write(text);
+          await writable.close();
+          return { ok: true, filename: picked.handle.name || undefined };
+        } catch (err) {
+          if (err?.name === "AbortError") return { cancelled: true };
+          return false;
+        }
+      }
+      : deps.download;
     try {
-      const result = await performDiagExport({ request, download: deps.download, now: deps.now, env: deps.env });
+      const result = await performDiagExport({
+        request,
+        download,
+        now: picked?.now ?? deps.now,
+        env: deps.env
+      });
       if (Number.isFinite(Number(result?.count))) view.count = Number(result.count) || 0;
       const described = describeDiagExportResult(result, view);
       if (described.retry) showFailure(described.text);
@@ -99,10 +141,11 @@ export function bindDiagPanel(doc = globalThis.document, deps = {}) {
     } finally {
       exportBtn.textContent = DIAG_TEXT.exportLabel;
       setBusy("");
+      exportBtn.focus();
     }
   }
 
-  function restoreClear(paint) {
+  function restoreClear(paint, focus) {
     if (confirmTimer) {
       clearTimeout(confirmTimer);
       confirmTimer = 0;
@@ -121,6 +164,7 @@ export function bindDiagPanel(doc = globalThis.document, deps = {}) {
     button.disabled = busy === "export" || busy === "clear";
     button.addEventListener("click", () => openConfirm());
     clearCtl.append(button);
+    if (focus) button.focus();
     if (paint) paintCount();
   }
 
@@ -144,14 +188,14 @@ export function bindDiagPanel(doc = globalThis.document, deps = {}) {
     no.id = "diagClearCancel";
     no.textContent = DIAG_TEXT.cancel;
     yes.addEventListener("click", () => { void confirmClear(); });
-    no.addEventListener("click", () => restoreClear(false));
+    no.addEventListener("click", () => restoreClear(false, true));
     actions.append(yes, no);
     clearCtl.append(label, actions);
     onKey = (ev) => {
-      if (ev.key === "Escape") restoreClear(false);
+      if (ev.key === "Escape") restoreClear(false, true);
     };
     doc.addEventListener("keydown", onKey);
-    confirmTimer = setTimeout(() => restoreClear(false), 5000);
+    confirmTimer = setTimeout(() => restoreClear(false, true), 5000);
   }
 
   async function confirmClear() {
@@ -171,7 +215,7 @@ export function bindDiagPanel(doc = globalThis.document, deps = {}) {
       /* leave the log in place; the confirm row still closes */
     } finally {
       setBusy("");
-      restoreClear(false);
+      restoreClear(false, true);
       if (cleared) setStatus(DIAG_TEXT.cleared, "ok");
     }
   }

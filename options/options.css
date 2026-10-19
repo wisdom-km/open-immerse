@@ -450,13 +450,17 @@ body.oi-settings .set-inline {
   cursor: pointer;
 }
 body.oi-settings .diag-heading {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
   margin: 0;
-  padding: 10px 16px 0;
+  padding: 8px 16px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--oi-text);
 }
-body.oi-settings .set-group > .diag-heading + .set-row { border-top: 0; }
+body.oi-settings .diag-retry { margin-left: 8px; }
+body.oi-settings .diag-retry:hover { text-decoration: underline; }
 body.oi-settings .diag-status {
   font-size: 12px;
   color: var(--oi-text-2, var(--oi-text-muted));
@@ -632,6 +636,7 @@ body.oi-settings .actions-bar { position: static; background: transparent; borde
   body.oi-settings .diag-export { width: 100%; }
   body.oi-settings .diag-confirm,
   body.oi-settings .diag-confirm-actions { width: 100%; }
+  body.oi-settings .diag-confirm-label { font-size: 13px; }
   body.oi-settings #diagExportRow .set-note,
   body.oi-settings #diagClearRow .set-note { white-space: normal; overflow: visible; }
 }

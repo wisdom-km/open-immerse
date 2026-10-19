@@ -2924,10 +2924,25 @@ test("about diagnostic panel matches the diagnostic states", async () => {
 
     const exportBtn = document.getElementById("diagExport");
     const before = hits.length;
+    globalThis.showSaveFilePicker = async () => {
+      const error = new Error("cancel");
+      error.name = "AbortError";
+      throw error;
+    };
+    exportBtn.click();
+    await flush();
+    assert.equal(document.getElementById("diagStatusText").textContent, "最近 7 天没有记录");
+    assert.equal(document.querySelector("[data-diag-retry]"), null);
+    assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
+    assert.equal(document._focused?.id, "diagExport");
+    assert.equal(blobs.length, 0);
+    delete globalThis.showSaveFilePicker;
+
     exportBtn.click();
     await flush();
     assert.equal(exportBtn.textContent, "导出诊断包");
-    assert.equal(document.getElementById("diagStatusText").textContent, "最近 7 天没有记录");
+    assert.match(document.getElementById("diagStatusText").textContent, /^✓ 已导出 open-immerse-diagnostics-0\.3\.0-\d{8}-\d{6}\.json$/);
+    assert.equal(document._focused?.id, "diagExport");
     assert.equal(document.querySelector("[data-diag-retry]"), null);
     assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
     assert.equal(blobs.length, 1);
@@ -2965,6 +2980,7 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     assert.match(document.getElementById("diagStatusText").textContent, /^✓ 已导出 open-immerse-diagnostics-0\.3\.0-\d{8}-\d{6}\.json$/);
     assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
     assert.equal(document.getElementById("diagStatus").classList.contains("set-done"), true);
+    assert.equal(document._focused?.id, "diagExport");
 
     globalThis.URL.createObjectURL = () => "";
     exportBtn.click();
@@ -2973,7 +2989,13 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), true);
     const retry = document.querySelector("[data-diag-retry]");
     assert.equal(retry.textContent, "再试一次");
-    assert.equal(retry.classList.contains("diag-warn"), true);
+    assert.equal(retry.classList.contains("diag-warn"), false);
+    assert.equal(retry.classList.contains("diag-retry"), true);
+    assert.equal(document._focused?.id, "diagExport");
+    assert.match(css, /\.diag-retry\s*\{\s*margin-left:\s*8px/);
+    assert.match(css, /\.diag-retry:hover\s*\{\s*text-decoration:\s*underline/);
+    assert.match(css, /@media \(max-width:\s*519px\)[\s\S]*\.diag-confirm-label\s*\{\s*font-size:\s*13px/);
+    assert.equal(diag.tagName, "DIV");
 
     globalThis.URL.createObjectURL = () => {
       const error = new Error("cancel");
@@ -2985,6 +3007,7 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     assert.equal(document.querySelector("[data-diag-retry]"), null);
     assert.match(document.getElementById("diagStatusText").textContent, /^已记录 \d+ 条 · 约 /);
     assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
+    assert.equal(document._focused?.id, "diagExport");
 
     const origGet = globalThis.chrome.storage.local.get.bind(globalThis.chrome.storage.local);
     globalThis.chrome.storage.local.get = async () => { throw new Error("unread"); };
@@ -3027,12 +3050,19 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     document.dispatchEvent(escape);
     assert.equal(document.getElementById("diagClear").textContent, "清空");
     assert.equal(document.getElementById("diagClearConfirm"), null);
+    assert.equal(document._focused?.id, "diagClear");
+
+    document.getElementById("diagClear").click();
+    document.getElementById("diagClearCancel").click();
+    assert.equal(document.getElementById("diagClear").textContent, "清空");
+    assert.equal(document._focused?.id, "diagClear");
 
     document.getElementById("diagClear").click();
     mock.timers.tick(4999);
     assert.equal(document.getElementById("diagClearConfirm").textContent, "清空");
     mock.timers.tick(1);
     assert.equal(document.getElementById("diagClear").textContent, "清空");
+    assert.equal(document._focused?.id, "diagClear");
 
     document.getElementById("diagClear").click();
     document.getElementById("diagClearConfirm").click();
@@ -3040,6 +3070,7 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     assert.equal(document.getElementById("diagStatusText").textContent, "已清空");
     assert.equal(document.getElementById("diagStatus").classList.contains("set-done"), true);
     assert.equal(document.getElementById("diagStatus").classList.contains("is-warn"), false);
+    assert.equal(document._focused?.id, "diagClear");
     const events = chrome.local[ "diag.events" ];
     assert.deepEqual(events, []);
   } finally {

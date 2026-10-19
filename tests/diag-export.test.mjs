@@ -211,7 +211,8 @@ test("only serialize and download failures ask the user to retry", () => {
   const none = describeDiagExportResult({ ok: true, code: "no-records", count: 0, filename: "a.json" }, { count: 0, bytes: 0 });
   assert.equal(none.failure, false);
   assert.equal(none.retry, false);
-  assert.equal(none.text, DIAG_TEXT.empty);
+  assert.equal(none.tone, "ok");
+  assert.equal(none.text, diagExportedLine("a.json"));
 
   const saved = describeDiagExportResult({ ok: true, code: "", count: 2, filename: "pack.json" }, { count: 2, bytes: 40 });
   assert.equal(saved.failure, false);
