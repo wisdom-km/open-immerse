@@ -59,6 +59,8 @@ class PipeCdp {
     this.buf = Buffer.alloc(0);
     this.next = 1;
     this.pending = new Map();
+    this.events = [];
+    this.eventWaiters = [];
     readStream.on("data", (chunk) => {
       this.buf = Buffer.concat([this.buf, chunk]);
       this.drain();
@@ -79,13 +81,36 @@ class PipeCdp {
         clearTimeout(timer);
         if (message.error) reject(new Error(message.error.message || JSON.stringify(message.error)));
         else done(message.result);
+        continue;
       }
+      if (!message.method) continue;
+      this.events.push(message);
+      this.eventWaiters = this.eventWaiters.filter((waiter) => {
+        if (!waiter.match(message)) return true;
+        clearTimeout(waiter.timer);
+        waiter.done(message);
+        return false;
+      });
     }
   }
 
   dispose() {
     for (const pending of this.pending.values()) clearTimeout(pending.timer);
+    for (const waiter of this.eventWaiters) clearTimeout(waiter.timer);
     this.pending.clear();
+    this.eventWaiters = [];
+  }
+
+  waitFor(match, timeoutMs = 20000) {
+    const existing = this.events.find(match);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((done, reject) => {
+      const timer = setTimeout(() => {
+        this.eventWaiters = this.eventWaiters.filter((waiter) => waiter.done !== done);
+        reject(new Error("CDP event timed out"));
+      }, timeoutMs);
+      this.eventWaiters.push({ match, done, timer });
+    });
   }
 
   send(method, params = {}, sessionId) {
@@ -215,34 +240,46 @@ test("F6UI-33/34 action row stays one line at 360 and icons under 280", { timeou
     mobile: false
   }, sessionId);
   const pageUrl = `file://${join(root, "tests/fixtures/ask-actions-row.html")}`;
+  // Polling Runtime.evaluate before the document commits measures about:blank
+  // (the expression returns null) and queues those tasks ahead of stylesheet
+  // parsing. Under a full suite that livelock eats the wait and reports
+  // "measure timed out: null". DOMContentLoaded is the event after the
+  // inline script sets data-ready, so measure once that event arrives.
+  let sawNavigation = false;
+  const ready = cdp.waitFor((message) => {
+    if (message.sessionId && message.sessionId !== sessionId) return false;
+    if (message.method === "Page.frameNavigated") {
+      const url = message.params?.frame?.url || "";
+      if (url.includes("ask-actions-row.html")) sawNavigation = true;
+      return false;
+    }
+    return message.method === "Page.domContentEventFired" && sawNavigation;
+  });
   await cdp.send("Page.navigate", { url: pageUrl }, sessionId);
-  const evaluate = async (expression, timeoutMs = 25000) => {
-    const started = Date.now();
-    let last = null;
-    while (Date.now() - started < timeoutMs) {
+  await ready;
+  const evaluate = async (expression) => {
+    let lastError = "empty result";
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       const result = await cdp.send("Runtime.evaluate", {
         expression,
         awaitPromise: true,
         returnByValue: true
       }, sessionId);
-      if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || "evaluate failed");
-      last = result.result?.value;
-      if (last) return last;
-      await new Promise((done) => setTimeout(done, 100));
+      if (result.exceptionDetails) {
+        lastError = result.exceptionDetails.text || "evaluate failed";
+        if (/context|destroyed|navigat/i.test(lastError) && attempt < 2) continue;
+        throw new Error(lastError);
+      }
+      const value = result.result?.value;
+      if (value) return value;
+      lastError = "empty result";
     }
-    let where = "";
-    try {
-      const probe = await cdp.send("Runtime.evaluate", {
-        expression: "location.href + ' ready=' + document.readyState",
-        returnByValue: true
-      }, sessionId);
-      where = probe.result?.value || "";
-    } catch (err) {
-      where = err.message;
-    }
-    throw new Error(`measure timed out: ${JSON.stringify(last)} page=${where} url=${pageUrl}`);
+    const probe = await cdp.send("Runtime.evaluate", {
+      expression: "location.href + ' ready=' + (document.documentElement.dataset.ready || '')",
+      returnByValue: true
+    }, sessionId);
+    throw new Error(`measure failed: ${lastError} page=${probe.result?.value || ""} url=${pageUrl}`);
   };
-  await evaluate(`document.documentElement.dataset.ready === "1" ? true : null`);
   const sample = await evaluate(MEASURE);
 
   const problems = [];

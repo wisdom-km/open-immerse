@@ -13,6 +13,8 @@ tests/settings-page.test.mjs
 tests/library-store.test.mjs
 # chrome.storage this-binding. No browser process.
 tests/unbound-storage.test.mjs
+# Ask answer rendering, copy, session scope, and a real notes-store put failure.
+tests/ask-f6b.test.mjs
 # Vision client. A fixed-vendor host guard must not hide a red test here.
 tests/mm-client.test.mjs
 # Settings-page probe, including 500 seeds. The tier version must stay the exported constant.

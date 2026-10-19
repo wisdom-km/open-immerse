@@ -11387,6 +11387,7 @@ async function adoptDoc(doc, title) {
   libraryProbe = null;
   notesDocHash = "";
   notesUi?.onDocumentReset();
+  askUi?.onDocumentReset();
   titleStructure = null;
   layoutCache.clear();
   formulaRasterCache.clear();
