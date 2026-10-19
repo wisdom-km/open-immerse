@@ -196,7 +196,7 @@ import { firstLineQuote } from "../lib/notes-view-model.js";
 import { mountNotesUi, textRangeOffsets } from "./notes-panel.js";
 import { mountAskUi } from "./ask-panel.js";
 import { mountLibraryUi } from "./library-panel.js";
-import { bindLibraryWriteMarks, resetLibraryWriteStops } from "../lib/library-writes.js";
+import { bindLibraryWriteMarks, noteLibraryLoaded, resetLibraryWriteStops } from "../lib/library-writes.js";
 import { performAsk } from "../lib/ask-transport.js";
 import { currentNet } from "../lib/net/fetch.js";
 import { ASK_CONFIRM_KEY, askTarget } from "../lib/ask-model.js";
@@ -421,6 +421,7 @@ const pageStates = new Map();
 let docPhase = "idle";
 let pdfTargetLang = "zh-CN";
 let pdfProvider = "";
+let pdfModel = "";
 let translatePaused = false;
 let autoAfterForce = false;
 let forceRetranslatePending = false;
@@ -431,6 +432,8 @@ let notesDocHash = "";
 let notesUi = null;
 let libraryUi = null;
 let libraryAdoptHold = null;
+let libraryAdoptWouldSkip = false;
+let libraryOpenNotedAt = 0;
 let askUi = null;
 let libraryChip = null;
 let importBinding = null;
@@ -844,7 +847,7 @@ function onKey(event) {
     applyReaderFontStep(shortcut);
     return;
   }
-  if (eventTargetIsField(event.target) || event.target?.isContentEditable) return;
+  if (eventTargetIsField(event.target) || event.target?.isContentEditable || focusInLibraryField(event.target)) return;
   if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.key === "z" || event.key === "Z")) {
     if (notesUi?.undo()) {
       event.preventDefault();
@@ -978,6 +981,16 @@ function eventTargetIsField(target) {
     || target instanceof HTMLInputElement
     || target instanceof HTMLTextAreaElement
     || target instanceof HTMLSelectElement;
+}
+
+function focusInLibraryField(target) {
+  const candidates = [target, document.activeElement];
+  for (const el of candidates) {
+    if (!el || typeof el.closest !== "function") continue;
+    if (!el.closest(".oi-library")) continue;
+    if (eventTargetIsField(el)) return true;
+  }
+  return false;
 }
 
 function focusInReader(target) {
@@ -4960,6 +4973,9 @@ function rememberTargetLang(settings) {
   if (code) pdfTargetLang = code;
   const provider = String(settings?.provider || "").trim();
   if (provider) pdfProvider = provider;
+  const id = provider || pdfProvider;
+  const model = String(settings?.model || settings?.providers?.[id]?.model || "").trim();
+  if (model) pdfModel = model;
 }
 
 function savedPairSettings() {
@@ -9319,6 +9335,7 @@ function storeOpenedPdf(openedStamp, captured = null, mode = "") {
     try {
       const hash = await pdfByteHash(bytes);
       if (docId !== openedStamp || !hash || hash === "nohash") return;
+      noteLibraryLoaded(hash, libraryOpenNotedAt || Date.now());
       // The record call does not store the blob and does not revive a
       // tombstone. The later source call must not move lastOpenedAt.
       const saved = await openLibraryPdf({
@@ -10191,6 +10208,14 @@ async function adoptLibraryPages(options = {}) {
       hasLayout: Boolean(getPageLayout(heldPage)?.blocks?.length)
     });
     clearSlotPainted(heldPage);
+    const would = libraryPageRunState({
+      pairs: libraryEntry(heldPage)?.pairs || null,
+      cached: null,
+      targetLang: pdfTargetLang,
+      provider: pdfProvider,
+      blocks: getPageLayout(heldPage)?.blocks || null
+    });
+    if (would === "done" || would === "skipped") libraryAdoptWouldSkip = true;
   }
   const listed = (libraryDoc?.pages || []).map((item) => Number(item?.page)).filter((n) => n >= 1);
   const lastListed = listed.length ? Math.max(...listed) : 0;
@@ -10602,13 +10627,17 @@ async function translateWholeDocument() {
     let priorCache = pageCache.get(translatingDoc, page);
     let failedBody = pageNeedsBypass(priorCache, pdfTargetLang);
     if (failedBody && Array.isArray(priorCache)) {
-      const reused = reuseSettledLibraryFailures(priorCache, libraryEntry(page)?.pairs, pdfTargetLang);
+      const reused = reuseSettledLibraryFailures(priorCache, libraryEntry(page)?.pairs, pdfTargetLang, {
+        provider: pdfProvider,
+        model: pdfModel
+      });
       if (reused !== priorCache) {
         priorCache = reused;
         pageCache.set(translatingDoc, page, priorCache);
         failedBody = pageNeedsBypass(priorCache, pdfTargetLang);
       }
     }
+    libraryAdoptWouldSkip = false;
     libraryAdoptHold = failedBody ? priorCache : null;
     await adoptLibraryPages({ onlyPage: page });
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
@@ -10622,8 +10651,11 @@ async function translateWholeDocument() {
     // title batch is sent again with bypassCache. A failed body row needs the
     // same retry: the restored cache still has failed, so the resend bypasses.
     if (titleStructureFailed(page) || failedBody) return "retry";
+    // Pairs that already cover the page would have painted it done. Without the
+    // failed-body retry above, that hold must skip instead of sending again.
+    if (libraryAdoptWouldSkip) return "skip";
     const state = pageStates.get(page)?.state || "queued";
-    if (state === "done" || state === "skipped" || state === "empty" || state === "held" || state === "failed") return "skip";
+    if (state === "done" || state === "skipped" || state === "empty" || state === "held") return "skip";
     return "translate";
   } : undefined;
   let translatedDoc = await translateDocumentPages({
@@ -11687,6 +11719,7 @@ async function adoptDoc(doc, title) {
   librarySourceSent.clear();
   libraryOriginalStored.clear();
   resetLibraryWriteStops();
+  libraryOpenNotedAt = Date.now();
   if (pdfDoc) {
     try {
       await pdfDoc.destroy();

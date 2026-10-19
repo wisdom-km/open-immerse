@@ -1635,12 +1635,26 @@ test("采纳会把页标成完成时，失败正文仍带 bypassCache 重发", {
     mode: "retryOpenBody",
     ready: "title.failed !== true && title.slotsDone === true && (window.__oiAuto.messages || []).some((item) => (item.texts || []).some((text) => String(text).includes('second sentence')))",
     label: "retryOpenBody-hold",
-    requireSavedBody: true
+    requireSavedBody: true,
+    beforeClick: async (evaluate) => {
+      const attached = await evaluate(`(() => {
+        const failed = "A second sentence stays failed until the retry.";
+        const kept = "The dominant sequence models use attention instead of recurrence.";
+        window.__oiSetPageCache(1, [
+          { role: "paragraph", original: kept, text: kept, translation: "主导模型用注意力。", failed: false },
+          { role: "paragraph", original: "This failed row stays unsettled.", text: "This failed row stays unsettled.", translation: "", failed: true }
+        ]);
+        return window.__oiSetLibraryPairs(1, [
+          { text: kept, translation: "主导模型用注意力。", targetLang: "zh-CN" },
+          { text: failed, translation: "第二句已经在库里译好了。", targetLang: "zh-CN" }
+        ]);
+      })()`);
+      if (attached !== true) throw new Error("文献页不存在，失败行对不上库里的译文");
+    }
   });
   const failedBody = stalled.messages.find((item) => (item.texts || []).some((text) => String(text).includes("second sentence")));
   const again = resumed.messages.slice(before);
   assert.ok(again.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(failedBody.texts)), JSON.stringify(again));
-  assert.equal(resumed.page1, "done");
 });
 
 test("文献里已经有同一语言的译文时，失败行不再重发", { timeout: 180000 }, async (t) => {

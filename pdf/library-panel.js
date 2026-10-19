@@ -11,7 +11,10 @@ import {
   consumeLibrarySort,
   deleteWillCopy,
   libraryDeleteAllowed,
+  libraryFooterCopy,
+  libraryHeaderCount,
   libraryNoHitCopy,
+  libraryNotesDeleteCopy,
   libraryPanelPhase,
   libraryProgressCopy,
   libraryRelativeTime,
@@ -35,6 +38,17 @@ function h(doc, tag, attrs, children) {
     if (child) el.append(child);
   }
   return el;
+}
+
+function cssEscape(value) {
+  const text = String(value ?? "");
+  const esc = globalThis.CSS?.escape;
+  if (typeof esc === "function") return esc(text);
+  return text.replace(/(["\\])/g, "\\$1");
+}
+
+function rowSelector(hash) {
+  return `[data-lib-row="${cssEscape(hash)}"]`;
 }
 
 export function mountLibraryUi(api = {}) {
@@ -67,17 +81,19 @@ export function mountLibraryUi(api = {}) {
   let usage = null;
   let phase = "blank";
   let query = "";
-  let pendingQuery = "";
   let searchTimer = 0;
   let sort = "";
   let sortConsumed = false;
   let confirmHash = "";
+  let deleteFailed = false;
+  let deleting = false;
   let active = 0;
   let column = "row";
   let poll = 0;
   let loadGen = 0;
   let repick = null;
   let readingHash = "";
+  let shell = null;
 
   function now() {
     return typeof api.now === "function" ? api.now() : Date.now();
@@ -132,7 +148,7 @@ export function mountLibraryUi(api = {}) {
       active = rows.findIndex((row) => row.docHash === next.docHash);
       if (active < 0) active = 0;
       render();
-      focusTarget(`[data-lib-row="${next.docHash}"]`);
+      focusTarget(rowSelector(next.docHash));
       return;
     }
     render();
@@ -145,6 +161,12 @@ export function mountLibraryUi(api = {}) {
     } catch {
       readingHash = "";
     }
+  }
+
+  function stopPoll() {
+    if (!poll) return;
+    timers.clearInterval(poll);
+    poll = 0;
   }
 
   async function load(options = {}) {
@@ -191,17 +213,18 @@ export function mountLibraryUi(api = {}) {
       rows = built;
       usage = nextUsage;
       phase = libraryPanelPhase({ count: rows.length });
-      if (poll) {
-        timers.clearInterval(poll);
-        poll = 0;
-      }
+      delete root.dataset.blocked;
+      stopPoll();
     } catch (error) {
       if (gen !== loadGen) return;
-      if (!isStorageBlocked(error)) {
+      if (isStorageBlocked(error)) {
         phase = "blocked";
-      } else phase = "blocked";
-      root.dataset.blocked = "true";
-      armPoll();
+        root.dataset.blocked = "true";
+        armPoll();
+      } else {
+        delete root.dataset.blocked;
+        phase = rows.length ? "list" : "empty";
+      }
     }
     if (confirmHash && !rows.some((row) => row.docHash === confirmHash)) confirmHash = "";
     await refreshReading();
@@ -209,7 +232,7 @@ export function mountLibraryUi(api = {}) {
   }
 
   function armPoll() {
-    if (poll) return;
+    if (!open || poll) return;
     poll = timers.setInterval(() => {
       void load({ keep: true });
     }, api.pollMs || STORAGE_POLL_MS);
@@ -217,6 +240,10 @@ export function mountLibraryUi(api = {}) {
 
   async function openRow(row) {
     if (!row) return;
+    if (readingHash && readingHash === row.docHash) {
+      close(true);
+      return;
+    }
     repick = null;
     let resolved;
     try {
@@ -224,10 +251,11 @@ export function mountLibraryUi(api = {}) {
     } catch (error) {
       if (isStorageBlocked(error)) {
         phase = "blocked";
+        root.dataset.blocked = "true";
+        armPoll();
         render();
-        return;
       }
-      throw error;
+      return;
     }
     if (resolved.status === "local") {
       await api.openBytes?.(resolved.bytes, libraryRowTitle(row).title);
@@ -280,58 +308,67 @@ export function mountLibraryUi(api = {}) {
   }
 
   async function commitDelete(row, withNotes) {
+    if (deleting) return;
     if (!libraryDeleteAllowed(readingHash, row.docHash)) return;
-    const store = await api.store();
-    const report = await store.deletePaperData(row.docHash, {
-      notes: withNotes === true,
-      formula: true,
-      readingHash
-    });
-    if (report?.refused === "reading") return;
-    const list = visibleRows();
-    const index = list.findIndex((item) => item.docHash === row.docHash);
-    confirmHash = "";
-    api.toast?.(libraryToastDeleted(libraryRowTitle(row).title));
-    await load({ keep: true });
-    moveFocusAfterDelete(index, list.filter((item) => item.docHash !== row.docHash));
+    deleting = true;
+    deleteFailed = false;
+    render();
+    try {
+      const store = await api.store();
+      const report = await store.deletePaperData(row.docHash, {
+        notes: withNotes === true,
+        formula: true,
+        readingHash
+      });
+      if (report?.refused === "reading") {
+        deleting = false;
+        render();
+        return;
+      }
+      const list = visibleRows();
+      const index = list.findIndex((item) => item.docHash === row.docHash);
+      confirmHash = "";
+      deleting = false;
+      api.toast?.(libraryToastDeleted(libraryRowTitle(row).title));
+      await load({ keep: true });
+      moveFocusAfterDelete(index, list.filter((item) => item.docHash !== row.docHash));
+    } catch {
+      deleting = false;
+      deleteFailed = true;
+      render();
+    }
   }
 
-  function render() {
-    const sheet = narrow();
-    root.classList.toggle("is-sheet", open && sheet);
-    const shown = phase === "list" ? visibleRows() : [];
-    if (active >= shown.length) active = Math.max(0, shown.length - 1);
-    const head = h(doc, "header", { class: "oi-lib-head" }, [
-      h(doc, "button", {
-        type: "button",
-        class: "oi-lib-back",
-        text: LIBRARY_COPY.back,
-        hidden: !sheet
-      }),
+  function ensureShell() {
+    if (shell) return shell;
+    const head = h(doc, "header", { class: "oi-lib-head" });
+    const back = h(doc, "button", { type: "button", class: "oi-lib-back", text: LIBRARY_COPY.back });
+    const titleBox = h(doc, "div", { class: "oi-lib-title" }, [
       h(doc, "h2", { text: LIBRARY_COPY.title }),
-      h(doc, "button", {
-        type: "button",
-        class: "oi-lib-close",
-        "aria-label": LIBRARY_COPY.close,
-        text: "×"
-      })
+      h(doc, "span", { class: "oi-lib-count" })
     ]);
-    head.querySelector(".oi-lib-back")?.addEventListener("click", () => close(true));
-    head.querySelector(".oi-lib-close")?.addEventListener("click", () => close(true));
+    const openPdf = h(doc, "button", { type: "button", class: "btn-secondary oi-lib-open-pdf" });
+    const closeBtn = h(doc, "button", {
+      type: "button",
+      class: "oi-lib-close",
+      "aria-label": LIBRARY_COPY.close,
+      text: "×"
+    });
+    head.append(back, titleBox, h(doc, "span", { class: "oi-lib-spacer" }), openPdf, closeBtn);
+    back.addEventListener("click", () => close(true));
+    closeBtn.addEventListener("click", () => close(true));
+    openPdf.addEventListener("click", () => api.pickPdf?.());
 
-    const search = h(doc, "div", { class: "oi-lib-search", hidden: rows.length < 8 });
+    const search = h(doc, "div", { class: "oi-lib-search" });
     const input = h(doc, "input", {
       type: "search",
       "aria-label": LIBRARY_COPY.search,
-      placeholder: LIBRARY_COPY.search,
-      value: pendingQuery || query
+      placeholder: LIBRARY_COPY.search
     });
     input.addEventListener("input", () => {
-      pendingQuery = input.value;
       if (searchTimer) timers.clearTimeout(searchTimer);
       searchTimer = timers.setTimeout(() => {
-        query = pendingQuery;
-        pendingQuery = "";
+        query = input.value;
         searchTimer = 0;
         render();
       }, api.searchMs ?? 150);
@@ -339,6 +376,57 @@ export function mountLibraryUi(api = {}) {
     search.append(input);
 
     const body = h(doc, "div", { class: "oi-lib-body" });
+    const foot = h(doc, "footer", { class: "oi-lib-foot" }, [
+      h(doc, "span", { class: "oi-lib-foot-copy" }),
+      h(doc, "a", {
+        class: "oi-lib-storage",
+        href: api.storageHref || "../options/options.html#data",
+        text: LIBRARY_COPY.storageLink
+      })
+    ]);
+    root.replaceChildren(head, search, body, foot);
+    shell = { head, back, count: titleBox.querySelector(".oi-lib-count"), openPdf, search, input, body, foot, footCopy: foot.querySelector(".oi-lib-foot-copy") };
+    return shell;
+  }
+
+  function heldListFocus() {
+    const el = doc.activeElement;
+    if (!el || el === shell?.input || !root.contains(el)) return null;
+    const row = typeof el.closest === "function" ? el.closest("[data-lib-row]") : null;
+    if (!row) return null;
+    const hash = row.getAttribute("data-lib-row") || "";
+    if (el.classList?.contains("oi-lib-trash")) return { hash, kind: "delete" };
+    if (el.classList?.contains("oi-lib-cancel") || el.closest?.(".oi-lib-confirm")) return { hash, kind: "confirm" };
+    return { hash, kind: "row" };
+  }
+
+  function render() {
+    const nodes = ensureShell();
+    const sheet = narrow();
+    root.classList.toggle("is-sheet", open && sheet);
+    const shown = phase === "list" ? visibleRows() : [];
+    if (active >= shown.length) active = Math.max(0, shown.length - 1);
+    const keep = heldListFocus();
+
+    nodes.back.hidden = !sheet;
+    nodes.count.textContent = libraryHeaderCount(rows.length);
+    nodes.count.hidden = rows.length === 0;
+    const showHeaderOpen = phase === "list";
+    nodes.openPdf.hidden = !showHeaderOpen;
+    if (sheet) {
+      nodes.openPdf.textContent = "＋";
+      nodes.openPdf.setAttribute("aria-label", LIBRARY_COPY.openPdf);
+      nodes.openPdf.classList.add("is-icon");
+    } else {
+      nodes.openPdf.textContent = LIBRARY_COPY.openPdfHeader;
+      nodes.openPdf.removeAttribute("aria-label");
+      nodes.openPdf.classList.remove("is-icon");
+    }
+    nodes.search.hidden = rows.length < 8 || phase !== "list";
+    if (doc.activeElement !== nodes.input && nodes.input.value !== query) nodes.input.value = query;
+
+    const body = nodes.body;
+    body.replaceChildren();
     if (phase === "blank") {
       body.append(h(doc, "div", { class: "oi-lib-blank", "aria-hidden": "true" }));
     } else if (phase === "blocked") {
@@ -346,6 +434,7 @@ export function mountLibraryUi(api = {}) {
       body.append(h(doc, "div", { class: "oi-lib-blocked" }, [
         h(doc, "p", { class: "oi-lib-blocked-title", text: BLOCKED_TITLE || LIBRARY_COPY.blockedTitle }),
         h(doc, "p", { text: reason.reason }),
+        h(doc, "p", { class: "oi-lib-muted", text: "已经存好的译文和笔记都还在，没有丢。每 5 秒会自动重试一次。" }),
         h(doc, "button", { type: "button", class: "btn-secondary oi-lib-retry", text: LIBRARY_COPY.retry })
       ]));
       body.querySelector(".oi-lib-retry")?.addEventListener("click", () => {
@@ -353,7 +442,8 @@ export function mountLibraryUi(api = {}) {
       });
     } else if (phase === "empty") {
       body.append(h(doc, "div", { class: "oi-lib-empty" }, [
-        h(doc, "p", { text: LIBRARY_COPY.empty }),
+        h(doc, "p", { class: "oi-lib-empty-title", text: LIBRARY_COPY.empty }),
+        h(doc, "p", { class: "oi-lib-muted oi-lib-empty-body", text: LIBRARY_COPY.emptyBody }),
         h(doc, "button", {
           type: "button",
           class: "btn-primary",
@@ -368,11 +458,11 @@ export function mountLibraryUi(api = {}) {
       if (!shown.length && query) {
         list.append(h(doc, "div", { class: "oi-lib-miss" }, [
           h(doc, "p", { text: libraryNoHitCopy(query) }),
+          h(doc, "p", { class: "oi-lib-muted", text: LIBRARY_COPY.searchHint }),
           h(doc, "button", { type: "button", class: "btn-secondary", text: LIBRARY_COPY.clearSearch })
         ]));
         list.querySelector("button")?.addEventListener("click", () => {
           query = "";
-          pendingQuery = "";
           render();
         });
       }
@@ -380,14 +470,14 @@ export function mountLibraryUi(api = {}) {
         const title = libraryRowTitle(row);
         const reading = readingHash && readingHash === row.docHash;
         const item = h(doc, "div", {
-          class: "oi-lib-row",
+          class: confirmHash === row.docHash ? "oi-lib-row is-confirm" : "oi-lib-row",
           role: "option",
           "data-lib-row": row.docHash,
           tabindex: index === active && column === "row" ? "0" : "-1",
           "aria-selected": index === active ? "true" : "false"
         });
         const main = h(doc, "button", { type: "button", class: "oi-lib-open" }, [
-          h(doc, "span", { class: "oi-lib-name", text: title.title }),
+          h(doc, "span", { class: "oi-lib-name", title: title.title, text: title.title }),
           h(doc, "span", { class: "oi-lib-meta", text: [libraryProgressCopy(row.translated, row.pageCount), libraryRelativeTime(row.lastOpenedAt, now()), librarySizeCopy(row.bytes)].filter(Boolean).join(" · ") })
         ]);
         if (reading) main.append(h(doc, "span", { class: "oi-lib-badge", text: LIBRARY_COPY.reading }));
@@ -407,6 +497,7 @@ export function mountLibraryUi(api = {}) {
         trash.addEventListener("click", () => {
           if (trash.disabled) return;
           confirmHash = confirmHash === row.docHash ? "" : row.docHash;
+          deleteFailed = false;
           active = index;
           column = "delete";
           render();
@@ -417,24 +508,33 @@ export function mountLibraryUi(api = {}) {
           const notesBox = row.notes > 0
             ? h(doc, "label", { class: "oi-lib-notes" }, [
               h(doc, "input", { type: "checkbox", "data-lib-notes": "true" }),
-              h(doc, "span", { text: "同时删除笔记" })
+              h(doc, "span", { text: libraryNotesDeleteCopy(row.notes) })
             ])
             : null;
           const card = h(doc, "div", { class: "oi-lib-confirm" }, [
+            h(doc, "p", { class: "oi-lib-confirm-title", text: LIBRARY_COPY.confirmTitle }),
             h(doc, "p", { text: deleteWillCopy({ pages: row.translated, hasSource: row.hasSource, localFile: librarySourceIsLocalFile(row) }) }),
             h(doc, "p", { text: LIBRARY_COPY.keepFile }),
             notesBox,
             h(doc, "div", { class: "oi-lib-confirm-actions" }, [
               h(doc, "button", { type: "button", class: "btn-secondary oi-lib-cancel", text: LIBRARY_COPY.cancel }),
-              h(doc, "button", { type: "button", class: "btn-primary oi-lib-do-delete", text: LIBRARY_COPY.confirmDelete })
+              h(doc, "button", { type: "button", class: "btn-danger oi-lib-do-delete", text: LIBRARY_COPY.confirmDelete })
             ])
           ]);
-          card.querySelector(".oi-lib-cancel")?.addEventListener("click", () => {
+          const cancel = card.querySelector(".oi-lib-cancel");
+          const commit = card.querySelector(".oi-lib-do-delete");
+          if (deleting) {
+            if (cancel) cancel.disabled = true;
+            if (commit) commit.disabled = true;
+          }
+          if (deleteFailed) card.append(h(doc, "p", { class: "oi-lib-warn", text: LIBRARY_COPY.deleteFailed }));
+          cancel?.addEventListener("click", () => {
             confirmHash = "";
+            deleteFailed = false;
             render();
-            focusTarget(`[data-lib-row="${row.docHash}"] .oi-lib-trash`);
+            focusTarget(`${rowSelector(row.docHash)} .oi-lib-trash`);
           });
-          card.querySelector(".oi-lib-do-delete")?.addEventListener("click", () => {
+          commit?.addEventListener("click", () => {
             const checked = card.querySelector("[data-lib-notes]")?.checked === true;
             void commitDelete(row, checked);
           });
@@ -478,12 +578,14 @@ export function mountLibraryUi(api = {}) {
     const total = usage?.byDoc
       ? [...usage.byDoc.values()].reduce((sum, n) => sum + (Number(n) || 0), 0)
       : rows.reduce((sum, row) => sum + (Number(row.bytes) || 0), 0);
-    const foot = h(doc, "footer", {
-      class: "oi-lib-foot",
-      text: `${librarySizeCopy(total) || "约 0 B"} · ${rows.length} 篇`
-    });
-    root.replaceChildren(head, search, body, foot);
-    if (confirmHash) focusTarget(".oi-lib-cancel");
+    nodes.footCopy.textContent = libraryFooterCopy(rows.length, total);
+    nodes.foot.hidden = phase !== "list";
+
+    if (keep && doc.activeElement !== nodes.input) {
+      if (keep.kind === "delete") focusTarget(`${rowSelector(keep.hash)} .oi-lib-trash`);
+      else if (keep.kind === "confirm") focusTarget(".oi-lib-cancel");
+      else focusTarget(rowSelector(keep.hash));
+    }
   }
 
   function onListKey(event) {
@@ -495,7 +597,7 @@ export function mountLibraryUi(api = {}) {
       active = key === "ArrowDown" ? Math.min(list.length - 1, active + 1) : Math.max(0, active - 1);
       column = "row";
       render();
-      focusTarget(`[data-lib-row="${list[active].docHash}"]`);
+      focusTarget(rowSelector(list[active].docHash));
       return;
     }
     if (key === "ArrowRight" || key === "ArrowLeft") {
@@ -503,7 +605,7 @@ export function mountLibraryUi(api = {}) {
       column = key === "ArrowRight" ? "delete" : "row";
       render();
       const hash = list[active]?.docHash;
-      focusTarget(column === "delete" ? `[data-lib-row="${hash}"] .oi-lib-trash` : `[data-lib-row="${hash}"]`);
+      focusTarget(column === "delete" ? `${rowSelector(hash)} .oi-lib-trash` : rowSelector(hash));
       return;
     }
     if (key === "Enter") {
@@ -512,6 +614,7 @@ export function mountLibraryUi(api = {}) {
         const row = list[active];
         if (row && libraryDeleteAllowed(readingHash, row.docHash)) {
           confirmHash = row.docHash;
+          deleteFailed = false;
           render();
           focusTarget(".oi-lib-cancel");
         }
@@ -525,6 +628,7 @@ export function mountLibraryUi(api = {}) {
       if (!row || !libraryDeleteAllowed(readingHash, row.docHash)) return;
       event.preventDefault();
       confirmHash = row.docHash;
+      deleteFailed = false;
       render();
       focusTarget(".oi-lib-cancel");
     }
@@ -557,6 +661,10 @@ export function mountLibraryUi(api = {}) {
     if (!open && !root.classList.contains("is-open")) return;
     open = false;
     confirmHash = "";
+    deleteFailed = false;
+    deleting = false;
+    stopPoll();
+    delete root.dataset.blocked;
     syncChrome(false, meta);
     if (focusButton && meta.handoff !== true && meta.focus !== false) {
       const preferred = meta.trigger || trigger;
@@ -590,8 +698,9 @@ export function mountLibraryUi(api = {}) {
       event.stopPropagation();
       const hash = confirmHash;
       confirmHash = "";
+      deleteFailed = false;
       render();
-      focusTarget(`[data-lib-row="${hash}"] .oi-lib-trash`);
+      focusTarget(`${rowSelector(hash)} .oi-lib-trash`);
     }
   });
 
@@ -609,8 +718,9 @@ export function mountLibraryUi(api = {}) {
       if (confirmHash) {
         const hash = confirmHash;
         confirmHash = "";
+        deleteFailed = false;
         render();
-        focusTarget(`[data-lib-row="${hash}"] .oi-lib-trash`);
+        focusTarget(`${rowSelector(hash)} .oi-lib-trash`);
         return true;
       }
       close(true);

@@ -358,7 +358,7 @@ test("文献库侧栏：开关、三种删除文案、网址变了、排序、�
       local: read("hash-local")
     });
   })()`));
-  assert.match(copies.none, /^会删除：译文 2 页和版面缓存。再打开要重新翻译（会再次调用翻译服务）。不会删除：你电脑上的 PDF 文件。/);
+  assert.match(copies.none, /从文献库删除这篇？会删除：译文 2 页和版面缓存。再打开要重新翻译（会再次调用翻译服务）。不会删除：你电脑上的 PDF 文件。/);
   assert.equal(copies.none.includes("Open Immerse 保存的 PDF 副本"), false);
   assert.match(copies.url, /会删除：译文 2 页、版面缓存和 Open Immerse 保存的 PDF 副本。再打开要重新翻译（会再次调用翻译服务）。不会删除：你电脑上的 PDF 文件。/);
   assert.equal(copies.url.includes("下次打开要重新选一次 PDF 文件。"), false);

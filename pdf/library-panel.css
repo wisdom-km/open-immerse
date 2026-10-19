@@ -40,11 +40,39 @@
   border-bottom: 1px solid var(--oi-reader-line);
 }
 
+.oi-lib-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
 .oi-lib-head h2 {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
   color: var(--oi-reader-ink);
+}
+
+.oi-lib-count {
+  color: var(--oi-reader-muted);
+  font-size: 12px;
+}
+
+.oi-lib-spacer {
+  flex: 1;
+}
+
+.oi-lib-open-pdf {
+  min-height: 30px;
+  white-space: nowrap;
+}
+
+.oi-lib-open-pdf.is-icon {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0;
 }
 
 .oi-lib-back,
@@ -92,10 +120,10 @@
 .oi-lib-search input {
   width: 100%;
   box-sizing: border-box;
-  min-height: 28px;
+  min-height: 30px;
   border: 1px solid var(--oi-reader-line);
-  border-radius: 6px;
-  background: var(--oi-reader-paper);
+  border-radius: 8px;
+  background: var(--oi-reader-well);
   color: var(--oi-reader-ink);
   padding: 4px 8px;
 }
@@ -127,9 +155,14 @@
 
 .oi-lib-row {
   align-items: stretch;
-  padding: 8px 12px;
+  min-height: 60px;
+  padding: 10px 8px 10px 10px;
   border-bottom: 1px solid var(--oi-reader-line);
   flex-wrap: wrap;
+}
+
+.oi-lib-row.is-confirm {
+  background: var(--oi-reader-warn-soft);
 }
 
 .oi-lib-open {
@@ -148,7 +181,8 @@
 }
 
 .oi-lib-name {
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .oi-lib-meta,
@@ -177,13 +211,44 @@
   font-weight: 600;
 }
 
+.oi-lib-confirm-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.oi-lib-do-delete {
+  background: var(--oi-reader-warn);
+  color: var(--oi-reader-surface);
+  border: 0;
+  border-radius: 7px;
+  min-height: 28px;
+  padding: 0 12px;
+}
+
+.oi-lib-do-delete:disabled {
+  opacity: 0.6;
+}
+
 .oi-lib-confirm-actions {
   margin-top: 8px;
+  justify-content: flex-end;
 }
 
 .oi-lib-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
   padding: 8px 12px;
   border-top: 1px solid var(--oi-reader-line);
+}
+
+.oi-lib-storage {
+  color: var(--oi-reader-focus);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .oi-library :focus-visible {

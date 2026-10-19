@@ -28,6 +28,7 @@ import { createLibraryStore } from "../lib/library-store.js";
 import {
   bindLibraryWriteMarks,
   libraryWritesStopped,
+  noteLibraryLoaded,
   resetLibraryWriteStops
 } from "../lib/library-writes.js";
 import { saveLibraryPage } from "../lib/pdf-library.js";
@@ -108,10 +109,14 @@ test("文献库文案：题名、进度、时间、搜索和深链只生效一�
   assert.equal(libraryRowTitle({ title: "", fileName: "paper.pdf" }).title, "paper.pdf");
   assert.equal(libraryRowTitle({ docHash: "abcdef1234567890" }).title, "未命名 PDF · abcdef12");
   assert.equal(libraryProgressCopy(3, 3), "全文已译");
-  assert.equal(libraryProgressCopy(1, 4), "1/4 页");
+  assert.equal(libraryProgressCopy(1, 4), "已译 1 / 4 页");
   const now = Date.UTC(2026, 9, 19, 12);
-  assert.equal(libraryRelativeTime(now, now), "今天");
-  assert.equal(libraryRelativeTime(now - 86400000, now), "昨天");
+  const clock = (ms) => {
+    const date = new Date(ms);
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  };
+  assert.equal(libraryRelativeTime(now, now), `今天 ${clock(now)}`);
+  assert.equal(libraryRelativeTime(now - 86400000, now), `昨天 ${clock(now - 86400000)}`);
   assert.equal(libraryRelativeTime(Date.UTC(2026, 0, 3, 12), now), "1月3日");
   assert.equal(libraryRelativeTime(Date.UTC(2025, 11, 2, 12), now), "2025-12-02");
   assert.equal(librarySizeCopy(2 * 1024 * 1024).startsWith("约 "), true);
@@ -212,6 +217,37 @@ test("usage() 无变化只扫一次，脏文档只重算那一篇，并计入 so
   assert.equal(fourth.byDoc.get("aaa"), third.byDoc.get("aaa"));
 });
 
+test("usage() 每次重读 estimate 和 persisted，删除和后续写入都看得到新值", async () => {
+  const { store } = memoryStore();
+  await store.touchPaper("del", { title: "删", pageCount: 1, opened: true, sourceSize: 500 });
+  await store.putPage("del", 1, { pairs: [{ text: "Hi", translation: "嗨" }] });
+  const backend = store.backend;
+  let persisted = false;
+  let estimateUsage = 80;
+  backend.estimate = async () => ({ quota: 1000, usage: estimateUsage });
+  backend.persisted = async () => persisted;
+  const warm = await store.usage();
+  assert.equal(warm.persisted, false);
+  assert.equal(warm.usage, 80);
+  assert.ok(warm.byDoc.get("del") > 0);
+  persisted = true;
+  const hit = await store.usage();
+  assert.equal(hit.persisted, true);
+  assert.equal(hit.usage, 80);
+  assert.equal(store.usageFullScans, 1);
+  await store.touchPaper("del", { title: "又写了" });
+  const afterWrite = await store.usage();
+  assert.equal(afterWrite.persisted, true);
+  assert.equal(store.usageFullScans, 1);
+  await store.deletePaperData("del");
+  estimateUsage = 15;
+  const afterDelete = await store.usage();
+  assert.equal(afterDelete.usage, 15);
+  assert.equal(afterDelete.persisted, true);
+  assert.ok(afterDelete.byDoc.get("del") < warm.byDoc.get("del"));
+  assert.equal(store.usageFullScans, 1);
+});
+
 test("删除论文清掉该篇公式缓存，别的论文还在", async () => {
   const formula = createMemoryStore();
   const stop = registerFormulaCleaner((hash) => formula.clearDoc(hash));
@@ -310,6 +346,92 @@ test("别的标签删掉之后，这一标签晚到的页写不能把论文救�
   resetLibraryWriteStops();
 });
 
+test("错过删除通知的标签，打开时间早于删除时间时不能把论文救回来", async () => {
+  resetLibraryWriteStops();
+  const { store } = memoryStore();
+  const hash = "missed";
+  noteLibraryLoaded(hash, 1);
+  await store.touchPaper(hash, { title: "错过", pageCount: 1, opened: true });
+  await store.putPage(hash, 1, { pairs: [{ text: "Hello", translation: "你好" }] });
+  await store.deletePaperData(hash);
+  assert.equal(libraryWritesStopped(hash), false);
+  const late = await saveLibraryPage({
+    hash,
+    title: "晚到",
+    pageCount: 1,
+    page: 2,
+    pairs: [{ translation: "不该回来" }]
+  }, { store });
+  assert.equal(late.source, "absent");
+  const still = await store.getPaper(hash);
+  assert.equal(still.deletedAt, 40);
+  assert.equal((await store.getPages(hash)).length, 0);
+  noteLibraryLoaded(hash, 100);
+  const again = await saveLibraryPage({
+    hash,
+    title: "重新打开",
+    pageCount: 1,
+    page: 1,
+    pairs: [{ translation: "回来" }]
+  }, { store });
+  assert.equal(again.source, "absent");
+  const revived = await store.getPaper(hash);
+  assert.equal(revived.deletedAt, undefined);
+  assert.equal((await store.getPages(hash)).length, 1);
+  resetLibraryWriteStops();
+});
+
+test("没记下打开时间时，未停写的页写仍会把论文救回来", async () => {
+  resetLibraryWriteStops();
+  const { store } = memoryStore();
+  await store.touchPaper("fresh", { title: "新开", pageCount: 1, opened: true });
+  await store.deletePaperData("fresh");
+  assert.equal(libraryWritesStopped("fresh"), false);
+  const saved = await saveLibraryPage({
+    hash: "fresh",
+    title: "新开",
+    pageCount: 1,
+    page: 1,
+    pairs: [{ translation: "回来" }]
+  }, { store });
+  assert.equal(saved.source, "absent");
+  const paper = await store.getPaper("fresh");
+  assert.equal(paper.deletedAt, undefined);
+  assert.equal((await store.getPages("fresh")).length, 1);
+});
+
+test("删除赶在页写的事务之前时，这一次写入不能把论文救回来", async () => {
+  resetLibraryWriteStops();
+  const { store } = memoryStore();
+  const hash = "race";
+  noteLibraryLoaded(hash, 1);
+  await store.touchPaper(hash, { title: "竞态", pageCount: 1, opened: true });
+  const realGet = store.getPaper.bind(store);
+  let raced = false;
+  store.getPaper = async (id) => {
+    const paper = await realGet(id);
+    if (!raced && id === hash) {
+      raced = true;
+      store.getPaper = realGet;
+      await store.deletePaperData(hash);
+    }
+    return paper;
+  };
+  const late = await saveLibraryPage({
+    hash,
+    title: "晚到",
+    pageCount: 1,
+    page: 1,
+    pairs: [{ translation: "不该回来" }]
+  }, { store });
+  assert.equal(raced, true);
+  assert.equal(late.source, "absent");
+  const still = await store.getPaper(hash);
+  assert.equal(still.deletedAt, 40);
+  assert.equal((await store.getPages(hash)).length, 0);
+  resetLibraryWriteStops();
+});
+
 test("失败行只复用同一目标语言里已经落定的文献译文", () => {
   const rows = [
     { original: "A second sentence stays failed until the retry.", translation: "", failed: true, role: "paragraph" },
@@ -330,6 +452,40 @@ test("失败行只复用同一目标语言里已经落定的文献译文", () =>
   assert.equal(reused[0].failed, false);
   assert.equal(reused[0].translation, "第二句已经在库里译好了。");
   assert.equal(reused[1], rows[1]);
+  const echo = reuseSettledLibraryFailures(rows, [{
+    text: "A second sentence stays failed until the retry.",
+    translation: "A second sentence stays failed until the retry.",
+    targetLang: "zh-CN",
+    provider: "openai",
+    model: "gpt-4o-mini"
+  }], "zh-CN", { provider: "openai", model: "gpt-4o-mini" });
+  assert.equal(echo, rows);
+  const otherProvider = reuseSettledLibraryFailures(rows, [{
+    text: "A second sentence stays failed until the retry.",
+    translation: "第二句已经在库里译好了。",
+    targetLang: "zh-CN",
+    provider: "kimi",
+    model: "gpt-4o-mini"
+  }], "zh-CN", { provider: "openai", model: "gpt-4o-mini" });
+  assert.equal(otherProvider, rows);
+  const otherModel = reuseSettledLibraryFailures(rows, [{
+    text: "A second sentence stays failed until the retry.",
+    translation: "第二句已经在库里译好了。",
+    targetLang: "zh-CN",
+    provider: "openai",
+    model: "gpt-4o"
+  }], "zh-CN", { provider: "openai", model: "gpt-4o-mini" });
+  assert.equal(otherModel, rows);
+  const matched = reuseSettledLibraryFailures(rows, [{
+    text: "A second sentence stays failed until the retry.",
+    translation: "第二句已经在库里译好了。",
+    targetLang: "zh-CN",
+    provider: "openai",
+    model: "gpt-4o-mini"
+  }], "zh-CN", { provider: "openai", model: "gpt-4o-mini" });
+  assert.equal(matched[0].failed, false);
+  assert.equal(matched[0].provider, "openai");
+  assert.equal(matched[0].model, "gpt-4o-mini");
 });
 
 function fakeTimers() {
@@ -375,6 +531,19 @@ async function flush() {
 
 function panelDom() {
   const parsed = parseHTML("<!doctype html><button id='libraryButton'>文献库</button><div id='sideSlot'></div>");
+  let active = parsed.document.body;
+  const proto = parsed.window.HTMLElement?.prototype;
+  if (proto) {
+    const orig = proto.focus;
+    proto.focus = function focusShim() {
+      active = this;
+      if (typeof orig === "function") orig.call(this);
+    };
+  }
+  Object.defineProperty(parsed.document, "activeElement", {
+    configurable: true,
+    get() { return active; }
+  });
   return parsed;
 }
 
@@ -448,25 +617,32 @@ test("文献库面板：空、有数据、确认文案三种、网址变了、�
   await flush();
   const text = () => ui.root.textContent;
   const confirmText = () => ui.root.querySelector(".oi-lib-confirm")?.textContent || "";
+  const TITLE = "从文献库删除这篇？";
   assert.match(text(), /没有副本/);
   assert.match(text(), /全文已译/);
   assert.match(text(), /今天/);
   assert.match(text(), /约 /);
+  assert.match(text(), /3 篇/);
+  assert.match(text(), /共 3 篇 · 约 .+（估算）/);
+  assert.equal(ui.root.querySelector(".oi-lib-storage")?.textContent, "存储与备份 →");
+  assert.equal(ui.root.querySelector(".oi-lib-open-pdf")?.textContent, "＋ 打开 PDF…");
 
   ui.root.querySelector('[data-lib-row="none"] .oi-lib-trash').click();
   await flush();
-  assert.equal(confirmText(), `${NO_COPY}${KEEP}取消删除`);
+  assert.equal(confirmText(), `${TITLE}${NO_COPY}${KEEP}取消删除`);
   ui.root.querySelector(".oi-lib-cancel").click();
 
   ui.root.querySelector('[data-lib-row="url"] .oi-lib-trash').click();
   await flush();
-  assert.equal(confirmText(), `${WITH_COPY}${KEEP}取消删除`);
+  assert.equal(confirmText(), `${TITLE}${WITH_COPY}${KEEP}取消删除`);
   assert.equal(confirmText().includes("下次打开要重新选一次 PDF 文件。"), false);
   ui.root.querySelector(".oi-lib-cancel").click();
 
   ui.root.querySelector('[data-lib-row="local"] .oi-lib-trash').click();
   await flush();
-  assert.equal(confirmText(), `${WITH_COPY_LOCAL}${KEEP}同时删除笔记取消删除`);
+  assert.equal(confirmText(), `${TITLE}${WITH_COPY_LOCAL}${KEEP}同时删除笔记（1 条，可在回收站找回）取消删除`);
+  assert.equal(ui.root.querySelector(".oi-lib-do-delete").classList.contains("btn-danger"), true);
+  assert.equal(ui.root.querySelector(".oi-lib-do-delete").classList.contains("btn-primary"), false);
   assert.notEqual(ui.root.querySelector("[data-lib-notes]").checked, true);
   const notesCalls = [];
   const originalDelete = store.deletePaperData.bind(store);
@@ -576,6 +752,7 @@ test("搜索防抖、深链排序只吃一次、正在阅读不能删、窄屏�
   assert.equal(names()[0], "Paper 0");
   const input = ui.root.querySelector("input[type=search]");
   assert.ok(input);
+  input.focus();
   input.value = "zzzz";
   input.dispatchEvent(new window.Event("input"));
   await flush();
@@ -583,6 +760,14 @@ test("搜索防抖、深链排序只吃一次、正在阅读不能删、窄屏�
   timers.advance(150);
   await flush();
   assert.match(ui.root.textContent, /没有找到「zzzz」/);
+  assert.match(ui.root.textContent, /只搜题名和文件名。/);
+  assert.equal(document.activeElement === input, true, document.activeElement?.tagName || "none");
+  assert.equal(input.value, "zzzz");
+  ui.refresh();
+  await flush();
+  assert.equal(ui.root.querySelector("input[type=search]") === input, true);
+  assert.equal(document.activeElement === input, true, document.activeElement?.tagName || "none");
+  assert.equal(input.value, "zzzz");
   ui.root.querySelector(".oi-lib-miss button").click();
   await flush();
   assert.equal(names().length, 8);
@@ -609,6 +794,143 @@ test("设置页「按篇查看」指向按大小排序的文献库", async () =>
     panel?.destroy();
     globalThis.document = previous;
   }
+});
+
+test("搜索框在刷新后仍是原来的节点，正在阅读只关面板，删除失败留在确认卡里", async () => {
+  const { document, window } = panelDom();
+  const timers = fakeTimers();
+  const papers = [
+    paperRow({ docHash: "read", title: "正在读", pageCount: 1, sourceSize: 10, lastOpenedAt: 2 }),
+    paperRow({ docHash: 'q"]x', title: "特殊", pageCount: 1, sourceSize: 20, lastOpenedAt: 1 })
+  ];
+  let opened = 0;
+  let deletes = 0;
+  const store = {
+    async listPapers() { return papers.filter((row) => !row.deletedAt); },
+    async getPages() { return [{ page: 1, pairs: [{ translation: "译" }] }]; },
+    async usage() { return { byDoc: new Map(papers.map((row) => [row.docHash, row.sourceSize])) }; },
+    async getSource() { return null; },
+    async deletePaperData() {
+      deletes += 1;
+      throw new Error("nope");
+    }
+  };
+  const ui = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    timers,
+    width: () => 1200,
+    searchMs: 150,
+    store: async () => store,
+    listNotes: async () => [],
+    openHash: async () => "read",
+    openBytes: async () => { opened += 1; }
+  });
+  ui.open();
+  await flush();
+  ui.root.querySelector('[data-lib-row="read"] .oi-lib-open').click();
+  await flush();
+  assert.equal(opened, 0);
+  assert.equal(ui.isOpen(), false);
+  ui.open();
+  await flush();
+  const list = ui.root.querySelector(".oi-lib-list");
+  const down = new window.Event("keydown", { bubbles: true });
+  down.key = "ArrowDown";
+  list.dispatchEvent(down);
+  await flush();
+  assert.equal(ui.root.querySelectorAll(".oi-lib-row").length, 2);
+  const trash = [...ui.root.querySelectorAll(".oi-lib-trash")].find((node) => !node.disabled);
+  trash.click();
+  await flush();
+  const pending = [];
+  store.deletePaperData = () => {
+    deletes += 1;
+    return new Promise((resolve, reject) => {
+      pending.push(() => reject(new Error("nope")));
+    });
+  };
+  ui.root.querySelector(".oi-lib-do-delete").click();
+  ui.root.querySelector(".oi-lib-do-delete").click();
+  await flush();
+  assert.equal(deletes, 1);
+  pending[0]();
+  await flush();
+  assert.match(ui.root.querySelector(".oi-lib-confirm")?.textContent || "", /没删成，稍后再试。/);
+  assert.equal(ui.root.querySelector(".oi-lib-do-delete").disabled, false);
+});
+
+test("文献库关掉之后，存储打不开的轮询会停", async () => {
+  const { document } = panelDom();
+  const timers = fakeTimers();
+  let calls = 0;
+  const ui = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    timers,
+    width: () => 1200,
+    pollMs: 5000,
+    store: async () => {
+      calls += 1;
+      const error = new Error("blocked");
+      error.name = "BlockedError";
+      throw error;
+    },
+    listNotes: async () => [],
+    openHash: async () => ""
+  });
+  ui.open();
+  await flush();
+  assert.match(ui.root.textContent, /暂时连不上本机存储/);
+  assert.match(ui.root.textContent, /已经存好的译文和笔记都还在/);
+  const afterOpen = calls;
+  ui.close();
+  assert.equal(ui.root.dataset.blocked, undefined);
+  timers.advance(5000);
+  await flush();
+  assert.equal(calls, afterOpen);
+});
+
+test("空文献库用规格里的说明和导入链接，普通错误不当成存储打不开", async () => {
+  const { document } = panelDom();
+  const timers = fakeTimers();
+  const ui = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    timers,
+    width: () => 1200,
+    store: async () => ({
+      async listPapers() { return []; },
+      async getPages() { return []; },
+      async usage() { return { byDoc: new Map() }; },
+      async getSource() { return null; }
+    }),
+    listNotes: async () => [],
+    openHash: async () => ""
+  });
+  ui.open();
+  await flush();
+  assert.match(ui.root.textContent, /打开一篇 PDF 开始阅读，译文会自动存在这台电脑上，下次打开不用重新翻译。/);
+  assert.equal(ui.root.querySelector(".oi-lib-empty a")?.textContent, "从旧库或备份导入…");
+  assert.equal(ui.root.querySelector(".oi-lib-foot").hidden, true);
+  assert.equal(ui.root.querySelector(".oi-lib-open-pdf").hidden, true);
+  ui.close();
+  const broken = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    timers,
+    width: () => 1200,
+    store: async () => { throw new Error("boom"); },
+    listNotes: async () => [],
+    openHash: async () => ""
+  });
+  broken.open();
+  await flush();
+  assert.equal(broken.root.textContent.includes("暂时连不上本机存储"), false);
+  assert.match(broken.root.textContent, /还没有论文/);
+});
+
+test("阅读页快捷键在文献库输入框里不响应", () => {
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  assert.match(viewer, /focusInLibraryField\(event\.target\)/);
+  const gate = viewer.slice(viewer.indexOf("function onKey"), viewer.indexOf("function eventTargetIsField"));
+  assert.match(gate, /focusInLibraryField\(event\.target\)\) return/);
 });
 
 test("clearFormulaDoc 会走到已注册的清理函数", async () => {
