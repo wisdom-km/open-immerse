@@ -64,6 +64,7 @@ import {
   pageBlocksCopy,
   pageFromViewport,
   pageHasTranslation,
+  pageNeedsBypass,
   pageTranslationComplete,
   unitsNeedingTranslation,
   claimTranslationUnits,
@@ -10429,12 +10430,18 @@ async function translateWholeDocument() {
   // It gates a second job, and must not stop the job that is already adopting.
   const prepareLibraryPage = libraryPass ? async (page) => {
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
+    // Snapshot before adopt. A page saved this session has no failed flag.
+    // Adopting it turns a failed body batch into a fresh request and drops bypassCache.
+    const priorCache = pageCache.get(translatingDoc, page);
+    const failedBody = pageNeedsBypass(priorCache, pdfTargetLang);
     await adoptLibraryPages({ onlyPage: page });
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
+    if (failedBody && priorCache) pageCache.set(translatingDoc, page, priorCache);
     // Body coverage is not a finished title. The open record can already
     // hold a layout or a skip page, and resume would skip before the failed
-    // title batch is sent again with bypassCache.
-    if (titleStructureFailed(page)) return "retry";
+    // title batch is sent again with bypassCache. A failed body row needs the
+    // same retry: the restored cache still has failed, so the resend bypasses.
+    if (titleStructureFailed(page) || failedBody) return "retry";
     const state = pageStates.get(page)?.state || "queued";
     if (state === "done" || state === "skipped" || state === "empty" || state === "held") return "skip";
     return "translate";

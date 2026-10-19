@@ -322,7 +322,10 @@ test("preparePage translates the current hole before later pages are prepared", 
 test("retry still reads originals when the cached body is already complete", async () => {
   const prep = viewer.slice(viewer.indexOf("const prepareLibraryPage"), viewer.indexOf("let translatedDoc"));
   assert.match(prep, /titleStructureFailed\(page\)/);
-  assert.match(prep, /return "retry"/);
+  assert.match(prep, /pageNeedsBypass\(priorCache, pdfTargetLang\)/);
+  assert.ok(prep.indexOf("pageNeedsBypass") < prep.indexOf("await adoptLibraryPages"));
+  assert.match(prep, /if \(failedBody && priorCache\) pageCache\.set\(translatingDoc, page, priorCache\)/);
+  assert.match(prep, /titleStructureFailed\(page\) \|\| failedBody\) return "retry"/);
   assert.equal(prep.includes("documentTranslateSuperseded"), false);
   const originals = viewer.slice(viewer.indexOf("async function originalsForPage"), viewer.indexOf("/** 原文: view toggle only."));
   assert.match(originals, /titleStructureFailed\(n\)/);

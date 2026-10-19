@@ -52,7 +52,7 @@ const STUB = `(() => {
     pdfLayout: mode === "local"
       ? { mode: "local-ocr", localBaseUrl: "http://127.0.0.1:8765" }
       : { mode: "" },
-    batchSize: 8
+    batchSize: mode === "retryOpenBody" ? 1 : 8
   };
   if (mode === "echo") sessionStorage.removeItem("oiSavedLib");
   window.__oiAuto = { mode, lang, batches: [], texts: [], messages: [], page3AtFirstBatch: null, clickedDuringOpen: false, saved: [] };
@@ -167,7 +167,7 @@ const STUB = `(() => {
         const type = message && message.type;
         if (type === "OI_GET_SETTINGS") return Promise.resolve({ settings });
         if (type === "OI_PDF_STRUCTURE") {
-          if (mode === "retryOpen") {
+          if (mode === "retryOpen" || mode === "retryOpenBody") {
             return Promise.resolve({
               ok: true,
               raw: JSON.stringify({
@@ -227,6 +227,10 @@ const STUB = `(() => {
           const index = window.__oiAuto.batches.length - 1;
           if ((mode === "retryTitle" || mode === "retryOpen") && index === 0) return Promise.resolve({ ok: false, error: "500" });
           if (mode === "retryBody" && index === 1) return Promise.resolve({ ok: false, error: "500" });
+          if (mode === "retryOpenBody" && texts.some((text) => String(text).includes("second sentence")) && !window.__oiAuto.bodyFailed) {
+            window.__oiAuto.bodyFailed = true;
+            return Promise.resolve({ ok: false });
+          }
           if (mode === "retryBoth" && index < 2) return Promise.resolve({ ok: false, error: "500" });
           if (mode === "short") {
             return Promise.resolve({
@@ -277,10 +281,19 @@ const STUB = `(() => {
   }
 })();`;
 
-function serveRepo() {
+function serveRepo(extras = new Map()) {
   const server = createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+    const extra = extras.get(rel);
+    if (extra) {
+      res.writeHead(200, {
+        "content-type": MIME[extname(rel)] || "application/octet-stream",
+        "cache-control": "no-store"
+      });
+      res.end(extra);
+      return;
+    }
     const file = resolve(root, rel);
     if (file !== root && !file.startsWith(`${root}${sep}`)) {
       res.writeHead(403);
@@ -1352,12 +1365,12 @@ function pdfLineStream(lines, size) {
   return `BT /F1 ${size} Tf 72 700 Td\n${body}\nET`;
 }
 
-/** Two pages: a title candidate, then a skip-only bibliography. The open record fills the second page. */
+/** Two pages: a title candidate with two body sentences, then a skip-only bibliography. */
 function titleRetryOpenPdf() {
+  const kept = "The dominant sequence models use attention instead of recurrence.";
+  const failed = "A second sentence stays failed until the retry.";
   const pages = [
-    pdfLineStream([
-      "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks."
-    ], 12),
+    `BT /F1 12 Tf 72 700 Td\n(${pdfEscape(kept)}) Tj\n0 -80 Td\n(${pdfEscape(failed)}) Tj\nET`,
     pdfLineStream([
       "[1] Vaswani Ashish. Attention is all you need. Advances in Neural Information Processing Systems. 2017.",
       "[2] Devlin Jacob. Bert pretraining of deep bidirectional transformers for language understanding. 2019.",
@@ -1397,9 +1410,7 @@ function titleRetryOpenPdf() {
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
 }
 
-test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", { timeout: 180000 }, async (t) => {
-  const pdfPath = join(root, "tests/fixtures/title-retry-open.pdf");
-  writeFileSync(pdfPath, titleRetryOpenPdf());
+async function probeTitleRetryPdf(pdfPath) {
   const { getDocument, GlobalWorkerOptions } = await import("../pdf/vendor/pdf.min.mjs");
   const { textLayerToBlocks } = await import("../lib/pdf-text-layer.js");
   const { isSkipOnlyPage } = await import("../lib/pdf-library.js");
@@ -1420,8 +1431,16 @@ test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", {
   } finally {
     await probed.destroy();
   }
+}
 
-  const server = await serveRepo();
+async function runOpenRecordRetry(t, { mode, ready, label, requireSavedBody = false }) {
+  const pdfDir = mkdtempSync(join(tmpdir(), "oi-auto-translate-"));
+  rememberOwnedTemp(pdfDir);
+  const pdfPath = join(pdfDir, "title-retry-open.pdf");
+  writeFileSync(pdfPath, titleRetryOpenPdf());
+  await probeTitleRetryPdf(pdfPath);
+  const pdfBytes = readFileSync(pdfPath);
+  const server = await serveRepo(new Map([["title-retry-open.pdf", pdfBytes]]));
   const ownedDir = mkdtempSync(join(tmpdir(), "oi-auto-translate-"));
   rememberOwnedTemp(ownedDir);
   const userDataDir = join(ownedDir, "profile");
@@ -1430,7 +1449,7 @@ test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", {
   mkdirSync(scratchDir);
   const handle = { child: null, cdp: null };
   t.after(async () => {
-    rmSync(pdfPath, { force: true });
+    rmSync(pdfDir, { recursive: true, force: true });
     try {
       handle.cdp?.dispose();
     } finally {
@@ -1446,7 +1465,7 @@ test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", {
 
   const address = server.address();
   const origin = `http://127.0.0.1:${address.port}`;
-  const src = `${origin}/tests/fixtures/title-retry-open.pdf`;
+  const src = `${origin}/title-retry-open.pdf`;
   handle.child = launchChrome(userDataDir, scratchDir);
   const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
   handle.cdp = cdp;
@@ -1467,7 +1486,7 @@ test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", {
     }
     return result.result?.value;
   };
-  const waitFor = async (expression, label, timeoutMs = 90000) => {
+  const waitFor = async (expression, step, timeoutMs = 90000) => {
     const started = Date.now();
     let last = null;
     while (Date.now() - started < timeoutMs) {
@@ -1476,22 +1495,23 @@ test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", {
       await sleep(200);
     }
     const status = await evaluate(`document.getElementById("status")?.textContent || ""`).catch(() => "");
-    throw new Error(`${label} timed out. status=${status} last=${JSON.stringify(last)}`);
+    throw new Error(`${step} timed out. status=${status} last=${JSON.stringify(last)}`);
   };
 
   await cdp.send("Page.navigate", {
-    url: `${origin}/pdf/viewer.html?oiAuto=retryOpen&src=${encodeURIComponent(src)}`
+    url: `${origin}/pdf/viewer.html?oiAuto=${mode}&src=${encodeURIComponent(src)}`
   }, sessionId);
   await waitFor(`(() => {
     const pager = document.getElementById("sourcePageLabel")?.textContent || "";
     return /\\/\\s*2/.test(pager) ? pager : "";
-  })()`, "retryOpen: PDF open", 20000);
+  })()`, `${label}: PDF open`, 20000);
 
   const stalled = JSON.parse(await waitFor(`(async () => {
     const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
     const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
     const title = window.__oiTitleState ? window.__oiTitleState() : null;
-    if (!title || title.failed !== true || title.slotsDone === true) return "";
+    if (!title) return "";
+    if (!(${ready})) return "";
     if (page1 !== "partial" && page1 !== "failed") return "";
     if (document.getElementById("translatePage")?.hidden !== false) return "";
     if (doc.includes("全文已译")) return "";
@@ -1503,6 +1523,13 @@ test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", {
     const pages = await store.getPages(paper.docHash);
     const skipped = (pages || []).some((row) => row.skipped === true);
     if (!skipped) return "";
+    if (${requireSavedBody ? "true" : "false"}) {
+      const pageOne = (pages || []).find((row) => Number(row.page) === 1);
+      const pairs = pageOne && pageOne.pairs || [];
+      const kept = pairs.some((pair) => String(pair.translation || "").trim() && !String(pair.text || "").includes("second sentence"));
+      const leaked = pairs.some((pair) => String(pair.text || "").includes("second sentence"));
+      if (!kept || leaked) return "";
+    }
     const messages = (window.__oiAuto && window.__oiAuto.messages) || [];
     return JSON.stringify({
       page1,
@@ -1513,15 +1540,9 @@ test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", {
       storedTitle: paper.title || "",
       pageRows: (pages || []).length,
       count: messages.length,
-      first: messages[0] || null
+      messages
     });
-  })()`, "retryOpen: 文献已有跳过页，标题批仍失败", 120000));
-  assert.equal(stalled.slotsDone, false);
-  assert.equal(stalled.titleFailed, true);
-  assert.ok(stalled.papers >= 1);
-  assert.ok(stalled.pageRows >= 1);
-  assert.ok(stalled.first && stalled.first.bypassCache !== true, JSON.stringify(stalled.first));
-  assert.ok(Array.isArray(stalled.first.texts) && stalled.first.texts.includes("Synthesized Title For Retry"), JSON.stringify(stalled.first));
+  })()`, `${label}: 文献已有跳过页，失败批仍停着`, 120000));
 
   const before = stalled.count;
   await evaluate(`document.getElementById("translatePage").click()`);
@@ -1543,10 +1564,46 @@ test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", {
       slotsDone: title.slotsDone === true,
       messages
     });
-  })()`, "retryOpen: 点翻译后标题批重发", 120000));
+  })()`, `${label}: 点翻译后失败批重发`, 120000));
+  return { stalled, resumed, before };
+}
+
+test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", { timeout: 180000 }, async (t) => {
+  const { stalled, resumed, before } = await runOpenRecordRetry(t, {
+    mode: "retryOpen",
+    ready: "title.failed === true && title.slotsDone !== true",
+    label: "retryOpen"
+  });
+  assert.equal(stalled.slotsDone, false);
+  assert.equal(stalled.titleFailed, true);
+  assert.ok(stalled.papers >= 1);
+  assert.ok(stalled.pageRows >= 1);
+  const first = stalled.messages[0];
+  assert.ok(first && first.bypassCache !== true, JSON.stringify(first));
+  assert.ok(Array.isArray(first.texts) && first.texts.includes("Synthesized Title For Retry"), JSON.stringify(first));
   assert.equal(resumed.slotsDone, true, JSON.stringify({ page1: resumed.page1, doc: resumed.doc, slotsDone: resumed.slotsDone }));
   assert.equal(resumed.page1, "done");
   assert.match(resumed.doc, /全文已译/);
   const again = resumed.messages.slice(before);
-  assert.ok(again.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(stalled.first.texts)), "失败的标题批要带 bypassCache 重发");
+  assert.ok(again.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(first.texts)), "失败的标题批要带 bypassCache 重发");
+});
+
+test("打开即写入文献后，失败的正文批仍带 bypassCache 重试", { timeout: 180000 }, async (t) => {
+  const { stalled, resumed, before } = await runOpenRecordRetry(t, {
+    mode: "retryOpenBody",
+    ready: "title.failed !== true && title.slotsDone === true && (window.__oiAuto.messages || []).some((item) => (item.texts || []).some((text) => String(text).includes('second sentence')))",
+    label: "retryOpenBody",
+    requireSavedBody: true
+  });
+  assert.equal(stalled.slotsDone, true);
+  assert.equal(stalled.titleFailed, false);
+  assert.ok(stalled.papers >= 1);
+  assert.ok(stalled.pageRows >= 2);
+  const failedBody = stalled.messages.find((item) => (item.texts || []).some((text) => String(text).includes("second sentence")));
+  assert.ok(failedBody && failedBody.bypassCache !== true, JSON.stringify(stalled.messages));
+  assert.equal(resumed.slotsDone, true, JSON.stringify({ page1: resumed.page1, doc: resumed.doc, slotsDone: resumed.slotsDone }));
+  assert.equal(resumed.page1, "done");
+  assert.match(resumed.doc, /全文已译/);
+  const again = resumed.messages.slice(before);
+  assert.ok(again.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(failedBody.texts)), "失败的正文批要带 bypassCache 重发");
 });
