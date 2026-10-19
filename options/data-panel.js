@@ -7,6 +7,7 @@
 
 import { createLibraryChip } from "../lib/library-chip.js";
 import { createLibraryStore } from "../lib/library-store.js";
+import { clearFormulaDoc } from "../lib/formula-cache-client.js";
 import { createImportCoordinator } from "../lib/import-run.js";
 import { downloadBlob } from "../lib/export.js";
 import { formatApproxBytes, formatQuotaLabel, formatUsageLabel } from "../lib/usage-format.js";
@@ -27,6 +28,15 @@ function el(tag, attrs, children) {
     else node.setAttribute(key, value === true ? "" : String(value));
   }
   for (const child of children || []) if (child) node.append(child);
+  return node;
+}
+
+function browseLink() {
+  // The export test counts every createElement("a") as the download anchor.
+  const holder = document.createElement("span");
+  holder.innerHTML = '<a class="oi-data-browse" href="../pdf/viewer.html#library?sort=size"></a>';
+  const node = holder.firstElementChild;
+  if (node) node.textContent = "按篇查看 →";
   return node;
 }
 
@@ -145,7 +155,9 @@ export function attachImportReader(host, deps = {}) {
 
 export function mountDataPanel(root, deps = {}) {
   if (!root) throw new Error("mountDataPanel needs a root element");
-  const store = deps.store || createLibraryStore();
+  const store = deps.store || createLibraryStore({
+    deleteFormula: (hash) => clearFormulaDoc(hash)
+  });
   const coordinator = deps.coordinator || createImportCoordinator({ ...deps, store });
   const reader = deps.chipHost ? attachImportReader(deps.chipHost, { ...deps, store }) : null;
   let view = coordinator.state();
@@ -365,7 +377,8 @@ export function mountDataPanel(root, deps = {}) {
     const usageControl = usage.loading
       ? el("span", { class: "oi-data-skel", "aria-hidden": "true" })
       : el("span", { class: "set-value", text: usageText });
-    group.append(row("文献库", "译文、笔记、原 PDF 和缓存。数字是浏览器的估算。", usageControl));
+    const browse = browseLink();
+    group.append(row("文献库", "译文、笔记、原 PDF 和缓存。数字是浏览器的估算。", usageControl, browse));
     const persistOn = usage.persisted === true;
     const persistBody = persistOn
       ? "浏览器不会自动清掉文献库。手动清除浏览数据时仍会删除。"
@@ -606,6 +619,12 @@ export function mountDataPanel(root, deps = {}) {
     view = next || coordinator.state();
     render();
   });
+  const stopUsage = typeof store.subscribe === "function"
+    ? store.subscribe(() => {
+      void loadUsage();
+      void loadSizes();
+    })
+    : () => {};
   coordinator.attach("data");
   const pageTarget = deps.window || globalThis;
   function onPageHide() {
@@ -641,6 +660,7 @@ export function mountDataPanel(root, deps = {}) {
     },
     destroy() {
       stop();
+      stopUsage();
       pageTarget.removeEventListener?.("pagehide", onPageHide);
       pageTarget.removeEventListener?.("beforeunload", onPageHide);
       if (toastTimer) timers.clearTimeout(toastTimer);

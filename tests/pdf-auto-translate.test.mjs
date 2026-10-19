@@ -1434,7 +1434,7 @@ async function probeTitleRetryPdf(pdfPath) {
   }
 }
 
-async function runOpenRecordRetry(t, { mode, ready, label, requireSavedBody = false }) {
+async function runOpenRecordRetry(t, { mode, ready, label, requireSavedBody = false, beforeClick, afterClick }) {
   const pdfDir = mkdtempSync(join(tmpdir(), "oi-auto-translate-"));
   rememberOwnedTemp(pdfDir);
   const pdfPath = join(pdfDir, "title-retry-open.pdf");
@@ -1546,7 +1546,9 @@ async function runOpenRecordRetry(t, { mode, ready, label, requireSavedBody = fa
   })()`, `${label}: 文献已有跳过页，失败批仍停着`, 120000));
 
   const before = stalled.count;
+  if (typeof beforeClick === "function") await beforeClick(evaluate, stalled);
   await evaluate(`document.getElementById("translatePage").click()`);
+  if (typeof afterClick === "function") return afterClick(evaluate, { stalled, before });
   const resumed = JSON.parse(await waitFor(`(() => {
     const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
     const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
@@ -1607,4 +1609,106 @@ test("打开即写入文献后，失败的正文批仍带 bypassCache 重试", {
   assert.match(resumed.doc, /全文已译/);
   const again = resumed.messages.slice(before);
   assert.ok(again.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(failedBody.texts)), "失败的正文批要带 bypassCache 重发");
+});
+
+test("标题失败但正文缓存没有失败行时，点翻译仍带 bypassCache 重发标题", { timeout: 180000 }, async (t) => {
+  const { stalled, resumed, before } = await runOpenRecordRetry(t, {
+    mode: "retryOpen",
+    ready: "title.failed === true && title.slotsDone !== true",
+    label: "retryOpen-title-only",
+    beforeClick: (evaluate) => evaluate(`window.__oiSetPageCache(1, [{
+      role: "paragraph",
+      original: "Hello world from the paper body.",
+      text: "Hello world from the paper body.",
+      translation: "这是已经译好的正文。",
+      failed: false
+    }])`)
+  });
+  assert.equal(stalled.titleFailed, true);
+  const again = resumed.messages.slice(before);
+  assert.ok(again.some((item) => item.bypassCache === true && (item.texts || []).includes("Synthesized Title For Retry")), JSON.stringify(again));
+  assert.equal(resumed.slotsDone, true);
+});
+
+test("采纳会把页标成完成时，失败正文仍带 bypassCache 重发", { timeout: 180000 }, async (t) => {
+  const { stalled, resumed, before } = await runOpenRecordRetry(t, {
+    mode: "retryOpenBody",
+    ready: "title.failed !== true && title.slotsDone === true && (window.__oiAuto.messages || []).some((item) => (item.texts || []).some((text) => String(text).includes('second sentence')))",
+    label: "retryOpenBody-hold",
+    requireSavedBody: true
+  });
+  const failedBody = stalled.messages.find((item) => (item.texts || []).some((text) => String(text).includes("second sentence")));
+  const again = resumed.messages.slice(before);
+  assert.ok(again.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(failedBody.texts)), JSON.stringify(again));
+  assert.equal(resumed.page1, "done");
+});
+
+test("文献里已经有同一语言的译文时，失败行不再重发", { timeout: 180000 }, async (t) => {
+  const { resumed, before } = await runOpenRecordRetry(t, {
+    mode: "retryOpenBody",
+    ready: "title.failed !== true && title.slotsDone === true && (window.__oiAuto.messages || []).some((item) => (item.texts || []).some((text) => String(text).includes('second sentence')))",
+    label: "retryOpenBody-reuse",
+    requireSavedBody: true,
+    beforeClick: async (evaluate) => {
+      const attached = await evaluate(`(() => {
+        const original = "A second sentence stays failed until the retry.";
+        window.__oiSetPageCache(1, [{ role: "paragraph", original, text: original, translation: "", failed: true }]);
+        return window.__oiSetLibraryPairs(1, [{ text: original, translation: "第二句已经在库里译好了。", targetLang: "zh-CN" }]);
+      })()`);
+      if (attached !== true) throw new Error("文献页不存在，失败行对不上库里的译文");
+    }
+  });
+  const again = resumed.messages.slice(before);
+  assert.equal(again.some((item) => (item.texts || []).some((text) => String(text).includes("second sentence"))), false, JSON.stringify(again));
+  assert.equal(resumed.page1, "done");
+  assert.match(resumed.doc, /全文已译|第二句已经在库里译好了/);
+});
+
+test("采纳失败页时，停在采纳之后也不会把状态画成完成", { timeout: 180000 }, async (t) => {
+  const seen = await runOpenRecordRetry(t, {
+    mode: "retryOpenBody",
+    ready: "title.failed !== true && title.slotsDone === true && (window.__oiAuto.messages || []).some((item) => (item.texts || []).some((text) => String(text).includes('second sentence')))",
+    label: "retryOpenBody-hold-stop",
+    requireSavedBody: true,
+    beforeClick: async (evaluate) => {
+      const attached = await evaluate(`(() => {
+        window.__oiWatchPageState = true;
+        window.__oiPageStateLog = [];
+        window.__oiStopAfterAdopt = true;
+        const failed = "A second sentence stays failed until the retry.";
+        const kept = "The dominant sequence models use attention instead of recurrence.";
+        // The failed row is not the live sentence, so library reuse does not clear it.
+        // The pairs still cover both live sentences and would paint the page done.
+        window.__oiSetPageCache(1, [
+          { role: "paragraph", original: kept, text: kept, translation: "主导模型用注意力。", failed: false },
+          { role: "paragraph", original: "This failed row stays unsettled.", text: "This failed row stays unsettled.", translation: "", failed: true }
+        ]);
+        return window.__oiSetLibraryPairs(1, [
+          { text: kept, translation: "主导模型用注意力。", targetLang: "zh-CN" },
+          { text: failed, translation: "第二句已经在库里译好了。", targetLang: "zh-CN" }
+        ]);
+      })()`);
+      if (attached !== true) throw new Error("文献页不存在，停不住采纳");
+    },
+    afterClick: async (evaluate) => {
+      const started = Date.now();
+      let last = null;
+      while (Date.now() - started < 20000) {
+        last = await evaluate(`(() => {
+          const log = window.__oiPageStateLog || [];
+          const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+          if (!log.length) return "";
+          return JSON.stringify({ log, page1 });
+        })()`);
+        if (last) break;
+        await sleep(200);
+      }
+      if (!last) throw new Error("采纳后没有记下页状态");
+      return JSON.parse(last);
+    }
+  });
+  const states = (seen.log || []).map((item) => item.state);
+  assert.ok(states.some((state) => state === "failed" || state === "partial"), JSON.stringify(seen));
+  assert.equal(states.includes("done"), false, JSON.stringify(seen));
+  assert.notEqual(seen.page1, "done");
 });

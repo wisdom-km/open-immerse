@@ -1,0 +1,208 @@
+/* Library side panel. Reader tokens only. */
+
+#libraryButton[aria-pressed="true"] {
+  background: var(--oi-reader-well);
+  box-shadow: inset 0 0 0 1px var(--oi-reader-line);
+  color: var(--oi-reader-ink);
+}
+
+.workspace[data-library-open="true"] .oi-notes,
+.workspace[data-library-open="true"] .oi-ask {
+  display: none;
+}
+
+.oi-library {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--oi-reader-surface);
+  color: var(--oi-reader-ink);
+  font-family: var(--oi-reader-ui-font, var(--oi-font, sans-serif));
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.oi-lib-head,
+.oi-lib-confirm-actions,
+.oi-lib-empty,
+.oi-lib-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.oi-lib-head {
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--oi-reader-line);
+}
+
+.oi-lib-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--oi-reader-ink);
+}
+
+.oi-lib-back,
+.oi-lib-close,
+.oi-lib-trash,
+.oi-lib-retry,
+.oi-lib-pick,
+.oi-lib-empty .btn-primary,
+.oi-lib-confirm-actions button {
+  white-space: nowrap;
+  min-height: 28px;
+  min-width: 28px;
+}
+
+.oi-lib-back {
+  display: none;
+  border: 0;
+  background: transparent;
+  color: var(--oi-reader-ink);
+  padding: 4px 8px;
+}
+
+.oi-library.is-sheet .oi-lib-back {
+  display: inline-flex;
+  align-items: center;
+}
+
+.oi-lib-close,
+.oi-lib-trash {
+  border: 0;
+  background: transparent;
+  color: var(--oi-reader-ink);
+  border-radius: 6px;
+}
+
+.oi-lib-trash:disabled {
+  color: var(--oi-reader-muted);
+  cursor: not-allowed;
+}
+
+.oi-lib-search {
+  padding: 8px 12px;
+}
+
+.oi-lib-search input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 28px;
+  border: 1px solid var(--oi-reader-line);
+  border-radius: 6px;
+  background: var(--oi-reader-paper);
+  color: var(--oi-reader-ink);
+  padding: 4px 8px;
+}
+
+.oi-lib-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.oi-lib-blank {
+  min-height: 48px;
+}
+
+.oi-lib-empty,
+.oi-lib-blocked,
+.oi-lib-miss {
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  color: var(--oi-reader-ink);
+}
+
+.oi-lib-empty a {
+  color: var(--oi-reader-ink-2);
+}
+
+.oi-lib-row {
+  align-items: stretch;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--oi-reader-line);
+  flex-wrap: wrap;
+}
+
+.oi-lib-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--oi-reader-ink);
+  text-align: start;
+  padding: 4px;
+  min-height: 28px;
+}
+
+.oi-lib-name {
+  font-weight: 600;
+}
+
+.oi-lib-meta,
+.oi-lib-muted,
+.oi-lib-foot {
+  color: var(--oi-reader-muted);
+  font-size: 12px;
+}
+
+.oi-lib-badge {
+  color: var(--oi-reader-ink-2);
+  font-size: 12px;
+}
+
+.oi-lib-confirm,
+.oi-lib-repick {
+  flex-basis: 100%;
+  padding: 8px;
+  background: var(--oi-reader-paper);
+  border-radius: 8px;
+  color: var(--oi-reader-ink);
+}
+
+.oi-lib-warn {
+  color: var(--oi-reader-warn);
+  font-weight: 600;
+}
+
+.oi-lib-confirm-actions {
+  margin-top: 8px;
+}
+
+.oi-lib-foot {
+  padding: 8px 12px;
+  border-top: 1px solid var(--oi-reader-line);
+}
+
+.oi-library :focus-visible {
+  outline: 2px solid var(--oi-reader-focus, var(--oi-reader-ink));
+  outline-offset: 2px;
+}
+
+@media (max-width: 899px) {
+  .oi-library.is-open.is-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    width: auto;
+    height: auto;
+    background: var(--oi-reader-paper);
+  }
+  .oi-lib-trash,
+  .oi-lib-open {
+    opacity: 1;
+    visibility: visible;
+  }
+}

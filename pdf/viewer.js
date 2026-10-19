@@ -65,6 +65,7 @@ import {
   pageFromViewport,
   pageHasTranslation,
   pageNeedsBypass,
+  reuseSettledLibraryFailures,
   pageTranslationComplete,
   unitsNeedingTranslation,
   claimTranslationUnits,
@@ -194,6 +195,8 @@ import { recordedPersistDenied } from "../lib/notes-store.js";
 import { firstLineQuote } from "../lib/notes-view-model.js";
 import { mountNotesUi, textRangeOffsets } from "./notes-panel.js";
 import { mountAskUi } from "./ask-panel.js";
+import { mountLibraryUi } from "./library-panel.js";
+import { bindLibraryWriteMarks, resetLibraryWriteStops } from "../lib/library-writes.js";
 import { performAsk } from "../lib/ask-transport.js";
 import { currentNet } from "../lib/net/fetch.js";
 import { ASK_CONFIRM_KEY, askTarget } from "../lib/ask-model.js";
@@ -426,6 +429,8 @@ let libraryDoc = null;
 let libraryProbe = null;
 let notesDocHash = "";
 let notesUi = null;
+let libraryUi = null;
+let libraryAdoptHold = null;
 let askUi = null;
 let libraryChip = null;
 let importBinding = null;
@@ -524,6 +529,7 @@ let arxivJob = 0;
 let page1TextItems = null;
 let page1Viewport = null;
 
+let lastShownFont = 0;
 init();
 
 function workerSrc() {
@@ -677,7 +683,15 @@ function init() {
   bindArxivChip();
   installNotesUi();
   installAskUi();
+  installLibraryUi();
   installLibraryChrome();
+  bindLibraryWriteMarks({
+    sourceSent: librarySourceSent,
+    originalStored: libraryOriginalStored,
+    dropDoc(hash) {
+      if (libraryDoc?.hash === hash) libraryDoc = null;
+    }
+  });
   $("translatePage").addEventListener("click", () => startTranslate());
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("translateMenuRetranslate")?.addEventListener("click", () => {
@@ -705,7 +719,11 @@ function init() {
     openFromSrc(src);
   } else {
     setStatus(PDF_COPY.empty);
-    updateTranslateControls();
+    // init() runs before later lets in this module. Open after they exist.
+    queueMicrotask(() => libraryUi?.open({ reason: "empty" }));
+  }
+  if (String(location.hash || "").startsWith("#library")) {
+    queueMicrotask(() => libraryUi?.open({ reason: "hash" }));
   }
 }
 
@@ -769,6 +787,10 @@ function onKey(event) {
     return;
   }
   if (event.key === "Escape" && closeSourcePop(true)) {
+    event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && libraryUi?.consumeEscape()) {
     event.preventDefault();
     return;
   }
@@ -906,6 +928,12 @@ function onKey(event) {
     if (event.key === "a" || event.key === "A") {
       event.preventDefault();
       askUi?.toggle();
+      return;
+    }
+    if (event.key === "l" || event.key === "L") {
+      if (eventTargetIsField(event.target)) return;
+      event.preventDefault();
+      libraryUi?.toggle();
       return;
     }
     if (event.key === "q" || event.key === "Q") {
@@ -1111,8 +1139,6 @@ function applyReaderSurface() {
   }
   syncAaPanel();
 }
-
-let lastShownFont = 0;
 
 function refreshReaderFontCap() {
   const next = readerShownFont();
@@ -2536,6 +2562,7 @@ function installNotesUi() {
     onOpenChange: (open, meta) => {
       if (open) {
         if (askUi?.isOpen()) askUi.close({ handoff: true, focus: false });
+        if (libraryUi?.isOpen()) libraryUi.close(false, { handoff: true, focus: false });
         syncNotesChrome({ opening: true });
       } else if (meta?.handoff || sideChromeOn()) {
         /* Ask still holds the shared column. */
@@ -2546,7 +2573,63 @@ function installNotesUi() {
 }
 
 function sideChromeOn(workspace = document.querySelector(".workspace")) {
-  return workspace?.dataset.notesOpen === "true" || workspace?.dataset.askOpen === "true";
+  return workspace?.dataset.notesOpen === "true" || workspace?.dataset.askOpen === "true" || workspace?.dataset.libraryOpen === "true";
+}
+
+function onLibraryOpenChange(open, meta) {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace) return;
+  if (open) {
+    workspace.dataset.libraryOpen = "true";
+    const slot = document.getElementById("sideSlot");
+    if (slot) {
+      slot.hidden = false;
+      slot.dataset.open = "true";
+      slot.setAttribute("aria-hidden", "false");
+    }
+    if (notesUi?.isOpen()) notesUi.close(false, { handoff: true });
+    if (askUi?.isOpen()) askUi.close({ handoff: true, focus: false });
+    syncNotesChrome({ opening: true });
+    return;
+  }
+  delete workspace.dataset.libraryOpen;
+  if (meta?.handoff || workspace.dataset.notesOpen === "true" || workspace.dataset.askOpen === "true") return;
+  closeNotesChrome();
+  const slot = document.getElementById("sideSlot");
+  if (slot && workspace.dataset.notesOpen !== "true" && workspace.dataset.askOpen !== "true") {
+    slot.hidden = true;
+    delete slot.dataset.open;
+    slot.setAttribute("aria-hidden", "true");
+  }
+}
+
+function installLibraryUi() {
+  libraryUi = mountLibraryUi({
+    store: async () => {
+      const { sharedLibraryStore } = await import("../lib/library-session.js");
+      return sharedLibraryStore();
+    },
+    listNotes: (hash) => sharedNotesStore().list(hash),
+    openHash: async () => {
+      const hash = libraryDoc?.hash || notesDocHash || await pdfByteHash();
+      return hash && hash !== "nohash" ? hash : "";
+    },
+    openBytes: (bytes, title) => openPdfData(bytes, title || ""),
+    pickPdf: () => $("file")?.click(),
+    toast: (text) => showToast(text),
+    onOpenChange: (open, meta) => onLibraryOpenChange(open, meta),
+    hash: () => location.hash,
+    width: () => window.innerWidth,
+    delay: async () => {
+      const ms = Number(globalThis.__oiLibraryDelay) || 0;
+      if (ms > 0) await new Promise((done) => setTimeout(done, ms));
+    }
+  });
+  void import("../lib/library-session.js").then(({ sharedLibraryStore: openStore }) => {
+    openStore().subscribe((event) => {
+      if (event?.collection === "papers") libraryUi?.refresh?.();
+    });
+  }).catch(() => {});
 }
 
 function installAskUi() {
@@ -2590,6 +2673,7 @@ function onAskOpenChange(open, meta) {
       slot.setAttribute("aria-hidden", "false");
     }
     if (notesUi?.isOpen()) notesUi.close(false, { handoff: true });
+    if (libraryUi?.isOpen()) libraryUi.close(false, { handoff: true, focus: false });
     const opening = workspace.dataset.layout !== "3" && workspace.dataset.layout !== "pair";
     syncNotesChrome({ opening });
     return;
@@ -4822,6 +4906,25 @@ function publishViewerTestHooks() {
     renderArticle();
     return getPageLayout(n)?.blocks?.length || 0;
   };
+  globalThis.__oiSetPageCache = (page, rows) => {
+    const n = Number(page);
+    if (!(n >= 1)) return false;
+    pageCache.set(docId, n, Array.isArray(rows) ? rows : []);
+    return true;
+  };
+  globalThis.__oiSetLibraryPairs = (page, pairs) => {
+    const pageNo = Number(page);
+    if (!(pageNo >= 1)) return false;
+    if (!libraryDoc) libraryDoc = { hash: docId, pages: [] };
+    if (!Array.isArray(libraryDoc.pages)) libraryDoc.pages = [];
+    let row = libraryDoc.pages.find((item) => Number(item.page) === pageNo);
+    if (!row) {
+      row = { page: pageNo, pairs: [] };
+      libraryDoc.pages.push(row);
+    }
+    row.pairs = Array.isArray(pairs) ? pairs : [];
+    return true;
+  };
   globalThis.__oiTitleState = () => {
     const record = titleStructure;
     if (!record || record.docId !== docId) return null;
@@ -5885,8 +5988,7 @@ function bindMoreMenu() {
   });
   $("menuLibrary")?.addEventListener("click", () => {
     closeMoreMenu(true);
-    notesUi?.close();
-    showSoonToast();
+    libraryUi?.toggle({ trigger: $("menuLibrary") });
   });
   $("menuAa")?.addEventListener("click", () => {
     closeMoreMenu(false);
@@ -5961,12 +6063,12 @@ function bindViewChrome() {
     setReaderView(button.dataset.view);
   });
   bindSourceModeChrome();
-  for (const id of ["tocButton", "libraryButton"]) {
-    $(id)?.addEventListener("click", () => {
-      if (id === "libraryButton") notesUi?.close();
-      showSoonToast();
-    });
-  }
+  $("tocButton")?.addEventListener("click", () => {
+    showSoonToast();
+  });
+  $("libraryButton")?.addEventListener("click", () => {
+    libraryUi?.toggle({ trigger: $("libraryButton") });
+  });
   $("askButton")?.addEventListener("click", () => askUi?.toggle());
   $("notesButton")?.addEventListener("click", () => notesUi?.toggle());
   setReaderView(document.querySelector(".workspace")?.dataset.view || "zh");
@@ -6433,13 +6535,13 @@ function scheduleNotesChrome() {
 }
 
 function closeNotesChrome() {
-  if (document.querySelector(".workspace")?.dataset.askOpen === "true") return;
+  const workspace = document.querySelector(".workspace");
+  if (workspace?.dataset.askOpen === "true" || workspace?.dataset.libraryOpen === "true") return;
   window.clearTimeout(notesResizeTimer);
   notesPaintedKind = "";
   notesLayoutLatch = "";
   notesUserPin = "";
   notesTempUpgrade = "";
-  const workspace = document.querySelector(".workspace");
   if (workspace) {
     delete workspace.dataset.layout;
     delete workspace.dataset.notesSide;
@@ -8018,7 +8120,13 @@ function notePageState(page, patch) {
   const key = Number(page);
   if (!(key >= 1)) return;
   const prev = pageStates.get(key) || { state: "queued", hasLayout: false, k: 0, m: 0, noText: false };
-  pageStates.set(key, { ...prev, ...patch });
+  const next = { ...prev, ...patch };
+  pageStates.set(key, next);
+  if (viewerUnderTest() && globalThis.__oiWatchPageState) {
+    const log = globalThis.__oiPageStateLog || [];
+    log.push({ page: key, state: next.state || "" });
+    globalThis.__oiPageStateLog = log;
+  }
 }
 
 function filledCount(results) {
@@ -9954,7 +10062,7 @@ async function readStoredLayouts(keys) {
   }
 }
 
-function seedLibraryProgress() {
+function seedLibraryProgress(skipPage = 0) {
   const pages = libraryDoc?.pages || [];
   if (!pages.length || !pdfDoc) return false;
   const installed = installDisplayableLibraryLayouts();
@@ -9962,6 +10070,8 @@ function seedLibraryProgress() {
   for (const entry of pages) {
     const page = Number(entry?.page);
     if (!(page >= 1) || page > pdfDoc.numPages) continue;
+    // A failed cache is restored after adopt. Seeding must not paint that page done first.
+    if (skipPage && page === skipPage) continue;
     const prior = pageStates.get(page);
     if (skipLocked.has(page) && prior?.state === "skipped") continue;
     if (prior?.hasLayout && prior.state && prior.state !== "layout" && prior.state !== "queued") continue;
@@ -10069,6 +10179,19 @@ async function adoptLibraryPages(options = {}) {
   const onlyPage = Number(options.onlyPage) || 0;
   const stamp = docId;
   const epoch = layoutEpoch;
+  const heldCache = Array.isArray(options.priorCache)
+    ? options.priorCache
+    : (Array.isArray(libraryAdoptHold) ? libraryAdoptHold : null);
+  libraryAdoptHold = null;
+  const heldPage = onlyPage >= 1 && heldCache && pageNeedsBypass(heldCache, pdfTargetLang) ? onlyPage : 0;
+  if (heldPage) {
+    pageCache.set(docId, heldPage, heldCache);
+    notePageState(heldPage, {
+      state: heldCache.some((row) => row?.failed === true) ? "failed" : "partial",
+      hasLayout: Boolean(getPageLayout(heldPage)?.blocks?.length)
+    });
+    clearSlotPainted(heldPage);
+  }
   const listed = (libraryDoc?.pages || []).map((item) => Number(item?.page)).filter((n) => n >= 1);
   const lastListed = listed.length ? Math.max(...listed) : 0;
   const total = Math.max(Number(pdfDoc?.numPages) || 0, ...listed, 0);
@@ -10086,10 +10209,11 @@ async function adoptLibraryPages(options = {}) {
     gap.push({ page, pairs: pairCount, live });
     globalThis.__oiLibraryGap = gap;
   };
-  if (seedLibraryProgress() && stamp === docId) renderArticle();
+  if (seedLibraryProgress(heldPage) && stamp === docId) renderArticle();
   if (await seedLegacySkipPages() && stamp === docId) renderArticle();
   for (let page = start; page <= end; page += 1) {
     if (stamp !== docId || docPhase === "stopped") return true;
+    if (heldPage && page === heldPage) continue;
     const entry = libraryEntry(page);
     let layout = getPageLayout(page);
     let blocks = layout?.blocks || null;
@@ -10475,10 +10599,23 @@ async function translateWholeDocument() {
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
     // Snapshot before adopt. A page saved this session has no failed flag.
     // Adopting it turns a failed body batch into a fresh request and drops bypassCache.
-    const priorCache = pageCache.get(translatingDoc, page);
-    const failedBody = pageNeedsBypass(priorCache, pdfTargetLang);
+    let priorCache = pageCache.get(translatingDoc, page);
+    let failedBody = pageNeedsBypass(priorCache, pdfTargetLang);
+    if (failedBody && Array.isArray(priorCache)) {
+      const reused = reuseSettledLibraryFailures(priorCache, libraryEntry(page)?.pairs, pdfTargetLang);
+      if (reused !== priorCache) {
+        priorCache = reused;
+        pageCache.set(translatingDoc, page, priorCache);
+        failedBody = pageNeedsBypass(priorCache, pdfTargetLang);
+      }
+    }
+    libraryAdoptHold = failedBody ? priorCache : null;
     await adoptLibraryPages({ onlyPage: page });
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
+    if (viewerUnderTest() && globalThis.__oiStopAfterAdopt) {
+      work.aborted = true;
+      return "stop";
+    }
     if (failedBody && priorCache) pageCache.set(translatingDoc, page, priorCache);
     // Body coverage is not a finished title. The open record can already
     // hold a layout or a skip page, and resume would skip before the failed
@@ -10486,7 +10623,7 @@ async function translateWholeDocument() {
     // same retry: the restored cache still has failed, so the resend bypasses.
     if (titleStructureFailed(page) || failedBody) return "retry";
     const state = pageStates.get(page)?.state || "queued";
-    if (state === "done" || state === "skipped" || state === "empty" || state === "held") return "skip";
+    if (state === "done" || state === "skipped" || state === "empty" || state === "held" || state === "failed") return "skip";
     return "translate";
   } : undefined;
   let translatedDoc = await translateDocumentPages({
@@ -11549,6 +11686,7 @@ async function adoptDoc(doc, title) {
   // drop bypassCache on the failed batch.
   librarySourceSent.clear();
   libraryOriginalStored.clear();
+  resetLibraryWriteStops();
   if (pdfDoc) {
     try {
       await pdfDoc.destroy();
