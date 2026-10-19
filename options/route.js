@@ -20,7 +20,7 @@ const REDIRECTS = Object.freeze({
   formula: "mm"
 });
 
-const FOCUS = new Set(["usage", "import", "export"]);
+const FOCUS = new Set(["usage", "import", "export", "diag"]);
 
 export function parseSettingsHash(hash) {
   const raw = String(hash || "").replace(/^#/, "");

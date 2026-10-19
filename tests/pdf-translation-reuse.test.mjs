@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,10 +83,7 @@ function echoedFirst(blocks) {
 
 function historicalLayer(commit) {
   const dir = mkdtempSync(join(tmpdir(), "oi-source-v2-"));
-  for (const file of readdirSync(join(root, "lib"))) {
-    if (!file.endsWith(".js")) continue;
-    writeFileSync(join(dir, file), readFileSync(join(root, "lib", file)));
-  }
+  cpSync(join(root, "lib"), dir, { recursive: true });
   writeFileSync(
     join(dir, "pdf-text-layer.js"),
     execFileSync("git", ["show", `${commit}:lib/pdf-text-layer.js`], { cwd: root })

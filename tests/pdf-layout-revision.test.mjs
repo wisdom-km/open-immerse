@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,10 +106,7 @@ test("同一份库的重算次数是串行队列进度，写回后再次打开�
 
 function oldTextLayer() {
   const dir = mkdtempSync(join(tmpdir(), "oi-layout-rev-src-"));
-  for (const file of readdirSync(join(root, "lib"))) {
-    if (!file.endsWith(".js")) continue;
-    writeFileSync(join(dir, file), readFileSync(join(root, "lib", file)));
-  }
+  cpSync(join(root, "lib"), dir, { recursive: true });
   writeFileSync(join(dir, "pdf-text-layer.js"), execFileSync("git", ["show", `${OLD_LAYER}:lib/pdf-text-layer.js`], { cwd: root }));
   return import(join(dir, "pdf-text-layer.js"));
 }
