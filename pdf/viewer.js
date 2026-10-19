@@ -353,7 +353,7 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, openLibraryPdf, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
+import { applySavedPairs, bindStructureRowBids, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, openLibraryPdf, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { bindImportChip } from "../options/data-panel.js";
@@ -362,7 +362,7 @@ import { cleanTitle, httpSourceUrl } from "../lib/library-record.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
-import { getProvider, missingRequiredField } from "../lib/providers.js";
+import { getProvider, missingRequiredField, resolveOutboundProvider } from "../lib/providers.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
   applyStructureTranslations,
@@ -3848,6 +3848,7 @@ async function startArxivSource() {
       pages: [...tiers.entries()].map(([page, row]) => ({ page, ...row }))
     };
   }
+  for (let n = 1; n <= (pdfDoc?.numPages || 0); n += 1) clearSlotPainted(n);
   renderArticle();
   paintArxivChip();
 }
@@ -5937,6 +5938,7 @@ function setReaderView(next) {
   for (const button of document.querySelectorAll("#viewSeg [data-view]")) {
     button.setAttribute("aria-checked", button.dataset.view === view ? "true" : "false");
   }
+  paintArxivChip();
 }
 
 function cycleReaderView() {
@@ -9023,6 +9025,24 @@ async function probeLocalService(baseUrl) {
   }
 }
 
+function noteFreeDefaultOutbound(outbound) {
+  const root = document.documentElement;
+  if (!root) return;
+  if (!outbound?.fallback) {
+    delete root.dataset.oiOutbound;
+    return;
+  }
+  root.dataset.oiOutbound = "mymemory-free";
+  const notice = String(outbound.notice || "");
+  const status = $("status");
+  if (status && notice) {
+    status.title = notice;
+    if (!status.classList.contains("error")) status.textContent = notice;
+  }
+  const button = $("translatePage");
+  if (button && notice) button.title = notice;
+}
+
 async function translatePreflight() {
   if (!extensionRuntimeReady()) return pdfTranslateFailureCopy({ reason: "runtime" });
   let settings = {};
@@ -9034,8 +9054,11 @@ async function translatePreflight() {
     return pdfTranslateFailureCopy({ error: String(err?.message || err) });
   }
   cachedPdfLayout = normalizePdfLayout(settings.pdfLayout);
-  const providerId = settings.provider || "mymemory";
-  const missing = missingRequiredField(getProvider(providerId), settings.providers?.[providerId] || {});
+  const outbound = resolveOutboundProvider(settings);
+  noteFreeDefaultOutbound(outbound);
+  const missing = outbound.fallback
+    ? null
+    : missingRequiredField(getProvider(outbound.providerId), settings.providers?.[outbound.providerId] || {});
   const layoutMode = pdfEngineMode();
   let localServiceUp = true;
   // GET / on 8765 is the library-and-OCR probe, not a /v1/layout failure.
@@ -10390,11 +10413,9 @@ async function translateWholeDocument() {
       const k = (merged || []).filter((item) => settledText(item?.translation, item?.original || item?.text || "")).length;
       const state = pageRunState(merged, { expected, targetLang: pdfTargetLang });
       notePageState(page, { state, hasLayout: true, k });
-      const slot = readerFlowEl()?.querySelector(`:scope > .rf-page[data-page="${page}"]`);
-      if (slot && slotHasTranslation(slot)) {
-        slot.querySelector(":scope > .rf-ps")?.remove();
-        slot.dataset.painted = "1";
-      } else clearSlotPainted(page);
+      // A partial paint may already have stamped the slot. Clearing it lets the
+      // settled page rebuild, so the chip recounts visible inline formulas.
+      clearSlotPainted(page);
       refreshDocStatus();
       renderArticle();
       if (state !== "failed") saveTasks.push(rememberTranslation(page, merged).then(() => null, (error) => error));
@@ -10851,7 +10872,10 @@ function withStructureRows(layout, merged) {
   const record = titleStructure;
   if (!record || record.docId !== docId || record.page !== layout?.page) return merged;
   if (!record.translated && !record.failed) return merged;
-  const rows = structureTranslationRows(record.source, record.structure);
+  const rows = bindStructureRowBids(
+    structureTranslationRows(record.source, record.structure),
+    layout?.blocks || []
+  );
   return combinePageResults(rows, merged, Boolean(record.failed));
 }
 
