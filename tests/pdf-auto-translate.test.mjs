@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -167,6 +167,20 @@ const STUB = `(() => {
         const type = message && message.type;
         if (type === "OI_GET_SETTINGS") return Promise.resolve({ settings });
         if (type === "OI_PDF_STRUCTURE") {
+          if (mode === "retryOpen") {
+            return Promise.resolve({
+              ok: true,
+              raw: JSON.stringify({
+                version: 1,
+                title: "Synthesized Title For Retry",
+                authors: [{ name: "Ada Lovelace", affiliation: "Analytical Engines", email: "ada@example.com" }],
+                abstract: {
+                  heading: "Abstract",
+                  body: "A synthesized abstract that is not a line on the page."
+                }
+              })
+            });
+          }
           if (mode === "struct") {
             return Promise.resolve({
               ok: true,
@@ -211,7 +225,7 @@ const STUB = `(() => {
           if (mode === "bothfail") return Promise.resolve({ ok: false, error: "500" });
           if (mode === "echo") return Promise.resolve({ ok: true, translations: texts.slice() });
           const index = window.__oiAuto.batches.length - 1;
-          if (mode === "retryTitle" && index === 0) return Promise.resolve({ ok: false, error: "500" });
+          if ((mode === "retryTitle" || mode === "retryOpen") && index === 0) return Promise.resolve({ ok: false, error: "500" });
           if (mode === "retryBody" && index === 1) return Promise.resolve({ ok: false, error: "500" });
           if (mode === "retryBoth" && index < 2) return Promise.resolve({ ok: false, error: "500" });
           if (mode === "short") {
@@ -1327,4 +1341,212 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.match(raced.doc, /全文已译/);
   assert.notEqual(raced.page1, "running");
   assert.ok(raced.batches >= 2);
+});
+
+function pdfEscape(text) {
+  return String(text).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+function pdfLineStream(lines, size) {
+  const body = lines.map((line, index) => `${index === 0 ? "" : "0 -18 Td\n"}(${pdfEscape(line)}) Tj`).join("\n");
+  return `BT /F1 ${size} Tf 72 700 Td\n${body}\nET`;
+}
+
+/** Two pages: a title candidate, then a skip-only bibliography. The open record fills the second page. */
+function titleRetryOpenPdf() {
+  const pages = [
+    pdfLineStream([
+      "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks."
+    ], 12),
+    pdfLineStream([
+      "[1] Vaswani Ashish. Attention is all you need. Advances in Neural Information Processing Systems. 2017.",
+      "[2] Devlin Jacob. Bert pretraining of deep bidirectional transformers for language understanding. 2019.",
+      "[3] Brown Tom. Language models are few shot learners with a very large transformer. 2020.",
+      "[4] Kaplan Jared. Scaling laws for neural language models across compute and data. 2020."
+    ], 11)
+  ];
+  const objects = new Map();
+  objects.set(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  objects.set(3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  let id = 4;
+  const kids = [];
+  for (const stream of pages) {
+    const pageId = id;
+    id += 1;
+    const contentId = id;
+    id += 1;
+    kids.push(`${pageId} 0 R`);
+    objects.set(contentId, `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
+    objects.set(pageId, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contentId} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`);
+  }
+  objects.set(2, `<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${pages.length} >>`);
+  const maxId = id - 1;
+  const chunks = ["%PDF-1.4\n"];
+  const offsets = [0];
+  let cursor = Buffer.byteLength(chunks[0]);
+  for (let n = 1; n <= maxId; n += 1) {
+    offsets.push(cursor);
+    const piece = `${n} 0 obj\n${objects.get(n)}\nendobj\n`;
+    chunks.push(piece);
+    cursor += Buffer.byteLength(piece);
+  }
+  let xref = `xref\n0 ${maxId + 1}\n0000000000 65535 f \n`;
+  for (let n = 1; n <= maxId; n += 1) xref += `${String(offsets[n]).padStart(10, "0")} 00000 n \n`;
+  chunks.push(xref);
+  chunks.push(`trailer\n<< /Size ${maxId + 1} /Root 1 0 R >>\nstartxref\n${cursor}\n%%EOF\n`);
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+}
+
+test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", { timeout: 180000 }, async (t) => {
+  const pdfPath = join(root, "tests/fixtures/title-retry-open.pdf");
+  writeFileSync(pdfPath, titleRetryOpenPdf());
+  const { getDocument, GlobalWorkerOptions } = await import("../pdf/vendor/pdf.min.mjs");
+  const { textLayerToBlocks } = await import("../lib/pdf-text-layer.js");
+  const { isSkipOnlyPage } = await import("../lib/pdf-library.js");
+  const { isTitlePageCandidate, pageTextForStructure } = await import("../lib/pdf-structure-schema.js");
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const probed = await getDocument({ data: new Uint8Array(readFileSync(pdfPath)), verbosity: 0 }).promise;
+  try {
+    assert.equal(probed.numPages, 2);
+    for (const [pageNo, expectSkip] of [[1, false], [2, true]]) {
+      const page = await probed.getPage(pageNo);
+      const viewport = page.getViewport({ scale: 1 });
+      const content = await page.getTextContent();
+      const built = textLayerToBlocks({ items: content.items, viewport, page: pageNo });
+      const blocks = built.blocks || [];
+      assert.equal(isSkipOnlyPage(blocks), expectSkip, `page ${pageNo} skip-only`);
+      if (pageNo === 1) assert.equal(isTitlePageCandidate(1, pageTextForStructure(blocks)), true);
+    }
+  } finally {
+    await probed.destroy();
+  }
+
+  const server = await serveRepo();
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-auto-translate-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const handle = { child: null, cdp: null };
+  t.after(async () => {
+    rmSync(pdfPath, { force: true });
+    try {
+      handle.cdp?.dispose();
+    } finally {
+      await cleanupChrome({
+        t,
+        child: handle.child,
+        server,
+        ownedDir,
+        userDataDir
+      });
+    }
+  });
+
+  const address = server.address();
+  const origin = `http://127.0.0.1:${address.port}`;
+  const src = `${origin}/tests/fixtures/title-retry-open.pdf`;
+  handle.child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
+  handle.cdp = cdp;
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  await cdp.send("Page.enable", {}, sessionId);
+  await cdp.send("Runtime.enable", {}, sessionId);
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: STUB }, sessionId);
+
+  const evaluate = async (expression) => {
+    const result = await cdp.send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true
+    }, sessionId);
+    if (result.exceptionDetails) {
+      throw new Error(result.exceptionDetails.text || JSON.stringify(result.exceptionDetails));
+    }
+    return result.result?.value;
+  };
+  const waitFor = async (expression, label, timeoutMs = 90000) => {
+    const started = Date.now();
+    let last = null;
+    while (Date.now() - started < timeoutMs) {
+      last = await evaluate(expression);
+      if (last) return last;
+      await sleep(200);
+    }
+    const status = await evaluate(`document.getElementById("status")?.textContent || ""`).catch(() => "");
+    throw new Error(`${label} timed out. status=${status} last=${JSON.stringify(last)}`);
+  };
+
+  await cdp.send("Page.navigate", {
+    url: `${origin}/pdf/viewer.html?oiAuto=retryOpen&src=${encodeURIComponent(src)}`
+  }, sessionId);
+  await waitFor(`(() => {
+    const pager = document.getElementById("sourcePageLabel")?.textContent || "";
+    return /\\/\\s*2/.test(pager) ? pager : "";
+  })()`, "retryOpen: PDF open", 20000);
+
+  const stalled = JSON.parse(await waitFor(`(async () => {
+    const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    const title = window.__oiTitleState ? window.__oiTitleState() : null;
+    if (!title || title.failed !== true || title.slotsDone === true) return "";
+    if (page1 !== "partial" && page1 !== "failed") return "";
+    if (document.getElementById("translatePage")?.hidden !== false) return "";
+    if (doc.includes("全文已译")) return "";
+    const { sharedLibraryStore } = await import("/lib/library-session.js");
+    const store = sharedLibraryStore();
+    const papers = await store.listPapers();
+    const paper = papers && papers[0];
+    if (!paper || !paper.docHash || !(Number(paper.lastOpenedAt) > 0)) return "";
+    const pages = await store.getPages(paper.docHash);
+    const skipped = (pages || []).some((row) => row.skipped === true);
+    if (!skipped) return "";
+    const messages = (window.__oiAuto && window.__oiAuto.messages) || [];
+    return JSON.stringify({
+      page1,
+      doc,
+      slotsDone: title.slotsDone === true,
+      titleFailed: title.failed === true,
+      papers: papers.length,
+      storedTitle: paper.title || "",
+      pageRows: (pages || []).length,
+      count: messages.length,
+      first: messages[0] || null
+    });
+  })()`, "retryOpen: 文献已有跳过页，标题批仍失败", 120000));
+  assert.equal(stalled.slotsDone, false);
+  assert.equal(stalled.titleFailed, true);
+  assert.ok(stalled.papers >= 1);
+  assert.ok(stalled.pageRows >= 1);
+  assert.ok(stalled.first && stalled.first.bypassCache !== true, JSON.stringify(stalled.first));
+  assert.ok(Array.isArray(stalled.first.texts) && stalled.first.texts.includes("Synthesized Title For Retry"), JSON.stringify(stalled.first));
+
+  const before = stalled.count;
+  await evaluate(`document.getElementById("translatePage").click()`);
+  const resumed = JSON.parse(await waitFor(`(() => {
+    const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
+    const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    const phase = document.querySelector("#docStatus")?.dataset.state || "";
+    const running = phase === "running" || phase === "opening" || page1 === "running" || page1 === "layout";
+    if (running) return "";
+    const title = window.__oiTitleState ? window.__oiTitleState() : null;
+    if (!title) return "";
+    const messages = (window.__oiAuto && window.__oiAuto.messages) || [];
+    const settled = page1 === "done" || page1 === "partial" || page1 === "failed";
+    if (!settled) return "";
+    if (messages.length === ${before} && !doc.includes("全文已译") && title.slotsDone !== true) return "";
+    return JSON.stringify({
+      page1,
+      doc,
+      slotsDone: title.slotsDone === true,
+      messages
+    });
+  })()`, "retryOpen: 点翻译后标题批重发", 120000));
+  assert.equal(resumed.slotsDone, true, JSON.stringify({ page1: resumed.page1, doc: resumed.doc, slotsDone: resumed.slotsDone }));
+  assert.equal(resumed.page1, "done");
+  assert.match(resumed.doc, /全文已译/);
+  const again = resumed.messages.slice(before);
+  assert.ok(again.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(stalled.first.texts)), "失败的标题批要带 bypassCache 重发");
 });

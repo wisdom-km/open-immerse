@@ -10431,6 +10431,10 @@ async function translateWholeDocument() {
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
     await adoptLibraryPages({ onlyPage: page });
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
+    // Body coverage is not a finished title. The open record can already
+    // hold a layout or a skip page, and resume would skip before the failed
+    // title batch is sent again with bypassCache.
+    if (titleStructureFailed(page)) return "retry";
     const state = pageStates.get(page)?.state || "queued";
     if (state === "done" || state === "skipped" || state === "empty" || state === "held") return "skip";
     return "translate";
@@ -11387,7 +11391,10 @@ async function ingestReadoutLayout(n, isStale) {
 }
 
 async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
-  if (skipLocked.has(n)) return [];
+  // A skip lock has no body units. A failed title on that page is still sent;
+  // otherwise pageSkipReason stops on titleStructureFailed and slotsDone stays false.
+  const retryFailedTitle = titleStructureFailed(n);
+  if (skipLocked.has(n) && !retryFailedTitle) return [];
   const epoch = layoutEpoch;
   if (docPhase === "stopped" || !layoutAttemptLive(epoch)) return [];
   const isStale = () => gen !== restoreGen || translatingDoc !== docId || docPhase === "stopped" || !layoutAttemptLive(epoch);
@@ -11418,6 +11425,7 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
     if (isStale()) return [];
     $("status")?.classList.remove("warn");
   }
+  if (skipLocked.has(n)) return [];
   const blocks = unitsForLayout(layout);
   if (n === pageNum) pageOriginals = blocks;
   const cached = pageCache.get(translatingDoc, n);
