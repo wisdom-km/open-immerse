@@ -4072,6 +4072,55 @@ test("an empty key does not send and is not a 401 chip", async () => {
   assert.equal(ocrTestDisabled({ ocr: { provider: "zhipu", apiKey: "" } }), true);
 });
 
+test("the empty-key hint leaves when the first key is saved and returns when that key is removed", async () => {
+  const page = await qa6page({
+    multimodal: { provider: "openai", apiKey: "", model: "gpt-5.6-luna", baseUrl: "" },
+    ocr: { provider: "baidu", apiKey: "", probe: null }
+  }, "hint-first-key");
+  try {
+    const doc = page.tab.document;
+    assert.equal(doc.querySelector("[data-key-hint='mm']").textContent, EMPTY_KEY_HINT);
+    assert.equal(doc.querySelector("[data-key-hint='ocr']").textContent, EMPTY_KEY_HINT);
+    assert.equal(doc.querySelector("[data-formula-action='mm']").disabled, true);
+    assert.equal(doc.querySelector("[data-formula-action='ocr']").disabled, true);
+
+    commitKey(page.tab, "sk-first-key-hint-778899");
+    await flush();
+    await qa6wait();
+    assert.equal(doc.querySelector("[data-key-hint='mm']") == null, true);
+    assert.equal(doc.querySelector("[data-key-hint='ocr']").textContent, EMPTY_KEY_HINT);
+    assert.equal(doc.querySelector("[data-formula-action='mm']").disabled, false);
+    assert.equal(doc.querySelector("[data-formula-card='mm'] .oi-set-chip")?.textContent, "待测试");
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, "sk-first-key-hint-778899");
+    assert.equal(doc.querySelector("[data-key-slot='mm'] [data-secret-saved]")?.textContent, "已保存");
+
+    commitOcrKey(page.tab, "ocr-first-key-hint-778899");
+    await flush();
+    await qa6wait();
+    assert.equal(doc.querySelector("[data-key-hint='ocr']") == null, true);
+    assert.equal(doc.querySelector("[data-formula-action='ocr']").disabled, false);
+    assert.equal(doc.querySelector("[data-formula-card='ocr'] .oi-set-chip")?.textContent, "待测试");
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].ocr.apiKey, "ocr-first-key-hint-778899");
+
+    assert.equal(clickRemoveKey(page.tab), true);
+    assert.equal(doc.querySelector("[data-key-hint='mm']").textContent, EMPTY_KEY_HINT);
+    assert.equal(doc.querySelector("[data-formula-action='mm']").disabled, true);
+    const ocrRemove = [...doc.querySelectorAll("[data-key-slot='ocr'] button")].find((node) => node.textContent === "移除密钥");
+    assert.equal(typeof ocrRemove?.click, "function");
+    ocrRemove.click();
+    assert.equal(doc.querySelector("[data-key-hint='ocr']").textContent, EMPTY_KEY_HINT);
+    assert.equal(doc.querySelector("[data-formula-action='ocr']").disabled, true);
+    await flush();
+    await qa6wait();
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, "");
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].ocr.apiKey, "");
+    assert.equal(doc.querySelector("[data-key-hint='mm']").textContent, EMPTY_KEY_HINT);
+    assert.equal(doc.querySelector("[data-key-hint='ocr']").textContent, EMPTY_KEY_HINT);
+  } finally {
+    page.done();
+  }
+});
+
 test("a chosen vendor with an empty key shows the fill-key hint", () => {
   const { document } = parseHTML("<!doctype html><div id='root'></div>");
   const previous = globalThis.document;
