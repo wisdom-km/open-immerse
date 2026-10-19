@@ -27,3 +27,7 @@ tests/formula-pdftext.test.mjs
 tests/formula-reopen-cache.test.mjs
 # F8-PR0 library data: pagesTranslated, lastOpenedAt, source blob, delete. No network.
 tests/f8-pr0-library.test.mjs
+# Tier-0 screen invariants: latest source when the version is missing, equation numbers, safe KaTeX, reopen without a second parse. No network.
+tests/formula-arxiv-invariants.test.mjs
+# Right pane. Headless Chrome. Inline splice stays at least 71, and a refresh does not download again.
+tests/formula-arxiv-screen.test.mjs

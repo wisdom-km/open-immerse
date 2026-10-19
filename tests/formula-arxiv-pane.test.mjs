@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { parseHTML } from "linkedom";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import {
   arxivFailSentence,
@@ -17,6 +18,7 @@ import {
   spliceInlinePieces,
   verifiedArxivFormula
 } from "../lib/formula-arxiv-session.js";
+import { MAX_FORMULA_LATEX_CHARS } from "../lib/formula-katex.js";
 import { copyLatexText, failedInlineKind, katexClickKept, mountArxivDisplay, plainWithInlineMath } from "../lib/formula-arxiv-pane.js";
 import { loadAttentionPages, loadKatex, loadSource, SRC_V7, SRC_V7_SHA } from "./helpers/arxiv-paper.mjs";
 
@@ -36,6 +38,20 @@ function loadIsolated(file, stubs) {
   assert.equal("Buffer" in context, false);
   assert.equal("require" in context, false);
   return exported;
+}
+
+function spyVendorKatex(real) {
+  const counts = { render: 0 };
+  return {
+    counts,
+    renderToString(latex, options) {
+      return real.renderToString(latex, options);
+    },
+    render(latex, node, options) {
+      counts.render += 1;
+      return real.render(latex, node, options);
+    }
+  };
 }
 
 test("new arxiv modules evaluate with no process, Buffer, or require", () => {
@@ -60,8 +76,12 @@ test("new arxiv modules evaluate with no process, Buffer, or require", () => {
 test("pane helpers evaluate with no process and keep click slop", () => {
   const pane = loadIsolated(new URL("../lib/formula-arxiv-pane.js", import.meta.url), {
     "./formula-katex.js": {
-      canRenderLatex() { return { pass: true, error: null }; },
+      MAX_FORMULA_LATEX_CHARS: 8000,
       renderLatexInto(node, latex) { node.rendered = latex; }
+    },
+    "./latex-units.js": {
+      prepareFormulaLatex(latex) { return String(latex ?? "").replace(/\\tag\*?\{[^}]*\}/g, "").replace(/\\label\{[^}]*\}/g, "").trim(); },
+      stripLatexColor(latex) { return String(latex ?? ""); }
     },
     "./formula-settings.js": {
       placeholderCopy() { return { aria: "公式 · 点击查看原公式", visible: [] }; }
@@ -74,6 +94,7 @@ test("pane helpers evaluate with no process and keep click slop", () => {
     }
   });
   assert.equal(pane.copyLatexText("E=mc^2"), "E=mc^2");
+  assert.equal(pane.copyLatexText("\\label{eq:a} E=mc^2 \\tag{9}"), "E=mc^2");
   assert.equal(pane.copyLatexText("E=mc^2").includes("$$"), false);
   assert.equal(pane.katexClickKept(3, 0), true);
   assert.equal(pane.katexClickKept(4, 0), true);
@@ -258,6 +279,7 @@ test("a KaTeX failure stays off the page and a success path does not assign inne
       return "<span>ok</span>";
     },
     render(latex, node) {
+      if (String(latex).includes("\\bad")) throw new Error("bad latex");
       const child = doc.createElement("span");
       child.textContent = String(latex);
       node.append(child);
@@ -280,6 +302,38 @@ test("a KaTeX failure stays off the page and a success path does not assign inne
   assert.equal(painted.includes("E=mc^2"), true);
   assert.equal(painted.includes("$$"), false);
   assert.equal(painted.includes("#e10091"), false);
+  const labeledParent = el("div");
+  labeledParent.ownerDocument = doc;
+  const labeledLatex = "\\label{eq:a} E=mc^2 \\tag{9}";
+  assert.equal(mountArxivDisplay(labeledParent, { ...broken, latex: labeledLatex }, 1, { katex }), "ok");
+  assert.equal(labeledParent.childNodes[0].dataset.latex, "E=mc^2");
+  assert.equal(labeledParent.childNodes[0].dataset.latex.includes("\\label"), false);
+  const coloredParent = el("div");
+  coloredParent.ownerDocument = doc;
+  assert.equal(mountArxivDisplay(coloredParent, { ...broken, latex: "\\color{red}{x}" }, 1, { katex }), "ok");
+  assert.equal(textOf(coloredParent).includes("\\color"), false);
+  const lengthDoc = parseHTML("<!doctype html><html><body></body></html>").document;
+  Object.defineProperty(lengthDoc, "compatMode", { value: "CSS1Compat" });
+  const previousDocument = globalThis.document;
+  globalThis.document = lengthDoc;
+  try {
+    const vendor = loadKatex();
+    const shortEngine = spyVendorKatex(vendor);
+    const shortParent = lengthDoc.createElement("div");
+    assert.equal(mountArxivDisplay(shortParent, { ...broken, latex: "x" }, 1, { katex: shortEngine }), "ok");
+    assert.equal(shortEngine.counts.render, 1);
+    const longEngine = spyVendorKatex(vendor);
+    const longParent = lengthDoc.createElement("div");
+    const longLatex = "y".repeat(MAX_FORMULA_LATEX_CHARS + 1);
+    assert.equal(MAX_FORMULA_LATEX_CHARS, 8000);
+    assert.equal(longLatex.length, 8001);
+    assert.equal(mountArxivDisplay(longParent, { ...broken, latex: longLatex }, 1, { katex: longEngine }), "katex-error");
+    assert.equal(longEngine.counts.render, 0);
+    assert.equal(longParent.childNodes.length, 0);
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
 
   const colored = el("div");
   colored.ownerDocument = doc;

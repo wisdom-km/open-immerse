@@ -121,6 +121,10 @@ Wisdom 2026-10-18（UTC+8）批准。第 3 层「差分审查」指向这一节�
 6. **保持小 PR。** 挑刺问题按主题拆分修复。
 7. **为什么。** [#143](https://github.com/wisdom-km/open-immerse/pull/143) 复审 14 轮，BUG4 截图、缓存、发送不一致，本应在第 4–5 轮统一数据源。[#144](https://github.com/wisdom-km/open-immerse/pull/144) 走了 9 轮。两起是反面案例。参考 [How the Claude Code team does code review](https://claude.dev/blog/solving-code-review-at-anthropic/)：三次不过就重想方案，不在原代码上继续修。
 
+### 复审点名的变异
+
+Wisdom 2026-10-19 09:03（UTC+8）批准。复审点名的变异，作者推送前必须自证：变异前绿，变异后红。命令和输出摘要贴进 PR 正文或评论。
+
 ### 共享状态：不变量优先
 
 Wisdom 2026-10-17。共享状态在「交付前刁钻自测」和五层审查里按这三条。
