@@ -26,6 +26,7 @@ import {
   MULTIMODAL_PROVIDERS,
   OCR_PROVIDERS,
   applyFormulaPart,
+  EMPTY_KEY_HINT,
   classifyFormulaProbe,
   defaultFormulaSettings,
   formulaChainFlags,
@@ -34,6 +35,8 @@ import {
   multimodalReady,
   multimodalTestDisabled,
   normalizeFormulaSettings,
+  ocrTestDisabled,
+  probeNeedsAttention,
   ocrSwitchState,
   placeholderCopy,
   probeClock,
@@ -366,6 +369,18 @@ test("FUI-04 custom base URL is required before the vision probe can run", () =>
   });
   assert.equal(multimodalTestDisabled(ready), false);
   assert.equal(multimodalTestDisabled(defaultFormulaSettings()), true);
+  const noKey = normalizeFormulaSettings({
+    multimodal: { provider: "openai", apiKey: "  ", model: "gpt-5.6-luna" }
+  });
+  assert.equal(multimodalTestDisabled(noKey), true);
+  assert.equal(ocrTestDisabled(normalizeFormulaSettings({ ocr: { provider: "baidu", apiKey: "" } })), true);
+  assert.equal(ocrTestDisabled(normalizeFormulaSettings({ ocr: { provider: "baidu", apiKey: "ocr-key-1" } })), false);
+  const missing = classifyFormulaProbe({ code: "empty-key", summary: EMPTY_KEY_HINT }, 9);
+  assert.equal(missing.chip, "");
+  assert.equal(missing.code, "empty-key");
+  assert.equal(missing.summary, EMPTY_KEY_HINT);
+  assert.equal(probeNeedsAttention(missing), false);
+  assert.notEqual(missing.chip, "密钥无效 (401)");
 });
 
 test("FUI-07 and FUI-08 probe copy is classified without a network call", async () => {

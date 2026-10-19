@@ -287,6 +287,17 @@ test("an unconfigured provider or vision:false sends nothing", async () => {
   assert.equal(off.reason, "disabled");
   assert.deepEqual(seen, []);
   assert.deepEqual(contractViolations(blocked), []);
+  const traffic = { sent: 0 };
+  const emptied = await runMultimodal(formulaBlock(), {
+    flags: formulaChainFlags(settingsFor("openai")),
+    settings: settingsFor("openai"),
+    mmTraffic: traffic,
+    cropPngFor: async () => ({ mime: "image/png", base64: PNG, hash: "crop" }),
+    sendVision: async () => ({ ok: false, error: { code: "empty-key", status: 0, summary: "请先填写密钥" } })
+  });
+  assert.equal(emptied.status, "skip");
+  assert.equal(emptied.reason, "not-configured");
+  assert.equal(traffic.sent, 0);
 });
 
 test("a verified crop becomes vlm data and the reader still shows the crop", async () => {

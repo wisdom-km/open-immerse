@@ -55,6 +55,7 @@ import { selfTier } from "../lib/formula-tiers/self.js";
 import { vectorTier } from "../lib/formula-tiers/vector.js";
 import {
   CUSTOM_BASE_URL_ERROR,
+  EMPTY_KEY_HINT,
   FORMULA_SETTINGS_KEY,
   FORMULA_SWITCH_KEYS,
   MULTIMODAL_PROVIDERS,
@@ -69,6 +70,8 @@ import {
   isProvenVisionProvider,
   multimodalReady,
   multimodalTestDisabled,
+  ocrTestDisabled,
+  probeNeedsAttention,
   readFormulaSettings,
   probeChipTone,
   redactProbeText,
@@ -3989,6 +3992,108 @@ test("R8-2 retyping the same key in the turn the vendor changes keeps that key",
     assert.equal(page.tab.document.querySelector("[data-key-slot='mm'] [data-secret-saved]")?.textContent, "已保存");
   } finally {
     page.done();
+  }
+});
+
+const OCR_R2O_KEY = "ocr-baidu-key-r2o-998877";
+
+test("R2o retyping the same OCR key in the turn the vendor changes keeps that key", async () => {
+  const page = await qa6page({
+    ...q7oaCard(),
+    ocr: { provider: "baidu", apiKey: OCR_R2O_KEY, probe: null }
+  }, "r2o");
+  try {
+    changeOcrProvider(page.tab, "zhipu");
+    commitOcrKey(page.tab, OCR_R2O_KEY);
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY].ocr;
+    assert.equal(stored.provider, "zhipu");
+    assert.equal(stored.apiKey, OCR_R2O_KEY);
+    assert.equal(page.tab.document.querySelector("[data-key-slot='ocr'] [data-secret-saved]")?.textContent, "已保存");
+  } finally {
+    page.done();
+  }
+});
+
+test("R-4 a key filled after the vendor switch has finished is kept", async () => {
+  const page = await qa6page({
+    ...q7oaCard(),
+    ocr: { provider: "baidu", apiKey: OCR_R2O_KEY, probe: null }
+  }, "r4");
+  try {
+    changeProvider(page.tab, "doubao");
+    changeOcrProvider(page.tab, "zhipu");
+    await flush();
+    await qa6wait();
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].multimodal.apiKey, "");
+    assert.equal(page.bag[FORMULA_SETTINGS_KEY].ocr.apiKey, "");
+    commitKey(page.tab, "sk-r4-refilled-77889900");
+    commitOcrKey(page.tab, "ocr-r4-refilled-778899");
+    await flush();
+    await qa6wait();
+    const stored = page.bag[FORMULA_SETTINGS_KEY];
+    assert.equal(stored.multimodal.provider, "doubao");
+    assert.equal(stored.multimodal.apiKey, "sk-r4-refilled-77889900");
+    assert.equal(stored.multimodal.probe?.chip, "待测试");
+    assert.equal(stored.ocr.provider, "zhipu");
+    assert.equal(stored.ocr.apiKey, "ocr-r4-refilled-778899");
+    assert.equal(stored.ocr.probe?.chip, "待测试");
+  } finally {
+    page.done();
+  }
+});
+
+test("R-2 a connectivity probe does not retry a 500", async () => {
+  const box = responseNet(() => ({ ok: false, status: 500, data: { error: { message: "down" } } }));
+  const probe = await probeMultimodal(openaiSettings(), { secret: SECRET, net: box.net, at: 9 });
+  assert.equal(box.seen.length, 1);
+  assert.equal(probe.chip, "测试失败");
+  assert.equal(probeNeedsAttention(probe), true);
+});
+
+test("an empty key does not send and is not a 401 chip", async () => {
+  let calls = 0;
+  const result = await probeMultimodal(openaiSettings({ apiKey: "" }), {
+    at: 9,
+    sendVision: async () => {
+      calls += 1;
+      return { ok: true, text: "SEEN" };
+    }
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.code, "empty-key");
+  assert.equal(result.chip, "");
+  assert.equal(result.summary, EMPTY_KEY_HINT);
+  assert.equal(probeNeedsAttention(result), false);
+  const settled = settleProbeResult(openaiSettings({ apiKey: "" }), result, { still: true });
+  assert.equal(settled.write, false);
+  assert.equal(multimodalTestDisabled(openaiSettings({ apiKey: "" })), true);
+  assert.equal(ocrTestDisabled({ ocr: { provider: "zhipu", apiKey: "" } }), true);
+});
+
+test("a chosen vendor with an empty key shows the fill-key hint", () => {
+  const { document } = parseHTML("<!doctype html><div id='root'></div>");
+  const previous = globalThis.document;
+  globalThis.document = document;
+  patchSelectValue(document);
+  try {
+    const panel = document.getElementById("root");
+    renderFormulaPanel(panel, {
+      multimodal: { provider: "openai", apiKey: "", model: "gpt-5.6-luna" },
+      ocr: { provider: "zhipu", apiKey: "   " }
+    }, {});
+    assert.equal(panel.querySelector("[data-key-hint='mm']").textContent, EMPTY_KEY_HINT);
+    assert.equal(panel.querySelector("[data-key-hint='ocr']").textContent, EMPTY_KEY_HINT);
+    assert.equal(panel.querySelector("[data-formula-action='mm']").disabled, true);
+    assert.equal(panel.querySelector("[data-formula-action='ocr']").disabled, true);
+    renderFormulaPanel(panel, defaultFormulaSettings(), {});
+    assert.equal(panel.querySelector("[data-key-hint]"), null);
+    renderFormulaPanel(panel, openaiSettings(), {});
+    assert.equal(panel.querySelector("[data-formula-card='mm'] [data-key-hint]"), null);
+    assert.equal(panel.querySelector("[data-formula-action='mm']").disabled, false);
+  } finally {
+    globalThis.document = previous;
   }
 });
 
