@@ -312,6 +312,7 @@ import {
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { detectArxivId } from "../lib/arxiv-id.js";
+import { resolveArxivSession } from "../lib/formula-arxiv-gate.js";
 import { KATEX_RENDER_OPTIONS } from "../lib/formula-katex.js";
 import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
 import { scheduleFormulaBlock, publishRestampedBlocks } from "../lib/formula-schedule.js";
@@ -3716,73 +3717,88 @@ async function startArxivSource() {
   arxivPhase = "loading";
   arxivFailReason = "";
   paintArxivChip();
-  let downloaded = null;
+  const pdfSha256 = notesDocHashNow();
+  let resolved = null;
   try {
-    downloaded = await runtimeSend({
-      type: "OI_ARXIV_SOURCE",
+    resolved = await resolveArxivSession({
       id: found.id,
-      version: found.version || "",
-      userTriggered: true,
-      pdfSha256: notesDocHashNow()
+      pdfVersion: found.version || "",
+      pdfSha256,
+      readAlignment: (query) => readCachedArxivAlignment(query),
+      download: async () => {
+        try {
+          return await runtimeSend({
+            type: "OI_ARXIV_SOURCE",
+            id: found.id,
+            version: found.version || "",
+            userTriggered: true,
+            pdfSha256
+          });
+        } catch {
+          return { ok: false, reason: "offline" };
+        }
+      },
+      prepare: async ({ files, id, version, pdfSha256: hash }) => {
+        try {
+          await ensureMissingLayouts();
+        } catch {
+          /* pages that fail to lay out stay on the crop path */
+        }
+        if (job !== arxivJob) return { ok: false, reason: "aborted" };
+        let pages = [];
+        try {
+          pages = await collectAlignPages();
+        } catch {
+          pages = [];
+        }
+        if (job !== arxivJob) return { ok: false, reason: "aborted" };
+        try {
+          return prepareArxivAlignment({
+            files,
+            pages,
+            katex: globalThis.katex,
+            id,
+            version,
+            pdfSha256: hash
+          });
+        } catch {
+          return { ok: false, reason: "no-main" };
+        }
+      }
     });
   } catch {
-    downloaded = { ok: false, reason: "offline" };
+    resolved = { ok: false, reason: "offline" };
   }
   if (job !== arxivJob) return;
-  if (!downloaded || downloaded.ok === false) {
+  if (!resolved?.ok) {
     arxivPhase = "failed";
-    arxivFailReason = downloaded?.reason || "offline";
+    arxivFailReason = resolved?.reason || "offline";
     setFormulaArxivSourceEnabled(false);
     paintArxivChip();
     return;
   }
+  rememberArxivAlignment(resolved.alignment);
+  setFormulaArxivSourceEnabled(true);
+  rememberArxivAlignment(resolved.alignment);
+  if (!resolved.reused) {
+    try {
+      await runtimeSend({
+        type: "OI_ARXIV_SOURCE",
+        action: "save-alignment",
+        id: found.id,
+        version: found.version || "",
+        pdfSha256,
+        alignment: resolved.alignment
+      });
+    } catch {
+      /* this session still uses the in-memory alignment */
+    }
+  }
+  if (job !== arxivJob) return;
   try {
     await ensureMissingLayouts();
   } catch {
     /* pages that fail to lay out stay on the crop path */
-  }
-  if (job !== arxivJob) return;
-  let pages = [];
-  try {
-    pages = await collectAlignPages();
-  } catch {
-    pages = [];
-  }
-  if (job !== arxivJob) return;
-  let prepared = null;
-  try {
-    prepared = prepareArxivAlignment({
-      files: downloaded.files || [],
-      pages,
-      katex: globalThis.katex,
-      id: found.id,
-      version: found.version || "",
-      pdfSha256: notesDocHashNow()
-    });
-  } catch {
-    prepared = { ok: false, reason: "no-main" };
-  }
-  if (!prepared.ok) {
-    arxivPhase = "failed";
-    arxivFailReason = prepared.reason || "no-main";
-    setFormulaArxivSourceEnabled(false);
-    paintArxivChip();
-    return;
-  }
-  rememberArxivAlignment(prepared.alignment);
-  setFormulaArxivSourceEnabled(true);
-  rememberArxivAlignment(prepared.alignment);
-  try {
-    await runtimeSend({
-      type: "OI_ARXIV_SOURCE",
-      action: "save-alignment",
-      id: found.id,
-      version: found.version || "",
-      pdfSha256: notesDocHashNow(),
-      alignment: prepared.alignment
-    });
-  } catch {
-    /* this session still uses the in-memory alignment */
   }
   if (job !== arxivJob) return;
   try {
@@ -3911,6 +3927,7 @@ async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob)
       placeholderEnabled: flags.placeholderEnabled,
       arxivId: arxivIdentity?.id || "",
       arxivVersion: arxivIdentity?.version || "",
+      pdfVersion: formulaArxivSourceEnabled() ? (arxivIdentity?.version || "") : undefined,
       readAlignment: async () => arxivAlignmentMemory,
       docHash: notesDocHashNow(),
       page: pageNumber,
@@ -4139,6 +4156,7 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
       readCropImage: formulaFlags.placeholderEnabled ? readFormulaCropImage : undefined,
       arxivId: arxiv?.id || "",
       arxivVersion: arxiv?.version || "",
+      pdfVersion: arxivOn ? (arxiv?.version || "") : undefined,
       readAlignment: readCachedArxivAlignment,
       docHash: notesDocHashNow(),
       page: pageNumber,
