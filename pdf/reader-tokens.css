@@ -149,6 +149,8 @@
   --oi-reader-thumb: var(--oi-reader-warm-thumb);
   --oi-reader-hover: var(--oi-reader-warm-hover);
   --oi-reader-pair-bg-solid: var(--oi-reader-warm-pair-bg-solid);
+  --oi-reader-link: #0B4A8C;
+  --oi-reader-link-hover: #08366A;
 
   --oi-reader-pair: #A86B12;
   --oi-reader-pair-bg: rgba(232, 180, 60, 0.10);
@@ -533,6 +535,8 @@
   --oi-reader-warn-soft: rgba(226, 168, 106, 0.14);
   --oi-reader-ai: #6FB3BC;
   --oi-reader-ai-soft: rgba(111, 179, 188, 0.16);
+  --oi-reader-link: #B7CFFF;
+  --oi-reader-link-hover: #D6E4FF;
   --oi-reader-mine: #B98CC6;
   --oi-reader-panel-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.3);
   --oi-reader-popover-shadow: var(--oi-reader-panel-shadow);

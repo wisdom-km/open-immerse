@@ -6,8 +6,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseHTML } from "linkedom";
 import "./helpers/load-markdown-it.mjs";
-import { abortSyncHang, renderGuarded } from "./helpers/render-guard.mjs";
+import { abortWorker, openHangWorker, renderGuarded } from "./helpers/render-guard.mjs";
 import {
+  markdownItSetup,
   renderAskAnswer,
   renderMarkdown,
   sanitizeMarkdownHtml
@@ -88,39 +89,46 @@ test("L-07 fences and inline code are not math", () => {
   assert.equal(pre.textContent.includes("```"), false);
 });
 
-test("L-08 tables keep alignment", () => {
+test("L-09 tables keep alignment", () => {
   const html = renderMarkdown("| 左 | 右 |\n| --- | ---: |\n| 1 | 2 |");
   const node = page(html);
   assert.equal(node.querySelectorAll("td").length, 2);
   assert.equal(node.querySelectorAll("th")[1].getAttribute("style"), "text-align:right");
   assert.equal(node.querySelectorAll("td")[1].getAttribute("style"), "text-align:right");
   assert.equal(html.includes("javascript:"), false);
+  for (const file of ["pdf/ask-panel.css", "pdf/notes-panel.css"]) {
+    const css = readFileSync(join(root, file), "utf8");
+    assert.match(css, /padding:\s*6px 10px/, file);
+    assert.match(css, /font-size:\s*13px/, file);
+    assert.match(css, /overflow-x:\s*auto/, file);
+    assert.match(css, /th\s*\{[^}]*background:\s*var\(--oi-reader-well\)/, file);
+  }
 });
 
-test("L-09 links are http, https, or mailto and open in a new tab", () => {
-  const node = page(renderMarkdown("见 https://example.com/a 与 [文档](http://example.com/b) 和 <mailto:hi@example.com>"));
+test("L-08 links keep the original URL and open in a new tab", () => {
+  const url = "https://x.com/a%20b?a=1&b=2#frag";
+  const node = page(renderMarkdown(`见 ${url} 与 [文档](http://example.com/b) 和 <mailto:hi@example.com>`));
   const links = [...node.querySelectorAll("a")];
   assert.equal(links.length, 3);
-  assert.deepEqual(links.map((el) => el.getAttribute("href")), [
-    "https://example.com/a",
+  assert.equal(links[0].href, url);
+  assert.equal(links[0].getAttribute("href"), url);
+  assert.equal(links[0].getAttribute("title"), url);
+  assert.deepEqual(links.slice(1).map((el) => el.getAttribute("href")), [
     "http://example.com/b",
     "mailto:hi@example.com"
   ]);
   for (const link of links) {
     assert.equal(link.getAttribute("target"), "_blank");
-    assert.equal(link.getAttribute("rel"), "noopener noreferrer");
+    assert.equal(link.getAttribute("rel"), "noopener noreferrer nofollow");
+    assert.equal(link.getAttribute("title"), link.getAttribute("href"));
   }
+  const blocked = page(renderMarkdown("[x](javascript:alert(1)) [y](data:text/html,hi) [z](ftp://example.com) //example.com"));
+  assert.equal(blocked.querySelector("a"), null);
+  assert.match(blocked.textContent, /javascript:alert\(1\)/);
+  assert.match(blocked.textContent, /ftp:\/\/example.com/);
 });
 
-test("L-10 javascript, data, and ftp are not anchors", () => {
-  const node = page(renderMarkdown("[x](javascript:alert(1)) [y](data:text/html,hi) [z](ftp://example.com) //example.com"));
-  assert.equal(node.querySelector("a"), null);
-  assert.match(node.textContent, /javascript:alert\(1\)/);
-  assert.match(node.textContent, /ftp:\/\/example.com/);
-  assert.equal(node.innerHTML.includes("<a"), false);
-});
-
-test("L-11 raw HTML is text", () => {
+test("L-10 raw HTML is text", () => {
   const html = renderMarkdown("<script>alert(1)</script> <b onclick=\"x\">粗</b>");
   assert.equal(html.includes("<script"), false);
   assert.equal(html.includes("<b"), false);
@@ -130,17 +138,45 @@ test("L-11 raw HTML is text", () => {
   assert.match(node.textContent, /<script>alert\(1\)<\/script>/);
 });
 
-test("L-12 images are not loaded", () => {
+test("L-11 images are links and are not loaded", () => {
   const html = renderMarkdown("![示意图](https://cdn.example/a.png) ![](javascript:alert(1))");
   const node = page(html);
+  const link = node.querySelector("a");
   assert.equal(node.querySelector("img"), null);
-  assert.equal(html.includes("cdn.example"), false);
+  assert.equal(html.includes("<img"), false);
   assert.equal(html.includes("src="), false);
-  assert.match(node.textContent, /图片：示意图/);
+  assert.equal(link.getAttribute("href"), "https://cdn.example/a.png");
+  assert.equal(link.getAttribute("title"), "https://cdn.example/a.png");
+  assert.equal(link.getAttribute("target"), "_blank");
+  assert.equal(link.getAttribute("rel"), "noopener noreferrer nofollow");
+  assert.equal(link.textContent, "图片：示意图");
   assert.match(node.textContent, /!\[\]\(javascript:alert\(1\)\)/);
+  const notes = page(renderNoteMarkdown("![示意图](https://cdn.example/a.png)"));
+  assert.equal(notes.querySelector("img"), null);
+  assert.equal(notes.querySelector("a").getAttribute("href"), "https://cdn.example/a.png");
 });
 
-test("L-13 display and inline math render, unsafe commands stay text", () => {
+test("math inside a URL stays in the href", () => {
+  const cases = ["[t](http://x.com/$a$)", "<http://x.com/$a$b>"];
+  for (const source of cases) {
+    for (const html of [renderMarkdown(source), renderNoteMarkdown(source)]) {
+      const node = page(html);
+      const link = node.querySelector("a");
+      assert.ok(link, source);
+      const href = link.getAttribute("href");
+      assert.equal(href.includes("<"), false, `${source} href=${href}`);
+      assert.equal(href.includes("span"), false, `${source} href=${href}`);
+      assert.match(href, /\$a\$/, `${source} href=${href}`);
+      assert.equal(node.querySelector("a span"), null, source);
+      assert.equal(node.querySelectorAll("a").length, 1, source);
+    }
+  }
+  const shown = page(renderMarkdown("[$x$](https://example.com/a)"));
+  assert.equal(shown.querySelector("a").getAttribute("href"), "https://example.com/a");
+  assert.match(shown.querySelector("a").innerHTML, /oi-note-math|katex/);
+});
+
+test("L-12 display and inline math render, unsafe commands stay text", () => {
   const engine = {
     renderToString(tex, options) {
       return `<span class="katex${options.displayMode ? "-display" : ""}">${tex}</span>`;
@@ -154,7 +190,7 @@ test("L-13 display and inline math render, unsafe commands stay text", () => {
   assert.match(blocked, /\\href\{https:\/\/example.com\}\{x\}/);
 });
 
-test("L-14 and D1 a display formula stays inside the list item", () => {
+test("L-13 and D1 a display formula stays inside the list item", () => {
   const html = renderMarkdown("1. 第一\n\n$$\na\n$$\n2. 第二");
   const node = page(html);
   const items = [...node.querySelectorAll("ol li")];
@@ -169,7 +205,7 @@ test("L-14 and D1 a display formula stays inside the list item", () => {
   assert.equal(unpaired.querySelector(".oi-note-math, .katex"), null);
 });
 
-test("L-15 streaming prefixes do not throw or emit an active tag", () => {
+test("L-14 streaming prefixes do not throw or emit an active tag", () => {
   const doc = [
     "看 https://example.com",
     "",
@@ -192,7 +228,7 @@ test("L-15 streaming prefixes do not throw or emit an active tag", () => {
   }
 });
 
-test("L-16 five thousand characters render in under 16ms", () => {
+test("L-15 five thousand characters render in under 16ms", () => {
   let chunk = "段落 **粗体** 与 [链接](https://example.com/a)。\n\n| 左 | 右 |\n| --- | ---: |\n| 1 | 2 |\n\n";
   while (chunk.length < 5000) chunk += chunk;
   chunk = chunk.slice(0, 5000);
@@ -234,7 +270,7 @@ test("A1 structural tags keep safe attributes and drop handlers", () => {
   ].join(""));
   assert.match(html, /<ol start="3">/);
   assert.match(html, /<th style="text-align:right">/);
-  assert.match(html, /<a href="https:\/\/example.com\/a" target="_blank" rel="noopener noreferrer">/);
+  assert.match(html, /<a href="https:\/\/example.com\/a" target="_blank" rel="noopener noreferrer nofollow">/);
   assert.match(html, /<code class="language-js">/);
   assert.match(html, /<input type="checkbox" disabled checked>/);
   assert.equal(html.includes("onclick"), false);
@@ -245,9 +281,65 @@ test("A1 structural tags keep safe attributes and drop handlers", () => {
   assert.match(html, /&lt;input type=&quot;text&quot;/);
 });
 
-test("A1 a synchronous infinite loop is aborted by terminating the worker", async () => {
-  const elapsed = await abortSyncHang(400);
-  assert.ok(elapsed < 2000, `hang lived ${elapsed.toFixed(0)}ms`);
+test("A1 a synchronous infinite loop is aborted by terminating the worker", { timeout: 5000 }, async (t) => {
+  const worker = openHangWorker();
+  let settled = false;
+  const stop = () => {
+    if (settled) return Promise.resolve();
+    settled = true;
+    return worker.terminate();
+  };
+  t.after(stop);
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("hang was not aborted within 2s")), 2000);
+  });
+  try {
+    const elapsed = await Promise.race([abortWorker(worker, 400), deadline]);
+    assert.ok(elapsed < 2000, `hang lived ${elapsed.toFixed(0)}ms`);
+  } finally {
+    clearTimeout(timer);
+    await stop();
+  }
+});
+
+test("markdown-it leaves HTML off and does not emit img", () => {
+  const setup = markdownItSetup();
+  assert.equal(setup.html, false);
+  const html = setup.imageRule([{
+    content: "示意图",
+    attrGet(name) { return name === "src" ? "https://cdn.example/a.png" : ""; }
+  }], 0);
+  assert.equal(/<img\b/i.test(html), false);
+  assert.match(html, /<a\b/);
+  assert.match(html, /图片：示意图/);
+});
+
+test("L-01 and L-16 headings and links are styled in both panels", () => {
+  const tokens = readFileSync(join(root, "pdf/reader-tokens.css"), "utf8");
+  const darkStart = tokens.indexOf('.oi-reader-app[data-reader-theme="dark"]');
+  const dark = tokens.slice(darkStart, tokens.indexOf(".oi-reader-app[data-reader-fs-band", darkStart));
+  assert.match(tokens, /--oi-reader-link:\s*#0B4A8C/i);
+  assert.match(tokens, /--oi-reader-link-hover:\s*#08366A/i);
+  assert.match(dark, /--oi-reader-link:\s*#B7CFFF/i);
+  assert.match(dark, /--oi-reader-link-hover:\s*#D6E4FF/i);
+  for (const background of ["#FFFFFF", "#FCFAF6", "#F6F3EC", "#F4F0E9", "#F2F5F0"]) {
+    assert.ok(contrastRatio("#0B4A8C", background) >= 4.5, background);
+    assert.ok(contrastRatio("#08366A", background) >= 4.5, background);
+  }
+  for (const background of ["#232427", "#1C1D1F"]) {
+    assert.ok(contrastRatio("#B7CFFF", background) >= 4.5, background);
+    assert.ok(contrastRatio("#D6E4FF", background) >= 4.5, background);
+  }
+  for (const file of ["pdf/ask-panel.css", "pdf/notes-panel.css"]) {
+    const css = readFileSync(join(root, file), "utf8");
+    for (const level of [1, 2, 3, 4, 5, 6]) assert.match(css, new RegExp(`h${level}\\b`), file);
+    assert.match(css, /h1,\s*[\s\S]*h6\s*\{[^}]*font-size:\s*15px;[^}]*font-weight:\s*600/, file);
+    assert.match(css, /a:hover/, file);
+    assert.match(css, /a:focus/, file);
+    assert.match(css, /color:\s*var\(--oi-reader-link\)/, file);
+    assert.match(css, /color:\s*var\(--oi-reader-link-hover\)/, file);
+  }
 });
 
 test("A1 an unclosed tag and a long dollar run finish under the worker cap", async () => {

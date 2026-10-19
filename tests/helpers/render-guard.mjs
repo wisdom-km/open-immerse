@@ -25,26 +25,26 @@ export function renderGuarded(sources, { totalMs = 8000 } = {}) {
   });
 }
 
-/** Proves terminate stops a synchronous infinite loop. */
-export function abortSyncHang(ms = 400) {
+/** A worker that loops until something calls terminate. */
+export function openHangWorker() {
+  const worker = new Worker(
+    "const { parentPort } = require('node:worker_threads'); parentPort.once('message', () => { while (true) {} });",
+    { eval: true, execArgv: [] }
+  );
+  worker.postMessage("go");
+  return worker;
+}
+
+/** The production abort. The test keeps its own terminate in after/finally. */
+export function abortWorker(worker, ms = 400) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(
-      "const { parentPort } = require('node:worker_threads'); parentPort.once('message', () => { while (true) {} });",
-      { eval: true, execArgv: [] }
-    );
     const started = performance.now();
     const timer = setTimeout(() => {
-      worker.terminate().then(() => resolve(performance.now() - started));
+      worker.terminate().then(() => resolve(performance.now() - started), reject);
     }, ms);
-    worker.once("message", () => {
-      clearTimeout(timer);
-      worker.terminate();
-      reject(new Error("hang worker returned a message"));
-    });
     worker.once("error", (err) => {
       clearTimeout(timer);
       reject(err);
     });
-    worker.postMessage("go");
   });
 }

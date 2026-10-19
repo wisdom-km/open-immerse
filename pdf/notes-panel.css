@@ -462,7 +462,36 @@
   font-size: var(--oi-notes-body-size);
   line-height: var(--oi-notes-body-line);
 }
-.oi-note-body p { margin: 0 0 0.4em; }
+.oi-note-body p,
+.oi-note-body h1,
+.oi-note-body h2,
+.oi-note-body h3,
+.oi-note-body h4,
+.oi-note-body h5,
+.oi-note-body h6 { margin: 0 0 0.4em; }
+.oi-note-body h1,
+.oi-note-body h2,
+.oi-note-body h3,
+.oi-note-body h4,
+.oi-note-body h5,
+.oi-note-body h6 {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.oi-note-body a {
+  color: var(--oi-reader-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.oi-note-body a:hover,
+.oi-note-body a:focus {
+  color: var(--oi-reader-link-hover);
+}
+.oi-note-body a:focus {
+  outline: 2px solid var(--oi-reader-link);
+  outline-offset: 2px;
+}
 .oi-note-body code,
 .oi-note-body pre {
   font-family: ui-monospace, monospace;
@@ -479,8 +508,13 @@
 .oi-note-body th,
 .oi-note-body td {
   border: 1px solid var(--oi-reader-line);
-  padding: 2px 6px;
+  padding: 6px 10px;
+  font-size: 13px;
   vertical-align: top;
+}
+.oi-note-body th {
+  background: var(--oi-reader-well);
+  font-weight: 600;
 }
 .oi-note-body blockquote {
   margin: 0 0 0.4em;
