@@ -6,8 +6,13 @@ import { fileURLToPath } from "node:url";
 import { parseHTML } from "linkedom";
 import { copyLatexText, mountArxivDisplay, mountArxivInline } from "../lib/formula-arxiv-pane.js";
 import { arxivFailSentence } from "../lib/formula-arxiv-session.js";
-import { bindStructureRowBids, pairsVerifiedForLibrary } from "../lib/pdf-library.js";
-import { libraryPageRunState } from "../lib/pdf-viewer.js";
+import { bindStructureRowBids, commitLandedStructurePairs, mergeStoredPagePairs, pairsVerifiedForLibrary, structurePairsChanged } from "../lib/pdf-library.js";
+import { libraryPageRunState, PDF_COPY } from "../lib/pdf-viewer.js";
+import { createLibraryStore } from "../lib/library-store.js";
+import { createMemoryKv } from "../lib/platform/kv.js";
+import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
+import { createSqliteLikeFactory } from "./sqlite-like-backend.mjs";
+import { arxivFailureReason, createArxivSourceClient, createMemoryStore } from "../background/arxiv-source.js";
 import { resolveOutboundProvider } from "../lib/providers.js";
 import { createNet, installNet } from "../lib/net/fetch.js";
 import { loadKatex } from "./helpers/arxiv-paper.mjs";
@@ -267,5 +272,123 @@ test("translateBatch sends an unconfigured engine to MyMemory and does not call 
     assert.equal(urls[0].includes("de="), false);
   } finally {
     installNet(null);
+  }
+});
+
+function failFetch(message) {
+  return async () => {
+    const error = new TypeError(message);
+    throw error;
+  };
+}
+
+test("a real disconnect says 离线; DNS, HTTP, timeout, and 401 do not", async () => {
+  const phrase = async (fetch, online) => {
+    const api = createArxivSourceClient({
+      fetch,
+      now: () => 0,
+      sleep: (ms) => (ms >= 20000 ? new Promise(() => {}) : Promise.resolve()),
+      store: createMemoryStore(),
+      gunzip: async (bytes) => bytes,
+      online
+    });
+    const outcome = await api.get({ id: `1706.03762-${Math.random()}`, userTriggered: true });
+    return { reason: outcome.reason, sentence: arxivFailSentence(outcome.reason) };
+  };
+  const dropped = await phrase(failFetch("Failed to fetch: net::ERR_INTERNET_DISCONNECTED"), true);
+  assert.equal(dropped.reason, "offline");
+  assert.equal(dropped.sentence, "未用 arXiv 源码：离线");
+  const unplugged = await phrase(failFetch("Failed to fetch"), false);
+  assert.equal(unplugged.reason, "offline");
+  assert.match(unplugged.sentence, /离线/);
+  const dns = await phrase(failFetch("Failed to fetch: net::ERR_NAME_NOT_RESOLVED"), true);
+  assert.equal(dns.reason, "error");
+  assert.equal(dns.sentence.includes("离线"), false);
+  assert.match(dns.sentence, /下载失败/);
+  for (const status of [404, 500, 401]) {
+    const http = await phrase(async () => ({ status, arrayBuffer: async () => new ArrayBuffer(0) }), true);
+    assert.equal(http.reason, "http", String(status));
+    assert.equal(http.sentence.includes("离线"), false, String(status));
+    assert.match(http.sentence, /下载失败/);
+  }
+  assert.equal(arxivFailureReason({ code: "timeout" }, false), "timeout");
+  assert.equal(arxivFailSentence("timeout").includes("离线"), false);
+  assert.match(arxivFailSentence("timeout"), /超时/);
+  assert.equal(PDF_COPY.pausedStreak.includes("离线"), false);
+  assert.match(PDF_COPY.pausedStreak, /已暂停/);
+});
+
+const TITLE = "Attention Is All You Need";
+const ABSTRACT = "Abstract";
+const BODY = "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.";
+
+function oldStructureBlocks() {
+  return [
+    { id: "title-1", bid: "bid-title", label: "title", text: TITLE, sourceText: TITLE },
+    { id: "abs-1", bid: "bid-abstract", label: "heading", text: ABSTRACT, sourceText: ABSTRACT },
+    { id: "body-1", bid: "bid-body", label: "text", text: BODY, sourceText: BODY }
+  ];
+}
+
+function oldStructureRows() {
+  return [
+    { id: "oi-structure:title", text: TITLE, original: TITLE, translation: "注意力就是你所需要的一切", role: "title", targetLang: "zh-CN" },
+    { id: "oi-structure:abstract.heading", text: ABSTRACT, original: ABSTRACT, translation: "摘要", role: "heading", targetLang: "zh-CN" }
+  ];
+}
+
+function structureLibrary(kind) {
+  const library = kind === "sqlite" ? createSqliteLikeFactory() : createMemoryLibraryFactory();
+  return createLibraryStore({
+    platform: { target: "memory", kv: createMemoryKv(), library },
+    deviceId: `f5-${kind}`,
+    now: () => 40,
+    mergePairs: (existing, incoming, blocks, lang) => mergeStoredPagePairs(existing, incoming, blocks, lang)
+  });
+}
+
+async function reopenOldStructure(store, hash, blocks, { landed } = {}) {
+  const sends = [];
+  for (let n = 0; n < 3; n += 1) {
+    const page = await store.getPage(hash, 1);
+    const state = libraryPageRunState({ pairs: page.pairs, blocks, targetLang: "zh-CN" });
+    const covered = state === "done" || state === "skipped" || state === "empty";
+    const next = commitLandedStructurePairs(page.pairs, covered ? [] : (landed || []), blocks, "zh-CN");
+    sends.push(covered ? 0 : 1);
+    if (structurePairsChanged(page.pairs, next)) {
+      await store.putPage(hash, 1, { pairs: next, blocks, targetLang: "zh-CN" });
+    }
+  }
+  const stored = await store.getPage(hash, 1);
+  return { sends, pairs: stored.pairs };
+}
+
+test("old structure rows heal on the first reopen and the next two send nothing", async () => {
+  assert.match(viewerSrc, /rememberLandedStructure\(n, translatingDoc\)/);
+  assert.match(viewerSrc, /commitLandedStructurePairs\(entry\.pairs, \[\], blocks, pdfTargetLang\)/);
+  const blocks = oldStructureBlocks();
+  const rows = oldStructureRows();
+  assert.equal(rows[0].bid, undefined);
+  assert.equal(rows[1].bid, undefined);
+  const body = [{ id: "body-1", bid: "bid-body", text: BODY, translation: "主导的序列转换模型基于复杂的循环或卷积神经网络。", targetLang: "zh-CN" }];
+  for (const kind of ["memory", "sqlite"]) {
+    const hash = `${kind}${"ab".repeat(30)}`.slice(0, 64);
+    const seeded = structureLibrary(kind);
+    await seeded.touchPaper(hash, { title: "Attention", pageCount: 1, origin: "native" });
+    await seeded.putPage(hash, 1, { pairs: [...body, ...rows], targetLang: "zh-CN" });
+    const healed = await reopenOldStructure(seeded, hash, blocks);
+    assert.equal(healed.sends[1], 0, kind);
+    assert.equal(healed.sends[2], 0, kind);
+    assert.equal(healed.pairs.some((pair) => pair.bid === "bid-title"), true, kind);
+    assert.equal(healed.pairs.some((pair) => pair.bid === "bid-abstract"), true, kind);
+
+    const missing = structureLibrary(kind);
+    const other = `${kind}${"cd".repeat(30)}`.slice(0, 64);
+    await missing.touchPaper(other, { title: "Attention", pageCount: 1, origin: "native" });
+    await missing.putPage(other, 1, { pairs: body, targetLang: "zh-CN" });
+    const filled = await reopenOldStructure(missing, other, blocks, { landed: rows });
+    assert.deepEqual(filled.sends, [1, 0, 0], kind);
+    assert.equal(filled.pairs.some((pair) => pair.bid === "bid-title"), true, kind);
+    assert.equal(filled.pairs.some((pair) => pair.bid === "bid-abstract"), true, kind);
   }
 });

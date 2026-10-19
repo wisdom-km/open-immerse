@@ -9,6 +9,19 @@ export const TIMEOUT_MS = 20000;
 export const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const POLITENESS_KEY = "meta:politeness";
 
+/**
+ * A dropped network is offline. DNS, HTTP, and timeouts stay their own reasons
+ * so the pane does not call a server failure 「离线」.
+ */
+export function arxivFailureReason(err, online) {
+  if (err?.code === "timeout" || err?.name === "AbortError") return "timeout";
+  const text = `${err?.code || ""} ${err?.message || ""} ${err?.cause?.code || ""} ${err?.cause?.message || ""}`;
+  if (/ERR_INTERNET_DISCONNECTED/i.test(text)) return "offline";
+  const line = typeof online === "boolean" ? online : globalThis.navigator?.onLine;
+  if (line === false) return "offline";
+  return "error";
+}
+
 export function sourceCacheKey(id, version) {
   return `src:${id}${version ? `@${version}` : "@latest"}`;
 }
@@ -170,7 +183,8 @@ export function createArxivSourceClient({
   sleep,
   store,
   gunzip,
-  maxAssetBytes
+  maxAssetBytes,
+  online
 } = {}) {
   if (typeof doFetch !== "function") throw new Error("createArxivSourceClient requires fetch");
   const clock = now || (() => Date.now());
@@ -314,7 +328,8 @@ export function createArxivSourceClient({
       outcome = await enqueue(() => download(id, version));
     } catch (err) {
       sessionFailed.add(key);
-      const reason = err?.code === "timeout" ? "timeout" : "error";
+      const line = typeof online === "function" ? online() : online;
+      const reason = arxivFailureReason(err, line);
       return { ok: false, reason, id, version: version || null };
     }
     if (outcome.reason === "pdf-only") {

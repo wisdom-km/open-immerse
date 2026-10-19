@@ -353,7 +353,7 @@ import {
   writeFormulaSettings
 } from "../lib/formula-settings.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, bindStructureRowBids, blockSoftLead, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, openLibraryPdf, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
+import { applySavedPairs, bindStructureRowBids, blockSoftLead, commitLandedStructurePairs, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, openLibraryPdf, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, structurePairsChanged, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { bindImportChip } from "../options/data-panel.js";
@@ -9757,6 +9757,20 @@ async function translateTitleStructure(work, gen, translatingDoc, batchSize, opt
   }
 }
 
+async function rememberLandedStructure(page, translatingDoc) {
+  const record = titleStructure;
+  if (!record || record.docId !== translatingDoc || Number(record.page) !== Number(page)) return;
+  if (!record.slotsDone || record.failed) return;
+  const blocks = getPageLayout(page)?.blocks || [];
+  const landed = structureTranslationRows(record.source, record.structure);
+  if (!landed.length) return;
+  const results = bindStructureRowBids(landed, blocks);
+  if (!results.some((row) => row.bid)) return;
+  const cached = pageCache.get(translatingDoc, page);
+  pageCache.set(translatingDoc, page, mergeTranslationRows(Array.isArray(cached) ? cached : [], results));
+  await rememberTranslation(page, results);
+}
+
 function structureLanded(page) {
   const record = titleStructure;
   if (!record?.translated || record.failed || record.docId !== docId || record.page !== page) return false;
@@ -10095,6 +10109,14 @@ async function adoptLibraryPages(options = {}) {
       publish();
       if (!entry && page >= lastListed) break;
       continue;
+    }
+    if (!skipped && entry?.pairs?.length && Array.isArray(blocks) && blocks.length) {
+      const healed = commitLandedStructurePairs(entry.pairs, [], blocks, pdfTargetLang);
+      if (structurePairsChanged(entry.pairs, healed)) {
+        entry.pairs = healed;
+        replaceLibraryPagePairs(libraryDoc, page, healed);
+        persistPagePairs({ page, pairs: healed }).catch(() => {});
+      }
     }
     const state = libraryPageRunState({
       pairs: entry?.pairs,
@@ -11428,6 +11450,8 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
       renderArticle();
     }
     await translateTitleStructure(work, gen, translatingDoc, batchSize, { page: n });
+    if (isStale()) return [];
+    await rememberLandedStructure(n, translatingDoc);
     if (isStale()) return [];
     $("status")?.classList.remove("warn");
   }
