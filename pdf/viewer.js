@@ -525,8 +525,6 @@ let arxivJob = 0;
 let page1TextItems = null;
 let page1Viewport = null;
 
-init();
-
 function workerSrc() {
   try {
     if (globalThis.chrome?.runtime?.getURL) {
@@ -12632,3 +12630,9 @@ function setStatus(text, isError = false, isWarn = false) {
   el.classList.toggle("error", Boolean(isError));
   el.classList.toggle("warn", Boolean(isWarn) && !isError);
 }
+
+// Keep this after every top-level let/const. Without ?src=, init() calls
+// updateTranslateControls while backgroundSessions is still uninitialized.
+// That TDZ error aborts the module; lastShownFont, cachedScrollbarWidth,
+// arxivPrefsLoaded, and cachedPdfLayout then fail the same way.
+init();
