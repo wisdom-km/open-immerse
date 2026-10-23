@@ -233,7 +233,7 @@ test("a script-sized ref stays inside the inline fraction and prose still ends i
 test("DPO reward formula on pages 18 and 19 is one inline unit", async (t) => {
   const pdfPath = join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf");
   if (!existsSync(pdfPath)) {
-    t.skip("DPO fixture PDF is absent");
+    t.skip("DPO fixture PDF is absent; this check did not run. CI without tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf skips it.");
     return;
   }
   assert.equal(readFileSync(pdfPath).byteLength > 1000, true);
@@ -291,14 +291,14 @@ test("DPO reward formula on pages 18 and 19 is one inline unit", async (t) => {
 test("DPO display crops cover every glyph and leave no formula fragment", async (t) => {
   const pdfPath = join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf");
   if (!existsSync(pdfPath)) {
-    t.skip("DPO fixture PDF is absent");
+    t.skip("DPO fixture PDF is absent; this check did not run. CI without tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf skips it.");
     return;
   }
   let createCanvas;
   try {
     ({ createCanvas } = createRequire(import.meta.url)("@napi-rs/canvas"));
   } catch {
-    t.skip("@napi-rs/canvas is not installed");
+    t.skip("@napi-rs/canvas is not installed; the DPO display-crop check did not run.");
     return;
   }
   GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
@@ -360,6 +360,8 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
         const sw = (block.bbox[2] - block.bbox[0]) * viewport.width * CROP_SCALE;
         const sh = (block.bbox[3] - block.bbox[1]) * viewport.height * CROP_SCALE;
         if (block.display === false) {
+          // Short inline blocks at CROP_SCALE 2 are narrower than the 24px
+          // display floor (about 18–23px). The floor stays on display crops.
           assert.ok(sw > 1 && sh > 1, `${block.bid} inline crop ${sw.toFixed(1)}×${sh.toFixed(1)}`);
         } else {
           assert.ok(sw >= 24 && sh >= 12, `${block.bid} crop ${sw.toFixed(1)}×${sh.toFixed(1)}`);

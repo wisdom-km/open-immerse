@@ -1377,3 +1377,189 @@ test("paragraphs keep sourceItems without dropping text or role", () => {
   assert.ok(blocks[0].sourceItems.length >= 1);
   assert.equal(blocks.some((block) => block.role === "paragraph" || block.role === "title"), true);
 });
+
+test("text diacritics, plain charges, and citation marks stay in the sentence", () => {
+  const text = (str, x, y, width, height = 10) => pdfItem(str, x, y, width, height, {
+    fontName: "Times-Roman",
+    fontRealName: "Times-Roman"
+  });
+  const raised = (str, x, y, width) => text(str, x, y, width, 6);
+  const page = textLayerToBlocks({
+    items: [
+      text("sample paths of ", 72, 500, 80),
+      text("H", 154, 500, 8),
+      text("¨", 156, 506, 6),
+      text("older-continuous functions.", 164, 500, 140),
+      text("We use a two-component Flatt", 72, 480, 150),
+      text("´", 224, 486, 4),
+      text("e parameterization here.", 230, 480, 120),
+      text("See www.cs.toronto.edu/", 72, 460, 120),
+      text("˜", 194, 466, 6),
+      text("kriz/cifar.html.", 202, 460, 70),
+      text("Institut f", 72, 440, 48),
+      text("¨", 122, 446, 6),
+      text("ur Theoretische Physik, Universit", 130, 440, 160),
+      text("¨", 292, 446, 6),
+      text("at Karlsruhe.", 300, 440, 60),
+      text("ions Na", 72, 400, 36),
+      raised("+", 110, 404, 6),
+      text(", Cl", 118, 400, 18),
+      raised("−", 138, 404, 6),
+      text(",", 146, 400, 4),
+      text(" and cm", 152, 400, 36),
+      raised("−", 190, 404, 6),
+      raised("1", 196, 404, 4),
+      text(" plus fb", 202, 400, 36),
+      raised("−", 240, 404, 6),
+      raised("1", 246, 404, 4),
+      text(".", 252, 400, 4),
+      text("see note", 72, 360, 40),
+      raised("1-2", 114, 364, 14),
+      text(" and refs", 130, 360, 40),
+      raised("3-4", 172, 364, 14),
+      text(" Smith", 188, 360, 30),
+      raised("a", 220, 364, 4),
+      raised("*", 224, 364, 4),
+      text(" and author", 230, 360, 50),
+      raised("1,a", 282, 364, 12),
+      text(" result", 296, 360, 32),
+      raised("*", 330, 364, 5)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 1
+  });
+  const formulas = page.blocks.filter((block) => block.label === "formula");
+  const shown = page.blocks.map((block) => block.text || block.sourceText || "").join("\n");
+  assert.equal(formulas.length, 0, formulas.map((block) => block.sourceText).join(" | "));
+  assert.match(shown, /H.*older/);
+  assert.match(shown, /Flatt.*e parameterization/);
+  assert.match(shown, /toronto\.edu/);
+  assert.match(shown, /Na/);
+  assert.match(shown, /Cl/);
+  assert.doesNotMatch(shown, /⟦f/);
+});
+
+test("a math-font letter keeps a raised star, and a text footnote does not", () => {
+  const math = (str, x, y, width, height, face) => pdfItem(str, x, y, width, height, {
+    fontName: "g_d0_f3",
+    fontRealName: face
+  });
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("sampled from ", 72, 400, 70, 10),
+      math("p", 144, 400, 5, 10, "CMMI10"),
+      math("∗", 149, 404, 4, 7, "CMSY7"),
+      pdfItem(", unlike Smith", 156, 400, 70, 10),
+      pdfItem("a", 228, 404, 4, 6),
+      pdfItem("*", 232, 404, 4, 6),
+      pdfItem(".", 238, 400, 4, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 3
+  });
+  const formulas = page.blocks.filter((block) => block.label === "formula");
+  assert.equal(formulas.length, 1, formulas.map((block) => block.sourceText).join(" | "));
+  assert.match(formulas[0].sourceText || "", /p/);
+  assert.match(formulas[0].sourceText || "", /∗/);
+  const sentence = page.blocks.find((block) => /sampled/.test(block.text || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /⟦f\d+⟧/);
+  assert.match(sentence.text, /Smith/);
+  assert.doesNotMatch(sentence.text, /Smith\s*⟦f/);
+});
+
+test("a short stacked subscript keeps its base letter", () => {
+  const math = (str, x, y, width, height, face) => pdfItem(str, x, y, width, height, {
+    fontName: "g_d0_f3",
+    fontRealName: face
+  });
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("the yield ", 72, 400, 48, 10),
+      math("P", 122, 400, 8, 10, "CMMI10"),
+      math("Λ", 130, 396, 7, 7, "CMMI7"),
+      math("b", 137, 393, 4, 5, "CMMI5"),
+      math("0", 141, 403, 4, 5, "CMR7"),
+      pdfItem(" is measured.", 148, 400, 64, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 32
+  });
+  const formula = page.blocks.find((block) => block.label === "formula");
+  assert.ok(formula, "P with a Greek stacked subscript is a formula");
+  assert.match(formula.sourceText || "", /P/);
+  assert.match(formula.sourceText || "", /Λ/);
+  const sentence = page.blocks.find((block) => /yield/.test(block.text || ""));
+  assert.ok(sentence);
+  assert.match(sentence.text, /⟦f\d+⟧/);
+  assert.doesNotMatch(sentence.text, /P\s*⟦f/);
+});
+
+test("a same-baseline T − t is not written as a subscript", () => {
+  const glyph = (str, x, face) => pdfItem(str, x, 200, 6, 6, {
+    fontName: "g_d0_f4",
+    fontRealName: face
+  });
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("Reverse process steps ", 72, 200, 90, 6, { fontRealName: "NimbusRomNo9L-Regu" }),
+      pdfItem("(", 164, 200, 4, 6),
+      glyph("T", 168, "CMMI10"),
+      glyph("−", 174, "CMSY10"),
+      glyph("t", 180, "CMMI10"),
+      pdfItem(")", 186, 200, 4, 6),
+      pdfItem(" Rate", 192, 200, 24, 6)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 7
+  });
+  const blob = page.blocks.map((block) => `${block.text || ""} ${block.sourceText || ""}`).join("\n");
+  assert.doesNotMatch(blob, /T_\{/);
+});
+
+test("a smaller raised minus still folds K−p the way main does", () => {
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("the ", 72, 400, 20, 10),
+      pdfItem("K", 94, 400, 8, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem("−", 102, 403.9, 6, 7, { fontName: "CMSY7", fontRealName: "CMSY7" }),
+      pdfItem("p", 108, 400, 6, 10, { fontName: "CMMI10", fontRealName: "CMMI10" }),
+      pdfItem(" rate", 116, 400, 24, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 5
+  });
+  const blob = page.blocks.map((block) => `${block.text || ""} ${block.sourceText || ""}`).join("\n");
+  assert.match(blob, /K_\{−p\}/);
+});
+
+test("an extra close in the middle does not drop the formula's own parenthesis", () => {
+  const math = (str, x, y = 400, width = 6, height = 10, face = "CMMI10") => pdfItem(str, x, y, width, height, {
+    fontName: "g_d0_f3",
+    fontRealName: face
+  });
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("where ", 72, 400, 32, 10),
+      math("β", 106),
+      math("(", 114, 400, 4, 10, "CMR10"),
+      math("x", 118),
+      math(")", 124, 400, 4, 10, "CMR10"),
+      math(")", 128, 400, 4, 10, "CMR10"),
+      math("=", 134, 400, 8, 10, "CMR10"),
+      math("π", 144),
+      math("′", 152, 404, 4, 7, "CMSY7"),
+      math("(", 158, 400, 4, 10, "CMR10"),
+      math("y", 162),
+      math("|", 168, 400, 3, 10, "CMSY10"),
+      math("x", 172),
+      math(")", 178, 400, 4, 10, "CMR10"),
+      pdfItem(" holds.", 184, 400, 32, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 19
+  });
+  const formula = page.blocks.find((block) => block.label === "formula" && /π/.test(block.sourceText || ""));
+  assert.ok(formula);
+  assert.match(formula.sourceText, /π′\(y\|x\)/);
+});

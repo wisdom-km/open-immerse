@@ -4082,8 +4082,15 @@ async function renderContextVisionCrop(page, block, pageNumber, spec = {}) {
     try {
       const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
       const glyphRect = glyphRectPixels(frame.bbox, block.glyphBoxes, unit.width, unit.height, plan.scale);
+      const glyphRects = (block.glyphBoxes || [])
+        .map((box) => targetBoxPixels(frame.bbox, box, unit.width, unit.height, plan.scale))
+        .filter(Boolean);
       const seated = glyphRect
-        ? seatInkBox({ data: pixels?.data, width: canvas.width, height: canvas.height }, glyphRect)
+        ? seatInkBox(
+          { data: pixels?.data, width: canvas.width, height: canvas.height },
+          glyphRect,
+          { glyphs: glyphRects }
+        )
         : null;
       if (seated) rect = seated;
     } catch {

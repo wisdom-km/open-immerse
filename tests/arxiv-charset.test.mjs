@@ -75,6 +75,7 @@ test("hat, tilde, bar, and prime match the pdf.js accent glyphs", () => {
     ["\\tilde\\mu_t", "μ\u0303t"],
     ["\\hat x_0", "ˆx0"],
     ["\\bar{x}", "x¯"],
+    ["\\overline{x}", "x¯"],
     ["x'", "x′"],
     ["x^{\\prime}", "x′"]
   ];

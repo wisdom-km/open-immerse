@@ -6,23 +6,28 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 
+import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import {
   INK_OUTSIDE_PX,
   TARGET_BOX_GAP,
   TARGET_BOX_PX,
   contextCropGeometry,
   contextWindow,
+  formulaInkOutsideCount,
+  glyphRectPixels,
   paintTargetBox,
   seatInkBox,
   targetBoxPixels
 } from "../lib/formula-context-crop.js";
-import { cropHashOf } from "../lib/formula-contract.js";
 import { formulaRegionWindow } from "../lib/pdf-formula-raster.js";
-import { FORMULA_RUN_MIN_WIDTH, sameLineFormulaSpans, shortFormulaRunExempt } from "../lib/pdf-text-layer.js";
+import { cropHashOf } from "../lib/formula-contract.js";
+import { FORMULA_RUN_MIN_WIDTH, sameLineFormulaSpans, shortFormulaRunExempt, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import {
   FORMULA_CONTEXT_PROMPT,
   FORMULA_VISION_SYSTEM,
@@ -80,8 +85,12 @@ function assertGlyphsInside(formula) {
 }
 
 test("DPO short probes keep every glyph inside the red box and the stroke inside the crop", () => {
-  const names = ["pi-theta", "y-w", "y-l", "pi-sft", "r-hat-theta", "r-phi"];
-  assert.deepEqual(names.map((name) => probes.probes[name].text), ["πθ", "yw", "yl", "πSFT", "rˆθ", "rϕ"]);
+  const names = ["pi-theta", "pi-sft", "r-hat-theta", "r-phi"];
+  assert.deepEqual(names.map((name) => probes.probes[name].text), ["πθ", "πSFT", "rˆθ", "rϕ"]);
+  // y_w and y_l are Latin subscripts. They stay in the sentence, and the
+  // boxes below are only geometry samples.
+  assert.deepEqual([probes.probes["y-w"].text, probes.probes["y-l"].text], ["yw", "yl"]);
+  for (const name of ["y-w", "y-l"]) assertGlyphsInside(probes.probes[name]);
   for (const name of names) {
     const formula = probes.probes[name];
     assert.equal(formula.display, false);
@@ -334,7 +343,7 @@ test("Greek subscripts, accents, and superscripts are short formulas; Latin subs
   assert.deepEqual(sameLineFormulaSpans(piSft), [[1, 2]]);
   const hat = [
     prose("where ", 0, 36),
-    glyph("r", 40, { width: 5, font: "NimbusRomNo9L-Regu" }),
+    glyph("r", 40, { width: 5, font: "CMMI10" }),
     glyph("ˆ", 44, { width: 5, font: "CMR10" }),
     glyph("θ", 49, { y: 96, width: 4, height: 7, font: "CMMI7" }),
     prose(" rates", 56, 30)
@@ -411,6 +420,106 @@ test("only an inline context crop appends the strict prompt", () => {
   );
   assert.equal(formulaVisionPrompt({ display: false }, { meta: { mode: "tight" } }).system, FORMULA_VISION_SYSTEM);
   assert.equal(MM_TIER_VERSION, "mm-4");
+});
+
+test("a wide descender row stays inside the red box", () => {
+  const image = blankImage(90, 90);
+  const glyph = { x: 10, y: 10, w: 50, h: 20 };
+  for (let y = 16; y <= 29; y += 1) {
+    for (let x = 14; x <= 40; x += 1) image.dot(x, y);
+  }
+  for (let y = 30; y <= 38; y += 1) {
+    for (let x = 16; x <= 40; x += 1) image.dot(x, y);
+  }
+  for (let x = glyph.x; x < glyph.x + glyph.w; x += 1) image.dot(x, 50);
+  const seated = seatInkBox(image, glyph);
+  assert.ok(seated.y + seated.h > 38, `bottom ${seated.y + seated.h} cut the descender`);
+  assert.ok(50 >= seated.y + seated.h, "neighbor stays outside");
+  assert.equal(formulaInkOutsideCount(image, [glyph], seated), 0);
+});
+
+function sliceRaster(image, originX, originY, width, height) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const src = ((originY + y) * image.width + originX) * 4;
+    data.set(image.data.subarray(src, src + width * 4), y * width * 4);
+  }
+  return { data, width, height };
+}
+
+test("rendered DPO and DDPM inline crops keep formula ink inside the red box", async (t) => {
+  const papers = [
+    [join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf"), [6, 8, 18, 19]],
+    ["/tmp/papers/ddpm.pdf", [4]]
+  ].filter(([path]) => existsSync(path));
+  if (!papers.length) {
+    t.skip("no fixture PDF; the rendered ink check did not run");
+    return;
+  }
+  let createCanvas;
+  try {
+    ({ createCanvas } = createRequire(import.meta.url)("@napi-rs/canvas"));
+  } catch {
+    t.skip("@napi-rs/canvas is not installed; the rendered ink check did not run");
+    return;
+  }
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const failures = [];
+  for (const [pdfPath, pages] of papers) {
+    const doc = await getDocument({
+      data: new Uint8Array(readFileSync(pdfPath)),
+      verbosity: 0,
+      isOffscreenCanvasSupported: false
+    }).promise;
+    try {
+      for (const number of pages) {
+        const pdfPage = await doc.getPage(number);
+        const content = await pdfPage.getTextContent();
+        const ops = await pdfPage.getOperatorList();
+        attachFontRealNames(content.items, pdfPage.commonObjs);
+        const viewport = pdfPage.getViewport({ scale: 1 });
+        const built = textLayerToBlocks({
+          items: content.items,
+          viewport,
+          images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+          page: number
+        });
+        const canvas = createCanvas(Math.ceil(viewport.width * SCALE), Math.ceil(viewport.height * SCALE));
+        const context = canvas.getContext("2d");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        await pdfPage.render({
+          canvasContext: context,
+          viewport: pdfPage.getViewport({ scale: SCALE })
+        }).promise;
+        const image = context.getImageData(0, 0, canvas.width, canvas.height);
+        for (const block of built.blocks) {
+          if (block.label !== "formula" || block.display !== false) continue;
+          const frame = contextCropGeometry(block, {
+            pageWidth: viewport.width,
+            pageHeight: viewport.height,
+            scale: SCALE
+          });
+          if (!frame?.bbox) continue;
+          const window = formulaRegionWindow(frame.bbox, canvas.width, canvas.height);
+          const slice = sliceRaster(image, window.offsetX, window.offsetY, window.pixelWidth, window.pixelHeight);
+          const glyphRect = glyphRectPixels(frame.bbox, block.glyphBoxes, viewport.width, viewport.height, SCALE);
+          const glyphs = (block.glyphBoxes || [])
+            .map((box) => targetBoxPixels(frame.bbox, box, viewport.width, viewport.height, SCALE))
+            .filter(Boolean);
+          if (!glyphRect || !glyphs.length) continue;
+          const seated = seatInkBox(slice, glyphRect, { glyphs });
+          const outside = formulaInkOutsideCount(slice, glyphs, seated);
+          if (outside) {
+            failures.push(`${pdfPath.split("/").pop()} p${number} ${block.sourceText?.slice(0, 40)} ${outside}`);
+          }
+        }
+      }
+    } finally {
+      await doc.destroy();
+    }
+  }
+  assert.deepEqual(failures, []);
 });
 
 test("the tier key is mm-4 and the crop hash is the png that was sent", () => {
