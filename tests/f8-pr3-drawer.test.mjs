@@ -235,10 +235,90 @@ test("title prefixes do not eat words, and a matched heading number wins", () =>
   ]);
   assert.equal(overridden[0].num, "2");
   const kept = applyHeadingMatch([
-    { level: 1, title: "A Simple Baseline", original: "A Simple Baseline", page: 3, num: "4" }
+    { level: 1, title: "A Simple Baseline", original: "A Simple Baseline", page: 3, lineNum: "4", lineMatched: true }
   ], []);
   assert.equal(kept[0].num, "4");
   assert.equal(kept[0].title, "A Simple Baseline");
+  const blocked = applyHeadingMatch([
+    { level: 1, title: "Thanks", original: "Thanks", page: 1, num: "9" }
+  ], []);
+  assert.equal(blocked[0].num, "");
+  const afterHeading = applyHeadingMatch([
+    { level: 1, title: "Thanks", original: "Thanks", page: 1, lineNum: "4" }
+  ], [
+    { page: 1, text: "Thanks" }
+  ]);
+  assert.equal(afterHeading[0].num, "4");
+  const headingWins = applyHeadingMatch([
+    { level: 1, title: "Thanks", original: "Thanks", page: 1, lineNum: "9", lineMatched: true }
+  ], [
+    { page: 1, text: "2 Thanks" }
+  ]);
+  assert.equal(headingWins[0].num, "2");
+});
+
+test("standalone same-line number shows, and (3) does not", () => {
+  const title = "Scaled Dot-Product Attention";
+  const y = 433;
+  const titleItem = { str: title, x: 138, y, width: 126, height: 10 };
+  assert.equal(numberBesideTitle([
+    { str: "3.2.1", x: 108, y, width: 20, height: 10 },
+    titleItem
+  ], title), "3.2.1");
+  assert.equal(numberBesideTitle([
+    { str: "(3)", x: 108, y, width: 14, height: 10 },
+    titleItem
+  ], title, { pageHeight: 792 }), "");
+  assert.equal(numberBesideTitle([
+    { str: "IV", x: 108, y, width: 14, height: 10 },
+    titleItem
+  ], title), "");
+  assert.equal(numberBesideTitle([
+    { str: "I", x: 108, y, width: 8, height: 10 },
+    titleItem
+  ], title), "");
+  assert.equal(numberBesideTitle([
+    { str: "A.1", x: 108, y, width: 16, height: 10 },
+    titleItem
+  ], title), "A.1");
+  assert.equal(numberBesideTitle([
+    { str: "3.2.1.", x: 108, y, width: 24, height: 10 },
+    { str: title, x: 140, y, width: 126, height: 10 }
+  ], title), "3.2.1");
+  assert.equal(numberBesideTitle([
+    { str: "4", x: 108, y: 20, width: 8, height: 10 },
+    { str: title, x: 138, y: 20, width: 126, height: 10 }
+  ], title, { pageHeight: 792 }), "");
+  assert.equal(numberBesideTitle([
+    titleItem,
+    { str: "(1)", x: 280, y, width: 14, height: 10 }
+  ], title), "");
+  assert.equal(numberBesideTitle([
+    { str: "3.2.1", x: 108, y: y + 8, width: 20, height: 10 },
+    titleItem
+  ], title), "");
+  assert.equal(numberBesideTitle([
+    { str: "4", x: 300, y: 30, width: 8, height: 10 },
+    { str: "3.2.1", x: 108, y: 400, width: 20, height: 10 },
+    { str: title, x: 138, y: 400, width: 126, height: 10 }
+  ], title, { pageHeight: 792 }), "3.2.1");
+  const { document } = panelDom();
+  const ui = mountDrawerUi({
+    slot: document.getElementById("drawerSlot"),
+    backdrop: document.getElementById("drawerBackdrop"),
+    session: memorySession(),
+    width: () => 1200,
+    mode: () => "dock"
+  });
+  ui.open();
+  ui.setToc({
+    source: "outline",
+    loading: false,
+    partial: "",
+    entries: [{ level: 3, num: "3.2.1", title, page: 4 }]
+  });
+  assert.equal(ui.root.classList.contains("is-unnumbered"), false);
+  assert.equal(ui.root.querySelector(".oi-toc-num")?.textContent, "3.2.1");
 });
 
 test("partial hint names the unfinished pages and disappears when layout is done", () => {

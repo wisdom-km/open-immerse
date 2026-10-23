@@ -2854,8 +2854,13 @@ async function loadDrawerOutline(doc) {
       }
       if (entry.page && pageHeights.has(entry.page)) entry.pageHeight = pageHeights.get(entry.page);
       if (gen !== drawerOutlineGen || pdfDoc !== doc) return;
-      const num = numberBesideTitle(textCache.get(entry.page) || [], entry.title);
-      if (num) entry.num = num;
+      const lineNum = numberBesideTitle(textCache.get(entry.page) || [], entry.title, {
+        pageHeight: pageHeights.get(entry.page) || 0
+      });
+      if (lineNum) {
+        entry.lineNum = lineNum;
+        entry.lineMatched = true;
+      }
     }
     if (gen !== drawerOutlineGen || pdfDoc !== doc) return;
     const entries = applyHeadingMatch(flat, drawerHeadingRecords()).map(({ dest, ...rest }) => rest);
