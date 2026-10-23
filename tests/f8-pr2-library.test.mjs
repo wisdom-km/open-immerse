@@ -144,7 +144,7 @@ test("网址变了的第二行是 12px muted，不是 warn", () => {
   assert.match(css, /\.oi-lib-muted[\s\S]*font-size:\s*12px/);
   assert.match(css, /\.oi-lib-muted[\s\S]*color:\s*var\(--oi-reader-muted\)/);
   assert.match(css, /\.oi-lib-warn[\s\S]*color:\s*var\(--oi-reader-warn\)/);
-  assert.match(css, /\.oi-lib-open-error[\s\S]*color:\s*var\(--oi-warn\)/);
+  assert.match(css, /\.oi-lib-open-error[\s\S]*color:\s*var\(--oi-reader-warn\)/);
   assert.doesNotMatch(css, /#[0-9A-Fa-f]{3,8}/);
   const panel = readFileSync(join(root, "pdf/library-panel.js"), "utf8");
   assert.match(panel, /repick\.changed \? h\(doc, "p", \{ class: "oi-lib-muted", text: LIBRARY_COPY\.urlChanged \}/);
