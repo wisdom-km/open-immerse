@@ -38,8 +38,13 @@ import {
   DEFAULT_ARMS,
   D2_CLEAR_MARGIN,
   DPO_PAPER,
+  CONTEXT_PROMPT_NOTE,
   PARAGRAPH_PROMPT_NOTE,
   PARAGRAPH_TEXT_MAX,
+  PROBE_SIGNATURES,
+  contextWindow,
+  probeSignature,
+  selectShortProbes,
   ROW_FIELDS,
   attachReferences,
   channelsFromEnv,
@@ -63,14 +68,25 @@ import {
   templateReport
 } from "../lib/mm-dpo-ab.js";
 import { CROP_SCALE, rasterCropRect } from "../lib/pdf-blocks.js";
-import { FORMULA_INK_PAD_PX, measureFormulaCrop } from "../lib/pdf-text-layer.js";
-import { createMemoryCanvas, renderParagraphCrop, renderTightCrop, renderVisionCrop } from "../tools/mm-dpo-vision.mjs";
+import { FORMULA_INK_PAD_PX, FORMULA_RUN_MIN_WIDTH, measureFormulaCrop } from "../lib/pdf-text-layer.js";
+import { alignDetectedFormulas } from "../tools/mm-dpo-build-reference.mjs";
+import { extractShortCandidates } from "../tools/mm-dpo-probes.mjs";
+import {
+  TARGET_BOX_PX,
+  createMemoryCanvas,
+  decodeRgbaPng,
+  renderContextCrop,
+  renderParagraphCrop,
+  renderTightCrop,
+  renderVisionCrop
+} from "../tools/mm-dpo-vision.mjs";
 import { parseCropDataUrl } from "../lib/formula-crop-png.js";
 import {
   USAGE,
   createLiveTransport,
   loadPdfFormulas,
   main,
+  openPdfSession,
   parseArgs
 } from "../tools/mm-dpo-reference.mjs";
 import { liveFetchViolations } from "./helpers/block-live-fetch.mjs";
@@ -188,9 +204,10 @@ function chat(text, usage = { prompt_tokens: 3, completion_tokens: 2, total_toke
 }
 
 test("default arms stay on the tight crop and page stays opt-in", () => {
-  assert.deepEqual(ARM_IDS, ["tight", "hi-res", "paragraph", "page"]);
+  assert.deepEqual(ARM_IDS, ["tight", "hi-res", "paragraph", "context", "page"]);
   assert.deepEqual(DEFAULT_ARMS, ["tight"]);
   assert.equal(DEFAULT_ARMS.includes("page"), false);
+  assert.equal(DEFAULT_ARMS.includes("context"), false);
   assert.deepEqual(resolveArms(null), ["tight"]);
   assert.deepEqual(resolveArms([]), ["tight"]);
   assert.deepEqual(resolveArms(["tight", "hi-res", "paragraph"]), ["tight", "hi-res", "paragraph"]);
@@ -217,6 +234,8 @@ test("argv documents arms, refuses command-line keys, and blocks a bare live run
   assert.equal(parseArgs(["--live"]).errors.some((line) => line.includes("--limit")), true);
   assert.equal(parseArgs(["--live", "--full", "--limit=15"]).errors.length > 0, true);
   assert.equal(parseArgs(["--limit=0"]).errors.length > 0, true);
+  assert.equal(parseArgs(["--probe-short", "--sample=15"]).probeShort, true);
+  assert.equal(parseArgs(["--sample=15"]).probeShort, false);
   assert.match(USAGE, /MM_DPO_KIMI_API_KEY/);
   assert.match(USAGE, /MM_DPO_DEEPSEEK_API_KEY/);
   assert.match(USAGE, /复用 MM_DPO_KIMI_API_KEY/);
@@ -312,6 +331,10 @@ test("template carries the plan fields, the deepseek baseline, and a zero mismat
   assert.equal(report.exampleRow.checkedButMismatch, true);
   assert.equal(report.exampleRow.example, true);
   const page = report.armGuide.find((arm) => arm.id === "page");
+  const contextArm = report.armGuide.find((arm) => arm.id === "context");
+  assert.equal(contextArm.default, false);
+  assert.equal(contextArm.sendsPdf, false);
+  assert.equal(report.vision.context, "script-only");
   assert.equal(page.default, false);
   assert.equal(page.sendsPdf, false);
   assert.equal(page.requiresFlag, "--arm=page");
@@ -1291,12 +1314,33 @@ test("the committed DPO reference covers the 15 sampled ids, and unaligned rows 
       assert.equal(row.reference, null);
     }
   }
+  assert.equal(table.aligned, 30);
+  assert.equal(table.unaligned, 12);
+  assert.equal(table.probeCount, 10);
+  assert.equal(table.probeAligned, 9);
+  assert.equal(table.formulas.find((row) => row.id === "p3-b7").aligned, true);
+  assert.match(table.formulas.find((row) => row.id === "p3-b7").reference, /SFT/);
+  assert.equal(table.formulas.find((row) => row.id === "p3-b8").reason, "paragraph-fragment");
+  assert.equal(table.formulas.find((row) => row.id === "p3-b8").reference, String.raw`(y \mid x)`);
+  const garbled = table.formulas.find((row) => row.id === "p5-b6");
+  assert.equal(garbled.aligned, false);
+  assert.equal(garbled.reference, null);
+  assert.equal(garbled.reason, "low-score");
+  for (const row of table.formulas.filter((item) => item.aligned === false)) {
+    assert.match(row.reason, /low-score|short-key|ambiguous|no-paragraph|no-inline|paragraph-tie/);
+  }
+  assert.deepEqual(table.probes.map((row) => row.id), [
+    "p3-s1", "p3-s2", "p3-s3", "p3-s4", "p3-s5",
+    "p4-s1", "p4-s2", "p4-s3", "p4-s4", "p5-s1"
+  ]);
   const attached = attachReferences([
-    formula({ id: "p3-b7", reference: "LEAK", imageUrl: dataUrl(PNG) }),
-    formula({ id: "p3-b9", reference: null, imageUrl: dataUrl(PNG), equationNumber: "(1)" })
+    formula({ id: "p5-b6", reference: "LEAK", imageUrl: dataUrl(PNG) }),
+    formula({ id: "p3-b9", reference: null, imageUrl: dataUrl(PNG), equationNumber: "(1)" }),
+    formula({ id: "p3-s2", reference: "LEAK", imageUrl: dataUrl(PNG) })
   ], table);
   assert.equal(attached[0].reference, null);
   assert.equal(typeof attached[1].reference, "string");
+  assert.equal(attached[2].reference, "y_w");
   const compared = await runAb({
     formulas: attached,
     arms: ["tight"],
@@ -1313,10 +1357,11 @@ test("the committed DPO reference covers the 15 sampled ids, and unaligned rows 
   assert.equal(compared.rows[0].matchesReference, null);
   assert.equal(compared.rows[0].exactMatch, null);
   assert.equal(compared.rows[1].matchesReference, false);
-  assert.equal(compared.summary.byArmModel[0].referenceCompared, 1);
-  assert.equal(compared.references.unaligned.includes("p3-b7"), true);
+  assert.equal(compared.rows[2].matchesReference, false);
+  assert.equal(compared.summary.byArmModel[0].referenceCompared, 2);
+  assert.equal(compared.references.unaligned.includes("p5-b6"), true);
   assert.equal(compared.references.unaligned.includes("p3-b9"), false);
-  assert.match(reportToMarkdown(compared), /p3-b7/);
+  assert.match(reportToMarkdown(compared), /p5-b6/);
 });
 
 test("the CLI loads the committed reference when --reference is omitted", async (t) => {
@@ -1324,7 +1369,7 @@ test("the CLI loads the committed reference when --reference is omitted", async 
   const fixturePath = join(dir, "fixture.json");
   writeFileSync(fixturePath, JSON.stringify({
     formulas: [
-      formula({ id: "p3-b7", reference: "LEAK", imageUrl: dataUrl(PNG) }),
+      formula({ id: "p5-b6", reference: "LEAK", imageUrl: dataUrl(PNG) }),
       formula({ id: "p3-b9", reference: null, imageUrl: dataUrl(PNG) })
     ]
   }));
@@ -1340,8 +1385,8 @@ test("the CLI loads the committed reference when --reference is omitted", async 
   });
   assert.equal(result.code, 0);
   assert.equal(result.report.references.aligned, 1);
-  assert.deepEqual(result.report.references.unaligned, ["p3-b7"]);
-  assert.match(readFileSync(result.paths.mdPath, "utf8"), /p3-b7/);
+  assert.deepEqual(result.report.references.unaligned, ["p5-b6"]);
+  assert.match(readFileSync(result.paths.mdPath, "utf8"), /p5-b6/);
   assert.equal(readFileSync(result.paths.jsonPath, "utf8").includes("LEAK"), false);
 });
 
@@ -1683,4 +1728,297 @@ test("the extension manifest and CI do not run the paid script", () => {
   const listed = read("scripts/ci/representative-tests.txt");
   assert.match(listed, /tests\/mm-dpo-ab\.test\.mjs/);
   assert.match(read(".gitignore"), /oi-qa\/f7-multimodal\/runs\//);
+});
+
+test("context crop draws the red box outside the glyphs, and paragraph does too", async () => {
+  assert.equal(FORMULA_VISION_SYSTEM.includes(CONTEXT_PROMPT_NOTE), false);
+  assert.equal(FORMULA_VISION_SYSTEM.includes(PARAGRAPH_PROMPT_NOTE), false);
+  assert.equal(TARGET_BOX_PX, 3);
+  const pageWidth = 200;
+  const pageHeight = 400;
+  const target = [0.4, 0.42, 0.55, 0.48];
+  const column = [0.08, 0.1, 0.92, 0.9];
+  const source = formula({
+    id: "ctx-1",
+    display: false,
+    inlineOf: "host",
+    bbox: target,
+    layoutBbox: target,
+    paragraphBbox: column,
+    paragraphText: `NEIGHBOR ${"word ".repeat(80)}`,
+    pdfText: "β",
+    reference: "\\beta"
+  });
+  const windowBox = contextWindow(source);
+  assert.ok(windowBox.bbox[0] <= target[0]);
+  assert.ok(windowBox.bbox[2] >= target[2]);
+  assert.ok(windowBox.bbox[0] >= column[0] - 1e-9);
+  assert.ok(windowBox.bbox[2] <= column[2] + 1e-9);
+  const yPad = target[1] - windowBox.bbox[1];
+  assert.ok(yPad >= 0.01 && yPad <= 0.021);
+  assert.ok(windowBox.bbox[3] - windowBox.bbox[1] < column[3] - column[1]);
+  const display = contextWindow(formula({
+    display: true,
+    bbox: [0.2, 0.3, 0.8, 0.7],
+    paragraphBbox: [0.1, 0.05, 0.9, 0.95]
+  }));
+  assert.ok(Math.abs((0.3 - display.bbox[1]) - 0.014) < 1e-9);
+  assert.ok(display.bbox[3] - display.bbox[1] < 0.5);
+
+  function expectedPixels(crop, box) {
+    const scale = 4;
+    const fullW = pageWidth * scale;
+    const fullH = pageHeight * scale;
+    const x = Math.round((box[0] - crop[0]) * fullW);
+    const y = Math.round((box[1] - crop[1]) * fullH);
+    const x2 = Math.round((box[2] - crop[0]) * fullW);
+    const y2 = Math.round((box[3] - crop[1]) * fullH);
+    return { x, y, w: x2 - x, h: y2 - y };
+  }
+  function positionedPage() {
+    return {
+      getViewport({ scale = 1, offsetX = 0, offsetY = 0 } = {}) {
+        return { width: pageWidth * scale, height: pageHeight * scale, scale, offsetX, offsetY };
+      },
+      render({ canvasContext, viewport }) {
+        canvasContext.fillStyle = "#ffffff";
+        canvasContext.fillRect(0, 0, canvasContext.canvas.width, canvasContext.canvas.height);
+        const x = target[0] * pageWidth * viewport.scale + viewport.offsetX;
+        const y = target[1] * pageHeight * viewport.scale + viewport.offsetY;
+        const w = (target[2] - target[0]) * pageWidth * viewport.scale;
+        const h = (target[3] - target[1]) * pageHeight * viewport.scale;
+        canvasContext.fillStyle = "#000000";
+        canvasContext.fillRect(x, y, w, h);
+        return { promise: Promise.resolve() };
+      }
+    };
+  }
+  function pixel(image, x, y) {
+    const index = (y * image.width + x) * 4;
+    return image.rgba.slice(index, index + 4);
+  }
+  function isRed(channels) {
+    return channels[0] > 180 && channels[1] < 40 && channels[2] < 40 && channels[3] > 200;
+  }
+  function assertBox(png, crop) {
+    const image = decodeRgbaPng(png.base64);
+    const rect = expectedPixels(crop, target);
+    assert.equal(isRed(pixel(image, 0, 0)), false);
+    assert.equal(isRed(pixel(image, rect.x + Math.floor(rect.w / 2), rect.y - 2)), true);
+    assert.equal(isRed(pixel(image, rect.x - 2, rect.y + Math.floor(rect.h / 2))), true);
+    let redInside = 0;
+    let blackInside = 0;
+    for (let py = rect.y + 2; py < rect.y + rect.h - 2; py += 1) {
+      for (let px = rect.x + 2; px < rect.x + rect.w - 2; px += 1) {
+        const channels = pixel(image, px, py);
+        if (isRed(channels)) redInside += 1;
+        if (channels[0] < 30 && channels[1] < 30 && channels[2] < 30 && channels[3] > 200) blackInside += 1;
+      }
+    }
+    assert.equal(redInside, 0);
+    assert.ok(blackInside > 0);
+  }
+  const page = positionedPage();
+  const contextPng = await renderContextCrop(page, source, memoryHooks());
+  assert.equal(contextPng.scale, 4);
+  assertBox(contextPng, windowBox.bbox);
+  const paragraphPng = await renderParagraphCrop(page, source, memoryHooks());
+  assertBox(paragraphPng, column);
+  const calls = [];
+  const report = await runAb({
+    formulas: [source],
+    arms: ["context"],
+    models: [channel("kimi", KIMI_KEY)],
+    send: true,
+    katex,
+    now: clock(),
+    renderContextCrop: (item) => renderContextCrop(page, item, memoryHooks()),
+    transport: async (call) => {
+      calls.push(call);
+      return { ok: true, text: "\\beta", usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 } };
+    }
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].system.startsWith(FORMULA_VISION_SYSTEM), true);
+  assert.match(calls[0].system, new RegExp(CONTEXT_PROMPT_NOTE));
+  assert.equal(calls[0].text.includes("NEIGHBOR"), true);
+  assert.ok(calls[0].text.length < 400);
+  assert.equal(report.rows[0].measured, true);
+  assert.equal(report.rows[0].inputKind, "context");
+  assert.equal(report.summary.recommended.productDefault, false);
+  assert.equal(report.writesPreset, false);
+  const pendingCalls = [];
+  const pending = await runAb({
+    formulas: [source],
+    arms: ["context"],
+    models: [channel("kimi", KIMI_KEY)],
+    send: true,
+    now: clock(),
+    transport: async () => {
+      pendingCalls.push(1);
+      return { ok: true, text: "x" };
+    }
+  });
+  assert.equal(pendingCalls.length, 0);
+  assert.equal(pending.rows[0].errorCode, "pending-context");
+  assert.equal(pending.summary.sent, 0);
+});
+
+test("short probes stay under the 12pt gate and the pick is deterministic", () => {
+  assert.equal(FORMULA_RUN_MIN_WIDTH, 12);
+  assert.match(read("lib/pdf-text-layer.js"), /export const FORMULA_RUN_MIN_WIDTH = 12;/);
+  assert.equal(probeSignature("πθ"), "pitheta");
+  assert.equal(probeSignature("πSFT"), "pisft");
+  assert.equal(probeSignature("π∗"), "star");
+  assert.equal(probeSignature("rˆθ"), "hat");
+  assert.equal(probeSignature("yw"), "yw");
+  assert.equal(probeSignature("yl"), "yl");
+  assert.equal(probeSignature("β"), "beta");
+  assert.equal(probeSignature("π"), "bare");
+  assert.equal(PROBE_SIGNATURES.includes("bare"), false);
+  const betas = Array.from({ length: 8 }, (_, index) => ({
+    id: `b${index}`,
+    page: 4,
+    signature: "beta",
+    bbox: [0.1, 0.1 + index * 0.05, 0.12, 0.14 + index * 0.05],
+    pdfText: "β"
+  }));
+  const yw = { id: "w", page: 3, signature: "yw", bbox: [0.2, 0.2, 0.24, 0.24], pdfText: "yw" };
+  const first = selectShortProbes([...betas, yw], 3);
+  const second = selectShortProbes([...betas, yw], 3);
+  assert.deepEqual(first.map((item) => item.id), second.map((item) => item.id));
+  assert.equal(first.filter((item) => item.signature === "yw").length, 1);
+  assert.equal(first.filter((item) => item.signature === "beta").length, 2);
+
+  const viewport = {
+    width: 400,
+    height: 100,
+    convertToViewportRectangle(rect) { return rect.slice(); }
+  };
+  const text = (partial) => ({
+    str: "y",
+    x: 0,
+    y: 40,
+    width: 5,
+    height: 10,
+    fontName: "CMMI10",
+    ...partial
+  });
+  const pages = [{
+    page: 3,
+    viewport,
+    blocks: [{ id: "t1", label: "text", bbox: [0, 0.2, 1, 0.8], text: "where the reward model prefers one answer" }],
+    items: [
+      text({ str: "where", x: 0, width: 40, fontName: "NimbusRomNo9L-Reg" }),
+      text({ str: "y", x: 50, width: 5 }),
+      text({ str: "w", x: 55, width: 4, height: 6, y: 43, fontName: "CMMI7" }),
+      text({ str: "and", x: 80, width: 20, fontName: "NimbusRomNo9L-Reg" }),
+      text({ str: "β", x: 120, width: 6 }),
+      text({ str: "a", x: 200, width: 6 }),
+      text({ str: "b", x: 206, width: 6 }),
+      text({ str: "c", x: 212, width: 6 }),
+      text({ str: "π", x: 300, width: 6 })
+    ]
+  }];
+  const covered = [{ page: 3, bbox: [0.74, 0.3, 0.82, 0.7], layoutBbox: [0.74, 0.3, 0.82, 0.7] }];
+  const candidates = extractShortCandidates({ pages, formulas: covered });
+  const again = extractShortCandidates({ pages, formulas: covered });
+  assert.deepEqual(candidates.map((item) => item.pdfText), again.map((item) => item.pdfText));
+  assert.deepEqual(candidates.map((item) => item.pdfText).sort(), ["yw", "β"]);
+  assert.equal(candidates.some((item) => item.pdfText.includes("π")), false);
+  assert.equal(candidates.some((item) => item.pdfText.includes("abc")), false);
+});
+
+test("alignment keeps a unique prefix and a parenthesized fragment, and leaves a garbled line", () => {
+  const prose = "Reward Modelling Phase the SFT model is prompted with prompts to produce pairs of answers then human labelers prefer";
+  const other = "where the reward is implicitly defined by the language model and the reference model in this section";
+  const units = [
+    {
+      id: "p33",
+      kind: "paragraph",
+      text: prose,
+      parts: [
+        { type: "inline", id: "i26", latex: String.raw`(y_1, y_2)\sim \pi^\text{SFT}(y \mid x)` },
+        { type: "inline", id: "i31", latex: "r^*(y, x)" },
+        { type: "inline", id: "i32", latex: "p^*" }
+      ]
+    },
+    {
+      id: "p96",
+      kind: "paragraph",
+      text: other,
+      parts: [
+        { type: "inline", id: "i88", latex: String.raw`\hat{r}_\theta(x, y) = \beta \log \frac{\pi_\theta(y \mid x)}{\pi_\text{ref}(y \mid x)}` }
+      ]
+    },
+    {
+      id: "decoy",
+      kind: "paragraph",
+      text: "unrelated appendix about datasets hyperparameters and training curves only",
+      parts: []
+    }
+  ];
+  const rows = alignDetectedFormulas([
+    { id: "cut", page: 3, display: false, pdfText: "(y1, y2) ∼ π", paragraphText: prose, equationNumber: null },
+    { id: "frag", page: 3, display: false, pdfText: "(y | x)", paragraphText: prose, equationNumber: null },
+    { id: "star", page: 3, display: false, pdfText: "p∗", paragraphText: prose, equationNumber: null },
+    { id: "mess", page: 5, display: false, pdfText: "θ(x, y) = βlog ππrefθ((yy||xx))", paragraphText: other, equationNumber: null }
+  ], units);
+  const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
+  assert.equal(byId.cut.reason, "paragraph-prefix");
+  assert.match(byId.cut.reference, /SFT/);
+  assert.equal(byId.frag.reference, String.raw`(y \mid x)`);
+  assert.equal(byId.star.reference, "p^*");
+  assert.equal(byId.mess.aligned, false);
+  assert.equal(byId.mess.reference, null);
+  assert.equal(byId.mess.reason, "low-score");
+});
+
+test("DPO short probes match the committed set and do not move the 15-sample", async (t) => {
+  const session = await openPdfSession(join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf"));
+  t.after(() => session.close());
+  const table = JSON.parse(readFileSync(join(root, "tests/fixtures/mm-dpo-reference.json"), "utf8"));
+  assert.equal(session.formulas.length, 42);
+  assert.deepEqual(session.probes.map((item) => item.id), table.probes.map((item) => item.id));
+  assert.deepEqual(session.probes.map((item) => item.pdfText), table.probes.map((item) => item.pdfText));
+  assert.deepEqual(selectSample(session.formulas, 15).map((item) => item.id), SAMPLED_REFERENCE_IDS);
+  const again = session.probes.map((item) => `${item.id}:${item.pdfText}`);
+  assert.deepEqual(again, table.probes.map((item) => `${item.id}:${item.pdfText}`));
+});
+
+test("--probe-short appends script probes without replacing the stratified sample", async (t) => {
+  const dir = createOwnedTemp(t, "mm-dpo-probe-");
+  const fixturePath = join(dir, "fixture.json");
+  writeFileSync(fixturePath, JSON.stringify({
+    formulas: [formula({ id: "only-one", equationNumber: null, imageUrl: dataUrl(PNG), pdfText: "x" })],
+    probes: [formula({ id: "probe-x", equationNumber: null, display: false, imageUrl: dataUrl(PNG), pdfText: "β" })]
+  }));
+  const withProbes = await main([
+    "--dry-run",
+    "--fixture", fixturePath,
+    "--sample=15",
+    "--probe-short",
+    "--arm=tight",
+    "--out", dir
+  ], {
+    env: { MM_DPO_KIMI_API_KEY: KIMI_KEY },
+    stdout() {},
+    stderr() {}
+  });
+  assert.equal(withProbes.code, 0);
+  assert.deepEqual(withProbes.report.sample.ids, ["only-one", "probe-x"]);
+  assert.equal(withProbes.report.summary.sent, 0);
+  assert.equal(withProbes.report.coverage.detected, 1);
+  const plain = await main([
+    "--dry-run",
+    "--fixture", fixturePath,
+    "--sample=15",
+    "--arm=tight",
+    "--out", join(dir, "plain")
+  ], {
+    env: { MM_DPO_KIMI_API_KEY: KIMI_KEY },
+    stdout() {},
+    stderr() {}
+  });
+  assert.deepEqual(plain.report.sample.ids, ["only-one"]);
 });

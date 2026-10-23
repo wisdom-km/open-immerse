@@ -6,7 +6,7 @@ schema: `open-immerse.mm-dpo-ab/v1` · mode: `template`
 
 整页臂默认关闭，必须 `--arm=page`。脚本不发送整页 PDF。本报告不进扩展包，也不改设置预置。
 
-高清裁图：tier `mm-3`，scale 4，路径 visionCropFor。段落臂是脚本实验。
+高清裁图：tier `mm-3`，scale 4，路径 visionCropFor。段落臂和上下文臂是脚本实验，红框只画在这两条臂上。
 
 ## 字段
 
@@ -26,7 +26,8 @@ schema: `open-immerse.mm-dpo-ab/v1` · mode: `template`
 
 - `tight`（默认）：紧裁 PNG。已有图走 cropPngFor；文字层 PDF 用 measureFormulaCrop（CROP_SCALE 2，行内 pad 4、独立 pad 6）。默认臂。
 - `hi-res`：产品高清裁图（visionCropFor / renderVisionCrop，mm-3，scale 4）。没有页面渲染时不发送。
-- `paragraph`：脚本实验：段落区域按同一高清倍率出图，并附上段落文字。不改产品默认，也不改产品提示词。
+- `paragraph`：脚本实验：段落区域按同一高清倍率出图，红框标出目标公式，并附上段落文字。不改产品默认，也不改产品提示词。
+- `context`：脚本实验：高清倍率（scale 4）下裁目标公式，上下约一行、左右几个词，并限制在栏内。红框标出目标。不进默认臂。
 - `page`，需要 `--arm=page`：整页对照，只在脚本里。默认关。不发送整页 PDF，也不能成为产品默认。
 
 ## 通道

@@ -19,7 +19,8 @@
     "scale": 4,
     "tight": "measureFormulaCrop",
     "hiRes": "visionCropFor",
-    "paragraph": "script-only"
+    "paragraph": "script-only",
+    "context": "script-only"
   },
   "sample": {
     "stratified": false,
@@ -68,7 +69,13 @@
       "id": "paragraph",
       "default": false,
       "sendsPdf": false,
-      "note": "脚本实验：段落区域按同一高清倍率出图，并附上段落文字。不改产品默认，也不改产品提示词。"
+      "note": "脚本实验：段落区域按同一高清倍率出图，红框标出目标公式，并附上段落文字。不改产品默认，也不改产品提示词。"
+    },
+    {
+      "id": "context",
+      "default": false,
+      "sendsPdf": false,
+      "note": "脚本实验：高清倍率（scale 4）下裁目标公式，上下约一行、左右几个词，并限制在栏内。红框标出目标。不进默认臂。"
     },
     {
       "id": "page",

@@ -13,8 +13,10 @@
  *   tight       紧裁 PNG。已有图走 cropPngFor；文字层 PDF 用 measureFormulaCrop
  *               （CROP_SCALE 2，行内 pad 4、独立 pad 6）。默认臂。
  *   hi-res      产品高清裁图（visionCropFor / renderVisionCrop，mm-3）。measured。
- *   paragraph   脚本实验：段落区域按同一高清倍率出图，并附段落文字。measured。
- *               不改产品默认，也不改产品提示词。
+ *   paragraph   脚本实验：段落区域按同一高清倍率出图，红框标出目标，并附段落文字。
+ *               measured。不改产品默认，也不改产品提示词。
+ *   context     脚本实验：高清倍率下裁目标公式，上下约一行、左右几个词，红框标出目标。
+ *               不进默认臂。--probe-short 另附 12pt 门槛漏掉的短公式，不改产品门槛。
  *   page        整页对照。脚本专有，默认关。必须写 --arm=page。不发送整页 PDF。
  *               --arm=tight,hi-res,paragraph 不会打开整页。
  *
@@ -73,7 +75,8 @@ import {
   runAb,
   templateReport
 } from "../lib/mm-dpo-ab.js";
-import { renderParagraphCrop, renderTightCrop, renderVisionCrop, visionCanvasAvailable } from "./mm-dpo-vision.mjs";
+import { renderContextCrop, renderParagraphCrop, renderTightCrop, renderVisionCrop, visionCanvasAvailable } from "./mm-dpo-vision.mjs";
+import { shortProbeFormulas } from "./mm-dpo-probes.mjs";
 import { multimodalTarget, sendVision } from "../lib/mm-client.js";
 import { fixedVendorHostMismatch, normalizeFormulaSettings } from "../lib/formula-settings.js";
 import { currentNet } from "../lib/net/fetch.js";
@@ -93,14 +96,16 @@ export const USAGE = [
   "  node tools/mm-dpo-reference.mjs --dry-run --fixture <file.json> [--arm=tight,hi-res,paragraph]",
   "  MM_DPO_KIMI_MODEL=kimi-k3 MM_DPO_KIMI_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 \\",
   "    node tools/mm-dpo-reference.mjs --live --limit=15 --arm=tight,hi-res,paragraph --model=kimi",
-  "  node tools/mm-dpo-reference.mjs --live --sample=15 --arm=tight,hi-res,paragraph --model=kimi",
+  "  node tools/mm-dpo-reference.mjs --live --sample=15 --arm=tight,hi-res,paragraph,context --model=kimi",
+  "  MM_DPO_KIMI_MODEL=kimi-k3 MM_DPO_KIMI_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 \\",
+  "    node tools/mm-dpo-reference.mjs --live --sample=15 --probe-short --arm=hi-res,context,paragraph --model=kimi",
   "  node tools/mm-dpo-reference.mjs --live --full --arm=page",
   "  node tools/mm-dpo-reference.mjs --rescore <report.json> [--reference <file.json>] [--out dir]",
   "  MM_DPO_KIMI_MODEL=kimi-k3 MM_DPO_KIMI_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 \\",
   "  MM_DPO_DEEPSEEK_MODEL=deepseek-v4.1-flash MM_DPO_DEEPSEEK_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 \\",
   "    node tools/mm-dpo-reference.mjs --live --full --arm=hi-res --model=kimi,deepseek",
   "",
-  "输入臂: tight（默认） / hi-res / paragraph / page",
+  "输入臂: tight（默认） / hi-res / paragraph / context / page",
   "  tight：已有图走 cropPngFor；文字层 PDF 用 measureFormulaCrop（CROP_SCALE 2）。",
   "  默认参考：tests/fixtures/mm-dpo-reference.json。未对齐的行不计入准确率。",
   "  火山方舟 Base URL 走产品「自定义兼容端点」：base + /chat/completions，不再加 /v1。",
@@ -110,7 +115,9 @@ export const USAGE = [
   "  那次报告 coverage.detected 为 37，--rescore 仍用当时记下的参考内容。",
   "  page 默认关，必须 --arm=page。不发送整页 PDF，也不进产品默认。",
   "  hi-res 走产品 visionCropFor / renderVisionCrop（mm-3）。没有页面时不发送。",
-  "  paragraph 只在本脚本里：段落区域按同一高清倍率出图，并附段落文字。",
+  "  paragraph 只在本脚本里：段落区域按同一高清倍率出图，红框标出目标，并附段落文字。",
+  "  context 只在本脚本里：目标上下约一行、左右几个词，红框标出目标。不进默认臂。",
+  "  --probe-short 另抽约 10 条产品 12pt 行内门槛漏掉、但带上下标或数学符号的短公式。不改产品门槛。",
   "  --placeholder-uses-tight 会用紧裁占位发送，报告里 measured=false，不参与推荐。",
   "  --limit=N 与 --sample=N 是同一套分层抽样（行内 + 独立，多页）。报告记下 id。",
   "  --ids=id1,id2 按报告里的 id 重放，不再重新抽样。",
@@ -160,6 +167,7 @@ export function parseArgs(argv) {
     reference: "",
     rescore: "",
     placeholderUsesTight: false,
+    probeShort: false,
     errors: []
   };
   for (let i = 0; i < args.length; i += 1) {
@@ -186,6 +194,10 @@ export function parseArgs(argv) {
     }
     if (arg === "--placeholder-uses-tight") {
       parsed.placeholderUsesTight = true;
+      continue;
+    }
+    if (arg === "--probe-short") {
+      parsed.probeShort = true;
       continue;
     }
     if (arg === "--api-key" || arg.startsWith("--api-key=") || arg === "--key" || arg.startsWith("--key=")) {
@@ -376,15 +388,22 @@ export async function openPdfSession(pdfPath) {
         images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
         page: number
       });
-      collected.push({ page: number, blocks: built.blocks });
+      collected.push({
+        page: number,
+        blocks: built.blocks,
+        items: content.items,
+        viewport
+      });
     }
   } catch (err) {
     await doc.destroy();
     throw err;
   }
   const formulas = formulasFromBlocks(collected);
+  const probes = shortProbeFormulas({ pages: collected, formulas });
   return {
     formulas,
+    probes,
     renderVisionCrop(block, spec) {
       return renderVisionCrop(pages.get(Number(block?.page)), block, spec);
     },
@@ -393,6 +412,9 @@ export async function openPdfSession(pdfPath) {
     },
     renderParagraphCrop(formula) {
       return renderParagraphCrop(pages.get(Number(formula?.page)), formula);
+    },
+    renderContextCrop(formula) {
+      return renderContextCrop(pages.get(Number(formula?.page)), formula);
     },
     async close() {
       pages.clear();
@@ -431,12 +453,17 @@ function applyReferenceFile(formulas, parsed) {
 
 async function loadFormulas(parsed) {
   if (parsed.fixture) {
-    const formulas = applyReferenceFile(formulasFromFixture(readJson(resolve(parsed.fixture))), parsed);
-    return { formulas, session: null };
+    const data = readJson(resolve(parsed.fixture));
+    const formulas = applyReferenceFile(formulasFromFixture(data), parsed);
+    const probes = Array.isArray(data?.probes)
+      ? applyReferenceFile(formulasFromFixture({ formulas: data.probes }), parsed)
+      : [];
+    return { formulas, probes, session: null };
   }
   const session = await openPdfSession(parsed.pdf ? resolve(parsed.pdf) : DEFAULT_PDF);
   session.formulas = applyReferenceFile(session.formulas, parsed);
-  return { formulas: session.formulas, session };
+  session.probes = applyReferenceFile(session.probes || [], parsed);
+  return { formulas: session.formulas, probes: session.probes, session };
 }
 
 export function writeReport(dir, report) {
@@ -538,7 +565,8 @@ export async function main(argv = [], io = {}) {
   const tightNeeds = arms.includes("tight") && io.renderTightCrop === undefined;
   const hiNeeds = arms.includes("hi-res") && io.renderVisionCrop === undefined;
   const paragraphNeeds = arms.includes("paragraph") && io.renderParagraphCrop === undefined;
-  if (!parsed.fixture && existsSync(pdfPath) && (tightNeeds || hiNeeds || paragraphNeeds) && !visionCanvasAvailable()) {
+  const contextNeeds = arms.includes("context") && io.renderContextCrop === undefined;
+  if (!parsed.fixture && existsSync(pdfPath) && (tightNeeds || hiNeeds || paragraphNeeds || contextNeeds) && !visionCanvasAvailable()) {
     stderr("裁图需要 @napi-rs/canvas。在仓库根目录运行 npm ci。");
     return { code: 1, report: null, paths: null };
   }
@@ -557,11 +585,21 @@ export async function main(argv = [], io = {}) {
       sample: parsed.sample,
       ids: parsed.ids
     });
-    if (parsed.ids.length && chosen.formulas.length !== parsed.ids.length) {
-      stderr(`--ids 里有报告清单中找不到的公式（要 ${parsed.ids.length}，找到 ${chosen.formulas.length}）`);
+    const probePool = loaded.probes || [];
+    let sampled = chosen.formulas;
+    let probeIds = [];
+    if (parsed.probeShort && !parsed.ids.length) {
+      probeIds = probePool.map((item) => item.id);
+      sampled = [...sampled, ...probePool];
+    } else if (parsed.ids.length && probePool.length) {
+      const have = new Set(sampled.map((item) => item.id));
+      const extra = probePool.filter((item) => parsed.ids.includes(item.id) && !have.has(item.id));
+      if (extra.length) sampled = [...sampled, ...extra];
+    }
+    if (parsed.ids.length && sampled.length !== parsed.ids.length) {
+      stderr(`--ids 里有报告清单中找不到的公式（要 ${parsed.ids.length}，找到 ${sampled.length}）`);
       return { code: 1, report: null, paths: null };
     }
-    const sampled = chosen.formulas;
     const live = parsed.live === true;
     const transport = live ? (io.transport || createLiveTransport({ net: io.net })) : null;
     let katex = io.katex || null;
@@ -576,6 +614,9 @@ export async function main(argv = [], io = {}) {
     const renderParagraph = io.renderParagraphCrop === undefined
       ? (loaded.session?.renderParagraphCrop || null)
       : io.renderParagraphCrop;
+    const renderContext = io.renderContextCrop === undefined
+      ? (loaded.session?.renderContextCrop || null)
+      : io.renderContextCrop;
     const report = await runAb({
       formulas: sampled,
       arms,
@@ -587,6 +628,7 @@ export async function main(argv = [], io = {}) {
       renderTightCrop: renderTight,
       renderVisionCrop: renderVision,
       renderParagraphCrop: renderParagraph,
+      renderContextCrop: renderContext,
       placeholderUsesTight: parsed.placeholderUsesTight,
       now: io.now,
       signal: io.signal,
@@ -597,7 +639,8 @@ export async function main(argv = [], io = {}) {
         stratified: chosen.stratified,
         locked: chosen.locked,
         requested: chosen.requested,
-        ids: chosen.ids
+        ids: sampled.map((item) => item.id),
+        ...(probeIds.length ? { probes: probeIds } : {})
       }
     });
     const dir = parsed.out ? resolve(parsed.out) : stampDir(report.generatedAt);

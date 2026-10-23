@@ -39,11 +39,21 @@ const PARAGRAPH_GAP = 0.15;
 const INLINE_SCORE = 0.92;
 const INLINE_COVER = 0.85;
 const INLINE_COVER_GAP = 0.2;
-const EXACT_KEY_MIN = 4;
+const EXACT_KEY_MIN = 2;
+const PREFIX_KEY_MIN = 8;
+const PREFIX_SUFFIX_MAX = 8;
+const FRAGMENT_KEY_MAX = 12;
 const DISPLAY_LCS = 0.7;
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function starKey(src) {
+  const marked = String(src || "")
+    .replace(/\^\s*\{?\s*(?:\\(?:ast|star)|[*∗])\s*\}?/g, "star")
+    .replace(/∗/g, "star");
+  return mathKey(marked);
 }
 
 function mathKey(src) {
@@ -51,7 +61,7 @@ function mathKey(src) {
   const map = {
     "∗": "*", "ϕ": "phi", "φ": "phi", "θ": "theta", "π": "pi", "β": "beta",
     "σ": "sigma", "∼": "sim", "≻": "succ", "−": "-", "–": "-", "∇": "nabla",
-    "∑": "sum", "ˆ": "hat", "̂": ""
+    "∑": "sum", "ˆ": "", "̂": ""
   };
   text = text.replace(/[∗ϕφθπβσ∼≻−–∇∑ˆ̂]/g, (ch) => map[ch] ?? "");
   text = text.replace(/\\(?:text|mathrm|textrm|mathbf|mathit|operatorname|mbox|mathbb|mathcal|textbf)\{([^{}]*)\}/g, "$1");
@@ -189,6 +199,69 @@ function blankRow(formula) {
   };
 }
 
+function parenSpans(latex) {
+  const text = String(latex || "");
+  const spans = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "\\") {
+      i += 1;
+      continue;
+    }
+    if (ch === "(") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === ")" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        spans.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return spans;
+}
+
+function relationMarks(src) {
+  const text = String(src || "");
+  return {
+    mid: /\\mid|\|/.test(text),
+    comma: /,/.test(text)
+  };
+}
+
+function sameRelations(pdf, span) {
+  const left = relationMarks(pdf);
+  const right = relationMarks(span);
+  return left.mid === right.mid && left.comma === right.comma;
+}
+
+function fragmentCandidates(paragraph) {
+  const out = [];
+  for (const item of inlineCandidates(paragraph)) {
+    for (const span of parenSpans(item.latex)) {
+      const key = mathKey(span);
+      if (key.length < EXACT_KEY_MIN || key === item.key || key.length > FRAGMENT_KEY_MAX) continue;
+      out.push({
+        id: `${item.id}#${key}`,
+        latex: referenceLatex(span, false),
+        key
+      });
+    }
+  }
+  return out;
+}
+
+function missReason(formula, paragraph, key, scored) {
+  if (!paragraph) return words(formula?.paragraphText).length < 4 ? "no-paragraph" : "paragraph-tie";
+  if (formula.display !== false) return key.length < 12 ? "short-key" : "low-score";
+  if (key.length < EXACT_KEY_MIN) return "short-key";
+  if (!scored.length) return "no-inline";
+  return "low-score";
+}
+
 function claim(row, source, reason) {
   row.aligned = true;
   row.confidence = "high";
@@ -218,7 +291,15 @@ export function alignDetectedFormulas(formulas, units) {
       }
     }
     const paragraph = matchParagraph(formula, sourceUnits);
-    const key = mathKey(formula.pdfText);
+    let key = mathKey(formula.pdfText);
+    let starMode = false;
+    if (formula.display === false && key.length < EXACT_KEY_MIN && /[*∗]/.test(String(formula.pdfText || ""))) {
+      const starred = starKey(formula.pdfText);
+      if (starred.length >= EXACT_KEY_MIN) {
+        key = starred;
+        starMode = true;
+      }
+    }
     if (formula.display !== false && paragraph && key.length >= 12) {
       const neighbor = adjacentDisplay(paragraph, sourceUnits, displays);
       if (neighbor) {
@@ -230,7 +311,10 @@ export function alignDetectedFormulas(formulas, units) {
       }
     }
     if (formula.display === false && paragraph && key.length >= EXACT_KEY_MIN) {
-      const scored = inlineCandidates(paragraph)
+      const pool = inlineCandidates(paragraph).map((item) => (
+        starMode ? { ...item, key: starKey(item.latex) } : item
+      ));
+      const scored = pool
         .map((item) => ({ item, ...scorePair(key, item.key) }))
         .sort((a, b) => b.cover - a.cover || b.score - a.score);
       const best = scored[0];
@@ -245,9 +329,25 @@ export function alignDetectedFormulas(formulas, units) {
         && exact[0].item.key.length >= EXACT_KEY_MIN
         && exact[0].cover >= 0.99
         && (next?.cover || 0) <= exact[0].cover - INLINE_COVER_GAP;
+      const fragments = fragmentCandidates(paragraph).filter((item) =>
+        item.key === mathKey(formula.pdfText) && sameRelations(formula.pdfText, item.latex));
+      const prefixed = key.length >= PREFIX_KEY_MIN
+        ? pool.filter((item) =>
+          item.key.startsWith(key)
+          && item.key.length > key.length
+          && item.key.length - key.length <= PREFIX_SUFFIX_MAX)
+        : [];
       if (longEnough) claim(row, best.item, "paragraph-inline");
       else if (exactUnique) claim(row, exact[0].item, "paragraph-inline");
+      else if (exact.length > 1) row.reason = "ambiguous";
+      else if (fragments.length === 1) claim(row, fragments[0], "paragraph-fragment");
+      else if (fragments.length > 1) row.reason = "ambiguous";
+      else if (prefixed.length === 1) claim(row, prefixed[0], "paragraph-prefix");
+      else if (prefixed.length > 1) row.reason = "ambiguous";
+      else row.reason = missReason(formula, paragraph, key, scored);
+      return row;
     }
+    row.reason = missReason(formula, paragraph, key, []);
     return row;
   });
   const claimed = new Map();
@@ -310,6 +410,12 @@ export function referenceDocument(formulas, rows, meta = {}) {
     }))
   };
   if (meta.legacy?.formulas?.length) document.legacy = meta.legacy;
+  if (Array.isArray(meta.probes)) {
+    document.probes = meta.probes;
+    document.probeCount = meta.probes.length;
+    document.probeAligned = meta.probes.filter((row) => row.aligned && row.reference).length;
+    document.probeNote = "脚本短公式探针，不是产品检出。FORMULA_RUN_MIN_WIDTH 仍是 12。";
+  }
   return document;
 }
 
@@ -341,10 +447,27 @@ export async function buildReference({ pdfPath = DEFAULT_PDF, sourcePath = DEFAU
   const session = await openPdfSession(pdfPath);
   try {
     const rows = alignDetectedFormulas(session.formulas, parsed.units);
+    const probeRows = alignDetectedFormulas(session.probes || [], parsed.units);
+    const probes = (session.probes || []).map((probe) => {
+      const row = probeRows.find((item) => item.id === probe.id) || {};
+      return {
+        id: probe.id,
+        page: probe.page,
+        display: false,
+        pdfText: probe.pdfText,
+        signature: probe.signature,
+        aligned: row.aligned === true,
+        confidence: row.aligned ? "high" : "none",
+        reason: row.reason || "low-score",
+        sourceId: row.aligned ? row.sourceId : "",
+        reference: row.aligned ? row.reference : null
+      };
+    });
     return referenceDocument(session.formulas, rows, {
       pdfSha256: sha256(readFileSync(pdfPath)),
       sourceSha256: sha256(sourceBytes),
-      legacy
+      legacy,
+      probes
     });
   } finally {
     await session.close();
@@ -383,9 +506,11 @@ async function main() {
   });
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, `${JSON.stringify(document, null, 2)}\n`);
-  const marked = document.formulas.filter((row) => row.aligned === false).map((row) => row.id);
-  console.log(`${outPath} detected=${document.detected} aligned=${document.aligned} unaligned=${document.unaligned}`);
+  const marked = document.formulas.filter((row) => row.aligned === false).map((row) => `${row.id}:${row.reason}`);
+  console.log(`${outPath} detected=${document.detected} aligned=${document.aligned} unaligned=${document.unaligned} probes=${document.probeCount} probeAligned=${document.probeAligned}`);
   if (marked.length) console.log(`unaligned: ${marked.join(", ")}`);
+  const probeMiss = (document.probes || []).filter((row) => row.aligned === false).map((row) => `${row.id}:${row.reason}:${row.pdfText}`);
+  if (probeMiss.length) console.log(`probe unaligned: ${probeMiss.join(" | ")}`);
 }
 
 function invokedDirectly() {

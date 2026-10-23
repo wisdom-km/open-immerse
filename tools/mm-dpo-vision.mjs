@@ -6,12 +6,16 @@
  * layout box at the vision scale, tight-crop with measureVisionRegion, then
  * mask neighbor ink. This file does not change the product prompt or defaults.
  *
- * The paragraph crop is script-only. It renders the paragraph box at the same
- * vision scale and does not go through visionCropSpec (that spec stays tight).
+ * The paragraph and context crops are script-only. They render at the same
+ * vision scale and do not go through visionCropSpec (that spec stays tight).
+ * Both draw a red rectangle outside the target glyphs.
  */
 
+export const TARGET_BOX_COLOR = "#e10600";
+export const TARGET_BOX_PX = 3;
+
 import { createRequire } from "node:module";
-import { deflateSync } from "node:zlib";
+import { deflateSync, inflateSync } from "node:zlib";
 
 import { CROP_SCALE, rasterCropRect } from "../lib/pdf-blocks.js";
 import { parseCropDataUrl } from "../lib/formula-crop-png.js";
@@ -24,6 +28,7 @@ import {
   visionRasterPlan,
   visionSourceBbox
 } from "../lib/formula-vision-crop.js";
+import { contextWindow } from "../lib/mm-dpo-ab.js";
 
 const require = createRequire(import.meta.url);
 
@@ -49,6 +54,37 @@ function pngChunk(type, data) {
 }
 
 /** RGBA PNG. Callers only need a real IHDR; the bytes are still a valid image. */
+export function decodeRgbaPng(base64) {
+  const buf = Buffer.from(String(base64 || ""), "base64");
+  if (buf.length < 8) return null;
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  const parts = [];
+  while (offset + 12 <= buf.length) {
+    const len = buf.readUInt32BE(offset);
+    const type = buf.toString("ascii", offset + 4, offset + 8);
+    const start = offset + 8;
+    const end = start + len;
+    if (end + 4 > buf.length) return null;
+    if (type === "IHDR") {
+      width = buf.readUInt32BE(start);
+      height = buf.readUInt32BE(start + 4);
+    } else if (type === "IDAT") parts.push(buf.subarray(start, end));
+    else if (type === "IEND") break;
+    offset = end + 4;
+  }
+  if (!(width > 0) || !(height > 0) || !parts.length) return null;
+  const raw = inflateSync(Buffer.concat(parts));
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  const stride = width * 4;
+  for (let y = 0; y < height; y += 1) {
+    const from = y * (stride + 1) + 1;
+    rgba.set(raw.subarray(from, from + stride), y * stride);
+  }
+  return { width, height, rgba };
+}
+
 export function encodeRgbaPng(width, height, rgba) {
   const w = width | 0;
   const h = height | 0;
@@ -271,6 +307,48 @@ function release(canvas) {
   }
 }
 
+/** Page-fraction box → integer pixels on a crop whose origin is `crop`. */
+export function targetBoxPixels(crop, target, pageWidth, pageHeight, scale) {
+  const fullW = pageWidth * scale;
+  const fullH = pageHeight * scale;
+  if (!(fullW > 0) || !(fullH > 0) || !Array.isArray(crop) || !Array.isArray(target)) return null;
+  const x = Math.round((target[0] - crop[0]) * fullW);
+  const y = Math.round((target[1] - crop[1]) * fullH);
+  const x2 = Math.round((target[2] - crop[0]) * fullW);
+  const y2 = Math.round((target[3] - crop[1]) * fullH);
+  const w = x2 - x;
+  const h = y2 - y;
+  if (!(w > 0) || !(h > 0)) return null;
+  return { x, y, w, h };
+}
+
+/** Stroke outside `rect` so the glyphs inside stay unpainted. */
+export function paintTargetBox(canvas, rect, thickness = TARGET_BOX_PX) {
+  if (!canvas || !rect || !(rect.w > 0) || !(rect.h > 0)) return false;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || typeof ctx.fillRect !== "function") return false;
+  const t = thickness > 0 ? thickness : TARGET_BOX_PX;
+  const { x, y, w, h } = rect;
+  ctx.fillStyle = TARGET_BOX_COLOR;
+  ctx.fillRect(x - t, y - t, w + 2 * t, t);
+  ctx.fillRect(x - t, y + h, w + 2 * t, t);
+  ctx.fillRect(x - t, y, t, h);
+  ctx.fillRect(x + w, y, t, h);
+  return true;
+}
+
+function paintFormulaFrame(page, canvas, cropBbox, targetBbox, scale) {
+  if (!page || typeof page.getViewport !== "function") return false;
+  let unit = null;
+  try {
+    unit = page.getViewport({ scale: 1 });
+  } catch {
+    return false;
+  }
+  const rect = targetBoxPixels(cropBbox, targetBbox, unit.width, unit.height, scale);
+  return paintTargetBox(canvas, rect, TARGET_BOX_PX);
+}
+
 function pngOf(canvas) {
   if (!canvas) return null;
   if (typeof canvas.toDataURL === "function") {
@@ -457,13 +535,16 @@ export async function renderTightCrop(page, formula, hooks = {}) {
 
 /**
  * Script-only paragraph bitmap at the product vision scale.
- * No ink trim: the crop is the paragraph box. Text stays with the caller.
+ * No ink trim: the crop is the paragraph box. A red frame marks the target.
+ * Text stays with the caller.
  */
 export async function renderParagraphCrop(page, formula, hooks = {}) {
   const bbox = Array.isArray(formula?.paragraphBbox) ? formula.paragraphBbox : null;
   if (!bbox) return null;
   const drawn = await renderWindow(page, bbox, VISION_CROP_SCALE, hooks);
   if (!drawn) return null;
+  const target = Array.isArray(formula?.layoutBbox) ? formula.layoutBbox : formula?.bbox;
+  if (target) paintFormulaFrame(page, drawn.canvas, bbox, target, drawn.plan.scale);
   const png = pngOf(drawn.canvas);
   release(drawn.canvas);
   if (!png) return null;
@@ -475,5 +556,32 @@ export async function renderParagraphCrop(page, formula, hooks = {}) {
     hash: png.hash,
     scale: drawn.plan.scale,
     paragraphText: typeof formula.paragraphText === "string" ? formula.paragraphText : ""
+  };
+}
+
+/**
+ * Script-only context crop at the product vision scale.
+ * One text line above and below, a few words left and right, clamped to the
+ * column. The red frame sits outside the target glyphs.
+ */
+export async function renderContextCrop(page, formula, hooks = {}) {
+  const windowBox = contextWindow(formula);
+  if (!windowBox) return null;
+  const drawn = await renderWindow(page, windowBox.bbox, VISION_CROP_SCALE, hooks);
+  if (!drawn) return null;
+  paintFormulaFrame(page, drawn.canvas, windowBox.bbox, windowBox.target, drawn.plan.scale);
+  const png = pngOf(drawn.canvas);
+  release(drawn.canvas);
+  if (!png) return null;
+  const neighbor = typeof formula?.paragraphText === "string" ? formula.paragraphText : "";
+  return {
+    mime: png.mime,
+    base64: png.base64,
+    w: png.w,
+    h: png.h,
+    hash: png.hash,
+    scale: drawn.plan.scale,
+    paragraphText: neighbor,
+    neighborText: neighbor
   };
 }
