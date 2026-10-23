@@ -19,6 +19,7 @@ import {
   TARGET_BOX_PX,
   contextCropGeometry,
   contextWindow,
+  containedGlyphInkShortfall,
   formulaInkOutsideCount,
   glyphRectPixels,
   paintTargetBox,
@@ -422,6 +423,37 @@ test("only an inline context crop appends the strict prompt", () => {
   assert.equal(MM_TIER_VERSION, "mm-4");
 });
 
+test("ink past the metric box stays inside the red box", () => {
+  // The glyph box ends at x=26. Connected ink continues to x=32, and most of
+  // that ink is still inside the box, so it belongs to the formula. Left and
+  // right edges have to follow the ink. A box built only from the glyph union
+  // leaves those pixels outside.
+  const image = blankImage(48, 36);
+  const glyph = { x: 10, y: 8, w: 16, h: 16 };
+  for (let y = 12; y <= 20; y += 1) {
+    for (let x = 12; x <= 32; x += 1) image.dot(x, y);
+  }
+  const seated = seatInkBox(image, glyph);
+  assert.equal(formulaInkOutsideCount(image, [glyph], seated), 0);
+  assert.ok(seated.x + seated.w >= 35, JSON.stringify(seated));
+});
+
+test("an accent disconnected from its base stays inside the red box", () => {
+  // The accent box overlaps the base, so the dark mass of the letter is the
+  // largest component and a largest-component rule drops the hat. The hat is
+  // its own component, fully inside the glyph box, and must sit at least two
+  // pixels inside the red box. This count does not use the seated mask.
+  const image = blankImage(40, 40);
+  const glyph = { x: 8, y: 4, w: 20, h: 28 };
+  for (let y = 16; y <= 28; y += 1) {
+    for (let x = 10; x <= 24; x += 1) image.dot(x, y);
+  }
+  for (let x = 14; x <= 20; x += 1) image.dot(x, 8);
+  const seated = seatInkBox(image, glyph);
+  assert.equal(containedGlyphInkShortfall(image, [glyph], seated, 2), 0);
+  assert.ok(seated.y <= 6, JSON.stringify(seated));
+});
+
 test("a wide descender row stays inside the red box", () => {
   const image = blankImage(90, 90);
   const glyph = { x: 10, y: 10, w: 50, h: 20 };
@@ -447,13 +479,20 @@ function sliceRaster(image, originX, originY, width, height) {
   return { data, width, height };
 }
 
-test("rendered DPO and DDPM inline crops keep formula ink inside the red box", async (t) => {
+test("rendered DPO, Attention, and DDPM inline crops keep formula ink inside the red box", { timeout: 1800000 }, async (t) => {
+  // Independent of the mask the box is seated on. A dark component that lies
+  // wholly inside this block's glyph boxes (one pixel of slack, so a neighbour
+  // line cannot qualify) must sit inside the red box. The box keeps a 2px
+  // white gap when the next line leaves room for the stroke; a tighter gap
+  // shrinks that pad instead of crossing the neighbour.
   const papers = [
-    [join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf"), [6, 8, 18, 19]],
-    ["/tmp/papers/ddpm.pdf", [4]]
-  ].filter(([path]) => existsSync(path));
-  if (!papers.length) {
-    t.skip("no fixture PDF; the rendered ink check did not run");
+    ["DPO", join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf")],
+    ["Attention", join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf")],
+    ["DDPM", join(root, "tests/fixtures/DDPM_2006.11239.pdf")]
+  ];
+  const missing = papers.filter(([, path]) => !existsSync(path)).map(([name]) => name);
+  if (missing.length) {
+    t.skip(`missing ${missing.join(", ")} under tests/fixtures; the rendered ink check did not run`);
     return;
   }
   let createCanvas;
@@ -465,14 +504,14 @@ test("rendered DPO and DDPM inline crops keep formula ink inside the red box", a
   }
   GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
   const failures = [];
-  for (const [pdfPath, pages] of papers) {
+  for (const [paperName, pdfPath] of papers) {
     const doc = await getDocument({
       data: new Uint8Array(readFileSync(pdfPath)),
       verbosity: 0,
       isOffscreenCanvasSupported: false
     }).promise;
     try {
-      for (const number of pages) {
+      for (let number = 1; number <= doc.numPages; number += 1) {
         const pdfPage = await doc.getPage(number);
         const content = await pdfPage.getTextContent();
         const ops = await pdfPage.getOperatorList();
@@ -509,9 +548,9 @@ test("rendered DPO and DDPM inline crops keep formula ink inside the red box", a
             .filter(Boolean);
           if (!glyphRect || !glyphs.length) continue;
           const seated = seatInkBox(slice, glyphRect, { glyphs });
-          const outside = formulaInkOutsideCount(slice, glyphs, seated);
+          const outside = containedGlyphInkShortfall(slice, glyphs, seated, 0);
           if (outside) {
-            failures.push(`${pdfPath.split("/").pop()} p${number} ${block.sourceText?.slice(0, 40)} ${outside}`);
+            failures.push(`${paperName} p${number} ${outside}px ${block.sourceText?.slice(0, 40)}`);
           }
         }
       }

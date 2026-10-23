@@ -11,6 +11,7 @@ import {
   FORMULA_PAPER_MIN,
   contentAwareFormulaBbox,
   formulaGlyphsRedrawSafe,
+  shortFormulaRunExempt,
   textLayerToBlocks,
   trimFormulaBboxToInk
 } from "../lib/pdf-text-layer.js";
@@ -1379,6 +1380,8 @@ test("paragraphs keep sourceItems without dropping text or role", () => {
 });
 
 test("text diacritics, plain charges, and citation marks stay in the sentence", () => {
+  // These marks are short spans. The charge and citation filters only apply
+  // under 12pt; a wider asymmetric error stays a block.
   const text = (str, x, y, width, height = 10) => pdfItem(str, x, y, width, height, {
     fontName: "Times-Roman",
     fontRealName: "Times-Roman"
@@ -1404,8 +1407,8 @@ test("text diacritics, plain charges, and citation marks stay in the sentence", 
       text("ions Na", 72, 400, 36),
       raised("+", 110, 404, 6),
       text(", Cl", 118, 400, 18),
-      raised("−", 138, 404, 6),
-      text(",", 146, 400, 4),
+      raised("−", 138, 404, 5),
+      text(",", 144, 400, 3),
       text(" and cm", 152, 400, 36),
       raised("−", 190, 404, 6),
       raised("1", 196, 404, 4),
@@ -1414,14 +1417,14 @@ test("text diacritics, plain charges, and citation marks stay in the sentence", 
       raised("1", 246, 404, 4),
       text(".", 252, 400, 4),
       text("see note", 72, 360, 40),
-      raised("1-2", 114, 364, 14),
+      raised("1-2", 114, 364, 10),
       text(" and refs", 130, 360, 40),
-      raised("3-4", 172, 364, 14),
+      raised("3-4", 172, 364, 10),
       text(" Smith", 188, 360, 30),
       raised("a", 220, 364, 4),
       raised("*", 224, 364, 4),
       text(" and author", 230, 360, 50),
-      raised("1,a", 282, 364, 12),
+      raised("1,a", 282, 364, 10),
       text(" result", 296, 360, 32),
       raised("*", 330, 364, 5)
     ],
@@ -1515,6 +1518,106 @@ test("a same-baseline T − t is not written as a subscript", () => {
   });
   const blob = page.blocks.map((block) => `${block.text || ""} ${block.sourceText || ""}`).join("\n");
   assert.doesNotMatch(blob, /T_\{/);
+});
+
+test("T − t with no parentheses stays a subtraction when every glyph shares the baseline", () => {
+  // Wider than 12pt, so the run is a candidate. The parentheses in the other
+  // fixture hide the offset check: indexIdentifierUnicode returns "" as soon
+  // as the first glyph is "(". Here the only guard is tailIsScriptOffset.
+  // A check that always returns true writes T_{−t}.
+  const glyph = (str, x) => pdfItem(str, x, 200, 8, 9, {
+    fontName: "g_d0_f4",
+    fontRealName: "CMMI10"
+  });
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("steps ", 40, 200, 32, 9),
+      glyph("T", 74),
+      glyph("−", 84),
+      glyph("t", 94),
+      pdfItem(" later", 106, 200, 28, 9)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 7
+  });
+  const blob = page.blocks.map((block) => `${block.text || ""} ${block.sourceText || ""}`).join("\n");
+  assert.doesNotMatch(blob, /T_\{/);
+  assert.match(blob, /T\s*−\s*t/);
+});
+
+test("the base is recovered when it is the last glyph of a longer text item", () => {
+  // LHCb 1507.03414 page 32 draws "expected (P" as one text item and Λ_b⁰
+  // after it. P is not its own math-font item, so a strong-anchor path never
+  // sees it. Dropping the split, or dropping attachedBaseIndex, leaves P in
+  // the sentence.
+  const math = (str, x, y, width, height, face) => pdfItem(str, x, y, width, height, {
+    fontName: "g_d0_f3",
+    fontRealName: face
+  });
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("expected (P", 72, 400, 62, 9, { fontName: "Times-Roman", fontRealName: "Times-Roman" }),
+      math("Λ", 136, 396.2, 6, 6, "CMMI7"),
+      math("b", 142.5, 395.8, 4, 5, "CMR7"),
+      math("0", 147, 403.2, 3.5, 4.5, "CMR5"),
+      pdfItem(" is zero.", 154, 400, 40, 9)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 32
+  });
+  const formula = page.blocks.find((block) => block.label === "formula");
+  const sentence = page.blocks.find((block) => /expected/.test(`${block.sourceText || ""} ${block.text || ""}`));
+  assert.ok(formula, page.blocks.map((block) => `${block.label}:${block.sourceText}`).join(" | "));
+  assert.match(formula.sourceText || "", /P/);
+  assert.match(formula.sourceText || "", /Λ/);
+  assert.ok(sentence);
+  assert.match(`${sentence.sourceText || ""} ${sentence.text || ""}`, /expected/);
+  assert.doesNotMatch(`${sentence.sourceText || ""} ${sentence.text || ""}`, /P\s*⟦f/);
+});
+
+test("a wide asymmetric error stays a formula block", () => {
+  // 0.18^{+5}_{−5.62} is wider than 12pt and has no letters, so the charge
+  // filter would delete it. That filter is only for a short span.
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("the rate ", 40, 400, 48, 10),
+      pdfItem("0.18", 92, 400, 22, 10),
+      pdfItem("+", 116, 404, 5, 6),
+      pdfItem("5", 121, 404, 4, 6),
+      pdfItem("−", 116, 394, 5, 5),
+      pdfItem("5", 121, 394, 4, 5),
+      pdfItem(".62", 126, 394, 12, 5),
+      pdfItem(" of events.", 142, 400, 56, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 4
+  });
+  const formula = page.blocks.find((block) => block.label === "formula");
+  assert.ok(formula, page.blocks.map((block) => `${block.label}:${block.sourceText}`).join(" | "));
+  assert.match(formula.sourceText || "", /0\.18/);
+  assert.match(formula.sourceText || "", /−/);
+});
+
+test("a superscript without a math-font or Greek base is not a short formula", () => {
+  // i^{th} on a text face. Citation and charge filters do not match "th",
+  // so the only rejection is the math-base half of rule (c). Dropping that
+  // half makes shortFormulaRunExempt return true.
+  const list = [
+    { str: "i", x: 40, y: 100, width: 4, height: 10, fontName: "Times-Italic", fontRealName: "Times-Italic" },
+    { str: "th", x: 44, y: 104.5, width: 8, height: 6, fontName: "Times-Roman", fontRealName: "Times-Roman" }
+  ];
+  assert.equal(shortFormulaRunExempt(list, 0, 1, { bodyH: 10, baseY: 100 }), false);
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("the ", 40, 100, 22, 10, { fontName: "Times-Roman", fontRealName: "Times-Roman" }),
+      pdfItem("i", 64, 100, 4, 10, { fontName: "Times-Italic", fontRealName: "Times-Italic" }),
+      pdfItem("th", 68, 104.5, 8, 6, { fontName: "Times-Roman", fontRealName: "Times-Roman" }),
+      pdfItem(" term", 78, 100, 28, 10, { fontName: "Times-Roman", fontRealName: "Times-Roman" })
+    ],
+    viewport: unitViewport(612, 792),
+    page: 2
+  });
+  assert.equal(page.blocks.some((block) => block.label === "formula"), false);
 });
 
 test("a smaller raised minus still folds K−p the way main does", () => {

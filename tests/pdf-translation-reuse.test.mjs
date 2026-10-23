@@ -469,7 +469,6 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
     const requested = sent.reduce((count, message) => count + message.texts.length, 0);
     const changed = [...pendingByPage.values()].reduce((count, units) => count + units.length, 0);
     assert.equal(requested, changed, `${name} requests only changed blocks`);
-    assert.equal(requested < 16, true, `${name} sends ${requested}, far below 16`);
     assert.equal(sent.every((message) => message.type === "OI_TRANSLATE_BATCH"), true);
     const kept = cache.get(1, 2).find((unit) => unit.id === unchanged.id);
     assert.equal(kept.translation, unchanged.translation);
@@ -501,12 +500,18 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
       pages: states.filter((row) => row.state === "partial").map((row) => row.page)
     };
   }
-  assert.equal(opened["source-v2"].requested, 2);
-  assert.deepEqual(opened["source-v2"].pages, [24, 26]);
-  assert.equal(opened["main-v2"].requested, 6);
-  assert.deepEqual(opened["main-v2"].pages, [9, 10, 24, 26]);
-  assert.equal(opened["tip-v3"].requested, 0);
-  assert.deepEqual(opened["tip-v3"].pages, []);
+  // Pages 3, 4, 5, 7, 16 and 17 gained short formula blocks (a Greek subscript,
+  // an accent, or a superscript on a math base). That changes the ⟦fN⟧ slots,
+  // so a paragraph saved against the older layout is resent. The older resends
+  // stay: source-v2 and main-v2 still send 24 and 26, and main-v2 still sends
+  // 9 and 10. Page 2 and the WATCH bids above are unchanged and are not resent.
+  // Opening the same layout a second time sends nothing.
+  assert.equal(opened["source-v2"].requested, 12);
+  assert.deepEqual(opened["source-v2"].pages, [3, 4, 5, 7, 16, 17, 24, 26]);
+  assert.equal(opened["main-v2"].requested, 16);
+  assert.deepEqual(opened["main-v2"].pages, [3, 4, 5, 7, 9, 10, 16, 17, 24, 26]);
+  assert.equal(opened["tip-v3"].requested, 10);
+  assert.deepEqual(opened["tip-v3"].pages, [3, 4, 5, 7, 16, 17]);
   assert.equal(opened["source-v2"].second, 0);
   assert.equal(opened["main-v2"].second, 0);
   assert.equal(opened["tip-v3"].second, 0);
