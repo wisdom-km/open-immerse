@@ -12632,7 +12632,7 @@ function setStatus(text, isError = false, isWarn = false) {
 }
 
 // Keep this after every top-level let/const. Without ?src=, init() calls
-// updateTranslateControls while backgroundSessions is still uninitialized.
+// updateTranslateControls while `const backgroundSessions` is still uninitialized.
 // That TDZ error aborts the module; lastShownFont, cachedScrollbarWidth,
 // arxivPrefsLoaded, and cachedPdfLayout then fail the same way.
 init();
