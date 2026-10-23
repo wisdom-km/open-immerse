@@ -143,7 +143,6 @@ import {
 } from "../lib/pdf-paper.js";
 import { describeBodyFont } from "../lib/pdf-body-font.js";
 import {
-  PDF_READOUT_COPY,
   extractReadoutBlocks,
   mergeReadoutTranslations,
   readoutFlowForPage,
@@ -370,6 +369,7 @@ import {
   readFormulaSettings,
   writeFormulaSettings
 } from "../lib/formula-settings.js";
+import { parseFigureLabel } from "../lib/figure-label.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
 import { applySavedPairs, bindStructureRowBids, blockSoftLead, commitLandedStructurePairs, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, openLibraryPdf, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, structurePairsChanged, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
@@ -5016,7 +5016,7 @@ function jumpFormulaPlaceholder(button) {
   else requestAnimationFrame(() => requestAnimationFrame(run));
 }
 
-function appendCropOrNotice(node, block, imageClass, page) {
+function appendCropOrNotice(node, block, imageClass, page, caption = null) {
   const shownPage = page ?? node.dataset.page;
   if (block?.label === "formula" && block.formulaTier === "placeholder") {
     mountFormulaPlaceholder(node, block, shownPage, false);
@@ -5055,8 +5055,11 @@ function appendCropOrNotice(node, block, imageClass, page) {
     node.append(visualCropPendingBox(block, shownPage));
     return;
   }
-  const notice = visualCropNotice(block, shownPage);
-  if (notice?.classList?.contains("oi-pdf-asset-fallback")) noteAssetPaint("fallback", block, shownPage);
+  const notice = visualCropNotice(block, shownPage, caption);
+  const painted = notice?.classList?.contains("oi-pdf-asset-fallback")
+    ? notice
+    : notice?.querySelector?.(".oi-pdf-asset-fallback");
+  if (painted) noteAssetPaint("fallback", block, shownPage);
   node.append(notice);
 }
 
@@ -5132,21 +5135,81 @@ function markVisualCropsFailed(layout) {
   }
 }
 
-function visualCropNotice(block, page) {
+function captionSourceText(block) {
+  return String(block?.sourceText || block?.text || "").trim();
+}
+
+function figureCardCapPx(block, page) {
+  const n = Number(page) || 0;
+  const layout = getPageLayout(n);
+  const pageW = Number(layout?.pageWidth) || 0;
+  const pageH = Number(layout?.pageHeight) || 0;
+  if (!(pageW > 0) || !(pageH > 0) || !Array.isArray(block?.bbox)) return 0;
+  const sized = visualDisplayCssSize({
+    block,
+    pageWidth: pageW,
+    pageHeight: pageH,
+    rasterWidth: Math.max(1, Math.floor(pageW * CROP_SCALE)),
+    rasterHeight: Math.max(1, Math.floor(pageH * CROP_SCALE))
+  });
+  const widthPx = Number(sized?.layoutCapPx) || 0;
+  return widthPx > 0 ? widthPx : 0;
+}
+
+function visualCropNotice(block, page, caption = null) {
   const n = Number(page) || 0;
   if ((block?.label === "figure" || block?.label === "table") && n >= 1) {
     const kind = block.label === "table" ? "表" : "图";
+    const copyKind = kind === "表" ? "table" : "figure";
+    const parsed = parseFigureLabel(captionSourceText(caption));
+    let figureLabel = String(block?.figureLabel || "").trim().replace(/^\(|\)$/g, "");
+    if (!figureLabel && parsed && parsed.kind === copyKind) figureLabel = parsed.num;
+    const shown = { ...block, page: n };
+    shown.figureLabel = figureLabel;
+    const copy = placeholderCopy(shown, { kind: copyKind });
+    const row = document.createElement("div");
+    row.className = "oi-figure-placeholder-row";
+    const reserve = document.createElement("span");
+    reserve.className = "oi-formula-reserve";
+    reserve.dataset.oiReserve = "f8";
+    reserve.setAttribute("aria-hidden", "true");
     const notice = document.createElement("button");
     notice.type = "button";
-    notice.className = "oi-pdf-asset-fallback";
+    notice.className = "oi-figure-placeholder oi-pdf-asset-fallback";
     notice.dataset.page = String(n);
-    notice.textContent = `${kind}见原文第 ${n} 页（点击查看）`;
-    notice.setAttribute("aria-label", `${kind}见原文第 ${n} 页`);
+    if (figureLabel) notice.dataset.figureLabel = figureLabel;
+    notice.title = copy.aria;
+    notice.setAttribute("aria-label", copy.aria);
+    const widthPx = figureCardCapPx(block, n);
+    if (widthPx > 0) notice.style.setProperty("--oi-fig-w", `${widthPx}px`);
+    const text = document.createElement("span");
+    text.className = "oi-ph-text";
+    text.setAttribute("aria-hidden", "true");
+    const line = document.createElement("span");
+    line.className = "oi-ph-line";
+    ["l0", "l1", "l2"].forEach((level, index) => {
+      const span = document.createElement("span");
+      span.className = level;
+      span.textContent = copy.visible[index] || "";
+      line.append(span);
+    });
+    line.append(placeholderIcon());
+    const sub = document.createElement("span");
+    sub.className = "oi-ph-sub";
+    ["s0", "s1", "s2"].forEach((level, index) => {
+      const span = document.createElement("span");
+      span.className = level;
+      span.textContent = copy.second?.[index] || "";
+      sub.append(span);
+    });
+    text.append(line, sub);
+    notice.append(text);
     notice.addEventListener("click", (event) => {
       event.preventDefault();
       jumpAssetFallback(notice);
     });
-    return notice;
+    row.append(reserve, notice);
+    return row;
   }
   return document.createTextNode(block?.label === "formula"
     ? PDF_COPY.formulaFallback
@@ -5154,14 +5217,12 @@ function visualCropNotice(block, page) {
 }
 
 function orphanVisualNotice(block, page) {
-  const table = /^(?:Table\s*|表\s*)\d+\s*[:：.]/i.test(block?.text || "");
-  const notice = visualCropNotice({ label: table ? "table" : "figure" }, page);
-  if (notice?.classList?.contains("oi-pdf-asset-fallback")) {
-    notice.textContent = PDF_READOUT_COPY.figurePlaceholder;
-    const n = Number(page) || 0;
-    if (n >= 1) notice.setAttribute("aria-label", `${table ? "表" : "图"}见原文第 ${n} 页`);
+  if (!/^(?:Figure|Fig\.?|Table|图|表)\s*\d+[A-Za-z]?\s*[:：.．]/i.test(captionSourceText(block))) {
+    return document.createDocumentFragment();
   }
-  return notice;
+  const parsed = parseFigureLabel(captionSourceText(block));
+  const table = parsed?.kind === "table";
+  return visualCropNotice({ label: table ? "table" : "figure" }, page, block);
 }
 
 function jumpAssetFallback(notice) {
@@ -5622,7 +5683,7 @@ function appendFixtureReadout(parent, layout, options = {}) {
       node.dataset.label = String(visual.label || "");
       const capNode = caption ? captionNode(caption, page, layout) : null;
       if (capNode && caption && blocks.indexOf(caption) < blocks.indexOf(visual)) node.append(capNode);
-      appendCropOrNotice(node, visual, plan.imageClass, page);
+      appendCropOrNotice(node, visual, plan.imageClass, page, caption);
       if (capNode && caption && blocks.indexOf(caption) > blocks.indexOf(visual)) node.append(capNode);
       parent.append(node);
       continue;

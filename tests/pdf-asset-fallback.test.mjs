@@ -281,8 +281,9 @@ test("figure placeholder jumps the source pane to its page", { timeout: 180000 }
   assert.equal(ready.tag, "BUTTON");
   assert.equal(ready.type, "button");
   assert.equal(ready.page, "3");
-  assert.match(ready.text, /图见原文第 3 页（点击查看）/);
-  assert.equal(ready.label, "图见原文第 3 页");
+  assert.match(ready.text, /点击查看原图/);
+  assert.match(ready.text, /图 1 · 原文第 3 页/);
+  assert.equal(ready.label, "图 1 · 原文第 3 页 · 点击查看原图");
   assert.equal(ready.follow, "off");
 
   await evaluate(`(() => {

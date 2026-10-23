@@ -680,12 +680,12 @@ test("figure redraw origin follows the bbox, and an empty crop is not shown", ()
     viewerSrc.indexOf("function captionNode")
   );
   assert.match(notice, /block\.label === "table" \? "表" : "图"/);
-  assert.match(notice, /见原文第 \$\{n\} 页（点击查看）/);
+  assert.match(notice, /placeholderCopy\(shown, \{ kind: copyKind \}\)/);
   assert.match(notice, /oi-pdf-asset-fallback/);
   assert.match(notice, /createElement\("button"\)/);
   assert.match(notice, /notice\.type = "button"/);
   assert.match(notice, /dataset\.page = String\(n\)/);
-  assert.match(notice, /setAttribute\("aria-label", `\$\{kind\}见原文第 \$\{n\} 页`\)/);
+  assert.match(notice, /setAttribute\("aria-label", copy\.aria\)/);
   assert.match(notice, /jumpAssetFallback\(notice\)/);
   const jump = viewerSrc.slice(
     viewerSrc.indexOf("function jumpAssetFallback"),
@@ -727,7 +727,8 @@ test("figure redraw origin follows the bbox, and an empty crop is not shown", ()
 test("figure placeholder dashed border stays visible on all four reader themes", () => {
   const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
   const tokens = readFileSync(join(root, "pdf/reader-tokens.css"), "utf8");
-  assert.match(css, /\.oi-pdf-asset-fallback\s*\{[^}]*border:\s*1px dashed var\(--oi-reader-line-strong\)/);
+  assert.match(css, /\.oi-figure-placeholder::after\s*\{[^}]*border:\s*1px dashed color-mix\(in srgb, var\(--oi-reader-line-strong\) 55%, transparent\)/);
+  assert.doesNotMatch(css, /\.oi-figure-placeholder::after\s*\{[^}]*var\(--oi-line[,)]/);
   assert.doesNotMatch(css, /\.oi-pdf-asset-fallback\s*\{[^}]*var\(--oi-line[,)]/);
   const hexOf = (name) => {
     const match = tokens.match(new RegExp(`${name}:\\s*(#[0-9A-Fa-f]{6})`));

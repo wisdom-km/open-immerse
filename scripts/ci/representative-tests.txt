@@ -46,3 +46,6 @@ tests/f8-pr3-drawer.test.mjs
 tests/f8-pr3-drawer-chrome.test.mjs
 # AX-23 locks lib/notes-* against origin/main. One git diff, no browser.
 tests/arxiv-regression.test.mjs
+# F8-PR3a figure and table placeholder cards. The Chrome file forces an empty crop locally. No network.
+tests/f8-pr3a-figure-cards.test.mjs
+tests/f8-pr3a-figure-cards-chrome.test.mjs
