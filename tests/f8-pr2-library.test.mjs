@@ -745,6 +745,16 @@ test("搜索防抖、深链排序只吃一次、正在阅读不能删、窄屏�
   const trash = ui.root.querySelector('[data-lib-row="p0"] .oi-lib-trash');
   assert.equal(trash.disabled, true);
   assert.equal(trash.getAttribute("title"), LIBRARY_COPY.readingReason);
+  assert.equal(trash.getAttribute("aria-label"), "删除《Paper 0》");
+  assert.equal(trash.querySelector("svg")?.getAttribute("aria-hidden"), "true");
+  assert.equal(trash.querySelector("path")?.getAttribute("fill"), "currentColor");
+  assert.equal(trash.textContent.includes("🗑"), false);
+  const line = ui.root.querySelector('[data-lib-row="p0"] .oi-lib-titleline');
+  assert.equal(line?.querySelector(".oi-lib-name")?.textContent, "Paper 0");
+  assert.equal(line?.lastElementChild?.classList.contains("oi-chip"), true);
+  assert.equal(line?.lastElementChild?.textContent, LIBRARY_COPY.reading);
+  assert.equal(ui.root.querySelector(".oi-lib-badge"), null);
+  assert.equal(ui.root.querySelector('[data-lib-row="p1"] .oi-lib-trash')?.getAttribute("aria-label"), "删除《Paper 1》");
   hash = "#library";
   ui.close();
   ui.open();
@@ -857,6 +867,10 @@ test("搜索框在刷新后仍是原来的节点，正在阅读只关面板，�
   await flush();
   assert.match(ui.root.querySelector(".oi-lib-confirm")?.textContent || "", /没删成，稍后再试。/);
   assert.equal(ui.root.querySelector(".oi-lib-do-delete").disabled, false);
+  assert.equal(document.activeElement?.isConnected, true);
+  assert.equal(document.activeElement?.classList.contains("oi-lib-do-delete"), true);
+  const failedRow = document.activeElement.closest("[data-lib-row]");
+  assert.equal(failedRow?.querySelector(".oi-lib-trash")?.getAttribute("aria-label"), "删除《特殊》");
 });
 
 test("文献库关掉之后，存储打不开的轮询会停", async () => {

@@ -40,6 +40,24 @@ function h(doc, tag, attrs, children) {
   return el;
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function trashIcon(doc) {
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const path = doc.createElementNS(SVG_NS, "path");
+  path.setAttribute("fill", "currentColor");
+  path.setAttribute("d", "M6.1 1.8h3.8l.45.9H13v1.3H3V2.7h2.65l.45-.9zM4.15 5.1h7.7l-.55 8.05a1 1 0 0 1-1 .85H5.7a1 1 0 0 1-1-.85L4.15 5.1z");
+  svg.append(path);
+  return svg;
+}
+
+function deleteLabel(title) {
+  return `${LIBRARY_COPY.delete}《${title}》`;
+}
+
 function cssEscape(value) {
   const text = String(value ?? "");
   const esc = globalThis.CSS?.escape;
@@ -429,6 +447,7 @@ export function mountLibraryUi(api = {}) {
       deleting = false;
       deleteFailed = true;
       render();
+      focusTarget(`${rowSelector(row.docHash)} .oi-lib-do-delete`);
     }
   }
 
@@ -566,16 +585,19 @@ export function mountLibraryUi(api = {}) {
           class: confirmHash === row.docHash ? "oi-lib-row is-confirm" : "oi-lib-row",
           "data-lib-row": row.docHash
         });
+        const label = deleteLabel(title.title);
         const main = h(doc, "button", {
           type: "button",
           class: "oi-lib-open",
           tabindex: index === active && column === "row" ? "0" : "-1",
           disabled: openingHash === row.docHash
         }, [
-          h(doc, "span", { class: "oi-lib-name", title: title.title, text: title.title }),
+          h(doc, "span", { class: "oi-lib-titleline" }, [
+            h(doc, "span", { class: "oi-lib-name", title: title.title, text: title.title }),
+            reading ? h(doc, "span", { class: "oi-chip", text: LIBRARY_COPY.reading }) : null
+          ]),
           h(doc, "span", { class: "oi-lib-meta", text: [libraryProgressCopy(row.translated, row.pageCount), libraryRelativeTime(row.lastOpenedAt, now()), librarySizeCopy(row.bytes)].filter(Boolean).join(" · ") })
         ]);
-        if (reading) main.append(h(doc, "span", { class: "oi-lib-badge", text: LIBRARY_COPY.reading }));
         main.addEventListener("click", () => {
           active = index;
           void openRow(row);
@@ -583,11 +605,11 @@ export function mountLibraryUi(api = {}) {
         const trash = h(doc, "button", {
           type: "button",
           class: "oi-lib-trash",
-          "aria-label": LIBRARY_COPY.delete,
-          title: reading ? LIBRARY_COPY.readingReason : LIBRARY_COPY.delete,
-          text: "🗑",
+          "aria-label": label,
+          title: reading ? LIBRARY_COPY.readingReason : label,
           tabindex: index === active && column === "delete" ? "0" : "-1"
         });
+        trash.append(trashIcon(doc));
         if (reading || !libraryDeleteAllowed(readingHash, row.docHash)) trash.disabled = true;
         trash.addEventListener("click", () => {
           if (trash.disabled) return;

@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -345,6 +345,89 @@ test("文献库侧栏：开关、三种删除文案、网址变了、排序、�
   assert.equal(seeded.search, true);
   assert.equal(seeded.copy.includes("PDF 阅读 ·"), false);
 
+  await cdp.send("DOM.enable", {}, sessionId);
+  await cdp.send("CSS.enable", {}, sessionId);
+  const { root: styleRoot } = await cdp.send("DOM.getDocument", { depth: 0 }, sessionId);
+  const { nodeId: hoverRow } = await cdp.send("DOM.querySelector", {
+    nodeId: styleRoot.nodeId,
+    selector: ".oi-lib-row"
+  }, sessionId);
+  await cdp.send("CSS.forcePseudoState", { nodeId: hoverRow, forcedPseudoClasses: ["hover"] }, sessionId);
+  const look = JSON.parse(await evaluate(`(() => {
+    const head = document.querySelector(".oi-lib-head");
+    const openPdf = document.querySelector(".oi-lib-open-pdf");
+    const close = document.querySelector(".oi-lib-close");
+    const trash = document.querySelector(".oi-lib-trash");
+    const svg = trash?.querySelector("svg");
+    const name = document.querySelector(".oi-lib-name");
+    const row = document.querySelector(".oi-lib-row");
+    const app = document.querySelector(".oi-reader-app");
+    const probe = document.createElement("div");
+    app.append(probe);
+    probe.style.background = "var(--oi-reader-hover)";
+    const warmHover = getComputedStyle(probe).backgroundColor;
+    const theme = app.getAttribute("data-reader-theme");
+    app.setAttribute("data-reader-theme", "dark");
+    const darkHover = getComputedStyle(app).getPropertyValue("--oi-reader-hover").trim();
+    const darkPaint = getComputedStyle(probe).backgroundColor;
+    app.setAttribute("data-reader-theme", theme);
+    probe.remove();
+    let outline = "";
+    const walk = (rules) => {
+      for (const rule of rules || []) {
+        if (rule.cssRules) walk(rule.cssRules);
+        const sel = rule.selectorText || "";
+        if (sel.includes(".oi-lib-row") && sel.includes(":focus-visible")) outline = rule.style.outlineOffset;
+      }
+    };
+    for (const sheet of document.styleSheets) {
+      try { walk(sheet.cssRules); } catch { /* cross-origin */ }
+    }
+    const box = (el) => {
+      const rect = el.getBoundingClientRect();
+      return { w: Math.round(rect.width), h: Math.round(rect.height) };
+    };
+    return JSON.stringify({
+      head: box(head),
+      openPdf: { ...box(openPdf), pad: getComputedStyle(openPdf).padding, radius: getComputedStyle(openPdf).borderRadius, size: getComputedStyle(openPdf).fontSize, weight: getComputedStyle(openPdf).fontWeight, wrap: getComputedStyle(openPdf).whiteSpace },
+      close: { ...box(close), pad: getComputedStyle(close).padding },
+      trash: { ...box(trash), color: getComputedStyle(trash).color, muted: getComputedStyle(document.querySelector(".oi-lib-meta")).color, opacity: getComputedStyle(trash).opacity, visibility: getComputedStyle(trash).visibility, label: trash.getAttribute("aria-label"), emoji: trash.textContent.includes("🗑") },
+      svg: svg ? box(svg) : { w: 0, h: 0 },
+      fill: svg?.querySelector("path")?.getAttribute("fill") || "",
+      name: { wrap: getComputedStyle(name).whiteSpace, overflow: getComputedStyle(name).overflowX, ellipsis: getComputedStyle(name).textOverflow },
+      rowHover: getComputedStyle(row).backgroundColor,
+      warmHover,
+      darkHover,
+      darkPaint,
+      outline
+    });
+  })()`));
+  await cdp.send("CSS.forcePseudoState", { nodeId: hoverRow, forcedPseudoClasses: [] }, sessionId);
+  assert.equal(look.head.h, 44, JSON.stringify(look.head));
+  assert.equal(look.openPdf.h, 30, JSON.stringify(look.openPdf));
+  assert.equal(look.openPdf.pad, "0px 12px");
+  assert.equal(look.openPdf.radius, "7px");
+  assert.equal(look.openPdf.size, "13px");
+  assert.equal(look.openPdf.weight, "500");
+  assert.equal(look.openPdf.wrap, "nowrap");
+  assert.deepEqual(look.close, { w: 30, h: 30, pad: "0px" });
+  assert.equal(look.trash.w, 28, JSON.stringify(look.trash));
+  assert.equal(look.trash.h, 28, JSON.stringify(look.trash));
+  assert.equal(look.trash.color, look.trash.muted, JSON.stringify(look.trash));
+  assert.equal(look.trash.opacity, "1");
+  assert.equal(look.trash.visibility, "visible");
+  assert.equal(look.trash.emoji, false);
+  assert.match(look.trash.label, /^删除《.+》$/);
+  assert.deepEqual(look.svg, { w: 16, h: 16 });
+  assert.equal(look.fill, "currentColor");
+  assert.equal(look.name.wrap, "nowrap");
+  assert.equal(look.name.overflow, "hidden");
+  assert.equal(look.name.ellipsis, "ellipsis");
+  assert.equal(look.rowHover, look.warmHover, JSON.stringify(look));
+  assert.equal(look.darkHover, "rgba(232, 230, 225, 0.08)");
+  assert.notEqual(look.darkPaint, look.warmHover);
+  assert.equal(look.outline, "-2px");
+
   const copies = JSON.parse(await evaluate(`(() => {
     const read = (hash) => {
       document.querySelector('[data-lib-row="' + hash + '"] .oi-lib-trash').click();
@@ -425,7 +508,7 @@ test("文献库侧栏：开关、三种删除文案、网址变了、排序、�
   assert.equal(narrow.back, "← 返回译文");
   assert.equal(narrow.trash, "nowrap");
   assert.ok(narrow.openH >= 28, JSON.stringify(narrow));
-  assert.equal(narrow.label, "删除");
+  assert.match(narrow.label, /^删除《.+》$/);
 
   await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId);
   await cdp.send("Page.navigate", { url: `${origin}/pdf/viewer.html#library?sort=size` }, sessionId);
@@ -663,4 +746,133 @@ test("文献库三行只有一个 Tab 停留点，Enter 和 Delete 作用在焦�
   assert.equal(returned.afterKey, "libraryButton", JSON.stringify(returned));
   assert.equal(returned.fromMenu, true, JSON.stringify(returned));
   assert.equal(returned.afterMenu, "libraryButton", JSON.stringify(returned));
+});
+
+test("打开 PDF…成功后关掉文献库，取消或打不开则保持", { timeout: 180000 }, async (t) => {
+  const fixture = join(root, "tests/fixtures/sample-m1.pdf");
+  assert.equal(existsSync(fixture), true, "tests/fixtures/sample-m1.pdf is missing");
+  const server = await serveRepo(new Map());
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-f8-pr2-open-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const handle = { child: null, cdp: null };
+  t.after(async () => {
+    try {
+      handle.cdp?.dispose();
+    } finally {
+      await cleanupChrome({ t, child: handle.child, server, ownedDir, userDataDir });
+    }
+  });
+
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  handle.child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
+  handle.cdp = cdp;
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  await cdp.send("Page.enable", {}, sessionId);
+  await cdp.send("Runtime.enable", {}, sessionId);
+  await cdp.send("DOM.enable", {}, sessionId);
+  const stub = CHROME_STUB.replace(
+    "getURL(path) { return path; }",
+    "getURL(path) { const name = String(path || \"\"); if (name.includes(\"pdf.worker\")) return new URL(\"/pdf/vendor/pdf.worker.min.mjs\", location.origin).href; return new URL(name.replace(/^\\//, \"\"), location.origin + \"/\").href; }"
+  );
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: stub }, sessionId);
+  const evaluate = async (expression) => {
+    const result = await cdp.send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true
+    }, sessionId);
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails.exception?.description || result.exceptionDetails.text;
+      throw new Error(detail || JSON.stringify(result.exceptionDetails));
+    }
+    return result.result?.value;
+  };
+
+  await cdp.send("Page.navigate", { url: `${origin}/pdf/viewer.html` }, sessionId);
+  const ready = Date.now();
+  let opened = false;
+  while (Date.now() - ready < 20000) {
+    opened = await evaluate(`document.querySelector(".oi-library")?.hidden === false && document.querySelector(".toolbar")?.dataset.tbBound === "1"`);
+    if (opened) break;
+    await sleep(50);
+  }
+  assert.equal(opened, true, await evaluate(`window.__oiBoot || "library did not open"`));
+
+  await t.test("取消选文件后面板保持", async () => {
+    const stayed = await evaluate(`(() => {
+      document.querySelector("[data-lib-empty-open]")?.click();
+      const input = document.getElementById("file");
+      input.value = "";
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      return document.querySelector(".oi-library")?.hidden === false;
+    })()`);
+    assert.equal(stayed, true);
+  });
+
+  await t.test("打开失败后面板保持", async () => {
+    await evaluate(`(() => {
+      const input = document.getElementById("file");
+      const data = new DataTransfer();
+      data.items.add(new File([new Uint8Array([1, 2, 3, 4])], "not-a.pdf", { type: "application/pdf" }));
+      input.files = data.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      return input.files.length;
+    })()`);
+    const started = Date.now();
+    let status = "";
+    while (Date.now() - started < 15000) {
+      status = await evaluate(`document.getElementById("status")?.textContent || ""`);
+      if (String(status).includes("无法打开这个 PDF")) break;
+      await sleep(100);
+    }
+    const still = await evaluate(`(() => JSON.stringify({
+      open: document.querySelector(".oi-library")?.hidden === false,
+      boot: window.__oiBoot || "",
+      status: document.getElementById("status")?.textContent || ""
+    }))()`);
+    const parsed = JSON.parse(still);
+    assert.match(parsed.status, /无法打开这个 PDF/, JSON.stringify(parsed));
+    assert.equal(parsed.open, true, JSON.stringify(parsed));
+    assert.equal(parsed.boot, "", JSON.stringify(parsed));
+  });
+
+  await t.test("成功打开后关闭面板", async () => {
+    const { root: doc } = await cdp.send("DOM.getDocument", { depth: 1 }, sessionId);
+    const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: doc.nodeId, selector: "#file" }, sessionId);
+    assert.ok(nodeId, "file input is missing");
+    await cdp.send("DOM.setFileInputFiles", { nodeId, files: [fixture] }, sessionId);
+    await evaluate(`(() => {
+      const input = document.getElementById("file");
+      const file = input && input.files && input.files[0];
+      if (file) input.dispatchEvent(new Event("change", { bubbles: true }));
+      return Boolean(file);
+    })()`);
+    const started = Date.now();
+    let state = null;
+    while (Date.now() - started < 20000) {
+      state = JSON.parse(await evaluate(`(() => {
+        const canvas = document.querySelector("#pages canvas");
+        const panel = document.querySelector(".oi-library");
+        return JSON.stringify({
+          painted: Boolean(canvas && canvas.width > 0 && canvas.height > 0),
+          hidden: panel ? panel.hidden === true : false,
+          title: document.title || "",
+          boot: window.__oiBoot || ""
+        });
+      })()`));
+      if (state.boot) break;
+      if (state.painted && state.hidden) break;
+      await sleep(100);
+    }
+    assert.equal(state?.boot || "", "", JSON.stringify(state));
+    assert.equal(state?.painted, true, JSON.stringify(state));
+    assert.equal(state?.hidden, true, JSON.stringify(state));
+    assert.match(state?.title || "", /sample-m1\.pdf/);
+  });
 });

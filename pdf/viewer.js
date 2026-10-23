@@ -651,7 +651,9 @@ function init() {
   $("file").addEventListener("change", async () => {
     const file = $("file").files?.[0];
     $("file").value = "";
-    if (file) await openFile(file);
+    if (!file) return;
+    const opened = await openFile(file);
+    if (opened) libraryUi?.close(true);
   });
   $("sourcePrev")?.addEventListener("click", () => {
     noteUserSourceInput();
@@ -11696,9 +11698,11 @@ async function openFile(file) {
   sourceUrl = file.name || "";
   try {
     await openPdfData(new Uint8Array(await file.arrayBuffer()), file.name);
+    return true;
   } catch {
     setStatus(PDF_COPY.error, true);
     setHasDoc(false);
+    return false;
   }
 }
 
