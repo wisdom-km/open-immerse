@@ -337,6 +337,12 @@ import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/
 import { scheduleFormulaBlock, publishRestampedBlocks } from "../lib/formula-schedule.js";
 import { cropPngFor } from "../lib/formula-crop-png.js";
 import {
+  TARGET_BOX_PX,
+  contextCropGeometry,
+  paintTargetBox,
+  targetBoxPixels
+} from "../lib/formula-context-crop.js";
+import {
   VISION_CROP_SCALE,
   measureVisionRegion,
   visionCropCacheKey,
@@ -3992,11 +3998,112 @@ function cropRegionCanvas(canvas, relativeBbox) {
 }
 
 /**
- * Tight PNG for the vision model. Scale and pad come from the vision spec.
- * The page raster and renderSharpVisualCrop are not this bitmap.
+ * Inline context PNG. The red stroke sits outside the glyph union and inside
+ * the bitmap. Display formulas do not take this path.
+ */
+async function renderContextVisionCrop(page, block, pageNumber, spec = {}) {
+  if (!page || block?.label !== "formula" || typeof page.getViewport !== "function") return "";
+  let unit = null;
+  try {
+    unit = page.getViewport({ scale: 1 });
+  } catch {
+    return "";
+  }
+  const requested = Number(spec?.scale) > 0 ? Number(spec.scale) : VISION_CROP_SCALE;
+  let frame = contextCropGeometry(block, {
+    pageWidth: unit.width,
+    pageHeight: unit.height,
+    scale: requested
+  });
+  if (!frame) frame = spec?.window;
+  if (!frame?.bbox || !frame?.target) return "";
+  let plan = visionRasterPlan({
+    bbox: frame.bbox,
+    pageWidth: unit.width,
+    pageHeight: unit.height,
+    scale: requested
+  });
+  if (plan && plan.scale + 1e-6 < requested) {
+    const fitted = contextCropGeometry(block, {
+      pageWidth: unit.width,
+      pageHeight: unit.height,
+      scale: plan.scale
+    });
+    if (fitted) {
+      frame = fitted;
+      plan = visionRasterPlan({
+        bbox: frame.bbox,
+        pageWidth: unit.width,
+        pageHeight: unit.height,
+        scale: plan.scale
+      });
+    }
+  }
+  if (!plan || plan.pixelWidth < 1 || plan.pixelHeight < 1) return "";
+  const key = visionCropCacheKey({
+    docId,
+    page: pageNumber,
+    bbox: frame.bbox,
+    scale: plan.scale,
+    namedPx: 0,
+    inline: true,
+    protect: false,
+    mode: "context",
+    target: frame.target
+  });
+  const cached = visionCropCache.get(key);
+  if (cached) {
+    rememberFormulaModelCrop(pageNumber, { ...block, imageUrl: cached });
+    return cached;
+  }
+  let canvas = null;
+  try {
+    const full = page.getViewport({ scale: plan.scale });
+    const fitted = formulaRegionWindow(frame.bbox, full.width, full.height);
+    if (fitted.pixelWidth < 1 || fitted.pixelHeight < 1) return "";
+    const viewport = page.getViewport({
+      scale: plan.scale,
+      offsetX: -frame.bbox[0] * full.width,
+      offsetY: -frame.bbox[1] * full.height
+    });
+    canvas = document.createElement("canvas");
+    canvas.width = fitted.pixelWidth;
+    canvas.height = fitted.pixelHeight;
+    const context = formulaDrawContext(canvas);
+    if (!context) {
+      canvas.width = 0;
+      canvas.height = 0;
+      return "";
+    }
+    await renderPdfPage(page, { canvasContext: context, viewport }).promise;
+    compositeWhitePaper(context, canvas);
+    const rect = targetBoxPixels(frame.bbox, frame.target, unit.width, unit.height, plan.scale);
+    paintTargetBox(canvas, rect, TARGET_BOX_PX);
+    const url = canvas.toDataURL("image/png");
+    canvas.width = 0;
+    canvas.height = 0;
+    canvas = null;
+    if (!/^data:image\/png;base64,/.test(url)) return "";
+    visionCropCache.set(key, url);
+    rememberFormulaModelCrop(pageNumber, { ...block, imageUrl: url });
+    return url;
+  } catch {
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+    return "";
+  }
+}
+
+/**
+ * PNG for the vision model. Inline formulas are a context crop with a red
+ * box. Display formulas stay on the hi-res tight crop. The page raster and
+ * renderSharpVisualCrop are not this bitmap.
  */
 async function renderVisionFormulaCrop(page, raster, block, pageNumber, spec = {}) {
   void raster;
+  if (spec?.mode === "context") return renderContextVisionCrop(page, block, pageNumber, spec);
   if (!page || block?.label !== "formula" || typeof page.getViewport !== "function") return "";
   const source = visionSourceBbox(block);
   if (!source) return "";

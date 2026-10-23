@@ -1,0 +1,276 @@
+/**
+ * Inline context crop: the red box contains every glyph, the stroke stays
+ * inside the bitmap, and short math with a script or a symbol is a formula.
+ */
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  TARGET_BOX_PX,
+  contextCropGeometry,
+  contextWindow,
+  paintTargetBox,
+  targetBoxPixels
+} from "../lib/formula-context-crop.js";
+import { cropHashOf } from "../lib/formula-contract.js";
+import { formulaRegionWindow } from "../lib/pdf-formula-raster.js";
+import { FORMULA_RUN_MIN_WIDTH, sameLineFormulaSpans, shortFormulaRunExempt } from "../lib/pdf-text-layer.js";
+import {
+  FORMULA_CONTEXT_PROMPT,
+  FORMULA_VISION_SYSTEM,
+  MM_TIER_VERSION,
+  formulaVisionPrompt
+} from "../lib/formula-tiers/multimodal.js";
+import { tierRecordKey } from "../lib/formula-cache.js";
+import { visionCropSpec } from "../lib/formula-vision-crop.js";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const probes = JSON.parse(readFileSync(join(root, "tests/fixtures/formula-context-probes.json"), "utf8"));
+const PAGE_W = probes.page.width;
+const PAGE_H = probes.page.height;
+const SCALE = 4;
+
+function glyph(str, x, extra = {}) {
+  return {
+    str,
+    x,
+    y: extra.y ?? 100,
+    width: extra.width ?? Math.max(4, String(str).length * 5),
+    height: extra.height ?? 10,
+    fontName: extra.fontName || "",
+    fontRealName: extra.font || "CMR10"
+  };
+}
+
+function frameOf(formula) {
+  return contextCropGeometry(formula, { pageWidth: PAGE_W, pageHeight: PAGE_H, scale: SCALE });
+}
+
+function assertGlyphsInside(formula) {
+  const frame = frameOf(formula);
+  assert.ok(frame, formula.text || formula.id);
+  for (const glyphBox of formula.glyphBoxes) {
+    assert.ok(glyphBox[0] >= frame.target[0] - 1e-9, `${formula.text} left`);
+    assert.ok(glyphBox[1] >= frame.target[1] - 1e-9, `${formula.text} top`);
+    assert.ok(glyphBox[2] <= frame.target[2] + 1e-9, `${formula.text} right`);
+    assert.ok(glyphBox[3] <= frame.target[3] + 1e-9, `${formula.text} bottom`);
+  }
+  const rect = targetBoxPixels(frame.bbox, frame.target, PAGE_W, PAGE_H, SCALE);
+  const crop = formulaRegionWindow(frame.bbox, PAGE_W * SCALE, PAGE_H * SCALE);
+  assert.ok(rect.x - TARGET_BOX_PX >= 0, `${formula.text} stroke left`);
+  assert.ok(rect.y - TARGET_BOX_PX >= 0, `${formula.text} stroke top`);
+  assert.ok(rect.x + rect.w + TARGET_BOX_PX <= crop.pixelWidth, `${formula.text} stroke right`);
+  assert.ok(rect.y + rect.h + TARGET_BOX_PX <= crop.pixelHeight, `${formula.text} stroke bottom`);
+  for (const glyphBox of formula.glyphBoxes) {
+    const painted = targetBoxPixels(frame.bbox, glyphBox, PAGE_W, PAGE_H, SCALE);
+    assert.ok(painted.x >= rect.x, `${formula.text} glyph x`);
+    assert.ok(painted.y >= rect.y, `${formula.text} glyph y`);
+    assert.ok(painted.x + painted.w <= rect.x + rect.w, `${formula.text} glyph right`);
+    assert.ok(painted.y + painted.h <= rect.y + rect.h, `${formula.text} glyph bottom`);
+  }
+  return { frame, rect, crop };
+}
+
+test("DPO short probes and a multi-line display keep every glyph inside the red box and the stroke inside the crop", () => {
+  const names = ["pi-theta", "y-w", "y-l", "pi-sft", "r-hat-theta", "r-phi"];
+  assert.deepEqual(names.map((name) => probes.probes[name].text), ["πθ", "yw", "yl", "πSFT", "rˆθ", "rϕ"]);
+  for (const name of names) {
+    const formula = probes.probes[name];
+    assert.equal(formula.display, false);
+    const spec = visionCropSpec(formula, { pageWidth: PAGE_W, pageHeight: PAGE_H, scale: SCALE });
+    assert.equal(spec.mode, "context");
+    assertGlyphsInside(formula);
+  }
+  const display = probes.display;
+  assert.equal(display.display, true);
+  assert.ok(display.glyphBoxes.length > 20);
+  const tops = display.glyphBoxes.map((box) => box[1]);
+  const bottoms = display.glyphBoxes.map((box) => box[3]);
+  assert.ok(Math.max(...bottoms) - Math.min(...tops) > 0.04);
+  assert.equal(visionCropSpec(display).mode, "tight");
+  assertGlyphsInside({ ...display, display: true });
+});
+
+test("a hat above the layout box stays inside the red box when the next line is close", () => {
+  const body = [0.4, 0.5, 0.43, 0.516];
+  const hat = [0.408, 0.488, 0.422, 0.502];
+  const neighbor = [0.2, 0.47, 0.7, 0.486];
+  const formula = {
+    display: false,
+    text: "rˆθ",
+    bbox: body,
+    layoutBbox: body,
+    glyphBoxes: [body, [0.4, 0.508, 0.412, 0.522], hat],
+    maskBoxes: [neighbor],
+    paragraphBbox: [0.12, 0.2, 0.88, 0.9]
+  };
+  const frame = frameOf(formula);
+  assert.ok(frame.target[1] <= hat[1] + 1e-9);
+  assert.ok(frame.target[3] >= 0.522 - 1e-9);
+  assert.ok(frame.bbox[0] >= formula.paragraphBbox[0] - 1e-6 || frame.bbox[0] <= hat[0]);
+  const rect = targetBoxPixels(frame.bbox, frame.target, PAGE_W, PAGE_H, SCALE);
+  const crop = formulaRegionWindow(frame.bbox, PAGE_W * SCALE, PAGE_H * SCALE);
+  assert.ok(rect.y - TARGET_BOX_PX >= 0);
+  assert.ok(rect.y + rect.h + TARGET_BOX_PX <= crop.pixelHeight);
+});
+
+test("the stroke may cross the column by the margin it needs, and no further", () => {
+  const glyphs = [0.2, 0.4, 0.22, 0.414];
+  const formula = {
+    display: false,
+    bbox: glyphs,
+    layoutBbox: glyphs,
+    glyphBoxes: [glyphs],
+    paragraphBbox: glyphs.slice()
+  };
+  const frame = frameOf(formula);
+  const strokeX = (TARGET_BOX_PX + 1) / (PAGE_W * SCALE);
+  assert.ok(frame.bbox[0] <= glyphs[0] - strokeX + 1e-8);
+  assert.ok(frame.bbox[0] > glyphs[0] - 0.02);
+  assert.ok(frame.target[0] <= glyphs[0]);
+  assert.ok(frame.target[2] >= glyphs[2]);
+});
+
+test("contextWindow still clamps words to the column without cutting the target", () => {
+  const target = [0.4, 0.42, 0.46, 0.44];
+  const column = [0.3, 0.1, 0.5, 0.9];
+  const window = contextWindow({
+    display: false,
+    bbox: target,
+    layoutBbox: target,
+    paragraphBbox: column
+  });
+  assert.ok(window.bbox[0] >= column[0] - 1e-9);
+  assert.ok(window.bbox[2] <= column[2] + 1e-9);
+  assert.ok(window.bbox[0] <= target[0]);
+  assert.ok(window.bbox[2] >= target[2]);
+});
+
+test("the red stroke sits outside the glyphs", () => {
+  const formula = probes.probes["pi-theta"];
+  const { frame, rect, crop } = assertGlyphsInside(formula);
+  const canvas = {
+    width: crop.pixelWidth,
+    height: crop.pixelHeight,
+    getContext() {
+      return this.ctx;
+    },
+    ctx: {
+      fillStyle: "",
+      fillRect(x, y, w, h) {
+        const red = this.fillStyle === "#e10600";
+        for (let py = Math.floor(y); py < y + h; py += 1) {
+          for (let px = Math.floor(x); px < x + w; px += 1) {
+            if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) {
+              canvas.clipped += 1;
+              continue;
+            }
+            canvas.pixels[(py * canvas.width + px) * 4] = red ? 225 : 0;
+          }
+        }
+      }
+    },
+    pixels: new Uint8ClampedArray(crop.pixelWidth * crop.pixelHeight * 4),
+    clipped: 0
+  };
+  canvas.pixels.fill(255);
+  assert.equal(paintTargetBox(canvas, rect, TARGET_BOX_PX), true);
+  assert.equal(canvas.clipped, 0);
+  const glyph = targetBoxPixels(frame.bbox, formula.glyphBoxes[0], PAGE_W, PAGE_H, SCALE);
+  let redInside = 0;
+  for (let y = glyph.y; y < glyph.y + glyph.h; y += 1) {
+    for (let x = glyph.x; x < glyph.x + glyph.w; x += 1) {
+      if (canvas.pixels[(y * canvas.width + x) * 4] === 225) redInside += 1;
+    }
+  }
+  assert.equal(redInside, 0);
+  assert.equal(canvas.pixels[((rect.y - 2) * canvas.width + (rect.x + 2)) * 4], 225);
+});
+
+test("short scripts and math symbols are formulas; plain letters and Z(x) are not", () => {
+  assert.equal(FORMULA_RUN_MIN_WIDTH, 12);
+  const prose = (str, x, width) => glyph(str, x, { width, font: "NimbusRomNo9L-Regu" });
+  const piTheta = [
+    prose("where ", 0, 36),
+    glyph("π", 40, { width: 6, font: "CMSY10" }),
+    glyph("θ", 46, { y: 97, width: 4, height: 7, font: "CMMI7" }),
+    prose(" is", 54, 16)
+  ];
+  assert.deepEqual(sameLineFormulaSpans(piTheta), [[1, 2]]);
+  const yw = [
+    prose("prefer ", 0, 40),
+    glyph("y", 42, { width: 5, font: "CMMI10" }),
+    glyph("w", 47, { y: 96, width: 5, height: 7, font: "CMMI7" }),
+    prose(" over", 56, 24)
+  ];
+  assert.deepEqual(sameLineFormulaSpans(yw), [[1, 2]]);
+  const piSft = [
+    prose("model ", 0, 36),
+    glyph("π", 40, { width: 6, font: "CMSY10" }),
+    glyph("SFT", 46, { y: 96, width: 11, height: 7, font: "NimbusRomNo9L-Regu" }),
+    prose(". The", 60, 24)
+  ];
+  assert.deepEqual(sameLineFormulaSpans(piSft), [[1, 2]]);
+  const hat = [
+    prose("where ", 0, 36),
+    glyph("r", 40, { width: 5, font: "CMMI10" }),
+    glyph("ˆ", 44, { width: 5, font: "CMR10" }),
+    glyph("θ", 49, { y: 96, width: 4, height: 7, font: "CMMI7" }),
+    prose(" rates", 56, 30)
+  ];
+  assert.deepEqual(sameLineFormulaSpans(hat), [[1, 3]]);
+  const phi = [
+    prose("reward ", 0, 40),
+    glyph("r", 42, { width: 5, font: "CMMI10" }),
+    glyph("ϕ", 47, { y: 96, width: 4, height: 7, font: "CMMI7" }),
+    prose(" then", 54, 24)
+  ];
+  assert.deepEqual(sameLineFormulaSpans(phi), [[1, 2]]);
+  const plain = [
+    prose("The value is ", 0, 70),
+    glyph("n", 72, { width: 8, font: "CMMI10" }),
+    prose(" here.", 82, 30)
+  ];
+  assert.deepEqual(sameLineFormulaSpans(plain), []);
+  const call = [
+    prose("where ", 0, 36),
+    glyph("Z", 40, { width: 6, font: "CMMI10" }),
+    glyph("(", 46, { width: 4, font: "CMR10" }),
+    glyph("x", 50, { width: 5, font: "CMMI10" }),
+    glyph(")", 55, { width: 4, font: "CMR10" }),
+    prose(" is", 62, 14)
+  ];
+  assert.deepEqual(sameLineFormulaSpans(call), []);
+  const word = [prose("Attention", 0, 50)];
+  assert.equal(shortFormulaRunExempt(word, 0, 0, { bodyH: 10, baseY: 100 }), false);
+  const cite = [glyph("[12]", 0, { width: 8, font: "CMR10" })];
+  assert.equal(shortFormulaRunExempt(cite, 0, 0, { bodyH: 10, baseY: 100 }), false);
+});
+
+test("only an inline context crop appends the strict prompt", () => {
+  const inline = formulaVisionPrompt(
+    { display: false },
+    { meta: { mode: "context" } }
+  );
+  assert.equal(inline.system, `${FORMULA_VISION_SYSTEM}\n${FORMULA_CONTEXT_PROMPT}`);
+  assert.match(inline.system, /不要补全/);
+  assert.equal(formulaVisionPrompt({ display: true }, { meta: { mode: "context" } }).system, FORMULA_VISION_SYSTEM);
+  assert.equal(formulaVisionPrompt({ display: false }, { meta: { mode: "tight" } }).system, FORMULA_VISION_SYSTEM);
+  assert.equal(MM_TIER_VERSION, "mm-4");
+});
+
+test("the tier key is mm-4 and the crop hash is the png that was sent", () => {
+  const first = { docHash: "doc", bid: "b1", crop: { pixels: "data:image/png;base64,AAAA" } };
+  const second = { docHash: "doc", bid: "b1", crop: { pixels: "data:image/png;base64,BBBB" } };
+  const key = tierRecordKey(first, { id: "multimodal", version: MM_TIER_VERSION }, "kimi-k3");
+  const other = tierRecordKey(second, { id: "multimodal", version: MM_TIER_VERSION }, "kimi-k3");
+  assert.notEqual(cropHashOf(first), cropHashOf(second));
+  assert.notEqual(key, other);
+  assert.match(key, /:mm-4:/);
+  assert.match(key, new RegExp(`${cropHashOf(first)}$`));
+  assert.doesNotMatch(key, /:mm-3:/);
+});

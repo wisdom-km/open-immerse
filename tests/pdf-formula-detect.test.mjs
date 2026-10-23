@@ -105,7 +105,7 @@ test("subscripts and superscripts join the adjacent formula and stop at prose", 
     { str: "t", x: 96, y: 96, width: 4, height: 7, fontRealName: "CMMI7" },
     { str: " are", x: 110, y: 100, width: 24, height: 10, fontRealName: "NimbusRomNo9L-Regu" }
   ];
-  assert.deepEqual(sameLineFormulaSpans(line), [[0, 5]]);
+  assert.deepEqual(sameLineFormulaSpans(line), [[0, 5], [7, 8]]);
   const lone = [
     { str: "The value is ", x: 0, y: 0, width: 70, height: 10, fontRealName: "NimbusRomNo9L-Regu" },
     { str: "n", x: 72, y: 0, width: 8, height: 10, fontName: "g_d0_f3", fontRealName: "CMMI10" },
@@ -345,7 +345,11 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
         if (block.label !== "formula" || !Array.isArray(block.bbox)) continue;
         const sw = (block.bbox[2] - block.bbox[0]) * viewport.width * CROP_SCALE;
         const sh = (block.bbox[3] - block.bbox[1]) * viewport.height * CROP_SCALE;
-        assert.ok(sw >= 24 && sh >= 12, `${block.bid} crop ${sw.toFixed(1)}×${sh.toFixed(1)}`);
+        if (block.display === false) {
+          assert.ok(sw > 1 && sh > 1, `${block.bid} inline crop ${sw.toFixed(1)}×${sh.toFixed(1)}`);
+        } else {
+          assert.ok(sw >= 24 && sh >= 12, `${block.bid} crop ${sw.toFixed(1)}×${sh.toFixed(1)}`);
+        }
         if (block.display === false) continue;
         const measured = measureFormulaCrop(block.bbox, image, {
           inline: false,
