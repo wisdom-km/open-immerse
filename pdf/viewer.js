@@ -4967,7 +4967,6 @@ function mountFormulaPlaceholder(parent, block, page, inline) {
   const hasBbox = Array.isArray(block?.bbox) && block.bbox.length >= 4;
   button.dataset.oiBbox = hasBbox ? "1" : "0";
   if (known) button.dataset.page = String(Math.floor(Number(shown.page)));
-  button.title = copy.aria;
   button.setAttribute("aria-label", copy.aria);
   const text = document.createElement("span");
   text.className = "oi-ph-text";
@@ -5183,7 +5182,6 @@ function visualCropNotice(block, page, caption = null) {
     notice.className = "oi-figure-placeholder oi-pdf-asset-fallback";
     notice.dataset.page = String(n);
     if (figureLabel) notice.dataset.figureLabel = figureLabel;
-    notice.title = copy.aria;
     notice.setAttribute("aria-label", copy.aria);
     const widthPx = figureCardCapPx(block, n);
     if (widthPx > 0) notice.style.setProperty("--oi-fig-w", `${widthPx}px`);

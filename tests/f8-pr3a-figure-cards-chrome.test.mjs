@@ -30,7 +30,7 @@ const MIME = {
 };
 const EMPTY_CROP = "export function pageCropLooksEmpty(pageRatio, bbox) {";
 const FORCED_CROP = "export function pageCropLooksEmpty(pageRatio, bbox) {\n  return true;";
-const CARD_HOOK = "globalThis.__oiFigureCards = { orphanVisualNotice, visualCropNotice };";
+const CARD_HOOK = "globalThis.__oiFigureCards = { orphanVisualNotice, visualCropNotice, mountFormulaPlaceholder };";
 
 const PROBE = `(() => {
   const shown = (button, selector) => {
@@ -550,6 +550,78 @@ test("caption-only cards and a hidden source without a pair", { timeout: 240000 
     return /\\/\\s*15/.test(pager) ? pager : "";
   })()`, "Attention open");
   await waitFor(`globalThis.__oiFigureCards ? "hook" : ""`, "figure card hook");
+
+  const weights = await evaluate(`(() => {
+    const api = globalThis.__oiFigureCards;
+    const host = document.createElement("div");
+    host.id = "oi-card-weight-host";
+    document.body.append(host);
+    const figureRow = api.visualCropNotice({ label: "figure", bbox: [0, 0, 0.4, 0.2] }, 3, {
+      label: "caption",
+      text: "Figure 1: Attention.",
+      sourceText: "Figure 1: Attention."
+    });
+    host.append(figureRow);
+    const formulaHost = document.createElement("div");
+    host.append(formulaHost);
+    api.mountFormulaPlaceholder(formulaHost, {
+      label: "formula",
+      formulaTier: "placeholder",
+      page: 4,
+      eqLabel: "(3)",
+      bbox: [0.1, 0.1, 0.5, 0.16]
+    }, 4, false);
+    const readLine = (el) => {
+      const style = getComputedStyle(el);
+      return { weight: style.fontWeight, size: style.fontSize, family: style.fontFamily };
+    };
+    const figure = figureRow.querySelector("button.oi-figure-placeholder");
+    const formula = formulaHost.querySelector("button.oi-formula-placeholder:not(.is-inline)");
+    const sub = figure.querySelector(".oi-ph-sub");
+    return {
+      figure: {
+        ...readLine(figure.querySelector(".oi-ph-line")),
+        sub: readLine(sub),
+        title: figure.getAttribute("title"),
+        aria: figure.getAttribute("aria-label") || ""
+      },
+      formula: {
+        ...readLine(formula.querySelector(".l0")),
+        title: formula.getAttribute("title"),
+        aria: formula.getAttribute("aria-label") || ""
+      }
+    };
+  })()`);
+  assert.equal(weights.figure.weight, "700", JSON.stringify(weights.figure));
+  assert.equal(weights.figure.size, "13px");
+  assert.equal(weights.figure.sub.weight, "400");
+  assert.equal(weights.figure.sub.size, "12px");
+  assert.equal(weights.formula.weight, "700", JSON.stringify(weights.formula));
+  assert.equal(weights.formula.size, "13px");
+  assert.equal(weights.figure.family, weights.formula.family);
+  assert.equal(weights.figure.title, null);
+  assert.equal(weights.formula.title, null);
+  const axOf = async (selector) => {
+    await send("Accessibility.enable");
+    const doc = await send("DOM.getDocument", { depth: 1, pierce: true });
+    const found = await send("DOM.querySelector", { nodeId: doc.root.nodeId, selector });
+    assert.ok(found.nodeId, selector);
+    const tree = await send("Accessibility.getPartialAXTree", { nodeId: found.nodeId, fetchRelatives: false });
+    const node = (tree.nodes || []).find((item) => item.role?.value === "button") || tree.nodes?.[0];
+    return {
+      name: String(node?.name?.value || ""),
+      description: String(node?.description?.value || "")
+    };
+  };
+  for (const [selector, aria] of [
+    ["#oi-card-weight-host .oi-figure-placeholder", weights.figure.aria],
+    ["#oi-card-weight-host .oi-formula-placeholder", weights.formula.aria]
+  ]) {
+    const ax = await axOf(selector);
+    assert.ok(ax.name.length > 0, JSON.stringify(ax));
+    assert.ok(ax.description === "" || ax.description !== ax.name, JSON.stringify(ax));
+    assert.equal(ax.name, aria, JSON.stringify(ax));
+  }
 
   const mount = async (kind, block, page, caption) => evaluate(`(() => {
     const api = globalThis.__oiFigureCards;
