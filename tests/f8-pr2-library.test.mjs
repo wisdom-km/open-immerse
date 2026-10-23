@@ -933,6 +933,187 @@ test("阅读页快捷键在文献库输入框里不响应", () => {
   assert.match(gate, /focusInLibraryField\(event\.target\)\) return/);
 });
 
+test("公式缓存清理失败时，删除通知仍然发出，论文保持已删", async () => {
+  const notes = [];
+  const { store } = memoryStore({
+    deleteFormula() {
+      throw new Error("formula down");
+    },
+    onNotify(event) {
+      notes.push(event);
+    }
+  });
+  await store.touchPaper("doc-x", { title: "X", pageCount: 1, opened: true });
+  const report = await store.deletePaperData("doc-x", { formula: true });
+  assert.equal(report.formula, false);
+  const paper = await store.getPaper("doc-x");
+  assert.ok(paper.deletedAt > 0);
+  assert.ok(notes.some((event) => event.deleted === true && event.docHash === "doc-x"));
+});
+
+test("列表只有一个可 Tab 的标题，Enter 和 Delete 跟着焦点走", async () => {
+  const { document, window } = panelDom();
+  const timers = fakeTimers();
+  const papers = [
+    paperRow({ docHash: "one", title: "第一篇", lastOpenedAt: 3, sourceSize: 0 }),
+    paperRow({ docHash: "two", title: "第二篇", lastOpenedAt: 2, sourceSize: 0 }),
+    paperRow({ docHash: "three", title: "第三篇", lastOpenedAt: 1, sourceSize: 0 })
+  ];
+  const opened = [];
+  const ui = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    timers,
+    width: () => 1200,
+    store: async () => ({
+      async listPapers() { return papers; },
+      async getPages() { return []; },
+      async usage() { return { byDoc: new Map() }; },
+      async getSource() { return null; },
+      async getPaper(hash) { return papers.find((row) => row.docHash === hash) || null; }
+    }),
+    listNotes: async () => [],
+    openHash: async () => "one",
+    openBytes: async (_bytes, title) => { opened.push(title); }
+  });
+  ui.open();
+  await flush();
+  const list = ui.root.querySelector(".oi-lib-list");
+  assert.equal(list?.getAttribute("role"), "group");
+  assert.equal(list?.hasAttribute("tabindex"), false);
+  assert.equal(ui.root.querySelector("[role='listbox']"), null);
+  assert.equal(ui.root.querySelector("[role='option']"), null);
+  const stops = [...ui.root.querySelectorAll(".oi-lib-open")].filter((node) => node.getAttribute("tabindex") === "0");
+  assert.equal(stops.length, 1);
+  assert.equal([...ui.root.querySelectorAll(".oi-lib-open")].every((node) => node.getAttribute("tabindex") != null), true);
+
+  const third = ui.root.querySelector('[data-lib-row="three"] .oi-lib-open');
+  third.focus();
+  const enter = new window.Event("keydown", { bubbles: true });
+  enter.key = "Enter";
+  third.dispatchEvent(enter);
+  await flush();
+  assert.equal(ui.root.querySelector(".oi-lib-repick")?.closest("[data-lib-row]")?.getAttribute("data-lib-row"), "three");
+  assert.equal(opened.length, 0);
+
+  ui.root.querySelector(".oi-lib-repick")?.remove();
+  const again = ui.root.querySelector('[data-lib-row="three"] .oi-lib-open');
+  again.focus();
+  const del = new window.Event("keydown", { bubbles: true });
+  del.key = "Delete";
+  again.dispatchEvent(del);
+  await flush();
+  assert.equal(ui.root.querySelector(".oi-lib-confirm")?.closest("[data-lib-row]")?.getAttribute("data-lib-row"), "three");
+  assert.match(ui.root.querySelector('[data-lib-row="three"]')?.textContent || "", /第三篇/);
+  assert.equal(ui.root.querySelector('[data-lib-row="one"] .oi-lib-confirm'), null);
+
+  const reading = ui.root.querySelector('[data-lib-row="one"] .oi-lib-open');
+  reading.focus();
+  const right = new window.Event("keydown", { bubbles: true });
+  right.key = "ArrowRight";
+  reading.dispatchEvent(right);
+  await flush();
+  const trash = ui.root.querySelector('[data-lib-row="one"] .oi-lib-trash');
+  assert.equal(trash.disabled, true);
+  assert.equal(trash.getAttribute("tabindex"), "-1");
+  assert.equal(document.activeElement?.classList.contains("oi-lib-open"), true);
+  assert.equal(document.activeElement?.closest("[data-lib-row]")?.getAttribute("data-lib-row"), "one");
+});
+
+test("打开同一行不会重入，下载超时和打开失败都留在这一行", async () => {
+  const { document } = panelDom();
+  const timers = fakeTimers();
+  let calls = 0;
+  let release = null;
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const local = {
+    size: bytes.byteLength,
+    async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); }
+  };
+  const papers = [
+    paperRow({ docHash: "local", title: "本地", sourceSize: 4, lastOpenedAt: 2 }),
+    paperRow({ docHash: "url", title: "网上", sourceSize: 0, sourceUrl: "https://example.com/a.pdf", lastOpenedAt: 1 })
+  ];
+  const ui = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    timers,
+    width: () => 1200,
+    downloadTimeoutMs: 40,
+    store: async () => ({
+      async listPapers() { return papers; },
+      async getPages() { return []; },
+      async usage() { return { byDoc: new Map() }; },
+      async getSource(hash) { return hash === "local" ? local : null; },
+      async getPaper(hash) { return papers.find((row) => row.docHash === hash) || null; }
+    }),
+    listNotes: async () => [],
+    openHash: async () => "",
+    openBytes: () => {
+      calls += 1;
+      return new Promise((resolve) => { release = resolve; });
+    },
+    fetch: () => new Promise(() => {})
+  });
+  ui.open();
+  await flush();
+  const button = ui.root.querySelector('[data-lib-row="local"] .oi-lib-open');
+  button.click();
+  button.click();
+  await flush();
+  assert.equal(calls, 1);
+  release();
+  await flush();
+  assert.equal(ui.isOpen(), false);
+
+  ui.open();
+  await flush();
+  ui.root.querySelector('[data-lib-row="url"] .oi-lib-open').click();
+  await flush();
+  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /正在重新下载…/);
+  timers.advance(40);
+  await flush();
+  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /没打开，稍后再试。/);
+  assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("正在重新下载"), false);
+
+  let failed = 0;
+  const broken = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    timers,
+    width: () => 1200,
+    store: async () => ({
+      async listPapers() { return [papers[0]]; },
+      async getPages() { return []; },
+      async usage() { return { byDoc: new Map() }; },
+      async getSource() { return local; },
+      async getPaper() { return papers[0]; }
+    }),
+    listNotes: async () => [],
+    openHash: async () => "",
+    openBytes: async () => { throw new Error("bytes"); }
+  });
+  broken.open();
+  await flush();
+  const caught = broken.root.querySelector('[data-lib-row="local"] .oi-lib-open').click();
+  await flush();
+  assert.equal(caught, undefined);
+  assert.equal(failed, 0);
+  assert.match(broken.root.querySelector('[data-lib-row="local"]')?.textContent || "", /没打开，稍后再试。/);
+  assert.equal(broken.isOpen(), true);
+});
+
+test("无 src 时仍更新翻译按钮，l 和菜单关闭后回到书架按钮", () => {
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  assert.equal(viewer.trimEnd().endsWith("init();"), true);
+  const init = viewer.slice(viewer.indexOf("function init()"), viewer.indexOf("function listenProgress"));
+  const empty = init.slice(init.lastIndexOf("setStatus(PDF_COPY.empty)"));
+  assert.match(empty, /updateTranslateControls\(\)/);
+  assert.equal(empty.includes("runs before later lets"), false);
+  assert.match(empty, /libraryUi\?\.open\(\{ reason: "empty" \}\)/);
+  const key = viewer.slice(viewer.indexOf('event.key === "l"'), viewer.indexOf('event.key === "q"'));
+  assert.match(key, /trigger: \$\("libraryButton"\)/);
+  const menu = viewer.slice(viewer.indexOf('$("menuLibrary")'), viewer.indexOf('$("menuAa")'));
+  assert.match(menu, /trigger: \$\("libraryButton"\)/);
+});
+
 test("clearFormulaDoc 会走到已注册的清理函数", async () => {
   const seen = [];
   const stop = registerFormulaCleaner((hash) => { seen.push(hash); });

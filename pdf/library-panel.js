@@ -94,6 +94,9 @@ export function mountLibraryUi(api = {}) {
   let repick = null;
   let readingHash = "";
   let shell = null;
+  let openingHash = "";
+  let downloadingHash = "";
+  let openError = "";
 
   function now() {
     return typeof api.now === "function" ? api.now() : Date.now();
@@ -142,13 +145,82 @@ export function mountLibraryUi(api = {}) {
     return el;
   }
 
+  function focusRowControl(hash, kind) {
+    if (kind === "delete") {
+      const trash = root.querySelector(`${rowSelector(hash)} .oi-lib-trash`);
+      if (trash && trash.disabled !== true) {
+        try {
+          trash.focus?.();
+        } catch {
+          /* the host may not focus */
+        }
+        return trash;
+      }
+    }
+    return focusTarget(`${rowSelector(hash)} .oi-lib-open`);
+  }
+
+  function focusAfterClose(preferred) {
+    const button = doc.getElementById("libraryButton");
+    const node = preferred && preferred.nodeType === 1 ? preferred : null;
+    let hidden = false;
+    try {
+      hidden = node?.hidden === true || Boolean(node?.closest?.("[hidden]"));
+    } catch {
+      hidden = false;
+    }
+    const usable = node && node !== doc.body && node !== doc.documentElement && !hidden;
+    const back = usable ? node : button;
+    try {
+      back?.focus?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function fetchWithin(url, ms, onTimeout) {
+    const fetchImpl = typeof api.fetch === "function" ? api.fetch : win.fetch.bind(win);
+    const limit = Number(ms) > 0 ? Number(ms) : 20000;
+    let timer = 0;
+    const timeout = new Promise((_, reject) => {
+      timer = timers.setTimeout(() => {
+        if (typeof onTimeout === "function") onTimeout();
+        reject(Object.assign(new Error("timeout"), { name: "TimeoutError" }));
+      }, limit);
+    });
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const pending = Promise.resolve().then(() => fetchImpl(url, ctl ? { signal: ctl.signal } : undefined));
+    return Promise.race([pending, timeout]).then((value) => {
+      timers.clearTimeout(timer);
+      return value;
+    }, (error) => {
+      timers.clearTimeout(timer);
+      try {
+        ctl?.abort();
+      } catch {
+        /* the download already failed */
+      }
+      throw error;
+    });
+  }
+
+  async function revealBytes(bytes, title, hash) {
+    try {
+      await api.openBytes?.(bytes, title);
+      return true;
+    } catch {
+      openError = hash;
+      return false;
+    }
+  }
+
   function moveFocusAfterDelete(index, list) {
     const next = list[index] || list[index - 1];
     if (next) {
       active = rows.findIndex((row) => row.docHash === next.docHash);
       if (active < 0) active = 0;
       render();
-      focusTarget(rowSelector(next.docHash));
+      focusRowControl(next.docHash, "row");
       return;
     }
     render();
@@ -239,55 +311,71 @@ export function mountLibraryUi(api = {}) {
   }
 
   async function openRow(row) {
-    if (!row) return;
+    if (!row || openingHash) return;
     if (readingHash && readingHash === row.docHash) {
       close(true);
       return;
     }
+    const hash = row.docHash;
+    const title = libraryRowTitle(row).title;
+    openingHash = hash;
+    openError = "";
     repick = null;
-    let resolved;
     try {
-      resolved = await resolveLibraryOpen(row.docHash, { store: await api.store(), fetch: undefined });
+      const store = await api.store();
+      const resolved = await resolveLibraryOpen(hash, { store, fetch: undefined });
+      if (resolved.status === "local") {
+        if (!(await revealBytes(resolved.bytes, title, hash))) return;
+        close(true);
+        return;
+      }
+      if (resolved.status === "needs-network") {
+        downloadingHash = hash;
+        render();
+        let timedOut = false;
+        const again = await resolveLibraryOpen(hash, {
+          store: await api.store(),
+          fetch: (url) => fetchWithin(url, api.downloadTimeoutMs ?? 20000, () => {
+            timedOut = true;
+          })
+        }).catch(() => ({ status: "needs-file" }));
+        downloadingHash = "";
+        if (again.status === "downloaded") {
+          if (!(await revealBytes(again.bytes, title, hash))) return;
+          close(true);
+          return;
+        }
+        if (timedOut) {
+          openError = hash;
+          return;
+        }
+        repick = {
+          hash,
+          title,
+          changed: again.status === "hash-mismatch" && again.via === "url",
+          warn: false
+        };
+        return;
+      }
+      repick = {
+        hash,
+        title,
+        changed: resolved.status === "hash-mismatch" && resolved.via === "url",
+        warn: resolved.status === "hash-mismatch" && resolved.via === "file"
+      };
     } catch (error) {
       if (isStorageBlocked(error)) {
         phase = "blocked";
         root.dataset.blocked = "true";
         armPoll();
-        render();
-      }
-      return;
-    }
-    if (resolved.status === "local") {
-      await api.openBytes?.(resolved.bytes, libraryRowTitle(row).title);
-      close(true);
-      return;
-    }
-    if (resolved.status === "needs-network") {
-      let again;
-      try {
-        again = await resolveLibraryOpen(row.docHash, {
-          store: await api.store(),
-          fetch: api.fetch || win.fetch.bind(win)
-        });
-      } catch {
-        again = { status: "needs-file" };
-      }
-      if (again.status === "downloaded") {
-        await api.openBytes?.(again.bytes, libraryRowTitle(row).title);
-        close(true);
         return;
       }
-      repick = { hash: row.docHash, title: libraryRowTitle(row).title, changed: again.status === "hash-mismatch" && again.via === "url", warn: false };
-      render();
-      return;
+      openError = hash;
+    } finally {
+      openingHash = "";
+      downloadingHash = "";
+      if (open) render();
     }
-    repick = {
-      hash: row.docHash,
-      title: libraryRowTitle(row).title,
-      changed: resolved.status === "hash-mismatch" && resolved.via === "url",
-      warn: resolved.status === "hash-mismatch" && resolved.via === "file"
-    };
-    render();
   }
 
   async function pickFile(file) {
@@ -298,7 +386,12 @@ export function mountLibraryUi(api = {}) {
       fileBytes: bytes
     });
     if (matched.status === "file") {
-      await api.openBytes?.(matched.bytes, repick.title);
+      const hash = repick.hash;
+      const title = repick.title;
+      if (!(await revealBytes(matched.bytes, title, hash))) {
+        render();
+        return;
+      }
       repick = null;
       close(true);
       return;
@@ -454,7 +547,7 @@ export function mountLibraryUi(api = {}) {
       ]));
       body.querySelector("[data-lib-empty-open]")?.addEventListener("click", () => api.pickPdf?.());
     } else {
-      const list = h(doc, "div", { class: "oi-lib-list", role: "listbox", tabindex: "0", "aria-label": LIBRARY_COPY.title });
+      const list = h(doc, "div", { class: "oi-lib-list", role: "group", "aria-label": LIBRARY_COPY.title });
       if (!shown.length && query) {
         list.append(h(doc, "div", { class: "oi-lib-miss" }, [
           h(doc, "p", { text: libraryNoHitCopy(query) }),
@@ -471,12 +564,14 @@ export function mountLibraryUi(api = {}) {
         const reading = readingHash && readingHash === row.docHash;
         const item = h(doc, "div", {
           class: confirmHash === row.docHash ? "oi-lib-row is-confirm" : "oi-lib-row",
-          role: "option",
-          "data-lib-row": row.docHash,
-          tabindex: index === active && column === "row" ? "0" : "-1",
-          "aria-selected": index === active ? "true" : "false"
+          "data-lib-row": row.docHash
         });
-        const main = h(doc, "button", { type: "button", class: "oi-lib-open" }, [
+        const main = h(doc, "button", {
+          type: "button",
+          class: "oi-lib-open",
+          tabindex: index === active && column === "row" ? "0" : "-1",
+          disabled: openingHash === row.docHash
+        }, [
           h(doc, "span", { class: "oi-lib-name", title: title.title, text: title.title }),
           h(doc, "span", { class: "oi-lib-meta", text: [libraryProgressCopy(row.translated, row.pageCount), libraryRelativeTime(row.lastOpenedAt, now()), librarySizeCopy(row.bytes)].filter(Boolean).join(" · ") })
         ]);
@@ -504,6 +599,13 @@ export function mountLibraryUi(api = {}) {
           focusTarget(".oi-lib-cancel");
         });
         item.append(main, trash);
+        if (downloadingHash === row.docHash) {
+          item.setAttribute("aria-busy", "true");
+          item.append(h(doc, "p", { class: "oi-lib-muted oi-lib-opening", text: LIBRARY_COPY.downloading }));
+        }
+        if (openError === row.docHash) {
+          item.append(h(doc, "p", { class: "oi-lib-warn oi-lib-open-error", text: LIBRARY_COPY.openFailed }));
+        }
         if (confirmHash === row.docHash) {
           const notesBox = row.notes > 0
             ? h(doc, "label", { class: "oi-lib-notes" }, [
@@ -532,7 +634,7 @@ export function mountLibraryUi(api = {}) {
             confirmHash = "";
             deleteFailed = false;
             render();
-            focusTarget(`${rowSelector(row.docHash)} .oi-lib-trash`);
+            focusRowControl(row.docHash, "delete");
           });
           commit?.addEventListener("click", () => {
             const checked = card.querySelector("[data-lib-notes]")?.checked === true;
@@ -582,53 +684,73 @@ export function mountLibraryUi(api = {}) {
     nodes.foot.hidden = phase !== "list";
 
     if (keep && doc.activeElement !== nodes.input) {
-      if (keep.kind === "delete") focusTarget(`${rowSelector(keep.hash)} .oi-lib-trash`);
+      if (keep.kind === "delete") focusRowControl(keep.hash, "delete");
       else if (keep.kind === "confirm") focusTarget(".oi-lib-cancel");
-      else focusTarget(rowSelector(keep.hash));
+      else focusRowControl(keep.hash, "row");
     }
   }
 
   function onListKey(event) {
     const list = visibleRows();
     if (!list.length) return;
+    if (event.target?.closest?.(".oi-lib-confirm, .oi-lib-repick, .oi-lib-miss")) return;
     const key = event.key;
+    const host = event.target?.closest?.("[data-lib-row]");
+    const hash = host?.getAttribute?.("data-lib-row") || "";
+    const index = hash ? list.findIndex((row) => row.docHash === hash) : -1;
+    const focused = index >= 0 ? { index, row: list[index] } : null;
+    if (focused) active = focused.index;
     if (key === "ArrowDown" || key === "ArrowUp") {
       event.preventDefault();
       active = key === "ArrowDown" ? Math.min(list.length - 1, active + 1) : Math.max(0, active - 1);
       column = "row";
       render();
-      focusTarget(rowSelector(list[active].docHash));
+      focusRowControl(list[active].docHash, "row");
       return;
     }
     if (key === "ArrowRight" || key === "ArrowLeft") {
       event.preventDefault();
-      column = key === "ArrowRight" ? "delete" : "row";
+      const row = list[active];
+      if (!row) return;
+      const toDelete = key === "ArrowRight";
+      if (toDelete && !libraryDeleteAllowed(readingHash, row.docHash)) {
+        column = "row";
+        render();
+        focusRowControl(row.docHash, "row");
+        return;
+      }
+      column = toDelete ? "delete" : "row";
       render();
-      const hash = list[active]?.docHash;
-      focusTarget(column === "delete" ? `${rowSelector(hash)} .oi-lib-trash` : rowSelector(hash));
+      focusRowControl(row.docHash, column);
       return;
     }
     if (key === "Enter") {
       event.preventDefault();
-      if (column === "delete") {
-        const row = list[active];
-        if (row && libraryDeleteAllowed(readingHash, row.docHash)) {
-          confirmHash = row.docHash;
-          deleteFailed = false;
-          render();
-          focusTarget(".oi-lib-cancel");
-        }
+      const row = focused?.row || list[active];
+      if (!row) return;
+      const onTrash = Boolean(event.target?.closest?.(".oi-lib-trash"));
+      if (onTrash || column === "delete") {
+        if (!libraryDeleteAllowed(readingHash, row.docHash)) return;
+        confirmHash = row.docHash;
+        deleteFailed = false;
+        active = focused ? focused.index : active;
+        column = "delete";
+        render();
+        focusTarget(".oi-lib-cancel");
         return;
       }
-      void openRow(list[active]);
+      active = focused ? focused.index : active;
+      void openRow(row);
       return;
     }
     if (key === "Delete" || key === "Backspace") {
-      const row = list[active];
+      const row = focused?.row || list[active];
       if (!row || !libraryDeleteAllowed(readingHash, row.docHash)) return;
       event.preventDefault();
       confirmHash = row.docHash;
       deleteFailed = false;
+      active = focused ? focused.index : active;
+      column = "delete";
       render();
       focusTarget(".oi-lib-cancel");
     }
@@ -668,12 +790,7 @@ export function mountLibraryUi(api = {}) {
     syncChrome(false, meta);
     if (focusButton && meta.handoff !== true && meta.focus !== false) {
       const preferred = meta.trigger || trigger;
-      const back = preferred && preferred.isConnected !== false ? preferred : doc.getElementById("libraryButton");
-      try {
-        back?.focus?.();
-      } catch {
-        /* ignore */
-      }
+      focusAfterClose(preferred && preferred.isConnected !== false ? preferred : null);
     }
   }
 
@@ -700,7 +817,7 @@ export function mountLibraryUi(api = {}) {
       confirmHash = "";
       deleteFailed = false;
       render();
-      focusTarget(`${rowSelector(hash)} .oi-lib-trash`);
+      focusRowControl(hash, "delete");
     }
   });
 
@@ -720,7 +837,7 @@ export function mountLibraryUi(api = {}) {
         confirmHash = "";
         deleteFailed = false;
         render();
-        focusTarget(`${rowSelector(hash)} .oi-lib-trash`);
+        focusRowControl(hash, "delete");
         return true;
       }
       close(true);

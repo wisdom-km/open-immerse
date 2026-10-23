@@ -733,8 +733,8 @@ function init() {
     openFromSrc(src);
   } else {
     setStatus(PDF_COPY.empty);
-    // init() runs before later lets in this module. Open after they exist.
-    queueMicrotask(() => libraryUi?.open({ reason: "empty" }));
+    updateTranslateControls();
+    libraryUi?.open({ reason: "empty" });
   }
   if (String(location.hash || "").startsWith("#library")) {
     queueMicrotask(() => libraryUi?.open({ reason: "hash" }));
@@ -947,7 +947,7 @@ function onKey(event) {
     if (event.key === "l" || event.key === "L") {
       if (eventTargetIsField(event.target)) return;
       event.preventDefault();
-      libraryUi?.toggle();
+      libraryUi?.toggle({ trigger: $("libraryButton") });
       return;
     }
     if (event.key === "q" || event.key === "Q") {
@@ -6017,7 +6017,7 @@ function bindMoreMenu() {
   });
   $("menuLibrary")?.addEventListener("click", () => {
     closeMoreMenu(true);
-    libraryUi?.toggle({ trigger: $("menuLibrary") });
+    libraryUi?.toggle({ trigger: $("libraryButton") });
   });
   $("menuAa")?.addEventListener("click", () => {
     closeMoreMenu(false);

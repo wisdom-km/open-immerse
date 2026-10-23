@@ -476,3 +476,191 @@ test("文献库侧栏：开关、三种删除文案、网址变了、排序、�
   assert.equal(gone, "gone");
 
 });
+
+test("文献库三行只有一个 Tab 停留点，Enter 和 Delete 作用在焦点所在行", { timeout: 180000 }, async (t) => {
+  const server = await serveRepo(new Map());
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-f8-pr2-keys-"));
+  rememberOwnedTemp(ownedDir);
+  const userDataDir = join(ownedDir, "profile");
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const handle = { child: null, cdp: null };
+  t.after(async () => {
+    try {
+      handle.cdp?.dispose();
+    } finally {
+      await cleanupChrome({ t, child: handle.child, server, ownedDir, userDataDir });
+    }
+  });
+
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  handle.child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
+  handle.cdp = cdp;
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  await cdp.send("Page.enable", {}, sessionId);
+  await cdp.send("Runtime.enable", {}, sessionId);
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: CHROME_STUB }, sessionId);
+  const evaluate = async (expression) => {
+    const result = await cdp.send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true
+    }, sessionId);
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails.exception?.description || result.exceptionDetails.text;
+      throw new Error(detail || JSON.stringify(result.exceptionDetails));
+    }
+    return result.result?.value;
+  };
+  const press = async (key, code, vk) => {
+    const down = { type: "keyDown", key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
+    await cdp.send("Input.dispatchKeyEvent", down, sessionId);
+    await cdp.send("Input.dispatchKeyEvent", { ...down, type: "keyUp" }, sessionId);
+  };
+
+  await cdp.send("Page.navigate", { url: `${origin}/pdf/viewer.html` }, sessionId);
+  const ready = Date.now();
+  let opened = false;
+  while (Date.now() - ready < 20000) {
+    opened = await evaluate(`document.querySelector(".oi-library")?.hidden === false`);
+    if (opened) break;
+    await sleep(50);
+  }
+  assert.equal(opened, true, await evaluate(`window.__oiBoot || "library did not open"`));
+
+  await evaluate(`(async () => {
+    const { sharedLibraryStore } = await import("/lib/library-session.js");
+    const store = sharedLibraryStore();
+    const rows = [
+      { docHash: "hash-3", title: "第三篇" },
+      { docHash: "hash-2", title: "第二篇" },
+      { docHash: "hash-1", title: "第一篇" }
+    ];
+    for (const row of rows) {
+      await store.touchPaper(row.docHash, { title: row.title, pageCount: 1, opened: true });
+    }
+    return rows.length;
+  })()`);
+  const listed = Date.now();
+  let names = [];
+  while (Date.now() - listed < 8000) {
+    names = JSON.parse(await evaluate(`JSON.stringify([...document.querySelectorAll(".oi-lib-name")].map((node) => node.textContent))`));
+    if (names.includes("第一篇") && names.includes("第三篇") && names.length === 3) break;
+    await sleep(50);
+  }
+  assert.deepEqual(names, ["第一篇", "第二篇", "第三篇"]);
+
+  const marked = JSON.parse(await evaluate(`(() => {
+    const list = document.querySelector(".oi-lib-list");
+    const nodes = [list, ...list.querySelectorAll("*")];
+    const stops = nodes.filter((node) => node && !node.disabled && node.tabIndex >= 0);
+    return JSON.stringify({
+      stops: stops.length,
+      role: list.getAttribute("role"),
+      listTab: list.hasAttribute("tabindex"),
+      options: list.querySelectorAll("[role='option']").length,
+      listbox: document.querySelector("[role='listbox']") != null
+    });
+  })()`));
+  assert.equal(marked.stops, 1, JSON.stringify(marked));
+  assert.equal(marked.role, "group");
+  assert.equal(marked.listTab, false);
+  assert.equal(marked.options, 0);
+  assert.equal(marked.listbox, false);
+
+  await evaluate(`document.querySelector(".oi-lib-close").focus()`);
+  const tabbed = [];
+  for (let i = 0; i < 6; i += 1) {
+    await press("Tab", "Tab", 9);
+    const where = JSON.parse(await evaluate(`(() => {
+      const el = document.activeElement;
+      const list = document.querySelector(".oi-lib-list");
+      return JSON.stringify({
+        inList: Boolean(list && el && list.contains(el)),
+        cls: el && el.className || "",
+        hash: el && el.closest ? (el.closest("[data-lib-row]")?.getAttribute("data-lib-row") || "") : ""
+      });
+    })()`));
+    if (!where.inList) break;
+    tabbed.push(where);
+  }
+  assert.equal(tabbed.length, 1, JSON.stringify(tabbed));
+
+  const openedHash = await evaluate(`(async () => {
+    const button = document.querySelector('[data-lib-row="hash-3"] .oi-lib-open');
+    button.focus();
+    button.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const started = Date.now();
+    while (Date.now() - started < 3000) {
+      const hash = document.querySelector(".oi-lib-repick")?.closest("[data-lib-row]")?.getAttribute("data-lib-row") || "";
+      if (hash) return hash;
+      await new Promise((done) => setTimeout(done, 20));
+    }
+    return "";
+  })()`);
+  assert.equal(openedHash, "hash-3");
+
+  const deleted = JSON.parse(await evaluate(`(() => {
+    const button = document.querySelector('[data-lib-row="hash-3"] .oi-lib-open');
+    button.focus();
+    button.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    const row = document.querySelector(".oi-lib-confirm")?.closest("[data-lib-row]");
+    return JSON.stringify({
+      hash: row?.getAttribute("data-lib-row") || "",
+      title: row?.querySelector(".oi-lib-name")?.textContent || ""
+    });
+  })()`));
+  assert.equal(deleted.hash, "hash-3", JSON.stringify(deleted));
+  assert.equal(deleted.title, "第三篇");
+
+  const arrows = JSON.parse(await evaluate(`(async () => {
+    document.querySelector(".oi-lib-cancel")?.click();
+    const first = document.querySelector('[data-lib-row="hash-1"] .oi-lib-open');
+    first.focus();
+    const down = () => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    down();
+    down();
+    const hash = document.activeElement?.closest?.("[data-lib-row]")?.getAttribute("data-lib-row") || "";
+    document.querySelector(".oi-lib-repick")?.remove();
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const started = Date.now();
+    let opened = "";
+    while (Date.now() - started < 3000) {
+      opened = document.querySelector(".oi-lib-repick")?.closest("[data-lib-row]")?.getAttribute("data-lib-row") || "";
+      if (opened) break;
+      await new Promise((done) => setTimeout(done, 20));
+    }
+    return JSON.stringify({ hash, opened });
+  })()`));
+  assert.equal(arrows.hash, "hash-3", JSON.stringify(arrows));
+  assert.equal(arrows.opened, "hash-3", JSON.stringify(arrows));
+
+  const returned = JSON.parse(await evaluate(`(() => {
+    document.querySelector(".oi-lib-close").click();
+    const other = document.createElement("button");
+    other.id = "otherFocus";
+    document.body.append(other);
+    other.focus();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    const opened = document.querySelector(".oi-library")?.hidden === false;
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "l", bubbles: true }));
+    const afterKey = document.activeElement?.id || "";
+    document.getElementById("moreButton").click();
+    document.getElementById("menuLibrary").click();
+    const fromMenu = document.querySelector(".oi-library")?.hidden === false;
+    document.querySelector(".oi-lib-close").click();
+    return JSON.stringify({
+      opened,
+      afterKey,
+      fromMenu,
+      afterMenu: document.activeElement?.id || ""
+    });
+  })()`));
+  assert.equal(returned.opened, true, JSON.stringify(returned));
+  assert.equal(returned.afterKey, "libraryButton", JSON.stringify(returned));
+  assert.equal(returned.fromMenu, true, JSON.stringify(returned));
+  assert.equal(returned.afterMenu, "libraryButton", JSON.stringify(returned));
+});
