@@ -1,0 +1,171 @@
+{
+  "schema": "open-immerse.mm-dpo-ab/v1",
+  "mode": "template",
+  "generatedAt": null,
+  "paper": {
+    "arxiv": "2305.18290",
+    "version": "v3",
+    "pages": [
+      3,
+      4,
+      5
+    ]
+  },
+  "expectedFormulaCount": 79,
+  "productSendsPage": false,
+  "writesPreset": false,
+  "coverage": {
+    "expected": 79,
+    "detected": 0,
+    "sampled": 0,
+    "pages": [],
+    "pagesMatch": false,
+    "complete": false
+  },
+  "arms": [
+    "tight"
+  ],
+  "armGuide": [
+    {
+      "id": "tight",
+      "default": true,
+      "sendsPdf": false,
+      "note": "现有紧裁 PNG，走 cropPngFor。默认臂。"
+    },
+    {
+      "id": "hi-res",
+      "default": false,
+      "sendsPdf": false,
+      "pending": "F7W-1",
+      "note": "高清裁图。产品路径未落地时不发送，除非另接 visionCropFor。"
+    },
+    {
+      "id": "paragraph",
+      "default": false,
+      "sendsPdf": false,
+      "pending": "F7W-3",
+      "note": "段落图加段落文字。产品路径未落地时不发送。"
+    },
+    {
+      "id": "page",
+      "default": false,
+      "sendsPdf": false,
+      "requiresFlag": "--arm=page",
+      "note": "整页对照，只在脚本里。默认关。不发送整页 PDF，也不能成为产品默认。"
+    }
+  ],
+  "channels": [
+    {
+      "role": "primary",
+      "provider": "kimi",
+      "model": "kimi-k3",
+      "envKey": "MM_DPO_KIMI_API_KEY",
+      "hasKey": false
+    },
+    {
+      "role": "baseline",
+      "provider": "deepseek",
+      "model": "deepseek-v4.1-flash",
+      "envKey": "MM_DPO_DEEPSEEK_API_KEY",
+      "hasKey": false
+    }
+  ],
+  "fieldGuide": {
+    "latex": "模型给出的公式 LaTeX。没有可核对的候选时为 null。",
+    "verify": "第二层核对（字符集 + KaTeX）。pass 为真才算核对过。",
+    "paint": "上屏方式：katex（核对通过）/ crop（核对不过、UNREADABLE 或调用失败，静默裁图）/ none（未发送）。",
+    "matchesReference": "与参考 LaTeX 归一化后是否一致。缺参考或没有候选时为 null。",
+    "latencyMs": "这一次模型请求的耗时（毫秒）。未发送为 0。",
+    "tokens": "token：prompt / completion / total。没有用量时为 null。",
+    "checkedButMismatch": "核对通过，但与参考不一致。汇总字段是这个标志的条数。"
+  },
+  "rowFields": [
+    "id",
+    "page",
+    "index",
+    "arm",
+    "provider",
+    "model",
+    "latex",
+    "verify",
+    "paint",
+    "matchesReference",
+    "latencyMs",
+    "tokens",
+    "checkedButMismatch"
+  ],
+  "rows": [],
+  "summary": {
+    "checkedButMismatch": 0,
+    "sent": 0,
+    "verified": 0,
+    "byArmModel": [
+      {
+        "arm": "tight",
+        "provider": "kimi",
+        "model": "kimi-k3",
+        "role": "primary",
+        "rows": 0,
+        "sent": 0,
+        "measured": 0,
+        "verified": 0,
+        "referenceCompared": 0,
+        "matchesReference": 0,
+        "checkedButMismatch": 0,
+        "latencyMsTotal": 0,
+        "tokensTotal": 0
+      },
+      {
+        "arm": "tight",
+        "provider": "deepseek",
+        "model": "deepseek-v4.1-flash",
+        "role": "baseline",
+        "rows": 0,
+        "sent": 0,
+        "measured": 0,
+        "verified": 0,
+        "referenceCompared": 0,
+        "matchesReference": 0,
+        "checkedButMismatch": 0,
+        "latencyMsTotal": 0,
+        "tokensTotal": 0
+      }
+    ],
+    "recommended": {
+      "arm": null,
+      "provider": null,
+      "model": null,
+      "reason": "no-measured-rows",
+      "provisional": true,
+      "productDefault": false,
+      "writesPreset": false,
+      "note": "本脚手架不改设置预置，也不因分数挡合入。整页臂不能成为产品默认。",
+      "pageLab": null
+    }
+  },
+  "exampleRow": {
+    "id": "example",
+    "page": 3,
+    "index": 1,
+    "arm": "tight",
+    "provider": "kimi",
+    "model": "kimi-k3",
+    "latex": "x",
+    "verify": {
+      "checked": true,
+      "pass": true,
+      "reason": null,
+      "jaccard": 1
+    },
+    "paint": "katex",
+    "matchesReference": false,
+    "latencyMs": 0,
+    "tokens": {
+      "prompt": 0,
+      "completion": 0,
+      "total": 0
+    },
+    "checkedButMismatch": true,
+    "example": true
+  }
+}

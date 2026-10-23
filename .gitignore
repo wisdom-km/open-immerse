@@ -26,3 +26,6 @@ reports/
 _qa-out/
 _qa-*/
 
+# F7W-2a lab output. The report template stays; paid runs do not.
+oi-qa/f7-multimodal/runs/
+
