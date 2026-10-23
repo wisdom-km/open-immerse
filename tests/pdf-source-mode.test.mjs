@@ -163,7 +163,9 @@ test("SM-06 side slot blocks backslash with the notes toast; absent slot does no
   assert.match(viewer, /SIDE_SLOT_TOAST/);
   const panels = viewer.slice(viewer.indexOf("function bindViewChrome"), viewer.indexOf("function readerWidth"));
   assert.match(panels, /notesButton/);
-  assert.match(panels, /showSoonToast/);
+  assert.match(panels, /tocButton/);
+  assert.match(panels, /drawerUi\?\.toggle/);
+  assert.doesNotMatch(panels, /showSoonToast/);
   const lib = readFileSync(join(root, "lib/pdf-source-mode.js"), "utf8");
   assert.match(lib, /请先关闭笔记 \/ 问 AI \/ 文献库面板/);
 });

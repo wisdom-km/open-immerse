@@ -1251,6 +1251,66 @@ test("无 src 时仍更新翻译按钮，l 和菜单关闭后回到书架按钮"
   assert.equal(notes.label, "调整笔记栏宽度");
 });
 
+test("重新选文件的焦点在行被滤掉或文献库关闭后不再挂着", async () => {
+  const { document, window } = panelDom();
+  const timers = fakeTimers();
+  const papers = [
+    paperRow({ docHash: "beta", title: "Beta paper", lastOpenedAt: 2 }),
+    paperRow({ docHash: "other", title: "Other", lastOpenedAt: 1 })
+  ];
+  const ui = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    timers,
+    width: () => 1200,
+    searchMs: 0,
+    store: async () => ({
+      async listPapers() { return papers; },
+      async getPages() { return []; },
+      async usage() { return { byDoc: new Map() }; },
+      async getSource() { return null; },
+      async getPaper(hash) { return papers.find((row) => row.docHash === hash) || null; }
+    }),
+    listNotes: async () => [],
+    openHash: async () => ""
+  });
+  ui.open();
+  await flush();
+  const input = ui.root.querySelector("input[type='search']");
+  input.value = "zzzz";
+  input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  timers.advance(0);
+  ui.showRepick({ hash: "beta", title: "Beta paper" });
+  input.value = "";
+  input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  timers.advance(0);
+  await flush();
+  assert.equal(document.activeElement?.classList?.contains("oi-lib-pick") === true, false);
+
+  const slot = document.createElement("div");
+  document.body.append(slot);
+  let release;
+  const held = new Promise((done) => { release = done; });
+  const again = mountLibraryUi({
+    slot,
+    timers,
+    width: () => 1200,
+    store: async () => ({
+      async listPapers() { return held; },
+      async getPages() { return []; },
+      async usage() { return { byDoc: new Map() }; },
+      async getSource() { return null; },
+      async getPaper() { return null; }
+    }),
+    listNotes: async () => [],
+    openHash: async () => ""
+  });
+  again.showRepick({ hash: "beta", title: "Beta paper" });
+  again.close();
+  release(papers);
+  await flush();
+  assert.equal(document.activeElement?.classList?.contains("oi-lib-pick") === true, false);
+});
+
 test("clearFormulaDoc 会走到已注册的清理函数", async () => {
   const seen = [];
   const stop = registerFormulaCleaner((hash) => { seen.push(hash); });

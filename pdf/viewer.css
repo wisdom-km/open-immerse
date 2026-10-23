@@ -1164,7 +1164,7 @@ body {
   border-radius: 6px;
   background: var(--oi-reader-well);
   color: var(--oi-reader-muted);
-  font: 600 13px/1.2 var(--oi-reader-ui-font, var(--oi-font));
+  font: 700 13px/1.2 var(--oi-reader-ui-font, var(--oi-font));
   white-space: nowrap;
   cursor: pointer;
   transition: background-color 120ms, color 120ms;
@@ -2861,7 +2861,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   border-radius: 6px;
   background: var(--oi-reader-well);
   color: var(--oi-reader-muted);
-  font: 600 13px/1 var(--oi-reader-ui-font, var(--oi-font));
+  font: 700 13px/1 var(--oi-reader-ui-font, var(--oi-font));
   cursor: pointer;
   transition: background-color 120ms, color 120ms;
 }

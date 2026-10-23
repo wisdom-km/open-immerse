@@ -121,6 +121,7 @@ export function mountLibraryUi(api = {}) {
   let poll = 0;
   let loadGen = 0;
   let repick = null;
+  let pendingFocus = null;
   let readingHash = "";
   let shell = null;
   let openingHash = "";
@@ -377,28 +378,45 @@ export function mountLibraryUi(api = {}) {
     }, api.pollMs || STORAGE_POLL_MS);
   }
 
-  async function openRow(row) {
-    if (!row || openingHash) return;
-    if (readingHash && readingHash === row.docHash) {
+  async function openRow(row, options = {}) {
+    const external = options.from === "drawer";
+    const report = (status, extra = {}) => {
+      const result = {
+        status,
+        hash: row?.docHash || "",
+        title: row ? libraryRowTitle(row).title : "",
+        ...extra
+      };
+      if (external && typeof options.onStatus === "function") options.onStatus(result);
+      return result;
+    };
+    if (!row || openingHash) return report("busy");
+    if (!external && readingHash && readingHash === row.docHash) {
       close(true);
-      return;
+      return report("current");
     }
     const hash = row.docHash;
     const title = libraryRowTitle(row).title;
     openingHash = hash;
     openError = "";
-    repick = null;
+    if (!external) repick = null;
     try {
       const store = await api.store();
       const resolved = await resolveLibraryOpen(hash, { store, fetch: undefined });
       if (resolved.status === "local") {
-        if (!(await revealBytes(resolved.bytes, title, hash))) return;
-        close(true);
-        return;
+        if (!(await revealBytes(resolved.bytes, title, hash))) {
+          if (external) openError = "";
+          return report("failed");
+        }
+        close(external ? false : true);
+        return report("opened");
       }
       if (resolved.status === "needs-network") {
-        downloadingHash = hash;
-        render();
+        if (!external || open) {
+          downloadingHash = hash;
+          render();
+        }
+        report("downloading");
         let timedOut = false;
         const again = await resolveLibraryOpen(hash, {
           store: await api.store(),
@@ -408,41 +426,79 @@ export function mountLibraryUi(api = {}) {
         }).catch(() => ({ status: "needs-file" }));
         downloadingHash = "";
         if (again.status === "downloaded") {
-          if (!(await revealBytes(again.bytes, title, hash))) return;
-          close(true);
-          return;
+          if (!(await revealBytes(again.bytes, title, hash))) {
+            if (external) openError = "";
+            return report("failed");
+          }
+          close(external ? false : true);
+          return report("opened");
         }
         if (timedOut) {
-          openError = hash;
-          return;
+          if (!external) openError = hash;
+          return report("failed");
         }
-        repick = {
+        const spec = {
           hash,
           title,
           changed: again.status === "hash-mismatch" && again.via === "url",
           warn: false
         };
-        return;
+        if (external) return report("needs-file", spec);
+        repick = spec;
+        return report("needs-file", spec);
       }
-      repick = {
+      const spec = {
         hash,
         title,
         changed: resolved.status === "hash-mismatch" && resolved.via === "url",
         warn: resolved.status === "hash-mismatch" && resolved.via === "file"
       };
+      if (external) return report("needs-file", spec);
+      repick = spec;
+      return report("needs-file", spec);
     } catch (error) {
       if (isStorageBlocked(error)) {
         phase = "blocked";
         root.dataset.blocked = "true";
         armPoll();
-        return;
+        return report("blocked");
       }
-      openError = hash;
+      if (!external) openError = hash;
+      return report("failed");
     } finally {
       openingHash = "";
       downloadingHash = "";
       if (open) render();
     }
+  }
+
+  async function openPaper(hash, options = {}) {
+    const id = String(hash || "");
+    if (!id) return { status: "missing", hash: "" };
+    if (!rows.some((row) => row.docHash === id)) {
+      try {
+        await load({ keep: open });
+      } catch (error) {
+        if (isStorageBlocked(error)) return { status: "blocked", hash: id };
+      }
+    }
+    const row = rows.find((item) => item.docHash === id);
+    if (!row) return { status: "missing", hash: id, title: options.title || "" };
+    return openRow(row, options);
+  }
+
+  function showRepick(spec = {}) {
+    const hash = String(spec.hash || "");
+    if (!hash) return;
+    repick = {
+      hash,
+      title: spec.title || "",
+      changed: spec.changed === true,
+      warn: spec.warn === true
+    };
+    pendingFocus = { hash, kind: "pick" };
+    if (!open) openPanel({ reason: "repick" });
+    else render();
   }
 
   async function pickFile(file) {
@@ -635,8 +691,11 @@ export function mountLibraryUi(api = {}) {
       shown.forEach((row, index) => {
         const title = libraryRowTitle(row);
         const reading = readingHash && readingHash === row.docHash;
+        const rowClass = ["oi-lib-row"];
+        if (confirmHash === row.docHash) rowClass.push("is-confirm");
+        if (repick && repick.hash === row.docHash) rowClass.push("is-repick");
         const item = h(doc, "div", {
-          class: confirmHash === row.docHash ? "oi-lib-row is-confirm" : "oi-lib-row",
+          class: rowClass.join(" "),
           "data-lib-row": row.docHash
         });
         const label = deleteLabel(title.title);
@@ -760,6 +819,27 @@ export function mountLibraryUi(api = {}) {
     nodes.footCopy.textContent = libraryFooterCopy(rows.length, total);
     nodes.foot.hidden = phase !== "list";
 
+    if (pendingFocus) {
+      const pending = pendingFocus;
+      const listed = phase === "list" && visibleRows().some((row) => row.docHash === pending.hash);
+      if (phase === "list" && !listed) pendingFocus = null;
+      const pick = listed ? root.querySelector(`${rowSelector(pending.hash)} .oi-lib-pick`) : null;
+      if (pick) {
+        pendingFocus = null;
+        const rowEl = pick.closest?.("[data-lib-row]");
+        try {
+          rowEl?.scrollIntoView?.({ block: "nearest" });
+        } catch {
+          /* the host may not scroll */
+        }
+        try {
+          pick.focus();
+        } catch {
+          /* the host may not focus */
+        }
+        return;
+      }
+    }
     if (keep && doc.activeElement !== nodes.input) {
       if (keep.kind === "delete") focusRowControl(keep.hash, "delete");
       else if (keep.kind === "confirm") focusTarget(".oi-lib-cancel");
@@ -864,6 +944,7 @@ export function mountLibraryUi(api = {}) {
       focusAfterClose(candidate && candidate.isConnected !== false ? candidate : null);
     }
     open = false;
+    pendingFocus = null;
     confirmHash = "";
     deleteFailed = false;
     deleting = false;
@@ -932,6 +1013,8 @@ export function mountLibraryUi(api = {}) {
     setReadingHash(hash) {
       readingHash = String(hash || "");
       if (open) render();
-    }
+    },
+    openPaper,
+    showRepick
   };
 }

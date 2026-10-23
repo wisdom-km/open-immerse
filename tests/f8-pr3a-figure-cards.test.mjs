@@ -78,6 +78,27 @@ test("placeholderCopy figure and table lines, including a missing number", () =>
   assert.equal(placeholderCopy({ page: 6, figureLabel: "2a" }, { kind: "table" }).visible[2], "原表");
 });
 
+test("card line 1 is 700 and line 2 stays 12/400 muted", () => {
+  const css = read("pdf/viewer.css");
+  const stack = "var(--oi-reader-ui-font, var(--oi-font))";
+  const figureRule = css.slice(css.indexOf(".oi-figure-placeholder {"), css.indexOf(".oi-figure-placeholder::after"));
+  assert.ok(figureRule.includes(`font: 700 13px/1.2 ${stack}`), figureRule);
+  const sub = css.slice(css.indexOf(".oi-figure-placeholder .oi-ph-sub {\n  font:"), css.indexOf(".oi-figure-placeholder:hover .oi-ph-sub"));
+  assert.ok(sub.includes(`font: 400 12px/1.3 ${stack}`), sub);
+  assert.ok(sub.includes("color: var(--oi-reader-muted)"), sub);
+  const formulaRule = css.slice(css.indexOf(".oi-formula-placeholder {"), css.indexOf(".oi-formula-placeholder:not(.is-inline)"));
+  assert.ok(formulaRule.includes(`font: 700 13px/1 ${stack}`), formulaRule);
+  assert.match(css, /\.oi-formula-placeholder\.is-inline \{[^}]*font:\s*500 12px\/1 var\(--oi-reader-ui-font, var\(--oi-font\)\)/);
+  const tokens = read("pdf/reader-tokens.css");
+  assert.match(tokens, /font-weight:\s*600;/);
+  assert.match(tokens, /--oi-reader-ui-weight:\s*500/);
+  const viewer = read("pdf/viewer.js");
+  assert.doesNotMatch(viewer, /button\.title = copy\.aria/);
+  assert.doesNotMatch(viewer, /notice\.title = copy\.aria/);
+  assert.match(viewer, /button\.setAttribute\("aria-label", copy\.aria\)/);
+  assert.match(viewer, /notice\.setAttribute\("aria-label", copy\.aria\)/);
+});
+
 test("figure card tokens, container query, and reader colors only", () => {
   const css = read("pdf/viewer.css");
   const tokens = read("pdf/reader-tokens.css");
