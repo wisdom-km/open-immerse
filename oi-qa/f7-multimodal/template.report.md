@@ -15,7 +15,7 @@ schema: `open-immerse.mm-dpo-ab/v1` · mode: `template`
 | LaTeX | `latex` |
 | 核对 | `verify` |
 | 上屏方式 | `paint` |
-| 与参考一致? | `matchesReference` |
+| 与参考一致? | `matchesReference`（只去空白）/ `canonicalMatch`（规范形，D2 用这个） |
 | 耗时 | `latencyMs` |
 | token | `tokens` |
 | 核对过但与参考不一致 | `checkedButMismatch`（汇总 0） |
@@ -51,10 +51,10 @@ stratified=false locked=false requested=— count=0
 
 ## 分臂汇总
 
-| arm | provider | model | sent | verified | 逐字一致 | 与参考一致 | 核对过但与参考不一致 | 失败 | 耗时合计 | token 合计 | 估算美元 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| tight | kimi | kimi-k3 | 0 | 0 | 0/0 | 0/0 | 0 | 0 | 0 | 0 | — |
-| tight | deepseek | deepseek-v4.1-flash | 0 | 0 | 0/0 | 0/0 | 0 | 0 | 0 | 0 | — |
+| arm | provider | model | sent | verified | 逐字一致 | 去空白 | 规范形 | 核对过但与参考不一致 | 失败 | 耗时合计 | token 合计 | 估算美元 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| tight | kimi | kimi-k3 | 0 | 0 | 0/0 | 0/0 | 0/0 | 0 | 0 | 0 | 0 | — |
+| tight | deepseek | deepseek-v4.1-flash | 0 | 0 | 0/0 | 0/0 | 0/0 | 0 | 0 | 0 | 0 | — |
 
 ## 推荐
 
@@ -66,7 +66,7 @@ writesPreset=false productDefault=false provisional=true
 
 ## D2
 
-paragraph 只有在 Kimi K3 上归一化准确率明显高于 hi-res 时才作为建议默认；否则建议 hi-res。本报告不改产品默认。
+paragraph 只有在 Kimi K3 上规范形准确率明显高于 hi-res 时才作为建议默认；否则建议 hi-res。本报告不改产品默认。
 
 suggestedArm=— clearlyBetter=null hi-res=— paragraph=—
 
@@ -82,7 +82,8 @@ writesPreset=false productDefault=false
 - 核对: checked=true pass=true reason=— jaccard=1
 - 上屏方式: katex（核对通过，上屏 KaTeX）
 - 与参考一致（逐字）: false
-- 与参考一致: false
+- 与参考一致（去空白）: false
+- 与参考一致（规范形）: false
 - 耗时: 0 ms
 - token: 0/0/0
 - 核对过但与参考不一致: true

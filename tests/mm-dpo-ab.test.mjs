@@ -50,6 +50,8 @@ import {
   formulasFromBlocks,
   formulasFromFixture,
   inputDecision,
+  canonicalizeLatex,
+  latexCanonicalMatch,
   latexExactMatch,
   latexMatchesReference,
   recommend,
@@ -217,6 +219,8 @@ test("argv documents arms, refuses command-line keys, and blocks a bare live run
   assert.equal(parseArgs(["--limit=0"]).errors.length > 0, true);
   assert.match(USAGE, /MM_DPO_KIMI_API_KEY/);
   assert.match(USAGE, /MM_DPO_DEEPSEEK_API_KEY/);
+  assert.match(USAGE, /复用 MM_DPO_KIMI_API_KEY/);
+  assert.match(USAGE, /--rescore/);
   assert.match(USAGE, /--arm=page/);
   assert.match(USAGE, /--live/);
   assert.match(USAGE, /79/);
@@ -239,6 +243,16 @@ test("channels come from env, and a Bearer prefix is not sent twice", () => {
   assert.equal(channels[1].secret, DEEPSEEK_KEY);
   assert.equal(channels[1].model, "deepseek-v4.1-flash");
   assert.equal(channels[1].role, "baseline");
+  const shared = channelsFromEnv({
+    MM_DPO_KIMI_API_KEY: `Bearer ${KIMI_KEY}`,
+    MM_DPO_DEEPSEEK_MODEL: "deepseek-v4.1-flash",
+    MM_DPO_DEEPSEEK_BASE_URL: "https://ark.cn-beijing.volces.com/api/plan/v3"
+  }, ["deepseek"]);
+  assert.equal(shared[0].secret, KIMI_KEY);
+  assert.equal(shared[0].model, "deepseek-v4.1-flash");
+  assert.equal(shared[0].baseUrl, "https://ark.cn-beijing.volces.com/api/plan/v3");
+  assert.equal(shared[0].envKey, "MM_DPO_DEEPSEEK_API_KEY");
+  assert.equal(channelsFromEnv({}, ["deepseek"])[0].secret, "");
   assert.throws(() => channelsFromEnv({}, ["grok"]), { code: "unknown-model" });
   const only = channelsFromEnv({ MM_DPO_KIMI_API_KEY: KIMI_KEY }, ["kimi", "kimi"]);
   assert.equal(only.length, 1);
@@ -830,17 +844,17 @@ test("the CLI writes a template and a fake live report without touching the netw
     }
   });
   assert.equal(live.code, 0);
-  assert.equal(sends, 1);
+  assert.equal(sends, 2);
   assert.equal(live.report.coverage.detected, 2);
   assert.equal(live.report.coverage.sampled, 1);
   assert.equal(live.report.coverage.complete, false);
   assert.equal(live.report.rows[0].checkedButMismatch, true);
-  assert.equal(live.report.summary.byArmModel.some((item) => item.provider === "deepseek" && item.sent === 0), true);
+  assert.equal(live.report.summary.byArmModel.some((item) => item.provider === "deepseek" && item.sent === 1), true);
   const written = readFileSync(live.paths.jsonPath, "utf8");
   assert.equal(written.includes(KIMI_KEY), false);
   assert.equal(written.includes("PARA_SHOULD_STAY_OUT"), false);
   assert.equal(written.includes(PNG), false);
-  assert.match(readFileSync(live.paths.mdPath, "utf8"), /核对过但与参考不一致：1/);
+  assert.match(readFileSync(live.paths.mdPath, "utf8"), /核对过但与参考不一致：2/);
 
   const noCrop = capture();
   const quiet = await main([
@@ -1438,6 +1452,174 @@ test("D2 treats a floating 5-point gap as clear, and an unknown kimi model still
   const priced = estimateCostUsd("kimi", "not-a-listed-model", { prompt: 1_000_000, completion: 0 });
   assert.equal(priced, 3);
   assert.equal(estimateCostUsd("", "kimi-k3", { prompt: 10, completion: 10 }), null);
+});
+
+test("canonical scoring keeps exact match, and real DPO outputs only match when the symbols match", () => {
+  const table = JSON.parse(read("tests/fixtures/mm-dpo-reference.json"));
+  const referenceOf = (id) => table.formulas.find((row) => row.id === id).reference;
+  const p3b9 = String.raw`p ^ { * } ( y _ { 1 } \succ y _ { 2 } \mid x ) = \frac { \exp \left( r ^ { * } ( x , y _ { 1 } ) \right) } { \exp \left( r ^ { * } ( x , y _ { 1 } ) \right) + \exp \left( r ^ { * } ( x , y _ { 2 } ) \right) } .`;
+  assert.equal(latexCanonicalMatch(p3b9, referenceOf("p3-b9")), true);
+  assert.equal(latexExactMatch(p3b9, referenceOf("p3-b9")), false);
+  assert.equal(latexMatchesReference(p3b9, referenceOf("p3-b9"), true), false);
+  assert.equal(latexCanonicalMatch(String.raw`\pi_{\mathrm{refl}}`, String.raw`\pi_\text{ref}`), false);
+  assert.equal(latexCanonicalMatch(String.raw`\pi_{\mathrm{ref}}`, String.raw`\pi_\text{ref}`), true);
+  assert.equal(latexCanonicalMatch(String.raw`\pi_1`, String.raw`\pi_{ref}`), false);
+  assert.equal(latexCanonicalMatch(String.raw`\pi_1`, referenceOf("p4-b9")), false);
+  const otherEquation = String.raw`Z(x) = \sum _ { y } \pi _ { \mathrm { r e f } } ( y \mid x ) \exp \left( \frac { 1 } { \beta } r ( x , y ) \right)`;
+  assert.equal(latexCanonicalMatch(otherEquation, referenceOf("p4-b9")), false);
+  const preferenceInstead = String.raw`p^{*}(y_1 \succ y_2 \mid x) = \frac{1}{1 + \exp\left(\beta \log \frac{\pi^{*}(y_2 \mid x)}{\pi_{\mathrm{ref}}(y_2 \mid x)} - \beta \log \frac{\pi^{*}(y_1 \mid x)}{\pi_{\mathrm{ref}}(y_1 \mid x)}\right)}`;
+  assert.equal(latexCanonicalMatch(preferenceInstead, referenceOf("p4-b11")), false);
+  assert.equal(canonicalizeLatex(String.raw`{\cal L}`), canonicalizeLatex(String.raw`\mathcal{L}`));
+  assert.equal(canonicalizeLatex(String.raw`\bigl(x\bigr)`), "(x)");
+  assert.equal(canonicalizeLatex(String.raw`a = \\ -b`), "a=-b");
+  assert.equal(latexCanonicalMatch(String.raw`x.\tag{2}\label{eq:x}`, "x"), true);
+});
+
+test("rescore recomputes a saved report without a network call or opening the PDF", async (t) => {
+  const before = liveFetchViolations();
+  const dir = createOwnedTemp(t, "mm-dpo-rescore-");
+  const input = join(dir, "live.json");
+  const p3b9 = String.raw`p ^ { * } ( y _ { 1 } \succ y _ { 2 } \mid x ) = \frac { \exp \left( r ^ { * } ( x , y _ { 1 } ) \right) } { \exp \left( r ^ { * } ( x , y _ { 1 } ) \right) + \exp \left( r ^ { * } ( x , y _ { 2 } ) \right) } .`;
+  const saved = {
+    schema: "open-immerse.mm-dpo-ab/v1",
+    mode: "live",
+    generatedAt: "2026-10-23T14:49:17.125Z",
+    sample: { stratified: true, locked: false, requested: 2, ids: ["p3-b9", "p4-b9"] },
+    arms: ["tight", "hi-res"],
+    channels: [{ role: "primary", provider: "kimi", model: "kimi-k3", envKey: "MM_DPO_KIMI_API_KEY", hasKey: true }],
+    coverage: { expected: 79, detected: 37, sampled: 2, pages: [3, 4, 5], pagesMatch: true, complete: false },
+    rows: [
+      {
+        id: "p3-b9",
+        arm: "tight",
+        provider: "kimi",
+        model: "kimi-k3",
+        role: "primary",
+        measured: true,
+        sent: true,
+        latex: p3b9,
+        verify: { checked: true, pass: true },
+        exactMatch: false,
+        matchesReference: false
+      },
+      {
+        id: "p4-b9",
+        arm: "hi-res",
+        provider: "kimi",
+        model: "kimi-k3",
+        role: "primary",
+        measured: true,
+        sent: true,
+        latex: String.raw`\pi_{\mathrm{refl}}`,
+        verify: { checked: true, pass: true },
+        exactMatch: false,
+        matchesReference: false
+      }
+    ]
+  };
+  const original = JSON.stringify(saved);
+  writeFileSync(input, original);
+  const out = join(dir, "out");
+  const logs = capture();
+  const result = await main([
+    "--rescore", input,
+    "--out", out,
+    "--pdf", join(dir, "missing.pdf"),
+    "--live"
+  ], {
+    ...logs,
+    transport() {
+      throw new Error("rescore must not send");
+    }
+  });
+  assert.equal(result.code, 2);
+  assert.match(logs.err.join("\n"), /--rescore/);
+  assert.equal(readFileSync(input, "utf8"), original);
+
+  const scored = await main(["--rescore", input, "--out", out], {
+    stdout() {},
+    stderr(line) {
+      throw new Error(line);
+    },
+    transport() {
+      throw new Error("rescore must not send");
+    }
+  });
+  assert.equal(scored.code, 0);
+  assert.equal(scored.report.mode, "rescore");
+  assert.equal(scored.report.generatedAt, saved.generatedAt);
+  assert.equal(scored.report.summary.sent, 2);
+  const tight = scored.report.summary.byArmModel.find((group) => group.arm === "tight");
+  const hi = scored.report.summary.byArmModel.find((group) => group.arm === "hi-res");
+  assert.equal(tight.canonicalMatches, 1);
+  assert.equal(tight.matchesReference, 0);
+  assert.equal(tight.exactMatches, 0);
+  assert.equal(hi.canonicalMatches, 0);
+  assert.equal(scored.report.rows.find((row) => row.id === "p3-b9").canonicalMatch, true);
+  assert.equal(scored.report.rows.find((row) => row.id === "p4-b9").canonicalMatch, false);
+  assert.equal(readFileSync(input, "utf8"), original);
+  const written = JSON.parse(readFileSync(scored.paths.jsonPath, "utf8"));
+  assert.equal(written.mode, "rescore");
+  assert.equal(written.rows.find((row) => row.id === "p3-b9").latex, p3b9);
+  assert.equal(written.rows.find((row) => row.id === "p3-b9").canonicalMatch, true);
+  const missing = await main(["--rescore", join(dir, "nope.json")], { stdout() {}, stderr() {} });
+  assert.equal(missing.code, 1);
+  assert.equal(liveFetchViolations(), before);
+});
+
+test("deepseek on the Ark plan base reuses the kimi key and the same request shape", async () => {
+  const box = harness(() => chat("x"));
+  const base = `https://ark.cn-beijing.volces.com/api/plan/v3?api_key=${KIMI_KEY}`;
+  const channels = channelsFromEnv({
+    MM_DPO_KIMI_API_KEY: KIMI_KEY,
+    MM_DPO_DEEPSEEK_MODEL: "deepseek-v4.1-flash",
+    MM_DPO_DEEPSEEK_BASE_URL: base
+  }, ["deepseek"]);
+  assert.equal(channels[0].secret, KIMI_KEY);
+  const report = await runAb({
+    formulas: [formula()],
+    arms: ["tight"],
+    models: channels,
+    send: true,
+    katex,
+    now: clock(),
+    transport: createLiveTransport({ net: box.net })
+  });
+  assert.equal(box.seen.length, 1);
+  const url = new URL(box.seen[0].url);
+  assert.equal(url.protocol, "https:");
+  assert.equal(url.hostname, "ark.cn-beijing.volces.com");
+  assert.equal(url.pathname, "/api/plan/v3/chat/completions");
+  assert.equal(url.pathname.includes("/v1"), false);
+  assert.equal(url.search, "");
+  assert.equal(box.seen[0].url.includes(KIMI_KEY), false);
+  const body = JSON.parse(box.seen[0].body);
+  assert.equal(body.model, "deepseek-v4.1-flash");
+  assert.deepEqual(body.thinking, { type: "disabled" });
+  assert.equal(body.reasoning_effort, undefined);
+  const image = body.messages.at(-1).content.find((part) => part.type === "image_url");
+  assert.match(image.image_url.url, /^data:image\/png;base64,/);
+  assert.equal(image.image_url.url.includes("http"), false);
+  assert.equal(box.seen[0].headers.Authorization, `Bearer ${KIMI_KEY}`);
+  assert.equal(report.rows[0].provider, "deepseek");
+  assert.equal(report.rows[0].model, "deepseek-v4.1-flash");
+  assert.equal(JSON.stringify(report).includes(KIMI_KEY), false);
+  assert.equal(JSON.stringify(report).includes("ark.cn-beijing.volces.com"), false);
+
+  const own = harness(() => chat("x"));
+  await createLiveTransport({ net: own.net })({
+    provider: "deepseek",
+    model: "deepseek-v4.1-flash",
+    baseUrl: base,
+    system: "s",
+    text: "独立公式",
+    image: { mime: "image/png", base64: PNG },
+    secret: DEEPSEEK_KEY
+  });
+  assert.equal(own.seen[0].headers.Authorization, `Bearer ${DEEPSEEK_KEY}`);
+  assert.equal(own.seen[0].url.includes(KIMI_KEY), false);
+  assert.equal(own.seen[0].url.includes(DEEPSEEK_KEY), false);
+  assert.equal(JSON.parse(own.seen[0].body).reasoning_effort, undefined);
 });
 
 test("the extension manifest and CI do not run the paid script", () => {

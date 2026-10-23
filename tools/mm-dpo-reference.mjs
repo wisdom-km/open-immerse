@@ -24,15 +24,20 @@
  *   MM_DPO_KIMI_BASE_URL        可选。火山方舟：https://ark.cn-beijing.volces.com/api/plan/v3
  *                               脚本把它当成产品的「自定义兼容端点」，地址是
  *                               base + /chat/completions，不再加 /v1。密钥不进 URL。
- *   MM_DPO_DEEPSEEK_API_KEY     DeepSeek V4.1 Flash，基线对照
+ *   MM_DPO_DEEPSEEK_API_KEY     DeepSeek V4.1 Flash，基线对照。
+ *                               未设置时复用 MM_DPO_KIMI_API_KEY（同一把火山方舟密钥）。
+ *                               设了自己的密钥就用自己的，不会回落到 Kimi。
  *   MM_DPO_DEEPSEEK_MODEL       默认 deepseek-v4.1-flash
- *   MM_DPO_DEEPSEEK_BASE_URL    可选，默认厂商预设
+ *   MM_DPO_DEEPSEEK_BASE_URL    可选。火山方舟与 Kimi 相同：
+ *                               https://ark.cn-beijing.volces.com/api/plan/v3
+ *                               请求形状也相同：base + /chat/completions，base64 PNG，
+ *                               thinking.type=disabled，不送 reasoning_effort。
  *
  * 真跑 / Live
  *   只有 --live 会发请求。CI 不要加 --live。
  *   默认 --reference 是 tests/fixtures/mm-dpo-reference.json。
  *   未对齐的行 reference 为空，不计入准确率，并写在报告里。
- *   还必须 --limit=N、--sample=N（建议 15，分层且可复现）或 --full（79 条，另批预算）。
+ *   还必须 --limit=N、--sample=N（建议 15，分层且可复现）或 --full（检出的全部，不再抽样）。
  *   --limit 与 --sample 都按页 × 行内/独立分层抽取，报告里记下 id，同一清单再跑是同一批。
  *   没有 PNG 时不发请求。文字层 PDF 只用来列出第 3–5 页公式并裁图，不整页上传。
  *   429 不重试，避免同一条公式扣两次。
@@ -41,14 +46,15 @@
  * 报告 / Report
  *   默认目录 oi-qa/f7-multimodal/runs/（不进扩展包，runs/ 不提交）。
  *   report.json + report.md。字段见计划 §5：LaTeX、核对、上屏方式、
- *   与参考一致?、耗时、token，以及「核对过但与参考不一致」的条数。
+ *   与参考一致?（去空白 / 规范形）、耗时、token，以及「核对过但与参考不一致」的条数。
+ *   D2 用规范形准确率。--rescore=<report.json> 用磁盘上的输出重算，不联网、不开 PDF。
  *   PDF 夹具不入库：tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf
  *   用 scripts/ci/fetch-fixtures.sh 按 2305.18290v3 取。
  */
 
 import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import {
@@ -62,6 +68,7 @@ import {
   formulasFromFixture,
   reportToJson,
   reportToMarkdown,
+  rescoreReport,
   resolveArms,
   runAb,
   templateReport
@@ -88,11 +95,17 @@ export const USAGE = [
   "    node tools/mm-dpo-reference.mjs --live --limit=15 --arm=tight,hi-res,paragraph --model=kimi",
   "  node tools/mm-dpo-reference.mjs --live --sample=15 --arm=tight,hi-res,paragraph --model=kimi",
   "  node tools/mm-dpo-reference.mjs --live --full --arm=page",
+  "  node tools/mm-dpo-reference.mjs --rescore <report.json> [--reference <file.json>] [--out dir]",
+  "  MM_DPO_KIMI_MODEL=kimi-k3 MM_DPO_KIMI_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 \\",
+  "  MM_DPO_DEEPSEEK_MODEL=deepseek-v4.1-flash MM_DPO_DEEPSEEK_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 \\",
+  "    node tools/mm-dpo-reference.mjs --live --full --arm=hi-res --model=kimi,deepseek",
   "",
   "输入臂: tight（默认） / hi-res / paragraph / page",
   "  tight：已有图走 cropPngFor；文字层 PDF 用 measureFormulaCrop（CROP_SCALE 2）。",
   "  默认参考：tests/fixtures/mm-dpo-reference.json。未对齐的行不计入准确率。",
   "  火山方舟 Base URL 走产品「自定义兼容端点」：base + /chat/completions，不再加 /v1。",
+  "  DeepSeek 走同一套方舟地址。未设置 MM_DPO_DEEPSEEK_API_KEY 时复用 MM_DPO_KIMI_API_KEY。",
+  "  --rescore 只重算已有报告的逐字 / 去空白 / 规范形，不发请求，也不打开 PDF。",
   "  page 默认关，必须 --arm=page。不发送整页 PDF，也不进产品默认。",
   "  hi-res 走产品 visionCropFor / renderVisionCrop（mm-3）。没有页面时不发送。",
   "  paragraph 只在本脚本里：段落区域按同一高清倍率出图，并附段落文字。",
@@ -114,7 +127,7 @@ export const USAGE = [
   `参考条数 ${DPO_PAPER.formulaCount}，不是合入门槛。`
 ].join("\n");
 
-const VALUE_FLAGS = ["--limit", "--sample", "--ids", "--arm", "--model", "--out", "--fixture", "--pdf", "--reference"];
+const VALUE_FLAGS = ["--limit", "--sample", "--ids", "--arm", "--model", "--out", "--fixture", "--pdf", "--reference", "--rescore"];
 
 function splitFlag(arg) {
   for (const name of VALUE_FLAGS) {
@@ -143,6 +156,7 @@ export function parseArgs(argv) {
     fixture: "",
     pdf: "",
     reference: "",
+    rescore: "",
     placeholderUsesTight: false,
     errors: []
   };
@@ -221,8 +235,15 @@ export function parseArgs(argv) {
     else if (pair.flag === "--fixture") parsed.fixture = value;
     else if (pair.flag === "--pdf") parsed.pdf = value;
     else if (pair.flag === "--reference") parsed.reference = value;
+    else if (pair.flag === "--rescore") {
+      if (!value.trim()) parsed.errors.push("--rescore 缺少报告路径");
+      else parsed.rescore = value;
+    }
   }
   if (parsed.help) return parsed;
+  if (parsed.rescore && (parsed.live || parsed.dryRun || parsed.template)) {
+    parsed.errors.push("--rescore 不发请求，也不能和 --live / --dry-run / --template 一起用");
+  }
   if (parsed.template && parsed.live) parsed.errors.push("--template 不会发请求");
   if (parsed.live && parsed.dryRun) parsed.errors.push("--live 和 --dry-run 只能选一个");
   if (parsed.full && (parsed.limit != null || parsed.sample != null || parsed.ids.length)) {
@@ -428,6 +449,35 @@ function stampDir(iso) {
   return join(root, "oi-qa", "f7-multimodal", "runs", stamp);
 }
 
+function rescoreDir(parsed, inputPath) {
+  const dir = parsed.out
+    ? resolve(parsed.out)
+    : join(dirname(inputPath), `${basename(inputPath, ".json")}.rescore`);
+  if (resolve(join(dir, "report.json")) === resolve(inputPath)) {
+    throw new Error("--out 会盖住原来的报告，换一个目录");
+  }
+  return dir;
+}
+
+export function rescoreFromFile(parsed) {
+  const inputPath = resolve(parsed.rescore);
+  if (!existsSync(inputPath)) throw new Error(`缺少报告：${inputPath}`);
+  const referencePath = referenceFile(parsed);
+  if (!existsSync(referencePath)) throw new Error(`缺少参考：${referencePath}`);
+  let report;
+  let table;
+  try {
+    report = readJson(inputPath);
+    table = readJson(referencePath);
+  } catch (err) {
+    throw new Error(`报告或参考不是 JSON：${err.message || err}`);
+  }
+  if (!report || report.schema !== "open-immerse.mm-dpo-ab/v1" || !Array.isArray(report.rows)) {
+    throw new Error(`不是 A/B 报告：${inputPath}`);
+  }
+  return { report: rescoreReport(report, table), dir: rescoreDir(parsed, inputPath) };
+}
+
 export async function main(argv = [], io = {}) {
   const stdout = io.stdout || ((line) => console.log(line));
   const stderr = io.stderr || ((line) => console.error(line));
@@ -450,6 +500,21 @@ export async function main(argv = [], io = {}) {
     const paths = writeReport(dir, report);
     stdout(paths.jsonPath);
     return { code: 0, report, paths };
+  }
+  if (parsed.rescore) {
+    let scored;
+    try {
+      scored = rescoreFromFile(parsed);
+    } catch (err) {
+      stderr(err.message || String(err));
+      return { code: 1, report: null, paths: null };
+    }
+    const paths = writeReport(scored.dir, scored.report);
+    const scoredArms = scored.report.summary.byArmModel
+      .map((group) => `${group.arm}/${group.provider} canonical=${group.canonicalMatches}/${group.referenceCompared}`)
+      .join(" ");
+    stdout(`${paths.jsonPath} ${scoredArms}`.trim());
+    return { code: 0, report: scored.report, paths };
   }
   let arms;
   let channels;

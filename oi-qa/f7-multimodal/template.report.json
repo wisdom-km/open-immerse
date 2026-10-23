@@ -99,10 +99,11 @@
     "verify": "第二层核对（字符集 + KaTeX）。pass 为真才算核对过。",
     "paint": "上屏方式：katex（核对通过）/ crop（核对不过、UNREADABLE 或调用失败，静默裁图）/ none（未发送）。",
     "exactMatch": "与参考 LaTeX 逐字一致。缺参考或没有候选时为 null。",
-    "matchesReference": "与参考 LaTeX 归一化后是否一致。缺参考或没有候选时为 null。",
+    "matchesReference": "去掉空白后是否一致。缺参考或没有候选时为 null。",
+    "canonicalMatch": "规范形是否一致（D2 用这个）。单符号花括号、字体命令、定界符尺寸、对齐外壳和句末标点不算差别。不同符号仍然不同。缺参考或没有候选时为 null。",
     "latencyMs": "这一次模型请求的耗时（毫秒）。未发送为 0。",
     "tokens": "token：prompt / completion / total。没有用量时为 null。",
-    "checkedButMismatch": "核对通过，但与参考不一致。汇总字段是这个标志的条数。"
+    "checkedButMismatch": "核对通过，但规范形与参考不一致。汇总字段是这个标志的条数。"
   },
   "rowFields": [
     "id",
@@ -116,6 +117,7 @@
     "paint",
     "exactMatch",
     "matchesReference",
+    "canonicalMatch",
     "latencyMs",
     "tokens",
     "checkedButMismatch"
@@ -138,6 +140,7 @@
         "verified": 0,
         "referenceCompared": 0,
         "matchesReference": 0,
+        "canonicalMatches": 0,
         "exactMatches": 0,
         "checkedButMismatch": 0,
         "failures": 0,
@@ -160,6 +163,7 @@
         "verified": 0,
         "referenceCompared": 0,
         "matchesReference": 0,
+        "canonicalMatches": 0,
         "exactMatches": 0,
         "checkedButMismatch": 0,
         "failures": 0,
@@ -185,7 +189,7 @@
     },
     "inputDecision": {
       "id": "D2",
-      "rule": "paragraph 只有在 Kimi K3 上归一化准确率明显高于 hi-res 时才作为建议默认；否则建议 hi-res。本报告不改产品默认。",
+      "rule": "paragraph 只有在 Kimi K3 上规范形准确率明显高于 hi-res 时才作为建议默认；否则建议 hi-res。本报告不改产品默认。",
       "margin": 0.05,
       "clearlyBetter": null,
       "suggestedArm": null,
@@ -212,6 +216,7 @@
     "paint": "katex",
     "exactMatch": false,
     "matchesReference": false,
+    "canonicalMatch": false,
     "latencyMs": 0,
     "tokens": {
       "prompt": 0,
