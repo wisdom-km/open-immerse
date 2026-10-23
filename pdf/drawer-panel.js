@@ -1,6 +1,7 @@
 /**
  * Reader drawer: 目录 / 说明 / 最近.
- * Docked it is an aside. Floating and the narrow sheet are modal dialogs.
+ * The root is a div. Docked it is complementary. Floating and the narrow
+ * sheet are modal dialogs, and the rest of the page is inert while they are.
  */
 
 import { recentMeta } from "../lib/drawer-info.js";
@@ -50,7 +51,7 @@ export function mountDrawerUi(api = {}) {
   const win = doc.defaultView || globalThis;
   const timers = api.timers || win;
   const backdrop = api.backdrop || doc.getElementById("drawerBackdrop");
-  const root = h(doc, "aside", {
+  const root = h(doc, "div", {
     class: "oi-drawer",
     role: "complementary",
     "aria-label": "目录与说明"
@@ -72,6 +73,7 @@ export function mountDrawerUi(api = {}) {
   const scrollTops = { toc: 0, info: 0, recent: 0 };
   const rowFlags = new Map();
   let tocSignature = "";
+  let refreshTimer = 0;
 
   function sessionGet(key) {
     try {
@@ -103,10 +105,19 @@ export function mountDrawerUi(api = {}) {
 
   function shown(node) {
     if (!node || node.nodeType !== 1 || node.hidden) return false;
-    try {
-      if (node.closest?.("[hidden]")) return false;
-    } catch {
-      return true;
+    const view = doc.defaultView;
+    let current = node;
+    while (current && current.nodeType === 1) {
+      if (current.hidden) return false;
+      try {
+        const style = view?.getComputedStyle?.(current);
+        const display = style?.display;
+        const visibility = style?.visibility;
+        if (display === "none" || visibility === "hidden" || visibility === "collapse") return false;
+      } catch {
+        /* a host without layout still honors the hidden attribute */
+      }
+      current = current.parentElement;
     }
     return true;
   }
@@ -143,6 +154,7 @@ export function mountDrawerUi(api = {}) {
       root.setAttribute("aria-modal", "true");
     }
     if (backdrop) backdrop.hidden = !(open && mode === "float");
+    setModalBarrier(open && mode !== "dock");
     const button = doc.getElementById("tocButton");
     if (button) {
       button.setAttribute("aria-pressed", open ? "true" : "false");
@@ -151,6 +163,28 @@ export function mountDrawerUi(api = {}) {
       else button.removeAttribute("data-open");
     }
     return modal;
+  }
+
+  function setModalBarrier(modal) {
+    const body = doc.body;
+    if (!body) return;
+    const keep = new Set();
+    for (let node = slot; node && node !== body; node = node.parentElement) keep.add(node);
+    if (backdrop) keep.add(backdrop);
+    for (const child of body.children) {
+      if (!keep.has(child)) {
+        child.inert = modal;
+        continue;
+      }
+      child.inert = false;
+      if (child !== slot && typeof child.contains === "function" && child.contains(slot)) {
+        for (const grand of child.children) {
+          const holdsDrawer = grand === slot || grand === backdrop || (typeof grand.contains === "function" && grand.contains(slot));
+          const side = grand.id === "sideSlot";
+          grand.inert = modal && !holdsDrawer && !side;
+        }
+      }
+    }
   }
 
   function rememberScroll() {
@@ -364,7 +398,7 @@ export function mountDrawerUi(api = {}) {
       api.showRepick?.(result);
       return;
     }
-    if (result.status === "failed" || result.status === "blocked") {
+    if (result.status === "failed" || result.status === "blocked" || result.status === "missing") {
       setRowFlag(row.docHash, "failed");
       const hash = row.docHash;
       timers.setTimeout(() => {
@@ -384,7 +418,7 @@ export function mountDrawerUi(api = {}) {
   async function loadInfo(force) {
     if (!force && infoState.phase === "ready") return;
     const gen = ++infoGen;
-    if (infoState.phase !== "ready") {
+    if (infoState.phase === "blank") {
       infoState = { phase: "blank", model: infoState.model };
       if (open && tab === "info") render();
     }
@@ -402,7 +436,7 @@ export function mountDrawerUi(api = {}) {
   async function loadRecent(force) {
     if (!force && recentState.phase === "ready") return;
     const gen = ++recentGen;
-    if (recentState.phase !== "ready") {
+    if (recentState.phase === "blank") {
       recentState = { phase: "blank", rows: recentState.rows };
       if (open && tab === "recent") render();
     }
@@ -515,7 +549,8 @@ export function mountDrawerUi(api = {}) {
     if (event.key === "Tab" && open && mode !== "dock") {
       const items = [...root.querySelectorAll("button, a, input, select, textarea")].filter((node) => {
         if (node.disabled || node.hidden) return false;
-        return node.tabIndex >= 0;
+        const attr = node.getAttribute("tabindex");
+        return attr == null || Number(attr) >= 0;
       });
       if (!items.length) return;
       const first = items[0];
@@ -561,6 +596,14 @@ export function mountDrawerUi(api = {}) {
     }
   }
 
+  function readCurrent() {
+    if (typeof api.currentIndex !== "function") return;
+    const index = Number(api.currentIndex());
+    if (!Number.isInteger(index)) return;
+    current = index;
+    activeToc = index;
+  }
+
   function openPanel(meta = {}) {
     if (open) return;
     open = true;
@@ -570,6 +613,7 @@ export function mountDrawerUi(api = {}) {
       const next = api.mode();
       if (next === "dock" || next === "float" || next === "sheet") mode = next;
     }
+    readCurrent();
     syncChrome();
     render({ keepScroll: true });
     api.onOpenChange?.(true, meta);
@@ -591,6 +635,14 @@ export function mountDrawerUi(api = {}) {
   }
 
   root.addEventListener("keydown", onKey);
+  doc.addEventListener("focusin", (event) => {
+    if (!open || mode === "dock") return;
+    const target = event.target;
+    if (root.contains(target)) return;
+    if (target?.closest?.("#sideSlot, .oi-library, .oi-notes, .oi-ask")) return;
+    const landing = root.querySelector('.oi-toc-item[aria-current="location"], .oi-toc-item, [role="tab"][aria-selected="true"]');
+    focus(landing || root);
+  });
   backdrop?.addEventListener("click", () => {
     if (open && mode === "float") close(true);
   });
@@ -620,11 +672,13 @@ export function mountDrawerUi(api = {}) {
       return true;
     },
     refresh() {
-      infoState = { phase: "blank", model: null };
-      recentState = { phase: "blank", rows: [] };
-      if (!open) return;
-      if (tab === "info") void loadInfo(true);
-      if (tab === "recent") void loadRecent(true);
+      timers.clearTimeout(refreshTimer);
+      refreshTimer = timers.setTimeout(() => {
+        refreshTimer = 0;
+        if (!open) return;
+        if (tab === "info" || infoState.phase !== "blank") void loadInfo(true);
+        if (tab === "recent" || recentState.phase !== "blank") void loadRecent(true);
+      }, 160);
     },
     setTab(next) {
       selectTab(next, false);

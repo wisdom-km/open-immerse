@@ -294,6 +294,11 @@ test("阅读页抽屉：停靠、目录、页签、最近和窄屏", { timeout: 
   assert.ok(docked.textX + 1 >= docked.drawerRight + 16, JSON.stringify(docked));
   assert.ok(Math.abs(docked.drawerRight - docked.translateX) <= 2, JSON.stringify(docked));
 
+  await evaluate(`document.querySelector(".workspace").style.setProperty("--oi-drawer-source", "768px")`);
+  await evaluate(`window.dispatchEvent(new Event("resize"))`);
+  const repinned = await evaluate(`parseFloat(getComputedStyle(document.querySelector(".workspace")).getPropertyValue("--oi-drawer-source"))`);
+  assert.ok(Math.abs(repinned - 768) > 40, `stale pin stayed ${repinned}`);
+
   await evaluate(`(() => {
     const pane = document.getElementById("pages");
     const page = document.querySelector("#pages .pdf-page[data-page='15']");
@@ -313,6 +318,42 @@ test("阅读页抽屉：停靠、目录、页签、最近和窄屏", { timeout: 
     if (text === ${JSON.stringify(lateCurrent)}) return "";
     return "moved";
   })()`, "滚回开头后当前项变化", 5000);
+
+  const alignReading = async (page) => {
+    await evaluate(`(() => {
+      const pane = document.getElementById("pages");
+      const node = document.querySelector("#pages .pdf-page[data-page='${page}']");
+      if (!pane || !node) return;
+      const paneBox = pane.getBoundingClientRect();
+      const pageBox = node.getBoundingClientRect();
+      pane.scrollTop += pageBox.top - (paneBox.top + pane.clientHeight / 3 - 5);
+      pane.dispatchEvent(new Event("scroll"));
+    })()`);
+  };
+  await alignReading(4);
+  const topOfPage4 = await waitFor(`(() => {
+    const num = document.querySelector(".oi-toc-item[aria-current='location'] .oi-toc-num")?.textContent || "";
+    return num === "3.2.1" ? num : "";
+  })()`, "第 4 页顶部当前节是 3.2.1", 5000);
+  assert.equal(topOfPage4, "3.2.1");
+  await alignReading(5);
+  const topOfPage5 = await waitFor(`(() => {
+    const num = document.querySelector(".oi-toc-item[aria-current='location'] .oi-toc-num")?.textContent || "";
+    return num === "3.2.3" ? num : "";
+  })()`, "第 5 页顶部当前节是 3.2.3", 5000);
+  assert.equal(topOfPage5, "3.2.3");
+
+  await evaluate(`document.getElementById("tocButton").click()`);
+  await waitFor(`document.getElementById("drawerSlot").hidden ? "closed" : ""`, "关上抽屉", 5000);
+  await alignReading(5);
+  await evaluate(`document.getElementById("tocButton").click()`);
+  const openedOn = await waitFor(`(() => {
+    const active = document.activeElement;
+    if (!active?.classList?.contains("oi-toc-item")) return "";
+    const num = active.querySelector(".oi-toc-num")?.textContent || "";
+    return num === "3.2.3" ? num : "";
+  })()`, "打开抽屉时焦点在 3.2.3", 5000);
+  assert.equal(openedOn, "3.2.3");
 
   const viewBefore = await evaluate(`document.querySelector(".workspace").dataset.view`);
   await key("t");
@@ -356,6 +397,34 @@ test("阅读页抽屉：停靠、目录、页签、最近和窄屏", { timeout: 
   assert.equal(floating.role, "dialog");
   assert.equal(floating.modal, "true");
   assert.notEqual(floating.shadow, "none");
+  assert.equal(await evaluate(`document.querySelector(".oi-drawer").tagName`), "DIV");
+
+  await evaluate(`(() => {
+    const root = document.querySelector(".oi-drawer");
+    const items = [...root.querySelectorAll("button")].filter((node) => !node.disabled && !node.hidden && node.tabIndex >= 0);
+    items[items.length - 1].focus();
+  })()`);
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Tab",
+    code: "Tab",
+    windowsVirtualKeyCode: 9,
+    nativeVirtualKeyCode: 9
+  }, sessionId);
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Tab",
+    code: "Tab",
+    windowsVirtualKeyCode: 9,
+    nativeVirtualKeyCode: 9
+  }, sessionId);
+  const trapped = await evaluate(`(() => {
+    const root = document.querySelector(".oi-drawer");
+    const active = document.activeElement;
+    const first = [...root.querySelectorAll("button")].find((node) => !node.disabled && !node.hidden && node.tabIndex >= 0);
+    return Boolean(active && root.contains(active) && active === first);
+  })()`);
+  assert.equal(trapped, true);
 
   await evaluate(`document.querySelector(".oi-toc-item[data-page='4']").click()`);
   const jumped = JSON.parse(await waitFor(`(() => {

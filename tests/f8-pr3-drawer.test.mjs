@@ -10,12 +10,14 @@ import { NOTES_DRAWER_DOCKED } from "../lib/notes-pane.js";
 import {
   applyHeadingMatch,
   currentTocIndex,
+  destinationTop,
   drawerShouldDock,
   flattenOutline,
   headingLevel,
   headingsToToc,
   numberBesideTitle,
   partialHint,
+  sectionOffsets,
   titleNumber
 } from "../lib/drawer-toc.js";
 import { drawerInfoModel, formulaNote, recentMeta, recentPapers } from "../lib/drawer-info.js";
@@ -188,6 +190,57 @@ test("current section treats the boundary as the entry that starts there", () =>
   assert.equal(currentTocIndex([], 4), -1);
 });
 
+test("reading line at the top of a page stays on that page's first section", () => {
+  const pages = [
+    { page: 4, top: 1000, height: 800 },
+    { page: 5, top: 1800, height: 800 }
+  ];
+  const entries = [
+    { page: 4, destY: 447.529, pageHeight: 792 },
+    { page: 4, destY: 166.913, pageHeight: 792 },
+    { page: 5, destY: 518.313, pageHeight: 792 },
+    { page: 5, destY: 301.225, pageHeight: 792 },
+    { page: 5, destY: 149.573, pageHeight: 792 }
+  ];
+  const placed = entries.map((entry, index) => ({ ...entry, offset: sectionOffsets(entries, pages)[index] }));
+  assert.equal(currentTocIndex(placed, 1005), 0);
+  assert.equal(currentTocIndex(placed, 1805), 2);
+  const later = 1000 + ((792 - 166.913) / 792) * 800 + 4;
+  assert.equal(currentTocIndex(placed, later), 1);
+  assert.equal(destinationTop([{}, { name: "XYZ" }, 108, 447.529, null]), 447.529);
+  assert.equal(destinationTop([{}, { name: "FitH" }, 720]), 720);
+  assert.equal(destinationTop(["page"]), null);
+});
+
+test("title prefixes do not eat words, and a matched heading number wins", () => {
+  assert.equal(titleNumber("A Simple Baseline"), "");
+  assert.equal(titleNumber("A Closer Look at Attention"), "");
+  assert.equal(titleNumber("2D Convolutions"), "");
+  assert.equal(titleNumber("E. coli results"), "");
+  assert.equal(titleNumber("I Introduction"), "");
+  assert.equal(titleNumber("A. Appendix title"), "A");
+  assert.equal(titleNumber("3.2.1 Scaled Dot-Product Attention"), "3.2.1");
+  const unified = applyHeadingMatch([
+    { level: 1, title: "A Unified View", original: "A Unified View", page: 3, num: "" }
+  ], [
+    { page: 3, text: "5 A Unified View", translation: "统一视角" }
+  ]);
+  assert.equal(unified[0].num, "5");
+  assert.equal(unified[0].title, "统一视角");
+  assert.equal(unified[0].translated, true);
+  const overridden = applyHeadingMatch([
+    { level: 1, title: "1 Methods", original: "1 Methods", page: 2, num: "9" }
+  ], [
+    { page: 2, text: "2 Methods", translation: "" }
+  ]);
+  assert.equal(overridden[0].num, "2");
+  const kept = applyHeadingMatch([
+    { level: 1, title: "A Simple Baseline", original: "A Simple Baseline", page: 3, num: "4" }
+  ], []);
+  assert.equal(kept[0].num, "4");
+  assert.equal(kept[0].title, "A Simple Baseline");
+});
+
 test("partial hint names the unfinished pages and disappears when layout is done", () => {
   assert.equal(partialHint(7, 15), "后面的小节等页面排版好后出现（7 / 15 页）");
   assert.equal(partialHint(15, 15), "");
@@ -307,6 +360,130 @@ test("drawer tabs keep their own scroll and the session tab", () => {
   again.close();
 });
 
+test("opening focuses the current section, and tab stays inside the dialog", () => {
+  const parsed = parseHTML("<!doctype html><html><body></body></html>");
+  const { document, window } = parsed;
+  document.body.innerHTML = `<button id="tocButton">目录</button><button id="moreButton">更多</button><div id="drawerBackdrop" hidden></div><div id="workspace" class="workspace"><div id="pdfPane"></div><div id="drawerSlot"></div></div>`;
+  let active = document.body;
+  const proto = window.HTMLElement?.prototype;
+  if (proto) {
+    const orig = proto.focus;
+    proto.focus = function focusShim() {
+      active = this;
+      if (typeof orig === "function") orig.call(this);
+    };
+  }
+  Object.defineProperty(document, "activeElement", { configurable: true, get() { return active; } });
+  const ui = mountDrawerUi({
+    slot: document.getElementById("drawerSlot"),
+    backdrop: document.getElementById("drawerBackdrop"),
+    session: memorySession(),
+    width: () => 1100,
+    mode: () => "float",
+    currentIndex: () => 1
+  });
+  ui.setToc({
+    source: "outline",
+    loading: false,
+    partial: "",
+    entries: [
+      { level: 1, num: "3.2.1", title: "Scaled Dot-Product Attention", page: 4 },
+      { level: 1, num: "3.2.3", title: "Applications of Attention in our Model", page: 5 }
+    ]
+  });
+  ui.open({ trigger: document.getElementById("tocButton") });
+  assert.equal(ui.root.tagName, "DIV");
+  assert.equal(ui.root.getAttribute("role"), "dialog");
+  assert.equal(document.activeElement?.getAttribute("data-toc-index"), "1");
+  assert.equal(document.activeElement?.getAttribute("aria-current"), "location");
+  assert.equal(document.getElementById("tocButton").inert, true);
+  assert.equal(document.getElementById("pdfPane").inert, true);
+  assert.equal(document.getElementById("drawerSlot").inert, false);
+  const items = [...ui.root.querySelectorAll("button")].filter((node) => {
+    if (node.disabled || node.hidden) return false;
+    const attr = node.getAttribute("tabindex");
+    return attr == null || Number(attr) >= 0;
+  });
+  const last = items[items.length - 1];
+  const first = items[0];
+  last.focus();
+  const tab = new window.Event("keydown", { bubbles: true, cancelable: true });
+  tab.key = "Tab";
+  last.dispatchEvent(tab);
+  assert.equal(tab.defaultPrevented, true);
+  assert.equal(document.activeElement, first);
+  ui.close();
+  assert.equal(document.getElementById("tocButton").inert, false);
+});
+
+test("escape skips a toolbar button that is only hidden by CSS", () => {
+  const { document, window } = panelDom();
+  const button = document.getElementById("tocButton");
+  const original = window.getComputedStyle?.bind(window);
+  window.getComputedStyle = (node) => {
+    if (node === button) return { display: "none", visibility: "visible" };
+    return original ? original(node) : { display: "block", visibility: "visible" };
+  };
+  const ui = mountDrawerUi({
+    slot: document.getElementById("drawerSlot"),
+    backdrop: document.getElementById("drawerBackdrop"),
+    session: memorySession(),
+    width: () => 1100,
+    mode: () => "float"
+  });
+  ui.open({ trigger: button });
+  ui.consumeEscape();
+  assert.equal(document.activeElement.id, "moreButton");
+});
+
+test("a papers refresh keeps the recent scroll and does not flash a skeleton", async () => {
+  const { document } = panelDom();
+  const timers = fakeTimers();
+  let generation = 0;
+  const ui = mountDrawerUi({
+    slot: document.getElementById("drawerSlot"),
+    backdrop: document.getElementById("drawerBackdrop"),
+    session: memorySession({ "oi.drawer.tab": "recent" }),
+    width: () => 1400,
+    mode: () => "dock",
+    timers,
+    async recent() {
+      generation += 1;
+      return Array.from({ length: 12 }, (_, index) => ({
+        docHash: `h${index}`,
+        title: `论文 ${index} ${generation}`,
+        pageCount: 8,
+        translated: 1,
+        lastOpenedAt: Date.UTC(2026, 9, 23, 8, index)
+      }));
+    },
+    async openPaper() {
+      return { status: "missing", hash: "h0" };
+    }
+  });
+  ui.open();
+  await new Promise((done) => setTimeout(done, 0));
+  await new Promise((done) => setTimeout(done, 0));
+  const scroller = ui.root.querySelector(".oi-drawer-scroll");
+  scroller.scrollTop = 120;
+  const before = generation;
+  ui.refresh();
+  ui.refresh();
+  assert.equal(ui.root.querySelector(".oi-drawer-skel"), null);
+  assert.equal(scroller.scrollTop, 120);
+  assert.equal(generation, before);
+  timers.advance(160);
+  await new Promise((done) => setTimeout(done, 0));
+  await new Promise((done) => setTimeout(done, 0));
+  const next = ui.root.querySelector(".oi-drawer-scroll");
+  assert.equal(ui.root.querySelector(".oi-drawer-skel"), null);
+  assert.equal(next.scrollTop, 120);
+  assert.equal(generation, before + 1);
+  ui.root.querySelector(".oi-recent-row").click();
+  await new Promise((done) => setTimeout(done, 0));
+  assert.match(ui.root.textContent, /没能打开 PDF，稍后再试一次。/);
+});
+
 test("empty TOC copy, unnumbered column, and escape focus", () => {
   const { document } = panelDom();
   const ui = mountDrawerUi({
@@ -390,8 +567,8 @@ test("drawer tokens match the notes hook and stay on reader colors", () => {
   assert.equal(Number(match?.[1]), NOTES_DRAWER_DOCKED);
   assert.equal(NOTES_DRAWER_DOCKED, 288);
   assert.match(css, /--oi-reader-drawer-scrim:\s*var\(--oi-reader-track\)/);
-  assert.match(css, /--oi-reader-fig-card-h:\s*64px/);
-  assert.match(css, /--oi-reader-fig-card-min-w:\s*160px/);
+  assert.equal(css.includes("--oi-reader-fig-card-h"), false);
+  assert.equal(css.includes("--oi-reader-fig-card-min-w"), false);
   assert.equal(/--oi-warn\b/.test(drawerCss), false);
   assert.equal(/body\.oi-settings/.test(drawerCss), false);
   const pick = (name) => {

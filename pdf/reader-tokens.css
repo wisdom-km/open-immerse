@@ -409,8 +409,6 @@
   --oi-reader-translate-min: 618px;
   --oi-reader-drawer-w: 288px;
   --oi-reader-drawer-scrim: var(--oi-reader-track);
-  --oi-reader-fig-card-h: 64px;
-  --oi-reader-fig-card-min-w: 160px;
   --oi-reader-formula-fade: 8px;
   --oi-reader-inline-line-max: 2.2em;
   --oi-reader-mark-border: 2px solid var(--oi-reader-focus);

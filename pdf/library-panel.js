@@ -821,7 +821,9 @@ export function mountLibraryUi(api = {}) {
 
     if (pendingFocus) {
       const pending = pendingFocus;
-      const pick = root.querySelector(`${rowSelector(pending.hash)} .oi-lib-pick`);
+      const listed = phase === "list" && visibleRows().some((row) => row.docHash === pending.hash);
+      if (phase === "list" && !listed) pendingFocus = null;
+      const pick = listed ? root.querySelector(`${rowSelector(pending.hash)} .oi-lib-pick`) : null;
       if (pick) {
         pendingFocus = null;
         const rowEl = pick.closest?.("[data-lib-row]");
@@ -942,6 +944,7 @@ export function mountLibraryUi(api = {}) {
       focusAfterClose(candidate && candidate.isConnected !== false ? candidate : null);
     }
     open = false;
+    pendingFocus = null;
     confirmHash = "";
     deleteFailed = false;
     deleting = false;

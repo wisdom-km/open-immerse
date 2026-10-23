@@ -200,11 +200,14 @@ import { mountDrawerUi } from "./drawer-panel.js";
 import {
   applyHeadingMatch,
   currentTocIndex,
+  destinationTop,
   drawerShouldDock,
   flattenOutline,
   headingsToToc,
   numberBesideTitle,
-  partialHint
+  partialHint,
+  sectionOffsets,
+  tocKey
 } from "../lib/drawer-toc.js";
 import { drawerInfoModel, recentPapers } from "../lib/drawer-info.js";
 import { bindLibraryWriteMarks, noteLibraryLoaded, resetLibraryWriteStops } from "../lib/library-writes.js";
@@ -1683,6 +1686,7 @@ function startSplitDrag(event, workspace, handle) {
     handle.removeEventListener("pointerup", onUp);
     handle.removeEventListener("pointercancel", onUp);
     if (mode === "mini") endMiniFitDrag();
+    syncDrawerDock();
     if (workspace.dataset.layout === "3") persistSplitRatio(workspace);
     else if (workspace.dataset.sourceMode === "mini") {
       if (sideChromeOn(workspace)) persistSlotPanelWidth(workspace);
@@ -2647,10 +2651,14 @@ function onLibraryOpenChange(open, meta) {
     if (notesUi?.isOpen()) notesUi.close(false, { handoff: true });
     if (askUi?.isOpen()) askUi.close({ handoff: true, focus: false });
     syncNotesChrome({ opening: true });
+    syncDrawerDock();
     return;
   }
   delete workspace.dataset.libraryOpen;
-  if (meta?.handoff || workspace.dataset.notesOpen === "true" || workspace.dataset.askOpen === "true") return;
+  if (meta?.handoff || workspace.dataset.notesOpen === "true" || workspace.dataset.askOpen === "true") {
+    syncDrawerDock();
+    return;
+  }
   closeNotesChrome();
   const slot = document.getElementById("sideSlot");
   if (slot && workspace.dataset.notesOpen !== "true" && workspace.dataset.askOpen !== "true") {
@@ -2708,6 +2716,10 @@ function installDrawerUi() {
       libraryUi?.open?.({ trigger: $("tocButton") });
     },
     onJump: (entry) => jumpDrawerEntry(entry),
+    currentIndex: () => {
+      const sample = drawerTrackSample();
+      return currentTocIndex(sample.entries, sample.line);
+    },
     onOpenChange: () => {
       syncDrawerDock();
       scheduleDrawerTrack();
@@ -2737,12 +2749,16 @@ function syncDrawerDock() {
     workspace.style.removeProperty("--oi-drawer-source");
     return;
   }
+  const wasDocked = workspace.hasAttribute("data-drawer-docked");
+  // Drop a pin from an earlier library width before measuring, or the
+  // column stays stuck at that width after the library closes.
+  workspace.style.removeProperty("--oi-drawer-source");
   const sourceWidth = drawerSourceWidth();
   const docked = drawerShouldDock({
     windowWidth: readerWidth(),
     sourceWidth,
     sideSlot: drawerSideSlotExtra(),
-    docked: workspace.hasAttribute("data-drawer-docked")
+    docked: wasDocked
   });
   if (docked) {
     if (sourceWidth > 1 && workspace.dataset.sourceMode !== "hidden" && workspace.dataset.sourceMode !== "mini") {
@@ -2814,11 +2830,14 @@ async function loadDrawerOutline(doc) {
   if (outline?.length) {
     const flat = flattenOutline(outline);
     const textCache = new Map();
+    const pageHeights = new Map();
     for (const entry of flat) {
       if (gen !== drawerOutlineGen || pdfDoc !== doc) return;
       try {
         const dest = typeof entry.dest === "string" ? await doc.getDestination(entry.dest) : entry.dest;
         if (Array.isArray(dest) && dest[0]) entry.page = (await doc.getPageIndex(dest[0])) + 1;
+        const top = destinationTop(dest);
+        if (top != null) entry.destY = top;
       } catch {
         /* a destination may not resolve to a page */
       }
@@ -2826,12 +2845,14 @@ async function loadDrawerOutline(doc) {
       if (entry.page && !textCache.has(entry.page)) {
         try {
           const page = await doc.getPage(entry.page);
+          pageHeights.set(entry.page, page.getViewport({ scale: 1 }).height);
           const text = await page.getTextContent();
           textCache.set(entry.page, text?.items || []);
         } catch {
           textCache.set(entry.page, []);
         }
       }
+      if (entry.page && pageHeights.has(entry.page)) entry.pageHeight = pageHeights.get(entry.page);
       if (gen !== drawerOutlineGen || pdfDoc !== doc) return;
       const num = numberBesideTitle(textCache.get(entry.page) || [], entry.title);
       if (num) entry.num = num;
@@ -2947,6 +2968,84 @@ function drawerReadingPage() {
   return source;
 }
 
+function contentTop(node, scroller) {
+  const rect = node.getBoundingClientRect();
+  const root = scroller.getBoundingClientRect();
+  return rect.top - root.top + scroller.scrollTop;
+}
+
+function drawerPageBoxes(scroller, selector) {
+  const boxes = [];
+  for (const node of document.querySelectorAll(selector)) {
+    if (node.dataset?.fallback === "1" || node.closest?.("[data-fallback='1']")) continue;
+    const rect = node.getBoundingClientRect();
+    if (rect.height < 1) continue;
+    const page = Number(node.dataset.page || node.dataset.srcPage) || 0;
+    if (!page) continue;
+    boxes.push({ page, top: contentTop(node, scroller), height: rect.height });
+  }
+  return boxes;
+}
+
+function translationOwnsReading() {
+  const flow = readerFlowEl();
+  const scroller = translateScrollRoot();
+  if (!flow || !scroller || scroller.scrollHeight <= scroller.clientHeight + 8) return false;
+  const source = sourceReadingPage();
+  const line = scroller.getBoundingClientRect().top + scroller.clientHeight / 3;
+  let reading = 0;
+  let drawn = 0;
+  for (const slot of flow.querySelectorAll(":scope > .rf-page")) {
+    if (slot.dataset?.fallback === "1") continue;
+    const rect = slot.getBoundingClientRect();
+    if (rect.height < 1) continue;
+    const page = Number(slot.dataset.page || slot.dataset.srcPage) || 0;
+    if (page > drawn) drawn = page;
+    if (page && rect.top <= line + 0.5) reading = page;
+  }
+  return Boolean(reading && source <= drawn);
+}
+
+function stampHeadingMarks(entries, scroller) {
+  const flow = readerFlowEl();
+  if (!flow || !scroller) return entries;
+  const nodes = [...flow.querySelectorAll("[data-label='heading'], h1, h2, h3, h4")].filter((node) => {
+    if (node.dataset?.fallback === "1" || node.closest?.("[data-fallback='1']")) return false;
+    return node.getBoundingClientRect().height >= 1;
+  });
+  if (!nodes.length) return entries;
+  return entries.map((entry) => {
+    const want = tocKey(entry?.original || entry?.title || "");
+    if (!want) return entry;
+    const page = Number(entry?.page) || 0;
+    const node = nodes.find((item) => {
+      const nodePage = Number(item.dataset?.page || item.closest?.("[data-page]")?.dataset?.page) || 0;
+      if (page && nodePage && nodePage !== page) return false;
+      return tocKey(item.textContent || "") === want;
+    });
+    if (!node) return entry;
+    return { ...entry, markTop: contentTop(node, scroller) };
+  });
+}
+
+function drawerTrackSample() {
+  const entries = drawerToc.entries || [];
+  const flow = translationOwnsReading();
+  const scroller = flow ? translateScrollRoot() : pdfScrollRoot();
+  if (!scroller || !entries.length) return { entries, line: drawerReadingPage() };
+  const pages = drawerPageBoxes(scroller, flow ? "#readerFlow > .rf-page" : "#pages .pdf-page");
+  if (!pages.length) return { entries, line: drawerReadingPage() };
+  const stamped = flow ? stampHeadingMarks(entries, scroller) : entries;
+  const offsets = sectionOffsets(stamped, pages);
+  if (!offsets.some((value) => Number.isFinite(value))) return { entries, line: drawerReadingPage() };
+  return {
+    line: scroller.scrollTop + Math.max(scroller.clientHeight, 1) / 3,
+    entries: stamped.map((entry, index) => (
+      Number.isFinite(offsets[index]) ? { ...entry, offset: offsets[index] } : entry
+    ))
+  };
+}
+
 function scheduleDrawerTrack() {
   if (drawerTrackFrame) return;
   let fired = false;
@@ -2955,7 +3054,8 @@ function scheduleDrawerTrack() {
     fired = true;
     drawerTrackFrame = 0;
     if (!drawerUi?.isOpen?.()) return;
-    drawerUi.setCurrent?.(currentTocIndex(drawerToc.entries || [], drawerReadingPage()));
+    const sample = drawerTrackSample();
+    drawerUi.setCurrent?.(currentTocIndex(sample.entries, sample.line));
   };
   const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : null;
   if (raf) raf(run);
@@ -6785,6 +6885,7 @@ function startNotesSplitDrag(event, workspace, handle) {
     handle.removeEventListener("pointercancel", onUp);
     persistNotesColumnWidth(workspace);
     notesUi?.syncLayoutChrome?.();
+    syncDrawerDock();
   };
   handle.addEventListener("pointermove", onMove);
   handle.addEventListener("pointerup", onUp);
