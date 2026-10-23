@@ -383,12 +383,158 @@ function inkBands(rgba, width, x0, x1, y0, y1) {
   return bands.filter((band) => band[1] >= band[0]);
 }
 
+function unionPixelBoxes(rects) {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const box of rects) {
+    if (!box || !(box.w > 0) || !(box.h > 0)) continue;
+    x0 = Math.min(x0, box.x);
+    y0 = Math.min(y0, box.y);
+    x1 = Math.max(x1, box.x + box.w);
+    y1 = Math.max(y1, box.y + box.h);
+  }
+  if (!(x1 > x0) || !(y1 > y0)) return null;
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** Page-fraction glyph boxes → one pixel rect on the crop. Empty when none map. */
+function glyphRectInCrop(crop, glyphBoxes, pageWidth, pageHeight, scale) {
+  const rects = [];
+  for (const box of glyphBoxes || []) {
+    if (!Array.isArray(box) || box.length < 4) continue;
+    const px = targetBoxPixels(crop, box, pageWidth, pageHeight, scale);
+    if (px) rects.push(px);
+  }
+  return unionPixelBoxes(rects);
+}
+
+function outsideGlyph(x, y, glyph) {
+  return x < glyph.x || y < glyph.y || x >= glyph.x + glyph.w || y >= glyph.y + glyph.h;
+}
+
+function bandHitsForeign(rgba, width, height, glyph, x0, y0, x1, y1) {
+  const left = Math.max(0, Math.floor(x0));
+  const top = Math.max(0, Math.floor(y0));
+  const right = Math.min(width - 1, Math.floor(x1));
+  const bottom = Math.min(height - 1, Math.floor(y1));
+  for (let y = top; y <= bottom; y += 1) {
+    for (let x = left; x <= right; x += 1) {
+      if (!darkPixel(rgba, width, x, y)) continue;
+      if (outsideGlyph(x, y, glyph)) return true;
+    }
+  }
+  return false;
+}
+
+function rowDarkCount(rgba, width, x0, x1, y) {
+  let count = 0;
+  const left = Math.max(0, x0);
+  const right = Math.min(width - 1, x1);
+  for (let x = left; x <= right; x += 1) {
+    if (darkPixel(rgba, width, x, y)) count += 1;
+  }
+  return count;
+}
+
 /**
- * Pull a paragraph box edge off a neighboring text line into the gap.
- * Interior bands stay, so a detector box that also contains the next line
- * (p4-b7's "where Z(x)=…") is not trimmed away. Edges only move inward.
+ * Descenders and side ink sit a few pixels outside the PDF glyph box.
+ * A neighboring text line is a dense row, or ink after a blank gap.
+ * `bleed` is the outermost formula pixel on that side (inclusive).
  */
-export function seatTargetRect(image, rect, { thickness = TARGET_BOX_PX, gap = TARGET_BOX_GAP } = {}) {
+function verticalMargin(rgba, width, height, glyph, dir) {
+  const glyphEdge = dir > 0 ? glyph.y + glyph.h - 1 : glyph.y;
+  const start = dir > 0 ? glyph.y + glyph.h : glyph.y - 1;
+  const lineMin = Math.max(10, Math.floor(Math.max(1, glyph.w) * 0.08));
+  let bleed = glyphEdge;
+  let neighbor = null;
+  let hole = 0;
+  let parted = false;
+  if (!rgba || !(width > 0) || !(height > 0)) return { bleed, neighbor };
+  for (let step = 0; step < 28; step += 1) {
+    const y = start + dir * step;
+    if (y < 0 || y >= height) break;
+    const count = rowDarkCount(rgba, width, glyph.x, glyph.x + glyph.w - 1, y);
+    if (count === 0) {
+      hole += 1;
+      if (hole >= 3) parted = true;
+      continue;
+    }
+    if (parted || count >= lineMin) {
+      neighbor = y;
+      break;
+    }
+    if (Math.abs(y - glyphEdge) > 14) break;
+    bleed = y;
+    hole = 0;
+  }
+  return { bleed, neighbor };
+}
+
+/**
+ * Inner edge sits outside the glyph union. Descenders stay inside the pad.
+ * A neighboring line pulls the edge into the gap, and the edge stops on the
+ * glyph union. The rect is never smaller than that union.
+ */
+function seatAroundGlyphs(image, glyphRect, thickness, gap) {
+  const rgba = image?.rgba || image?.data;
+  const width = image?.width | 0;
+  const height = image?.height | 0;
+  const t = thickness > 0 ? thickness : TARGET_BOX_PX;
+  const g = gap > 0 ? gap : 0;
+  const gL = glyphRect.x;
+  const gT = glyphRect.y;
+  const gR = glyphRect.x + glyphRect.w;
+  const gB = glyphRect.y + glyphRect.h;
+  const above = verticalMargin(rgba, width, height, glyphRect, -1);
+  const below = verticalMargin(rgba, width, height, glyphRect, 1);
+  let top = above.bleed - g;
+  let bottom = below.bleed + 1 + g;
+  if (above.neighbor != null) {
+    const pushed = above.neighbor + 1 + t + g;
+    if (pushed > top) top = Math.min(above.bleed, pushed);
+  }
+  if (below.neighbor != null) {
+    const room = below.neighbor - t - g;
+    if (room < bottom) bottom = Math.max(below.bleed + 1, room);
+  }
+  if (top > gT) top = gT;
+  if (bottom < gB) bottom = gB;
+  let left = gL - g;
+  let right = gR + g;
+  if (rgba && width > 0 && height > 0) {
+    const hits = (x0, y0, x1, y1) => bandHitsForeign(rgba, width, height, glyphRect, x0, y0, x1, y1);
+    while (left < gL && hits(left - t, top, left - 1, bottom - 1)) left += 1;
+    while (right > gR && hits(right, top, right + t - 1, bottom - 1)) right -= 1;
+  }
+  if (width > 0 && height > 0) {
+    if (gL >= t) left = Math.min(gL, Math.max(left, t));
+    if (gT >= t) top = Math.min(gT, Math.max(top, t));
+    if (gR <= width - t) right = Math.max(gR, Math.min(right, width - t));
+    if (gB <= height - t) bottom = Math.max(gB, Math.min(bottom, height - t));
+  }
+  if (!(right > left) || !(bottom > top)) {
+    return { x: gL, y: gT, w: glyphRect.w, h: glyphRect.h };
+  }
+  return { x: left, y: top, w: right - left, h: bottom - top };
+}
+
+/**
+ * Pull a box edge off a neighboring text line into the gap.
+ * With `glyphRect`, the box stays at least the glyph union (padded outward)
+ * and only moves inward while the stroke would cover ink outside that union.
+ * Without glyph boxes, interior bands stay, so a detector box that also
+ * contains the next line (p4-b7's "where Z(x)=…") is not trimmed away.
+ */
+export function seatTargetRect(image, rect, { thickness = TARGET_BOX_PX, gap = TARGET_BOX_GAP, glyphRect = null } = {}) {
+  if (glyphRect && glyphRect.w > 0 && glyphRect.h > 0) {
+    return seatAroundGlyphs(image, glyphRect, thickness, gap);
+  }
+  return seatByInkBands(image, rect, thickness, gap);
+}
+
+function seatByInkBands(image, rect, thickness, gap) {
   const rgba = image?.rgba || image?.data;
   if (!rgba || !rect || !(rect.w > 0) || !(rect.h > 0)) return rect;
   const width = image.width | 0;
@@ -461,7 +607,7 @@ export function seatTargetRect(image, rect, { thickness = TARGET_BOX_PX, gap = T
   return { x: rect.x, y: top, w: rect.w, h: bottom - top };
 }
 
-function paintFormulaFrame(page, canvas, cropBbox, targetBbox, scale, gap = 0) {
+function paintFormulaFrame(page, canvas, cropBbox, targetBbox, scale, gap = 0, glyphBoxes = null) {
   if (!page || typeof page.getViewport !== "function") return false;
   let unit = null;
   try {
@@ -476,6 +622,15 @@ function paintFormulaFrame(page, canvas, cropBbox, targetBbox, scale, gap = 0) {
     image = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
   } catch {
     image = null;
+  }
+  const glyphRect = glyphRectInCrop(cropBbox, glyphBoxes, unit.width, unit.height, scale);
+  if (glyphRect) {
+    const seated = seatTargetRect(image, rect, {
+      thickness: TARGET_BOX_PX,
+      gap: TARGET_BOX_GAP,
+      glyphRect
+    });
+    return paintTargetBox(canvas, seated, TARGET_BOX_PX, 0);
   }
   const seated = gap > 0 || !image ? rect : seatTargetRect(image, rect);
   const fitted = strokeGap(seated, canvas.width, canvas.height, TARGET_BOX_PX, gap);
@@ -715,8 +870,7 @@ export async function renderParagraphCrop(page, formula, hooks = {}) {
   const drawn = await renderWindow(page, bbox, VISION_CROP_SCALE, hooks);
   if (!drawn) return null;
   const target = Array.isArray(formula?.layoutBbox) ? formula.layoutBbox : formula?.bbox;
-  // gap 0: seating pulls the stroke into the gap. Context keeps its own window and only adds TARGET_BOX_GAP.
-  if (target) paintFormulaFrame(page, drawn.canvas, bbox, target, drawn.plan.scale, 0);
+  if (target) paintFormulaFrame(page, drawn.canvas, bbox, target, drawn.plan.scale, 0, formula?.glyphBoxes);
   const png = pngOf(drawn.canvas);
   release(drawn.canvas);
   if (!png) return null;
@@ -741,7 +895,7 @@ export async function renderContextCrop(page, formula, hooks = {}) {
   if (!windowBox) return null;
   const drawn = await renderWindow(page, windowBox.bbox, VISION_CROP_SCALE, hooks);
   if (!drawn) return null;
-  paintFormulaFrame(page, drawn.canvas, windowBox.bbox, windowBox.target, drawn.plan.scale, TARGET_BOX_GAP);
+  paintFormulaFrame(page, drawn.canvas, windowBox.bbox, windowBox.target, drawn.plan.scale, TARGET_BOX_GAP, formula?.glyphBoxes);
   const png = pngOf(drawn.canvas);
   release(drawn.canvas);
   if (!png) return null;

@@ -213,7 +213,7 @@ function probeFromRun(run, page, viewport, blocks) {
     paragraphText: paragraph.text || "",
     paragraphBbox: paragraph.bbox || bbox.slice(),
     glyphs: [],
-    glyphBoxes: [],
+    glyphBoxes: boxes.slice(),
     maskBoxes: [],
     seedBoxes: [],
     inlineOf: "",

@@ -77,11 +77,13 @@ import {
   TARGET_BOX_PX,
   createMemoryCanvas,
   decodeRgbaPng,
+  paragraphCropBbox,
   renderContextCrop,
   renderParagraphCrop,
   renderTightCrop,
   renderVisionCrop,
-  seatTargetRect
+  seatTargetRect,
+  targetBoxPixels
 } from "../tools/mm-dpo-vision.mjs";
 import { parseCropDataUrl } from "../lib/formula-crop-png.js";
 import {
@@ -1549,6 +1551,26 @@ test("canonical scoring keeps exact match, and real DPO outputs only match when 
   assert.equal(canonicalizeLatex(String.raw`\bigl(x\bigr)`), "(x)");
   assert.equal(canonicalizeLatex(String.raw`a = \\ -b`), "a=-b");
   assert.equal(latexCanonicalMatch(String.raw`x.\tag{2}\label{eq:x}`, "x"), true);
+  assert.equal(
+    canonicalizeLatex(String.raw`\text{increase likelihood of $y_w$}`),
+    canonicalizeLatex(String.raw`\text{increase likelihood of }y_w`)
+  );
+  assert.equal(
+    canonicalizeLatex(String.raw`\text{increase likelihood of $y_w$}`)
+      === canonicalizeLatex(String.raw`\text{increase likelihood of $y_l$}`),
+    false
+  );
+  const dollars = referenceOf("p5-b4");
+  const lifted = dollars
+    .replace(String.raw`\text{increase likelihood of $y_w$}`, String.raw`\text{increase likelihood of }y_w`)
+    .replace(String.raw`\text{decrease likelihood of $y_l$}`, String.raw`\text{decrease likelihood of }y_l`);
+  assert.notEqual(lifted, dollars);
+  assert.equal(latexCanonicalMatch(lifted, dollars), true);
+  assert.equal(latexCanonicalMatch(`${referenceOf("p3-b22")}\\tag { 3 }`, referenceOf("p3-b22")), true);
+  assert.equal(canonicalizeLatex(String.raw`x.\tag {3}`), "x");
+  assert.equal(canonicalizeLatex(String.raw`\operatorname{arg\,max}`), canonicalizeLatex(String.raw`\arg\max`));
+  assert.equal(canonicalizeLatex(String.raw`\operatorname*{arg\,max}`), canonicalizeLatex(String.raw`\operatorname{arg\,max}`));
+  assert.equal(canonicalizeLatex(String.raw`\operatorname{softmax}`) === canonicalizeLatex(String.raw`\arg\max`), false);
 });
 
 test("rescore recomputes a saved report without a network call or opening the PDF", async (t) => {
@@ -2156,6 +2178,50 @@ test("paragraph seating keeps an interior line and leaves the neighbor outside t
   assert.ok(seated.y + seated.h >= 59);
 });
 
+test("glyph floor keeps the box on the union and pulls the stroke inside the canvas", () => {
+  const width = 160;
+  const height = 150;
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  rgba.fill(255);
+  const ink = (x0, x1, y0, y1) => {
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        const index = (y * width + x) * 4;
+        rgba[index] = 0;
+        rgba[index + 1] = 0;
+        rgba[index + 2] = 0;
+        rgba[index + 3] = 255;
+      }
+    }
+  };
+  ink(10, 140, 8, 18);
+  ink(40, 120, 40, 52);
+  ink(40, 120, 78, 100);
+  ink(10, 140, 128, 140);
+  const glyph = { x: 36, y: 36, w: 90, h: 70 };
+  const floored = seatTargetRect(
+    { width, height, rgba },
+    { x: 8, y: 6, w: 140, h: 136 },
+    { glyphRect: glyph }
+  );
+  assert.ok(floored.x <= glyph.x && floored.y <= glyph.y);
+  assert.ok(floored.x + floored.w >= glyph.x + glyph.w);
+  assert.ok(floored.y + floored.h >= glyph.y + glyph.h);
+  assert.ok(floored.y > 18);
+  assert.ok(floored.y + floored.h < 128);
+  const canvasW = 94;
+  const wide = new Uint8ClampedArray(canvasW * 40 * 4);
+  wide.fill(255);
+  const clamped = seatTargetRect(
+    { width: canvasW, height: 40, rgba: wide },
+    { x: 0, y: 0, w: canvasW, h: 40 },
+    { glyphRect: { x: 8, y: 8, w: 82, h: 16 } }
+  );
+  assert.ok(clamped.x + clamped.w <= canvasW - TARGET_BOX_PX);
+  assert.ok(clamped.x + clamped.w >= 90);
+  assert.ok(clamped.y <= 8 && clamped.y + clamped.h >= 24);
+});
+
 test("context window stays put, and the paragraph box is fully inside its crop", async (t) => {
   const session = await openPdfSession(join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf"));
   t.after(() => session.close());
@@ -2229,7 +2295,9 @@ test("context window stays put, and the paragraph box is fully inside its crop",
         if (dark(image, x, y)) struck += 1;
       }
     }
-    assert.equal(struck, 0, id);
+    // A descender beside the box can touch this 8px strip. A line through the
+    // formula would also fail the gap check below.
+    assert.ok(struck <= 6, id);
     let gapAbove = 0;
     const sampleX = Math.min(box.maxX - 8, box.minX + Math.floor((box.maxX - box.minX) * 0.35));
     for (let y = box.minY - 1; y >= 0; y -= 1) {
@@ -2239,5 +2307,80 @@ test("context window stays put, and the paragraph box is fully inside its crop",
     }
     assert.ok(gapAbove >= 1, id);
     if (id === "p4-b7") assert.ok(box.maxY - box.minY > 140);
+  }
+  const pageWidth = 612;
+  const pageHeight = 792;
+  const covered = [
+    ...SAMPLED_REFERENCE_IDS.map((id) => session.formulas.find((item) => item.id === id)),
+    ...session.probes
+  ];
+  assert.equal(covered.length, 25);
+  function glyphPixels(crop, boxes, scale) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -1;
+    let maxY = -1;
+    for (const box of boxes || []) {
+      const px = targetBoxPixels(crop, box, pageWidth, pageHeight, scale);
+      if (!px) continue;
+      minX = Math.min(minX, px.x);
+      minY = Math.min(minY, px.y);
+      maxX = Math.max(maxX, px.x + px.w - 1);
+      maxY = Math.max(maxY, px.y + px.h - 1);
+    }
+    return { minX, minY, maxX, maxY };
+  }
+  function isRed(image, x, y) {
+    const index = (y * image.width + x) * 4;
+    return image.data[index] > 180 && image.data[index + 1] < 50 && image.data[index + 2] < 50;
+  }
+  function strokeThickness(image, box, side) {
+    const midX = Math.floor((box.minX + box.maxX) / 2);
+    const midY = Math.floor((box.minY + box.maxY) / 2);
+    let count = 0;
+    const step = side === "left" || side === "top" ? 1 : -1;
+    const axis = side === "left" || side === "right" ? "x" : "y";
+    let cursor = axis === "x" ? (side === "left" ? box.minX : box.maxX) : (side === "top" ? box.minY : box.maxY);
+    const limit = axis === "x" ? image.width : image.height;
+    while (cursor >= 0 && cursor < limit && count < 8) {
+      const x = axis === "x" ? cursor : midX;
+      const y = axis === "y" ? cursor : midY;
+      if (!isRed(image, x, y)) break;
+      count += 1;
+      cursor += step;
+    }
+    return count;
+  }
+  for (const formula of covered) {
+    assert.ok(formula?.glyphBoxes?.length > 0, formula?.id);
+    for (const arm of ["paragraph", "context"]) {
+      const png = arm === "paragraph"
+        ? await session.renderParagraphCrop(formula)
+        : await session.renderContextCrop(formula);
+      const crop = arm === "paragraph"
+        ? paragraphCropBbox(formula, pageWidth, pageHeight, VISION_CROP_SCALE)
+        : contextWindow(formula).bbox;
+      const plan = visionRasterPlan({
+        bbox: crop,
+        pageWidth,
+        pageHeight,
+        scale: VISION_CROP_SCALE
+      });
+      const label = `${formula.id} ${arm}`;
+      assert.equal(png.w, plan.pixelWidth, label);
+      assert.equal(png.h, plan.pixelHeight, label);
+      const image = await rgbaOf(png);
+      const box = redBounds(image);
+      const glyphs = glyphPixels(crop, formula.glyphBoxes, plan.scale);
+      assert.ok(Number.isFinite(glyphs.minX), label);
+      assert.ok(box.minX + TARGET_BOX_PX <= glyphs.minX + 1, `${label} left`);
+      assert.ok(box.minY + TARGET_BOX_PX <= glyphs.minY + 1, `${label} top`);
+      assert.ok(box.maxX - TARGET_BOX_PX >= glyphs.maxX - 1, `${label} right`);
+      assert.ok(box.maxY - TARGET_BOX_PX >= glyphs.maxY - 1, `${label} bottom`);
+      assert.ok(box.maxX < image.width && box.maxY < image.height, label);
+      assert.ok(box.minX >= 0 && box.minY >= 0, label);
+      const roomRight = glyphs.maxX + TARGET_BOX_PX < image.width - 1;
+      if (roomRight) assert.equal(strokeThickness(image, box, "right"), TARGET_BOX_PX, label);
+    }
   }
 });
