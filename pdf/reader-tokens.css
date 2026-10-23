@@ -240,6 +240,8 @@
   --oi-reader-footnote-size: max(11px, 0.6875em);
   --oi-reader-footnote-line: 1.4;
   --oi-reader-crop-pad: 2px;
+  --oi-reader-fig-card-h: 64px;
+  --oi-reader-fig-card-min-w: 160px;
 
   --oi-reader-capsule-top: 10px;
   --oi-reader-capsule-z: 5;

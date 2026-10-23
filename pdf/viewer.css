@@ -1127,19 +1127,140 @@ body {
   border: none;
   border-radius: 8px;
 }
-.oi-pdf-asset-fallback {
-  display: inline-block;
-  margin: 12px auto;
-  padding: 10px 14px;
-  min-height: 0;
-  color: var(--oi-paper-muted);
-  background: transparent;
-  border: 1px dashed var(--oi-reader-line-strong);
-  border-radius: 8px;
-  font: inherit;
-  font-weight: 400;
-  line-height: inherit;
+.oi-figure-placeholder-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0 auto;
+}
+.oi-figure-placeholder-row > .oi-formula-reserve {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+}
+.oi-figure-placeholder {
+  position: relative;
+  box-sizing: border-box;
+  container: oi-fig / inline-size;
+  display: inline-flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: min(100%, var(--oi-fig-w, 100%));
+  min-width: min(100%, var(--oi-reader-fig-card-min-w, 160px));
+  max-width: 100%;
+  height: var(--oi-reader-fig-card-h, 64px);
+  margin: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  background: var(--oi-reader-well);
+  color: var(--oi-reader-muted);
+  font: 600 13px/1.2 var(--oi-reader-ui-font, var(--oi-font));
+  white-space: nowrap;
   cursor: pointer;
+  transition: background-color 120ms, color 120ms;
+}
+.oi-figure-placeholder::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px dashed color-mix(in srgb, var(--oi-reader-line-strong) 55%, transparent);
+  border-radius: inherit;
+  pointer-events: none;
+  transition: border-color 120ms;
+}
+.oi-figure-placeholder:hover {
+  background: color-mix(in srgb, var(--oi-reader-well) 70%, var(--oi-reader-line));
+  color: var(--oi-reader-ink);
+}
+.oi-figure-placeholder:hover::after {
+  border-style: solid;
+  border-color: var(--oi-reader-line-strong);
+}
+.oi-figure-placeholder:active {
+  background: var(--oi-reader-track);
+}
+.oi-figure-placeholder:focus {
+  outline: none;
+}
+.oi-figure-placeholder:focus-visible {
+  outline: 2px solid var(--oi-reader-focus);
+  outline-offset: 2px;
+}
+.oi-figure-placeholder .oi-ph-text {
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.oi-figure-placeholder .oi-ph-line,
+.oi-figure-placeholder .oi-ph-sub {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+}
+.oi-figure-placeholder .oi-ph-line {
+  gap: 4px;
+}
+.oi-figure-placeholder .oi-ph-sub {
+  font: 400 12px/1.3 var(--oi-reader-ui-font, var(--oi-font));
+  color: var(--oi-reader-muted);
+}
+.oi-figure-placeholder:hover .oi-ph-sub,
+.oi-figure-placeholder:active .oi-ph-sub {
+  color: var(--oi-reader-ink);
+}
+.oi-figure-placeholder .oi-ph-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+.oi-figure-placeholder .l0,
+.oi-figure-placeholder .s0 {
+  display: inline;
+}
+.oi-figure-placeholder .l1,
+.oi-figure-placeholder .l2,
+.oi-figure-placeholder .s1,
+.oi-figure-placeholder .s2 {
+  display: none;
+}
+@container oi-fig (width < 200px) {
+  .oi-figure-placeholder .l0,
+  .oi-figure-placeholder .s0 {
+    display: none;
+  }
+  .oi-figure-placeholder .l1,
+  .oi-figure-placeholder .s1 {
+    display: inline;
+  }
+}
+@container oi-fig (width < 128px) {
+  .oi-figure-placeholder .l0,
+  .oi-figure-placeholder .l1,
+  .oi-figure-placeholder .s0,
+  .oi-figure-placeholder .s1,
+  .oi-figure-placeholder .oi-ph-sub {
+    display: none;
+  }
+  .oi-figure-placeholder .l2 {
+    display: inline;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oi-figure-placeholder,
+  .oi-figure-placeholder::after {
+    transition: none;
+  }
 }
 .pane-translate .readout.is-mirror {
   max-width: none;
