@@ -40,6 +40,7 @@ import {
   saveLibraryPage,
   saveLibrarySource
 } from "../lib/pdf-library.js";
+import { resetLibraryWriteStops, stopLibraryWrites } from "../lib/library-writes.js";
 import { createIdbLibraryFactory } from "../lib/platform/idb-backend.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
 import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
@@ -552,6 +553,22 @@ test("opening prefers the local blob, then an injected download checked by hash,
   await store.deletePaperData(hash);
   assert.equal((await resolveLibraryOpen(hash, { store })).status, "missing");
   assert.equal(await store.getSource(hash), null);
+  const tomb = await store.getPaper(hash);
+  stopLibraryWrites(hash);
+  const late = await saveLibraryPage({
+    hash,
+    title: "晚到的一页",
+    pageCount: 1,
+    page: 1,
+    pairs: [{ translation: "不该回来" }]
+  }, { store });
+  assert.equal(late.source, "absent");
+  const still = await store.getPaper(hash);
+  assert.equal(still.deletedAt, tomb.deletedAt);
+  assert.equal(still.createdAt, tomb.createdAt);
+  assert.equal((await store.getPages(hash)).length, 0);
+  assert.equal(await store.getSource(hash), null);
+  resetLibraryWriteStops();
 
   const revived = await saveLibraryPage({
     hash: "pointer",

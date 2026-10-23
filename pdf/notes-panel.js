@@ -158,12 +158,13 @@ export function mountNotesUi(api) {
     }
     workspace.dataset.notesOpen = state.open ? "true" : "false";
     const askHolds = workspace.dataset.askOpen === "true";
+    const libraryHolds = workspace.dataset.libraryOpen === "true";
     if (state.open) root.hidden = false;
-    if (state.open || (handoff && askHolds)) {
+    if (state.open || libraryHolds || (handoff && askHolds)) {
       slot.hidden = false;
       slot.dataset.open = "true";
       slot.setAttribute("aria-hidden", "false");
-      if (handoff && !state.open) root.hidden = true;
+      if ((handoff || libraryHolds) && !state.open) root.hidden = true;
     } else {
       slot.hidden = true;
       delete slot.dataset.open;
