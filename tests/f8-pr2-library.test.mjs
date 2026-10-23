@@ -1213,6 +1213,13 @@ test("关闭文献库后面焦点回到书架按钮", async () => {
   ui.root.querySelector(".oi-lib-close").click();
   await flush();
   assert.equal(document.activeElement?.id, "libraryButton");
+  document.body.focus();
+  assert.equal(document.activeElement, document.body);
+  ui.open();
+  await flush();
+  ui.root.querySelector(".oi-lib-open").focus();
+  ui.close(true);
+  assert.equal(document.activeElement?.id, "libraryButton");
 });
 
 test("无 src 时仍更新翻译按钮，l 和菜单关闭后回到书架按钮", () => {

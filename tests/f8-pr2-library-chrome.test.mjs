@@ -314,7 +314,7 @@ test("文献库侧栏：开关、三种删除文案、网址变了、排序、�
       { docHash: "hash-local", title: "本地的", sourceSize: 4096, sourceUrl: "" }
     ];
     for (let n = 0; n < 5; n += 1) {
-      rows.push({ docHash: "hash-extra-" + n, title: "补充 " + n, sourceSize: 1000 + n, sourceUrl: "" });
+      rows.push({ docHash: "hash-extra-" + n, title: n === 0 ? "pygmy gypsy glyph grouping" : "补充 " + n, sourceSize: 1000 + n, sourceUrl: "" });
     }
     for (const row of rows) {
       await store.touchPaper(row.docHash, {
@@ -360,6 +360,10 @@ test("文献库侧栏：开关、三种删除文案、网址变了、排序、�
     const trash = document.querySelector(".oi-lib-trash");
     const svg = trash?.querySelector("svg");
     const name = document.querySelector(".oi-lib-name");
+    const gyp = document.querySelector('[data-lib-row="hash-extra-0"] .oi-lib-name');
+    const gypStyle = gyp ? getComputedStyle(gyp) : null;
+    const gypFont = gypStyle ? parseFloat(gypStyle.fontSize) : 0;
+    const gypLine = gypStyle ? parseFloat(gypStyle.lineHeight) : 0;
     const row = document.querySelector(".oi-lib-row");
     const app = document.querySelector(".oi-reader-app");
     const probe = document.createElement("div");
@@ -395,6 +399,7 @@ test("文献库侧栏：开关、三种删除文案、网址变了、排序、�
       svg: svg ? box(svg) : { w: 0, h: 0 },
       fill: svg?.querySelector("path")?.getAttribute("fill") || "",
       name: { wrap: getComputedStyle(name).whiteSpace, overflow: getComputedStyle(name).overflowX, ellipsis: getComputedStyle(name).textOverflow },
+      gyp: gyp ? { scroll: gyp.scrollHeight, client: gyp.clientHeight, ratio: gypFont > 0 ? gypLine / gypFont : 0, lineHeight: gypStyle.lineHeight } : null,
       rowHover: getComputedStyle(row).backgroundColor,
       warmHover,
       darkHover,
@@ -423,6 +428,8 @@ test("文献库侧栏：开关、三种删除文案、网址变了、排序、�
   assert.equal(look.name.wrap, "nowrap");
   assert.equal(look.name.overflow, "hidden");
   assert.equal(look.name.ellipsis, "ellipsis");
+  assert.ok(look.gyp && look.gyp.client > 0 && look.gyp.scroll <= look.gyp.client, JSON.stringify(look.gyp));
+  assert.ok(look.gyp.ratio >= 1.4, JSON.stringify(look.gyp));
   assert.equal(look.rowHover, look.warmHover, JSON.stringify(look));
   assert.equal(look.darkHover, "rgba(232, 230, 225, 0.08)");
   assert.notEqual(look.darkPaint, look.warmHover);
