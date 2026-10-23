@@ -567,8 +567,8 @@ test("drawer tokens match the notes hook and stay on reader colors", () => {
   assert.equal(Number(match?.[1]), NOTES_DRAWER_DOCKED);
   assert.equal(NOTES_DRAWER_DOCKED, 288);
   assert.match(css, /--oi-reader-drawer-scrim:\s*var\(--oi-reader-track\)/);
-  assert.equal(css.includes("--oi-reader-fig-card-h"), false);
-  assert.equal(css.includes("--oi-reader-fig-card-min-w"), false);
+  assert.equal(css.match(/--oi-reader-fig-card-h:/g)?.length || 0, 1);
+  assert.equal(css.match(/--oi-reader-fig-card-min-w:/g)?.length || 0, 1);
   assert.equal(/--oi-warn\b/.test(drawerCss), false);
   assert.equal(/body\.oi-settings/.test(drawerCss), false);
   const pick = (name) => {
