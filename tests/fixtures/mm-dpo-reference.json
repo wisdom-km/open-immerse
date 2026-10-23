@@ -23,7 +23,7 @@
       "confidence": "high",
       "reason": "paragraph-prefix",
       "sourceId": "i26",
-      "reference": "(y_1, y_2)\\sim \\pi^\\text{SFT}(y \\mid x)"
+      "reference": "(y_1, y_2)\\sim \\pi"
     },
     {
       "id": "p3-b8",
@@ -419,7 +419,7 @@
       "confidence": "high",
       "reason": "paragraph-prefix",
       "sourceId": "i110",
-      "reference": "\\pi_\\text{ref} = \\operatorname{arg\\,max}_{\\pi}\\mathbb{E}_{x, y_w \\sim \\mathcal{D}}\\left[\\log \\pi(y_w \\mid x)\\right]"
+      "reference": "\\pi_\\text{ref} = \\operatorname{arg\\,max}_{\\pi}\\mathbb{E}_{x, y_w \\sim \\mathcal{D}}"
     },
     {
       "id": "p5-b18",
@@ -1014,5 +1014,8 @@
   ],
   "probeCount": 10,
   "probeAligned": 9,
-  "probeNote": "脚本短公式探针，不是产品检出。FORMULA_RUN_MIN_WIDTH 仍是 12。"
+  "probeNote": "脚本短公式探针，不是产品检出。FORMULA_RUN_MIN_WIDTH 仍是 12。",
+  "detectorNotes": [
+    "p4-b7 的检出框仍含 where Z(x)=… 那一行。这是产品检测器的框，脚本不改 FORMULA_RUN_MIN_WIDTH（仍是 12）。"
+  ]
 }

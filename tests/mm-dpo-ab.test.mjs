@@ -55,6 +55,7 @@ import {
   formulasFromBlocks,
   formulasFromFixture,
   inputDecision,
+  summarizeRows,
   canonicalizeLatex,
   latexCanonicalMatch,
   latexExactMatch,
@@ -69,16 +70,18 @@ import {
 } from "../lib/mm-dpo-ab.js";
 import { CROP_SCALE, rasterCropRect } from "../lib/pdf-blocks.js";
 import { FORMULA_INK_PAD_PX, FORMULA_RUN_MIN_WIDTH, measureFormulaCrop } from "../lib/pdf-text-layer.js";
-import { alignDetectedFormulas } from "../tools/mm-dpo-build-reference.mjs";
+import { alignDetectedFormulas, sameSourceSpan } from "../tools/mm-dpo-build-reference.mjs";
 import { extractShortCandidates } from "../tools/mm-dpo-probes.mjs";
 import {
+  TARGET_BOX_GAP,
   TARGET_BOX_PX,
   createMemoryCanvas,
   decodeRgbaPng,
   renderContextCrop,
   renderParagraphCrop,
   renderTightCrop,
-  renderVisionCrop
+  renderVisionCrop,
+  seatTargetRect
 } from "../tools/mm-dpo-vision.mjs";
 import { parseCropDataUrl } from "../lib/formula-crop-png.js";
 import {
@@ -1319,7 +1322,11 @@ test("the committed DPO reference covers the 15 sampled ids, and unaligned rows 
   assert.equal(table.probeCount, 10);
   assert.equal(table.probeAligned, 9);
   assert.equal(table.formulas.find((row) => row.id === "p3-b7").aligned, true);
-  assert.match(table.formulas.find((row) => row.id === "p3-b7").reference, /SFT/);
+  assert.equal(table.formulas.find((row) => row.id === "p3-b7").reference, String.raw`(y_1, y_2)\sim \pi`);
+  assert.equal(table.formulas.find((row) => row.id === "p5-b17").reference.includes("\\log"), false);
+  assert.match(table.formulas.find((row) => row.id === "p5-b17").reference, /arg\\,max/);
+  assert.deepEqual(sameSourceSpan(table.formulas), []);
+  assert.match(table.detectorNotes.join(" "), /p4-b7/);
   assert.equal(table.formulas.find((row) => row.id === "p3-b8").reason, "paragraph-fragment");
   assert.equal(table.formulas.find((row) => row.id === "p3-b8").reference, String.raw`(y \mid x)`);
   const garbled = table.formulas.find((row) => row.id === "p5-b6");
@@ -1327,7 +1334,7 @@ test("the committed DPO reference covers the 15 sampled ids, and unaligned rows 
   assert.equal(garbled.reference, null);
   assert.equal(garbled.reason, "low-score");
   for (const row of table.formulas.filter((item) => item.aligned === false)) {
-    assert.match(row.reason, /low-score|short-key|ambiguous|no-paragraph|no-inline|paragraph-tie/);
+    assert.match(row.reason, /low-score|short-key|ambiguous|no-paragraph|no-inline|paragraph-tie|partial-block/);
   }
   assert.deepEqual(table.probes.map((row) => row.id), [
     "p3-s1", "p3-s2", "p3-s3", "p3-s4", "p3-s5",
@@ -1800,12 +1807,18 @@ test("context crop draws the red box outside the glyphs, and paragraph does too"
   function isRed(channels) {
     return channels[0] > 180 && channels[1] < 40 && channels[2] < 40 && channels[3] > 200;
   }
-  function assertBox(png, crop) {
+  function assertBox(png, crop, gap) {
     const image = decodeRgbaPng(png.base64);
     const rect = expectedPixels(crop, target);
+    const midX = rect.x + Math.floor(rect.w / 2);
+    const midY = rect.y + Math.floor(rect.h / 2);
     assert.equal(isRed(pixel(image, 0, 0)), false);
-    assert.equal(isRed(pixel(image, rect.x + Math.floor(rect.w / 2), rect.y - 2)), true);
-    assert.equal(isRed(pixel(image, rect.x - 2, rect.y + Math.floor(rect.h / 2))), true);
+    assert.equal(isRed(pixel(image, midX, rect.y - gap - 2)), true);
+    assert.equal(isRed(pixel(image, rect.x - gap - 2, midY)), true);
+    if (gap > 0) {
+      assert.equal(isRed(pixel(image, midX, rect.y - 1)), false);
+      assert.equal(isRed(pixel(image, rect.x - 1, midY)), false);
+    }
     let redInside = 0;
     let blackInside = 0;
     for (let py = rect.y + 2; py < rect.y + rect.h - 2; py += 1) {
@@ -1821,9 +1834,10 @@ test("context crop draws the red box outside the glyphs, and paragraph does too"
   const page = positionedPage();
   const contextPng = await renderContextCrop(page, source, memoryHooks());
   assert.equal(contextPng.scale, 4);
-  assertBox(contextPng, windowBox.bbox);
+  assert.equal(TARGET_BOX_GAP, 2);
+  assertBox(contextPng, windowBox.bbox, TARGET_BOX_GAP);
   const paragraphPng = await renderParagraphCrop(page, source, memoryHooks());
-  assertBox(paragraphPng, column);
+  assertBox(paragraphPng, column, 0);
   const calls = [];
   const report = await runAb({
     formulas: [source],
@@ -1966,8 +1980,11 @@ test("alignment keeps a unique prefix and a parenthesized fragment, and leaves a
   ], units);
   const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
   assert.equal(byId.cut.reason, "paragraph-prefix");
-  assert.match(byId.cut.reference, /SFT/);
+  assert.equal(byId.cut.reference, String.raw`(y_1, y_2)\sim \pi`);
+  assert.equal(byId.cut.reference.includes("SFT"), false);
+  assert.equal(byId.cut.reference.includes(byId.frag.reference), false);
   assert.equal(byId.frag.reference, String.raw`(y \mid x)`);
+  assert.deepEqual(sameSourceSpan(rows), []);
   assert.equal(byId.star.reference, "p^*");
   assert.equal(byId.mess.aligned, false);
   assert.equal(byId.mess.reference, null);
@@ -2021,4 +2038,206 @@ test("--probe-short appends script probes without replacing the stratified sampl
     stderr() {}
   });
   assert.deepEqual(plain.report.sample.ids, ["only-one"]);
+});
+
+test("a prefix reference stops at the block and does not swallow the next block", () => {
+  const prose = "the optimal policy under the reference model is written as the following expectation over the dataset";
+  const units = [{
+    id: "p-long",
+    kind: "paragraph",
+    text: prose,
+    parts: [{
+      type: "inline",
+      id: "i110",
+      latex: String.raw`\pi_\text{ref} = \operatorname{arg\,max}_{\pi}\mathbb{E}_{x, y_w \sim \mathcal{D}}\left[\log \pi(y_w \mid x)\right]`
+    }]
+  }];
+  const rows = alignDetectedFormulas([
+    {
+      id: "head",
+      page: 5,
+      display: false,
+      pdfText: "πref = arg maxπ Ex,yw∼D",
+      paragraphText: prose,
+      equationNumber: null
+    },
+    {
+      id: "tail",
+      page: 5,
+      display: false,
+      pdfText: "π(yw | x)]",
+      paragraphText: prose,
+      equationNumber: null
+    }
+  ], units);
+  const head = rows.find((row) => row.id === "head");
+  const tail = rows.find((row) => row.id === "tail");
+  assert.equal(head.reason, "paragraph-prefix");
+  assert.equal(head.reference.includes("\\log"), false);
+  assert.match(head.reference, /mathcal\{D\}/);
+  assert.equal(tail.aligned, false);
+  assert.equal(head.reference.includes("\\pi(y_w \\mid x)"), false);
+  assert.deepEqual(sameSourceSpan(rows), []);
+});
+
+test("context is the suggested input only when it clears the hi-res margin", () => {
+  const kimi = (arm, compared, hits, probeCompared = 0, probeHits = 0) => ({
+    arm,
+    provider: "kimi",
+    model: "kimi-k3",
+    role: "primary",
+    referenceCompared: compared,
+    canonicalMatches: hits,
+    probeReferenceCompared: probeCompared,
+    probeCanonicalMatches: probeHits
+  });
+  const close = inputDecision([
+    kimi("hi-res", 20, 16, 10, 6),
+    kimi("paragraph", 20, 16, 10, 6),
+    kimi("context", 20, 16, 10, 6)
+  ]);
+  assert.equal(close.contextEligible, false);
+  assert.equal(close.suggestedArm, "hi-res");
+  assert.equal(close.productDefault, false);
+  const overall = inputDecision([
+    kimi("hi-res", 20, 14, 10, 5),
+    kimi("paragraph", 20, 14, 10, 5),
+    kimi("context", 20, 16, 10, 5)
+  ]);
+  assert.equal(overall.contextEligible, true);
+  assert.equal(overall.suggestedArm, "context");
+  assert.ok(overall.contextNormalized >= overall.hiResNormalized + D2_CLEAR_MARGIN);
+  const probes = inputDecision([
+    kimi("hi-res", 20, 16, 10, 4),
+    kimi("paragraph", 20, 16, 10, 4),
+    kimi("context", 20, 16, 10, 6)
+  ]);
+  assert.equal(probes.contextNormalized, probes.hiResNormalized);
+  assert.equal(probes.contextEligible, true);
+  assert.equal(probes.suggestedArm, "context");
+  const counted = summarizeRows([
+    { id: "p3-b7", arm: "hi-res", provider: "kimi", model: "kimi-k3", measured: true, canonicalMatch: true, sent: false },
+    { id: "p3-s1", arm: "hi-res", provider: "kimi", model: "kimi-k3", measured: true, canonicalMatch: false, sent: false },
+    { id: "p3-b7", arm: "context", provider: "kimi", model: "kimi-k3", measured: true, canonicalMatch: true, sent: false },
+    { id: "p3-s1", arm: "context", provider: "kimi", model: "kimi-k3", measured: true, canonicalMatch: true, sent: false }
+  ], ["hi-res", "context"], [{ provider: "kimi", model: "kimi-k3", role: "primary" }]);
+  const fromRows = inputDecision(counted);
+  assert.equal(fromRows.suggestedArm, "context");
+  assert.equal(fromRows.contextProbeNormalized, 1);
+  assert.equal(fromRows.hiResProbeNormalized, 0);
+});
+
+test("paragraph seating keeps an interior line and leaves the neighbor outside the stroke", () => {
+  const width = 120;
+  const height = 90;
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  rgba.fill(255);
+  const ink = (x0, x1, y0, y1) => {
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        const index = (y * width + x) * 4;
+        rgba[index] = 0;
+        rgba[index + 1] = 0;
+        rgba[index + 2] = 0;
+        rgba[index + 3] = 255;
+      }
+    }
+  };
+  ink(10, 100, 8, 18);
+  ink(10, 100, 40, 58);
+  ink(10, 100, 70, 82);
+  const seated = seatTargetRect(
+    { width, height, rgba },
+    { x: 12, y: 14, w: 80, h: 60 }
+  );
+  assert.ok(seated.y > 18);
+  assert.ok(seated.y + seated.h < 70);
+  assert.ok(seated.y <= 40);
+  assert.ok(seated.y + seated.h >= 59);
+});
+
+test("context window stays put, and the paragraph box is fully inside its crop", async (t) => {
+  const session = await openPdfSession(join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf"));
+  t.after(() => session.close());
+  const p3b7 = session.formulas.find((item) => item.id === "p3-b7");
+  const frozen = contextWindow(p3b7);
+  assert.deepEqual(frozen.bbox, [
+    0.2728055555555555,
+    0.5473482323232323,
+    0.5207168006535947,
+    0.5907444444444445
+  ]);
+  const { createCanvas, loadImage } = await import("@napi-rs/canvas");
+  async function rgbaOf(png) {
+    const image = await loadImage(Buffer.from(png.base64, "base64"));
+    const canvas = createCanvas(image.width, image.height);
+    const context = canvas.getContext("2d");
+    context.drawImage(image, 0, 0);
+    const packed = context.getImageData(0, 0, image.width, image.height);
+    return { width: image.width, height: image.height, data: packed.data };
+  }
+  function redBounds(image) {
+    let minX = image.width;
+    let minY = image.height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < image.height; y += 1) {
+      for (let x = 0; x < image.width; x += 1) {
+        const index = (y * image.width + x) * 4;
+        const red = image.data[index] > 180 && image.data[index + 1] < 50 && image.data[index + 2] < 50;
+        if (!red) continue;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+    return { minX, minY, maxX, maxY };
+  }
+  function dark(image, x, y) {
+    const index = (y * image.width + x) * 4;
+    return image.data[index] < 96 && image.data[index + 1] < 96 && image.data[index + 2] < 96;
+  }
+  const contextPng = await session.renderContextCrop(p3b7);
+  assert.equal(contextPng.w, 607);
+  assert.equal(contextPng.h, 137);
+  const contextImage = await rgbaOf(contextPng);
+  const contextBox = redBounds(contextImage);
+  assert.ok(contextBox.minY > 2 && contextBox.maxY < contextImage.height - 2);
+  const mid = Math.floor((contextBox.minX + contextBox.maxX) / 2);
+  let gapRows = 1000;
+  for (const x of [mid - 24, mid, mid + 24]) {
+    if (x <= contextBox.minX + 2 || x >= contextBox.maxX - 2) continue;
+    let rows = 0;
+    for (let y = contextBox.maxY - TARGET_BOX_PX; y >= 1; y -= 1) {
+      if (dark(contextImage, x, y)) break;
+      rows += 1;
+    }
+    if (rows < gapRows) gapRows = rows;
+  }
+  assert.ok(gapRows >= TARGET_BOX_GAP);
+  for (const id of ["p3-b12", "p3-b16", "p3-b22", "p4-b7", "p4-b11", "p4-b16"]) {
+    const formula = session.formulas.find((item) => item.id === id);
+    const png = await session.renderParagraphCrop(formula);
+    const image = await rgbaOf(png);
+    const box = redBounds(image);
+    assert.ok(box.minX > 1 && box.minY > 1, id);
+    assert.ok(box.maxX < image.width - 2 && box.maxY < image.height - 2, id);
+    let struck = 0;
+    for (let y = box.minY; y <= box.minY + 2; y += 1) {
+      for (let x = Math.max(0, box.minX - 8); x < box.minX; x += 1) {
+        if (dark(image, x, y)) struck += 1;
+      }
+    }
+    assert.equal(struck, 0, id);
+    let gapAbove = 0;
+    const sampleX = Math.min(box.maxX - 8, box.minX + Math.floor((box.maxX - box.minX) * 0.35));
+    for (let y = box.minY - 1; y >= 0; y -= 1) {
+      if (dark(image, sampleX, y)) break;
+      gapAbove += 1;
+      if (gapAbove > 12) break;
+    }
+    assert.ok(gapAbove >= 1, id);
+    if (id === "p4-b7") assert.ok(box.maxY - box.minY > 140);
+  }
 });

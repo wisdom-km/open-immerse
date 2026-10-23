@@ -69,7 +69,7 @@
       "id": "paragraph",
       "default": false,
       "sendsPdf": false,
-      "note": "脚本实验：段落区域按同一高清倍率出图，红框标出目标公式，并附上段落文字。不改产品默认，也不改产品提示词。"
+      "note": "脚本实验：段落区域按同一高清倍率出图，裁图含完整红框，红框落在行间空隙里。不改产品默认，也不改产品提示词。"
     },
     {
       "id": "context",
@@ -148,6 +148,8 @@
         "referenceCompared": 0,
         "matchesReference": 0,
         "canonicalMatches": 0,
+        "probeReferenceCompared": 0,
+        "probeCanonicalMatches": 0,
         "exactMatches": 0,
         "checkedButMismatch": 0,
         "failures": 0,
@@ -171,6 +173,8 @@
         "referenceCompared": 0,
         "matchesReference": 0,
         "canonicalMatches": 0,
+        "probeReferenceCompared": 0,
+        "probeCanonicalMatches": 0,
         "exactMatches": 0,
         "checkedButMismatch": 0,
         "failures": 0,
@@ -196,12 +200,16 @@
     },
     "inputDecision": {
       "id": "D2",
-      "rule": "paragraph 只有在 Kimi K3 上规范形准确率明显高于 hi-res 时才作为建议默认；否则建议 hi-res。本报告不改产品默认。",
+      "rule": "paragraph 只有在 Kimi K3 上规范形准确率明显高于 hi-res 时才作为建议；否则建议 hi-res。context 只有在整体规范形高出 hi-res 至少 5 个点，或短公式探针上明显更好时，才成为建议输入。本报告不改产品默认。",
       "margin": 0.05,
       "clearlyBetter": null,
       "suggestedArm": null,
       "hiResNormalized": null,
       "paragraphNormalized": null,
+      "contextNormalized": null,
+      "contextProbeNormalized": null,
+      "hiResProbeNormalized": null,
+      "contextEligible": false,
       "productDefault": false,
       "writesPreset": false
     }

@@ -26,7 +26,7 @@ schema: `open-immerse.mm-dpo-ab/v1` · mode: `template`
 
 - `tight`（默认）：紧裁 PNG。已有图走 cropPngFor；文字层 PDF 用 measureFormulaCrop（CROP_SCALE 2，行内 pad 4、独立 pad 6）。默认臂。
 - `hi-res`：产品高清裁图（visionCropFor / renderVisionCrop，mm-3，scale 4）。没有页面渲染时不发送。
-- `paragraph`：脚本实验：段落区域按同一高清倍率出图，红框标出目标公式，并附上段落文字。不改产品默认，也不改产品提示词。
+- `paragraph`：脚本实验：段落区域按同一高清倍率出图，裁图含完整红框，红框落在行间空隙里。不改产品默认，也不改产品提示词。
 - `context`：脚本实验：高清倍率（scale 4）下裁目标公式，上下约一行、左右几个词，并限制在栏内。红框标出目标。不进默认臂。
 - `page`，需要 `--arm=page`：整页对照，只在脚本里。默认关。不发送整页 PDF，也不能成为产品默认。
 
@@ -67,9 +67,9 @@ writesPreset=false productDefault=false provisional=true
 
 ## D2
 
-paragraph 只有在 Kimi K3 上规范形准确率明显高于 hi-res 时才作为建议默认；否则建议 hi-res。本报告不改产品默认。
+paragraph 只有在 Kimi K3 上规范形准确率明显高于 hi-res 时才作为建议；否则建议 hi-res。context 只有在整体规范形高出 hi-res 至少 5 个点，或短公式探针上明显更好时，才成为建议输入。本报告不改产品默认。
 
-suggestedArm=— clearlyBetter=null hi-res=— paragraph=—
+suggestedArm=— clearlyBetter=null hi-res=— paragraph=— context=— contextEligible=false
 
 writesPreset=false productDefault=false
 

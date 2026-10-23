@@ -13,6 +13,8 @@
 
 export const TARGET_BOX_COLOR = "#e10600";
 export const TARGET_BOX_PX = 3;
+/** White pixels between the context stroke and the glyph box. Paragraph seating uses the same gap. */
+export const TARGET_BOX_GAP = 2;
 
 import { createRequire } from "node:module";
 import { deflateSync, inflateSync } from "node:zlib";
@@ -322,22 +324,144 @@ export function targetBoxPixels(crop, target, pageWidth, pageHeight, scale) {
   return { x, y, w, h };
 }
 
-/** Stroke outside `rect` so the glyphs inside stay unpainted. */
-export function paintTargetBox(canvas, rect, thickness = TARGET_BOX_PX) {
+/** Stroke outside `rect` so the glyphs inside stay unpainted. `gap` is extra white pixels. */
+export function paintTargetBox(canvas, rect, thickness = TARGET_BOX_PX, gap = 0) {
   if (!canvas || !rect || !(rect.w > 0) || !(rect.h > 0)) return false;
   const ctx = canvas.getContext("2d");
   if (!ctx || typeof ctx.fillRect !== "function") return false;
   const t = thickness > 0 ? thickness : TARGET_BOX_PX;
+  const g = gap > 0 ? gap : 0;
   const { x, y, w, h } = rect;
   ctx.fillStyle = TARGET_BOX_COLOR;
-  ctx.fillRect(x - t, y - t, w + 2 * t, t);
-  ctx.fillRect(x - t, y + h, w + 2 * t, t);
-  ctx.fillRect(x - t, y, t, h);
-  ctx.fillRect(x + w, y, t, h);
+  ctx.fillRect(x - t - g, y - t - g, w + 2 * (t + g), t);
+  ctx.fillRect(x - t - g, y + h + g, w + 2 * (t + g), t);
+  ctx.fillRect(x - t - g, y - g, t, h + 2 * g);
+  ctx.fillRect(x + w + g, y - g, t, h + 2 * g);
   return true;
 }
 
-function paintFormulaFrame(page, canvas, cropBbox, targetBbox, scale) {
+function strokeGap(rect, width, height, thickness, gap) {
+  if (!(gap > 0) || !rect || !(width > 0) || !(height > 0)) return 0;
+  const room = Math.min(
+    rect.x,
+    rect.y,
+    width - (rect.x + rect.w),
+    height - (rect.y + rect.h)
+  );
+  return Math.max(0, Math.min(gap, Math.floor(room) - thickness));
+}
+
+function darkPixel(rgba, width, x, y) {
+  const index = (y * width + x) * 4;
+  return rgba[index] < 96 && rgba[index + 1] < 96 && rgba[index + 2] < 96 && rgba[index + 3] > 180;
+}
+
+function inkBands(rgba, width, x0, x1, y0, y1) {
+  const bands = [];
+  const span = Math.max(1, x1 - x0 + 1);
+  const minCount = Math.max(8, Math.floor(span * 0.015));
+  let start = -1;
+  let hole = 0;
+  for (let y = y0; y <= y1; y += 1) {
+    let count = 0;
+    for (let x = x0; x <= x1; x += 1) {
+      if (darkPixel(rgba, width, x, y)) count += 1;
+    }
+    if (count >= minCount) {
+      if (start < 0) start = y;
+      hole = 0;
+    } else if (start >= 0) {
+      hole += 1;
+      if (hole > 4) {
+        bands.push([start, y - hole]);
+        start = -1;
+        hole = 0;
+      }
+    }
+  }
+  if (start >= 0) bands.push([start, y1 - hole]);
+  return bands.filter((band) => band[1] >= band[0]);
+}
+
+/**
+ * Pull a paragraph box edge off a neighboring text line into the gap.
+ * Interior bands stay, so a detector box that also contains the next line
+ * (p4-b7's "where Z(x)=…") is not trimmed away. Edges only move inward.
+ */
+export function seatTargetRect(image, rect, { thickness = TARGET_BOX_PX, gap = TARGET_BOX_GAP } = {}) {
+  const rgba = image?.rgba || image?.data;
+  if (!rgba || !rect || !(rect.w > 0) || !(rect.h > 0)) return rect;
+  const width = image.width | 0;
+  const height = image.height | 0;
+  if (!(width > 0) || !(height > 0)) return rect;
+  const x0 = Math.max(0, Math.min(width - 1, rect.x));
+  const x1 = Math.max(x0, Math.min(width - 1, rect.x + rect.w - 1));
+  const y0 = Math.max(0, Math.min(height - 1, rect.y));
+  const y1 = Math.max(y0, Math.min(height - 1, rect.y + rect.h - 1));
+  const bands = inkBands(rgba, width, x0, x1, Math.max(0, y0 - 80), Math.min(height - 1, y1 + 80));
+  const roleOf = (band) => {
+    const [top, bottom] = band;
+    const insideTop = Math.max(top, y0);
+    const insideBottom = Math.min(bottom, y1);
+    const inside = insideBottom >= insideTop ? insideBottom - insideTop + 1 : 0;
+    const above = Math.max(0, y0 - top);
+    const below = Math.max(0, bottom - y1);
+    if (inside === 0) return above > 0 ? "above" : "below";
+    if (above >= 4 && inside <= Math.max(8, above)) return "above";
+    if (below >= 4 && inside <= Math.max(8, below)) return "below";
+    return "content";
+  };
+  const tagged = bands.map((band) => ({ band, role: roleOf(band) }));
+  const aboveBands = tagged.filter((item) => item.role === "above");
+  let content = tagged.filter((item) => item.role === "content").map((item) => item.band);
+  let droppedTail = -1;
+  if (aboveBands.length && content.length > 1) {
+    const neighborEnd = aboveBands.reduce((max, item) => Math.max(max, item.band[1]), -1);
+    const first = content[0];
+    const second = content[1];
+    const tail = first[1] - first[0] + 1;
+    const gapToNeighbor = first[0] - neighborEnd - 1;
+    const gapToNext = second[0] - first[1] - 1;
+    if (tail <= 12 && gapToNeighbor <= thickness + gap && gapToNext >= 16) {
+      droppedTail = first[1];
+      content = content.slice(1);
+    }
+  }
+  if (!content.length) return { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+  const contentTop = Math.max(y0, Math.min(...content.map((band) => band[0])));
+  const contentBottom = Math.min(y1, Math.max(...content.map((band) => band[1])));
+  const aboveBottom = Math.max(
+    droppedTail,
+    bands.filter((band) => roleOf(band) === "above").reduce((max, band) => Math.max(max, band[1]), -1)
+  );
+  const belowTop = bands.filter((band) => roleOf(band) === "below").reduce((min, band) => Math.min(min, band[0]), height);
+  const t = thickness > 0 ? thickness : TARGET_BOX_PX;
+  const g = gap > 0 ? gap : 0;
+  let top = rect.y;
+  let bottom = rect.y + rect.h;
+  const clearAbove = aboveBottom >= 0 ? contentTop - aboveBottom - 1 : contentTop - y0 + t + g;
+  if (aboveBottom >= 0 && clearAbove >= t) {
+    const usedGap = Math.min(g, clearAbove - t);
+    const seated = contentTop - usedGap;
+    if (seated > top) top = seated;
+  } else if (contentTop > y0 + 4) {
+    const seated = contentTop - Math.min(g, contentTop - y0);
+    if (seated > top) top = seated;
+  }
+  const clearBelow = belowTop < height ? belowTop - contentBottom - 1 : y1 - contentBottom + t + g;
+  if (belowTop < height && clearBelow >= t) {
+    const usedGap = Math.min(g, clearBelow - t);
+    const seated = contentBottom + 1 + usedGap;
+    if (seated < bottom) bottom = seated;
+  } else if (contentBottom < y1 - 4) {
+    const seated = contentBottom + 1 + Math.min(g, y1 - contentBottom);
+    if (seated < bottom) bottom = seated;
+  }
+  if (!(bottom > top)) return { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+  return { x: rect.x, y: top, w: rect.w, h: bottom - top };
+}
+
+function paintFormulaFrame(page, canvas, cropBbox, targetBbox, scale, gap = 0) {
   if (!page || typeof page.getViewport !== "function") return false;
   let unit = null;
   try {
@@ -346,7 +470,46 @@ function paintFormulaFrame(page, canvas, cropBbox, targetBbox, scale) {
     return false;
   }
   const rect = targetBoxPixels(cropBbox, targetBbox, unit.width, unit.height, scale);
-  return paintTargetBox(canvas, rect, TARGET_BOX_PX);
+  if (!rect) return false;
+  let image = null;
+  try {
+    image = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+  } catch {
+    image = null;
+  }
+  const seated = gap > 0 || !image ? rect : seatTargetRect(image, rect);
+  const fitted = strokeGap(seated, canvas.width, canvas.height, TARGET_BOX_PX, gap);
+  return paintTargetBox(canvas, seated, TARGET_BOX_PX, fitted);
+}
+
+/**
+ * Paragraph bitmap is the paragraph box grown so the red stroke is inside the
+ * crop. Context and hi-res windows are not this function.
+ */
+export function paragraphCropBbox(formula, pageWidth, pageHeight, scale = VISION_CROP_SCALE) {
+  const column = Array.isArray(formula?.paragraphBbox) ? formula.paragraphBbox : null;
+  const target = Array.isArray(formula?.layoutBbox) ? formula.layoutBbox : formula?.bbox;
+  if (!column && !Array.isArray(target)) return null;
+  const width = Number(pageWidth) > 0 ? Number(pageWidth) : 1;
+  const height = Number(pageHeight) > 0 ? Number(pageHeight) : 1;
+  const used = scale > 0 ? scale : VISION_CROP_SCALE;
+  const padX = (TARGET_BOX_PX + TARGET_BOX_GAP + 2) / (width * used);
+  const padY = (TARGET_BOX_PX + TARGET_BOX_GAP + 2) / (height * used);
+  let crop = column ? column.slice(0, 4) : target.slice(0, 4);
+  if (Array.isArray(target)) {
+    crop = [
+      Math.min(crop[0], target[0] - padX),
+      Math.min(crop[1], target[1] - padY),
+      Math.max(crop[2], target[2] + padX),
+      Math.max(crop[3], target[3] + padY)
+    ];
+  }
+  return [
+    Math.max(0, crop[0]),
+    Math.max(0, crop[1]),
+    Math.min(1, crop[2]),
+    Math.min(1, crop[3])
+  ];
 }
 
 function pngOf(canvas) {
@@ -539,12 +702,21 @@ export async function renderTightCrop(page, formula, hooks = {}) {
  * Text stays with the caller.
  */
 export async function renderParagraphCrop(page, formula, hooks = {}) {
-  const bbox = Array.isArray(formula?.paragraphBbox) ? formula.paragraphBbox : null;
+  let unit = null;
+  try {
+    unit = page?.getViewport?.({ scale: 1 }) || null;
+  } catch {
+    unit = null;
+  }
+  const bbox = unit
+    ? paragraphCropBbox(formula, unit.width, unit.height, VISION_CROP_SCALE)
+    : (Array.isArray(formula?.paragraphBbox) ? formula.paragraphBbox : null);
   if (!bbox) return null;
   const drawn = await renderWindow(page, bbox, VISION_CROP_SCALE, hooks);
   if (!drawn) return null;
   const target = Array.isArray(formula?.layoutBbox) ? formula.layoutBbox : formula?.bbox;
-  if (target) paintFormulaFrame(page, drawn.canvas, bbox, target, drawn.plan.scale);
+  // gap 0: seating pulls the stroke into the gap. Context keeps its own window and only adds TARGET_BOX_GAP.
+  if (target) paintFormulaFrame(page, drawn.canvas, bbox, target, drawn.plan.scale, 0);
   const png = pngOf(drawn.canvas);
   release(drawn.canvas);
   if (!png) return null;
@@ -569,7 +741,7 @@ export async function renderContextCrop(page, formula, hooks = {}) {
   if (!windowBox) return null;
   const drawn = await renderWindow(page, windowBox.bbox, VISION_CROP_SCALE, hooks);
   if (!drawn) return null;
-  paintFormulaFrame(page, drawn.canvas, windowBox.bbox, windowBox.target, drawn.plan.scale);
+  paintFormulaFrame(page, drawn.canvas, windowBox.bbox, windowBox.target, drawn.plan.scale, TARGET_BOX_GAP);
   const png = pngOf(drawn.canvas);
   release(drawn.canvas);
   if (!png) return null;

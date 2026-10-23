@@ -270,6 +270,92 @@ function claim(row, source, reason) {
   row.reference = source.latex;
 }
 
+function braceDepth(text) {
+  let depth = 0;
+  const src = String(text || "");
+  for (let i = 0; i < src.length; i += 1) {
+    if (src[i] === "\\") {
+      i += 1;
+      continue;
+    }
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}") depth -= 1;
+    if (depth < 0) return -1;
+  }
+  return depth;
+}
+
+/**
+ * Cut a source formula at the first balanced prefix whose math key equals the
+ * block. A paragraph-prefix hit otherwise keeps the rest of the formula, including
+ * glyphs that belong to the next block.
+ */
+export function trimLatexToKey(latex, pdfKey) {
+  const text = String(latex || "");
+  const wanted = String(pdfKey || "");
+  if (!text || !wanted) return "";
+  for (let i = 1; i <= text.length; i += 1) {
+    const slice = text.slice(0, i).trim();
+    if (!slice || slice.endsWith("\\")) continue;
+    if (mathKey(slice) !== wanted) continue;
+    if (braceDepth(slice) !== 0) continue;
+    return slice;
+  }
+  return "";
+}
+
+function unalign(row, reason) {
+  row.aligned = false;
+  row.confidence = "none";
+  row.reason = reason;
+  row.sourceId = "";
+  row.reference = null;
+}
+
+function sourceBase(id) {
+  return String(id || "").split("#")[0];
+}
+
+/**
+ * Two aligned rows from the same source formula, where one's reference still
+ * contains the other's math as its suffix. That is the prefix bug: the box
+ * only covers the first block.
+ */
+export function sameSourceSpan(rows) {
+  const aligned = (Array.isArray(rows) ? rows : []).filter((row) => row?.aligned && row.reference);
+  const hits = [];
+  for (const left of aligned) {
+    const base = sourceBase(left.sourceId);
+    if (!base) continue;
+    const leftKey = mathKey(left.reference);
+    for (const right of aligned) {
+      if (right.id === left.id || sourceBase(right.sourceId) !== base) continue;
+      const rightKey = mathKey(right.reference);
+      if (rightKey.length < 2 || leftKey.length <= rightKey.length) continue;
+      if (leftKey.endsWith(rightKey)) hits.push([left.id, right.id]);
+    }
+  }
+  return hits;
+}
+
+function dropSpanningReferences(rows, formulas) {
+  const list = Array.isArray(formulas) ? formulas : [];
+  const byId = new Map(list.map((formula) => [formula.id, formula]));
+  for (const row of rows) {
+    if (!row.aligned || !row.reference) continue;
+    const mine = mathKey(byId.get(row.id)?.pdfText || "");
+    const refKey = mathKey(row.reference);
+    if (!mine || refKey === mine || !refKey.startsWith(mine)) continue;
+    const extra = refKey.slice(mine.length);
+    const spans = list.some((other) => {
+      if (!other || other.id === row.id) return false;
+      const key = mathKey(other.pdfText);
+      return key.length >= 4 && extra.includes(key);
+    });
+    if (spans) unalign(row, "partial-block");
+  }
+}
+
 /**
  * Align detected blocks to parsed source units.
  * A row is aligned only when one source formula wins cleanly.
@@ -342,8 +428,14 @@ export function alignDetectedFormulas(formulas, units) {
       else if (exact.length > 1) row.reason = "ambiguous";
       else if (fragments.length === 1) claim(row, fragments[0], "paragraph-fragment");
       else if (fragments.length > 1) row.reason = "ambiguous";
-      else if (prefixed.length === 1) claim(row, prefixed[0], "paragraph-prefix");
-      else if (prefixed.length > 1) row.reason = "ambiguous";
+      else if (prefixed.length === 1) {
+        const trimmed = trimLatexToKey(prefixed[0].latex, key);
+        if (trimmed && mathKey(trimmed) === key && trimmed.length < String(prefixed[0].latex || "").length) {
+          claim(row, { ...prefixed[0], latex: trimmed }, "paragraph-prefix");
+        } else {
+          row.reason = "partial-block";
+        }
+      } else if (prefixed.length > 1) row.reason = "ambiguous";
       else row.reason = missReason(formula, paragraph, key, scored);
       return row;
     }
@@ -358,14 +450,9 @@ export function alignDetectedFormulas(formulas, units) {
   }
   for (const group of claimed.values()) {
     if (group.length < 2) continue;
-    for (const row of group) {
-      row.aligned = false;
-      row.confidence = "none";
-      row.reason = "ambiguous";
-      row.sourceId = "";
-      row.reference = null;
-    }
+    for (const row of group) unalign(row, "ambiguous");
   }
+  dropSpanningReferences(rows, list);
   return rows;
 }
 
@@ -416,6 +503,9 @@ export function referenceDocument(formulas, rows, meta = {}) {
     document.probeAligned = meta.probes.filter((row) => row.aligned && row.reference).length;
     document.probeNote = "脚本短公式探针，不是产品检出。FORMULA_RUN_MIN_WIDTH 仍是 12。";
   }
+  document.detectorNotes = [
+    "p4-b7 的检出框仍含 where Z(x)=… 那一行。这是产品检测器的框，脚本不改 FORMULA_RUN_MIN_WIDTH（仍是 12）。"
+  ];
   return document;
 }
 
