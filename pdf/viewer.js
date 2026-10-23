@@ -363,6 +363,7 @@ import { createLibraryChip } from "../lib/library-chip.js";
 import { bindImportChip } from "../options/data-panel.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, persistCardHiddenThisSession, readPersistCardState } from "../lib/persist-card.js";
 import { cleanTitle, httpSourceUrl } from "../lib/library-record.js";
+import { diagLog, noteViewerNetwork } from "../lib/diag-log.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
@@ -533,7 +534,6 @@ let page1TextItems = null;
 let page1Viewport = null;
 
 let lastShownFont = 0;
-init();
 
 function workerSrc() {
   try {
@@ -624,11 +624,22 @@ function writeNotesPanelPrefs(patch) {
   return notesPrefsSession.write(patch);
 }
 
+function watchDiagNetwork() {
+  try {
+    noteViewerNetwork(globalThis.navigator?.onLine !== false);
+    globalThis.addEventListener?.("online", () => noteViewerNetwork(true));
+    globalThis.addEventListener?.("offline", () => noteViewerNetwork(false));
+  } catch {
+    /* diagnostic notes never block the reader */
+  }
+}
+
 function init() {
   // Copy legacy localStorage keys into the local area once. Until that
   // finishes, reads still use localStorage. On a later open those keys are
   // already gone, so this window sees defaults rather than the saved values.
   void notesPrefsSession.prime();
+  watchDiagNetwork();
   bindToolbarGeometry();
   bindViewChrome();
   applyToolbarBand();
@@ -3856,6 +3867,7 @@ async function startArxivSource() {
             pdfSha256
           });
         } catch {
+          diagLog("net.offline", { ctx: "viewer", code: "offline" });
           return { ok: false, reason: "offline" };
         }
       },
@@ -3888,6 +3900,7 @@ async function startArxivSource() {
       }
     });
   } catch {
+    diagLog("net.offline", { ctx: "viewer", code: "offline" });
     resolved = { ok: false, reason: "offline" };
   }
   if (job !== arxivJob) return;
@@ -12789,3 +12802,9 @@ function setStatus(text, isError = false, isWarn = false) {
   el.classList.toggle("error", Boolean(isError));
   el.classList.toggle("warn", Boolean(isWarn) && !isError);
 }
+
+// Keep this after every top-level let/const. Without ?src=, init() calls
+// updateTranslateControls while `const backgroundSessions` is still uninitialized.
+// That TDZ error aborts the module; lastShownFont, cachedScrollbarWidth,
+// arxivPrefsLoaded, and cachedPdfLayout then fail the same way.
+init();

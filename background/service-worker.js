@@ -200,12 +200,31 @@ async function handleMessage(message, sender) {
       return { ok: true, settings: await saveSettings({ siteRules: rules }) };
     }
     case "OI_ARXIV_SOURCE":
+      // AX-11 and sw-startup lock this file's imports. Diagnostic actions are not arXiv.
+      if (message?.action === "diag" || message?.action === "diag-note") return { ok: false };
       return handleArxivSourceMessage(message);
     case "OI_FORMULA_CACHE":
       return handleFormulaCacheMessage(message);
+    case "OI_DIAG_LOG":
+    case "OI_DIAG_EXPORT":
+    case "OI_DIAG_CLEAR":
+    case "OI_DIAG_STATS":
+      return handleArxivSourceMessage({ action: "diag", message, sender });
     default:
       return { ok: false, error: "unknown message" };
   }
+}
+
+function reportTranslateFailure(err, fields) {
+  Promise.resolve(handleArxivSourceMessage({
+    action: "diag-note",
+    failure: {
+      message: String(err?.message || err || ""),
+      httpStatus: err?.httpStatus,
+      code: err?.code
+    },
+    fields: fields || {}
+  })).catch(() => {});
 }
 
 function emitTranslateProgress(sender, requestId, progress) {
@@ -295,6 +314,10 @@ async function translateBatch(texts, options = {}) {
         options.polishFailed = true;
         continue;
       }
+      reportTranslateFailure(err, {
+        provider: options.providerId || "",
+        count: chunk.length
+      });
       throw err;
     }
     const guarded = guardZhTranslations(

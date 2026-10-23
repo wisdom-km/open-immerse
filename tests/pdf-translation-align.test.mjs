@@ -7,7 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -117,10 +117,7 @@ function libraryFor(pages) {
 
 function historicalLayer(commit) {
   const dir = mkdtempSync(join(tmpdir(), "oi-align-layer-"));
-  for (const file of readdirSync(join(root, "lib"))) {
-    if (!file.endsWith(".js")) continue;
-    writeFileSync(join(dir, file), readFileSync(join(root, "lib", file)));
-  }
+  cpSync(join(root, "lib"), dir, { recursive: true });
   writeFileSync(
     join(dir, "pdf-text-layer.js"),
     execFileSync("git", ["show", `${commit}:lib/pdf-text-layer.js`], { cwd: root })

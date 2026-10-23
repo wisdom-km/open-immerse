@@ -59,6 +59,8 @@ import { focusFormulaCard, renderFormulaPanel, renderFormulaSwitchList } from ".
 import { createNotesPrefsSession } from "../lib/reader-notes-local.js";
 import { NOTES_PANEL_WIDTH_DEFAULT, NOTES_PANE_WIDTH_DEFAULT } from "../lib/notes-prefs.js";
 import { downloadBlob } from "../lib/export.js";
+import { diagLog } from "../lib/diag-log.js";
+import { bindDiagPanel } from "./diag-panel.js";
 import { sharedLibraryStore } from "../lib/library-session.js";
 import { mountDataPanel } from "./data-panel.js";
 import { SETTINGS_PAGES, parseSettingsHash } from "./route.js";
@@ -220,6 +222,7 @@ async function init() {
   applyStoredForm();
   el("translateScope").addEventListener("change", () => syncTranslateScopeHint());
   bindData();
+  bindDiagPanel();
   bindPanelNav();
   el("laterList")?.addEventListener("change", () => {
     syncPdfLayoutBox();
@@ -827,6 +830,7 @@ async function testConnection() {
     await markProviderAttention(attentionArea(), providerId);
     if (el("provider")?.value !== providerId) return;
     setTestStatus(formatConnectionStatus({ ok: false, missingField: missing.label }), "err");
+    diagLog("provider.probe", { ctx: "options", provider: providerId, ok: false, code: "missing" });
     restoreTestButton();
     return;
   }
@@ -848,11 +852,18 @@ async function testConnection() {
     else await markProviderAttention(attentionArea(), providerId);
     if (requestId !== testRequestId) return;
     setTestStatus(formatConnectionStatus(res || { ok: false, error: "无响应" }), res && res.ok ? "ok" : "err");
+    diagLog("provider.probe", {
+      ctx: "options",
+      provider: providerId,
+      ok: res?.ok === true,
+      code: res?.ok ? "ok" : (res?.httpStatus ? String(res.httpStatus) : "fail")
+    });
   } catch (err) {
     if (requestId !== testRequestId) return;
     await markProviderAttention(attentionArea(), providerId);
     if (requestId !== testRequestId) return;
     setTestStatus(formatConnectionStatus({ ok: false, error: String(err.message || err) }), "err");
+    diagLog("provider.probe", { ctx: "options", provider: providerId, ok: false, code: "fail" });
   } finally {
     if (requestId === testRequestId) restoreTestButton();
   }
@@ -2158,7 +2169,7 @@ function searchHits(query) {
       .map((slot) => document.querySelector(`[data-key-slot="${slot}"]`))
       .filter(Boolean);
   }
-  const focusOf = { 导入: "import", 导出: "export", 备份: "backup" };
+  const focusOf = { 导入: "import", 导出: "export", 备份: "backup", 诊断: "diag", 日志: "diag", 报告问题: "diag" };
   if (Object.prototype.hasOwnProperty.call(focusOf, q)) {
     const name = focusOf[q];
     const group = document.querySelector(`[data-focus-group="${name}"]`) || document.querySelector(`[data-focus="${name}"]`);
@@ -2257,6 +2268,16 @@ function showPage(id, focus) {
       group.tabIndex = -1;
       group.scrollIntoView?.({ block: "center" });
       group.focus?.();
+      group.classList.add("set-flash");
+      setTimeout(() => group.classList.remove("set-flash"), 1200);
+    }
+  }
+  if (focus && next === "about") {
+    const group = document.querySelector(`#panel-about [data-focus-group="${focus}"]`);
+    const button = group?.querySelector("[data-diag-export]") || group;
+    if (group && button) {
+      group.scrollIntoView?.({ block: "center" });
+      button.focus?.();
       group.classList.add("set-flash");
       setTimeout(() => group.classList.remove("set-flash"), 1200);
     }
