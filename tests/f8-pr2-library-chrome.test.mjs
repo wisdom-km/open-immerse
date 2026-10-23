@@ -435,6 +435,29 @@ test("文献库侧栏：开关、三种删除文案、网址变了、排序、�
   assert.notEqual(look.darkPaint, look.warmHover);
   assert.equal(look.outline, "-2px");
 
+  await evaluate(`(() => {
+    const input = document.querySelector(".oi-lib-search input");
+    input.focus();
+    input.value = "zzzz-no-hit";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return input.value;
+  })()`);
+  await sleep(400);
+  const cleared = JSON.parse(await evaluate(`(() => {
+    const button = document.querySelector(".oi-lib-miss button");
+    button.focus();
+    button.click();
+    const input = document.querySelector(".oi-lib-search input");
+    return JSON.stringify({
+      focused: document.activeElement === input,
+      miss: document.querySelector(".oi-lib-miss") != null,
+      rows: document.querySelectorAll(".oi-lib-name").length
+    });
+  })()`));
+  assert.equal(cleared.focused, true, JSON.stringify(cleared));
+  assert.equal(cleared.miss, false, JSON.stringify(cleared));
+  assert.ok(cleared.rows >= 8, JSON.stringify(cleared));
+
   const copies = JSON.parse(await evaluate(`(() => {
     const read = (hash) => {
       document.querySelector('[data-lib-row="' + hash + '"] .oi-lib-trash').click();
@@ -516,6 +539,13 @@ test("文献库侧栏：开关、三种删除文案、网址变了、排序、�
   assert.equal(narrow.trash, "nowrap");
   assert.ok(narrow.openH >= 28, JSON.stringify(narrow));
   assert.match(narrow.label, /^删除《.+》$/);
+  const narrowFocus = await evaluate(`(() => {
+    const back = document.querySelector(".oi-lib-back");
+    back.focus();
+    back.click();
+    return document.activeElement?.id || document.activeElement?.tagName || "";
+  })()`);
+  assert.equal(narrowFocus, "moreButton", narrowFocus);
 
   await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId);
   await cdp.send("Page.navigate", { url: `${origin}/pdf/viewer.html#library?sort=size` }, sessionId);
@@ -858,14 +888,26 @@ test("打开 PDF…成功后关掉文献库，取消或打不开则保持", { ti
       if (String(status).includes("无法打开这个 PDF")) break;
       await sleep(100);
     }
-    const still = await evaluate(`(() => JSON.stringify({
-      open: document.querySelector(".oi-library")?.hidden === false,
-      boot: window.__oiBoot || "",
-      status: document.getElementById("status")?.textContent || ""
-    }))()`);
+    const still = await evaluate(`(() => {
+      const slot = document.getElementById("sideSlot");
+      const button = document.getElementById("libraryButton");
+      return JSON.stringify({
+        open: document.querySelector(".oi-library")?.hidden === false,
+        slot: slot?.hidden === false,
+        pressed: button?.getAttribute("aria-pressed") || "",
+        libraryOpen: document.querySelector(".workspace")?.dataset.libraryOpen || "",
+        notesDisabled: document.getElementById("notesButton")?.disabled === true,
+        boot: window.__oiBoot || "",
+        status: document.getElementById("status")?.textContent || ""
+      });
+    })()`);
     const parsed = JSON.parse(still);
     assert.match(parsed.status, /无法打开这个 PDF/, JSON.stringify(parsed));
     assert.equal(parsed.open, true, JSON.stringify(parsed));
+    assert.equal(parsed.slot, true, JSON.stringify(parsed));
+    assert.equal(parsed.pressed, "true", JSON.stringify(parsed));
+    assert.equal(parsed.libraryOpen, "true", JSON.stringify(parsed));
+    assert.equal(parsed.notesDisabled, false, JSON.stringify(parsed));
     assert.equal(parsed.boot, "", JSON.stringify(parsed));
   });
 
@@ -901,5 +943,64 @@ test("打开 PDF…成功后关掉文献库，取消或打不开则保持", { ti
     assert.equal(state?.painted, true, JSON.stringify(state));
     assert.equal(state?.hidden, true, JSON.stringify(state));
     assert.match(state?.title || "", /sample-m1\.pdf/);
+  });
+
+  await t.test("已打开文档时失败，原文和面板都保持", async () => {
+    await evaluate(`(() => {
+      window.__oiOpenErrors = [];
+      window.addEventListener("error", (event) => {
+        window.__oiOpenErrors.push(String(event?.message || event?.error || "error"));
+      });
+      document.getElementById("libraryButton").click();
+      return document.querySelector(".oi-library")?.hidden === false;
+    })()`);
+    const reopened = Date.now();
+    let panelOpen = false;
+    while (Date.now() - reopened < 5000) {
+      panelOpen = await evaluate(`document.querySelector(".oi-library")?.hidden === false`);
+      if (panelOpen) break;
+      await sleep(50);
+    }
+    assert.equal(panelOpen, true);
+    await evaluate(`(() => {
+      const input = document.getElementById("file");
+      const data = new DataTransfer();
+      data.items.add(new File([new Uint8Array([1, 2, 3, 4])], "not-a.pdf", { type: "application/pdf" }));
+      input.files = data.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      return input.files.length;
+    })()`);
+    const started = Date.now();
+    let failed = null;
+    while (Date.now() - started < 15000) {
+      failed = JSON.parse(await evaluate(`(() => {
+        const slot = document.getElementById("sideSlot");
+        const button = document.getElementById("libraryButton");
+        const canvas = document.querySelector("#pages canvas");
+        return JSON.stringify({
+          status: document.getElementById("status")?.textContent || "",
+          open: document.querySelector(".oi-library")?.hidden === false,
+          slot: slot?.hidden === false,
+          pressed: button?.getAttribute("aria-pressed") || "",
+          libraryOpen: document.querySelector(".workspace")?.dataset.libraryOpen || "",
+          title: document.title || "",
+          doc: document.getElementById("docTitle")?.textContent || "",
+          canvas: canvas?.width || 0,
+          flow: (document.querySelector(".reader-flow")?.textContent || "").trim().length,
+          errors: window.__oiOpenErrors || []
+        });
+      })()`));
+      if (String(failed.status).includes("无法打开这个 PDF")) break;
+      await sleep(100);
+    }
+    assert.match(failed?.status || "", /无法打开这个 PDF/, JSON.stringify(failed));
+    assert.equal(failed.open, true, JSON.stringify(failed));
+    assert.equal(failed.slot, true, JSON.stringify(failed));
+    assert.equal(failed.pressed, "true", JSON.stringify(failed));
+    assert.equal(failed.libraryOpen, "true", JSON.stringify(failed));
+    assert.match(failed.title, /sample-m1\.pdf/, JSON.stringify(failed));
+    assert.match(failed.doc, /sample-m1\.pdf/, JSON.stringify(failed));
+    assert.ok(failed.canvas > 0, JSON.stringify(failed));
+    assert.equal(failed.errors.some((item) => String(item).includes("displayCropColumnFraction")), false, JSON.stringify(failed));
   });
 });

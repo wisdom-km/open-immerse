@@ -195,11 +195,6 @@ test("NTP-12/18/19 aria, keyboard, pins, and menu copy", () => {
   assert.equal(aria.valuetext, "笔记栏 360 像素");
   assert.equal(aria.bubble, "笔记栏 360px");
   assert.equal(aria.label, "调整笔记栏宽度");
-  const library = notesSplitAria({ notesWidth: 360, workspaceWidth: 1440, panel: "library" });
-  assert.equal(library.valuetext, "文献库 360 像素");
-  assert.equal(library.bubble, "文献库 360px");
-  assert.equal(library.label, "调整文献库宽度");
-  assert.equal(notesSplitAria({ notesWidth: 360, workspaceWidth: 1440, panel: "ask" }).label, "调整笔记栏宽度");
   const narrow = notesSplitAria({ notesWidth: 360, workspaceWidth: 1314 });
   assert.equal(narrow.valuemax, 360);
   const source = threeSourceAria({ workspaceWidth: 1440, notesWidth: 360, splitRatio: 0.5 });

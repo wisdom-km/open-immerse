@@ -195,7 +195,7 @@ import { recordedPersistDenied } from "../lib/notes-store.js";
 import { firstLineQuote } from "../lib/notes-view-model.js";
 import { mountNotesUi, textRangeOffsets } from "./notes-panel.js";
 import { mountAskUi } from "./ask-panel.js";
-import { mountLibraryUi } from "./library-panel.js";
+import { librarySplitAria, mountLibraryUi } from "./library-panel.js";
 import { bindLibraryWriteMarks, noteLibraryLoaded, resetLibraryWriteStops } from "../lib/library-writes.js";
 import { performAsk } from "../lib/ask-transport.js";
 import { currentNet } from "../lib/net/fetch.js";
@@ -6344,11 +6344,14 @@ function paintThreeColumns(workspace, { notesWidth, splitRatio } = {}) {
     const bubble = handle.querySelector(".split-bubble");
     if (bubble) bubble.textContent = sourceAria.bubble;
   }
-  applyNotesSplitAria(notesSplitHandle(workspace), notesSplitAria({
+  const notesAria = notesSplitAria({
     notesWidth: columns.notes,
-    workspaceWidth: width,
-    panel: workspace.dataset.libraryOpen === "true" ? "library" : ""
-  }));
+    workspaceWidth: width
+  });
+  applyNotesSplitAria(
+    notesSplitHandle(workspace),
+    workspace.dataset.libraryOpen === "true" ? librarySplitAria(notesAria) : notesAria
+  );
   return columns;
 }
 
@@ -11700,11 +11703,25 @@ function restoreOriginal() {
 }
 
 async function openFile(file) {
+  let bytes;
+  let opened;
+  try {
+    bytes = new Uint8Array(await file.arrayBuffer());
+    opened = await getDocument({ data: bytes.slice(), verbosity: 0 }).promise;
+  } catch {
+    setStatus(PDF_COPY.error, true);
+    return false;
+  }
   sourceUrl = file.name || "";
   try {
-    await openPdfData(new Uint8Array(await file.arrayBuffer()), file.name);
+    await openPdfData(bytes, file.name, opened);
     return true;
   } catch {
+    try {
+      await opened?.destroy?.();
+    } catch {
+      /* the rejected document may already be gone */
+    }
     setStatus(PDF_COPY.error, true);
     setHasDoc(false);
     return false;
@@ -11724,12 +11741,12 @@ async function openFromSrc(src) {
   }
 }
 
-async function openPdfData(data, title) {
+async function openPdfData(data, title, opened) {
   rememberLibraryIdentity(title);
   setStatus(PDF_COPY.loading);
   pdfBytes = data instanceof Uint8Array ? data.slice() : new Uint8Array(data || []);
-  const loading = getDocument({ data, verbosity: 0 });
-  await adoptDoc(await loading.promise, title);
+  const doc = opened || await getDocument({ data: pdfBytes.slice(), verbosity: 0 }).promise;
+  await adoptDoc(doc, title);
 }
 
 async function adoptDoc(doc, title) {

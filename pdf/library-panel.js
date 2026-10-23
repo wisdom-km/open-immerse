@@ -26,6 +26,17 @@ import {
   sortLibraryRows
 } from "../lib/library-copy.js";
 
+export function librarySplitAria(model) {
+  const now = Number(model?.valuenow);
+  const width = Number.isFinite(now) ? now : 0;
+  return {
+    ...(model || {}),
+    valuetext: `文献库 ${width} 像素`,
+    bubble: `文献库 ${width}px`,
+    label: "调整文献库宽度"
+  };
+}
+
 function h(doc, tag, attrs, children) {
   const el = doc.createElement(tag);
   for (const [key, value] of Object.entries(attrs || {})) {
@@ -178,8 +189,34 @@ export function mountLibraryUi(api = {}) {
     return focusTarget(`${rowSelector(hash)} .oi-lib-open`);
   }
 
-  function focusAfterClose(preferred) {
+  function shown(node) {
+    if (!node || node.nodeType !== 1 || node.hidden) return false;
+    try {
+      if (node.closest?.("[hidden]")) return false;
+      const view = doc.defaultView;
+      if (typeof view?.getComputedStyle !== "function") return true;
+      let current = node;
+      while (current && current.nodeType === 1) {
+        const style = view.getComputedStyle(current);
+        if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+        current = current.parentElement;
+      }
+    } catch {
+      return true;
+    }
+    return true;
+  }
+
+  function libraryReturnTarget() {
     const button = doc.getElementById("libraryButton");
+    if (shown(button)) return button;
+    const more = doc.getElementById("moreButton");
+    if (shown(more)) return more;
+    return button;
+  }
+
+  function focusAfterClose(preferred) {
+    const button = libraryReturnTarget();
     const node = preferred && preferred.nodeType === 1 ? preferred : null;
     let hidden = false;
     try {
@@ -187,7 +224,8 @@ export function mountLibraryUi(api = {}) {
     } catch {
       hidden = false;
     }
-    const usable = node && node !== doc.body && node !== doc.documentElement && !hidden;
+    const inside = node && typeof root.contains === "function" && root.contains(node);
+    const usable = node && !inside && node !== doc.body && node !== doc.documentElement && !hidden && shown(node);
     const back = usable ? node : button;
     try {
       back?.focus?.();
@@ -587,6 +625,11 @@ export function mountLibraryUi(api = {}) {
         list.querySelector("button")?.addEventListener("click", () => {
           query = "";
           render();
+          try {
+            shell?.input?.focus();
+          } catch {
+            /* the host may not focus */
+          }
         });
       }
       shown.forEach((row, index) => {
@@ -815,6 +858,11 @@ export function mountLibraryUi(api = {}) {
 
   function close(focusButton = true, meta = {}) {
     if (!open && !root.classList.contains("is-open")) return;
+    const restore = focusButton && meta.handoff !== true && meta.focus !== false;
+    if (restore) {
+      const candidate = meta.trigger || trigger;
+      focusAfterClose(candidate && candidate.isConnected !== false ? candidate : null);
+    }
     open = false;
     confirmHash = "";
     deleteFailed = false;
@@ -822,9 +870,10 @@ export function mountLibraryUi(api = {}) {
     stopPoll();
     delete root.dataset.blocked;
     syncChrome(false, meta);
-    if (focusButton && meta.handoff !== true && meta.focus !== false) {
-      const preferred = meta.trigger || trigger;
-      focusAfterClose(preferred && preferred.isConnected !== false ? preferred : null);
+    if (restore) {
+      const active = doc.activeElement;
+      const lost = !active || active === doc.body || active === doc.documentElement || (typeof root.contains === "function" && root.contains(active));
+      if (lost) focusAfterClose(null);
     }
   }
 

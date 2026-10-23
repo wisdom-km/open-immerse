@@ -36,7 +36,7 @@ import { reuseSettledLibraryFailures } from "../lib/pdf-viewer.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
 import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
 import { mountDataPanel } from "../options/data-panel.js";
-import { mountLibraryUi } from "../pdf/library-panel.js";
+import { librarySplitAria, mountLibraryUi } from "../pdf/library-panel.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -784,6 +784,10 @@ test("搜索防抖、深链排序只吃一次、正在阅读不能删、窄屏�
   ui.root.querySelector(".oi-lib-miss button").click();
   await flush();
   assert.equal(names().length, 8);
+  assert.equal(document.activeElement, input);
+  ui.root.querySelector(".oi-lib-back").focus();
+  ui.root.querySelector(".oi-lib-back").click();
+  assert.equal(document.activeElement?.id, "libraryButton");
 });
 
 test("设置页「按篇查看」指向按大小排序的文献库", async () => {
@@ -1237,7 +1241,14 @@ test("无 src 时仍更新翻译按钮，l 和菜单关闭后回到书架按钮"
   assert.match(viewer, /function showToast\(text, duration\)/);
   assert.match(viewer, /Number\(duration\) > 0 \? Number\(duration\) : 1600/);
   assert.match(viewer, /toast: \(text, duration\) => showToast\(text, duration\)/);
-  assert.match(viewer, /panel: workspace\.dataset\.libraryOpen === "true" \? "library" : ""/);
+  assert.match(viewer, /dataset\.libraryOpen === "true" \? librarySplitAria\(notesAria\) : notesAria/);
+  const notes = { valuenow: 360, valuemin: 320, valuemax: 480, valuetext: "笔记栏 360 像素", bubble: "笔记栏 360px", label: "调整笔记栏宽度" };
+  const library = librarySplitAria(notes);
+  assert.equal(library.valuetext, "文献库 360 像素");
+  assert.equal(library.bubble, "文献库 360px");
+  assert.equal(library.label, "调整文献库宽度");
+  assert.equal(library.valuenow, 360);
+  assert.equal(notes.label, "调整笔记栏宽度");
 });
 
 test("clearFormulaDoc 会走到已注册的清理函数", async () => {
