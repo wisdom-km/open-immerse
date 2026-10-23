@@ -196,6 +196,17 @@ import { firstLineQuote } from "../lib/notes-view-model.js";
 import { mountNotesUi, textRangeOffsets } from "./notes-panel.js";
 import { mountAskUi } from "./ask-panel.js";
 import { librarySplitAria, mountLibraryUi } from "./library-panel.js";
+import { mountDrawerUi } from "./drawer-panel.js";
+import {
+  applyHeadingMatch,
+  currentTocIndex,
+  drawerShouldDock,
+  flattenOutline,
+  headingsToToc,
+  numberBesideTitle,
+  partialHint
+} from "../lib/drawer-toc.js";
+import { drawerInfoModel, recentPapers } from "../lib/drawer-info.js";
 import { bindLibraryWriteMarks, noteLibraryLoaded, resetLibraryWriteStops } from "../lib/library-writes.js";
 import { performAsk } from "../lib/ask-transport.js";
 import { currentNet } from "../lib/net/fetch.js";
@@ -362,7 +373,7 @@ import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-
 import { createLibraryChip } from "../lib/library-chip.js";
 import { bindImportChip } from "../options/data-panel.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, persistCardHiddenThisSession, readPersistCardState } from "../lib/persist-card.js";
-import { cleanTitle, httpSourceUrl } from "../lib/library-record.js";
+import { cleanTitle, countTranslated, httpSourceUrl } from "../lib/library-record.js";
 import { diagLog, noteViewerNetwork } from "../lib/diag-log.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
@@ -432,6 +443,10 @@ let libraryProbe = null;
 let notesDocHash = "";
 let notesUi = null;
 let libraryUi = null;
+let drawerUi = null;
+let drawerOutlineGen = 0;
+let drawerToc = { source: "", entries: [], partial: "", loading: false };
+let drawerTrackFrame = 0;
 let libraryAdoptHold = null;
 let libraryAdoptWouldSkip = false;
 let libraryOpenNotedAt = 0;
@@ -700,6 +715,7 @@ function init() {
   installNotesUi();
   installAskUi();
   installLibraryUi();
+  installDrawerUi();
   installLibraryChrome();
   bindLibraryWriteMarks({
     sourceSent: librarySourceSent,
@@ -806,7 +822,15 @@ function onKey(event) {
     event.preventDefault();
     return;
   }
+  if (event.key === "Escape" && drawerUi?.isModal?.() && drawerUi.consumeEscape()) {
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape" && libraryUi?.consumeEscape()) {
+    event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && drawerUi?.consumeEscape()) {
     event.preventDefault();
     return;
   }
@@ -833,6 +857,7 @@ function onKey(event) {
   }
   if (event.key === "F6" && !event.metaKey && !event.ctrlKey && !event.altKey) {
     event.preventDefault();
+    if (drawerUi?.isModal?.()) return;
     closeMoreMenu(false);
     closeTranslateMenu(false);
     closeSourceModeMenu(false);
@@ -871,6 +896,11 @@ function onKey(event) {
     if (readerPrefs.singleKey !== false && event.shiftKey && !focusInOpenMenu() && !focusInAaPanel() && (event.key === "N" || event.key === "n")) {
       event.preventDefault();
       void notesQuestionShortcut();
+      return;
+    }
+    if (readerPrefs.singleKey !== false && event.shiftKey && !focusInOpenMenu() && !focusInAaPanel() && (event.key === "T" || event.key === "t")) {
+      event.preventDefault();
+      drawerUi?.toggle({ trigger: $("tocButton") });
       return;
     }
     if (event.shiftKey && !focusInOpenMenu() && !focusInAaPanel() && (event.key === "M" || event.key === "m")) {
@@ -2606,6 +2636,7 @@ function onLibraryOpenChange(open, meta) {
   const workspace = document.querySelector(".workspace");
   if (!workspace) return;
   if (open) {
+    if (readerWidth() < 900) drawerUi?.close?.(false, { focus: false });
     workspace.dataset.libraryOpen = "true";
     const slot = document.getElementById("sideSlot");
     if (slot) {
@@ -2653,9 +2684,357 @@ function installLibraryUi() {
   });
   void import("../lib/library-session.js").then(({ sharedLibraryStore: openStore }) => {
     openStore().subscribe((event) => {
-      if (event?.collection === "papers") libraryUi?.refresh?.();
+      if (event?.collection === "papers") {
+        libraryUi?.refresh?.();
+        drawerUi?.refresh?.();
+      }
     });
   }).catch(() => {});
+}
+
+function installDrawerUi() {
+  drawerUi = mountDrawerUi({
+    width: () => readerWidth(),
+    mode: () => drawerMode(),
+    info: () => drawerInfoSnapshot(),
+    recent: () => drawerRecentList(),
+    openPaper: (hash, options) => libraryUi?.openPaper?.(hash, options) || Promise.resolve({ status: "missing", hash }),
+    showRepick: (spec) => {
+      if (readerWidth() < 900) drawerUi?.close?.(false, { focus: false });
+      libraryUi?.showRepick?.(spec);
+    },
+    openLibrary: () => {
+      if (readerWidth() < 900) drawerUi?.close?.(false, { focus: false });
+      libraryUi?.open?.({ trigger: $("tocButton") });
+    },
+    onJump: (entry) => jumpDrawerEntry(entry),
+    onOpenChange: () => {
+      syncDrawerDock();
+      scheduleDrawerTrack();
+    }
+  });
+  translateScrollRoot()?.addEventListener("scroll", scheduleDrawerTrack, { passive: true });
+  pdfScrollRoot()?.addEventListener("scroll", scheduleDrawerTrack, { passive: true });
+  window.addEventListener("resize", () => syncDrawerDock());
+}
+
+function drawerMode() {
+  if (readerWidth() < 900) return "sheet";
+  const workspace = document.querySelector(".workspace");
+  return drawerShouldDock({
+    windowWidth: readerWidth(),
+    sourceWidth: drawerSourceWidth(),
+    sideSlot: drawerSideSlotExtra(),
+    docked: workspace?.hasAttribute("data-drawer-docked") === true
+  }) ? "dock" : "float";
+}
+
+function syncDrawerDock() {
+  const workspace = document.querySelector(".workspace");
+  if (!workspace || !drawerUi) return;
+  if (!drawerUi.isOpen()) {
+    workspace.removeAttribute("data-drawer-docked");
+    workspace.style.removeProperty("--oi-drawer-source");
+    return;
+  }
+  const sourceWidth = drawerSourceWidth();
+  const docked = drawerShouldDock({
+    windowWidth: readerWidth(),
+    sourceWidth,
+    sideSlot: drawerSideSlotExtra(),
+    docked: workspace.hasAttribute("data-drawer-docked")
+  });
+  if (docked) {
+    if (sourceWidth > 1 && workspace.dataset.sourceMode !== "hidden" && workspace.dataset.sourceMode !== "mini") {
+      workspace.style.setProperty("--oi-drawer-source", `${Math.round(sourceWidth)}px`);
+    } else workspace.style.removeProperty("--oi-drawer-source");
+    workspace.setAttribute("data-drawer-docked", "true");
+    drawerUi.setMode("dock");
+  } else {
+    workspace.removeAttribute("data-drawer-docked");
+    workspace.style.removeProperty("--oi-drawer-source");
+    drawerUi.setMode(readerWidth() < 900 ? "sheet" : "float");
+  }
+}
+
+function drawerSourceWidth() {
+  const workspace = document.querySelector(".workspace");
+  const mode = workspace?.dataset.sourceMode || "side";
+  if (mode === "hidden" || readerWidth() < 900) return 0;
+  const pane = $("pdfPane");
+  if (!pane) return mode === "mini" ? 360 : 320;
+  try {
+    const view = getComputedStyle(pane);
+    if (view.position === "absolute" || view.position === "fixed" || view.display === "none" || view.visibility === "hidden") return 0;
+  } catch {
+    /* measurement still uses the box */
+  }
+  const width = pane.getBoundingClientRect?.().width || 0;
+  if (width > 1) return width;
+  if (mode === "mini") {
+    const mini = Number.parseFloat(workspace?.style.getPropertyValue("--oi-mini-width") || "");
+    return mini > 0 ? mini : 360;
+  }
+  return 320;
+}
+
+function drawerSideSlotExtra() {
+  if (!sideSlotOpen()) return 0;
+  const slot = document.getElementById("sideSlot");
+  const width = slot?.getBoundingClientRect?.().width || 0;
+  return width > 1 ? width : 0;
+}
+
+function drawerHeadingRecords() {
+  const rows = [];
+  const total = Number(pdfDoc?.numPages) || 0;
+  for (let n = 1; n <= total; n += 1) {
+    const layout = getPageLayout(n);
+    for (const block of layout?.blocks || []) {
+      if (block?.label !== "heading" && block?.type !== "heading") continue;
+      const text = String(block.text || block.sourceText || "").trim();
+      if (!text) continue;
+      rows.push({ page: n, text, translation: String(block.translation || "").trim() });
+    }
+  }
+  return rows;
+}
+
+async function loadDrawerOutline(doc) {
+  const gen = ++drawerOutlineGen;
+  drawerToc = { source: "", entries: [], partial: "", loading: true };
+  drawerUi?.setToc?.(drawerToc);
+  let outline = null;
+  try {
+    outline = await doc.getOutline();
+  } catch {
+    outline = null;
+  }
+  if (gen !== drawerOutlineGen || pdfDoc !== doc) return;
+  if (outline?.length) {
+    const flat = flattenOutline(outline);
+    const textCache = new Map();
+    for (const entry of flat) {
+      if (gen !== drawerOutlineGen || pdfDoc !== doc) return;
+      try {
+        const dest = typeof entry.dest === "string" ? await doc.getDestination(entry.dest) : entry.dest;
+        if (Array.isArray(dest) && dest[0]) entry.page = (await doc.getPageIndex(dest[0])) + 1;
+      } catch {
+        /* a destination may not resolve to a page */
+      }
+      if (gen !== drawerOutlineGen || pdfDoc !== doc) return;
+      if (entry.page && !textCache.has(entry.page)) {
+        try {
+          const page = await doc.getPage(entry.page);
+          const text = await page.getTextContent();
+          textCache.set(entry.page, text?.items || []);
+        } catch {
+          textCache.set(entry.page, []);
+        }
+      }
+      if (gen !== drawerOutlineGen || pdfDoc !== doc) return;
+      const num = numberBesideTitle(textCache.get(entry.page) || [], entry.title);
+      if (num) entry.num = num;
+    }
+    if (gen !== drawerOutlineGen || pdfDoc !== doc) return;
+    const entries = applyHeadingMatch(flat, drawerHeadingRecords()).map(({ dest, ...rest }) => rest);
+    drawerToc = { source: "outline", entries, partial: "", loading: false };
+  } else {
+    const total = Number(doc?.numPages) || 0;
+    const layouts = [];
+    for (let n = 1; n <= total; n += 1) {
+      const layout = getPageLayout(n);
+      if (layout?.blocks?.length) layouts.push({ page: n, blocks: layout.blocks });
+    }
+    drawerToc = {
+      source: "headings",
+      entries: headingsToToc(layouts),
+      partial: partialHint(layouts.length, total),
+      loading: false
+    };
+  }
+  drawerUi?.setToc?.(drawerToc);
+  scheduleDrawerTrack();
+}
+
+function refreshDrawerHeadings() {
+  if (!pdfDoc || drawerToc.loading) return;
+  if (drawerToc.source === "outline") {
+    drawerToc = {
+      ...drawerToc,
+      entries: applyHeadingMatch(drawerToc.entries, drawerHeadingRecords()).map(({ dest, ...rest }) => rest)
+    };
+    drawerUi?.setToc?.(drawerToc);
+    return;
+  }
+  const total = Number(pdfDoc.numPages) || 0;
+  const layouts = [];
+  for (let n = 1; n <= total; n += 1) {
+    const layout = getPageLayout(n);
+    if (layout?.blocks?.length) layouts.push({ page: n, blocks: layout.blocks });
+  }
+  if (!layouts.length && drawerToc.source !== "headings") return;
+  drawerToc = {
+    source: "headings",
+    entries: headingsToToc(layouts),
+    partial: partialHint(layouts.length, total),
+    loading: false
+  };
+  drawerUi?.setToc?.(drawerToc);
+}
+
+function jumpDrawerEntry(entry) {
+  const page = Number(entry?.page) || 0;
+  const flow = readerFlowEl();
+  const want = String(entry?.original || entry?.title || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+  let match = null;
+  if (flow && want) {
+    for (const node of flow.querySelectorAll("[data-label='heading'], h1, h2, h3, h4")) {
+      const nodePage = Number(node.dataset?.page || node.closest?.("[data-page]")?.dataset?.page) || 0;
+      if (page && nodePage && nodePage !== page) continue;
+      const text = String(node.textContent || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+      if (text.includes(want)) {
+        match = node;
+        break;
+      }
+    }
+  }
+  if (match?.dataset?.pairId) jumpTranslationToSource(match);
+  else if (match) {
+    try { match.scrollIntoView({ block: "start" }); } catch { /* the host may not scroll */ }
+    if (page >= 1) revealSourcePage(page);
+  } else if (page >= 1) {
+    revealSourcePage(page);
+    const slot = flow?.querySelector(`:scope > .rf-page[data-page="${page}"]`);
+    try { slot?.scrollIntoView?.({ block: "start" }); } catch { /* the host may not scroll */ }
+  }
+  const pane = document.querySelector(".pane-translate");
+  if (pane && page >= 1) pane.dataset.drawerPage = String(page);
+  if (drawerUi?.isModal?.()) drawerUi.close(true, { focus: false });
+}
+
+function sourceReadingPage() {
+  const pane = pdfScrollRoot();
+  if (!pane) return 1;
+  const line = pane.getBoundingClientRect().top + Math.max(pane.clientHeight, 1) / 3;
+  let page = 1;
+  for (const node of pane.querySelectorAll(".pdf-page")) {
+    if (node.getBoundingClientRect().top <= line + 1) page = Number(node.dataset.page) || page;
+  }
+  return page;
+}
+
+function drawerReadingPage() {
+  const source = sourceReadingPage();
+  const flow = readerFlowEl();
+  const scroller = translateScrollRoot();
+  let reading = 0;
+  let drawn = 0;
+  if (flow && scroller && scroller.scrollHeight > scroller.clientHeight + 8) {
+    const line = scroller.getBoundingClientRect().top + scroller.clientHeight / 3;
+    for (const slot of flow.querySelectorAll(":scope > .rf-page, [data-label='heading']")) {
+      if (slot.dataset?.fallback === "1" || slot.closest?.("[data-fallback='1']")) continue;
+      const rect = slot.getBoundingClientRect();
+      if (rect.height < 1) continue;
+      const page = Number(slot.dataset.page || slot.dataset.srcPage) || 0;
+      if (page > drawn) drawn = page;
+      if (page && rect.top <= line + 0.5) reading = page;
+    }
+  }
+  // Translation wins once it has drawn the page under the reading line.
+  // Until then, scrolling the source column still moves the current section.
+  if (reading && source <= drawn) return reading;
+  return source;
+}
+
+function scheduleDrawerTrack() {
+  if (drawerTrackFrame) return;
+  let fired = false;
+  const run = () => {
+    if (fired) return;
+    fired = true;
+    drawerTrackFrame = 0;
+    if (!drawerUi?.isOpen?.()) return;
+    drawerUi.setCurrent?.(currentTocIndex(drawerToc.entries || [], drawerReadingPage()));
+  };
+  const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : null;
+  if (raf) raf(run);
+  const timer = setTimeout(run, 48);
+  drawerTrackFrame = timer;
+}
+
+async function drawerStore() {
+  const { sharedLibraryStore } = await import("../lib/library-session.js");
+  return sharedLibraryStore();
+}
+
+async function drawerCurrentHash() {
+  try {
+    const hash = libraryDoc?.hash || notesDocHash || await pdfByteHash();
+    return hash && hash !== "nohash" ? String(hash) : "";
+  } catch {
+    return "";
+  }
+}
+
+async function drawerInfoSnapshot() {
+  const total = Number(pdfDoc?.numPages) || 0;
+  const states = [];
+  for (let n = 1; n <= total; n += 1) {
+    const row = pageStates.get(n);
+    if (row) states.push({ page: n, state: row.state });
+  }
+  const layouts = [];
+  for (let n = 1; n <= total; n += 1) {
+    const layout = getPageLayout(n);
+    if (layout) layouts.push(layout);
+  }
+  let persisted = false;
+  let bytes = 0;
+  let storedPages = 0;
+  let hasSource = false;
+  try {
+    const store = await drawerStore();
+    const hash = await drawerCurrentHash();
+    if (hash) {
+      const usage = await store.usage();
+      persisted = usage?.persisted === true;
+      bytes = usage?.byDoc?.get?.(hash) || 0;
+      const pages = typeof store.getPages === "function" ? await store.getPages(hash) : [];
+      storedPages = Array.isArray(pages) ? pages.length : 0;
+      const source = typeof store.getSource === "function" ? await store.getSource(hash) : null;
+      hasSource = Boolean(source && (source.size == null || Number(source.size) > 0));
+    }
+  } catch (error) {
+    if (isStorageBlocked(error)) throw error;
+  }
+  return drawerInfoModel({
+    pageCount: total,
+    pageStates: states,
+    layouts,
+    storedPages,
+    bytes,
+    persisted,
+    hasSource
+  });
+}
+
+async function drawerRecentList() {
+  const store = await drawerStore();
+  const papers = await store.listPapers();
+  const current = await drawerCurrentHash();
+  const picked = recentPapers(papers, current, 15);
+  const rows = [];
+  for (const paper of picked) {
+    let translated = Number(paper.pagesTranslated) || 0;
+    try {
+      translated = countTranslated(await store.getPages(paper.docHash));
+    } catch {
+      /* the paper row still has a count */
+    }
+    rows.push({ ...paper, translated });
+  }
+  return rows;
 }
 
 function installAskUi() {
@@ -3100,6 +3479,7 @@ function setPageLayout(page, layout, { reanchor = true } = {}) {
     noteFormulaCropPlan(layout);
   }
   layoutCache.set(layoutKey(page), layout);
+  refreshDrawerHeadings();
   if (viewerUnderTest() && layout?.blocks) {
     const bucket = globalThis.__oiLayouts || (globalThis.__oiLayouts = {});
     bucket[page] = translatableBlocks(layout.blocks).map((block) => ({
@@ -6096,7 +6476,7 @@ function bindViewChrome() {
   });
   bindSourceModeChrome();
   $("tocButton")?.addEventListener("click", () => {
-    showSoonToast();
+    drawerUi?.toggle({ trigger: $("tocButton") });
   });
   $("libraryButton")?.addEventListener("click", () => {
     libraryUi?.toggle({ trigger: $("libraryButton") });
@@ -6686,6 +7066,7 @@ function applySourceLayout(anchor) {
     });
   }
   if (!notesChromeLock && sideChromeOn(workspace) && notesPaintedKind) scheduleNotesChrome();
+  syncDrawerDock();
 }
 
 function syncSourceModeControls() {
@@ -7642,7 +8023,8 @@ function cycleF6(backward) {
     side: workspace?.dataset.sourceSide === "end" ? "end" : "start",
     sideSlotOpen: layout ? false : sideSlotOpen(),
     notesLayout: layout,
-    notesSide: workspace?.dataset.notesSide === "start" ? "start" : "end"
+    notesSide: workspace?.dataset.notesSide === "start" ? "start" : "end",
+    drawerOpen: Boolean(drawerUi?.isDocked?.())
   });
   const current = f6CurrentRegion(ids);
   const step = backward ? -1 : 1;
@@ -7658,7 +8040,8 @@ function f6CurrentRegion(ids) {
     translation: document.querySelector(".pane-translate"),
     popup: $("sourcePop"),
     sideSlot: document.querySelector("[data-side-slot]"),
-    notes: document.querySelector(".oi-notes") || document.querySelector("[data-side-slot]")
+    notes: document.querySelector(".oi-notes") || document.querySelector("[data-side-slot]"),
+    drawer: document.querySelector(".oi-drawer")
   };
   for (let i = 0; i < ids.length; i += 1) {
     const host = map[ids[i]];
@@ -7674,7 +8057,8 @@ function focusF6Region(id) {
     translation: () => $("readerFlow"),
     popup: () => $("sourcePopClose") || $("sourcePop"),
     sideSlot: () => document.querySelector("[data-side-slot]"),
-    notes: () => document.querySelector(".oi-notes [data-notes-segment]") || document.querySelector(".oi-notes") || document.querySelector("[data-side-slot]")
+    notes: () => document.querySelector(".oi-notes [data-notes-segment]") || document.querySelector(".oi-notes") || document.querySelector("[data-side-slot]"),
+    drawer: () => document.querySelector(".oi-drawer [role='tab'][aria-selected='true']") || document.querySelector(".oi-drawer")
   }[id]?.();
   if (!target) return;
   if (target.tabIndex < 0 && target.id !== "sourcePopClose") target.tabIndex = -1;
@@ -11770,6 +12154,7 @@ async function adoptDoc(doc, title) {
   abortTranslateSession(session);
   abortBackgroundFills();
   pdfDoc = doc;
+  void loadDrawerOutline(doc);
   pageNum = 1;
   sourceZoomTouched = false;
   const first = await doc.getPage(1);

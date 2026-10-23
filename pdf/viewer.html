@@ -12,12 +12,13 @@
   <link rel="stylesheet" href="notes-panel.css" />
   <link rel="stylesheet" href="ask-panel.css" />
   <link rel="stylesheet" href="library-panel.css" />
+  <link rel="stylesheet" href="drawer-panel.css" />
 </head>
 <body class="oi-reader-app" data-reader-theme="warm">
   <header class="toolbar" data-tb-zones data-band="wide" data-has-doc="0">
     <div class="tb-zone tb-zone-left" data-zone="left">
       <div class="tb-group" data-grp="identity">
-        <button type="button" id="tocButton" class="btn-ghost tb-icon" data-tb="icon" aria-label="目录" title="目录 · Shift+T">
+        <button type="button" id="tocButton" class="btn-ghost tb-icon" data-tb="icon" aria-label="目录" title="目录 · Shift+T" aria-pressed="false" aria-controls="drawerSlot">
           <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
             <path d="M2.5 4h11M2.5 8h11M2.5 12h11" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"></path>
           </svg>
@@ -218,6 +219,8 @@
         <div id="readerFade" class="rf-fade" aria-hidden="true" hidden></div>
       </div>
     </aside>
+    <div id="drawerBackdrop" class="oi-drawer-scrim" hidden></div>
+    <div id="drawerSlot" data-drawer hidden></div>
     <div id="sideSlot" data-side-slot hidden aria-hidden="true"></div>
     <div class="split-handle" data-split="notes" role="separator" aria-orientation="vertical" aria-controls="sideSlot" aria-valuemin="320" aria-valuemax="480" aria-valuenow="360" aria-valuetext="笔记栏 360 像素" tabindex="-1" aria-hidden="true" aria-label="调整笔记栏宽度" hidden><span class="split-bubble" aria-hidden="true">笔记栏 360px</span></div>
   </div>
