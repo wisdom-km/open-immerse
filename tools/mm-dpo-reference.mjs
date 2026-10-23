@@ -106,6 +106,8 @@ export const USAGE = [
   "  火山方舟 Base URL 走产品「自定义兼容端点」：base + /chat/completions，不再加 /v1。",
   "  DeepSeek 走同一套方舟地址。未设置 MM_DPO_DEEPSEEK_API_KEY 时复用 MM_DPO_KIMI_API_KEY。",
   "  --rescore 只重算已有报告的逐字 / 去空白 / 规范形，不发请求，也不打开 PDF。",
+  "  2026-10-23 那次报告的 id 是字体加载前的 37 块，第 3 页块号已经变了，不能 --ids 重放。",
+  "  那次报告 coverage.detected 为 37，--rescore 仍用当时记下的参考内容。",
   "  page 默认关，必须 --arm=page。不发送整页 PDF，也不进产品默认。",
   "  hi-res 走产品 visionCropFor / renderVisionCrop（mm-3）。没有页面时不发送。",
   "  paragraph 只在本脚本里：段落区域按同一高清倍率出图，并附段落文字。",
@@ -362,9 +364,12 @@ export async function openPdfSession(pdfPath) {
       const pdfPage = await doc.getPage(number);
       pages.set(number, pdfPage);
       const content = await pdfPage.getTextContent();
-      attachFontRealNames(content.items, pdfPage.commonObjs);
       const viewport = pdfPage.getViewport({ scale: 1 });
+      // Operator list loads font objects into commonObjs. Reading names first
+      // leaves every math font unresolved, so CMMI/CMSY spans stay in the sentence.
+      // pdf/viewer.js loads the operator list, then attachFontRealNames.
       const ops = await pdfPage.getOperatorList();
+      attachFontRealNames(content.items, pdfPage.commonObjs);
       const built = textLayerToBlocks({
         items: content.items,
         viewport,

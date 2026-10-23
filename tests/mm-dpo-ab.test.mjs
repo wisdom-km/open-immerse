@@ -1246,17 +1246,38 @@ test("coverage stays incomplete off the 79-formula pages", async () => {
 });
 
 const SAMPLED_REFERENCE_IDS = [
-  "p3-b7", "p3-b8", "p3-b9", "p3-b11", "p3-b12",
+  "p3-b7", "p3-b8", "p3-b9", "p3-b12", "p3-b16", "p3-b22",
   "p4-b2", "p4-b3", "p4-b7", "p4-b9", "p4-b11", "p4-b16",
-  "p5-b3", "p5-b4", "p5-b6", "p5-b7"
+  "p5-b3", "p5-b4", "p5-b6"
 ];
+
+test("DPO pages 3–5 detect 42 formula blocks after fonts load, in product order", async () => {
+  const formulas = await loadPdfFormulas(join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf"));
+  assert.equal(formulas.length, 42);
+  const page3 = formulas.filter((item) => item.page === 3);
+  assert.equal(page3.filter((item) => item.display === false).length, 10);
+  assert.equal(page3.filter((item) => item.display !== false).length, 3);
+  assert.equal(formulas.filter((item) => item.page === 4).length, 11);
+  assert.equal(formulas.filter((item) => item.page === 5).length, 18);
+  let lastPage = 0;
+  for (const item of formulas) {
+    assert.ok(item.page >= lastPage);
+    lastPage = item.page;
+  }
+  assert.equal(formulas[0].id, "p3-b7");
+  assert.equal(formulas.at(-1).page, 5);
+});
 
 test("the committed DPO reference covers the 15 sampled ids, and unaligned rows stay out of accuracy", async () => {
   const table = JSON.parse(readFileSync(join(root, "tests/fixtures/mm-dpo-reference.json"), "utf8"));
   assert.equal(table.arxiv, "2305.18290");
   assert.equal(table.version, "v3");
   assert.equal(table.pdfSha256, "92cb3a2b71362acda98a789b03d88688fd33cf5fcf13f81d2b1de30ee7d3b67a");
-  assert.equal(table.detected, 37);
+  assert.equal(table.detected, 42);
+  assert.deepEqual(selectSample(table.formulas, 15).map((row) => row.id), SAMPLED_REFERENCE_IDS);
+  assert.equal(table.legacy.detected, 37);
+  assert.equal(table.legacy.formulas.length, 37);
+  assert.match(table.legacy.note, /不能重放/);
   for (const id of SAMPLED_REFERENCE_IDS) {
     const row = table.formulas.find((item) => item.id === id);
     assert.ok(row, id);
@@ -1458,9 +1479,12 @@ test("canonical scoring keeps exact match, and real DPO outputs only match when 
   const table = JSON.parse(read("tests/fixtures/mm-dpo-reference.json"));
   const referenceOf = (id) => table.formulas.find((row) => row.id === id).reference;
   const p3b9 = String.raw`p ^ { * } ( y _ { 1 } \succ y _ { 2 } \mid x ) = \frac { \exp \left( r ^ { * } ( x , y _ { 1 } ) \right) } { \exp \left( r ^ { * } ( x , y _ { 1 } ) \right) + \exp \left( r ^ { * } ( x , y _ { 2 } ) \right) } .`;
-  assert.equal(latexCanonicalMatch(p3b9, referenceOf("p3-b9")), true);
-  assert.equal(latexExactMatch(p3b9, referenceOf("p3-b9")), false);
-  assert.equal(latexMatchesReference(p3b9, referenceOf("p3-b9"), true), false);
+  const pStar = table.formulas.find((row) => String(row.reference || "").startsWith("p^*(y_1"));
+  assert.equal(pStar.id, "p3-b12");
+  assert.equal(latexCanonicalMatch(p3b9, pStar.reference), true);
+  assert.equal(latexExactMatch(p3b9, pStar.reference), false);
+  assert.equal(latexMatchesReference(p3b9, pStar.reference, true), false);
+  assert.equal(latexCanonicalMatch(p3b9, table.legacy.formulas.find((row) => row.id === "p3-b9").reference), true);
   assert.equal(latexCanonicalMatch(String.raw`\pi_{\mathrm{refl}}`, String.raw`\pi_\text{ref}`), false);
   assert.equal(latexCanonicalMatch(String.raw`\pi_{\mathrm{ref}}`, String.raw`\pi_\text{ref}`), true);
   assert.equal(latexCanonicalMatch(String.raw`\pi_1`, String.raw`\pi_{ref}`), false);
@@ -1562,6 +1586,33 @@ test("rescore recomputes a saved report without a network call or opening the PD
   assert.equal(written.mode, "rescore");
   assert.equal(written.rows.find((row) => row.id === "p3-b9").latex, p3b9);
   assert.equal(written.rows.find((row) => row.id === "p3-b9").canonicalMatch, true);
+  const currentPath = join(dir, "current.json");
+  const shifted = {
+    ...saved,
+    coverage: { ...saved.coverage, detected: 42 },
+    rows: [saved.rows[0]]
+  };
+  writeFileSync(currentPath, JSON.stringify(shifted));
+  const movedId = await main(["--rescore", currentPath, "--out", join(dir, "current")], {
+    stdout() {},
+    stderr(line) {
+      throw new Error(line);
+    }
+  });
+  assert.equal(movedId.report.rows[0].id, "p3-b9");
+  assert.equal(movedId.report.rows[0].canonicalMatch, false);
+  const pStar = JSON.parse(read("tests/fixtures/mm-dpo-reference.json")).formulas.find((row) => row.id === "p3-b12");
+  writeFileSync(currentPath, JSON.stringify({
+    ...shifted,
+    rows: [{ ...saved.rows[0], reference: pStar.reference }]
+  }));
+  const byContent = await main(["--rescore", currentPath, "--out", join(dir, "content")], {
+    stdout() {},
+    stderr(line) {
+      throw new Error(line);
+    }
+  });
+  assert.equal(byContent.report.rows[0].canonicalMatch, true);
   const missing = await main(["--rescore", join(dir, "nope.json")], { stdout() {}, stderr() {} });
   assert.equal(missing.code, 1);
   assert.equal(liveFetchViolations(), before);

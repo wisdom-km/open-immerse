@@ -269,9 +269,24 @@ export function alignDetectedFormulas(formulas, units) {
   return rows;
 }
 
+/**
+ * The 2026-10-23 live report used ids from a detection pass that read font
+ * names before the operator list (37 blocks). Those page-3 ids are not the
+ * same blocks anymore. Rescore still scores that report from this copy.
+ */
+export function legacyDetection(previous) {
+  if (previous?.legacy?.formulas?.length) return previous.legacy;
+  if (previous?.detected !== 37 || !Array.isArray(previous.formulas)) return null;
+  return {
+    detected: 37,
+    note: "2026-10-23 的报告在字体加载前检出 37 块。这些 id 不能重放。coverage.detected 为 37 时，--rescore 用这里记下的参考内容。",
+    formulas: previous.formulas
+  };
+}
+
 export function referenceDocument(formulas, rows, meta = {}) {
   const aligned = rows.filter((row) => row.aligned && row.reference).length;
-  return {
+  const document = {
     schema: REFERENCE_SCHEMA,
     arxiv: DPO_PAPER.arxiv,
     version: DPO_PAPER.version,
@@ -294,6 +309,8 @@ export function referenceDocument(formulas, rows, meta = {}) {
       reference: row.aligned ? row.reference : null
     }))
   };
+  if (meta.legacy?.formulas?.length) document.legacy = meta.legacy;
+  return document;
 }
 
 async function download(url, dest, expect) {
@@ -313,7 +330,7 @@ async function download(url, dest, expect) {
   writeFileSync(dest, bytes);
 }
 
-export async function buildReference({ pdfPath = DEFAULT_PDF, sourcePath = DEFAULT_SOURCE } = {}) {
+export async function buildReference({ pdfPath = DEFAULT_PDF, sourcePath = DEFAULT_SOURCE, legacy = null } = {}) {
   await download(DPO_PDF_URL, pdfPath, DPO_PDF_SHA256);
   await download(DPO_SOURCE_URL, sourcePath, DPO_SOURCE_SHA256);
   const sourceBytes = readFileSync(sourcePath);
@@ -326,7 +343,8 @@ export async function buildReference({ pdfPath = DEFAULT_PDF, sourcePath = DEFAU
     const rows = alignDetectedFormulas(session.formulas, parsed.units);
     return referenceDocument(session.formulas, rows, {
       pdfSha256: sha256(readFileSync(pdfPath)),
-      sourceSha256: sha256(sourceBytes)
+      sourceSha256: sha256(sourceBytes),
+      legacy
     });
   } finally {
     await session.close();
@@ -350,7 +368,19 @@ async function main() {
   const pdfPath = argValue(argv, "--pdf") || DEFAULT_PDF;
   const sourcePath = argValue(argv, "--source") || DEFAULT_SOURCE;
   const outPath = argValue(argv, "--out") || DEFAULT_REFERENCE_OUT;
-  const document = await buildReference({ pdfPath, sourcePath });
+  let previous = null;
+  if (existsSync(outPath)) {
+    try {
+      previous = JSON.parse(readFileSync(outPath, "utf8"));
+    } catch {
+      previous = null;
+    }
+  }
+  const document = await buildReference({
+    pdfPath,
+    sourcePath,
+    legacy: legacyDetection(previous)
+  });
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, `${JSON.stringify(document, null, 2)}\n`);
   const marked = document.formulas.filter((row) => row.aligned === false).map((row) => row.id);
