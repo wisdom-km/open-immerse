@@ -23,28 +23,44 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createNet } from "../lib/net/fetch.js";
-import { FORMULA_VISION_SYSTEM, formulaVisionText } from "../lib/formula-tiers/multimodal.js";
+import { FORMULA_VISION_SYSTEM, MM_TIER_VERSION, formulaVisionText } from "../lib/formula-tiers/multimodal.js";
+import {
+  VISION_CROP_SCALE,
+  VISION_INK_PAD_PX,
+  visionCropFor,
+  visionCropSpec,
+  visionRasterPlan
+} from "../lib/formula-vision-crop.js";
 import {
   AB_CHANNELS,
   ARM_IDS,
+  COST_RATES,
   DEFAULT_ARMS,
+  D2_CLEAR_MARGIN,
   DPO_PAPER,
   PARAGRAPH_PROMPT_NOTE,
   PARAGRAPH_TEXT_MAX,
   ROW_FIELDS,
   attachReferences,
   channelsFromEnv,
+  chooseFormulas,
   clipParagraph,
   coverageOf,
+  estimateCostUsd,
   formulasFromBlocks,
   formulasFromFixture,
+  inputDecision,
+  latexExactMatch,
+  latexMatchesReference,
   recommend,
   reportToJson,
   reportToMarkdown,
   resolveArms,
   runAb,
+  selectSample,
   templateReport
 } from "../lib/mm-dpo-ab.js";
+import { createMemoryCanvas, renderParagraphCrop, renderVisionCrop } from "../tools/mm-dpo-vision.mjs";
 import { parseCropDataUrl } from "../lib/formula-crop-png.js";
 import {
   USAGE,
@@ -861,6 +877,343 @@ test("the CLI writes a template and a fake live report without touching the netw
   assert.equal(pageOnly.report.arms.includes("page"), true);
   assert.equal(pageOnly.report.summary.sent, 0);
   assert.equal(pageOnly.report.rows.every((row) => row.arm === "page" && row.paint === "none"), true);
+});
+
+function memoryHooks() {
+  return { createCanvas: createMemoryCanvas };
+}
+
+function fakePage(pageWidth, pageHeight, paint) {
+  return {
+    getViewport({ scale = 1, offsetX = 0, offsetY = 0 } = {}) {
+      return {
+        width: pageWidth * scale,
+        height: pageHeight * scale,
+        scale,
+        offsetX,
+        offsetY
+      };
+    },
+    render({ canvasContext }) {
+      paint(canvasContext);
+      return { promise: Promise.resolve() };
+    }
+  };
+}
+
+function paintInset(ctx) {
+  const width = ctx.canvas.width;
+  const height = ctx.canvas.height;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#000000";
+  const inset = 80;
+  ctx.fillRect(inset, inset, Math.max(1, width - inset * 2), Math.max(1, height - inset * 2));
+}
+
+function catalog(perPage = 10) {
+  const rows = [];
+  let n = 0;
+  for (const page of DPO_PAPER.pages) {
+    for (let i = 0; i < perPage; i += 1) {
+      n += 1;
+      rows.push(formula({
+        id: `p${page}-f${n}`,
+        page,
+        index: i + 1,
+        display: i % 2 === 0,
+        imageUrl: "",
+        reference: "x"
+      }));
+    }
+  }
+  return rows;
+}
+
+test("hi-res uses the product vision crop, and paragraph adds a crop plus text", async () => {
+  assert.equal(MM_TIER_VERSION, "mm-3");
+  assert.equal(VISION_CROP_SCALE, 4);
+  assert.deepEqual(DEFAULT_ARMS, ["tight"]);
+  assert.equal(FORMULA_VISION_SYSTEM, "只输出这一个公式的 LaTeX，不加 $，不加解释；看不清就输出 UNREADABLE");
+  assert.equal(FORMULA_VISION_SYSTEM.includes(PARAGRAPH_PROMPT_NOTE), false);
+  const ignored = visionCropSpec({
+    label: "formula",
+    display: true,
+    bbox: [0, 0, 1, 1],
+    paragraph: { text: "the product prompt stays tight" }
+  });
+  assert.equal(ignored.mode, "tight");
+  assert.equal(ignored.paragraph, null);
+  assert.equal(ignored.scale, VISION_CROP_SCALE);
+
+  const bbox = [0.1, 0.1, 0.9, 0.5];
+  const page = fakePage(400, 200, paintInset);
+  const seen = [];
+  const render = (block, spec) => {
+    seen.push({ block, spec });
+    return renderVisionCrop(page, block, spec, memoryHooks());
+  };
+  const source = formula({
+    id: "crop-1",
+    bbox,
+    display: true,
+    pdfText: "x",
+    reference: "x "
+  });
+  const dry = await runAb({
+    formulas: [source],
+    arms: ["hi-res"],
+    models: [channel("kimi", KIMI_KEY)],
+    send: false,
+    renderVisionCrop: render
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].block.label, "formula");
+  assert.equal(seen[0].spec.mode, "tight");
+  assert.equal(seen[0].spec.paragraph, null);
+  assert.equal(seen[0].spec.scale, VISION_CROP_SCALE);
+  assert.equal(seen[0].spec.pad.namedPx, VISION_INK_PAD_PX.display);
+  assert.deepEqual(seen[0].spec, visionCropSpec(seen[0].block, { scale: VISION_CROP_SCALE }));
+  const directUrl = await renderVisionCrop(page, seen[0].block, visionCropSpec(seen[0].block), memoryHooks());
+  const direct = parseCropDataUrl(directUrl);
+  const product = await visionCropFor(seen[0].block, {
+    scale: VISION_CROP_SCALE,
+    renderVisionCrop: (block, spec) => renderVisionCrop(page, block, spec, memoryHooks())
+  });
+  const plan = visionRasterPlan({ bbox, pageWidth: 400, pageHeight: 200, scale: VISION_CROP_SCALE });
+  assert.equal(product.meta.kind, "vision");
+  assert.equal(product.meta.scale, VISION_CROP_SCALE);
+  assert.equal(product.w, direct.w);
+  assert.equal(product.h, direct.h);
+  assert.ok(direct.w < plan.pixelWidth);
+  assert.ok(direct.h < plan.pixelHeight);
+  assert.equal(dry.rows[0].cropHash, product.hash);
+  assert.equal(dry.rows[0].inputKind, "hi-res");
+  assert.equal(dry.rows[0].placeholder, false);
+  assert.equal(dry.rows[0].errorCode, "dry-run");
+  assert.equal(dry.rows[0].sent, false);
+  assert.equal(dry.summary.sent, 0);
+
+  const calls = [];
+  const live = await runAb({
+    formulas: [source],
+    arms: ["hi-res"],
+    models: [channel("kimi", KIMI_KEY)],
+    send: true,
+    katex,
+    now: clock(),
+    renderVisionCrop: render,
+    transport: async (call) => {
+      calls.push(call);
+      assert.equal(call.system, FORMULA_VISION_SYSTEM);
+      assert.equal(call.system.includes(PARAGRAPH_PROMPT_NOTE), false);
+      assert.match(call.image.base64, /^[A-Za-z0-9+/]+=*$/);
+      assert.equal(call.image.base64.includes("http"), false);
+      assert.equal(String(call.image.base64).includes("%PDF"), false);
+      return { ok: true, text: "x", usage: { prompt_tokens: 1000, completion_tokens: 10, total_tokens: 1010 } };
+    }
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].image.w, direct.w);
+  assert.equal(calls[0].image.h, direct.h);
+  assert.equal(live.rows[0].measured, true);
+  assert.equal(live.rows[0].exactMatch, false);
+  assert.equal(live.rows[0].matchesReference, true);
+  assert.equal(latexExactMatch("x", "x "), false);
+  assert.equal(latexMatchesReference("x", "x ", true), true);
+  const priced = live.summary.byArmModel.find((item) => item.provider === "kimi");
+  assert.equal(priced.estimatedCostUsd, estimateCostUsd("kimi", "kimi-k3", { prompt: 1000, completion: 10 }));
+  assert.equal(priced.estimatedCostUsd, 0.00315);
+  assert.equal(live.vision.tier, "mm-3");
+  assert.equal(JSON.stringify(live).includes(KIMI_KEY), false);
+  assert.equal(JSON.stringify(live).includes(calls[0].image.base64), false);
+
+  const paragraphPage = fakePage(200, 100, (ctx) => {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(4, 4, 12, 8);
+  });
+  const paragraphBox = [0.05, 0.2, 0.8, 0.55];
+  const paragraphFormula = formula({
+    id: "para-1",
+    display: false,
+    inlineOf: "host",
+    bbox: [0.2, 0.3, 0.35, 0.42],
+    paragraphBbox: paragraphBox,
+    paragraphText: "HOST_PARAGRAPH_CONTEXT",
+    pdfText: "x",
+    reference: "x"
+  });
+  const paragraphPlan = visionRasterPlan({
+    bbox: paragraphBox,
+    pageWidth: 200,
+    pageHeight: 100,
+    scale: VISION_CROP_SCALE
+  });
+  const paragraphPng = await renderParagraphCrop(paragraphPage, paragraphFormula, memoryHooks());
+  assert.equal(paragraphPng.w, paragraphPlan.pixelWidth);
+  assert.equal(paragraphPng.h, paragraphPlan.pixelHeight);
+  assert.equal(paragraphPng.paragraphText, "HOST_PARAGRAPH_CONTEXT");
+  assert.equal(paragraphPlan.scale, VISION_CROP_SCALE);
+  let paragraphRenders = 0;
+  let pageRenders = 0;
+  const paragraphCalls = [];
+  const paragraphReport = await runAb({
+    formulas: [paragraphFormula],
+    arms: ["paragraph", "page"],
+    models: [channel("kimi", KIMI_KEY)],
+    send: true,
+    katex,
+    now: clock(),
+    renderParagraphCrop: async (item) => {
+      paragraphRenders += 1;
+      return renderParagraphCrop(paragraphPage, item, memoryHooks());
+    },
+    renderVisionCrop: async () => {
+      pageRenders += 1;
+      return "";
+    },
+    transport: async (call) => {
+      paragraphCalls.push(call);
+      return { ok: true, text: "x", usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 } };
+    }
+  });
+  assert.equal(paragraphRenders, 1);
+  assert.equal(pageRenders, 0);
+  assert.equal(paragraphCalls.length, 1);
+  assert.equal(paragraphCalls[0].arm, "paragraph");
+  assert.equal(paragraphCalls[0].text.includes("HOST_PARAGRAPH_CONTEXT"), true);
+  assert.equal(paragraphCalls[0].system.startsWith(FORMULA_VISION_SYSTEM), true);
+  assert.match(paragraphCalls[0].system, new RegExp(PARAGRAPH_PROMPT_NOTE));
+  assert.equal(paragraphCalls[0].image.w, paragraphPlan.pixelWidth);
+  assert.equal(paragraphCalls[0].image.h, paragraphPlan.pixelHeight);
+  assert.equal(paragraphReport.rows.find((row) => row.arm === "paragraph").measured, true);
+  assert.equal(paragraphReport.rows.find((row) => row.arm === "page").sent, false);
+  assert.equal(paragraphReport.rows.find((row) => row.arm === "page").errorCode, "page-script-only");
+  assert.equal(paragraphReport.productSendsPage, false);
+  assert.equal(JSON.stringify(paragraphReport).includes("HOST_PARAGRAPH_CONTEXT"), false);
+  assert.equal(JSON.stringify(paragraphReport).includes("%PDF"), false);
+});
+
+test("sample of 15 is deterministic and stratified across pages and kinds", () => {
+  const rows = catalog(10);
+  assert.equal(rows.length, 30);
+  const first = selectSample(rows, 15);
+  const second = selectSample(rows, 15);
+  assert.deepEqual(first.map((item) => item.id), second.map((item) => item.id));
+  assert.equal(first.length, 15);
+  assert.equal(new Set(first.map((item) => item.page)).size, 3);
+  assert.equal(first.some((item) => item.display === false), true);
+  assert.equal(first.some((item) => item.display === true), true);
+  const viaLimit = chooseFormulas(rows, { limit: 15 });
+  const viaSample = chooseFormulas(rows, { sample: 15 });
+  assert.deepEqual(viaLimit.ids, viaSample.ids);
+  assert.equal(viaLimit.stratified, true);
+  const locked = chooseFormulas(rows, { ids: ["p5-f21", "p3-f1"] });
+  assert.deepEqual(locked.ids, ["p5-f21", "p3-f1"]);
+  assert.equal(locked.locked, true);
+  const full = chooseFormulas(rows, { full: true });
+  assert.equal(full.stratified, false);
+  assert.equal(full.ids.length, 30);
+
+  const hosted = formulasFromBlocks([{
+    page: 3,
+    blocks: [
+      { id: "above", label: "text", text: "ABOVE", bbox: [0.1, 0.05, 0.8, 0.12] },
+      { id: "disp", label: "formula", display: true, bbox: [0.2, 0.14, 0.7, 0.22] },
+      { id: "host", label: "text", sourceText: "HOST TEXT", bbox: [0.1, 0.4, 0.8, 0.55] },
+      { id: "f", label: "formula", display: false, inlineOf: "host", bbox: [0.3, 0.42, 0.45, 0.5] },
+      { id: "below", label: "text", text: "BELOW", bbox: [0.1, 0.7, 0.8, 0.9] }
+    ]
+  }]);
+  assert.equal(hosted[0].id, "disp");
+  assert.equal(hosted[0].paragraphText, "ABOVE");
+  assert.ok(hosted[0].paragraphBbox[3] >= 0.22);
+  assert.equal(hosted[1].id, "f");
+  assert.equal(hosted[1].paragraphText, "HOST TEXT");
+  assert.equal(hosted[1].paragraphBbox[0], 0.1);
+  assert.ok(hosted[1].paragraphBbox[2] >= 0.45);
+
+  const tied = inputDecision([
+    { arm: "hi-res", provider: "kimi", model: "kimi-k3", role: "primary", referenceCompared: 15, matchesReference: 12 },
+    { arm: "paragraph", provider: "kimi", model: "kimi-k3", role: "primary", referenceCompared: 15, matchesReference: 12 }
+  ]);
+  assert.equal(tied.suggestedArm, "hi-res");
+  assert.equal(tied.clearlyBetter, false);
+  assert.equal(tied.productDefault, false);
+  assert.equal(tied.writesPreset, false);
+  const better = inputDecision([
+    { arm: "hi-res", provider: "kimi", model: "kimi-k3", role: "primary", referenceCompared: 15, matchesReference: 10 },
+    { arm: "paragraph", provider: "kimi", model: "kimi-k3", role: "primary", referenceCompared: 15, matchesReference: 12 }
+  ]);
+  assert.equal(better.clearlyBetter, true);
+  assert.equal(better.suggestedArm, "paragraph");
+  assert.ok(better.paragraphNormalized >= better.hiResNormalized + D2_CLEAR_MARGIN);
+  const short = inputDecision([
+    { arm: "hi-res", provider: "kimi", model: "kimi-k3", role: "primary", referenceCompared: 100, matchesReference: 80 },
+    { arm: "paragraph", provider: "kimi", model: "kimi-k3", role: "primary", referenceCompared: 100, matchesReference: 84 }
+  ]);
+  assert.equal(short.clearlyBetter, false);
+  assert.equal(short.suggestedArm, "hi-res");
+  assert.equal(COST_RATES[0].provider, "kimi");
+  assert.equal(estimateCostUsd("deepseek", "deepseek-v4.1-flash", { prompt: 10, completion: 10 }), null);
+});
+
+test("dry-run samples without a network call, and a locked id list is what the report records", async (t) => {
+  const before = liveFetchViolations();
+  const dir = createOwnedTemp(t, "mm-dpo-sample-");
+  const { writeFileSync } = await import("node:fs");
+  const fixturePath = join(dir, "fixture.json");
+  writeFileSync(fixturePath, JSON.stringify({ formulas: catalog(10) }));
+  let sends = 0;
+  const logs = capture();
+  const sampled = await main([
+    "--dry-run",
+    "--sample=15",
+    "--arm=tight,hi-res,paragraph,page",
+    "--fixture", fixturePath,
+    "--out", dir
+  ], {
+    ...logs,
+    env: { MM_DPO_KIMI_API_KEY: KIMI_KEY },
+    renderVisionCrop: async () => {
+      throw new Error("dry-run still prepares crops, but this fixture has no page");
+    },
+    transport: async () => {
+      sends += 1;
+      throw new Error("dry-run must not send");
+    }
+  });
+  assert.equal(sampled.code, 0);
+  assert.equal(sends, 0);
+  assert.equal(sampled.report.sample.stratified, true);
+  assert.equal(sampled.report.sample.ids.length, 15);
+  assert.deepEqual(sampled.report.sample.ids, selectSample(catalog(10), 15).map((item) => item.id));
+  assert.equal(sampled.report.summary.sent, 0);
+  assert.equal(sampled.report.rows.every((row) => row.sent === false), true);
+  assert.equal(sampled.report.arms.includes("page"), true);
+  assert.equal(liveFetchViolations(), before);
+
+  const limitLogs = capture();
+  const limited = await main([
+    "--dry-run",
+    "--limit=15",
+    "--fixture", fixturePath,
+    "--out", dir
+  ], limitLogs);
+  assert.deepEqual(limited.report.sample.ids, sampled.report.sample.ids);
+
+  const lockPath = join(dir, "locked");
+  const locked = await main([
+    "--dry-run",
+    "--ids=p4-f11,p3-f2",
+    "--fixture", fixturePath,
+    "--out", lockPath
+  ], capture());
+  assert.deepEqual(locked.report.sample.ids, ["p4-f11", "p3-f2"]);
+  assert.equal(locked.report.sample.locked, true);
+  assert.equal(liveFetchViolations(), before);
 });
 
 test("coverage stays incomplete off the 79-formula pages, and the optional vision hook is absent or a function", async () => {

@@ -14,6 +14,27 @@
   "expectedFormulaCount": 79,
   "productSendsPage": false,
   "writesPreset": false,
+  "vision": {
+    "tier": "mm-3",
+    "scale": 4,
+    "hiRes": "visionCropFor",
+    "paragraph": "script-only"
+  },
+  "sample": {
+    "stratified": false,
+    "locked": false,
+    "requested": null,
+    "ids": []
+  },
+  "costRates": [
+    {
+      "provider": "kimi",
+      "model": "kimi-k3",
+      "promptUsdPerMillion": 3,
+      "completionUsdPerMillion": 15,
+      "note": "Moonshot 公开标价（缓存未命中的输入 / 输出）。不是账单。"
+    }
+  ],
   "coverage": {
     "expected": 79,
     "detected": 0,
@@ -36,15 +57,13 @@
       "id": "hi-res",
       "default": false,
       "sendsPdf": false,
-      "pending": "F7W-1",
-      "note": "高清裁图。产品路径未落地时不发送，除非另接 visionCropFor。"
+      "note": "产品高清裁图（visionCropFor / renderVisionCrop，mm-3，scale 4）。没有页面渲染时不发送。"
     },
     {
       "id": "paragraph",
       "default": false,
       "sendsPdf": false,
-      "pending": "F7W-3",
-      "note": "段落图加段落文字。产品路径未落地时不发送。"
+      "note": "脚本实验：段落区域按同一高清倍率出图，并附上段落文字。不改产品默认，也不改产品提示词。"
     },
     {
       "id": "page",
@@ -74,6 +93,7 @@
     "latex": "模型给出的公式 LaTeX。没有可核对的候选时为 null。",
     "verify": "第二层核对（字符集 + KaTeX）。pass 为真才算核对过。",
     "paint": "上屏方式：katex（核对通过）/ crop（核对不过、UNREADABLE 或调用失败，静默裁图）/ none（未发送）。",
+    "exactMatch": "与参考 LaTeX 逐字一致。缺参考或没有候选时为 null。",
     "matchesReference": "与参考 LaTeX 归一化后是否一致。缺参考或没有候选时为 null。",
     "latencyMs": "这一次模型请求的耗时（毫秒）。未发送为 0。",
     "tokens": "token：prompt / completion / total。没有用量时为 null。",
@@ -89,6 +109,7 @@
     "latex",
     "verify",
     "paint",
+    "exactMatch",
     "matchesReference",
     "latencyMs",
     "tokens",
@@ -98,6 +119,7 @@
   "summary": {
     "checkedButMismatch": 0,
     "sent": 0,
+    "failures": 0,
     "verified": 0,
     "byArmModel": [
       {
@@ -111,9 +133,16 @@
         "verified": 0,
         "referenceCompared": 0,
         "matchesReference": 0,
+        "exactMatches": 0,
         "checkedButMismatch": 0,
+        "failures": 0,
         "latencyMsTotal": 0,
-        "tokensTotal": 0
+        "latencyMsMean": 0,
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "tokensTotal": 0,
+        "pricedRows": 0,
+        "estimatedCostUsd": null
       },
       {
         "arm": "tight",
@@ -126,9 +155,16 @@
         "verified": 0,
         "referenceCompared": 0,
         "matchesReference": 0,
+        "exactMatches": 0,
         "checkedButMismatch": 0,
+        "failures": 0,
         "latencyMsTotal": 0,
-        "tokensTotal": 0
+        "latencyMsMean": 0,
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "tokensTotal": 0,
+        "pricedRows": 0,
+        "estimatedCostUsd": null
       }
     ],
     "recommended": {
@@ -141,6 +177,17 @@
       "writesPreset": false,
       "note": "本脚手架不改设置预置，也不因分数挡合入。整页臂不能成为产品默认。",
       "pageLab": null
+    },
+    "inputDecision": {
+      "id": "D2",
+      "rule": "paragraph 只有在 Kimi K3 上归一化准确率明显高于 hi-res 时才作为建议默认；否则建议 hi-res。本报告不改产品默认。",
+      "margin": 0.05,
+      "clearlyBetter": null,
+      "suggestedArm": null,
+      "hiResNormalized": null,
+      "paragraphNormalized": null,
+      "productDefault": false,
+      "writesPreset": false
     }
   },
   "exampleRow": {
@@ -158,6 +205,7 @@
       "jaccard": 1
     },
     "paint": "katex",
+    "exactMatch": false,
     "matchesReference": false,
     "latencyMs": 0,
     "tokens": {

@@ -5,13 +5,15 @@
  *   node tools/mm-dpo-reference.mjs --help
  *   node tools/mm-dpo-reference.mjs --template [--out dir]
  *   node tools/mm-dpo-reference.mjs --dry-run --fixture tests/fixtures/mm-dpo.json [--arm=tight,hi-res,paragraph]
- *   node tools/mm-dpo-reference.mjs --live --limit=15 --arm=tight
+ *   node tools/mm-dpo-reference.mjs --live --limit=15 --arm=tight,hi-res,paragraph --model=kimi
+ *   node tools/mm-dpo-reference.mjs --live --sample=15 --arm=tight,hi-res,paragraph --model=kimi
  *   node tools/mm-dpo-reference.mjs --live --full --arm=page
  *
  * 输入臂 / Arms
  *   tight       现有紧裁 PNG（cropPngFor）。默认，也是唯一默认臂。
- *   hi-res      高清裁图。F7W-1 未落地时不发送（占位）。
- *   paragraph   段落图 + 段落文字。F7W-3 未落地时不发送（占位）。
+ *   hi-res      产品高清裁图（visionCropFor / renderVisionCrop，mm-3）。measured。
+ *   paragraph   脚本实验：段落区域按同一高清倍率出图，并附段落文字。measured。
+ *               不改产品默认，也不改产品提示词。
  *   page        整页对照。脚本专有，默认关。必须写 --arm=page。不发送整页 PDF。
  *               --arm=tight,hi-res,paragraph 不会打开整页。
  *
@@ -25,8 +27,9 @@
  *
  * 真跑 / Live
  *   只有 --live 会发请求。CI 不要加 --live。
- *   还必须 --limit=N（建议 15）或 --full（79 条，另批预算）。
- *   没有 PNG 紧裁时不发请求。文字层 PDF 只用来列出第 3–5 页公式。
+ *   还必须 --limit=N、--sample=N（建议 15，分层且可复现）或 --full（79 条，另批预算）。
+ *   --limit 与 --sample 都按页 × 行内/独立分层抽取，报告里记下 id，同一清单再跑是同一批。
+ *   没有 PNG 时不发请求。文字层 PDF 只用来列出第 3–5 页公式并裁图，不整页上传。
  *   429 不重试，避免同一条公式扣两次。
  *   产品里的 DeepSeek 仍是「待实测」；这里的基线不改那条预设。
  *
@@ -48,7 +51,9 @@ import {
   DPO_PAPER,
   attachReferences,
   channelsFromEnv,
+  chooseFormulas,
   coverageOf,
+  formulasFromBlocks,
   formulasFromFixture,
   reportToJson,
   reportToMarkdown,
@@ -56,6 +61,7 @@ import {
   runAb,
   templateReport
 } from "../lib/mm-dpo-ab.js";
+import { renderParagraphCrop, renderVisionCrop, visionCanvasAvailable } from "./mm-dpo-vision.mjs";
 import { multimodalTarget, sendVision } from "../lib/mm-client.js";
 import { normalizeFormulaSettings } from "../lib/formula-settings.js";
 
@@ -71,13 +77,18 @@ export const USAGE = [
   "  node tools/mm-dpo-reference.mjs --help",
   "  node tools/mm-dpo-reference.mjs --template [--out dir]",
   "  node tools/mm-dpo-reference.mjs --dry-run --fixture <file.json> [--arm=tight,hi-res,paragraph]",
-  "  node tools/mm-dpo-reference.mjs --live --limit=15 --arm=tight",
+  "  node tools/mm-dpo-reference.mjs --live --limit=15 --arm=tight,hi-res,paragraph --model=kimi",
+  "  node tools/mm-dpo-reference.mjs --live --sample=15 --arm=tight,hi-res,paragraph --model=kimi",
   "  node tools/mm-dpo-reference.mjs --live --full --arm=page",
   "",
   "输入臂: tight（默认） / hi-res / paragraph / page",
   "  page 默认关，必须 --arm=page。不发送整页 PDF，也不进产品默认。",
-  "  hi-res、paragraph 在对应产品路径落地前只占位，不拿紧裁冒充测量。",
+  "  hi-res 走产品 visionCropFor / renderVisionCrop（mm-3）。没有页面时不发送。",
+  "  paragraph 只在本脚本里：段落区域按同一高清倍率出图，并附段落文字。",
   "  --placeholder-uses-tight 会用紧裁占位发送，报告里 measured=false，不参与推荐。",
+  "  --limit=N 与 --sample=N 是同一套分层抽样（行内 + 独立，多页）。报告记下 id。",
+  "  --ids=id1,id2 按报告里的 id 重放，不再重新抽样。",
+  "  hi-res / paragraph 画 PDF 需要 devDependency @napi-rs/canvas（仓库根目录 npm ci）。",
   "",
   "环境变量（密钥不要写在命令行）:",
   ...AB_CHANNELS.flatMap((channel) => [
@@ -86,13 +97,13 @@ export const USAGE = [
     `  ${channel.envBaseUrl}`
   ]),
   "",
-  "只有 --live 会联网。CI 不要跑 --live。真跑还要 --limit=N 或 --full。",
+  "只有 --live 会联网。CI 不要跑 --live。真跑还要 --limit=N、--sample=N 或 --full。",
   "没有 PNG 时不发请求。报告写到 oi-qa/f7-multimodal/runs/，不进扩展包。",
   `PDF 不入库。缺文件时用 scripts/ci/fetch-fixtures.sh 取 2305.18290v3。`,
   `参考条数 ${DPO_PAPER.formulaCount}，不是合入门槛。`
 ].join("\n");
 
-const VALUE_FLAGS = ["--limit", "--arm", "--model", "--out", "--fixture", "--pdf", "--reference"];
+const VALUE_FLAGS = ["--limit", "--sample", "--ids", "--arm", "--model", "--out", "--fixture", "--pdf", "--reference"];
 
 function splitFlag(arg) {
   for (const name of VALUE_FLAGS) {
@@ -111,6 +122,8 @@ export function parseArgs(argv) {
     live: false,
     full: false,
     limit: null,
+    sample: null,
+    ids: [],
     arms: [],
     armSet: false,
     models: [],
@@ -170,6 +183,15 @@ export function parseArgs(argv) {
     if (pair.flag === "--limit") {
       if (!/^[1-9]\d*$/.test(value)) parsed.errors.push("--limit 需要正整数");
       else parsed.limit = Number(value);
+    } else if (pair.flag === "--sample") {
+      if (!/^[1-9]\d*$/.test(value)) parsed.errors.push("--sample 需要正整数");
+      else parsed.sample = Number(value);
+    } else if (pair.flag === "--ids") {
+      for (const part of value.split(",")) {
+        const id = part.trim();
+        if (!id) parsed.errors.push("--ids 是空的");
+        else parsed.ids.push(id);
+      }
     } else if (pair.flag === "--arm") {
       parsed.armSet = true;
       for (const part of value.split(",")) {
@@ -192,9 +214,15 @@ export function parseArgs(argv) {
   if (parsed.help) return parsed;
   if (parsed.template && parsed.live) parsed.errors.push("--template 不会发请求");
   if (parsed.live && parsed.dryRun) parsed.errors.push("--live 和 --dry-run 只能选一个");
-  if (parsed.full && parsed.limit != null) parsed.errors.push("--full 和 --limit 只能选一个");
-  if (parsed.live && !parsed.full && parsed.limit == null) {
-    parsed.errors.push("真跑需要 --limit=N 或 --full。默认不跑满 79 条。");
+  if (parsed.full && (parsed.limit != null || parsed.sample != null || parsed.ids.length)) {
+    parsed.errors.push("--full 和 --limit / --sample / --ids 只能选一个");
+  }
+  if (parsed.limit != null && parsed.sample != null) parsed.errors.push("--limit 和 --sample 只能选一个");
+  if (parsed.ids.length && (parsed.limit != null || parsed.sample != null)) {
+    parsed.errors.push("--ids 不再抽样，不能和 --limit / --sample 一起用");
+  }
+  if (parsed.live && !parsed.full && parsed.limit == null && parsed.sample == null && !parsed.ids.length) {
+    parsed.errors.push("真跑需要 --limit=N、--sample=N 或 --full。默认不跑满 79 条。");
   }
   return parsed;
 }
@@ -247,12 +275,14 @@ export async function loadOptionalVisionCrop() {
   }
 }
 
-export async function loadPdfFormulas(pdfPath) {
-  if (!existsSync(pdfPath)) {
-    throw new Error(
-      `缺少 DPO PDF：${pdfPath}。该文件不入库。用 scripts/ci/fetch-fixtures.sh 按 arXiv 2305.18290v3 取到 tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf。参考范围是第 ${DPO_PAPER.pages.join("、")} 页。`
-    );
-  }
+function missingPdf(pdfPath) {
+  return new Error(
+    `缺少 DPO PDF：${pdfPath}。该文件不入库。用 scripts/ci/fetch-fixtures.sh 按 arXiv 2305.18290v3 取到 tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf。参考范围是第 ${DPO_PAPER.pages.join("、")} 页。`
+  );
+}
+
+export async function openPdfSession(pdfPath) {
+  if (!existsSync(pdfPath)) throw missingPdf(pdfPath);
   const { getDocument, GlobalWorkerOptions } = await import("../pdf/vendor/pdf.min.mjs");
   const { textLayerToBlocks } = await import("../lib/pdf-text-layer.js");
   const { attachFontRealNames } = await import("../lib/pdf-mirror.js");
@@ -264,10 +294,12 @@ export async function loadPdfFormulas(pdfPath) {
   }).promise;
   const wanted = new Set(DPO_PAPER.pages);
   const collected = [];
+  const pages = new Map();
   try {
     for (let number = 1; number <= doc.numPages; number += 1) {
       if (!wanted.has(number)) continue;
       const pdfPage = await doc.getPage(number);
+      pages.set(number, pdfPage);
       const content = await pdfPage.getTextContent();
       attachFontRealNames(content.items, pdfPage.commonObjs);
       const viewport = pdfPage.getViewport({ scale: 1 });
@@ -280,10 +312,34 @@ export async function loadPdfFormulas(pdfPath) {
       });
       collected.push({ page: number, blocks: built.blocks });
     }
-  } finally {
+  } catch (err) {
     await doc.destroy();
+    throw err;
   }
-  return formulasFromBlocks(collected);
+  const formulas = formulasFromBlocks(collected);
+  return {
+    formulas,
+    renderVisionCrop(block, spec) {
+      return renderVisionCrop(pages.get(Number(block?.page)), block, spec);
+    },
+    renderParagraphCrop(formula) {
+      return renderParagraphCrop(pages.get(Number(formula?.page)), formula);
+    },
+    async close() {
+      pages.clear();
+      await doc.destroy();
+    }
+  };
+}
+
+export async function loadPdfFormulas(pdfPath) {
+  if (!existsSync(pdfPath)) throw missingPdf(pdfPath);
+  const session = await openPdfSession(pdfPath);
+  try {
+    return session.formulas;
+  } finally {
+    await session.close();
+  }
 }
 
 function readJson(path) {
@@ -291,14 +347,14 @@ function readJson(path) {
 }
 
 async function loadFormulas(parsed) {
-  let formulas;
   if (parsed.fixture) {
-    formulas = formulasFromFixture(readJson(resolve(parsed.fixture)));
-  } else {
-    formulas = await loadPdfFormulas(parsed.pdf ? resolve(parsed.pdf) : DEFAULT_PDF);
+    let formulas = formulasFromFixture(readJson(resolve(parsed.fixture)));
+    if (parsed.reference) formulas = attachReferences(formulas, readJson(resolve(parsed.reference)));
+    return { formulas, session: null };
   }
-  if (parsed.reference) formulas = attachReferences(formulas, readJson(resolve(parsed.reference)));
-  return formulas;
+  const session = await openPdfSession(parsed.pdf ? resolve(parsed.pdf) : DEFAULT_PDF);
+  if (parsed.reference) session.formulas = attachReferences(session.formulas, readJson(resolve(parsed.reference)));
+  return { formulas: session.formulas, session };
 }
 
 export function writeReport(dir, report) {
@@ -352,38 +408,72 @@ export async function main(argv = [], io = {}) {
     stderr(`真跑至少需要一个环境变量密钥：${AB_CHANNELS.map((channel) => channel.envKey).join("、")}`);
     return { code: 2, report: null, paths: null };
   }
-  let formulas;
+  const needsRaster = arms.some((arm) => arm === "hi-res" || arm === "paragraph");
+  if (!parsed.fixture && needsRaster && io.renderVisionCrop === undefined && !visionCanvasAvailable()) {
+    stderr("高清裁图需要 @napi-rs/canvas。在仓库根目录运行 npm ci。");
+    return { code: 1, report: null, paths: null };
+  }
+  let loaded;
   try {
-    formulas = await loadFormulas(parsed);
+    loaded = await loadFormulas(parsed);
   } catch (err) {
     stderr(err.message || String(err));
     return { code: 1, report: null, paths: null };
   }
-  const sampled = parsed.full || parsed.limit == null ? formulas.slice() : formulas.slice(0, parsed.limit);
-  const live = parsed.live === true;
-  const transport = live ? (io.transport || createLiveTransport({ net: io.net })) : null;
-  let katex = io.katex || null;
-  if (live && !katex) katex = loadBundledKatex();
-  const visionCropFor = io.visionCropFor === undefined ? await loadOptionalVisionCrop() : io.visionCropFor;
-  const report = await runAb({
-    formulas: sampled,
-    arms,
-    models: channels,
-    send: live,
-    transport,
-    katex,
-    visionCropFor,
-    placeholderUsesTight: parsed.placeholderUsesTight,
-    now: io.now,
-    signal: io.signal,
-    mode: live ? "live" : "dry-run",
-    generatedAt: generatedAt || new Date().toISOString(),
-    coverage: coverageOf(formulas, sampled.length)
-  });
-  const dir = parsed.out ? resolve(parsed.out) : stampDir(report.generatedAt);
-  const paths = writeReport(dir, report);
-  stdout(`${paths.jsonPath} sent=${report.summary.sent}`);
-  return { code: 0, report, paths };
+  try {
+    const formulas = loaded.formulas;
+    const chosen = chooseFormulas(formulas, {
+      full: parsed.full,
+      limit: parsed.limit,
+      sample: parsed.sample,
+      ids: parsed.ids
+    });
+    if (parsed.ids.length && chosen.formulas.length !== parsed.ids.length) {
+      stderr(`--ids 里有报告清单中找不到的公式（要 ${parsed.ids.length}，找到 ${chosen.formulas.length}）`);
+      return { code: 1, report: null, paths: null };
+    }
+    const sampled = chosen.formulas;
+    const live = parsed.live === true;
+    const transport = live ? (io.transport || createLiveTransport({ net: io.net })) : null;
+    let katex = io.katex || null;
+    if (live && !katex) katex = loadBundledKatex();
+    const visionCropFor = io.visionCropFor === undefined ? null : io.visionCropFor;
+    const renderVision = io.renderVisionCrop === undefined
+      ? (loaded.session?.renderVisionCrop || null)
+      : io.renderVisionCrop;
+    const renderParagraph = io.renderParagraphCrop === undefined
+      ? (loaded.session?.renderParagraphCrop || null)
+      : io.renderParagraphCrop;
+    const report = await runAb({
+      formulas: sampled,
+      arms,
+      models: channels,
+      send: live,
+      transport,
+      katex,
+      visionCropFor,
+      renderVisionCrop: renderVision,
+      renderParagraphCrop: renderParagraph,
+      placeholderUsesTight: parsed.placeholderUsesTight,
+      now: io.now,
+      signal: io.signal,
+      mode: live ? "live" : "dry-run",
+      generatedAt: generatedAt || new Date().toISOString(),
+      coverage: coverageOf(formulas, sampled.length),
+      sample: {
+        stratified: chosen.stratified,
+        locked: chosen.locked,
+        requested: chosen.requested,
+        ids: chosen.ids
+      }
+    });
+    const dir = parsed.out ? resolve(parsed.out) : stampDir(report.generatedAt);
+    const paths = writeReport(dir, report);
+    stdout(`${paths.jsonPath} sent=${report.summary.sent}`);
+    return { code: 0, report, paths };
+  } finally {
+    await loaded.session?.close?.();
+  }
 }
 
 function invokedDirectly() {
