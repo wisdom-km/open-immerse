@@ -1137,6 +1137,9 @@ body {
   min-width: 0;
   margin: 0 auto;
 }
+.oi-figure-placeholder-row:not(.oi-pdf-figure > *) {
+  margin: 12px auto 6px;
+}
 .oi-figure-placeholder-row > .oi-formula-reserve {
   inset-inline-start: auto;
   inset-inline-end: 0;

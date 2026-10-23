@@ -4737,6 +4737,9 @@ function visualCropNotice(block, page, caption = null) {
 }
 
 function orphanVisualNotice(block, page) {
+  if (!/^(?:Figure|Fig\.?|Table|图|表)\s*\d+[A-Za-z]?\s*[:：.．]/i.test(captionSourceText(block))) {
+    return document.createDocumentFragment();
+  }
   const parsed = parseFigureLabel(captionSourceText(block));
   const table = parsed?.kind === "table";
   return visualCropNotice({ label: table ? "table" : "figure" }, page, block);

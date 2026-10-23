@@ -565,6 +565,27 @@ test("caption-only cards and a hidden source without a pair", { timeout: 240000 
     return read;
   })()`);
 
+  const gated = await evaluate(`(() => {
+    const api = globalThis.__oiFigureCards;
+    const prose = api.orphanVisualNotice({
+      label: "caption",
+      text: "Table 2 summarizes our results and compares them.",
+      sourceText: "Table 2 summarizes our results and compares them."
+    }, 8);
+    const real = api.orphanVisualNotice({
+      label: "caption",
+      text: "Table 3:",
+      sourceText: "Table 3:"
+    }, 8);
+    const button = real.querySelector ? real.querySelector("button.oi-figure-placeholder") : null;
+    return {
+      proseCards: prose.querySelectorAll ? prose.querySelectorAll("button.oi-figure-placeholder").length : -1,
+      realLabel: button ? (button.getAttribute("aria-label") || "") : ""
+    };
+  })()`);
+  assert.equal(gated.proseCards, 0, JSON.stringify(gated));
+  assert.equal(gated.realLabel, "表 3 · 原文第 8 页 · 点击查看原表");
+
   const table = await mount("orphanVisualNotice", {
     label: "caption",
     text: "Table 3: Win rates.",

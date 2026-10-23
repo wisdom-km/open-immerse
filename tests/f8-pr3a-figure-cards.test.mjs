@@ -91,6 +91,7 @@ test("figure card tokens, container query, and reader colors only", () => {
   assert.match(css, /\.oi-figure-placeholder:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-reader-focus\)/);
   const card = css.slice(css.indexOf(".oi-figure-placeholder-row"), css.indexOf(".pane-translate .readout.is-mirror"));
   assert.match(card, /\.oi-figure-placeholder-row > \.oi-formula-reserve/);
+  assert.match(card, /\.oi-figure-placeholder-row:not\(\.oi-pdf-figure > \*\)\s*\{[^}]*margin:\s*12px auto 6px/);
   assert.equal(card.includes("--oi-warn"), false);
   assert.equal(card.includes("--oi-primary"), false);
   assert.equal(card.includes("--oi-line"), false);
@@ -111,6 +112,7 @@ test("figure cards derive figureLabel on the render copy and leave formula place
   assert.match(viewer, /parsed\.kind === copyKind/);
   assert.doesNotMatch(viewer, /noticeCaption/);
   const orphan = viewer.slice(viewer.indexOf("function orphanVisualNotice"), viewer.indexOf("function jumpAssetFallback"));
+  assert.match(orphan, /createDocumentFragment\(\)/);
   assert.match(orphan, /parseFigureLabel\(captionSourceText\(block\)\)/);
   assert.match(orphan, /const table = parsed\?\.kind === "table"/);
   assert.match(orphan, /visualCropNotice\(\{ label: table \? "table" : "figure" \}, page, block\)/);
