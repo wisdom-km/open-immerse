@@ -212,7 +212,11 @@ test("same-frame scrollend still lets soft-follow align once", () => {
 test("viewer sync path has no smooth fight and no fixed 360ms lock", () => {
   assert.doesNotMatch(viewerSrc, /syncLock/);
   assert.doesNotMatch(viewerSrc, /behavior:\s*["']smooth["']/);
-  assert.doesNotMatch(viewerSrc, /\b360\b/);
+  // 360 here is the mini-window fallback width, not the old 360ms sync lock.
+  const syncSrc = viewerSrc
+    .replaceAll('return mode === "mini" ? 360 : 320;', "")
+    .replaceAll("return mini > 0 ? mini : 360;", "");
+  assert.doesNotMatch(syncSrc, /\b360\b/);
   assert.match(viewerSrc, /followReducer|sourceFollowScroll/);
   assert.match(viewerSrc, /PANE_SYNC_BEHAVIOR/);
   assert.match(viewerSrc, /scrollend/);

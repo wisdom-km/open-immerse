@@ -697,7 +697,8 @@ test("placeholder buttons append visible text for display and inline", () => {
   assert.equal(button.textContent.includes("原文第"), false);
   assert.equal(button.textContent.includes("(3)"), false);
   assert.equal(button.getAttribute("aria-label"), "公式 (3) · 原文第 7 页 · 点击查看原公式");
-  assert.equal(button.title, button.getAttribute("aria-label"));
+  assert.equal(button.title, "");
+  assert.equal(button.getAttribute("title"), null);
   assert.equal(button.dataset.oiTier, "placeholder");
   assert.equal(button.dataset.kind, "formula");
   assert.equal(button.dataset.oiReason, "crop-blank");
@@ -729,7 +730,8 @@ test("placeholder buttons append visible text for display and inline", () => {
   assert.match(inlineButton.textContent, /原公式/);
   assert.equal(inlineButton.textContent.includes("原文第"), false);
   assert.equal(inlineButton.getAttribute("aria-label"), "行内公式 · 原文第 7 页 · 点击查看原公式");
-  assert.equal(inlineButton.title, inlineButton.getAttribute("aria-label"));
+  assert.equal(inlineButton.title, "");
+  assert.equal(inlineButton.getAttribute("title"), null);
   assert.equal(inlineButton.styleProps["--oi-ph-w"], "56px");
   assert.equal(inlineButton.styleProps["--oi-ph-h"], "11px");
   assert.equal(inlineHost.childNodes.some((node) => node.className === "oi-pdf-eq-num"), false);
