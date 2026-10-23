@@ -339,7 +339,9 @@ import { cropPngFor } from "../lib/formula-crop-png.js";
 import {
   TARGET_BOX_PX,
   contextCropGeometry,
+  glyphRectPixels,
   paintTargetBox,
+  seatInkBox,
   targetBoxPixels
 } from "../lib/formula-context-crop.js";
 import {
@@ -4015,7 +4017,6 @@ async function renderContextVisionCrop(page, block, pageNumber, spec = {}) {
     pageHeight: unit.height,
     scale: requested
   });
-  if (!frame) frame = spec?.window;
   if (!frame?.bbox || !frame?.target) return "";
   let plan = visionRasterPlan({
     bbox: frame.bbox,
@@ -4077,7 +4078,17 @@ async function renderContextVisionCrop(page, block, pageNumber, spec = {}) {
     }
     await renderPdfPage(page, { canvasContext: context, viewport }).promise;
     compositeWhitePaper(context, canvas);
-    const rect = targetBoxPixels(frame.bbox, frame.target, unit.width, unit.height, plan.scale);
+    let rect = targetBoxPixels(frame.bbox, frame.target, unit.width, unit.height, plan.scale);
+    try {
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+      const glyphRect = glyphRectPixels(frame.bbox, block.glyphBoxes, unit.width, unit.height, plan.scale);
+      const seated = glyphRect
+        ? seatInkBox({ data: pixels?.data, width: canvas.width, height: canvas.height }, glyphRect)
+        : null;
+      if (seated) rect = seated;
+    } catch {
+      // No bitmap: the glyph-union target still contains the metric box.
+    }
     paintTargetBox(canvas, rect, TARGET_BOX_PX);
     const url = canvas.toDataURL("image/png");
     canvas.width = 0;
@@ -4758,6 +4769,18 @@ function restampFormulaStale(pageNumber, epoch, job, layout) {
 async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob) {
   const layout = getPageLayout(pageNumber);
   if (!layout?.blocks) return;
+  let pageWidth;
+  let pageHeight;
+  if (pdfDoc?.getPage) {
+    try {
+      const pdfPage = await pdfDoc.getPage(pageNumber);
+      const unit = pdfPage.getViewport({ scale: 1 });
+      pageWidth = unit.width;
+      pageHeight = unit.height;
+    } catch {
+      /* the render path recomputes from the live page */
+    }
+  }
   const flags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: formulaArxivSourceEnabled() });
   const mmLedger = mmPageLedger(pageNumber);
   const next = [];
@@ -4771,6 +4794,8 @@ async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob)
     if (sourceUnitId) stamped.sourceUnitId = sourceUnitId;
     else delete stamped.sourceUnitId;
     next.push(await scheduleFormulaBlock(stamped, {
+      pageWidth,
+      pageHeight,
       withRasterCrop: async (item) => item,
       cropPngFor: (block, hooks) => formulaModelPng(pageNumber, block, hooks),
       isStale: () => restampFormulaStale(pageNumber, epoch, job, layout),
@@ -4990,6 +5015,16 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
   }) || arxivIdentity : null;
   const formulaFlags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: arxivOn });
   const mmLedger = mmPageLedger(pageNumber);
+  let pageWidth;
+  let pageHeight;
+  try {
+    const unit = page?.getViewport?.({ scale: 1 });
+    pageWidth = unit?.width;
+    pageHeight = unit?.height;
+  } catch {
+    pageWidth = undefined;
+    pageHeight = undefined;
+  }
   for (const block of blocks || []) {
     if (isStale()) return null;
     if (block?.label !== "formula") {
@@ -4999,6 +5034,8 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
     const sourceUnitId = arxivOn ? arxivSourceUnitFor(block) : "";
     if (sourceUnitId) block.sourceUnitId = sourceUnitId;
     cropped.push(await scheduleFormulaBlock(block, {
+      pageWidth,
+      pageHeight,
       withRasterCrop: (item) => formulaModelDisplayCrop(raster, page, item, pageNumber, options),
       renderVisionCrop: (block, spec) => renderVisionFormulaCrop(page, raster, block, pageNumber, spec),
       cropPngFor: (block, hooks) => formulaModelPng(pageNumber, block, hooks),
