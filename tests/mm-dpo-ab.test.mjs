@@ -1552,20 +1552,20 @@ test("canonical scoring keeps exact match, and real DPO outputs only match when 
   assert.equal(canonicalizeLatex(String.raw`a = \\ -b`), "a=-b");
   assert.equal(latexCanonicalMatch(String.raw`x.\tag{2}\label{eq:x}`, "x"), true);
   assert.equal(
-    canonicalizeLatex(String.raw`\text{increase likelihood of $y_w$}`),
-    canonicalizeLatex(String.raw`\text{increase likelihood of }y_w`)
+    canonicalizeLatex(String.raw`_\text{increase likelihood of $y_w$}`),
+    canonicalizeLatex(String.raw`_{\mathrm{increase~likelihood~of~}y_{w}}`)
   );
   assert.equal(
-    canonicalizeLatex(String.raw`\text{increase likelihood of $y_w$}`)
-      === canonicalizeLatex(String.raw`\text{increase likelihood of $y_l$}`),
+    canonicalizeLatex(String.raw`_\text{increase likelihood of $y_w$}`)
+      === canonicalizeLatex(String.raw`_\text{increase likelihood of $y_l$}`),
     false
   );
   const dollars = referenceOf("p5-b4");
-  const lifted = dollars
-    .replace(String.raw`\text{increase likelihood of $y_w$}`, String.raw`\text{increase likelihood of }y_w`)
-    .replace(String.raw`\text{decrease likelihood of $y_l$}`, String.raw`\text{decrease likelihood of }y_l`);
-  assert.notEqual(lifted, dollars);
-  assert.equal(latexCanonicalMatch(lifted, dollars), true);
+  const model = dollars
+    .replace(String.raw`_\text{increase likelihood of $y_w$}`, String.raw`_{\mathrm{increase~likelihood~of~}y_{w}}`)
+    .replace(String.raw`_\text{decrease likelihood of $y_l$}`, String.raw`_{\mathrm{decrease~likelihood~of~}y_{l}}`);
+  assert.notEqual(model, dollars);
+  assert.equal(latexCanonicalMatch(model, dollars), true);
   assert.equal(latexCanonicalMatch(`${referenceOf("p3-b22")}\\tag { 3 }`, referenceOf("p3-b22")), true);
   assert.equal(canonicalizeLatex(String.raw`x.\tag {3}`), "x");
   assert.equal(canonicalizeLatex(String.raw`\operatorname{arg\,max}`), canonicalizeLatex(String.raw`\arg\max`));
@@ -2178,7 +2178,7 @@ test("paragraph seating keeps an interior line and leaves the neighbor outside t
   assert.ok(seated.y + seated.h >= 59);
 });
 
-test("glyph floor keeps the box on the union and pulls the stroke inside the canvas", () => {
+test("ink floor sits in the gap and keeps descenders that pass the font box", () => {
   const width = 160;
   const height = 150;
   const rgba = new Uint8ClampedArray(width * height * 4);
@@ -2194,21 +2194,75 @@ test("glyph floor keeps the box on the union and pulls the stroke inside the can
       }
     }
   };
-  ink(10, 140, 8, 18);
-  ink(40, 120, 40, 52);
-  ink(40, 120, 78, 100);
-  ink(10, 140, 128, 140);
-  const glyph = { x: 36, y: 36, w: 90, h: 70 };
+  // Previous line starts above the font box and overlaps its top. Formula ink
+  // starts after a blank gap. Descenders continue past the font box, 10px wide.
+  ink(10, 140, 0, 18);
+  ink(40, 110, 48, 68);
+  ink(50, 59, 69, 78);
+  ink(10, 140, 110, 122);
+  const glyph = { x: 20, y: 8, w: 100, h: 62 };
   const floored = seatTargetRect(
     { width, height, rgba },
-    { x: 8, y: 6, w: 140, h: 136 },
+    { x: 8, y: 0, w: 140, h: 130 },
     { glyphRect: glyph }
   );
-  assert.ok(floored.x <= glyph.x && floored.y <= glyph.y);
-  assert.ok(floored.x + floored.w >= glyph.x + glyph.w);
-  assert.ok(floored.y + floored.h >= glyph.y + glyph.h);
   assert.ok(floored.y > 18);
-  assert.ok(floored.y + floored.h < 128);
+  assert.ok(floored.y <= 48);
+  assert.ok(floored.y + floored.h >= 79);
+  assert.ok(floored.y + floored.h < 110);
+  assert.ok(floored.x <= 40);
+  assert.ok(floored.x + floored.w >= 111);
+  // Where-line inside the font union, parted by four blank rows from the
+  // following sentence. The sentence stays outside; the where-line stays in.
+  const whereRgba = new Uint8ClampedArray(width * height * 4);
+  whereRgba.fill(255);
+  const whereInk = (x0, x1, y0, y1) => {
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        const index = (y * width + x) * 4;
+        whereRgba[index] = 0;
+        whereRgba[index + 1] = 0;
+        whereRgba[index + 2] = 0;
+        whereRgba[index + 3] = 255;
+      }
+    }
+  };
+  whereInk(10, 140, 0, 18);
+  whereInk(40, 110, 40, 70);
+  whereInk(30, 120, 100, 128);
+  whereInk(30, 40, 129, 136);
+  whereInk(10, 140, 141, 149);
+  const whereBox = seatTargetRect(
+    { width, height, rgba: whereRgba },
+    { x: 8, y: 0, w: 140, h: 140 },
+    { glyphRect: { x: 20, y: 8, w: 120, h: 130 } }
+  );
+  assert.ok(whereBox.y > 18 && whereBox.y <= 40);
+  assert.ok(whereBox.y + whereBox.h >= 137);
+  assert.ok(whereBox.y + whereBox.h < 141);
+  // A five-pixel accent inside the font box stays with the formula.
+  const accentRgba = new Uint8ClampedArray(width * 80 * 4);
+  accentRgba.fill(255);
+  const accentInk = (x0, x1, y0, y1) => {
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        const index = (y * width + x) * 4;
+        accentRgba[index] = 0;
+        accentRgba[index + 1] = 0;
+        accentRgba[index + 2] = 0;
+        accentRgba[index + 3] = 255;
+      }
+    }
+  };
+  accentInk(70, 78, 20, 24);
+  accentInk(40, 100, 30, 55);
+  const accentBox = seatTargetRect(
+    { width, height: 80, rgba: accentRgba },
+    { x: 8, y: 0, w: 140, h: 70 },
+    { glyphRect: { x: 20, y: 8, w: 100, h: 60 } }
+  );
+  assert.ok(accentBox.y <= 20);
+  assert.ok(accentBox.y + accentBox.h >= 56);
   const canvasW = 94;
   const wide = new Uint8ClampedArray(canvasW * 40 * 4);
   wide.fill(255);
@@ -2261,8 +2315,44 @@ test("context window stays put, and the paragraph box is fully inside its crop",
     return { minX, minY, maxX, maxY };
   }
   function dark(image, x, y) {
+    if (x < 0 || y < 0 || x >= image.width || y >= image.height) return false;
     const index = (y * image.width + x) * 4;
     return image.data[index] < 96 && image.data[index + 1] < 96 && image.data[index + 2] < 96;
+  }
+  function edgeStrike(image, box, isDark) {
+    let struck = 0;
+    const y0 = box.minY;
+    const y1 = Math.min(image.height - 1, box.minY + TARGET_BOX_PX - 1);
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = box.minX; x <= box.maxX; x += 1) {
+        if (isDark(image, x, y - 1)) struck += 1;
+      }
+    }
+    return struck;
+  }
+  function minGapAlong(image, box, isDark, side) {
+    let min = 1000;
+    const x0 = box.minX + TARGET_BOX_PX;
+    const x1 = box.maxX - TARGET_BOX_PX;
+    for (let x = x0; x <= x1; x += 1) {
+      let rows = 0;
+      if (side === "top") {
+        for (let y = box.minY - 1; y >= 0; y -= 1) {
+          if (isDark(image, x, y)) break;
+          rows += 1;
+          if (rows > 30) break;
+        }
+      } else {
+        const above = box.maxY - TARGET_BOX_PX;
+        for (let y = above; y >= box.minY; y -= 1) {
+          if (isDark(image, x, y)) break;
+          rows += 1;
+          if (rows > 30) break;
+        }
+      }
+      if (rows < min) min = rows;
+    }
+    return min;
   }
   const contextPng = await session.renderContextCrop(p3b7);
   assert.equal(contextPng.w, 607);
@@ -2289,23 +2379,8 @@ test("context window stays put, and the paragraph box is fully inside its crop",
     const box = redBounds(image);
     assert.ok(box.minX > 1 && box.minY > 1, id);
     assert.ok(box.maxX < image.width - 2 && box.maxY < image.height - 2, id);
-    let struck = 0;
-    for (let y = box.minY; y <= box.minY + 2; y += 1) {
-      for (let x = Math.max(0, box.minX - 8); x < box.minX; x += 1) {
-        if (dark(image, x, y)) struck += 1;
-      }
-    }
-    // A descender beside the box can touch this 8px strip. A line through the
-    // formula would also fail the gap check below.
-    assert.ok(struck <= 6, id);
-    let gapAbove = 0;
-    const sampleX = Math.min(box.maxX - 8, box.minX + Math.floor((box.maxX - box.minX) * 0.35));
-    for (let y = box.minY - 1; y >= 0; y -= 1) {
-      if (dark(image, sampleX, y)) break;
-      gapAbove += 1;
-      if (gapAbove > 12) break;
-    }
-    assert.ok(gapAbove >= 1, id);
+    assert.equal(edgeStrike(image, box, dark), 0, id);
+    assert.ok(minGapAlong(image, box, dark, "top") >= 1, id);
     if (id === "p4-b7") assert.ok(box.maxY - box.minY > 140);
   }
   const pageWidth = 612;
@@ -2373,14 +2448,17 @@ test("context window stays put, and the paragraph box is fully inside its crop",
       const box = redBounds(image);
       const glyphs = glyphPixels(crop, formula.glyphBoxes, plan.scale);
       assert.ok(Number.isFinite(glyphs.minX), label);
-      assert.ok(box.minX + TARGET_BOX_PX <= glyphs.minX + 1, `${label} left`);
-      assert.ok(box.minY + TARGET_BOX_PX <= glyphs.minY + 1, `${label} top`);
-      assert.ok(box.maxX - TARGET_BOX_PX >= glyphs.maxX - 1, `${label} right`);
-      assert.ok(box.maxY - TARGET_BOX_PX >= glyphs.maxY - 1, `${label} bottom`);
       assert.ok(box.maxX < image.width && box.maxY < image.height, label);
       assert.ok(box.minX >= 0 && box.minY >= 0, label);
       const roomRight = glyphs.maxX + TARGET_BOX_PX < image.width - 1;
       if (roomRight) assert.equal(strokeThickness(image, box, "right"), TARGET_BOX_PX, label);
+      if (formula.id === "p3-b16" || formula.id === "p3-b22" || formula.id === "p4-b7") {
+        assert.equal(edgeStrike(image, box, dark), 0, label);
+        assert.ok(minGapAlong(image, box, dark, "top") >= 1, label);
+      }
+      if (formula.id === "p3-b8" || formula.id === "p4-b3") {
+        assert.ok(minGapAlong(image, box, dark, "bottom") >= 1, label);
+      }
     }
   }
 });

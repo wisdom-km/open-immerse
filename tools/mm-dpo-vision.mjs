@@ -410,28 +410,11 @@ function glyphRectInCrop(crop, glyphBoxes, pageWidth, pageHeight, scale) {
   return unionPixelBoxes(rects);
 }
 
-function outsideGlyph(x, y, glyph) {
-  return x < glyph.x || y < glyph.y || x >= glyph.x + glyph.w || y >= glyph.y + glyph.h;
-}
-
-function bandHitsForeign(rgba, width, height, glyph, x0, y0, x1, y1) {
-  const left = Math.max(0, Math.floor(x0));
-  const top = Math.max(0, Math.floor(y0));
-  const right = Math.min(width - 1, Math.floor(x1));
-  const bottom = Math.min(height - 1, Math.floor(y1));
-  for (let y = top; y <= bottom; y += 1) {
-    for (let x = left; x <= right; x += 1) {
-      if (!darkPixel(rgba, width, x, y)) continue;
-      if (outsideGlyph(x, y, glyph)) return true;
-    }
-  }
-  return false;
-}
-
 function rowDarkCount(rgba, width, x0, x1, y) {
   let count = 0;
   const left = Math.max(0, x0);
   const right = Math.min(width - 1, x1);
+  if (y < 0 || right < left) return 0;
   for (let x = left; x <= right; x += 1) {
     if (darkPixel(rgba, width, x, y)) count += 1;
   }
@@ -439,43 +422,115 @@ function rowDarkCount(rgba, width, x0, x1, y) {
 }
 
 /**
- * Descenders and side ink sit a few pixels outside the PDF glyph box.
- * A neighboring text line is a dense row, or ink after a blank gap.
- * `bleed` is the outermost formula pixel on that side (inclusive).
+ * Ink of the formula, measured inside the font-metric union.
+ * Tall brackets overlap the previous line; that line is a separate band
+ * above a blank gap, so it is not part of the formula ink.
+ * A blank of four rows splits a real neighboring line (the sentence under
+ * p4-b7's where-line, or the line above a short inline). Descenders that
+ * continue without that blank stay in the formula band. A where-line that
+ * is mostly inside the union stays. An accent that sits entirely inside
+ * the union stays even when it is only a few pixels tall.
  */
-function verticalMargin(rgba, width, height, glyph, dir) {
-  const glyphEdge = dir > 0 ? glyph.y + glyph.h - 1 : glyph.y;
-  const start = dir > 0 ? glyph.y + glyph.h : glyph.y - 1;
-  const lineMin = Math.max(10, Math.floor(Math.max(1, glyph.w) * 0.08));
-  let bleed = glyphEdge;
-  let neighbor = null;
+function formulaInkRect(rgba, width, height, glyph) {
+  if (!rgba || !(width > 0) || !(height > 0) || !glyph) return null;
+  const gL = glyph.x;
+  const gT = glyph.y;
+  const gR = glyph.x + glyph.w;
+  const gB = glyph.y + glyph.h;
+  const x0 = Math.max(0, gL);
+  const x1 = Math.min(width - 1, gR - 1);
+  if (x1 < x0) return null;
+  const scanTop = Math.max(0, gT - 24);
+  const scanBot = Math.min(height - 1, gB + 23);
+  const bands = [];
+  let start = -1;
+  let prev = -1;
   let hole = 0;
-  let parted = false;
-  if (!rgba || !(width > 0) || !(height > 0)) return { bleed, neighbor };
-  for (let step = 0; step < 28; step += 1) {
-    const y = start + dir * step;
-    if (y < 0 || y >= height) break;
-    const count = rowDarkCount(rgba, width, glyph.x, glyph.x + glyph.w - 1, y);
-    if (count === 0) {
+  for (let y = scanTop; y <= scanBot; y += 1) {
+    if (rowDarkCount(rgba, width, x0, x1, y) > 0) {
+      if (start < 0) start = y;
+      prev = y;
+      hole = 0;
+    } else if (start >= 0) {
       hole += 1;
-      if (hole >= 3) parted = true;
-      continue;
+      if (hole >= 4) {
+        bands.push([start, prev]);
+        start = -1;
+        prev = -1;
+        hole = 0;
+      }
     }
-    if (parted || count >= lineMin) {
-      neighbor = y;
-      break;
-    }
-    if (Math.abs(y - glyphEdge) > 14) break;
-    bleed = y;
-    hole = 0;
   }
-  return { bleed, neighbor };
+  if (start >= 0) bands.push([start, prev]);
+  if (!bands.length) return null;
+  const overlapOf = (band) => {
+    const top = Math.max(band[0], gT);
+    const bottom = Math.min(band[1], gB - 1);
+    return bottom >= top ? bottom - top + 1 : 0;
+  };
+  let main = bands[0];
+  let mainOverlap = -1;
+  for (const band of bands) {
+    const overlap = overlapOf(band);
+    if (overlap > mainOverlap) {
+      mainOverlap = overlap;
+      main = band;
+    }
+  }
+  const owned = bands.filter((band) => {
+    if (band === main) return true;
+    const overlap = overlapOf(band);
+    const heightPx = band[1] - band[0] + 1;
+    const fullyInside = band[0] >= gT && band[1] <= gB - 1;
+    if (fullyInside) return true;
+    // A where-line lives in the union and may hang a few pixels past it.
+    // The previous line only clips the top, so its overlap stays small.
+    if (overlap < 8) return false;
+    return overlap / heightPx >= 0.75;
+  });
+  let minY = Infinity;
+  let maxY = -1;
+  for (const band of owned) {
+    minY = Math.min(minY, band[0]);
+    maxY = Math.max(maxY, band[1]);
+  }
+  const sx0 = Math.max(0, gL - 8);
+  const sx1 = Math.min(width - 1, gR - 1 + 8);
+  let minX = Infinity;
+  let maxX = -1;
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = sx0; x <= sx1; x += 1) {
+      if (!darkPixel(rgba, width, x, y)) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+    }
+  }
+  if (!(maxX >= minX) || !(maxY >= minY)) return null;
+  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+
+function bandHitsOutside(rgba, width, height, ink, x0, y0, x1, y1) {
+  const left = Math.max(0, Math.floor(x0));
+  const top = Math.max(0, Math.floor(y0));
+  const right = Math.min(width - 1, Math.floor(x1));
+  const bottom = Math.min(height - 1, Math.floor(y1));
+  const iL = ink.x;
+  const iT = ink.y;
+  const iR = ink.x + ink.w;
+  const iB = ink.y + ink.h;
+  for (let y = top; y <= bottom; y += 1) {
+    for (let x = left; x <= right; x += 1) {
+      if (!darkPixel(rgba, width, x, y)) continue;
+      if (x < iL || y < iT || x >= iR || y >= iB) return true;
+    }
+  }
+  return false;
 }
 
 /**
- * Inner edge sits outside the glyph union. Descenders stay inside the pad.
- * A neighboring line pulls the edge into the gap, and the edge stops on the
- * glyph union. The rect is never smaller than that union.
+ * The box stays outside the formula's ink, not the raw font-metric union.
+ * Edges move into the blank between that ink and a neighboring line, and
+ * stop on the ink. Descenders past the font box stay inside.
  */
 function seatAroundGlyphs(image, glyphRect, thickness, gap) {
   const rgba = image?.rgba || image?.data;
@@ -483,47 +538,38 @@ function seatAroundGlyphs(image, glyphRect, thickness, gap) {
   const height = image?.height | 0;
   const t = thickness > 0 ? thickness : TARGET_BOX_PX;
   const g = gap > 0 ? gap : 0;
-  const gL = glyphRect.x;
-  const gT = glyphRect.y;
-  const gR = glyphRect.x + glyphRect.w;
-  const gB = glyphRect.y + glyphRect.h;
-  const above = verticalMargin(rgba, width, height, glyphRect, -1);
-  const below = verticalMargin(rgba, width, height, glyphRect, 1);
-  let top = above.bleed - g;
-  let bottom = below.bleed + 1 + g;
-  if (above.neighbor != null) {
-    const pushed = above.neighbor + 1 + t + g;
-    if (pushed > top) top = Math.min(above.bleed, pushed);
-  }
-  if (below.neighbor != null) {
-    const room = below.neighbor - t - g;
-    if (room < bottom) bottom = Math.max(below.bleed + 1, room);
-  }
-  if (top > gT) top = gT;
-  if (bottom < gB) bottom = gB;
-  let left = gL - g;
-  let right = gR + g;
+  const ink = formulaInkRect(rgba, width, height, glyphRect) || glyphRect;
+  const iL = ink.x;
+  const iT = ink.y;
+  const iR = ink.x + ink.w;
+  const iB = ink.y + ink.h;
+  let left = iL - g;
+  let top = iT - g;
+  let right = iR + g;
+  let bottom = iB + g;
   if (rgba && width > 0 && height > 0) {
-    const hits = (x0, y0, x1, y1) => bandHitsForeign(rgba, width, height, glyphRect, x0, y0, x1, y1);
-    while (left < gL && hits(left - t, top, left - 1, bottom - 1)) left += 1;
-    while (right > gR && hits(right, top, right + t - 1, bottom - 1)) right -= 1;
+    const hits = (x0, y0, x1, y1) => bandHitsOutside(rgba, width, height, ink, x0, y0, x1, y1);
+    while (top < iT && hits(Math.min(left, iL), top - t, Math.max(right, iR) - 1, top - 1)) top += 1;
+    while (bottom > iB && hits(Math.min(left, iL), bottom, Math.max(right, iR) - 1, bottom + t - 1)) bottom -= 1;
+    while (left < iL && hits(left - t, Math.min(top, iT), left - 1, Math.max(bottom, iB) - 1)) left += 1;
+    while (right > iR && hits(right, Math.min(top, iT), right + t - 1, Math.max(bottom, iB) - 1)) right -= 1;
   }
   if (width > 0 && height > 0) {
-    if (gL >= t) left = Math.min(gL, Math.max(left, t));
-    if (gT >= t) top = Math.min(gT, Math.max(top, t));
-    if (gR <= width - t) right = Math.max(gR, Math.min(right, width - t));
-    if (gB <= height - t) bottom = Math.max(gB, Math.min(bottom, height - t));
+    if (iL >= t) left = Math.min(iL, Math.max(left, t));
+    if (iT >= t) top = Math.min(iT, Math.max(top, t));
+    if (iR <= width - t) right = Math.max(iR, Math.min(right, width - t));
+    if (iB <= height - t) bottom = Math.max(iB, Math.min(bottom, height - t));
   }
   if (!(right > left) || !(bottom > top)) {
-    return { x: gL, y: gT, w: glyphRect.w, h: glyphRect.h };
+    return { x: iL, y: iT, w: ink.w, h: ink.h };
   }
   return { x: left, y: top, w: right - left, h: bottom - top };
 }
 
 /**
  * Pull a box edge off a neighboring text line into the gap.
- * With `glyphRect`, the box stays at least the glyph union (padded outward)
- * and only moves inward while the stroke would cover ink outside that union.
+ * With `glyphRect`, the box stays outside the ink measured inside that union
+ * and only moves inward while the stroke would cover a neighboring line.
  * Without glyph boxes, interior bands stay, so a detector box that also
  * contains the next line (p4-b7's "where Z(x)=…") is not trimmed away.
  */
