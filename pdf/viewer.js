@@ -322,7 +322,9 @@ import {
   fitSnappedFormulaCss,
   formulaDevicePixels,
   formulaRasterCacheKey,
+  formulaInkPadPx,
   formulaRasterPlan,
+  formulaRegionWindow,
   imageInkRatio,
   isSourceRedrawBlock,
   pageCropLooksEmpty,
@@ -334,6 +336,14 @@ import { KATEX_RENDER_OPTIONS } from "../lib/formula-katex.js";
 import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
 import { scheduleFormulaBlock, publishRestampedBlocks } from "../lib/formula-schedule.js";
 import { cropPngFor } from "../lib/formula-crop-png.js";
+import {
+  VISION_CROP_SCALE,
+  measureVisionRegion,
+  visionCropCacheKey,
+  visionPadFor,
+  visionRasterPlan,
+  visionSourceBbox
+} from "../lib/formula-vision-crop.js";
 import { createFormulaCache } from "../lib/formula-cache.js";
 import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
 import { mmPageLedger, resetMmPages } from "../lib/formula-mm-ledger.js";
@@ -3823,6 +3833,7 @@ function paintFormulaMask(canvas, crop, block) {
 }
 
 const formulaRasterCache = createFormulaRasterCache();
+const visionCropCache = createFormulaRasterCache();
 
 function formulaPaneMetrics(pageNumber, unitViewport) {
   const unitW = Number(unitViewport?.width) || 0;
@@ -3964,6 +3975,121 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
 
 async function renderSharpFormulaCrop(page, raster, block, pageNumber) {
   return renderSharpVisualCrop(page, raster, block, pageNumber);
+}
+
+function cropRegionCanvas(canvas, relativeBbox) {
+  if (!canvas || !Array.isArray(relativeBbox) || relativeBbox.length < 4) return null;
+  const rect = rasterCropRect(relativeBbox, canvas.width, canvas.height);
+  if (rect.sw < 1 || rect.sh < 1) return null;
+  if (rect.sx === 0 && rect.sy === 0 && rect.sw === canvas.width && rect.sh === canvas.height) return canvas;
+  const out = document.createElement("canvas");
+  out.width = rect.sw;
+  out.height = rect.sh;
+  const ctx = out.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(canvas, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, rect.sw, rect.sh);
+  return out;
+}
+
+/**
+ * Tight PNG for the vision model. Scale and pad come from the vision spec.
+ * The page raster and renderSharpVisualCrop are not this bitmap.
+ */
+async function renderVisionFormulaCrop(page, raster, block, pageNumber, spec = {}) {
+  void raster;
+  if (!page || block?.label !== "formula" || typeof page.getViewport !== "function") return "";
+  const source = visionSourceBbox(block);
+  if (!source) return "";
+  let unit = null;
+  try {
+    unit = page.getViewport({ scale: 1 });
+  } catch {
+    return "";
+  }
+  const requested = Number(spec?.scale) > 0 ? Number(spec.scale) : VISION_CROP_SCALE;
+  const plan = visionRasterPlan({
+    bbox: source,
+    pageWidth: unit.width,
+    pageHeight: unit.height,
+    scale: requested
+  });
+  if (!plan || plan.pixelWidth < 1 || plan.pixelHeight < 1) return "";
+  const pad = visionPadFor(block, plan.scale);
+  const namedPx = Number(spec?.pad?.namedPx) > 0 ? Number(spec.pad.namedPx) : pad.namedPx;
+  const key = visionCropCacheKey({
+    docId,
+    page: pageNumber,
+    bbox: source,
+    scale: plan.scale,
+    namedPx,
+    inline: pad.inline,
+    protect: pad.protect
+  });
+  const cached = visionCropCache.get(key);
+  if (cached) {
+    rememberFormulaModelCrop(pageNumber, { ...block, imageUrl: cached });
+    return cached;
+  }
+  let canvas = null;
+  try {
+    const full = page.getViewport({ scale: plan.scale });
+    const fitted = formulaRegionWindow(source, full.width, full.height);
+    if (fitted.pixelWidth < 1 || fitted.pixelHeight < 1) return "";
+    const viewport = page.getViewport({
+      scale: plan.scale,
+      offsetX: -source[0] * full.width,
+      offsetY: -source[1] * full.height
+    });
+    canvas = document.createElement("canvas");
+    canvas.width = fitted.pixelWidth;
+    canvas.height = fitted.pixelHeight;
+    const context = formulaDrawContext(canvas);
+    if (!context) {
+      canvas.width = 0;
+      canvas.height = 0;
+      return "";
+    }
+    await renderPdfPage(page, { canvasContext: context, viewport }).promise;
+    compositeWhitePaper(context, canvas);
+    let image = null;
+    try {
+      image = context.getImageData(0, 0, canvas.width, canvas.height);
+    } catch {
+      image = null;
+    }
+    const measured = image
+      ? measureVisionRegion(block, image, {
+        scale: plan.scale,
+        sourceBbox: source,
+        padPx: formulaInkPadPx(namedPx, plan.scale)
+      })
+      : null;
+    let out = canvas;
+    let pageBbox = source;
+    if (measured?.relativeBbox) {
+      const tight = cropRegionCanvas(canvas, measured.relativeBbox);
+      if (tight) {
+        out = tight;
+        pageBbox = measured.pageBbox || source;
+      }
+    }
+    paintFormulaMask(out, pageBbox, block);
+    const url = out.toDataURL("image/png");
+    if (out !== canvas) out.width = 0;
+    canvas.width = 0;
+    canvas.height = 0;
+    canvas = null;
+    if (!/^data:image\/png;base64,/.test(url)) return "";
+    visionCropCache.set(key, url);
+    rememberFormulaModelCrop(pageNumber, { ...block, imageUrl: url });
+    return url;
+  } catch {
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+    return "";
+  }
 }
 
 function rasterRegionInk(canvas, bbox) {
@@ -4701,8 +4827,8 @@ async function readCachedArxivAlignment(query) {
   }
 }
 
-// Page-raster PNG keyed by the stable bid. Display may later swap imageUrl
-// for a zoom-dependent redraw; the model cache keeps this URL.
+// Stable model PNG keyed by bid. Display may swap imageUrl for a zoom-dependent
+// redraw. The page-raster URL is the fallback; a vision render overwrites it.
 const formulaModelCrops = new Map();
 
 function modelPngPayloadUrl(block) {
@@ -4743,9 +4869,10 @@ async function formulaModelDisplayCrop(raster, page, item, pageNumber, options =
 }
 
 async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, options = {}) {
-  // The PNG sent to the model is always the CROP_SCALE page raster.
-  // Display keeps the pre-fix redraw. Reopen hydrate opts out, then refreshes
-  // the screen without scheduling another formula request.
+  // Display keeps the sharp redraw, or the page raster when sharp is false.
+  // The model PNG is the vision tight crop, not that redraw. Reopen hydrate
+  // opts out of the redraw, then refreshes the screen without a second send
+  // when the cache already holds this vision input.
   try { await formulaSettingsReady; } catch { /* defaults stay off */ }
   const cropped = [];
   const arxivOn = formulaArxivSourceEnabled();
@@ -4766,6 +4893,7 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
     if (sourceUnitId) block.sourceUnitId = sourceUnitId;
     cropped.push(await scheduleFormulaBlock(block, {
       withRasterCrop: (item) => formulaModelDisplayCrop(raster, page, item, pageNumber, options),
+      renderVisionCrop: (block, spec) => renderVisionFormulaCrop(page, raster, block, pageNumber, spec),
       cropPngFor: (block, hooks) => formulaModelPng(pageNumber, block, hooks),
       isStale,
       signal: options.signal,
@@ -12359,6 +12487,7 @@ async function adoptDoc(doc, title) {
   titleStructure = null;
   layoutCache.clear();
   formulaRasterCache.clear();
+  visionCropCache.clear();
   pageOriginals = [];
   pageResults = [];
   pageItems = 0;
@@ -13332,6 +13461,7 @@ function setHasDoc(has) {
     pageResults = [];
     layoutCache.clear();
     formulaRasterCache.clear();
+    visionCropCache.clear();
     renderArticle();
   }
   updatePager();
