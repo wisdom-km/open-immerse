@@ -97,7 +97,7 @@ test("figure card tokens, container query, and reader colors only", () => {
   assert.equal(/body\.oi-settings/.test(card), false);
 });
 
-test("figure cards write figureLabel and leave formula placeholders on the formula copy", () => {
+test("figure cards derive figureLabel on the render copy and leave formula placeholders on the formula copy", () => {
   const viewer = read("pdf/viewer.js");
   assert.match(viewer, /import \{ parseFigureLabel \} from "\.\.\/lib\/figure-label\.js"/);
   assert.match(viewer, /shown\.figureLabel = figureLabel/);
@@ -106,9 +106,14 @@ test("figure cards write figureLabel and leave formula placeholders on the formu
   assert.match(viewer, /placeholderCopy\(shown, \{ inline, kind: "formula" \}\)/);
   assert.match(viewer, /function jumpAssetFallback\(notice\)/);
   assert.match(viewer, /presentSourceForJump\(notice\)/);
+  assert.match(viewer, /function visualCropNotice\(block, page, caption = null\)/);
+  assert.match(viewer, /parseFigureLabel\(captionSourceText\(caption\)\)/);
+  assert.match(viewer, /parsed\.kind === copyKind/);
+  assert.doesNotMatch(viewer, /noticeCaption/);
   const orphan = viewer.slice(viewer.indexOf("function orphanVisualNotice"), viewer.indexOf("function jumpAssetFallback"));
   assert.match(orphan, /parseFigureLabel\(captionSourceText\(block\)\)/);
-  assert.match(orphan, /visualCropNotice\(\{ label: table \? "table" : "figure" \}, page\)/);
+  assert.match(orphan, /const table = parsed\?\.kind === "table"/);
+  assert.match(orphan, /visualCropNotice\(\{ label: table \? "table" : "figure" \}, page, block\)/);
   assert.doesNotMatch(orphan, /figurePlaceholder/);
   assert.doesNotMatch(viewer.slice(viewer.indexOf("function visualCropNotice"), viewer.indexOf("function orphanVisualNotice")), /placeholderEnabled|tier3/);
   const end = viewer.lastIndexOf("init();");

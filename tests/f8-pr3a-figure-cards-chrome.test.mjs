@@ -30,6 +30,7 @@ const MIME = {
 };
 const EMPTY_CROP = "export function pageCropLooksEmpty(pageRatio, bbox) {";
 const FORCED_CROP = "export function pageCropLooksEmpty(pageRatio, bbox) {\n  return true;";
+const CARD_HOOK = "globalThis.__oiFigureCards = { orphanVisualNotice, visualCropNotice };";
 
 const PROBE = `(() => {
   const shown = (button, selector) => {
@@ -98,6 +99,12 @@ function serveRepo() {
         if (!source.includes(EMPTY_CROP)) throw new Error("pageCropLooksEmpty hook point missing");
         body = Buffer.from(source.replace(EMPTY_CROP, FORCED_CROP));
         patched = true;
+      }
+      if (rel === "pdf/viewer.js") {
+        const source = body.toString("utf8");
+        if (!source.includes("function orphanVisualNotice")) throw new Error("orphanVisualNotice hook point missing");
+        if (source.includes(CARD_HOOK)) throw new Error("card hook must stay out of the repo");
+        body = Buffer.from(`${source}\n${CARD_HOOK}\n`);
       }
       res.writeHead(200, {
         "content-type": MIME[extname(file)] || "application/octet-stream",
@@ -457,4 +464,188 @@ test("figure and table placeholder cards", { timeout: 240000 }, async (t) => {
   assert.ok(Math.abs(table.height - 64) < 1, `table height ${table.height}`);
   assert.ok(table.width >= 160, `table width ${table.width}`);
   assert.ok(fits(table), `table overflow ${JSON.stringify(table)}`);
+});
+
+test("caption-only cards and a hidden source without a pair", { timeout: 240000 }, async (t) => {
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  assert.equal(viewer.includes(CARD_HOOK), false);
+  assert.equal(existsSync(fixture), true, "tests/fixtures/Attention_Is_All_You_Need.pdf is missing");
+
+  const handle = { child: null, cdp: null, server: null, ownedDir: null, userDataDir: null };
+  t.after(async () => {
+    try {
+      handle.cdp?.dispose();
+    } finally {
+      await cleanupChrome({
+        t,
+        child: handle.child,
+        server: handle.server,
+        ownedDir: handle.ownedDir,
+        userDataDir: handle.userDataDir
+      });
+    }
+  });
+
+  handle.server = await serveRepo();
+  handle.ownedDir = mkdtempSync(join(tmpdir(), "oi-fig-cards-"));
+  rememberOwnedTemp(handle.ownedDir);
+  const userDataDir = join(handle.ownedDir, "profile");
+  const scratchDir = join(handle.ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  handle.userDataDir = userDataDir;
+  handle.child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
+  handle.cdp = cdp;
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const send = (method, params, timeoutMs) => cdp.send(method, params, sessionId, timeoutMs);
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(() => {
+      try { localStorage.setItem("reader.follow", "0"); } catch {}
+      globalThis.chrome = {
+        storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
+        runtime: {
+          getURL() { return new URL("./vendor/pdf.worker.min.mjs", location.href).href; },
+          sendMessage(message) {
+            const type = message && message.type;
+            if (type === "OI_GET_SETTINGS") {
+              return Promise.resolve({ settings: { pdfAutoTranslate: false, batchSize: 8, targetLang: "zh-CN", pdfLayout: { mode: "" }, features: { pdf: true } } });
+            }
+            if (type === "OI_PDF_STRUCTURE") return Promise.resolve({ ok: false });
+            if (type === "OI_ENSURE_GLMOCR") return Promise.resolve({ ok: true });
+            return Promise.resolve({ ok: true });
+          },
+          onMessage: { addListener() {} }
+        }
+      };
+    })();`
+  });
+
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, 30000);
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails;
+      throw new Error(detail.exception?.description || detail.text || JSON.stringify(detail));
+    }
+    return result.result?.value;
+  };
+  const origin = `http://127.0.0.1:${handle.server.address().port}`;
+  const src = `${origin}/tests/fixtures/Attention_Is_All_You_Need.pdf`;
+  await send("Page.navigate", { url: `${origin}/pdf/viewer.html?src=${encodeURIComponent(src)}` });
+  const waitFor = async (expression, label, timeoutMs = 90000) => {
+    const started = Date.now();
+    let last = null;
+    while (Date.now() - started < timeoutMs) {
+      last = await evaluate(expression);
+      if (last) return last;
+      await sleep(200);
+    }
+    throw new Error(`${label}: ${JSON.stringify(last)}`);
+  };
+  await waitFor(`(() => {
+    const pager = document.getElementById("sourcePageLabel")?.textContent || "";
+    return /\\/\\s*15/.test(pager) ? pager : "";
+  })()`, "Attention open");
+  await waitFor(`globalThis.__oiFigureCards ? "hook" : ""`, "figure card hook");
+
+  const mount = async (kind, block, page, caption) => evaluate(`(() => {
+    const api = globalThis.__oiFigureCards;
+    const row = api.${kind}(${JSON.stringify(block)}, ${page}, ${JSON.stringify(caption)});
+    const host = document.getElementById("oi-orphan-host") || document.body.appendChild(Object.assign(document.createElement("div"), { id: "oi-orphan-host" }));
+    const slot = document.createElement("div");
+    host.append(slot);
+    slot.append(row);
+    const button = row.querySelector("button.oi-figure-placeholder");
+    const read = ${PROBE}.read(button);
+    read.pairHost = Boolean(button.closest("[data-pair-id]"));
+    read.slot = slot.dataset.oiSlot = ${JSON.stringify(kind + ":" + (caption?.text || block.text || ""))};
+    return read;
+  })()`);
+
+  const table = await mount("orphanVisualNotice", {
+    label: "caption",
+    text: "Table 3: Win rates.",
+    sourceText: "Table 3: Win rates."
+  }, 5, null);
+  assert.equal(table.pairHost, false);
+  assert.equal(table.figureLabel, "3");
+  assert.equal(table.l0, "点击查看原表");
+  assert.equal(table.s0, "表 3 · 原文第 5 页");
+  assert.equal(table.label, "表 3 · 原文第 5 页 · 点击查看原表");
+
+  const figure = await mount("orphanVisualNotice", {
+    label: "caption",
+    text: "Figure 4: The model.",
+    sourceText: "Figure 4: The model."
+  }, 7, null);
+  assert.equal(figure.pairHost, false);
+  assert.equal(figure.figureLabel, "4");
+  assert.equal(figure.l0, "点击查看原图");
+  assert.equal(figure.s0, "图 4 · 原文第 7 页");
+  assert.equal(figure.label, "图 4 · 原文第 7 页 · 点击查看原图");
+
+  // A figure block keeps figure copy when the caption is a table, and the number is dropped.
+  const mismatch = await mount("visualCropNotice", { label: "figure", id: "m-fig" }, 4, {
+    label: "caption",
+    text: "Table 2: Results.",
+    sourceText: "Table 2: Results."
+  });
+  assert.equal(mismatch.figureLabel, "");
+  assert.equal(mismatch.l0, "点击查看原图");
+  assert.equal(mismatch.s0, "原文第 4 页");
+  assert.equal(mismatch.label, "图 · 原文第 4 页 · 点击查看原图");
+
+  const mismatchTable = await mount("visualCropNotice", { label: "table", id: "m-table" }, 8, {
+    label: "caption",
+    text: "Figure 9: Detail.",
+    sourceText: "Figure 9: Detail."
+  });
+  assert.equal(mismatchTable.figureLabel, "");
+  assert.equal(mismatchTable.l0, "点击查看原表");
+  assert.equal(mismatchTable.s0, "原文第 8 页");
+  assert.equal(mismatchTable.label, "表 · 原文第 8 页 · 点击查看原表");
+
+  await evaluate(`document.querySelector("#sourceModeSeg [data-source-mode='hidden']").click()`);
+  await waitFor(`document.querySelector(".workspace")?.dataset.sourceMode === "hidden" ? "hidden" : ""`, "source hidden");
+  await evaluate(`(() => {
+    const pop = document.getElementById("sourcePop");
+    if (pop && pop.hidden === false) document.getElementById("sourcePopClose")?.click();
+    return true;
+  })()`);
+  await waitFor(`document.getElementById("sourcePop")?.hidden === true ? "closed" : ""`, "source pop closed");
+  await evaluate(`new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))`);
+  const popped = await evaluate(`(() => {
+    const button = document.querySelector("#oi-orphan-host button.oi-figure-placeholder[data-figure-label='3']");
+    const before = {
+      mode: document.querySelector(".workspace")?.dataset.sourceMode || "",
+      view: document.querySelector(".workspace")?.dataset.view || "",
+      pairHost: Boolean(button.closest("[data-pair-id]"))
+    };
+    button.click();
+    const workspace = document.querySelector(".workspace");
+    const pop = document.getElementById("sourcePop");
+    return {
+      before,
+      mode: workspace?.dataset.sourceMode || "",
+      view: workspace?.dataset.view || "",
+      pop: pop ? pop.hidden === false : false,
+      popFlag: workspace?.dataset.sourcePop || "",
+      sideChecked: document.querySelector("#sourceModeSeg [data-source-mode='side']")?.getAttribute("aria-checked") || "",
+      hiddenChecked: document.querySelector("#sourceModeSeg [data-source-mode='hidden']")?.getAttribute("aria-checked") || "",
+      biChecked: document.querySelector("#viewSeg [data-view='bi']")?.getAttribute("aria-checked") || ""
+    };
+  })()`);
+  assert.equal(popped.before.pairHost, false);
+  assert.equal(popped.before.mode, "hidden");
+  assert.equal(popped.before.view, "zh");
+  assert.equal(popped.pop, true, JSON.stringify(popped));
+  assert.equal(popped.popFlag, "open");
+  assert.equal(popped.mode, "hidden");
+  assert.equal(popped.view, "zh");
+  assert.equal(popped.hiddenChecked, "true");
+  assert.equal(popped.sideChecked, "false");
+  assert.equal(popped.biChecked, "false");
 });

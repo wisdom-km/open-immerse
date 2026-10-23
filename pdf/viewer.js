@@ -4575,7 +4575,7 @@ function appendCropOrNotice(node, block, imageClass, page, caption = null) {
     node.append(visualCropPendingBox(block, shownPage));
     return;
   }
-  const notice = withNoticeCaption(caption, () => visualCropNotice(block, shownPage));
+  const notice = visualCropNotice(block, shownPage, caption);
   const painted = notice?.classList?.contains("oi-pdf-asset-fallback")
     ? notice
     : notice?.querySelector?.(".oi-pdf-asset-fallback");
@@ -4655,20 +4655,8 @@ function markVisualCropsFailed(layout) {
   }
 }
 
-let noticeCaption = null;
-
 function captionSourceText(block) {
   return String(block?.sourceText || block?.text || "").trim();
-}
-
-function withNoticeCaption(caption, build) {
-  const previous = noticeCaption;
-  noticeCaption = caption || null;
-  try {
-    return build();
-  } finally {
-    noticeCaption = previous;
-  }
 }
 
 function figureCardCapPx(block, page) {
@@ -4688,12 +4676,12 @@ function figureCardCapPx(block, page) {
   return widthPx > 0 ? widthPx : 0;
 }
 
-function visualCropNotice(block, page) {
+function visualCropNotice(block, page, caption = null) {
   const n = Number(page) || 0;
   if ((block?.label === "figure" || block?.label === "table") && n >= 1) {
     const kind = block.label === "table" ? "表" : "图";
     const copyKind = kind === "表" ? "table" : "figure";
-    const parsed = parseFigureLabel(captionSourceText(noticeCaption));
+    const parsed = parseFigureLabel(captionSourceText(caption));
     let figureLabel = String(block?.figureLabel || "").trim().replace(/^\(|\)$/g, "");
     if (!figureLabel && parsed && parsed.kind === copyKind) figureLabel = parsed.num;
     const shown = { ...block, page: n };
@@ -4751,7 +4739,7 @@ function visualCropNotice(block, page) {
 function orphanVisualNotice(block, page) {
   const parsed = parseFigureLabel(captionSourceText(block));
   const table = parsed?.kind === "table";
-  return withNoticeCaption(block, () => visualCropNotice({ label: table ? "table" : "figure" }, page));
+  return visualCropNotice({ label: table ? "table" : "figure" }, page, block);
 }
 
 function jumpAssetFallback(notice) {

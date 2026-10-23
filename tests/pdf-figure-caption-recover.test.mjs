@@ -170,7 +170,7 @@ test("a translated caption keeps a dropped inline formula token", () => {
 test("an unmatched caption placeholder is the clickable fallback, not a bare paragraph", () => {
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   assert.match(viewer, /function orphanVisualNotice\(block, page\)/);
-  assert.match(viewer, /visualCropNotice\(\{ label: table \? "table" : "figure" \}, page\)/);
+  assert.match(viewer, /visualCropNotice\(\{ label: table \? "table" : "figure" \}, page, block\)/);
   assert.match(viewer, /shown\.figureLabel = figureLabel/);
   const orphan = viewer.slice(viewer.indexOf("function orphanVisualNotice"), viewer.indexOf("function jumpAssetFallback"));
   assert.doesNotMatch(orphan, /figurePlaceholder/);
