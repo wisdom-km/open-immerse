@@ -459,10 +459,14 @@ test("Attention and DPO text-layer bids match the locked reference", { timeout: 
   const dpo = await loadDocument(dpoPath);
   assert.equal(dpo.length, 27);
   const dpoBlocks = dpo.flatMap((page) => page.blocks);
-  assert.equal(dpoBlocks.length, 468);
+  // 468 → 480 at this text-layer. The +12 are new inline formula blocks
+  // (165 → 177). Other labels are unchanged. Pages 3, 4, and 5 gained
+  // 2, 7, and 3 formula blocks. This path does not attach font real names,
+  // so the count is not the viewer's attach-first formula total.
+  assert.equal(dpoBlocks.length, 480);
   const dpoBids = dpoBlocks.map((block) => block.bid);
   assert.equal(dpoBids.every((bid) => isBid(bid)), true);
-  assert.equal(new Set(dpoBids).size, 468);
+  assert.equal(new Set(dpoBids).size, 480);
   assert.equal(findBlock(dpo, "p2-b8").block.bid, "b1-p2-t1hmmsbz");
   assert.equal(findBlock(dpo, "p3-b1").block.bid, "b1-p3-t1n7kik7");
   const byBase = new Map();

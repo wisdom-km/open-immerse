@@ -490,9 +490,10 @@ test("rendered DPO, Attention, and DDPM inline crops keep formula ink inside the
     ["Attention", join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf")],
     ["DDPM", join(root, "tests/fixtures/DDPM_2006.11239.pdf")]
   ];
-  const missing = papers.filter(([, path]) => !existsSync(path)).map(([name]) => name);
+  const missing = papers.filter(([, path]) => !existsSync(path));
   if (missing.length) {
-    t.skip(`missing ${missing.join(", ")} under tests/fixtures; the rendered ink check did not run`);
+    const listed = missing.map(([name, path]) => `${name} (${path.slice(root.length + 1)})`).join(", ");
+    t.skip(`missing ${listed}; gitignored arXiv PDFs are not in the repo (DDPM is tests/fixtures/DDPM_2006.11239.pdf). Supply that file locally. The rendered ink check did not run`);
     return;
   }
   let createCanvas;

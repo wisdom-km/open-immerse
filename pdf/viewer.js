@@ -10247,6 +10247,7 @@ function rememberTranslation(page, results) {
     pairsVerifiedForLibrary(results, blocks, savedPairSettings()),
     blocks
   );
+  const replaceBids = [...new Set(verified.map((pair) => String(pair?.bid || "")).filter(Boolean))];
   const skipOnly = isSkipOnlyPage(blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
   if (!verified.length && !skipOnly) {
@@ -10257,7 +10258,9 @@ function rememberTranslation(page, results) {
     void maybeShowPersistCard();
     return Promise.resolve();
   }
-  const keptPairs = pairsWithoutUnalignedSlots(existing?.pairs, blocks, savedPairSettings());
+  const replaceBidSet = new Set(replaceBids);
+  const keptPairs = pairsWithoutUnalignedSlots(existing?.pairs, blocks, savedPairSettings())
+    .filter((pair) => !replaceBidSet.has(String(pair?.bid || "")));
   const pairs = verified.length
     ? mergeLibraryPairs(keptPairs, verified, blocks, pdfTargetLang)
     : [];
@@ -10281,6 +10284,7 @@ function rememberTranslation(page, results) {
       pageCount,
       page,
       pairs,
+      ...(replaceBids.length ? { replaceBids } : {}),
       // The layout row stays when it is already current. The blocks still have
       // to ride along, or the page merge keeps a settled but misaligned pair.
       ...(blocks?.length ? { blocks } : {}),
@@ -10406,8 +10410,8 @@ function persistPageLayout(page) {
   if (!version || !raw?.blocks?.length) return Promise.resolve();
   const layout = cacheableLayout(raw);
   const entry = libraryEntry(page);
-  const pairs = Array.isArray(entry?.pairs) ? entry.pairs : [];
-  const skipped = Boolean(entry?.skipped) || (isSkipOnlyPage(raw.blocks) && !pairs.length);
+  const capturedPairs = Array.isArray(entry?.pairs) ? entry.pairs : [];
+  const skipped = Boolean(entry?.skipped) || (isSkipOnlyPage(raw.blocks) && !capturedPairs.length);
   const bytes = pdfBytes;
   const identity = captureLibraryIdentity();
   const pageCount = pdfDoc?.numPages || 0;
@@ -10419,6 +10423,10 @@ function persistPageLayout(page) {
     if (await layoutWriteSuperseded(hash, page, version)) return;
     if (!layoutAttemptLive(epoch)) return;
     const live = libraryEntry(page);
+    // Read pairs at write time. The array captured when this layout was
+    // scheduled can still be the old cache, and a same-hash merge would
+    // keep that text over a translation rememberTranslation already stored.
+    const pairs = Array.isArray(live?.pairs) ? live.pairs : capturedPairs;
     if (live) {
       live.layout = layout;
       live.layoutVersion = version;
@@ -10490,20 +10498,25 @@ function bindSavedPairs(saved, units) {
 }
 
 function ensureLibraryDocument() {
-  if (libraryDoc) return Promise.resolve(libraryDoc);
   if (libraryProbe) return libraryProbe;
+  if (libraryDoc?.pages?.length) return Promise.resolve(libraryDoc);
   const stamp = docId;
   libraryProbe = (async () => {
     try {
       const hash = await pdfByteHash();
       if (docId !== stamp || !hash || hash === "nohash") return null;
-      if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
+      if (libraryDoc?.pages?.length && libraryDoc.hash === hash) return libraryDoc;
       const doc = await fetchLibraryDocument(hash, { engine: pdfEngineMode() });
       if (docId !== stamp) return null;
       // Translation may already have filled this document while the probe was
       // still reading. A late legacy snapshot must not replace it, or the next
       // layout write stores the original pairs over the translation.
-      if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
+      // A paper row with no pages yet must not hide the legacy page list.
+      if (libraryDoc && libraryDoc.hash === hash) {
+        const havePages = Array.isArray(libraryDoc.pages) && libraryDoc.pages.length > 0;
+        const fetchedPages = Array.isArray(doc?.pages) && doc.pages.length > 0;
+        if (havePages || !fetchedPages) return libraryDoc;
+      }
       if (doc) doc.hash = hash;
       libraryDoc = doc || null;
       if (hash) void pendingNotes?.hydrate?.(hash);
@@ -10593,7 +10606,9 @@ async function savedTranslationFor(page) {
       }
     } else if (zone?.document && !savedThisSession) {
       if (!zone.document.hash) zone.document.hash = hash;
-      libraryDoc = zone.document;
+      const zonePages = Array.isArray(zone.document.pages) ? zone.document.pages.length : 0;
+      const heldPages = libraryDoc?.hash === hash && Array.isArray(libraryDoc.pages) ? libraryDoc.pages.length : 0;
+      if (!(heldPages > zonePages)) libraryDoc = zone.document;
     }
   }
   if (!libraryDoc) return null;
@@ -11233,6 +11248,11 @@ async function translateWholeDocument() {
   if (!pdfDoc || documentTranslateSuperseded()) return;
   translatePaused = false;
   try {
+    // Pairs have to be in hand before the first batch. A paper row with no
+    // pages, or a probe that is still reading the old library, used to let
+    // every block go out. The same-hash merge then kept 旧译 and the returned
+    // bid translation never landed.
+    await ensureLibraryDocument();
     const saved = await savedTranslationFor(pageNum);
     if (documentTranslateSuperseded()) return;
     if ((saved?.readout || libraryArticle) && !libraryDoc?.pages?.length) {
