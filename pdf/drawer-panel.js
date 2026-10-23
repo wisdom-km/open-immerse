@@ -70,6 +70,8 @@ export function mountDrawerUi(api = {}) {
   let recentState = { phase: "blank", rows: [] };
   let infoGen = 0;
   let recentGen = 0;
+  let infoStale = false;
+  let recentStale = false;
   const scrollTops = { toc: 0, info: 0, recent: 0 };
   const rowFlags = new Map();
   let tocSignature = "";
@@ -154,6 +156,8 @@ export function mountDrawerUi(api = {}) {
       root.setAttribute("aria-modal", "true");
     }
     if (backdrop) backdrop.hidden = !(open && mode === "float");
+    // While the drawer is modal the source column stays inert, so its wheel
+    // does not scroll. That is the modal barrier, recorded as a leftover.
     setModalBarrier(open && mode !== "dock");
     const button = doc.getElementById("tocButton");
     if (button) {
@@ -513,8 +517,14 @@ export function mountDrawerUi(api = {}) {
     tab = next;
     sessionSet(TAB_KEY, tab);
     render({ keepScroll: true });
-    if (tab === "info") void loadInfo(false);
-    if (tab === "recent") void loadRecent(false);
+    if (tab === "info") {
+      void loadInfo(infoStale);
+      infoStale = false;
+    }
+    if (tab === "recent") {
+      void loadRecent(recentStale);
+      recentStale = false;
+    }
     if (fromKey) focus(root.querySelector(`[role="tab"][aria-selected="true"]`));
   }
 
@@ -617,8 +627,14 @@ export function mountDrawerUi(api = {}) {
     syncChrome();
     render({ keepScroll: true });
     api.onOpenChange?.(true, meta);
-    if (tab === "info") void loadInfo(false);
-    if (tab === "recent") void loadRecent(true);
+    if (tab === "info") {
+      void loadInfo(infoStale);
+      infoStale = false;
+    }
+    if (tab === "recent") {
+      void loadRecent(true);
+      recentStale = false;
+    }
     if (meta.focus !== false) focusEntry();
   }
 
@@ -675,7 +691,13 @@ export function mountDrawerUi(api = {}) {
       timers.clearTimeout(refreshTimer);
       refreshTimer = timers.setTimeout(() => {
         refreshTimer = 0;
-        if (!open) return;
+        if (!open) {
+          infoStale = true;
+          recentStale = true;
+          return;
+        }
+        infoStale = false;
+        recentStale = false;
         if (tab === "info" || infoState.phase !== "blank") void loadInfo(true);
         if (tab === "recent" || recentState.phase !== "blank") void loadRecent(true);
       }, 160);

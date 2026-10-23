@@ -319,29 +319,40 @@ test("阅读页抽屉：停靠、目录、页签、最近和窄屏", { timeout: 
     return "moved";
   })()`, "滚回开头后当前项变化", 5000);
 
-  const alignReading = async (page) => {
+  const alignReading = async (page, fraction = 0) => {
     await evaluate(`(() => {
       const pane = document.getElementById("pages");
       const node = document.querySelector("#pages .pdf-page[data-page='${page}']");
       if (!pane || !node) return;
       const paneBox = pane.getBoundingClientRect();
       const pageBox = node.getBoundingClientRect();
-      pane.scrollTop += pageBox.top - (paneBox.top + pane.clientHeight / 3 - 5);
+      const into = ${fraction} * pageBox.height;
+      pane.scrollTop += pageBox.top + into - (paneBox.top + pane.clientHeight / 3 - 5);
       pane.dispatchEvent(new Event("scroll"));
     })()`);
   };
+  const currentNum = `(() => {
+    const num = document.querySelector(".oi-toc-item[aria-current='location'] .oi-toc-num")?.textContent || "";
+    return num;
+  })()`;
   await alignReading(4);
   const topOfPage4 = await waitFor(`(() => {
-    const num = document.querySelector(".oi-toc-item[aria-current='location'] .oi-toc-num")?.textContent || "";
-    return num === "3.2.1" ? num : "";
-  })()`, "第 4 页顶部当前节是 3.2.1", 5000);
-  assert.equal(topOfPage4, "3.2.1");
+    const num = ${currentNum};
+    return num === "3.2" ? num : "";
+  })()`, "第 4 页顶部当前节是 3.2", 5000);
+  assert.equal(topOfPage4, "3.2");
   await alignReading(5);
   const topOfPage5 = await waitFor(`(() => {
-    const num = document.querySelector(".oi-toc-item[aria-current='location'] .oi-toc-num")?.textContent || "";
+    const num = ${currentNum};
+    return num === "3.2.2" ? num : "";
+  })()`, "第 5 页顶部当前节是 3.2.2", 5000);
+  assert.equal(topOfPage5, "3.2.2");
+  await alignReading(5, 0.45);
+  const pastHeading = await waitFor(`(() => {
+    const num = ${currentNum};
     return num === "3.2.3" ? num : "";
-  })()`, "第 5 页顶部当前节是 3.2.3", 5000);
-  assert.equal(topOfPage5, "3.2.3");
+  })()`, "第 5 页标题下当前节是 3.2.3", 5000);
+  assert.equal(pastHeading, "3.2.3");
 
   await evaluate(`document.getElementById("tocButton").click()`);
   await waitFor(`document.getElementById("drawerSlot").hidden ? "closed" : ""`, "关上抽屉", 5000);
@@ -351,9 +362,9 @@ test("阅读页抽屉：停靠、目录、页签、最近和窄屏", { timeout: 
     const active = document.activeElement;
     if (!active?.classList?.contains("oi-toc-item")) return "";
     const num = active.querySelector(".oi-toc-num")?.textContent || "";
-    return num === "3.2.3" ? num : "";
-  })()`, "打开抽屉时焦点在 3.2.3", 5000);
-  assert.equal(openedOn, "3.2.3");
+    return num === "3.2.2" ? num : "";
+  })()`, "打开抽屉时焦点在 3.2.2", 5000);
+  assert.equal(openedOn, "3.2.2");
 
   const viewBefore = await evaluate(`document.querySelector(".workspace").dataset.view`);
   await key("t");

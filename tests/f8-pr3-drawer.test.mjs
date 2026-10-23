@@ -190,12 +190,14 @@ test("current section treats the boundary as the entry that starts there", () =>
   assert.equal(currentTocIndex([], 4), -1);
 });
 
-test("reading line at the top of a page stays on that page's first section", () => {
+test("reading line stays on the previous section until the next heading", () => {
   const pages = [
+    { page: 3, top: 200, height: 800 },
     { page: 4, top: 1000, height: 800 },
     { page: 5, top: 1800, height: 800 }
   ];
   const entries = [
+    { page: 3, destY: 117.119, pageHeight: 792 },
     { page: 4, destY: 447.529, pageHeight: 792 },
     { page: 4, destY: 166.913, pageHeight: 792 },
     { page: 5, destY: 518.313, pageHeight: 792 },
@@ -205,8 +207,8 @@ test("reading line at the top of a page stays on that page's first section", () 
   const placed = entries.map((entry, index) => ({ ...entry, offset: sectionOffsets(entries, pages)[index] }));
   assert.equal(currentTocIndex(placed, 1005), 0);
   assert.equal(currentTocIndex(placed, 1805), 2);
-  const later = 1000 + ((792 - 166.913) / 792) * 800 + 4;
-  assert.equal(currentTocIndex(placed, later), 1);
+  const past = 1800 + ((792 - 518.313) / 792) * 800 + 4;
+  assert.equal(currentTocIndex(placed, past), 3);
   assert.equal(destinationTop([{}, { name: "XYZ" }, 108, 447.529, null]), 447.529);
   assert.equal(destinationTop([{}, { name: "FitH" }, 720]), 720);
   assert.equal(destinationTop(["page"]), null);
@@ -275,6 +277,22 @@ test("standalone same-line number shows, and (3) does not", () => {
   ], title), "");
   assert.equal(numberBesideTitle([
     { str: "I", x: 108, y, width: 8, height: 10 },
+    titleItem
+  ], title), "I");
+  assert.equal(numberBesideTitle([
+    { str: "C", x: 108, y, width: 8, height: 10 },
+    titleItem
+  ], title), "C");
+  assert.equal(numberBesideTitle([
+    { str: "D", x: 108, y, width: 8, height: 10 },
+    titleItem
+  ], title), "D");
+  assert.equal(numberBesideTitle([
+    { str: "II", x: 108, y, width: 12, height: 10 },
+    titleItem
+  ], title), "");
+  assert.equal(numberBesideTitle([
+    { str: "XI", x: 108, y, width: 12, height: 10 },
     titleItem
   ], title), "");
   assert.equal(numberBesideTitle([
@@ -562,6 +580,43 @@ test("a papers refresh keeps the recent scroll and does not flash a skeleton", a
   ui.root.querySelector(".oi-recent-row").click();
   await new Promise((done) => setTimeout(done, 0));
   assert.match(ui.root.textContent, /没能打开 PDF，稍后再试一次。/);
+});
+
+test("a closed drawer reloads info on open after papers change, without a skeleton", async () => {
+  const { document } = panelDom();
+  const timers = fakeTimers();
+  let infoCalls = 0;
+  let progress = "已译 1 / 10 页";
+  const ui = mountDrawerUi({
+    slot: document.getElementById("drawerSlot"),
+    backdrop: document.getElementById("drawerBackdrop"),
+    session: memorySession({ "oi.drawer.tab": "info" }),
+    width: () => 1400,
+    mode: () => "dock",
+    timers,
+    async info() {
+      infoCalls += 1;
+      return { progress, formulaRows: [], storage: [], note: "", laidOut: 2 };
+    }
+  });
+  ui.open();
+  await new Promise((done) => setTimeout(done, 0));
+  await new Promise((done) => setTimeout(done, 0));
+  assert.equal(infoCalls, 1);
+  assert.match(ui.root.textContent, /已译 1 \/ 10 页/);
+  ui.close();
+  progress = "已译 4 / 10 页";
+  ui.refresh();
+  timers.advance(160);
+  await new Promise((done) => setTimeout(done, 0));
+  assert.equal(infoCalls, 1);
+  assert.equal(ui.root.querySelector(".oi-drawer-skel"), null);
+  ui.open();
+  await new Promise((done) => setTimeout(done, 0));
+  await new Promise((done) => setTimeout(done, 0));
+  assert.equal(infoCalls, 2);
+  assert.equal(ui.root.querySelector(".oi-drawer-skel"), null);
+  assert.match(ui.root.textContent, /已译 4 \/ 10 页/);
 });
 
 test("empty TOC copy, unnumbered column, and escape focus", () => {
