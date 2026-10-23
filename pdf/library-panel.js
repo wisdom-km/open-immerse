@@ -200,14 +200,25 @@ export function mountLibraryUi(api = {}) {
     const fetchImpl = typeof api.fetch === "function" ? api.fetch : win.fetch.bind(win);
     const limit = Number(ms) > 0 ? Number(ms) : 20000;
     let timer = 0;
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
     const timeout = new Promise((_, reject) => {
       timer = timers.setTimeout(() => {
+        try {
+          ctl?.abort();
+        } catch {
+          /* the download already failed */
+        }
         if (typeof onTimeout === "function") onTimeout();
         reject(Object.assign(new Error("timeout"), { name: "TimeoutError" }));
       }, limit);
     });
-    const ctl = typeof AbortController === "function" ? new AbortController() : null;
-    const pending = Promise.resolve().then(() => fetchImpl(url, ctl ? { signal: ctl.signal } : undefined));
+    const pending = Promise.resolve().then(async () => {
+      const res = await fetchImpl(url, ctl ? { signal: ctl.signal } : undefined);
+      if (res instanceof Uint8Array) return res;
+      if (!res || res.ok === false) return res;
+      if (typeof res.arrayBuffer === "function") return new Uint8Array(await res.arrayBuffer());
+      return res;
+    });
     return Promise.race([pending, timeout]).then((value) => {
       timers.clearTimeout(timer);
       return value;
@@ -440,7 +451,7 @@ export function mountLibraryUi(api = {}) {
       const index = list.findIndex((item) => item.docHash === row.docHash);
       confirmHash = "";
       deleting = false;
-      api.toast?.(libraryToastDeleted(libraryRowTitle(row).title));
+      api.toast?.(libraryToastDeleted(libraryRowTitle(row).title), 4000);
       await load({ keep: true });
       moveFocusAfterDelete(index, list.filter((item) => item.docHash !== row.docHash));
     } catch {
@@ -590,7 +601,7 @@ export function mountLibraryUi(api = {}) {
           type: "button",
           class: "oi-lib-open",
           tabindex: index === active && column === "row" ? "0" : "-1",
-          disabled: openingHash === row.docHash
+          "aria-disabled": openingHash === row.docHash ? "true" : null
         }, [
           h(doc, "span", { class: "oi-lib-titleline" }, [
             h(doc, "span", { class: "oi-lib-name", title: title.title, text: title.title }),
@@ -599,6 +610,7 @@ export function mountLibraryUi(api = {}) {
           h(doc, "span", { class: "oi-lib-meta", text: [libraryProgressCopy(row.translated, row.pageCount), libraryRelativeTime(row.lastOpenedAt, now()), librarySizeCopy(row.bytes)].filter(Boolean).join(" · ") })
         ]);
         main.addEventListener("click", () => {
+          if (main.getAttribute("aria-disabled") === "true") return;
           active = index;
           void openRow(row);
         });

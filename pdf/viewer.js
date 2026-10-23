@@ -2642,7 +2642,7 @@ function installLibraryUi() {
     },
     openBytes: (bytes, title) => openPdfData(bytes, title || ""),
     pickPdf: () => $("file")?.click(),
-    toast: (text) => showToast(text),
+    toast: (text, duration) => showToast(text, duration),
     onOpenChange: (open, meta) => onLibraryOpenChange(open, meta),
     hash: () => location.hash,
     width: () => window.innerWidth,
@@ -6047,15 +6047,16 @@ function bindMoreMenu() {
 
 let toastTimer = 0;
 
-function showToast(text) {
+function showToast(text, duration) {
   const el = $("tbToast");
   if (!el) return;
   el.hidden = false;
   el.textContent = text || "即将推出";
   clearTimeout(toastTimer);
+  const ms = Number(duration) > 0 ? Number(duration) : 1600;
   toastTimer = setTimeout(() => {
     el.hidden = true;
-  }, 1600);
+  }, ms);
 }
 
 function showSoonToast() {
@@ -6343,7 +6344,11 @@ function paintThreeColumns(workspace, { notesWidth, splitRatio } = {}) {
     const bubble = handle.querySelector(".split-bubble");
     if (bubble) bubble.textContent = sourceAria.bubble;
   }
-  applyNotesSplitAria(notesSplitHandle(workspace), notesSplitAria({ notesWidth: columns.notes, workspaceWidth: width }));
+  applyNotesSplitAria(notesSplitHandle(workspace), notesSplitAria({
+    notesWidth: columns.notes,
+    workspaceWidth: width,
+    panel: workspace.dataset.libraryOpen === "true" ? "library" : ""
+  }));
   return columns;
 }
 

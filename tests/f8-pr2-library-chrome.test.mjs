@@ -672,6 +672,26 @@ test("文献库三行只有一个 Tab 停留点，Enter 和 Delete 作用在焦�
   }
   assert.equal(tabbed.length, 1, JSON.stringify(tabbed));
 
+  const deleteOther = JSON.parse(await evaluate(`(() => {
+    document.querySelector('[data-lib-row="hash-1"] .oi-lib-open').focus();
+    const button = document.querySelector('[data-lib-row="hash-3"] .oi-lib-open');
+    button.focus();
+    button.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    const row = document.querySelector(".oi-lib-confirm")?.closest("[data-lib-row]");
+    const hash = row?.getAttribute("data-lib-row") || "";
+    const title = row?.querySelector(".oi-lib-name")?.textContent || "";
+    document.querySelector(".oi-lib-cancel")?.click();
+    document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    return JSON.stringify({
+      hash,
+      title,
+      gone: document.querySelector(".oi-lib-confirm") == null
+    });
+  })()`));
+  assert.equal(deleteOther.hash, "hash-3", JSON.stringify(deleteOther));
+  assert.equal(deleteOther.title, "第三篇", JSON.stringify(deleteOther));
+  assert.equal(deleteOther.gone, true);
+
   const openedHash = await evaluate(`(async () => {
     const button = document.querySelector('[data-lib-row="hash-3"] .oi-lib-open');
     button.focus();

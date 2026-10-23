@@ -575,6 +575,7 @@ test("文献库面板：空、有数据、确认文案三种、网址变了、�
   };
   const notes = { local: [{ id: "n1" }] };
   let opened = [];
+  const toasts = [];
   const store = {
     async listPapers() { return papers.filter((row) => !row.deletedAt); },
     async getPages(hash) { return pages[hash] || []; },
@@ -607,7 +608,7 @@ test("文献库面板：空、有数据、确认文案三种、网址变了、�
       if (releaseDelay) return;
       return new Promise((done) => { releaseDelay = done; });
     },
-    toast() {}
+    toast(text, duration) { toasts.push({ text, duration }); }
   });
   ui.open();
   await flush();
@@ -654,6 +655,7 @@ test("文献库面板：空、有数据、确认文案三种、网址变了、�
   await flush();
   assert.deepEqual(notesCalls, [false]);
   assert.equal(ui.root.querySelector('[data-lib-row="local"]'), null);
+  assert.deepEqual(toasts, [{ text: "已删除《本地的》", duration: 4000 }]);
 
   ui.root.querySelector('[data-lib-row="url"] .oi-lib-open').click();
   await flush();
@@ -1080,9 +1082,16 @@ test("打开同一行不会重入，下载超时和打开失败都留在这一�
 
   ui.open();
   await flush();
-  ui.root.querySelector('[data-lib-row="url"] .oi-lib-open').click();
+  const urlButton = ui.root.querySelector('[data-lib-row="url"] .oi-lib-open');
+  urlButton.focus();
+  urlButton.click();
   await flush();
   assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /正在重新下载…/);
+  assert.equal(document.activeElement?.isConnected, true);
+  assert.equal(document.activeElement?.classList.contains("oi-lib-open"), true);
+  assert.equal(document.activeElement?.closest("[data-lib-row]")?.getAttribute("data-lib-row"), "url");
+  assert.equal(document.activeElement?.disabled, false);
+  assert.equal(document.activeElement?.getAttribute("aria-disabled"), "true");
   timers.advance(40);
   await flush();
   assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /没打开，稍后再试。/);
@@ -1114,6 +1123,97 @@ test("打开同一行不会重入，下载超时和打开失败都留在这一�
   assert.equal(broken.isOpen(), true);
 });
 
+test("响应头到了但正文一直不来时，超时会停掉整次下载", async () => {
+  const { document } = panelDom();
+  const timers = fakeTimers();
+  let aborted = false;
+  let opened = 0;
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const local = {
+    size: bytes.byteLength,
+    async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); }
+  };
+  const papers = [
+    paperRow({ docHash: "local", title: "本地", sourceSize: 4, lastOpenedAt: 2 }),
+    paperRow({ docHash: "url", title: "网上", sourceSize: 0, sourceUrl: "https://example.com/a.pdf", lastOpenedAt: 1 })
+  ];
+  const ui = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    timers,
+    width: () => 1200,
+    downloadTimeoutMs: 40,
+    store: async () => ({
+      async listPapers() { return papers; },
+      async getPages() { return []; },
+      async usage() { return { byDoc: new Map() }; },
+      async getSource(hash) { return hash === "local" ? local : null; },
+      async getPaper(hash) { return papers.find((row) => row.docHash === hash) || null; }
+    }),
+    listNotes: async () => [],
+    openHash: async () => "",
+    openBytes: async () => { opened += 1; },
+    fetch: (_url, init) => {
+      init?.signal?.addEventListener("abort", () => { aborted = true; });
+      return Promise.resolve({
+        ok: true,
+        arrayBuffer: () => new Promise(() => {})
+      });
+    }
+  });
+  ui.open();
+  await flush();
+  ui.root.querySelector('[data-lib-row="url"] .oi-lib-open').click();
+  await flush();
+  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /正在重新下载…/);
+  ui.root.querySelector('[data-lib-row="local"] .oi-lib-open').click();
+  await flush();
+  assert.equal(opened, 0);
+  timers.advance(40);
+  await flush();
+  assert.equal(aborted, true);
+  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /没打开，稍后再试。/);
+  assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("正在重新下载"), false);
+  ui.root.querySelector('[data-lib-row="local"] .oi-lib-open').click();
+  await flush();
+  assert.equal(opened, 1);
+  assert.equal(ui.isOpen(), false);
+});
+
+test("关闭文献库后面焦点回到书架按钮", async () => {
+  const { document } = panelDom();
+  const timers = fakeTimers();
+  const button = document.getElementById("libraryButton");
+  const ui = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    timers,
+    width: () => 1200,
+    store: async () => ({
+      async listPapers() { return [paperRow({ docHash: "one", title: "一篇" })]; },
+      async getPages() { return []; },
+      async usage() { return { byDoc: new Map() }; },
+      async getSource() { return null; }
+    }),
+    listNotes: async () => [],
+    openHash: async () => ""
+  });
+  button.focus();
+  ui.open({ trigger: button });
+  await flush();
+  ui.root.querySelector(".oi-lib-open").focus();
+  ui.close(true);
+  assert.equal(document.activeElement?.id, "libraryButton");
+  const other = document.createElement("button");
+  other.id = "other";
+  document.body.append(other);
+  other.focus();
+  ui.open({ trigger: button });
+  await flush();
+  ui.root.querySelector(".oi-lib-close").focus();
+  ui.root.querySelector(".oi-lib-close").click();
+  await flush();
+  assert.equal(document.activeElement?.id, "libraryButton");
+});
+
 test("无 src 时仍更新翻译按钮，l 和菜单关闭后回到书架按钮", () => {
   const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
   assert.equal(viewer.trimEnd().endsWith("init();"), true);
@@ -1126,6 +1226,10 @@ test("无 src 时仍更新翻译按钮，l 和菜单关闭后回到书架按钮"
   assert.match(key, /trigger: \$\("libraryButton"\)/);
   const menu = viewer.slice(viewer.indexOf('$("menuLibrary")'), viewer.indexOf('$("menuAa")'));
   assert.match(menu, /trigger: \$\("libraryButton"\)/);
+  assert.match(viewer, /function showToast\(text, duration\)/);
+  assert.match(viewer, /Number\(duration\) > 0 \? Number\(duration\) : 1600/);
+  assert.match(viewer, /toast: \(text, duration\) => showToast\(text, duration\)/);
+  assert.match(viewer, /panel: workspace\.dataset\.libraryOpen === "true" \? "library" : ""/);
 });
 
 test("clearFormulaDoc 会走到已注册的清理函数", async () => {
