@@ -24,7 +24,7 @@ schema: `open-immerse.mm-dpo-ab/v1` · mode: `template`
 
 ## 输入臂
 
-- `tight`（默认）：现有紧裁 PNG，走 cropPngFor。默认臂。
+- `tight`（默认）：紧裁 PNG。已有图走 cropPngFor；文字层 PDF 用 measureFormulaCrop（CROP_SCALE 2，行内 pad 4、独立 pad 6）。默认臂。
 - `hi-res`：产品高清裁图（visionCropFor / renderVisionCrop，mm-3，scale 4）。没有页面渲染时不发送。
 - `paragraph`：脚本实验：段落区域按同一高清倍率出图，并附上段落文字。不改产品默认，也不改产品提示词。
 - `page`，需要 `--arm=page`：整页对照，只在脚本里。默认关。不发送整页 PDF，也不能成为产品默认。
@@ -39,9 +39,13 @@ schema: `open-immerse.mm-dpo-ab/v1` · mode: `template`
 stratified=false locked=false requested=— count=0
 （无）
 
+## 参考
+
+对齐 0。未对齐 0（不计入准确率）：（无）
+
 ## 估价
 
-- `kimi` / `kimi-k3`：输入 $3/百万，输出 $15/百万。Moonshot 公开标价（缓存未命中的输入 / 输出）。不是账单。
+- `kimi` / `kimi-k3`：输入 $3/百万，输出 $15/百万。kimi-k3 公开标价估算（缓存未命中）。火山方舟通道沿用此数，不是账单。
 
 失败（已发送但没有 LaTeX）：0
 

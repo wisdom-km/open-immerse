@@ -13,10 +13,10 @@
 import { createRequire } from "node:module";
 import { deflateSync } from "node:zlib";
 
-import { rasterCropRect } from "../lib/pdf-blocks.js";
+import { CROP_SCALE, rasterCropRect } from "../lib/pdf-blocks.js";
 import { parseCropDataUrl } from "../lib/formula-crop-png.js";
 import { formulaInkPadPx, formulaRegionWindow } from "../lib/pdf-formula-raster.js";
-import { blankFormulaMask, boxesInCrop } from "../lib/pdf-text-layer.js";
+import { blankFormulaMask, boxesInCrop, measureFormulaCrop } from "../lib/pdf-text-layer.js";
 import {
   VISION_CROP_SCALE,
   measureVisionRegion,
@@ -249,11 +249,11 @@ function paintFormulaMask(canvas, crop, block) {
   return true;
 }
 
-function cropCanvas(canvas, relativeBbox, createCanvas) {
+function cropCanvas(canvas, relativeBbox, createCanvas, alwaysCopy = false) {
   if (!canvas || !Array.isArray(relativeBbox) || relativeBbox.length < 4) return null;
   const rect = rasterCropRect(relativeBbox, canvas.width, canvas.height);
   if (rect.sw < 1 || rect.sh < 1) return null;
-  if (rect.sx === 0 && rect.sy === 0 && rect.sw === canvas.width && rect.sh === canvas.height) return canvas;
+  if (!alwaysCopy && rect.sx === 0 && rect.sy === 0 && rect.sw === canvas.width && rect.sh === canvas.height) return canvas;
   const out = createCanvas(rect.sw, rect.sh);
   const ctx = out.getContext("2d");
   if (!ctx) return null;
@@ -372,6 +372,87 @@ export async function renderVisionCrop(page, block, spec = {}, hooks = {}) {
   release(drawn.canvas);
   if (!png) return "";
   return `data:image/png;base64,${png.base64}`;
+}
+
+const tightPageCache = new WeakMap();
+
+async function pageAtCropScale(page, hooks) {
+  if (!page || typeof page.getViewport !== "function") return null;
+  const cached = tightPageCache.get(page);
+  if (cached) return cached;
+  let viewport = null;
+  try {
+    viewport = page.getViewport({ scale: CROP_SCALE });
+  } catch {
+    return null;
+  }
+  const width = Math.max(1, Math.floor(viewport.width));
+  const height = Math.max(1, Math.floor(viewport.height));
+  const createCanvas = hooks.createCanvas || defaultCreateCanvas;
+  const canvas = createCanvas(width, height);
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  try {
+    const task = page.render({ canvasContext: context, viewport });
+    await (task?.promise || task);
+  } catch {
+    release(canvas);
+    return null;
+  }
+  compositeWhitePaper(context, canvas);
+  let image = null;
+  try {
+    image = context.getImageData(0, 0, canvas.width, canvas.height);
+  } catch {
+    image = null;
+  }
+  if (!image) {
+    release(canvas);
+    return null;
+  }
+  const raster = { canvas, image, createCanvas };
+  tightPageCache.set(page, raster);
+  return raster;
+}
+
+/**
+ * Product tight crop at CROP_SCALE. Pad stays on measureFormulaCrop's default
+ * (inline 4 / display 6). The page raster is cached; the returned PNG is a copy.
+ */
+export async function renderTightCrop(page, formula, hooks = {}) {
+  const bbox = Array.isArray(formula?.layoutBbox) ? formula.layoutBbox : formula?.bbox;
+  if (!page || !Array.isArray(bbox)) return null;
+  const raster = await pageAtCropScale(page, hooks);
+  if (!raster) return null;
+  const inline = formula.display === false || Boolean(formula.inlineOf);
+  const measured = measureFormulaCrop(bbox, raster.image, {
+    inline,
+    protect: formula.formulaInkProtect === true,
+    maskBoxes: formula.maskBoxes,
+    glyphBoxes: formula.glyphBoxes
+  });
+  const cropBox = measured?.bbox || bbox;
+  const rect = rasterCropRect(cropBox, raster.canvas.width, raster.canvas.height);
+  if (rect.sw < 24 || rect.sh < 12) return null;
+  const out = cropCanvas(raster.canvas, cropBox, raster.createCanvas, true);
+  if (!out) return null;
+  paintFormulaMask(out, cropBox, {
+    label: "formula",
+    maskBoxes: formula.maskBoxes || [],
+    glyphBoxes: formula.glyphBoxes || [],
+    seedBoxes: formula.seedBoxes || []
+  });
+  const png = pngOf(out);
+  release(out);
+  if (!png) return null;
+  return {
+    mime: png.mime,
+    base64: png.base64,
+    w: png.w,
+    h: png.h,
+    hash: png.hash,
+    scale: CROP_SCALE
+  };
 }
 
 /**

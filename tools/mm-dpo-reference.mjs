@@ -10,7 +10,8 @@
  *   node tools/mm-dpo-reference.mjs --live --full --arm=page
  *
  * 输入臂 / Arms
- *   tight       现有紧裁 PNG（cropPngFor）。默认，也是唯一默认臂。
+ *   tight       紧裁 PNG。已有图走 cropPngFor；文字层 PDF 用 measureFormulaCrop
+ *               （CROP_SCALE 2，行内 pad 4、独立 pad 6）。默认臂。
  *   hi-res      产品高清裁图（visionCropFor / renderVisionCrop，mm-3）。measured。
  *   paragraph   脚本实验：段落区域按同一高清倍率出图，并附段落文字。measured。
  *               不改产品默认，也不改产品提示词。
@@ -19,14 +20,18 @@
  *
  * 环境变量 / Env（密钥只放这里，不要写进命令行、报告、仓库）
  *   MM_DPO_KIMI_API_KEY         Kimi K3，主力。不要加 Bearer。
- *   MM_DPO_KIMI_MODEL           默认 kimi-k3
- *   MM_DPO_KIMI_BASE_URL        可选，默认厂商预设
+ *   MM_DPO_KIMI_MODEL           默认 kimi-k3。火山方舟也用 kimi-k3。
+ *   MM_DPO_KIMI_BASE_URL        可选。火山方舟：https://ark.cn-beijing.volces.com/api/plan/v3
+ *                               脚本把它当成产品的「自定义兼容端点」，地址是
+ *                               base + /chat/completions，不再加 /v1。密钥不进 URL。
  *   MM_DPO_DEEPSEEK_API_KEY     DeepSeek V4.1 Flash，基线对照
  *   MM_DPO_DEEPSEEK_MODEL       默认 deepseek-v4.1-flash
  *   MM_DPO_DEEPSEEK_BASE_URL    可选，默认厂商预设
  *
  * 真跑 / Live
  *   只有 --live 会发请求。CI 不要加 --live。
+ *   默认 --reference 是 tests/fixtures/mm-dpo-reference.json。
+ *   未对齐的行 reference 为空，不计入准确率，并写在报告里。
  *   还必须 --limit=N、--sample=N（建议 15，分层且可复现）或 --full（79 条，另批预算）。
  *   --limit 与 --sample 都按页 × 行内/独立分层抽取，报告里记下 id，同一清单再跑是同一批。
  *   没有 PNG 时不发请求。文字层 PDF 只用来列出第 3–5 页公式并裁图，不整页上传。
@@ -61,14 +66,16 @@ import {
   runAb,
   templateReport
 } from "../lib/mm-dpo-ab.js";
-import { renderParagraphCrop, renderVisionCrop, visionCanvasAvailable } from "./mm-dpo-vision.mjs";
+import { renderParagraphCrop, renderTightCrop, renderVisionCrop, visionCanvasAvailable } from "./mm-dpo-vision.mjs";
 import { multimodalTarget, sendVision } from "../lib/mm-client.js";
-import { normalizeFormulaSettings } from "../lib/formula-settings.js";
+import { fixedVendorHostMismatch, normalizeFormulaSettings } from "../lib/formula-settings.js";
+import { currentNet } from "../lib/net/fetch.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
 
 export const DEFAULT_PDF = join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf");
+export const DEFAULT_REFERENCE = join(root, "tests/fixtures/mm-dpo-reference.json");
 
 export const USAGE = [
   "DPO 多模态 A/B 脚手架（arXiv 2305.18290v3，第 3–5 页，79 个公式参考）",
@@ -77,11 +84,15 @@ export const USAGE = [
   "  node tools/mm-dpo-reference.mjs --help",
   "  node tools/mm-dpo-reference.mjs --template [--out dir]",
   "  node tools/mm-dpo-reference.mjs --dry-run --fixture <file.json> [--arm=tight,hi-res,paragraph]",
-  "  node tools/mm-dpo-reference.mjs --live --limit=15 --arm=tight,hi-res,paragraph --model=kimi",
+  "  MM_DPO_KIMI_MODEL=kimi-k3 MM_DPO_KIMI_BASE_URL=https://ark.cn-beijing.volces.com/api/plan/v3 \\",
+  "    node tools/mm-dpo-reference.mjs --live --limit=15 --arm=tight,hi-res,paragraph --model=kimi",
   "  node tools/mm-dpo-reference.mjs --live --sample=15 --arm=tight,hi-res,paragraph --model=kimi",
   "  node tools/mm-dpo-reference.mjs --live --full --arm=page",
   "",
   "输入臂: tight（默认） / hi-res / paragraph / page",
+  "  tight：已有图走 cropPngFor；文字层 PDF 用 measureFormulaCrop（CROP_SCALE 2）。",
+  "  默认参考：tests/fixtures/mm-dpo-reference.json。未对齐的行不计入准确率。",
+  "  火山方舟 Base URL 走产品「自定义兼容端点」：base + /chat/completions，不再加 /v1。",
   "  page 默认关，必须 --arm=page。不发送整页 PDF，也不进产品默认。",
   "  hi-res 走产品 visionCropFor / renderVisionCrop（mm-3）。没有页面时不发送。",
   "  paragraph 只在本脚本里：段落区域按同一高清倍率出图，并附段落文字。",
@@ -236,11 +247,55 @@ export function loadBundledKatex() {
   return katexModule.exports;
 }
 
+function httpsHost(base) {
+  try {
+    const url = new URL(String(base || "").trim());
+    if (url.protocol !== "https:") return "";
+    return url.hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function arkBase(base) {
+  const host = httpsHost(base);
+  return host === "ark.cn-beijing.volces.com" || host.endsWith(".volces.com") || host.endsWith(".volcengine.com");
+}
+
+/**
+ * A fixed vendor only accepts its own host. An Ark override is the product's
+ * custom OpenAI-compatible endpoint, so Moonshot's host check does not apply.
+ * Any other host stays on the named provider and is still refused.
+ */
+export function liveProviderFor(call) {
+  const base = String(call?.baseUrl || "").trim();
+  if (!base || !arkBase(base)) return String(call?.provider || "");
+  const mismatch = fixedVendorHostMismatch({
+    multimodal: { provider: call?.provider, baseUrl: base, apiKey: "x" }
+  });
+  return mismatch ? "custom" : String(call?.provider || "");
+}
+
+function omitReasoningEffort(net) {
+  const base = net || currentNet();
+  return {
+    fetch(request) {
+      const json = request?.json;
+      if (!json || typeof json !== "object" || !Object.prototype.hasOwnProperty.call(json, "reasoning_effort")) {
+        return base.fetch(request);
+      }
+      const next = { ...json };
+      delete next.reasoning_effort;
+      return base.fetch({ ...request, json: next });
+    }
+  };
+}
+
 export function createLiveTransport({ net } = {}) {
   return async function liveTransport(call) {
     const settings = normalizeFormulaSettings({
       multimodal: {
-        provider: call.provider,
+        provider: liveProviderFor(call),
         model: call.model,
         baseUrl: call.baseUrl || "",
         apiKey: ""
@@ -254,25 +309,10 @@ export function createLiveTransport({ net } = {}) {
       images: call.image ? [{ mime: "image/png", base64: call.image.base64 }] : [],
       secret: call.secret,
       signal: call.signal,
-      net,
+      net: arkBase(call.baseUrl) ? omitReasoningEffort(net) : net,
       retry: false
     });
   };
-}
-
-function missingModule(err) {
-  return err?.code === "ERR_MODULE_NOT_FOUND"
-    || /Cannot find module|Cannot find package/.test(String(err?.message || ""));
-}
-
-export async function loadOptionalVisionCrop() {
-  try {
-    const mod = await import("../lib/formula-vision-crop.js");
-    return typeof mod.visionCropFor === "function" ? mod.visionCropFor : null;
-  } catch (err) {
-    if (missingModule(err)) return null;
-    throw err;
-  }
 }
 
 function missingPdf(pdfPath) {
@@ -322,6 +362,9 @@ export async function openPdfSession(pdfPath) {
     renderVisionCrop(block, spec) {
       return renderVisionCrop(pages.get(Number(block?.page)), block, spec);
     },
+    renderTightCrop(formula) {
+      return renderTightCrop(pages.get(Number(formula?.page)), formula);
+    },
     renderParagraphCrop(formula) {
       return renderParagraphCrop(pages.get(Number(formula?.page)), formula);
     },
@@ -346,14 +389,27 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+function referenceFile(parsed) {
+  if (parsed.reference) return resolve(parsed.reference);
+  return DEFAULT_REFERENCE;
+}
+
+function applyReferenceFile(formulas, parsed) {
+  const path = referenceFile(parsed);
+  if (!existsSync(path)) {
+    if (parsed.reference) throw new Error(`缺少参考：${path}`);
+    return formulas;
+  }
+  return attachReferences(formulas, readJson(path));
+}
+
 async function loadFormulas(parsed) {
   if (parsed.fixture) {
-    let formulas = formulasFromFixture(readJson(resolve(parsed.fixture)));
-    if (parsed.reference) formulas = attachReferences(formulas, readJson(resolve(parsed.reference)));
+    const formulas = applyReferenceFile(formulasFromFixture(readJson(resolve(parsed.fixture))), parsed);
     return { formulas, session: null };
   }
   const session = await openPdfSession(parsed.pdf ? resolve(parsed.pdf) : DEFAULT_PDF);
-  if (parsed.reference) session.formulas = attachReferences(session.formulas, readJson(resolve(parsed.reference)));
+  session.formulas = applyReferenceFile(session.formulas, parsed);
   return { formulas: session.formulas, session };
 }
 
@@ -408,9 +464,12 @@ export async function main(argv = [], io = {}) {
     stderr(`真跑至少需要一个环境变量密钥：${AB_CHANNELS.map((channel) => channel.envKey).join("、")}`);
     return { code: 2, report: null, paths: null };
   }
-  const needsRaster = arms.some((arm) => arm === "hi-res" || arm === "paragraph");
-  if (!parsed.fixture && needsRaster && io.renderVisionCrop === undefined && !visionCanvasAvailable()) {
-    stderr("高清裁图需要 @napi-rs/canvas。在仓库根目录运行 npm ci。");
+  const pdfPath = parsed.pdf ? resolve(parsed.pdf) : DEFAULT_PDF;
+  const tightNeeds = arms.includes("tight") && io.renderTightCrop === undefined;
+  const hiNeeds = arms.includes("hi-res") && io.renderVisionCrop === undefined;
+  const paragraphNeeds = arms.includes("paragraph") && io.renderParagraphCrop === undefined;
+  if (!parsed.fixture && existsSync(pdfPath) && (tightNeeds || hiNeeds || paragraphNeeds) && !visionCanvasAvailable()) {
+    stderr("裁图需要 @napi-rs/canvas。在仓库根目录运行 npm ci。");
     return { code: 1, report: null, paths: null };
   }
   let loaded;
@@ -438,6 +497,9 @@ export async function main(argv = [], io = {}) {
     let katex = io.katex || null;
     if (live && !katex) katex = loadBundledKatex();
     const visionCropFor = io.visionCropFor === undefined ? null : io.visionCropFor;
+    const renderTight = io.renderTightCrop === undefined
+      ? (loaded.session?.renderTightCrop || null)
+      : io.renderTightCrop;
     const renderVision = io.renderVisionCrop === undefined
       ? (loaded.session?.renderVisionCrop || null)
       : io.renderVisionCrop;
@@ -452,6 +514,7 @@ export async function main(argv = [], io = {}) {
       transport,
       katex,
       visionCropFor,
+      renderTightCrop: renderTight,
       renderVisionCrop: renderVision,
       renderParagraphCrop: renderParagraph,
       placeholderUsesTight: parsed.placeholderUsesTight,

@@ -18,7 +18,7 @@
 import "./helpers/block-live-fetch.mjs";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,12 +60,13 @@ import {
   selectSample,
   templateReport
 } from "../lib/mm-dpo-ab.js";
-import { createMemoryCanvas, renderParagraphCrop, renderVisionCrop } from "../tools/mm-dpo-vision.mjs";
+import { CROP_SCALE, rasterCropRect } from "../lib/pdf-blocks.js";
+import { FORMULA_INK_PAD_PX, measureFormulaCrop } from "../lib/pdf-text-layer.js";
+import { createMemoryCanvas, renderParagraphCrop, renderTightCrop, renderVisionCrop } from "../tools/mm-dpo-vision.mjs";
 import { parseCropDataUrl } from "../lib/formula-crop-png.js";
 import {
   USAGE,
   createLiveTransport,
-  loadOptionalVisionCrop,
   loadPdfFormulas,
   main,
   parseArgs
@@ -1216,7 +1217,7 @@ test("dry-run samples without a network call, and a locked id list is what the r
   assert.equal(liveFetchViolations(), before);
 });
 
-test("coverage stays incomplete off the 79-formula pages, and the optional vision hook is absent or a function", async () => {
+test("coverage stays incomplete off the 79-formula pages", async () => {
   const off = coverageOf([formula({ page: 9 })], 1);
   assert.equal(off.pagesMatch, false);
   assert.equal(off.complete, false);
@@ -1224,12 +1225,219 @@ test("coverage stays incomplete off the 79-formula pages, and the optional visio
   assert.equal(partial.pagesMatch, true);
   assert.equal(partial.complete, false);
   assert.equal(partial.expected, 79);
-  const hook = await loadOptionalVisionCrop();
-  assert.equal(hook === null || typeof hook === "function", true);
   await assert.rejects(
     () => loadPdfFormulas(join(root, "tests/fixtures/missing-dpo.pdf")),
     /2305\.18290/
   );
+});
+
+const SAMPLED_REFERENCE_IDS = [
+  "p3-b7", "p3-b8", "p3-b9", "p3-b11", "p3-b12",
+  "p4-b2", "p4-b3", "p4-b7", "p4-b9", "p4-b11", "p4-b16",
+  "p5-b3", "p5-b4", "p5-b6", "p5-b7"
+];
+
+test("the committed DPO reference covers the 15 sampled ids, and unaligned rows stay out of accuracy", async () => {
+  const table = JSON.parse(readFileSync(join(root, "tests/fixtures/mm-dpo-reference.json"), "utf8"));
+  assert.equal(table.arxiv, "2305.18290");
+  assert.equal(table.version, "v3");
+  assert.equal(table.pdfSha256, "92cb3a2b71362acda98a789b03d88688fd33cf5fcf13f81d2b1de30ee7d3b67a");
+  assert.equal(table.detected, 37);
+  for (const id of SAMPLED_REFERENCE_IDS) {
+    const row = table.formulas.find((item) => item.id === id);
+    assert.ok(row, id);
+    if (row.aligned) {
+      assert.equal(row.confidence, "high");
+      assert.equal(typeof row.reference, "string");
+      assert.ok(row.reference.length > 0, id);
+    } else {
+      assert.equal(row.aligned, false);
+      assert.equal(row.confidence, "none");
+      assert.equal(row.reference, null);
+    }
+  }
+  const attached = attachReferences([
+    formula({ id: "p3-b7", reference: "LEAK", imageUrl: dataUrl(PNG) }),
+    formula({ id: "p3-b9", reference: null, imageUrl: dataUrl(PNG), equationNumber: "(1)" })
+  ], table);
+  assert.equal(attached[0].reference, null);
+  assert.equal(typeof attached[1].reference, "string");
+  const compared = await runAb({
+    formulas: attached,
+    arms: ["tight"],
+    models: [channel("kimi", KIMI_KEY)],
+    send: true,
+    katex,
+    now: clock(),
+    transport: async () => ({
+      ok: true,
+      text: "x",
+      usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 }
+    })
+  });
+  assert.equal(compared.rows[0].matchesReference, null);
+  assert.equal(compared.rows[0].exactMatch, null);
+  assert.equal(compared.rows[1].matchesReference, false);
+  assert.equal(compared.summary.byArmModel[0].referenceCompared, 1);
+  assert.equal(compared.references.unaligned.includes("p3-b7"), true);
+  assert.equal(compared.references.unaligned.includes("p3-b9"), false);
+  assert.match(reportToMarkdown(compared), /p3-b7/);
+});
+
+test("the CLI loads the committed reference when --reference is omitted", async (t) => {
+  const dir = createOwnedTemp(t, "mm-dpo-ref-");
+  const fixturePath = join(dir, "fixture.json");
+  writeFileSync(fixturePath, JSON.stringify({
+    formulas: [
+      formula({ id: "p3-b7", reference: "LEAK", imageUrl: dataUrl(PNG) }),
+      formula({ id: "p3-b9", reference: null, imageUrl: dataUrl(PNG) })
+    ]
+  }));
+  const result = await main([
+    "--dry-run",
+    "--fixture", fixturePath,
+    "--arm=tight",
+    "--out", dir
+  ], {
+    env: { MM_DPO_KIMI_API_KEY: KIMI_KEY },
+    stdout() {},
+    stderr() {}
+  });
+  assert.equal(result.code, 0);
+  assert.equal(result.report.references.aligned, 1);
+  assert.deepEqual(result.report.references.unaligned, ["p3-b7"]);
+  assert.match(readFileSync(result.paths.mdPath, "utf8"), /p3-b7/);
+  assert.equal(readFileSync(result.paths.jsonPath, "utf8").includes("LEAK"), false);
+});
+
+test("the tight arm renders the product CROP_SCALE crop when the block has no image", async () => {
+  assert.equal(CROP_SCALE, 2);
+  assert.equal(FORMULA_INK_PAD_PX.inline, 4);
+  assert.equal(FORMULA_INK_PAD_PX.display, 6);
+  const pageWidth = 200;
+  const pageHeight = 120;
+  const bbox = [0.1, 0.1, 0.9, 0.7];
+  const page = fakePage(pageWidth, pageHeight, paintInset);
+  const rasterW = Math.max(1, Math.floor(pageWidth * CROP_SCALE));
+  const rasterH = Math.max(1, Math.floor(pageHeight * CROP_SCALE));
+  const probe = createMemoryCanvas(rasterW, rasterH);
+  paintInset(probe.getContext("2d"));
+  const image = probe.getContext("2d").getImageData(0, 0, rasterW, rasterH);
+  const displayBox = measureFormulaCrop(bbox, image, { inline: false, protect: false }).bbox;
+  const inlineBox = measureFormulaCrop(bbox, image, { inline: true, protect: false }).bbox;
+  const displayRect = rasterCropRect(displayBox, rasterW, rasterH);
+  const inlineRect = rasterCropRect(inlineBox, rasterW, rasterH);
+  assert.notDeepEqual([displayRect.sw, displayRect.sh], [inlineRect.sw, inlineRect.sh]);
+  const displayPng = await renderTightCrop(page, formula({
+    id: "tight-display",
+    display: true,
+    bbox,
+    imageUrl: ""
+  }), memoryHooks());
+  const inlinePage = fakePage(pageWidth, pageHeight, paintInset);
+  const inlinePng = await renderTightCrop(inlinePage, formula({
+    id: "tight-inline",
+    display: false,
+    inlineOf: "host",
+    bbox,
+    imageUrl: ""
+  }), memoryHooks());
+  assert.equal(displayPng.scale, CROP_SCALE);
+  assert.equal(displayPng.w, displayRect.sw);
+  assert.equal(displayPng.h, displayRect.sh);
+  assert.equal(inlinePng.w, inlineRect.sw);
+  assert.equal(inlinePng.h, inlineRect.sh);
+  assert.ok(displayPng.w < rasterW);
+  const calls = [];
+  const live = await runAb({
+    formulas: [formula({ id: "tight-pdf", display: true, bbox, imageUrl: "", reference: "x" })],
+    arms: ["tight"],
+    models: [channel("kimi", KIMI_KEY)],
+    send: true,
+    katex,
+    now: clock(),
+    renderTightCrop: (item) => renderTightCrop(page, item, memoryHooks()),
+    transport: async (call) => {
+      calls.push(call);
+      assert.match(call.image.base64, /^[A-Za-z0-9+/]+=*$/);
+      return { ok: true, text: "x", usage: { prompt_tokens: 8, completion_tokens: 1, total_tokens: 9 } };
+    }
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].image.w, displayPng.w);
+  assert.equal(calls[0].image.h, displayPng.h);
+  assert.equal(live.rows[0].measured, true);
+  assert.equal(live.rows[0].inputKind, "tight");
+  assert.equal(live.rows[0].matchesReference, true);
+  let skipped = 0;
+  const kept = await runAb({
+    formulas: [formula({ imageUrl: dataUrl(PNG) })],
+    arms: ["tight"],
+    models: [channel("kimi", KIMI_KEY)],
+    send: false,
+    renderTightCrop: async () => {
+      skipped += 1;
+      return null;
+    }
+  });
+  assert.equal(skipped, 0);
+  assert.equal(kept.rows[0].errorCode, "dry-run");
+  assert.equal(kept.rows[0].cropHash.length > 0, true);
+});
+
+test("an Ark plan base URL is one chat/completions path, with base64 and thinking off", async () => {
+  const box = harness(() => chat("x"));
+  const base = `https://ark.cn-beijing.volces.com/api/plan/v3?api_key=${KIMI_KEY}`;
+  const report = await runAb({
+    formulas: [formula()],
+    arms: ["tight"],
+    models: channelsFromEnv({
+      MM_DPO_KIMI_API_KEY: KIMI_KEY,
+      MM_DPO_KIMI_MODEL: "kimi-k3",
+      MM_DPO_KIMI_BASE_URL: base
+    }, ["kimi"]),
+    send: true,
+    katex,
+    now: clock(),
+    transport: createLiveTransport({ net: box.net })
+  });
+  assert.equal(box.seen.length, 1);
+  const url = new URL(box.seen[0].url);
+  assert.equal(url.protocol, "https:");
+  assert.equal(url.hostname, "ark.cn-beijing.volces.com");
+  assert.equal(url.pathname, "/api/plan/v3/chat/completions");
+  assert.equal(url.pathname.includes("/v1"), false);
+  assert.equal(url.search, "");
+  assert.equal(box.seen[0].url.includes(KIMI_KEY), false);
+  const body = JSON.parse(box.seen[0].body);
+  assert.equal(body.model, "kimi-k3");
+  assert.deepEqual(body.thinking, { type: "disabled" });
+  assert.equal(body.reasoning_effort, undefined);
+  const image = body.messages.at(-1).content.find((part) => part.type === "image_url");
+  assert.match(image.image_url.url, /^data:image\/png;base64,/);
+  assert.equal(image.image_url.url.includes("http"), false);
+  assert.equal(box.seen[0].headers.Authorization, `Bearer ${KIMI_KEY}`);
+  assert.equal(report.rows[0].latex, "x");
+  assert.equal(JSON.stringify(report).includes(KIMI_KEY), false);
+  assert.equal(JSON.stringify(report).includes("ark.cn-beijing.volces.com"), false);
+  assert.equal(typeof estimateCostUsd("kimi", "kimi-k3", { prompt: 10, completion: 2 }), "number");
+  assert.equal(typeof estimateCostUsd("kimi", "ark-endpoint-id", { prompt: 10, completion: 2 }), "number");
+  assert.equal(estimateCostUsd("deepseek", "deepseek-v4.1-flash", { prompt: 10, completion: 2 }), null);
+  assert.equal(estimateCostUsd("kimi", "kimi-k3", null), null);
+});
+
+test("D2 treats a floating 5-point gap as clear, and an unknown kimi model still prices", () => {
+  const edge = inputDecision([
+    { arm: "hi-res", provider: "kimi", model: "kimi-k3", role: "primary", referenceCompared: 20, matchesReference: 16 },
+    { arm: "paragraph", provider: "kimi", model: "kimi-k3", role: "primary", referenceCompared: 20, matchesReference: 17 }
+  ]);
+  assert.equal(17 / 20 >= 16 / 20 + D2_CLEAR_MARGIN, false);
+  assert.equal(edge.clearlyBetter, true);
+  assert.equal(edge.suggestedArm, "paragraph");
+  assert.equal(edge.productDefault, false);
+  const priced = estimateCostUsd("kimi", "not-a-listed-model", { prompt: 1_000_000, completion: 0 });
+  assert.equal(priced, 3);
+  assert.equal(estimateCostUsd("", "kimi-k3", { prompt: 10, completion: 10 }), null);
 });
 
 test("the extension manifest and CI do not run the paid script", () => {
