@@ -11,6 +11,8 @@ import {
   FORMULA_PAPER_MIN,
   contentAwareFormulaBbox,
   formulaGlyphsRedrawSafe,
+  isCitationOrFootnote,
+  isPlainChargeSpan,
   shortFormulaRunExempt,
   textLayerToBlocks,
   trimFormulaBboxToInk
@@ -1573,6 +1575,122 @@ test("the base is recovered when it is the last glyph of a longer text item", ()
   assert.ok(sentence);
   assert.match(`${sentence.sourceText || ""} ${sentence.text || ""}`, /expected/);
   assert.doesNotMatch(`${sentence.sourceText || ""} ${sentence.text || ""}`, /P\s*⟦f/);
+});
+
+test("an English article is not split off as a formula base", () => {
+  // DDPM 2006.11239 page 15. "(by a" is one text item; √ is the same height
+  // and only shifted, so it is not a subscript. The sentence keeps the article.
+  const body = { fontName: "g_d0_f1", fontRealName: "NimbusRomNo9L-Regu" };
+  const ddpm = textLayerToBlocks({
+    items: [
+      pdfItem("Diffusion models scale down the data with each forward process step (by a", 143.87, 437.74, 295.07, 9.96, body),
+      pdfItem("√", 441.44, 445.27, 8.3, 9.96, { fontName: "g_d0_f2", fontRealName: "CMSY10" }),
+      pdfItem("1", 449.74, 437.74, 4.98, 9.96, { fontName: "g_d0_f3", fontRealName: "CMR10" }),
+      pdfItem("−", 456.93, 437.74, 7.75, 9.96, { fontName: "g_d0_f2", fontRealName: "CMSY10" }),
+      pdfItem("β", 466.9, 437.74, 5.63, 9.96, { fontName: "g_d0_f4", fontRealName: "CMMI10" }),
+      pdfItem("t", 472.53, 436.25, 3.01, 6.97, { fontName: "g_d0_f5", fontRealName: "CMMI7" }),
+      pdfItem("factor)", 478.54, 437.74, 26.13, 9.96, body)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 15
+  });
+  const sentence = ddpm.blocks.find((block) => /forward process/.test(block.text || ""));
+  const formula = ddpm.blocks.find((block) => block.label === "formula");
+  assert.ok(sentence);
+  assert.match(sentence.text, /by a/);
+  assert.doesNotMatch(sentence.text, /by ⟦f/);
+  assert.match(sentence.text, /⟦f\d+⟧/);
+  assert.match(sentence.sourceText || "", /√/);
+  assert.doesNotMatch(sentence.sourceText || "", /1\/√d_k/);
+  assert.ok(formula);
+  assert.match(formula.sourceText || "", /√/);
+  assert.match(formula.sourceText || "", /β/);
+  assert.doesNotMatch(formula.sourceText || "", /^a/);
+
+  // 1305.7498 "as a 𝕜-module". 𝕜 is smaller than the prose, and a superscript
+  // still anchors the run, so "split only when smaller" would keep swallowing
+  // the article. A standalone a / A / I is a word.
+  const blackboard = "\u{1D55C}";
+  const moduleLine = textLayerToBlocks({
+    items: [
+      pdfItem("finitely generated as a", 72, 400, 120, 10, { fontName: "Times-Roman", fontRealName: "Times-Roman" }),
+      pdfItem(blackboard, 194, 400, 8, 7, { fontName: "g_d0_f6", fontRealName: "CMMI7" }),
+      pdfItem("0", 202, 406, 4, 5, { fontName: "g_d0_f7", fontRealName: "CMR5" }),
+      pdfItem("-module", 208, 400, 40, 10, { fontName: "Times-Roman", fontRealName: "Times-Roman" })
+    ],
+    viewport: unitViewport(612, 792),
+    page: 3
+  });
+  const moduleSentence = moduleLine.blocks.find((block) => /generated/.test(block.text || ""));
+  assert.ok(moduleSentence);
+  assert.match(moduleSentence.text, /as a/);
+  assert.match(moduleSentence.text, /-module/);
+  assert.doesNotMatch(moduleSentence.text, /as ⟦f/);
+  assert.equal(
+    moduleLine.blocks.some((block) => block.label === "formula" && /^a/.test(block.sourceText || "")),
+    false
+  );
+});
+
+test("a full-size shifted glyph does not take the preceding letter", () => {
+  // Split only when the next glyph is script-sized. ⊙ here matches the
+  // letter's height and is only shifted, so M stays in the sentence.
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("mass M", 72, 400, 36, 10, { fontName: "Times-Roman", fontRealName: "Times-Roman" }),
+      pdfItem("⊙", 110, 406, 8, 10, { fontName: "g_d0_f2", fontRealName: "CMSY10" }),
+      pdfItem(" stars", 120, 400, 28, 10, { fontName: "Times-Roman", fontRealName: "Times-Roman" })
+    ],
+    viewport: unitViewport(612, 792),
+    page: 6
+  });
+  const shown = page.blocks.map((block) => `${block.text || ""} ${block.sourceText || ""}`).join("\n");
+  assert.match(shown, /M⊙/);
+  assert.equal(page.blocks.some((block) => block.label === "formula"), false);
+});
+
+test("a unit power stays inline after the unit letter widens the run", () => {
+  // 0707.1879 s−1, and 0.01 s−1. The minus is smaller, so the letter is
+  // taken as a base and the run is wider than 12pt. isPlainChargeSpan is
+  // what rejects it; a charge filter that always returns false makes a block.
+  // A citation filter that always returns false fails the direct assert.
+  const text = (str, x, y, width, height = 10) => pdfItem(str, x, y, width, height, {
+    fontName: "Times-Roman",
+    fontRealName: "Times-Roman"
+  });
+  const page = textLayerToBlocks({
+    items: [
+      text("about ", 72, 420, 32),
+      text("s", 106, 420, 6),
+      text("−", 112, 424, 6, 6),
+      text("1", 118, 424, 5, 6),
+      text(",", 124, 420, 3),
+      text(" and", 128, 420, 20),
+      text("rate ", 40, 400, 28),
+      text("0.01", 70, 400, 22),
+      text("s", 94, 400, 6),
+      text("−", 100, 404, 8, 6),
+      text("1", 108, 404, 6, 6),
+      text(" now", 116, 400, 20)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 4
+  });
+  const formulas = page.blocks.filter((block) => block.label === "formula");
+  const shown = page.blocks.map((block) => `${block.text || ""} ${block.sourceText || ""}`).join("\n");
+  assert.equal(formulas.length, 0, formulas.map((block) => block.sourceText).join(" | "));
+  assert.match(shown, /s−1/);
+  assert.match(shown, /0\.01/);
+  assert.doesNotMatch(shown, /⟦f/);
+  const metrics = { bodyH: 10, baseY: 100 };
+  assert.equal(isPlainChargeSpan(
+    [{ str: "−", x: 0, y: 104, width: 5, height: 6, fontName: "Times-Roman", fontRealName: "Times-Roman" }],
+    0, 0, metrics
+  ), true);
+  assert.equal(isCitationOrFootnote(
+    [{ str: "1-2", x: 0, y: 104, width: 10, height: 6, fontName: "Times-Roman", fontRealName: "Times-Roman" }],
+    0, 0, metrics
+  ), true);
 });
 
 test("a wide asymmetric error stays a formula block", () => {
