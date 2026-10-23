@@ -37,3 +37,5 @@ tests/formula-arxiv-screen.test.mjs
 tests/diag-redact.test.mjs
 tests/diag-log.test.mjs
 tests/diag-export.test.mjs
+# Viewer with no ?src=, then a local PDF. Headless Chrome. No network.
+tests/pdf-open-local.test.mjs
