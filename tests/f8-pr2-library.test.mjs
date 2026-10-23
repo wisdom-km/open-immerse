@@ -144,6 +144,7 @@ test("网址变了的第二行是 12px muted，不是 warn", () => {
   assert.match(css, /\.oi-lib-muted[\s\S]*font-size:\s*12px/);
   assert.match(css, /\.oi-lib-muted[\s\S]*color:\s*var\(--oi-reader-muted\)/);
   assert.match(css, /\.oi-lib-warn[\s\S]*color:\s*var\(--oi-reader-warn\)/);
+  assert.match(css, /\.oi-lib-open-error[\s\S]*color:\s*var\(--oi-warn\)/);
   assert.doesNotMatch(css, /#[0-9A-Fa-f]{3,8}/);
   const panel = readFileSync(join(root, "pdf/library-panel.js"), "utf8");
   assert.match(panel, /repick\.changed \? h\(doc, "p", \{ class: "oi-lib-muted", text: LIBRARY_COPY\.urlChanged \}/);
@@ -1094,7 +1095,7 @@ test("打开同一行不会重入，下载超时和打开失败都留在这一�
   assert.equal(document.activeElement?.getAttribute("aria-disabled"), "true");
   timers.advance(40);
   await flush();
-  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /没打开，稍后再试。/);
+  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /没能打开 PDF，稍后再试一次。/);
   assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("正在重新下载"), false);
 
   let failed = 0;
@@ -1119,7 +1120,7 @@ test("打开同一行不会重入，下载超时和打开失败都留在这一�
   await flush();
   assert.equal(caught, undefined);
   assert.equal(failed, 0);
-  assert.match(broken.root.querySelector('[data-lib-row="local"]')?.textContent || "", /没打开，稍后再试。/);
+  assert.match(broken.root.querySelector('[data-lib-row="local"]')?.textContent || "", /没能打开 PDF，稍后再试一次。/);
   assert.equal(broken.isOpen(), true);
 });
 
@@ -1171,7 +1172,7 @@ test("响应头到了但正文一直不来时，超时会停掉整次下载", as
   timers.advance(40);
   await flush();
   assert.equal(aborted, true);
-  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /没打开，稍后再试。/);
+  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /没能打开 PDF，稍后再试一次。/);
   assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("正在重新下载"), false);
   ui.root.querySelector('[data-lib-row="local"] .oi-lib-open').click();
   await flush();

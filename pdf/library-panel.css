@@ -22,6 +22,7 @@
   font-family: var(--oi-reader-ui-font, var(--oi-font, sans-serif));
   font-size: 14px;
   line-height: 1.45;
+  --oi-warn: var(--oi-reader-warn);
 }
 
 .oi-library button {
@@ -275,6 +276,10 @@
 .oi-lib-warn {
   color: var(--oi-reader-warn);
   font-weight: 600;
+}
+
+.oi-lib-open-error {
+  color: var(--oi-warn);
 }
 
 .oi-lib-confirm-title {
