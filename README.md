@@ -165,6 +165,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 - 右栏另有独立缩放芯片（0.5–5，步长 0.25），不进顶栏
 - 中缝可拖，改左右栏宽度
 - 内容精准第一，排版第二且尽量做好。译文跟抽出的原文一致。公式、图、表跟打开的 PDF 是同一套内容，默认用原页裁图（pageRaster）；其他手段须过同一条验收
+- 公式多模态的豆包预设默认地址是 `https://ark.cn-beijing.volces.com/api/plan/v3`（glm-5.3-flash，另一预设 deepseek-v4.1-flash）。Base URL 留空就用这个地址。已经保存的地址保持不变。按量密钥可以手动改成 `https://ark.cn-beijing.volces.com/api/v3`
 - 有文字层的正文用文字层原句。点击右栏用左栏高亮对齐
 - OCR 把 `i` 认成 `n`，或把 `n` 认成 `i`，不上屏，也不送进翻译
 - 测试期划区用本机智谱 GLM-OCR。上线用 OCR API，翻译用插件里已经配置的大模型 API
