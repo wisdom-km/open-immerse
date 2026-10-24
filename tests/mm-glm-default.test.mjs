@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 
 import { createFormulaCache, isDurableFormulaResult } from "../lib/formula-cache.js";
 import {
+  FORMULA_SETTINGS_KEY,
   LEGACY_DOUBAO_MODEL,
   MM_PRESET_GENERATION,
   defaultFormulaSettings,
@@ -16,11 +17,12 @@ import {
   normalizeFormulaSettings,
   readFormulaSettings
 } from "../lib/formula-settings.js";
+import { renderFormulaPanel } from "../lib/formula-settings-ui.js";
 import { classifyMmDecision } from "../lib/formula-mm-ledger.js";
 import { PROBE_PNG_BASE64 } from "../lib/mm-probe.js";
 import { applyChatThinking } from "../lib/providers.js";
 import { buildVisionRequest, multimodalTarget, sendVision } from "../lib/mm-client.js";
-import { arkImagePlan } from "../lib/mm-caps.js";
+import { arkImagePlan, normalizeGlmRetryBody } from "../lib/mm-caps.js";
 import { createNet, MM_ACCOUNT_CONCURRENCY } from "../lib/net/fetch.js";
 import { readPngInfo } from "../lib/vision-png.js";
 
@@ -28,6 +30,54 @@ const ARK = "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
 const TINY = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const KEY_A = "account-a-not-a-real-key";
 const KEY_B = "account-b-not-a-real-key";
+const LITE = "doubao-seed-2-1-lite-260915";
+
+class DomNode {
+  constructor() {
+    this.childNodes = [];
+  }
+  append(...nodes) {
+    for (const node of nodes) {
+      node.parentElement = this;
+      this.childNodes.push(node);
+    }
+  }
+  replaceChildren(...nodes) {
+    this.childNodes = [];
+    this.append(...nodes);
+  }
+  get textContent() {
+    return this.childNodes.map((node) => node.textContent || "").join("");
+  }
+  set textContent(value) {
+    this.childNodes = [{ textContent: String(value ?? "") }];
+  }
+}
+
+class DomEl extends DomNode {
+  constructor(tag) {
+    super();
+    this.tagName = String(tag || "").toUpperCase();
+    this.attrs = {};
+    this.dataset = {};
+    this.className = "";
+    this.disabled = false;
+    this.value = "";
+    this.type = "";
+  }
+  setAttribute(name, value) {
+    this.attrs[name] = String(value);
+  }
+  getAttribute(name) {
+    return this.attrs[name];
+  }
+  addEventListener() {}
+}
+
+function walk(node, visit) {
+  visit(node);
+  for (const child of node.childNodes || []) walk(child, visit);
+}
 
 function glmTarget(model = "glm-5.3-flash") {
   return {
@@ -159,7 +209,7 @@ test("a glm image under the Ark floor is padded; a legal image is unchanged", as
   assert.equal(legal, `data:image/png;base64,${PROBE_PNG_BASE64}`);
 });
 
-test("glm 400 InvalidParameter retries once without reasoning fields and does not switch model", async () => {
+test("glm 400 InvalidParameter retries once, keeps reasoning_effort low, and does not switch model", async () => {
   const bodies = [];
   let calls = 0;
   const net = netOf((_url, init) => {
@@ -189,9 +239,27 @@ test("glm 400 InvalidParameter retries once without reasoning fields and does no
   assert.equal(bodies[0].reasoning_effort, "low");
   assert.equal(Object.hasOwn(bodies[0], "thinking"), false);
   assert.equal(bodies[1].model, "glm-5.3-flash");
+  assert.equal(bodies[1].reasoning_effort, "low");
   assert.equal(Object.hasOwn(bodies[1], "thinking"), false);
-  assert.equal(Object.hasOwn(bodies[1], "reasoning_effort"), false);
+  assert.equal(bodies[1].temperature, 0);
   assert.equal(JSON.stringify(bodies).includes(KEY_A), false);
+
+  const normalized = normalizeGlmRetryBody({
+    model: "glm-5.3-flash",
+    temperature: 0,
+    messages: [{ role: "user", content: "x" }],
+    reasoning_effort: "low",
+    thinking: { type: "disabled" },
+    stream: true,
+    extra: 1
+  });
+  assert.equal(normalized.reasoning_effort, "low");
+  assert.equal(Object.hasOwn(normalized, "thinking"), false);
+  assert.equal(Object.hasOwn(normalized, "stream"), false);
+  assert.equal(Object.hasOwn(normalized, "extra"), false);
+  assert.equal(normalized.temperature, 0);
+  assert.equal(normalizeGlmRetryBody({ reasoning_effort: "minimal", thinking: { type: "disabled" } }).reasoning_effort, "low");
+  assert.equal(normalizeGlmRetryBody({ reasoning_effort: "high" }).reasoning_effort, "high");
 });
 
 test("a 400 that is still invalid after the normalized retry is not a cached model failure", async () => {
@@ -382,8 +450,9 @@ test("new installs default to glm-5.3-flash and an explicit saved model stays", 
   const explicit = normalizeFormulaSettings({
     multimodal: { provider: "doubao", apiKey: KEY_A, model: "doubao-seed-2-1-lite-260915" }
   });
-  assert.equal(explicit.multimodal.model, "doubao-seed-2-1-lite-260915");
+  assert.equal(explicit.multimodal.model, LITE);
   assert.equal(explicit.multimodal.provider, "doubao");
+  assert.equal(explicit.multimodal.customModel, false);
 
   const implicitOld = normalizeFormulaSettings({
     multimodal: { provider: "doubao", apiKey: KEY_A, model: "" }
@@ -410,4 +479,58 @@ test("new installs default to glm-5.3-flash and an explicit saved model stays", 
   assert.equal(saved.multimodal.provider, "kimi");
   assert.equal(saved.multimodal.model, "kimi-k3");
   assert.equal(saved["formula.tier2.enabled"], true);
+});
+
+test("a saved doubao-seed lite model is shown as that model, not as glm", async () => {
+  const raw = {
+    multimodal: { provider: "doubao", apiKey: KEY_A, model: LITE, customModel: false }
+  };
+  const stored = normalizeFormulaSettings(raw);
+  assert.equal(stored.multimodal.model, LITE);
+  assert.equal(stored.multimodal.customModel, false);
+  assert.deepEqual(modelChoice(raw), { mode: "select", select: "__custom", custom: LITE });
+  assert.equal(multimodalTarget(raw).model, LITE);
+
+  const loaded = await readFormulaSettings({
+    async get(key) {
+      assert.equal(key, FORMULA_SETTINGS_KEY);
+      return { [FORMULA_SETTINGS_KEY]: raw };
+    }
+  });
+  assert.equal(loaded.multimodal.model, LITE);
+  assert.equal(loaded.multimodal.customModel, false);
+  assert.notEqual(loaded.multimodal.model, "glm-5.3-flash");
+
+  const previous = globalThis.document;
+  globalThis.document = {
+    createElement(tag) {
+      return new DomEl(tag);
+    },
+    createTextNode(text) {
+      return { textContent: String(text ?? "") };
+    }
+  };
+  try {
+    const panel = new DomEl("div");
+    renderFormulaPanel(panel, raw, {});
+    const selects = [];
+    const inputs = [];
+    walk(panel, (node) => {
+      if (node.tagName === "SELECT") selects.push(node);
+      if (node.tagName === "INPUT") inputs.push(node);
+    });
+    assert.equal(selects[0].value, "doubao");
+    assert.equal(selects[1].value, "__custom");
+    assert.notEqual(selects[1].value, "glm-5.3-flash");
+    const optionValues = [];
+    walk(selects[1], (node) => {
+      if (node.tagName === "OPTION") optionValues.push(node.value);
+    });
+    assert.deepEqual(optionValues, ["", "glm-5.3-flash", "deepseek-v4.1-flash", "__custom"]);
+    assert.equal(inputs.some((input) => input.value === LITE), true);
+    assert.equal(inputs.some((input) => input.value === "glm-5.3-flash"), false);
+    assert.match(panel.textContent, /自定义模型/);
+  } finally {
+    globalThis.document = previous;
+  }
 });
