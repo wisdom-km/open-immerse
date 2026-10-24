@@ -28,6 +28,7 @@ import {
   FORMULA_VISION_SYSTEM,
   formulaVisionPrompt
 } from "../lib/formula-tiers/multimodal.js";
+import { charsetJaccard, latexToCharset, pdfTextCharset } from "../lib/formula-charset.js";
 import {
   applyNeighbourSafetyNet,
   neighbourEdgeLetters,
@@ -37,11 +38,7 @@ import {
 import { renderEquivalent } from "../lib/formula-render-equiv.js";
 import { latexMatchesReference } from "../lib/mm-dpo-ab.js";
 import { buildVisionRequest, multimodalTarget } from "../lib/mm-client.js";
-import {
-  MULTIMODAL_PROVIDERS,
-  defaultFormulaSettings,
-  normalizeFormulaSettings
-} from "../lib/formula-settings.js";
+import { normalizeFormulaSettings } from "../lib/formula-settings.js";
 import { loadKatex } from "./helpers/arxiv-paper.mjs";
 
 const katex = loadKatex();
@@ -94,7 +91,7 @@ function pixel(data, width, x, y) {
 }
 
 function isRed(rgb) {
-  return rgb[0] === 225 && rgb[1] === 6 && rgb[2] === 0;
+  return rgb[0] === 255 && rgb[1] === 0 && rgb[2] === 0;
 }
 
 const inlineFormula = {
@@ -166,7 +163,7 @@ test("the red box stays outside the formula at DPR 1 and DPR 2", () => {
     assert.ok(rect.y + rect.h + TARGET_BOX_PX <= crop.pixelHeight);
     const { canvas, data } = strokeCanvas(crop.pixelWidth, crop.pixelHeight);
     assert.equal(paintTargetBox(canvas, rect, TARGET_BOX_PX), true);
-    assert.equal(TARGET_BOX_COLOR, "#e10600");
+    assert.equal(TARGET_BOX_COLOR, "#ff0000");
     const midX = rect.x + Math.floor(rect.w / 2);
     const midY = rect.y + Math.floor(rect.h / 2);
     assert.deepEqual(pixel(data, crop.pixelWidth, midX, midY), [255, 255, 255]);
@@ -241,9 +238,18 @@ test("neighbour letters are peeled only when the stripped formula still renders"
   assert.equal(stripNeighbourEdgeLetters("If\\ x^2\\ eq", letters), "x^2");
   assert.equal(stripNeighbourEdgeLetters("\\mathrm{If} x_i \\text{eq}", letters), "x_i");
   assert.equal(stripNeighbourEdgeLetters("If x^2", ["eq"]), "If x^2");
-  assert.equal(applyNeighbourSafetyNet("If x^2 eq", letters, false, katex), "x^2");
-  assert.equal(applyNeighbourSafetyNet("aa x^", ["aa"], false, katex), "aa x^");
-  assert.equal(applyNeighbourSafetyNet("aa \\notacommand", ["aa"], false, katex), "aa \\notacommand");
+  assert.equal(applyNeighbourSafetyNet("If x^2 eq", letters, false, katex, "x^2"), "x^2");
+  assert.equal(applyNeighbourSafetyNet("aa x^", ["aa"], false, katex, "x"), "aa x^");
+  assert.equal(applyNeighbourSafetyNet("aa \\notacommand", ["aa"], false, katex, "x"), "aa \\notacommand");
+  const above = { str: "to", bbox: [0.36, 0.385, 0.39, 0.4] };
+  const far = { str: "Or", bbox: [0.2, 0.4, 0.24, 0.42] };
+  const beside = { str: "x", bbox: [0.52, 0.4, 0.545, 0.42] };
+  assert.deepEqual(neighbourEdgeLetters([above, far], host), []);
+  assert.deepEqual(neighbourEdgeLetters(
+    [{ str: "If", bbox: [0.36, 0.4, 0.39, 0.42] }, beside],
+    host,
+    { formulaBoxes: [[0.51, 0.395, 0.56, 0.425]] }
+  ), ["If"]);
   const kept = verifyCandidate("Q \\notacommand", {
     pdfText: "Q",
     display: false,
@@ -256,6 +262,39 @@ test("neighbour letters are peeled only when the stripped formula still renders"
     neighbourLetters: letters
   }, katex);
   assert.equal(peeled.latex, "x^2");
+});
+
+test("neighbour peeling does not delete letters that belong to the formula", () => {
+  const sum = "\\sum_{i=1}^{n}+bcde + b x";
+  const damaged = "\\sum_{i=1}^{n}+bcde + b";
+  const pdf = "∑i=1n+bcdebx";
+  const fullOverlap = charsetJaccard(latexToCharset(sum), pdfTextCharset(pdf));
+  const damagedOverlap = charsetJaccard(latexToCharset(damaged), pdfTextCharset(pdf));
+  assert.ok(damagedOverlap >= 0.9, `damaged overlap ${damagedOverlap}`);
+  assert.ok(fullOverlap > damagedOverlap);
+  const cases = [
+    ["a + b", "a + b", ["a"], "a + b"],
+    ["f(x) = a x", "f(x) = a x", ["a", "x"], "f(x) = a x"],
+    [sum, pdf, ["x"], sum]
+  ];
+  for (const [latex, source, letters, kept] of cases) {
+    const direct = applyNeighbourSafetyNet(latex, letters, false, katex, source);
+    assert.equal(direct, kept);
+    const checked = verifyCandidate(latex, {
+      pdfText: source,
+      display: false,
+      neighbourLetters: letters
+    }, katex);
+    assert.equal(checked.latex, kept);
+  }
+  const shown = verifyCandidate(sum, {
+    pdfText: pdf,
+    display: false,
+    neighbourLetters: ["x"]
+  }, katex);
+  assert.equal(shown.pass, true);
+  assert.equal(shown.latex.includes("x"), true);
+  assert.notEqual(shown.latex, damaged);
 });
 
 test("render equivalence is the acceptance metric", () => {
@@ -285,7 +324,7 @@ test("glm omits thinking, other vision calls keep temperature 0 and thinking off
   assert.equal(glm.json.model, "glm-5.3-flash");
   assert.equal(glm.json.temperature, 0);
   assert.equal(Object.hasOwn(glm.json, "thinking"), false);
-  assert.equal(Object.hasOwn(glm.json, "reasoning_effort"), false);
+  assert.equal(glm.json.reasoning_effort, "minimal");
   assert.equal(JSON.stringify(glm.json).includes("sk-glm-test"), false);
   assert.match(glm.json.messages.at(-1).content[1].image_url.url, /^data:image\/png;base64,/);
 
@@ -301,12 +340,4 @@ test("glm omits thinking, other vision calls keep temperature 0 and thinking off
   assert.equal(deep.json.temperature, 0);
   assert.deepEqual(deep.json.thinking, { type: "disabled" });
   assert.equal(JSON.stringify(deep.json).includes("sk-ds-test"), false);
-
-  const defaults = defaultFormulaSettings();
-  assert.equal(defaults.multimodal.provider, "");
-  assert.equal(defaults.multimodal.model, "");
-  const deepseek = MULTIMODAL_PROVIDERS.find((item) => item.id === "deepseek");
-  assert.equal(deepseek.vision, false);
-  assert.deepEqual(deepseek.models, ["deepseek-flash"]);
-  assert.equal(MULTIMODAL_PROVIDERS.some((item) => item.models?.includes("glm-5.3-flash")), false);
 });

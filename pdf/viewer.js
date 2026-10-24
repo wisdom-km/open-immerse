@@ -5188,6 +5188,10 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
       docHash: notesDocHashNow(),
       page: pageNumber,
       textItems,
+      otherFormulaBoxes: (blocks || [])
+        .filter((item) => item !== block && item?.label === "formula")
+        .map((item) => item.layoutBbox || item.bbox)
+        .filter((box) => Array.isArray(box)),
       katex: globalThis.katex,
       settings: formulaViewerSettings,
       readSettings: () => formulaViewerSettings,

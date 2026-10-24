@@ -223,14 +223,14 @@ test("an empty metric margin above a bracket is not the red edge", () => {
   assert.ok(seated.y + seated.h > 59, "bracket ink is inside");
 });
 
-test("the inter-line gap limits the pad, so a full gap and a 3px shrink both miss", () => {
+test("the inter-line gap limits the pad, so a full gap and a 4px stroke both miss the next line", () => {
   const image = blankImage(80, 70);
   const glyph = { x: 10, y: 10, w: 40, h: 20 };
   for (let y = 20; y <= 29; y += 1) image.dot(20, y);
-  for (let x = glyph.x; x < glyph.x + glyph.w; x += 1) image.dot(x, 34);
+  for (let x = glyph.x; x < glyph.x + glyph.w; x += 1) image.dot(x, 35);
   const seated = seatInkBox(image, glyph);
   const inkBottom = 30;
-  const neighbor = 34;
+  const neighbor = 35;
   const room = neighbor - inkBottom;
   const pad = Math.min(TARGET_BOX_GAP, Math.max(0, room - TARGET_BOX_PX));
   assert.equal(pad, 1);
@@ -267,14 +267,14 @@ test("the red stroke sits outside the glyphs", () => {
     ctx: {
       fillStyle: "",
       fillRect(x, y, w, h) {
-        const red = this.fillStyle === "#e10600";
+        const red = this.fillStyle === "#ff0000";
         for (let py = Math.floor(y); py < y + h; py += 1) {
           for (let px = Math.floor(x); px < x + w; px += 1) {
             if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) {
               canvas.clipped += 1;
               continue;
             }
-            canvas.pixels[(py * canvas.width + px) * 4] = red ? 225 : 0;
+            canvas.pixels[(py * canvas.width + px) * 4] = red ? 1 : 0;
           }
         }
       }
@@ -289,11 +289,11 @@ test("the red stroke sits outside the glyphs", () => {
   let redInside = 0;
   for (let y = glyph.y; y < glyph.y + glyph.h; y += 1) {
     for (let x = glyph.x; x < glyph.x + glyph.w; x += 1) {
-      if (canvas.pixels[(y * canvas.width + x) * 4] === 225) redInside += 1;
+      if (canvas.pixels[(y * canvas.width + x) * 4] === 1) redInside += 1;
     }
   }
   assert.equal(redInside, 0);
-  assert.equal(canvas.pixels[((rect.y - 2) * canvas.width + (rect.x + 2)) * 4], 225);
+  assert.equal(canvas.pixels[((rect.y - 2) * canvas.width + (rect.x + 2)) * 4], 1);
 });
 
 test("Greek subscripts, accents, and superscripts are short formulas; Latin subscripts are not", () => {
@@ -421,7 +421,7 @@ test("only an inline context crop appends the strict prompt", () => {
     `${FORMULA_VISION_SYSTEM}\n${FORMULA_CONTEXT_PROMPT}`
   );
   assert.equal(formulaVisionPrompt({ display: false }, { meta: { mode: "tight" } }).system, FORMULA_VISION_SYSTEM);
-  assert.equal(MM_TIER_VERSION, "mm-4");
+  assert.equal(MM_TIER_VERSION, "mm-5");
 });
 
 test("ink past the metric box stays inside the red box", () => {
@@ -563,14 +563,14 @@ test("rendered DPO, Attention, and DDPM inline crops keep formula ink inside the
   assert.deepEqual(failures, []);
 });
 
-test("the tier key is mm-4 and the crop hash is the png that was sent", () => {
+test("the tier key is mm-5 and the crop hash is the png that was sent", () => {
   const first = { docHash: "doc", bid: "b1", crop: { pixels: "data:image/png;base64,AAAA" } };
   const second = { docHash: "doc", bid: "b1", crop: { pixels: "data:image/png;base64,BBBB" } };
   const key = tierRecordKey(first, { id: "multimodal", version: MM_TIER_VERSION }, "kimi-k3");
   const other = tierRecordKey(second, { id: "multimodal", version: MM_TIER_VERSION }, "kimi-k3");
   assert.notEqual(cropHashOf(first), cropHashOf(second));
   assert.notEqual(key, other);
-  assert.match(key, /:mm-4:/);
+  assert.match(key, /:mm-5:/);
   assert.match(key, new RegExp(`${cropHashOf(first)}$`));
   assert.doesNotMatch(key, /:mm-3:/);
 });

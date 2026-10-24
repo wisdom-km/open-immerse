@@ -56,7 +56,7 @@ function serveRepo() {
   return new Promise((done) => server.listen(0, "127.0.0.1", () => done(server)));
 }
 
-function launchChrome(userDataDir, scratchDir) {
+function launchChrome(userDataDir, scratchDir, dpr) {
   const child = spawn("google-chrome", [
     "--headless=new",
     "--disable-gpu",
@@ -65,7 +65,7 @@ function launchChrome(userDataDir, scratchDir) {
     "--remote-debugging-pipe",
     `--user-data-dir=${userDataDir}`,
     "--window-size=1440,900",
-    "--force-device-scale-factor=1",
+    `--force-device-scale-factor=${dpr}`,
     "--no-first-run",
     "--no-default-browser-check"
   ], {
@@ -225,12 +225,7 @@ async function measureRequestImages() {
   return { dpr: dump?.dpr, rows };
 }
 
-test("Chrome DPO p4 and DDPM p4 inline request images box the formula in red", { timeout: 300000 }, async (t) => {
-  const missing = PAPERS.filter(([, file]) => !existsSync(join(root, "tests/fixtures", file)));
-  if (missing.length) {
-    t.skip(`missing ${missing.map(([name]) => name).join(", ")}; gitignored arXiv PDFs are local only`);
-    return;
-  }
+async function checkPapers(t, dpr) {
   const server = await serveRepo();
   const ownedDir = mkdtempSync(join(tmpdir(), "oi-redbox-chrome-"));
   rememberOwnedTemp(ownedDir);
@@ -238,7 +233,7 @@ test("Chrome DPO p4 and DDPM p4 inline request images box the formula in red", {
   const scratchDir = join(ownedDir, "scratch");
   mkdirSync(userDataDir);
   mkdirSync(scratchDir);
-  const child = launchChrome(userDataDir, scratchDir);
+  const child = launchChrome(userDataDir, scratchDir, dpr);
   const cdp = new PipeCdp(child.stdio[3], child.stdio[4]);
   const close = async () => {
     try { cdp.dispose(); } finally {
@@ -251,6 +246,12 @@ test("Chrome DPO p4 and DDPM p4 inline request images box the formula in red", {
     const send = (method, params, timeout) => cdp.send(method, params, sessionId, timeout);
     await send("Page.enable");
     await send("Runtime.enable");
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: 1440,
+      height: 900,
+      deviceScaleFactor: dpr,
+      mobile: false
+    });
     const origin = `http://127.0.0.1:${server.address().port}`;
     const evaluate = async (expression, timeout = 180000) => {
       const result = await send("Runtime.evaluate", {
@@ -276,22 +277,35 @@ test("Chrome DPO p4 and DDPM p4 inline request images box the formula in red", {
         if (hook === true) break;
         await sleep(300);
       }
-      assert.equal(hook, true, `${name} viewer test hook`);
+      assert.equal(hook, true, `${name} DPR ${dpr} viewer test hook`);
+      const pageDpr = await evaluate(`window.devicePixelRatio`);
+      assert.equal(pageDpr, dpr, `${name} window.devicePixelRatio`);
       for (const page of [1, 2, 3, 4]) {
         await evaluate(`window.__oiOpenPage(${page})`, 180000);
       }
       const dump = await evaluate(`(${measureRequestImages.toString()})()`, 180000);
+      assert.equal(dump?.dpr, dpr, `${name} crop hook dpr`);
       const inline = (dump?.rows || []).filter((row) => row.inline);
       const display = (dump?.rows || []).filter((row) => !row.inline);
       assert.ok(inline.length >= 1, `${name} page 4 has no inline formula`);
-      for (const row of inline) assertRedBox(name, row);
+      for (const row of inline) assertRedBox(`${name} DPR ${dpr}`, row);
       assert.equal(display.length, 1, `${name} display sample`);
       assert.equal(display[0].mode, "tight");
-      assert.equal(display[0].count, 0, `${name} display crop contains red`);
+      assert.equal(display[0].count, 0, `${name} DPR ${dpr} display crop contains red`);
     }
   } catch (error) {
     await close();
     throw error;
   }
   await close();
+}
+
+test("Chrome DPO p4 and DDPM p4 inline request images box the formula in red at DPR 1 and DPR 2", { timeout: 300000 }, async (t) => {
+  const missing = PAPERS.filter(([, file]) => !existsSync(join(root, "tests/fixtures", file)));
+  if (missing.length) {
+    t.skip(`missing ${missing.map(([name]) => name).join(", ")}; gitignored arXiv PDFs are local only`);
+    return;
+  }
+  await checkPapers(t, 1);
+  await checkPapers(t, 2);
 });
