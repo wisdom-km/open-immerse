@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { formulaReadabilityFloor, readerFormulaCssSize } from "../lib/pdf-formula-size.js";
+import { formulaRefFloorScale, formulaRefScale, readerFormulaCssSize } from "../lib/pdf-formula-size.js";
 import {
   READER_CAPSULE_SLOT_PX,
   READER_CPL_MIN,
@@ -206,11 +206,11 @@ test("FS-12 FS-13 paragraph gap, captions, and equation numbers follow the size"
   assert.match(css, /max-width:\s*var\(--oi-reader-caption-max/);
 });
 
-test("FS-14 display formula width is the #114 width and does not gain a font scale", () => {
+test("FS-14 display formula width is the reference size and does not gain an Aa scale", () => {
   const sample = { sourceBodyPt: 10, inkPt: 40, widthPt: 173, columnPx: 800 };
   const widths = READER_FONT_SIZES.map((font) => readerFormulaCssSize({ ...sample, bodyFontPx: font }).cssWidth);
   assert.equal(new Set(widths).size, 1);
-  assert.ok(Math.abs(widths[0] - 173) < 0.05);
+  assert.ok(Math.abs(widths[0] - 173 * formulaRefScale(10)) < 0.05);
   const wide = { sourceBodyPt: 10, inkPt: 40, widthPt: 640, columnPx: 2000 };
   for (const font of [14, 28, 40]) {
     const box = readerFormulaCssSize({ ...wide, bodyFontPx: font });
@@ -219,39 +219,35 @@ test("FS-14 display formula width is the #114 width and does not gain a font sca
   assert.doesNotMatch(tokens, /--oi-reader-display-scale/);
   assert.doesNotMatch(css, /--oi-reader-display-scale/);
   assert.doesNotMatch(viewer, /--oi-reader-display-scale/);
-  assert.match(viewer, /formulaReadabilityFloor\(readerShownFont\(\), bodyPt\)/);
-  assert.doesNotMatch(viewer, /formulaReadabilityFloor\(readerPrefs\.fontSize/);
+  assert.match(viewer, /formulaRefFloorScale\(bodyPt\)/);
+  assert.doesNotMatch(viewer, /formulaReadabilityFloor\(/);
 });
 
-test("a setting of 32 capped at 20 uses the 20px formula floor", () => {
+test("a setting of 32 capped at 20 does not change the crop scale", () => {
   const shown = effectiveReaderFontSize(32, 20);
   assert.equal(shown, 20);
   const bodyPt = 10;
-  assert.equal(formulaReadabilityFloor(shown, bodyPt), formulaReadabilityFloor(20, bodyPt));
-  assert.equal(formulaReadabilityFloor(20, bodyPt), 0.96);
-  assert.equal(formulaReadabilityFloor(32, bodyPt), 1);
   const wide = { sourceBodyPt: bodyPt, inkPt: 40, widthPt: 640, columnPx: 400 };
   const capped = readerFormulaCssSize({ ...wide, bodyFontPx: shown });
   assert.equal(capped.k, readerFormulaCssSize({ ...wide, bodyFontPx: 20 }).k);
-  assert.equal(capped.k, formulaReadabilityFloor(20, bodyPt));
-  assert.equal(readerFormulaCssSize({ ...wide, bodyFontPx: 32 }).k, 1);
+  assert.equal(capped.k, readerFormulaCssSize({ ...wide, bodyFontPx: 32 }).k);
+  assert.equal(capped.k, formulaRefFloorScale(bodyPt));
   const inline = { sourceBodyPt: bodyPt, inkPt: 50, widthPt: 40, columnPx: 800, inline: true };
   assert.equal(
-    readerFormulaCssSize({ ...inline, bodyFontPx: shown }).raised,
-    readerFormulaCssSize({ ...inline, bodyFontPx: 20 }).raised
+    readerFormulaCssSize({ ...inline, bodyFontPx: shown }).cssHeight,
+    readerFormulaCssSize({ ...inline, bodyFontPx: 32 }).cssHeight
   );
-  assert.equal(readerFormulaCssSize({ ...inline, bodyFontPx: 20 }).raised, true);
-  assert.equal(readerFormulaCssSize({ ...inline, bodyFontPx: 32 }).raised, false);
-  assert.match(viewer, /readerFontPx: readerShownFont\(\)/);
-  assert.match(viewer, /bodyFontPx: readerShownFont\(\)/);
-  assert.match(viewer, /floor: readerFormulaFloor\(/);
+  assert.equal(readerFormulaCssSize({ ...inline, bodyFontPx: 14 }).raised, true);
+  assert.equal(readerFormulaCssSize({ ...inline, bodyFontPx: 40 }).raised, true);
+  assert.match(viewer, /formulaRefScale\(bodyPt\)/);
+  assert.match(viewer, /floor: scales\.floor/);
   const refresh = viewer.slice(viewer.indexOf("function refreshReaderFontCap"), viewer.indexOf("const CJK_CACHE_KEY"));
   assert.match(refresh, /applyPaperMetrics\(\)/);
   const apply = viewer.slice(viewer.indexOf("function applyPaperMetrics"), viewer.indexOf("function bindPaperMetrics"));
   assert.match(apply, /refreshMatchedFormulas/);
   assert.match(apply, /refreshFallbackFormulaWidths/);
   const planKey = viewer.slice(viewer.indexOf("function formulaCropPlanKeyNow"), viewer.indexOf("function noteFormulaCropPlan"));
-  assert.match(planKey, /readerShownFont\(\)/);
+  assert.doesNotMatch(planKey, /readerShownFont\(\)/);
 });
 
 test("FS-15 and FS-16 inline crops and KaTeX stay on em", () => {

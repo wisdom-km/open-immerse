@@ -412,6 +412,7 @@
   --oi-reader-drawer-w: 288px;
   --oi-reader-drawer-scrim: var(--oi-reader-track);
   --oi-reader-formula-fade: 8px;
+  --oi-reader-formula-ref-size: 18px;
   --oi-reader-inline-line-max: 2.2em;
   --oi-reader-mark-border: 2px solid var(--oi-reader-focus);
   --oi-reader-mark-bg: color-mix(in srgb, var(--oi-reader-focus) 16%, transparent);

@@ -370,12 +370,14 @@ async function wideDpoDisplay() {
 
 test("a real DPO display formula shrinks to the floor and scrolls in its box", { timeout: 240000 }, async (t) => {
   assert.equal(existsSync(dpoPath), true, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf is missing");
-  const { formulaReadabilityFloor } = await import("../lib/pdf-formula-size.js");
+  const { FORMULA_REF_SHRINK, formulaRefFloorScale, formulaRefScale } = await import("../lib/pdf-formula-size.js");
   const found = await wideDpoDisplay();
   assert.ok(found && found.widthPt >= 370, `DPO widest display is ${found?.widthPt}`);
-  const floor = formulaReadabilityFloor(16, found.bodyPt);
-  assert.ok(floor >= 0.75 && floor <= 1, `floor ${floor}`);
-  assert.ok(found.widthPt * floor > 280, `${found.widthPt}pt at ${floor} still fits 280px`);
+  const k = formulaRefScale(found.bodyPt);
+  const kFloor = formulaRefFloorScale(found.bodyPt);
+  const floor = FORMULA_REF_SHRINK;
+  assert.equal(floor, 0.75);
+  assert.ok(found.widthPt * kFloor > 280, `${found.widthPt}pt at ${kFloor} still exceeds 280px`);
 
   const server = await serveReader();
   const ownedDir = mkdtempSync(join(tmpdir(), "oi-formula-scroll-chrome-"));
@@ -539,9 +541,11 @@ test("a real DPO display formula shrinks to the floor and scrolls in its box", {
     assert.ok(wide?.widest, `page ${found.page} display formula did not paint ${JSON.stringify(wide)} ${JSON.stringify(census)}`);
   }
   assert.equal(wide.font, 16);
-  assert.ok(wide.flow > wide.widest.width + 8, `column ${wide.flow} already shrinks ${wide.widest.width}`);
-  assert.ok(wide.widest.width >= 360, `native width ${wide.widest.width} on page ${found.page} (${found.widthPt}pt)`);
+  assert.ok(wide.widest.width >= 360, `reference width ${wide.widest.width} on page ${found.page} (${found.widthPt}pt)`);
   assert.ok(wide.widest.scrollWidth <= wide.widest.clientWidth + 2, "wide column should not scroll yet");
+  if (wide.flow > found.widthPt * k + 8) {
+    assert.ok(Math.abs(wide.widest.width - found.widthPt * k) <= Math.max(8, found.widthPt * k * 0.04));
+  }
 
   await evaluate(`(() => {
     const row = [...document.querySelectorAll('#readerFlow .oi-pdf-display-math[data-page="${found.page}"] .oi-pdf-math-row.is-matched')]
@@ -586,8 +590,9 @@ test("a real DPO display formula shrinks to the floor and scrolls in its box", {
     if (narrow && narrow.width < wide.widest.width - 20 && narrow.flowWidth < 300) break;
   }
   assert.ok(narrow, "narrowed formula was not measured");
-  const expectedW = wide.widest.width * floor;
-  const expectedH = wide.widest.height * floor;
+  const displayedK = wide.widest.width / found.widthPt;
+  const expectedW = found.widthPt * kFloor;
+  const expectedH = wide.widest.height * (kFloor / displayedK);
   assert.ok(narrow.flowWidth >= 276 && narrow.flowWidth <= 284, `column ${narrow.flowWidth}`);
   assert.ok(Math.abs(narrow.width - expectedW) <= Math.max(8, expectedW * 0.05), `width ${narrow.width} vs floor ${expectedW} (${floor})`);
   assert.ok(Math.abs(narrow.height - expectedH) <= Math.max(4, expectedH * 0.05), `height ${narrow.height} vs floor ${expectedH}`);

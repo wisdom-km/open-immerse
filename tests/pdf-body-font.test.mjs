@@ -85,11 +85,11 @@ test("display em helper stays within 2.5 body and fallback width is page points"
   const low = displayFormulaMinEm(0.22, 0.05);
   assert.ok(low <= 2.5);
   assert.ok(low < 4);
-  const css = displayFormulaWidthCss(0.9, 0.015, { pageWidthPt: 612, floor: 0.75 });
-  assert.equal(css, "max(413.1px, min(100%, 550.8px))");
+  const css = displayFormulaWidthCss(0.9, 0.015, { pageWidthPt: 612, scale: 1.8, floor: 1.35 });
+  assert.equal(css, "max(743.58px, min(100%, 991.44px))");
   assert.doesNotMatch(css, /em|0\.015|oi-pdf-left-w/);
-  const xHeight = displayFormulaWidthCss(0.9, 0.015, { pageWidthPt: 612, floor: 0.96 });
-  assert.equal(xHeight, "max(528.768px, min(100%, 550.8px))");
+  const xHeight = displayFormulaWidthCss(0.9, 0.015, { pageWidthPt: 612, scale: 1.8, floor: 1.35 });
+  assert.equal(xHeight, css);
   const pageWidth = 612;
   const pageHeight = 792;
   const bbox = [0.12, 0.42, 0.88, 0.47];

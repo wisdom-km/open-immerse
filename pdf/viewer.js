@@ -244,7 +244,8 @@ import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } 
 import {
   READER_SOURCE_BODY_PT,
   displayFormulaColumnPx,
-  formulaReadabilityFloor,
+  formulaRefFloorScale,
+  formulaRefScale,
   formulaScriptPt,
   placeholderCssLength,
   placeholderNativeBox,
@@ -319,12 +320,12 @@ import {
   acceptVisualRedraw,
   assetLayoutCapPx,
   createFormulaRasterCache,
-  fitSnappedFormulaCss,
+  fitFormulaRefCss,
   FORMULA_INK_MIN_SPAN,
-  formulaDevicePixels,
   formulaRasterCacheKey,
   formulaInkPadPx,
   formulaRasterPlan,
+  formulaRefRasterPlan,
   formulaRegionWindow,
   imageInkRatio,
   inlineShortCropScale,
@@ -3917,12 +3918,11 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
   if (!css) return "";
   const formula = block.label === "formula";
   const plan = formula
-    ? formulaDevicePixels({
-      cssWidth: css.cssWidth / metrics.mirrorZoom,
-      cssHeight: css.cssHeight / metrics.mirrorZoom,
+    ? formulaRefRasterPlan({
       pdfWidth: css.pdfWidth,
       pdfHeight: css.pdfHeight,
-      mirrorZoom: metrics.mirrorZoom,
+      cssWidth: css.cssWidth / metrics.mirrorZoom,
+      cssHeight: css.cssHeight / metrics.mirrorZoom,
       devicePixelRatio: metrics.devicePixelRatio
     })
     : formulaRasterPlan({
@@ -5234,11 +5234,15 @@ function formulaPageFraction(block) {
   return Math.min(1, fraction);
 }
 
-/** Readability floor and inline line cap follow the size on screen, not the stored setting. */
-function readerFormulaFloor(page) {
+/** Crop floor and full scale follow the page's source body, not Aa. */
+function readerFormulaScales(page) {
   const layout = getPageLayout(page);
   const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
-  return formulaReadabilityFloor(readerShownFont(), bodyPt);
+  return {
+    sourceBodyPt: bodyPt,
+    scale: formulaRefScale(bodyPt),
+    floor: formulaRefFloorScale(bodyPt)
+  };
 }
 
 function mountDisplayMath(node, block, img, page) {
@@ -5258,9 +5262,11 @@ function mountDisplayMath(node, block, img, page) {
   } else {
     const pageFraction = formulaPageFraction(block);
     const layout = getPageLayout(page);
+    const scales = readerFormulaScales(page);
     const width = pageFraction ? displayFormulaWidthCss(pageFraction, 0, {
       pageWidthPt: Number(layout?.pageWidth) || 0,
-      floor: readerFormulaFloor(page)
+      scale: scales.scale,
+      floor: scales.floor
     }) : "";
     if (width) row.style.setProperty("--oi-formula-w", width);
   }
@@ -5429,9 +5435,11 @@ function appendCropOrNotice(node, block, imageClass, page, caption = null) {
     const pageFraction = displayCropColumnFraction(block);
     if (pageFraction) {
       const layout = getPageLayout(shownPage);
+      const scales = readerFormulaScales(page ?? node.dataset.page);
       img.style.width = displayFormulaWidthCss(pageFraction, Number(block.bbox[3]) - Number(block.bbox[1]), {
         pageWidthPt: Number(layout?.pageWidth) || 0,
-        floor: readerFormulaFloor(page ?? node.dataset.page)
+        scale: scales.scale,
+        floor: scales.floor
       });
     }
     if (block.label === "figure" || block.label === "table") noteAssetPaint("image", block, shownPage);
@@ -5806,6 +5814,7 @@ function paintRenderPieces(node, pieces, block, layout) {
       if (matched.raised) span.classList.add("is-raised");
       span.style.setProperty("--oi-formula-h", matched.height);
       span.style.setProperty("--oi-formula-ar", matched.aspect);
+      stampFormulaBaseline(span, matched);
     }
     if (img) {
       img.className = "oi-pdf-math-crop";
@@ -8834,18 +8843,6 @@ function paperHeightFor(pageNumber) {
   return paper.heightBase > 0 ? paper.heightBase : leftH;
 }
 
-function snappedFormulaBox(matched, columnPx) {
-  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
-  const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
-  return fitSnappedFormulaCss({
-    cssWidth: matched.cssWidth,
-    cssHeight: matched.cssHeight,
-    columnPx,
-    mirrorZoom: mirror,
-    devicePixelRatio: dpr
-  });
-}
-
 function readerColumnPx(row) {
   const pane = translateScrollRoot();
   const flow = readerFlowEl();
@@ -8878,7 +8875,6 @@ function readerFormulaStyle(block, page, inline, columnPx) {
   const widthPt = fracW * pageW;
   const column = columnPx > 0 ? columnPx : readerColumnPx();
   const sized = readerFormulaCssSize({
-    bodyFontPx: readerShownFont(),
     sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
     inkPt,
     widthPt,
@@ -8887,20 +8883,40 @@ function readerFormulaStyle(block, page, inline, columnPx) {
     inline
   });
   if (!sized) return null;
-  const limit = inline && !sized.raised ? 0 : (sized.scrolls ? 0 : column);
-  const snapped = snappedFormulaBox(sized, limit) || sized;
-  const height = snapped.cssHeight || sized.cssHeight;
-  const width = snapped.cssWidth > 0 ? snapped.cssWidth : sized.cssWidth;
+  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+  const fitted = fitFormulaRefCss({
+    cssWidth: sized.cssWidth || 0,
+    cssHeight: sized.cssHeight,
+    pdfWidth: widthPt,
+    pdfHeight: inkPt,
+    devicePixelRatio: dpr
+  }) || sized;
+  const height = fitted.cssHeight || sized.cssHeight;
+  const width = fitted.cssWidth > 0 ? fitted.cssWidth : sized.cssWidth;
   // A broken paper metric once produced a 33554432px box and a blank image.
   if (!(height > 0) || height > 16384) return null;
   if (width > 16384) return null;
+  const k = widthPt > 0 && width > 0 ? width / widthPt : sized.k;
   return {
     height: paperCssPx(height),
     aspect: width > 0 ? String(Math.round((width / height) * 10000) / 10000) : "1",
     raised: Boolean(sized.raised),
-    k: sized.k,
-    widthPt
+    k,
+    widthPt,
+    baselineDepthPt: Number.isFinite(Number(block?.baselineDepthPt)) ? Number(block.baselineDepthPt) : null
   };
+}
+
+function stampFormulaBaseline(node, matched) {
+  if (!node?.style) return;
+  const depth = Number(matched?.baselineDepthPt);
+  const k = Number(matched?.k);
+  if (!Number.isFinite(depth) || !(k > 0)) {
+    node.style.removeProperty("--oi-reader-formula-baseline");
+    return;
+  }
+  const px = Math.round(-depth * k * 100) / 100;
+  node.style.setProperty("--oi-reader-formula-baseline", `${px}px`);
 }
 
 function stampDisplayFormulaScale(row, matched, page) {
@@ -8934,6 +8950,7 @@ function refreshMatchedFormulas(paper) {
     if (!matched) return;
     span.style.setProperty("--oi-formula-h", matched.height);
     span.style.setProperty("--oi-formula-ar", matched.aspect);
+    stampFormulaBaseline(span, matched);
     span.classList.toggle("is-raised", matched.raised);
   });
 }
@@ -8943,7 +8960,7 @@ function refreshFallbackFormulaWidths(paper) {
   const layout = getPageLayout(page);
   const blocks = layout?.blocks || [];
   const pageWidthPt = Number(layout?.pageWidth) || 0;
-  const floor = readerFormulaFloor(page);
+  const scales = readerFormulaScales(page);
   const blockFor = (node) => {
     const id = node.closest?.("[data-block-id]")?.dataset?.blockId;
     if (!id) return null;
@@ -8951,7 +8968,11 @@ function refreshFallbackFormulaWidths(paper) {
   };
   paper.querySelectorAll(".oi-pdf-math-row:not(.is-matched)").forEach((row) => {
     const pageFraction = formulaPageFraction(blockFor(row));
-    const width = pageFraction ? displayFormulaWidthCss(pageFraction, 0, { pageWidthPt, floor }) : "";
+    const width = pageFraction ? displayFormulaWidthCss(pageFraction, 0, {
+      pageWidthPt,
+      scale: scales.scale,
+      floor: scales.floor
+    }) : "";
     if (width) row.style.setProperty("--oi-formula-w", width);
   });
   paper.querySelectorAll("img.oi-pdf-math-crop, img.oi-pdf-asset-crop").forEach((img) => {
@@ -8960,7 +8981,11 @@ function refreshFallbackFormulaWidths(paper) {
     const pageFraction = displayCropColumnFraction(block);
     if (!pageFraction) return;
     const heightFrac = Number(block.bbox[3]) - Number(block.bbox[1]);
-    const width = displayFormulaWidthCss(pageFraction, heightFrac, { pageWidthPt, floor });
+    const width = displayFormulaWidthCss(pageFraction, heightFrac, {
+      pageWidthPt,
+      scale: scales.scale,
+      floor: scales.floor
+    });
     if (width) img.style.width = width;
   });
 }
@@ -13006,7 +13031,7 @@ function formulaCropPlanKeyNow() {
   const mirror = Number(mirrorZoom) > 0 ? Number(mirrorZoom) : 1;
   const left = Number(zoom) > 0 ? Number(zoom) : 1;
   const avail = paperAvailWidth(translateScrollRoot()?.clientWidth || 0);
-  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}|${readerShownFont()}`;
+  return `${mirror.toFixed(4)}|${left.toFixed(4)}|${dpr.toFixed(3)}|${avail.toFixed(1)}`;
 }
 
 function noteFormulaCropPlan(layout) {
@@ -13014,10 +13039,10 @@ function noteFormulaCropPlan(layout) {
 }
 
 /**
- * Mirror zoom, left-pane zoom, and devicePixelRatio change the CSS size
- * of a formula, figure, or table. The cache key already includes scale
- * and DPR; this replans visuals whose stored key is stale. A miss keeps
- * the page-raster crop.
+ * Mirror zoom, left-pane zoom, column width, and devicePixelRatio change
+ * the CSS size of a formula, figure, or table. Aa does not: crop size is
+ * the reference px over the page's source body. A miss keeps the page-raster
+ * crop.
  */
 let formulaCropJob = null;
 let formulaCropPending = false;

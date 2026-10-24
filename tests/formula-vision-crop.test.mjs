@@ -484,7 +484,7 @@ test("screen redraw, page raster, and the 7-level chain stay on their old path",
   assert.equal(sharp.includes("VISION_CROP_SCALE"), false);
   assert.equal(sharp.includes("measureVisionRegion"), false);
   assert.equal(sharp.includes("visionPadFor"), false);
-  assert.match(sharp, /formulaDevicePixels/);
+  assert.match(sharp, /formulaRefRasterPlan/);
   const imageFn = sliceBetween(viewer, "function imageForVisualBlock", "function cropFormulaImage");
   assert.equal(imageFn.includes("vision"), false);
   assert.match(imageFn, /formulaInkBbox/);
