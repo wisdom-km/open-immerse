@@ -24,7 +24,7 @@ import {
   formulaRefFloorScale,
   formulaRefScale,
   FORMULA_NATIVE_SCALE,
-  FORMULA_REF_SIZE_PX,
+  FORMULA_REF_FALLBACK_PX,
   FORMULA_REF_SHRINK,
   FORMULA_SHRINK_FLOOR,
   BODY_X_HEIGHT_RATIO,
@@ -141,7 +141,7 @@ test("inline formulas match the page point size and have no font-scaled fallback
 });
 
 test("reader formula size uses the 18px reference and ignores the font step", () => {
-  assert.equal(FORMULA_REF_SIZE_PX, 18);
+  assert.equal(FORMULA_REF_FALLBACK_PX, 18);
   assert.equal(FORMULA_NATIVE_SCALE, 1);
   assert.equal(BODY_X_HEIGHT_RATIO, 0.48);
   assert.equal(formulaRefScale(10), 1.8);
@@ -245,7 +245,7 @@ test("inline promotion ignores Aa and keeps a staying crop at the reference scal
   });
   assert.equal(wide.raised, false);
   assert.equal(wide.k, formulaRefFloorScale(10));
-  assert.ok(wide.cssWidth > 12 * FORMULA_REF_SIZE_PX);
+  assert.ok(wide.cssWidth > 12 * FORMULA_REF_FALLBACK_PX);
   const stay = readerFormulaCssSize({
     bodyFontPx: 16,
     sourceBodyPt: 10,

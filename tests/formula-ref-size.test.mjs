@@ -10,10 +10,10 @@ import { fileURLToPath } from "node:url";
 import { CROP_SCALE } from "../lib/pdf-blocks.js";
 import {
   BODY_X_HEIGHT_RATIO,
-  FORMULA_INLINE_MAX_EM,
+  FORMULA_REF_FALLBACK_PX,
   FORMULA_REF_SHRINK,
-  FORMULA_REF_SIZE_PX,
   formulaRefFloorScale,
+  formulaRefPxFromCss,
   formulaRefScale,
   readerFormulaCssSize
 } from "../lib/pdf-formula-size.js";
@@ -26,10 +26,22 @@ import {
   formulaRefRasterScale,
   inlineShortCropScale
 } from "../lib/pdf-formula-raster.js";
-import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import {
+  FORMULA_INK_PAD_PX,
+  formulaBaselineDepthPt,
+  formulaInkPadPt,
+  rebaseFormulaBaseline,
+  textLayerToBlocks
+} from "../lib/pdf-text-layer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dpoPath = join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf");
+const dpoEq7Path = join(root, "tests/fixtures/dpo-eq7-glyphs.json");
+const DPO_FIXTURE_SKIP = [
+  "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf is gitignored and is not committed.",
+  "scripts/ci/fetch-fixtures.sh downloads arXiv 2305.18290v3 into that path.",
+  "tests/fixtures/dpo-eq7-glyphs.json is the committed glyph-edge fixture and does not need the PDF."
+].join(" ");
 const tokens = readFileSync(join(root, "pdf/reader-tokens.css"), "utf8");
 const css = readFileSync(join(root, "pdf/viewer.css"), "utf8");
 const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
@@ -50,7 +62,11 @@ function pdfItem(str, x, y, width, height, extra = {}) {
 }
 
 test("acceptance 1: the reference token is 18px and new names stay on --oi-reader-*", () => {
-  assert.equal(FORMULA_REF_SIZE_PX, 18);
+  const declared = /--oi-reader-formula-ref-size:\s*([^;]+);/.exec(tokens);
+  assert.ok(declared, "missing --oi-reader-formula-ref-size");
+  assert.equal(formulaRefPxFromCss(declared[1]), 18);
+  assert.equal(formulaRefPxFromCss(""), FORMULA_REF_FALLBACK_PX);
+  assert.equal(formulaRefPxFromCss("nope"), FORMULA_REF_FALLBACK_PX);
   assert.match(tokens, /--oi-reader-formula-ref-size:\s*18px;/);
   assert.match(css, /var\(--oi-reader-formula-ref-size\)/);
   assert.match(css, /var\(--oi-reader-formula-baseline,\s*calc\(-0\.2 \* var\(--oi-reader-formula-ref-size\)\)\)/);
@@ -64,7 +80,7 @@ test("acceptance 1: the reference token is 18px and new names stay on --oi-reade
 test("acceptance 2: a 10pt body crop matches an 18px x-height within 10%", () => {
   const k = formulaRefScale(10);
   assert.equal(k, 18 / 10);
-  const xBody = FORMULA_REF_SIZE_PX * BODY_X_HEIGHT_RATIO;
+  const xBody = formulaRefPxFromCss("18px") * BODY_X_HEIGHT_RATIO;
   const xCrop = 10 * BODY_X_HEIGHT_RATIO * k;
   assert.ok(Math.abs(xCrop - xBody) / xBody <= 0.1, `crop x-height ${xCrop} vs ${xBody}`);
   const box = readerFormulaCssSize({
@@ -162,7 +178,7 @@ test("acceptance 6 and 7: inline baseline uses PDF depth, and the line cap stays
 });
 
 test("acceptance 8: a wide display shrinks to the column, then scrolls at 13.5px", () => {
-  assert.equal(FORMULA_REF_SIZE_PX * FORMULA_REF_SHRINK, 13.5);
+  assert.equal(formulaRefPxFromCss("18px") * FORMULA_REF_SHRINK, 13.5);
   const widthPt = 640;
   const open = readerFormulaCssSize({ sourceBodyPt: 10, inkPt: 40, widthPt, columnPx: 2000 });
   assert.equal(open.scrolls, false);
@@ -203,35 +219,96 @@ test("acceptance 10: crop rules do not fade the bitmap", () => {
   }
 });
 
-test("acceptance 11: DPO eq(7) at the measured 612px does not scroll in a 620px column", () => {
-  // §8: at R=18 the painted eq(7) is 612px, which is 340pt × 1.8.
-  const widthPt = 612 / formulaRefScale(10);
-  assert.ok(Math.abs(widthPt - 340) < 1e-9);
-  for (const font of [14, 20, 40]) {
-    const box = readerFormulaCssSize({
-      bodyFontPx: font,
-      sourceBodyPt: 10,
-      inkPt: 16,
-      widthPt,
-      columnPx: 620
-    });
-    assert.equal(box.scrolls, false, `font ${font}`);
-    assert.ok(box.cssWidth <= 620, `font ${font} width ${box.cssWidth}`);
-    assert.ok(Math.abs(box.cssWidth - 612) < 0.05, `font ${font} width ${box.cssWidth}`);
-  }
-  const inlineCap = readerFormulaCssSize({
-    sourceBodyPt: 10,
-    inkPt: 12,
-    widthPt: 200,
-    columnPx: 800,
-    inline: true
+test("a 20px reference token scales the crop and the viewer reads that token", () => {
+  const sample = { sourceBodyPt: 10, inkPt: 10, widthPt: 40, columnPx: 800 };
+  const at18 = readerFormulaCssSize({ ...sample, refPx: formulaRefPxFromCss("18px") });
+  const at20 = readerFormulaCssSize({ ...sample, refPx: formulaRefPxFromCss("20px") });
+  assert.equal(formulaRefPxFromCss("20px"), 20);
+  assert.ok(Math.abs(at20.cssWidth - 80) < 1e-9);
+  assert.ok(Math.abs(at20.cssHeight - 20) < 1e-9);
+  assert.ok(Math.abs(at20.cssWidth / at18.cssWidth - 20 / 18) < 1e-9);
+  assert.equal(formulaRefPxFromCss("0px"), FORMULA_REF_FALLBACK_PX);
+  assert.equal(formulaRefPxFromCss("20em"), FORMULA_REF_FALLBACK_PX);
+  assert.match(viewer, /getPropertyValue\("--oi-reader-formula-ref-size"\)/);
+  assert.match(viewer, /formulaRefPxFromCss\(raw\)/);
+  assert.match(viewer, /refPx: readFormulaRefPx\(\)/);
+  assert.doesNotMatch(viewer, /readerFontPx|FORMULA_REF_SIZE_PX|FORMULA_REF_FALLBACK_PX/);
+});
+
+test("inline baseline ignores scripts and counts the ink pad", () => {
+  const viewport = unitViewport(612, 792);
+  const glyph = (str, x, y, width, height, extra) => ({ ...pdfItem(str, x, y, width, height, extra), y });
+  const body = [
+    glyph("x", 100, 400, 8, 10, { fontName: "CMMI10" }),
+    glyph("y", 112, 400, 8, 10, { fontName: "CMMI10" }),
+    glyph("z", 124, 400, 8, 10, { fontName: "CMMI10" })
+  ];
+  const mixed = [
+    ...body,
+    glyph("i", 108, 394, 4, 6, { fontName: "CMMI7" }),
+    glyph("2", 120, 408, 4, 6, { fontName: "CMMI7" }),
+    glyph("(", 88, 388, 6, 24, { fontName: "CMEX10" })
+  ];
+  const padPt = formulaInkPadPt({ inline: true, protect: true });
+  assert.equal(padPt, FORMULA_INK_PAD_PX.inlineProtect / CROP_SCALE);
+  const baselineVp = 792 - 400;
+  const tightBottom = baselineVp / 792;
+  const tight = [0.1, 0.45, 0.3, tightBottom];
+  const depth = formulaBaselineDepthPt(mixed, viewport, tight, { inline: true, protect: true });
+  const bodyOnly = formulaBaselineDepthPt(body, viewport, tight, { inline: true, protect: true });
+  assert.equal(depth, bodyOnly);
+  assert.ok(Math.abs(depth - padPt) < 0.02, `depth ${depth} should be the ${padPt}pt ink pad`);
+  const shift = -depth * formulaRefScale(10, formulaRefPxFromCss("18px"));
+  assert.ok(Math.abs(shift - (-padPt * 1.8)) < 0.05, `shift ${shift}`);
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("where ", 72, 400, 32, 10, { fontName: "CMR10" }),
+      ...mixed,
+      pdfItem(" ends.", 160, 400, 36, 10, { fontName: "CMR10" })
+    ],
+    viewport,
+    page: 3
   });
-  assert.ok(inlineCap.cssWidth <= FORMULA_INLINE_MAX_EM * FORMULA_REF_SIZE_PX + 0.05 || inlineCap.k === formulaRefFloorScale(10));
+  const crop = page.blocks.find((block) => block.label === "formula");
+  assert.ok(crop, "expected a formula crop");
+  assert.ok(crop.baselineDepthPt + 1e-6 >= crop.baselinePadPt, `painted depth ${crop.baselineDepthPt}`);
+  const trimmed = crop.bbox.slice();
+  trimmed[3] = crop.baselinePageFrac;
+  const rebased = rebaseFormulaBaseline({ ...crop }, trimmed);
+  assert.ok(Math.abs(rebased - crop.baselinePadPt) < 0.02, `rebased ${rebased}`);
+});
+
+test("acceptance 11: DPO eq(7) glyph edges fit a 620px column", () => {
+  const fixture = JSON.parse(readFileSync(dpoEq7Path, "utf8"));
+  assert.equal(fixture.page, 4);
+  assert.equal(fixture.equation, 7);
+  assert.ok(fixture.glyphs.length > 8);
+  const left = Math.min(...fixture.glyphs.map((glyph) => glyph.x));
+  const right = Math.max(...fixture.glyphs.map((glyph) => glyph.x + glyph.w));
+  const widthPt = right - left;
+  assert.ok(widthPt > 320 && widthPt < 360, `fixture span ${widthPt}pt`);
+  const refPx = formulaRefPxFromCss("18px");
+  for (const sourceBodyPt of [10, fixture.bodyPt]) {
+    for (const font of [14, 20, 40]) {
+      const box = readerFormulaCssSize({
+        bodyFontPx: font,
+        sourceBodyPt,
+        inkPt: 22,
+        widthPt,
+        columnPx: 620,
+        refPx
+      });
+      assert.equal(box.scrolls, false, `f=${sourceBodyPt} font ${font}`);
+      assert.ok(box.cssWidth <= 620, `width ${box.cssWidth}`);
+      assert.equal(box.k, Math.round(formulaRefScale(sourceBodyPt, refPx) * 10000) / 10000);
+      assert.ok(Math.abs(box.cssWidth - widthPt * box.k) < 0.05);
+    }
+  }
 });
 
 test("acceptance 11: DPO page-4 equation (7) ink fits a 620px column", async (t) => {
   if (!existsSync(dpoPath)) {
-    t.skip("DPO fixture is not in the tree; the 340pt lock above still runs");
+    t.skip(DPO_FIXTURE_SKIP);
     return;
   }
   const { describeBodyFont } = await import("../lib/pdf-body-font.js");

@@ -22,6 +22,9 @@ installOwnedTmpGuard(PREFIXES);
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const pdfRel = "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf";
+const dpoSkip = existsSync(join(root, pdfRel))
+  ? false
+  : `${pdfRel} is gitignored and is not committed. Fetch it with scripts/ci/fetch-fixtures.sh (arXiv 2305.18290v3).`;
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -363,9 +366,13 @@ async function waitForLayout({ page = 0, allPages = false, blockPage = "", block
   throw new Error(page ? `page ${page} did not paint (${detail})` : `layout did not settle (${detail})`);
 }
 
-describe("Aa font-size risk checks on DPO", () => {
+describe("Aa font-size risk checks on DPO", { skip: dpoSkip }, () => {
   before(async () => {
-    assert.equal(existsSync(join(root, pdfRel)), true, `${pdfRel} is missing`);
+    assert.equal(
+      existsSync(join(root, pdfRel)),
+      true,
+      `${pdfRel} is gitignored and is not committed. Fetch it with scripts/ci/fetch-fixtures.sh (arXiv 2305.18290v3).`
+    );
     handle.server = await serveRepo();
     handle.ownedDir = mkdtempSync(join(tmpdir(), "oi-font-risk-"));
     rememberOwnedTemp(handle.ownedDir);

@@ -219,7 +219,7 @@ test("FS-14 display formula width is the reference size and does not gain an Aa 
   assert.doesNotMatch(tokens, /--oi-reader-display-scale/);
   assert.doesNotMatch(css, /--oi-reader-display-scale/);
   assert.doesNotMatch(viewer, /--oi-reader-display-scale/);
-  assert.match(viewer, /formulaRefFloorScale\(bodyPt\)/);
+  assert.match(viewer, /formulaRefFloorScale\(bodyPt, refPx\)/);
   assert.doesNotMatch(viewer, /formulaReadabilityFloor\(/);
 });
 
@@ -239,7 +239,7 @@ test("a setting of 32 capped at 20 does not change the crop scale", () => {
   );
   assert.equal(readerFormulaCssSize({ ...inline, bodyFontPx: 14 }).raised, true);
   assert.equal(readerFormulaCssSize({ ...inline, bodyFontPx: 40 }).raised, true);
-  assert.match(viewer, /formulaRefScale\(bodyPt\)/);
+  assert.match(viewer, /formulaRefScale\(bodyPt, refPx\)/);
   assert.match(viewer, /floor: scales\.floor/);
   const refresh = viewer.slice(viewer.indexOf("function refreshReaderFontCap"), viewer.indexOf("const CJK_CACHE_KEY"));
   assert.match(refresh, /applyPaperMetrics\(\)/);

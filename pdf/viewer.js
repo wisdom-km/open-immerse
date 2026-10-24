@@ -240,11 +240,12 @@ import {
   stampSessionLayout,
   storedLayoutDisplayable
 } from "../lib/pdf-layout-client.js";
-import { blankFormulaMask, boxesInCrop, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { blankFormulaMask, boxesInCrop, measureFormulaCrop, rebaseFormulaBaseline, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import {
   READER_SOURCE_BODY_PT,
   displayFormulaColumnPx,
   formulaRefFloorScale,
+  formulaRefPxFromCss,
   formulaRefScale,
   formulaScriptPt,
   placeholderCssLength,
@@ -3798,6 +3799,7 @@ function imageForVisualBlock(raster, block) {
     const trimmed = formulaInkBbox(raster?.canvas, probe);
     if (probe.inkShare) block.inkShare = probe.inkShare;
     block.bbox = trimmed;
+    rebaseFormulaBaseline(block, trimmed);
   }
   return cropFormulaImage(raster?.canvas, block);
 }
@@ -3870,7 +3872,7 @@ function formulaPaneMetrics(pageNumber, unitViewport) {
     paperHeight: paper.heightBase > 0 ? paper.heightBase : leftHeight,
     mirrorZoom: 1,
     devicePixelRatio: Math.max(1, Number(window.devicePixelRatio) || 1),
-    readerFontPx: readerShownFont(),
+    refPx: readFormulaRefPx(),
     sourceBodyPt: Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT,
     columnPx: readerColumnPx()
   };
@@ -5234,14 +5236,33 @@ function formulaPageFraction(block) {
   return Math.min(1, fraction);
 }
 
-/** Crop floor and full scale follow the page's source body, not Aa. */
+/**
+ * Authored crop size. --oi-reader-formula-ref-size lives on .oi-reader.
+ * A missing node or a non-px value falls back to 18.
+ */
+function readFormulaRefPx() {
+  let raw = "";
+  try {
+    const el = readerRootEl() || document.documentElement;
+    if (el && typeof getComputedStyle === "function") {
+      raw = getComputedStyle(el).getPropertyValue("--oi-reader-formula-ref-size");
+    }
+  } catch {
+    raw = "";
+  }
+  return formulaRefPxFromCss(raw);
+}
+
+/** Crop floor and full scale follow the page's source body and the CSS token, not Aa. */
 function readerFormulaScales(page) {
   const layout = getPageLayout(page);
   const bodyPt = Number(layout?.bodyItemHeight) > 0 ? Number(layout.bodyItemHeight) : READER_SOURCE_BODY_PT;
+  const refPx = readFormulaRefPx();
   return {
     sourceBodyPt: bodyPt,
-    scale: formulaRefScale(bodyPt),
-    floor: formulaRefFloorScale(bodyPt)
+    refPx,
+    scale: formulaRefScale(bodyPt, refPx),
+    floor: formulaRefFloorScale(bodyPt, refPx)
   };
 }
 
@@ -8880,7 +8901,8 @@ function readerFormulaStyle(block, page, inline, columnPx) {
     widthPt,
     scriptPt: formulaScriptPt(block, inkPt),
     columnPx: column,
-    inline
+    inline,
+    refPx: readFormulaRefPx()
   });
   if (!sized) return null;
   const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
