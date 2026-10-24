@@ -24,7 +24,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,7 +38,7 @@ import { CHAIN_VERSION, cropHashOf, contractViolations, unitKeyOf } from "../lib
 import { cropPngFor } from "../lib/formula-crop-png.js";
 import { classifyMmDecision, createMmLedger, mmPageStatsFor, beginMmPage, mmPageLedger, resetMmPages } from "../lib/formula-mm-ledger.js";
 import { verifyCandidate as verifyFromArbiter } from "../lib/formula-arbiter.js";
-import { parseLatexCandidate, verifyCandidate } from "../lib/formula-verify.js";
+import { parseLatexCandidate, punctuationOnlyFormula, verifyCandidate } from "../lib/formula-verify.js";
 import { publishRestampedBlocks, scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import {
   FORMULA_SWITCH_KEYS,
@@ -565,7 +565,7 @@ test("an uncheckable text layer does not call the model", async () => {
   const settings = settingsFor("openai");
   let sends = 0;
   const result = await runMultimodal({
-    pdfText: "\u0012\u0013",
+    pdfText: "x\uE000",
     display: true,
     glyphs: [],
     equationNumber: null,
@@ -584,6 +584,206 @@ test("an uncheckable text layer does not call the model", async () => {
   assert.equal(sends, 0);
   assert.equal(result.reason, "uncheckable-glyph");
   assert.equal(result.status, "reject");
+});
+
+test("a parenthesis-only formula makes zero vision calls and writes no failure cache", async () => {
+  const settings = settingsFor("openai");
+  const state = { saved: [], boom: false };
+  const cache = createFormulaCache(wrapStore(createMemoryStore(), state));
+  const ledger = createMmLedger();
+  let sends = 0;
+  let crops = 0;
+  const samples = [")", ").", "[]", "\uF8F9", "\uF8EE", "\u0012"];
+  for (const sourceText of samples) {
+    assert.equal(punctuationOnlyFormula({ pdfText: sourceText }), true, sourceText);
+    const result = await runMultimodal({
+      pdfText: sourceText,
+      display: true,
+      glyphs: [],
+      equationNumber: null,
+      crop: { url: PNG_URL }
+    }, {
+      flags: formulaChainFlags(settings),
+      settings,
+      readSettings: () => settings,
+      katex,
+      sendVision: async () => {
+        sends += 1;
+        return { ok: true, text: sourceText };
+      },
+      cropPngFor: async () => {
+        crops += 1;
+        return { mime: "image/png", base64: PNG };
+      }
+    });
+    assert.equal(result.status, "skip", sourceText);
+    assert.equal(result.reason, "punctuation-only", sourceText);
+  }
+  const shown = await scheduleFormulaBlock(formulaBlock({
+    bid: "paren",
+    id: "paren",
+    sourceText: ")",
+    text: ")"
+  }), {
+    ...formulaChainFlags(settings),
+    docHash: "doc-paren",
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache,
+    mmLedger: ledger,
+    sendVision: async () => {
+      sends += 1;
+      return { ok: true, text: ")" };
+    },
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+  });
+  assert.equal(sends, 0);
+  assert.equal(crops, 0);
+  assert.equal(state.saved.length, 0);
+  assert.equal(shown.latexSource, undefined);
+  assert.equal(shown.latex, undefined);
+  assert.equal(shown.imageUrl, PNG_URL);
+  assert.equal(shown.formulaTier, "crop");
+  assert.equal(ledger.stats().k, 0);
+  for (const sourceText of ["(1)", "(2)", "a)", "x_i", "=", "+", "\u2212", "x\uF8F9"]) {
+    assert.equal(punctuationOnlyFormula({ pdfText: sourceText }), false, sourceText);
+  }
+  // probe.mjs samples. Brackets, sentence marks, and U+F8EB–U+F8FE skip.
+  // Operators, primes, and private-use glyphs outside that block do not.
+  const probeSkip = [")", "\uF8EE", "\uF8EE\uF8F9", "...", "\uF8EB", "\uF8F0", "\uF8FE", "\u0012", "()", "[ ]"];
+  const probeSend = ["-", "'", "\u2032", "!", "/", "*", "\u2016", "\u2212", "=", "\u2211", ":=", "\u2329", "\u00B7", "#", "&", "(1)", "|x|", "\\|", "\uE000", "\uF8EA", "\uF8FF"];
+  for (const sourceText of probeSkip) {
+    assert.equal(punctuationOnlyFormula({ pdfText: sourceText }), true, JSON.stringify(sourceText));
+  }
+  for (const sourceText of probeSend) {
+    assert.equal(punctuationOnlyFormula({ pdfText: sourceText }), false, JSON.stringify(sourceText));
+  }
+  for (const sourceText of ["-", "\u2212", "\u2016", "*", "/", "\u2032", "'", "!", "\u00B7", "\u2329"]) {
+    let sent = 0;
+    const result = await runMultimodal({
+      pdfText: sourceText,
+      display: true,
+      glyphs: [],
+      equationNumber: null,
+      crop: { url: PNG_URL }
+    }, {
+      flags: formulaChainFlags(settings),
+      settings,
+      readSettings: () => settings,
+      katex,
+      sendVision: async () => {
+        sent += 1;
+        return { ok: true, text: "x" };
+      },
+      cropPngFor: async () => ({ mime: "image/png", base64: PNG })
+    });
+    assert.equal(sent, 1, JSON.stringify(sourceText));
+    assert.notEqual(result.reason, "punctuation-only", JSON.stringify(sourceText));
+  }
+  const otherPrivate = await runMultimodal({
+    pdfText: "\uE000",
+    display: true,
+    glyphs: [],
+    equationNumber: null,
+    crop: { url: PNG_URL }
+  }, {
+    flags: formulaChainFlags(settings),
+    settings,
+    readSettings: () => settings,
+    katex,
+    sendVision: async () => {
+      sends += 1;
+      return { ok: true, text: "x" };
+    },
+    cropPngFor: async () => ({ mime: "image/png", base64: PNG })
+  });
+  assert.notEqual(otherPrivate.reason, "punctuation-only");
+  assert.equal(otherPrivate.reason, "uncheckable-glyph");
+  let realSends = 0;
+  const real = await runMultimodal({
+    pdfText: "a)",
+    display: true,
+    glyphs: [],
+    equationNumber: null,
+    crop: { url: PNG_URL }
+  }, {
+    flags: formulaChainFlags(settings),
+    settings,
+    readSettings: () => settings,
+    katex,
+    sendVision: async () => {
+      realSends += 1;
+      return { ok: true, text: "a)" };
+    },
+    cropPngFor: async () => ({ mime: "image/png", base64: PNG })
+  });
+  assert.equal(realSends, 1);
+  assert.notEqual(real.reason, "punctuation-only");
+});
+
+test("DDPM lone bracket blocks make zero vision calls", async (t) => {
+  const pdfPath = join(root, "tests/fixtures/DDPM_2006.11239.pdf");
+  if (!existsSync(pdfPath)) {
+    t.skip("DDPM fixture PDF is absent; the lone-bracket check did not run.");
+    return;
+  }
+  const { getDocument, GlobalWorkerOptions } = await import("../pdf/vendor/pdf.min.mjs");
+  const { textLayerToBlocks } = await import("../lib/pdf-text-layer.js");
+  const { attachFontRealNames } = await import("../lib/pdf-mirror.js");
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(pdfPath)),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  const settings = settingsFor("openai");
+  const state = { saved: [], boom: false };
+  const cache = createFormulaCache(wrapStore(createMemoryStore(), state));
+  let sends = 0;
+  let brackets = 0;
+  try {
+    for (const number of [13, 14]) {
+      const pdfPage = await doc.getPage(number);
+      const content = await pdfPage.getTextContent();
+      attachFontRealNames(content.items, pdfPage.commonObjs);
+      const viewport = pdfPage.getViewport({ scale: 1 });
+      const ops = await pdfPage.getOperatorList();
+      const built = textLayerToBlocks({
+        items: content.items,
+        viewport,
+        images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+        page: number
+      });
+      for (const block of built.blocks) {
+        if (block.label !== "formula") continue;
+        const unit = { pdfText: block.sourceText || "" };
+        if (!punctuationOnlyFormula(unit)) continue;
+        brackets += 1;
+        const shown = await scheduleFormulaBlock(block, {
+          ...formulaChainFlags(settings),
+          docHash: "ddpm",
+          page: number,
+          settings,
+          readSettings: () => settings,
+          katex,
+          cache,
+          sendVision: async () => {
+            sends += 1;
+            return { ok: true, text: "x" };
+          },
+          withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" })
+        });
+        assert.equal(shown.latexSource, undefined, block.id);
+        assert.equal(shown.imageUrl, PNG_URL, block.id);
+      }
+    }
+  } finally {
+    await doc.destroy();
+  }
+  assert.ok(brackets >= 1, "DDPM pages 13–14 have a lone bracket formula");
+  assert.equal(sends, 0);
+  assert.equal(state.saved.length, 0);
 });
 
 test("interrupt: after settings are read, a removed key sends nothing and writes nothing", async () => {

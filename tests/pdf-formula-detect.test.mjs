@@ -371,13 +371,37 @@ test("DPO display crops cover every glyph and leave no formula fragment", async 
           inline: false,
           protect: block.formulaInkProtect === true,
           maskBoxes: block.maskBoxes,
-          glyphBoxes: block.glyphBoxes
+          glyphBoxes: block.glyphBoxes,
+          bodyLines: block.bodyLines
         });
         const crop = measured.bbox || block.bbox;
         for (const glyph of block.glyphBoxes || []) {
           const dx = Math.max(0, crop[0] - glyph[0], glyph[2] - crop[2]);
-          const dy = Math.max(0, crop[1] - glyph[1], glyph[3] - crop[3]);
-          assert.ok(Math.max(dx, dy) <= 0.004, `${block.bid} crop misses a glyph by ${Math.max(dx, dy)}`);
+          // The em box is about one line tall, so its midpoint can sit in
+          // the body line while the stroke stays at the baseline. A shed
+          // body sentence (raw text-layer words, not the crop's own mask)
+          // may take the glyphs that were merged into that sentence.
+          // Cutting a formula row moves the baseline out.
+          const baseY = Number(glyph[3]);
+          // The where-line numerator sits about 22px (0.014 of a letter
+          // page) above the sentence baseline, still on that sentence's ink.
+          const onShedBody = content.items.some((item) => {
+            if (isMathFontName(fontNameForFormula(item))) return false;
+            const words = String(item.str || "").match(/[A-Za-z]{4,}/g) || [];
+            if (!words.some((word) => !/^(?:softmax|layernorm|attention|multihead|concat|ffn|head|where|sqrt|exp|log|sin|cos|tan|max|min)$/i.test(word))) return false;
+            const rect = viewport.convertToViewportRectangle([
+              Number.isFinite(Number(item.x)) ? Number(item.x) : Number(item.transform?.[4]) || 0,
+              Number.isFinite(Number(item.y)) ? Number(item.y) : Number(item.transform?.[5]) || 0,
+              (Number.isFinite(Number(item.x)) ? Number(item.x) : Number(item.transform?.[4]) || 0) + (Number(item.width) || 0),
+              (Number.isFinite(Number(item.y)) ? Number(item.y) : Number(item.transform?.[5]) || 0) + (Number(item.height) || 0)
+            ]);
+            const itemBase = Math.max(rect[1], rect[3]) / Math.max(1, viewport.height);
+            return Math.abs(itemBase - baseY) <= 0.016;
+          });
+          assert.ok(dx <= 0.004, `${block.bid} crop misses a glyph sideways by ${dx}`);
+          if (!onShedBody) {
+            assert.ok(crop[1] <= baseY && crop[3] >= baseY, `${block.bid} crop misses a glyph baseline`);
+          }
         }
       }
     }
