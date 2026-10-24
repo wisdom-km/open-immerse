@@ -7,11 +7,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createFormulaCache, isDurableFormulaResult } from "../lib/formula-cache.js";
+import { resolveAskTarget } from "../lib/ask-route.js";
 import {
+  ARK_DIRECT_BASE_URL,
+  ARK_PLAN_BASE_URL,
+  FORMULA_ARK_BASE_NOTE,
   FORMULA_SETTINGS_KEY,
   LEGACY_DOUBAO_MODEL,
   MM_PRESET_GENERATION,
   defaultFormulaSettings,
+  fixedVendorHostMismatch,
   modelChoice,
   multimodalProvider,
   normalizeFormulaSettings,
@@ -479,6 +484,77 @@ test("new installs default to glm-5.3-flash and an explicit saved model stays", 
   assert.equal(saved.multimodal.provider, "kimi");
   assert.equal(saved.multimodal.model, "kimi-k3");
   assert.equal(saved["formula.tier2.enabled"], true);
+
+  assert.equal(fresh.multimodal.baseUrl, "");
+  assert.equal(multimodalProvider("doubao").baseUrl, ARK_PLAN_BASE_URL);
+  assert.equal(multimodalProvider("deepseek").baseUrl, "https://api.deepseek.com");
+  assert.equal(multimodalTarget(fresh).url, `${ARK_PLAN_BASE_URL}/chat/completions`);
+  assert.equal(multimodalTarget({
+    multimodal: { provider: "doubao", model: "deepseek-v4.1-flash", baseUrl: "" }
+  }).url, `${ARK_PLAN_BASE_URL}/chat/completions`);
+});
+
+test("a saved Ark Base URL stays, and an empty one uses the plan endpoint", async () => {
+  const direct = {
+    multimodal: {
+      provider: "doubao",
+      apiKey: KEY_A,
+      model: "glm-5.3-flash",
+      baseUrl: ARK_DIRECT_BASE_URL
+    }
+  };
+  const kept = normalizeFormulaSettings(direct);
+  assert.equal(kept.multimodal.baseUrl, ARK_DIRECT_BASE_URL);
+  assert.equal(kept.multimodal.model, "glm-5.3-flash");
+  assert.equal(multimodalTarget(direct).url, `${ARK_DIRECT_BASE_URL}/chat/completions`);
+  assert.equal(fixedVendorHostMismatch(direct), false);
+  const loaded = await readFormulaSettings({
+    async get() {
+      return { [FORMULA_SETTINGS_KEY]: direct };
+    }
+  });
+  assert.equal(loaded.multimodal.baseUrl, ARK_DIRECT_BASE_URL);
+
+  const llm = {
+    provider: "openai",
+    providers: { openai: { model: "gpt-4o-mini", baseUrl: "https://api.openai.com/v1" } }
+  };
+  const planAsk = resolveAskTarget(llm, {
+    multimodal: { provider: "doubao", apiKey: KEY_A, model: "deepseek-v4.1-flash", baseUrl: "" }
+  });
+  assert.equal(planAsk.via, "multimodal");
+  assert.equal(planAsk.model, "deepseek-v4.1-flash");
+  assert.equal(planAsk.url, `${ARK_PLAN_BASE_URL}/chat/completions`);
+  const directAsk = resolveAskTarget(llm, direct);
+  assert.equal(directAsk.url, `${ARK_DIRECT_BASE_URL}/chat/completions`);
+  const translation = resolveAskTarget(llm, { multimodal: { provider: "", apiKey: "" } });
+  assert.equal(translation.via, "translation");
+  assert.equal(translation.url, "https://api.openai.com/v1/chat/completions");
+
+  const previous = globalThis.document;
+  globalThis.document = {
+    createElement(tag) {
+      return new DomEl(tag);
+    },
+    createTextNode(text) {
+      return { textContent: String(text ?? "") };
+    }
+  };
+  try {
+    const panel = new DomEl("div");
+    renderFormulaPanel(panel, defaultFormulaSettings(), {});
+    const inputs = [];
+    walk(panel, (node) => {
+      if (node.tagName === "INPUT") inputs.push(node);
+    });
+    const base = inputs.find((input) => input.attrs["data-base-url"]);
+    assert.equal(base.placeholder, ARK_PLAN_BASE_URL);
+    assert.equal(base.value, "");
+    assert.equal(panel.textContent.includes(FORMULA_ARK_BASE_NOTE), true);
+    assert.equal(panel.textContent.includes(ARK_DIRECT_BASE_URL), true);
+  } finally {
+    globalThis.document = previous;
+  }
 });
 
 test("a saved doubao-seed lite model is shown as that model, not as glm", async () => {
