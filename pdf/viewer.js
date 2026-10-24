@@ -3771,7 +3771,8 @@ function formulaInkBbox(canvas, block) {
       inline: block.display === false || Boolean(block.inlineOf),
       protect: block.formulaInkProtect === true,
       maskBoxes: block.maskBoxes,
-      glyphBoxes: block.glyphBoxes
+      glyphBoxes: block.glyphBoxes,
+      bodyLines: block.bodyLines
     });
     if (measured?.inkShare) block.inkShare = measured.inkShare;
     return measured?.bbox || bbox;
@@ -5850,6 +5851,63 @@ function viewerUnderTest() {
   }
 }
 
+function probeRoundBox(box) {
+  if (!Array.isArray(box) || box.length < 4) return null;
+  return box.slice(0, 4).map((value) => Math.round(Number(value) * 10000) / 10000);
+}
+
+function probeViewportBox(item, viewport) {
+  const transform = Array.isArray(item?.transform) ? item.transform : [];
+  const x = Number.isFinite(Number(item?.x)) ? Number(item.x) : Number(transform[4]) || 0;
+  const y = Number.isFinite(Number(item?.y)) ? Number(item.y) : Number(transform[5]) || 0;
+  const width = Number(item?.width) || 0;
+  const height = Number(item?.height) || 0;
+  const rect = viewport.convertToViewportRectangle([x, y, x + width, y + height]);
+  const vw = Math.max(1, Number(viewport.width) || 1);
+  const vh = Math.max(1, Number(viewport.height) || 1);
+  return [
+    Math.min(rect[0], rect[2]) / vw,
+    Math.min(rect[1], rect[3]) / vh,
+    Math.max(rect[0], rect[2]) / vw,
+    Math.max(rect[1], rect[3]) / vh
+  ];
+}
+
+/** oiAuto only. The crop the viewer painted, plus the raw text-layer boxes behind it. */
+async function dumpFormulaCropProbe(page) {
+  const n = Number(page);
+  const blocks = getPageLayout(n)?.blocks || [];
+  const pdfPage = pdfDoc ? await pdfDoc.getPage(n) : null;
+  const viewport = pdfPage ? pdfPage.getViewport({ scale: 1 }) : null;
+  const content = pdfPage ? await pdfPage.getTextContent() : null;
+  const items = [];
+  if (content && viewport) {
+    for (const item of content.items || []) {
+      const str = String(item?.str || "");
+      if (!str.trim()) continue;
+      items.push({ str, box: probeRoundBox(probeViewportBox(item, viewport)) });
+    }
+  }
+  const formulas = [];
+  for (const block of blocks) {
+    if (block?.label !== "formula" || block.display === false || block.inlineOf) continue;
+    formulas.push({
+      id: String(block.id || ""),
+      eq: String(block.eqLabel || ""),
+      text: String(block.sourceText || "").replace(/\s+/g, " ").slice(0, 180),
+      bbox: probeRoundBox(block.bbox),
+      surface: String(block.surface || ""),
+      image: String(block.imageUrl || "")
+    });
+  }
+  return {
+    dpr: Number(window.devicePixelRatio) || 1,
+    blocks: blocks.length,
+    formulas,
+    items
+  };
+}
+
 function publishViewerTestHooks() {
   if (!viewerUnderTest()) return;
   globalThis.__oiLibrarySourceSentHas = (hash) => librarySourceSent.has(String(hash || ""));
@@ -5901,6 +5959,7 @@ function publishViewerTestHooks() {
     sourceId: String(block.sourceId || ""),
     text: String(block.text || "")
   }));
+  globalThis.__oiFormulaDump = (page) => dumpFormulaCropProbe(page);
   exposeNotesProbe();
   globalThis.__oiJumpFormula = jumpFormulaPlaceholder;
 }

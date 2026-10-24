@@ -544,13 +544,28 @@ describe("Aa font-size risk checks on DPO", () => {
   });
 
   test("a real DPO display formula shrinks to the shown-font floor, then scrolls", async () => {
-    await handle.send("Emulation.setDeviceMetricsOverride", {
-      width: 320, height: 800, deviceScaleFactor: 1, mobile: false
-    });
-    await handle.evaluate(`window.dispatchEvent(new Event("resize"))`);
-    const sample = await waitForLayout({ allPages: true });
+    const fit = async (width) => {
+      await handle.send("Emulation.setDeviceMetricsOverride", {
+        width, height: 800, deviceScaleFactor: 1, mobile: false
+      });
+      await handle.evaluate(`window.dispatchEvent(new Event("resize"))`);
+      return waitForLayout({ allPages: true });
+    };
+    // 320px is the narrow column. The widest crop (DPO p4, the (4) / where
+    // line) used to stick out by about 2px. Dropping the merged where-line
+    // took the margin with it; the rightmost formula glyph is still inside
+    // the crop. Measure that crop and pull the window in until the
+    // floor-scaled formula overflows again. The shown font is already at
+    // the 14px cap, so the floor does not drop with the window.
+    let sample = await fit(320);
     assert.ok(sample?.top, `no matched display formula (mode ${sample?.mode}, column ${sample?.column}, shown ${sample?.shown})`);
-    const row = sample.top;
+    let row = sample.top;
+    if (!(row.scrollW > row.clientW + 1)) {
+      const deficit = Math.max(0, Math.ceil(row.clientW + 2 - row.scrollW));
+      sample = await fit(Math.max(260, 320 - deficit - 16));
+      assert.ok(sample?.top, `no matched display formula after narrowing (mode ${sample?.mode})`);
+      row = sample.top;
+    }
     const expected = formulaReadabilityFloor(sample.shown, row.bodyPt);
     const storedFloor = formulaReadabilityFloor(sample.setting, row.bodyPt);
     const observed = row.img / row.widthPt;
