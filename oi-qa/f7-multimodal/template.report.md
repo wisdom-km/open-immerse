@@ -13,7 +13,7 @@ schema: `open-immerse.mm-dpo-ab/v1` · mode: `template`
 | LaTeX | `latex` |
 | 核对 | `verify` |
 | 上屏方式 | `paint` |
-| 与参考一致? | `matchesReference` |
+| 渲染等价? | `matchesReference` |
 | 耗时 | `latencyMs` |
 | token | `tokens` |
 | 核对过但与参考不一致 | `checkedButMismatch`（汇总 0） |
@@ -34,7 +34,7 @@ schema: `open-immerse.mm-dpo-ab/v1` · mode: `template`
 
 ## 分臂汇总
 
-| arm | provider | model | sent | verified | 与参考一致 | 核对过但与参考不一致 | 耗时合计 | token 合计 |
+| arm | provider | model | sent | verified | 渲染等价 | 核对过但与参考不一致 | 耗时合计 | token 合计 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | tight | kimi | kimi-k3 | 0 | 0 | 0/0 | 0 | 0 | 0 |
 | tight | deepseek | deepseek-v4.1-flash | 0 | 0 | 0/0 | 0 | 0 | 0 |
@@ -56,7 +56,7 @@ writesPreset=false productDefault=false provisional=true
 - LaTeX: `x`
 - 核对: checked=true pass=true reason=— jaccard=1
 - 上屏方式: katex（核对通过，上屏 KaTeX）
-- 与参考一致: false
+- 渲染等价: false
 - 耗时: 0 ms
 - token: 0/0/0
 - 核对过但与参考不一致: true
