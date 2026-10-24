@@ -169,6 +169,7 @@ Target: text-layer body text plus content-accurate original-page display (crops 
 - Separate right-pane zoom chip (0.5–5, step 0.25); not in the top bar
 - Drag the split to resize columns
 - Content accuracy comes first; layout comes second and should be as good as possible without changing content. Translations match the extracted source. Formulas, figures, and tables match the opened PDF. The default is an original-page crop (pageRaster). Any other method must pass the same check
+- The Doubao formula presets default to `https://ark.cn-beijing.volces.com/api/plan/v3` (glm-5.3-flash, and deepseek-v4.1-flash). An empty Base URL uses that address. A saved Base URL is left as written. A pay-as-you-go key can be pointed at `https://ark.cn-beijing.volces.com/api/v3` by hand
 - Body text of a text-layer PDF uses the original text-layer sentences. Clicking the right pane highlights the matching region in the left pane
 - OCR confusions of `i` and `n` are not shown and are not sent to translation
 - Test-time region detection uses a local Zhipu GLM-OCR. Production uses an OCR API plus the LLM API already configured in the extension
