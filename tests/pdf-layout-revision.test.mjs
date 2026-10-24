@@ -54,13 +54,16 @@ GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", impo
 test("a layout revision matches only the current algorithm", async () => {
   const version = await currentLayoutVersion();
   assert.match(version, /^source-v3:[0-9a-f]{16}$/);
-  // source-v3:1f2d433e57362376 → source-v3:fa66b73d5cbc5203. currentLayoutVersion
+  // source-v3:fa66b73d5cbc5203 → source-v3:18f3fb1cd3aaee6c. currentLayoutVersion
   // hashes pdf-text-layer.js, pdf-layout-adapter.js, pdf-blocks.js, and
   // pdf-mirror.js. Only pdf-text-layer.js changed: #169 行间裁图 scales the
-  // previous-equation debris gap with the glyph em. A fixed 3px gap kept
-  // DDPM eq. 13's product subscript on the cases crop at DPR 1, where that
-  // paper gap is 1px. Recompute this pin if any of those four files change again.
-  assert.equal(version, "source-v3:fa66b73d5cbc5203");
+  // empty-baseline prose gap with the body em (75th percentile, so scripts
+  // do not shrink it). A fixed 2px gap kept DDPM p4 "function approximator"
+  // on the formula at DPR 1, where that paper gap is 1px. A band that
+  // already holds glyph baselines still needs the unscaled 4px gap, so the
+  // underbrace label stays. Recompute this pin if any of those four files
+  // change again.
+  assert.equal(version, "source-v3:18f3fb1cd3aaee6c");
   assert.equal(await currentLayoutVersion(), version);
   const blocks = [{ id: "a", label: "text", text: "Hi" }];
   assert.equal(storedLayoutCurrent({ blocks }, version), null);

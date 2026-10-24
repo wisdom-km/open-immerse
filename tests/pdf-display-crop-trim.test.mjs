@@ -634,6 +634,82 @@ test("DDPM crop excludes \"where εθ is a function approximator\" above \"to co
   });
 });
 
+test("DDPM p4 to-compute crop excludes the approximator sentence at DPR 1", async (t) => {
+  // Review id p4-b24. The text layer's id shifts with font warming, so the
+  // formula is the display block that contains "to compute". At CROP_SCALE 2
+  // the body line sits 2px above the formula and the scale-2 test already
+  // drops it. DPR 1 leaves a 1px gap, and a fixed 2px rule kept the sentence.
+  const pdfPath = join(root, DDPM);
+  if (!existsSync(pdfPath)) {
+    t.skip("DDPM fixture PDF is absent; the DPR 1 approximator check did not run.");
+    return;
+  }
+  let createCanvas;
+  try {
+    ({ createCanvas } = createRequire(import.meta.url)("@napi-rs/canvas"));
+  } catch {
+    t.skip("@napi-rs/canvas is not installed; the DPR 1 approximator check did not run.");
+    return;
+  }
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(pdfPath)),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  try {
+    const pdfPage = await doc.getPage(4);
+    const content = await pdfPage.getTextContent();
+    attachFontRealNames(content.items, pdfPage.commonObjs);
+    const viewport = pdfPage.getViewport({ scale: 1 });
+    const ops = await pdfPage.getOperatorList();
+    const built = textLayerToBlocks({
+      items: content.items,
+      viewport,
+      images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+      page: 4
+    });
+    const sentence = /function approximator intended to p/;
+    const hits = content.items.filter((item) => sentence.test(String(item.str || "")));
+    assert.ok(hits.length >= 1, "approximator sentence");
+    const block = displayFormulas(built).find((entry) => /to compute/.test(entry.sourceText || ""));
+    assert.ok(block, "to compute display formula");
+    const compute = content.items.filter((item) => /^to compute$/.test(String(item.str || "").trim()));
+    assert.ok(compute.length >= 1, "to compute words");
+    const raster = pdfPage.getViewport({ scale: 1 });
+    const width = Math.ceil(raster.width);
+    const height = Math.ceil(raster.height);
+    const canvas = createCanvas(width, height);
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    await pdfPage.render({ canvasContext: context, viewport: raster }).promise;
+    const image = context.getImageData(0, 0, width, height);
+    const crop = measureFormulaCrop(block.bbox, image, cropOptions(block)).bbox;
+    assert.ok(crop, block.id);
+    for (const item of hits) {
+      const base = viewportBox(item, viewport)[3];
+      assert.ok(crop[1] > base, `${JSON.stringify(item.str)} baseline ${base.toFixed(4)} is inside the DPR 1 crop top ${crop[1].toFixed(4)}`);
+    }
+    for (const item of compute) {
+      const base = viewportBox(item, viewport)[3];
+      assert.ok(crop[1] <= base && crop[3] >= base, `to compute baseline ${base.toFixed(4)} was cut`);
+    }
+    let kept = 0;
+    for (const glyph of block.glyphBoxes || []) {
+      const base = Number(glyph[3]);
+      if (base < block.bbox[1] || base > block.bbox[3]) continue;
+      const onSentence = hits.some((item) => Math.abs(viewportBox(item, viewport)[3] - base) <= 0.016);
+      if (onSentence) continue;
+      kept += 1;
+      assert.ok(crop[1] <= base && crop[3] >= base, `${block.id} cut a formula glyph at ${base.toFixed(4)}`);
+    }
+    assert.ok(kept >= 1, "formula glyphs stay");
+  } finally {
+    await doc.destroy();
+  }
+});
+
 test("DPO page 18 crop excludes \"sides we obtain:\"", async (t) => {
   await assertSentenceOutside(t, {
     rel: DPO,
