@@ -320,14 +320,18 @@ import {
   assetLayoutCapPx,
   createFormulaRasterCache,
   fitSnappedFormulaCss,
+  FORMULA_INK_MIN_SPAN,
   formulaDevicePixels,
   formulaRasterCacheKey,
   formulaInkPadPx,
   formulaRasterPlan,
   formulaRegionWindow,
   imageInkRatio,
+  inlineShortCropScale,
+  isInlineFormulaBlock,
   isSourceRedrawBlock,
   pageCropLooksEmpty,
+  shortInlineFormulaLabel,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { detectArxivId } from "../lib/arxiv-id.js";
@@ -336,6 +340,14 @@ import { KATEX_RENDER_OPTIONS } from "../lib/formula-katex.js";
 import { formulaArxivSourceEnabled, setFormulaArxivSourceEnabled } from "../lib/formula-flags.js";
 import { scheduleFormulaBlock, publishRestampedBlocks } from "../lib/formula-schedule.js";
 import { cropPngFor } from "../lib/formula-crop-png.js";
+import {
+  TARGET_BOX_PX,
+  contextCropGeometry,
+  glyphRectPixels,
+  paintTargetBox,
+  seatInkBox,
+  targetBoxPixels
+} from "../lib/formula-context-crop.js";
 import {
   VISION_CROP_SCALE,
   measureVisionRegion,
@@ -3924,6 +3936,14 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
       devicePixelRatio: metrics.devicePixelRatio
     });
   if (!plan || (!formula && plan.reusePageRaster)) return "";
+  // A short inline crop is already at the 24×12 floor. The device-pixel
+  // redraw is the print size and would replace that bitmap with a smaller
+  // one. Keep the floor crop until zoom asks for at least that many pixels.
+  if (
+    formula &&
+    Number(block.shortInlineScale) > 0 &&
+    (plan.pixelWidth < FORMULA_INK_MIN_SPAN.x || plan.pixelHeight < FORMULA_INK_MIN_SPAN.y)
+  ) return "";
   const key = formulaRasterCacheKey({
     docId,
     page: pageNumber,
@@ -3992,11 +4012,128 @@ function cropRegionCanvas(canvas, relativeBbox) {
 }
 
 /**
- * Tight PNG for the vision model. Scale and pad come from the vision spec.
- * The page raster and renderSharpVisualCrop are not this bitmap.
+ * Inline context PNG. The red stroke sits outside the glyph union and inside
+ * the bitmap. Display formulas do not take this path.
+ */
+async function renderContextVisionCrop(page, block, pageNumber, spec = {}) {
+  if (!page || block?.label !== "formula" || typeof page.getViewport !== "function") return "";
+  let unit = null;
+  try {
+    unit = page.getViewport({ scale: 1 });
+  } catch {
+    return "";
+  }
+  const requested = Number(spec?.scale) > 0 ? Number(spec.scale) : VISION_CROP_SCALE;
+  let frame = contextCropGeometry(block, {
+    pageWidth: unit.width,
+    pageHeight: unit.height,
+    scale: requested
+  });
+  if (!frame?.bbox || !frame?.target) return "";
+  let plan = visionRasterPlan({
+    bbox: frame.bbox,
+    pageWidth: unit.width,
+    pageHeight: unit.height,
+    scale: requested
+  });
+  if (plan && plan.scale + 1e-6 < requested) {
+    const fitted = contextCropGeometry(block, {
+      pageWidth: unit.width,
+      pageHeight: unit.height,
+      scale: plan.scale
+    });
+    if (fitted) {
+      frame = fitted;
+      plan = visionRasterPlan({
+        bbox: frame.bbox,
+        pageWidth: unit.width,
+        pageHeight: unit.height,
+        scale: plan.scale
+      });
+    }
+  }
+  if (!plan || plan.pixelWidth < 1 || plan.pixelHeight < 1) return "";
+  const key = visionCropCacheKey({
+    docId,
+    page: pageNumber,
+    bbox: frame.bbox,
+    scale: plan.scale,
+    namedPx: 0,
+    inline: true,
+    protect: false,
+    mode: "context",
+    target: frame.target
+  });
+  const cached = visionCropCache.get(key);
+  if (cached) {
+    rememberFormulaModelCrop(pageNumber, { ...block, imageUrl: cached });
+    return cached;
+  }
+  let canvas = null;
+  try {
+    const full = page.getViewport({ scale: plan.scale });
+    const fitted = formulaRegionWindow(frame.bbox, full.width, full.height);
+    if (fitted.pixelWidth < 1 || fitted.pixelHeight < 1) return "";
+    const viewport = page.getViewport({
+      scale: plan.scale,
+      offsetX: -frame.bbox[0] * full.width,
+      offsetY: -frame.bbox[1] * full.height
+    });
+    canvas = document.createElement("canvas");
+    canvas.width = fitted.pixelWidth;
+    canvas.height = fitted.pixelHeight;
+    const context = formulaDrawContext(canvas);
+    if (!context) {
+      canvas.width = 0;
+      canvas.height = 0;
+      return "";
+    }
+    await renderPdfPage(page, { canvasContext: context, viewport }).promise;
+    compositeWhitePaper(context, canvas);
+    let rect = targetBoxPixels(frame.bbox, frame.target, unit.width, unit.height, plan.scale);
+    try {
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+      const glyphRect = glyphRectPixels(frame.bbox, block.glyphBoxes, unit.width, unit.height, plan.scale);
+      const glyphRects = (block.glyphBoxes || [])
+        .map((box) => targetBoxPixels(frame.bbox, box, unit.width, unit.height, plan.scale))
+        .filter(Boolean);
+      const seated = glyphRect
+        ? seatInkBox(
+          { data: pixels?.data, width: canvas.width, height: canvas.height },
+          glyphRect,
+          { glyphs: glyphRects }
+        )
+        : null;
+      if (seated) rect = seated;
+    } catch {
+      // No bitmap: the glyph-union target still contains the metric box.
+    }
+    paintTargetBox(canvas, rect, TARGET_BOX_PX);
+    const url = canvas.toDataURL("image/png");
+    canvas.width = 0;
+    canvas.height = 0;
+    canvas = null;
+    if (!/^data:image\/png;base64,/.test(url)) return "";
+    visionCropCache.set(key, url);
+    rememberFormulaModelCrop(pageNumber, { ...block, imageUrl: url });
+    return url;
+  } catch {
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+    return "";
+  }
+}
+
+/**
+ * PNG for the vision model. Inline formulas are a context crop with a red
+ * box. Display formulas stay on the hi-res tight crop. The page raster and
+ * renderSharpVisualCrop are not this bitmap.
  */
 async function renderVisionFormulaCrop(page, raster, block, pageNumber, spec = {}) {
   void raster;
+  if (spec?.mode === "context") return renderContextVisionCrop(page, block, pageNumber, spec);
   if (!page || block?.label !== "formula" || typeof page.getViewport !== "function") return "";
   const source = visionSourceBbox(block);
   if (!source) return "";
@@ -4119,10 +4256,102 @@ function redrawKeepsInk(context, canvas, raster, block) {
   return acceptVisualRedraw(redrawInk, rasterRegionInk(raster?.canvas, block?.bbox));
 }
 
+/**
+ * Page-raster crops under 24×12 stay empty. A short inline formula is
+ * redrawn from the PDF at the smallest uniform scale that clears that
+ * floor. The canvas is the bbox at that scale, not a 24px-wide pad.
+ * No ink leaves imageUrl empty so the reader can show sourceText.
+ */
+async function renderShortInlineCrop(page, raster, block, pageNumber) {
+  if (!page || !isInlineFormulaBlock(block) || !Array.isArray(block.bbox)) return "";
+  let unit = null;
+  try {
+    unit = page.getViewport({ scale: 1 });
+  } catch {
+    return "";
+  }
+  const pageW = Number(unit.width) || 0;
+  const pageH = Number(unit.height) || 0;
+  const pdfW = (Number(block.bbox[2]) - Number(block.bbox[0])) * pageW;
+  const pdfH = (Number(block.bbox[3]) - Number(block.bbox[1])) * pageH;
+  const scale = inlineShortCropScale(pdfW, pdfH, {
+    pageWidth: pageW,
+    pageHeight: pageH,
+    pixelWidth: raster?.pixelWidth || raster?.canvas?.width,
+    pixelHeight: raster?.pixelHeight || raster?.canvas?.height
+  });
+  if (!(scale > 0)) return "";
+  const key = formulaRasterCacheKey({
+    docId,
+    page: pageNumber,
+    bbox: block.bbox,
+    scale,
+    devicePixelRatio: 0
+  });
+  const cached = formulaRasterCache.get(key);
+  if (cached) {
+    block.shortInlineScale = scale;
+    return cached;
+  }
+  let canvas = null;
+  try {
+    const pixelWidth = Math.round(pdfW * scale);
+    const pixelHeight = Math.round(pdfH * scale);
+    if (pixelWidth < FORMULA_INK_MIN_SPAN.x || pixelHeight < FORMULA_INK_MIN_SPAN.y) return "";
+    const full = page.getViewport({ scale });
+    const originX = Number(block.bbox[0]) || 0;
+    const originY = Number(block.bbox[1]) || 0;
+    const viewport = page.getViewport({
+      scale,
+      offsetX: -originX * full.width,
+      offsetY: -originY * full.height
+    });
+    canvas = document.createElement("canvas");
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+    const context = formulaDrawContext(canvas);
+    if (!context) return "";
+    const task = renderPdfPage(page, { canvasContext: context, viewport });
+    formulaCropRenderTask = task;
+    try {
+      await task.promise;
+    } finally {
+      if (formulaCropRenderTask === task) formulaCropRenderTask = null;
+    }
+    compositeWhitePaper(context, canvas);
+    paintFormulaMask(canvas, block.bbox, block);
+    let ink = null;
+    try {
+      if (typeof context.getImageData === "function") {
+        ink = imageInkRatio(context.getImageData(0, 0, canvas.width, canvas.height));
+      }
+    } catch {
+      ink = null;
+    }
+    if (!(ink > 0)) return "";
+    const url = canvas.toDataURL("image/png");
+    if (!/^data:image\/png;base64,/.test(url)) return "";
+    formulaRasterCache.set(key, url);
+    block.shortInlineScale = scale;
+    return url;
+  } catch {
+    return "";
+  } finally {
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  }
+}
+
 async function withRasterCrop(raster, page, block, pageNumber, options = {}) {
   if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
   const next = { ...block };
   next.imageUrl = imageForVisualBlock(raster, next);
+  if (!next.imageUrl && isInlineFormulaBlock(next)) {
+    const lifted = await renderShortInlineCrop(page, raster, next, pageNumber);
+    if (lifted) next.imageUrl = lifted;
+  }
   if (next.imageUrl) next.surface = "png";
   if ((next.label === "figure" || next.label === "table") && next.imageUrl && pageCropLooksEmpty(rasterRegionInk(raster?.canvas, next.bbox), next.bbox)) {
     next.imageUrl = "";
@@ -4651,6 +4880,18 @@ function restampFormulaStale(pageNumber, epoch, job, layout) {
 async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob) {
   const layout = getPageLayout(pageNumber);
   if (!layout?.blocks) return;
+  let pageWidth;
+  let pageHeight;
+  if (pdfDoc?.getPage) {
+    try {
+      const pdfPage = await pdfDoc.getPage(pageNumber);
+      const unit = pdfPage.getViewport({ scale: 1 });
+      pageWidth = unit.width;
+      pageHeight = unit.height;
+    } catch {
+      /* the render path recomputes from the live page */
+    }
+  }
   const flags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: formulaArxivSourceEnabled() });
   const mmLedger = mmPageLedger(pageNumber);
   const next = [];
@@ -4664,6 +4905,8 @@ async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob)
     if (sourceUnitId) stamped.sourceUnitId = sourceUnitId;
     else delete stamped.sourceUnitId;
     next.push(await scheduleFormulaBlock(stamped, {
+      pageWidth,
+      pageHeight,
       withRasterCrop: async (item) => item,
       cropPngFor: (block, hooks) => formulaModelPng(pageNumber, block, hooks),
       isStale: () => restampFormulaStale(pageNumber, epoch, job, layout),
@@ -4883,6 +5126,16 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
   }) || arxivIdentity : null;
   const formulaFlags = formulaChainFlags(formulaViewerSettings, { arxivEnabled: arxivOn });
   const mmLedger = mmPageLedger(pageNumber);
+  let pageWidth;
+  let pageHeight;
+  try {
+    const unit = page?.getViewport?.({ scale: 1 });
+    pageWidth = unit?.width;
+    pageHeight = unit?.height;
+  } catch {
+    pageWidth = undefined;
+    pageHeight = undefined;
+  }
   for (const block of blocks || []) {
     if (isStale()) return null;
     if (block?.label !== "formula") {
@@ -4892,6 +5145,8 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
     const sourceUnitId = arxivOn ? arxivSourceUnitFor(block) : "";
     if (sourceUnitId) block.sourceUnitId = sourceUnitId;
     cropped.push(await scheduleFormulaBlock(block, {
+      pageWidth,
+      pageHeight,
       withRasterCrop: (item) => formulaModelDisplayCrop(raster, page, item, pageNumber, options),
       renderVisionCrop: (block, spec) => renderVisionFormulaCrop(page, raster, block, pageNumber, spec),
       cropPngFor: (block, hooks) => formulaModelPng(pageNumber, block, hooks),
@@ -5563,7 +5818,10 @@ function paintRenderPieces(node, pieces, block, layout) {
         clip.append(img);
         span.append(clip);
       } else span.append(img);
-    } else span.textContent = PDF_COPY.formulaFallback;
+    } else {
+      const label = shortInlineFormulaLabel(formula);
+      span.textContent = label || PDF_COPY.formulaFallback;
+    }
     node.append(span);
   });
 }
@@ -10096,6 +10354,7 @@ function rememberTranslation(page, results) {
     pairsVerifiedForLibrary(results, blocks, savedPairSettings()),
     blocks
   );
+  const replaceBids = [...new Set(verified.map((pair) => String(pair?.bid || "")).filter(Boolean))];
   const skipOnly = isSkipOnlyPage(blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
   if (!verified.length && !skipOnly) {
@@ -10106,7 +10365,9 @@ function rememberTranslation(page, results) {
     void maybeShowPersistCard();
     return Promise.resolve();
   }
-  const keptPairs = pairsWithoutUnalignedSlots(existing?.pairs, blocks, savedPairSettings());
+  const replaceBidSet = new Set(replaceBids);
+  const keptPairs = pairsWithoutUnalignedSlots(existing?.pairs, blocks, savedPairSettings())
+    .filter((pair) => !replaceBidSet.has(String(pair?.bid || "")));
   const pairs = verified.length
     ? mergeLibraryPairs(keptPairs, verified, blocks, pdfTargetLang)
     : [];
@@ -10130,6 +10391,7 @@ function rememberTranslation(page, results) {
       pageCount,
       page,
       pairs,
+      ...(replaceBids.length ? { replaceBids } : {}),
       // The layout row stays when it is already current. The blocks still have
       // to ride along, or the page merge keeps a settled but misaligned pair.
       ...(blocks?.length ? { blocks } : {}),
@@ -10255,8 +10517,8 @@ function persistPageLayout(page) {
   if (!version || !raw?.blocks?.length) return Promise.resolve();
   const layout = cacheableLayout(raw);
   const entry = libraryEntry(page);
-  const pairs = Array.isArray(entry?.pairs) ? entry.pairs : [];
-  const skipped = Boolean(entry?.skipped) || (isSkipOnlyPage(raw.blocks) && !pairs.length);
+  const capturedPairs = Array.isArray(entry?.pairs) ? entry.pairs : [];
+  const skipped = Boolean(entry?.skipped) || (isSkipOnlyPage(raw.blocks) && !capturedPairs.length);
   const bytes = pdfBytes;
   const identity = captureLibraryIdentity();
   const pageCount = pdfDoc?.numPages || 0;
@@ -10268,6 +10530,10 @@ function persistPageLayout(page) {
     if (await layoutWriteSuperseded(hash, page, version)) return;
     if (!layoutAttemptLive(epoch)) return;
     const live = libraryEntry(page);
+    // Read pairs at write time. The array captured when this layout was
+    // scheduled can still be the old cache, and a same-hash merge would
+    // keep that text over a translation rememberTranslation already stored.
+    const pairs = Array.isArray(live?.pairs) ? live.pairs : capturedPairs;
     if (live) {
       live.layout = layout;
       live.layoutVersion = version;
@@ -10339,20 +10605,25 @@ function bindSavedPairs(saved, units) {
 }
 
 function ensureLibraryDocument() {
-  if (libraryDoc) return Promise.resolve(libraryDoc);
   if (libraryProbe) return libraryProbe;
+  if (libraryDoc?.pages?.length) return Promise.resolve(libraryDoc);
   const stamp = docId;
   libraryProbe = (async () => {
     try {
       const hash = await pdfByteHash();
       if (docId !== stamp || !hash || hash === "nohash") return null;
-      if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
+      if (libraryDoc?.pages?.length && libraryDoc.hash === hash) return libraryDoc;
       const doc = await fetchLibraryDocument(hash, { engine: pdfEngineMode() });
       if (docId !== stamp) return null;
       // Translation may already have filled this document while the probe was
       // still reading. A late legacy snapshot must not replace it, or the next
       // layout write stores the original pairs over the translation.
-      if (libraryDoc && libraryDoc.hash === hash) return libraryDoc;
+      // A paper row with no pages yet must not hide the legacy page list.
+      if (libraryDoc && libraryDoc.hash === hash) {
+        const havePages = Array.isArray(libraryDoc.pages) && libraryDoc.pages.length > 0;
+        const fetchedPages = Array.isArray(doc?.pages) && doc.pages.length > 0;
+        if (havePages || !fetchedPages) return libraryDoc;
+      }
       if (doc) doc.hash = hash;
       libraryDoc = doc || null;
       if (hash) void pendingNotes?.hydrate?.(hash);
@@ -10442,7 +10713,9 @@ async function savedTranslationFor(page) {
       }
     } else if (zone?.document && !savedThisSession) {
       if (!zone.document.hash) zone.document.hash = hash;
-      libraryDoc = zone.document;
+      const zonePages = Array.isArray(zone.document.pages) ? zone.document.pages.length : 0;
+      const heldPages = libraryDoc?.hash === hash && Array.isArray(libraryDoc.pages) ? libraryDoc.pages.length : 0;
+      if (!(heldPages > zonePages)) libraryDoc = zone.document;
     }
   }
   if (!libraryDoc) return null;
@@ -11082,6 +11355,11 @@ async function translateWholeDocument() {
   if (!pdfDoc || documentTranslateSuperseded()) return;
   translatePaused = false;
   try {
+    // Pairs have to be in hand before the first batch. A paper row with no
+    // pages, or a probe that is still reading the old library, used to let
+    // every block go out. The same-hash merge then kept 旧译 and the returned
+    // bid translation never landed.
+    await ensureLibraryDocument();
     const saved = await savedTranslationFor(pageNum);
     if (documentTranslateSuperseded()) return;
     if ((saved?.readout || libraryArticle) && !libraryDoc?.pages?.length) {

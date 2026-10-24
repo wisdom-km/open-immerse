@@ -13,7 +13,7 @@
  * ① key 不出现在缓存、trace、账本、请求体摘要里；
  * ② 中止或过期的结果不写缓存，块上也不留下 vlm；
  * ③ 关开关、移除密钥、换厂商或模型之后，不为旧配置再发请求，在途结果作废；
- * ④ 缓存命中的记录属于当前 model + cropHash + mm-3；
+ * ④ 缓存命中的记录属于当前 model + cropHash + mm-4；
  * ⑤ 已经核对通过的公式不会被更旧的结果降级，也不会被更早采样的已核对行盖掉。
  *    仍存活调用者的已核对决策，其 tier 行 latex 与该决策一致；被换掉的已核对行留在
  *    存储行的 prev 链上，过期回滚只摘掉自己或恢复链上最近一个仍在的行，不丢行，
@@ -456,7 +456,7 @@ test("a failed check or a call failure falls back to the crop and skips self and
   }
 });
 
-test("cache hits use mm-3 plus the model and do not send again", async () => {
+test("cache hits use mm-4 plus the model and do not send again", async () => {
   const settings = settingsFor("openai", { model: "gpt-5.6-luna" });
   const flags = formulaChainFlags(settings);
   const state = { saved: [], boom: false };
@@ -510,7 +510,7 @@ test("cache hits use mm-3 plus the model and do not send again", async () => {
 });
 
 test("a verified mm-1 row is not adopted", async () => {
-  assert.equal(MM_TIER_VERSION, "mm-3");
+  assert.equal(MM_TIER_VERSION, "mm-4");
   assert.equal(CHAIN_VERSION, "f3-1");
   const settings = settingsFor("openai", { model: "gpt-5.6-luna" });
   const cache = createFormulaCache(createMemoryStore());

@@ -10,7 +10,7 @@ import {
   latexToCharset,
   pdfTextCharset
 } from "../lib/formula-charset.js";
-import { verifyCandidate } from "../lib/formula-verify.js";
+import { stripTrailingVisionPunct, verifyCandidate } from "../lib/formula-verify.js";
 import { loadKatex } from "./helpers/arxiv-paper.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -65,6 +65,45 @@ test("delimiter and order commands map onto the PDF text layer", () => {
     assert.deepEqual(rendered.unknownCommands, [], latex);
     assert.equal(charsetEqual(rendered, pdfTextCharset(ch)), true, `${latex} → ${ch}`);
   }
+});
+
+test("hat, tilde, bar, and prime match the pdf.js accent glyphs", () => {
+  const cases = [
+    ["\\hat{r}_\\theta", "rˆθ"],
+    ["\\hat{r}_\\theta", "r\u0302θ"],
+    ["\\tilde\\mu_t", "μ˜t"],
+    ["\\tilde\\mu_t", "μ\u0303t"],
+    ["\\hat x_0", "ˆx0"],
+    ["\\bar{x}", "x¯"],
+    ["\\overline{x}", "x¯"],
+    ["x'", "x′"],
+    ["x^{\\prime}", "x′"]
+  ];
+  for (const [latex, pdf] of cases) {
+    const rendered = latexToCharset(latex);
+    assert.deepEqual(rendered.unknownCommands, [], latex);
+    assert.equal(charsetEqual(rendered, pdfTextCharset(pdf)), true, `${latex} vs ${pdf}`);
+  }
+});
+
+test("trailing sentence punctuation is dropped only when the text layer lacks it", () => {
+  const katex = loadKatex();
+  const cases = [
+    ["d_k.", "dk"],
+    ["\\pi_\\theta,", "πθ"],
+    ["\\hat{r}_\\theta", "rˆθ"],
+    ["\\tilde\\mu_t", "μ˜t"],
+    ["\\hat x_0", "ˆx0"]
+  ];
+  for (const [latex, pdf] of cases) {
+    const verdict = verifyCandidate(latex, { pdfText: pdf, display: false }, katex);
+    assert.equal(verdict.pass, true, `${latex} vs ${pdf} ${verdict.reason || ""} j=${verdict.checks.charset.jaccard}`);
+    assert.equal(verdict.latex.endsWith(".") || verdict.latex.endsWith(","), false, latex);
+  }
+  assert.equal(stripTrailingVisionPunct("Z(x).", "Z(x)."), "Z(x).");
+  const kept = verifyCandidate("Z(x).", { pdfText: "Z(x).", display: true }, katex);
+  assert.equal(kept.pass, true, kept.reason || "");
+  assert.equal(kept.latex, "Z(x).");
 });
 
 test("DPO eq(5) with \\mid verifies against the PDF text", () => {

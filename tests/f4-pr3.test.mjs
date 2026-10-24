@@ -2709,6 +2709,13 @@ test("a corrected pair is merged with the live blocks even when the layout row i
   assert.equal(written[0].translation, fresh.translation);
   const kept = mergeStoredPagePairs([stalePair], [fresh], null, "zh-CN");
   assert.equal(kept[0].translation, stalePair.translation);
+  const replaced = mergeStoredPagePairs([stalePair], [fresh], null, "zh-CN", { replaceBids: [fresh.bid] });
+  assert.equal(replaced[0].translation, fresh.translation);
+  const prose = { bid: "b1-p1-t1998als", label: "text", text: "Direct Preference Optimization:", sourceText: "Direct Preference Optimization:" };
+  const oldProse = { bid: prose.bid, text: prose.text, sourceText: prose.sourceText, translation: "旧译fcc6a8d8a6259db837801b5363b04fe3", targetLang: "zh-CN" };
+  const nextProse = { bid: prose.bid, text: prose.text, sourceText: prose.sourceText, translation: "译:b1-p1-t1998als", targetLang: "zh-CN" };
+  assert.equal(mergeStoredPagePairs([oldProse], [nextProse], [prose], "zh-CN")[0].translation, oldProse.translation);
+  assert.equal(mergeStoredPagePairs([oldProse], [nextProse], [prose], "zh-CN", { replaceBids: [prose.bid] })[0].translation, nextProse.translation);
   const viewer = read("pdf/viewer.js");
   const remember = viewer.slice(viewer.indexOf("function rememberTranslation"), viewer.indexOf("function rememberSkipHole"));
   assert.ok(remember.indexOf("blocks?.length") < remember.indexOf("keepLayout ? { layout }"));

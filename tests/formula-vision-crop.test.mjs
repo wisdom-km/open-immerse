@@ -284,10 +284,21 @@ test("visionCropFor asks for a tight scale-4 crop and ignores paragraph mode", a
   assert.equal(png.w, 32 + 14);
   assert.equal(png.hash, sha256Hex(png.base64).slice(0, 12));
 
-  const inline = visionCropSpec({ display: false, inlineOf: "t" });
-  assert.equal(inline.mode, "tight");
-  assert.equal(inline.pad.namedPx, VISION_INK_PAD_PX.inline);
+  const inlineBare = visionCropSpec({ display: false, inlineOf: "t" });
+  assert.equal(inlineBare.mode, "tight");
+  assert.equal(inlineBare.pad.namedPx, VISION_INK_PAD_PX.inline);
+  assert.equal(inlineBare.paragraph, null);
+  const inline = visionCropSpec({
+    display: false,
+    inlineOf: "t",
+    bbox: [0.4, 0.4, 0.48, 0.42],
+    paragraphBbox: [0.12, 0.2, 0.48, 0.8]
+  });
+  assert.equal(inline.mode, "context");
+  assert.equal(inline.scale, VISION_CROP_SCALE);
   assert.equal(inline.paragraph, null);
+  assert.ok(inline.window.bbox[0] >= 0.12 - 1e-9);
+  assert.ok(inline.window.target[2] <= inline.window.bbox[2]);
 
   const pageArm = visionCropSpec(block, { mode: "page", scale: 6 });
   assert.equal(pageArm.mode, "tight");
@@ -318,9 +329,10 @@ test("a different pad or scale changes the crop hash, and a repeat does not", as
     { id: "multimodal", version: "mm-2" },
     model
   );
-  assert.equal(live, `${unitKey}:multimodal:mm-3:${model}:${first.hash}`);
+  assert.equal(live, `${unitKey}:multimodal:mm-4:${model}:${first.hash}`);
   assert.notEqual(live, retired);
-  assert.match(live, /:mm-3:/);
+  assert.match(live, /:mm-4:/);
+  assert.doesNotMatch(live, /:mm-3:/);
   assert.doesNotMatch(live, /:mm-2:/);
 });
 
@@ -399,7 +411,7 @@ test("schedule sends the vision crop and leaves the screen image in place", asyn
 });
 
 test("an mm-2 row is not adopted for the same pixels", async () => {
-  assert.equal(MM_TIER_VERSION, "mm-3");
+  assert.equal(MM_TIER_VERSION, "mm-4");
   const settings = settingsFor();
   const cache = createFormulaCache(createMemoryStore());
   const named = `${settings.multimodal.model}#${mmConfigFingerprint(settings)}`;
@@ -462,7 +474,7 @@ test("an mm-2 row is not adopted for the same pixels", async () => {
   assert.equal(shown.imageUrl, display);
   assert.equal(await cache.store.getTier(oldKey) != null, true);
   const live = await cache.store.getTier(liveKey);
-  assert.equal(live.result.meta.version, "mm-3");
+  assert.equal(live.result.meta.version, "mm-4");
   assert.equal(live.result.latex, "x");
 });
 
@@ -507,5 +519,5 @@ test("screen redraw, page raster, and the 7-level chain stay on their old path",
   assert.match(chain, /Order: arxiv, multimodal, ocr, self, vector, crop, placeholder/);
   const tiers = createDefaultTiers();
   assert.deepEqual(Object.keys(tiers), ["arxiv", "multimodal", "ocr", "self", "vector", "crop", "placeholder"]);
-  assert.equal(tiers.multimodal.version, "mm-3");
+  assert.equal(tiers.multimodal.version, "mm-4");
 });

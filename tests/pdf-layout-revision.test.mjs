@@ -54,7 +54,11 @@ GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", impo
 test("a layout revision matches only the current algorithm", async () => {
   const version = await currentLayoutVersion();
   assert.match(version, /^source-v3:[0-9a-f]{16}$/);
-  assert.equal(version, "source-v3:5285c7689aa0b873");
+  // source-v3:5285c7689aa0b873 → source-v3:5ff2472bf983ef6a. currentLayoutVersion
+  // hashes pdf-text-layer.js, pdf-layout-adapter.js, pdf-blocks.js, and
+  // pdf-mirror.js. Only pdf-text-layer.js changed: the new inline formula
+  // blocks. Recompute this pin if any of those four files change again.
+  assert.equal(version, "source-v3:5ff2472bf983ef6a");
   assert.equal(await currentLayoutVersion(), version);
   const blocks = [{ id: "a", label: "text", text: "Hi" }];
   assert.equal(storedLayoutCurrent({ blocks }, version), null);
