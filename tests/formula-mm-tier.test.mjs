@@ -649,6 +649,57 @@ test("a parenthesis-only formula makes zero vision calls and writes no failure c
   for (const sourceText of ["(1)", "(2)", "a)", "x_i", "=", "+", "\u2212", "x\uF8F9"]) {
     assert.equal(punctuationOnlyFormula({ pdfText: sourceText }), false, sourceText);
   }
+  // probe.mjs samples. Brackets, sentence marks, and U+F8EB–U+F8FE skip.
+  // Operators, primes, and private-use glyphs outside that block do not.
+  const probeSkip = [")", "\uF8EE", "\uF8EE\uF8F9", "...", "\uF8EB", "\uF8F0", "\uF8FE", "\u0012", "()", "[ ]"];
+  const probeSend = ["-", "'", "\u2032", "!", "/", "*", "\u2016", "\u2212", "=", "\u2211", ":=", "\u2329", "\u00B7", "#", "&", "(1)", "|x|", "\\|", "\uE000", "\uF8EA", "\uF8FF"];
+  for (const sourceText of probeSkip) {
+    assert.equal(punctuationOnlyFormula({ pdfText: sourceText }), true, JSON.stringify(sourceText));
+  }
+  for (const sourceText of probeSend) {
+    assert.equal(punctuationOnlyFormula({ pdfText: sourceText }), false, JSON.stringify(sourceText));
+  }
+  for (const sourceText of ["-", "\u2212", "\u2016", "*", "/", "\u2032", "'", "!", "\u00B7", "\u2329"]) {
+    let sent = 0;
+    const result = await runMultimodal({
+      pdfText: sourceText,
+      display: true,
+      glyphs: [],
+      equationNumber: null,
+      crop: { url: PNG_URL }
+    }, {
+      flags: formulaChainFlags(settings),
+      settings,
+      readSettings: () => settings,
+      katex,
+      sendVision: async () => {
+        sent += 1;
+        return { ok: true, text: "x" };
+      },
+      cropPngFor: async () => ({ mime: "image/png", base64: PNG })
+    });
+    assert.equal(sent, 1, JSON.stringify(sourceText));
+    assert.notEqual(result.reason, "punctuation-only", JSON.stringify(sourceText));
+  }
+  const otherPrivate = await runMultimodal({
+    pdfText: "\uE000",
+    display: true,
+    glyphs: [],
+    equationNumber: null,
+    crop: { url: PNG_URL }
+  }, {
+    flags: formulaChainFlags(settings),
+    settings,
+    readSettings: () => settings,
+    katex,
+    sendVision: async () => {
+      sends += 1;
+      return { ok: true, text: "x" };
+    },
+    cropPngFor: async () => ({ mime: "image/png", base64: PNG })
+  });
+  assert.notEqual(otherPrivate.reason, "punctuation-only");
+  assert.equal(otherPrivate.reason, "uncheckable-glyph");
   let realSends = 0;
   const real = await runMultimodal({
     pdfText: "a)",

@@ -57,12 +57,13 @@ test("display crops drop a neighboring text line and keep formula ink", () => {
   fill(image, 40, 360, 624, 681);
   fill(image, 40, 360, 689, 751);
 
-  const glyph = [40 / width, 80 / height, 300 / width, 170 / height];
+  const neighborMask = [20 / width, 78 / height, 420 / width, 94 / height];
   const bbox = [20 / width, 70 / height, 420 / width, 210 / height];
+  // No formula glyph boxes, so the scan is the whole content box. The top
+  // line drops only because the mask box owns it.
   const measured = measureFormulaCrop(bbox, image, {
     inline: false,
-    glyphBoxes: [glyph],
-    maskBoxes: [[20 / width, 78 / height, 420 / width, 94 / height]]
+    maskBoxes: [neighborMask]
   });
   assert.ok(measured.bbox);
   assert.equal(coversRow(measured.bbox, height, 85), false, "neighbor line stays out");
@@ -72,13 +73,26 @@ test("display crops drop a neighboring text line and keep formula ink", () => {
   assert.equal(coversRow(measured.bbox, height, 158), true, "subscript stays");
   assert.equal(coversRow(measured.bbox, height, 148), true, "bracket foot stays");
 
-  const inline = measureFormulaCrop(bbox, image, { inline: true, glyphBoxes: [glyph] });
+  const owned = measureFormulaCrop(bbox, image, {
+    inline: false,
+    glyphBoxes: [[40 / width, 80 / height, 300 / width, 170 / height]],
+    maskBoxes: [neighborMask]
+  });
+  assert.equal(coversRow(owned.bbox, height, 85), true, "a formula glyph on the edge line keeps it");
+
+  const inline = measureFormulaCrop(bbox, image, {
+    inline: true,
+    glyphBoxes: [[40 / width, 80 / height, 300 / width, 170 / height]]
+  });
   assert.equal(coversRow(inline.bbox, height, 85), true, "inline crops keep the surrounding line");
 
   const lower = measureFormulaCrop(
     [20 / width, 390 / height, 420 / width, 490 / height],
     image,
-    { inline: false }
+    {
+      inline: false,
+      maskBoxes: [[20 / width, 460 / height, 420 / width, 476 / height]]
+    }
   );
   assert.equal(coversRow(lower.bbox, height, 420), true, "formula above a caption stays");
   assert.equal(coversRow(lower.bbox, height, 468), false, "caption line below stays out");
@@ -86,11 +100,42 @@ test("display crops drop a neighboring text line and keep formula ink", () => {
   const lines = measureFormulaCrop(
     [20 / width, 590 / height, 420 / width, 770 / height],
     image,
-    { inline: false }
+    {
+      inline: false,
+      maskBoxes: [[20 / width, 598 / height, 420 / width, 614 / height]]
+    }
   );
   assert.equal(coversRow(lines.bbox, height, 605), false, "text above a derivation stays out");
   assert.equal(coversRow(lines.bbox, height, 640), true, "first formula line stays");
   assert.equal(coversRow(lines.bbox, height, 720), true, "second formula line stays");
+});
+
+test("a short formula line under a fraction stays when it is not a neighbor glyph", () => {
+  const width = 480;
+  const height = 1584;
+  const image = paper(width, height);
+  fill(image, 50, 300, 100, 140);
+  fill(image, 60, 200, 150, 162);
+  const bbox = [20 / width, 90 / height, 420 / width, 175 / height];
+  const kept = measureFormulaCrop(bbox, image, { inline: false });
+  assert.ok(kept.bbox);
+  assert.equal(coversRow(kept.bbox, height, 120), true, "fraction row stays");
+  assert.equal(coversRow(kept.bbox, height, 156), true, "12px = x + y stays");
+  assert.ok(kept.bbox[3] * height >= 161, `crop bottom ${kept.bbox[3] * height} cut the last line`);
+
+  const owned = measureFormulaCrop(bbox, image, {
+    inline: false,
+    glyphBoxes: [[50 / width, 148 / height, 220 / width, 164 / height]],
+    maskBoxes: [[50 / width, 148 / height, 220 / width, 164 / height]]
+  });
+  assert.equal(coversRow(owned.bbox, height, 156), true, "formula glyph on the short line keeps it");
+
+  const foreign = measureFormulaCrop(bbox, image, {
+    inline: false,
+    maskBoxes: [[50 / width, 148 / height, 220 / width, 164 / height]]
+  });
+  assert.equal(coversRow(foreign.bbox, height, 120), true, "fraction stays when the last line is body text");
+  assert.equal(coversRow(foreign.bbox, height, 156), false, "neighbor glyph on the short line drops it");
 });
 
 function rowEdge(image, x0, x1, y) {
@@ -131,6 +176,17 @@ function inkBands(image, bbox) {
   return bands;
 }
 
+function bandOverlap(band, boxes, height) {
+  let best = 0;
+  for (const box of boxes || []) {
+    if (!Array.isArray(box) || box.length < 4) continue;
+    const y0 = Number(box[1]) * height;
+    const y1 = Number(box[3]) * height;
+    best = Math.max(best, Math.min(band.b, y1) - Math.max(band.a, y0));
+  }
+  return Math.max(0, best);
+}
+
 function assertDisplayTrim(image, block) {
   const measured = measureFormulaCrop(block.bbox, image, {
     inline: false,
@@ -144,26 +200,34 @@ function assertDisplayTrim(image, block) {
   const top = crop[1] * height;
   const bottom = crop[3] * height;
   const bands = inkBands(image, block.bbox);
+  let shed = 0;
   for (const band of bands) {
-    if (band.h > 18) {
-      const mid = (band.a + band.b) / 2;
-      assert.ok(mid >= top && mid < bottom, `${block.id} dropped formula ink ${band.a}-${band.b} h${band.h}`);
-      assert.ok(top <= band.a + 6 && bottom >= band.b - 6, `${block.id} clipped formula ink ${band.a}-${band.b}`);
+    if (bandOverlap(band, block.glyphBoxes, height) <= 0) continue;
+    for (const box of block.glyphBoxes || []) {
+      const y0 = Math.max(band.a, Number(box[1]) * height);
+      const y1 = Math.min(band.b, Number(box[3]) * height);
+      if (y1 - y0 < 1) continue;
+      const mid = (y0 + y1) / 2;
+      assert.ok(
+        mid >= top - 1 && mid < bottom + 1,
+        `${block.id} cut a formula glyph row ${y0.toFixed(1)}-${y1.toFixed(1)} (crop ${top.toFixed(1)}-${bottom.toFixed(1)})`
+      );
     }
   }
   if (bands.length >= 2) {
-    const gap = bands[1].a - bands[0].b;
-    const lead = bands[0];
-    if (gap >= 6 && lead.h >= 6 && lead.h <= 16 && lead.edge >= 80) {
-      assert.ok(top >= lead.b - 1, `${block.id} still includes the line above (${top.toFixed(1)} < ${lead.b})`);
-    }
-    const tail = bands[bands.length - 1];
-    const gapBot = tail.a - bands[bands.length - 2].b;
-    if (gapBot >= 6 && tail.h >= 6 && tail.h <= 16 && tail.edge >= 80) {
-      assert.ok(bottom <= tail.a + 1, `${block.id} still includes the line below`);
+    const edges = [
+      [bands[0], bands[1].a - bands[0].b, "above", (band) => top >= band.b - 1],
+      [bands[bands.length - 1], bands[bands.length - 1].a - bands[bands.length - 2].b, "below", (band) => bottom <= band.a + 1]
+    ];
+    for (const [band, gap, side, outside] of edges) {
+      const glyph = bandOverlap(band, block.glyphBoxes, height);
+      const mask = bandOverlap(band, block.maskBoxes, height);
+      if (gap < 4 || glyph > 0 || mask < band.h * 0.5) continue;
+      assert.ok(outside(band), `${block.id} still includes the neighbor line ${side} (${band.a}-${band.b})`);
+      shed += 1;
     }
   }
-  return { id: block.id, top, bottom, bands: bands.length };
+  return { id: block.id, top, bottom, bands: bands.length, shed };
 }
 
 async function scanPages(pdfPath, pages, createCanvas) {
@@ -209,7 +273,7 @@ async function scanPages(pdfPath, pages, createCanvas) {
   return notes;
 }
 
-test("DPO and DDPM display crops shed the adjacent body line", async (t) => {
+test("DPO and DDPM display crops keep formula glyph rows", async (t) => {
   const papers = [
     ["DPO", "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf", [3, 17, 18]],
     ["DDPM", "tests/fixtures/DDPM_2006.11239.pdf", [2, 3]]
@@ -230,9 +294,11 @@ test("DPO and DDPM display crops shed the adjacent body line", async (t) => {
   for (const [name, rel, pages] of present) {
     const notes = await scanPages(join(root, rel), pages, createCanvas);
     const leaks = notes.filter((note) => note.bands >= 2);
+    const shed = notes.reduce((sum, note) => sum + note.shed, 0);
     assert.ok(notes.length >= 1, `${name} rendered display formulas`);
-    dropped.push(`${name} formulas ${notes.length}`);
+    dropped.push(`${name} pages ${pages.join(",")} formulas ${notes.length}, neighbor lines shed ${shed}`);
     assert.ok(leaks.length >= 1, `${name} had a multi-band display crop to judge`);
   }
+  t.diagnostic(dropped.join("; "));
   assert.ok(dropped.length >= 1);
 });
