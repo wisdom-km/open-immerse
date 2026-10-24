@@ -939,7 +939,7 @@ body {
 }
 .oi-pdf-inline-math.is-matched .oi-pdf-math-clip {
   display: inline-block;
-  vertical-align: middle;
+  vertical-align: var(--oi-reader-formula-baseline, calc(-0.2 * var(--oi-reader-formula-ref-size)));
 }
 .oi-pdf-inline-math.is-matched.is-raised .oi-pdf-math-clip {
   display: block;
@@ -1050,7 +1050,7 @@ body {
   max-width: 100%;
   overflow-x: auto;
   overflow-y: visible;
-  vertical-align: middle;
+  vertical-align: var(--oi-reader-formula-baseline, calc(-0.2 * var(--oi-reader-formula-ref-size)));
   margin-top: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
   margin-bottom: calc(min(0px, var(--oi-reader-inline-line-max) - var(--oi-formula-h)) / 2);
 }
@@ -1061,7 +1061,7 @@ body {
   max-height: none;
   max-width: none;
   margin-top: 0;
-  vertical-align: middle;
+  vertical-align: var(--oi-reader-formula-baseline, calc(-0.2 * var(--oi-reader-formula-ref-size)));
 }
 .pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched.is-raised,
 .pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched.is-raised:has(.oi-pdf-math-crop) {
@@ -1077,6 +1077,11 @@ body {
   width: calc(var(--oi-formula-h) * var(--oi-formula-ar, 1));
   max-height: none;
   max-width: none;
+}
+.pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched > img.oi-pdf-math-crop {
+  /* display:block drops the inline strut. Depth 0 then sits on the baseline. */
+  display: block;
+  vertical-align: top;
 }
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
   font: 400 14px/1.55 var(--oi-font);

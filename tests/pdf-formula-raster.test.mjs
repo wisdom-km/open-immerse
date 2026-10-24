@@ -76,8 +76,8 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     paperHeight
   });
   const aspect = (0.48 * pageWidth) / (0.04 * pageHeight);
-  assert.ok(Math.abs(size.cssHeight - 0.04 * pageHeight) < 1e-6);
-  assert.ok(Math.abs(size.cssWidth - 0.48 * pageWidth) < 1e-6);
+  assert.ok(Math.abs(size.cssHeight - 0.04 * pageHeight * 1.8) < 1e-6);
+  assert.ok(Math.abs(size.cssWidth - 0.48 * pageWidth * 1.8) < 1e-6);
   assert.ok(Math.abs(size.cssWidth / size.cssHeight - aspect) < 1e-6);
   const pane = formulaDisplayCssSize({
     block: { label: "formula", display: true, bbox, scriptShare: 0.8 },
@@ -156,8 +156,8 @@ test("scale covers CSS pixels times devicePixelRatio times slack", () => {
     cssHeight: short.cssHeight,
     devicePixelRatio: 2
   });
-  assert.ok(Math.abs(short.cssHeight - 0.01 * pageHeight) < 1e-6);
-  assert.ok(Math.abs(short.cssWidth - 0.48 * pageWidth) < 1e-6);
+  assert.ok(Math.abs(short.cssHeight - 0.01 * pageHeight * 1.8) < 1e-6);
+  assert.ok(Math.abs(short.cssWidth - 0.48 * pageWidth * 1.8) < 1e-6);
   assert.equal(shortPlan.capped, false);
   assert.equal(shortPlan.scale % CROP_SCALE, 0);
   assert.ok(shortPlan.pixelWidth > 0);
@@ -397,7 +397,7 @@ test("formula redraw is one device pixel per CSS pixel and does not reuse the pa
     devicePixelRatio: 2
   });
   assert.equal(covered.reusePageRaster, true);
-  assert.match(viewerSrc, /formulaDevicePixels/);
+  assert.match(viewerSrc, /formulaRefRasterPlan/);
 });
 
 test("a snapped formula stays inside the column, including a 16:1 crop", () => {
@@ -450,7 +450,7 @@ test("a snapped formula stays inside the column, including a 16:1 crop", () => {
   );
   assert.match(refresh, /readerFormulaStyle\(block, paper\.dataset\.page, true, readerColumnPx\(span\)\)/);
   assert.match(refresh, /readerFormulaStyle\(block, paper\.dataset\.page, false, readerColumnPx\(row\)\)/);
-  assert.match(viewerSrc, /fitSnappedFormulaCss/);
+  assert.match(viewerSrc, /fitFormulaRefCss/);
   assert.match(viewerSrc, /block\.label === "formula"/);
   assert.match(viewerSrc, /paintFormulaMask/);
   assert.match(viewerSrc, /function formulaDrawContext/);

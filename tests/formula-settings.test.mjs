@@ -758,8 +758,8 @@ test("placeholder size follows displayFormulaWidthCss at ×1 and shortens copy b
   assert.equal(placeholderCssLength(native.h), "14.12px");
   assert.ok(union[0] + native.w >= 504.67 - 0.001);
   const frac = bbox[2] - bbox[0];
-  const crop = displayFormulaWidthCss(frac, bbox[3] - bbox[1], { pageWidthPt: pageW, floor: 0.8 });
-  assert.equal(crop, "max(273.424px, min(100%, 341.78px))");
+  const crop = displayFormulaWidthCss(frac, bbox[3] - bbox[1], { pageWidthPt: pageW, scale: 1.8, floor: 1.44 });
+  assert.equal(crop, "max(492.1632px, min(100%, 615.204px))");
   assert.equal(crop.includes("455.7067px"), false);
   const wide = placeholderUsedBox({ w0: native.w, h0: native.h, column: 640 });
   assert.ok(Math.abs(wide.w - 341.78) <= 0.001);
