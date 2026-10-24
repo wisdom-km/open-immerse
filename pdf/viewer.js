@@ -3771,7 +3771,8 @@ function formulaInkBbox(canvas, block) {
       inline: block.display === false || Boolean(block.inlineOf),
       protect: block.formulaInkProtect === true,
       maskBoxes: block.maskBoxes,
-      glyphBoxes: block.glyphBoxes
+      glyphBoxes: block.glyphBoxes,
+      bodyLines: block.bodyLines
     });
     if (measured?.inkShare) block.inkShare = measured.inkShare;
     return measured?.bbox || bbox;

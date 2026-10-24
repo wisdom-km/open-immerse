@@ -81,6 +81,28 @@ test("display crops drop a neighboring text line and keep formula ink", () => {
   assert.equal(coversRow(reach.bbox, height, 85), false, "a font box that only reaches the body line does not keep it");
   assert.equal(coversRow(reach.bbox, height, 133), true, "formula ink under that font box stays");
 
+  // The em-box midpoint sits on the body line; the stroke is the baseline
+  // run just under it. That midpoint must not keep the body line.
+  const coarse = measureFormulaCrop(bbox, image, {
+    inline: false,
+    glyphBoxes: [[40 / width, 76 / height, 90 / width, 102 / height]],
+    maskBoxes: [neighborMask]
+  });
+  assert.equal(coversRow(coarse.bbox, height, 85), false, "a coarse em box whose midpoint sits on the body line does not keep it");
+  assert.equal(coversRow(coarse.bbox, height, 104), true, "formula ink under that em box stays");
+
+  const prose = measureFormulaCrop(bbox, image, {
+    inline: false,
+    glyphBoxes: [
+      [40 / width, 78 / height, 300 / width, 96 / height],
+      [50 / width, 110 / height, 300 / width, 170 / height]
+    ],
+    maskBoxes: [neighborMask],
+    bodyLines: [[20 / width, 78 / height, 420 / width, 94 / height]]
+  });
+  assert.equal(coversRow(prose.bbox, height, 85), false, "a body sentence on the edge line drops it even when a formula glyph is centered there");
+  assert.equal(coversRow(prose.bbox, height, 133), true, "the formula under that sentence stays");
+
   const owned = measureFormulaCrop(bbox, image, {
     inline: false,
     glyphBoxes: [[40 / width, 78 / height, 300 / width, 96 / height]],
@@ -184,13 +206,18 @@ function inkBands(image, bbox) {
   return bands;
 }
 
-function assertDisplayTrim(image, block) {
-  const measured = measureFormulaCrop(block.bbox, image, {
+function cropOptions(block) {
+  return {
     inline: false,
     protect: block.formulaInkProtect === true,
     maskBoxes: block.maskBoxes,
-    glyphBoxes: block.glyphBoxes
-  });
+    glyphBoxes: block.glyphBoxes,
+    bodyLines: block.bodyLines
+  };
+}
+
+function assertDisplayTrim(image, block, proseBaselines) {
+  const measured = measureFormulaCrop(block.bbox, image, cropOptions(block));
   const crop = measured.bbox;
   assert.ok(crop, block.id);
   const height = image.height;
@@ -198,12 +225,16 @@ function assertDisplayTrim(image, block) {
   const bottom = crop[3] * height;
   const bands = inkBands(image, block.bbox);
   for (const box of block.glyphBoxes || []) {
-    const mid = ((Number(box[1]) + Number(box[3])) / 2) * height;
-    const host = bands.find((band) => mid >= band.a && mid < band.b);
+    // Baseline, not the em-box midpoint: the midpoint sits in the body
+    // line above a formula while the stroke stays on the formula.
+    const base = Number(box[3]) * height;
+    const host = bands.find((band) => base >= band.a && base < band.b);
     if (!host) continue;
+    const shed = (proseBaselines || []).some((y) => y >= host.a - 2 && y <= host.b + 2);
+    if (shed) continue;
     assert.ok(
-      mid >= top - 1 && mid < bottom + 1,
-      `${block.id} cut a formula line at ${mid.toFixed(1)} (ink ${host.a}-${host.b}, crop ${top.toFixed(1)}-${bottom.toFixed(1)})`
+      base >= top - 1 && base < bottom + 1,
+      `${block.id} cut a formula line at ${base.toFixed(1)} (ink ${host.a}-${host.b}, crop ${top.toFixed(1)}-${bottom.toFixed(1)})`
     );
   }
   return { id: block.id, top, bottom, bands: bands.length };
@@ -241,9 +272,14 @@ async function scanPages(pdfPath, pages, createCanvas) {
         viewport: pdfPage.getViewport({ scale: CROP_SCALE })
       }).promise;
       const image = context.getImageData(0, 0, width, height);
+      const proseBaselines = content.items.flatMap((item) => {
+        const text = String(item.str || "");
+        if (!/[A-Za-z]{4,}/.test(text)) return [];
+        return [viewportBox(item, viewport)[3] * height];
+      });
       for (const block of built.blocks) {
         if (block.label !== "formula" || block.display === false || !Array.isArray(block.bbox)) continue;
-        notes.push(assertDisplayTrim(image, block));
+        notes.push(assertDisplayTrim(image, block, proseBaselines));
       }
     }
   } finally {
@@ -355,12 +391,7 @@ test("DDPM page 2 equation 4 crop excludes the notation sentence", async (t) => 
       viewport: pdfPage.getViewport({ scale: CROP_SCALE })
     }).promise;
     const image = context.getImageData(0, 0, width, height);
-    const crop = measureFormulaCrop(block.bbox, image, {
-      inline: false,
-      protect: block.formulaInkProtect === true,
-      maskBoxes: block.maskBoxes,
-      glyphBoxes: block.glyphBoxes
-    }).bbox;
+    const crop = measureFormulaCrop(block.bbox, image, cropOptions(block)).bbox;
     assert.ok(crop);
     for (const item of sameLine) {
       const box = viewportBox(item, viewport);
@@ -382,9 +413,274 @@ test("DDPM page 2 equation 4 crop excludes the notation sentence", async (t) => 
   }
 });
 
-// The trim keeps these body lines because a coarse glyph-box midpoint lands
-// on the line. Left for a follow-up; not part of this change.
-test.todo("DPO equation (15) still includes the body line above it, \"Hence we have the optimal solution:\", because a coarse glyph-box midpoint sits on that line");
-test.todo("DDPM equation (11) still includes the body line above it, \"we may choose the parameterization\", because a coarse glyph-box midpoint sits on that line");
-test.todo("DPO p4-b10 still includes the body sentence \"where Z(x) = …\" under the formula, because a coarse glyph-box midpoint sits on that line");
-test.todo("DPO p18-b17 still includes the body sentence \"where Z(x) = …\" under the formula, because a coarse glyph-box midpoint sits on that line");
+const pageCache = new Map();
+
+function loadPaperPage(rel, pageNumber) {
+  const key = `${rel}:${pageNumber}`;
+  if (!pageCache.has(key)) pageCache.set(key, renderPaperPage(rel, pageNumber));
+  return pageCache.get(key);
+}
+
+async function renderPaperPage(rel, pageNumber) {
+  const pdfPath = join(root, rel);
+  if (!existsSync(pdfPath)) return null;
+  let createCanvas;
+  try {
+    ({ createCanvas } = createRequire(import.meta.url)("@napi-rs/canvas"));
+  } catch {
+    return null;
+  }
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(pdfPath)),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  const pdfPage = await doc.getPage(pageNumber);
+  const content = await pdfPage.getTextContent();
+  attachFontRealNames(content.items, pdfPage.commonObjs);
+  const viewport = pdfPage.getViewport({ scale: 1 });
+  const ops = await pdfPage.getOperatorList();
+  const built = textLayerToBlocks({
+    items: content.items,
+    viewport,
+    images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+    page: pageNumber
+  });
+  const width = Math.ceil(viewport.width * CROP_SCALE);
+  const height = Math.ceil(viewport.height * CROP_SCALE);
+  const canvas = createCanvas(width, height);
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  await pdfPage.render({
+    canvasContext: context,
+    viewport: pdfPage.getViewport({ scale: CROP_SCALE })
+  }).promise;
+  const image = context.getImageData(0, 0, width, height);
+  await doc.destroy();
+  return { content, viewport, built, image, height };
+}
+
+function displayFormulas(built) {
+  return built.blocks.filter((block) => block.label === "formula" && block.display !== false && Array.isArray(block.bbox));
+}
+
+/**
+ * The sentence is located from raw text-layer items, not from the crop's
+ * mask or glyph assignment. `side` is "above" when the sentence sits over
+ * the formula and "below" when it sits under it.
+ */
+async function assertSentenceOutside(t, { rel, page, formula, sentence, side }) {
+  const loaded = await loadPaperPage(rel, page);
+  if (!loaded) {
+    t.skip("fixture PDF or @napi-rs/canvas is absent; the body-line crop check did not run.");
+    return;
+  }
+  const hits = loaded.content.items.filter((item) => sentence.test(String(item.str || "")));
+  assert.ok(hits.length >= 1, `page ${page} has ${sentence}`);
+  let block = null;
+  let bestDist = Infinity;
+  let bestSpan = Infinity;
+  for (const entry of displayFormulas(loaded.built)) {
+    if (formula && !formula.test(entry.sourceText || "")) continue;
+    for (const item of hits) {
+      const base = viewportBox(item, loaded.viewport)[3];
+      const dist = base < entry.bbox[1] ? entry.bbox[1] - base : base > entry.bbox[3] ? base - entry.bbox[3] : 0;
+      const span = entry.bbox[3] - entry.bbox[1];
+      if (dist < bestDist - 1e-6 || (Math.abs(dist - bestDist) <= 1e-6 && span < bestSpan)) {
+        bestDist = dist;
+        bestSpan = span;
+        block = entry;
+      }
+    }
+  }
+  assert.ok(block && bestDist <= 0.02, `display formula near ${sentence}`);
+  const near = hits.filter((item) => {
+    const box = viewportBox(item, loaded.viewport);
+    return box[3] > block.bbox[1] - 0.03 && box[1] < block.bbox[3] + 0.03;
+  });
+  assert.ok(near.length >= 1, "sentence items next to the formula");
+  const crop = measureFormulaCrop(block.bbox, loaded.image, cropOptions(block)).bbox;
+  assert.ok(crop, block.id);
+  for (const item of near) {
+    const base = viewportBox(item, loaded.viewport)[3];
+    if (side === "above") {
+      assert.ok(crop[1] > base, `${JSON.stringify(item.str)} baseline ${base.toFixed(4)} is inside the crop top ${crop[1].toFixed(4)}`);
+    } else {
+      assert.ok(crop[3] < base, `${JSON.stringify(item.str)} baseline ${base.toFixed(4)} is inside the crop bottom ${crop[3].toFixed(4)}`);
+    }
+  }
+  // Any body sentence, not only the one this test names. The where-line
+  // numerator sits ~22px above "partition", and a later test on the same
+  // crop ("sides we obtain:") must not report that numerator as a cut row.
+  const proseBases = loaded.content.items.flatMap((item) => {
+    const words = String(item.str || "").match(/[A-Za-z]{4,}/g);
+    if (!words) return [];
+    return [viewportBox(item, loaded.viewport)[3]];
+  });
+  let kept = 0;
+  for (const glyph of block.glyphBoxes || []) {
+    const base = Number(glyph[3]);
+    const onSentence = proseBases.some((y) => Math.abs(y - base) <= 0.016) && (
+      side === "below" ? base >= crop[3] - 0.008 : base <= crop[1] + 0.008 || base >= crop[3] - 0.008
+    );
+    if (onSentence) continue;
+    if (base < block.bbox[1] || base > block.bbox[3]) continue;
+    kept += 1;
+    assert.ok(crop[1] <= base && crop[3] >= base, `${block.id} cut a formula glyph at ${base.toFixed(4)}`);
+  }
+  assert.ok(kept >= 1, `${block.id} kept a formula glyph`);
+}
+
+const DPO = "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf";
+const DDPM = "tests/fixtures/DDPM_2006.11239.pdf";
+
+test("DPO equation (15) crop excludes \"Hence we have the optimal solution:\"", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DPO,
+    page: 16,
+    formula: /\(15\)/,
+    sentence: /Hence we have the optimal solution:/,
+    side: "above"
+  });
+});
+
+test("DPO page 16 crop excludes \"re-organize the final objective\"", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DPO,
+    page: 16,
+    formula: /\(13\)/,
+    sentence: /re-organize the final objective/,
+    side: "above"
+  });
+});
+
+test("DPO page 16 crop excludes \"Substituting Eq. 17 into Eq. 16 we obtain:\"", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DPO,
+    page: 16,
+    sentence: /Substituting Eq\. 17 into Eq\. 16 we obtain:/,
+    side: "above"
+  });
+});
+
+test("DPO page 16 crop excludes \"we're left with:\"", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DPO,
+    page: 16,
+    sentence: /left with:/,
+    side: "above"
+  });
+});
+
+test("DPO page 4 crop excludes \"where Z(x)\" and the partition sentence under the formula", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DPO,
+    page: 4,
+    formula: /where Z\(x\)/,
+    sentence: /is the partition function/,
+    side: "below"
+  });
+});
+
+test("DPO page 18 crop excludes \"where Z(x)\" under the formula", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DPO,
+    page: 18,
+    formula: /where Z\(x\)/,
+    sentence: /notice that|partition function|also depends/,
+    side: "below"
+  });
+});
+
+test("DDPM equation (3) crop excludes the variational-bound sentence", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DDPM,
+    page: 2,
+    formula: /\(3\)/,
+    sentence: /variational bound on negative log/,
+    side: "above"
+  });
+});
+
+test("DDPM equation (11) crop excludes \"we may choose the parameterization\"", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DDPM,
+    page: 4,
+    formula: /\(11\)/,
+    sentence: /we may choose the parameterization/,
+    side: "above"
+  });
+});
+
+test("DDPM equation (12) crop excludes \"Eq. (10) simplifies to:\"", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DDPM,
+    page: 4,
+    formula: /\(12\)/,
+    sentence: /simplifies to:/,
+    side: "above"
+  });
+});
+
+test("DDPM crop excludes \"where εθ is a function approximator\" above \"to compute\"", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DDPM,
+    page: 4,
+    formula: /to compute/,
+    sentence: /function approximator intended to p/,
+    side: "above"
+  });
+});
+
+test("DPO page 18 crop excludes \"sides we obtain:\"", async (t) => {
+  await assertSentenceOutside(t, {
+    rel: DPO,
+    page: 18,
+    formula: /where Z\(x\)/,
+    sentence: /sides we obtain:/,
+    side: "above"
+  });
+});
+
+test("DDPM equation (13) crop drops the previous equation's tag and keeps the cases", async (t) => {
+  const loaded = await loadPaperPage(DDPM, 4);
+  if (!loaded) {
+    t.skip("fixture PDF or @napi-rs/canvas is absent; the body-line crop check did not run.");
+    return;
+  }
+  const block = displayFormulas(loaded.built).find((entry) => /if x = 1/.test(entry.sourceText || ""));
+  assert.ok(block, "cases formula");
+  const crop = measureFormulaCrop(block.bbox, loaded.image, cropOptions(block)).bbox;
+  const tag = loaded.content.items.find((item) => String(item.str || "").includes("(13)"));
+  assert.ok(tag, "equation tag (13)");
+  const tagBase = viewportBox(tag, loaded.viewport)[3];
+  const kept = loaded.content.items.filter((item) => {
+    if (!/^if$/.test(String(item.str || "").trim())) return false;
+    const base = viewportBox(item, loaded.viewport)[3];
+    return base > tagBase && base < tagBase + 0.05;
+  });
+  assert.ok(kept.length >= 2, "both case rows");
+  assert.ok(crop[1] > tagBase, `(13) baseline ${tagBase.toFixed(4)} is inside the crop top ${crop[1].toFixed(4)}`);
+  for (const item of kept) {
+    const base = viewportBox(item, loaded.viewport)[3];
+    assert.ok(crop[1] <= base && crop[3] >= base, `${JSON.stringify(item.str)} baseline ${base.toFixed(4)} was cut`);
+  }
+});
+
+test("DPO underbrace label \"using Thm. 1\" stays inside the crop", async (t) => {
+  const loaded = await loadPaperPage(DPO, 6);
+  if (!loaded) {
+    t.skip("fixture PDF or @napi-rs/canvas is absent; the body-line crop check did not run.");
+    return;
+  }
+  const block = displayFormulas(loaded.built).find((entry) => /using Thm/.test(entry.sourceText || ""));
+  assert.ok(block, "underbrace formula");
+  const crop = measureFormulaCrop(block.bbox, loaded.image, cropOptions(block)).bbox;
+  const label = loaded.content.items.find((item) => /using Thm/.test(String(item.str || "")));
+  assert.ok(label, "underbrace label");
+  const base = viewportBox(label, loaded.viewport)[3];
+  assert.ok(crop[1] <= base && crop[3] >= base, `underbrace label baseline ${base.toFixed(4)} was cut`);
+});
+
