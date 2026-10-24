@@ -669,6 +669,108 @@ test("DDPM equation (13) crop drops the previous equation's tag and keeps the ca
   }
 });
 
+test("DDPM product subscript stays on its own crop at DPR 1", async (t) => {
+  // The real-device page is page 2 of a cropped DDPM (original page 4).
+  // That extract is not in the fixtures. DPR 1 is this page rendered at
+  // scale 1: the paper gap above the cases brace is 1px, and a fixed 3px
+  // rule left the product's lower limit on the cases crop. Scale 2 is the
+  // viewer raster and must keep the same cut.
+  const pdfPath = join(root, DDPM);
+  if (!existsSync(pdfPath)) {
+    t.skip("DDPM fixture PDF is absent; the DPR 1 subscript check did not run.");
+    return;
+  }
+  let createCanvas;
+  try {
+    ({ createCanvas } = createRequire(import.meta.url)("@napi-rs/canvas"));
+  } catch {
+    t.skip("@napi-rs/canvas is not installed; the DPR 1 subscript check did not run.");
+    return;
+  }
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(pdfPath)),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  try {
+    const pdfPage = await doc.getPage(4);
+    const content = await pdfPage.getTextContent();
+    attachFontRealNames(content.items, pdfPage.commonObjs);
+    const viewport = pdfPage.getViewport({ scale: 1 });
+    const ops = await pdfPage.getOperatorList();
+    const built = textLayerToBlocks({
+      items: content.items,
+      viewport,
+      images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+      page: 4
+    });
+    const symbol = content.items.find((item) => String(item.str || "") === "∏");
+    assert.ok(symbol, "product symbol");
+    const symbolBox = viewportBox(symbol, viewport);
+    const limits = content.items.filter((item) => {
+      const text = String(item.str || "");
+      if (text !== "i" && text !== "=1" && text !== "δ" && text !== "−") return false;
+      const box = viewportBox(item, viewport);
+      const midX = (box[0] + box[2]) / 2;
+      return midX >= symbolBox[0] - 0.005 && midX <= symbolBox[2] + 0.08 &&
+        box[1] >= symbolBox[3] - 0.002 && box[3] <= symbolBox[3] + 0.04;
+    });
+    assert.ok(limits.some((item) => String(item.str) === "=1"), "product subscript i=1");
+    assert.ok(limits.some((item) => String(item.str) === "δ"), "integral lower limit");
+    const symbolMid = (symbolBox[1] + symbolBox[3]) / 2;
+    const product = displayFormulas(built).find((entry) => symbolMid >= entry.bbox[1] && symbolMid <= entry.bbox[3]);
+    const cases = displayFormulas(built).find((entry) => /if x = 1/.test(entry.sourceText || "") && entry.bbox[1] > symbolBox[3]);
+    assert.ok(product, "product display formula");
+    assert.ok(cases, "cases display formula");
+    const tag = content.items.find((item) => String(item.str || "").includes("(13)"));
+    assert.ok(tag, "equation tag (13)");
+    const tagBase = viewportBox(tag, viewport)[3];
+    const caseRows = content.items.filter((item) => {
+      if (!/^if$/.test(String(item.str || "").trim())) return false;
+      const base = viewportBox(item, viewport)[3];
+      return base > tagBase && base < tagBase + 0.05;
+    });
+    assert.ok(caseRows.length >= 2, "both case rows");
+    for (const scale of [1, 2]) {
+      const raster = pdfPage.getViewport({ scale });
+      const width = Math.ceil(raster.width);
+      const height = Math.ceil(raster.height);
+      const canvas = createCanvas(width, height);
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      await pdfPage.render({ canvasContext: context, viewport: raster }).promise;
+      const image = context.getImageData(0, 0, width, height);
+      const productCrop = measureFormulaCrop(product.bbox, image, cropOptions(product)).bbox;
+      const casesCrop = measureFormulaCrop(cases.bbox, image, cropOptions(cases)).bbox;
+      assert.ok(productCrop && casesCrop, `scale ${scale} crops`);
+      const slop = 1.5 / height;
+      for (const item of limits) {
+        const box = viewportBox(item, viewport);
+        assert.ok(
+          productCrop[1] <= box[1] + slop && productCrop[3] >= box[3] - slop,
+          `scale ${scale} cut ${JSON.stringify(item.str)} (${box[1].toFixed(4)}-${box[3].toFixed(4)}) from the product crop ${productCrop[1].toFixed(4)}-${productCrop[3].toFixed(4)}`
+        );
+        assert.ok(
+          casesCrop[1] >= box[3] - slop,
+          `scale ${scale} left ${JSON.stringify(item.str)} on the cases crop top ${casesCrop[1].toFixed(4)}`
+        );
+      }
+      assert.ok(casesCrop[1] > tagBase, `scale ${scale} kept (13) at ${tagBase.toFixed(4)}`);
+      for (const item of caseRows) {
+        const base = viewportBox(item, viewport)[3];
+        assert.ok(
+          casesCrop[1] <= base && casesCrop[3] >= base,
+          `scale ${scale} cut a cases row at ${base.toFixed(4)}`
+        );
+      }
+    }
+  } finally {
+    await doc.destroy();
+  }
+});
+
 test("DPO underbrace label \"using Thm. 1\" stays inside the crop", async (t) => {
   const loaded = await loadPaperPage(DPO, 6);
   if (!loaded) {

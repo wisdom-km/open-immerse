@@ -54,15 +54,13 @@ GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", impo
 test("a layout revision matches only the current algorithm", async () => {
   const version = await currentLayoutVersion();
   assert.match(version, /^source-v3:[0-9a-f]{16}$/);
-  // source-v3:caad18517e8cf6ba → source-v3:1f2d433e57362376. currentLayoutVersion
+  // source-v3:1f2d433e57362376 → source-v3:fa66b73d5cbc5203. currentLayoutVersion
   // hashes pdf-text-layer.js, pdf-layout-adapter.js, pdf-blocks.js, and
-  // pdf-mirror.js. Only pdf-text-layer.js changed: #169 行间裁图 now
-  // attributes an edge line by the glyph's baseline ink, and drops it when
-  // a body-font English word of the neighboring sentence sits on that line.
-  // A previous equation's tail (DDPM eq. 13) drops when it is a minority of
-  // the baselines and a neighbor box covers it. Recompute this pin if any
-  // of those four files change again.
-  assert.equal(version, "source-v3:1f2d433e57362376");
+  // pdf-mirror.js. Only pdf-text-layer.js changed: #169 行间裁图 scales the
+  // previous-equation debris gap with the glyph em. A fixed 3px gap kept
+  // DDPM eq. 13's product subscript on the cases crop at DPR 1, where that
+  // paper gap is 1px. Recompute this pin if any of those four files change again.
+  assert.equal(version, "source-v3:fa66b73d5cbc5203");
   assert.equal(await currentLayoutVersion(), version);
   const blocks = [{ id: "a", label: "text", text: "Hi" }];
   assert.equal(storedLayoutCurrent({ blocks }, version), null);
