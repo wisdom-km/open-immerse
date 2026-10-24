@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
-import { FORMULA_INK_PAD_PX, measureFormulaCrop, textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { FORMULA_INK_PAD_PX, measureFormulaCrop, rebaseFormulaBaseline, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
@@ -330,13 +330,14 @@ function loadImageForVisualBlock(source) {
     "measureFormulaCrop",
     "redrawFormulaGlyphs",
     "cropFormulaImage",
+    "rebaseFormulaBaseline",
     `const formulaRasterPixels = new WeakMap();\n${body}\nreturn imageForVisualBlock;`
   );
   return factory(measureFormulaCrop, () => "", (canvas, block) => {
     const rect = rasterCropRect(block.bbox, canvas.width, canvas.height);
     block.cropRect = { sw: rect.sw, sh: rect.sh };
     return pngDataUrl(rect.sw, rect.sh);
-  });
+  }, rebaseFormulaBaseline);
 }
 
 function scanPast(source, from, openCh, closeCh) {
@@ -473,7 +474,6 @@ test("cold start display ratio stays on the sharp redraw", async () => {
     block: { label: "formula", bbox },
     pageWidth: 612,
     pageHeight: 792,
-    readerFontPx: 16,
     sourceBodyPt: 10,
     columnPx: 320
   });

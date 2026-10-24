@@ -91,6 +91,7 @@
 界面文案：
 - 多模态卡标题下常显：「问 AI 也用这个模型；没配时用翻译的文字模型。」
 - 翻译页的当前引擎卡（仅大模型引擎）加一句：「没配多模态模型时，问 AI 也用这个模型。」
+- 豆包 Base URL（2026-10-24）：新安装和空地址使用 `https://ark.cn-beijing.volces.com/api/plan/v3`，glm-5.3-flash 与 deepseek-v4.1-flash 共用。已保存的非空地址原样保留。按量密钥可手填 `https://ark.cn-beijing.volces.com/api/v3`。问 AI 在多模态地址为空时用同一默认。
 
 ## 6 状态
 | 状态 | 表现 |

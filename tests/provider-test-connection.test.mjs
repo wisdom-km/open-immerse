@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { ARK_DIRECT_BASE_URL } from "../lib/formula-settings.js";
 import {
   PROVIDER_PROBE_TEXT,
   formatConnectionStatus,
@@ -130,10 +131,37 @@ test("probe failure includes HTTP status and never echoes the key", async () => 
     assert.equal(result.ok, false);
     assert.equal(result.httpStatus, 401);
     assert.match(result.error, /401/);
+    assert.match(result.error, /按量密钥/);
+    assert.match(result.error, /https:\/\/ark\.cn-beijing\.volces\.com\/api\/v3/);
     assert.equal(result.error.includes(SECRET), false);
     assert.equal(JSON.stringify(result).includes(SECRET), false);
+    const statusLine = formatConnectionStatus(result);
+    assert.match(statusLine, /连接失败 · HTTP 401/);
+    assert.match(statusLine, /https:\/\/ark\.cn-beijing\.volces\.com\/api\/v3/);
+    assert.equal(statusLine.includes(SECRET), false);
+  } finally {
+    restore();
+  }
+});
+
+test("a 401 from /api/v3 stays an invalid key and does not mention the plan hint", async () => {
+  const restore = mockFetch(async () => ({
+    ok: false,
+    status: 401,
+    async json() {
+      return { error: { message: "invalid api key" } };
+    }
+  }));
+  try {
+    const result = await testProviderConnection({
+      providerId: "openai",
+      providerConfig: { apiKey: SECRET, baseUrl: ARK_DIRECT_BASE_URL, model: "doubao-seed" }
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.httpStatus, 401);
+    assert.match(result.error, /401/);
+    assert.equal(result.error.includes("按量"), false);
     assert.match(formatConnectionStatus(result), /连接失败 · HTTP 401/);
-    assert.equal(formatConnectionStatus(result).includes(SECRET), false);
   } finally {
     restore();
   }

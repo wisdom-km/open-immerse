@@ -476,6 +476,41 @@ test("error copy covers 401, 429, timeout, and offline without a fallback button
   assert.equal(timed.text.includes("（错误）"), false);
 });
 
+test("a plan-endpoint 401 tells pay-as-you-go keys to use /api/v3", () => {
+  const plan = "https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions";
+  const direct = "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
+  const session = createAskSession({ ids: () => "plan-401" });
+  const begun = beginTurn(session, {
+    question: "这句",
+    route: {
+      ok: true,
+      via: "multimodal",
+      provider: "doubao",
+      model: "glm-5.3-flash",
+      url: plan,
+      host: "ark.cn-beijing.volces.com"
+    }
+  });
+  settleTurn(session, begun.generation, { ok: false, status: 401 });
+  assert.equal(begun.turn.error.url, plan);
+  const model = askErrorModel(begun.turn.error);
+  assert.match(model.text, /多模态模型调用失败（401）/);
+  assert.match(model.text, /按量密钥/);
+  assert.match(model.text, /https:\/\/ark\.cn-beijing\.volces\.com\/api\/v3/);
+  assert.equal(model.text.includes("/api/plan"), false);
+
+  const directModel = askErrorModel({ via: "multimodal", status: 401, url: direct });
+  assert.match(directModel.text, /多模态模型调用失败（401）/);
+  assert.equal(directModel.text.includes("按量"), false);
+  const translate = askErrorModel({ via: "translation", status: 401, url: plan });
+  assert.match(translate.text, /密钥无效（401）/);
+  assert.match(translate.text, /\/api\/v3/);
+  const plain = askErrorModel({ via: "translation", status: 401 });
+  assert.equal(plain.text, "密钥无效或没有权限（401）");
+  const other = askErrorModel({ via: "translation", status: 401, url: "https://api.openai.com/v1/chat/completions" });
+  assert.equal(other.text.includes("按量"), false);
+});
+
 function mulberry32(seed) {
   let state = seed >>> 0;
   return () => {

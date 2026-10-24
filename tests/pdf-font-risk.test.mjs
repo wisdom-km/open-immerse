@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from "node
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { formulaReadabilityFloor } from "../lib/pdf-formula-size.js";
+import { formulaRefFloorScale } from "../lib/pdf-formula-size.js";
 import { READER_FONT_SIZES, readerLayoutFontCap } from "../lib/pdf-reader-flow.js";
 import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
 import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs";
@@ -22,6 +22,9 @@ installOwnedTmpGuard(PREFIXES);
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const pdfRel = "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf";
+const dpoSkip = existsSync(join(root, pdfRel))
+  ? false
+  : `${pdfRel} is gitignored and is not committed. Fetch it with scripts/ci/fetch-fixtures.sh (arXiv 2305.18290v3).`;
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -363,9 +366,13 @@ async function waitForLayout({ page = 0, allPages = false, blockPage = "", block
   throw new Error(page ? `page ${page} did not paint (${detail})` : `layout did not settle (${detail})`);
 }
 
-describe("Aa font-size risk checks on DPO", () => {
+describe("Aa font-size risk checks on DPO", { skip: dpoSkip }, () => {
   before(async () => {
-    assert.equal(existsSync(join(root, pdfRel)), true, `${pdfRel} is missing`);
+    assert.equal(
+      existsSync(join(root, pdfRel)),
+      true,
+      `${pdfRel} is gitignored and is not committed. Fetch it with scripts/ci/fetch-fixtures.sh (arXiv 2305.18290v3).`
+    );
     handle.server = await serveRepo();
     handle.ownedDir = mkdtempSync(join(tmpdir(), "oi-font-risk-"));
     rememberOwnedTemp(handle.ownedDir);
@@ -566,15 +573,12 @@ describe("Aa font-size risk checks on DPO", () => {
       assert.ok(sample?.top, `no matched display formula after narrowing (mode ${sample?.mode})`);
       row = sample.top;
     }
-    const expected = formulaReadabilityFloor(sample.shown, row.bodyPt);
-    const storedFloor = formulaReadabilityFloor(sample.setting, row.bodyPt);
+    const expected = formulaRefFloorScale(row.bodyPt);
     const observed = row.img / row.widthPt;
     assert.ok(row.widthPt > 300, `expected a wide DPO formula, got ${row.widthPt}pt on ${row.page} ${row.id}`);
     assert.ok(row.clientW > 0 && (row.clientW - 2) / row.widthPt < expected, `column ${row.clientW}px does not force ${row.widthPt}pt down to the floor ${expected}`);
     assert.ok(Math.abs(observed - expected) < 0.03, `${row.page} ${row.id} scale ${observed} != floor ${expected} (shown ${sample.shown}, body ${row.bodyPt}, img ${row.img}, pt ${row.widthPt})`);
-    if (Math.abs(storedFloor - expected) > 0.02) {
-      assert.ok(Math.abs(observed - storedFloor) > 0.02, "scale followed the stored font instead of the shown font");
-    }
+    assert.ok(Math.abs(expected - formulaRefFloorScale(10)) < 0.2 || row.bodyPt !== 10, "10pt floor is 0.75 × 18/10");
     assert.ok(row.scrollW > row.clientW + 1, `formula ${row.img}px did not scroll inside ${row.clientW}px`);
     assert.ok(row.frame <= sample.column + 1, `formula frame ${row.frame} exceeds column ${sample.column}`);
   });

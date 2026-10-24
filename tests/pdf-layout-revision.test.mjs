@@ -54,16 +54,14 @@ GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", impo
 test("a layout revision matches only the current algorithm", async () => {
   const version = await currentLayoutVersion();
   assert.match(version, /^source-v3:[0-9a-f]{16}$/);
-  // source-v3:18f3fb1cd3aaee6c → source-v3:362458240c2b4e9e. currentLayoutVersion
+  // source-v3:362458240c2b4e9e → source-v3:f5fe74205191709b. currentLayoutVersion
   // hashes pdf-text-layer.js, pdf-layout-adapter.js, pdf-blocks.js, and
-  // pdf-mirror.js. Only pdf-text-layer.js changed: #169 行间裁图 treats a
-  // 2px gap as the previous equation when that edge band is about an em
-  // tall. Chrome's scale-2 raster draws the DDPM eq. 13 gap as 2px, where
-  // the napi raster draws 3px, so the product limit stayed on the cases
-  // crop. A shorter band on a 2px gap, including the underbrace label, still
-  // needs the 3px rule. Recompute this pin if any of those four files change
-  // again.
-  assert.equal(version, "source-v3:362458240c2b4e9e");
+  // pdf-mirror.js. #169's 2px edge band stays. This merge also hashes the
+  // inline baseline rebase: an ink-trimmed box uses its own bottom, and a
+  // two-glyph superscript no longer averages the baseline. pdf-blocks.js
+  // carries the fixed reference-size crop. Recompute this pin if any of
+  // those four files change again.
+  assert.equal(version, "source-v3:f5fe74205191709b");
   assert.equal(await currentLayoutVersion(), version);
   const blocks = [{ id: "a", label: "text", text: "Hi" }];
   assert.equal(storedLayoutCurrent({ blocks }, version), null);
