@@ -175,6 +175,13 @@ test("acceptance 6 and 7: inline baseline uses PDF depth, and the line cap stays
   );
   assert.doesNotMatch(css, /vertical-align:\s*middle/);
   assert.match(viewer, /--oi-reader-formula-baseline/);
+  const cropRule = css.indexOf(".pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched .oi-pdf-math-crop");
+  const blockRule = css.indexOf(".pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched > img.oi-pdf-math-crop");
+  assert.ok(cropRule >= 0 && blockRule > cropRule, "direct crop images must beat the inline-block strut");
+  assert.match(
+    css.slice(blockRule, blockRule + 280),
+    /display:\s*block;\s*vertical-align:\s*top;/
+  );
 });
 
 test("acceptance 8: a wide display shrinks to the column, then scrolls at 13.5px", () => {
@@ -258,6 +265,12 @@ test("inline baseline ignores scripts and counts the ink pad", () => {
   const bodyOnly = formulaBaselineDepthPt(body, viewport, tight, { inline: true, protect: true });
   assert.equal(depth, bodyOnly);
   assert.ok(Math.abs(depth - padPt) < 0.02, `depth ${depth} should be the ${padPt}pt ink pad`);
+  const piStar = [
+    glyph("π", 100, 400, 8, 9.96, { fontName: "CMMI10" }),
+    glyph("∗", 110, 403.62, 4, 6.97, { fontName: "CMMI7" })
+  ];
+  const piDepth = formulaBaselineDepthPt(piStar, viewport, tight, { inline: true, protect: true });
+  assert.ok(Math.abs(piDepth - padPt) < 0.05, `π∗ depth ${piDepth} averaged the superscript`);
   const shift = -depth * formulaRefScale(10, formulaRefPxFromCss("18px"));
   assert.ok(Math.abs(shift - (-padPt * 1.8)) < 0.05, `shift ${shift}`);
   const page = textLayerToBlocks({
@@ -274,8 +287,26 @@ test("inline baseline ignores scripts and counts the ink pad", () => {
   assert.ok(crop.baselineDepthPt + 1e-6 >= crop.baselinePadPt, `painted depth ${crop.baselineDepthPt}`);
   const trimmed = crop.bbox.slice();
   trimmed[3] = crop.baselinePageFrac;
-  const rebased = rebaseFormulaBaseline({ ...crop }, trimmed);
-  assert.ok(Math.abs(rebased - crop.baselinePadPt) < 0.02, `rebased ${rebased}`);
+  const rebased = rebaseFormulaBaseline({ ...crop }, trimmed, { trimmed: true });
+  assert.ok(Math.abs(rebased) < 0.02, `trimmed rebase ${rebased} should follow the box, not the pad`);
+  const untrimmed = rebaseFormulaBaseline({ ...crop }, trimmed);
+  assert.ok(Math.abs(untrimmed - crop.baselinePadPt) < 0.02, `untrimmed rebase ${untrimmed}`);
+  const above = crop.bbox.slice();
+  above[3] = crop.baselinePageFrac - 1.2 / crop.baselinePageH;
+  const negative = rebaseFormulaBaseline({ ...crop }, above, { inkTrimmed: true });
+  assert.ok(negative < -1, `negative trimmed depth ${negative}`);
+  const shallow = crop.bbox.slice();
+  shallow[3] = crop.baselinePageFrac + 0.4 / crop.baselinePageH;
+  const shallowDepth = rebaseFormulaBaseline({ ...crop }, shallow, { trimmed: true });
+  assert.ok(Math.abs(shallowDepth - 0.4) < 0.02, `shallow trimmed depth ${shallowDepth}`);
+  assert.match(
+    viewer,
+    /baselineDepthPt: block\?\.baselineDepthPt != null && Number\.isFinite\(Number\(block\?\.baselineDepthPt\)\)/
+  );
+  const stamp = viewer.slice(viewer.indexOf("function stampFormulaBaseline"), viewer.indexOf("function stampDisplayFormulaScale"));
+  assert.match(stamp, /if \(matched\?\.baselineDepthPt == null\)/);
+  assert.match(stamp, /setProperty\("--oi-reader-formula-baseline"/);
+  assert.match(viewer, /rebaseFormulaBaseline\(block, trimmed, \{ trimmed: Number\(probe\.inkShare\) > 0 \}\)/);
 });
 
 test("acceptance 11: DPO eq(7) glyph edges fit a 620px column", () => {

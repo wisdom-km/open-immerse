@@ -1078,6 +1078,11 @@ body {
   max-height: none;
   max-width: none;
 }
+.pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched > img.oi-pdf-math-crop {
+  /* display:block drops the inline strut. Depth 0 then sits on the baseline. */
+  display: block;
+  vertical-align: top;
+}
 .pane-translate .readout .oi-pdf-p[data-role="authors"] {
   font: 400 14px/1.55 var(--oi-font);
   color: var(--oi-paper-muted);

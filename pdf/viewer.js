@@ -3799,7 +3799,7 @@ function imageForVisualBlock(raster, block) {
     const trimmed = formulaInkBbox(raster?.canvas, probe);
     if (probe.inkShare) block.inkShare = probe.inkShare;
     block.bbox = trimmed;
-    rebaseFormulaBaseline(block, trimmed);
+    rebaseFormulaBaseline(block, trimmed, { trimmed: Number(probe.inkShare) > 0 });
   }
   return cropFormulaImage(raster?.canvas, block);
 }
@@ -5884,6 +5884,14 @@ function publishViewerTestHooks() {
   if (!viewerUnderTest()) return;
   globalThis.__oiLibrarySourceSentHas = (hash) => librarySourceSent.has(String(hash || ""));
   globalThis.__oiRenderArticle = () => renderArticle();
+  globalThis.__oiFormulaSources = (page) => (getPageLayout(Number(page))?.blocks || [])
+    .filter((block) => block?.label === "formula")
+    .map((block) => ({
+      id: String(block.id || ""),
+      inline: block.display === false || Boolean(block.inlineOf),
+      sourceText: String(block.sourceText || block.text || ""),
+      baselineDepthPt: block.baselineDepthPt == null ? null : Number(block.baselineDepthPt)
+    }));
   globalThis.__oiOpenPage = async (page) => {
     const n = Number(page);
     if (!(n >= 1) || !pdfDoc) return 0;
@@ -8925,13 +8933,21 @@ function readerFormulaStyle(block, page, inline, columnPx) {
     raised: Boolean(sized.raised),
     k,
     widthPt,
-    baselineDepthPt: Number.isFinite(Number(block?.baselineDepthPt)) ? Number(block.baselineDepthPt) : null
+    baselineDepthPt: block?.baselineDepthPt != null && Number.isFinite(Number(block?.baselineDepthPt))
+      ? Number(block.baselineDepthPt)
+      : null
   };
 }
 
 function stampFormulaBaseline(node, matched) {
   if (!node?.style) return;
-  const depth = Number(matched?.baselineDepthPt);
+  // Number(null) is 0, which would stamp 0px and hide the -0.2em fallback.
+  // A measured depth of 0 is real and still stamps 0px.
+  if (matched?.baselineDepthPt == null) {
+    node.style.removeProperty("--oi-reader-formula-baseline");
+    return;
+  }
+  const depth = Number(matched.baselineDepthPt);
   const k = Number(matched?.k);
   if (!Number.isFinite(depth) || !(k > 0)) {
     node.style.removeProperty("--oi-reader-formula-baseline");
