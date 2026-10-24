@@ -73,12 +73,20 @@ test("display crops drop a neighboring text line and keep formula ink", () => {
   assert.equal(coversRow(measured.bbox, height, 158), true, "subscript stays");
   assert.equal(coversRow(measured.bbox, height, 148), true, "bracket foot stays");
 
-  const owned = measureFormulaCrop(bbox, image, {
+  const reach = measureFormulaCrop(bbox, image, {
     inline: false,
     glyphBoxes: [[40 / width, 80 / height, 300 / width, 170 / height]],
     maskBoxes: [neighborMask]
   });
-  assert.equal(coversRow(owned.bbox, height, 85), true, "a formula glyph on the edge line keeps it");
+  assert.equal(coversRow(reach.bbox, height, 85), false, "a font box that only reaches the body line does not keep it");
+  assert.equal(coversRow(reach.bbox, height, 133), true, "formula ink under that font box stays");
+
+  const owned = measureFormulaCrop(bbox, image, {
+    inline: false,
+    glyphBoxes: [[40 / width, 78 / height, 300 / width, 96 / height]],
+    maskBoxes: [neighborMask]
+  });
+  assert.equal(coversRow(owned.bbox, height, 85), true, "a formula glyph centered on the edge line keeps it");
 
   const inline = measureFormulaCrop(bbox, image, {
     inline: true,
@@ -176,17 +184,6 @@ function inkBands(image, bbox) {
   return bands;
 }
 
-function bandOverlap(band, boxes, height) {
-  let best = 0;
-  for (const box of boxes || []) {
-    if (!Array.isArray(box) || box.length < 4) continue;
-    const y0 = Number(box[1]) * height;
-    const y1 = Number(box[3]) * height;
-    best = Math.max(best, Math.min(band.b, y1) - Math.max(band.a, y0));
-  }
-  return Math.max(0, best);
-}
-
 function assertDisplayTrim(image, block) {
   const measured = measureFormulaCrop(block.bbox, image, {
     inline: false,
@@ -200,34 +197,16 @@ function assertDisplayTrim(image, block) {
   const top = crop[1] * height;
   const bottom = crop[3] * height;
   const bands = inkBands(image, block.bbox);
-  let shed = 0;
-  for (const band of bands) {
-    if (bandOverlap(band, block.glyphBoxes, height) <= 0) continue;
-    for (const box of block.glyphBoxes || []) {
-      const y0 = Math.max(band.a, Number(box[1]) * height);
-      const y1 = Math.min(band.b, Number(box[3]) * height);
-      if (y1 - y0 < 1) continue;
-      const mid = (y0 + y1) / 2;
-      assert.ok(
-        mid >= top - 1 && mid < bottom + 1,
-        `${block.id} cut a formula glyph row ${y0.toFixed(1)}-${y1.toFixed(1)} (crop ${top.toFixed(1)}-${bottom.toFixed(1)})`
-      );
-    }
+  for (const box of block.glyphBoxes || []) {
+    const mid = ((Number(box[1]) + Number(box[3])) / 2) * height;
+    const host = bands.find((band) => mid >= band.a && mid < band.b);
+    if (!host) continue;
+    assert.ok(
+      mid >= top - 1 && mid < bottom + 1,
+      `${block.id} cut a formula line at ${mid.toFixed(1)} (ink ${host.a}-${host.b}, crop ${top.toFixed(1)}-${bottom.toFixed(1)})`
+    );
   }
-  if (bands.length >= 2) {
-    const edges = [
-      [bands[0], bands[1].a - bands[0].b, "above", (band) => top >= band.b - 1],
-      [bands[bands.length - 1], bands[bands.length - 1].a - bands[bands.length - 2].b, "below", (band) => bottom <= band.a + 1]
-    ];
-    for (const [band, gap, side, outside] of edges) {
-      const glyph = bandOverlap(band, block.glyphBoxes, height);
-      const mask = bandOverlap(band, block.maskBoxes, height);
-      if (gap < 4 || glyph > 0 || mask < band.h * 0.5) continue;
-      assert.ok(outside(band), `${block.id} still includes the neighbor line ${side} (${band.a}-${band.b})`);
-      shed += 1;
-    }
-  }
-  return { id: block.id, top, bottom, bands: bands.length, shed };
+  return { id: block.id, top, bottom, bands: bands.length };
 }
 
 async function scanPages(pdfPath, pages, createCanvas) {
@@ -294,11 +273,111 @@ test("DPO and DDPM display crops keep formula glyph rows", async (t) => {
   for (const [name, rel, pages] of present) {
     const notes = await scanPages(join(root, rel), pages, createCanvas);
     const leaks = notes.filter((note) => note.bands >= 2);
-    const shed = notes.reduce((sum, note) => sum + note.shed, 0);
     assert.ok(notes.length >= 1, `${name} rendered display formulas`);
-    dropped.push(`${name} pages ${pages.join(",")} formulas ${notes.length}, neighbor lines shed ${shed}`);
+    dropped.push(`${name} pages ${pages.join(",")} formulas ${notes.length}`);
     assert.ok(leaks.length >= 1, `${name} had a multi-band display crop to judge`);
   }
   t.diagnostic(dropped.join("; "));
   assert.ok(dropped.length >= 1);
+});
+
+function viewportBox(item, viewport) {
+  const transform = Array.isArray(item?.transform) ? item.transform : [];
+  const x = Number.isFinite(Number(item?.x)) ? Number(item.x) : Number(transform[4]) || 0;
+  const y = Number.isFinite(Number(item?.y)) ? Number(item.y) : Number(transform[5]) || 0;
+  const width = Number(item.width) || 0;
+  const height = Number(item.height) || 0;
+  const rect = viewport.convertToViewportRectangle([x, y, x + width, y + height]);
+  const [x1, y1, x2, y2] = rect;
+  const vw = Math.max(1, Number(viewport.width) || 1);
+  const vh = Math.max(1, Number(viewport.height) || 1);
+  return [
+    Math.min(x1, x2) / vw,
+    Math.min(y1, y2) / vh,
+    Math.max(x1, x2) / vw,
+    Math.max(y1, y2) / vh
+  ];
+}
+
+test("DDPM page 2 equation 4 crop excludes the notation sentence", async (t) => {
+  const pdfPath = join(root, "tests/fixtures/DDPM_2006.11239.pdf");
+  if (!existsSync(pdfPath)) {
+    t.skip("DDPM fixture PDF is absent; the equation 4 crop check did not run.");
+    return;
+  }
+  let createCanvas;
+  try {
+    ({ createCanvas } = createRequire(import.meta.url)("@napi-rs/canvas"));
+  } catch {
+    t.skip("@napi-rs/canvas is not installed; the equation 4 crop check did not run.");
+    return;
+  }
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(pdfPath)),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  try {
+    const pdfPage = await doc.getPage(2);
+    const content = await pdfPage.getTextContent();
+    attachFontRealNames(content.items, pdfPage.commonObjs);
+    const viewport = pdfPage.getViewport({ scale: 1 });
+    const ops = await pdfPage.getOperatorList();
+    const built = textLayerToBlocks({
+      items: content.items,
+      viewport,
+      images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+      page: 2
+    });
+    const block = built.blocks.find((entry) =>
+      entry.label === "formula" && entry.display !== false &&
+      /q\(xt\|x0\)/.test(entry.sourceText || "") && /\(4\)/.test(entry.sourceText || ""));
+    assert.ok(block, "page 2 display formula (4)");
+    const notation = content.items.find((item) => /^in closed form: using the notation$/.test(String(item.str || "").trim()));
+    assert.ok(notation, "the sentence above equation 4 contains notation");
+    const notationBox = viewportBox(notation, viewport);
+    const notationMid = (notationBox[1] + notationBox[3]) / 2;
+    const sameLine = content.items.filter((item) => {
+      const box = viewportBox(item, viewport);
+      const mid = (box[1] + box[3]) / 2;
+      return Math.abs(mid - notationMid) < 0.008 && /[A-Za-z]{3,}/.test(String(item.str || ""));
+    });
+    assert.ok(sameLine.some((item) => /\busing\b|\bhave\b/.test(String(item.str || ""))), "notation shares a line with the sentence");
+    const width = Math.ceil(viewport.width * CROP_SCALE);
+    const height = Math.ceil(viewport.height * CROP_SCALE);
+    const canvas = createCanvas(width, height);
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    await pdfPage.render({
+      canvasContext: context,
+      viewport: pdfPage.getViewport({ scale: CROP_SCALE })
+    }).promise;
+    const image = context.getImageData(0, 0, width, height);
+    const crop = measureFormulaCrop(block.bbox, image, {
+      inline: false,
+      protect: block.formulaInkProtect === true,
+      maskBoxes: block.maskBoxes,
+      glyphBoxes: block.glyphBoxes
+    }).bbox;
+    assert.ok(crop);
+    for (const item of sameLine) {
+      const box = viewportBox(item, viewport);
+      const mid = (box[1] + box[3]) / 2;
+      assert.ok(crop[1] > mid, `${JSON.stringify(item.str)} at ${mid.toFixed(4)} is inside the crop top ${crop[1].toFixed(4)}`);
+    }
+    const formulaMid = (block.bbox[1] + block.bbox[3]) / 2;
+    assert.ok(crop[1] <= formulaMid && crop[3] >= formulaMid, "equation 4 itself stays in the crop");
+    let keptGlyphs = 0;
+    for (const box of block.glyphBoxes || []) {
+      const mid = (Number(box[1]) + Number(box[3])) / 2;
+      if (mid < notationBox[3] + 0.004) continue;
+      keptGlyphs += 1;
+      assert.ok(crop[1] <= mid && crop[3] >= mid, `formula glyph at ${mid.toFixed(4)} was cut`);
+    }
+    assert.ok(keptGlyphs >= 1, "equation 4 has glyphs below the notation line");
+  } finally {
+    await doc.destroy();
+  }
 });

@@ -242,23 +242,33 @@ test("vision ink pad is wider than the screen pad and still masks the next line"
   assert.ok(inkX >= 0 && inkY >= 0 && inkX < sliced.width && inkY < sliced.height);
   const inkAt = (inkY * sliced.width + inkX) * 4;
   assert.equal(sliced.data[inkAt], 0, "formula ink survives the crop");
+  const mapped = boxesInCrop(block.maskBoxes, vision.pageBbox);
   blankFormulaMask(sliced, {
-    maskBoxes: boxesInCrop(block.maskBoxes, vision.pageBbox),
+    maskBoxes: mapped,
     glyphBoxes: [],
     seedBoxes: []
   });
-  let neighborInk = 0;
-  const mask = boxesInCrop(block.maskBoxes, vision.pageBbox)[0];
-  for (let y = 0; y < sliced.height; y += 1) {
-    for (let x = 0; x < sliced.width; x += 1) {
-      const nx = (x + 0.5) / sliced.width;
-      const ny = (y + 0.5) / sliced.height;
-      if (nx < mask[0] || nx > mask[2] || ny < mask[1] || ny > mask[3]) continue;
-      const i = (y * sliced.width + x) * 4;
-      if (sliced.data[i] < 250) neighborInk += 1;
+  const mask = mapped[0];
+  if (mask) {
+    let neighborInk = 0;
+    for (let y = 0; y < sliced.height; y += 1) {
+      for (let x = 0; x < sliced.width; x += 1) {
+        const nx = (x + 0.5) / sliced.width;
+        const ny = (y + 0.5) / sliced.height;
+        if (nx < mask[0] || nx > mask[2] || ny < mask[1] || ny > mask[3]) continue;
+        const i = (y * sliced.width + x) * 4;
+        if (sliced.data[i] < 250) neighborInk += 1;
+      }
     }
+    assert.equal(neighborInk, 0);
+  } else {
+    // The neighbor is a mask-owned edge line with no formula glyph on it,
+    // so the display trim removes it before the mask stage. The crop box
+    // itself no longer meets that line.
+    const meets = vision.pageBbox[2] > neighbor[0] && neighbor[2] > vision.pageBbox[0] &&
+      vision.pageBbox[3] > neighbor[1] && neighbor[3] > vision.pageBbox[1];
+    assert.equal(meets, false);
   }
-  assert.equal(neighborInk, 0);
   assert.equal(sliced.data[inkAt], 0);
 });
 
