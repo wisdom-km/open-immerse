@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +32,12 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const dpoRel = "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf";
 const ddpmRel = "tests/fixtures/DDPM_2006.11239.pdf";
 const fallback = PDF_COPY.formulaFallback;
-const artifactDir = "/opt/cursor/artifacts";
+
+/** Optional PNG dir. Unset uses the temp dir. An unwritable path is skipped. */
+function formulaShotDir() {
+  const requested = String(process.env.OI_FORMULA_SHOT_DIR || "").trim();
+  return requested || join(tmpdir(), "oi-short-formula-shots");
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -419,11 +424,59 @@ async function goToPage(page) {
 }
 
 function saveShot(name, data) {
-  mkdirSync(artifactDir, { recursive: true });
-  const file = join(artifactDir, name);
-  writeFileSync(file, Buffer.from(data, "base64"));
-  return file;
+  if (!name || !data) return "";
+  const dir = formulaShotDir();
+  try {
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, name);
+    writeFileSync(file, Buffer.from(data, "base64"));
+    return file;
+  } catch {
+    return "";
+  }
 }
+
+test("an empty crop shows short source text and keeps the fallback string otherwise", () => {
+  const shown = (formula) => shortInlineFormulaLabel(formula) || fallback;
+  const inline = { label: "formula", display: false, inlineOf: "p4-b3", imageUrl: "" };
+  assert.equal(shown({ ...inline, sourceText: "πθ" }), "πθ");
+  assert.equal(shown({ ...inline, sourceText: "rˆθ" }), "rˆθ");
+  assert.equal(shown({
+    ...inline,
+    sourceText: "r(x, y) = rϕ(x, y) − β(logπθ(y | x) − logπref(y | x))"
+  }), fallback);
+  assert.equal(shown({ label: "formula", display: true, sourceText: "πθ", imageUrl: "" }), fallback);
+  assert.equal(shown({ ...inline, sourceText: "" }), fallback);
+  assert.equal(shown({ ...inline, sourceText: "πθ\nnext" }), fallback);
+  assert.equal(fallback.includes("公式见左栏"), true);
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const paint = viewer.slice(
+    viewer.indexOf("function paintRenderPieces"),
+    viewer.indexOf("function unitsForLayout")
+  );
+  assert.match(paint, /shortInlineFormulaLabel\(formula\)/);
+  assert.match(paint, /label \|\| PDF_COPY\.formulaFallback/);
+});
+
+test("shot files stay out of /opt unless asked, and an unwritable dir is skipped", () => {
+  const previous = process.env.OI_FORMULA_SHOT_DIR;
+  // A file where a directory should be. recursive mkdir throws ENOTDIR.
+  // Do not use /proc here: mkdirSync(recursive) on /proc never returns.
+  const blocked = join(tmpdir(), `oi-short-formula-blocked-${process.pid}`);
+  delete process.env.OI_FORMULA_SHOT_DIR;
+  try {
+    assert.equal(formulaShotDir().startsWith(tmpdir()), true);
+    assert.equal(formulaShotDir().startsWith("/opt"), false);
+    writeFileSync(blocked, "");
+    process.env.OI_FORMULA_SHOT_DIR = join(blocked, "shots");
+    assert.equal(saveShot("n1.png", Buffer.from("png").toString("base64")), "");
+    assert.equal(existsSync(join(blocked, "shots")), false);
+  } finally {
+    rmSync(blocked, { force: true });
+    if (previous == null) delete process.env.OI_FORMULA_SHOT_DIR;
+    else process.env.OI_FORMULA_SHOT_DIR = previous;
+  }
+});
 
 describe("DPO page 4 block p4-b4 does not show the formula fallback", () => {
   before(async () => {
@@ -505,7 +558,7 @@ describe("DPO page 4 block p4-b4 does not show the formula fallback", () => {
     }
   });
 
-  test("p4-b4 renders as an image or as πθ", async () => {
+  test("p4-b4 renders as an image at least 24 by 12", async () => {
     const probe = await handle.evaluate(`(() => {
       const fallback = ${JSON.stringify(fallback)};
       const spans = [...document.querySelectorAll("#readerFlow .oi-pdf-inline-math")];
@@ -528,9 +581,9 @@ describe("DPO page 4 block p4-b4 does not show the formula fallback", () => {
     assert.equal(probe.text.includes("公式见左栏"), false);
     assert.equal(probe.text.includes(fallback), false);
     assert.equal(probe.alt.includes(fallback), false);
-    const image = probe.src.startsWith("data:image") && probe.naturalWidth >= FORMULA_INK_MIN_SPAN.x && probe.naturalHeight >= FORMULA_INK_MIN_SPAN.y;
-    const text = probe.text.includes("π") && probe.text.includes("θ");
-    assert.ok(image || text, JSON.stringify(probe));
+    assert.equal(probe.src.startsWith("data:image"), true, JSON.stringify(probe));
+    assert.ok(probe.naturalWidth >= FORMULA_INK_MIN_SPAN.x, JSON.stringify(probe));
+    assert.ok(probe.naturalHeight >= FORMULA_INK_MIN_SPAN.y, JSON.stringify(probe));
     const shot = await captureBlock('#readerFlow .oi-pdf-inline-math[data-block-id="p4-b4"]');
     if (shot) saveShot("n1-dpo-p4.png", shot);
   });
