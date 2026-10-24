@@ -29,7 +29,6 @@ import {
 } from "../lib/pdf-formula-raster.js";
 import {
   FORMULA_INK_PAD_PX,
-  blankFormulaMask,
   boxesInCrop,
   measureFormulaCrop
 } from "../lib/pdf-text-layer.js";
@@ -203,8 +202,8 @@ test("vision ink pad is wider than the screen pad and still masks the next line"
   assert.ok(visionPx.sw > screenPx.sw * 2, `width ${visionPx.sw} vs ${screenPx.sw * 2}`);
   assert.ok(visionPx.sh > screenPx.sh * 2, `height ${visionPx.sh} vs ${screenPx.sh * 2}`);
   assert.ok(Math.abs((visionPx.sw - screenPx.sw * 2) - extra * 2) <= 2);
-  assert.ok(vision.pageBbox[3] < neighbor[3] + 0.02);
-  assert.ok(vision.pageBbox[3] < 0.8, "neighbor ink did not become the crop edge");
+  assert.ok(screen.bbox[3] <= neighbor[1], "screen crop still includes the neighbor line");
+  assert.ok(vision.pageBbox[3] <= neighbor[1], "vision crop still includes the neighbor line");
 
   const plain = paper(200, 100, (x, y, w, h) => {
     const nx = x / w;
@@ -242,33 +241,10 @@ test("vision ink pad is wider than the screen pad and still masks the next line"
   assert.ok(inkX >= 0 && inkY >= 0 && inkX < sliced.width && inkY < sliced.height);
   const inkAt = (inkY * sliced.width + inkX) * 4;
   assert.equal(sliced.data[inkAt], 0, "formula ink survives the crop");
+  // This neighbor is mask-owned and has no formula glyph, so the display
+  // trim removes it. The input is fixed; a crop that still meets the line fails.
   const mapped = boxesInCrop(block.maskBoxes, vision.pageBbox);
-  blankFormulaMask(sliced, {
-    maskBoxes: mapped,
-    glyphBoxes: [],
-    seedBoxes: []
-  });
-  const mask = mapped[0];
-  if (mask) {
-    let neighborInk = 0;
-    for (let y = 0; y < sliced.height; y += 1) {
-      for (let x = 0; x < sliced.width; x += 1) {
-        const nx = (x + 0.5) / sliced.width;
-        const ny = (y + 0.5) / sliced.height;
-        if (nx < mask[0] || nx > mask[2] || ny < mask[1] || ny > mask[3]) continue;
-        const i = (y * sliced.width + x) * 4;
-        if (sliced.data[i] < 250) neighborInk += 1;
-      }
-    }
-    assert.equal(neighborInk, 0);
-  } else {
-    // The neighbor is a mask-owned edge line with no formula glyph on it,
-    // so the display trim removes it before the mask stage. The crop box
-    // itself no longer meets that line.
-    const meets = vision.pageBbox[2] > neighbor[0] && neighbor[2] > vision.pageBbox[0] &&
-      vision.pageBbox[3] > neighbor[1] && neighbor[3] > vision.pageBbox[1];
-    assert.equal(meets, false);
-  }
+  assert.equal(mapped.length, 0);
   assert.equal(sliced.data[inkAt], 0);
 });
 

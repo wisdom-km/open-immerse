@@ -381,3 +381,10 @@ test("DDPM page 2 equation 4 crop excludes the notation sentence", async (t) => 
     await doc.destroy();
   }
 });
+
+// The trim keeps these body lines because a coarse glyph-box midpoint lands
+// on the line. Left for a follow-up; not part of this change.
+test.todo("DPO equation (15) still includes the body line above it, \"Hence we have the optimal solution:\", because a coarse glyph-box midpoint sits on that line");
+test.todo("DDPM equation (11) still includes the body line above it, \"we may choose the parameterization\", because a coarse glyph-box midpoint sits on that line");
+test.todo("DPO p4-b10 still includes the body sentence \"where Z(x) = …\" under the formula, because a coarse glyph-box midpoint sits on that line");
+test.todo("DPO p18-b17 still includes the body sentence \"where Z(x) = …\" under the formula, because a coarse glyph-box midpoint sits on that line");
