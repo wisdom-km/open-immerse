@@ -54,16 +54,16 @@ GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", impo
 test("a layout revision matches only the current algorithm", async () => {
   const version = await currentLayoutVersion();
   assert.match(version, /^source-v3:[0-9a-f]{16}$/);
-  // source-v3:fa66b73d5cbc5203 → source-v3:18f3fb1cd3aaee6c. currentLayoutVersion
+  // source-v3:18f3fb1cd3aaee6c → source-v3:362458240c2b4e9e. currentLayoutVersion
   // hashes pdf-text-layer.js, pdf-layout-adapter.js, pdf-blocks.js, and
-  // pdf-mirror.js. Only pdf-text-layer.js changed: #169 行间裁图 scales the
-  // empty-baseline prose gap with the body em (75th percentile, so scripts
-  // do not shrink it). A fixed 2px gap kept DDPM p4 "function approximator"
-  // on the formula at DPR 1, where that paper gap is 1px. A band that
-  // already holds glyph baselines still needs the unscaled 4px gap, so the
-  // underbrace label stays. Recompute this pin if any of those four files
-  // change again.
-  assert.equal(version, "source-v3:18f3fb1cd3aaee6c");
+  // pdf-mirror.js. Only pdf-text-layer.js changed: #169 行间裁图 treats a
+  // 2px gap as the previous equation when that edge band is about an em
+  // tall. Chrome's scale-2 raster draws the DDPM eq. 13 gap as 2px, where
+  // the napi raster draws 3px, so the product limit stayed on the cases
+  // crop. A shorter band on a 2px gap, including the underbrace label, still
+  // needs the 3px rule. Recompute this pin if any of those four files change
+  // again.
+  assert.equal(version, "source-v3:362458240c2b4e9e");
   assert.equal(await currentLayoutVersion(), version);
   const blocks = [{ id: "a", label: "text", text: "Hi" }];
   assert.equal(storedLayoutCurrent({ blocks }, version), null);
