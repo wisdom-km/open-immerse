@@ -413,7 +413,8 @@ test("only an inline context crop appends the strict prompt", () => {
     { meta: { mode: "context" } }
   );
   assert.equal(inline.system, `${FORMULA_VISION_SYSTEM}\n${FORMULA_CONTEXT_PROMPT}`);
-  assert.match(inline.system, /不要补全/);
+  assert.match(inline.system, /只输出红框里这个公式的 LaTeX/);
+  assert.match(inline.system, /不要输出红框外的公式/);
   assert.equal(formulaVisionPrompt({ display: true }, { meta: { mode: "context" } }).system, FORMULA_VISION_SYSTEM);
   assert.equal(
     formulaVisionPrompt({ inlineOf: "p1-b2" }, { meta: { mode: "context" } }).system,

@@ -290,7 +290,7 @@ test("template carries the plan fields, the deepseek baseline, and a zero mismat
   const markdown = reportToMarkdown(report);
   assert.match(markdown, /核对过但与参考不一致：0/);
   assert.match(markdown, /上屏方式/);
-  assert.match(markdown, /与参考一致/);
+  assert.match(markdown, /渲染等价/);
   assert.match(markdown, /耗时/);
   assert.match(markdown, /token/);
   assert.match(markdown, /--arm=page/);

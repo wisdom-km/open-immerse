@@ -118,23 +118,24 @@ test("vision scale is 4 and the pad is larger in the screen pixel unit", () => {
   assert.equal(FORMULA_INK_PAD_PX.displayProtect, 7);
   assert.equal(VISION_INK_PAD_PX.inline, 10);
   assert.equal(VISION_INK_PAD_PX.inlineProtect, 11);
-  assert.equal(VISION_INK_PAD_PX.display, 14);
-  assert.equal(VISION_INK_PAD_PX.displayProtect, 15);
+  assert.equal(VISION_INK_PAD_PX.display, 18);
+  assert.equal(VISION_INK_PAD_PX.displayProtect, 19);
   assert.ok(VISION_INK_PAD_PX.inline > FORMULA_INK_PAD_PX.inline);
   assert.ok(VISION_INK_PAD_PX.display > FORMULA_INK_PAD_PX.display);
   assert.ok(VISION_INK_PAD_PX.inline >= 8 && VISION_INK_PAD_PX.inline <= 12);
   assert.ok(VISION_INK_PAD_PX.inlineProtect >= 8 && VISION_INK_PAD_PX.inlineProtect <= 12);
-  assert.ok(VISION_INK_PAD_PX.display >= 12 && VISION_INK_PAD_PX.display <= 16);
-  assert.ok(VISION_INK_PAD_PX.displayProtect >= 12 && VISION_INK_PAD_PX.displayProtect <= 16);
+  assert.equal(VISION_INK_PAD_PX.display, 9 * CROP_SCALE);
+  assert.equal(VISION_INK_PAD_PX.displayProtect, 9 * CROP_SCALE + 1);
 
   const display = visionPadFor({ display: true }, VISION_CROP_SCALE);
   const inline = visionPadFor({ display: false, inlineOf: "p" }, VISION_CROP_SCALE);
   const protect = visionPadFor({ display: true, formulaInkProtect: true }, VISION_CROP_SCALE);
-  assert.equal(display.namedPx, 14);
-  assert.equal(display.padPx, formulaInkPadPx(14, 4, CROP_SCALE));
+  assert.equal(display.namedPx, 18);
+  assert.equal(display.padPx, formulaInkPadPx(18, 4, CROP_SCALE));
+  assert.equal(display.padPx, 36);
   assert.equal(inline.namedPx, 10);
   assert.equal(inline.padPx, 20);
-  assert.equal(protect.namedPx, 15);
+  assert.equal(protect.namedPx, 19);
   assert.ok(display.padPx > formulaInkMeasureOptions(4, { inline: false }).padPx);
   assert.equal(formulaInkMeasureOptions(4, { inline: false }).padPx, formulaInkPadPx(FORMULA_INK_PAD_PX.display, 4));
   assert.equal(formulaInkPadPx(FORMULA_INK_PAD_PX.inline, CROP_SCALE), FORMULA_INK_PAD_PX.inline);
@@ -197,7 +198,7 @@ test("vision ink pad is wider than the screen pad and still masks the next line"
   const visionPx = rasterCropRect(vision.relativeBbox, high.width, high.height);
   const screenPadAtVision = formulaInkPadPx(FORMULA_INK_PAD_PX.display, VISION_CROP_SCALE);
   const extra = vision.padPx - screenPadAtVision;
-  assert.equal(vision.padPx, 28);
+  assert.equal(vision.padPx, 36);
   assert.ok(extra > 0);
   assert.ok(visionPx.sw > screenPx.sw * 2, `width ${visionPx.sw} vs ${screenPx.sw * 2}`);
   assert.ok(visionPx.sh > screenPx.sh * 2, `height ${visionPx.sh} vs ${screenPx.sh * 2}`);
@@ -266,8 +267,8 @@ test("visionCropFor asks for a tight scale-4 crop and ignores paragraph mode", a
   assert.equal(seen[0].pad.namedPx, VISION_INK_PAD_PX.display);
   assert.equal(png.meta.kind, "vision");
   assert.equal(png.meta.scale, 4);
-  assert.equal(png.meta.pad, 14);
-  assert.equal(png.w, 32 + 14);
+  assert.equal(png.meta.pad, 18);
+  assert.equal(png.w, 32 + 18);
   assert.equal(png.hash, sha256Hex(png.base64).slice(0, 12));
 
   const inlineBare = visionCropSpec({ display: false, inlineOf: "t" });
