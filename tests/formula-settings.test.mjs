@@ -17,6 +17,9 @@ import { multimodalTier } from "../lib/formula-tiers/multimodal.js";
 import { ocrTier } from "../lib/formula-tiers/ocr.js";
 import { scheduleFormulaBlock } from "../lib/formula-schedule.js";
 import {
+  ARK_DIRECT_BASE_URL,
+  ARK_PLAN_BASE_URL,
+  ARK_PLAN_PAYG_HINT,
   FORMULA_BASE_URL_NOTE,
   FORMULA_ORDER,
   FORMULA_PRIVACY_NOTE,
@@ -40,7 +43,9 @@ import {
   ocrSwitchState,
   placeholderCopy,
   probeClock,
+  probeExplanation,
   providerSwitchState,
+  requestUsesArkPlan,
   readFormulaSettings,
   runFormulaProbe,
   stubFormulaProbe,
@@ -381,6 +386,21 @@ test("FUI-04 custom base URL is required before the vision probe can run", () =>
   assert.equal(missing.summary, EMPTY_KEY_HINT);
   assert.equal(probeNeedsAttention(missing), false);
   assert.notEqual(missing.chip, "密钥无效 (401)");
+});
+
+test("a plan-endpoint 401 keeps the invalid-key chip and shows the pay-as-you-go hint", () => {
+  assert.equal(requestUsesArkPlan(`${ARK_PLAN_BASE_URL}/chat/completions`), true);
+  assert.equal(requestUsesArkPlan(`${ARK_PLAN_BASE_URL}/`), true);
+  assert.equal(requestUsesArkPlan("https://ark.cn-beijing.volcengine.com/api/plan/v3/chat/completions"), true);
+  assert.equal(requestUsesArkPlan(`${ARK_DIRECT_BASE_URL}/chat/completions`), false);
+  assert.equal(requestUsesArkPlan("https://api.openai.com/v1/chat/completions"), false);
+  assert.equal(requestUsesArkPlan("https://ark.cn-beijing.volces.com.evil/api/plan/v3"), false);
+  assert.equal(requestUsesArkPlan(""), false);
+  assert.ok(ARK_PLAN_PAYG_HINT.length <= 80);
+  assert.match(ARK_PLAN_PAYG_HINT, /https:\/\/ark\.cn-beijing\.volces\.com\/api\/v3/);
+  const probe = classifyFormulaProbe({ status: 401, code: "401", summary: ARK_PLAN_PAYG_HINT }, 1);
+  assert.equal(probe.chip, "密钥无效 (401)");
+  assert.equal(probeExplanation(probe), ARK_PLAN_PAYG_HINT);
 });
 
 test("FUI-07 and FUI-08 probe copy is classified without a network call", async () => {

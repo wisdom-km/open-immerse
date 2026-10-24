@@ -846,3 +846,93 @@ test("error bodies stay unread unless the caller opts in", async () => {
   assert.equal(opted.ok, false);
   assert.equal(opted.data.error.message, "This model does not support image input");
 });
+
+test("abort releases the multimodal account slot immediately and does not double-release", async () => {
+  const gates = [];
+  let started = 0;
+  const net = createNet({
+    transport: () => new Promise((resolve) => {
+      started += 1;
+      gates.push(resolve);
+    })
+  });
+  const headers = { Authorization: "Bearer slot-key" };
+  const controllers = [new AbortController(), new AbortController(), new AbortController()];
+  const hanging = controllers.map((controller) => net.fetch({
+    url: "https://example.test/mm-slot",
+    method: "POST",
+    purpose: "multimodal",
+    headers,
+    signal: controller.signal,
+    timeoutMs: false,
+    retry: false
+  }));
+  for (let i = 0; i < 20 && started < 3; i += 1) await Promise.resolve();
+  assert.equal(started, 3);
+  for (const controller of controllers) controller.abort();
+  const settled = await Promise.allSettled(hanging);
+  assert.deepEqual(settled.map((item) => item.status), ["rejected", "rejected", "rejected"]);
+  for (const item of settled) assert.equal(item.reason.name, "AbortError");
+
+  const follow = [0, 1, 2, 3].map(() => net.fetch({
+    url: "https://example.test/mm-slot",
+    method: "POST",
+    purpose: "multimodal",
+    headers,
+    timeoutMs: false,
+    retry: false
+  }));
+  for (let i = 0; i < 20 && started < 6; i += 1) await Promise.resolve();
+  assert.equal(started, 6);
+  gates[3]({ ok: true, status: 200, data: { ok: true } });
+  for (let i = 0; i < 20 && started < 7; i += 1) await Promise.resolve();
+  assert.equal(started, 7);
+  for (let i = 0; i < started; i += 1) {
+    if (i === 3) continue;
+    gates[i]({ ok: true, status: 200, data: { ok: true } });
+  }
+  const followed = await Promise.all(follow);
+  assert.equal(followed.length, 4);
+  assert.equal(followed.every((item) => item.ok === true), true);
+});
+
+test("a retry removes the abort listener before the next attempt", async () => {
+  const controller = new AbortController();
+  const signal = controller.signal;
+  let added = 0;
+  let removed = 0;
+  const add = signal.addEventListener.bind(signal);
+  const remove = signal.removeEventListener.bind(signal);
+  signal.addEventListener = (type, listener, options) => {
+    if (type === "abort") added += 1;
+    return add(type, listener, options);
+  };
+  signal.removeEventListener = (type, listener, options) => {
+    if (type === "abort") removed += 1;
+    return remove(type, listener, options);
+  };
+  let calls = 0;
+  const net = createNet({
+    random: () => 0,
+    sleep: () => Promise.resolve(),
+    transport: async () => {
+      calls += 1;
+      if (calls === 1) return { ok: false, status: 500, data: {} };
+      return { ok: true, status: 200, data: { ok: true } };
+    }
+  });
+  const res = await net.fetch({
+    url: "https://example.test/retry-listener",
+    method: "POST",
+    purpose: "multimodal",
+    headers: { Authorization: "Bearer listener-key" },
+    signal,
+    timeoutMs: false,
+    retry: { max: 1, on: [500], backoffMs: [0, 0], honorRetryAfter: false }
+  });
+  assert.equal(res.ok, true);
+  assert.equal(calls, 2);
+  assert.equal(added, 2);
+  assert.equal(removed, 2);
+  assert.equal(signal.aborted, false);
+});

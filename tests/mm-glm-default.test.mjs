@@ -11,6 +11,7 @@ import { resolveAskTarget } from "../lib/ask-route.js";
 import {
   ARK_DIRECT_BASE_URL,
   ARK_PLAN_BASE_URL,
+  ARK_PLAN_PAYG_HINT,
   FORMULA_ARK_BASE_NOTE,
   FORMULA_SETTINGS_KEY,
   LEGACY_DOUBAO_MODEL,
@@ -26,7 +27,7 @@ import { renderFormulaPanel } from "../lib/formula-settings-ui.js";
 import { classifyMmDecision } from "../lib/formula-mm-ledger.js";
 import { PROBE_PNG_BASE64 } from "../lib/mm-probe.js";
 import { applyChatThinking } from "../lib/providers.js";
-import { buildVisionRequest, multimodalTarget, sendVision } from "../lib/mm-client.js";
+import { buildVisionRequest, classifyVisionError, multimodalTarget, sendVision } from "../lib/mm-client.js";
 import { arkImagePlan, normalizeGlmRetryBody } from "../lib/mm-caps.js";
 import { createNet, MM_ACCOUNT_CONCURRENCY } from "../lib/net/fetch.js";
 import { readPngInfo } from "../lib/vision-png.js";
@@ -609,4 +610,47 @@ test("a saved doubao-seed lite model is shown as that model, not as glm", async 
   } finally {
     globalThis.document = previous;
   }
+});
+
+test("a 401 from the default plan Base URL names /api/v3; a direct or other host does not", async () => {
+  const planUrl = `${ARK_PLAN_BASE_URL}/chat/completions`;
+  const directUrl = `${ARK_DIRECT_BASE_URL}/chat/completions`;
+  const denied = () => ({
+    ok: false,
+    status: 401,
+    data: { error: { message: "AuthenticationError" } }
+  });
+  const plan = await sendVision({
+    target: { ...glmTarget(), url: planUrl },
+    text: "行内公式",
+    images: [{ mime: "image/png", base64: PROBE_PNG_BASE64 }],
+    secret: KEY_A,
+    net: netOf(denied)
+  });
+  assert.equal(plan.error.code, "401");
+  assert.equal(plan.error.summary, ARK_PLAN_PAYG_HINT);
+  assert.match(plan.error.summary, /\/api\/v3/);
+  assert.equal(plan.error.summary.includes(KEY_A), false);
+  assert.ok(plan.error.summary.length <= 80);
+
+  const direct = await sendVision({
+    target: glmTarget(),
+    text: "行内公式",
+    images: [{ mime: "image/png", base64: PROBE_PNG_BASE64 }],
+    secret: KEY_A,
+    net: netOf(denied)
+  });
+  assert.equal(direct.error.code, "401");
+  assert.match(direct.error.summary, /AuthenticationError/);
+  assert.equal(direct.error.summary.includes("按量"), false);
+  assert.equal(directUrl.endsWith("/api/v3/chat/completions"), true);
+
+  const other = classifyVisionError({
+    status: 401,
+    data: { error: { message: "invalid" } },
+    url: "https://api.openai.com/v1/chat/completions"
+  });
+  assert.equal(other.error.summary, "invalid");
+  const missing = classifyVisionError({ status: 401, data: { error: { message: "paper9z" } } });
+  assert.equal(missing.error.summary, "paper9z");
 });
