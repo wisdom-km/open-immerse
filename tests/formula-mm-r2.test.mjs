@@ -8,11 +8,14 @@ import assert from "node:assert/strict";
 
 import {
   TARGET_BOX_COLOR,
+  TARGET_BOX_GAP,
   TARGET_BOX_PX,
   contextCropGeometry,
   contextWindow,
   paintTargetBox,
-  targetBoxPixels
+  seatInkBox,
+  targetBoxPixels,
+  targetGapPx
 } from "../lib/formula-context-crop.js";
 import { formulaRegionWindow } from "../lib/pdf-formula-raster.js";
 import {
@@ -183,6 +186,100 @@ test("the red box stays outside the formula at DPR 1 and DPR 2", () => {
   assert.ok(high.width > low.width);
   assert.equal(low.dpr, 1);
   assert.equal(high.dpr, 2);
+});
+
+test("the stroke inner edge clears the ink bbox by the gap at DPR 1 and DPR 2", () => {
+  for (const dpr of [1, 2]) {
+    const scale = VISION_CROP_SCALE * dpr;
+    const gap = targetGapPx(scale);
+    assert.equal(gap, TARGET_BOX_GAP * dpr);
+    const width = 120 * dpr;
+    const height = 90 * dpr;
+    const data = new Uint8ClampedArray(width * height * 4);
+    data.fill(255);
+    const dot = (x, y) => {
+      const index = (y * width + x) * 4;
+      data[index] = 0;
+      data[index + 1] = 0;
+      data[index + 2] = 0;
+      data[index + 3] = 255;
+    };
+    const x0 = 28 * dpr;
+    const y0 = 30 * dpr;
+    const inkW = 18 * dpr;
+    const inkH = 14 * dpr;
+    for (let y = y0; y < y0 + inkH; y += 1) {
+      for (let x = x0; x < x0 + inkW; x += 1) dot(x, y);
+    }
+    // Disconnected ≤ bar, five 4× pixels to the right of the metric ink.
+    const tipX = x0 + inkW + 5 * dpr;
+    for (let y = y0 + inkH - 3 * dpr; y < y0 + inkH; y += 1) {
+      for (let x = tipX; x < tipX + 3 * dpr; x += 1) dot(x, y);
+    }
+    // Comma tail, four 4× pixels below the metric ink.
+    const tailY = y0 + inkH + 4 * dpr;
+    for (let y = tailY; y < tailY + 4 * dpr; y += 1) dot(x0 + 4 * dpr, y);
+    const glyph = { x: x0, y: y0, w: inkW, h: inkH };
+    const image = { data, width, height };
+    const seated = seatInkBox(image, glyph, { glyphs: [glyph], scale });
+    const owned = [];
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const index = (y * width + x) * 4;
+        if (data[index] !== 0) continue;
+        owned.push(index);
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    assert.ok(maxX >= tipX, `dpr ${dpr} the detached bar is part of the ink bbox`);
+    assert.ok(maxY >= tailY, `dpr ${dpr} the comma tail is part of the ink bbox`);
+    assert.ok(seated.x + gap <= minX, `dpr ${dpr} left gap`);
+    assert.ok(seated.y + gap <= minY, `dpr ${dpr} top gap`);
+    assert.ok(maxX < seated.x + seated.w - gap, `dpr ${dpr} right gap`);
+    assert.ok(maxY < seated.y + seated.h - gap, `dpr ${dpr} bottom gap`);
+    const paint = {
+      width,
+      height,
+      getContext() {
+        return {
+          fillStyle: TARGET_BOX_COLOR,
+          fillRect(x, y, w, h) {
+            const x0p = Math.max(0, Math.floor(x));
+            const y0p = Math.max(0, Math.floor(y));
+            const x1p = Math.min(width, Math.ceil(x + w));
+            const y1p = Math.min(height, Math.ceil(y + h));
+            for (let yy = y0p; yy < y1p; yy += 1) {
+              for (let xx = x0p; xx < x1p; xx += 1) {
+                const index = (yy * width + xx) * 4;
+                data[index] = 255;
+                data[index + 1] = 0;
+                data[index + 2] = 0;
+              }
+            }
+          }
+        };
+      }
+    };
+    assert.equal(paintTargetBox(paint, seated, TARGET_BOX_PX), true);
+    for (const index of owned) {
+      assert.equal(data[index], 0, `dpr ${dpr} stroke covers target ink`);
+    }
+    let thickness = 0;
+    const midX = seated.x + Math.floor(seated.w / 2);
+    for (let step = 1; step <= 8; step += 1) {
+      const index = ((seated.y - step) * width + midX) * 4;
+      if (data[index] !== 255 || data[index + 1] !== 0) break;
+      thickness += 1;
+    }
+    assert.equal(thickness, TARGET_BOX_PX, `dpr ${dpr} stroke width`);
+  }
 });
 
 test("a display crop keeps at least 9pt above and below and has no red-box window", () => {

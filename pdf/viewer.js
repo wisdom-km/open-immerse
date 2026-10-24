@@ -4106,7 +4106,7 @@ async function renderContextVisionCrop(page, block, pageNumber, spec = {}) {
         ? seatInkBox(
           { data: pixels?.data, width: canvas.width, height: canvas.height },
           glyphRect,
-          { glyphs: glyphRects }
+          { glyphs: glyphRects, scale: plan.scale }
         )
         : null;
       if (seated) rect = seated;

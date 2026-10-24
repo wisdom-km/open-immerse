@@ -159,7 +159,7 @@ test("viewer stamps before it crops, and the model crop stays sharp:false", () =
   assert.match(functionBody("cropLayoutBlocks"), /formulaModelDisplayCrop\(/);
   assert.match(functionBody("restampArxivPage"), /formulaModelPng\(/);
   assert.equal(functionBody("refreshFormulaCropsForDisplay").includes("scheduleFormulaBlock"), false);
-  assert.equal(MM_TIER_VERSION, "mm-5");
+  assert.equal(MM_TIER_VERSION, "mm-6");
 });
 
 test("a cold start and a reopen share unitId and cropHash and send once", async () => {
@@ -252,7 +252,7 @@ test("a cold start and a reopen share unitId and cropHash and send once", async 
   const live = identity(saved[0].blocks[0], "doc-reopen", saved[0].page);
   assert.equal(tempKey.includes(":p3-b12:"), true);
   assert.equal(tempKey.includes(live.unitId), false);
-  assert.equal(MM_TIER_VERSION, "mm-5");
+  assert.equal(MM_TIER_VERSION, "mm-6");
 });
 
 // Letter page at the page-raster scale. A second measure of the stored trim

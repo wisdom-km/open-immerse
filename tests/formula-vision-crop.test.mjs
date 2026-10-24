@@ -316,9 +316,9 @@ test("a different pad or scale changes the crop hash, and a repeat does not", as
     { id: "multimodal", version: "mm-2" },
     model
   );
-  assert.equal(live, `${unitKey}:multimodal:mm-5:${model}:${first.hash}`);
+  assert.equal(live, `${unitKey}:multimodal:mm-6:${model}:${first.hash}`);
   assert.notEqual(live, retired);
-  assert.match(live, /:mm-5:/);
+  assert.match(live, /:mm-6:/);
   assert.doesNotMatch(live, /:mm-3:/);
   assert.doesNotMatch(live, /:mm-2:/);
 });
@@ -398,7 +398,7 @@ test("schedule sends the vision crop and leaves the screen image in place", asyn
 });
 
 test("an mm-2 row is not adopted for the same pixels", async () => {
-  assert.equal(MM_TIER_VERSION, "mm-5");
+  assert.equal(MM_TIER_VERSION, "mm-6");
   const settings = settingsFor();
   const cache = createFormulaCache(createMemoryStore());
   const named = `${settings.multimodal.model}#${mmConfigFingerprint(settings)}`;
@@ -461,7 +461,7 @@ test("an mm-2 row is not adopted for the same pixels", async () => {
   assert.equal(shown.imageUrl, display);
   assert.equal(await cache.store.getTier(oldKey) != null, true);
   const live = await cache.store.getTier(liveKey);
-  assert.equal(live.result.meta.version, "mm-5");
+  assert.equal(live.result.meta.version, "mm-6");
   assert.equal(live.result.latex, "x");
 });
 
@@ -506,5 +506,5 @@ test("screen redraw, page raster, and the 7-level chain stay on their old path",
   assert.match(chain, /Order: arxiv, multimodal, ocr, self, vector, crop, placeholder/);
   const tiers = createDefaultTiers();
   assert.deepEqual(Object.keys(tiers), ["arxiv", "multimodal", "ocr", "self", "vector", "crop", "placeholder"]);
-  assert.equal(tiers.multimodal.version, "mm-5");
+  assert.equal(tiers.multimodal.version, "mm-6");
 });
