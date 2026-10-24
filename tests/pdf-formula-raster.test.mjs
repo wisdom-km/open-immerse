@@ -23,7 +23,11 @@ import {
   imageInkRatio,
   isSourceRedrawBlock,
   pageCropLooksEmpty,
+  inlineShortCropScale,
+  isInlineFormulaBlock,
   scaleCovering,
+  shortInlineFormulaLabel,
+  SHORT_INLINE_FORMULA_GLYPHS,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { FORMULA_INK_PAD_PX, measureFormulaCrop } from "../lib/pdf-text-layer.js";
@@ -741,6 +745,69 @@ test("figure placeholder dashed border stays visible on all four reader themes",
     const ratio = contrast(paper, line);
     assert.ok(ratio >= 3, `${theme} ${paper} on ${line} contrast ${ratio.toFixed(2)}`);
   }
+});
+
+test("short inline crops scale uniformly past the 24×12 floor", () => {
+  assert.equal(CROP_SCALE, 2);
+  assert.equal(SHORT_INLINE_FORMULA_GLYPHS, 12);
+  assert.equal(inlineShortCropScale(12, 8), 0);
+  assert.equal(inlineShortCropScale(12, 8, {
+    pageWidth: 100,
+    pageHeight: 100,
+    pixelWidth: 200,
+    pixelHeight: 200
+  }), 0);
+
+  const lifted = inlineShortCropScale(11, 8);
+  assert.ok(lifted > CROP_SCALE, `scale ${lifted}`);
+  const widthPx = Math.round(11 * lifted);
+  const heightPx = Math.round(8 * lifted);
+  assert.ok(widthPx >= 24 && heightPx >= 12, `${widthPx}×${heightPx}`);
+  assert.ok(Math.abs(widthPx / heightPx - 11 / 8) < 0.2, `${widthPx}×${heightPx}`);
+
+  const tall = inlineShortCropScale(20, 5);
+  const tallW = Math.round(20 * tall);
+  const tallH = Math.round(5 * tall);
+  assert.ok(tallH >= 12 && tallW >= 24, `${tallW}×${tallH}`);
+  assert.ok(Math.abs(tallW / tallH - 20 / 5) < 0.25, `${tallW}×${tallH}`);
+  assert.ok(tallW > 24, "uniform scale, not a 24px-wide pad");
+
+  assert.equal(inlineShortCropScale(1, 1e8), 0);
+  assert.equal(inlineShortCropScale(0, 8), 0);
+});
+
+test("short inline formulas show source text instead of the fallback string", () => {
+  const inline = { label: "formula", display: false, inlineOf: "p4-b3" };
+  assert.equal(isInlineFormulaBlock(inline), true);
+  assert.equal(shortInlineFormulaLabel({ ...inline, sourceText: "πθ" }), "πθ");
+  assert.equal(shortInlineFormulaLabel({ ...inline, sourceText: "r̂θ" }), "r̂θ");
+  assert.equal(shortInlineFormulaLabel({ ...inline, sourceText: "x′t" }), "x′t");
+  assert.equal(shortInlineFormulaLabel({ ...inline, sourceText: "  πθ  " }), "πθ");
+  assert.equal(shortInlineFormulaLabel({ ...inline, sourceText: "πθ\nnext" }), "");
+  assert.equal(shortInlineFormulaLabel({ ...inline, sourceText: "abcdefghijklmnopqrstuvwxyz" }), "");
+  assert.equal(shortInlineFormulaLabel({ ...inline, sourceText: "" }), "");
+  assert.equal(shortInlineFormulaLabel({ label: "formula", display: true, sourceText: "πθ" }), "");
+  assert.equal(shortInlineFormulaLabel({ label: "text", display: false, sourceText: "πθ" }), "");
+  const paint = viewerSrc.slice(
+    viewerSrc.indexOf("function paintRenderPieces"),
+    viewerSrc.indexOf("function unitsForLayout")
+  );
+  assert.match(paint, /shortInlineFormulaLabel\(formula\)/);
+  assert.match(paint, /label \|\| PDF_COPY\.formulaFallback/);
+  const crop = viewerSrc.slice(
+    viewerSrc.indexOf("async function withRasterCrop"),
+    viewerSrc.indexOf("async function cropLayoutBlocks")
+  );
+  assert.match(crop, /renderShortInlineCrop/);
+  assert.match(crop, /imageForVisualBlock/);
+  assert.match(crop, /isInlineFormulaBlock/);
+  const sharp = viewerSrc.slice(
+    viewerSrc.indexOf("async function renderSharpVisualCrop"),
+    viewerSrc.indexOf("async function renderSharpFormulaCrop")
+  );
+  assert.match(sharp, /shortInlineScale/);
+  assert.match(sharp, /FORMULA_INK_MIN_SPAN/);
+  assert.match(sharp, /originX = Number\(block\.bbox\[0\]\) \|\| 0/);
 });
 
 function contrast(paper, ink) {

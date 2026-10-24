@@ -320,14 +320,18 @@ import {
   assetLayoutCapPx,
   createFormulaRasterCache,
   fitSnappedFormulaCss,
+  FORMULA_INK_MIN_SPAN,
   formulaDevicePixels,
   formulaRasterCacheKey,
   formulaInkPadPx,
   formulaRasterPlan,
   formulaRegionWindow,
   imageInkRatio,
+  inlineShortCropScale,
+  isInlineFormulaBlock,
   isSourceRedrawBlock,
   pageCropLooksEmpty,
+  shortInlineFormulaLabel,
   visualDisplayCssSize
 } from "../lib/pdf-formula-raster.js";
 import { detectArxivId } from "../lib/arxiv-id.js";
@@ -3932,6 +3936,14 @@ async function renderSharpVisualCrop(page, raster, block, pageNumber) {
       devicePixelRatio: metrics.devicePixelRatio
     });
   if (!plan || (!formula && plan.reusePageRaster)) return "";
+  // A short inline crop is already at the 24×12 floor. The device-pixel
+  // redraw is the print size and would replace that bitmap with a smaller
+  // one. Keep the floor crop until zoom asks for at least that many pixels.
+  if (
+    formula &&
+    Number(block.shortInlineScale) > 0 &&
+    (plan.pixelWidth < FORMULA_INK_MIN_SPAN.x || plan.pixelHeight < FORMULA_INK_MIN_SPAN.y)
+  ) return "";
   const key = formulaRasterCacheKey({
     docId,
     page: pageNumber,
@@ -4244,10 +4256,102 @@ function redrawKeepsInk(context, canvas, raster, block) {
   return acceptVisualRedraw(redrawInk, rasterRegionInk(raster?.canvas, block?.bbox));
 }
 
+/**
+ * Page-raster crops under 24×12 stay empty. A short inline formula is
+ * redrawn from the PDF at the smallest uniform scale that clears that
+ * floor. The canvas is the bbox at that scale, not a 24px-wide pad.
+ * No ink leaves imageUrl empty so the reader can show sourceText.
+ */
+async function renderShortInlineCrop(page, raster, block, pageNumber) {
+  if (!page || !isInlineFormulaBlock(block) || !Array.isArray(block.bbox)) return "";
+  let unit = null;
+  try {
+    unit = page.getViewport({ scale: 1 });
+  } catch {
+    return "";
+  }
+  const pageW = Number(unit.width) || 0;
+  const pageH = Number(unit.height) || 0;
+  const pdfW = (Number(block.bbox[2]) - Number(block.bbox[0])) * pageW;
+  const pdfH = (Number(block.bbox[3]) - Number(block.bbox[1])) * pageH;
+  const scale = inlineShortCropScale(pdfW, pdfH, {
+    pageWidth: pageW,
+    pageHeight: pageH,
+    pixelWidth: raster?.pixelWidth || raster?.canvas?.width,
+    pixelHeight: raster?.pixelHeight || raster?.canvas?.height
+  });
+  if (!(scale > 0)) return "";
+  const key = formulaRasterCacheKey({
+    docId,
+    page: pageNumber,
+    bbox: block.bbox,
+    scale,
+    devicePixelRatio: 0
+  });
+  const cached = formulaRasterCache.get(key);
+  if (cached) {
+    block.shortInlineScale = scale;
+    return cached;
+  }
+  let canvas = null;
+  try {
+    const pixelWidth = Math.round(pdfW * scale);
+    const pixelHeight = Math.round(pdfH * scale);
+    if (pixelWidth < FORMULA_INK_MIN_SPAN.x || pixelHeight < FORMULA_INK_MIN_SPAN.y) return "";
+    const full = page.getViewport({ scale });
+    const originX = Number(block.bbox[0]) || 0;
+    const originY = Number(block.bbox[1]) || 0;
+    const viewport = page.getViewport({
+      scale,
+      offsetX: -originX * full.width,
+      offsetY: -originY * full.height
+    });
+    canvas = document.createElement("canvas");
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+    const context = formulaDrawContext(canvas);
+    if (!context) return "";
+    const task = renderPdfPage(page, { canvasContext: context, viewport });
+    formulaCropRenderTask = task;
+    try {
+      await task.promise;
+    } finally {
+      if (formulaCropRenderTask === task) formulaCropRenderTask = null;
+    }
+    compositeWhitePaper(context, canvas);
+    paintFormulaMask(canvas, block.bbox, block);
+    let ink = null;
+    try {
+      if (typeof context.getImageData === "function") {
+        ink = imageInkRatio(context.getImageData(0, 0, canvas.width, canvas.height));
+      }
+    } catch {
+      ink = null;
+    }
+    if (!(ink > 0)) return "";
+    const url = canvas.toDataURL("image/png");
+    if (!/^data:image\/png;base64,/.test(url)) return "";
+    formulaRasterCache.set(key, url);
+    block.shortInlineScale = scale;
+    return url;
+  } catch {
+    return "";
+  } finally {
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  }
+}
+
 async function withRasterCrop(raster, page, block, pageNumber, options = {}) {
   if (!isVisualBlock(block) || !Array.isArray(block.bbox)) return block;
   const next = { ...block };
   next.imageUrl = imageForVisualBlock(raster, next);
+  if (!next.imageUrl && isInlineFormulaBlock(next)) {
+    const lifted = await renderShortInlineCrop(page, raster, next, pageNumber);
+    if (lifted) next.imageUrl = lifted;
+  }
   if (next.imageUrl) next.surface = "png";
   if ((next.label === "figure" || next.label === "table") && next.imageUrl && pageCropLooksEmpty(rasterRegionInk(raster?.canvas, next.bbox), next.bbox)) {
     next.imageUrl = "";
@@ -5714,7 +5818,10 @@ function paintRenderPieces(node, pieces, block, layout) {
         clip.append(img);
         span.append(clip);
       } else span.append(img);
-    } else span.textContent = PDF_COPY.formulaFallback;
+    } else {
+      const label = shortInlineFormulaLabel(formula);
+      span.textContent = label || PDF_COPY.formulaFallback;
+    }
     node.append(span);
   });
 }
