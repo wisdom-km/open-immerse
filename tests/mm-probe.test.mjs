@@ -1577,6 +1577,39 @@ test("real keystrokes then change clear the on-screen 已连通 chip", async () 
   }
 });
 
+test("reselecting custom does not store a typed model draft", async () => {
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: {
+        provider: "custom",
+        apiKey: SECRET,
+        model: "local-vision",
+        customModel: true,
+        baseUrl: "https://vendor.example/v1"
+      }
+    }
+  };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const tab = await openOptionsTab("model-draft-provider");
+    typeValue(tab, modelTextInput(tab), "draft-model");
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "local-vision");
+    // Removing the key repaints from the live card, so the provider closure sees the keystroke.
+    assert.equal(clickRemoveKey(tab), true);
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "local-vision");
+    changeProvider(tab, "custom");
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "custom");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "local-vision");
+    assert.equal(modelTextInput(tab).value, "draft-model");
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
 test("switching to custom does not store a typed Base URL draft", async () => {
   const bag = {
     [FORMULA_SETTINGS_KEY]: {
