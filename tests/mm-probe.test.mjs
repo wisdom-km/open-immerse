@@ -4137,7 +4137,9 @@ test("a chosen vendor with an empty key shows the fill-key hint", () => {
     assert.equal(panel.querySelector("[data-formula-action='mm']").disabled, true);
     assert.equal(panel.querySelector("[data-formula-action='ocr']").disabled, true);
     renderFormulaPanel(panel, defaultFormulaSettings(), {});
-    assert.equal(panel.querySelector("[data-key-hint]"), null);
+    assert.equal(panel.querySelector("[data-key-hint='mm']").textContent, EMPTY_KEY_HINT);
+    assert.equal(panel.querySelector("[data-key-hint='ocr']"), null);
+    assert.equal(panel.querySelector("[data-formula-action='mm']").disabled, true);
     renderFormulaPanel(panel, openaiSettings(), {});
     assert.equal(panel.querySelector("[data-formula-card='mm'] [data-key-hint]"), null);
     assert.equal(panel.querySelector("[data-formula-action='mm']").disabled, false);
