@@ -33,7 +33,8 @@
  * 报告 / Report
  *   默认目录 oi-qa/f7-multimodal/runs/（不进扩展包，runs/ 不提交）。
  *   report.json + report.md。字段见计划 §5：LaTeX、核对、上屏方式、
- *   与参考一致?、耗时、token，以及「核对过但与参考不一致」的条数。
+ *   渲染等价?、耗时、token，以及「核对过但与参考不一致」的条数。
+ *   主指标是 KaTeX 渲染等价（MathML），不是字符串精确匹配。
  *   PDF 夹具不入库：tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf
  *   用 scripts/ci/fetch-fixtures.sh 按 2305.18290v3 取。
  */

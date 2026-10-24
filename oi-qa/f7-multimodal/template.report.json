@@ -74,7 +74,7 @@
     "latex": "模型给出的公式 LaTeX。没有可核对的候选时为 null。",
     "verify": "第二层核对（字符集 + KaTeX）。pass 为真才算核对过。",
     "paint": "上屏方式：katex（核对通过）/ crop（核对不过、UNREADABLE 或调用失败，静默裁图）/ none（未发送）。",
-    "matchesReference": "与参考 LaTeX 归一化后是否一致。缺参考或没有候选时为 null。",
+    "matchesReference": "主指标：两边 KaTeX 渲染出的 MathML 是否等价。缺参考或没有候选时为 null。不再用字符串精确匹配。",
     "latencyMs": "这一次模型请求的耗时（毫秒）。未发送为 0。",
     "tokens": "token：prompt / completion / total。没有用量时为 null。",
     "checkedButMismatch": "核对通过，但与参考不一致。汇总字段是这个标志的条数。"

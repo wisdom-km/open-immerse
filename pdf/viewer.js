@@ -352,8 +352,10 @@ import {
 } from "../lib/formula-context-crop.js";
 import {
   VISION_CROP_SCALE,
+  displayVisionSourceBbox,
   measureVisionRegion,
   visionCropCacheKey,
+  visionCropSpec,
   visionPadFor,
   visionRasterPlan,
   visionSourceBbox
@@ -4104,7 +4106,7 @@ async function renderContextVisionCrop(page, block, pageNumber, spec = {}) {
         ? seatInkBox(
           { data: pixels?.data, width: canvas.width, height: canvas.height },
           glyphRect,
-          { glyphs: glyphRects }
+          { glyphs: glyphRects, scale: plan.scale }
         )
         : null;
       if (seated) rect = seated;
@@ -4138,14 +4140,19 @@ async function renderVisionFormulaCrop(page, raster, block, pageNumber, spec = {
   void raster;
   if (spec?.mode === "context") return renderContextVisionCrop(page, block, pageNumber, spec);
   if (!page || block?.label !== "formula" || typeof page.getViewport !== "function") return "";
-  const source = visionSourceBbox(block);
-  if (!source) return "";
   let unit = null;
   try {
     unit = page.getViewport({ scale: 1 });
   } catch {
     return "";
   }
+  // The bitmap has to contain the 9pt pad. Measuring inside the tight layout
+  // box clamps that pad away. Inline formulas never reach this branch.
+  const expanded = Array.isArray(spec?.sourceBbox) && spec.sourceBbox.length >= 4
+    ? spec.sourceBbox
+    : displayVisionSourceBbox(block, unit.height);
+  const source = expanded || visionSourceBbox(block);
+  if (!source) return "";
   const requested = Number(spec?.scale) > 0 ? Number(spec.scale) : VISION_CROP_SCALE;
   const plan = visionRasterPlan({
     bbox: source,
@@ -5139,6 +5146,20 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
     pageWidth = undefined;
     pageHeight = undefined;
   }
+  let textItems = [];
+  try {
+    if (pageWidth && pageHeight && typeof page?.getTextContent === "function") {
+      const viewport = page.getViewport({ scale: 1 });
+      const content = await page.getTextContent();
+      for (const item of content?.items || []) {
+        const str = String(item?.str || "");
+        if (!str.trim()) continue;
+        textItems.push({ str, bbox: probeViewportBox(item, viewport) });
+      }
+    }
+  } catch {
+    textItems = [];
+  }
   for (const block of blocks || []) {
     if (isStale()) return null;
     if (block?.label !== "formula") {
@@ -5168,6 +5189,11 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
       readAlignment: readCachedArxivAlignment,
       docHash: notesDocHashNow(),
       page: pageNumber,
+      textItems,
+      otherFormulaBoxes: (blocks || [])
+        .filter((item) => item !== block && item?.label === "formula")
+        .map((item) => item.layoutBbox || item.bbox)
+        .filter((box) => Array.isArray(box)),
       katex: globalThis.katex,
       settings: formulaViewerSettings,
       readSettings: () => formulaViewerSettings,
@@ -5938,6 +5964,50 @@ async function dumpFormulaCropProbe(page) {
   };
 }
 
+/**
+ * oiAuto only. The PNG the multimodal request would send: up to four inline
+ * formulas on this page, plus one display formula. No model call.
+ */
+async function dumpInlineVisionCrops(page) {
+  const n = Number(page);
+  const blocks = getPageLayout(n)?.blocks || [];
+  const pdfPage = pdfDoc ? await pdfDoc.getPage(n) : null;
+  const dpr = Number(window.devicePixelRatio) || 1;
+  if (!pdfPage) return { dpr, formulas: [] };
+  const viewport = pdfPage.getViewport({ scale: 1 });
+  const formulas = [];
+  let displayKept = 0;
+  let inlineKept = 0;
+  for (const block of blocks) {
+    if (block?.label !== "formula") continue;
+    const inline = block.display === false || Boolean(block.inlineOf);
+    if (inline && inlineKept >= 4) continue;
+    if (!inline && displayKept >= 1) continue;
+    const spec = visionCropSpec(block, {
+      pageWidth: viewport.width,
+      pageHeight: viewport.height
+    });
+    const image = await renderVisionFormulaCrop(pdfPage, null, block, n, spec);
+    if (inline) inlineKept += 1;
+    else displayKept += 1;
+    formulas.push({
+      id: String(block.id || ""),
+      inline,
+      mode: spec.mode,
+      image: String(image || ""),
+      crop: probeRoundBox(spec.mode === "context" ? spec.window?.bbox : spec.sourceBbox),
+      target: probeRoundBox(spec.window?.target || block.layoutBbox || block.bbox),
+      glyphs: (Array.isArray(block.glyphBoxes) ? block.glyphBoxes : [])
+        .map((box) => probeRoundBox(box))
+        .filter(Boolean),
+      pageWidth: viewport.width,
+      pageHeight: viewport.height,
+      scale: spec.scale
+    });
+  }
+  return { dpr, formulas };
+}
+
 function publishViewerTestHooks() {
   if (!viewerUnderTest()) return;
   globalThis.__oiLibrarySourceSentHas = (hash) => librarySourceSent.has(String(hash || ""));
@@ -5998,6 +6068,7 @@ function publishViewerTestHooks() {
     text: String(block.text || "")
   }));
   globalThis.__oiFormulaDump = (page) => dumpFormulaCropProbe(page);
+  globalThis.__oiInlineVisionCrops = (page) => dumpInlineVisionCrops(page);
   exposeNotesProbe();
   globalThis.__oiJumpFormula = jumpFormulaPlaceholder;
 }

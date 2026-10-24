@@ -17,11 +17,13 @@ import {
   INK_OUTSIDE_PX,
   TARGET_BOX_GAP,
   TARGET_BOX_PX,
+  targetGapPx,
   contextCropGeometry,
   contextWindow,
   containedGlyphInkShortfall,
   formulaInkOutsideCount,
   glyphRectPixels,
+  measureFormulaInk,
   paintTargetBox,
   seatInkBox,
   targetBoxPixels
@@ -223,20 +225,15 @@ test("an empty metric margin above a bracket is not the red edge", () => {
   assert.ok(seated.y + seated.h > 59, "bracket ink is inside");
 });
 
-test("the inter-line gap limits the pad, so a full gap and a 3px shrink both miss", () => {
+test("a close next line does not shrink the white gap below 2px", () => {
   const image = blankImage(80, 70);
   const glyph = { x: 10, y: 10, w: 40, h: 20 };
   for (let y = 20; y <= 29; y += 1) image.dot(20, y);
-  for (let x = glyph.x; x < glyph.x + glyph.w; x += 1) image.dot(x, 34);
+  for (let x = glyph.x; x < glyph.x + glyph.w; x += 1) image.dot(x, 35);
   const seated = seatInkBox(image, glyph);
   const inkBottom = 30;
-  const neighbor = 34;
-  const room = neighbor - inkBottom;
-  const pad = Math.min(TARGET_BOX_GAP, Math.max(0, room - TARGET_BOX_PX));
-  assert.equal(pad, 1);
-  assert.equal(seated.y + seated.h, inkBottom + pad);
-  assert.ok(seated.y + seated.h > inkBottom && seated.y + seated.h < neighbor);
-  assert.ok(neighbor >= seated.y + seated.h + TARGET_BOX_PX);
+  assert.equal(seated.y + seated.h - inkBottom, TARGET_BOX_GAP);
+  assert.ok(seated.y + seated.h - inkBottom >= targetGapPx(4));
   assert.ok(29 < seated.y + seated.h);
 });
 
@@ -267,14 +264,14 @@ test("the red stroke sits outside the glyphs", () => {
     ctx: {
       fillStyle: "",
       fillRect(x, y, w, h) {
-        const red = this.fillStyle === "#e10600";
+        const red = this.fillStyle === "#ff0000";
         for (let py = Math.floor(y); py < y + h; py += 1) {
           for (let px = Math.floor(x); px < x + w; px += 1) {
             if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) {
               canvas.clipped += 1;
               continue;
             }
-            canvas.pixels[(py * canvas.width + px) * 4] = red ? 225 : 0;
+            canvas.pixels[(py * canvas.width + px) * 4] = red ? 1 : 0;
           }
         }
       }
@@ -289,11 +286,11 @@ test("the red stroke sits outside the glyphs", () => {
   let redInside = 0;
   for (let y = glyph.y; y < glyph.y + glyph.h; y += 1) {
     for (let x = glyph.x; x < glyph.x + glyph.w; x += 1) {
-      if (canvas.pixels[(y * canvas.width + x) * 4] === 225) redInside += 1;
+      if (canvas.pixels[(y * canvas.width + x) * 4] === 1) redInside += 1;
     }
   }
   assert.equal(redInside, 0);
-  assert.equal(canvas.pixels[((rect.y - 2) * canvas.width + (rect.x + 2)) * 4], 225);
+  assert.equal(canvas.pixels[((rect.y - 2) * canvas.width + (rect.x + 2)) * 4], 1);
 });
 
 test("Greek subscripts, accents, and superscripts are short formulas; Latin subscripts are not", () => {
@@ -413,14 +410,15 @@ test("only an inline context crop appends the strict prompt", () => {
     { meta: { mode: "context" } }
   );
   assert.equal(inline.system, `${FORMULA_VISION_SYSTEM}\n${FORMULA_CONTEXT_PROMPT}`);
-  assert.match(inline.system, /不要补全/);
+  assert.match(inline.system, /只输出红框里这个公式的 LaTeX/);
+  assert.match(inline.system, /不要输出红框外的公式/);
   assert.equal(formulaVisionPrompt({ display: true }, { meta: { mode: "context" } }).system, FORMULA_VISION_SYSTEM);
   assert.equal(
     formulaVisionPrompt({ inlineOf: "p1-b2" }, { meta: { mode: "context" } }).system,
     `${FORMULA_VISION_SYSTEM}\n${FORMULA_CONTEXT_PROMPT}`
   );
   assert.equal(formulaVisionPrompt({ display: false }, { meta: { mode: "tight" } }).system, FORMULA_VISION_SYSTEM);
-  assert.equal(MM_TIER_VERSION, "mm-4");
+  assert.equal(MM_TIER_VERSION, "mm-6");
 });
 
 test("ink past the metric box stays inside the red box", () => {
@@ -480,11 +478,9 @@ function sliceRaster(image, originX, originY, width, height) {
 }
 
 test("rendered DPO, Attention, and DDPM inline crops keep formula ink inside the red box", { timeout: 1800000 }, async (t) => {
-  // Independent of the mask the box is seated on. A dark component that lies
-  // wholly inside this block's glyph boxes (one pixel of slack, so a neighbour
-  // line cannot qualify) must sit inside the red box. The box keeps a 2px
-  // white gap when the next line leaves room for the stroke; a tighter gap
-  // shrinks that pad instead of crossing the neighbour.
+  // A dark component that lies wholly inside this block's glyph boxes must
+  // sit at least targetGapPx inside the red box. The gap stays at 4× even
+  // when the next line is close.
   const papers = [
     ["DPO", join(root, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf")],
     ["Attention", join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf")],
@@ -549,7 +545,7 @@ test("rendered DPO, Attention, and DDPM inline crops keep formula ink inside the
             .filter(Boolean);
           if (!glyphRect || !glyphs.length) continue;
           const seated = seatInkBox(slice, glyphRect, { glyphs });
-          const outside = containedGlyphInkShortfall(slice, glyphs, seated, 0);
+          const outside = containedGlyphInkShortfall(slice, glyphs, seated, targetGapPx(SCALE));
           if (outside) {
             failures.push(`${paperName} p${number} ${outside}px ${block.sourceText?.slice(0, 40)}`);
           }
@@ -562,14 +558,147 @@ test("rendered DPO, Attention, and DDPM inline crops keep formula ink inside the
   assert.deepEqual(failures, []);
 });
 
-test("the tier key is mm-4 and the crop hash is the png that was sent", () => {
+test("DDPM p3 ≤ and p8 commas stay inside the red box with a white gap", { timeout: 120000 }, async (t) => {
+  const pdfPath = join(root, "tests/fixtures/DDPM_2006.11239.pdf");
+  if (!existsSync(pdfPath)) {
+    t.skip("missing DDPM PDF; the ≤ and comma fixtures did not run");
+    return;
+  }
+  let createCanvas;
+  try {
+    ({ createCanvas } = createRequire(import.meta.url)("@napi-rs/canvas"));
+  } catch {
+    t.skip("@napi-rs/canvas is not installed; the ≤ and comma fixtures did not run");
+    return;
+  }
+  GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(pdfPath)),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  const gap = targetGapPx(SCALE);
+  const failures = [];
+  try {
+    for (const number of [3, 8]) {
+      const pdfPage = await doc.getPage(number);
+      const content = await pdfPage.getTextContent();
+      const ops = await pdfPage.getOperatorList();
+      attachFontRealNames(content.items, pdfPage.commonObjs);
+      const viewport = pdfPage.getViewport({ scale: 1 });
+      const built = textLayerToBlocks({
+        items: content.items,
+        viewport,
+        images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+        page: number
+      });
+      const canvas = createCanvas(Math.ceil(viewport.width * SCALE), Math.ceil(viewport.height * SCALE));
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await pdfPage.render({
+        canvasContext: context,
+        viewport: pdfPage.getViewport({ scale: SCALE })
+      }).promise;
+      const image = context.getImageData(0, 0, canvas.width, canvas.height);
+      const want = number === 3 ? "1 < t ≤ T" : "t + 1, . . . , T";
+      const hits = built.blocks.filter((block) => (
+        block.label === "formula" && block.display === false && String(block.sourceText || "").includes(want)
+      ));
+      if (!hits.length) failures.push(`p${number} missing ${want}`);
+      for (const block of hits) {
+        const frame = contextCropGeometry(block, {
+          pageWidth: viewport.width,
+          pageHeight: viewport.height,
+          scale: SCALE
+        });
+        const window = formulaRegionWindow(frame.bbox, canvas.width, canvas.height);
+        const slice = sliceRaster(image, window.offsetX, window.offsetY, window.pixelWidth, window.pixelHeight);
+        const glyphRect = glyphRectPixels(frame.bbox, block.glyphBoxes, viewport.width, viewport.height, SCALE);
+        const glyphs = (block.glyphBoxes || [])
+          .map((box) => targetBoxPixels(frame.bbox, box, viewport.width, viewport.height, SCALE))
+          .filter(Boolean);
+        const seated = seatInkBox(slice, glyphRect, { glyphs, scale: SCALE });
+        const measured = measureFormulaInk(slice, glyphRect, glyphs, SCALE);
+        const label = `p${number} ${want}`;
+        if (!seated || !measured) {
+          failures.push(`${label} has no seated box`);
+          continue;
+        }
+        const clearLeft = measured.inkLeft - seated.x;
+        const clearTop = measured.top - seated.y;
+        const clearRight = seated.x + seated.w - (measured.inkRight + 1);
+        const clearBottom = seated.y + seated.h - (measured.bottom + 1);
+        if (clearLeft < gap || clearTop < gap || clearRight < gap || clearBottom < gap) {
+          failures.push(`${label} gap ${clearLeft},${clearTop},${clearRight},${clearBottom}`);
+        }
+        const extras = [];
+        for (let y = 0; y < slice.height; y += 1) {
+          for (let x = 0; x < slice.width; x += 1) {
+            if (!measured.mask?.[y * slice.width + x]) continue;
+            const inGlyph = glyphs.some((box) => (
+              x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h
+            ));
+            if (inGlyph) continue;
+            extras.push({ x, y, index: (y * slice.width + x) * 4 });
+          }
+        }
+        if (!extras.length) failures.push(`${label} fixture ink was not outside the metric box`);
+        const below = number === 8 && extras.some((pixel) => pixel.y >= glyphRect.y + glyphRect.h);
+        const beside = number === 3 && extras.some((pixel) => pixel.x >= glyphRect.x + glyphRect.w);
+        if (number === 8 && !below) failures.push(`${label} comma tail is still outside the ink`);
+        if (number === 3 && !beside) failures.push(`${label} ≤ bar is still outside the ink`);
+        const paint = {
+          width: slice.width,
+          height: slice.height,
+          getContext() {
+            return {
+              fillStyle: "#ff0000",
+              fillRect(px, py, w, h) {
+                const x0 = Math.max(0, Math.floor(px));
+                const y0 = Math.max(0, Math.floor(py));
+                const x1 = Math.min(slice.width, Math.ceil(px + w));
+                const y1 = Math.min(slice.height, Math.ceil(py + h));
+                for (let yy = y0; yy < y1; yy += 1) {
+                  for (let xx = x0; xx < x1; xx += 1) {
+                    const index = (yy * slice.width + xx) * 4;
+                    slice.data[index] = 255;
+                    slice.data[index + 1] = 0;
+                    slice.data[index + 2] = 0;
+                  }
+                }
+              }
+            };
+          }
+        };
+        paintTargetBox(paint, seated, TARGET_BOX_PX);
+        for (const pixel of extras) {
+          const inside = pixel.x >= seated.x + gap
+            && pixel.y >= seated.y + gap
+            && pixel.x < seated.x + seated.w - gap
+            && pixel.y < seated.y + seated.h - gap;
+          if (!inside) failures.push(`${label} ink ${pixel.x},${pixel.y} is inside the stroke`);
+          const red = slice.data[pixel.index] > 200
+            && slice.data[pixel.index + 1] < 40
+            && slice.data[pixel.index + 2] < 40;
+          if (red) failures.push(`${label} stroke covers ${pixel.x},${pixel.y}`);
+        }
+      }
+    }
+  } finally {
+    await doc.destroy();
+  }
+  assert.deepEqual(failures, []);
+});
+
+test("the tier key is mm-6 and the crop hash is the png that was sent", () => {
   const first = { docHash: "doc", bid: "b1", crop: { pixels: "data:image/png;base64,AAAA" } };
   const second = { docHash: "doc", bid: "b1", crop: { pixels: "data:image/png;base64,BBBB" } };
   const key = tierRecordKey(first, { id: "multimodal", version: MM_TIER_VERSION }, "kimi-k3");
   const other = tierRecordKey(second, { id: "multimodal", version: MM_TIER_VERSION }, "kimi-k3");
   assert.notEqual(cropHashOf(first), cropHashOf(second));
   assert.notEqual(key, other);
-  assert.match(key, /:mm-4:/);
+  assert.match(key, /:mm-6:/);
   assert.match(key, new RegExp(`${cropHashOf(first)}$`));
   assert.doesNotMatch(key, /:mm-3:/);
 });
