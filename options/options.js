@@ -126,6 +126,10 @@ let formulaUndo = null;
 let formulaBusy = "";
 let formulaWriting = false;
 let formulaCustomUrl = "";
+// An empty URL on a later write is not a deletion. This is set only when the
+// user commits a blank Base URL, so that write is stored empty instead of
+// being filled back in from the previous record.
+let formulaBaseUrlCleared = false;
 let formulaQueued = 0;
 let formulaKeyFor = { multimodal: "", ocr: "" };
 const formulaEchoKeys = new Set();
@@ -141,7 +145,7 @@ let formulaWrite = Promise.resolve();
 // 6. 每笔写入带一个本页记得的 formulaEcho。迟到的自写回声不把草稿弹回去；另一页写出同样内容仍会落下来。采纳别的页的卡片时清掉这组回声。
 // 7. pagehide 只中止探测，不提交未保存的地址。
 // 8. 保存密钥（含换回同一把）把该卡改成「待测试」；移除密钥不留芯片。旧探测被 drop() 作废。
-// 9. 换厂商清空该卡密钥和探测。同一拍里重新输入的密钥算这一家的，不会被上一条存储记录清掉。固定厂商只走 https 上的自家主机。自定义卡记得上一次提交的 Base URL，同页切走再切回来时写回输入框。
+// 9. 换厂商清空该卡密钥和探测。同一拍里重新输入的密钥算这一家的，不会被上一条存储记录清掉。固定厂商只走 https 上的自家主机。自定义卡记得上一次提交的有效 Base URL，同页切走再切回来时写回输入框。用户把地址清空并提交后，这份记忆也清掉。
 function nextFormulaEcho() {
   formulaEchoSeq += 1;
   return `${formulaEchoSeq}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1743,7 +1747,8 @@ async function flushCommitted({ rerender = false, clearProbe = "", savedSlot = "
   };
   let failed = false;
   try {
-    const saved = await writeFormulaSettings(snapshot, wrapped || storage, { keyFor });
+    const baseUrlCleared = formulaBaseUrlCleared === true && !httpBaseUrl(snapshot?.multimodal?.baseUrl);
+    const saved = await writeFormulaSettings(snapshot, wrapped || storage, { keyFor, baseUrlCleared });
     if (formulaExternal) {
       const incoming = formulaExternal;
       formulaExternal = null;
@@ -1805,6 +1810,10 @@ function updateFormulaPart(which, patch, opts = {}) {
     if (patch.provider === "custom") {
       if (leaving === "custom" && httpBaseUrl(committedUrl)) baseUrl = committedUrl;
       else if (httpBaseUrl(formulaCustomUrl)) baseUrl = formulaCustomUrl;
+      // Another provider's model is not a custom model. Reselecting custom
+      // leaves model off the patch, so a typed draft stays on the live card
+      // and the committed custom model stays in storage.
+      if (leaving !== "custom") patch = { ...patch, model: "", customModel: true };
     }
     patch = { ...patch, baseUrl };
   }
@@ -1815,8 +1824,9 @@ function updateFormulaPart(which, patch, opts = {}) {
     return;
   }
   const part = which === "ocr" ? "ocr" : "multimodal";
-  // Only an invalid URL rolls back. A blank URL stays in the field and does not
-  // discard a model or key that was already committed.
+  // An invalid URL rolls back. A blank field is a real clear: it is stored
+  // empty, and it is not the same as a write that simply omitted the URL.
+  let clearedBaseUrl = false;
   if (part === "multimodal" && Object.prototype.hasOwnProperty.call(patch || {}, "baseUrl") && !Object.prototype.hasOwnProperty.call(patch, "provider")) {
     const rawUrl = String(patch.baseUrl ?? "");
     if (rawUrl.trim() && !httpBaseUrl(rawUrl)) {
@@ -1828,9 +1838,12 @@ function updateFormulaPart(which, patch, opts = {}) {
       return;
     }
     if (!rawUrl.trim()) {
-      formulaSettings = applyFormulaPart(formulaSettings, which, { baseUrl: "" });
-      paintFormulaSettings();
-      return;
+      clearedBaseUrl = true;
+      formulaBaseUrlCleared = true;
+      patch = { ...patch, baseUrl: "" };
+      if (String(formulaCommitted?.multimodal?.provider || "") === "custom") formulaCustomUrl = "";
+    } else if (httpBaseUrl(rawUrl)) {
+      formulaBaseUrlCleared = false;
     }
   }
   // Interrupt: a key commit writes that key onto the committed card and drops 「已连通」.
@@ -1860,6 +1873,7 @@ function updateFormulaPart(which, patch, opts = {}) {
   formulaCommitted = dropCarriedKey(applyFormulaPart(formulaCommitted, which, patch), part, beforeProvider);
   if (String(formulaCommitted?.[part]?.provider || "") !== beforeProvider) formulaKeyFor[part] = "";
   rememberCommittedUrl();
+  if (clearedBaseUrl) paintFormulaSettings();
   const afterMm = formulaCommitted.multimodal;
   const structural = Object.prototype.hasOwnProperty.call(patch, "provider")
     || Object.prototype.hasOwnProperty.call(patch, "customModel");
@@ -1934,6 +1948,7 @@ function adoptFormulaRecord(stored) {
   formulaEchoKeys.clear();
   if (stamp) formulaEchoKeys.add(stamp);
   const clean = acceptStoredFormulaSettings(stored);
+  formulaBaseUrlCleared = false;
   formulaSettings = clean;
   formulaSaved = clean;
   formulaCommitted = clean;

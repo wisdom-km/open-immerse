@@ -5,7 +5,7 @@
  * 1. 并发 — 两个标签页交错写 formulaSettings，探测结果只落到还没过期的那一页。
  * 2. 页面生命周期 — pagehide / drop() 中止在途探测，回来的结果不写存储。
  * 3. 新旧版本兼容 — 不适用（Wisdom 决定不做旧后台兼容）。
- * 4. 失败与回滚 — 401/403/404/429/超时/不能看图/无法连接；空 Base URL 不写入；失败芯片留下。
+ * 4. 失败与回滚 — 401/403/404/429/超时/不能看图/无法连接；未提交的地址不写入；显式清空的地址写成空；失败芯片留下。
  * 5. 边界输入 — 未实测厂商、空 Base URL、超长摘要、密钥混进摘要、大小写厂商名、SEEN。、短密钥。
  * 6. 交付要求 — 先红后绿。删掉保存端或读取端的校验、空地址拒绝、过期结果丢弃，对应测试变红。
  * 7. 逐字输入 — input 只改草稿，change 才写入；芯片与存储里的探测一致。
@@ -54,6 +54,8 @@ import { MM_TIER_VERSION, multimodalTier } from "../lib/formula-tiers/multimodal
 import { selfTier } from "../lib/formula-tiers/self.js";
 import { vectorTier } from "../lib/formula-tiers/vector.js";
 import {
+  ARK_DIRECT_BASE_URL,
+  ARK_PLAN_BASE_URL,
   CUSTOM_BASE_URL_ERROR,
   EMPTY_KEY_HINT,
   FORMULA_SETTINGS_KEY,
@@ -893,7 +895,8 @@ test("options page: selectOption, empty Base URL, probe, and unload", async () =
     base.dispatchEvent(new window.Event("change", { bubbles: true }));
     for (let i = 0; i < 20; i += 1) await Promise.resolve();
     assert.match(document.getElementById("formulaSettingsRoot").textContent, /请填写 Base URL/);
-    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+    assert.match(seen[0].url, /vendor\.example\/v1/);
     assertNoSecret(seen.map((hit) => ({ url: hit.url, body: hit.body })));
   } finally {
     installNet(null);
@@ -1605,6 +1608,142 @@ test("reselecting custom does not store a typed model draft", async () => {
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "custom");
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "local-vision");
     assert.equal(modelTextInput(tab).value, "draft-model");
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("clearing a Base URL is stored empty, survives reload, and the next request uses the provider default", async () => {
+  const oldUrl = ARK_DIRECT_BASE_URL;
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: {
+        provider: "doubao",
+        apiKey: SECRET,
+        model: "glm-5.3-flash",
+        customModel: false,
+        baseUrl: oldUrl,
+        presetGeneration: 2,
+        probe: { ok: true, chip: "已连通", code: "ok", summary: "", at: 4 }
+      }
+    }
+  };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const tab = await openOptionsTab("clear-ark-url");
+    const field = tab.document.querySelector("[data-base-url]");
+    assert.equal(field.value, oldUrl);
+    changeBaseUrl(tab, "   ");
+    await flush();
+    const stored = bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(stored.baseUrl, "");
+    assert.equal(stored.model, "glm-5.3-flash");
+    assert.equal(tab.document.querySelector("[data-base-url]").value, "");
+    assert.equal(tab.document.querySelector("[data-base-url]").placeholder, ARK_PLAN_BASE_URL);
+    const target = multimodalTarget(bag[FORMULA_SETTINGS_KEY]);
+    const built = buildVisionRequest(target, {
+      text: "t",
+      images: [{ mime: "image/png", base64: PROBE_PNG_BASE64 }],
+      secret: stored.apiKey
+    });
+    assert.equal(target.url, `${ARK_PLAN_BASE_URL}/chat/completions`);
+    assert.equal(built.url, `${ARK_PLAN_BASE_URL}/chat/completions`);
+    assert.equal(built.url.includes(oldUrl), false);
+    const ask = resolveAskTarget(llmSettings, bag[FORMULA_SETTINGS_KEY]);
+    assert.equal(ask.url, `${ARK_PLAN_BASE_URL}/chat/completions`);
+
+    const reloaded = await openOptionsTab("clear-ark-url-reload");
+    const again = reloaded.document.querySelector("[data-base-url]");
+    assert.equal(again.value, "");
+    assert.equal(again.placeholder, ARK_PLAN_BASE_URL);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+    assert.equal(multimodalTarget(bag[FORMULA_SETTINGS_KEY]).url, `${ARK_PLAN_BASE_URL}/chat/completions`);
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("clearing a custom Base URL stays empty across reload and does not reuse the old URL", async () => {
+  const oldUrl = "https://vendor.example/v1";
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: {
+        provider: "custom",
+        apiKey: SECRET,
+        model: "local-vision",
+        customModel: true,
+        baseUrl: oldUrl
+      }
+    }
+  };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const tab = await openOptionsTab("clear-custom-url");
+    changeBaseUrl(tab, "");
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "local-vision");
+    assert.equal(tab.document.querySelector("[data-base-url]").value, "");
+    assert.equal(tab.document.querySelector("[data-base-url-error]")?.textContent, CUSTOM_BASE_URL_ERROR);
+    assert.equal(multimodalReady(bag[FORMULA_SETTINGS_KEY]), false);
+    const target = multimodalTarget(bag[FORMULA_SETTINGS_KEY]);
+    const built = buildVisionRequest(target, {
+      text: "t",
+      images: [{ mime: "image/png", base64: PROBE_PNG_BASE64 }],
+      secret: SECRET
+    });
+    assert.equal(target.url, "");
+    assert.equal(built.error != null, true);
+    assert.equal(JSON.stringify(built).includes(oldUrl), false);
+    assert.equal(JSON.stringify(built).includes("vendor.example"), false);
+
+    changeProvider(tab, "openai");
+    await flush();
+    changeProvider(tab, "custom");
+    await flush();
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.provider, "custom");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+    assert.equal(tab.document.querySelector("[data-base-url]").value, "");
+
+    const reloaded = await openOptionsTab("clear-custom-url-reload");
+    assert.equal(reloaded.document.querySelector("[data-base-url]").value, "");
+    assert.equal(reloaded.document.querySelector("[data-base-url-error]")?.textContent, CUSTOM_BASE_URL_ERROR);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+  } finally {
+    restoreGlobals(previous);
+  }
+});
+
+test("switching from doubao to custom does not store glm-5.3-flash", async () => {
+  const bag = {
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: {
+        provider: "doubao",
+        apiKey: SECRET,
+        model: "glm-5.3-flash",
+        customModel: false,
+        baseUrl: "",
+        presetGeneration: 2
+      }
+    }
+  };
+  const previous = captureGlobals();
+  installChromeHarness(bag, { settings: llmSettings }, []);
+  try {
+    const tab = await openOptionsTab("doubao-to-custom-model");
+    changeProvider(tab, "custom");
+    await flush();
+    const stored = bag[FORMULA_SETTINGS_KEY].multimodal;
+    assert.equal(stored.provider, "custom");
+    assert.equal(stored.model, "");
+    assert.equal(stored.model.includes("glm"), false);
+    assert.equal(stored.customModel, true);
+    assert.equal(modelTextInput(tab).value, "");
+    const reloaded = await openOptionsTab("doubao-to-custom-model-reload");
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "");
+    assert.equal(modelTextInput(reloaded).value, "");
   } finally {
     restoreGlobals(previous);
   }
@@ -2341,8 +2480,12 @@ async function runSeed(seed, tierCalls) {
         changeBaseUrl(tab, event === "empty-url" ? "   " : "vendor.example/v1");
         await flush();
         const after = bag[FORMULA_SETTINGS_KEY]?.multimodal?.baseUrl || "";
-        if (httpBaseUrl(before)) assert.equal(after, before);
-        else assert.equal(httpBaseUrl(after), "");
+        if (event === "schemeless") {
+          if (httpBaseUrl(before)) assert.equal(after, before);
+          else assert.equal(httpBaseUrl(after), "");
+        } else {
+          assert.equal(after, "");
+        }
       } else if (event === "type-url") {
         const input = tab.document.querySelector("[data-base-url]");
         const typed = rand() < 0.5 ? "https://draft.example/v1" : "https://vendor.example/v1/";
@@ -3264,7 +3407,9 @@ test("QA6-10 a committed model survives a blank URL and a same-turn switch", asy
     await qa6wait();
     const stored = page.bag[FORMULA_SETTINGS_KEY];
     assert.equal(stored.multimodal.model, "other-vision");
-    assert.equal(stored.multimodal.baseUrl, "https://vendor.example/v1");
+    assert.equal(stored.multimodal.baseUrl, "");
+    assert.equal(page.tab.document.querySelector("[data-base-url]").value, "");
+    assert.equal(page.tab.document.querySelector("[data-base-url-error]")?.textContent, CUSTOM_BASE_URL_ERROR);
     assert.equal(stored[FORMULA_SWITCH_KEYS.tier2], true);
     assert.equal(modelTextInput(page.tab)?.value, "other-vision");
   } finally {

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { multimodalTarget } from "../lib/mm-client.js";
 import { displayFormulaWidthCss } from "../lib/pdf-blocks.js";
 import { cacheableLayout } from "../lib/pdf-layout-client.js";
 import {
@@ -31,6 +32,7 @@ import {
   applyFormulaPart,
   EMPTY_KEY_HINT,
   classifyFormulaProbe,
+  customBaseUrlError,
   defaultFormulaSettings,
   formulaChainFlags,
   formulaOrderText,
@@ -386,6 +388,81 @@ test("FUI-04 custom base URL is required before the vision probe can run", () =>
   assert.equal(missing.summary, EMPTY_KEY_HINT);
   assert.equal(probeNeedsAttention(missing), false);
   assert.notEqual(missing.chip, "密钥无效 (401)");
+});
+
+test("an explicit Base URL clear is stored empty; a write that omitted the URL keeps the saved one", async () => {
+  const kept = memoryStorage({
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: {
+        provider: "custom",
+        apiKey: "sk-custom",
+        model: "m",
+        customModel: true,
+        baseUrl: "https://vendor.example/v1"
+      }
+    }
+  });
+  const omitted = await writeFormulaSettings({
+    multimodal: { provider: "custom", apiKey: "sk-custom", model: "m", customModel: true, baseUrl: "" },
+    [FORMULA_SWITCH_KEYS.tier3]: true
+  }, kept);
+  assert.equal(omitted.multimodal.baseUrl, "https://vendor.example/v1");
+  assert.equal(kept.bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "https://vendor.example/v1");
+
+  const cleared = await writeFormulaSettings({
+    ...omitted,
+    multimodal: { ...omitted.multimodal, baseUrl: "" }
+  }, kept, { baseUrlCleared: true });
+  assert.equal(cleared.multimodal.baseUrl, "");
+  assert.equal(kept.bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
+  assert.equal(customBaseUrlError(cleared), "请填写 Base URL");
+  const reread = await readFormulaSettings(kept);
+  assert.equal(reread.multimodal.baseUrl, "");
+  assert.equal(multimodalTarget(reread).url, "");
+  assert.equal(multimodalReady(reread), false);
+
+  const ark = memoryStorage({
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: {
+        provider: "doubao",
+        apiKey: "sk-ark",
+        model: "glm-5.3-flash",
+        customModel: false,
+        baseUrl: ARK_DIRECT_BASE_URL,
+        presetGeneration: 2
+      }
+    }
+  });
+  const arkCleared = await writeFormulaSettings({
+    multimodal: {
+      provider: "doubao",
+      apiKey: "sk-ark",
+      model: "glm-5.3-flash",
+      customModel: false,
+      baseUrl: "",
+      presetGeneration: 2
+    }
+  }, ark, { baseUrlCleared: true });
+  assert.equal(arkCleared.multimodal.baseUrl, "");
+  const arkRead = await readFormulaSettings(ark);
+  assert.equal(arkRead.multimodal.baseUrl, "");
+  assert.equal(arkRead.multimodal.model, "glm-5.3-flash");
+  assert.equal(multimodalTarget(arkRead).url, `${ARK_PLAN_BASE_URL}/chat/completions`);
+
+  const legacy = memoryStorage({
+    [FORMULA_SETTINGS_KEY]: {
+      multimodal: {
+        provider: "doubao",
+        apiKey: "sk-old",
+        model: "doubao-seed-2-1-pro-260915",
+        baseUrl: ""
+      }
+    }
+  });
+  const legacyRead = await readFormulaSettings(legacy);
+  assert.equal(legacyRead.multimodal.baseUrl, "");
+  assert.equal(legacyRead.multimodal.model, "doubao-seed-2-1-pro-260915");
+  assert.equal(multimodalTarget(legacyRead).url, `${ARK_PLAN_BASE_URL}/chat/completions`);
 });
 
 test("a plan-endpoint 401 keeps the invalid-key chip and shows the pay-as-you-go hint", () => {
