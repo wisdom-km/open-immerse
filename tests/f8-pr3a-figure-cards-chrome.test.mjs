@@ -378,7 +378,7 @@ test("figure and table placeholder cards", { timeout: 240000 }, async (t) => {
       if (last && last.width <= px + 1) return last;
       await sleep(50);
     }
-    return last;
+    assert.fail(`width did not apply (${px}px): ${JSON.stringify(last)}`);
   };
   const mid = await sized(190);
   assert.equal(mid.l0, "", JSON.stringify(mid));

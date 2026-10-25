@@ -22,8 +22,20 @@ elif command -v google-chrome >/dev/null 2>&1; then
   echo "chrome $(google-chrome --version)"
 fi
 
+log="$(mktemp)"
+trap 'rm -f "$log"' EXIT
+set +e
 node --test \
   --test-timeout=3600000 \
   --test-force-exit \
   --test-reporter=spec \
-  tests/*.test.mjs
+  tests/*.test.mjs 2>&1 | tee "$log"
+status=${PIPESTATUS[0]}
+set -e
+# The spec reporter prints one suite total. The last "skipped" line is that count.
+skipped="$(awk '$2 == "skipped" { value = $3 } END { print value + 0 }' "$log")"
+echo "skipped tests: ${skipped}"
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  printf '### Full suite\n\nSkipped tests: %s\n' "$skipped" >> "$GITHUB_STEP_SUMMARY"
+fi
+exit "$status"
