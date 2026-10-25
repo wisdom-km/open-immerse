@@ -229,6 +229,17 @@ function reportTranslateFailure(err, fields) {
   })).catch(() => {});
 }
 
+function reportTranslateBorrow(fields) {
+  Promise.resolve(handleArxivSourceMessage({
+    action: "diag-borrow",
+    fields: {
+      provider: fields?.provider || "",
+      model: fields?.model || "",
+      count: Number(fields?.count) || 0
+    }
+  })).catch(() => {});
+}
+
 function emitTranslateProgress(sender, requestId, progress) {
   const payload = {
     type: "OI_TRANSLATE_PROGRESS",
@@ -265,6 +276,13 @@ async function translateBatch(texts, options = {}) {
   options.outboundFallback = outbound.fallback === true;
   options.borrowed = outbound.borrowed === true;
   options.providerCalled = false;
+  if (outbound.borrowed) {
+    reportTranslateBorrow({
+      provider: outbound.vendorId,
+      model: outbound.model,
+      count: texts.length
+    });
+  }
   const provider = outbound.provider;
   const borrowed = outbound.borrowed === true ? outbound.runtimeConfig : null;
   const providerSettings = borrowed

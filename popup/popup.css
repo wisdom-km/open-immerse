@@ -96,18 +96,3 @@ select {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.engine-link.is-borrow {
-  display: inline-flex;
-  align-items: baseline;
-  vertical-align: bottom;
-  max-width: 100%;
-}
-.engine-link.is-borrow .engine-main {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.engine-link.is-borrow .engine-borrow {
-  flex: none;
-}

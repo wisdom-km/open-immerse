@@ -1,6 +1,6 @@
 import { getProvider, isProviderConfigured } from "../lib/providers.js";
 import { readFormulaSettings } from "../lib/formula-settings.js";
-import { describeTranslateBorrow, formatBorrowedEngine } from "../lib/translate-borrow.js";
+import { describeTranslateBorrow } from "../lib/translate-borrow.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { featureOn } from "../lib/features.js";
@@ -149,17 +149,8 @@ function renderEngine(settings, formula) {
   const warn = $("engineWarn");
   const warnText = $("engineWarnText");
   if (described.mode === "borrow") {
-    const line = formatBorrowedEngine(described);
-    link.classList.add("is-borrow");
-    link.textContent = "";
-    const main = document.createElement("span");
-    main.className = "engine-main";
-    main.textContent = line.main;
-    const suffix = document.createElement("span");
-    suffix.className = "engine-borrow";
-    suffix.textContent = line.suffix;
-    link.append(main, suffix);
-    link.title = line.title;
+    link.textContent = `引擎：${described.shortName}`;
+    link.title = described.vendorLabel || described.shortName;
     warn.hidden = true;
     return;
   }
@@ -179,7 +170,6 @@ function renderEngine(settings, formula) {
     azure: "Azure",
     custom: "Custom"
   }[provider.id] || provider.name.split("/")[0].trim();
-  link.classList.remove("is-borrow");
   link.textContent = provider.id === "mymemory" ? `引擎：${shortName}（免费）` : `引擎：${shortName}`;
   link.title = provider.name;
   if (provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
