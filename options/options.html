@@ -63,7 +63,6 @@
         <div id="setSkeleton" class="set-skeleton" hidden>
           <span></span><span></span><span></span><span></span>
         </div>
-
         <section id="panel-translate" class="set-page is-on" data-panel="translate" role="tabpanel">
           <h2>翻译</h2>
           <p class="set-lead">网页、PDF、文档翻译共用这里的引擎。</p>
@@ -127,7 +126,7 @@
 
         <section id="panel-formula" class="set-page" data-panel="mm" role="tabpanel" hidden>
           <h2>多模态 · OCR</h2>
-          <p id="mmPdfBanner" class="set-banner" hidden>PDF 阅读在实验室里还没开启 · <button type="button" id="mmEnablePdf" class="set-inline">开启</button></p>
+          <p id="mmPdfBanner" class="set-banner" hidden>PDF 阅读已关闭 · <button type="button" id="mmEnablePdf" class="set-inline">去开启</button></p>
           <p class="set-lead">公式没拿到源码时，按下面顺序逐级尝试。灰色 = 当前不会用到。阅读页 Aa 面板里的「公式」开关与这里是同一组设置。</p>
           <div id="formulaSettingsRoot" class="oi-reader" data-reader-theme="warm"></div>
         </section>
@@ -194,6 +193,22 @@
 
         <section id="panel-pdf" class="set-page" data-panel="pdf" role="tabpanel" hidden>
           <h2>PDF 阅读</h2>
+          <div id="pdfFeatureList" class="set-group">
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title" id="pdfEnabledLabel">PDF 阅读</p>
+                <p class="set-note" id="pdfEnabledNote">在浏览器里打开 PDF 时，用沉浸译的双栏阅读器显示原文和译文。</p>
+              </div>
+              <input id="pdfEnabled" data-feat="pdf" type="checkbox" role="switch" checked aria-labelledby="pdfEnabledLabel" aria-describedby="pdfEnabledNote" />
+            </div>
+            <p id="pdfOnNotice" class="set-banner" hidden>
+              <span class="set-banner-copy">PDF 阅读已默认开启。在浏览器里打开 PDF 会用沉浸译的双栏阅读器；不想用可以在这里关闭。</span>
+              <span class="set-banner-actions">
+                <button type="button" id="pdfOnNoticeOff" class="set-inline">关闭 PDF 阅读</button>
+                <button type="button" id="pdfOnNoticeDismiss" class="btn-secondary">知道了</button>
+              </span>
+            </p>
+          </div>
           <div class="set-group">
             <div class="set-row">
               <div class="set-txt">
@@ -342,7 +357,8 @@
 
         <section id="panel-about" class="set-page" data-panel="about" role="tabpanel" hidden>
           <h2>关于</h2>
-          <div class="set-group">
+          <h3 class="set-gh" id="aboutVersionHeading">版本</h3>
+          <div class="set-group" aria-labelledby="aboutVersionHeading">
             <div class="set-row">
               <div class="set-copy"><p class="set-title">版本</p></div>
               <div class="set-ctl"><span id="aboutVersion">0.3.0</span></div>
@@ -356,8 +372,8 @@
               <div class="set-ctl"><a href="../documents/documents.html">打开</a></div>
             </div>
           </div>
+          <h3 class="set-gh" id="diagHeading">问题诊断</h3>
           <div class="set-group" id="diagGroup" data-focus-group="diag" role="group" aria-labelledby="diagHeading">
-            <h3 class="diag-heading" id="diagHeading">问题诊断</h3>
             <div class="set-row" id="diagExportRow">
               <div class="set-copy">
                 <p class="set-title">导出诊断包</p>
@@ -380,7 +396,6 @@
             </div>
           </div>
         </section>
-        <section id="data" data-panel="data" role="tabpanel" hidden></section>
       </main>
     </div>
     <footer class="actions-bar" aria-label="状态">

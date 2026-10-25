@@ -337,9 +337,13 @@ test("DATA-01 the mounted panel only contains its three groups, in order", async
   try {
     const root = document.createElement("div");
     mountDataPanel(root, { store: storeFor("memory"), usage: async () => ({ usage: 0, quota: 1, persisted: true }) });
-    const titles = [...root.querySelectorAll(".set-group h2")].map((node) => node.textContent);
+    const titles = [...root.querySelectorAll("h3.set-gh")].map((node) => node.textContent);
     assert.deepEqual(titles, ["存储用量", "文献库 · 导入", "文献库 · 导出"]);
-    assert.equal(root.textContent.includes("API 密钥永远不导出"), true);
+    assert.equal(root.querySelector(".set-group > h2, .set-group > h3"), null);
+    assert.equal(root.querySelector('[data-focus-group="usage"]').getAttribute("aria-labelledby"), "dataUsageHeading");
+    assert.equal(root.querySelector('[data-focus-group="import"]').getAttribute("aria-labelledby"), "dataImportHeading");
+    assert.equal(root.querySelector('[data-focus-group="export"]').getAttribute("aria-labelledby"), "dataExportHeading");
+    assert.equal(root.textContent.includes("API 密钥永远不导出"), false);
   } finally {
     restore();
   }
@@ -369,10 +373,14 @@ test("DATA-02 DATA-03 usage labels, persist retry, and migration continue", asyn
     assert.match(root.textContent, /约 1\.24 GB/);
     assert.match(root.textContent, /已用 25%/);
     assert.equal(root.textContent.includes("未开启"), true);
-    click(root, "再申请一次");
+    click(root, "申请长期保存");
     await flush();
     assert.equal(asks, 1);
-    assert.match(root.textContent, /浏览器仍未同意/);
+    assert.equal(root.querySelector("[data-persist-state]").getAttribute("data-persist-state"), "denied");
+    assert.match(root.textContent, /再试一次/);
+    assert.match(root.textContent, /导出文献库/);
+    assert.match(root.textContent, /空间紧张时仍可能清掉文献库/);
+    assert.equal(root.querySelector(".oi-data-toast"), null);
     click(root, "现在继续");
     await flush();
     assert.match(chip.textContent, /正在搬旧库 1\/3/);

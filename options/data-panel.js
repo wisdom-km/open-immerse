@@ -170,6 +170,7 @@ export function mountDataPanel(root, deps = {}) {
   let packingPct = 0;
   let toastText = "";
   let toastTimer = 0;
+  let persistPhase = "idle";
   let showIgnored = false;
   let showErrors = false;
   let showMigrationErrors = false;
@@ -304,16 +305,93 @@ export function mountDataPanel(root, deps = {}) {
     await loadSizes();
   }
 
+  let persistLockWidth = 0;
+  let persistReturnFocus = false;
+
+  function persistView() {
+    if (usage.persisted === true || persistPhase === "granted") {
+      return {
+        state: "on",
+        chip: "已开启",
+        tone: "is-ok",
+        body: "浏览器不会自动清掉文献库。手动清除浏览数据时仍会删除。",
+        button: false
+      };
+    }
+    if (!canAskPersist() || persistPhase === "unsupported") {
+      return {
+        state: "unsupported",
+        chip: "不支持",
+        tone: "is-off",
+        body: "这个浏览器不能把文献库标成长期保存。",
+        button: false
+      };
+    }
+    if (persistPhase === "asking") {
+      return {
+        state: "asking",
+        chip: "申请中",
+        tone: "is-off",
+        body: "正在向浏览器申请长期保存。",
+        button: "busy",
+        label: "申请长期保存"
+      };
+    }
+    if (persistPhase === "denied") {
+      return {
+        state: "denied",
+        chip: "未开启",
+        tone: "is-warn",
+        body: "浏览器没有同意长期保存，空间紧张时仍可能清掉文献库。可以导出文献库，留在自己的文件夹里。",
+        button: "retry",
+        label: "再试一次",
+        exportLink: true
+      };
+    }
+    return {
+      state: "off",
+      chip: "未开启",
+      tone: "is-warn",
+      body: "未开启时，磁盘空间紧张浏览器可能清掉文献库。建议定期导出备份。",
+      button: "ask",
+      label: "申请长期保存"
+    };
+  }
+
+  function canAskPersist() {
+    if (typeof deps.persistSupported === "boolean") return deps.persistSupported;
+    if (typeof deps.requestPersist === "function") return true;
+    const storage = globalThis.navigator?.storage;
+    return Boolean(storage && typeof storage.persist === "function");
+  }
+
   async function askPersist() {
+    if (persistPhase === "asking") return;
+    if (!canAskPersist()) {
+      persistPhase = "unsupported";
+      render();
+      return;
+    }
+    rememberPersistWidth();
+    persistPhase = "asking";
+    render();
     let granted = false;
     try {
       if (typeof deps.requestPersist === "function") granted = (await deps.requestPersist()) === true;
-      else granted = (await store.retryPersist()) === true;
+      else if (typeof store.retryPersist === "function") granted = (await store.retryPersist()) === true;
+      else {
+        persistPhase = "unsupported";
+        usage = { ...usage, persisted: false, loading: false };
+        render();
+        return;
+      }
     } catch {
       granted = false;
     }
     usage = { ...usage, persisted: granted, loading: false };
-    toast(granted ? "浏览器已同意长期保存" : "浏览器仍未同意");
+    persistPhase = granted ? "granted" : "denied";
+    persistReturnFocus = true;
+    render();
   }
 
   async function continueMigration() {
@@ -360,10 +438,38 @@ export function mountDataPanel(root, deps = {}) {
     render();
   }
 
+  function findMarked(node, name) {
+    if (!node) return null;
+    if (typeof node.getAttribute === "function" && node.getAttribute(name) != null) return node;
+    for (const kid of node.children || []) {
+      const found = findMarked(kid, name);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function findPersistAsk(node) {
+    return findMarked(node, "data-persist-ask");
+  }
+
+  function rememberPersistWidth() {
+    if (persistLockWidth) return;
+    const current = findPersistAsk(root);
+    const measured = Number(current?.offsetWidth) || 0;
+    if (measured > 0) persistLockWidth = Math.ceil(measured) + 18;
+  }
+
+  function focusExportLibrary() {
+    const group = root.querySelector?.('[data-focus-group="export"]');
+    const control = group?.querySelector?.("button");
+    group?.scrollIntoView?.({ block: "center" });
+    (control || group)?.focus?.();
+  }
+
   function row(title, body, control, extra) {
     const copy = el("div", { class: "set-copy" }, [
       el("h3", { text: title }),
-      body ? el("p", { text: body }) : null
+      typeof body === "string" ? el("p", { text: body }) : body
     ]);
     if (extra) copy.append(extra);
     const actions = el("div", { class: `set-actions${narrow() ? " is-block" : ""}` }, Array.isArray(control) ? control : [control]);
@@ -379,15 +485,38 @@ export function mountDataPanel(root, deps = {}) {
       : el("span", { class: "set-value", text: usageText });
     const browse = browseLink();
     group.append(row("文献库", "译文、笔记、原 PDF 和缓存。数字是浏览器的估算。", usageControl, browse));
-    const persistOn = usage.persisted === true;
-    const persistBody = persistOn
-      ? "浏览器不会自动清掉文献库。手动清除浏览数据时仍会删除。"
-      : "未开启时，磁盘空间紧张浏览器可能清掉文献库。建议定期导出备份。";
+    const persist = persistView();
     const persistControls = [
-      el("span", { class: `oi-data-chip${persistOn ? " is-ok" : " is-warn"}`, text: persistOn ? "已开启" : "未开启" })
+      el("span", { class: `oi-data-chip ${persist.tone}`, text: persist.chip })
     ];
-    if (!persistOn) persistControls.push(button("再申请一次", "btn-secondary", () => { void askPersist(); }));
-    group.append(row("长期保存", persistBody, persistControls));
+    if (persist.button) {
+      const ask = el("button", {
+        type: "button",
+        class: "btn-secondary",
+        "data-persist-ask": "true",
+        "aria-busy": persist.button === "busy" ? "true" : "false"
+      }, persist.button === "busy"
+        ? [el("span", { class: "oi-set-spin", "aria-hidden": "true" }), el("span", { text: persist.label })]
+        : [el("span", { text: persist.label })]);
+      ask.addEventListener("click", (event) => {
+        event.preventDefault();
+        void askPersist();
+      });
+      if (persistLockWidth) ask.style.width = `${persistLockWidth}px`;
+      if (persist.button === "busy") {
+        ask.disabled = true;
+        ask.setAttribute("aria-disabled", "true");
+      }
+      persistControls.push(ask);
+    }
+    if (persist.exportLink) {
+      persistControls.push(button("导出文献库", "btn-secondary", () => focusExportLibrary()));
+    }
+    const description = el("p", { role: "status", "aria-live": "polite", text: persist.body });
+    const persistRow = row("长期保存", description, persistControls);
+    persistRow.setAttribute("data-persist-state", persist.state);
+    persistRow.setAttribute("tabindex", "-1");
+    group.append(persistRow);
     if (!usage.unavailable && usage.quota != null) {
       group.append(row("可用空间", "浏览器分给本扩展的上限", el("span", { class: "set-value", text: formatQuotaLabel(usage.usage, usage.quota) })));
     }
@@ -603,14 +732,25 @@ export function mountDataPanel(root, deps = {}) {
     root.classList.add("oi-data");
     root.classList.toggle("is-narrow", narrow());
     root.setAttribute("data-narrow", narrow() ? "1" : "0");
-    root.append(el("p", { class: "oi-data-lead", text: "文献库、笔记和设置都只存在这台电脑上。API 密钥永远不导出。" }));
-    const usageGroup = el("section", { class: "set-group", "data-focus-group": "usage" }, [el("h2", { text: "存储用量" })]);
-    const importGroup = el("section", { class: "set-group", "data-focus-group": "import" }, [el("h2", { text: "文献库 · 导入" })]);
-    const exportGroup = el("section", { class: "set-group", "data-focus-group": "export" }, [el("h2", { text: "文献库 · 导出" })]);
+    const usageHeading = el("h3", { class: "set-gh", id: "dataUsageHeading", text: "存储用量" });
+    const importHeading = el("h3", { class: "set-gh", id: "dataImportHeading", text: "文献库 · 导入" });
+    const exportHeading = el("h3", { class: "set-gh", id: "dataExportHeading", text: "文献库 · 导出" });
+    const usageGroup = el("section", { class: "set-group", "data-focus-group": "usage", "aria-labelledby": "dataUsageHeading" });
+    const importGroup = el("section", { class: "set-group", "data-focus-group": "import", "aria-labelledby": "dataImportHeading" });
+    const exportGroup = el("section", { class: "set-group", "data-focus-group": "export", "aria-labelledby": "dataExportHeading" });
     renderUsage(usageGroup);
     renderImport(importGroup);
     renderExport(exportGroup);
-    root.append(usageGroup, importGroup, exportGroup);
+    root.append(usageHeading, usageGroup, importHeading, importGroup, exportHeading, exportGroup);
+    rememberPersistWidth();
+    const lockedAsk = findPersistAsk(root);
+    if (lockedAsk && persistLockWidth) lockedAsk.style.width = `${persistLockWidth}px`;
+    if (persistReturnFocus) {
+      persistReturnFocus = false;
+      const ask = findPersistAsk(root);
+      const row = findMarked(root, "data-persist-state");
+      (ask || row)?.focus?.();
+    }
     if (toastText) root.append(el("p", { class: "oi-data-toast", role: "status", text: toastText }));
     root.scrollTop = scrolled;
   }

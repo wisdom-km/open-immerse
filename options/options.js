@@ -7,7 +7,14 @@ import {
   redactProviderText
 } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
-import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
+import { FEATURES, laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
+import {
+  PDF_DEFAULT_NOTICE_KEY,
+  dismissPdfDefaultNotice,
+  pdfDefaultNoticeVisible,
+  readPdfDefaultNoticeSeen,
+  writePdfDefaultNoticeSeen
+} from "../lib/pdf-default-notice.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -229,9 +236,19 @@ async function init() {
   bindDiagPanel();
   bindPanelNav();
   el("laterList")?.addEventListener("change", () => {
-    syncPdfLayoutBox();
-    syncPdfBanner();
     void persist(el("laterList"));
+  });
+  el("pdfEnabled")?.addEventListener("change", () => {
+    if (!el("pdfEnabled").checked) void dismissPdfNotice("off");
+    syncPdfAvailability();
+    void persist(el("pdfEnabled"));
+  });
+  el("pdfOnNoticeDismiss")?.addEventListener("click", () => { void dismissPdfNotice("ack"); });
+  el("pdfOnNoticeOff")?.addEventListener("click", () => turnOffPdfFromNotice());
+  globalThis.chrome?.storage?.onChanged?.addListener((changes, area) => {
+    if (area !== "local" || !changes?.[PDF_DEFAULT_NOTICE_KEY] || pdfNoticeKept) return;
+    const banner = el("pdfOnNotice");
+    if (banner) banner.hidden = true;
   });
   bindFormulaSettings();
   bindNotes();
@@ -254,7 +271,10 @@ async function init() {
   el("importSettings").addEventListener("click", () => el("importFile").click());
   el("importFile").addEventListener("change", (ev) => importSettingsFile(ev));
   el("setRetry")?.addEventListener("click", () => location.reload());
-  el("mmEnablePdf")?.addEventListener("click", () => enablePdf());
+  el("mmEnablePdf")?.addEventListener("click", () => {
+    showPage("pdf");
+    el("pdfEnabled")?.focus();
+  });
   syncSiteRulesBox();
   bindSteppers();
   document.addEventListener("click", jumpToProvider);
@@ -265,6 +285,7 @@ async function init() {
   bindSecretSync();
   await pinKeySync();
   await syncAttentionBadge();
+  syncPdfAvailability();
 }
 
 function applyStoredForm() {
@@ -305,8 +326,9 @@ function applyStoredForm() {
   if (el("siteRules")) el("siteRules").value = (settings.siteRules || []).map((rule) => rule.host).join("\n");
   renderFeatures(el("featureList"), v1Features(), features);
   renderFeatures(el("laterList"), laterFeatures(), features);
+  paintPdfSwitch(features);
   fillPdfLayout(settings.pdfLayout);
-  syncPdfLayoutBox();
+  syncPdfAvailability();
   syncPdfBanner();
   syncQualityLocks();
   renderProviderFields();
@@ -414,7 +436,7 @@ function hideReadError() {
 
 function snapshotControl(control) {
   if (!control) return null;
-  if (control.id === "featureList" || control.id === "laterList" || control.dataset?.feat) {
+  if (control.id === "featureList" || control.id === "laterList" || control.id === "pdfEnabled" || control.dataset?.feat) {
     const features = {};
     document.querySelectorAll("[data-feat]").forEach((input) => {
       features[input.dataset.feat] = input.checked;
@@ -433,8 +455,7 @@ function applySnapshot(snap) {
       input.checked = snap.features[input.dataset.feat] === true;
       syncSwitch(input);
     });
-    syncPdfLayoutBox();
-    syncPdfBanner();
+    syncPdfAvailability();
     return;
   }
   if (snap.kind === "pdfKey") {
@@ -613,27 +634,101 @@ async function clearPdfCloud() {
   });
 }
 
-function syncPdfLayoutBox() {
-  const on = Boolean(document.querySelector('[data-feat="pdf"]')?.checked);
+const PDF_ON_NOTE = "在浏览器里打开 PDF 时，用沉浸译的双栏阅读器显示原文和译文。";
+const PDF_OFF_NOTE = "已关闭。PDF 会用浏览器自带的查看器打开。";
+
+function pdfOnNote() {
+  return PDF_ON_NOTE;
+}
+
+function syncPdfAvailability() {
+  const input = el("pdfEnabled");
+  const on = Boolean(input?.checked);
+  const note = el("pdfEnabledNote");
+  if (note) note.textContent = on ? pdfOnNote() : PDF_OFF_NOTE;
+  const page = el("panel-pdf");
+  page?.querySelectorAll(".set-row").forEach((row) => {
+    if (input && row.contains(input)) {
+      row.setAttribute("aria-disabled", "false");
+      return;
+    }
+    row.setAttribute("aria-disabled", on ? "false" : "true");
+    row.querySelectorAll("input, select, textarea, button").forEach((control) => {
+      control.disabled = !on;
+      control.setAttribute("aria-disabled", on ? "false" : "true");
+    });
+  });
   const box = el("pdfLayoutBox");
-  if (box) box.hidden = !on;
+  if (box) box.hidden = false;
+  syncPdfBanner();
+}
+
+let pdfNoticeKept = false;
+
+function paintPdfSwitch(features) {
+  const input = el("pdfEnabled");
+  if (!input) return;
+  input.checked = features.pdf !== false;
+  syncSwitch(input);
+}
+
+function turnOffPdfFromNotice() {
+  const input = el("pdfEnabled");
+  if (input && input.checked) {
+    input.checked = false;
+    syncSwitch(input);
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+  void dismissPdfNotice("off");
+}
+
+async function dismissPdfNotice(reason) {
+  pdfNoticeKept = false;
+  const banner = el("pdfOnNotice");
+  if (banner) banner.hidden = true;
+  const record = dismissPdfDefaultNotice(reason, Date.now());
+  if (!record) return;
+  try {
+    await writePdfDefaultNoticeSeen(globalThis.chrome?.storage?.local, record);
+  } catch {
+    /* the banner is already hidden */
+  }
+}
+
+async function presentPdfDefaultNotice() {
+  const banner = el("pdfOnNotice");
+  if (!banner) return;
+  const onPdf = Boolean(el("panel-pdf") && !el("panel-pdf").hidden);
+  if (!onPdf) return;
+  if (pdfNoticeKept) {
+    banner.hidden = false;
+    return;
+  }
+  let seen = null;
+  try {
+    seen = await readPdfDefaultNoticeSeen(globalThis.chrome?.storage?.local);
+  } catch {
+    seen = null;
+  }
+  if (!pdfDefaultNoticeVisible(cachedSettings, seen)) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  pdfNoticeKept = true;
+  const record = dismissPdfDefaultNotice("seen", Date.now());
+  try {
+    await writePdfDefaultNoticeSeen(globalThis.chrome?.storage?.local, record);
+  } catch {
+    /* this visit still shows the notice */
+  }
 }
 
 function syncPdfBanner() {
-  const on = Boolean(document.querySelector('[data-feat="pdf"]')?.checked);
+  const on = Boolean(el("pdfEnabled")?.checked);
   const banner = el("mmPdfBanner");
   if (banner) banner.hidden = on;
-}
-
-function enablePdf() {
-  const input = document.querySelector('[data-feat="pdf"]');
-  if (input) {
-    input.checked = true;
-    syncSwitch(input);
-  }
-  syncPdfLayoutBox();
-  syncPdfBanner();
-  void persist(input);
 }
 
 function paintQualityNote(note, llm, provider, ready) {
@@ -892,7 +987,11 @@ function renderProviderFields() {
   }
   provider.fields.forEach((field) => {
     const wrap = document.createElement("label");
-    wrap.appendChild(document.createTextNode(field.key === "apiKey" ? "API 密钥" : field.label));
+    wrap.className = "set-field";
+    const name = document.createElement("span");
+    name.className = "set-field-name";
+    name.textContent = field.key === "apiKey" ? "API 密钥" : field.label;
+    wrap.appendChild(name);
     if (field.key === "apiKey") wrap.setAttribute("data-key-slot", "translate");
     let input;
     if (field.type === "textarea") {
@@ -956,12 +1055,12 @@ function renderProviderFields() {
       remove.className = "set-inline";
       remove.textContent = "移除密钥";
       remove.addEventListener("click", () => clearProviderKey(provider.id));
-      wrap.appendChild(input);
-      wrap.appendChild(toggle);
-      wrap.appendChild(remove);
       const saved = document.createElement("span");
       saved.setAttribute("data-secret-saved", "1");
-      wrap.appendChild(saved);
+      const line = document.createElement("div");
+      line.className = "set-key-line";
+      line.append(input, toggle, remove, saved);
+      wrap.appendChild(line);
     } else {
       wrap.appendChild(input);
       const event = field.type === "select" ? "change" : "blur";
@@ -1351,14 +1450,13 @@ function clearProviderKey(id) {
 function restoreControl(control) {
   if (!control) return;
   const stored = cachedSettings || {};
-  if (control.id === "featureList" || control.id === "laterList" || control.dataset?.feat) {
+  if (control.id === "featureList" || control.id === "laterList" || control.id === "pdfEnabled" || control.dataset?.feat) {
     const features = resolveFeatures(stored);
     document.querySelectorAll("[data-feat]").forEach((input) => {
       input.checked = Boolean(features[input.dataset.feat]);
       syncSwitch(input);
     });
-    syncPdfLayoutBox();
-    syncPdfBanner();
+    syncPdfAvailability();
     return;
   }
   const checks = {
@@ -2276,6 +2374,8 @@ function showPage(id, focus) {
   const select = el("setPageSelect");
   if (select) select.value = next;
   if (location.hash !== `#${next}`) history.replaceState(null, "", `#${next}`);
+  if (next === "pdf") void presentPdfDefaultNotice();
+  else pdfNoticeKept = false;
   if (next === "mm") focusMm = true;
   if (focus && next === "data") {
     const group = document.querySelector(`[data-focus-group="${focus}"]`) || document.querySelector(`[data-focus="${focus}"]`);

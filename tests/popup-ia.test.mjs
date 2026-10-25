@@ -158,13 +158,15 @@ test("options keep v1 module gates; youtube\/x only in Advanced group", () => {
   for (const id of ["webpage", "learning", "documents", "fab"]) {
     assert.match(featSrc, new RegExp(`id: "${id}"[\\s\\S]*group: "v1"`));
   }
-  for (const id of ["hover", "selection", "youtube", "x", "pdf"]) {
+  for (const id of ["hover", "selection", "youtube", "x"]) {
     assert.match(featSrc, new RegExp(`id: "${id}"[\\s\\S]*group: "later"`));
   }
+  assert.match(featSrc, /id: "pdf"[\s\S]*group: "pdf"/);
   assert.match(featSrc, /youtube:\s*false/);
   assert.match(featSrc, /x:\s*false/);
-  assert.match(featSrc, /pdf:\s*false/);
-  assert.match(featSrc, /PDF 阅读（实验室）/);
+  assert.match(featSrc, /pdf:\s*true/);
+  assert.match(featSrc, /label: "PDF 阅读"/);
+  assert.doesNotMatch(featSrc, /PDF 阅读（实验室）/);
   assert.doesNotMatch(html, /pdf\/viewer\.html/);
   const optJs = readFileSync(join(root, "options/options.js"), "utf8");
   assert.match(optJs, /el\("twoStepPolish"\)\.checked = settings\.twoStepPolish === true/);

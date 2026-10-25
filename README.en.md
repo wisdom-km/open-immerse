@@ -8,7 +8,7 @@ Translate foreign-language webpages and plain-text documents into a side-by-side
 
 Repo: https://github.com/wisdom-km/open-immerse
 
-Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. **PDF reading is a lab feature: off by default.** It only appears after you opt in under **Settings → Advanced**. The target is text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Translations are not pasted into the left pane. YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
+Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. **PDF reading is on by default.** The switch sits at the top of **Settings → PDF**. It is no longer a lab toggle. The target is text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Translations are not pasted into the left pane. YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
 
 Not affiliated with the commercial “Immersive Translate” product.
 
@@ -24,7 +24,7 @@ Not affiliated with the commercial “Immersive Translate” product.
 | Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
 | Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
 | Faithful-then-polish | **On by default** (**Settings → 功能**, not Advanced). LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only; a custom system prompt skips the second pass. |
-| PDF reader (lab) | **Off by default** (Settings → Advanced, opt-in). Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Notes (#122): side slot or three columns, highlights, export and import. arXiv source (#124): off by default, download only after a click. Formulas, figures, and tables match the opened PDF. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the LLM API already configured in the extension. **Webpage bilingual remains the primary product.** |
+| PDF reader | **On by default** (Settings → PDF, switch at the top of the page; you can turn it off). Installs that stored `features.pdf` as `false` are turned on once, and `migrationNotes.pdfFlippedAt` is written. The notice appears only when that time is set: under the switch on the PDF settings page, and at the top of the reader the first time a PDF opens after the upgrade. The reader sentence links to Settings › PDF. Clicking 知道了, turning PDF off, or seeing it once in either place writes `oi.notice.pdfDefaultOn` in local storage, and neither place shows it again. New installs and installs that were already on write no time and show no notice. Turning it off after settings version 9 stays off. Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Notes (#122): side slot or three columns, highlights, export and import. arXiv source (#124): off by default, download only after a click. Formulas, figures, and tables match the opened PDF. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the LLM API already configured in the extension. **Webpage bilingual remains the primary product.** |
 | Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
 
 Suggested regression page (article-scope scan and title handling were tuned on posts like this):  
@@ -50,11 +50,11 @@ Translate / Original / collapse. Draggable; position is saved.
 
 ![Toolbar popup](docs/screenshots/05-popup.png)
 
-Intent card: primary **翻译此页** (becomes **停止** while a job runs), **恢复原文**, per-site auto, scope, and languages. Quota lives under **更多**. **No progress bar.** Footer is **设置 · 学习 · 文档**. No PDF in the footer by default; the PDF link appears only **after enabling lab PDF**. A PDF tab shows **在沉浸译中打开（实验室）** only when the lab is on.
+Intent card: primary **翻译此页** (becomes **停止** while a job runs), **恢复原文**, per-site auto, scope, and languages. Quota lives under **更多**. **No progress bar.** Footer is **设置 · 学习 · 文档**. PDF reading is on by default, so the footer shows PDF. A PDF tab shows **在沉浸译中打开（实验室）** while the feature is on. Turning **PDF 阅读** off hides those entries.
 
 **Settings four groups: 引擎 / 阅读 / 功能 / 高级**
 
-Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages; page names are in [`docs/settings-spec.md`](docs/settings-spec.md) (`#translate`, `#mm`, `#web`, `#pdf`, `#notes`, `#labs`, `#data`, `#about`). 多模态 · OCR is a top-level page (`#mm`, second item in the 常规 group), not a section inside another page. Ask AI is no longer its own page (2026-10-13 12:19–12:23, spec approved by Wisdom at 13:01, SET-01…SET-34). Landed in #137. The four groups and the screenshots below are the UI from before that redesign. The lab PDF entry follows the settings-page spec.
+Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages; page names are in [`docs/settings-spec.md`](docs/settings-spec.md) (`#translate`, `#mm`, `#web`, `#pdf`, `#notes`, `#labs`, `#data`, `#about`). 多模态 · OCR is a top-level page (`#mm`, second item in the 常规 group), not a section inside another page. Ask AI is no longer its own page (2026-10-13 12:19–12:23, spec approved by Wisdom at 13:01, SET-01…SET-34). Landed in #137. The four groups and the screenshots below are the UI from before that redesign. The PDF switch is at the top of Settings → PDF and is on by default.
 
 ![Options: default engine and test connection](docs/screenshots/03-options-engine.png)
 
@@ -70,13 +70,13 @@ Left rail: muted 学习中心 · 文档翻译 + 引擎 / 阅读 / 功能 / 高�
 
 ![Options: Advanced](docs/screenshots/08-options-advanced.png)
 
-**高级**: hover / selection / captions and **PDF 阅读（实验室）** are off by default. **先信后润** lives under **功能** (on by default), not here.
+**功能与实验室**: hover / selection / captions are off by default. **PDF 阅读** is not on this page. Its switch is at the top of **Settings → PDF** and is on by default. **先信后润** lives under **功能** (on by default).
 
-**PDF lab (optional)**
+**PDF reading**
 
 ![PDF Markdown reading-flow](docs/screenshots/06-pdf-readout.png)
 
-Lab feature. Enable it under **Settings → Advanced**. Off by default.
+On by default. The switch is at the top of **Settings → PDF**.
 
 ---
 
@@ -127,7 +127,7 @@ Open a foreign-language page and click **翻译** on the FAB.
 | Popup **翻译此页** | Start; becomes **停止** while translating (abort only — keeps glosses) |
 | `Alt+T` | Start; press again to restore original |
 
-The popup can also change page scope, source/target language, and per-site auto-translate; per-page quota is under **更多**. Footer links are **设置 · 学习 · 文档**. PDF entries are hidden by default. Only after you enable **PDF 阅读（实验室）** under **Settings → Advanced** does the popup footer show **PDF**, and a PDF tab show **在沉浸译中打开（实验室）** (Open in Open Immerse).
+The popup can also change page scope, source/target language, and per-site auto-translate; per-page quota is under **更多**. Footer links are **设置 · 学习 · 文档**. PDF reading is on by default, so the footer shows **PDF**, and a PDF tab shows **在沉浸译中打开（实验室）** (Open in Open Immerse). Turn the switch off under **Settings → PDF** to hide those entries.
 
 Font scale and body spacing live under **Settings → 阅读**. That group is font scale plus two gaps only — no translation-style dropdown or preview table.
 
@@ -152,16 +152,16 @@ Popup → **文档**, or **文档翻译** under the title in the Settings left r
 
 No layout-preserving Office or scanned files here. Convert to plain text first. Scans wait on the lab OCR path, or convert to Markdown yourself.
 
-### 5. PDF (lab, off by default)
+### 5. PDF reading (on by default)
 
-**Not a default entry.** Enable **PDF 阅读（实验室）** under **Settings → Advanced** before the popup footer **PDF** button or a PDF tab’s **在沉浸译中打开（实验室）** appear.
+**A default entry.** New installs have `features.pdf` on, with no `pdfFlippedAt` and no notice. The switch is at the top of **Settings → PDF**, labeled 「PDF 阅读」. Turning it off hides the popup footer **PDF** button and a PDF tab’s **在沉浸译中打开（实验室）**. Only an upgrade that finds a stored `false` turns it on once and shows the notice under that switch and at the top of the reader.
 
 Target: text-layer body text plus content-accurate original-page display (crops by default). The right pane stays a **Markdown reading-flow** in reading order. Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. The spec is `pdf/PDF-MD-READOUT.md`. The reader runtime switches by the phases in `pdf/high-precision/EXECUTION.md`.
 
 - Notes (#122): side slot or three columns, highlights, export and import
 - arXiv source (#124): off by default; download only after the user clicks
 - Left pane: pdf.js continuous scroll; zoom applies only to the original page
-- Top bar: translated n / t pages → Open PDF → Translate → Retranslate page → Stop (shown only while a job is running) → Original → Previous → page number → Next → Aa. Aa font size is 14–40 and is capped by the column width (#116). Formulas do not scale with the font size. Export MD / PDF lives in the **···** menu, not on the bar. Opening starts a full-document translation. Settings → 功能 → PDF has **打开 PDF 时自动翻译全文**, on by default. Original only switches the view; it does not abort the job or clear the cache.
+- Top bar: translated n / t pages → Open PDF → Translate → Retranslate page → Stop (shown only while a job is running) → Original → Previous → page number → Next → Aa. Aa font size is 14–40 and is capped by the column width (#116). Formulas do not scale with the font size. Export MD / PDF lives in the **···** menu, not on the bar. Opening starts a full-document translation. Settings → PDF has **打开 PDF 时自动翻译全文**, on by default. Original only switches the view; it does not abort the job or clear the cache.
 - Reopen checks the library against the live text-layer blocks. A page is done only when every block has its own settled translation. Fewer pairs than live blocks, or a long pair echoed from the source, queues that page and must not light **全文已译**. The abstract and its footnote are stored separately. A short unchanged token (≤3 words, or no letters) still counts as already in the target language.
 - Full document walks pages with `OI_TRANSLATE_BATCH`. In-page progress is `正在翻译 · k / m 段`. Jobs can be stopped. After stop or completion the primary button returns to **翻译**; Chinese already produced stays
 - **Original only switches the view**, and does not abort translation or clear the cache
@@ -262,7 +262,7 @@ open-immerse/
 │   ├── net/fetch.js           # one outbound HTTP entry
 │   ├── platform/              # extension / desktop adapters; net swaps transport
 │   ├── translate-skill.js     # shared Skill / two-step prompts
-│   ├── storage.js             # defaults + migration (settingsVersion = 8)
+│   ├── storage.js             # defaults + migration (settingsVersion = 9)
 │   ├── page-scan.js           # node collection (keep in sync with content.js)
 │   ├── site-presets.js        # site presets (claude.com today)
 │   ├── bilingual-layout.js
@@ -334,7 +334,7 @@ Not built, not guaranteed, or still experimental:
 
 | Item | Notes |
 | --- | --- |
-| **PDF reader (lab, default off)** | `features.pdf` defaults to `false`. Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the configured LLM API. Webpage bilingual remains the primary product |
+| **PDF reader (on by default)** | `features.pdf` defaults to `true`. The switch is at the top of Settings → PDF. Installs that stored `false` are turned on once and `migrationNotes.pdfFlippedAt` is written. The notice sits under that switch and at the top of the reader (the reader sentence links to Settings › PDF); seeing it once, clicking 知道了, or turning PDF off writes `oi.notice.pdfDefaultOn` and it does not return. Installs that were already on, and new installs, write no time. Turning it off after settings version 9 stays off. Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the configured LLM API. Webpage bilingual remains the primary product |
 | Sidebar en/zh pairing | Shelved; product focus is body/main-text bilingual |
 | Chrome Web Store | Unpacked load only |
 | OCR | When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong. Figures and tables stay original-page crops; formulas follow the fallback chain and show the original-page crop when it cannot be decided. An `i` read as `n`, or an `n` read as `i`, is not shown |
