@@ -217,8 +217,9 @@ import {
 } from "../lib/library-layout.js";
 import {
   clearLibraryAutoPaused,
+  libraryResumePlan,
   readLibraryAutoPaused,
-  writeLibraryAutoPaused
+  settleLibraryAutoPause
 } from "../lib/library-auto-pause.js";
 import { mountDrawerUi } from "./drawer-panel.js";
 import {
@@ -493,6 +494,7 @@ let librarySessionWidth = null;
 let pdfOpenGen = 0;
 let pendingLibraryOpenHash = "";
 let libraryResumePending = false;
+let libraryTranslateRun = { mode: "document", anchorPage: 1 };
 let autoPauseNoted = "";
 const userPausedDocs = new Set();
 let autoAfterForce = false;
@@ -10544,7 +10546,10 @@ function stopTranslateWork(options) {
 function libraryResumePage() {
   const total = pdfDoc?.numPages || 0;
   const limit = total > 0 ? total : Math.max(pageStates.size, 1);
-  for (let n = 1; n <= limit; n += 1) {
+  const fromPage = libraryTranslateRun.mode === "from-page";
+  const anchor = Math.max(1, Math.floor(Number(libraryTranslateRun.anchorPage) || 1));
+  const begin = fromPage ? Math.min(anchor, Math.max(limit, 1)) : 1;
+  for (let n = begin; n <= limit; n += 1) {
     const state = pageStates.get(n)?.state || "";
     if (state === "done" || state === "skipped" || state === "empty" || state === "held") continue;
     if (pageHasTranslation(pageCache.get(docId, n), pdfTargetLang)) continue;
@@ -10561,17 +10566,20 @@ async function prepareLibrarySwitch(spec = {}) {
   if (!busy) return { skipped: true };
   if (autoPauseNoted === current) return { already: true };
   const resumePage = libraryResumePage();
+  const mode = libraryTranslateRun.mode === "from-page" ? "from-page" : "document";
+  const anchorPage = mode === "from-page"
+    ? Math.max(1, Math.floor(Number(libraryTranslateRun.anchorPage) || resumePage))
+    : 1;
   userPausedDocs.delete(current);
-  try {
-    await writeLibraryAutoPaused(globalThis.chrome?.storage, current, {
-      docHash: current,
-      resumePage,
-      phase: "auto-paused",
-      at: Date.now()
-    });
-  } catch {
-    /* still switch; returning to this paper does not auto-resume */
-  }
+  // The session write is part of the 1500ms switch budget. A hung write still opens B.
+  await settleLibraryAutoPause(globalThis.chrome?.storage, current, {
+    docHash: current,
+    resumePage,
+    mode,
+    anchorPage,
+    phase: "auto-paused",
+    at: Date.now()
+  }, LIBRARY_SWITCH_FALLBACK_MS);
   autoPauseNoted = current;
   stopTranslateWork({ silent: true });
   libraryUi?.refresh?.();
@@ -10597,7 +10605,7 @@ async function applyLibraryResume(hash) {
   }
   if (autoPauseNoted === id) autoPauseNoted = "";
   userPausedDocs.delete(id);
-  libraryResumePending = true;
+  libraryResumePending = libraryResumePlan(record, { pageCount: pdfDoc?.numPages || 0 });
   return "resume";
 }
 
@@ -10736,10 +10744,15 @@ function documentTranslateSuperseded() {
 
 async function maybeAutoTranslateDocument() {
   if (libraryResumePending) {
+    const plan = libraryResumePending;
     libraryResumePending = false;
     if (!pdfDoc) return;
     if (docPhase === "stopped") docPhase = "opening";
-    await startTranslate();
+    await startTranslate({
+      mode: plan.mode,
+      startPage: plan.startPage,
+      anchorPage: plan.anchorPage
+    });
     return;
   }
   if (!pdfDoc || docPhase === "stopped") return;
@@ -10765,7 +10778,7 @@ async function maybeAutoTranslateDocument() {
   await startTranslate();
 }
 
-async function startTranslate() {
+async function startTranslate(options) {
   if (pdfTranslateBusy(session) || forceReadoutHold) {
     if (forceReadoutHold) autoAfterForce = true;
     return;
@@ -10785,8 +10798,21 @@ async function startTranslate() {
   docPhase = "running";
   const resumedHash = currentLibraryHash();
   if (resumedHash) userPausedDocs.delete(resumedHash);
+  const resumed = Boolean(options) && (options.mode != null || options.startPage != null);
+  if (resumed && options.mode === "from-page") {
+    libraryTranslateRun = {
+      mode: "from-page",
+      anchorPage: Math.max(1, Math.floor(Number(options.anchorPage) || Number(options.startPage) || 1))
+    };
+  } else {
+    libraryTranslateRun = { mode: "document", anchorPage: 1 };
+  }
+  const requested = Math.max(1, Math.floor(Number(resumed ? options.startPage : 1) || 1));
+  const startPage = libraryTranslateRun.mode === "from-page"
+    ? Math.max(libraryTranslateRun.anchorPage, requested)
+    : requested;
   refreshDocStatus();
-  await translateWholeDocument();
+  await translateWholeDocument({ startPage, mode: libraryTranslateRun.mode });
 }
 
 async function resolveBatchSize() {
@@ -11903,7 +11929,7 @@ function demoteUnpaintedDonePages() {
   return hole;
 }
 
-async function translateWholeDocument() {
+async function translateWholeDocument(options = {}) {
   if (!pdfDoc || documentTranslateSuperseded()) return;
   translatePaused = false;
   try {
@@ -11951,10 +11977,14 @@ async function translateWholeDocument() {
   const gen = restoreGen;
   const translatingDoc = docId;
   const total = pdfDoc.numPages;
+  const startPage = Math.min(
+    Math.max(1, Math.floor(Number(options?.startPage) || 1)),
+    Math.max(total, 1)
+  );
   const libraryPass = Boolean(libraryDoc?.pages?.length || libraryArticle);
   const work = beginViewerSession();
   updateTranslateControls();
-  if (!libraryPass && !$("status").classList.contains("warn")) setStatus(progressDocumentStatus(1, total));
+  if (!libraryPass && !$("status").classList.contains("warn")) setStatus(progressDocumentStatus(startPage, total));
   renderArticle();
   let batchSize = 8;
   try {
@@ -11985,6 +12015,7 @@ async function translateWholeDocument() {
     cache: pageCache,
     docId: translatingDoc,
     numPages: total,
+    startPage,
     batchSize,
     targetLang: pdfTargetLang,
     send: runtimeSend,
@@ -12198,14 +12229,14 @@ async function translateWholeDocument() {
     renderArticle();
     if (!translatedDoc.paused) {
       let stillQueued = false;
-      for (let page = 1; page <= total; page += 1) {
+      for (let page = startPage; page <= total; page += 1) {
         if ((pageStates.get(page)?.state || "") === "queued") stillQueued = true;
       }
       if (stillQueued) {
         const again = await translateDocumentPages({
           ...pageJob,
           preserveSession: true,
-          includePage: (page) => (pageStates.get(page)?.state || "") === "queued"
+          includePage: (page) => page >= startPage && (pageStates.get(page)?.state || "") === "queued"
         });
         translatedDoc = {
           ok: translatedDoc.ok && again.ok,
@@ -12277,7 +12308,7 @@ async function translateWholeDocument() {
               ...pageJob,
               ...guarded,
               preserveSession: true,
-              includePage: (page) => needs.includes(page) && fillAlive()
+              includePage: (page) => page >= startPage && needs.includes(page) && fillAlive()
             });
           } finally {
             tracked?.release();

@@ -29,7 +29,9 @@ import { mountLibraryUi } from "../pdf/library-panel.js";
 import {
   LIBRARY_AUTO_PAUSED_KEY,
   clearLibraryAutoPaused,
+  libraryResumePlan,
   readLibraryAutoPaused,
+  settleLibraryAutoPause,
   writeLibraryAutoPaused
 } from "../lib/library-auto-pause.js";
 import { firstUnfinishedPage, waitAtMost } from "../lib/library-layout.js";
@@ -37,6 +39,7 @@ import { LIBRARY_COPY } from "../lib/library-copy.js";
 import {
   abortTranslateSession,
   createTranslateSession,
+  translateDocumentPages,
   translatePageBlocks
 } from "../lib/pdf-viewer.js";
 import { createTranslateAbortRegistry } from "../lib/translate-abort.js";
@@ -142,6 +145,8 @@ test("library.autoPaused stays in session and out of sync and export", async () 
   });
   assert.equal(written.phase, "auto-paused");
   assert.equal(written.resumePage, 3);
+  assert.equal(written.mode, "document");
+  assert.equal(written.anchorPage, 1);
   const map = await readLibraryAutoPaused(storage);
   assert.equal(map["doc-a"].docHash, "doc-a");
   assert.equal((await sync.get(LIBRARY_AUTO_PAUSED_KEY))[LIBRARY_AUTO_PAUSED_KEY], undefined);
@@ -408,4 +413,151 @@ test("Enter after a settled open still opens the focused row inside the click de
   press("hash-3", "Enter");
   await flush();
   assert.equal(ui.root.querySelector(".oi-lib-repick")?.closest("[data-lib-row]")?.getAttribute("data-lib-row"), "hash-3");
+});
+
+test("resume keeps the mode, starts at resumePage, and does not resend translated pages", async () => {
+  const cases = [
+    {
+      mode: "document",
+      resumePage: 3,
+      translated: [4],
+      pageCount: 5,
+      start: 3,
+      send: [3, 5]
+    },
+    {
+      mode: "from-page",
+      resumePage: 4,
+      anchorPage: 3,
+      translated: [3, 5],
+      pageCount: 6,
+      start: 4,
+      send: [4, 6]
+    }
+  ];
+  for (const item of cases) {
+    const plan = libraryResumePlan({
+      mode: item.mode,
+      resumePage: item.resumePage,
+      anchorPage: item.anchorPage
+    }, {
+      pageCount: item.pageCount,
+      translatedPages: item.translated
+    });
+    assert.equal(plan.mode, item.mode);
+    assert.equal(plan.startPage, item.start);
+    assert.deepEqual(plan.sendPages, item.send);
+
+    const requested = [];
+    const sent = [];
+    const rows = new Map(item.translated.map((page) => [
+      page,
+      [{ original: "Hello", translation: "你好", role: "paragraph" }]
+    ]));
+    const result = await translateDocumentPages({
+      session: createTranslateSession(),
+      cache: {
+        get(_id, page) { return rows.get(page) || null; },
+        set(_id, page, value) { rows.set(page, value); }
+      },
+      docId: "doc",
+      numPages: item.pageCount,
+      startPage: plan.startPage,
+      batchSize: 4,
+      targetLang: "zh-CN",
+      getPageOriginals: async (page) => {
+        requested.push(page);
+        return [{ bid: `b${page}`, original: "Source" }];
+      },
+      send: async (message) => {
+        sent.push((message.items || []).map((row) => row.bid));
+        return {
+          ok: true,
+          translations: (message.items || []).map((row) => ({ bid: row.bid, translation: "译文" }))
+        };
+      }
+    });
+    assert.deepEqual(requested, item.send);
+    assert.equal(sent.length, item.send.length);
+    for (const page of item.translated) assert.equal(requested.includes(page), false);
+    assert.equal(result.pages.some((entry) => entry.page < plan.startPage), false);
+  }
+
+  const viewer = read("pdf/viewer.js");
+  const auto = viewer.slice(
+    viewer.indexOf("async function maybeAutoTranslateDocument"),
+    viewer.indexOf("async function startTranslate")
+  );
+  const branch = auto.slice(0, auto.indexOf("if (!pdfDoc || docPhase"));
+  assert.match(branch, /mode: plan\.mode/);
+  assert.match(branch, /startPage: plan\.startPage/);
+  assert.match(branch, /anchorPage: plan\.anchorPage/);
+  assert.doesNotMatch(branch, /startTranslate\(\)/);
+  assert.match(auto, /await startTranslate\(\)/);
+  const start = viewer.slice(
+    viewer.indexOf("async function startTranslate"),
+    viewer.indexOf("async function resolveBatchSize")
+  );
+  assert.match(start, /options\.mode === "from-page"/);
+  assert.match(start, /translateWholeDocument\(\{ startPage, mode: libraryTranslateRun\.mode \}\)/);
+  assert.match(viewer, /libraryResumePending = libraryResumePlan\(/);
+  assert.match(viewer, /\$\("translatePage"\)\.addEventListener\("click", \(\) => startTranslate\(\)\)/);
+  const pages = read("lib/pdf-viewer.js");
+  const loop = pages.slice(
+    pages.indexOf("export async function translateDocumentPages"),
+    pages.indexOf("export function extractPageItems")
+  );
+  assert.match(loop, /for \(let page = startPage; page <= numPages; page\+\+\)/);
+});
+
+test("a hung library.autoPaused write times out at 1500ms and the switch still continues", async () => {
+  const timers = fakeTimers();
+  let writes = 0;
+  const area = {
+    async get() { return {}; },
+    set() {
+      writes += 1;
+      return new Promise(() => {});
+    }
+  };
+  let status = "";
+  const pending = settleLibraryAutoPause(area, "doc-a", {
+    resumePage: 4,
+    mode: "from-page",
+    anchorPage: 3
+  }, 1500, timers).then((result) => {
+    status = result.status;
+    return result;
+  });
+  await flush();
+  assert.equal(writes, 1);
+  timers.advance(1499);
+  await flush();
+  assert.equal(status, "");
+  timers.advance(1);
+  const result = await pending;
+  assert.equal(result.status, "timeout");
+  assert.equal(result.record, null);
+
+  const stored = await settleLibraryAutoPause(memoryArea(), "doc-b", {
+    resumePage: 4,
+    mode: "from-page",
+    anchorPage: 3,
+    at: 8
+  });
+  assert.equal(stored.status, "done");
+  assert.equal(stored.record.mode, "from-page");
+  assert.equal(stored.record.anchorPage, 3);
+  assert.equal(stored.record.resumePage, 4);
+  const failed = await settleLibraryAutoPause({ sync: memoryArea() }, "doc-c", { resumePage: 2 });
+  assert.equal(failed.status, "failed");
+
+  const prep = read("pdf/viewer.js").slice(
+    read("pdf/viewer.js").indexOf("async function prepareLibrarySwitch"),
+    read("pdf/viewer.js").indexOf("async function applyLibraryResume")
+  );
+  assert.match(prep, /settleLibraryAutoPause\(/);
+  assert.match(prep, /LIBRARY_SWITCH_FALLBACK_MS/);
+  assert.match(prep, /stopTranslateWork\(\{ silent: true \}\)/);
+  assert.match(read("lib/library-auto-pause.js"), /waitAtMost\(writing, ms, timers\)/);
 });
