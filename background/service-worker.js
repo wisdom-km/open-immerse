@@ -1,4 +1,6 @@
-import { completePdfStructure, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, resolveOutboundProvider, testProviderConnection } from "../lib/providers.js";
+import { completePdfStructure, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, sanitizeProviderError, testProviderConnection } from "../lib/providers.js";
+import { defaultFormulaSettings, readFormulaSettings } from "../lib/formula-settings.js";
+import { resolveTranslateOutbound } from "../lib/translate-borrow.js";
 import { getSettings, matchSiteRule, noteTranslationSucceeded, saveSettings } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { featureOn, resolveFeatures } from "../lib/features.js";
@@ -252,21 +254,41 @@ function resolveBatchPolish(message = {}, settings = {}) {
 
 async function translateBatch(texts, options = {}) {
   const settings = await getSettings();
-  const outbound = resolveOutboundProvider(settings);
+  let formula;
+  try {
+    formula = await readFormulaSettings(chrome.storage?.local);
+  } catch {
+    formula = defaultFormulaSettings();
+  }
+  const outbound = resolveTranslateOutbound(settings, formula);
   options.providerId = outbound.providerId;
   options.outboundFallback = outbound.fallback === true;
+  options.borrowed = outbound.borrowed === true;
   options.providerCalled = false;
   const provider = outbound.provider;
-  const providerSettings = {
-    ...(settings.providers?.[outbound.providerId] || {}),
-    twoStepPolish: resolveBatchPolish(options, settings),
-    deepThink: settings.deepThink === true,
-    promptAddendum: String(options.promptAddendum || "")
-  };
+  const borrowed = outbound.borrowed === true ? outbound.runtimeConfig : null;
+  const providerSettings = borrowed
+    ? {
+        apiKey: borrowed.apiKey,
+        model: borrowed.model,
+        baseUrl: borrowed.baseUrl,
+        twoStepPolish: resolveBatchPolish(options, settings),
+        deepThink: settings.deepThink === true,
+        promptAddendum: String(options.promptAddendum || "")
+      }
+    : {
+        ...(settings.providers?.[outbound.providerId] || {}),
+        twoStepPolish: resolveBatchPolish(options, settings),
+        deepThink: settings.deepThink === true,
+        promptAddendum: String(options.promptAddendum || "")
+      };
   const pending = [];
   const results = new Array(texts.length);
   texts.forEach((text, index) => {
-    const key = cacheKey(outbound.providerId, settings.sourceLang, settings.targetLang, text, providerSettings);
+    const cacheProvider = outbound.borrowed
+      ? `${outbound.providerId}|${outbound.model}|${outbound.baseUrl}`
+      : outbound.providerId;
+    const key = cacheKey(cacheProvider, settings.sourceLang, settings.targetLang, text, providerSettings);
     if (!options.bypassCache && cache.has(key)) results[index] = readCachedTranslation(key, text, settings.targetLang);
     else pending.push({ text, index, key });
   });
@@ -314,11 +336,17 @@ async function translateBatch(texts, options = {}) {
         options.polishFailed = true;
         continue;
       }
-      reportTranslateFailure(err, {
+      const safe = borrowed
+        ? Object.assign(new Error(sanitizeProviderError(err, { apiKey: borrowed.apiKey })), {
+            httpStatus: err?.httpStatus,
+            code: err?.code
+          })
+        : err;
+      reportTranslateFailure(safe, {
         provider: options.providerId || "",
         count: chunk.length
       });
-      throw err;
+      throw safe;
     }
     const guarded = guardZhTranslations(
       chunk.map((c) => c.text),
@@ -331,6 +359,7 @@ async function translateBatch(texts, options = {}) {
       remember(item.key, value, item.text);
     });
   }
+  if (outbound.borrowed) options.providerCalled = false;
   return guardZhTranslations(texts, results, settings.targetLang);
 }
 

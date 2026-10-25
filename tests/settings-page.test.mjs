@@ -1845,7 +1845,7 @@ test("numbered and token names in a key-only file are not imported", async () =>
   }
 });
 
-test("missing-field 需处理 badge survives refresh", async () => {
+test("missing-field attention is stored, and the translate badge stays hidden without an own engine", async () => {
   const chrome = installChrome({ settings: savedSettings() });
   const page = mountPage("#translate");
   const { startOptions } = await import("../options/options.js?missing-field=1");
@@ -1857,17 +1857,82 @@ test("missing-field 需处理 badge survives refresh", async () => {
   await flush();
   page.document.getElementById("testConnection").click();
   await flush();
-  assert.equal(page.document.querySelector("[data-badge='translate']").hidden, false);
+  assert.equal(page.document.querySelector("[data-badge='translate']").hidden, true);
   assert.equal(chrome.local.oiProviderAttention.deepl, true);
   assert.equal(JSON.stringify(chrome.local.oiProviderAttention).includes(OPENAI_KEY), false);
   assert.equal(chrome.sync.settings.oiProviderAttention, undefined);
+  const hint = page.document.getElementById("translateBorrowHint");
+  assert.equal(hint.hidden, false);
+  assert.match(hint.textContent, /正在使用免费的 MyMemory/);
+  assert.match(hint.textContent, /设置引擎/);
 
   const refreshed = mountPage("#translate");
   await startOptions();
   await flush();
   assert.equal(refreshed.document.getElementById("provider").value, "deepl");
-  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, false);
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, true);
   assert.equal(chrome.local.oiProviderAttention.deepl, true);
+});
+
+test("borrow hint uses the multimodal model and an own engine takes over immediately", async () => {
+  const mmKey = "sk-mm-borrow-hint";
+  const chrome = installChrome({
+    settings: {
+      settingsVersion: SETTINGS_VERSION,
+      provider: "openai",
+      sourceLang: "auto",
+      targetLang: "zh-CN",
+      providers: { openai: { apiKey: "" } }
+    },
+    local: {
+      formulaSettings: {
+        multimodal: { provider: "kimi", apiKey: mmKey, model: "kimi-k2", baseUrl: "" }
+      }
+    }
+  });
+  const page = mountPage("#translate");
+  const { startOptions } = await import("../options/options.js?borrow-hint=1");
+  await startOptions();
+  await flush();
+  const hint = page.document.getElementById("translateBorrowHint");
+  const engineHint = page.document.getElementById("translateEngineHint");
+  assert.equal(hint.hidden, false);
+  assert.equal(hint.getAttribute("aria-live"), "polite");
+  assert.equal(engineHint.hidden, true);
+  assert.match(hint.textContent, /正在借用「多模态 · OCR」的/);
+  assert.match(hint.textContent, /Kimi · kimi-k2/);
+  assert.match(hint.textContent, /单独设置/);
+  assert.equal(hint.textContent.includes(mmKey), false);
+  assert.equal(hint.querySelector(".set-borrow-model").title, "kimi-k2");
+  const before = page.location.hash;
+  hint.querySelector("[data-borrow-focus]").click();
+  assert.equal(page.document._focused, page.document.getElementById("provider"));
+  assert.equal(page.location.hash, before);
+  page.document.getElementById("testConnection").click();
+  await flush();
+  assert.equal(page.document.querySelector("[data-badge='translate']").hidden, true);
+
+  const provider = page.document.getElementById("provider");
+  provider.value = "mymemory";
+  fire(provider, "change");
+  await flush();
+  assert.equal(hint.hidden, true);
+  assert.equal(engineHint.hidden, false);
+  assert.match(engineHint.textContent, /只显示当前默认引擎的配置/);
+
+  provider.value = "openai";
+  fire(provider, "change");
+  await flush();
+  assert.equal(hint.hidden, false);
+  const key = page.document.querySelector("[data-key-slot='translate'] input");
+  key.value = "sk-own-engine-key";
+  fire(key, "blur");
+  await flush();
+  assert.equal(hint.hidden, true);
+  assert.equal(engineHint.hidden, false);
+  const stored = JSON.stringify(chrome.sync.settings) + JSON.stringify(chrome.local.oiSecrets || {});
+  assert.equal(stored.includes(mmKey), false);
+  assert.equal(chrome.local.formulaSettings.multimodal.apiKey, mmKey);
 });
 
 function storedProviderKey(chrome, legacy) {

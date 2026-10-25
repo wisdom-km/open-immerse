@@ -194,6 +194,9 @@ test("popup engine link uses short name + full title; lang-row stays 1fr 1fr", (
   assert.match(js, /custom:\s*"Custom"/);
   assert.match(js, /引擎：\$\{shortName\}/);
   assert.match(js, /link\.title = provider\.name/);
+  assert.match(js, /formatBorrowedEngine\(described\)/);
+  assert.match(js, /warn\.hidden = true/);
+  assert.match(js, /className = "engine-borrow"/);
   assert.match(js, /openOptionsPage/);
   assert.match(html, /class="lang-row"/);
   assert.match(html, /id="engineLink"/);

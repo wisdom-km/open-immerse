@@ -67,6 +67,12 @@ import { createNotesPrefsSession } from "../lib/reader-notes-local.js";
 import { NOTES_PANEL_WIDTH_DEFAULT, NOTES_PANE_WIDTH_DEFAULT } from "../lib/notes-prefs.js";
 import { downloadBlob } from "../lib/export.js";
 import { diagLog } from "../lib/diag-log.js";
+import {
+  describeTranslateBorrow,
+  focusBorrowTarget,
+  ownTranslateConfigured,
+  paintBorrowHint
+} from "../lib/translate-borrow.js";
 import { bindDiagPanel } from "./diag-panel.js";
 import { sharedLibraryStore } from "../lib/library-session.js";
 import { mountDataPanel } from "./data-panel.js";
@@ -250,7 +256,7 @@ async function init() {
     const banner = el("pdfOnNotice");
     if (banner) banner.hidden = true;
   });
-  bindFormulaSettings();
+  const formulaReady = bindFormulaSettings();
   bindNotes();
   bindSecretsList();
   el("provider").addEventListener("change", () => {
@@ -260,6 +266,7 @@ async function init() {
     syncQualityLocks();
     invalidateTest("clear");
     attentionProvider = el("provider").value;
+    refreshTranslateBorrow();
     void (async () => {
       if (left && left !== attentionProvider) await clearProviderAttention(chrome.storage?.local, left);
       await syncAttentionBadge();
@@ -283,8 +290,10 @@ async function init() {
   const manifest = chrome.runtime?.getManifest?.();
   if (manifest?.version && el("aboutVersion")) el("aboutVersion").textContent = manifest.version;
   bindSecretSync();
+  bindTranslateBorrow();
   await pinKeySync();
-  await syncAttentionBadge();
+  await formulaReady;
+  refreshTranslateBorrow();
   syncPdfAvailability();
 }
 
@@ -827,9 +836,38 @@ function attentionArea() {
   return globalThis.chrome?.storage?.local;
 }
 
+function translateFormSettings() {
+  return {
+    provider: el("provider")?.value || cachedSettings.provider || "",
+    providers: cachedSettings.providers || {}
+  };
+}
+
+function refreshTranslateBorrow() {
+  const description = describeTranslateBorrow(translateFormSettings(), formulaCommitted);
+  paintBorrowHint(el("translateBorrowHint"), el("translateEngineHint"), description);
+  void syncAttentionBadge();
+}
+
+function bindTranslateBorrow() {
+  const hint = el("translateBorrowHint");
+  if (!hint || hint.dataset.bound === "1") return;
+  hint.dataset.bound = "1";
+  hint.addEventListener("click", (ev) => {
+    const button = ev.target?.closest?.("[data-borrow-focus]");
+    if (!button) return;
+    ev.preventDefault();
+    focusBorrowTarget(document);
+  });
+}
+
 async function syncAttentionBadge(options = {}) {
   const badge = document.querySelector('[data-badge="translate"]');
   if (!badge) return;
+  if (!ownTranslateConfigured(translateFormSettings())) {
+    badge.hidden = true;
+    return;
+  }
   attentionProvider = el("provider")?.value || attentionProvider || "";
   let flagged = false;
   try {
@@ -914,7 +952,7 @@ function setTestStatus(text, kind) {
   status.textContent = redactProviderText(text || "");
   status.className = kind ? `provider-test-status is-${kind}` : "provider-test-status";
   const badge = document.querySelector('[data-badge="translate"]');
-  if (badge) badge.hidden = kind !== "err";
+  if (badge) badge.hidden = !ownTranslateConfigured(translateFormSettings()) || kind !== "err";
 }
 
 async function testConnection() {
@@ -1036,6 +1074,7 @@ function renderProviderFields() {
           const ticket = claimProviderKey(provider.id);
           void queueProviderKey(provider.id, result.value, false, beforeKey, ticket);
         }
+        refreshTranslateBorrow();
         void persist(input);
       });
       bound.paint();
@@ -1066,6 +1105,7 @@ function renderProviderFields() {
       const event = field.type === "select" ? "change" : "blur";
       input.addEventListener(event, () => {
         harvestVisibleProvider();
+        refreshTranslateBorrow();
         void persist(input);
       });
     }
@@ -1444,6 +1484,7 @@ function clearProviderKey(id) {
   cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
   const ticket = claimProviderKey(id);
   renderProviderFields();
+  refreshTranslateBorrow();
   void queueProviderKey(id, "", true, previous, ticket);
 }
 
@@ -1791,6 +1832,7 @@ function syncProbeChrome(which, probe, secret) {
 }
 
 function queueFormulaWrite({ rerender = false, clearProbe = "", savedSlot = "" } = {}) {
+  refreshTranslateBorrow();
   formulaQueued += 1;
   const job = formulaWrite.then(() => {
     formulaQueued -= 1;
@@ -2054,6 +2096,7 @@ function adoptFormulaRecord(stored) {
   syncKeyOwner(clean);
   invalidateFormulaProbe();
   paintFormulaSettings();
+  refreshTranslateBorrow();
 }
 
 /** A throw that escapes the probe is not a network error. Chip stays 「测试失败」. */
@@ -2137,6 +2180,7 @@ function bindFormulaSettings() {
       // Use the card on screen, not this echo. A newer clear must keep the hint.
       syncEmptyKeyHints(el("formulaSettingsRoot"), formulaSettings);
       refreshBadges();
+      refreshTranslateBorrow();
       return;
     }
     if (formulaWriting) {
@@ -2145,14 +2189,18 @@ function bindFormulaSettings() {
     }
     adoptFormulaRecord(raw);
   });
-  readFormulaSettings(storage?.local).then((stored) => {
+  return readFormulaSettings(storage?.local).then((stored) => {
     formulaSettings = stored;
     formulaSaved = stored;
     formulaCommitted = stored;
     rememberCommittedUrl();
     syncKeyOwner(stored);
     paintFormulaSettings();
-  }).catch(() => paintFormulaSettings());
+    refreshTranslateBorrow();
+  }).catch(() => {
+    paintFormulaSettings();
+    refreshTranslateBorrow();
+  });
 }
 
 function bindNotes() {

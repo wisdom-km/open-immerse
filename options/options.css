@@ -592,6 +592,55 @@ body.oi-settings .set-inline {
   font: inherit;
   cursor: pointer;
 }
+body.oi-settings #translateBorrowHint.set-borrow {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+}
+body.oi-settings #translateBorrowHint.set-borrow[hidden] { display: none; }
+body.oi-settings .set-borrow-main {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+}
+body.oi-settings .set-borrow-lead,
+body.oi-settings .set-borrow-tail,
+body.oi-settings .set-borrow-vendor,
+body.oi-settings .set-borrow-dot,
+body.oi-settings #translateBorrowHint .set-inline {
+  flex: none;
+}
+body.oi-settings .set-borrow-who {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  color: var(--oi-text-2);
+}
+body.oi-settings .set-borrow-vendor,
+body.oi-settings .set-borrow-dot,
+body.oi-settings .set-borrow-model {
+  color: var(--oi-text-2);
+}
+body.oi-settings .set-borrow-model {
+  display: inline-block;
+  min-width: 0;
+  max-width: 18em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.oi-settings #translateBorrowHint .set-inline:hover { color: var(--oi-accent-hover); }
+body.oi-settings #translateBorrowHint .set-inline:focus-visible {
+  outline: 2px solid var(--oi-focus);
+  outline-offset: 2px;
+}
 body.oi-settings .diag-heading {
   display: flex;
   align-items: center;

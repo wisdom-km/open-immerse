@@ -414,7 +414,8 @@ import { diagLog, noteViewerNetwork } from "../lib/diag-log.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
-import { getProvider, missingRequiredField, resolveOutboundProvider } from "../lib/providers.js";
+import { missingRequiredField } from "../lib/providers.js";
+import { resolveTranslateOutbound } from "../lib/translate-borrow.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
   applyStructureTranslations,
@@ -10405,11 +10406,19 @@ async function translatePreflight() {
     return pdfTranslateFailureCopy({ error: String(err?.message || err) });
   }
   cachedPdfLayout = normalizePdfLayout(settings.pdfLayout);
-  const outbound = resolveOutboundProvider(settings);
+  try { await formulaSettingsReady; } catch { /* defaults stay off */ }
+  const outbound = resolveTranslateOutbound(settings, formulaViewerSettings);
   noteFreeDefaultOutbound(outbound);
+  const providerCfg = outbound.borrowed
+    ? {
+        apiKey: outbound.runtimeConfig?.apiKey || "",
+        model: outbound.runtimeConfig?.model || "",
+        baseUrl: outbound.runtimeConfig?.baseUrl || ""
+      }
+    : (settings.providers?.[outbound.providerId] || {});
   const missing = outbound.fallback
     ? null
-    : missingRequiredField(getProvider(outbound.providerId), settings.providers?.[outbound.providerId] || {});
+    : missingRequiredField(outbound.provider, providerCfg);
   const layoutMode = pdfEngineMode();
   let localServiceUp = true;
   // GET / on 8765 is the library-and-OCR probe, not a /v1/layout failure.

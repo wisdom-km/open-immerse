@@ -1,4 +1,6 @@
-import { getProvider, isProviderConfigured, resolveOutboundProvider } from "../lib/providers.js";
+import { getProvider, isProviderConfigured } from "../lib/providers.js";
+import { readFormulaSettings } from "../lib/formula-settings.js";
+import { describeTranslateBorrow, formatBorrowedEngine } from "../lib/translate-borrow.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { featureOn } from "../lib/features.js";
@@ -34,7 +36,8 @@ async function init() {
   $("targetLang").value = settings.targetLang;
   $("translateScope").value = settings.translateScope || "article";
   $("translateLimit").value = isTitleLeadLimit(settings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
-  renderEngine(settings);
+  await renderEngine(settings, await readFormulaSettings(chrome.storage?.local));
+  bindEngineRefresh();
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   await syncPrimary(tab);
@@ -113,8 +116,53 @@ async function syncPrimary(tab) {
   setPrimaryBusy(Boolean(ping?.inflight));
 }
 
-function renderEngine(settings) {
-  const outbound = resolveOutboundProvider(settings);
+function bindEngineRefresh() {
+  let ticket = 0;
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    const syncSettings = area === "sync" && Object.prototype.hasOwnProperty.call(changes, "settings");
+    const localBorrow = area === "local" && (
+      Object.prototype.hasOwnProperty.call(changes, "formulaSettings")
+      || Object.prototype.hasOwnProperty.call(changes, "oiSecrets")
+    );
+    if (!syncSettings && !localBorrow) return;
+    const current = ++ticket;
+    void refreshEngine(() => current === ticket);
+  });
+}
+
+async function refreshEngine(still = () => true) {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
+    if (!still()) return;
+    const formula = await readFormulaSettings(chrome.storage?.local);
+    if (!still()) return;
+    renderEngine(res?.settings || {}, formula);
+  } catch {
+    /* keep the last engine line */
+  }
+}
+
+function renderEngine(settings, formula) {
+  const described = describeTranslateBorrow(settings, formula);
+  const outbound = described.outbound;
+  const link = $("engineLink");
+  const warn = $("engineWarn");
+  const warnText = $("engineWarnText");
+  if (described.mode === "borrow") {
+    const line = formatBorrowedEngine(described);
+    link.classList.add("is-borrow");
+    link.textContent = "";
+    const main = document.createElement("span");
+    main.className = "engine-main";
+    main.textContent = line.main;
+    const suffix = document.createElement("span");
+    suffix.className = "engine-borrow";
+    suffix.textContent = line.suffix;
+    link.append(main, suffix);
+    link.title = line.title;
+    warn.hidden = true;
+    return;
+  }
   const provider = getProvider(outbound.providerId);
   const shortName = {
     openai: "OpenAI",
@@ -131,17 +179,15 @@ function renderEngine(settings) {
     azure: "Azure",
     custom: "Custom"
   }[provider.id] || provider.name.split("/")[0].trim();
-  const link = $("engineLink");
+  link.classList.remove("is-borrow");
   link.textContent = provider.id === "mymemory" ? `引擎：${shortName}（免费）` : `引擎：${shortName}`;
   link.title = provider.name;
   if (provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
   const selected = getProvider(settings.provider);
   const cfg = settings.providers?.[selected.id] || {};
   const ok = !outbound.fallback && isProviderConfigured(selected, cfg);
-  const warn = $("engineWarn");
-  const warnText = $("engineWarnText");
   if (outbound.fallback && warnText) warnText.textContent = outbound.notice;
-  warn.hidden = ok;
+  warn.hidden = outbound.borrowed || ok;
 }
 
 function hostOf(url) {

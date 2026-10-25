@@ -14,6 +14,7 @@ import { createMemoryLibraryFactory } from "../lib/platform/memory-backend.js";
 import { createSqliteLikeFactory } from "./sqlite-like-backend.mjs";
 import { arxivFailureReason, createArxivSourceClient, createMemoryStore } from "../background/arxiv-source.js";
 import { resolveOutboundProvider } from "../lib/providers.js";
+import { resolveTranslateOutbound } from "../lib/translate-borrow.js";
 import { createNet, installNet } from "../lib/net/fetch.js";
 import { loadKatex } from "./helpers/arxiv-paper.mjs";
 
@@ -202,11 +203,36 @@ test("unconfigured outbound is MyMemory and a configured engine stays put", () =
   const selectedFree = resolveOutboundProvider({ provider: "mymemory", providers: { mymemory: {} } });
   assert.equal(selectedFree.fallback, false);
   assert.match(selectedFree.notice, /免费的 MyMemory/);
-  assert.match(viewerSrc, /resolveOutboundProvider\(settings\)/);
+  const mm = { multimodal: { provider: "kimi", apiKey: "sk-mm-not-stored", model: "kimi-k2", baseUrl: "" } };
+  const borrowed = resolveTranslateOutbound(
+    { provider: "openai", providers: { openai: { apiKey: "" } } },
+    mm
+  );
+  assert.equal(borrowed.mode, "borrow");
+  assert.equal(borrowed.fallback, false);
+  assert.equal(borrowed.model, "kimi-k2");
+  assert.equal(borrowed.runtimeConfig.apiKey, "sk-mm-not-stored");
+  const ownWins = resolveTranslateOutbound(
+    { provider: "openai", providers: { openai: { apiKey: "sk-own" } } },
+    mm
+  );
+  assert.equal(ownWins.mode, "own");
+  assert.equal(ownWins.providerId, "openai");
+  assert.equal(ownWins.borrowed, false);
+  const explicitFree = resolveTranslateOutbound({ provider: "mymemory", providers: { mymemory: {} } }, mm);
+  assert.equal(explicitFree.mode, "own");
+  assert.equal(explicitFree.providerId, "mymemory");
+  const stillFree = resolveTranslateOutbound(
+    { provider: "openai", providers: { openai: { apiKey: "" } } },
+    { multimodal: { provider: "kimi", apiKey: "", model: "kimi-k2" } }
+  );
+  assert.equal(stillFree.providerId, "mymemory");
+  assert.equal(stillFree.fallback, true);
+  assert.match(viewerSrc, /resolveTranslateOutbound\(settings, formulaViewerSettings\)/);
   assert.match(viewerSrc, /outbound\.fallback/);
-  assert.match(workerSrc, /resolveOutboundProvider\(settings\)/);
+  assert.match(workerSrc, /resolveTranslateOutbound\(settings, formula\)/);
   assert.match(workerSrc, /options\.providerId = outbound\.providerId/);
-  assert.match(popupSrc, /resolveOutboundProvider\(settings\)/);
+  assert.match(popupSrc, /describeTranslateBorrow\(settings, formula\)/);
   assert.match(popupSrc, /引擎：\$\{shortName\}（免费）/);
 });
 

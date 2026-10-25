@@ -262,7 +262,17 @@ const STUB = `(() => {
     },
     storage: {
       local: {
-        get() { return Promise.resolve({}); },
+        get(key) {
+          // C：翻译引擎未配置时，多模态也没有 key，才回退免费 MyMemory。
+          if (mode === "missing" && (key == null || key === "formulaSettings")) {
+            return Promise.resolve({
+              formulaSettings: {
+                multimodal: { provider: "kimi", apiKey: "", model: "", baseUrl: "" }
+              }
+            });
+          }
+          return Promise.resolve({});
+        },
         set() { return Promise.resolve(); }
       }
     }
