@@ -438,6 +438,7 @@ export function mountLibraryUi(api = {}) {
     const hash = row.docHash;
     const title = libraryRowTitle(row).title;
     const at = now();
+    const keyed = options.gesture === "key";
     if (!external && !libraryClickFresh({
       lastHash: lastOpenClick.hash,
       lastAt: lastOpenClick.at,
@@ -445,7 +446,9 @@ export function mountLibraryUi(api = {}) {
       at,
       wait: api.clickDedupeMs ?? LIBRARY_CLICK_DEDUPE_MS
     })) {
-      return report("deduped");
+      // Pointer repeats collapse for 300ms. A key press after that open has
+      // settled is a new activation: Enter must still open the focused row.
+      if (!keyed || rowBusy === hash) return report("deduped");
     }
     if (!external) lastOpenClick = { hash, at };
     const gen = ++openGen;
@@ -1003,7 +1006,7 @@ export function mountLibraryUi(api = {}) {
         return;
       }
       active = focused ? focused.index : active;
-      void openRow(row);
+      void openRow(row, { gesture: "key" });
       return;
     }
     if (key === "Delete" || key === "Backspace") {

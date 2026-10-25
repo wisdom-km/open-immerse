@@ -369,3 +369,43 @@ test("LIB-18 blank stays while a slow load is under 300ms, and blocked keeps the
   assert.equal(ui.root.querySelector(".oi-lib-storage")?.textContent, "存储与备份 →");
   assert.match(ui.root.textContent, /重试/);
 });
+
+test("Enter after a settled open still opens the focused row inside the click dedupe window", async () => {
+  const { document, window } = panelDom();
+  const papers = [
+    paper({ docHash: "hash-1", title: "第一篇", sourceSize: 0, lastOpenedAt: 3 }),
+    paper({ docHash: "hash-2", title: "第二篇", sourceSize: 0, lastOpenedAt: 2 }),
+    paper({ docHash: "hash-3", title: "第三篇", sourceSize: 0, lastOpenedAt: 1 })
+  ];
+  const ui = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    now: () => 1000,
+    width: () => 1200,
+    store: async () => ({
+      async listPapers() { return papers; },
+      async getPages() { return []; },
+      async usage() { return { byDoc: new Map() }; },
+      async getSource() { return null; },
+      async getPaper(hash) { return papers.find((row) => row.docHash === hash) || null; }
+    }),
+    listNotes: async () => [],
+    openHash: async () => "",
+    openBytes: async () => true
+  });
+  ui.open();
+  await flush();
+  const press = (hash, key) => {
+    const button = ui.root.querySelector(`[data-lib-row="${hash}"] .oi-lib-open`);
+    button.focus();
+    const event = new window.Event("keydown", { bubbles: true });
+    event.key = key;
+    button.dispatchEvent(event);
+  };
+  press("hash-3", "Enter");
+  await flush();
+  assert.equal(ui.root.querySelector(".oi-lib-repick")?.closest("[data-lib-row]")?.getAttribute("data-lib-row"), "hash-3");
+  ui.root.querySelector(".oi-lib-repick")?.remove();
+  press("hash-3", "Enter");
+  await flush();
+  assert.equal(ui.root.querySelector(".oi-lib-repick")?.closest("[data-lib-row]")?.getAttribute("data-lib-row"), "hash-3");
+});
