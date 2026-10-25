@@ -83,8 +83,22 @@ function serveRepo() {
   });
 }
 
+// Prefer the Chrome binary. A google-chrome wrapper can inject a shared
+// profile and --remote-debugging-port, and the first pipe message is dropped
+// until Chrome reads it. The command timeout stays 20s.
+function chromeExecutable() {
+  const fromEnv = String(process.env.CHROME_BIN || process.env.CHROME_PATH || "").trim();
+  if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  if (existsSync("/opt/google/chrome/chrome")) return "/opt/google/chrome/chrome";
+  return "google-chrome";
+}
+
 function launchChrome(userDataDir, scratchDir) {
-  const child = spawn("google-chrome", [
+  const env = { ...process.env, TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir };
+  for (const key of ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
+    delete env[key];
+  }
+  const child = spawn(chromeExecutable(), [
     "--headless=new",
     "--disable-gpu",
     "--no-sandbox",
@@ -94,18 +108,35 @@ function launchChrome(userDataDir, scratchDir) {
     `--user-data-dir=${userDataDir}`,
     "--window-size=1440,900",
     "--no-first-run",
-    "--no-default-browser-check"
+    "--no-default-browser-check",
+    "--no-proxy-server",
+    "--proxy-bypass-list=*",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-sync",
+    "--disable-domain-reliability",
+    "--disable-client-side-phishing-detection",
+    "--disable-extensions",
+    "--disable-default-apps",
+    "--disable-breakpad",
+    "--disable-hang-monitor",
+    "--metrics-recording-only",
+    "--password-store=basic",
+    "--use-mock-keychain",
+    "--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider"
   ], {
     detached: true,
-    env: {
-      ...process.env,
-      TMPDIR: scratchDir,
-      TMP: scratchDir,
-      TEMP: scratchDir
-    },
+    env,
     stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"]
   });
-  child.stderr.on("data", () => {});
+  const stderr = [];
+  let stderrBytes = 0;
+  child.stderr.on("data", (chunk) => {
+    stderr.push(chunk);
+    stderrBytes += chunk.length;
+    while (stderrBytes > 4096 && stderr.length > 1) stderrBytes -= stderr.shift().length;
+  });
+  child.stderrTail = () => Buffer.concat(stderr).toString("utf8").slice(-1500);
   child.stdio[3].on("error", () => {});
   child.stdio[4].on("error", () => {});
   return child;
@@ -147,7 +178,7 @@ class PipeCdp {
     this.pending.clear();
   }
 
-  send(method, params = {}, sessionId) {
+  send(method, params = {}, sessionId, timeoutMs = 20000) {
     const id = this.next++;
     const payload = { id, method, params };
     if (sessionId) payload.sessionId = sessionId;
@@ -156,11 +187,28 @@ class PipeCdp {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`CDP timeout: ${method}`));
-      }, 20000);
+      }, timeoutMs);
       this.pending.set(id, { done, reject, timer });
       this.writeStream.write(body);
     });
   }
+}
+
+async function waitForDebuggingPipe(cdp, child) {
+  const deadline = Date.now() + 20000;
+  let last = "chrome pipe was not ready";
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`chrome exited before the pipe was ready (${child.exitCode ?? child.signalCode}): ${child.stderrTail?.() || ""}`);
+    }
+    try {
+      await cdp.send("Browser.getVersion", {}, undefined, 1000);
+      return;
+    } catch (error) {
+      last = error?.message || String(error);
+    }
+  }
+  throw new Error(`${last}; stderr=${child.stderrTail?.() || ""}`);
 }
 
 function sleep(ms) {
@@ -269,6 +317,7 @@ test("toolbar controls share the y=24 centerline across themes and widths", { ti
   handle.child = launchChrome(userDataDir, scratchDir);
   const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
   handle.cdp = cdp;
+  await waitForDebuggingPipe(cdp, handle.child);
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   await cdp.send("Page.enable", {}, sessionId);
