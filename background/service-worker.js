@@ -1,17 +1,17 @@
 import { completePdfStructure, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, sanitizeProviderError, testProviderConnection } from "../lib/providers.js";
-import { defaultFormulaSettings, readFormulaSettings } from "../lib/formula-settings.js";
-import { resolveTranslateOutbound } from "../lib/translate-borrow.js";
 import { getSettings, matchSiteRule, noteTranslationSucceeded, saveSettings } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { featureOn, resolveFeatures } from "../lib/features.js";
 import { handleArxivSourceMessage } from "./arxiv-source.js";
 import { handleFormulaCacheMessage } from "./formula-cache.js";
+import { defaultFormulaSettings, readFormulaSettings } from "../lib/formula-settings.js";
+import { resolveTranslateOutbound } from "../lib/translate-borrow.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
 const CACHE_VER = "v5-title-calque";
-const BORROW_EPISODE_KEY = "oiTranslateBorrowEpisode";
 cache.clear();
+const BORROW_EPISODE_KEY = "oiTranslateBorrowEpisode";
 let borrowEpisode = "";
 let borrowEpisodeKnown = false;
 let borrowEpisodeChain = Promise.resolve();

@@ -53,7 +53,18 @@ test("TBM-01/02/05/11 settings page does not show a borrow hint", () => {
   assert.equal(borrowJs.includes("单独设置"), false);
   assert.equal(borrowJs.includes("（借用）"), false);
   assert.equal(borrowJs.includes("formatBorrowedEngine"), false);
-  for (const file of ["popup/popup.js", "popup/popup.html", "options/options.html", "options/options.js", "pdf/viewer.js"]) {
+  for (const file of [
+    "popup/popup.js",
+    "popup/popup.html",
+    "options/options.html",
+    "options/options.js",
+    "pdf/viewer.js",
+    "content/content.js",
+    "content/toolbar.js",
+    "content/subtitles.js",
+    "lib/fab.js",
+    "lib/bilingual-layout.js"
+  ]) {
     assert.equal(readFileSync(join(root, file), "utf8").includes("借用"), false, file);
   }
   const borrow = describeTranslateBorrow(unconfigured(), mm());
