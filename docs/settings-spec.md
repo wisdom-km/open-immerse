@@ -113,7 +113,7 @@
 - 最小支持宽 420：不重叠、不裁切、不出现横向滚动条。
 - 无障碍：可以用 Tab 走遍所有控件；导航支持 ↑ / ↓；开关带 `role=switch` 和 `aria-checked`。
 - `#pdf` 页开关说明：开着时「在浏览器里打开 PDF 时，用沉浸译的双栏阅读器显示原文和译文。」关掉后「已关闭。PDF 会用浏览器自带的查看器打开。」
-- `features.pdf` 关时，「版面识别」组置灰（行上 `aria-disabled`，控件按 SVA-03 变淡），不隐藏。
+- `features.pdf` 关时，「版面识别」组和同页其余行置灰（行上 `aria-disabled`，整行 `opacity: 0.5`，文字 `--oi-text-muted`，仍勾选的开关轨道用 `--oi-line-strong` 而不用 accent），不隐藏。
 
 ## 8 验收索引（SET-01…41）
 | ID | 要点 |
@@ -192,6 +192,6 @@
 - 对比度（脚本算，半透明底先与分组色混合）：正文 15.60、行说明 9.01、muted / 页底 5.71、muted / 侧栏 5.22、侧栏选中 11.76、链接 6.23、主按钮字 14.68、warn / 出错行底 5.79、行说明 / 出错行底 8.02、chip 8.03。最低 5.22（SET-39）。
 
 ## 11 变更记录
-- **设置页视觉与 PDF 开关（本变更）**：分组卡走 `--set-card-border` / `--set-card-radius` / `--set-card-pad` / `--set-card-gap`，控件高 `--set-ctl-h`（28px），无阴影。`.set-group + .hint` 跟在卡片后；`.set-ctl a` 用强调色。多模态卡不用 `--oi-reader-*`。`features.pdf` 默认 `true`。`#pdf` 页第一张卡的第一行是专用开关 `#pdfEnabled`（`role=switch`），不走 `renderFeatures`。开关说明开着时是「在浏览器里打开 PDF 时，用沉浸译的双栏阅读器显示原文和译文。」关掉后改为「已关闭。PDF 会用浏览器自带的查看器打开。」「版面识别」组置灰，不隐藏。同页其余行 `aria-disabled` 并变灰。`settingsVersion` 9 只做这一步：已存 `features.pdf === false` 时改为 `true`，并写入 `migrationNotes.pdfFlippedAt`；本来就是 `true`、或缺这个键的新安装，不写这个时间。提示只在 `pdfFlippedAt` 有值时出现：`#pdf` 页开关正下方的中性 `.set-banner`（「在这里关闭」，另有「关闭 PDF 阅读」），以及阅读器顶部（链到「设置 › PDF 阅读」）。点「知道了」、任一处关掉 PDF 阅读，或任一处显示过一次，都写入 `chrome.storage.local` 的 `oi.notice.pdfDefaultOn = { seenAt }`，两处都不再出现。版本已是 9 之后再关掉不会被翻回去。多模态页在 PDF 关闭时显示「PDF 阅读已关闭 · 去开启」，点了只打开 PDF 页并聚焦开关。不增加 `unlimitedStorage`。长期保存写在行内：未开启时按钮「申请长期保存」；申请中转圈，按钮宽为实测宽度加 18px（转圈 12px 加间距 6px）且不换行，三种状态等宽等高；被拒芯片仍是「未开启」，按钮「再试一次」，另有「导出文献库」。文献库行的「按篇查看」用行说明的 muted 色，默认无下划线。说明是 `role=status`。结果出来后焦点回到按钮。数据页和关于页的组标题在卡片外，用 `h3.set-gh`。
+- **设置页视觉与 PDF 开关（本变更）**：分组卡走 `--set-card-border` / `--set-card-radius` / `--set-card-pad` / `--set-card-gap`，控件高 `--set-ctl-h`（28px），无阴影。`.set-group + .hint` 跟在卡片后；`.set-ctl a` 用强调色。多模态卡不用 `--oi-reader-*`。`features.pdf` 默认 `true`。`#pdf` 页第一张卡的第一行是专用开关 `#pdfEnabled`（`role=switch`），不走 `renderFeatures`。开关说明开着时是「在浏览器里打开 PDF 时，用沉浸译的双栏阅读器显示原文和译文。」关掉后改为「已关闭。PDF 会用浏览器自带的查看器打开。」「版面识别」组置灰，不隐藏。同页其余行 `aria-disabled`，整行 `opacity: 0.5`，文字 `--oi-text-muted`，仍勾选的开关轨道改为 `--oi-line-strong`。`settingsVersion` 9 只做这一步：已存 `features.pdf === false` 时改为 `true`，并写入 `migrationNotes.pdfFlippedAt`；本来就是 `true`、或缺这个键的新安装，不写这个时间。提示只在 `pdfFlippedAt` 有值时出现：`#pdf` 页开关正下方的中性 `.set-banner`（「在这里关闭」，另有「关闭 PDF 阅读」），以及阅读器顶部（链到「设置 › PDF 阅读」）。点「知道了」、任一处关掉 PDF 阅读，或任一处显示过一次，都写入 `chrome.storage.local` 的 `oi.notice.pdfDefaultOn = { seenAt }`，两处都不再出现。版本已是 9 之后再关掉不会被翻回去。多模态页在 PDF 关闭时显示「PDF 阅读已关闭 · 去开启」，点了只打开 PDF 页并聚焦开关。不增加 `unlimitedStorage`。长期保存写在行内：未开启时按钮「申请长期保存」；申请中转圈，按钮宽为实测宽度加 18px（转圈 12px 加间距 6px）且不换行，三种状态等宽等高；被拒芯片仍是「未开启」，按钮「再试一次」，另有「导出文献库」。文献库行的「按篇查看」用行说明的 muted 色，默认无下划线。说明是 `role=status`。结果出来后焦点回到按钮。数据页和关于页的组标题在卡片外，用 `h3.set-gh`。
 - **2026-10-15 22:00（Wisdom 定）**：设置页配色用 A 暖纸（§10，SET-39…41）；`#notes` 只放 3 项（笔记位置、侧栏宽度恢复 440、三栏宽度恢复 360），不做「默认布局」「新笔记默认类型」（SET-18）；阅读器和笔记面板都不改，只改设置界面。
 - **2026-10-15（Loom，按 IMPACT-2026-10-15.md）**：以仓库 `docs/settings-spec.md`（e4f464d，SET-01…34）为基线同步；改 SET-02（`#formula → #mm`、`#data?focus=`）、SET-08、SET-11、SET-13、SET-16、SET-18、SET-19、SET-32、SET-33；新增 SET-35…38；公式开关键名为 `formulaSettings` 里的 `formula.tier2/ocr/tier3.enabled`，笔记面板按篇提示键为 `reader.notesPersistHintDismissed.<docHash>`；新增 §9 与 PR-4 衔接。依据 Wisdom 2026-10-15 21:47（F4 Q4 / Q5）。

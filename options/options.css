@@ -819,13 +819,25 @@ body.oi-settings .set-row > input[role="switch"]:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
-/* SVA-03: a row with aria-disabled is greyed and its controls fade. */
+/* SVA-03: an aria-disabled row fades once. Text is muted, and a switch
+   that is still checked drops the accent track for the disabled grey.
+   Controls stay fully opaque so this fade is not applied a second time. */
+body.oi-settings .set-row[aria-disabled="true"] {
+  opacity: 0.5;
+}
 body.oi-settings .set-row[aria-disabled="true"] .set-title,
 body.oi-settings .set-row[aria-disabled="true"] .set-note {
   color: var(--oi-text-muted);
 }
+body.oi-settings .set-row[aria-disabled="true"] > input[role="switch"],
+body.oi-settings .set-row[aria-disabled="true"] > input[role="switch"]:checked,
+body.oi-settings .set-row[aria-disabled="true"] > input[role="switch"]:disabled {
+  background: var(--oi-line-strong);
+  opacity: 1;
+  cursor: not-allowed;
+}
 body.oi-settings .set-row[aria-disabled="true"] :is(input, select, textarea, button) {
-  opacity: 0.45;
+  opacity: 1;
 }
 body.oi-settings .set-quality .set-ctl { width: auto; flex: none; gap: 6px; }
 body.oi-settings .set-quality .set-stepper,

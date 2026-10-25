@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { extname, join, resolve, sep } from "node:path";
+import { cleanupChrome } from "./helpers/chrome-cleanup.mjs";
+import { installOwnedTmpGuard, rememberOwnedTemp } from "./helpers/owned-tmp.mjs";
 
 import { DEFAULT_SETTINGS, migrateSettings } from "../lib/storage.js";
 import { DEFAULT_FEATURES } from "../lib/features.js";
@@ -17,6 +22,8 @@ import {
 
 const root = join(import.meta.dirname, "..");
 const read = (path) => readFileSync(join(root, path), "utf8");
+const PDF_OFF_PREFIXES = ["oi-pdf-off-", "com.google.Chrome.", ".com.google.Chrome."];
+installOwnedTmpGuard(PDF_OFF_PREFIXES);
 
 test("settings html drops the empty data section and the duplicate privacy sentence", () => {
   const html = read("options/options.html");
@@ -80,8 +87,12 @@ test("settings cards use flat --set-* tokens and multimodal cards do not use rea
   assert.match(css, /body\.oi-settings \.set-group \+ \.hint \{[^}]*margin:\s*8px 4px 0/s);
   assert.match(css, /body\.oi-settings \.set-ctl button \{[^}]*height:\s*var\(--set-ctl-h\)/s);
   assert.match(css, /body\.oi-settings \.set-ctl a \{[^}]*color:\s*var\(--oi-accent\)/s);
+  assert.match(css, /\.set-row\[aria-disabled="true"\] \{\s*opacity:\s*0\.5/);
   assert.match(css, /\.set-row\[aria-disabled="true"\] \.set-title/);
-  assert.match(css, /\.set-row\[aria-disabled="true"\] :is\(input, select, textarea, button\) \{\s*opacity:\s*0\.45/);
+  assert.match(css, /\.set-row\[aria-disabled="true"\] \.set-note \{\s*color:\s*var\(--oi-text-muted\)/);
+  assert.match(css, /\.set-row\[aria-disabled="true"\] > input\[role="switch"\]:checked/);
+  assert.match(css, /\.set-row\[aria-disabled="true"\] > input\[role="switch"\]:disabled \{[^}]*background:\s*var\(--oi-line-strong\)/s);
+  assert.match(css, /\.set-row\[aria-disabled="true"\] :is\(input, select, textarea, button\) \{\s*opacity:\s*1/);
   assert.match(css, /padding:\s*var\(--set-card-pad\)/);
   assert.equal(css.includes("--oi-reader-"), false);
   assert.match(css, /\.oi-set-card \{[^}]*border:\s*var\(--set-card-border\)/s);
@@ -400,3 +411,284 @@ function walkText(node, out = []) {
   for (const kid of node.children || []) walkText(kid, out);
   return out;
 }
+
+const SHOT_MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".woff2": "font/woff2"
+};
+
+function serveRepo() {
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || "/", "http://127.0.0.1");
+    const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+    const file = resolve(root, rel);
+    if (file !== root && !file.startsWith(`${root}${sep}`)) {
+      res.writeHead(403);
+      res.end();
+      return;
+    }
+    try {
+      if (!statSync(file).isFile()) throw new Error("not a file");
+      res.writeHead(200, {
+        "content-type": SHOT_MIME[extname(file)] || "application/octet-stream",
+        "cache-control": "no-store"
+      });
+      res.end(readFileSync(file));
+    } catch {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  return new Promise((done) => server.listen(0, "127.0.0.1", () => done(server)));
+}
+
+function launchChrome(userDataDir, scratchDir) {
+  const child = spawn("google-chrome", [
+    "--headless=new",
+    "--disable-gpu",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--remote-debugging-pipe",
+    `--user-data-dir=${userDataDir}`,
+    "--window-size=1280,900",
+    "--force-device-scale-factor=1",
+    "--no-first-run",
+    "--no-default-browser-check"
+  ], {
+    detached: true,
+    env: { ...process.env, TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir },
+    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"]
+  });
+  child.stderr.on("data", () => {});
+  child.stdio[3].on("error", () => {});
+  child.stdio[4].on("error", () => {});
+  return child;
+}
+
+class PipeCdp {
+  constructor(writeStream, readStream) {
+    this.writeStream = writeStream;
+    this.readStream = readStream;
+    this.buf = Buffer.alloc(0);
+    this.next = 1;
+    this.pending = new Map();
+    readStream.on("data", (chunk) => {
+      this.buf = Buffer.concat([this.buf, chunk]);
+      this.drain();
+    });
+  }
+
+  drain() {
+    while (this.buf.length) {
+      const end = this.buf.indexOf(0);
+      if (end < 0) return;
+      const text = this.buf.subarray(0, end).toString("utf8");
+      this.buf = this.buf.subarray(end + 1);
+      if (!text) continue;
+      const message = JSON.parse(text);
+      if (message.id && this.pending.has(message.id)) {
+        const { done, reject, timer } = this.pending.get(message.id);
+        this.pending.delete(message.id);
+        clearTimeout(timer);
+        if (message.error) reject(new Error(message.error.message || JSON.stringify(message.error)));
+        else done(message.result);
+      }
+    }
+  }
+
+  dispose() {
+    for (const pending of this.pending.values()) clearTimeout(pending.timer);
+    this.pending.clear();
+  }
+
+  send(method, params = {}, sessionId, timeoutMs = 20000) {
+    const id = this.next++;
+    const payload = { id, method, params };
+    if (sessionId) payload.sessionId = sessionId;
+    const body = Buffer.from(`${JSON.stringify(payload)}\0`, "utf8");
+    return new Promise((done, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP timeout: ${method}`));
+      }, timeoutMs);
+      this.pending.set(id, { done, reject, timer });
+      this.writeStream.write(body);
+    });
+  }
+}
+
+const PDF_OFF_STUB = `(() => {
+  globalThis.chrome = {
+    runtime: {
+      id: "oi-pdf-off",
+      getManifest() { return { version: "0.0.0" }; },
+      getURL(path) { return new URL(path, location.href).href; },
+      sendMessage(message) {
+        const type = message && message.type;
+        if (type === "OI_GET_SETTINGS") {
+          return Promise.resolve({
+            ok: true,
+            settings: {
+              provider: "mymemory",
+              sourceLang: "auto",
+              targetLang: "zh-CN",
+              batchSize: 8,
+              pdfAutoTranslate: true,
+              features: { pdf: false },
+              providers: {},
+              pdfLayout: { mode: "" }
+            }
+          });
+        }
+        return Promise.resolve({ ok: true, settings: {} });
+      },
+      onMessage: { addListener() {} }
+    },
+    storage: {
+      local: {
+        get() { return Promise.resolve({}); },
+        set() { return Promise.resolve(); },
+        remove() { return Promise.resolve(); }
+      },
+      sync: {
+        get() { return Promise.resolve({}); },
+        set() { return Promise.resolve(); }
+      },
+      onChanged: { addListener() {}, removeListener() {} }
+    },
+    tabs: { create() { return Promise.resolve(); } }
+  };
+})();`;
+
+const PDF_OFF_STYLE = `(() => {
+  const sw = document.getElementById("pdfAutoTranslate");
+  const note = document.getElementById("pdfEnabledNote");
+  const box = document.getElementById("pdfLayoutBox");
+  if (!sw || !note || !box || box.hidden) return null;
+  if (!note.textContent.startsWith("已关闭")) return null;
+  const row = sw.closest(".set-row");
+  const title = document.getElementById("pdfAutoTranslateLabel");
+  const mode = document.getElementById("pdfLayoutMode");
+  const gap = document.getElementById("bodyGlossGap");
+  const master = document.getElementById("pdfEnabled");
+  const step = row.parentElement.querySelector(".set-step");
+  const probe = document.createElement("span");
+  probe.style.color = getComputedStyle(document.body).getPropertyValue("--oi-text-muted").trim();
+  document.body.appendChild(probe);
+  const muted = getComputedStyle(probe).color;
+  probe.style.color = getComputedStyle(document.body).getPropertyValue("--oi-accent").trim();
+  const accent = getComputedStyle(probe).color;
+  probe.style.background = getComputedStyle(document.body).getPropertyValue("--oi-line-strong").trim();
+  const line = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  const paint = (node) => {
+    const style = getComputedStyle(node);
+    return { opacity: style.opacity, color: style.color, background: style.backgroundColor };
+  };
+  return {
+    note: note.textContent,
+    rowOpacity: paint(row).opacity,
+    titleColor: paint(title).color,
+    noteColor: paint(row.querySelector(".set-note")).color,
+    switchBg: paint(sw).background,
+    switchOpacity: paint(sw).opacity,
+    switchDisabled: sw.disabled,
+    switchChecked: sw.checked,
+    modeDisabled: mode.disabled,
+    modeOpacity: paint(mode).opacity,
+    modeRowOpacity: paint(mode.closest(".set-row")).opacity,
+    modeTitle: paint(mode.closest(".set-row").querySelector(".set-title")).color,
+    gapDisabled: gap.disabled,
+    gapRowOpacity: paint(gap.closest(".set-row")).opacity,
+    stepDisabled: step.disabled,
+    stepOpacity: paint(step).opacity,
+    masterDisabled: master.disabled,
+    masterOpacity: paint(master).opacity,
+    masterRowOpacity: paint(master.closest(".set-row")).opacity,
+    muted,
+    accent,
+    line
+  };
+})()`;
+
+test("pdf off greys affected rows in computed style", { timeout: 120000 }, async (t) => {
+  const handle = { child: null, cdp: null, server: null, ownedDir: null, userDataDir: null };
+  t.after(async () => {
+    try {
+      handle.cdp?.dispose();
+    } finally {
+      await cleanupChrome({
+        t,
+        child: handle.child,
+        server: handle.server,
+        ownedDir: handle.ownedDir,
+        userDataDir: handle.userDataDir
+      });
+    }
+  });
+
+  handle.server = await serveRepo();
+  handle.ownedDir = mkdtempSync(join(tmpdir(), "oi-pdf-off-"));
+  rememberOwnedTemp(handle.ownedDir);
+  const userDataDir = join(handle.ownedDir, "profile");
+  const scratchDir = join(handle.ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  handle.userDataDir = userDataDir;
+  handle.child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
+  handle.cdp = cdp;
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const send = (method, params, timeoutMs) => cdp.send(method, params, sessionId, timeoutMs);
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: PDF_OFF_STUB });
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true
+    }, 30000);
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails;
+      throw new Error(detail.exception?.description || detail.text || JSON.stringify(detail));
+    }
+    return result.result?.value;
+  };
+  const origin = `http://127.0.0.1:${handle.server.address().port}`;
+  await send("Page.navigate", { url: `${origin}/options/options.html#pdf` });
+  const started = Date.now();
+  let style = null;
+  while (Date.now() - started < 20000) {
+    style = await evaluate(PDF_OFF_STYLE);
+    if (style) break;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  assert.ok(style, "pdf-off styles did not settle");
+  assert.match(style.note, /^已关闭/);
+  assert.equal(style.switchDisabled, true);
+  assert.equal(style.switchChecked, true);
+  assert.equal(style.rowOpacity, "0.5");
+  assert.equal(style.titleColor, style.muted);
+  assert.equal(style.noteColor, style.muted);
+  assert.equal(style.switchBg, style.line);
+  assert.notEqual(style.switchBg, style.accent);
+  assert.equal(style.switchOpacity, "1");
+  assert.equal(style.modeDisabled, true);
+  assert.equal(style.modeOpacity, "1");
+  assert.equal(style.modeRowOpacity, "0.5");
+  assert.equal(style.modeTitle, style.muted);
+  assert.equal(style.gapDisabled, true);
+  assert.equal(style.gapRowOpacity, "0.5");
+  assert.equal(style.stepDisabled, true);
+  assert.equal(style.stepOpacity, "1");
+  assert.equal(style.masterDisabled, false);
+  assert.equal(style.masterRowOpacity, "1");
+  assert.equal(style.masterOpacity, "1");
+});
