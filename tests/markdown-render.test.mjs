@@ -239,23 +239,22 @@ test("L-14 streaming prefixes do not throw or emit an active tag", () => {
   }
 });
 
-test("L-15 five thousand characters render in under 16ms", () => {
+test("L-15 five thousand characters render in under 16ms", (t) => {
   let chunk = "段落 **粗体** 与 [链接](https://example.com/a)。\n\n| 左 | 右 |\n| --- | ---: |\n| 1 | 2 |\n\n";
   while (chunk.length < 5000) chunk += chunk;
   chunk = chunk.slice(0, 5000);
   assert.equal(chunk.length, 5000);
   renderMarkdown(chunk);
   const times = [];
-  for (let index = 0; index < 7; index += 1) {
+  for (let index = 0; index < 9; index += 1) {
     const started = performance.now();
     renderMarkdown(chunk);
     times.push(performance.now() - started);
   }
   times.sort((a, b) => a - b);
-  // A full suite deschedules this process. That wait only lengthens a sample,
-  // so the fastest one is the render. The 16ms budget stays on that sample.
-  const fastest = times[0];
-  assert.ok(fastest < 16, `fastest ${fastest.toFixed(2)}ms from ${times.map((n) => n.toFixed(2)).join(", ")}`);
+  t.diagnostic(times.map((n) => n.toFixed(2)).join(", "));
+  const third = times[2];
+  assert.ok(third < 16, `3rd fastest ${third.toFixed(2)}ms from ${times.map((n) => n.toFixed(2)).join(", ")}`);
 });
 
 test("Ask and notes share one renderer, including a fence and an ordered start", () => {
