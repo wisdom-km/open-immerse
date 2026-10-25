@@ -27,15 +27,31 @@ test("settings html drops the empty data section and the duplicate privacy sente
   const pdf = html.slice(html.indexOf('id="panel-pdf"'), html.indexOf('id="panel-notes"'));
   assert.ok(pdf.indexOf('id="pdfFeatureList"') < pdf.indexOf('id="pdfAutoTranslate"'));
   const list = pdf.slice(pdf.indexOf('id="pdfFeatureList"'), pdf.indexOf('id="pdfAutoTranslate"'));
+  const firstRow = list.slice(list.indexOf('<div class="set-row">'), list.indexOf('id="pdfOnNotice"'));
+  assert.match(firstRow, /id="pdfEnabled"[^>]*role="switch"/);
+  assert.match(firstRow, /aria-labelledby="pdfEnabledLabel"/);
+  assert.match(firstRow, /aria-describedby="pdfEnabledNote"/);
+  assert.ok(list.indexOf('id="pdfEnabled"') < list.indexOf('id="pdfOnNotice"'));
   assert.match(list, /id="pdfOnNotice" class="set-banner"/);
   assert.ok(list.includes(PDF_DEFAULT_NOTICE_COPY));
   assert.match(list, /id="pdfOnNoticeOff" class="set-inline">关闭 PDF 阅读/);
   assert.match(list, /id="pdfOnNoticeDismiss" class="btn-secondary">知道了/);
-  assert.match(html, /PDF 阅读还没开启/);
+  assert.match(html, /PDF 阅读已关闭 · <button type="button" id="mmEnablePdf" class="set-inline">去开启<\/button>/);
+  assert.doesNotMatch(html, /PDF 阅读还没开启/);
   assert.doesNotMatch(html, /在实验室里还没开启/);
+  const about = html.slice(html.indexOf('id="panel-about"'));
+  const versionAt = about.indexOf('id="aboutVersionHeading"');
+  const diagAt = about.indexOf('id="diagHeading"');
+  const groupAt = about.indexOf('id="diagGroup"');
+  assert.match(about, /<h3 class="set-gh" id="aboutVersionHeading">版本<\/h3>/);
+  assert.match(about, /<h3 class="set-gh" id="diagHeading">问题诊断<\/h3>/);
+  assert.ok(versionAt > 0 && versionAt < diagAt && diagAt < groupAt);
+  assert.equal(about.slice(diagAt, groupAt).includes("diag-heading"), false);
   const viewer = read("pdf/viewer.html");
   assert.match(viewer, /id="pdfDefaultNotice" class="oi-reader-notice"/);
-  assert.ok(viewer.includes(PDF_DEFAULT_NOTICE_COPY));
+  assert.match(viewer, /id="pdfDefaultNoticeSettings" href="\.\.\/options\/options\.html#pdf">设置 › PDF 阅读<\/a> 里关闭。/);
+  assert.equal(viewer.includes(PDF_DEFAULT_NOTICE_COPY), false);
+  assert.equal(viewer.includes("在这里关闭"), false);
   assert.match(viewer, /id="pdfDefaultNoticeDismiss" class="btn-secondary">知道了/);
   assert.equal(viewer.includes("关闭 PDF 阅读"), false);
   const readerCss = read("pdf/viewer.css");
@@ -47,18 +63,30 @@ test("settings html drops the empty data section and the duplicate privacy sente
 test("settings cards use flat --set-* tokens and multimodal cards do not use reader tokens", () => {
   const css = read("options/options.css");
   const manifest = read("manifest.json");
-  assert.match(css, /--set-border:\s*1px solid var\(--oi-line\)/);
-  assert.match(css, /--set-radius:\s*10px/);
-  assert.match(css, /--set-row-pad:\s*8px 16px/);
-  assert.match(css, /--set-group-gap:\s*16px/);
+  assert.match(css, /--set-card-border:\s*1px solid var\(--oi-line\)/);
+  assert.match(css, /--set-card-radius:\s*10px/);
+  assert.match(css, /--set-card-pad:\s*8px 16px/);
+  assert.match(css, /--set-card-gap:\s*16px/);
+  assert.match(css, /--set-ctl-h:\s*28px/);
+  assert.equal(css.includes("--set-border"), false);
+  assert.equal(css.includes("--set-radius:"), false);
+  assert.equal(css.includes("--set-row-pad"), false);
+  assert.equal(css.includes("--set-group-gap"), false);
   assert.match(css, /body\.oi-settings section \{\s*box-shadow:\s*none/);
   assert.match(css, /body\.oi-settings \.set-group \{[^}]*box-shadow:\s*none/s);
-  assert.match(css, /body\.oi-settings \.set-group \{[^}]*border:\s*var\(--set-border\)/s);
-  assert.match(css, /body\.oi-settings \.set-group \+ \.set-group \{\s*margin-top:\s*var\(--set-group-gap\)/);
-  assert.match(css, /padding:\s*var\(--set-row-pad\)/);
+  assert.match(css, /body\.oi-settings \.set-group \{[^}]*border:\s*var\(--set-card-border\)/s);
+  assert.match(css, /body\.oi-settings \.set-group \+ \.set-group \{\s*margin-top:\s*var\(--set-card-gap\)/);
+  assert.match(css, /body\.oi-settings \.set-group \+ \.hint \{[^}]*margin:\s*8px 4px 0/s);
+  assert.match(css, /body\.oi-settings \.set-ctl button \{[^}]*height:\s*var\(--set-ctl-h\)/s);
+  assert.match(css, /body\.oi-settings \.set-ctl a \{[^}]*color:\s*var\(--oi-accent\)/s);
+  assert.match(css, /\.set-row\[aria-disabled="true"\] \.set-title/);
+  assert.match(css, /\.set-row\[aria-disabled="true"\] :is\(input, select, textarea, button\) \{\s*opacity:\s*0\.45/);
+  assert.match(css, /padding:\s*var\(--set-card-pad\)/);
   assert.equal(css.includes("--oi-reader-"), false);
-  assert.match(css, /\.oi-set-card \{[^}]*border:\s*var\(--set-border\)/s);
+  assert.match(css, /\.oi-set-card \{[^}]*border:\s*var\(--set-card-border\)/s);
   assert.match(css, /\.oi-set-card \{[^}]*box-shadow:\s*none/s);
+  const dataCss = read("options/data-panel.css");
+  assert.match(dataCss, /\[data-persist-ask\]\[aria-busy="true"\] \{\s*width:\s*8\.5em/);
   assert.match(css, /\.set-key-line \{[^}]*display:\s*flex/s);
   assert.equal(manifest.includes("unlimitedStorage"), false);
 });
@@ -67,11 +95,15 @@ test("translation key actions sit on one line beside the input", () => {
   const js = read("options/options.js");
   assert.match(js, /line\.className = "set-key-line"/);
   assert.match(js, /line\.append\(input, toggle, remove, saved\)/);
-  assert.match(js, /renderPdfFeature\(features\)/);
-  assert.match(js, /renderFeatures\(box, FEATURES\.filter\(\(feat\) => feat\.id === "pdf"\), features\)/);
-  assert.match(js, /box\.append\(notice\)/);
+  assert.equal(js.includes("renderPdfFeature"), false);
+  assert.equal(js.includes('FEATURES.filter((feat) => feat.id === "pdf")'), false);
+  assert.match(js, /const PDF_OFF_NOTE = "已关闭。PDF 会用浏览器自带的查看器打开。"/);
+  assert.match(js, /row\.setAttribute\("aria-disabled", on \? "false" : "true"\)/);
+  assert.match(js, /control\.disabled = !on/);
+  assert.match(js, /el\("mmEnablePdf"\)\?\.addEventListener\("click", \(\) => \{\s*showPage\("pdf"\);\s*el\("pdfEnabled"\)\?\.focus\(\);/s);
   assert.equal(js.includes("pdfFeatureNotice"), false);
   const viewer = read("pdf/viewer.js");
+  assert.match(viewer, /tabs\.create\(\{ url: `\$\{base\}#pdf` \}\)/);
   assert.match(viewer, /void maybeShowPdfDefaultNotice\(\)/);
   assert.match(viewer, /dismissReaderPdfNotice\("ack"\)/);
   assert.match(js, /dismissPdfNotice\("ack"\)/);
@@ -196,6 +228,7 @@ function installDom() {
       children: [],
       textContent: "",
       disabled: false,
+    offsetWidth: tag === "button" ? 120 : 0,
     style: {},
     listeners: {},
     classList: {
@@ -220,7 +253,7 @@ function installDom() {
     },
     querySelector() { return null; },
     querySelectorAll() { return []; },
-    focus() {}
+    focus() { document.activeElement = node; }
   };
     Object.defineProperty(node, "textContent", {
       get() {
@@ -232,7 +265,7 @@ function installDom() {
     return node;
   }
   const previous = globalThis.document;
-  globalThis.document = { createElement };
+  globalThis.document = { createElement, activeElement: null };
   return () => { globalThis.document = previous; };
 }
 
@@ -273,19 +306,39 @@ test("long-term storage reports inline and does not toast", async () => {
       requestPersist: () => new Promise((resolve) => { pending = resolve; })
     });
     await asking.reload();
+    const headings = walkText(off).filter((node) => node.tag === "h3" && node.className === "set-gh").map((node) => node.textContent);
+    assert.deepEqual(headings, ["存储用量", "文献库 · 导入", "文献库 · 导出"]);
+    const usageGroup = walkText(off).find((node) => node.getAttribute?.("data-focus-group") === "usage");
+    assert.equal(usageGroup.tag, "section");
+    assert.equal(usageGroup.getAttribute("aria-labelledby"), "dataUsageHeading");
+    assert.equal(usageGroup.children.some((node) => node.tag === "h2" || node.tag === "h3"), false);
     assert.equal(stateOf(off).getAttribute("data-persist-state"), "off");
     assert.match(off.textContent, /未开启/);
-    click(off, "再申请一次");
+    const idleStatus = walkText(off).find((node) => node.getAttribute?.("role") === "status");
+    assert.equal(idleStatus.getAttribute("aria-live"), "polite");
+    click(off, "申请长期保存");
     assert.equal(stateOf(off).getAttribute("data-persist-state"), "asking");
-    const askingButton = [...walkText(off)].find((node) => node.tag === "button" && String(node.textContent).includes("再申请一次"));
+    const askingButton = [...walkText(off)].find((node) => node.tag === "button" && node.getAttribute?.("data-persist-ask") != null);
     assert.equal(askingButton.disabled, true);
+    assert.equal(askingButton.getAttribute("aria-busy"), "true");
+    assert.equal(askingButton.style.width, "120px");
+    assert.equal(askingButton.children.some((node) => node.className === "oi-set-spin"), true);
+    assert.match(askingButton.textContent, /申请长期保存/);
     assert.match(off.textContent, /申请中/);
     pending(false);
-    await asking.reload();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(stateOf(off).getAttribute("data-persist-state"), "denied");
-    assert.match(off.textContent, /浏览器未同意/);
+    assert.equal(off.textContent.includes("浏览器未同意"), false);
+    const deniedChip = walkText(off).find((node) => String(node.className).includes("oi-data-chip") && node.textContent === "未开启");
+    assert.ok(deniedChip);
+    assert.match(off.textContent, /再试一次/);
+    assert.match(off.textContent, /导出文献库/);
+    assert.match(off.textContent, /可以导出文献库，留在自己的文件夹里/);
     assert.match(off.textContent, /空间紧张时仍可能清掉文献库/);
+    const deniedStatus = walkText(off).find((node) => node.getAttribute?.("role") === "status" && String(node.textContent).includes("可以导出文献库"));
+    assert.equal(deniedStatus.getAttribute("aria-live"), "polite");
+    assert.equal(document.activeElement?.getAttribute("data-persist-ask"), "true");
+    assert.match(document.activeElement.textContent, /再试一次/);
     assert.equal(off.textContent.includes("oi-data-toast") || [...walkText(off)].some((node) => node.className === "oi-data-toast"), false);
 
     const on = document.createElement("div");
@@ -299,6 +352,20 @@ test("long-term storage reports inline and does not toast", async () => {
     assert.equal(stateOf(on).getAttribute("data-persist-state"), "on");
     assert.match(on.textContent, /已开启/);
 
+    const granted = document.createElement("div");
+    const grantedPanel = mountDataPanel(granted, {
+      store: panelStore(),
+      coordinator: quietCoordinator(),
+      usage: async () => ({ usage: 1, quota: 2, persisted: false }),
+      requestPersist: async () => true
+    });
+    await grantedPanel.reload();
+    click(granted, "申请长期保存");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(stateOf(granted).getAttribute("data-persist-state"), "on");
+    assert.equal(document.activeElement, stateOf(granted));
+    assert.equal(document.activeElement.getAttribute("tabindex"), "-1");
+
     const unsupported = document.createElement("div");
     const unsupportedPanel = mountDataPanel(unsupported, {
       store: panelStore(),
@@ -308,9 +375,11 @@ test("long-term storage reports inline and does not toast", async () => {
     });
     assert.equal(stateOf(unsupported).getAttribute("data-persist-state"), "unsupported");
     assert.match(unsupported.textContent, /不支持/);
-    assert.equal(unsupported.textContent.includes("再申请一次"), false);
+    assert.equal(unsupported.textContent.includes("申请长期保存"), false);
+    assert.equal(unsupported.textContent.includes("再试一次"), false);
     asking.destroy();
     onPanel.destroy();
+    grantedPanel.destroy();
     unsupportedPanel.destroy();
   } finally {
     restore();

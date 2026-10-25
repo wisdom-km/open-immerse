@@ -959,8 +959,18 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
 
     page.document.getElementById("mmEnablePdf").click();
     await flush();
-    assert.equal(page.document.querySelector("[data-feat='pdf']").checked, true);
-    assert.equal(page.document.getElementById("mmPdfBanner").hidden, true);
+    assert.equal(page.location.hash, "#pdf");
+    assert.equal(page.document._focused?.id, "pdfEnabled");
+    const pdfSwitch = page.document.getElementById("pdfEnabled");
+    assert.equal(pdfSwitch.checked, false);
+    assert.equal(pdfSwitch.getAttribute("role"), "switch");
+    assert.equal(pdfSwitch.closest(".set-row").getAttribute("aria-disabled"), "false");
+    assert.equal(page.document.getElementById("pdfEnabledNote").textContent, "已关闭。PDF 会用浏览器自带的查看器打开。");
+    const autoRow = page.document.getElementById("pdfAutoTranslate").closest(".set-row");
+    assert.equal(autoRow.getAttribute("aria-disabled"), "true");
+    assert.equal(page.document.getElementById("pdfAutoTranslate").disabled, true);
+    assert.equal(page.document.querySelector("#panel-pdf .set-group").id, "pdfFeatureList");
+    assert.equal(page.document.getElementById("mmPdfBanner").hidden, false);
 
     const scale = page.document.getElementById("fontScale");
     const scaleBefore = scale.value;
@@ -2895,7 +2905,10 @@ test("about diagnostic panel matches the diagnostic states", async () => {
     const nav = [...document.querySelectorAll("[data-nav]")].map((tab) => tab.dataset.nav);
     assert.deepEqual(nav, ["translate", "mm", "web", "pdf", "notes", "labs", "data", "about"]);
     const diag = document.getElementById("diagGroup");
-    assert.match(diag.previousElementSibling.textContent, /版本/);
+    assert.equal(diag.previousElementSibling.id, "diagHeading");
+    assert.match(diag.previousElementSibling.className, /set-gh/);
+    assert.equal(page.document.getElementById("aboutVersionHeading").textContent, "版本");
+    assert.match(page.document.getElementById("aboutVersionHeading").className, /set-gh/);
     const titles = [...diag.querySelectorAll(".set-row > .set-copy > .set-title")].map((node) => node.textContent);
     assert.deepEqual(titles, ["导出诊断包", "清空日志"]);
     assert.equal(document.getElementById("diagInclude").textContent, "包含最近 7 天的运行记录、出错原因、版本和浏览器信息。");

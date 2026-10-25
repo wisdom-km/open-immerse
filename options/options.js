@@ -238,12 +238,10 @@ async function init() {
   el("laterList")?.addEventListener("change", () => {
     void persist(el("laterList"));
   });
-  el("pdfFeatureList")?.addEventListener("change", () => {
-    const on = Boolean(document.querySelector('[data-feat="pdf"]')?.checked);
-    if (!on) void dismissPdfNotice("off");
-    syncPdfLayoutBox();
-    syncPdfBanner();
-    void persist(el("pdfFeatureList"));
+  el("pdfEnabled")?.addEventListener("change", () => {
+    if (!el("pdfEnabled").checked) void dismissPdfNotice("off");
+    syncPdfAvailability();
+    void persist(el("pdfEnabled"));
   });
   el("pdfOnNoticeDismiss")?.addEventListener("click", () => { void dismissPdfNotice("ack"); });
   el("pdfOnNoticeOff")?.addEventListener("click", () => turnOffPdfFromNotice());
@@ -273,7 +271,10 @@ async function init() {
   el("importSettings").addEventListener("click", () => el("importFile").click());
   el("importFile").addEventListener("change", (ev) => importSettingsFile(ev));
   el("setRetry")?.addEventListener("click", () => location.reload());
-  el("mmEnablePdf")?.addEventListener("click", () => enablePdf());
+  el("mmEnablePdf")?.addEventListener("click", () => {
+    showPage("pdf");
+    el("pdfEnabled")?.focus();
+  });
   syncSiteRulesBox();
   bindSteppers();
   document.addEventListener("click", jumpToProvider);
@@ -284,6 +285,7 @@ async function init() {
   bindSecretSync();
   await pinKeySync();
   await syncAttentionBadge();
+  syncPdfAvailability();
 }
 
 function applyStoredForm() {
@@ -324,9 +326,9 @@ function applyStoredForm() {
   if (el("siteRules")) el("siteRules").value = (settings.siteRules || []).map((rule) => rule.host).join("\n");
   renderFeatures(el("featureList"), v1Features(), features);
   renderFeatures(el("laterList"), laterFeatures(), features);
-  renderPdfFeature(features);
+  paintPdfSwitch(features);
   fillPdfLayout(settings.pdfLayout);
-  syncPdfLayoutBox();
+  syncPdfAvailability();
   syncPdfBanner();
   syncQualityLocks();
   renderProviderFields();
@@ -434,7 +436,7 @@ function hideReadError() {
 
 function snapshotControl(control) {
   if (!control) return null;
-  if (control.id === "featureList" || control.id === "laterList" || control.id === "pdfFeatureList" || control.dataset?.feat) {
+  if (control.id === "featureList" || control.id === "laterList" || control.id === "pdfEnabled" || control.dataset?.feat) {
     const features = {};
     document.querySelectorAll("[data-feat]").forEach((input) => {
       features[input.dataset.feat] = input.checked;
@@ -453,8 +455,7 @@ function applySnapshot(snap) {
       input.checked = snap.features[input.dataset.feat] === true;
       syncSwitch(input);
     });
-    syncPdfLayoutBox();
-    syncPdfBanner();
+    syncPdfAvailability();
     return;
   }
   if (snap.kind === "pdfKey") {
@@ -633,23 +634,45 @@ async function clearPdfCloud() {
   });
 }
 
-function syncPdfLayoutBox() {
-  const on = Boolean(document.querySelector('[data-feat="pdf"]')?.checked);
+const PDF_OFF_NOTE = "已关闭。PDF 会用浏览器自带的查看器打开。";
+
+function pdfOnNote() {
+  return FEATURES.find((feat) => feat.id === "pdf")?.hint || "";
+}
+
+function syncPdfAvailability() {
+  const input = el("pdfEnabled");
+  const on = Boolean(input?.checked);
+  const note = el("pdfEnabledNote");
+  if (note) note.textContent = on ? pdfOnNote() : PDF_OFF_NOTE;
+  const page = el("panel-pdf");
+  page?.querySelectorAll(".set-row").forEach((row) => {
+    if (input && row.contains(input)) {
+      row.setAttribute("aria-disabled", "false");
+      return;
+    }
+    row.setAttribute("aria-disabled", on ? "false" : "true");
+    row.querySelectorAll("input, select, textarea, button").forEach((control) => {
+      control.disabled = !on;
+      control.setAttribute("aria-disabled", on ? "false" : "true");
+    });
+  });
   const box = el("pdfLayoutBox");
-  if (box) box.hidden = !on;
+  if (box) box.hidden = false;
+  syncPdfBanner();
 }
 
 let pdfNoticeKept = false;
 
-function renderPdfFeature(features) {
-  const box = el("pdfFeatureList");
-  const notice = el("pdfOnNotice");
-  renderFeatures(box, FEATURES.filter((feat) => feat.id === "pdf"), features);
-  if (box && notice) box.append(notice);
+function paintPdfSwitch(features) {
+  const input = el("pdfEnabled");
+  if (!input) return;
+  input.checked = features.pdf !== false;
+  syncSwitch(input);
 }
 
 function turnOffPdfFromNotice() {
-  const input = document.querySelector('[data-feat="pdf"]');
+  const input = el("pdfEnabled");
   if (input && input.checked) {
     input.checked = false;
     syncSwitch(input);
@@ -702,20 +725,9 @@ async function presentPdfDefaultNotice() {
 }
 
 function syncPdfBanner() {
-  const on = Boolean(document.querySelector('[data-feat="pdf"]')?.checked);
+  const on = Boolean(el("pdfEnabled")?.checked);
   const banner = el("mmPdfBanner");
   if (banner) banner.hidden = on;
-}
-
-function enablePdf() {
-  const input = document.querySelector('[data-feat="pdf"]');
-  if (input) {
-    input.checked = true;
-    syncSwitch(input);
-  }
-  syncPdfLayoutBox();
-  syncPdfBanner();
-  void persist(input);
 }
 
 function paintQualityNote(note, llm, provider, ready) {
@@ -1437,14 +1449,13 @@ function clearProviderKey(id) {
 function restoreControl(control) {
   if (!control) return;
   const stored = cachedSettings || {};
-  if (control.id === "featureList" || control.id === "laterList" || control.id === "pdfFeatureList" || control.dataset?.feat) {
+  if (control.id === "featureList" || control.id === "laterList" || control.id === "pdfEnabled" || control.dataset?.feat) {
     const features = resolveFeatures(stored);
     document.querySelectorAll("[data-feat]").forEach((input) => {
       input.checked = Boolean(features[input.dataset.feat]);
       syncSwitch(input);
     });
-    syncPdfLayoutBox();
-    syncPdfBanner();
+    syncPdfAvailability();
     return;
   }
   const checks = {

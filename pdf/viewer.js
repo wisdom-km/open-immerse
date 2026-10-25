@@ -695,6 +695,12 @@ function init() {
   bindViewChrome();
   applyToolbarBand();
   $("pdfDefaultNoticeDismiss")?.addEventListener("click", () => { void dismissReaderPdfNotice("ack"); });
+  $("pdfDefaultNoticeSettings")?.addEventListener("click", (event) => {
+    const base = globalThis.chrome?.runtime?.getURL?.("options/options.html");
+    if (!base || typeof globalThis.chrome?.tabs?.create !== "function") return;
+    event.preventDefault();
+    globalThis.chrome.tabs.create({ url: `${base}#pdf` });
+  });
   globalThis.chrome?.storage?.onChanged?.addListener((changes, area) => {
     if (area !== "local" || !changes?.[PDF_DEFAULT_NOTICE_KEY] || pdfDefaultNoticeKept) return;
     const node = $("pdfDefaultNotice");

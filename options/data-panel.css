@@ -11,7 +11,7 @@
 .oi-data .set-group { margin: 0; box-shadow: none; padding: 0; }
 .oi-data .set-group > h2 {
   margin: 0;
-  padding: var(--set-row-pad, 8px 16px);
+  padding: var(--set-card-pad, 8px 16px);
   font-size: 13px;
   font-weight: 600;
 }
@@ -20,7 +20,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: var(--set-row-pad, 8px 16px);
+  padding: var(--set-card-pad, 8px 16px);
   border-top: 1px solid var(--oi-line);
 }
 .oi-data .set-copy { flex: 1; }
@@ -29,6 +29,16 @@
 .oi-data .set-group > p { margin: 4px 0; color: var(--oi-text-muted); font-size: 13px; line-height: 1.5; }
 .oi-data .set-value { color: var(--oi-text-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .oi-data .set-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.oi-data [data-persist-ask] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-width: 8.5em;
+}
+.oi-data [data-persist-ask][aria-busy="true"] { width: 8.5em; }
+.oi-data [data-persist-ask] .oi-set-spin { margin-right: 0; flex: none; }
 .oi-data .btn-link {
   border: 0;
   background: transparent;

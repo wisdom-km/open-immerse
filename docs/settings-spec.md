@@ -20,7 +20,7 @@
 | 4 | 阅读 | PDF 阅读 | `#pdf` | 页顶「PDF 阅读」开关（`features.pdf`，默认开，文案不带「实验室」）、打开时自动翻译、正文译文间距、译文段间距、版面识别（原「PDF 划区」）、「恢复阅读偏好默认值」 |
 | 5 | 阅读 | 笔记 | `#notes` | 笔记位置（左 / 右）、侧栏面板宽度（恢复 440）、三栏笔记宽度（恢复 360）。不做「默认布局」「新笔记默认类型」（Wisdom 2026-10-15 22:00） |
 | 6 | 更多 | 功能与实验室 | `#labs` | 功能开关（网页翻译 / 学习中心 / 文档翻译 / 页面开关按钮），实验室（悬浮 / 划词 / YouTube / X）。PDF 阅读开关不在这一页 |
-| 7 | 更多 | 数据与隐私 | `#data` | 密钥存放位置一览、同步密钥（并入 F11，本期置灰）、导出 / 导入（「文献库」和「设置」两个文件，都不含 API key，见 §2）。导入旧的设置文件时忽略里面的 key，并给出提示。文献库持久存储被拒绝时不阻止导入，全局只提示一次（界面可并进 NIM-04；关闭记在 `library.persistHintDismissed`，与笔记按篇的 `reader.notesPersistHintDismissed.<docHash>` 分开；阅读页只显示文献库卡，见 SET-33）；本页提供「再申请一次」。分组顺序：存储用量 → 文献库 · 导入 → 文献库 · 导出（这三组由 PR-4 的 `mountDataPanel` 提供，规格见 F4 界面规格 DATA-01…26）→ 设置 · 备份与恢复 → 密钥存在哪儿 → 同步密钥。迁移和导入在任一 Open Immerse 页面开着时继续，「完成」用中性色加 ✓（SET-32…SET-34） |
+| 7 | 更多 | 数据与隐私 | `#data` | 密钥存放位置一览、同步密钥（并入 F11，本期置灰）、导出 / 导入（「文献库」和「设置」两个文件，都不含 API key，见 §2）。导入旧的设置文件时忽略里面的 key，并给出提示。文献库持久存储被拒绝时不阻止导入，全局只提示一次（界面可并进 NIM-04；关闭记在 `library.persistHintDismissed`，与笔记按篇的 `reader.notesPersistHintDismissed.<docHash>` 分开；阅读页只显示文献库卡，见 SET-33）；本页长期保存的按钮是「申请长期保存」，被拒后改为「再试一次」并给出「导出文献库」。分组顺序：存储用量 → 文献库 · 导入 → 文献库 · 导出（这三组由 PR-4 的 `mountDataPanel` 提供，规格见 F4 界面规格 DATA-01…26）→ 设置 · 备份与恢复 → 密钥存在哪儿 → 同步密钥。迁移和导入在任一 Open Immerse 页面开着时继续，「完成」用中性色加 ✓（SET-32…SET-34） |
 | 8 | 更多 | 关于 | `#about` | 版本、学习中心 / 文档翻译入口 |
 
 - 没有「高级」页，也没有「问 AI」页。
@@ -148,7 +148,7 @@
 | SET-30 | 多模态失败时问 AI 报错，不改用翻译模型 |
 | SET-31 | 不再读写 `ask.model`；设置页没有问 AI 专属控件 |
 | SET-32 | 文献库迁移和导入不挡当前阅读。导入在任一 Open Immerse 页面开着时继续，全部关掉就暂停，下次打开接着做（DATA-06，Wisdom 2026-10-15 21:47）。设置导入是一次性写入，不算后台任务（2026-10-15 改） |
-| SET-33 | `#data` 有「再申请一次」（DATA-03）。持久存储被拒时不阻止导入。键分开：文献库全局 `library.persistHintDismissed`；笔记按篇 `reader.notesPersistHintDismissed.<docHash>`（不带后缀的同名键只是 #130 前的旧数据块，迁移时读）。阅读页只显示文献库提示卡，笔记被拒也触发这张卡；点过「不再提示」后两种都不再出现（F4UI-16 / 27，Wisdom 2026-10-15 21:47）。设置页本身不画这张卡（2026-10-15 改） |
+| SET-33 | `#data` 长期保存：未开启时按钮「申请长期保存」，被拒后芯片「未开启」、按钮「再试一次」，并有「导出文献库」（DATA-03）。持久存储被拒时不阻止导入。键分开：文献库全局 `library.persistHintDismissed`；笔记按篇 `reader.notesPersistHintDismissed.<docHash>`（不带后缀的同名键只是 #130 前的旧数据块，迁移时读）。阅读页只显示文献库提示卡，笔记被拒也触发这张卡；点过「不再提示」后两种都不再出现（F4UI-16 / 27，Wisdom 2026-10-15 21:47）。设置页本身不画这张卡（2026-10-15 改） |
 | SET-34 | 迁移或导入的「完成」用中性色加 ✓ |
 | SET-35 | 打开 `options.html#formula` 落到 `#mm`，地址栏被替换；Aa「公式设置…」不论旧链接还是新链接都到 `#mm` |
 | SET-36 | `#data?focus=export\|import\|usage` 从阅读页提示卡、F4 小标签和弹层打开时，滚到对应组并落焦点，query 被去掉；与 DATA-18 一致 |
@@ -190,6 +190,6 @@
 - 对比度（脚本算，半透明底先与分组色混合）：正文 15.60、行说明 9.01、muted / 页底 5.71、muted / 侧栏 5.22、侧栏选中 11.76、链接 6.23、主按钮字 14.68、warn / 出错行底 5.79、行说明 / 出错行底 8.02、chip 8.03。最低 5.22（SET-39）。
 
 ## 11 变更记录
-- **设置页视觉与 PDF 开关（本变更）**：分组卡走 `--set-border` / `--set-radius` / `--set-row-pad` / `--set-group-gap`，无阴影。多模态卡不用 `--oi-reader-*`。`features.pdf` 默认 `true`，开关在 `#pdf` 页顶，文案「PDF 阅读」。`settingsVersion` 9 只做这一步：已存 `features.pdf === false` 时改为 `true`，并写入 `migrationNotes.pdfFlippedAt`；本来就是 `true`、或缺这个键的新安装，不写这个时间。提示只在 `pdfFlippedAt` 有值时出现，两处文案相同：`#pdf` 页开关正下方的中性 `.set-banner`（另有「关闭 PDF 阅读」），以及阅读器顶部（`--oi-reader-*`）。点「知道了」、任一处关掉 PDF 阅读，或任一处显示过一次，都写入 `chrome.storage.local` 的 `oi.notice.pdfDefaultOn = { seenAt }`，两处都不再出现。版本已是 9 之后再关掉不会被翻回去。不增加 `unlimitedStorage`。长期保存的结果写在行内：未开启 / 申请中 / 已开启 / 浏览器未同意 / 不支持。
+- **设置页视觉与 PDF 开关（本变更）**：分组卡走 `--set-card-border` / `--set-card-radius` / `--set-card-pad` / `--set-card-gap`，控件高 `--set-ctl-h`（28px），无阴影。`.set-group + .hint` 跟在卡片后；`.set-ctl a` 用强调色。多模态卡不用 `--oi-reader-*`。`features.pdf` 默认 `true`。`#pdf` 页第一张卡的第一行是专用开关 `#pdfEnabled`（`role=switch`），不走 `renderFeatures`。关掉后说明改为「已关闭。PDF 会用浏览器自带的查看器打开。」，同页其余行 `aria-disabled` 并变灰。`settingsVersion` 9 只做这一步：已存 `features.pdf === false` 时改为 `true`，并写入 `migrationNotes.pdfFlippedAt`；本来就是 `true`、或缺这个键的新安装，不写这个时间。提示只在 `pdfFlippedAt` 有值时出现：`#pdf` 页开关正下方的中性 `.set-banner`（「在这里关闭」，另有「关闭 PDF 阅读」），以及阅读器顶部（链到「设置 › PDF 阅读」）。点「知道了」、任一处关掉 PDF 阅读，或任一处显示过一次，都写入 `chrome.storage.local` 的 `oi.notice.pdfDefaultOn = { seenAt }`，两处都不再出现。版本已是 9 之后再关掉不会被翻回去。多模态页在 PDF 关闭时显示「PDF 阅读已关闭 · 去开启」，点了只打开 PDF 页并聚焦开关。不增加 `unlimitedStorage`。长期保存写在行内：未开启时按钮「申请长期保存」；申请中转圈并锁住宽度；被拒芯片仍是「未开启」，按钮「再试一次」，另有「导出文献库」。说明是 `role=status`。结果出来后焦点回到按钮。数据页和关于页的组标题在卡片外，用 `h3.set-gh`。
 - **2026-10-15 22:00（Wisdom 定）**：设置页配色用 A 暖纸（§10，SET-39…41）；`#notes` 只放 3 项（笔记位置、侧栏宽度恢复 440、三栏宽度恢复 360），不做「默认布局」「新笔记默认类型」（SET-18）；阅读器和笔记面板都不改，只改设置界面。
 - **2026-10-15（Loom，按 IMPACT-2026-10-15.md）**：以仓库 `docs/settings-spec.md`（e4f464d，SET-01…34）为基线同步；改 SET-02（`#formula → #mm`、`#data?focus=`）、SET-08、SET-11、SET-13、SET-16、SET-18、SET-19、SET-32、SET-33；新增 SET-35…38；公式开关键名为 `formulaSettings` 里的 `formula.tier2/ocr/tier3.enabled`，笔记面板按篇提示键为 `reader.notesPersistHintDismissed.<docHash>`；新增 §9 与 PR-4 衔接。依据 Wisdom 2026-10-15 21:47（F4 Q4 / Q5）。

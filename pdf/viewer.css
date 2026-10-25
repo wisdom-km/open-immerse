@@ -28,6 +28,11 @@ body {
 }
 .oi-reader-notice[hidden] { display: none; }
 .oi-reader-notice span { flex: 1; min-width: 0; }
+.oi-reader-notice a {
+  color: var(--oi-reader-link);
+  text-underline-offset: 2px;
+}
+.oi-reader-notice a:hover { color: var(--oi-reader-link-hover); }
 .oi-reader-notice .btn-secondary {
   flex: none;
   margin-left: auto;

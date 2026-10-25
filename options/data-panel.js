@@ -305,6 +305,9 @@ export function mountDataPanel(root, deps = {}) {
     await loadSizes();
   }
 
+  let persistLockWidth = 0;
+  let persistReturnFocus = false;
+
   function persistView() {
     if (usage.persisted === true || persistPhase === "granted") {
       return {
@@ -330,16 +333,19 @@ export function mountDataPanel(root, deps = {}) {
         chip: "申请中",
         tone: "is-off",
         body: "正在向浏览器申请长期保存。",
-        button: "disabled"
+        button: "busy",
+        label: "申请长期保存"
       };
     }
     if (persistPhase === "denied") {
       return {
         state: "denied",
-        chip: "浏览器未同意",
+        chip: "未开启",
         tone: "is-warn",
-        body: "浏览器没有同意长期保存，空间紧张时仍可能清掉文献库。",
-        button: true
+        body: "浏览器没有同意长期保存，空间紧张时仍可能清掉文献库。可以导出文献库，留在自己的文件夹里。",
+        button: "retry",
+        label: "再试一次",
+        exportLink: true
       };
     }
     return {
@@ -347,7 +353,8 @@ export function mountDataPanel(root, deps = {}) {
       chip: "未开启",
       tone: "is-warn",
       body: "未开启时，磁盘空间紧张浏览器可能清掉文献库。建议定期导出备份。",
-      button: true
+      button: "ask",
+      label: "申请长期保存"
     };
   }
 
@@ -365,6 +372,9 @@ export function mountDataPanel(root, deps = {}) {
       render();
       return;
     }
+    const current = findPersistAsk(root);
+    const measured = Number(current?.offsetWidth) || 0;
+    if (measured > 0) persistLockWidth = Math.ceil(measured);
     persistPhase = "asking";
     render();
     let granted = false;
@@ -382,6 +392,7 @@ export function mountDataPanel(root, deps = {}) {
     }
     usage = { ...usage, persisted: granted, loading: false };
     persistPhase = granted ? "granted" : "denied";
+    persistReturnFocus = true;
     render();
   }
 
@@ -429,10 +440,31 @@ export function mountDataPanel(root, deps = {}) {
     render();
   }
 
+  function findMarked(node, name) {
+    if (!node) return null;
+    if (typeof node.getAttribute === "function" && node.getAttribute(name) != null) return node;
+    for (const kid of node.children || []) {
+      const found = findMarked(kid, name);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function findPersistAsk(node) {
+    return findMarked(node, "data-persist-ask");
+  }
+
+  function focusExportLibrary() {
+    const group = root.querySelector?.('[data-focus-group="export"]');
+    const control = group?.querySelector?.("button");
+    group?.scrollIntoView?.({ block: "center" });
+    (control || group)?.focus?.();
+  }
+
   function row(title, body, control, extra) {
     const copy = el("div", { class: "set-copy" }, [
       el("h3", { text: title }),
-      body ? el("p", { text: body }) : null
+      typeof body === "string" ? el("p", { text: body }) : body
     ]);
     if (extra) copy.append(extra);
     const actions = el("div", { class: `set-actions${narrow() ? " is-block" : ""}` }, Array.isArray(control) ? control : [control]);
@@ -453,15 +485,32 @@ export function mountDataPanel(root, deps = {}) {
       el("span", { class: `oi-data-chip ${persist.tone}`, text: persist.chip })
     ];
     if (persist.button) {
-      const ask = button("再申请一次", "btn-secondary", () => { void askPersist(); });
-      if (persist.button === "disabled") {
+      const ask = el("button", {
+        type: "button",
+        class: "btn-secondary",
+        "data-persist-ask": "true",
+        "aria-busy": persist.button === "busy" ? "true" : "false"
+      }, persist.button === "busy"
+        ? [el("span", { class: "oi-set-spin", "aria-hidden": "true" }), el("span", { text: persist.label })]
+        : [el("span", { text: persist.label })]);
+      ask.addEventListener("click", (event) => {
+        event.preventDefault();
+        void askPersist();
+      });
+      if (persist.button === "busy") {
         ask.disabled = true;
         ask.setAttribute("aria-disabled", "true");
+        if (persistLockWidth) ask.style.width = `${persistLockWidth}px`;
       }
       persistControls.push(ask);
     }
-    const persistRow = row("长期保存", persist.body, persistControls);
+    if (persist.exportLink) {
+      persistControls.push(button("导出文献库", "btn-secondary", () => focusExportLibrary()));
+    }
+    const description = el("p", { role: "status", "aria-live": "polite", text: persist.body });
+    const persistRow = row("长期保存", description, persistControls);
     persistRow.setAttribute("data-persist-state", persist.state);
+    persistRow.setAttribute("tabindex", "-1");
     group.append(persistRow);
     if (!usage.unavailable && usage.quota != null) {
       group.append(row("可用空间", "浏览器分给本扩展的上限", el("span", { class: "set-value", text: formatQuotaLabel(usage.usage, usage.quota) })));
@@ -678,13 +727,22 @@ export function mountDataPanel(root, deps = {}) {
     root.classList.add("oi-data");
     root.classList.toggle("is-narrow", narrow());
     root.setAttribute("data-narrow", narrow() ? "1" : "0");
-    const usageGroup = el("section", { class: "set-group", "data-focus-group": "usage" }, [el("h2", { text: "存储用量" })]);
-    const importGroup = el("section", { class: "set-group", "data-focus-group": "import" }, [el("h2", { text: "文献库 · 导入" })]);
-    const exportGroup = el("section", { class: "set-group", "data-focus-group": "export" }, [el("h2", { text: "文献库 · 导出" })]);
+    const usageHeading = el("h3", { class: "set-gh", id: "dataUsageHeading", text: "存储用量" });
+    const importHeading = el("h3", { class: "set-gh", id: "dataImportHeading", text: "文献库 · 导入" });
+    const exportHeading = el("h3", { class: "set-gh", id: "dataExportHeading", text: "文献库 · 导出" });
+    const usageGroup = el("section", { class: "set-group", "data-focus-group": "usage", "aria-labelledby": "dataUsageHeading" });
+    const importGroup = el("section", { class: "set-group", "data-focus-group": "import", "aria-labelledby": "dataImportHeading" });
+    const exportGroup = el("section", { class: "set-group", "data-focus-group": "export", "aria-labelledby": "dataExportHeading" });
     renderUsage(usageGroup);
     renderImport(importGroup);
     renderExport(exportGroup);
-    root.append(usageGroup, importGroup, exportGroup);
+    root.append(usageHeading, usageGroup, importHeading, importGroup, exportHeading, exportGroup);
+    if (persistReturnFocus) {
+      persistReturnFocus = false;
+      const ask = findPersistAsk(root);
+      const row = findMarked(root, "data-persist-state");
+      (ask || row)?.focus?.();
+    }
     if (toastText) root.append(el("p", { class: "oi-data-toast", role: "status", text: toastText }));
     root.scrollTop = scrolled;
   }

@@ -274,11 +274,13 @@ test("options no longer expose page follow; pdf layout stays with the PDF featur
   assert.doesNotMatch(optionsJs, /readPdfScroll/);
   assert.match(features, /id="pdfLayoutBox"/);
   assert.match(features, /id="pdfLayoutBox"[^>]*hidden/);
+  assert.match(features, /id="pdfEnabled"[^>]*data-feat="pdf"[^>]*role="switch"/);
   assert.match(features, /id="pdfAutoTranslate"/);
   assert.match(features, /打开 PDF 时自动翻译全文/);
   assert.doesNotMatch(advanced, /id="pdfLayoutBox"|id="pdfSoftPageFollow"/);
-  assert.match(optionsJs, /box\.hidden = !on/);
-  assert.match(optionsJs, /data-feat="pdf"/);
+  assert.match(optionsJs, /box\.hidden = false/);
+  assert.match(optionsJs, /aria-disabled/);
+  assert.match(optionsJs, /querySelectorAll\("\[data-feat\]"\)/);
 });
 
 test("safe center makes the scrollable distance equal the overflow", () => {

@@ -126,7 +126,7 @@
 
         <section id="panel-formula" class="set-page" data-panel="mm" role="tabpanel" hidden>
           <h2>多模态 · OCR</h2>
-          <p id="mmPdfBanner" class="set-banner" hidden>PDF 阅读还没开启 · <button type="button" id="mmEnablePdf" class="set-inline">开启</button></p>
+          <p id="mmPdfBanner" class="set-banner" hidden>PDF 阅读已关闭 · <button type="button" id="mmEnablePdf" class="set-inline">去开启</button></p>
           <p class="set-lead">公式没拿到源码时，按下面顺序逐级尝试。灰色 = 当前不会用到。阅读页 Aa 面板里的「公式」开关与这里是同一组设置。</p>
           <div id="formulaSettingsRoot" class="oi-reader" data-reader-theme="warm"></div>
         </section>
@@ -194,6 +194,13 @@
         <section id="panel-pdf" class="set-page" data-panel="pdf" role="tabpanel" hidden>
           <h2>PDF 阅读</h2>
           <div id="pdfFeatureList" class="set-group">
+            <div class="set-row">
+              <div class="set-txt">
+                <p class="set-title" id="pdfEnabledLabel">PDF 阅读</p>
+                <p class="set-note" id="pdfEnabledNote">文字层正文 + 原页内容精准展示（默认裁图）；公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图。</p>
+              </div>
+              <input id="pdfEnabled" data-feat="pdf" type="checkbox" role="switch" checked aria-labelledby="pdfEnabledLabel" aria-describedby="pdfEnabledNote" />
+            </div>
             <p id="pdfOnNotice" class="set-banner" hidden>
               <span class="set-banner-copy">PDF 阅读已默认开启。在浏览器里打开 PDF 会用沉浸译的双栏阅读器；不想用可以在这里关闭。</span>
               <span class="set-banner-actions">
@@ -350,7 +357,8 @@
 
         <section id="panel-about" class="set-page" data-panel="about" role="tabpanel" hidden>
           <h2>关于</h2>
-          <div class="set-group">
+          <h3 class="set-gh" id="aboutVersionHeading">版本</h3>
+          <div class="set-group" aria-labelledby="aboutVersionHeading">
             <div class="set-row">
               <div class="set-copy"><p class="set-title">版本</p></div>
               <div class="set-ctl"><span id="aboutVersion">0.3.0</span></div>
@@ -364,8 +372,8 @@
               <div class="set-ctl"><a href="../documents/documents.html">打开</a></div>
             </div>
           </div>
+          <h3 class="set-gh" id="diagHeading">问题诊断</h3>
           <div class="set-group" id="diagGroup" data-focus-group="diag" role="group" aria-labelledby="diagHeading">
-            <h3 class="diag-heading" id="diagHeading">问题诊断</h3>
             <div class="set-row" id="diagExportRow">
               <div class="set-copy">
                 <p class="set-title">导出诊断包</p>

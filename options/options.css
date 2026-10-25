@@ -23,10 +23,11 @@ body.oi-settings {
   --oi-success: var(--oi-text-2);
   --oi-primary: #22201C;
   --oi-on-accent: #F7F3EA;
-  --set-border: 1px solid var(--oi-line);
-  --set-radius: 10px;
-  --set-row-pad: 8px 16px;
-  --set-group-gap: 16px;
+  --set-card-border: 1px solid var(--oi-line);
+  --set-card-radius: 10px;
+  --set-card-pad: 8px 16px;
+  --set-card-gap: 16px;
+  --set-ctl-h: 28px;
 }
 
 * { box-sizing: border-box; }
@@ -189,11 +190,11 @@ button {
 }
 .oi-set-card {
   background: var(--oi-panel);
-  border: var(--set-border);
-  border-radius: var(--set-radius);
+  border: var(--set-card-border);
+  border-radius: var(--set-card-radius);
   box-shadow: none;
   padding: 14px 16px;
-  margin: 0 0 var(--set-group-gap);
+  margin: 0 0 var(--set-card-gap);
 }
 .oi-set-card-head, .oi-set-test, .oi-set-key, .oi-set-switch-row {
   display: flex;
@@ -352,19 +353,24 @@ body.oi-settings .set-gh {
   font-weight: 500;
   color: var(--oi-text-muted);
 }
+body.oi-settings .set-group + .hint {
+  margin: 8px 4px 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
 body.oi-settings section {
   box-shadow: none;
 }
 body.oi-settings .set-group {
   background: var(--oi-panel);
-  border: var(--set-border);
-  border-radius: var(--set-radius);
+  border: var(--set-card-border);
+  border-radius: var(--set-card-radius);
   box-shadow: none;
   padding: 0;
   overflow: hidden;
 }
 body.oi-settings .set-group + .set-group {
-  margin-top: var(--set-group-gap);
+  margin-top: var(--set-card-gap);
 }
 body.oi-settings .set-row {
   display: flex;
@@ -372,13 +378,23 @@ body.oi-settings .set-row {
   justify-content: space-between;
   gap: 12px;
   min-height: 44px;
-  padding: var(--set-row-pad);
+  padding: var(--set-card-pad);
   border-top: 1px solid var(--oi-line);
 }
 body.oi-settings .set-group > .set-row:first-child { border-top: 0; }
 body.oi-settings .set-title { margin: 0; font-size: 13px; font-weight: 500; color: var(--oi-text); }
 body.oi-settings .set-note { margin: 2px 0 0; font-size: 12px; line-height: 1.45; color: var(--oi-text-2, var(--oi-text-muted)); }
 body.oi-settings .set-ctl { display: flex; align-items: center; gap: 8px; }
+body.oi-settings .set-ctl button {
+  height: var(--set-ctl-h);
+  min-height: var(--set-ctl-h);
+  padding: 0 12px;
+}
+body.oi-settings .set-ctl a {
+  color: var(--oi-accent);
+  text-decoration: none;
+}
+body.oi-settings .set-ctl a:hover { text-decoration: underline; }
 body.oi-settings .set-group input,
 body.oi-settings .set-group select,
 body.oi-settings .set-group textarea,
@@ -458,8 +474,8 @@ body.oi-settings .set-banner {
   gap: 12px;
   margin: 0 0 12px;
   padding: 8px 12px;
-  border: var(--set-border);
-  border-radius: var(--set-radius);
+  border: var(--set-card-border);
+  border-radius: var(--set-card-radius);
   background: var(--oi-panel);
   color: var(--oi-text);
   font-size: 13px;
@@ -495,7 +511,7 @@ body.oi-settings .diag-heading {
   align-items: center;
   min-height: 44px;
   margin: 0;
-  padding: var(--set-row-pad);
+  padding: var(--set-card-pad);
   font-size: 13px;
   font-weight: 500;
   color: var(--oi-text);
@@ -645,8 +661,8 @@ body.oi-settings .set-provider-slot { min-height: 104px; }
 body.oi-settings .set-why { color: var(--oi-warn); }
 body.oi-settings .provider-card {
   background: var(--oi-panel);
-  border: var(--set-border);
-  border-radius: var(--set-radius);
+  border: var(--set-card-border);
+  border-radius: var(--set-card-radius);
   box-shadow: none;
   padding: 12px 16px;
 }
@@ -802,6 +818,14 @@ body.oi-settings .set-row > input[role="switch"]:checked::before { transform: tr
 body.oi-settings .set-row > input[role="switch"]:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+/* SVA-03: a row with aria-disabled is greyed and its controls fade. */
+body.oi-settings .set-row[aria-disabled="true"] .set-title,
+body.oi-settings .set-row[aria-disabled="true"] .set-note {
+  color: var(--oi-text-muted);
+}
+body.oi-settings .set-row[aria-disabled="true"] :is(input, select, textarea, button) {
+  opacity: 0.45;
 }
 body.oi-settings .set-quality .set-ctl { width: auto; flex: none; gap: 6px; }
 body.oi-settings .set-quality .set-stepper,
