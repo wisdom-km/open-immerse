@@ -129,6 +129,54 @@ test("redactDiagEvent drops paper text fields", () => {
   assert.equal("answer" in event, false);
 });
 
+test("redactDiagEvent keeps a model id and drops secrets, urls, and paper text", () => {
+  const secret = "sk-borrow-unit-key";
+  const base = "https://api.moonshot.cn/v1";
+  const event = redactDiagEvent({
+    type: "translate.borrow",
+    ctx: "sw",
+    provider: "kimi",
+    model: "kimi-k2",
+    reason: "translate-unconfigured",
+    ok: true,
+    apiKey: secret,
+    authorization: `Bearer ${secret}`,
+    baseUrl: base,
+    text: PAPER,
+    translation: TRANS
+  }, [secret]);
+  assert.equal(event.provider, "kimi");
+  assert.equal(event.model, "kimi-k2");
+  assert.equal(event.reason, "translate-unconfigured");
+  assert.equal(event.ok, true);
+  const packed = JSON.stringify(event);
+  assert.equal(packed.includes(secret), false);
+  assert.equal(packed.includes("Authorization"), false);
+  assert.equal(packed.includes("Bearer"), false);
+  assert.equal(packed.includes(base), false);
+  assert.equal(packed.includes(PAPER), false);
+  assert.equal(packed.includes(TRANS), false);
+  assert.equal("apiKey" in event, false);
+  assert.equal("baseUrl" in event, false);
+  assert.equal("text" in event, false);
+  assert.equal("translation" in event, false);
+
+  const asModel = redactDiagEvent({
+    type: "translate.borrow",
+    ctx: "sw",
+    provider: "kimi",
+    model: secret,
+    reason: "translate-unconfigured"
+  }, [secret]);
+  assert.equal(asModel.model, undefined);
+  assert.equal(JSON.stringify(asModel).includes(secret), false);
+
+  assert.equal(redactDiagEvent({ type: "translate.borrow", model: "k".repeat(40) }, []).model, "k".repeat(40));
+  assert.equal(redactDiagEvent({ type: "translate.borrow", model: "k".repeat(41) }, []).model, undefined);
+  assert.equal(redactDiagEvent({ type: "translate.borrow", model: base }, []).model, undefined);
+  assert.equal(redactDiagEvent({ type: "translate.borrow", model: "kimi k2" }, []).model, undefined);
+});
+
 test("redactDiagEvent rejects a bad type and caps the message", () => {
   assert.equal(redactDiagEvent({ type: "Has Space", msg: "x" }), null);
   const event = redactDiagEvent({ type: "mm.error", msg: "测".repeat(500) }, []);

@@ -15,15 +15,18 @@ import {
   DIAG_CTX_CAP,
   DIAG_RETENTION_MS,
   DIAG_STORAGE_KEY,
+  buildDiagPackage,
   createDiagWriter,
   diagByteLength,
   diagLog,
   handleDiagMessage,
   installDiagWriter,
+  noteTranslateBorrow,
   noteTranslateFailure,
   noteViewerNetwork,
   resetDiagForTests,
-  retainDiagEvents
+  retainDiagEvents,
+  serializeDiagPackage
 } from "../lib/diag-log.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -414,6 +417,61 @@ test("a failed write during export still returns events that can be read", async
   });
   assert.notEqual(result.code, "storage-unreadable");
   assert.ok(result.package.events.some((event) => event.code === "kept"));
+});
+
+test("translate.borrow keeps model through the log and the export without the key", async () => {
+  const secret = "sk-borrow-unit-key";
+  const base = "https://api.moonshot.cn/v1";
+  const storage = memoryArea({
+    formulaSettings: { multimodal: { provider: "kimi", apiKey: secret, model: "kimi-k2" } }
+  });
+  const writer = createDiagWriter({ storage, sync: memoryArea(), debounceMs: -1 });
+  installDiagWriter(writer);
+  noteTranslateBorrow({ provider: "kimi", model: "kimi-k2", ok: true, apiKey: secret, baseUrl: base });
+  writer.log({
+    type: "translate.borrow",
+    ctx: "sw",
+    provider: "kimi",
+    model: secret,
+    reason: "translate-unconfigured",
+    apiKey: secret,
+    authorization: `Bearer ${secret}`,
+    baseUrl: base,
+    text: "Hello",
+    translation: "你好"
+  });
+  await writer.flush();
+  const events = stored(storage);
+  const kept = events.find((event) => event.model === "kimi-k2");
+  assert.equal(kept.type, "translate.borrow");
+  assert.equal(kept.ctx, "sw");
+  assert.equal(kept.provider, "kimi");
+  assert.equal(kept.reason, "translate-unconfigured");
+  assert.equal(kept.ok, true);
+  const dropped = events.find((event) => event.model === secret);
+  assert.equal(dropped, undefined);
+  const exported = await writer.exportPackage({
+    extVersion: "0",
+    browser: { brand: "Chrome", version: "1", platform: "Linux" },
+    locale: "zh-CN"
+  });
+  const packed = serializeDiagPackage(exported);
+  assert.equal(packed.ok, true);
+  assert.equal(packed.text.includes(secret), false);
+  assert.equal(packed.text.includes("Authorization"), false);
+  assert.equal(packed.text.includes("Bearer"), false);
+  assert.equal(packed.text.includes(base), false);
+  assert.equal(packed.text.includes("Hello"), false);
+  assert.equal(packed.text.includes("你好"), false);
+  assert.equal(packed.text.includes("kimi-k2"), true);
+  const direct = buildDiagPackage({
+    events: stored(storage),
+    secrets: [secret],
+    now: Date.now(),
+    env: { extVersion: "0", browser: { brand: "Chrome", version: "1", platform: "Linux" }, locale: "zh-CN" }
+  });
+  assert.equal(JSON.stringify(direct).includes(secret), false);
+  assert.equal(direct.package.events.some((event) => event.model === "kimi-k2"), true);
 });
 
 test("service worker reaches the diagnostic log without a dynamic import", () => {

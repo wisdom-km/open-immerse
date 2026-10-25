@@ -53,6 +53,9 @@ test("TBM-01/02/05/11 settings page does not show a borrow hint", () => {
   assert.equal(borrowJs.includes("单独设置"), false);
   assert.equal(borrowJs.includes("（借用）"), false);
   assert.equal(borrowJs.includes("formatBorrowedEngine"), false);
+  for (const file of ["popup/popup.js", "popup/popup.html", "options/options.html", "options/options.js", "pdf/viewer.js"]) {
+    assert.equal(readFileSync(join(root, file), "utf8").includes("借用"), false, file);
+  }
   const borrow = describeTranslateBorrow(unconfigured(), mm());
   assert.equal(borrow.mode, "borrow");
   assert.equal(JSON.stringify(borrow).includes(MM_KEY), false);
@@ -68,22 +71,10 @@ test("TBM-03/04 settings page has no borrow-hint layout", () => {
   assert.match(css, /\.hint \{[^}]*font-size:\s*13px/s);
 });
 
-test("TBM-07/08 popup shows the engine actually used and hides the unconfigured warning", async () => {
-  const popupJs = readFileSync(join(root, "popup/popup.js"), "utf8");
-  const popupHtml = readFileSync(join(root, "popup/popup.html"), "utf8");
-  const popupCss = readFileSync(join(root, "popup/popup.css"), "utf8");
-  assert.match(popupJs, /described\.mode === "borrow"/);
-  assert.match(popupJs, /引擎：\$\{described\.shortName\}/);
-  assert.match(popupJs, /引擎：\$\{shortName\}（免费）/);
-  assert.equal(popupJs.includes("（借用）"), false);
-  assert.equal(popupJs.includes("formatBorrowedEngine"), false);
-  assert.equal(popupJs.includes("engine-borrow"), false);
-  assert.equal(popupJs.includes("is-borrow"), false);
-  assert.equal(popupCss.includes("is-borrow"), false);
-  assert.equal(popupCss.includes("engine-borrow"), false);
-  assert.match(popupHtml, /id="engineWarn"/);
-  assert.match(popupCss, /\.engine-link\s*\{[^}]*text-overflow:\s*ellipsis/s);
+let popupBoot = 0;
 
+async function bootPopup(settings, formula) {
+  const popupHtml = readFileSync(join(root, "popup/popup.html"), "utf8");
   const parsed = parseHTML(popupHtml);
   const selectProto = Object.getPrototypeOf(parsed.document.createElement("select"));
   Object.defineProperty(selectProto, "value", {
@@ -105,26 +96,14 @@ test("TBM-07/08 popup shows the engine actually used and hides the unconfigured 
       getURL: (path) => path,
       openOptionsPage() {},
       async sendMessage(message) {
-        if (message?.type === "OI_GET_SETTINGS") {
-          return {
-            settings: {
-              provider: "openai",
-              providers: { openai: { apiKey: "" } },
-              sourceLang: "en",
-              targetLang: "zh-CN",
-              translateScope: "article",
-              translateLimit: "all",
-              features: {}
-            }
-          };
-        }
+        if (message?.type === "OI_GET_SETTINGS") return { settings };
         return { ok: true };
       }
     },
     storage: {
       local: {
         async get() {
-          return { formulaSettings: mm({ model: "kimi-k2-0905-preview" }) };
+          return { formulaSettings: formula };
         }
       },
       onChanged: { addListener() {} }
@@ -135,38 +114,92 @@ test("TBM-07/08 popup shows the engine actually used and hides the unconfigured 
     }
   };
   try {
-    await import(`../popup/popup.js?borrow-popup=${Date.now()}`);
-    let linkText = "";
+    popupBoot += 1;
+    await import(`../popup/popup.js?borrow-popup=${popupBoot}`);
+    let linkText = "引擎：—";
     for (let i = 0; i < 30; i += 1) {
       await Promise.resolve();
       linkText = parsed.document.getElementById("engineLink").textContent;
-      if (linkText === "引擎：Kimi") break;
+      if (linkText !== "引擎：—") break;
     }
     const link = parsed.document.getElementById("engineLink");
     const warn = parsed.document.getElementById("engineWarn");
     const warnText = parsed.document.getElementById("engineWarnText");
-    assert.equal(link.textContent, "引擎：Kimi");
-    assert.equal(link.title, "Kimi");
-    assert.equal(link.querySelector(".engine-borrow"), null);
-    assert.equal(link.textContent.includes("kimi-k2"), false);
-    assert.equal(link.textContent.includes("借用"), false);
-    assert.equal(link.textContent.includes("MyMemory"), false);
-    assert.equal(link.textContent.includes("免费"), false);
-    assert.equal(link.textContent.includes("还没配置"), false);
-    assert.equal(link.title.includes("借用"), false);
-    assert.equal(link.title.includes(MM_KEY), false);
-    assert.equal(warn.hidden, true);
-    assert.equal(warnText.textContent, "未配置引擎");
-    assert.equal(warnText.textContent.includes("还没配置"), false);
-    assert.equal(warnText.textContent.includes("MyMemory"), false);
     for (let i = 0; i < 40; i += 1) await Promise.resolve();
+    return {
+      text: link.textContent,
+      title: link.title,
+      warnHidden: warn.hidden,
+      warnText: warnText.textContent,
+      body: parsed.document.body.textContent
+    };
   } finally {
     globalThis.document = previous.document;
     globalThis.window = previous.window;
     globalThis.chrome = previous.chrome;
     globalThis.setInterval = previous.setInterval;
   }
+}
+
+function popupSettings(provider, apiKey) {
+  return {
+    provider,
+    providers: { [provider]: { apiKey } },
+    sourceLang: "en",
+    targetLang: "zh-CN",
+    translateScope: "article",
+    translateLimit: "all",
+    features: {}
+  };
+}
+
+test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and fallback stays MyMemory", async () => {
+  const popupJs = readFileSync(join(root, "popup/popup.js"), "utf8");
+  const popupCss = readFileSync(join(root, "popup/popup.css"), "utf8");
+  assert.match(popupJs, /引擎：\$\{shortName\}/);
+  assert.match(popupJs, /link\.title = provider\.name/);
+  assert.match(popupJs, /const ok = borrowed \|\|/);
+  assert.equal(popupJs.includes("借用"), false);
+  assert.equal(popupCss.includes("is-borrow"), false);
+
+  const own = await bootPopup(popupSettings("kimi", "sk-own-kimi"), { multimodal: { provider: "kimi", apiKey: "", model: "" } });
+  const borrowed = await bootPopup(popupSettings("openai", ""), mm({ model: "kimi-k2-0905-preview" }));
+  assert.equal(borrowed.text, own.text);
+  assert.equal(borrowed.title, own.title);
+  assert.equal(borrowed.text, "引擎：Kimi");
+  assert.equal(borrowed.title, "Kimi / 月之暗面");
+  assert.equal(borrowed.warnHidden, true);
+  assert.equal(borrowed.warnText, "");
+  assert.equal(borrowed.body.includes("借用"), false);
+  assert.equal(borrowed.body.includes("多模态"), false);
+  assert.equal(borrowed.body.includes("MyMemory"), false);
+  assert.equal(borrowed.body.includes("免费"), false);
+  assert.equal(borrowed.body.includes("未配置引擎"), false);
+  assert.equal(borrowed.body.includes("还没配置"), false);
+  assert.equal(borrowed.body.includes("kimi-k2"), false);
+  assert.equal(borrowed.body.includes(MM_KEY), false);
+
+  const doubao = await bootPopup(
+    popupSettings("openai", ""),
+    { multimodal: { provider: "doubao", apiKey: MM_KEY, model: "glm-5.3-flash", baseUrl: "" } }
+  );
+  assert.equal(doubao.text, "引擎：豆包");
+  assert.equal(doubao.title, "豆包");
+  assert.equal(doubao.warnHidden, true);
+  assert.equal(doubao.body.includes("MyMemory"), false);
+  assert.equal(doubao.body.includes(MM_KEY), false);
+
+  const fallback = await bootPopup(
+    popupSettings("openai", ""),
+    { multimodal: { provider: "kimi", apiKey: "", model: "" } }
+  );
+  assert.equal(fallback.text, "引擎：MyMemory（免费）");
+  assert.match(fallback.warnText, /还没配置/);
+  assert.match(fallback.warnText, /免费的 MyMemory/);
+  assert.equal(fallback.warnHidden, false);
+  assert.equal(fallback.title, fallback.warnText);
 });
+
 
 test("TBM-09/10 own config wins, borrow does not copy the key into storage, and the request uses it", async () => {
   const settings = unconfigured();
@@ -273,11 +306,13 @@ test("TBM-09/10 own config wins, borrow does not copy the key into storage, and 
     const sw = await import(`../background/service-worker.js?borrow-batch=${Date.now()}`);
     const opts = {};
     const out = await sw.translateBatch(["Hello"], opts);
+    const again = await sw.translateBatch(["World"], {});
     assert.equal(out[0], "你好");
+    assert.equal(again[0], "你好");
     assert.equal(opts.borrowed, true);
     assert.equal(opts.providerCalled, false);
     assert.equal(opts.outboundFallback, false);
-    assert.equal(urls.length, 1);
+    assert.equal(urls.length, 2);
     assert.match(urls[0], /^https:\/\/api\.moonshot\.cn\/v1\/chat\/completions$/);
     const dumped = JSON.stringify(writes);
     assert.equal(dumped.includes(MM_KEY), false);
@@ -285,13 +320,23 @@ test("TBM-09/10 own config wins, borrow does not copy the key into storage, and 
     const { handleArxivSourceMessage } = await import("../background/arxiv-source.js");
     await handleArxivSourceMessage({ action: "diag", message: { type: "OI_DIAG_STATS" } });
     const logged = writes.flatMap((patch) => patch?.["diag.events"] || []);
-    const borrowLog = logged.find((event) => event.type === "translate.borrow");
-    assert.equal(borrowLog?.provider, "kimi");
-    assert.equal(borrowLog?.code, "borrow");
-    assert.equal(borrowLog?.reason, "kimi-k2");
-    assert.equal(borrowLog?.count, 1);
-    assert.equal(JSON.stringify(borrowLog).includes(MM_KEY), false);
-    assert.equal(JSON.stringify(borrowLog).includes("apiKey"), false);
+    const borrows = logged.filter((event) => event.type === "translate.borrow");
+    assert.equal(borrows.length, 1);
+    const borrowLog = borrows[0];
+    assert.equal(borrowLog.ctx, "sw");
+    assert.equal(borrowLog.provider, "kimi");
+    assert.equal(borrowLog.model, "kimi-k2");
+    assert.equal(borrowLog.reason, "translate-unconfigured");
+    assert.equal(borrowLog.ok, true);
+    assert.equal(borrowLog.code, undefined);
+    const borrowPacked = JSON.stringify(borrowLog);
+    assert.equal(borrowPacked.includes(MM_KEY), false);
+    assert.equal(borrowPacked.includes("apiKey"), false);
+    assert.equal(borrowPacked.includes("Authorization"), false);
+    assert.equal(borrowPacked.includes("moonshot"), false);
+    assert.equal(borrowPacked.includes("Hello"), false);
+    assert.equal(borrowPacked.includes("World"), false);
+    assert.equal(borrowPacked.includes("你好"), false);
     assert.equal(JSON.stringify(writes).includes(MM_KEY), false);
     for (const key of sw.translationCache.keys()) {
       assert.equal(String(key).includes(MM_KEY), false);
@@ -299,15 +344,22 @@ test("TBM-09/10 own config wins, borrow does not copy the key into storage, and 
     const adapter = getProvider("kimi");
     assert.equal(typeof adapter.translate, "function");
     const worker = readFileSync(join(root, "background/service-worker.js"), "utf8");
-    const report = worker.slice(worker.indexOf("function reportTranslateBorrow"), worker.indexOf("function emitTranslateProgress"));
+    const report = worker.slice(worker.indexOf("function reportTranslateBorrow"), worker.indexOf("function noteBorrowEpisode"));
     assert.match(report, /action: "diag-borrow"/);
     assert.equal(report.includes("apiKey"), false);
     assert.equal(report.includes("baseUrl"), false);
-    const call = worker.slice(worker.indexOf("if (outbound.borrowed)"), worker.indexOf("const provider = outbound.provider"));
-    assert.match(call, /provider: outbound\.vendorId/);
-    assert.match(call, /model: outbound\.model/);
-    assert.equal(call.includes("apiKey"), false);
-    assert.equal(call.includes("runtimeConfig"), false);
+    assert.equal(report.includes("Authorization"), false);
+    const reports = [...worker.matchAll(/reportTranslateBorrow\(\{[\s\S]*?\}\)/g)].map((match) => match[0]);
+    assert.equal(reports.length, 2);
+    for (const block of reports) {
+      assert.match(block, /provider: outbound\.vendorId/);
+      assert.match(block, /model: outbound\.model/);
+      assert.equal(block.includes("apiKey"), false);
+      assert.equal(block.includes("baseUrl"), false);
+      assert.equal(block.includes("Authorization"), false);
+    }
+    const diag = readFileSync(join(root, "lib/diag-log.js"), "utf8");
+    assert.match(diag, /reason: "translate-unconfigured"/);
   } finally {
     console.error = originalError;
     installNet(null);

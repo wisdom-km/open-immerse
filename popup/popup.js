@@ -1,4 +1,4 @@
-import { getProvider, isProviderConfigured } from "../lib/providers.js";
+import { getProvider, isProviderConfigured, providers } from "../lib/providers.js";
 import { readFormulaSettings } from "../lib/formula-settings.js";
 import { describeTranslateBorrow } from "../lib/translate-borrow.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
@@ -144,17 +144,17 @@ async function refreshEngine(still = () => true) {
 
 function renderEngine(settings, formula) {
   const described = describeTranslateBorrow(settings, formula);
-  const outbound = described.outbound;
+  const borrowed = described.mode === "borrow";
+  const outbound = borrowed
+    ? { providerId: described.vendorId, fallback: false, borrowed: true, notice: "" }
+    : described.outbound;
   const link = $("engineLink");
   const warn = $("engineWarn");
   const warnText = $("engineWarnText");
-  if (described.mode === "borrow") {
-    link.textContent = `引擎：${described.shortName}`;
-    link.title = described.vendorLabel || described.shortName;
-    warn.hidden = true;
-    return;
-  }
-  const provider = getProvider(outbound.providerId);
+  const known = providers[outbound.providerId];
+  const provider = known
+    ? getProvider(outbound.providerId)
+    : { id: outbound.providerId, name: described.vendorLabel || outbound.providerId };
   const shortName = {
     openai: "OpenAI",
     openrouter: "OpenRouter",
@@ -172,12 +172,13 @@ function renderEngine(settings, formula) {
   }[provider.id] || provider.name.split("/")[0].trim();
   link.textContent = provider.id === "mymemory" ? `引擎：${shortName}（免费）` : `引擎：${shortName}`;
   link.title = provider.name;
-  if (provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
+  if (!borrowed && provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
   const selected = getProvider(settings.provider);
   const cfg = settings.providers?.[selected.id] || {};
-  const ok = !outbound.fallback && isProviderConfigured(selected, cfg);
+  const ok = borrowed || (!outbound.fallback && isProviderConfigured(selected, cfg));
   if (outbound.fallback && warnText) warnText.textContent = outbound.notice;
-  warn.hidden = outbound.borrowed || ok;
+  else if (borrowed && warnText) warnText.textContent = "";
+  warn.hidden = ok;
 }
 
 function hostOf(url) {

@@ -1868,6 +1868,8 @@ test("missing-field attention is stored, and the translate badge stays hidden wi
   assert.match(hints[0].textContent, /只显示当前默认引擎的配置/);
   assert.equal(hints[0].textContent.includes("正在借用"), false);
   assert.equal(hints[0].textContent.includes("MyMemory"), false);
+  const panel = page.document.getElementById("panel-translate").textContent;
+  assert.equal(panel.includes("借用"), false);
 
   const refreshed = mountPage("#translate");
   await startOptions();
@@ -1911,6 +1913,8 @@ test("settings page keeps the original engine hint while borrowing, and an own e
   assert.equal(hint.textContent.includes("正在借用"), false);
   assert.equal(hint.textContent.includes("单独设置"), false);
   assert.equal(hint.textContent.includes(mmKey), false);
+  const panel = page.document.getElementById("panel-translate").textContent;
+  assert.equal(panel.includes("借用"), false);
   page.document.getElementById("testConnection").click();
   await flush();
   assert.equal(page.document.querySelector("[data-badge='translate']").hidden, true);

@@ -11,6 +11,7 @@ const cache = new Map();
 const CACHE_LIMIT = 2000;
 const CACHE_VER = "v5-title-calque";
 cache.clear();
+let borrowEpisode = "";
 
 chrome.runtime.onInstalled.addListener(() => {
   cache.clear();
@@ -230,14 +231,22 @@ function reportTranslateFailure(err, fields) {
 }
 
 function reportTranslateBorrow(fields) {
+  const payload = {
+    provider: fields?.provider || "",
+    model: fields?.model || ""
+  };
+  if (typeof fields?.ok === "boolean") payload.ok = fields.ok;
   Promise.resolve(handleArxivSourceMessage({
     action: "diag-borrow",
-    fields: {
-      provider: fields?.provider || "",
-      model: fields?.model || "",
-      count: Number(fields?.count) || 0
-    }
+    fields: payload
   })).catch(() => {});
+}
+
+function noteBorrowEpisode(outbound) {
+  const episode = outbound?.borrowed ? `${outbound.vendorId}\0${outbound.model}` : "";
+  const entering = episode !== "" && episode !== borrowEpisode;
+  borrowEpisode = episode;
+  return entering;
 }
 
 function emitTranslateProgress(sender, requestId, progress) {
@@ -276,13 +285,7 @@ async function translateBatch(texts, options = {}) {
   options.outboundFallback = outbound.fallback === true;
   options.borrowed = outbound.borrowed === true;
   options.providerCalled = false;
-  if (outbound.borrowed) {
-    reportTranslateBorrow({
-      provider: outbound.vendorId,
-      model: outbound.model,
-      count: texts.length
-    });
-  }
+  const enteringBorrow = noteBorrowEpisode(outbound);
   const provider = outbound.provider;
   const borrowed = outbound.borrowed === true ? outbound.runtimeConfig : null;
   const providerSettings = borrowed
@@ -364,6 +367,13 @@ async function translateBatch(texts, options = {}) {
         provider: options.providerId || "",
         count: chunk.length
       });
+      if (enteringBorrow) {
+        reportTranslateBorrow({
+          provider: outbound.vendorId,
+          model: outbound.model,
+          ok: false
+        });
+      }
       throw safe;
     }
     const guarded = guardZhTranslations(
@@ -378,6 +388,13 @@ async function translateBatch(texts, options = {}) {
     });
   }
   if (outbound.borrowed) options.providerCalled = false;
+  if (enteringBorrow) {
+    reportTranslateBorrow({
+      provider: outbound.vendorId,
+      model: outbound.model,
+      ok: true
+    });
+  }
   return guardZhTranslations(texts, results, settings.targetLang);
 }
 
