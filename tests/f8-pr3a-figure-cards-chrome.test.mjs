@@ -353,18 +353,32 @@ test("figure and table placeholder cards", { timeout: 240000 }, async (t) => {
   assert.equal(card.l0, "点击查看原图");
   assert.equal(card.s0, "图 1 · 原文第 3 页");
 
+  // The container is the button. Pinning only the row loses to --oi-fig-w
+  // while the page is still laying out, and two frames then still read the
+  // wide label. Re-apply until the used width has caught up.
   const sized = async (px) => {
-    await evaluate(`(() => {
-      const button = document.querySelector("#readerFlow .oi-figure-placeholder[data-page='3']");
-      const row = button.parentElement;
-      row.style.boxSizing = "border-box";
-      row.style.width = "${px}px";
-      row.style.maxWidth = "${px}px";
-      row.style.flex = "0 0 auto";
-      return true;
-    })()`);
-    await evaluate(`new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))`);
-    return evaluate(cardExpr("3"));
+    const started = Date.now();
+    let last = null;
+    while (Date.now() - started < 5000) {
+      await evaluate(`(() => {
+        const button = document.querySelector("#readerFlow .oi-figure-placeholder[data-page='3']");
+        if (!button) return false;
+        const row = button.parentElement;
+        for (const el of [row, button]) {
+          el.style.boxSizing = "border-box";
+          el.style.width = "${px}px";
+          el.style.maxWidth = "${px}px";
+          el.style.flex = "0 0 auto";
+        }
+        button.style.minWidth = "0";
+        return true;
+      })()`);
+      await evaluate(`new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))`);
+      last = await evaluate(cardExpr("3"));
+      if (last && last.width <= px + 1) return last;
+      await sleep(50);
+    }
+    assert.fail(`width did not apply (${px}px): ${JSON.stringify(last)}`);
   };
   const mid = await sized(190);
   assert.equal(mid.l0, "", JSON.stringify(mid));
@@ -384,9 +398,13 @@ test("figure and table placeholder cards", { timeout: 240000 }, async (t) => {
   await evaluate(`(() => {
     const button = document.querySelector("#readerFlow .oi-figure-placeholder[data-page='3']");
     const row = button.parentElement;
-    row.style.width = "";
-    row.style.maxWidth = "";
-    row.style.flex = "";
+    for (const el of [row, button]) {
+      el.style.width = "";
+      el.style.maxWidth = "";
+      el.style.flex = "";
+      el.style.minWidth = "";
+      el.style.boxSizing = "";
+    }
     button.focus();
     return document.activeElement === button;
   })()`);

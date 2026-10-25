@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -190,6 +190,40 @@ function sleep(ms) {
   return new Promise((done) => setTimeout(done, ms));
 }
 
+// Screenshots stay under the owned temp dir. /opt/cursor is root-owned on a
+// GitHub runner, and mkdir there throws EACCES before the assertion runs.
+function selShotDir(ownedDir) {
+  return join(ownedDir, "shots");
+}
+
+function writeSelShot(dir, name, buf) {
+  const root = resolve(dir);
+  const temp = resolve(tmpdir());
+  if (root !== temp && !root.startsWith(`${temp}${sep}`)) {
+    throw new Error(`SEL-20 screenshots stay in the temp dir, refused ${root}`);
+  }
+  mkdirSync(root, { recursive: true });
+  const file = join(root, name);
+  writeFileSync(file, buf);
+  return file;
+}
+
+test("SEL-20 screenshots use a temp dir and do not touch /opt", () => {
+  const owned = mkdtempSync(join(tmpdir(), "oi-sel-visual-"));
+  try {
+    const file = writeSelShot(selShotDir(owned), "probe.png", Buffer.from("png-bytes"));
+    assert.equal(file.startsWith(`${resolve(tmpdir())}${sep}`), true);
+    assert.equal(file.includes(`${sep}opt${sep}`), false);
+    assert.equal(readFileSync(file).toString(), "png-bytes");
+    assert.throws(
+      () => writeSelShot("/opt/cursor/artifacts/screenshots", "probe.png", Buffer.from("x")),
+      /temp dir/
+    );
+  } finally {
+    rmSync(owned, { recursive: true, force: true });
+  }
+});
+
 test("SEL-20 polish holds in headless Chrome on Attention and DPO", { timeout: 300000 }, async (t) => {
   assert.equal(existsSync(attention), true, "tests/fixtures/Attention_Is_All_You_Need.pdf is missing");
   assert.equal(existsSync(dpo), true, "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf is missing");
@@ -213,7 +247,7 @@ test("SEL-20 polish holds in headless Chrome on Attention and DPO", { timeout: 3
   handle.server = await serveRepo();
   handle.ownedDir = mkdtempSync(join(tmpdir(), "oi-sel-visual-"));
   rememberOwnedTemp(handle.ownedDir);
-  shotDir.path = join(handle.ownedDir, "shots");
+  shotDir.path = selShotDir(handle.ownedDir);
   mkdirSync(shotDir.path);
   const userDataDir = join(handle.ownedDir, "profile");
   const scratchDir = join(handle.ownedDir, "scratch");
@@ -325,11 +359,8 @@ test("SEL-20 polish holds in headless Chrome on Attention and DPO", { timeout: 3
     const { data } = await send("Page.captureScreenshot", params);
     const buf = Buffer.from(data, "base64");
     assert.ok(buf.length > 1500, `${name} screenshot is empty`);
-    writeFileSync(join(shotDir.path, name), buf);
-    const artifacts = "/opt/cursor/artifacts/screenshots";
-    mkdirSync(artifacts, { recursive: true });
-    writeFileSync(join(artifacts, name), buf);
-    t.diagnostic(`${name} ${buf.length} bytes`);
+    const file = writeSelShot(shotDir.path, name, buf);
+    t.diagnostic(`${name} ${buf.length} bytes ${file}`);
     return buf.length;
   };
   const annotate = (rects) => evaluate(`(() => {
