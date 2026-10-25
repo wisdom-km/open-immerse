@@ -20,15 +20,36 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  min-height: 44px;
   padding: var(--set-card-pad, 8px 16px);
   border-top: 1px solid var(--oi-line);
 }
+.oi-data .set-row.is-toggle { cursor: pointer; }
+.oi-data .set-row.is-toggle:hover { background: rgba(34, 32, 28, .04); }
 .oi-data .set-copy { flex: 1; }
 .oi-data .set-copy h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
 .oi-data .set-copy p,
 .oi-data .set-group > p { margin: 4px 0; color: var(--oi-text-muted); font-size: 13px; line-height: 1.5; }
+.oi-data .set-num {
+  font-size: 12px;
+  color: var(--oi-text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .oi-data .set-value { color: var(--oi-text-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-.oi-data .set-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.oi-data .set-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-width: 72px;
+  justify-content: flex-end;
+}
+.oi-data .oi-data-always {
+  font-size: 12px;
+  color: var(--oi-text-muted);
+  white-space: nowrap;
+}
 .oi-data [data-persist-ask] {
   display: inline-flex;
   align-items: center;
@@ -86,10 +107,11 @@
 .oi-data .oi-data-bar.is-paused > span { background: var(--oi-line-strong); }
 .oi-data .oi-data-skel {
   display: inline-block;
-  width: 72px;
-  height: 12px;
-  border-radius: 6px;
-  background: var(--oi-surface-2);
+  width: 56px;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--oi-line);
+  vertical-align: middle;
 }
 .oi-data .oi-data-file { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .oi-data .oi-data-toast {
@@ -100,10 +122,16 @@
 .oi-data .oi-data-ignored,
 .oi-data .oi-data-errors { margin: 6px 0 0; padding: 0; list-style: none; color: var(--oi-text-muted); font-size: 13px; }
 @media (max-width: 519px) {
-  .oi-data .set-row { flex-direction: column; align-items: stretch; }
+  .oi-data .set-row:not(.is-toggle) { flex-direction: column; align-items: stretch; }
   .oi-data .set-actions,
   .oi-data .btn-primary,
   .oi-data .set-actions.is-block { width: 100%; }
+  .oi-data .set-row.is-toggle {
+    flex-direction: row;
+    align-items: center;
+  }
+  .oi-data .set-row.is-toggle .set-actions { width: auto; }
+  .oi-data .set-num { white-space: nowrap; }
   .oi-data .btn-primary.is-block,
   .oi-data.is-narrow .btn-primary { width: 100%; }
 }

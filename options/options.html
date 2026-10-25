@@ -13,39 +13,23 @@
     <div class="options-shell">
       <aside class="options-nav" aria-label="设置分组">
         <header class="brand">
-          <div class="mark" aria-hidden="true"><span></span><span></span></div>
-          <div>
-            <h1>沉浸译</h1>
-            <p class="lead">Open Immerse · 设置</p>
-          </div>
+          <div class="mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <h1>沉浸译</h1>
+          <p class="lead">Open Immerse · 设置</p>
         </header>
-        <p class="brand-links">
-          <a href="../learning/learning.html">学习中心</a>
-          <span class="brand-links-sep" aria-hidden="true">·</span>
-          <a href="../documents/documents.html">文档翻译</a>
-        </p>
         <input id="setSearch" class="set-search" type="search" placeholder="搜索设置" aria-label="搜索设置" />
         <div id="setResults" class="set-results" hidden></div>
         <nav class="nav-tabs" role="tablist" aria-label="设置页">
           <p class="set-label">常规</p>
-          <div class="set-nav-item">
-            <button type="button" role="tab" data-nav="translate" aria-selected="true" aria-controls="panel-translate">翻译</button>
-            <span class="set-badge" data-badge="translate" hidden>需处理</span>
-          </div>
-          <div class="set-nav-item">
-            <button type="button" role="tab" data-nav="mm" aria-selected="false" aria-controls="panel-formula">多模态 · OCR</button>
-            <span class="set-badge" data-badge="mm" hidden>需处理</span>
-          </div>
+          <button type="button" role="tab" data-nav="translate" aria-selected="true" aria-controls="panel-translate">翻译<span class="set-badge" data-badge="translate" hidden><span class="set-sr">，</span>需处理</span></button>
+          <button type="button" role="tab" data-nav="mm" aria-selected="false" aria-controls="panel-formula">多模态 · OCR<span class="set-badge" data-badge="mm" hidden><span class="set-sr">，</span>需处理</span></button>
           <p class="set-label">阅读</p>
           <button type="button" role="tab" data-nav="web" aria-selected="false" aria-controls="panel-web">网页</button>
           <button type="button" role="tab" data-nav="pdf" aria-selected="false" aria-controls="panel-pdf">PDF 阅读</button>
           <button type="button" role="tab" data-nav="notes" aria-selected="false" aria-controls="panel-notes">笔记</button>
           <p class="set-label">更多</p>
           <button type="button" role="tab" data-nav="labs" aria-selected="false" aria-controls="panel-labs">功能与实验室</button>
-          <div class="set-nav-item">
-            <button type="button" role="tab" data-nav="data" aria-selected="false" aria-controls="panel-data">数据与隐私</button>
-            <span class="set-badge" data-badge="data" hidden>需处理</span>
-          </div>
+          <button type="button" role="tab" data-nav="data" aria-selected="false" aria-controls="panel-data">数据与隐私<span class="set-badge" data-badge="data" hidden><span class="set-sr">，</span>需处理</span></button>
           <button type="button" role="tab" data-nav="about" aria-selected="false" aria-controls="panel-about">关于</button>
         </nav>
       </aside>
