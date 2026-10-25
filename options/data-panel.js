@@ -163,9 +163,11 @@ export function mountDataPanel(root, deps = {}) {
   let view = coordinator.state();
   let usage = { loading: true, usage: null, quota: null, persisted: false };
   let migration = null;
-  let sizes = { base: 0, sources: 0, trash: 0, hasSource: false, empty: true };
+  let sizes = { base: 0, sources: 0, trash: 0, hasSource: false, empty: true, loading: true, error: false };
   let wantSource = false;
   let wantTrash = false;
+  let pendingFocusId = "";
+  let estimateNode = null;
   let packing = false;
   let packingPct = 0;
   let toastText = "";
@@ -255,10 +257,12 @@ export function mountDataPanel(root, deps = {}) {
         sources,
         trash: Math.max(0, JSON.stringify(withTrash).length - JSON.stringify(plain).length),
         hasSource,
-        empty: papers.length === 0 && !notes
+        empty: papers.length === 0 && !notes,
+        loading: false,
+        error: false
       };
     } catch {
-      sizes = { base: 0, sources: 0, trash: 0, hasSource: false, empty: true };
+      sizes = { base: 0, sources: 0, trash: 0, hasSource: false, empty: true, loading: false, error: true };
     }
     render();
   }
@@ -466,14 +470,81 @@ export function mountDataPanel(root, deps = {}) {
     (control || group)?.focus?.();
   }
 
-  function row(title, body, control, extra) {
-    const copy = el("div", { class: "set-copy" }, [
-      el("h3", { text: title }),
-      typeof body === "string" ? el("p", { text: body }) : body
-    ]);
+  function row(title, body, control, extra, opts = {}) {
+    const heading = opts.titleNode || el("h3", { id: opts.titleId, text: title });
+    const note = typeof body === "string" ? el("p", { id: opts.noteId, text: body }) : body;
+    const copy = el("div", { class: "set-copy" }, [heading, note]);
     if (extra) copy.append(extra);
-    const actions = el("div", { class: `set-actions${narrow() ? " is-block" : ""}` }, Array.isArray(control) ? control : [control]);
-    return el("div", { class: "set-row" }, [copy, actions]);
+    const actions = el("div", {
+      class: `set-actions${narrow() && !opts.keepActions ? " is-block" : ""}`
+    }, Array.isArray(control) ? control : [control]);
+    return el("div", { class: opts.rowClass || "set-row" }, [copy, actions]);
+  }
+
+  function estimateHeading(text) {
+    if (!estimateNode) {
+      estimateNode = el("h3", { id: "exportEstimate", role: "status", "aria-live": "polite", text });
+      return estimateNode;
+    }
+    if (estimateNode.textContent !== text) estimateNode.textContent = text;
+    return estimateNode;
+  }
+
+  function sizeNote(id, bytes, tail, state) {
+    if (state === "loading") {
+      return el("p", { id }, [
+        el("span", { class: "oi-data-skel", "aria-hidden": "true" }),
+        el("span", { text: " · 正在计算大小…" })
+      ]);
+    }
+    if (state === "error") {
+      return el("p", { id }, [
+        el("span", { class: "set-num", text: "大小未知" }),
+        el("span", { text: tail })
+      ]);
+    }
+    if (state === "empty") return el("p", { id, text: "回收站是空的" });
+    return el("p", { id }, [
+      el("span", { class: "set-num", text: `约 ${formatApproxBytes(bytes)}` }),
+      el("span", { text: tail })
+    ]);
+  }
+
+  function exportSwitch(id, titleId, noteId, on, disabled) {
+    const input = el("input", {
+      type: "checkbox",
+      role: "switch",
+      id,
+      "aria-checked": on ? "true" : "false",
+      "aria-labelledby": titleId,
+      "aria-describedby": noteId
+    });
+    input.checked = on === true;
+    if (disabled) {
+      input.disabled = true;
+      input.setAttribute("disabled", "");
+    }
+    input.addEventListener("click", (event) => {
+      event.stopPropagation?.();
+    });
+    input.addEventListener("change", () => {
+      const next = input.checked === true;
+      if (id === "exportIncSource") wantSource = next;
+      else wantTrash = next;
+      input.setAttribute("aria-checked", next ? "true" : "false");
+      pendingFocusId = id;
+      render();
+    });
+    return input;
+  }
+
+  function bindRowToggle(rowEl, input) {
+    rowEl.addEventListener("click", (event) => {
+      const target = event?.target;
+      if (target === input || input.contains?.(target)) return;
+      if (input.disabled) return;
+      input.click();
+    });
   }
 
   function renderUsage(group) {
@@ -689,31 +760,59 @@ export function mountDataPanel(root, deps = {}) {
   }
 
   function renderExport(group) {
-    group.append(row("译文和笔记", "每次都包含", el("span", { class: "oi-data-chip is-off", text: "始终包含" })));
-    if (sizes.hasSource) {
-      const box = el("input", { type: "checkbox" });
-      box.checked = wantSource;
-      box.addEventListener("change", () => {
-        wantSource = box.checked === true;
-        render();
-      });
-      group.append(row("原 PDF", "体积大，默认不带", [
-        el("span", { class: "set-value", text: `+ 约 ${formatApproxBytes(sizes.sources)}` }),
-        box
-      ]));
+    group.append(row(
+      "译文和笔记",
+      "每次都包含",
+      el("span", { class: "oi-data-always", text: "始终包含" }),
+      null,
+      { keepActions: true }
+    ));
+    if (sizes.hasSource || sizes.error === true) {
+      const sourceState = sizes.loading ? "loading" : (sizes.error ? "error" : "ready");
+      const sourceInput = exportSwitch(
+        "exportIncSource",
+        "exportIncSourceTitle",
+        "exportIncSourceNote",
+        wantSource,
+        packing
+      );
+      const sourceRow = row(
+        "原 PDF",
+        sizeNote("exportIncSourceNote", sizes.sources, " · 体积大，默认不带", sourceState),
+        sourceInput,
+        null,
+        { titleId: "exportIncSourceTitle", rowClass: "set-row is-toggle", keepActions: true }
+      );
+      bindRowToggle(sourceRow, sourceInput);
+      group.append(sourceRow);
     }
-    const trashBox = el("input", { type: "checkbox" });
-    trashBox.checked = wantTrash;
-    trashBox.addEventListener("change", () => {
-      wantTrash = trashBox.checked === true;
-      render();
-    });
-    group.append(row("回收站里的笔记", "", [
-      el("span", { class: "set-value", text: `+ 约 ${formatApproxBytes(sizes.trash)}` }),
-      trashBox
-    ]));
-    const estimate = sizes.empty ? "预计 0 MB" : `预计约 ${formatApproxBytes(estimateNow())}`;
-    const hint = sizes.empty
+    const trashEmpty = !sizes.loading && !sizes.error && sizes.trash === 0;
+    if (trashEmpty) wantTrash = false;
+    const trashState = sizes.loading ? "loading" : (sizes.error ? "error" : (trashEmpty ? "empty" : "ready"));
+    const trashInput = exportSwitch(
+      "exportIncTrash",
+      "exportIncTrashTitle",
+      "exportIncTrashNote",
+      wantTrash,
+      packing || trashEmpty
+    );
+    const trashRow = row(
+      "回收站里的笔记",
+      sizeNote("exportIncTrashNote", sizes.trash, " · 已删除但还没清空的笔记", trashState),
+      trashInput,
+      null,
+      { titleId: "exportIncTrashTitle", rowClass: "set-row is-toggle", keepActions: true }
+    );
+    bindRowToggle(trashRow, trashInput);
+    group.append(trashRow);
+    const estimate = sizes.loading
+      ? "预计 计算中…"
+      : sizes.error
+        ? "预计 —"
+        : sizes.empty
+          ? "预计 0 MB"
+          : `预计约 ${formatApproxBytes(estimateNow())}`;
+    const hint = !sizes.loading && !sizes.error && sizes.empty
       ? "文献库是空的，打开并翻译一篇论文后才能导出。"
       : "版面缓存可以重算，不导出。API 密钥和设置不在这个文件里。";
     const exportButton = button(
@@ -722,11 +821,15 @@ export function mountDataPanel(root, deps = {}) {
       () => { void exportLibrary(); }
     );
     if (sizes.empty || packing) exportButton.disabled = true;
-    group.append(row(estimate, hint, exportButton));
+    group.append(row("", hint, exportButton, null, { titleNode: estimateHeading(estimate) }));
   }
 
   function render() {
     if (!globalThis.document?.createElement) return;
+    const active = document.activeElement;
+    const activeId = active?.id || active?.getAttribute?.("id") || "";
+    const restoreId = pendingFocusId || (activeId === "exportIncSource" || activeId === "exportIncTrash" ? activeId : "");
+    pendingFocusId = "";
     const scrolled = root.scrollTop;
     root.replaceChildren();
     root.classList.add("oi-data");
@@ -748,8 +851,10 @@ export function mountDataPanel(root, deps = {}) {
     if (persistReturnFocus) {
       persistReturnFocus = false;
       const ask = findPersistAsk(root);
-      const row = findMarked(root, "data-persist-state");
-      (ask || row)?.focus?.();
+      const marked = findMarked(root, "data-persist-state");
+      (ask || marked)?.focus?.();
+    } else if (restoreId) {
+      root.querySelector?.(`#${restoreId}`)?.focus?.();
     }
     if (toastText) root.append(el("p", { class: "oi-data-toast", role: "status", text: toastText }));
     root.scrollTop = scrolled;

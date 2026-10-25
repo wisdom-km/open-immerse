@@ -58,31 +58,31 @@ test("popup CSS uses elevated dark tokens and 340px shell", () => {
   assert.equal(/\.mark span[^}]*--oi-accent/.test(tokens), false);
 });
 
-test("options learning/docs are muted brand-links under title, not accent note", () => {
+test("options sidebar drops learning/docs links; about and popup still open them", () => {
   const html = readFileSync(join(root, "options/options.html"), "utf8");
   const css = readFileSync(join(root, "options/options.css"), "utf8");
+  const popup = readFileSync(join(root, "popup/popup.html"), "utf8");
+  const js = readFileSync(join(root, "options/options.js"), "utf8");
   const aside = html.match(/<aside class="options-nav"[\s\S]*?<\/aside>/)[0];
-  assert.match(aside, /class="brand"[\s\S]*class="brand-links"[\s\S]*class="nav-tabs"/);
-  assert.match(aside, /class="brand-links"/);
-  assert.match(aside, /href="\.\.\/learning\/learning\.html">学习中心</);
-  assert.match(aside, /href="\.\.\/documents\/documents\.html">文档翻译</);
-  assert.match(aside, /class="brand-links-sep"[^>]*aria-hidden="true"/);
-  assert.doesNotMatch(aside, /class="note"/);
-  assert.match(aside, /data-nav="translate"[^>]*>翻译</);
-  assert.match(aside, /data-nav="mm"[^>]*>多模态 · OCR</);
+  const about = html.match(/id="panel-about"[\s\S]*?<\/section>/)[0];
+  assert.doesNotMatch(aside, /brand-links|学习中心|文档翻译/);
+  assert.doesNotMatch(css, /\.brand-links/);
+  assert.equal(js.includes("brand-links"), false);
+  assert.match(aside, /class="brand"[\s\S]*class="nav-tabs"/);
+  assert.doesNotMatch(aside, /class="note"|set-nav-item/);
+  assert.match(aside, /data-nav="translate"[^>]*>翻译<span class="set-badge"/);
+  assert.match(aside, /data-nav="mm"[^>]*>多模态 · OCR<span class="set-badge"/);
   assert.match(aside, /data-nav="web"[^>]*>网页</);
   assert.match(aside, /data-nav="pdf"[^>]*>PDF 阅读</);
   assert.match(aside, /data-nav="notes"[^>]*>笔记</);
   assert.match(aside, /data-nav="labs"[^>]*>功能与实验室</);
-  assert.match(aside, /data-nav="data"[^>]*>数据与隐私</);
+  assert.match(aside, /data-nav="data"[^>]*>数据与隐私<span class="set-badge"/);
   assert.match(aside, /data-nav="about"[^>]*>关于</);
   assert.doesNotMatch(aside, /data-nav="advanced"/);
-  assert.match(css, /\.brand-links\s*\{[^}]*margin:\s*6px 0 0/s);
-  assert.match(css, /\.brand-links\s*\{[^}]*font-size:\s*12px/s);
-  assert.match(css, /\.brand-links\s*\{[^}]*color:\s*var\(--oi-text-muted\)/s);
-  assert.match(css, /\.brand-links a\s*\{[^}]*color:\s*inherit/s);
-  assert.match(css, /\.brand-links a\s*\{[^}]*text-decoration:\s*none/s);
-  assert.match(css, /\.brand-links a:hover\s*\{[^}]*color:\s*var\(--oi-accent\)/s);
+  assert.match(about, /学习中心[\s\S]{0,240}href="\.\.\/learning\/learning\.html">打开/);
+  assert.match(about, /文档翻译[\s\S]{0,240}href="\.\.\/documents\/documents\.html">打开/);
+  assert.match(popup, /id="openLearning">学习/);
+  assert.match(popup, /id="openDocs">文档/);
   assert.doesNotMatch(css, /\.note a\s*\{[^}]*--oi-accent/);
   assert.match(css, /\.nav-tabs\s*\{[^}]*margin-top:\s*22px/s);
   assert.match(css, /\.nav-tabs\s*\{[^}]*border-top:\s*0/s);
@@ -109,7 +109,7 @@ test("options save bar is a quiet sticky Loom bar", () => {
 test("options keep v1 module gates; youtube\/x only in Advanced group", () => {
   const html = readFileSync(join(root, "options/options.html"), "utf8");
   const featSrc = readFileSync(join(root, "lib/features.js"), "utf8");
-  assert.match(html, /data-nav="translate"[^>]*>翻译</);
+  assert.match(html, /data-nav="translate"[^>]*>翻译/);
   assert.match(html, /data-nav="labs"[^>]*>功能与实验室</);
   assert.doesNotMatch(html, /data-nav="advanced"/);
   assert.doesNotMatch(html, /data-nav="engine"/);
