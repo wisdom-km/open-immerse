@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,11 +31,9 @@ test("popup IA is page-only: Dual Line, 沉浸译, no feature toggles or youtube
   assert.match(html, /id="openOptions">设置</);
   assert.match(html, /id="openLearning">学习</);
   assert.match(html, /id="openDocs">文档</);
-  assert.match(html, /id="openPdfPage"[^>]*>PDF</);
-  assert.match(html, /id="openPdfPage"[^>]*\bhidden\b/);
-  assert.match(html, /id="openPdfSep"[^>]*\bhidden\b/);
-  assert.match(html, /id="openPdf"[^>]*>在沉浸译中打开（实验室）</);
+  assert.match(html, /id="openPdf"[^>]*class="btn-secondary"[^>]*>打开 PDF</);
   assert.match(html, /id="pdfEntry" hidden/);
+  assert.doesNotMatch(html, /id="openPdfPage"|id="openPdfSep"/);
   assert.equal(html.includes("featureList"), false);
   assert.equal(/youtube|YouTube/i.test(html), false);
   assert.equal(html.includes("hamburger"), false);
@@ -206,12 +205,11 @@ test("popup PDF entries stay hidden unless features.pdf is on", () => {
   const html = readFileSync(join(root, "popup/popup.html"), "utf8");
   assert.match(js, /import \{ featureOn \} from "\.\.\/lib\/features\.js"/);
   assert.match(js, /featureOn\(settings,\s*"pdf"\)/);
-  assert.match(js, /\$\("openPdfPage"\)\.hidden = !pdfOn/);
-  assert.match(js, /\$\("openPdfSep"\)\.hidden = !pdfOn/);
-  assert.match(js, /\$\("pdfEntry"\)\.hidden = !\(pdfOn && pdfTab\)/);
+  assert.match(js, /\$\("pdfEntry"\)\.hidden = !pdfOn/);
   assert.match(js, /if \(!featureOn\(settings, "pdf"\)\) return/);
-  assert.match(html, /id="openPdfPage" hidden/);
   assert.match(html, /id="pdfEntry" hidden/);
+  assert.doesNotMatch(js, /openPdfPage|openPdfSep/);
+  assert.doesNotMatch(html, /openPdfPage|openPdfSep/);
 });
 
 test("popup footer links bind before the active-tab ping", () => {
@@ -255,4 +253,175 @@ test("isProviderConfigured requires apiKey when the adapter marks it required", 
   assert.equal(isProviderConfigured(paid, { apiKey: "sk-test" }), true);
   const free = getProvider("mymemory");
   assert.equal(isProviderConfigured(free, {}), true);
+});
+
+function popupSources() {
+  return {
+    html: readFileSync(join(root, "popup/popup.html"), "utf8"),
+    css: readFileSync(join(root, "popup/popup.css"), "utf8"),
+    js: readFileSync(join(root, "popup/popup.js"), "utf8")
+  };
+}
+
+function openPdfClick(js) {
+  const start = js.indexOf('$("openPdf").addEventListener');
+  const end = js.indexOf("if (tab?.id) setInterval");
+  assert.ok(start >= 0 && end > start);
+  return js.slice(start, end);
+}
+
+test("PPE-01 pdf on shows 打开 PDF on every page, one label, no lab copy", () => {
+  const { html, js } = popupSources();
+  assert.match(html, /id="openPdf"[^>]*class="btn-secondary"[^>]*>打开 PDF</);
+  assert.equal([...html.matchAll(/>打开 PDF</g)].length, 1);
+  assert.doesNotMatch(html, /实验室|在沉浸译中打开/);
+  assert.doesNotMatch(js, /实验室|在沉浸译中打开/);
+  assert.match(js, /\$\("pdfEntry"\)\.hidden = !pdfOn/);
+  assert.doesNotMatch(js, /\$\("pdfEntry"\)\.hidden = !\(pdfOn && pdfTab\)/);
+  assert.doesNotMatch(js, /\$\("openPdf"\)\.textContent/);
+});
+
+test("PPE-02 打开 PDF sits between 翻译此页 and 恢复原文 at full width", () => {
+  const { html, css } = popupSources();
+  const cardStart = html.indexOf('<section class="intent-card">');
+  const translate = html.indexOf('id="translatePage"', cardStart);
+  const open = html.indexOf('id="openPdf"', cardStart);
+  const restore = html.indexOf('id="restorePage"', cardStart);
+  assert.ok(cardStart >= 0 && translate > cardStart && open > translate && restore > open);
+  assert.equal(html.indexOf('id="openPdf"'), open);
+  assert.match(html, /id="pdfEntry"[\s\S]*id="openPdf"[\s\S]*id="restorePage"/);
+  assert.match(css, /\.btn-secondary\s*\{[^}]*width:\s*100%/s);
+  assert.match(css, /\.btn-secondary\s*\{[^}]*margin-top:\s*8px/s);
+});
+
+test("PPE-03 open PDF is a 36px secondary button; only 翻译此页 is accent", () => {
+  const { html, css } = popupSources();
+  assert.match(html, /id="openPdf"[^>]*class="btn-secondary"/);
+  assert.match(html, /id="restorePage"[^>]*class="btn-secondary"/);
+  assert.equal([...html.matchAll(/btn-primary/g)].length, 1);
+  assert.match(html, /id="translatePage"[^>]*class="btn-primary"/);
+  assert.match(css, /\.btn-secondary\s*\{[^}]*min-height:\s*36px/s);
+  assert.match(css, /\.btn-secondary\s*\{[^}]*padding:\s*8px 14px/s);
+  assert.match(css, /\.btn-secondary\s*\{[^}]*background:\s*transparent/s);
+  assert.match(css, /\.btn-secondary\s*\{[^}]*color:\s*var\(--oi-text-muted\)/s);
+  assert.match(css, /\.btn-secondary\s*\{[^}]*border:\s*1px solid var\(--oi-line-strong\)/s);
+  assert.match(css, /\.btn-secondary\s*\{[^}]*font-weight:\s*500/s);
+  assert.match(css, /\.btn-secondary\s*\{[^}]*border-radius:\s*var\(--oi-radius-control\)/s);
+  assert.match(css, /\.btn-primary\s*\{[^}]*background:\s*var\(--oi-accent\)/s);
+  const openRule = css.match(/#openPdf\s*\{[^}]+\}/)[0];
+  assert.doesNotMatch(openRule, /background|color:|border|min-height|font-weight/);
+});
+
+test("PPE-04 打开 PDF stays on one line inside the 340px popup", () => {
+  const { css } = popupSources();
+  assert.match(css, /body\s*\{[^}]*width:\s*340px/s);
+  const openRule = css.match(/#openPdf\s*\{[^}]+\}/)[0];
+  assert.match(openRule, /white-space:\s*nowrap/);
+  assert.match(openRule, /overflow:\s*hidden/);
+  assert.match(openRule, /text-overflow:\s*ellipsis/);
+});
+
+test("PPE-05 a PDF tab sends OI_OPEN_PAGE with src and then closes", () => {
+  const { js } = popupSources();
+  const click = openPdfClick(js);
+  assert.match(js, /const pdfTab = shouldOfferPdfOpen\(tab\?\.url\)/);
+  assert.match(click, /pdfTab\s*\?\s*\{ type: "OI_OPEN_PAGE", page: "pdf", src: tab\.url \}/);
+  assert.doesNotMatch(click, /tabs\.query/);
+  const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
+  assert.match(sw, /pdf\/viewer\.html/);
+  assert.match(sw, /message\.page === "pdf" && message\.src \? `\?src=\$\{encodeURIComponent\(message\.src\)\}`/);
+  assert.ok(click.indexOf("window.close()") > click.indexOf("} catch"));
+});
+
+test("PPE-06 other pages open the library without src and then close", () => {
+  const click = openPdfClick(popupSources().js);
+  const library = click.match(/:\s*\{ type: "OI_OPEN_PAGE", page: "pdf" \}/);
+  assert.ok(library);
+  assert.equal(library[0].includes("src"), false);
+  assert.ok(click.indexOf("window.close()") > click.lastIndexOf('page: "pdf"'));
+});
+
+test("PPE-07 PDF and ordinary pages share one unchanged secondary button", () => {
+  const { html, js } = popupSources();
+  assert.equal([...html.matchAll(/id="openPdf"/g)].length, 1);
+  const click = openPdfClick(js);
+  assert.doesNotMatch(click, /textContent|className|classList|btn-primary/);
+  assert.doesNotMatch(js, /pdfTab[\s\S]{0,120}(?:textContent|btn-primary)/);
+});
+
+test("PPE-08 the button disables before sendMessage so a second click cannot open another tab", () => {
+  const click = openPdfClick(popupSources().js);
+  const guard = click.indexOf("if (btn.disabled) return;");
+  const disable = click.indexOf("btn.disabled = true;");
+  const busy = click.indexOf('btn.setAttribute("aria-busy", "true")');
+  const send = click.indexOf("chrome.runtime.sendMessage");
+  assert.ok(guard >= 0 && guard < disable && disable < busy && busy < send);
+  assert.equal(click.split("chrome.runtime.sendMessage").length - 1, 1);
+  assert.doesNotMatch(click, /textContent/);
+});
+
+test("PPE-09 a failed open shows 无法打开 PDF 阅读器 and leaves the popup open", () => {
+  const { html, css, js } = popupSources();
+  assert.match(html, /id="openPdfError"[^>]*class="danger"[^>]*hidden[^>]*>无法打开 PDF 阅读器</);
+  assert.equal(html.indexOf('id="openPdfError"') > html.indexOf('id="openPdf"'), true);
+  assert.match(css, /\.danger\s*\{[^}]*color:\s*var\(--oi-danger\)/);
+  assert.match(css, /\.danger\s*\{[^}]*font-size:\s*12px/);
+  const click = openPdfClick(js);
+  const catchAt = click.indexOf("} catch {");
+  const closeAt = click.indexOf("window.close()");
+  assert.ok(catchAt > 0 && closeAt > catchAt);
+  const caught = click.slice(catchAt, closeAt);
+  assert.match(click, /if \(!res \|\| res\.ok === false\) throw new Error\("open failed"\)/);
+  assert.match(caught, /btn\.disabled = false/);
+  assert.match(caught, /removeAttribute\("aria-busy"\)/);
+  assert.match(caught, /err\.hidden = false/);
+  assert.match(caught, /return;/);
+  assert.equal(caught.includes("window.close"), false);
+  assert.match(click.slice(closeAt - 30, closeAt), /err\.hidden = true/);
+});
+
+test("PPE-10 pdf off hides the entry and leaves the rest of the popup", () => {
+  const { html, js } = popupSources();
+  assert.match(html, /id="pdfEntry" hidden/);
+  assert.match(js, /const pdfOn = featureOn\(settings, "pdf"\)/);
+  assert.match(js, /\$\("pdfEntry"\)\.hidden = !pdfOn/);
+  assert.match(html, /id="translatePage"[^>]*>翻译此页</);
+  assert.match(html, /id="restorePage"[^>]*>恢复原文</);
+  assert.match(html, />本站自动</);
+  assert.match(html, /id="openOptions">设置</);
+  assert.match(html, /id="openLearning">学习</);
+  assert.match(html, /id="openDocs">文档</);
+  assert.doesNotMatch(html, /id="openPdfPage"|id="openPdfSep"/);
+});
+
+test("PPE-11 footer is only 设置 · 学习 · 文档", () => {
+  const { html, css, js } = popupSources();
+  assert.doesNotMatch(html, /openPdfPage|openPdfSep/);
+  assert.doesNotMatch(js, /openPdfPage|openPdfSep/);
+  assert.doesNotMatch(css, /openPdfPage|openPdfSep/);
+  const nav = html.match(/<nav class="entries">[\s\S]*?<\/nav>/)[0];
+  assert.match(nav, /id="openOptions">设置</);
+  assert.match(nav, /id="openLearning">学习</);
+  assert.match(nav, /id="openDocs">文档</);
+  assert.equal([...nav.matchAll(/·/g)].length, 2);
+  assert.doesNotMatch(nav, /PDF/);
+});
+
+test("PPE-12 translate, restore, and Alt+T stay; new CSS uses --oi-* tokens; manifest and service worker are untouched", () => {
+  const { js, css } = popupSources();
+  assert.match(js, /PRIMARY_IDLE = "翻译此页"/);
+  assert.match(js, /PRIMARY_STOP = "停止"/);
+  assert.match(js, /dataset\.busy === "1"/);
+  assert.match(js, /type: "OI_STOP"/);
+  assert.match(js, /type: "OI_RESTORE"/);
+  assert.match(js, /setPrimaryBusy/);
+  const manifest = readFileSync(join(root, "manifest.json"), "utf8");
+  assert.match(manifest, /"default": "Alt\+T"/);
+  assert.match(manifest, /"mac": "Alt\+T"/);
+  const added = [...css.matchAll(/#openPdf(?::focus-visible)?\s*\{[^}]+\}/g)].map((hit) => hit[0]).join("\n");
+  assert.match(added, /#openPdf:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-focus\)/s);
+  assert.match(added, /outline-offset:\s*2px/);
+  assert.equal(added.match(/#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)|hsla?\([^)]*\)/g), null);
+  assert.doesNotMatch(css, /#pdfEntry\s*\{/);
+  execFileSync("git", ["diff", "--quiet", "cb9425a", "--", "manifest.json", "background/service-worker.js"], { cwd: root });
 });

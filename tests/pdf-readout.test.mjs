@@ -262,11 +262,11 @@ test("viewer default right pane is Markdown readout without bbox wiring", () => 
   assert.match(readmeEn, /formulas may be rendered from verified LaTeX \(KaTeX\); when that cannot be decided, the original-page crop is shown/i);
   assert.doesNotMatch(readmeEn, /after enabling lab PDF/i);
   assert.match(readmeEn, /text-layer body/i);
-  assert.match(popupHtml, /id="openPdfPage"[^>]*>PDF</);
-  assert.match(popupHtml, /id="openPdfPage"[^>]*\bhidden\b/);
+  assert.doesNotMatch(popupHtml, /openPdfPage|openPdfSep/);
+  assert.doesNotMatch(popupJs, /openPdfPage|openPdfSep/);
   assert.match(popupJs, /page: "pdf"/);
   assert.match(popupJs, /featureOn\(settings,\s*"pdf"\)/);
-  assert.match(popupJs, /\$\("openPdfPage"\)\.hidden = !pdfOn/);
+  assert.match(popupJs, /\$\("pdfEntry"\)\.hidden = !pdfOn/);
 });
 
 test("vendored pdf.js Attention-style page yields readable MD, not bbox boxes", async () => {

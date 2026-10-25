@@ -715,7 +715,7 @@ test("PDF-MIRROR-CJK-CLIP text boxes do not clip CJK glyph ink", () => {
   assert.match(applyMirror, /--oi-mirror-zoom/);
 });
 
-test("looksLikePdfUrl and popup entry only for PDF tabs", () => {
+test("looksLikePdfUrl and popup PDF entry when the feature is on", () => {
   assert.equal(looksLikePdfUrl("https://cdn.example.com/paper.pdf"), true);
   assert.equal(looksLikePdfUrl("https://cdn.example.com/paper.pdf?dl=1"), true);
   assert.equal(looksLikePdfUrl("file:///Users/me/Doc.pdf"), true);
@@ -729,13 +729,12 @@ test("looksLikePdfUrl and popup entry only for PDF tabs", () => {
   assert.equal(readViewerSrc("?src=https%3A%2F%2Fx.com%2Fa.pdf"), "https://x.com/a.pdf");
   assert.equal(viewerSearch("https://x.com/a.pdf"), "?src=https%3A%2F%2Fx.com%2Fa.pdf");
   assert.match(popupHtml, /id="pdfEntry" hidden/);
-  assert.match(popupHtml, /id="openPdf"[^>]*>在沉浸译中打开（实验室）</);
-  assert.match(popupHtml, /id="openPdfPage"[^>]*>PDF</);
-  assert.match(popupHtml, /id="openPdfPage"[^>]*\bhidden\b/);
+  assert.match(popupHtml, /id="openPdf"[^>]*class="btn-secondary"[^>]*>打开 PDF</);
+  assert.doesNotMatch(popupHtml, /openPdfPage/);
   assert.match(popupJs, /shouldOfferPdfOpen/);
   assert.match(popupJs, /featureOn\(settings,\s*"pdf"\)/);
   assert.match(popupJs, /page: "pdf"/);
-  assert.match(popupJs, /\$\("pdfEntry"\)\.hidden = !\(pdfOn && pdfTab\)/);
+  assert.match(popupJs, /\$\("pdfEntry"\)\.hidden = !pdfOn/);
   assert.match(popupCss, /\.btn-primary[^}]*background:\s*var\(--oi-accent\)/);
 });
 

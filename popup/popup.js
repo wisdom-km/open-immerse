@@ -80,18 +80,30 @@ async function init() {
   }
 
   const pdfOn = featureOn(settings, "pdf");
-  $("openPdfPage").hidden = !pdfOn;
-  $("openPdfSep").hidden = !pdfOn;
-  $("openPdfPage").addEventListener("click", () => {
-    if (!featureOn(settings, "pdf")) return;
-    chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "pdf" });
-  });
-
   const pdfTab = shouldOfferPdfOpen(tab?.url);
-  $("pdfEntry").hidden = !(pdfOn && pdfTab);
-  $("openPdf").addEventListener("click", () => {
-    if (!featureOn(settings, "pdf") || !pdfTab) return;
-    chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "pdf", src: tab.url });
+  $("pdfEntry").hidden = !pdfOn;
+  $("openPdf").addEventListener("click", async () => {
+    if (!featureOn(settings, "pdf")) return;
+    const btn = $("openPdf");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    const err = $("openPdfError");
+    err.hidden = true;
+    try {
+      const message = pdfTab
+        ? { type: "OI_OPEN_PAGE", page: "pdf", src: tab.url }
+        : { type: "OI_OPEN_PAGE", page: "pdf" };
+      const res = await chrome.runtime.sendMessage(message);
+      if (!res || res.ok === false) throw new Error("open failed");
+    } catch {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+      err.hidden = false;
+      return;
+    }
+    err.hidden = true;
+    window.close();
   });
 
   if (tab?.id) setInterval(() => syncPrimary(tab), 400);
