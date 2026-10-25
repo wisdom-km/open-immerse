@@ -13313,7 +13313,9 @@ async function adoptDoc(doc, title, openGen) {
   layoutClosed = false;
   abortTranslateSession(session);
   abortBackgroundFills();
-  abortInflightLayouts();
+  // Drop the layout signal so destroy does not wait on an in-flight POST.
+  // The page-lifetime abort stays with resetMmPages, after the first await.
+  cancelQueuedVendorLayouts();
   const previous = pdfDoc;
   pdfDoc = null;
   if (previous && previous !== doc) {

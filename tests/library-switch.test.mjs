@@ -223,8 +223,9 @@ test("viewer aborts before destroy, last click wins, and silent pause writes no 
   assert.equal(viewer.includes("openingHash"), false);
   const adopt = viewer.slice(viewer.indexOf("async function adoptDoc"), viewer.indexOf("function shortTitle"));
   const abortAt = adopt.indexOf("abortTranslateSession(session)");
+  const cancelAt = adopt.indexOf("cancelQueuedVendorLayouts()");
   const destroyAt = adopt.indexOf("previous.destroy()");
-  assert.ok(abortAt > 0 && destroyAt > abortAt);
+  assert.ok(abortAt > 0 && cancelAt > abortAt && destroyAt > cancelAt);
   assert.match(adopt, /waitAtMost\([\s\S]*LIBRARY_SWITCH_FALLBACK_MS\)/);
   assert.match(adopt, /abortInflightLayouts\(\)/);
   const head = viewer.slice(viewer.indexOf("async function adoptDoc"), viewer.indexOf("async function adoptDoc") + 800);

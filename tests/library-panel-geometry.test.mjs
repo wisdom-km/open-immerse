@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +14,29 @@ const TMP_PREFIXES = ["oi-library-panel-", "com.google.Chrome.", ".com.google.Ch
 installOwnedTmpGuard(TMP_PREFIXES);
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const shots = "/opt/cursor/artifacts/library-panel";
+
+function resolveShotDir() {
+  const fromEnv = String(process.env.OI_LIBRARY_PANEL_SHOTS || "").trim();
+  try {
+    if (fromEnv) {
+      mkdirSync(fromEnv, { recursive: true });
+      return { dir: fromEnv, owned: false };
+    }
+    return { dir: mkdtempSync(join(tmpdir(), "oi-lib-panel-shots-")), owned: true };
+  } catch {
+    return { dir: "", owned: false };
+  }
+}
+
+function writeShot(dir, name, bytes) {
+  if (!dir) return;
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, name), bytes);
+  } catch {
+    /* screenshots are evidence; a read-only directory must not fail the run */
+  }
+}
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -292,23 +314,39 @@ function sleep(ms) {
 }
 
 test("LIB-01/04/05 library panel and rows fill the column at default and dragged widths", { timeout: 120000 }, async (t) => {
-  const server = await serveRepo();
-  const ownedDir = mkdtempSync(join(tmpdir(), "oi-library-panel-"));
-  rememberOwnedTemp(ownedDir);
-  const userDataDir = join(ownedDir, "profile");
-  const scratchDir = join(ownedDir, "scratch");
-  mkdirSync(userDataDir);
-  mkdirSync(scratchDir);
-  mkdirSync(shots, { recursive: true });
-  const handle = { child: null, cdp: null };
+  const handle = { child: null, cdp: null, server: null, ownedDir: "", userDataDir: "" };
+  const shots = { dir: "", owned: false };
   t.after(async () => {
     try {
       handle.cdp?.dispose();
     } finally {
-      await cleanupChrome({ t, child: handle.child, server, ownedDir, userDataDir });
+      await cleanupChrome({
+        t,
+        child: handle.child,
+        server: handle.server,
+        ownedDir: handle.ownedDir,
+        userDataDir: handle.userDataDir
+      });
+      if (shots.owned && shots.dir) {
+        try {
+          rmSync(shots.dir, { recursive: true, force: true });
+        } catch {
+          /* temp shots are optional */
+        }
+      }
     }
   });
-  const origin = `http://127.0.0.1:${server.address().port}`;
+  Object.assign(shots, resolveShotDir());
+  handle.server = await serveRepo();
+  const ownedDir = mkdtempSync(join(tmpdir(), "oi-library-panel-"));
+  rememberOwnedTemp(ownedDir);
+  handle.ownedDir = ownedDir;
+  const userDataDir = join(ownedDir, "profile");
+  handle.userDataDir = userDataDir;
+  const scratchDir = join(ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  const origin = `http://127.0.0.1:${handle.server.address().port}`;
   handle.child = launchChrome(userDataDir, scratchDir);
   const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
   handle.cdp = cdp;
@@ -394,6 +432,6 @@ test("LIB-01/04/05 library panel and rows fill the column at default and dragged
       assert.equal(measured.linkColor, "rgb(11, 74, 140)");
     }
     const shot = await cdp.send("Page.captureScreenshot", { format: "png" }, sessionId);
-    writeFileSync(join(shots, `${item.name}.png`), Buffer.from(shot.data, "base64"));
+    writeShot(shots.dir, `${item.name}.png`, Buffer.from(shot.data, "base64"));
   }
 });
