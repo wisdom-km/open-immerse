@@ -8,6 +8,13 @@ import {
 } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { FEATURES, laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
+import {
+  PDF_DEFAULT_NOTICE_KEY,
+  dismissPdfDefaultNotice,
+  pdfDefaultNoticeVisible,
+  readPdfDefaultNoticeSeen,
+  writePdfDefaultNoticeSeen
+} from "../lib/pdf-default-notice.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -232,11 +239,19 @@ async function init() {
     void persist(el("laterList"));
   });
   el("pdfFeatureList")?.addEventListener("change", () => {
+    const on = Boolean(document.querySelector('[data-feat="pdf"]')?.checked);
+    if (!on) void dismissPdfNotice("off");
     syncPdfLayoutBox();
     syncPdfBanner();
     void persist(el("pdfFeatureList"));
   });
-  el("pdfOnNoticeDismiss")?.addEventListener("click", () => dismissPdfNotice());
+  el("pdfOnNoticeDismiss")?.addEventListener("click", () => { void dismissPdfNotice("ack"); });
+  el("pdfOnNoticeOff")?.addEventListener("click", () => turnOffPdfFromNotice());
+  globalThis.chrome?.storage?.onChanged?.addListener((changes, area) => {
+    if (area !== "local" || !changes?.[PDF_DEFAULT_NOTICE_KEY] || pdfNoticeKept) return;
+    const banner = el("pdfOnNotice");
+    if (banner) banner.hidden = true;
+  });
   bindFormulaSettings();
   bindNotes();
   bindSecretsList();
@@ -309,9 +324,7 @@ function applyStoredForm() {
   if (el("siteRules")) el("siteRules").value = (settings.siteRules || []).map((rule) => rule.host).join("\n");
   renderFeatures(el("featureList"), v1Features(), features);
   renderFeatures(el("laterList"), laterFeatures(), features);
-  renderFeatures(el("pdfFeatureList"), FEATURES.filter((feat) => feat.id === "pdf"), features);
-  const pdfNotice = el("pdfOnNotice");
-  if (pdfNotice) pdfNotice.hidden = settings.pdfFeatureNotice !== true;
+  renderPdfFeature(features);
   fillPdfLayout(settings.pdfLayout);
   syncPdfLayoutBox();
   syncPdfBanner();
@@ -626,18 +639,66 @@ function syncPdfLayoutBox() {
   if (box) box.hidden = !on;
 }
 
-function dismissPdfNotice() {
+let pdfNoticeKept = false;
+
+function renderPdfFeature(features) {
+  const box = el("pdfFeatureList");
+  const notice = el("pdfOnNotice");
+  renderFeatures(box, FEATURES.filter((feat) => feat.id === "pdf"), features);
+  if (box && notice) box.append(notice);
+}
+
+function turnOffPdfFromNotice() {
+  const input = document.querySelector('[data-feat="pdf"]');
+  if (input && input.checked) {
+    input.checked = false;
+    syncSwitch(input);
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+  void dismissPdfNotice("off");
+}
+
+async function dismissPdfNotice(reason) {
+  pdfNoticeKept = false;
   const banner = el("pdfOnNotice");
   if (banner) banner.hidden = true;
-  if (cachedSettings.pdfFeatureNotice !== true) return;
-  cachedSettings.pdfFeatureNotice = false;
-  void enqueueSave(async () => {
-    if (!readsOk) return;
-    await chrome.runtime.sendMessage({
-      type: "OI_SAVE_SETTINGS",
-      patch: { pdfFeatureNotice: false }
-    });
-  });
+  const record = dismissPdfDefaultNotice(reason, Date.now());
+  if (!record) return;
+  try {
+    await writePdfDefaultNoticeSeen(globalThis.chrome?.storage?.local, record);
+  } catch {
+    /* the banner is already hidden */
+  }
+}
+
+async function presentPdfDefaultNotice() {
+  const banner = el("pdfOnNotice");
+  if (!banner) return;
+  const onPdf = Boolean(el("panel-pdf") && !el("panel-pdf").hidden);
+  if (!onPdf) return;
+  if (pdfNoticeKept) {
+    banner.hidden = false;
+    return;
+  }
+  let seen = null;
+  try {
+    seen = await readPdfDefaultNoticeSeen(globalThis.chrome?.storage?.local);
+  } catch {
+    seen = null;
+  }
+  if (!pdfDefaultNoticeVisible(cachedSettings, seen)) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  pdfNoticeKept = true;
+  const record = dismissPdfDefaultNotice("seen", Date.now());
+  try {
+    await writePdfDefaultNoticeSeen(globalThis.chrome?.storage?.local, record);
+  } catch {
+    /* this visit still shows the notice */
+  }
 }
 
 function syncPdfBanner() {
@@ -2301,6 +2362,8 @@ function showPage(id, focus) {
   const select = el("setPageSelect");
   if (select) select.value = next;
   if (location.hash !== `#${next}`) history.replaceState(null, "", `#${next}`);
+  if (next === "pdf") void presentPdfDefaultNotice();
+  else pdfNoticeKept = false;
   if (next === "mm") focusMm = true;
   if (focus && next === "data") {
     const group = document.querySelector(`[data-focus-group="${focus}"]`) || document.querySelector(`[data-focus="${focus}"]`);

@@ -102,16 +102,18 @@ test("pdf feature defaults on and is not a lab toggle", () => {
   const stored = { settingsVersion: 8, features: { webpage: true, learning: true, pdf: false } };
   const merged = { ...DEFAULT_SETTINGS, ...stored, features: { ...DEFAULT_FEATURES, ...stored.features } };
   assert.equal(merged.features.pdf, false);
-  const flipped = migrateSettings(merged, stored);
+  const flipped = migrateSettings(merged, stored, 1_700_000_000_000);
   assert.equal(flipped.settings.features.pdf, true);
-  assert.equal(flipped.settings.pdfFeatureNotice, true);
+  assert.equal(flipped.settings.migrationNotes.pdfFlippedAt, 1_700_000_000_000);
   assert.equal(flipped.settings.settingsVersion, 9);
   const again = migrateSettings(
     { ...flipped.settings, features: { ...flipped.settings.features, pdf: false } },
-    { ...flipped.settings, features: { ...flipped.settings.features, pdf: false } }
+    { ...flipped.settings, features: { ...flipped.settings.features, pdf: false } },
+    1_700_000_000_100
   );
   assert.equal(again.changed, false);
   assert.equal(again.settings.features.pdf, false);
+  assert.equal(again.settings.migrationNotes.pdfFlippedAt, 1_700_000_000_000);
 });
 
 test("subtitleEnabled does not flip youtube/x on", () => {

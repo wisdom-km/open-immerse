@@ -63,8 +63,6 @@
         <div id="setSkeleton" class="set-skeleton" hidden>
           <span></span><span></span><span></span><span></span>
         </div>
-        <p id="pdfOnNotice" class="set-banner" hidden>PDF 阅读已默认开启。可以在「PDF 阅读」页关掉。<button type="button" id="pdfOnNoticeDismiss" class="set-inline">知道了</button></p>
-
         <section id="panel-translate" class="set-page is-on" data-panel="translate" role="tabpanel">
           <h2>翻译</h2>
           <p class="set-lead">网页、PDF、文档翻译共用这里的引擎。</p>
@@ -195,7 +193,15 @@
 
         <section id="panel-pdf" class="set-page" data-panel="pdf" role="tabpanel" hidden>
           <h2>PDF 阅读</h2>
-          <div id="pdfFeatureList" class="set-group"></div>
+          <div id="pdfFeatureList" class="set-group">
+            <p id="pdfOnNotice" class="set-banner" hidden>
+              <span class="set-banner-copy">PDF 阅读已默认开启。在浏览器里打开 PDF 会用沉浸译的双栏阅读器；不想用可以在这里关闭。</span>
+              <span class="set-banner-actions">
+                <button type="button" id="pdfOnNoticeOff" class="set-inline">关闭 PDF 阅读</button>
+                <button type="button" id="pdfOnNoticeDismiss" class="btn-secondary">知道了</button>
+              </span>
+            </p>
+          </div>
           <div class="set-group">
             <div class="set-row">
               <div class="set-txt">

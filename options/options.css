@@ -444,7 +444,6 @@ body.oi-settings .set-step {
   background: var(--oi-card);
   color: var(--oi-text);
 }
-body.oi-settings .set-banner,
 body.oi-settings .set-warn {
   margin: 0 0 12px;
   padding: 8px 12px;
@@ -452,6 +451,35 @@ body.oi-settings .set-warn {
   background: var(--oi-warn-soft);
   color: var(--oi-warn);
   font-size: 13px;
+}
+body.oi-settings .set-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: var(--set-border);
+  border-radius: var(--set-radius);
+  background: var(--oi-panel);
+  color: var(--oi-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+body.oi-settings .set-banner[hidden] { display: none; }
+body.oi-settings .set-banner-copy { flex: 1; min-width: 0; }
+body.oi-settings .set-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  flex: none;
+}
+body.oi-settings #pdfFeatureList > .set-banner {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--oi-line);
+  border-radius: 0;
+  background: transparent;
 }
 body.oi-settings .set-inline {
   border: 0;

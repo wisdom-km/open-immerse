@@ -6,6 +6,14 @@ import { join } from "node:path";
 import { DEFAULT_SETTINGS, migrateSettings } from "../lib/storage.js";
 import { DEFAULT_FEATURES } from "../lib/features.js";
 import { mountDataPanel } from "../options/data-panel.js";
+import {
+  PDF_DEFAULT_NOTICE_COPY,
+  PDF_DEFAULT_NOTICE_KEY,
+  dismissPdfDefaultNotice,
+  pdfDefaultNoticeVisible,
+  readPdfDefaultNoticeSeen,
+  writePdfDefaultNoticeSeen
+} from "../lib/pdf-default-notice.js";
 
 const root = join(import.meta.dirname, "..");
 const read = (path) => readFileSync(join(root, path), "utf8");
@@ -16,12 +24,24 @@ test("settings html drops the empty data section and the duplicate privacy sente
   assert.equal(html.includes('<section id="data"'), false);
   assert.equal(html.split("API 密钥永远不导出").length - 1, 1);
   assert.equal(panel.includes("API 密钥永远不导出"), false);
-  assert.match(html, /id="pdfOnNotice"/);
-  assert.match(html, /PDF 阅读已默认开启/);
   const pdf = html.slice(html.indexOf('id="panel-pdf"'), html.indexOf('id="panel-notes"'));
   assert.ok(pdf.indexOf('id="pdfFeatureList"') < pdf.indexOf('id="pdfAutoTranslate"'));
+  const list = pdf.slice(pdf.indexOf('id="pdfFeatureList"'), pdf.indexOf('id="pdfAutoTranslate"'));
+  assert.match(list, /id="pdfOnNotice" class="set-banner"/);
+  assert.ok(list.includes(PDF_DEFAULT_NOTICE_COPY));
+  assert.match(list, /id="pdfOnNoticeOff" class="set-inline">关闭 PDF 阅读/);
+  assert.match(list, /id="pdfOnNoticeDismiss" class="btn-secondary">知道了/);
   assert.match(html, /PDF 阅读还没开启/);
   assert.doesNotMatch(html, /在实验室里还没开启/);
+  const viewer = read("pdf/viewer.html");
+  assert.match(viewer, /id="pdfDefaultNotice" class="oi-reader-notice"/);
+  assert.ok(viewer.includes(PDF_DEFAULT_NOTICE_COPY));
+  assert.match(viewer, /id="pdfDefaultNoticeDismiss" class="btn-secondary">知道了/);
+  assert.equal(viewer.includes("关闭 PDF 阅读"), false);
+  const readerCss = read("pdf/viewer.css");
+  assert.match(readerCss, /\.oi-reader-notice \{[^}]*var\(--oi-reader-line\)/s);
+  assert.match(readerCss, /\.oi-reader-notice\[hidden\] \{\s*display:\s*none/);
+  assert.equal(readerCss.includes("--set-"), false);
 });
 
 test("settings cards use flat --set-* tokens and multimodal cards do not use reader tokens", () => {
@@ -47,9 +67,22 @@ test("translation key actions sit on one line beside the input", () => {
   const js = read("options/options.js");
   assert.match(js, /line\.className = "set-key-line"/);
   assert.match(js, /line\.append\(input, toggle, remove, saved\)/);
-  assert.match(js, /renderFeatures\(el\("pdfFeatureList"\), FEATURES\.filter\(\(feat\) => feat\.id === "pdf"\)/);
-  assert.match(js, /pdfFeatureNotice/);
+  assert.match(js, /renderPdfFeature\(features\)/);
+  assert.match(js, /renderFeatures\(box, FEATURES\.filter\(\(feat\) => feat\.id === "pdf"\), features\)/);
+  assert.match(js, /box\.append\(notice\)/);
+  assert.equal(js.includes("pdfFeatureNotice"), false);
+  const viewer = read("pdf/viewer.js");
+  assert.match(viewer, /void maybeShowPdfDefaultNotice\(\)/);
+  assert.match(viewer, /dismissReaderPdfNotice\("ack"\)/);
+  assert.match(js, /dismissPdfNotice\("ack"\)/);
+  assert.match(js, /dismissPdfNotice\("off"\)/);
+  assert.match(js, /dismissPdfDefaultNotice\("seen"/);
+  assert.match(viewer, /dismissPdfDefaultNotice\("seen"/);
+  assert.match(js, /PDF_DEFAULT_NOTICE_KEY/);
+  assert.match(viewer, /PDF_DEFAULT_NOTICE_KEY/);
 });
+
+const FLIP_AT = 1_700_000_000_000;
 
 test("migration flips a stored pdf=false once and leaves a later off choice alone", () => {
   const storedOff = { settingsVersion: 8, features: { pdf: false, webpage: true } };
@@ -58,33 +91,69 @@ test("migration flips a stored pdf=false once and leaves a later off choice alon
     ...storedOff,
     features: { ...DEFAULT_FEATURES, ...storedOff.features }
   };
-  const flipped = migrateSettings(mergedOff, storedOff);
+  const flipped = migrateSettings(mergedOff, storedOff, FLIP_AT);
   assert.equal(flipped.changed, true);
   assert.equal(flipped.settings.features.pdf, true);
-  assert.equal(flipped.settings.pdfFeatureNotice, true);
+  assert.equal(flipped.settings.migrationNotes.pdfFlippedAt, FLIP_AT);
   assert.equal(flipped.settings.settingsVersion, 9);
+  assert.equal(flipped.settings.pdfFeatureNotice, undefined);
+  assert.equal(pdfDefaultNoticeVisible(flipped.settings, null), true);
 
   const keptOn = migrateSettings(
     { ...DEFAULT_SETTINGS, settingsVersion: 8, features: { ...DEFAULT_FEATURES, pdf: true } },
-    { settingsVersion: 8, features: { pdf: true } }
+    { settingsVersion: 8, features: { pdf: true } },
+    FLIP_AT
   );
   assert.equal(keptOn.settings.features.pdf, true);
-  assert.equal(keptOn.settings.pdfFeatureNotice, undefined);
+  assert.equal(keptOn.settings.migrationNotes, undefined);
+  assert.equal(pdfDefaultNoticeVisible(keptOn.settings, null), false);
 
   const missing = migrateSettings(
     { ...DEFAULT_SETTINGS, settingsVersion: 8, features: { ...DEFAULT_FEATURES, webpage: true } },
-    { settingsVersion: 8, features: { webpage: true } }
+    { settingsVersion: 8, features: { webpage: true } },
+    FLIP_AT
   );
   assert.equal(missing.settings.features.pdf, true);
-  assert.equal(missing.settings.pdfFeatureNotice, undefined);
+  assert.equal(missing.settings.migrationNotes, undefined);
+  assert.equal(pdfDefaultNoticeVisible(missing.settings, null), false);
+
+  const fresh = migrateSettings({ ...DEFAULT_SETTINGS }, {}, FLIP_AT);
+  assert.equal(fresh.settings.features.pdf, true);
+  assert.equal(fresh.settings.migrationNotes, undefined);
+  assert.equal(pdfDefaultNoticeVisible(fresh.settings, null), false);
 
   const choice = migrateSettings(
-    { ...flipped.settings, features: { ...flipped.settings.features, pdf: false }, pdfFeatureNotice: false },
-    { ...flipped.settings, features: { ...flipped.settings.features, pdf: false }, pdfFeatureNotice: false }
+    { ...flipped.settings, features: { ...flipped.settings.features, pdf: false } },
+    { ...flipped.settings, features: { ...flipped.settings.features, pdf: false } },
+    FLIP_AT + 50
   );
   assert.equal(choice.changed, false);
   assert.equal(choice.settings.features.pdf, false);
-  assert.equal(choice.settings.pdfFeatureNotice, false);
+  assert.equal(choice.settings.migrationNotes.pdfFlippedAt, FLIP_AT);
+});
+
+test("pdf default-on notice dismisses forever from either place", async () => {
+  const settings = { features: { pdf: true }, migrationNotes: { pdfFlippedAt: FLIP_AT } };
+  assert.equal(pdfDefaultNoticeVisible(settings, null), true);
+  assert.equal(pdfDefaultNoticeVisible(settings, {}), true);
+  assert.equal(pdfDefaultNoticeVisible({ features: { pdf: true } }, null), false);
+  assert.equal(dismissPdfDefaultNotice("later", FLIP_AT), null);
+
+  const mem = {};
+  const area = {
+    async get(key) { return { [key]: mem[key] }; },
+    async set(patch) { Object.assign(mem, patch); }
+  };
+  for (const reason of ["ack", "off", "seen"]) {
+    const record = dismissPdfDefaultNotice(reason, FLIP_AT + 1);
+    assert.deepEqual(record, { seenAt: FLIP_AT + 1 });
+    assert.equal(pdfDefaultNoticeVisible(settings, record), false);
+    await writePdfDefaultNoticeSeen(area, record);
+  }
+  assert.deepEqual(mem[PDF_DEFAULT_NOTICE_KEY], { seenAt: FLIP_AT + 1 });
+  assert.deepEqual(await readPdfDefaultNoticeSeen(area), { seenAt: FLIP_AT + 1 });
+  assert.equal(pdfDefaultNoticeVisible(settings, await readPdfDefaultNoticeSeen(area)), false);
+  assert.equal(PDF_DEFAULT_NOTICE_KEY, "oi.notice.pdfDefaultOn");
 });
 
 function quietCoordinator() {

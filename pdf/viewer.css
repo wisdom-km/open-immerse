@@ -14,6 +14,30 @@ body {
   color: var(--oi-reader-ink-2);
 }
 
+.oi-reader-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--oi-reader-line);
+  background: var(--oi-reader-paper);
+  color: var(--oi-reader-ink);
+  font: 400 13px/1.45 var(--oi-reader-ui-font);
+}
+.oi-reader-notice[hidden] { display: none; }
+.oi-reader-notice span { flex: 1; min-width: 0; }
+.oi-reader-notice .btn-secondary {
+  flex: none;
+  margin-left: auto;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  color: var(--oi-reader-ink);
+}
+
 .toolbar {
   display: flex;
   flex-wrap: nowrap;

@@ -7,6 +7,13 @@ import {
   translationExportFilename
 } from "../lib/export.js";
 import {
+  PDF_DEFAULT_NOTICE_KEY,
+  dismissPdfDefaultNotice,
+  pdfDefaultNoticeVisible,
+  readPdfDefaultNoticeSeen,
+  writePdfDefaultNoticeSeen
+} from "../lib/pdf-default-notice.js";
+import {
   DEFAULT_ZOOM,
   PDF_COPY,
   defaultSourceZoom,
@@ -687,6 +694,12 @@ function init() {
   bindToolbarGeometry();
   bindViewChrome();
   applyToolbarBand();
+  $("pdfDefaultNoticeDismiss")?.addEventListener("click", () => { void dismissReaderPdfNotice("ack"); });
+  globalThis.chrome?.storage?.onChanged?.addListener((changes, area) => {
+    if (area !== "local" || !changes?.[PDF_DEFAULT_NOTICE_KEY] || pdfDefaultNoticeKept) return;
+    const node = $("pdfDefaultNotice");
+    if (node) node.hidden = true;
+  });
   $("pick").addEventListener("click", () => $("file").click());
   $("openPdfItem")?.addEventListener("click", () => {
     closeMoreMenu(true);
@@ -10219,6 +10232,56 @@ function syncReadoutToPage(page) {
   return writeAnchorScroll(pane, node);
 }
 
+let pdfDefaultNoticeKept = false;
+let pdfDefaultNoticeDone = false;
+
+async function dismissReaderPdfNotice(reason) {
+  pdfDefaultNoticeKept = false;
+  pdfDefaultNoticeDone = true;
+  const node = $("pdfDefaultNotice");
+  if (node) node.hidden = true;
+  const record = dismissPdfDefaultNotice(reason, Date.now());
+  if (!record) return;
+  try {
+    await writePdfDefaultNoticeSeen(globalThis.chrome?.storage?.local, record);
+  } catch {
+    /* already hidden */
+  }
+}
+
+async function maybeShowPdfDefaultNotice() {
+  if (pdfDefaultNoticeDone) return;
+  const node = $("pdfDefaultNotice");
+  if (!node || !extensionRuntimeReady()) return;
+  let settings = {};
+  try {
+    const res = await runtimeSend({ type: "OI_GET_SETTINGS" });
+    settings = res?.settings || {};
+  } catch {
+    return;
+  }
+  let seen = null;
+  try {
+    seen = await readPdfDefaultNoticeSeen(globalThis.chrome?.storage?.local);
+  } catch {
+    return;
+  }
+  if (!pdfDefaultNoticeVisible(settings, seen)) {
+    pdfDefaultNoticeDone = true;
+    node.hidden = true;
+    return;
+  }
+  node.hidden = false;
+  pdfDefaultNoticeKept = true;
+  pdfDefaultNoticeDone = true;
+  const record = dismissPdfDefaultNotice("seen", Date.now());
+  try {
+    await writePdfDefaultNoticeSeen(globalThis.chrome?.storage?.local, record);
+  } catch {
+    /* this open still shows it */
+  }
+}
+
 function runtimeSend(message) {
   const send = globalThis.chrome?.runtime?.sendMessage;
   if (typeof send !== "function") {
@@ -12918,6 +12981,7 @@ async function adoptDoc(doc, title) {
   abortTranslateSession(session);
   abortBackgroundFills();
   pdfDoc = doc;
+  void maybeShowPdfDefaultNotice();
   void loadDrawerOutline(doc);
   pageNum = 1;
   sourceZoomTouched = false;

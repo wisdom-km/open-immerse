@@ -25,7 +25,7 @@ node --test tests/*.test.mjs
 ```text
 阅读仓库里的 pdf/high-precision/README.md 和 ARCHITECTURE.md。
 只执行 EXECUTION.md 里的「阶段 N」。完成条件全部成立后再停。不要开始下一阶段。
-网页翻译、Options 间距、features.pdf 默认关闭，都保持现状。
+网页翻译和 Options 间距保持现状。features.pdf 默认开启，开关在设置 → PDF 阅读。
 ```
 
 ## 本目录怎么读
@@ -43,7 +43,7 @@ node --test tests/*.test.mjs
 ## 仓库事实
 
 - 扩展仓：本仓库，MIT，零构建。改完到 `chrome://extensions` 重新加载，不要移除扩展。
-- 实验室开关：`lib/features.js` 的 `features.pdf` 默认 `false`。入口在设置 → 高级。
+- PDF 阅读开关：`lib/features.js` 的 `features.pdf` 默认 `true`。入口在设置 → PDF 阅读页顶，不在实验室。
 - 阅读器：`pdf/viewer.html`、`pdf/viewer.js`。原文栏 `#pages` 里的 pdf.js canvas。右栏 `#readout`。
 - 翻译：阅读器发 `OI_TRANSLATE_BATCH`，`background/service-worker.js` 的 `translateBatch`。所有密钥只存 `chrome.storage.local`，不进 sync（2026-10-13 12:19–12:23 Wisdom 定，收窄 11:57）。翻译密钥和 PDF 云端密钥从 sync 迁到 local，迁移、导入和回滚都要有测试；设置页重设计已合（#137）。2026-10-13 17:29 Wisdom 定：导出拆成「文献库」和「设置」两个文件，都不含任何 API key；设置导出不带 key，导入设置也不写入 key。见 `docs/settings-spec.md` §2。密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口，随 F11 执行（F10 并入 F11，2026-10-18）（见 REQUIREMENTS §2.6「开关」和 `docs/ui-phase2-plan.md`「设置页重设计」）。笔记面板偏好从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起（2026-10-13 11:55 定，12:00 确认）；旧值自动迁移，已合入（#130，`4e0a705`），见 `docs/ui-phase2-plan.md` 第 4 节。
 - 划区 sidecar 放在扩展仓外面（本机示例名 `pdf-layout-sidecar`）。它听 `127.0.0.1:8765`（`/v1/layout` 划区接口；同一端口上的 `/v1/library/*` 文献库接口由路线图 v2 的 F4 替换，划区不在 F4 范围）。`7860` 是 GLM-OCR 网页，不是这个接口。认字模型在 `127.0.0.1:5002`。版面模型在扩展仓外的模型目录（本机示例名 `pdf-layout-models`），仓库名 `PaddlePaddle/PP-DocLayoutV3_safetensors`。`id2label` 在模型加载后从权重配置读取，不写进扩展仓。权重、PyTorch、vLLM 不进本仓库。
@@ -88,5 +88,5 @@ node --test tests/*.test.mjs
 - 有文字层的数字 PDF，正文用文字层里的原句。这是主场景。扫描件少，只在没有可信文字层时才用 OCR 的正文，并在右栏标明可能有误差。
 - 划区测试用本机部署的智谱 GLM-OCR。`local-ocr` 与 `cloud-ocr` 从阶段 1 就写进引擎枚举。上线把模式切到 `cloud-ocr`，翻译继续走插件里已经配置的大模型 API。两套后端吐出同一份 `blocks-1`，右栏裁图代码不跟着改。
 - 送进 `OI_TRANSLATE_BATCH` 的字符串只有标题、小节、正文、题注，以及行内占位符 `⟦fN⟧`。数字和变量名原样保留。翻译用现有大模型 API，质量开关保持用户设置，不为了省事改成更弱的单程。
-- `features.pdf` 保持默认关闭。网页 `content/` 和 Options 间距不改。
+- `features.pdf` 默认开启。网页 `content/` 不改。
 - 本仓库不加入 PyTorch、模型权重、BabelDOC 源码。权重留在本机 sidecar。
