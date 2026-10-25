@@ -11,7 +11,6 @@ import {
   TRANSLATE_BORROW_COPY,
   describeTranslateBorrow,
   formatBorrowedEngine,
-  paintBorrowHint,
   resolveTranslateOutbound,
   truncateBorrowModel
 } from "../lib/translate-borrow.js";
@@ -35,55 +34,42 @@ function mm(extra = {}) {
   };
 }
 
-test("TBM-01/05/11 borrow hint copy, fallback copy, and aria-live", () => {
+test("TBM-01/02/05/11 settings page does not show a borrow hint", () => {
   const html = readFileSync(join(root, "options/options.html"), "utf8");
-  assert.match(html, /id="translateBorrowHint"[^>]*class="hint set-borrow"[^>]*aria-live="polite"/);
-  assert.match(html, /id="translateEngineHint"/);
-  const { document } = parseHTML("<p id='engine' class='hint'>只显示当前默认引擎的配置。改上方下拉框即可换家；其他引擎已保存的 Key 不会丢。</p><p id='hint' class='hint set-borrow' aria-live='polite'></p>");
-  const hint = document.getElementById("hint");
-  const engine = document.getElementById("engine");
+  const optionsJs = readFileSync(join(root, "options/options.js"), "utf8");
+  const borrowJs = readFileSync(join(root, "lib/translate-borrow.js"), "utf8");
+  assert.match(html, /<p class="hint">只显示当前默认引擎的配置。改上方下拉框即可换家；其他引擎已保存的 Key 不会丢。<\/p>/);
+  assert.equal(html.includes("translateBorrowHint"), false);
+  assert.equal(html.includes("translateEngineHint"), false);
+  assert.equal(html.includes("set-borrow"), false);
+  assert.equal(html.includes("aria-live"), false);
+  assert.equal(html.includes("单独设置"), false);
+  assert.equal(html.includes("设置引擎"), false);
+  assert.equal(html.includes("正在借用"), false);
+  assert.equal(optionsJs.includes("translateBorrowHint"), false);
+  assert.equal(optionsJs.includes("paintBorrowHint"), false);
+  assert.equal(optionsJs.includes("focusBorrowTarget"), false);
+  assert.equal(optionsJs.includes("data-borrow-focus"), false);
+  assert.equal(borrowJs.includes("paintBorrowHint"), false);
+  assert.equal(borrowJs.includes("focusBorrowTarget"), false);
+  assert.equal(borrowJs.includes("单独设置"), false);
+  assert.equal(TRANSLATE_BORROW_COPY.setupLink, undefined);
+  assert.equal(TRANSLATE_BORROW_COPY.hintBorrowPrefix, undefined);
+  assert.equal(TRANSLATE_BORROW_COPY.hintFallback, undefined);
+  assert.equal(TRANSLATE_BORROW_COPY.popupBorrowSuffix, "（借用）");
   const borrow = describeTranslateBorrow(unconfigured(), mm());
-  paintBorrowHint(hint, engine, borrow);
-  assert.equal(hint.hidden, false);
-  assert.equal(engine.hidden, true);
-  assert.match(hint.textContent, /正在借用「多模态 · OCR」的/);
-  assert.match(hint.textContent, /Kimi · kimi-k2/);
-  assert.equal(hint.querySelector(".set-inline").textContent, TRANSLATE_BORROW_COPY.setupLink);
-  assert.equal(hint.querySelector(".set-borrow-model").title, "kimi-k2");
-  assert.equal(hint.querySelector(".set-borrow-model").textContent, "kimi-k2");
-  assert.equal(hint.textContent.includes(MM_KEY), false);
+  assert.equal(borrow.mode, "borrow");
   assert.equal(JSON.stringify(borrow).includes(MM_KEY), false);
-
-  paintBorrowHint(hint, engine, describeTranslateBorrow(unconfigured(), { multimodal: { provider: "kimi", apiKey: "", model: "" } }));
-  assert.match(hint.textContent, /未配置翻译服务，正在使用免费的 MyMemory/);
-  assert.equal(hint.querySelector(".set-inline").textContent, TRANSLATE_BORROW_COPY.fallbackLink);
-  assert.equal(engine.hidden, true);
-
-  paintBorrowHint(hint, engine, describeTranslateBorrow({ provider: "mymemory", providers: { mymemory: {} } }, mm()));
-  assert.equal(hint.hidden, true);
-  assert.equal(engine.hidden, false);
-  assert.match(engine.textContent, /只显示当前默认引擎/);
+  assert.equal(describeTranslateBorrow(unconfigured(), { multimodal: { provider: "kimi", apiKey: "", model: "" } }).mode, "fallback");
+  assert.equal(describeTranslateBorrow({ provider: "mymemory", providers: { mymemory: {} } }, mm()).mode, "own");
 });
 
-test("TBM-03/04 borrow hint stays one line with existing tokens", () => {
+test("TBM-03/04 settings page has no borrow-hint layout", () => {
   const css = readFileSync(join(root, "options/options.css"), "utf8");
-  const block = css.slice(css.indexOf("#translateBorrowHint.set-borrow"));
-  assert.match(block, /#translateBorrowHint\.set-borrow\s*\{[^}]*white-space:\s*nowrap/s);
-  assert.match(block, /overflow:\s*hidden/);
-  assert.match(block, /\.set-borrow-model\s*\{[^}]*max-width:\s*18em/s);
-  assert.match(block, /\.set-borrow-model\s*\{[^}]*text-overflow:\s*ellipsis/s);
-  assert.match(block, /#translateBorrowHint \.set-inline\s*\{[^}]*flex:\s*none/s);
-  assert.match(block, /color:\s*var\(--oi-text-2\)/);
-  assert.match(block, /color:\s*var\(--oi-accent-hover\)/);
-  assert.match(block, /outline:\s*2px solid var\(--oi-focus\)/);
-  assert.equal(/--oi-warn|warn-soft|#(?:[0-9a-fA-F]{3,8})/.test(block.slice(0, block.indexOf("body.oi-settings .diag-heading"))), false);
-  assert.equal(/@media[\s\S]{0,400}set-borrow[\s\S]{0,200}white-space:\s*normal/.test(css), false);
-  const { document } = parseHTML("<p id='hint'></p>");
-  paintBorrowHint(document.getElementById("hint"), null, describeTranslateBorrow(unconfigured(), mm({ model: "kimi-k2-0905-preview-extra-long-name" })));
-  const model = document.querySelector(".set-borrow-model");
-  assert.equal(model.textContent, "kimi-k2-0905-preview-extra-long-name");
-  assert.equal(model.title, model.textContent);
-  assert.equal(document.querySelector(".set-inline").textContent, "单独设置");
+  assert.equal(css.includes("translateBorrowHint"), false);
+  assert.equal(css.includes("set-borrow"), false);
+  assert.match(css, /body\.oi-settings \.set-group \+ \.hint \{[^}]*margin:\s*8px 4px 0/s);
+  assert.match(css, /\.hint \{[^}]*font-size:\s*13px/s);
 });
 
 test("TBM-07/08 popup borrow line keeps the model, truncates past 16, and hides warn", async () => {

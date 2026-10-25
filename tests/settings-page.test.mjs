@@ -1861,10 +1861,13 @@ test("missing-field attention is stored, and the translate badge stays hidden wi
   assert.equal(chrome.local.oiProviderAttention.deepl, true);
   assert.equal(JSON.stringify(chrome.local.oiProviderAttention).includes(OPENAI_KEY), false);
   assert.equal(chrome.sync.settings.oiProviderAttention, undefined);
-  const hint = page.document.getElementById("translateBorrowHint");
-  assert.equal(hint.hidden, false);
-  assert.match(hint.textContent, /正在使用免费的 MyMemory/);
-  assert.match(hint.textContent, /设置引擎/);
+  assert.equal(page.document.getElementById("translateBorrowHint"), null);
+  const hints = [...page.document.querySelectorAll("#panel-translate p.hint")];
+  assert.equal(hints.length, 1);
+  assert.equal(hints[0].hidden, false);
+  assert.match(hints[0].textContent, /只显示当前默认引擎的配置/);
+  assert.equal(hints[0].textContent.includes("正在借用"), false);
+  assert.equal(hints[0].textContent.includes("MyMemory"), false);
 
   const refreshed = mountPage("#translate");
   await startOptions();
@@ -1874,7 +1877,7 @@ test("missing-field attention is stored, and the translate badge stays hidden wi
   assert.equal(chrome.local.oiProviderAttention.deepl, true);
 });
 
-test("borrow hint uses the multimodal model and an own engine takes over immediately", async () => {
+test("settings page keeps the original engine hint while borrowing, and an own engine does not copy the multimodal key", async () => {
   const mmKey = "sk-mm-borrow-hint";
   const chrome = installChrome({
     settings: {
@@ -1894,42 +1897,42 @@ test("borrow hint uses the multimodal model and an own engine takes over immedia
   const { startOptions } = await import("../options/options.js?borrow-hint=1");
   await startOptions();
   await flush();
-  const hint = page.document.getElementById("translateBorrowHint");
-  const engineHint = page.document.getElementById("translateEngineHint");
+  function engineHint() {
+    const hints = [...page.document.querySelectorAll("#panel-translate p.hint")];
+    assert.equal(hints.length, 1);
+    return hints[0];
+  }
+  assert.equal(page.document.getElementById("translateBorrowHint"), null);
+  assert.equal(page.document.querySelector("#panel-translate [aria-live]"), null);
+  assert.equal(page.document.querySelector("#panel-translate .set-borrow"), null);
+  const hint = engineHint();
   assert.equal(hint.hidden, false);
-  assert.equal(hint.getAttribute("aria-live"), "polite");
-  assert.equal(engineHint.hidden, true);
-  assert.match(hint.textContent, /正在借用「多模态 · OCR」的/);
-  assert.match(hint.textContent, /Kimi · kimi-k2/);
-  assert.match(hint.textContent, /单独设置/);
+  assert.match(hint.textContent, /只显示当前默认引擎的配置/);
+  assert.equal(hint.textContent.includes("正在借用"), false);
+  assert.equal(hint.textContent.includes("单独设置"), false);
   assert.equal(hint.textContent.includes(mmKey), false);
-  assert.equal(hint.querySelector(".set-borrow-model").title, "kimi-k2");
-  const before = page.location.hash;
-  hint.querySelector("[data-borrow-focus]").click();
-  assert.equal(page.document._focused, page.document.getElementById("provider"));
-  assert.equal(page.location.hash, before);
   page.document.getElementById("testConnection").click();
   await flush();
   assert.equal(page.document.querySelector("[data-badge='translate']").hidden, true);
+  assert.equal(engineHint().hidden, false);
 
   const provider = page.document.getElementById("provider");
   provider.value = "mymemory";
   fire(provider, "change");
   await flush();
-  assert.equal(hint.hidden, true);
-  assert.equal(engineHint.hidden, false);
-  assert.match(engineHint.textContent, /只显示当前默认引擎的配置/);
+  assert.match(engineHint().textContent, /只显示当前默认引擎的配置/);
+  assert.equal(engineHint().hidden, false);
 
   provider.value = "openai";
   fire(provider, "change");
   await flush();
-  assert.equal(hint.hidden, false);
+  assert.equal(page.document.getElementById("translateBorrowHint"), null);
   const key = page.document.querySelector("[data-key-slot='translate'] input");
   key.value = "sk-own-engine-key";
   fire(key, "blur");
   await flush();
-  assert.equal(hint.hidden, true);
-  assert.equal(engineHint.hidden, false);
+  assert.match(engineHint().textContent, /只显示当前默认引擎的配置/);
+  assert.equal(engineHint().hidden, false);
   const stored = JSON.stringify(chrome.sync.settings) + JSON.stringify(chrome.local.oiSecrets || {});
   assert.equal(stored.includes(mmKey), false);
   assert.equal(chrome.local.formulaSettings.multimodal.apiKey, mmKey);

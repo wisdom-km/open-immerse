@@ -67,12 +67,7 @@ import { createNotesPrefsSession } from "../lib/reader-notes-local.js";
 import { NOTES_PANEL_WIDTH_DEFAULT, NOTES_PANE_WIDTH_DEFAULT } from "../lib/notes-prefs.js";
 import { downloadBlob } from "../lib/export.js";
 import { diagLog } from "../lib/diag-log.js";
-import {
-  describeTranslateBorrow,
-  focusBorrowTarget,
-  ownTranslateConfigured,
-  paintBorrowHint
-} from "../lib/translate-borrow.js";
+import { ownTranslateConfigured } from "../lib/translate-borrow.js";
 import { bindDiagPanel } from "./diag-panel.js";
 import { sharedLibraryStore } from "../lib/library-session.js";
 import { mountDataPanel } from "./data-panel.js";
@@ -266,7 +261,7 @@ async function init() {
     syncQualityLocks();
     invalidateTest("clear");
     attentionProvider = el("provider").value;
-    refreshTranslateBorrow();
+    void syncAttentionBadge();
     void (async () => {
       if (left && left !== attentionProvider) await clearProviderAttention(chrome.storage?.local, left);
       await syncAttentionBadge();
@@ -290,10 +285,9 @@ async function init() {
   const manifest = chrome.runtime?.getManifest?.();
   if (manifest?.version && el("aboutVersion")) el("aboutVersion").textContent = manifest.version;
   bindSecretSync();
-  bindTranslateBorrow();
   await pinKeySync();
   await formulaReady;
-  refreshTranslateBorrow();
+  void syncAttentionBadge();
   syncPdfAvailability();
 }
 
@@ -843,24 +837,6 @@ function translateFormSettings() {
   };
 }
 
-function refreshTranslateBorrow() {
-  const description = describeTranslateBorrow(translateFormSettings(), formulaCommitted);
-  paintBorrowHint(el("translateBorrowHint"), el("translateEngineHint"), description);
-  void syncAttentionBadge();
-}
-
-function bindTranslateBorrow() {
-  const hint = el("translateBorrowHint");
-  if (!hint || hint.dataset.bound === "1") return;
-  hint.dataset.bound = "1";
-  hint.addEventListener("click", (ev) => {
-    const button = ev.target?.closest?.("[data-borrow-focus]");
-    if (!button) return;
-    ev.preventDefault();
-    focusBorrowTarget(document);
-  });
-}
-
 async function syncAttentionBadge(options = {}) {
   const badge = document.querySelector('[data-badge="translate"]');
   if (!badge) return;
@@ -1074,7 +1050,7 @@ function renderProviderFields() {
           const ticket = claimProviderKey(provider.id);
           void queueProviderKey(provider.id, result.value, false, beforeKey, ticket);
         }
-        refreshTranslateBorrow();
+        void syncAttentionBadge();
         void persist(input);
       });
       bound.paint();
@@ -1105,7 +1081,7 @@ function renderProviderFields() {
       const event = field.type === "select" ? "change" : "blur";
       input.addEventListener(event, () => {
         harvestVisibleProvider();
-        refreshTranslateBorrow();
+        void syncAttentionBadge();
         void persist(input);
       });
     }
@@ -1484,7 +1460,7 @@ function clearProviderKey(id) {
   cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
   const ticket = claimProviderKey(id);
   renderProviderFields();
-  refreshTranslateBorrow();
+  void syncAttentionBadge();
   void queueProviderKey(id, "", true, previous, ticket);
 }
 
@@ -1832,7 +1808,6 @@ function syncProbeChrome(which, probe, secret) {
 }
 
 function queueFormulaWrite({ rerender = false, clearProbe = "", savedSlot = "" } = {}) {
-  refreshTranslateBorrow();
   formulaQueued += 1;
   const job = formulaWrite.then(() => {
     formulaQueued -= 1;
@@ -2096,7 +2071,6 @@ function adoptFormulaRecord(stored) {
   syncKeyOwner(clean);
   invalidateFormulaProbe();
   paintFormulaSettings();
-  refreshTranslateBorrow();
 }
 
 /** A throw that escapes the probe is not a network error. Chip stays 「测试失败」. */
@@ -2180,7 +2154,6 @@ function bindFormulaSettings() {
       // Use the card on screen, not this echo. A newer clear must keep the hint.
       syncEmptyKeyHints(el("formulaSettingsRoot"), formulaSettings);
       refreshBadges();
-      refreshTranslateBorrow();
       return;
     }
     if (formulaWriting) {
@@ -2196,10 +2169,8 @@ function bindFormulaSettings() {
     rememberCommittedUrl();
     syncKeyOwner(stored);
     paintFormulaSettings();
-    refreshTranslateBorrow();
   }).catch(() => {
     paintFormulaSettings();
-    refreshTranslateBorrow();
   });
 }
 
