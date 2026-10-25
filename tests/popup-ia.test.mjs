@@ -324,8 +324,13 @@ test("PPE-04 打开 PDF stays on one line inside the 340px popup", () => {
 test("PPE-05 a PDF tab sends OI_OPEN_PAGE with src and then closes", () => {
   const { js } = popupSources();
   const click = openPdfClick(js);
-  assert.match(js, /const pdfTab = shouldOfferPdfOpen\(tab\?\.url\)/);
-  assert.match(click, /pdfTab\s*\?\s*\{ type: "OI_OPEN_PAGE", page: "pdf", src: tab\.url \}/);
+  const init = js.slice(js.indexOf("async function init"), js.indexOf("function setPrimaryBusy"));
+  const probeAt = init.indexOf("readPdfContentType");
+  const syncAt = init.indexOf("await syncPrimary");
+  assert.ok(probeAt >= 0 && probeAt < syncAt && probeAt < init.indexOf('$("openPdf").addEventListener'));
+  assert.match(click, /resolvePopupPdfSrc\(tab\?\.url, await pdfProbe\)/);
+  assert.match(click, /src\s*\?\s*\{ type: "OI_OPEN_PAGE", page: "pdf", src \}/);
+  assert.match(js, /chrome\.scripting\.executeScript/);
   assert.doesNotMatch(click, /tabs\.query/);
   const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
   assert.match(sw, /pdf\/viewer\.html/);
@@ -424,4 +429,34 @@ test("PPE-12 translate, restore, and Alt+T stay; new CSS uses --oi-* tokens; man
   assert.equal(added.match(/#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)|hsla?\([^)]*\)/g), null);
   assert.doesNotMatch(css, /#pdfEntry\s*\{/);
   execFileSync("git", ["diff", "--quiet", "cb9425a", "--", "manifest.json", "background/service-worker.js"], { cwd: root });
+});
+
+test("popup PDF open uses contentType, then URL fallback, without a new permission", async () => {
+  const { readPdfContentType, resolvePopupPdfSrc, looksLikePdfUrl } = await import("../lib/pdf-viewer.js");
+  const { js } = popupSources();
+  const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
+  assert.ok(manifest.permissions.includes("scripting"));
+  assert.ok(manifest.permissions.includes("activeTab"));
+  assert.equal(manifest.permissions.includes("tabs"), false);
+  assert.equal(looksLikePdfUrl("https://arxiv.org/pdf/1706.03762"), true);
+  assert.equal(looksLikePdfUrl("https://arxiv.org/pdf/1706.03762v7"), true);
+  assert.equal(looksLikePdfUrl("https://arxiv.org/abs/1706.03762"), false);
+  assert.equal(resolvePopupPdfSrc("https://arxiv.org/pdf/1706.03762", null), "https://arxiv.org/pdf/1706.03762");
+  assert.equal(resolvePopupPdfSrc("https://files.example/get", "application/pdf"), "https://files.example/get");
+  assert.equal(resolvePopupPdfSrc("https://example.com/article", "text/html"), "");
+  assert.equal(resolvePopupPdfSrc("https://example.com/article", null), "");
+  assert.equal(resolvePopupPdfSrc("data:application/pdf;base64,AAA", "application/pdf"), "");
+  assert.equal(resolvePopupPdfSrc("data:application/pdf;base64,AAA", null), "");
+  const failed = await readPdfContentType(7, async () => {
+    throw new Error("inject failed");
+  });
+  assert.equal(failed, null);
+  assert.equal(resolvePopupPdfSrc("https://arxiv.org/pdf/1706.03762", failed), "https://arxiv.org/pdf/1706.03762");
+  assert.equal(resolvePopupPdfSrc("https://example.com/article", failed), "");
+  const click = openPdfClick(js);
+  const disable = click.indexOf("btn.disabled = true;");
+  const probe = click.indexOf("await pdfProbe");
+  const send = click.indexOf("chrome.runtime.sendMessage");
+  assert.ok(disable >= 0 && disable < probe && probe < send);
+  assert.equal(click.split("chrome.runtime.sendMessage").length - 1, 1);
 });

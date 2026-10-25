@@ -2,7 +2,7 @@ import { getProvider, isProviderConfigured, resolveOutboundProvider } from "../l
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { featureOn } from "../lib/features.js";
-import { shouldOfferPdfOpen } from "../lib/pdf-viewer.js";
+import { readPdfContentType, resolvePopupPdfSrc } from "../lib/pdf-viewer.js";
 
 const $ = (id) => document.getElementById(id);
 const PRIMARY_IDLE = "翻译此页";
@@ -37,6 +37,10 @@ async function init() {
   renderEngine(settings);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const pdfOn = featureOn(settings, "pdf");
+  const pdfProbe = pdfOn
+    ? readPdfContentType(tab?.id, (details) => chrome.scripting.executeScript(details))
+    : Promise.resolve(null);
   await syncPrimary(tab);
 
   const host = hostOf(tab?.url);
@@ -79,8 +83,6 @@ async function init() {
     );
   }
 
-  const pdfOn = featureOn(settings, "pdf");
-  const pdfTab = shouldOfferPdfOpen(tab?.url);
   $("pdfEntry").hidden = !pdfOn;
   $("openPdf").addEventListener("click", async () => {
     if (!featureOn(settings, "pdf")) return;
@@ -91,8 +93,9 @@ async function init() {
     const err = $("openPdfError");
     err.hidden = true;
     try {
-      const message = pdfTab
-        ? { type: "OI_OPEN_PAGE", page: "pdf", src: tab.url }
+      const src = resolvePopupPdfSrc(tab?.url, await pdfProbe);
+      const message = src
+        ? { type: "OI_OPEN_PAGE", page: "pdf", src }
         : { type: "OI_OPEN_PAGE", page: "pdf" };
       const res = await chrome.runtime.sendMessage(message);
       if (!res || res.ok === false) throw new Error("open failed");
