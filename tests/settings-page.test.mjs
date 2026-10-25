@@ -1845,7 +1845,7 @@ test("numbered and token names in a key-only file are not imported", async () =>
   }
 });
 
-test("missing-field attention is stored, and the translate badge stays hidden without an own engine", async () => {
+test("missing-field attention is stored, and the translate badge shows when the failure is not a borrow", async () => {
   const chrome = installChrome({ settings: savedSettings() });
   const page = mountPage("#translate");
   const { startOptions } = await import("../options/options.js?missing-field=1");
@@ -1857,7 +1857,7 @@ test("missing-field attention is stored, and the translate badge stays hidden wi
   await flush();
   page.document.getElementById("testConnection").click();
   await flush();
-  assert.equal(page.document.querySelector("[data-badge='translate']").hidden, true);
+  assert.equal(page.document.querySelector("[data-badge='translate']").hidden, false);
   assert.equal(chrome.local.oiProviderAttention.deepl, true);
   assert.equal(JSON.stringify(chrome.local.oiProviderAttention).includes(OPENAI_KEY), false);
   assert.equal(chrome.sync.settings.oiProviderAttention, undefined);
@@ -1875,7 +1875,7 @@ test("missing-field attention is stored, and the translate badge stays hidden wi
   await startOptions();
   await flush();
   assert.equal(refreshed.document.getElementById("provider").value, "deepl");
-  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, true);
+  assert.equal(refreshed.document.querySelector("[data-badge='translate']").hidden, false);
   assert.equal(chrome.local.oiProviderAttention.deepl, true);
 });
 
@@ -1915,9 +1915,11 @@ test("settings page keeps the original engine hint while borrowing, and an own e
   assert.equal(hint.textContent.includes(mmKey), false);
   const panel = page.document.getElementById("panel-translate").textContent;
   assert.equal(panel.includes("借用"), false);
+  assert.equal(page.document.querySelector("[data-badge='translate']").hidden, true);
   page.document.getElementById("testConnection").click();
   await flush();
-  assert.equal(page.document.querySelector("[data-badge='translate']").hidden, true);
+  assert.equal(page.document.querySelector("[data-badge='translate']").hidden, false);
+  assert.equal(chrome.local.oiProviderAttention.openai, true);
   assert.equal(engineHint().hidden, false);
 
   const provider = page.document.getElementById("provider");

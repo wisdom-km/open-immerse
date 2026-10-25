@@ -10,8 +10,11 @@ import { handleFormulaCacheMessage } from "./formula-cache.js";
 const cache = new Map();
 const CACHE_LIMIT = 2000;
 const CACHE_VER = "v5-title-calque";
+const BORROW_EPISODE_KEY = "oiTranslateBorrowEpisode";
 cache.clear();
 let borrowEpisode = "";
+let borrowEpisodeKnown = false;
+let borrowEpisodeChain = Promise.resolve();
 
 chrome.runtime.onInstalled.addListener(() => {
   cache.clear();
@@ -242,11 +245,46 @@ function reportTranslateBorrow(fields) {
   })).catch(() => {});
 }
 
+function borrowSession() {
+  const session = globalThis.chrome?.storage?.session;
+  if (!session || typeof session.get !== "function" || typeof session.set !== "function") return null;
+  return session;
+}
+
+async function loadBorrowEpisode() {
+  if (borrowEpisodeKnown) return;
+  borrowEpisodeKnown = true;
+  const session = borrowSession();
+  if (!session) return;
+  try {
+    const bag = await session.get(BORROW_EPISODE_KEY);
+    const stored = bag?.[BORROW_EPISODE_KEY];
+    if (typeof stored === "string") borrowEpisode = stored;
+  } catch {
+    // session 缺失时只靠本进程内存，不能挡住翻译。
+  }
+}
+
 function noteBorrowEpisode(outbound) {
   const episode = outbound?.borrowed ? `${outbound.vendorId}\0${outbound.model}` : "";
-  const entering = episode !== "" && episode !== borrowEpisode;
-  borrowEpisode = episode;
-  return entering;
+  const run = borrowEpisodeChain.then(async () => {
+    await loadBorrowEpisode();
+    const entering = episode !== "" && episode !== borrowEpisode;
+    if (episode !== borrowEpisode) {
+      borrowEpisode = episode;
+      const session = borrowSession();
+      if (session) {
+        try {
+          await session.set({ [BORROW_EPISODE_KEY]: episode });
+        } catch {
+          // 内存里的 episode 仍然有效，避免同一次进程重复记日志。
+        }
+      }
+    }
+    return entering;
+  });
+  borrowEpisodeChain = run.then(() => {}, () => {});
+  return run;
 }
 
 function emitTranslateProgress(sender, requestId, progress) {
@@ -285,7 +323,7 @@ async function translateBatch(texts, options = {}) {
   options.outboundFallback = outbound.fallback === true;
   options.borrowed = outbound.borrowed === true;
   options.providerCalled = false;
-  const enteringBorrow = noteBorrowEpisode(outbound);
+  const enteringBorrow = await noteBorrowEpisode(outbound);
   const provider = outbound.provider;
   const borrowed = outbound.borrowed === true ? outbound.runtimeConfig : null;
   const providerSettings = borrowed
@@ -387,6 +425,8 @@ async function translateBatch(texts, options = {}) {
       remember(item.key, value, item.text);
     });
   }
+  // 借用成功也不算这台引擎自己测通：providerCalled 保持 false，
+  // 因此不会清掉原引擎的「需处理」。这里不写存储（TBM-08）。
   if (outbound.borrowed) options.providerCalled = false;
   if (enteringBorrow) {
     reportTranslateBorrow({

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  collectSecretValues,
   redactDiagEvent,
   scrubDiagMessage,
   scrubDiagUrl
@@ -172,9 +173,35 @@ test("redactDiagEvent keeps a model id and drops secrets, urls, and paper text",
   assert.equal(JSON.stringify(asModel).includes(secret), false);
 
   assert.equal(redactDiagEvent({ type: "translate.borrow", model: "k".repeat(40) }, []).model, "k".repeat(40));
-  assert.equal(redactDiagEvent({ type: "translate.borrow", model: "k".repeat(41) }, []).model, undefined);
+  assert.equal(redactDiagEvent({ type: "translate.borrow", model: "k".repeat(41) }, []).model, "k".repeat(40));
+  assert.equal(redactDiagEvent({ type: "translate.borrow", model: "moonshotai/kimi-k2" }, []).model, "moonshotai/kimi-k2");
+  assert.equal(redactDiagEvent({ type: "translate.borrow", model: "moonshotai/kimi-k2:free" }, []).model, "moonshotai/kimi-k2:free");
+  const slashModel = `moonshotai/${"k".repeat(40)}`;
+  assert.equal(redactDiagEvent({ type: "translate.borrow", model: slashModel }, []).model, slashModel.slice(0, 40));
   assert.equal(redactDiagEvent({ type: "translate.borrow", model: base }, []).model, undefined);
   assert.equal(redactDiagEvent({ type: "translate.borrow", model: "kimi k2" }, []).model, undefined);
+  const longKey = `sk-${"a".repeat(45)}`;
+  const clippedKey = redactDiagEvent({ type: "translate.borrow", model: longKey.slice(0, 40) }, [longKey]);
+  assert.equal(clippedKey.model, undefined);
+  assert.equal(JSON.stringify(clippedKey).includes(longKey.slice(0, 40)), false);
+});
+
+test("collectSecretValues includes formula.multimodal.apiKey and drops that key from a model field", () => {
+  const secret = "sk-formula-model-leak";
+  const secrets = collectSecretValues({
+    formula: { multimodal: { apiKey: secret, model: "kimi-k2" } }
+  });
+  assert.equal(secrets.includes(secret), true);
+  const event = redactDiagEvent({
+    type: "translate.borrow",
+    ctx: "sw",
+    provider: "kimi",
+    model: secret,
+    reason: "translate-unconfigured"
+  }, secrets);
+  assert.equal(event.model, undefined);
+  assert.equal(JSON.stringify(event).includes(secret), false);
+  assert.equal(event.reason, "translate-unconfigured");
 });
 
 test("redactDiagEvent rejects a bad type and caps the message", () => {

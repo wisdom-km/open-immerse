@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { handleArxivSourceMessage } from "../background/arxiv-source.js";
+import { collectSecretValues } from "../lib/diag-redact.js";
 import { wrapLibraryError } from "../lib/library-store.js";
 import { classifyVisionError, isTransportFailure } from "../lib/mm-client.js";
 import { settleProbeResult } from "../lib/mm-probe.js";
@@ -472,6 +473,40 @@ test("translate.borrow keeps model through the log and the export without the ke
   });
   assert.equal(JSON.stringify(direct).includes(secret), false);
   assert.equal(direct.package.events.some((event) => event.model === "kimi-k2"), true);
+});
+
+test("a key typed into the model field is collected and absent from the log", async () => {
+  const secret = `sk-${"b".repeat(45)}`;
+  const longModel = `moonshotai/${"k".repeat(40)}`;
+  const storage = memoryArea({
+    formula: { multimodal: { apiKey: secret, model: longModel } }
+  });
+  assert.equal(collectSecretValues(storage.bag).includes(secret), true);
+  const writer = createDiagWriter({ storage, sync: memoryArea(), debounceMs: -1 });
+  writer.log({
+    type: "translate.borrow",
+    ctx: "sw",
+    provider: "kimi",
+    model: longModel,
+    reason: "translate-unconfigured",
+    ok: true
+  });
+  writer.log({
+    type: "translate.borrow",
+    ctx: "sw",
+    provider: "kimi",
+    model: secret,
+    reason: "translate-unconfigured",
+    ok: false
+  });
+  await writer.flush();
+  const packed = JSON.stringify(stored(storage));
+  assert.equal(packed.includes(secret), false);
+  assert.equal(packed.includes(secret.slice(0, 40)), false);
+  const kept = stored(storage).find((event) => event.provider === "kimi" && event.ok === true);
+  assert.equal(kept.model, longModel.slice(0, 40));
+  assert.equal(kept.model.length, 40);
+  assert.equal(kept.reason, "translate-unconfigured");
 });
 
 test("service worker reaches the diagnostic log without a dynamic import", () => {

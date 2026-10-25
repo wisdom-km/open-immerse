@@ -67,7 +67,7 @@ import { createNotesPrefsSession } from "../lib/reader-notes-local.js";
 import { NOTES_PANEL_WIDTH_DEFAULT, NOTES_PANE_WIDTH_DEFAULT } from "../lib/notes-prefs.js";
 import { downloadBlob } from "../lib/export.js";
 import { diagLog } from "../lib/diag-log.js";
-import { ownTranslateConfigured } from "../lib/translate-borrow.js";
+import { describeTranslateBorrow } from "../lib/translate-borrow.js";
 import { bindDiagPanel } from "./diag-panel.js";
 import { sharedLibraryStore } from "../lib/library-session.js";
 import { mountDataPanel } from "./data-panel.js";
@@ -837,13 +837,13 @@ function translateFormSettings() {
   };
 }
 
+function translateBorrowing() {
+  return describeTranslateBorrow(translateFormSettings(), formulaCommitted).mode === "borrow";
+}
+
 async function syncAttentionBadge(options = {}) {
   const badge = document.querySelector('[data-badge="translate"]');
   if (!badge) return;
-  if (!ownTranslateConfigured(translateFormSettings())) {
-    badge.hidden = true;
-    return;
-  }
   attentionProvider = el("provider")?.value || attentionProvider || "";
   let flagged = false;
   try {
@@ -854,6 +854,10 @@ async function syncAttentionBadge(options = {}) {
   }
   if (flagged) {
     badge.hidden = false;
+    return;
+  }
+  if (translateBorrowing()) {
+    badge.hidden = true;
     return;
   }
   const status = el("testConnectionStatus");
@@ -928,7 +932,7 @@ function setTestStatus(text, kind) {
   status.textContent = redactProviderText(text || "");
   status.className = kind ? `provider-test-status is-${kind}` : "provider-test-status";
   const badge = document.querySelector('[data-badge="translate"]');
-  if (badge) badge.hidden = !ownTranslateConfigured(translateFormSettings()) || kind !== "err";
+  if (badge) badge.hidden = kind !== "err";
 }
 
 async function testConnection() {

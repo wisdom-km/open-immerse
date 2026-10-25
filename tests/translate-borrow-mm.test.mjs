@@ -367,6 +367,98 @@ test("TBM-09/10 own config wins, borrow does not copy the key into storage, and 
   }
 });
 
+test("a restarted service worker does not log the same borrow episode again", async () => {
+  resetDiagForTests();
+  const formula = mm();
+  const writes = [];
+  const sessionBag = {};
+  installNet(createNet({
+    transport() {
+      return {
+        ok: true,
+        status: 200,
+        headers: {},
+        data: { choices: [{ message: { content: "1. 你好" } }] }
+      };
+    }
+  }));
+  globalThis.chrome = {
+    storage: {
+      sync: {
+        async get() {
+          return {
+            settings: {
+              ...unconfigured(),
+              sourceLang: "en",
+              targetLang: "zh-CN",
+              batchSize: 8,
+              twoStepPolish: false,
+              deepThink: false
+            }
+          };
+        },
+        async set() {}
+      },
+      local: {
+        async get(key) {
+          if (key === "formulaSettings") return { formulaSettings: formula };
+          return {};
+        },
+        async set(patch) { writes.push(patch); }
+      },
+      session: {
+        async get(key) {
+          if (typeof key === "string") return { [key]: sessionBag[key] };
+          return { ...sessionBag };
+        },
+        async set(patch) { Object.assign(sessionBag, patch); }
+      }
+    },
+    runtime: {
+      onInstalled: { addListener() {} },
+      onStartup: { addListener() {} },
+      onMessage: { addListener() {} },
+      getURL: (path) => path
+    },
+    contextMenus: {
+      onClicked: { addListener() {} },
+      async removeAll() {},
+      create() {}
+    },
+    commands: { onCommand: { addListener() {} } },
+    tabs: { async query() { return []; }, async sendMessage() {}, async create() {} }
+  };
+  try {
+    const stamp = Date.now();
+    const sw1 = await import(`../background/service-worker.js?borrow-restart-a=${stamp}`);
+    await sw1.translateBatch(["Hello"], {});
+    const { handleArxivSourceMessage } = await import("../background/arxiv-source.js");
+    await handleArxivSourceMessage({ action: "diag", message: { type: "OI_DIAG_STATS" } });
+    const latestBorrows = () => {
+      const patches = writes.filter((patch) => Array.isArray(patch?.["diag.events"]));
+      const events = patches.length ? patches[patches.length - 1]["diag.events"] : [];
+      return events.filter((event) => event.type === "translate.borrow");
+    };
+    assert.equal(latestBorrows().length, 1);
+    assert.equal(latestBorrows()[0].provider, "kimi");
+    assert.equal(latestBorrows()[0].model, "kimi-k2");
+    assert.equal(sessionBag.oiTranslateBorrowEpisode, "kimi\0kimi-k2");
+    const sw2 = await import(`../background/service-worker.js?borrow-restart-b=${stamp}`);
+    await sw2.translateBatch(["World"], {});
+    await handleArxivSourceMessage({ action: "diag", message: { type: "OI_DIAG_STATS" } });
+    assert.equal(latestBorrows().length, 1);
+    assert.equal(JSON.stringify(writes).includes(MM_KEY), false);
+    const worker = readFileSync(join(root, "background/service-worker.js"), "utf8");
+    assert.match(worker, /chrome\?\.storage\?\.session/);
+    assert.match(worker, /oiTranslateBorrowEpisode/);
+    assert.match(worker, /TBM-08/);
+    assert.match(worker, /if \(outbound\.borrowed\) options\.providerCalled = false;/);
+  } finally {
+    installNet(null);
+    resetDiagForTests();
+  }
+});
+
 test("pdf missing mode states that multimodal is also unconfigured", () => {
   const src = readFileSync(join(root, "tests/pdf-auto-translate.test.mjs"), "utf8");
   assert.match(src, /多模态也没有 key/);
