@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,8 +79,23 @@ function serveRepo(extra) {
   });
 }
 
+// Prefer the Chrome binary. The google-chrome wrapper injects a shared
+// user-data-dir and --remote-debugging-port=9222, then a second cold start
+// joins that instance and never reads the debugging pipe. The command
+// timeout stays 20s; startup retries a short handshake instead of waiting longer.
+function chromeExecutable() {
+  const fromEnv = String(process.env.CHROME_BIN || process.env.CHROME_PATH || "").trim();
+  if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  if (existsSync("/opt/google/chrome/chrome")) return "/opt/google/chrome/chrome";
+  return "google-chrome";
+}
+
 function launchChrome(userDataDir, scratchDir) {
-  const child = spawn("google-chrome", [
+  const env = { ...process.env, TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir };
+  for (const key of ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
+    delete env[key];
+  }
+  const child = spawn(chromeExecutable(), [
     "--headless=new",
     "--disable-gpu",
     "--no-sandbox",
@@ -89,13 +104,35 @@ function launchChrome(userDataDir, scratchDir) {
     `--user-data-dir=${userDataDir}`,
     "--window-size=1440,900",
     "--no-first-run",
-    "--no-default-browser-check"
+    "--no-default-browser-check",
+    "--no-proxy-server",
+    "--proxy-bypass-list=*",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-sync",
+    "--disable-domain-reliability",
+    "--disable-client-side-phishing-detection",
+    "--disable-extensions",
+    "--disable-default-apps",
+    "--disable-breakpad",
+    "--disable-hang-monitor",
+    "--metrics-recording-only",
+    "--password-store=basic",
+    "--use-mock-keychain",
+    "--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider"
   ], {
     detached: true,
-    env: { ...process.env, TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir },
+    env,
     stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"]
   });
-  child.stderr.on("data", () => {});
+  const stderr = [];
+  let stderrBytes = 0;
+  child.stderr.on("data", (chunk) => {
+    stderr.push(chunk);
+    stderrBytes += chunk.length;
+    while (stderrBytes > 4096 && stderr.length > 1) stderrBytes -= stderr.shift().length;
+  });
+  child.stderrTail = () => Buffer.concat(stderr).toString("utf8").slice(-1500);
   child.stdio[3].on("error", () => {});
   child.stdio[4].on("error", () => {});
   return child;
@@ -108,6 +145,8 @@ class PipeCdp {
     this.buf = Buffer.alloc(0);
     this.next = 1;
     this.pending = new Map();
+    this.events = [];
+    this.eventWaiters = [];
     readStream.on("data", (chunk) => {
       this.buf = Buffer.concat([this.buf, chunk]);
       this.drain();
@@ -128,16 +167,39 @@ class PipeCdp {
         clearTimeout(timer);
         if (message.error) reject(new Error(message.error.message || JSON.stringify(message.error)));
         else done(message.result);
+        continue;
       }
+      if (!message.method) continue;
+      this.events.push(message);
+      this.eventWaiters = this.eventWaiters.filter((waiter) => {
+        if (!waiter.match(message)) return true;
+        clearTimeout(waiter.timer);
+        waiter.done(message);
+        return false;
+      });
     }
   }
 
   dispose() {
     for (const pending of this.pending.values()) clearTimeout(pending.timer);
+    for (const waiter of this.eventWaiters) clearTimeout(waiter.timer);
     this.pending.clear();
+    this.eventWaiters = [];
   }
 
-  send(method, params = {}, sessionId) {
+  waitFor(match, timeoutMs = 20000) {
+    const existing = this.events.find(match);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((done, reject) => {
+      const timer = setTimeout(() => {
+        this.eventWaiters = this.eventWaiters.filter((waiter) => waiter.done !== done);
+        reject(new Error("CDP event timed out"));
+      }, timeoutMs);
+      this.eventWaiters.push({ match, done, timer });
+    });
+  }
+
+  send(method, params = {}, sessionId, timeoutMs = 20000) {
     const id = this.next++;
     const payload = { id, method, params };
     if (sessionId) payload.sessionId = sessionId;
@@ -146,11 +208,49 @@ class PipeCdp {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`CDP timeout: ${method}`));
-      }, 20000);
+      }, timeoutMs);
       this.pending.set(id, { done, reject, timer });
       this.writeStream.write(body);
     });
   }
+}
+
+// A message written before Chrome reads the pipe is dropped by the client
+// timer, then sent again. The per-command ceiling stays 20s.
+async function waitForDebuggingPipe(cdp, child) {
+  const deadline = Date.now() + 20000;
+  let last = "chrome pipe was not ready";
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`chrome exited before the pipe was ready (${child.exitCode ?? child.signalCode}): ${child.stderrTail?.() || ""}`);
+    }
+    try {
+      await cdp.send("Browser.getVersion", {}, undefined, 1000);
+      return;
+    } catch (error) {
+      last = error?.message || String(error);
+    }
+  }
+  throw new Error(`${last}; stderr=${child.stderrTail?.() || ""}`);
+}
+
+// Polling Runtime.evaluate before the document commits queues work ahead of
+// the parser. Under a full suite that livelock reports a timeout on a page
+// that never got to run. DOMContentLoaded is the commit point.
+async function openPage(session, url) {
+  const marker = new URL(url).pathname;
+  let sawNavigation = false;
+  const ready = session.cdp.waitFor((message) => {
+    if (message.sessionId && message.sessionId !== session.sessionId) return false;
+    if (message.method === "Page.frameNavigated") {
+      const frame = message.params?.frame || {};
+      if (!frame.parentId && String(frame.url || "").includes(marker)) sawNavigation = true;
+      return false;
+    }
+    return sawNavigation && message.method === "Page.domContentEventFired";
+  });
+  await session.cdp.send("Page.navigate", { url }, session.sessionId);
+  await ready;
 }
 
 async function withChrome(t, source, run) {
@@ -174,6 +274,7 @@ async function withChrome(t, source, run) {
   handle.child = launchChrome(userDataDir, scratchDir);
   const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
   handle.cdp = cdp;
+  await waitForDebuggingPipe(cdp, handle.child);
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   await cdp.send("Page.enable", {}, sessionId);
@@ -492,9 +593,7 @@ test("reopening the same PDF in the same tab adopts the saved translation", { ti
 
   const session = await withChrome(t, chromeStub({ mode: "text-layer", library: null }), async () => {});
   const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=reopen`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=reopen`);
   await session.waitFor(`(() => {
     const text = document.getElementById("readerFlow")?.innerText || "";
     if (!text.includes("同页已译:")) return "";
@@ -546,9 +645,7 @@ test("reopening the same PDF in the same tab adopts the saved translation", { ti
 test("a new tab reuses stored pages when the 8765 404 and the library read are slow", { timeout: 180000 }, async (t) => {
   const session = await withChrome(t, chromeStub({ mode: "text-layer", library: null }), async () => {});
   const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=slow-legacy`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=slow-legacy`);
   await session.waitFor(`(async () => {
     ${storedLibraryPagesSource()}
     const pages = await oiStoredLibraryPages();
@@ -614,9 +711,7 @@ test("a new tab reuses stored pages when the 8765 404 and the library read are s
       db.close();
       return true;
     })()`);
-    await session.cdp.send("Page.navigate", {
-      url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=slow-legacy&oiLegacyDelay=${delay}&oiSlowOpen=1000`
-    }, session.sessionId);
+    await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=slow-legacy&oiLegacyDelay=${delay}&oiSlowOpen=1000`);
     const shown = await session.waitFor(`(() => {
       const text = document.getElementById("readerFlow")?.innerText || "";
       if (!text.includes("同页已译:")) return "";
@@ -641,9 +736,7 @@ test("a new tab reuses stored pages when the 8765 404 and the library read are s
 test("manual translate before the library read finishes does not treat the open as a saved page", { timeout: 180000 }, async (t) => {
   const session = await withChrome(t, chromeStub({ mode: "text-layer", library: null }), async () => {});
   const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=manual-before-read`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=manual-before-read`);
   await session.waitFor(`(async () => {
     ${storedLibraryPagesSource()}
     const pages = await oiStoredLibraryPages();
@@ -690,9 +783,7 @@ test("manual translate before the library read finishes does not treat the open 
     const papers = await sharedLibraryStore().listPapers();
     return papers && papers[0] ? papers[0].lastOpenedAt : 0;
   })()`)) || 0;
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=manual-before-read&oiAutoTranslate=0&oiLegacyDelay=3000`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=manual-before-read&oiAutoTranslate=0&oiLegacyDelay=3000`);
   const hash = await session.waitFor(`(async () => {
     const button = document.getElementById("translatePage");
     if (!button || button.disabled) return "";
@@ -741,9 +832,7 @@ test("a 2s slow open sends no page-1 layout POST and does not hold translation f
   }), async () => {});
   const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
   const started = Date.now();
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=slow-open`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=slow-open`);
   const shown = JSON.parse(await session.waitFor(`(() => {
     const text = document.getElementById("readerFlow")?.innerText || "";
     if (!text.includes("慢开已译")) return "";
@@ -779,9 +868,7 @@ test("a held v1 connection does not hold the first translation for the blocked-o
   }), async () => {});
   const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
   const started = Date.now();
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=held-v1`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=held-v1`);
   const shown = JSON.parse(await session.waitFor(`(() => {
     const hold = window.__oiHold;
     const openAt = window.__oiSlow && window.__oiSlow.openAt || 0;
@@ -838,9 +925,7 @@ test("Stop during a page-2 re-zone sends no layout POST, and retranslate of that
   pageTwo.layout.fallback = { source: "text-layer", reason: "http-502" };
   const session = await withChrome(t, chromeStub({ mode: "local-ocr", library }), async () => {});
   const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=stop-zone`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=stop-zone`);
   const clicked = JSON.parse(await session.evaluate(`(async () => {
     const started = Date.now();
     while (Date.now() - started < 15000) {
@@ -927,9 +1012,7 @@ test("notes reopen after versionchange waits for the library upgrade", { timeout
     runtime: { id: "oi-e2e", getURL() { return location.href; }, sendMessage() { return Promise.resolve({ ok: true }); }, onMessage: { addListener() {} } },
     storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } }
   };`, async () => {});
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/oi-notes-probe.html`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/oi-notes-probe.html`);
   await session.waitFor(`document.body ? "ready" : ""`, "probe document", 15000);
   const raw = await session.evaluate(`(async () => {
     const opens = [];
@@ -1091,9 +1174,7 @@ async function openStalePageTwo(t, layoutReply, scene) {
       document.addEventListener('DOMContentLoaded', pinPageOne);
       pinPageOne();`
   }, session.sessionId);
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=${scene}`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=${scene}`);
   return session;
 }
 
@@ -1205,9 +1286,7 @@ test("auto-translate still writes the library paper before the first batch and t
     })();`
   }, session.sessionId);
   const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=open-record-now&oiBatchDelay=5000&oiLegacyDelay=8000`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=open-record-now&oiBatchDelay=5000&oiLegacyDelay=8000`);
   const seen = JSON.parse(await session.waitFor(`(() => {
     if (window.__oiOpenSeen) return JSON.stringify(window.__oiOpenSeen);
     if (window.__oiOpenSeenError) return JSON.stringify({ error: window.__oiOpenSeenError });
@@ -1229,9 +1308,7 @@ test("auto-translate still writes the library paper before the first batch and t
 test("a fresh library lookup after open still reuses the stored page", { timeout: 180000 }, async (t) => {
   const session = await withChrome(t, chromeStub({ mode: "text-layer", library: null }), async () => {});
   const src = `${session.origin}/tests/fixtures/sample-m1.pdf`;
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=r1-fresh-lookup`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=r1-fresh-lookup`);
   await session.waitFor(`(async () => {
     ${storedLibraryPagesSource()}
     const pages = await oiStoredLibraryPages();
@@ -1278,9 +1355,7 @@ test("a fresh library lookup after open still reuses the stored page", { timeout
     const papers = await sharedLibraryStore().listPapers();
     return papers && papers[0] ? papers[0].lastOpenedAt : 0;
   })()`)) || 0;
-  await session.cdp.send("Page.navigate", {
-    url: `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=r1-fresh-lookup&oiAutoTranslate=0&oiLegacyDelay=8000`
-  }, session.sessionId);
+  await openPage(session, `${session.origin}/pdf/viewer.html?src=${encodeURIComponent(src)}&oiAuto=1&oiScene=r1-fresh-lookup&oiAutoTranslate=0&oiLegacyDelay=8000`);
   const hash = await session.waitFor(`(async () => {
     const button = document.getElementById("translatePage");
     if (!button || button.disabled) return "";

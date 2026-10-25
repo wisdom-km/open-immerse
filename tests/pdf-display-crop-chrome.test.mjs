@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -309,6 +309,11 @@ async function assertProductLimit(t, dpr) {
 }
 
 test("Chrome DDPM p4 b46 keeps i=1 and b47 does not, at DPR 1 and DPR 2", { timeout: 180000 }, async (t) => {
+  const pdf = join(root, "tests/fixtures/DDPM_2006.11239.pdf");
+  if (!existsSync(pdf)) {
+    t.skip("tests/fixtures/DDPM_2006.11239.pdf is gitignored and is not committed. scripts/ci/fetch-fixtures.sh leaves it absent on purpose.");
+    return;
+  }
   await assertProductLimit(t, 1);
   await assertProductLimit(t, 2);
 });

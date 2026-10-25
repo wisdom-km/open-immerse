@@ -26,12 +26,13 @@
  * 中断点见 lib/mm-probe.js 文件头。每个点在下面有单独的对抗测试。
  */
 
-import test from "node:test";
+import nodeTest from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { connect as connectTcp } from "node:net";
 import { inflateSync } from "node:zlib";
-import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseHTML } from "linkedom";
@@ -83,6 +84,28 @@ import {
 } from "../lib/formula-settings.js";
 import { commitProviderSelect, renderFormulaPanel } from "../lib/formula-settings-ui.js";
 import { maskSecret } from "../lib/settings-secrets.js";
+
+// A long probe sleep never resolves; the abort path is what ends it.
+// Under a full suite that once left the 500-seed test pending for about 10
+// minutes. Each test fails at this ceiling instead.
+// The seed run is separate: every tab is its own options.js module, and Node
+// keeps those URLs forever. Hundreds of retained documents make a WeakMap
+// rehash run for minutes without returning to the event loop, so a timer in
+// this process cannot fire. Batches run in a fresh process. The parent kills
+// a batch that is still alive after MM_PROBE_BATCH_TIMEOUT_MS.
+const MM_PROBE_TEST_TIMEOUT_MS = 120_000;
+const MM_PROBE_SEED_TIMEOUT_MS = 240_000;
+const MM_PROBE_SEED_BATCH = 40;
+const MM_PROBE_BATCH_TIMEOUT_MS = 45_000;
+const MM_PROBE_SEED_ENV = "OI_MM_PROBE_SEEDS";
+
+function test(name, options, fn) {
+  if (process.env[MM_PROBE_SEED_ENV]) return;
+  if (typeof options === "function") {
+    return nodeTest(name, { timeout: MM_PROBE_TEST_TIMEOUT_MS }, options);
+  }
+  return nodeTest(name, { timeout: MM_PROBE_TEST_TIMEOUT_MS, ...options }, fn);
+}
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -4381,29 +4404,105 @@ test("a fixed vendor on http does not attach the key", () => {
   }), false);
 });
 
-test("500 seeds drive two real settings pages, including concurrent probes", async () => {
-  const tierCalls = { n: 0 };
-  const originals = [selfTier, vectorTier, multimodalTier].map((tier) => tier.run);
-  for (const tier of [selfTier, vectorTier, multimodalTier]) {
-    const run = tier.run;
-    tier.run = async (...args) => {
-      tierCalls.n += 1;
-      return run.apply(tier, args);
-    };
-  }
-  try {
-    for (let seed = 1; seed <= 500; seed += 1) {
-      try {
-        await runSeed(seed, tierCalls);
-      } catch (err) {
-        err.message = `seed ${seed}: ${err.message}`;
-        throw err;
-      }
+function runSeedRange(range) {
+  const match = /^(\d+)-(\d+)$/.exec(range || "");
+  if (!match) throw new Error(`${MM_PROBE_SEED_ENV} must be from-to, got ${range}`);
+  const from = Number(match[1]);
+  const to = Number(match[2]);
+  if (from < 1 || to > 500 || from > to) throw new Error(`seed range ${range} is outside 1-500`);
+  return (async () => {
+    const tierCalls = { n: 0 };
+    const originals = [selfTier, vectorTier, multimodalTier].map((tier) => tier.run);
+    for (const tier of [selfTier, vectorTier, multimodalTier]) {
+      const run = tier.run;
+      tier.run = async (...args) => {
+        tierCalls.n += 1;
+        return run.apply(tier, args);
+      };
     }
-  } finally {
-    [selfTier, vectorTier, multimodalTier].forEach((tier, index) => {
-      tier.run = originals[index];
+    try {
+      for (let seed = from; seed <= to; seed += 1) {
+        try {
+          await runSeed(seed, tierCalls);
+        } catch (err) {
+          err.message = `seed ${seed}: ${err.message}`;
+          throw err;
+        }
+      }
+    } finally {
+      [selfTier, vectorTier, multimodalTier].forEach((tier, index) => {
+        tier.run = originals[index];
+      });
+    }
+  })();
+}
+
+function runSeedBatch(from, to, signal) {
+  const range = `${from}-${to}`;
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env, [MM_PROBE_SEED_ENV]: range };
+    delete env.NODE_TEST_CONTEXT;
+    delete env.WATCH_REPORT_DEPENDENCIES;
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"]
     });
+    const chunks = [];
+    let bytes = 0;
+    const take = (buf) => {
+      chunks.push(buf);
+      bytes += buf.length;
+      while (bytes > 32_000 && chunks.length > 1) {
+        bytes -= chunks[0].length;
+        chunks.shift();
+      }
+    };
+    child.stdout.on("data", take);
+    child.stderr.on("data", take);
+    let settled = false;
+    const finish = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (err) reject(err);
+      else resolve();
+    };
+    const kill = () => {
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+    };
+    const timer = setTimeout(() => {
+      kill();
+      finish(new Error(`seeds ${range} still running after ${MM_PROBE_BATCH_TIMEOUT_MS}ms`));
+    }, MM_PROBE_BATCH_TIMEOUT_MS);
+    const onAbort = () => {
+      kill();
+      finish(new Error(`seeds ${range} aborted`));
+    };
+    if (signal?.aborted) {
+      kill();
+      finish(new Error(`seeds ${range} aborted`));
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.once("error", (err) => finish(err));
+    child.once("exit", (code, sig) => {
+      if (settled) return;
+      if (code === 0) finish();
+      else {
+        const tail = Buffer.concat(chunks).toString("utf8").trim().slice(-2000);
+        finish(new Error(`seeds ${range} exited ${code ?? sig}${tail ? `\n${tail}` : ""}`));
+      }
+    });
+  });
+}
+
+test("500 seeds drive two real settings pages, including concurrent probes", { timeout: MM_PROBE_SEED_TIMEOUT_MS }, async (t) => {
+  for (let from = 1; from <= 500; from += MM_PROBE_SEED_BATCH) {
+    const to = Math.min(500, from + MM_PROBE_SEED_BATCH - 1);
+    const started = Date.now();
+    await runSeedBatch(from, to, t.signal);
+    t.diagnostic(`seeds ${from}-${to} ${Date.now() - started}ms`);
   }
 });
 
@@ -4418,3 +4517,13 @@ test("default probe client is sendVision, not a private shortcut", () => {
   assert.match(options, /settleProbeResult\(/);
   assert.match(options, /pagehide/);
 });
+
+if (process.env[MM_PROBE_SEED_ENV]) {
+  try {
+    await runSeedRange(process.env[MM_PROBE_SEED_ENV]);
+  } catch (err) {
+    writeSync(2, `${err?.stack || err}\n`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
