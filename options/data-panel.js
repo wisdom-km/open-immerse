@@ -372,9 +372,7 @@ export function mountDataPanel(root, deps = {}) {
       render();
       return;
     }
-    const current = findPersistAsk(root);
-    const measured = Number(current?.offsetWidth) || 0;
-    if (measured > 0) persistLockWidth = Math.ceil(measured);
+    rememberPersistWidth();
     persistPhase = "asking";
     render();
     let granted = false;
@@ -454,6 +452,13 @@ export function mountDataPanel(root, deps = {}) {
     return findMarked(node, "data-persist-ask");
   }
 
+  function rememberPersistWidth() {
+    if (persistLockWidth) return;
+    const current = findPersistAsk(root);
+    const measured = Number(current?.offsetWidth) || 0;
+    if (measured > 0) persistLockWidth = Math.ceil(measured) + 18;
+  }
+
   function focusExportLibrary() {
     const group = root.querySelector?.('[data-focus-group="export"]');
     const control = group?.querySelector?.("button");
@@ -497,10 +502,10 @@ export function mountDataPanel(root, deps = {}) {
         event.preventDefault();
         void askPersist();
       });
+      if (persistLockWidth) ask.style.width = `${persistLockWidth}px`;
       if (persist.button === "busy") {
         ask.disabled = true;
         ask.setAttribute("aria-disabled", "true");
-        if (persistLockWidth) ask.style.width = `${persistLockWidth}px`;
       }
       persistControls.push(ask);
     }
@@ -737,6 +742,9 @@ export function mountDataPanel(root, deps = {}) {
     renderImport(importGroup);
     renderExport(exportGroup);
     root.append(usageHeading, usageGroup, importHeading, importGroup, exportHeading, exportGroup);
+    rememberPersistWidth();
+    const lockedAsk = findPersistAsk(root);
+    if (lockedAsk && persistLockWidth) lockedAsk.style.width = `${persistLockWidth}px`;
     if (persistReturnFocus) {
       persistReturnFocus = false;
       const ask = findPersistAsk(root);

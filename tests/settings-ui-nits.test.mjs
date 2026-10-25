@@ -28,6 +28,7 @@ test("settings html drops the empty data section and the duplicate privacy sente
   assert.ok(pdf.indexOf('id="pdfFeatureList"') < pdf.indexOf('id="pdfAutoTranslate"'));
   const list = pdf.slice(pdf.indexOf('id="pdfFeatureList"'), pdf.indexOf('id="pdfAutoTranslate"'));
   const firstRow = list.slice(list.indexOf('<div class="set-row">'), list.indexOf('id="pdfOnNotice"'));
+  assert.match(firstRow, /在浏览器里打开 PDF 时，用沉浸译的双栏阅读器显示原文和译文。/);
   assert.match(firstRow, /id="pdfEnabled"[^>]*role="switch"/);
   assert.match(firstRow, /aria-labelledby="pdfEnabledLabel"/);
   assert.match(firstRow, /aria-describedby="pdfEnabledNote"/);
@@ -86,7 +87,11 @@ test("settings cards use flat --set-* tokens and multimodal cards do not use rea
   assert.match(css, /\.oi-set-card \{[^}]*border:\s*var\(--set-card-border\)/s);
   assert.match(css, /\.oi-set-card \{[^}]*box-shadow:\s*none/s);
   const dataCss = read("options/data-panel.css");
-  assert.match(dataCss, /\[data-persist-ask\]\[aria-busy="true"\] \{\s*width:\s*8\.5em/);
+  assert.match(dataCss, /\[data-persist-ask\] \{[^}]*white-space:\s*nowrap/s);
+  assert.equal(dataCss.includes("8.5em"), false);
+  assert.match(dataCss, /a\.oi-data-browse,\s*\n\.oi-data a\.oi-data-browse:visited \{[^}]*color:\s*var\(--oi-text-muted\)/s);
+  assert.match(dataCss, /a\.oi-data-browse:hover \{[^}]*text-decoration:\s*underline/s);
+  assert.match(dataCss, /a\.oi-data-browse:focus-visible \{[^}]*outline:\s*2px solid var\(--oi-focus\)/s);
   assert.match(css, /\.set-key-line \{[^}]*display:\s*flex/s);
   assert.equal(manifest.includes("unlimitedStorage"), false);
 });
@@ -97,7 +102,10 @@ test("translation key actions sit on one line beside the input", () => {
   assert.match(js, /line\.append\(input, toggle, remove, saved\)/);
   assert.equal(js.includes("renderPdfFeature"), false);
   assert.equal(js.includes('FEATURES.filter((feat) => feat.id === "pdf")'), false);
+  assert.match(js, /const PDF_ON_NOTE = "在浏览器里打开 PDF 时，用沉浸译的双栏阅读器显示原文和译文。"/);
   assert.match(js, /const PDF_OFF_NOTE = "已关闭。PDF 会用浏览器自带的查看器打开。"/);
+  assert.match(read("options/data-panel.js"), /persistLockWidth = Math\.ceil\(measured\) \+ 18/);
+  assert.match(read("docs/settings-spec.md"), /「版面识别」组置灰/);
   assert.match(js, /row\.setAttribute\("aria-disabled", on \? "false" : "true"\)/);
   assert.match(js, /control\.disabled = !on/);
   assert.match(js, /el\("mmEnablePdf"\)\?\.addEventListener\("click", \(\) => \{\s*showPage\("pdf"\);\s*el\("pdfEnabled"\)\?\.focus\(\);/s);
@@ -321,7 +329,7 @@ test("long-term storage reports inline and does not toast", async () => {
     const askingButton = [...walkText(off)].find((node) => node.tag === "button" && node.getAttribute?.("data-persist-ask") != null);
     assert.equal(askingButton.disabled, true);
     assert.equal(askingButton.getAttribute("aria-busy"), "true");
-    assert.equal(askingButton.style.width, "120px");
+    assert.equal(askingButton.style.width, "138px");
     assert.equal(askingButton.children.some((node) => node.className === "oi-set-spin"), true);
     assert.match(askingButton.textContent, /申请长期保存/);
     assert.match(off.textContent, /申请中/);

@@ -35,10 +35,20 @@
   justify-content: center;
   gap: 6px;
   box-sizing: border-box;
-  min-width: 8.5em;
+  flex: none;
+  white-space: nowrap;
 }
-.oi-data [data-persist-ask][aria-busy="true"] { width: 8.5em; }
 .oi-data [data-persist-ask] .oi-set-spin { margin-right: 0; flex: none; }
+.oi-data a.oi-data-browse,
+.oi-data a.oi-data-browse:visited {
+  color: var(--oi-text-muted);
+  text-decoration: none;
+}
+.oi-data a.oi-data-browse:hover { text-decoration: underline; }
+.oi-data a.oi-data-browse:focus-visible {
+  outline: 2px solid var(--oi-focus);
+  outline-offset: 2px;
+}
 .oi-data .btn-link {
   border: 0;
   background: transparent;

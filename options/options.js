@@ -634,10 +634,11 @@ async function clearPdfCloud() {
   });
 }
 
+const PDF_ON_NOTE = "在浏览器里打开 PDF 时，用沉浸译的双栏阅读器显示原文和译文。";
 const PDF_OFF_NOTE = "已关闭。PDF 会用浏览器自带的查看器打开。";
 
 function pdfOnNote() {
-  return FEATURES.find((feat) => feat.id === "pdf")?.hint || "";
+  return PDF_ON_NOTE;
 }
 
 function syncPdfAvailability() {
