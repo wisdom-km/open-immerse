@@ -339,7 +339,7 @@ test("DATA-01 the mounted panel only contains its three groups, in order", async
     mountDataPanel(root, { store: storeFor("memory"), usage: async () => ({ usage: 0, quota: 1, persisted: true }) });
     const titles = [...root.querySelectorAll(".set-group h2")].map((node) => node.textContent);
     assert.deepEqual(titles, ["存储用量", "文献库 · 导入", "文献库 · 导出"]);
-    assert.equal(root.textContent.includes("API 密钥永远不导出"), true);
+    assert.equal(root.textContent.includes("API 密钥永远不导出"), false);
   } finally {
     restore();
   }
@@ -372,7 +372,9 @@ test("DATA-02 DATA-03 usage labels, persist retry, and migration continue", asyn
     click(root, "再申请一次");
     await flush();
     assert.equal(asks, 1);
-    assert.match(root.textContent, /浏览器仍未同意/);
+    assert.match(root.textContent, /浏览器未同意/);
+    assert.match(root.textContent, /空间紧张时仍可能清掉文献库/);
+    assert.equal(root.querySelector(".oi-data-toast"), null);
     click(root, "现在继续");
     await flush();
     assert.match(chip.textContent, /正在搬旧库 1\/3/);

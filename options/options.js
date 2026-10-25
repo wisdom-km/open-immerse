@@ -7,7 +7,7 @@ import {
   redactProviderText
 } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
-import { laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
+import { FEATURES, laterFeatures, resolveFeatures, v1Features } from "../lib/features.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -229,10 +229,14 @@ async function init() {
   bindDiagPanel();
   bindPanelNav();
   el("laterList")?.addEventListener("change", () => {
-    syncPdfLayoutBox();
-    syncPdfBanner();
     void persist(el("laterList"));
   });
+  el("pdfFeatureList")?.addEventListener("change", () => {
+    syncPdfLayoutBox();
+    syncPdfBanner();
+    void persist(el("pdfFeatureList"));
+  });
+  el("pdfOnNoticeDismiss")?.addEventListener("click", () => dismissPdfNotice());
   bindFormulaSettings();
   bindNotes();
   bindSecretsList();
@@ -305,6 +309,9 @@ function applyStoredForm() {
   if (el("siteRules")) el("siteRules").value = (settings.siteRules || []).map((rule) => rule.host).join("\n");
   renderFeatures(el("featureList"), v1Features(), features);
   renderFeatures(el("laterList"), laterFeatures(), features);
+  renderFeatures(el("pdfFeatureList"), FEATURES.filter((feat) => feat.id === "pdf"), features);
+  const pdfNotice = el("pdfOnNotice");
+  if (pdfNotice) pdfNotice.hidden = settings.pdfFeatureNotice !== true;
   fillPdfLayout(settings.pdfLayout);
   syncPdfLayoutBox();
   syncPdfBanner();
@@ -414,7 +421,7 @@ function hideReadError() {
 
 function snapshotControl(control) {
   if (!control) return null;
-  if (control.id === "featureList" || control.id === "laterList" || control.dataset?.feat) {
+  if (control.id === "featureList" || control.id === "laterList" || control.id === "pdfFeatureList" || control.dataset?.feat) {
     const features = {};
     document.querySelectorAll("[data-feat]").forEach((input) => {
       features[input.dataset.feat] = input.checked;
@@ -617,6 +624,20 @@ function syncPdfLayoutBox() {
   const on = Boolean(document.querySelector('[data-feat="pdf"]')?.checked);
   const box = el("pdfLayoutBox");
   if (box) box.hidden = !on;
+}
+
+function dismissPdfNotice() {
+  const banner = el("pdfOnNotice");
+  if (banner) banner.hidden = true;
+  if (cachedSettings.pdfFeatureNotice !== true) return;
+  cachedSettings.pdfFeatureNotice = false;
+  void enqueueSave(async () => {
+    if (!readsOk) return;
+    await chrome.runtime.sendMessage({
+      type: "OI_SAVE_SETTINGS",
+      patch: { pdfFeatureNotice: false }
+    });
+  });
 }
 
 function syncPdfBanner() {
@@ -892,7 +913,11 @@ function renderProviderFields() {
   }
   provider.fields.forEach((field) => {
     const wrap = document.createElement("label");
-    wrap.appendChild(document.createTextNode(field.key === "apiKey" ? "API 密钥" : field.label));
+    wrap.className = "set-field";
+    const name = document.createElement("span");
+    name.className = "set-field-name";
+    name.textContent = field.key === "apiKey" ? "API 密钥" : field.label;
+    wrap.appendChild(name);
     if (field.key === "apiKey") wrap.setAttribute("data-key-slot", "translate");
     let input;
     if (field.type === "textarea") {
@@ -956,12 +981,12 @@ function renderProviderFields() {
       remove.className = "set-inline";
       remove.textContent = "移除密钥";
       remove.addEventListener("click", () => clearProviderKey(provider.id));
-      wrap.appendChild(input);
-      wrap.appendChild(toggle);
-      wrap.appendChild(remove);
       const saved = document.createElement("span");
       saved.setAttribute("data-secret-saved", "1");
-      wrap.appendChild(saved);
+      const line = document.createElement("div");
+      line.className = "set-key-line";
+      line.append(input, toggle, remove, saved);
+      wrap.appendChild(line);
     } else {
       wrap.appendChild(input);
       const event = field.type === "select" ? "change" : "blur";
@@ -1351,7 +1376,7 @@ function clearProviderKey(id) {
 function restoreControl(control) {
   if (!control) return;
   const stored = cachedSettings || {};
-  if (control.id === "featureList" || control.id === "laterList" || control.dataset?.feat) {
+  if (control.id === "featureList" || control.id === "laterList" || control.id === "pdfFeatureList" || control.dataset?.feat) {
     const features = resolveFeatures(stored);
     document.querySelectorAll("[data-feat]").forEach((input) => {
       input.checked = Boolean(features[input.dataset.feat]);

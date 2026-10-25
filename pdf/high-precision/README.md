@@ -77,7 +77,7 @@ node --test tests/*.test.mjs
 | `extractReadoutBlocks` 的公式带 `latex` | 旧通读 | 阶段 2 起新路径不再展示 `latex`。旧函数可留到没有调用方 |
 | README 中英文含「原页内容精准展示（默认裁图）」和「公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图」 | D0 已在 F3-PR2 改完，以 `REQUIREMENTS.md` 为准 | 再改这些句子时同步改 `tests/pdf-readout.test.mjs`，不要放宽成空断言 |
 | AX-23：`lib/notes-*` 相对 main 不得改动 | viewer（`pdf/viewer.js`）的锁定已随 F3 PR2 解除。service worker 直接静态导入 `background/formula-cache.js`，不从 `background/arxiv-source.js` 再转一层 | Wisdom 2026-10-13 10:36 批准。`tests/arxiv-regression.test.mjs` 锁着笔记文件 |
-| `features.pdf === false`、弹层 PDF 按钮默认隐藏 | `tests/v1-defaults.test.mjs`、`tests/popup-ia.test.mjs` | 始终保持 |
+| `features.pdf` 默认 `true`；弹层 PDF 入口仅在开关关掉时隐藏 | `tests/v1-defaults.test.mjs`、`tests/popup-ia.test.mjs` | 2026-10-25：开关移到设置 → PDF 阅读，不再默认关闭 |
 
 ## 硬边界
 

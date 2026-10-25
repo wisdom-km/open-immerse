@@ -63,6 +63,7 @@
         <div id="setSkeleton" class="set-skeleton" hidden>
           <span></span><span></span><span></span><span></span>
         </div>
+        <p id="pdfOnNotice" class="set-banner" hidden>PDF 阅读已默认开启。可以在「PDF 阅读」页关掉。<button type="button" id="pdfOnNoticeDismiss" class="set-inline">知道了</button></p>
 
         <section id="panel-translate" class="set-page is-on" data-panel="translate" role="tabpanel">
           <h2>翻译</h2>
@@ -127,7 +128,7 @@
 
         <section id="panel-formula" class="set-page" data-panel="mm" role="tabpanel" hidden>
           <h2>多模态 · OCR</h2>
-          <p id="mmPdfBanner" class="set-banner" hidden>PDF 阅读在实验室里还没开启 · <button type="button" id="mmEnablePdf" class="set-inline">开启</button></p>
+          <p id="mmPdfBanner" class="set-banner" hidden>PDF 阅读还没开启 · <button type="button" id="mmEnablePdf" class="set-inline">开启</button></p>
           <p class="set-lead">公式没拿到源码时，按下面顺序逐级尝试。灰色 = 当前不会用到。阅读页 Aa 面板里的「公式」开关与这里是同一组设置。</p>
           <div id="formulaSettingsRoot" class="oi-reader" data-reader-theme="warm"></div>
         </section>
@@ -194,6 +195,7 @@
 
         <section id="panel-pdf" class="set-page" data-panel="pdf" role="tabpanel" hidden>
           <h2>PDF 阅读</h2>
+          <div id="pdfFeatureList" class="set-group"></div>
           <div class="set-group">
             <div class="set-row">
               <div class="set-txt">
@@ -380,7 +382,6 @@
             </div>
           </div>
         </section>
-        <section id="data" data-panel="data" role="tabpanel" hidden></section>
       </main>
     </div>
     <footer class="actions-bar" aria-label="状态">

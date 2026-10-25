@@ -8,15 +8,19 @@
   overflow-x: hidden;
 }
 .oi-data * { min-width: 0; }
-.oi-data-lead { margin: 0 0 18px; color: var(--oi-text-muted); font-size: 13px; line-height: 1.5; }
-.oi-data .set-group { margin: 0 0 28px; }
-.oi-data .set-group > h2 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+.oi-data .set-group { margin: 0; box-shadow: none; padding: 0; }
+.oi-data .set-group > h2 {
+  margin: 0;
+  padding: var(--set-row-pad, 8px 16px);
+  font-size: 13px;
+  font-weight: 600;
+}
 .oi-data .set-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 0;
+  padding: var(--set-row-pad, 8px 16px);
   border-top: 1px solid var(--oi-line);
 }
 .oi-data .set-copy { flex: 1; }
