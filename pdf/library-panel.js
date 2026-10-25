@@ -3,6 +3,7 @@
  * Copy lives in lib/library-copy.js.
  */
 
+import { LIBRARY_CLICK_DEDUPE_MS, LIBRARY_SKELETON_MS, LIBRARY_WIDTH_DEFAULT, libraryClickFresh } from "../lib/library-layout.js";
 import { countTranslated } from "../lib/library-record.js";
 import { resolveLibraryOpen } from "../lib/pdf-library.js";
 import { BLOCKED_TITLE, STORAGE_POLL_MS, blockedReasonCopy, isStorageBlocked } from "../lib/storage-copy.js";
@@ -16,6 +17,7 @@ import {
   libraryNoHitCopy,
   libraryNotesDeleteCopy,
   libraryPanelPhase,
+  libraryPausedCopy,
   libraryProgressCopy,
   libraryRelativeTime,
   libraryRowTitle,
@@ -124,7 +126,11 @@ export function mountLibraryUi(api = {}) {
   let pendingFocus = null;
   let readingHash = "";
   let shell = null;
-  let openingHash = "";
+  let openGen = 0;
+  let lastOpenClick = { hash: "", at: 0 };
+  let rowBusy = "";
+  let autoPaused = {};
+  let skeletonTimer = 0;
   let downloadingHash = "";
   let openError = "";
 
@@ -272,11 +278,13 @@ export function mountLibraryUi(api = {}) {
     });
   }
 
-  async function revealBytes(bytes, title, hash) {
+  async function revealBytes(bytes, title, hash, meta = {}) {
     try {
-      await api.openBytes?.(bytes, title);
+      const opened = await api.openBytes?.(bytes, title, { hash, stale: meta.stale });
+      if (opened === false) return false;
       return true;
     } catch {
+      if (meta.stale?.()) return false;
       openError = hash;
       return false;
     }
@@ -309,12 +317,40 @@ export function mountLibraryUi(api = {}) {
     poll = 0;
   }
 
+  function clearSkeletonTimer() {
+    if (!skeletonTimer) return;
+    timers.clearTimeout(skeletonTimer);
+    skeletonTimer = 0;
+  }
+
+  function refreshAutoPaused() {
+    if (typeof api.autoPaused !== "function") {
+      autoPaused = api.autoPaused && typeof api.autoPaused === "object" ? api.autoPaused : {};
+      return null;
+    }
+    return Promise.resolve()
+      .then(() => api.autoPaused())
+      .then((next) => {
+        autoPaused = next && typeof next === "object" ? next : {};
+      })
+      .catch(() => {
+        autoPaused = {};
+      });
+  }
+
   async function load(options = {}) {
     const gen = ++loadGen;
     const showBlank = options.keep !== true;
+    clearSkeletonTimer();
     if (showBlank) {
       phase = "blank";
       render();
+      skeletonTimer = timers.setTimeout(() => {
+        skeletonTimer = 0;
+        if (gen !== loadGen || phase !== "blank") return;
+        phase = "skeleton";
+        render();
+      }, api.skeletonMs ?? LIBRARY_SKELETON_MS);
     }
     try {
       if (typeof api.delay === "function") await api.delay();
@@ -354,9 +390,11 @@ export function mountLibraryUi(api = {}) {
       usage = nextUsage;
       phase = libraryPanelPhase({ count: rows.length });
       delete root.dataset.blocked;
+      clearSkeletonTimer();
       stopPoll();
     } catch (error) {
       if (gen !== loadGen) return;
+      clearSkeletonTimer();
       if (isStorageBlocked(error)) {
         phase = "blocked";
         root.dataset.blocked = "true";
@@ -368,6 +406,8 @@ export function mountLibraryUi(api = {}) {
     }
     if (confirmHash && !rows.some((row) => row.docHash === confirmHash)) confirmHash = "";
     await refreshReading();
+    const pausedTask = refreshAutoPaused();
+    if (pausedTask) await pausedTask;
     if (gen === loadGen) render();
   }
 
@@ -390,24 +430,45 @@ export function mountLibraryUi(api = {}) {
       if (external && typeof options.onStatus === "function") options.onStatus(result);
       return result;
     };
-    if (!row || openingHash) return report("busy");
+    if (!row) return report("missing");
     if (!external && readingHash && readingHash === row.docHash) {
       close(true);
       return report("current");
     }
     const hash = row.docHash;
     const title = libraryRowTitle(row).title;
-    openingHash = hash;
+    const at = now();
+    if (!external && !libraryClickFresh({
+      lastHash: lastOpenClick.hash,
+      lastAt: lastOpenClick.at,
+      hash,
+      at,
+      wait: api.clickDedupeMs ?? LIBRARY_CLICK_DEDUPE_MS
+    })) {
+      return report("deduped");
+    }
+    if (!external) lastOpenClick = { hash, at };
+    const gen = ++openGen;
+    const stale = () => gen !== openGen;
+    rowBusy = hash;
+    const live = root.querySelector(rowSelector(hash));
+    if (live) live.setAttribute("aria-busy", "true");
     openError = "";
     if (!external) repick = null;
     try {
+      if (typeof api.prepareSwitch === "function") await api.prepareSwitch({ hash, title, stale });
+      if (stale()) return report("superseded");
       const store = await api.store();
+      if (stale()) return report("superseded");
       const resolved = await resolveLibraryOpen(hash, { store, fetch: undefined });
+      if (stale()) return report("superseded");
       if (resolved.status === "local") {
-        if (!(await revealBytes(resolved.bytes, title, hash))) {
+        if (!(await revealBytes(resolved.bytes, title, hash, { stale }))) {
+          if (stale()) return report("superseded");
           if (external) openError = "";
           return report("failed");
         }
+        if (stale()) return report("superseded");
         close(external ? false : true);
         return report("opened");
       }
@@ -425,14 +486,18 @@ export function mountLibraryUi(api = {}) {
           })
         }).catch(() => ({ status: "needs-file" }));
         downloadingHash = "";
+        if (stale()) return report("superseded");
         if (again.status === "downloaded") {
-          if (!(await revealBytes(again.bytes, title, hash))) {
+          if (!(await revealBytes(again.bytes, title, hash, { stale }))) {
+            if (stale()) return report("superseded");
             if (external) openError = "";
             return report("failed");
           }
+          if (stale()) return report("superseded");
           close(external ? false : true);
           return report("opened");
         }
+        if (stale()) return report("superseded");
         if (timedOut) {
           if (!external) openError = hash;
           return report("failed");
@@ -453,10 +518,12 @@ export function mountLibraryUi(api = {}) {
         changed: resolved.status === "hash-mismatch" && resolved.via === "url",
         warn: resolved.status === "hash-mismatch" && resolved.via === "file"
       };
+      if (stale()) return report("superseded");
       if (external) return report("needs-file", spec);
       repick = spec;
       return report("needs-file", spec);
     } catch (error) {
+      if (stale()) return report("superseded");
       if (isStorageBlocked(error)) {
         phase = "blocked";
         root.dataset.blocked = "true";
@@ -466,9 +533,11 @@ export function mountLibraryUi(api = {}) {
       if (!external) openError = hash;
       return report("failed");
     } finally {
-      openingHash = "";
-      downloadingHash = "";
-      if (open) render();
+      if (gen === openGen) {
+        rowBusy = "";
+        downloadingHash = "";
+        if (open) render();
+      }
     }
   }
 
@@ -617,9 +686,30 @@ export function mountLibraryUi(api = {}) {
     return { hash, kind: "row" };
   }
 
+  function columnWidth() {
+    if (typeof api.columnWidth === "function") {
+      const n = Number(api.columnWidth());
+      if (n > 0) return n;
+    }
+    try {
+      const rect = root.getBoundingClientRect?.();
+      if (rect?.width > 1) return rect.width;
+    } catch {
+      /* the host has no layout box */
+    }
+    return 0;
+  }
+
   function render() {
     const nodes = ensureShell();
+    const savedScroll = nodes.body.scrollTop || 0;
+    const restoreScroll = () => {
+      nodes.body.scrollTop = savedScroll;
+    };
     const sheet = narrow();
+    const col = columnWidth();
+    const compact = col > 0 && col < LIBRARY_WIDTH_DEFAULT;
+    root.classList.toggle("is-compact", compact);
     root.classList.toggle("is-sheet", open && sheet);
     const shown = phase === "list" ? visibleRows() : [];
     if (active >= shown.length) active = Math.max(0, shown.length - 1);
@@ -630,7 +720,8 @@ export function mountLibraryUi(api = {}) {
     nodes.count.hidden = rows.length === 0;
     const showHeaderOpen = phase === "list";
     nodes.openPdf.hidden = !showHeaderOpen;
-    if (sheet) {
+    const iconOpen = sheet || compact;
+    if (iconOpen) {
       nodes.openPdf.textContent = "＋";
       nodes.openPdf.setAttribute("aria-label", LIBRARY_COPY.openPdf);
       nodes.openPdf.classList.add("is-icon");
@@ -646,6 +737,15 @@ export function mountLibraryUi(api = {}) {
     body.replaceChildren();
     if (phase === "blank") {
       body.append(h(doc, "div", { class: "oi-lib-blank", "aria-hidden": "true" }));
+    } else if (phase === "skeleton") {
+      const skeleton = h(doc, "div", { class: "oi-lib-skeleton", "aria-hidden": "true" });
+      for (let i = 0; i < 3; i += 1) {
+        skeleton.append(h(doc, "div", { class: "oi-lib-skel-row" }, [
+          h(doc, "span", { class: "oi-lib-skel-title" }),
+          h(doc, "span", { class: "oi-lib-skel-meta" })
+        ]));
+      }
+      body.append(skeleton);
     } else if (phase === "blocked") {
       const reason = blockedReasonCopy("blocked");
       body.append(h(doc, "div", { class: "oi-lib-blocked" }, [
@@ -674,7 +774,7 @@ export function mountLibraryUi(api = {}) {
       const list = h(doc, "div", { class: "oi-lib-list", role: "group", "aria-label": LIBRARY_COPY.title });
       if (!shown.length && query) {
         list.append(h(doc, "div", { class: "oi-lib-miss" }, [
-          h(doc, "p", { text: libraryNoHitCopy(query) }),
+          h(doc, "p", { class: "oi-lib-nohit", text: libraryNoHitCopy(query) }),
           h(doc, "p", { class: "oi-lib-muted", text: LIBRARY_COPY.searchHint }),
           h(doc, "button", { type: "button", class: "btn-secondary", text: LIBRARY_COPY.clearSearch })
         ]));
@@ -699,20 +799,24 @@ export function mountLibraryUi(api = {}) {
           "data-lib-row": row.docHash
         });
         const label = deleteLabel(title.title);
+        const paused = Boolean(autoPaused[row.docHash]);
+        const metaText = [
+          paused ? libraryPausedCopy(row.translated, row.pageCount) : libraryProgressCopy(row.translated, row.pageCount),
+          libraryRelativeTime(row.lastOpenedAt, now()),
+          librarySizeCopy(row.bytes)
+        ].filter(Boolean).join(" · ");
         const main = h(doc, "button", {
           type: "button",
           class: "oi-lib-open",
-          tabindex: index === active && column === "row" ? "0" : "-1",
-          "aria-disabled": openingHash === row.docHash ? "true" : null
+          tabindex: index === active && column === "row" ? "0" : "-1"
         }, [
           h(doc, "span", { class: "oi-lib-titleline" }, [
             h(doc, "span", { class: "oi-lib-name", title: title.title, text: title.title }),
-            reading ? h(doc, "span", { class: "oi-chip", text: LIBRARY_COPY.reading }) : null
+            reading ? h(doc, "span", { class: "oi-chip", title: LIBRARY_COPY.reading, text: LIBRARY_COPY.reading }) : null
           ]),
-          h(doc, "span", { class: "oi-lib-meta", text: [libraryProgressCopy(row.translated, row.pageCount), libraryRelativeTime(row.lastOpenedAt, now()), librarySizeCopy(row.bytes)].filter(Boolean).join(" · ") })
+          h(doc, "span", { class: "oi-lib-meta", title: metaText, text: metaText })
         ]);
         main.addEventListener("click", () => {
-          if (main.getAttribute("aria-disabled") === "true") return;
           active = index;
           void openRow(row);
         });
@@ -735,7 +839,7 @@ export function mountLibraryUi(api = {}) {
           focusTarget(".oi-lib-cancel");
         });
         item.append(main, trash);
-        if (downloadingHash === row.docHash) {
+        if (downloadingHash === row.docHash || rowBusy === row.docHash) {
           item.setAttribute("aria-busy", "true");
           item.append(h(doc, "p", { class: "oi-lib-muted oi-lib-opening", text: LIBRARY_COPY.downloading }));
         }
@@ -817,7 +921,7 @@ export function mountLibraryUi(api = {}) {
       ? [...usage.byDoc.values()].reduce((sum, n) => sum + (Number(n) || 0), 0)
       : rows.reduce((sum, row) => sum + (Number(row.bytes) || 0), 0);
     nodes.footCopy.textContent = libraryFooterCopy(rows.length, total);
-    nodes.foot.hidden = phase !== "list";
+    nodes.foot.hidden = phase !== "list" && phase !== "blocked";
 
     if (pendingFocus) {
       const pending = pendingFocus;
@@ -837,6 +941,7 @@ export function mountLibraryUi(api = {}) {
         } catch {
           /* the host may not focus */
         }
+        restoreScroll();
         return;
       }
     }
@@ -845,6 +950,7 @@ export function mountLibraryUi(api = {}) {
       else if (keep.kind === "confirm") focusTarget(".oi-lib-cancel");
       else focusRowControl(keep.hash, "row");
     }
+    restoreScroll();
   }
 
   function onListKey(event) {
@@ -938,6 +1044,7 @@ export function mountLibraryUi(api = {}) {
 
   function close(focusButton = true, meta = {}) {
     if (!open && !root.classList.contains("is-open")) return;
+    clearSkeletonTimer();
     const restore = focusButton && meta.handoff !== true && meta.focus !== false;
     if (restore) {
       const candidate = meta.trigger || trigger;
@@ -1010,9 +1117,21 @@ export function mountLibraryUi(api = {}) {
     refresh() {
       if (open) void load({ keep: true });
     },
+    setAutoPaused(map) {
+      autoPaused = map && typeof map === "object" ? map : {};
+      if (open) render();
+    },
     setReadingHash(hash) {
       readingHash = String(hash || "");
       if (open) render();
+    },
+    syncWidth() {
+      if (!open) return;
+      const col = columnWidth();
+      const compact = col > 0 && col < LIBRARY_WIDTH_DEFAULT;
+      const sheet = narrow();
+      if (root.classList.contains("is-compact") === compact && root.classList.contains("is-sheet") === (open && sheet)) return;
+      render();
     },
     openPaper,
     showRepick

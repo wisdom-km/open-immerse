@@ -1096,7 +1096,8 @@ test("打开同一行不会重入，下载超时和打开失败都留在这一�
   assert.equal(document.activeElement?.classList.contains("oi-lib-open"), true);
   assert.equal(document.activeElement?.closest("[data-lib-row]")?.getAttribute("data-lib-row"), "url");
   assert.equal(document.activeElement?.disabled, false);
-  assert.equal(document.activeElement?.getAttribute("aria-disabled"), "true");
+  assert.equal(document.activeElement?.getAttribute("aria-disabled"), null);
+  assert.equal(document.activeElement?.closest("[data-lib-row]")?.getAttribute("aria-busy"), "true");
   timers.advance(40);
   await flush();
   assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /没能打开 PDF，稍后再试一次。/);
@@ -1170,18 +1171,18 @@ test("响应头到了但正文一直不来时，超时会停掉整次下载", as
   ui.root.querySelector('[data-lib-row="url"] .oi-lib-open').click();
   await flush();
   assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /正在重新下载…/);
-  ui.root.querySelector('[data-lib-row="local"] .oi-lib-open').click();
-  await flush();
-  assert.equal(opened, 0);
-  timers.advance(40);
-  await flush();
-  assert.equal(aborted, true);
-  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /没能打开 PDF，稍后再试一次。/);
-  assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("正在重新下载"), false);
+  // A later row wins. The in-flight download is abandoned and still aborted.
   ui.root.querySelector('[data-lib-row="local"] .oi-lib-open').click();
   await flush();
   assert.equal(opened, 1);
   assert.equal(ui.isOpen(), false);
+  timers.advance(40);
+  await flush();
+  assert.equal(aborted, true);
+  ui.open();
+  await flush();
+  assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("没能打开 PDF"), false);
+  assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("正在重新下载"), false);
 });
 
 test("关闭文献库后面焦点回到书架按钮", async () => {
