@@ -142,8 +142,10 @@ test("figure cards derive figureLabel on the render copy and leave formula place
   const end = viewer.lastIndexOf("init();");
   assert.equal(viewer.slice(end + "init();".length).trim(), "");
   const library = read("lib/pdf-library.js").split("\n");
-  assert.equal(library[13], 'import { diagLog } from "./diag-log.js";');
-  assert.equal(library[14], 'import { libraryLoadedAt, libraryReviveAllowed, libraryWritesStopped } from "./library-writes.js";');
+  const diagAt = library.findIndex((line) => line === 'import { diagLog } from "./diag-log.js";');
+  assert.ok(diagAt >= 0);
+  assert.equal(library[diagAt], 'import { diagLog } from "./diag-log.js";');
+  assert.equal(library[diagAt + 1], 'import { libraryLoadedAt, libraryReviveAllowed, libraryWritesStopped } from "./library-writes.js";');
 });
 
 function contrast(hexA, hexB) {

@@ -222,7 +222,11 @@ test("display width compensates for the padded content column", () => {
 });
 
 test("fixture viewer crops through cropBlockImage and leaves the legacy formula call", () => {
-  assert.match(viewerSrc, /oi-pdf-engine/);
+  assert.match(viewerSrc, /ENGINE_OVERRIDE_KEY/);
+  assert.match(
+    readFileSync(join(root, "lib/formula-pipeline.js"), "utf8"),
+    /ENGINE_OVERRIDE_KEY = "oi-pdf-engine"/
+  );
   assert.match(viewerSrc, /cropBlockImage/);
   assert.match(viewerSrc, /scale: CROP_SCALE/);
   assert.doesNotMatch(viewerSrc, /cropCanvasToDataUrl/);

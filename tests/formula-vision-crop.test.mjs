@@ -499,8 +499,10 @@ test("screen redraw, page raster, and the 7-level chain stay on their old path",
   assert.equal(viewer.trimEnd().endsWith("init();"), true);
 
   const library = read("lib/pdf-library.js").split("\n");
-  assert.match(library[13], /import \{ diagLog \} from "\.\/diag-log\.js"/);
-  assert.match(library[14], /import \{ libraryLoadedAt, libraryReviveAllowed, libraryWritesStopped \} from "\.\/library-writes\.js"/);
+  const diagAt = library.findIndex((line) => /import \{ diagLog \} from "\.\/diag-log\.js"/.test(line));
+  assert.ok(diagAt >= 0);
+  assert.match(library[diagAt], /import \{ diagLog \} from "\.\/diag-log\.js"/);
+  assert.match(library[diagAt + 1], /import \{ libraryLoadedAt, libraryReviveAllowed, libraryWritesStopped \} from "\.\/library-writes\.js"/);
 
   const chain = read("lib/formula-chain.js");
   assert.match(chain, /Order: arxiv, multimodal, ocr, self, vector, crop, placeholder/);

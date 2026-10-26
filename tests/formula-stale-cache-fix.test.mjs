@@ -21,7 +21,7 @@ import { diagStateForPage } from "../lib/diag-log.js";
 import { cacheableLayout, layoutCacheKey, resolveLayoutMode } from "../lib/pdf-layout-client.js";
 import { parseLayoutCacheKey } from "../lib/pdf-layout-cache.js";
 import { pairsFromResults } from "../lib/pdf-library.js";
-import { PDF_COPY, canRetranslateRequestedPage, libraryPageRunState } from "../lib/pdf-viewer.js";
+import { PDF_COPY, canRetranslateRequestedPage, docStatusView, libraryPageRunState, translatedPageTotal } from "../lib/pdf-viewer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
@@ -62,7 +62,7 @@ test("fp-1 is on the layout key and each translation; chainVersion stays f3-1", 
 test("an unstamped library page is not marked done before the text layer is compared", () => {
   assert.equal(formulaCacheVerdict({ pairs: settled, layout: { blocks: [{ label: "text", text: "Attention", sourceText: "Attention" }] } }), "unchecked");
   assert.equal(applyFormulaVerdict("done", "unchecked"), "formula-check");
-  assert.equal(applyFormulaVerdict("partial", "unchecked"), "formula-check");
+  assert.equal(applyFormulaVerdict("partial", "unchecked"), "partial");
   assert.equal(libraryPageRunState({ pairs: settled, formulaVerdict: "unchecked" }), "formula-check");
   assert.equal(libraryPageRunState({ pairs: settled }), "done");
   const blocks = [{ label: "text", text: "Attention", sourceText: "Attention" }];
@@ -72,6 +72,36 @@ test("an unstamped library page is not marked done before the text layer is comp
     formulaVerdict: "unchecked",
     targetLang: "zh-CN"
   }), "formula-check");
+  const hole = [{ text: "Only one sentence.", sourceText: "Only one sentence.", translation: "只有一句", targetLang: "zh-CN" }];
+  const live = [
+    { label: "text", text: "Only one sentence.", sourceText: "Only one sentence." },
+    { label: "text", text: "Another live sentence.", sourceText: "Another live sentence." }
+  ];
+  assert.equal(libraryPageRunState({
+    pairs: hole,
+    blocks: live,
+    formulaVerdict: "unchecked",
+    targetLang: "zh-CN"
+  }), "partial");
+});
+
+test("a pending formula check still counts toward the open total", () => {
+  const totals = translatedPageTotal([
+    { state: "formula-check" },
+    { state: "skipped" },
+    { state: "done" }
+  ]);
+  assert.equal(totals.n, 3);
+  assert.equal(totals.formulaPending, 1);
+  assert.equal(totals.needsRetry, 0);
+  assert.equal(docStatusView({
+    n: totals.n,
+    t: 3,
+    formulaPending: totals.formulaPending,
+    phase: "opening"
+  }).text, "已译 3 / 3 页");
+  assert.notEqual(docStatusView({ n: 3, t: 3, formulaPending: 1, phase: "idle" }).text, "全文已译");
+  assert.equal(docStatusView({ n: 3, t: 3, phase: "idle" }).text, "全文已译");
 });
 
 test("only a block mismatch is stale; a matching page can be stamped", () => {

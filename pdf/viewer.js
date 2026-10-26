@@ -10033,11 +10033,12 @@ function pageTotals() {
 function refreshDocStatus() {
   const el = $("docStatus");
   if (!el) return;
-  const { n, t, needsRetry } = pageTotals();
+  const { n, t, needsRetry, formulaPending } = pageTotals();
   const view = docStatusView({
     n,
     t,
     needsRetry,
+    formulaPending,
     phase: docPhase,
     retranslate: retranslateScope === "document" || rushCutInLive()
   });
@@ -11775,6 +11776,12 @@ function persistPageLayout(page) {
   const entry = libraryEntry(page);
   const capturedPairs = Array.isArray(entry?.pairs) ? entry.pairs : [];
   const skipped = Boolean(entry?.skipped) || (isSkipOnlyPage(raw.blocks) && !capturedPairs.length);
+  // Visible before the write queue runs, so a retry does not POST this page again.
+  if (entry) {
+    entry.layout = layout;
+    entry.layoutVersion = version;
+    if (skipped) entry.skipped = true;
+  }
   const bytes = pdfBytes;
   const identity = captureLibraryIdentity();
   const pageCount = pdfDoc?.numPages || 0;
@@ -12319,8 +12326,22 @@ async function readStoredLayouts(keys) {
   }
 }
 
+function layoutRevisionCurrent(layout) {
+  if (!layout || !knownLayoutVersion) return false;
+  return Boolean(layoutCurrentForLibrary(layout, knownLayoutVersion, pdfEngineMode()));
+}
+
 function formulaVerdictFor(page, pairs, layout) {
   const fresh = formulaFreshDoc === docId ? (formulaFreshBlocks.get(Number(page)) || null) : null;
+  // A layout at the current revision was produced by this segmentation.
+  // Comparing it again to a second text-layer read must not call it stale.
+  if (layoutRevisionCurrent(layout)) {
+    return formulaCacheVerdict({
+      pairs,
+      layout,
+      freshBlocks: Array.isArray(layout.blocks) ? layout.blocks : fresh
+    });
+  }
   return formulaCacheVerdict({
     pairs,
     layout: layout || null,
@@ -12385,11 +12406,7 @@ async function classifyOpenFormulaPages() {
     }
     if (gen !== formulaClassifyGen || stamp !== docId) return;
     if (fresh) formulaFreshBlocks.set(page, fresh);
-    const verdict = formulaCacheVerdict({
-      pairs: entry?.pairs,
-      layout: shown,
-      freshBlocks: fresh
-    });
+    const verdict = formulaVerdictFor(page, entry?.pairs, shown);
     const blocks = shown?.blocks || null;
     if (verdict === "current" || verdict === "compatible") {
       const stamped = stampFormulaPairs(entry?.pairs || []);
@@ -12420,8 +12437,17 @@ async function classifyOpenFormulaPages() {
       notePageState(page, formulaStatePatch(next, { hasLayout: Boolean(blocks?.length) }));
       if (page === pageNum && next === "done" && !pdfTranslateBusy(session)) setStatus(PDF_COPY.done);
     } else if (verdict === "stale") {
-      notePageState(page, formulaStatePatch("stale-formula", { hasLayout: Boolean(blocks?.length) }));
-      if (page === pageNum && !pdfTranslateBusy(session)) setStatus(STALE_FORMULA_COPY, false, true);
+      const stamped = formulaPipelineStamp(shown?.formulaPipeline);
+      const vendor = shown?.mode === "local-ocr" || shown?.mode === "cloud-ocr";
+      // An unknown text-layer row can disagree with a second read of the same
+      // PDF engine. Keep the check mark and the translated count. A recorded
+      // older pipeline, or a vendor layout, is the old-formula label.
+      if (!stamped && !vendor) {
+        notePageState(page, formulaStatePatch("formula-check", { hasLayout: Boolean(blocks?.length) }));
+      } else {
+        notePageState(page, formulaStatePatch("stale-formula", { hasLayout: Boolean(blocks?.length) }));
+        if (page === pageNum && !pdfTranslateBusy(session)) setStatus(STALE_FORMULA_COPY, false, true);
+      }
     }
     clearSlotPainted(page);
   }
@@ -12648,6 +12674,17 @@ async function adoptLibraryPages(options = {}) {
         && !translatableBlocks(blocks).length
         && !isTitlePageCandidate(page, pageTextForStructure(blocks))
     });
+    const liveCount = translatableBlocks(blocks || []).length;
+    const pairCount = Array.isArray(entry?.pairs) ? entry.pairs.length : 0;
+    if ((state === "formula-check" || state === "stale-formula") && liveCount > 0 && pairCount < liveCount) {
+      noteLibraryGap(page, blocks, entry);
+      notePageState(page, { state: "partial", hasLayout: Boolean(blocks?.length) });
+      clearSlotPainted(page);
+      publish();
+      hole = true;
+      if (!entry && page >= lastListed) break;
+      continue;
+    }
     if (state === "queued") {
       if (entry?.skipped || isSkipOnlyPage(blocks)) {
         notePageState(page, { state: "skipped", hasLayout: Boolean(blocks?.length) });
@@ -13772,6 +13809,7 @@ async function retryPendingVendorLayouts(isStale, options = {}) {
     const storedBlocks = entry?.layout?.blocks;
     const hasStored = (Array.isArray(storedBlocks) && storedBlocks.length > 0) ||
       Boolean(entry?.layoutVersion || entry?.layout?.layoutVersion);
+    if (vendorLayoutSettled.has(page)) continue;
     const stale = Boolean(entry && hasStored && version && !layoutCurrentForLibrary(entry, version, mode));
     if (!stale && !vendorLayoutPending.has(page)) continue;
     try {
@@ -13835,6 +13873,9 @@ async function writeStoredLayout(key, page) {
 
 const vendorLayoutPending = new Set();
 const vendorLayoutReason = new Map();
+// The vendor already answered no-boxes for this page. A second caller queued
+// behind that POST must not send it again.
+const vendorLayoutSettled = new Set();
 const vendorLayoutLane = createPrioritySerialLane();
 let layoutAbort = new AbortController();
 let layoutEpoch = 0;
@@ -13976,7 +14017,7 @@ async function ingestVendorLayout(n, mode, isStale, epoch) {
   let recomputed = false;
   if (!mapped) {
     try {
-      const envelope = await postVendorLayout(n, ({ signal, maxAttempts, onNetworkFailure, shouldStop }) => {
+      const envelope = await postVendorLayout(n, async ({ signal, maxAttempts, onNetworkFailure, shouldStop }) => {
         if (docPhase === "stopped" || !layoutAttemptLive(epoch)) throw abortError();
         const notify = () => {
           if (typeof onNetworkFailure === "function") onNetworkFailure();
@@ -13985,28 +14026,44 @@ async function ingestVendorLayout(n, mode, isStale, epoch) {
           if (!pdfTranslateBusy(session)) setStatus(layoutNotice);
         };
         const stop = () => docPhase === "stopped" || (typeof shouldStop === "function" && shouldStop());
-        return mode === "cloud-ocr"
-          ? fetchCloudEnvelope({
-            baseUrl: settings.cloudBaseUrl,
-            apiKey: settings.cloudApiKey,
-            model: settings.cloudModel,
-            pngDataUrl: png,
-            signal,
-            maxAttempts,
-            shouldStop: stop,
-            onNetworkFailure: notify
-          })
-          : fetchLocalEnvelope({
-            baseUrl: settings.localBaseUrl,
-            page: n,
-            imageBase64: png.replace(/^data:image\/png;base64,/, ""),
-            pixelWidth: raster.pixelWidth,
-            pixelHeight: raster.pixelHeight,
-            signal,
-            maxAttempts,
-            shouldStop: stop,
-            onNetworkFailure: notify
-          });
+        if (vendorLayoutSettled.has(n)) {
+          const settled = new Error("vendor layout already answered");
+          settled.code = "settled";
+          throw settled;
+        }
+        const shown = getPageLayout(n);
+        if (layoutCurrentForEngine(shown, version, mode) || layoutCurrentForLibrary(libraryEntry(n), version, mode)) {
+          const settled = new Error("vendor layout already current");
+          settled.code = "settled";
+          throw settled;
+        }
+        try {
+          return mode === "cloud-ocr"
+            ? await fetchCloudEnvelope({
+              baseUrl: settings.cloudBaseUrl,
+              apiKey: settings.cloudApiKey,
+              model: settings.cloudModel,
+              pngDataUrl: png,
+              signal,
+              maxAttempts,
+              shouldStop: stop,
+              onNetworkFailure: notify
+            })
+            : await fetchLocalEnvelope({
+              baseUrl: settings.localBaseUrl,
+              page: n,
+              imageBase64: png.replace(/^data:image\/png;base64,/, ""),
+              pixelWidth: raster.pixelWidth,
+              pixelHeight: raster.pixelHeight,
+              signal,
+              maxAttempts,
+              shouldStop: stop,
+              onNetworkFailure: notify
+            });
+        } catch (err) {
+          if (err?.code === "no-boxes") vendorLayoutSettled.add(n);
+          throw err;
+        }
       }, epoch);
       let images = null;
       try {
@@ -14042,9 +14099,14 @@ async function ingestVendorLayout(n, mode, isStale, epoch) {
         vendorLayoutPending.delete(n);
         return null;
       }
+      if (err?.code === "settled") {
+        vendorLayoutPending.delete(n);
+        return null;
+      }
       if (err?.code === "no-boxes") {
         vendorLayoutReason.set(n, "no-boxes");
         vendorLayoutPending.delete(n);
+        vendorLayoutSettled.add(n);
         if (!isStale()) layoutNotice = LAYOUT_NO_BOXES_STATUS;
         return null;
       }
@@ -14486,6 +14548,7 @@ async function adoptDoc(doc, title, openGen) {
   resetMmPages();
   vendorLayoutPending.clear();
   vendorLayoutReason.clear();
+  vendorLayoutSettled.clear();
   docPhase = "opening";
   notePageState(1, { state: "layout", hasLayout: false });
   libraryArticle = null;
