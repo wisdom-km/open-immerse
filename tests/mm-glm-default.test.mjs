@@ -121,7 +121,7 @@ function netOf(handler, { random = () => 0, waits = null } = {}) {
   });
 }
 
-test("glm omits thinking and uses reasoning_effort minimal; ark and kimi keep their fields", () => {
+test("glm omits thinking and uses reasoning_effort low; ark and kimi keep their fields", () => {
   const glm = buildVisionRequest(glmTarget(), {
     system: "只输出 LaTeX",
     text: "行内公式",
@@ -130,7 +130,7 @@ test("glm omits thinking and uses reasoning_effort minimal; ark and kimi keep th
     outputLimit: 200000
   });
   assert.equal(Object.hasOwn(glm.json, "thinking"), false);
-  assert.equal(glm.json.reasoning_effort, "minimal");
+  assert.equal(glm.json.reasoning_effort, "low");
   assert.equal(glm.json.temperature, 0);
   assert.equal(glm.json.max_tokens, 131072);
   assert.equal(glm.json.model, "glm-5.3-flash");
@@ -176,7 +176,7 @@ test("glm omits thinking and uses reasoning_effort minimal; ark and kimi keep th
 
   const translated = applyChatThinking({ model: "glm-5.3-flash" }, { baseUrl: ARK, deepThink: false });
   assert.equal(Object.hasOwn(translated, "thinking"), false);
-  assert.equal(translated.reasoning_effort, "minimal");
+  assert.equal(translated.reasoning_effort, "low");
   const thinkingOn = applyChatThinking({ model: "glm-5.3-flash" }, { baseUrl: ARK, deepThink: true });
   assert.equal(Object.hasOwn(thinkingOn, "thinking"), false);
   assert.equal(thinkingOn.reasoning_effort, "high");
@@ -215,7 +215,7 @@ test("a glm image under the Ark floor is padded; a legal image is unchanged", as
   assert.equal(legal, `data:image/png;base64,${PROBE_PNG_BASE64}`);
 });
 
-test("glm 400 InvalidParameter retries once, keeps reasoning_effort minimal, and does not switch model", async () => {
+test("glm 400 InvalidParameter retries once without reasoning_effort, and does not switch model", async () => {
   const bodies = [];
   let calls = 0;
   const net = netOf((_url, init) => {
@@ -242,10 +242,10 @@ test("glm 400 InvalidParameter retries once, keeps reasoning_effort minimal, and
   assert.equal(result.text, "E=mc^2");
   assert.equal(bodies.length, 2);
   assert.equal(bodies[0].model, "glm-5.3-flash");
-  assert.equal(bodies[0].reasoning_effort, "minimal");
+  assert.equal(bodies[0].reasoning_effort, "low");
   assert.equal(Object.hasOwn(bodies[0], "thinking"), false);
   assert.equal(bodies[1].model, "glm-5.3-flash");
-  assert.equal(bodies[1].reasoning_effort, "minimal");
+  assert.equal(Object.hasOwn(bodies[1], "reasoning_effort"), false);
   assert.equal(Object.hasOwn(bodies[1], "thinking"), false);
   assert.equal(bodies[1].temperature, 0);
   assert.equal(JSON.stringify(bodies).includes(KEY_A), false);
@@ -259,13 +259,14 @@ test("glm 400 InvalidParameter retries once, keeps reasoning_effort minimal, and
     stream: true,
     extra: 1
   });
-  assert.equal(normalized.reasoning_effort, "minimal");
+  assert.equal(normalized.reasoning_effort, "low");
   assert.equal(Object.hasOwn(normalized, "thinking"), false);
   assert.equal(Object.hasOwn(normalized, "stream"), false);
   assert.equal(Object.hasOwn(normalized, "extra"), false);
   assert.equal(normalized.temperature, 0);
-  assert.equal(normalizeGlmRetryBody({ reasoning_effort: "minimal", thinking: { type: "disabled" } }).reasoning_effort, "minimal");
-  assert.equal(normalizeGlmRetryBody({ reasoning_effort: "low", thinking: { type: "disabled" } }).reasoning_effort, "minimal");
+  assert.equal(normalizeGlmRetryBody({ reasoning_effort: "minimal", thinking: { type: "disabled" } }).reasoning_effort, "low");
+  assert.equal(normalizeGlmRetryBody({ reasoning_effort: "low", thinking: { type: "disabled" } }).reasoning_effort, "low");
+  assert.equal(normalizeGlmRetryBody({}).reasoning_effort, "low");
   assert.equal(normalizeGlmRetryBody({ reasoning_effort: "high" }).reasoning_effort, "high");
   assert.equal(normalizeGlmRetryBody({ reasoning_effort: "max" }).reasoning_effort, "max");
 });
