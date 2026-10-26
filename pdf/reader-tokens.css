@@ -584,6 +584,11 @@
   --oi-notes-pane-max: 480px;
   --oi-notes-pane-default: 360px;
   --oi-notes-pane-w: var(--notes-width, 360px);
+  --oi-reader-library-min: 320px;
+  --oi-reader-library-max: 480px;
+  --oi-reader-library-w: clamp(320px, var(--library-width, 360px), 480px);
+  --oi-reader-library-pad-x: 12px;
+  --oi-reader-library-row-h: 56px;
   --oi-notes-undo-ms: 6000;
   --oi-notes-save-debounce-ms: 600;
   --oi-notes-loading-delay-ms: 150;

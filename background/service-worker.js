@@ -4,6 +4,7 @@ import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/le
 import { featureOn, resolveFeatures } from "../lib/features.js";
 import { handleArxivSourceMessage } from "./arxiv-source.js";
 import { handleFormulaCacheMessage } from "./formula-cache.js";
+import { translateAbortRegistry } from "../lib/translate-abort.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
@@ -128,20 +129,29 @@ async function handleMessage(message, sender) {
         system: message.system,
         user: message.user
       });
+    case "OI_TRANSLATE_ABORT":
+      translateAbortRegistry.abort(message.requestId || "");
+      return { ok: true };
     case "OI_TRANSLATE_BATCH": {
+      const controller = translateAbortRegistry.begin(message.requestId || "");
       const batchOpts = {
         onProgress: (progress) => emitTranslateProgress(sender, message.requestId, progress),
         polish: message.polish,
         promptAddendum: message.promptAddendum,
-        bypassCache: message.bypassCache === true
+        bypassCache: message.bypassCache === true,
+        signal: controller.signal
       };
-      const translations = await translateBatch(message.texts || [], batchOpts);
-      if (batchOpts.providerCalled) await noteTranslationSucceeded(batchOpts.providerId);
-      return {
-        ok: true,
-        translations,
-        ...(batchOpts.polishFailed ? { polishError: "润色失败" } : {})
-      };
+      try {
+        const translations = await translateBatch(message.texts || [], batchOpts);
+        if (batchOpts.providerCalled) await noteTranslationSucceeded(batchOpts.providerId);
+        return {
+          ok: true,
+          translations,
+          ...(batchOpts.polishFailed ? { polishError: "润色失败" } : {})
+        };
+      } finally {
+        translateAbortRegistry.finish(message.requestId || "");
+      }
     }
     case "OI_TEST_PROVIDER": {
       const providerConfig =
@@ -272,6 +282,11 @@ async function translateBatch(texts, options = {}) {
   });
   const size = Math.max(1, Number(settings.batchSize) || 8);
   for (let i = 0; i < pending.length; i += size) {
+    if (options.signal?.aborted) {
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      throw error;
+    }
     const chunk = pending.slice(i, i + size);
     let translated;
     try {
@@ -280,6 +295,7 @@ async function translateBatch(texts, options = {}) {
         sourceLang: settings.sourceLang,
         targetLang: settings.targetLang,
         settings: providerSettings,
+        signal: options.signal,
         onProgress: async (progress) => {
           if (progress?.phase !== "draft" || typeof options.onProgress !== "function") return;
           const guarded = guardZhTranslations(
