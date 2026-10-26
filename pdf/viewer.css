@@ -3514,3 +3514,49 @@ button:disabled { opacity: 0.45; cursor: default; }
     animation: none;
   }
 }
+.retranslate-clear-rule {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--oi-reader-border);
+}
+.retranslate-clear .retranslate-item-label {
+  color: var(--oi-reader-danger, var(--oi-reader-warn));
+}
+.retranslate-clear-confirm {
+  padding: 8px 12px 10px;
+}
+.retranslate-clear-copy {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--oi-reader-muted);
+}
+.retranslate-clear-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.retranslate-clear-actions button {
+  flex: 1 1 0;
+  height: 32px;
+  white-space: nowrap;
+}
+.retranslate-clear-go {
+  border: 0;
+  border-radius: 6px;
+  background: var(--oi-reader-danger, var(--oi-reader-warn));
+  color: var(--oi-reader-on-danger, #fff);
+  font: inherit;
+  cursor: pointer;
+}
+.rf-stale-formula {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--oi-reader-warn);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+#status.is-stale { cursor: pointer; }

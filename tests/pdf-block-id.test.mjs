@@ -243,7 +243,7 @@ test("applySavedPairs matches bid, then sourceId, then text", () => {
 test("layout cache key stays on source-v3 and the viewer stamps bids in one place", () => {
   assert.equal(
     layoutCacheKey({ hash: "abc", page: 4, mode: "text-layer" }),
-    "oi-pdf-layout:abc:4:text-layer:blocks-1:source-v3"
+    "oi-pdf-layout:abc:4:text-layer:blocks-1:source-v3:fp-1"
   );
   assert.match(layoutSrc, /source-v3/);
   assert.equal(layoutSrc.includes("source-v2"), false);

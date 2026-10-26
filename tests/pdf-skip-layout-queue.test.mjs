@@ -51,7 +51,7 @@ GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", impo
 const fixtures = new Map();
 
 function legacyKey({ hash, page }) {
-  return layoutCacheKey({ hash, page, mode: "local-ocr" }).replace(/:source-v3$/, ":source-v2");
+  return layoutCacheKey({ hash, page, mode: "local-ocr" }).replace(/:source-v3(?::[^:]+)?$/, ":source-v2");
 }
 
 function oldTranslation(block) {
