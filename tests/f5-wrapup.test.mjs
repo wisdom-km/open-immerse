@@ -222,16 +222,13 @@ test("unconfigured outbound is NO_ENGINE and a configured engine stays put", () 
   assert.equal(ownWins.mode, "own");
   assert.equal(ownWins.providerId, "openai");
   assert.equal(ownWins.borrowed, false);
-  const factoryFree = resolveTranslateOutbound({ provider: "mymemory", providers: { mymemory: {} } }, mm);
-  assert.equal(factoryFree.mode, "borrow");
-  assert.equal(factoryFree.vendorId, "kimi");
-  const explicitFree = resolveTranslateOutbound({
-    provider: "mymemory",
-    translateProviderChosen: true,
-    providers: { mymemory: {} }
-  }, mm);
-  assert.equal(explicitFree.mode, "own");
-  assert.equal(explicitFree.providerId, "mymemory");
+  const chosenFree = resolveTranslateOutbound({ provider: "mymemory", providers: { mymemory: {} } }, mm);
+  assert.equal(chosenFree.mode, "own");
+  assert.equal(chosenFree.providerId, "mymemory");
+  assert.equal(chosenFree.borrowed, false);
+  const emptyBorrows = resolveTranslateOutbound({ provider: "", providers: {} }, mm);
+  assert.equal(emptyBorrows.mode, "borrow");
+  assert.equal(emptyBorrows.vendorId, "kimi");
   const stillFree = resolveTranslateOutbound(
     { provider: "openai", providers: { openai: { apiKey: "" } } },
     { multimodal: { provider: "kimi", apiKey: "", model: "kimi-k2" } }

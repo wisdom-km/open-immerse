@@ -212,7 +212,6 @@ test("NEP-01/02/08/11 web toast, popup line, and preflight send no translation r
   state.settings = {
     ...state.settings,
     provider: "openai",
-    translateProviderChosen: true,
     providers: { openai: { apiKey: "sk-own-engine", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" } }
   };
   state.formula = { multimodal: { provider: "kimi", apiKey: "", model: "" } };
@@ -241,7 +240,7 @@ test("NEP-01/02/08/11 web toast, popup line, and preflight send no translation r
 
   state.settings = {
     settingsVersion: 9,
-    provider: "mymemory",
+    provider: "",
     sourceLang: "en",
     targetLang: "zh-CN",
     translateScope: "article",
@@ -310,7 +309,6 @@ test("NEP-01/02/08/11 web toast, popup line, and preflight send no translation r
     state.settings = {
       ...state.settings,
       provider: "openai",
-      translateProviderChosen: true,
       providers: { openai: { apiKey: "sk-own-engine", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" } }
     };
     page.window.dispatchEvent(new page.window.Event("oi-please-start"));
@@ -349,7 +347,6 @@ test("NEP-03 a configured engine failure stays on that engine", async () => {
             settings: {
               settingsVersion: 9,
               provider: "openai",
-              translateProviderChosen: true,
               sourceLang: "en",
               targetLang: "zh-CN",
               batchSize: 8,

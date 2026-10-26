@@ -17,7 +17,6 @@ import {
   readPdfDefaultNoticeSeen,
   writePdfDefaultNoticeSeen
 } from "../lib/pdf-default-notice.js";
-import { implicitDefaultTranslate } from "../lib/translate-borrow.js";
 import { NO_ENGINE_COPY, flashFocus } from "../lib/no-engine-prompt.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
@@ -263,7 +262,6 @@ async function init() {
   bindSecretsList();
   el("provider").addEventListener("change", () => {
     const left = attentionProvider;
-    cachedSettings.translateProviderChosen = true;
     harvestVisibleProvider();
     renderProviderFields();
     syncQualityLocks();
@@ -761,7 +759,6 @@ function paintQualityNote(note, llm, provider, ready) {
 }
 
 function displayedProvider(settings) {
-  if (implicitDefaultTranslate(settings)) return "";
   const id = String(settings?.provider || "").trim();
   return providers[id] ? id : "";
 }
@@ -1558,7 +1555,6 @@ async function persistNow(control) {
   }
   const patch = {
     provider: el("provider").value,
-    translateProviderChosen: cachedSettings.translateProviderChosen === true,
     sourceLang: el("sourceLang").value,
     targetLang: el("targetLang").value,
     batchSize: Number(el("batchSize").value) || 8,

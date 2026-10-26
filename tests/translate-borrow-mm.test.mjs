@@ -75,13 +75,14 @@ test("TBM-01/02/05/11 settings page does not show a borrow hint", () => {
   assert.equal(idle.outbound.code, "NO_ENGINE");
   assert.equal(describeTranslateBorrow({
     provider: "mymemory",
-    translateProviderChosen: true,
     providers: { mymemory: {} }
   }, mm()).mode, "own");
+  assert.equal(borrowJs.includes("translateProviderChosen"), false);
+  assert.equal(optionsJs.includes("translateProviderChosen"), false);
 });
 
-test("factory MyMemory borrows a configured multimodal card, and an explicit MyMemory choice does not", () => {
-  const fresh = { provider: "mymemory", providers: { mymemory: { email: "" } } };
+test("an empty provider borrows a configured multimodal card, and a MyMemory choice does not", () => {
+  const fresh = { provider: "", providers: { mymemory: { email: "" } } };
   const borrowed = resolveTranslateOutbound(fresh, mm());
   assert.equal(borrowed.mode, "borrow");
   assert.equal(borrowed.borrowed, true);
@@ -91,15 +92,14 @@ test("factory MyMemory borrows a configured multimodal card, and an explicit MyM
   assert.equal(JSON.stringify(fresh).includes(MM_KEY), false);
   assert.equal(describeTranslateBorrow(fresh, mm()).mode, "borrow");
 
-  const explicit = resolveTranslateOutbound({
+  const selected = resolveTranslateOutbound({
     provider: "mymemory",
-    translateProviderChosen: true,
     providers: { mymemory: { email: "" } }
   }, mm());
-  assert.equal(explicit.mode, "own");
-  assert.equal(explicit.borrowed, false);
-  assert.equal(explicit.providerId, "mymemory");
-  assert.equal(explicit.fallback, false);
+  assert.equal(selected.mode, "own");
+  assert.equal(selected.borrowed, false);
+  assert.equal(selected.providerId, "mymemory");
+  assert.equal(selected.fallback, false);
 
   const neither = resolveTranslateOutbound(fresh, {
     multimodal: { provider: "kimi", apiKey: "", model: "" }
@@ -274,33 +274,33 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and no eng
   assert.equal(fallback.body.includes("MyMemory"), false);
   assert.equal(fallback.body.includes("还没配置"), false);
 
-  const factorySettings = {
-    provider: "mymemory",
-    providers: { mymemory: { email: "" } },
+  const emptySettings = {
+    provider: "",
+    providers: {},
     sourceLang: "en",
     targetLang: "zh-CN",
     translateScope: "article",
     translateLimit: "all",
     features: {}
   };
-  const factory = await bootPopup(factorySettings, mm());
-  assert.equal(factory.text, "引擎：Kimi");
-  assert.equal(factory.title, "Kimi / 月之暗面");
-  assert.equal(factory.unsetHidden, true);
-  assert.equal(factory.noteHidden, true);
-  assert.equal(factory.body.includes("借用"), false);
-  assert.equal(factory.body.includes("MyMemory"), false);
+  const emptyBorrow = await bootPopup(emptySettings, mm());
+  assert.equal(emptyBorrow.text, "引擎：Kimi");
+  assert.equal(emptyBorrow.title, "Kimi / 月之暗面");
+  assert.equal(emptyBorrow.unsetHidden, true);
+  assert.equal(emptyBorrow.noteHidden, true);
+  assert.equal(emptyBorrow.body.includes("借用"), false);
+  assert.equal(emptyBorrow.body.includes("MyMemory"), false);
 
-  const explicitFree = await bootPopup(
-    { ...factorySettings, translateProviderChosen: true },
+  const selectedFree = await bootPopup(
+    { ...emptySettings, provider: "mymemory", providers: { mymemory: { email: "" } } },
     mm()
   );
-  assert.equal(explicitFree.text, "引擎：MyMemory（免费）");
-  assert.equal(explicitFree.unsetHidden, true);
-  assert.equal(explicitFree.noteHidden, true);
+  assert.equal(selectedFree.text, "引擎：MyMemory（免费）");
+  assert.equal(selectedFree.unsetHidden, true);
+  assert.equal(selectedFree.noteHidden, true);
 
   const neither = await bootPopup(
-    factorySettings,
+    emptySettings,
     { multimodal: { provider: "kimi", apiKey: "", model: "" } },
     (ui) => {
       assert.equal(ui.translate.disabled, false);
@@ -330,7 +330,7 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and no eng
   assert.equal(neither.body.includes("借用"), false);
 
   const custom = await bootPopup(
-    factorySettings,
+    emptySettings,
     { multimodal: { provider: "custom", apiKey: MM_KEY, model: "kimi-k3", baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3" } }
   );
   assert.equal(custom.text, "引擎：自定义");

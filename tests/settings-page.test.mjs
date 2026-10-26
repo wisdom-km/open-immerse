@@ -1954,11 +1954,11 @@ test("settings page keeps the original engine hint while borrowing, and an own e
   assert.equal(chrome.local.formulaSettings.multimodal.apiKey, mmKey);
 });
 
-test("picking a translation engine stores translateProviderChosen, including an explicit MyMemory choice", async () => {
+test("an empty provider shows 请选择引擎, and choosing an engine including MyMemory stores that id", async () => {
   const chrome = installChrome({
     settings: {
       ...savedSettings(),
-      provider: "mymemory",
+      provider: "",
       providers: { mymemory: { email: "" }, openai: { apiKey: "" } }
     }
   });
@@ -1966,7 +1966,6 @@ test("picking a translation engine stores translateProviderChosen, including an 
   const { startOptions } = await import("../options/options.js?provider-chosen=1");
   await startOptions();
   await flush();
-  assert.equal(chrome.sync.settings.translateProviderChosen, undefined);
   const provider = page.document.getElementById("provider");
   assert.equal(provider.value, "");
   const placeholder = [...provider.options].find((option) => option.value === "");
@@ -1977,12 +1976,11 @@ test("picking a translation engine stores translateProviderChosen, including an 
   fire(provider, "change");
   await flush();
   assert.equal(chrome.sync.settings.provider, "deepl");
-  assert.equal(chrome.sync.settings.translateProviderChosen, true);
   provider.value = "mymemory";
   fire(provider, "change");
   await flush();
   assert.equal(chrome.sync.settings.provider, "mymemory");
-  assert.equal(chrome.sync.settings.translateProviderChosen, true);
+  assert.equal(JSON.stringify(chrome.sync.settings).includes("translateProviderChosen"), false);
   assert.equal(JSON.stringify(chrome.sync.settings).includes("借用"), false);
   const kept = mountPage("#translate");
   await startOptions();

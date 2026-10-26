@@ -43,7 +43,6 @@ const STUB = `(() => {
   const delayMs = Number(params.get("oiDelay") || 0);
   const settings = {
     provider: mode === "missing" ? "openai" : "mymemory",
-    translateProviderChosen: mode !== "missing",
     providers: {
       mymemory: { email: "" },
       openai: { apiKey: "" }
