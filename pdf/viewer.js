@@ -845,11 +845,11 @@ function init() {
   });
   $("translateMenuRetranslate")?.addEventListener("click", () => {
     closeTranslateMenu(true);
-    forceRetranslateCurrentPage();
+    void runRetranslateMenu("page");
   });
   $("translateMenuRetranslateDoc")?.addEventListener("click", () => {
     closeTranslateMenu(true);
-    void forceRetranslateDocument();
+    void runRetranslateMenu("document");
   });
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("exportMd").addEventListener("click", () => {
@@ -9234,25 +9234,27 @@ function onRetranslateMenuKey(event) {
   return false;
 }
 
-function showNepPrompt(message) {
-  // #176 adds the NEP panel. This is the call site until that merge.
-  setStatus(message || "请先在设置里配置翻译引擎", false, true);
-  return "nep";
+function showNepPrompt() {
+  showNoEngineBanner();
+  return "NO_ENGINE";
 }
 
 function openNepSettings() {
-  const url = globalThis.chrome?.runtime?.getURL?.("options/options.html#nep") || "options/options.html#nep";
-  if (globalThis.chrome?.tabs?.create) globalThis.chrome.tabs.create({ url });
-  else globalThis.open?.(url, "_blank");
+  runtimeSend({ type: "OI_OPEN_TRANSLATE_SETTINGS" }).catch(() => {});
 }
 
 async function runRetranslateMenu(scope) {
   closeRetranslateMenu(true);
   const blocker = await translatePreflight();
-  if (blocker) {
-    showNepPrompt(blocker);
+  if (blocker === "NO_ENGINE") {
+    showNepPrompt();
     return;
   }
+  if (blocker) {
+    setStatus(blocker, true);
+    return;
+  }
+  hideNoEngineBanner();
   if (scope === "document") await forceRetranslateDocument();
   else forceRetranslateCurrentPage();
 }
@@ -12963,10 +12965,15 @@ async function zoneForRetranslate(page, work) {
 async function retryFailedPage(page) {
   if (!pdfDoc || pdfTranslateBusy(session) || forceReadoutHold) return;
   const blocker = await translatePreflight();
-  if (blocker) {
-    showNepPrompt(blocker);
+  if (blocker === "NO_ENGINE") {
+    showNepPrompt();
     return;
   }
+  if (blocker) {
+    setStatus(blocker, true);
+    return;
+  }
+  hideNoEngineBanner();
   pageRetryPending.add(page);
   pageRetryStill.delete(page);
   renderArticle();

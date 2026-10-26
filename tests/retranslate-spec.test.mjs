@@ -53,9 +53,10 @@ test("RT-03 RT-05 RT-06 retranslate starts without confirm and leaves an NEP cal
   );
   assert.match(docForce, /forceAll: true/);
   assert.equal(docForce.includes("confirm("), false);
-  assert.match(viewer, /function showNepPrompt/);
-  assert.match(viewer, /function openNepSettings/);
-  assert.match(viewer, /options\/options\.html#nep/);
+  assert.match(viewer, /function showNepPrompt\(\) \{\s*showNoEngineBanner\(\);/);
+  assert.match(viewer, /function openNepSettings\(\) \{\s*runtimeSend\(\{ type: "OI_OPEN_TRANSLATE_SETTINGS" \}\)/);
+  assert.match(viewer, /if \(blocker === "NO_ENGINE"\) \{\s*showNepPrompt\(\);/);
+  assert.equal(viewer.includes("options/options.html#nep"), false);
   assert.match(html, /id="retranslateStop"/);
   assert.match(html, /title="停止重译"/);
   assert.equal(retranslateButtonLabel({ busy: true, scope: "document", n: 2, t: 9 }), "重译中 2/9");
