@@ -26,7 +26,10 @@ test("popup IA is page-only: Dual Line, 沉浸译, no feature toggles or youtube
   assert.match(html, /id="translateLimit"/);
   assert.match(html, /class="lang-row"/);
   assert.match(html, /id="engineLink"/);
-  assert.match(html, /未配置引擎/);
+  assert.match(html, /id="engineUnsetName">未设置/);
+  assert.match(html, /id="engineSetup"[^>]*>去设置/);
+  assert.match(html, /id="engineNote"/);
+  assert.equal(html.includes("未配置引擎"), false);
   assert.match(html, /id="openOptions">设置</);
   assert.match(html, /id="openLearning">学习</);
   assert.match(html, /id="openDocs">文档</);
@@ -195,8 +198,11 @@ test("popup engine link uses short name + full title; lang-row stays 1fr 1fr", (
   assert.match(js, /引擎：\$\{shortName\}/);
   assert.match(js, /link\.title = provider\.name/);
   assert.match(js, /described\.mode === "borrow"/);
-  assert.match(js, /const ok = borrowed \|\|/);
-  assert.match(js, /warn\.hidden = ok/);
+  assert.match(js, /engineMissing = true/);
+  assert.match(js, /unset\.hidden = false/);
+  assert.match(js, /NO_ENGINE_COPY\.body/);
+  assert.doesNotMatch(js, /const ok = borrowed \|\|/);
+  assert.doesNotMatch(js, /warn\.hidden/);
   assert.doesNotMatch(js, /借用/);
   assert.doesNotMatch(js, /formatBorrowedEngine/);
   assert.doesNotMatch(js, /engine-borrow/);

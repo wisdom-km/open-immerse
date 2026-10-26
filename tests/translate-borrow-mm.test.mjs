@@ -129,7 +129,7 @@ test("TBM-03/04 settings page has no borrow-hint layout", () => {
 
 let popupBoot = 0;
 
-async function bootPopup(settings, formula) {
+async function bootPopup(settings, formula, act) {
   const popupHtml = readFileSync(join(root, "popup/popup.html"), "utf8");
   const parsed = parseHTML(popupHtml);
   const selectProto = Object.getPrototypeOf(parsed.document.createElement("select"));
@@ -147,11 +147,13 @@ async function bootPopup(settings, formula) {
   globalThis.document = parsed.document;
   globalThis.window = parsed.window;
   globalThis.setInterval = () => 0;
+  const sent = [];
   globalThis.chrome = {
     runtime: {
       getURL: (path) => path,
       openOptionsPage() {},
       async sendMessage(message) {
+        sent.push(message);
         if (message?.type === "OI_GET_SETTINGS") return { settings };
         return { ok: true };
       }
@@ -173,21 +175,31 @@ async function bootPopup(settings, formula) {
     popupBoot += 1;
     await import(`../popup/popup.js?borrow-popup=${popupBoot}`);
     let linkText = "引擎：—";
-    for (let i = 0; i < 30; i += 1) {
+    let unsetHidden = true;
+    for (let i = 0; i < 40; i += 1) {
       await Promise.resolve();
       linkText = parsed.document.getElementById("engineLink").textContent;
-      if (linkText !== "引擎：—") break;
+      unsetHidden = parsed.document.getElementById("engineUnset").hidden;
+      if (linkText !== "引擎：—" || unsetHidden === false) break;
     }
-    const link = parsed.document.getElementById("engineLink");
-    const warn = parsed.document.getElementById("engineWarn");
-    const warnText = parsed.document.getElementById("engineWarnText");
     for (let i = 0; i < 40; i += 1) await Promise.resolve();
+    const link = parsed.document.getElementById("engineLink");
+    const unset = parsed.document.getElementById("engineUnset");
+    const note = parsed.document.getElementById("engineNote");
+    const translate = parsed.document.getElementById("translatePage");
+    const setup = parsed.document.getElementById("engineSetup");
+    if (act) act({ translate, setup, note, unset, sent, document: parsed.document });
     return {
       text: link.textContent,
       title: link.title,
-      warnHidden: warn.hidden,
-      warnText: warnText.textContent,
-      body: parsed.document.body.textContent
+      linkHidden: link.hidden,
+      unsetHidden: unset.hidden,
+      unsetText: unset.textContent.replace(/\s+/g, " ").trim(),
+      noteHidden: note.hidden,
+      noteText: note.textContent,
+      translateDisabled: translate.disabled,
+      body: parsed.document.body.textContent,
+      sent
     };
   } finally {
     globalThis.document = previous.document;
@@ -214,7 +226,9 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and no eng
   const popupCss = readFileSync(join(root, "popup/popup.css"), "utf8");
   assert.match(popupJs, /引擎：\$\{shortName\}/);
   assert.match(popupJs, /link\.title = provider\.name/);
-  assert.match(popupJs, /const ok = borrowed \|\|/);
+  assert.match(popupJs, /engineMissing = true/);
+  assert.match(popupJs, /NO_ENGINE_COPY\.body/);
+  assert.equal(popupJs.includes("const ok = borrowed"), false);
   assert.equal(popupJs.includes("借用"), false);
   assert.equal(popupCss.includes("is-borrow"), false);
 
@@ -224,8 +238,9 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and no eng
   assert.equal(borrowed.title, own.title);
   assert.equal(borrowed.text, "引擎：Kimi");
   assert.equal(borrowed.title, "Kimi / 月之暗面");
-  assert.equal(borrowed.warnHidden, true);
-  assert.equal(borrowed.warnText, "");
+  assert.equal(borrowed.linkHidden, false);
+  assert.equal(borrowed.unsetHidden, true);
+  assert.equal(borrowed.noteHidden, true);
   assert.equal(borrowed.body.includes("借用"), false);
   assert.equal(borrowed.body.includes("多模态"), false);
   assert.equal(borrowed.body.includes("MyMemory"), false);
@@ -241,7 +256,8 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and no eng
   );
   assert.equal(doubao.text, "引擎：豆包");
   assert.equal(doubao.title, "豆包");
-  assert.equal(doubao.warnHidden, true);
+  assert.equal(doubao.unsetHidden, true);
+  assert.equal(doubao.noteHidden, true);
   assert.equal(doubao.body.includes("MyMemory"), false);
   assert.equal(doubao.body.includes(MM_KEY), false);
 
@@ -250,8 +266,11 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and no eng
     { multimodal: { provider: "kimi", apiKey: "", model: "" } }
   );
   assert.equal(fallback.text, "引擎：—");
-  assert.equal(fallback.warnText, "未配置引擎");
-  assert.equal(fallback.warnHidden, false);
+  assert.equal(fallback.linkHidden, true);
+  assert.equal(fallback.unsetHidden, false);
+  assert.equal(fallback.unsetText, "引擎：未设置 · 去设置");
+  assert.equal(fallback.noteHidden, true);
+  assert.equal(fallback.translateDisabled, false);
   assert.equal(fallback.body.includes("MyMemory"), false);
   assert.equal(fallback.body.includes("还没配置"), false);
 
@@ -267,7 +286,8 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and no eng
   const factory = await bootPopup(factorySettings, mm());
   assert.equal(factory.text, "引擎：Kimi");
   assert.equal(factory.title, "Kimi / 月之暗面");
-  assert.equal(factory.warnHidden, true);
+  assert.equal(factory.unsetHidden, true);
+  assert.equal(factory.noteHidden, true);
   assert.equal(factory.body.includes("借用"), false);
   assert.equal(factory.body.includes("MyMemory"), false);
 
@@ -276,16 +296,38 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and no eng
     mm()
   );
   assert.equal(explicitFree.text, "引擎：MyMemory（免费）");
-  assert.equal(explicitFree.warnHidden, true);
+  assert.equal(explicitFree.unsetHidden, true);
+  assert.equal(explicitFree.noteHidden, true);
 
   const neither = await bootPopup(
     factorySettings,
-    { multimodal: { provider: "kimi", apiKey: "", model: "" } }
+    { multimodal: { provider: "kimi", apiKey: "", model: "" } },
+    (ui) => {
+      assert.equal(ui.translate.disabled, false);
+      let focused = null;
+      ui.setup.focus = () => { focused = ui.setup; };
+      ui.translate.click();
+      assert.equal(focused, ui.setup);
+      assert.equal(ui.note.hidden, false);
+      assert.equal(ui.note.textContent, "去设置里选一个引擎并填写 API Key，就能开始翻译。");
+      assert.equal(ui.translate.disabled, false);
+      assert.equal(ui.translate.textContent, "翻译此页");
+      assert.equal(ui.sent.some((message) => (
+        message?.type === "OI_START" || message?.type === "OI_SAVE_SETTINGS" || message?.type === "OI_TRANSLATE_BATCH"
+      )), false);
+      ui.setup.click();
+      assert.equal(ui.sent.some((message) => message?.type === "OI_OPEN_TRANSLATE_SETTINGS"), true);
+    }
   );
   assert.equal(neither.text, "引擎：—");
-  assert.equal(neither.warnHidden, false);
-  assert.equal(neither.warnText, "未配置引擎");
+  assert.equal(neither.linkHidden, true);
+  assert.equal(neither.unsetHidden, false);
+  assert.equal(neither.unsetText, "引擎：未设置 · 去设置");
+  assert.equal(neither.noteHidden, false);
+  assert.equal(neither.noteText, "去设置里选一个引擎并填写 API Key，就能开始翻译。");
+  assert.equal(neither.translateDisabled, false);
   assert.equal(neither.body.includes("MyMemory"), false);
+  assert.equal(neither.body.includes("借用"), false);
 
   const custom = await bootPopup(
     factorySettings,
@@ -293,7 +335,8 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and no eng
   );
   assert.equal(custom.text, "引擎：自定义");
   assert.equal(custom.title, "自定义");
-  assert.equal(custom.warnHidden, true);
+  assert.equal(custom.unsetHidden, true);
+  assert.equal(custom.noteHidden, true);
   assert.equal(custom.body.includes("Custom"), false);
   assert.equal(custom.body.includes("自定义 HTTP API"), false);
   assert.equal(custom.body.includes("借用"), false);

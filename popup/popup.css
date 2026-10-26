@@ -88,11 +88,34 @@ select {
   min-width: 0;
   width: 100%;
 }
+.engine-line {
+  margin-top: 8px;
+  max-width: 100%;
+}
 .engine-link {
   display: inline-block;
-  margin-top: 8px;
+  margin-top: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.engine-unset-name,
+#engineUnsetName { color: var(--oi-text-muted); }
+.engine-setup {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--oi-accent);
+  text-decoration: none;
+}
+.engine-setup:focus-visible {
+  outline: 2px solid var(--oi-focus);
+  outline-offset: 2px;
+}
+.engine-note {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--oi-warn);
 }

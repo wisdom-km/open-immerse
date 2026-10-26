@@ -22,6 +22,7 @@
 
     <section class="intent-card">
       <button type="button" id="translatePage" class="btn-primary" data-busy="0">翻译此页</button>
+      <p id="engineNote" class="engine-note" hidden>去设置里选一个引擎并填写 API Key，就能开始翻译。</p>
       <button type="button" id="restorePage" class="btn-secondary">恢复原文</button>
       <label class="switch-row"><span>本站自动</span><input id="autoSite" type="checkbox" /></label>
       <label>范围
@@ -36,8 +37,10 @@
           <select id="targetLang" aria-label="目标语言"></select>
         </div>
       </label>
-      <a id="engineLink" class="ghost-link engine-link" href="#">引擎：—</a>
-      <p id="engineWarn" class="danger" hidden><span id="engineWarnText">未配置引擎</span> <button type="button" id="goSetup" class="ghost-link">去设置</button></p>
+      <p id="engineLine" class="engine-line">
+        <a id="engineLink" class="ghost-link engine-link" href="#">引擎：—</a>
+        <span id="engineUnset" hidden>引擎：<span id="engineUnsetName">未设置</span> · <a id="engineSetup" class="engine-setup" href="#">去设置</a></span>
+      </p>
       <details class="more">
         <summary>更多</summary>
         <label>本次额度

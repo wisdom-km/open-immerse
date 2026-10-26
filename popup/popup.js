@@ -1,14 +1,16 @@
-import { getProvider, isProviderConfigured, providers } from "../lib/providers.js";
+import { getProvider, providers } from "../lib/providers.js";
 import { readFormulaSettings } from "../lib/formula-settings.js";
 import { describeTranslateBorrow } from "../lib/translate-borrow.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { featureOn } from "../lib/features.js";
 import { shouldOfferPdfOpen } from "../lib/pdf-viewer.js";
+import { NO_ENGINE_COPY } from "../lib/no-engine-prompt.js";
 
 const $ = (id) => document.getElementById(id);
 const PRIMARY_IDLE = "翻译此页";
 const PRIMARY_STOP = "停止";
+let engineMissing = false;
 
 init();
 
@@ -23,7 +25,10 @@ async function init() {
     ev.preventDefault();
     openOptions();
   });
-  $("goSetup").addEventListener("click", openOptions);
+  $("engineSetup").addEventListener("click", (ev) => {
+    ev.preventDefault();
+    chrome.runtime.sendMessage({ type: "OI_OPEN_TRANSLATE_SETTINGS" });
+  });
   $("openOptions").addEventListener("click", openOptions);
   $("openLearning").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "learning" }));
   $("openDocs").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "documents" }));
@@ -50,6 +55,15 @@ async function init() {
     if ($("translatePage").dataset.busy === "1") {
       if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "OI_STOP" }).catch(() => {});
       setPrimaryBusy(false);
+      return;
+    }
+    if (engineMissing) {
+      const note = $("engineNote");
+      if (note) {
+        note.hidden = false;
+        note.textContent = NO_ENGINE_COPY.body;
+      }
+      $("engineSetup")?.focus();
       return;
     }
     await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: true } });
@@ -149,17 +163,19 @@ function renderEngine(settings, formula) {
     ? { providerId: described.vendorId, fallback: false, borrowed: true, notice: "" }
     : described.outbound;
   const link = $("engineLink");
-  const warn = $("engineWarn");
-  const warnText = $("engineWarnText");
+  const unset = $("engineUnset");
+  const note = $("engineNote");
   if (!borrowed && outbound?.code === "NO_ENGINE") {
-    if (link) {
-      link.textContent = "引擎：—";
-      link.title = "";
-    }
-    if (warnText) warnText.textContent = "未配置引擎";
-    if (warn) warn.hidden = false;
+    engineMissing = true;
+    if (link) link.hidden = true;
+    if (unset) unset.hidden = false;
+    if (note) note.hidden = true;
     return;
   }
+  engineMissing = false;
+  if (link) link.hidden = false;
+  if (unset) unset.hidden = true;
+  if (note) note.hidden = true;
   const known = providers[outbound.providerId];
   const provider = known
     ? getProvider(outbound.providerId)
@@ -185,12 +201,6 @@ function renderEngine(settings, formula) {
   link.title = provider.name;
   if (borrowed && described.vendorId === "custom") link.title = described.shortName || provider.name;
   if (!borrowed && provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
-  const selected = getProvider(settings.provider);
-  const cfg = settings.providers?.[selected.id] || {};
-  const ok = borrowed || (!outbound.fallback && isProviderConfigured(selected, cfg));
-  if (outbound.fallback && warnText) warnText.textContent = outbound.notice;
-  else if (borrowed && warnText) warnText.textContent = "";
-  warn.hidden = ok;
 }
 
 function hostOf(url) {

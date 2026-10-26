@@ -18,6 +18,7 @@ import {
   writePdfDefaultNoticeSeen
 } from "../lib/pdf-default-notice.js";
 import { implicitDefaultTranslate } from "../lib/translate-borrow.js";
+import { NO_ENGINE_COPY, flashFocus } from "../lib/no-engine-prompt.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -200,7 +201,7 @@ if (!globalThis.OI_OPTIONS_MANUAL && globalThis.document?.body?.classList?.conta
 
 async function init() {
   fillSelect(el("provider"), [
-    { value: "", label: "未选择" },
+    { value: "", label: NO_ENGINE_COPY.providerPlaceholder, disabled: true },
     ...PROVIDER_LIST.map((p) => ({ value: p.id, label: p.name }))
   ]);
   fillSelect(el("sourceLang"), LANGUAGE_OPTIONS.map((l) => ({ value: l.code, label: l.label })));
@@ -1633,6 +1634,7 @@ function fillSelect(select, items) {
     const option = document.createElement("option");
     option.value = item.value;
     option.textContent = item.label;
+    if (item.disabled) option.disabled = true;
     select.appendChild(option);
   });
 }
@@ -2422,6 +2424,7 @@ function showPage(id, focus) {
   if (next === "pdf") void presentPdfDefaultNotice();
   else pdfNoticeKept = false;
   if (next === "mm") focusMm = true;
+  if (focus === "provider" && next === "translate") flashFocus(el("provider"));
   if (focus && next === "data") {
     const group = document.querySelector(`[data-focus-group="${focus}"]`) || document.querySelector(`[data-focus="${focus}"]`);
     if (group) {

@@ -142,6 +142,50 @@ html[data-oi-style="card"] .oi-translation:not(.oi-inline) {
   box-shadow: var(--oi-shadow-1);
 }
 .oi-toast.show { opacity: 1; transform: none; }
+.oi-toast.is-engine {
+  pointer-events: auto;
+}
+.oi-toast.is-engine .oi-engine-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.oi-toast.is-engine .oi-engine-body {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+.oi-toast.is-engine .oi-engine-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  margin-top: 8px;
+}
+.oi-toast.is-engine .oi-engine-actions button {
+  height: 28px;
+  margin: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--oi-text-muted);
+  font: 500 13px/28px var(--oi-font);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.oi-toast.is-engine .oi-engine-actions .oi-engine-go {
+  background: var(--oi-accent);
+  color: #fff;
+}
+.oi-toast.is-engine .oi-engine-actions button:focus-visible {
+  outline: 2px solid var(--oi-focus);
+  outline-offset: 2px;
+}
 .oi-selection-card {
   position: fixed;
   right: var(--oi-fab-toast-right, 20px);

@@ -416,6 +416,7 @@ import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
 import { missingRequiredField } from "../lib/providers.js";
 import { resolveTranslateOutbound } from "../lib/translate-borrow.js";
+import { NO_ENGINE_COPY } from "../lib/no-engine-prompt.js";
 import { normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
   applyStructureTranslations,
@@ -774,6 +775,10 @@ function init() {
     }
   });
   $("translatePage").addEventListener("click", () => startTranslate());
+  $("noEngineSetup")?.addEventListener("click", () => {
+    runtimeSend({ type: "OI_OPEN_TRANSLATE_SETTINGS" }).catch(() => {});
+  });
+  $("noEngineDismiss")?.addEventListener("click", () => hideNoEngineBanner());
   $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
   $("translateMenuRetranslate")?.addEventListener("click", () => {
     closeTranslateMenu(true);
@@ -10377,6 +10382,27 @@ async function probeLocalService(baseUrl) {
   }
 }
 
+function showNoEngineBanner() {
+  const banner = $("noEngineBanner");
+  if (!banner) return;
+  const title = banner.querySelector("h3");
+  const body = banner.querySelector("p");
+  const setup = $("noEngineSetup");
+  const dismiss = $("noEngineDismiss");
+  if (title) title.textContent = NO_ENGINE_COPY.title;
+  if (body) body.textContent = NO_ENGINE_COPY.body;
+  if (setup) setup.textContent = NO_ENGINE_COPY.primary;
+  if (dismiss) dismiss.textContent = NO_ENGINE_COPY.dismiss;
+  banner.hidden = false;
+  const pending = $("pendingRead");
+  if (pending) pending.hidden = true;
+}
+
+function hideNoEngineBanner() {
+  const banner = $("noEngineBanner");
+  if (banner) banner.hidden = true;
+}
+
 function noteFreeDefaultOutbound(outbound) {
   const root = document.documentElement;
   if (!root) return;
@@ -10488,6 +10514,15 @@ async function startTranslate() {
   const blocker = await translatePreflight();
   if (adopting !== docId) return;
   if (documentTranslateSuperseded()) return;
+  if (blocker === "NO_ENGINE") {
+    showNoEngineBanner();
+    if (docPhase === "opening" || docPhase === "running") docPhase = "idle";
+    refreshDocStatus();
+    renderArticle();
+    updateTranslateControls();
+    return;
+  }
+  hideNoEngineBanner();
   if (blocker) {
     setStatus(blocker, true);
     if (docPhase === "opening" || docPhase === "running") docPhase = "idle";

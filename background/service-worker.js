@@ -181,6 +181,20 @@ async function handleMessage(message, sender) {
       return { ok: true };
     case "OI_REVIEW_LEARNING":
       return { ok: true, item: await reviewItem(message.id, message.grade) };
+    case "OI_TRANSLATE_PREFLIGHT": {
+      const settings = await getSettings();
+      let formula;
+      try {
+        formula = await readFormulaSettings(chrome.storage?.local);
+      } catch {
+        formula = defaultFormulaSettings();
+      }
+      const outbound = resolveTranslateOutbound(settings, formula);
+      if (outbound.code === NO_ENGINE || !outbound.provider) return { ok: false, code: NO_ENGINE };
+      return { ok: true, code: "" };
+    }
+    case "OI_OPEN_TRANSLATE_SETTINGS":
+      return openTranslateProviderSettings();
     case "OI_OPEN_PAGE": {
       const settings = await getSettings();
       const features = resolveFeatures(settings);
@@ -470,6 +484,31 @@ function remember(key, value, source = "") {
   }
   cache.set(key, text);
   if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
+}
+
+export async function openTranslateProviderSettings() {
+  const url = chrome.runtime.getURL("options/options.html#translate?focus=provider");
+  const base = chrome.runtime.getURL("options/options.html");
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch {
+    tabs = [];
+  }
+  const existing = (tabs || []).find((tab) => String(tab?.url || tab?.pendingUrl || "").startsWith(base));
+  if (existing?.id != null) {
+    await chrome.tabs.update(existing.id, { active: true, url });
+    if (existing.windowId != null && chrome.windows?.update) {
+      try {
+        await chrome.windows.update(existing.windowId, { focused: true });
+      } catch {
+        /* the settings tab is already active */
+      }
+    }
+    return { ok: true, reused: true };
+  }
+  await chrome.tabs.create({ url });
+  return { ok: true, reused: false };
 }
 
 export { translateBatch, resolveBatchPolish, CACHE_VER, cache as translationCache };

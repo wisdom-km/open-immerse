@@ -577,6 +577,12 @@ test("settings routes redirect old anchors and keep eight pages", () => {
   assert.equal(focus.focus, "export");
   assert.equal(focus.replace, "#data");
   assert.equal(parseSettingsHash("#data?focus=nope").focus, "");
+  const providerFocus = parseSettingsHash("#translate?focus=provider");
+  assert.equal(providerFocus.id, "translate");
+  assert.equal(providerFocus.focus, "provider");
+  assert.equal(providerFocus.redirected, true);
+  assert.equal(providerFocus.replace, "#translate");
+  assert.equal(parseSettingsHash("#mm?focus=provider").focus, "");
   assert.equal(parseSettingsHash("#nope").id, "translate");
   assert.equal(parseSettingsHash("").id, "translate");
 });
@@ -1863,11 +1869,15 @@ test("missing-field attention is stored, and the translate badge shows when the 
   assert.equal(chrome.sync.settings.oiProviderAttention, undefined);
   assert.equal(page.document.getElementById("translateBorrowHint"), null);
   const hints = [...page.document.querySelectorAll("#panel-translate p.hint")];
-  assert.equal(hints.length, 1);
-  assert.equal(hints[0].hidden, false);
-  assert.match(hints[0].textContent, /只显示当前默认引擎的配置/);
-  assert.equal(hints[0].textContent.includes("正在借用"), false);
-  assert.equal(hints[0].textContent.includes("MyMemory"), false);
+  assert.equal(hints.length, 2);
+  const hint = hints.find((node) => node.textContent.includes("只显示当前默认引擎的配置"));
+  assert.equal(hint.hidden, false);
+  assert.equal(hint.textContent.includes("正在借用"), false);
+  assert.equal(hint.textContent.includes("MyMemory"), false);
+  assert.equal(
+    page.document.getElementById("providerHint").textContent,
+    "选择引擎后填写 API Key。MyMemory 免费但质量有限，无需 Key。"
+  );
   const panel = page.document.getElementById("panel-translate").textContent;
   assert.equal(panel.includes("借用"), false);
 
@@ -1901,8 +1911,8 @@ test("settings page keeps the original engine hint while borrowing, and an own e
   await flush();
   function engineHint() {
     const hints = [...page.document.querySelectorAll("#panel-translate p.hint")];
-    assert.equal(hints.length, 1);
-    return hints[0];
+    assert.equal(hints.length, 2);
+    return hints.find((node) => node.textContent.includes("只显示当前默认引擎的配置"));
   }
   assert.equal(page.document.getElementById("translateBorrowHint"), null);
   assert.equal(page.document.querySelector("#panel-translate [aria-live]"), null);
@@ -1958,6 +1968,11 @@ test("picking a translation engine stores translateProviderChosen, including an 
   await flush();
   assert.equal(chrome.sync.settings.translateProviderChosen, undefined);
   const provider = page.document.getElementById("provider");
+  assert.equal(provider.value, "");
+  const placeholder = [...provider.options].find((option) => option.value === "");
+  assert.equal(placeholder.disabled, true);
+  assert.equal(placeholder.textContent, "请选择引擎");
+  assert.equal([...provider.options].some((option) => option.value === "mymemory" && option.disabled !== true), true);
   provider.value = "deepl";
   fire(provider, "change");
   await flush();
@@ -1969,6 +1984,10 @@ test("picking a translation engine stores translateProviderChosen, including an 
   assert.equal(chrome.sync.settings.provider, "mymemory");
   assert.equal(chrome.sync.settings.translateProviderChosen, true);
   assert.equal(JSON.stringify(chrome.sync.settings).includes("借用"), false);
+  const kept = mountPage("#translate");
+  await startOptions();
+  await flush();
+  assert.equal(kept.document.getElementById("provider").value, "mymemory");
 });
 
 function storedProviderKey(chrome, legacy) {
