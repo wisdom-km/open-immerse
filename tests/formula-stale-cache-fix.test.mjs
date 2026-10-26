@@ -21,7 +21,7 @@ import { diagStateForPage } from "../lib/diag-log.js";
 import { cacheableLayout, layoutCacheKey, resolveLayoutMode } from "../lib/pdf-layout-client.js";
 import { parseLayoutCacheKey } from "../lib/pdf-layout-cache.js";
 import { pairsFromResults } from "../lib/pdf-library.js";
-import { PDF_COPY, libraryPageRunState } from "../lib/pdf-viewer.js";
+import { PDF_COPY, canRetranslateRequestedPage, libraryPageRunState } from "../lib/pdf-viewer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
@@ -224,9 +224,39 @@ test("diagnostics tell a cached page from a fresh translation", () => {
   assert.ok(resegment >= 0 && resegment < send);
   assert.match(originals, /prior === "stale-formula" \|\| prior === "formula-check"/);
   assert.match(originals, /if \(!laid\?\.blocks\?\.length\) return \[\]/);
+  const rush = originals.indexOf("const rush = page === rushArmed");
+  const rushGate = originals.indexOf("forceAll === true || rush");
+  assert.ok(rush >= 0 && rush < rushGate && rushGate < resegment && resegment < send);
   const prep = viewer.slice(viewer.indexOf("const prepareLibraryPage"), viewer.indexOf("let translatedDoc = await translateDocumentPages"));
   assert.match(prep, /state === "stale-formula"/);
   assert.match(prep, /state === "formula-check"/);
   const skip = viewer.slice(viewer.indexOf("onPageSkip({ page, reason })"), viewer.indexOf("onPageStart({ page, total: pageTotal })"));
   assert.match(skip, /prior\?\.state === "stale-formula"/);
+});
+
+test("a rushed old-formula page is recut before it is translated", () => {
+  const originals = viewer.slice(viewer.indexOf("getPageOriginals: async (page) => {"), viewer.indexOf("pageSkipReason:"));
+  const rush = originals.indexOf("const rush = page === rushArmed");
+  const gate = originals.indexOf("if (options?.forceAll === true || rush)");
+  const prior = originals.indexOf('prior === "stale-formula" || prior === "formula-check"');
+  const ingest = originals.indexOf("ingestTextLayerLayout(page,");
+  const hold = originals.indexOf("if (!laid?.blocks?.length) return []");
+  const send = originals.indexOf("await originalsForPage");
+  assert.ok(rush >= 0 && rush < gate && gate < prior && prior < ingest && ingest < hold && hold < send);
+  assert.match(originals, /force: options\?\.forceAll === true \|\| rush/);
+});
+
+test("an explicit page is retranslated only when that page can, and an old formula mark still can", () => {
+  assert.equal(canRetranslateRequestedPage({ state: "queued", translatableCount: 0, originals: 0 }), false);
+  assert.equal(canRetranslateRequestedPage({ state: "empty", translatableCount: 0, originals: 0 }), false);
+  assert.equal(canRetranslateRequestedPage({ state: "skipped", translatableCount: 0, originals: 0 }), false);
+  assert.equal(canRetranslateRequestedPage({ state: "done", translatableCount: 0, originals: 0 }), false);
+  assert.equal(canRetranslateRequestedPage({ state: "queued", translatableCount: 2, originals: 0 }), true);
+  assert.equal(canRetranslateRequestedPage({ state: "stale-formula", translatableCount: 0, originals: 0 }), true);
+  assert.equal(canRetranslateRequestedPage({ state: "formula-check", translatableCount: 0, originals: 0 }), true);
+  const force = viewer.slice(viewer.indexOf("async function forceRetranslateCurrentPage"), viewer.indexOf("async function forceRetranslateCurrentPage") + 1800);
+  assert.match(force, /canRetranslate: retranslateOpenFor\(page\)/);
+  assert.equal(force.includes("explicit ||"), false);
+  const open = viewer.slice(viewer.indexOf("function retranslateOpenFor"), viewer.indexOf("function retranslatePageOpen"));
+  assert.match(open, /canRetranslateRequestedPage\(/);
 });

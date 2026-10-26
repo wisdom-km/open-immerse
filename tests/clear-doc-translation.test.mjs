@@ -16,6 +16,7 @@ import {
 } from "../lib/doc-translation-cache.js";
 import { createMemoryStore } from "../lib/formula-cache.js";
 import { LIBRARY_COPY, libraryProgressCopy } from "../lib/library-copy.js";
+import { readerToolbarChrome } from "../lib/pdf-pairing.js";
 import { createLibraryStore } from "../lib/library-store.js";
 import { createNotesStore } from "../lib/notes-store.js";
 import { createMemoryKv } from "../lib/platform/kv.js";
@@ -56,12 +57,48 @@ test("CDC-01 the clear item is only the last retranslate menu row, in danger col
   assert.match(menu, new RegExp(`>${CLEAR_DOC_COPY.cancel}<`));
   assert.match(menu, new RegExp(`>${CLEAR_DOC_COPY.confirmButton}<`));
   assert.match(menu, /id="retranslateClearCancel"[^>]*class="btn-secondary"/);
-  const clearCss = css.slice(css.indexOf(".retranslate-clear-rule"));
-  assert.match(clearCss, /\.retranslate-clear \.retranslate-item-label \{\s*color: var\(--oi-reader-danger, var\(--oi-reader-warn\)\);/);
-  assert.match(clearCss, /\.retranslate-clear-go \{[^}]*background: var\(--oi-reader-danger, var\(--oi-reader-warn\)\);/s);
+  const clearCss = css.slice(css.indexOf(".retranslate-clear-rule"), css.indexOf(".rf-stale-formula"));
+  assert.match(clearCss, /\.retranslate-clear \.retranslate-item-label \{\s*color: var\(--oi-reader-danger\);/);
+  assert.match(clearCss, /\.retranslate-clear-go \{[^}]*background: var\(--oi-reader-danger\);/s);
+  assert.match(clearCss, /color: var\(--oi-reader-on-danger\);/);
+  assert.equal(clearCss.includes("#fff"), false);
+  assert.equal(clearCss.includes("--oi-reader-warn"), false);
+  assert.match(clearCss, /border-radius: var\(--oi-reader-topbar-btn-radius\)/);
   assert.equal(clearCss.includes("--oi-settings"), false);
   assert.equal(readFileSync(join(root, "options/options.html"), "utf8").includes(CLEAR_DOC_COPY.item), false);
   assert.equal(readFileSync(join(root, "pdf/library-panel.js"), "utf8").includes(CLEAR_DOC_COPY.item), false);
+});
+
+test("CDC-01 medium and narrow translate menus keep the same clear row", () => {
+  const menu = html.slice(html.indexOf('id="translateMenu"'), html.indexOf('id="retranslateSplit"'));
+  const doc = menu.indexOf('id="translateMenuRetranslateDoc"');
+  const rule = menu.indexOf('class="retranslate-clear-rule"');
+  const item = menu.indexOf('id="translateClearDoc"');
+  const confirm = menu.indexOf('id="translateClearConfirm"');
+  assert.ok(doc >= 0 && doc < rule && rule < item && item < confirm);
+  assert.match(menu, new RegExp(CLEAR_DOC_COPY.item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(menu, new RegExp(CLEAR_DOC_COPY.note));
+  assert.match(menu, new RegExp(CLEAR_DOC_COPY.confirm));
+  assert.match(menu, /id="translateClearCancel"[^>]*class="btn-secondary"/);
+  assert.match(menu, /id="translateClearGo"[^>]*class="retranslate-clear-go"/);
+  for (const width of [1199, 1000, 899, 800]) {
+    const chrome = readerToolbarChrome(width);
+    assert.equal(chrome.retranslateOnBar, false, String(width));
+    assert.equal(chrome.translateMenuOnBar, true, String(width));
+  }
+  assert.equal(readerToolbarChrome(1200).translateMenuOnBar, false);
+  const slots = viewer.slice(viewer.indexOf("function clearDocSlots"), viewer.indexOf("function viewerLayoutStorage"));
+  assert.match(slots, /translateClearDoc/);
+  assert.match(slots, /translateClearCancel/);
+  assert.match(slots, /translateClearGo/);
+  assert.match(slots, /applyClearDocConfirm\("open-item"\)/);
+  assert.match(viewer, /function closeTranslateMenu[\s\S]{0,180}resetClearDocConfirm\(\)/);
+  const tokens = readFileSync(join(root, "pdf/reader-tokens.css"), "utf8");
+  const dark = tokens.slice(tokens.indexOf('[data-reader-theme="dark"]'));
+  assert.match(tokens, /--oi-reader-danger:\s*#8E1B12/i);
+  assert.match(tokens, /--oi-reader-on-danger:\s*#FFF8F6/i);
+  assert.match(dark, /--oi-reader-danger:\s*#F6C7BE/i);
+  assert.match(dark, /--oi-reader-on-danger:\s*#1C1D1F/i);
 });
 
 test("CDC-02 confirm stays in the menu and cancel does not clear", () => {
@@ -72,7 +109,7 @@ test("CDC-02 confirm stays in the menu and cancel does not clear", () => {
   assert.deepEqual(reduceClearDocConfirm(opened, "outside"), { confirming: false, clear: false, close: true, focus: "" });
   assert.equal(reduceClearDocConfirm({ confirming: false }, "confirm").clear, false);
   assert.deepEqual(reduceClearDocConfirm(opened, "confirm"), { confirming: false, clear: true, close: true, focus: "" });
-  const bind = viewer.slice(viewer.indexOf("function bindClearDocTranslation"), viewer.indexOf("function viewerLayoutStorage"));
+  const bind = viewer.slice(viewer.indexOf("function clearDocSlots"), viewer.indexOf("function viewerLayoutStorage"));
   assert.match(bind, /applyClearDocConfirm\("open-item"\)/);
   assert.match(bind, /retranslateClearCancel/);
   assert.match(bind, /if \(next\.clear\) void clearDocTranslationCache\(\)/);

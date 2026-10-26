@@ -58,6 +58,7 @@ import {
   translationLanded,
   translationSettled,
   canRetranslatePage,
+  canRetranslateRequestedPage,
   psEmptyCopy,
   psNoTextCopy,
   psRunning,
@@ -9315,38 +9316,56 @@ function closeRetranslateMenu(focusButton) {
 
 let clearDocConfirming = false;
 
+function clearDocSlots() {
+  return [
+    ["retranslateClearDoc", "retranslateClearConfirm", "retranslateClearCancel", "retranslateClearGo"],
+    ["translateClearDoc", "translateClearConfirm", "translateClearCancel", "translateClearGo"]
+  ];
+}
+
 function resetClearDocConfirm() {
   clearDocConfirming = false;
-  const confirm = $("retranslateClearConfirm");
-  const item = $("retranslateClearDoc");
-  if (confirm) confirm.hidden = true;
-  if (item) item.hidden = false;
+  for (const [itemId, confirmId] of clearDocSlots()) {
+    const confirm = $(confirmId);
+    const item = $(itemId);
+    if (confirm) confirm.hidden = true;
+    if (item) item.hidden = false;
+  }
 }
 
 function applyClearDocConfirm(event) {
   const next = reduceClearDocConfirm({ confirming: clearDocConfirming }, event);
   clearDocConfirming = next.confirming === true;
-  const item = $("retranslateClearDoc");
-  const confirm = $("retranslateClearConfirm");
-  if (item) item.hidden = next.confirming === true;
-  if (confirm) confirm.hidden = next.confirming !== true;
-  if (next.focus === "cancel") $("retranslateClearCancel")?.focus();
+  for (const [itemId, confirmId] of clearDocSlots()) {
+    const item = $(itemId);
+    const confirm = $(confirmId);
+    if (item) item.hidden = next.confirming === true;
+    if (confirm) confirm.hidden = next.confirming !== true;
+  }
+  if (next.focus === "cancel") {
+    const cancel = clearDocSlots()
+      .map(([, , cancelId]) => $(cancelId))
+      .find((node) => node && !node.closest("[hidden]"));
+    (cancel || $("retranslateClearCancel"))?.focus();
+  }
   return next;
 }
 
 function bindClearDocTranslation() {
-  $("retranslateClearDoc")?.addEventListener("click", () => {
-    applyClearDocConfirm("open-item");
-  });
-  $("retranslateClearCancel")?.addEventListener("click", (event) => {
-    event.stopPropagation();
-    applyClearDocConfirm("cancel");
-  });
-  $("retranslateClearGo")?.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const next = applyClearDocConfirm("confirm");
-    if (next.clear) void clearDocTranslationCache();
-  });
+  for (const [itemId, , cancelId, goId] of clearDocSlots()) {
+    $(itemId)?.addEventListener("click", () => {
+      applyClearDocConfirm("open-item");
+    });
+    $(cancelId)?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      applyClearDocConfirm("cancel");
+    });
+    $(goId)?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const next = applyClearDocConfirm("confirm");
+      if (next.clear) void clearDocTranslationCache();
+    });
+  }
 }
 
 function viewerLayoutStorage() {
@@ -9494,6 +9513,7 @@ async function runRetranslateMenu(scope) {
 }
 
 function closeTranslateMenu(focusButton) {
+  resetClearDocConfirm();
   const menu = $("translateMenu");
   if (!menu || menu.hidden) return false;
   menu.hidden = true;
@@ -13517,7 +13537,7 @@ async function forceRetranslateCurrentPage(requestedPage) {
     busy: pdfTranslateBusy(session),
     retranslating: retranslateScope === "page" || retranslateScope === "document",
     page,
-    canRetranslate: explicit || retranslatePageOpen()
+    canRetranslate: retranslateOpenFor(page)
   });
   if (plan.action === "ignore") return;
   if (plan.action === "rush") {
@@ -15478,16 +15498,19 @@ function setHasDoc(has) {
   updateTranslateControls();
 }
 
-function retranslatePageOpen() {
-  const page = capsulePage();
+function retranslateOpenFor(page) {
   const row = pageStates.get(page);
   const layout = getPageLayout(page);
-  return canRetranslatePage({
+  return canRetranslateRequestedPage({
     state: row?.state || "",
     translatableCount: translatableBlocks(layout?.blocks || []).length,
     titleCandidate: isTitlePageCandidate(page, pageTextForStructure(layout?.blocks)),
     originals: page === pageNum ? pageOriginals.length : 0
   });
+}
+
+function retranslatePageOpen() {
+  return retranslateOpenFor(capsulePage());
 }
 
 function updateTranslateControls() {
