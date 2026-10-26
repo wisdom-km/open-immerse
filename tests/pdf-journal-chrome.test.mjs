@@ -7,10 +7,18 @@ import { vendorLayoutToBlocks } from "../lib/pdf-layout-adapter.js";
 
 const page = { width: 612, height: 792 };
 
-test("decorative text and DOI-only lines are chrome without a position", () => {
+test("decorative text and an edge DOI are chrome; a reference DOI stays", () => {
   assert.equal(isPageChromeText("a1111111111"), true);
   assert.equal(isPageChromeText("OPEN ACCESS"), true);
-  assert.equal(isPageChromeText("10.1186/s13059-014-0550-8"), true);
+  assert.equal(isPageChromeText("10.1186/s13059-014-0550-8"), false);
+  assert.equal(
+    isPageChromeItem({ str: "10.1186/s13059-014-0550-8", x: 72, y: 24, width: 180, height: 8 }, page),
+    true
+  );
+  assert.equal(
+    isPageChromeItem({ str: "https://doi.org/10.1007/BF00992696", x: 200, y: 400, width: 220, height: 9 }, page),
+    false
+  );
   assert.equal(isPageChromeText("Attention Is All You Need"), false);
   assert.equal(isPageChromeText("Abstract"), false);
   assert.equal(isPageChromeText("The dominant sequence transduction models are based on"), false);

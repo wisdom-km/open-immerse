@@ -87,6 +87,12 @@ test("Symbol private-use and CMEX delimiters remap; unknown runs are gap marks",
   assert.equal(sanitizePdfTextItem("\uE103\uE09D\uE104"), GLYPH_GAP_MARK);
   assert.equal(countLeaks(sanitizeBlockText("\uF074 \uF8F1 \uFFFD \uE103")).total, 0);
   assert.equal(sanitizeBlockText("\u00FEetta"), "\u00FEetta");
+  assert.equal(sanitizeBlockText("Nal Kalchbrenner"), "Nal Kalchbrenner");
+  const stored = readingSurfaceText({
+    blocks: [{ label: "formula", sourceText: "\uF8EE" }]
+  });
+  assert.equal(countLeaks(stored).total, 0);
+  assert.match(stored, /\u23A1/);
 });
 
 test("a ligature hole split by a newline is one word, and bare numbers are not page noise", () => {
