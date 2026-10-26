@@ -48,6 +48,43 @@ test("NEP-04 the three surfaces quote the shared no-engine copy", () => {
   }
 });
 
+function authorDisplay(css, element) {
+  const hidden = element.hasAttribute("hidden");
+  let best = { spec: hidden ? 10 : -1, order: -1, value: hidden ? "none" : "" };
+  let order = 0;
+  for (const block of css.matchAll(/(^|})([^{}@]+)\{([^{}]*)\}/g)) {
+    order += 1;
+    const declared = block[3].match(/(?:^|;)\s*display\s*:\s*([^;]+)/);
+    if (!declared) continue;
+    for (const raw of block[2].split(",")) {
+      const selector = raw.trim();
+      if (!selector || !element.matches(selector)) continue;
+      const spec = (selector.match(/#[\w-]+/g) || []).length * 100
+        + (selector.match(/\.[\w-]+|\[[^\]]+\]/g) || []).length * 10
+        + (selector.match(/(^|[\s>+~])[a-zA-Z][\w-]*/g) || []).length;
+      if (spec > best.spec || (spec === best.spec && order > best.order)) {
+        best = { spec, order, value: declared[1].trim() };
+      }
+    }
+  }
+  return best.value || "inline";
+}
+
+test("an unconfigured popup shows only the NEP engine line", () => {
+  const { document } = parseHTML(read("popup/popup.html"));
+  const css = read("popup/popup.css");
+  const link = document.getElementById("engineLink");
+  const unset = document.getElementById("engineUnset");
+  const note = document.getElementById("engineNote");
+  link.hidden = true;
+  unset.hidden = false;
+  note.hidden = true;
+  const shown = [link, unset, note]
+    .filter((el) => authorDisplay(css, el) !== "none")
+    .map((el) => el.textContent.replace(/\s+/g, " ").trim());
+  assert.deepEqual(shown, ["引擎：未设置 · 去设置"]);
+});
+
 test("NEP-05/10 the provider anchor focuses the select and the ring lasts 1.2s", () => {
   const parsed = parseSettingsHash("#translate?focus=provider");
   assert.equal(parsed.id, "translate");

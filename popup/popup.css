@@ -108,6 +108,9 @@ select {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.engine-link[hidden] {
+  display: none;
+}
 .engine-unset-name,
 #engineUnsetName { color: var(--oi-text-muted); }
 .engine-setup {
