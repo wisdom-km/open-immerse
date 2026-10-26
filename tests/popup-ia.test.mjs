@@ -504,9 +504,10 @@ test("popup PDF open uses contentType, then URL fallback, without a new permissi
   assert.ok(disable >= 0 && disable < probe && probe < send);
 });
 
-function popupTabStops(html, { pdf = true, unset = false } = {}) {
+function popupTabStops(html, { pdf = true, unset = false, restore = false } = {}) {
   const { document } = parseHTML(html);
   if (pdf) document.getElementById("pdfEntry").hidden = false;
+  if (restore) document.getElementById("restorePage").disabled = false;
   if (unset) {
     document.getElementById("engineLink").hidden = true;
     document.getElementById("engineUnset").hidden = false;
@@ -613,7 +614,7 @@ test("PL-06 the no-engine note sits under the button row and only pushes what fo
 test("PL-07 a disabled 恢复原文 stays in the action row", () => {
   const { html, css, js } = popupSources();
   const row = html.slice(html.indexOf('class="action-row"'), html.indexOf("</div>", html.indexOf('class="action-row"')));
-  assert.match(row, /id="restorePage"/);
+  assert.match(row, /id="restorePage"[^>]*disabled[^>]*>恢复原文/);
   const disabled = css.match(/\.action-row > #restorePage:disabled\s*\{[^}]+\}/)[0];
   assert.match(disabled, /display:\s*inline-flex/);
   assert.match(disabled, /min-width:\s*88px/);
@@ -625,7 +626,9 @@ test("PL-07 a disabled 恢复原文 stays in the action row", () => {
 
 test("PL-08 tab order is translate, restore, site, scope, language, setup, more, PDF, footer", () => {
   const { html } = popupSources();
-  const configured = popupTabStops(html, { pdf: true, unset: false });
+  assert.match(html, /id="restorePage"[^>]*disabled/);
+  assert.equal(popupTabStops(html, { pdf: true }).includes("restorePage"), false);
+  const configured = popupTabStops(html, { pdf: true, unset: false, restore: true });
   assert.deepEqual(configured, [
     "translatePage",
     "restorePage",
@@ -640,7 +643,7 @@ test("PL-08 tab order is translate, restore, site, scope, language, setup, more,
     "openLearning",
     "openDocs"
   ]);
-  const unset = popupTabStops(html, { pdf: true, unset: true });
+  const unset = popupTabStops(html, { pdf: true, unset: true, restore: true });
   assert.deepEqual(unset, [
     "translatePage",
     "restorePage",

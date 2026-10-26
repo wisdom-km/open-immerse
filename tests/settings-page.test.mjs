@@ -647,7 +647,8 @@ test("palette A contrast and scope stay on the settings page", () => {
   // viewer.js changes, so that directory is read instead of filtered by log.
   // `git diff A B` compares two commits and ignores the worktree. The second
   // call compares the files on disk with e4f464d, so an uncommitted edit fails.
-  const scope = ["ui/tokens.css", "lib/notes-prefs.js", "lib/reader-notes-local.js"];
+  // Shared dark --oi-warn lives in ui/tokens.css. This pin stays on the notes files.
+  const scope = ["lib/notes-prefs.js", "lib/reader-notes-local.js"];
   execFileSync("git", ["diff", "--quiet", "e4f464d", "HEAD", "--", ...scope]);
   execFileSync("git", ["diff", "--quiet", "e4f464d", "--", ...scope]);
   const shared = new Set([...readFileSync(join(root, "ui/tokens.css"), "utf8").matchAll(/--(oi-[\w-]+)\s*:/g)].map((hit) => hit[1]));
