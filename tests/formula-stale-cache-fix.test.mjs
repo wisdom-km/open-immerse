@@ -7,10 +7,14 @@ import { CHAIN_VERSION } from "../lib/formula-contract.js";
 import { normalizeArxivPrefs } from "../lib/formula-arxiv-session.js";
 import {
   FORMULA_PIPELINE_VERSION,
+  PDF_LAYOUT_MODE_MIGRATED,
+  PDF_LAYOUT_RESET_COPY,
   STALE_FORMULA_COPY,
+  UNKNOWN_FORMULA_PIPELINE,
   applyFormulaVerdict,
   formulaCacheVerdict,
   migrateEngineOverride,
+  migrateStoredPdfLayout,
   stampFormulaPairs
 } from "../lib/formula-pipeline.js";
 import { diagStateForPage } from "../lib/diag-log.js";
@@ -36,12 +40,21 @@ test("fp-1 is on the layout key and each translation; chainVersion stays f3-1", 
   assert.equal(legacy.docHash, "abc");
   assert.equal(parseLayoutCacheKey(layoutCacheKey({ hash: "abc", page: 4, mode: "text-layer" })).pipeline, "fp-1");
   assert.equal(parseLayoutCacheKey("oi-pdf-layout:abc:4:text-layer:blocks-1:source-v2"), null);
-  assert.equal(pairsFromResults([{ original: "Attention", translation: "注意力" }])[0].formulaPipeline, "fp-1");
+  assert.equal(pairsFromResults([{ original: "Attention", translation: "注意力" }])[0].formulaPipeline, UNKNOWN_FORMULA_PIPELINE);
+  assert.equal(
+    pairsFromResults([{ original: "Attention", translation: "注意力" }], { formulaPipeline: "fp-1" })[0].formulaPipeline,
+    "fp-1"
+  );
   const stored = cacheableLayout({
     page: 4,
     blocks: [{ id: "a", label: "text", text: "Hi", latex: "x", formulaTier: "ocr" }]
   });
-  assert.equal(stored.formulaPipeline, "fp-1");
+  assert.equal(stored.formulaPipeline, UNKNOWN_FORMULA_PIPELINE);
+  assert.equal(cacheableLayout({
+    page: 4,
+    blocks: [{ id: "a", label: "text", text: "Hi" }],
+    formulaPipeline: "fp-1"
+  }).formulaPipeline, "fp-1");
   assert.equal(stored.blocks[0].latex, undefined);
   assert.equal(stored.blocks[0].formulaTier, undefined);
 });
@@ -104,6 +117,73 @@ test("pairs compared without a stored layout ignore inline formula crops", () =>
   assert.equal(formulaCacheVerdict({ pairs, freshBlocks: changed }), "stale");
 });
 
+test("a stamp without a fresh text layer does not clear the old-page mark", () => {
+  const fresh = [{ label: "text", text: "Attention", sourceText: "Attention" }];
+  const stamped = stampFormulaPairs(settled);
+  assert.equal(formulaCacheVerdict({
+    pairs: stamped,
+    layout: { blocks: fresh, formulaPipeline: "fp-1" }
+  }), "unchecked");
+  assert.equal(applyFormulaVerdict("done", "unchecked"), "formula-check");
+  const legacy = cacheableLayout({ page: 4, blocks: fresh });
+  const legacyPairs = pairsFromResults([{ original: "Attention", translation: "注意力" }]);
+  assert.equal(legacy.formulaPipeline, UNKNOWN_FORMULA_PIPELINE);
+  assert.equal(legacyPairs[0].formulaPipeline, UNKNOWN_FORMULA_PIPELINE);
+  assert.equal(formulaCacheVerdict({ pairs: legacyPairs, layout: legacy }), "unchecked");
+  assert.equal(formulaCacheVerdict({
+    pairs: stamped,
+    layout: { blocks: fresh, formulaPipeline: "fp-1" },
+    freshBlocks: fresh
+  }), "current");
+  const split = {
+    blocks: [
+      { label: "text", text: "scaling factor of", sourceText: "scaling factor of" },
+      { label: "formula", text: "1/√d_k", sourceText: "1/√d_k" }
+    ],
+    formulaPipeline: "fp-1"
+  };
+  assert.equal(formulaCacheVerdict({
+    pairs: stamped,
+    layout: split,
+    freshBlocks: fresh
+  }), "stale");
+});
+
+test("saved local-ocr without a cloud key or an explicit choice resets once", () => {
+  const reset = migrateStoredPdfLayout({ pdfLayout: { mode: "local-ocr", cloudApiKey: "" } });
+  assert.equal(reset.reset, true);
+  assert.equal(reset.changed, true);
+  assert.equal(reset.settings.pdfLayout.mode, "");
+  assert.equal(reset.settings.pdfLayoutResetNotice, true);
+  assert.equal(reset.settings.pdfLayoutModeMigrated, PDF_LAYOUT_MODE_MIGRATED);
+  const again = migrateStoredPdfLayout({
+    ...reset.settings,
+    pdfLayout: { ...reset.settings.pdfLayout, mode: "local-ocr", explicit: true }
+  });
+  assert.equal(again.changed, false);
+  assert.equal(again.settings.pdfLayout.mode, "local-ocr");
+  const explicit = migrateStoredPdfLayout({ pdfLayout: { mode: "local-ocr", explicit: true } });
+  assert.equal(explicit.reset, false);
+  assert.equal(explicit.settings.pdfLayout.mode, "local-ocr");
+  assert.equal(explicit.settings.pdfLayoutResetNotice, undefined);
+  const cloud = migrateStoredPdfLayout({ pdfLayout: { mode: "local-ocr", cloudApiKey: "cloud-key" } });
+  assert.equal(cloud.reset, false);
+  assert.equal(cloud.settings.pdfLayout.mode, "local-ocr");
+  const text = migrateStoredPdfLayout({ pdfLayout: { mode: "" } });
+  assert.equal(text.reset, false);
+  assert.equal(text.settings.pdfLayout.mode, "");
+  assert.equal(text.settings.pdfLayoutResetNotice, undefined);
+  assert.equal(PDF_LAYOUT_RESET_COPY, "已改回默认文字层，可在此重新选择本地 OCR");
+  const optionsHtml = readFileSync(join(root, "options/options.html"), "utf8");
+  const modeRow = optionsHtml.slice(optionsHtml.indexOf('id="pdfLayoutMode"') - 400, optionsHtml.indexOf('id="pdfLayoutMode"'));
+  assert.match(modeRow, /id="pdfLayoutResetNote"/);
+  assert.match(optionsHtml, new RegExp(PDF_LAYOUT_RESET_COPY));
+  const optionsJs = readFileSync(join(root, "options/options.js"), "utf8");
+  assert.match(optionsJs, /paintPdfLayoutResetNote/);
+  assert.match(optionsJs, /pdfLayoutResetNotice: false/);
+  assert.match(optionsJs, /mode === "local-ocr" \|\| previous\.explicit === true/);
+});
+
 test("a leftover engine override is dropped; settings local-ocr and arXiv opt-in stay", () => {
   assert.deepEqual(migrateEngineOverride({ override: "local-ocr", explicit: false }), {
     override: "",
@@ -130,11 +210,20 @@ test("diagnostics tell a cached page from a fresh translation", () => {
   const seed = viewer.slice(viewer.indexOf("function seedLibraryProgress"), viewer.indexOf("async function seedLegacySkipPages"));
   assert.match(seed, /formulaVerdict: formulaVerdictFor/);
   assert.match(seed, /formulaStatePatch/);
-  const force = viewer.slice(viewer.indexOf("async function forceRetranslateCurrentPage"), viewer.indexOf("async function forceRetranslateCurrentPage") + 1200);
+  const force = viewer.slice(viewer.indexOf("async function forceRetranslateCurrentPage"), viewer.indexOf("async function forceRetranslateCurrentPage") + 1600);
   const pending = force.indexOf("forceRetranslatePending = false");
-  const ingest = force.indexOf("ingestTextLayerLayout(capsulePage()");
-  const source = force.indexOf("const sourceLayout = getPageLayout(capsulePage())");
+  const ingest = force.indexOf("ingestTextLayerLayout(page, () => false)");
+  const source = force.indexOf("const sourceLayout = getPageLayout(page)");
   assert.ok(pending >= 0 && pending < ingest && ingest < source);
+  assert.match(force, /formulaState === "stale-formula" \|\| formulaState === "formula-check"/);
+  const slot = viewer.slice(viewer.indexOf('if (spec.kind === "stale-formula")'), viewer.indexOf("if (spec.chip?.retry)"));
+  assert.match(slot, /forceRetranslateCurrentPage\(page\)/);
+  const originals = viewer.slice(viewer.indexOf("getPageOriginals: async (page) => {"), viewer.indexOf("pageSkipReason:"));
+  const resegment = originals.indexOf("ingestTextLayerLayout(page,");
+  const send = originals.indexOf("originalsForPage");
+  assert.ok(resegment >= 0 && resegment < send);
+  assert.match(originals, /prior === "stale-formula" \|\| prior === "formula-check"/);
+  assert.match(originals, /if \(!laid\?\.blocks\?\.length\) return \[\]/);
   const prep = viewer.slice(viewer.indexOf("const prepareLibraryPage"), viewer.indexOf("let translatedDoc = await translateDocumentPages"));
   assert.match(prep, /state === "stale-formula"/);
   assert.match(prep, /state === "formula-check"/);

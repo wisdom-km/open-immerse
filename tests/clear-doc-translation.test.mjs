@@ -9,8 +9,10 @@ import {
   clearDocTranslationPlan,
   clearDocTranslationRecords,
   deleteLayoutCacheKeys,
+  deleteVersionlessLayoutCacheKeys,
   layoutCacheKeyPrefix,
-  reduceClearDocConfirm
+  reduceClearDocConfirm,
+  versionlessLayoutCacheKeys
 } from "../lib/doc-translation-cache.js";
 import { createMemoryStore } from "../lib/formula-cache.js";
 import { LIBRARY_COPY, libraryProgressCopy } from "../lib/library-copy.js";
@@ -114,7 +116,9 @@ test("CDC-03 clear drops this document's translations and leaves the rest", asyn
   const settings = { apiKey: "secret-keep", pdfLayout: { mode: "local-ocr" } };
   const bag = {
     [`${layoutCacheKeyPrefix("doc-a")}1:text-layer:blocks-1:source-v3:fp-1`]: { page: 1 },
+    [`${layoutCacheKeyPrefix("doc-a")}2:text-layer:blocks-1:source-v3`]: { page: 2 },
     [`${layoutCacheKeyPrefix("doc-b")}1:text-layer:blocks-1:source-v3:fp-1`]: { page: 1 },
+    [`${layoutCacheKeyPrefix("doc-b")}2:text-layer:blocks-1:source-v3`]: { page: 2 },
     "oi-settings": settings
   };
   const report = await clearDocTranslationRecords("doc-a", {
@@ -153,7 +157,9 @@ test("CDC-03 clear drops this document's translations and leaves the rest", asyn
   assert.equal(sourceAfter.size, sourceBefore.size);
   assert.equal((await notes.list("doc-a")).some((note) => note.body === "笔记还在"), true);
   assert.equal(bag[`${layoutCacheKeyPrefix("doc-a")}1:text-layer:blocks-1:source-v3:fp-1`], undefined);
+  assert.equal(bag[`${layoutCacheKeyPrefix("doc-a")}2:text-layer:blocks-1:source-v3`], undefined);
   assert.ok(bag[`${layoutCacheKeyPrefix("doc-b")}1:text-layer:blocks-1:source-v3:fp-1`]);
+  assert.ok(bag[`${layoutCacheKeyPrefix("doc-b")}2:text-layer:blocks-1:source-v3`]);
   assert.equal(bag["oi-settings"].apiKey, "secret-keep");
   assert.equal(settings.pdfLayout.mode, "local-ocr");
   assert.equal(await formula.getDecision("a-ocr"), null);
@@ -168,7 +174,10 @@ test("CDC-03 clear drops this document's translations and leaves the rest", asyn
       return bag;
     },
     async remove() {}
-  }, "doc-b"), [`${layoutCacheKeyPrefix("doc-b")}1:text-layer:blocks-1:source-v3:fp-1`]);
+  }, "doc-b"), [
+    `${layoutCacheKeyPrefix("doc-b")}1:text-layer:blocks-1:source-v3:fp-1`,
+    `${layoutCacheKeyPrefix("doc-b")}2:text-layer:blocks-1:source-v3`
+  ]);
 });
 
 test("CDC-04 a cleared document reads as untranslated and does not auto-translate", () => {
@@ -207,6 +216,57 @@ test("CDC-05 a busy clear stops the in-flight job before deleting records", () =
   const auto = viewer.slice(viewer.indexOf("async function maybeAutoTranslateDocument"), viewer.indexOf("async function startTranslate"));
   assert.match(auto, /autoTranslateTicket/);
   assert.match(viewer.slice(viewer.indexOf("async function startTranslate"), viewer.indexOf("async function resolveBatchSize")), /autoTicket/);
+});
+
+test("a chrome failure after the library delete does not report the clear as failed", async () => {
+  const store = memoryLibrary();
+  await store.touchPaper("doc-a", { title: "甲", pageCount: 1, origin: "native" });
+  await store.putPage("doc-a", 1, { pairs: [{ text: "甲", translation: "A" }] });
+  const report = await clearDocTranslationRecords("doc-a", {
+    store,
+    layoutStorage: {
+      async get() {
+        throw new Error("chrome down");
+      },
+      async remove() {
+        throw new Error("chrome down");
+      }
+    },
+    clearFormula: async () => {
+      throw new Error("formula down");
+    }
+  });
+  assert.equal(report.libraryCleared, true);
+  assert.equal(report.incomplete, true);
+  assert.equal(report.pages, 1);
+  assert.equal((await store.getPages("doc-a")).length, 0);
+  await assert.rejects(() => clearDocTranslationRecords("doc-a", {
+    store: {
+      async clearDocTranslations() {
+        throw new Error("idb down");
+      }
+    },
+    layoutStorage: {
+      async get() {
+        return {};
+      }
+    }
+  }), /idb down/);
+  const versionless = "oi-pdf-layout:doc-c:1:text-layer:blocks-1:source-v3";
+  const versioned = "oi-pdf-layout:doc-c:1:text-layer:blocks-1:source-v3:fp-1";
+  const other = { [versionless]: { page: 1 }, [versioned]: { page: 1 }, "oi-settings": { ok: true } };
+  assert.deepEqual(versionlessLayoutCacheKeys(other), [versionless]);
+  const removed = await deleteVersionlessLayoutCacheKeys({
+    async get() {
+      return { ...other };
+    },
+    async remove(keys) {
+      for (const key of keys) delete other[key];
+    }
+  });
+  assert.deepEqual(removed, [versionless]);
+  assert.ok(other[versioned]);
+  assert.ok(other["oi-settings"]);
 });
 
 test("CDC-06 clearing the formula store makes the next read miss", async () => {

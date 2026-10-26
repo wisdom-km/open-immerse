@@ -433,9 +433,11 @@ import {
 import {
   ENGINE_OVERRIDE_EXPLICIT_KEY,
   ENGINE_OVERRIDE_KEY,
+  FORMULA_PIPELINE_VERSION,
   STALE_FORMULA_COPY,
   applyFormulaVerdict,
   formulaCacheVerdict,
+  formulaPipelineStamp,
   migrateEngineOverride,
   stampFormulaPairs
 } from "../lib/formula-pipeline.js";
@@ -543,6 +545,7 @@ let autoPauseNoted = "";
 const userPausedDocs = new Set();
 let autoAfterForce = false;
 let forceRetranslatePending = false;
+let forceRetranslatePendingPage = 0;
 let libraryArticle = null;
 let libraryDoc = null;
 let libraryProbe = null;
@@ -869,7 +872,7 @@ function init() {
   bindClearDocTranslation();
   $("status")?.addEventListener("click", () => {
     if (pageStates.get(pageNum)?.state !== "stale-formula") return;
-    void forceRetranslateCurrentPage();
+    void forceRetranslateCurrentPage(pageNum);
   });
   $("translateMenuRetranslateDoc")?.addEventListener("click", () => {
     closeTranslateMenu(true);
@@ -6290,6 +6293,19 @@ function savedPairSettings() {
   return { targetLang: pdfTargetLang, provider: pdfProvider };
 }
 
+/** Only a pipeline recorded on a freshly built layout is written onto pairs. */
+function pairSettingsForLayout(layout) {
+  const pipeline = formulaPipelineStamp(layout?.formulaPipeline);
+  const base = savedPairSettings();
+  return pipeline ? { ...base, formulaPipeline: pipeline } : base;
+}
+
+function stampFreshFormulaPipeline(layout) {
+  if (!layout || formulaPipelineStamp(layout.formulaPipeline)) return layout;
+  layout.formulaPipeline = FORMULA_PIPELINE_VERSION;
+  return layout;
+}
+
 /** Keep settled reuse and provider failures. A library echo is a fresh hole, not a bypass. */
 function cacheableReuse(units) {
   return (units || []).map((unit) => {
@@ -10099,7 +10115,7 @@ function syncPageStatus(slot, page, row) {
     button.className = "rf-stale-formula";
     button.textContent = spec.text || STALE_FORMULA_COPY;
     button.addEventListener("click", () => {
-      void forceRetranslateCurrentPage();
+      void forceRetranslateCurrentPage(page);
     });
     text.append(button);
   } else {
@@ -11029,6 +11045,7 @@ function stopTranslateWork(options) {
   cancelQueuedVendorLayouts();
   translatingPage = 0;
   forceRetranslatePending = false;
+  forceRetranslatePendingPage = 0;
   if (!silent) noteUserAction("stop");
   for (const [page, row] of pageStates) {
     if (row.state === "running" || row.state === "layout") {
@@ -11125,7 +11142,8 @@ function destroyQuiet(doc) {
 function resumePendingRetranslate() {
   if (!forceRetranslatePending) return;
   if (!pdfDoc || pdfTranslateBusy(session) || forceReadoutHold) return;
-  void forceRetranslateCurrentPage();
+  const pendingPage = forceRetranslatePendingPage;
+  void forceRetranslateCurrentPage(pendingPage >= 1 ? pendingPage : undefined);
 }
 
 function revealTranslationPage(page) {
@@ -11470,7 +11488,7 @@ function rememberTranslation(page, results, options = {}) {
   const layout = cacheableLayout(rawLayout);
   const blocks = rawLayout?.blocks || [];
   const verified = pairsWithLiveFormulaSlots(
-    pairsVerifiedForLibrary(results, blocks, savedPairSettings()),
+    pairsVerifiedForLibrary(results, blocks, pairSettingsForLayout(rawLayout)),
     blocks
   );
   const replaceBids = [...new Set(verified.map((pair) => String(pair?.bid || "")).filter(Boolean))];
@@ -11578,6 +11596,7 @@ function layoutFromStored(page, stored) {
     textSource: stored.textSource || "text-layer",
     sourceAudit: stored.sourceAudit || null,
     ...(stored.layoutVersion ? { layoutVersion: String(stored.layoutVersion) } : {}),
+    ...(stored.formulaPipeline ? { formulaPipeline: String(stored.formulaPipeline) } : {}),
     ...(stored.mode ? { mode: String(stored.mode) } : {}),
     ...(fallback ? { fallback } : {}),
     blocks: stored.blocks,
@@ -12026,7 +12045,7 @@ function structureLanded(page) {
 async function translateCurrentPage() {
   if (!pdfDoc || pdfTranslateBusy(session)) return;
   if (pageStates.get(pageNum)?.state === "stale-formula") {
-    await forceRetranslateCurrentPage();
+    await forceRetranslateCurrentPage(pageNum);
     return;
   }
   noteUserAction("translate-page", { page: pageNum });
@@ -12725,6 +12744,19 @@ async function translateWholeDocument(options = {}) {
     bypassCache: options?.forceAll === true,
     onAbortRequest: translateAbortRequest,
     getPageOriginals: async (page) => {
+      if (options?.forceAll === true) {
+        const prior = pageStates.get(page)?.state;
+        if (prior === "stale-formula" || prior === "formula-check") {
+          let laid = null;
+          try {
+            laid = await ingestTextLayerLayout(page, () => gen !== restoreGen || translatingDoc !== docId);
+          } catch {
+            laid = null;
+          }
+          // No new text-layer cut: do not send the old blocks or stamp them current.
+          if (!laid?.blocks?.length) return [];
+        }
+      }
       const units = await originalsForPage(page, gen, translatingDoc, work, batchSize, {
         force: options?.forceAll === true
       });
@@ -13356,24 +13388,30 @@ async function forceRetranslateDocument() {
   }
 }
 
-async function forceRetranslateCurrentPage() {
+async function forceRetranslateCurrentPage(requestedPage) {
+  const page = Number(requestedPage) >= 1 ? Math.floor(Number(requestedPage)) : capsulePage();
   if (!pdfDoc || pdfTranslateBusy(session) || forceReadoutHold) {
-    if (pdfDoc) forceRetranslatePending = true;
+    if (pdfDoc) {
+      forceRetranslatePending = true;
+      forceRetranslatePendingPage = page;
+    }
     return;
   }
   retranslateScope = "page";
-  noteUserAction("retranslate-page", { page: capsulePage() });
+  noteUserAction("retranslate-page", { page });
   forceRetranslatePending = false;
-  if (pageStates.get(capsulePage())?.state === "stale-formula") {
+  forceRetranslatePendingPage = 0;
+  const formulaState = pageStates.get(page)?.state;
+  if (formulaState === "stale-formula" || formulaState === "formula-check") {
     try {
-      await ingestTextLayerLayout(capsulePage(), () => false);
+      await ingestTextLayerLayout(page, () => false);
     } catch {
       /* the retranslate below still uses the layout already on the page */
     }
   }
-  const sourceLayout = getPageLayout(capsulePage());
+  const sourceLayout = getPageLayout(page);
   const units = liveOriginals(sourceLayout, unitsForForceRetranslate(sourceLayout));
-  const titleCandidate = isTitlePageCandidate(pageNum, pageTextForStructure(sourceLayout?.blocks));
+  const titleCandidate = isTitlePageCandidate(page, pageTextForStructure(sourceLayout?.blocks));
   if (isSkipOnlyPage(sourceLayout?.blocks)) {
     retranslateScope = "";
     setStatus(PAGE_STATUS_BIBLIOGRAPHY);
@@ -13389,7 +13427,7 @@ async function forceRetranslateCurrentPage() {
   }
   const gen = restoreGen;
   const translatingDoc = docId;
-  const targetPage = capsulePage();
+  const targetPage = page;
   const prior = snapshotForceReadout(translatingDoc, targetPage);
   // Drop the document job's session so its next batch cannot land in this
   // retranslate, and so its save-wait tail cannot clear translatingPage.
@@ -13471,7 +13509,7 @@ async function forceRetranslateCurrentPage() {
     translatingPage = targetPage;
     updateTranslateControls();
     try {
-      const pairs = pairsFromResults(merged);
+      const pairs = pairsFromResults(merged, pairSettingsForLayout(zonedLayout));
       try {
         await rememberTranslation(targetPage, merged);
       } catch (error) {
@@ -13906,7 +13944,10 @@ async function ingestVendorLayout(n, mode, isStale, epoch) {
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
   if (recomputed && !layoutAttemptLive(epoch)) return null;
-  if (recomputed) stampProducedEngine(layout);
+  if (recomputed) {
+    stampProducedEngine(layout);
+    stampFreshFormulaPipeline(layout);
+  }
   setPageLayout(n, layout);
   if (!isStale()) clearLayoutFallbackStatus();
   if (recomputed && layoutAttemptLive(epoch)) persistPageLayout(n).catch(() => {});
@@ -13954,6 +13995,7 @@ async function ingestSkippedSourceLayout(n, isStale) {
     blocks: built.blocks,
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
+  stampFreshFormulaPipeline(layout);
   setPageLayout(n, layout);
   return layout;
 }
@@ -13998,6 +14040,7 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
     itemCount: extractPageItems(content).length
   }, content.items, viewport);
   if (!fallback) stampTextLayerEngine(layout);
+  stampFreshFormulaPipeline(layout);
   // The quick stand-in (persist: false) is replaced by the vendor layout.
   // Re-anchoring it marks 位置近似 notes lost, then the real layout writes them back.
   setPageLayout(n, layout, { reanchor: options.persist !== false });
