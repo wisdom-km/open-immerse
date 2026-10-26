@@ -423,7 +423,7 @@ import {
 } from "../lib/formula-settings.js";
 import { parseFigureLabel } from "../lib/figure-label.js";
 import { renderFormulaSwitchList } from "../lib/formula-settings-ui.js";
-import { applySavedPairs, bindStructureRowBids, blockSoftLead, commitLandedStructurePairs, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, openLibraryPdf, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, storedReadoutBlocks, structurePairsChanged, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
+import { applySavedPairs, bindStructureRowBids, blockSoftLead, commitLandedStructurePairs, createLibraryWriteQueue, currentLayoutIfArrived, fetchLibraryDocument, flushPendingPages, isInternalSlotLead, isSkipOnlyPage, LIBRARY_ZONE_WAIT_MS, libraryFetchInFlight, libraryHoldCopy, libraryProbeFailure, mergeLibraryPairs, pageSoftStatus, PAGE_STATUS_BIBLIOGRAPHY, pairsFromResults, pairsVerifiedForLibrary, pairsWithLiveFormulaSlots, pairsWithoutUnalignedSlots, paperFullyInLibrary, repairMatrixProjectionPairs, replaceLibraryPagePairs, resolveZoneForVendor, openLibraryPdf, saveLibraryPage, selectPageLayout, selectSavedTranslation, setLibraryUiHooks, settleFreshZone, shouldProbeLocalService, slotBadgeForLead, storedReadoutBlocks, structurePairsChanged, translationWaitsForLibrary, waitForFirstZone, waitForZoneMigration, whenZoneReadSettles } from "../lib/pdf-library.js";
 import { readLayoutCache, readLayoutCaches, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { createLibraryChip } from "../lib/library-chip.js";
 import { bindImportChip } from "../options/data-panel.js";
@@ -4905,6 +4905,7 @@ async function collectAlignPages() {
     const page = await pdfDoc.getPage(n);
     const viewport = page.getViewport({ scale: 1 });
     const content = await page.getTextContent();
+    attachFontRealNames(content.items, page.commonObjs);
     if (n === 1) {
       page1TextItems = content.items;
       page1Viewport = viewport;
@@ -5772,9 +5773,24 @@ function fillBlockText(node, block, layout) {
   node.append(zh, src);
 }
 
-function writeBlockPieces(node, block, layout) {
+function appendBlockLead(node, block) {
   const lead = blockSoftLead(block);
-  if (lead) node.append(document.createTextNode(lead));
+  if (!lead) return;
+  if (isInternalSlotLead(lead)) {
+    const badge = slotBadgeForLead(lead);
+    const mark = document.createElement("sup");
+    mark.className = "oi-pdf-slot-badge";
+    mark.dataset.slotBadge = badge.label;
+    mark.title = badge.title;
+    mark.textContent = badge.label;
+    node.append(mark);
+    return;
+  }
+  node.append(document.createTextNode(lead));
+}
+
+function writeBlockPieces(node, block, layout) {
+  appendBlockLead(node, block);
   // A failed empty translation is not done, but the paragraph still has to
   // show. Use the source sentence and its formula crops rather than an empty box.
   const pending = block?.failed === true && !String(block.translation || "").trim();
@@ -13177,6 +13193,7 @@ async function ingestReadoutLayout(n, isStale) {
   const viewport = page.getViewport({ scale: 1 });
   const content = await page.getTextContent();
   if (isStale()) return null;
+  attachFontRealNames(content.items, page.commonObjs);
   const items = extractPageItems(content);
   const blocks = extractReadoutBlocks(content, { width: viewport.width, height: viewport.height });
   const layout = stampBodyFont({

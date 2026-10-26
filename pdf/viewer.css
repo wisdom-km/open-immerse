@@ -1010,6 +1010,19 @@ body {
   max-width: none;
   max-height: none;
 }
+.oi-pdf-slot-badge {
+  display: inline-block;
+  margin-right: 0.35em;
+  padding: 0 0.28em;
+  font-size: 0.72em;
+  line-height: 1.45;
+  vertical-align: super;
+  font-weight: 600;
+  color: #6b5a3e;
+  background: #f4efe4;
+  border-radius: 2px;
+}
+
 .oi-pdf-inline-math {
   display: inline-block;
   vertical-align: baseline;

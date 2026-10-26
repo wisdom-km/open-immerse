@@ -29,3 +29,6 @@ _qa-*/
 # F7W-2a lab output. The report template stays; paid runs do not.
 oi-qa/f7-multimodal/runs/
 
+# Journal leak-scan output. PDFs and scan JSON stay outside the repo.
+oi-qa/journal-pdf/runs/
+
