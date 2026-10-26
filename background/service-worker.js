@@ -1,4 +1,4 @@
-import { completePdfStructure, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, sanitizeProviderError, testProviderConnection } from "../lib/providers.js";
+import { NO_ENGINE, completePdfStructure, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, sanitizeProviderError, testProviderConnection } from "../lib/providers.js";
 import { getSettings, matchSiteRule, noteTranslationSucceeded, saveSettings } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { featureOn, resolveFeatures } from "../lib/features.js";
@@ -85,7 +85,11 @@ chrome.commands.onCommand.addListener(async (command) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender)
     .then(sendResponse)
-    .catch((err) => sendResponse({ ok: false, error: String(err.message || err) }));
+    .catch((err) => sendResponse({
+      ok: false,
+      error: String(err?.message || err),
+      ...(err?.code ? { code: String(err.code) } : {})
+    }));
   return true;
 });
 
@@ -324,6 +328,11 @@ async function translateBatch(texts, options = {}) {
   options.borrowed = outbound.borrowed === true;
   options.providerCalled = false;
   const enteringBorrow = await noteBorrowEpisode(outbound);
+  if (outbound.code === NO_ENGINE || !outbound.provider) {
+    const err = new Error(NO_ENGINE);
+    err.code = NO_ENGINE;
+    throw err;
+  }
   const provider = outbound.provider;
   const borrowed = outbound.borrowed === true ? outbound.runtimeConfig : null;
   const providerSettings = borrowed

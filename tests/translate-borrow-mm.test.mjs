@@ -70,7 +70,9 @@ test("TBM-01/02/05/11 settings page does not show a borrow hint", () => {
   const borrow = describeTranslateBorrow(unconfigured(), mm());
   assert.equal(borrow.mode, "borrow");
   assert.equal(JSON.stringify(borrow).includes(MM_KEY), false);
-  assert.equal(describeTranslateBorrow(unconfigured(), { multimodal: { provider: "kimi", apiKey: "", model: "" } }).mode, "fallback");
+  const idle = describeTranslateBorrow(unconfigured(), { multimodal: { provider: "kimi", apiKey: "", model: "" } });
+  assert.equal(idle.mode, "none");
+  assert.equal(idle.outbound.code, "NO_ENGINE");
   assert.equal(describeTranslateBorrow({
     provider: "mymemory",
     translateProviderChosen: true,
@@ -102,10 +104,12 @@ test("factory MyMemory borrows a configured multimodal card, and an explicit MyM
   const neither = resolveTranslateOutbound(fresh, {
     multimodal: { provider: "kimi", apiKey: "", model: "" }
   });
-  assert.equal(neither.mode, "fallback");
-  assert.equal(neither.providerId, "mymemory");
-  assert.equal(neither.fallback, true);
-  assert.match(neither.notice, /免费的 MyMemory/);
+  assert.equal(neither.mode, "none");
+  assert.equal(neither.code, "NO_ENGINE");
+  assert.equal(neither.providerId, "");
+  assert.equal(neither.provider, null);
+  assert.equal(neither.fallback, false);
+  assert.equal(neither.notice, "");
 
   const own = resolveTranslateOutbound({
     provider: "openai",
@@ -205,7 +209,7 @@ function popupSettings(provider, apiKey) {
   };
 }
 
-test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and fallback stays MyMemory", async () => {
+test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and no engine is NO_ENGINE", async () => {
   const popupJs = readFileSync(join(root, "popup/popup.js"), "utf8");
   const popupCss = readFileSync(join(root, "popup/popup.css"), "utf8");
   assert.match(popupJs, /引擎：\$\{shortName\}/);
@@ -245,11 +249,11 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and fallba
     popupSettings("openai", ""),
     { multimodal: { provider: "kimi", apiKey: "", model: "" } }
   );
-  assert.equal(fallback.text, "引擎：MyMemory（免费）");
-  assert.match(fallback.warnText, /还没配置/);
-  assert.match(fallback.warnText, /免费的 MyMemory/);
+  assert.equal(fallback.text, "引擎：—");
+  assert.equal(fallback.warnText, "未配置引擎");
   assert.equal(fallback.warnHidden, false);
-  assert.equal(fallback.title, fallback.warnText);
+  assert.equal(fallback.body.includes("MyMemory"), false);
+  assert.equal(fallback.body.includes("还没配置"), false);
 
   const factorySettings = {
     provider: "mymemory",
@@ -278,9 +282,10 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and fallba
     factorySettings,
     { multimodal: { provider: "kimi", apiKey: "", model: "" } }
   );
-  assert.equal(neither.text, "引擎：MyMemory（免费）");
+  assert.equal(neither.text, "引擎：—");
   assert.equal(neither.warnHidden, false);
-  assert.match(neither.warnText, /免费的 MyMemory/);
+  assert.equal(neither.warnText, "未配置引擎");
+  assert.equal(neither.body.includes("MyMemory"), false);
 
   const custom = await bootPopup(
     factorySettings,
@@ -319,13 +324,15 @@ test("TBM-09/10 own config wins, borrow does not copy the key into storage, and 
   assert.equal(own.runtimeConfig, undefined);
 
   const mismatch = resolveTranslateOutbound(unconfigured(), mm({ baseUrl: "https://evil.example/v1" }));
-  assert.equal(mismatch.mode, "fallback");
-  assert.equal(mismatch.providerId, "mymemory");
+  assert.equal(mismatch.mode, "none");
+  assert.equal(mismatch.code, "NO_ENGINE");
+  assert.equal(mismatch.providerId, "");
 
   const custom = resolveTranslateOutbound(unconfigured(), {
     multimodal: { provider: "custom", apiKey: MM_KEY, model: "my-model", baseUrl: "" }
   });
-  assert.equal(custom.mode, "fallback");
+  assert.equal(custom.mode, "none");
+  assert.equal(custom.code, "NO_ENGINE");
 
   const doubao = resolveTranslateOutbound(unconfigured(), {
     multimodal: { provider: "doubao", apiKey: MM_KEY, model: "glm-5.3-flash", baseUrl: "" }

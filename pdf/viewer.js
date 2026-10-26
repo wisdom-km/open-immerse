@@ -10380,19 +10380,11 @@ async function probeLocalService(baseUrl) {
 function noteFreeDefaultOutbound(outbound) {
   const root = document.documentElement;
   if (!root) return;
-  if (!outbound?.fallback) {
-    delete root.dataset.oiOutbound;
+  if (outbound?.code === "NO_ENGINE") {
+    root.dataset.oiOutbound = "NO_ENGINE";
     return;
   }
-  root.dataset.oiOutbound = "mymemory-free";
-  const notice = String(outbound.notice || "");
-  const status = $("status");
-  if (status && notice) {
-    status.title = notice;
-    if (!status.classList.contains("error")) status.textContent = notice;
-  }
-  const button = $("translatePage");
-  if (button && notice) button.title = notice;
+  delete root.dataset.oiOutbound;
 }
 
 async function translatePreflight() {
@@ -10409,6 +10401,7 @@ async function translatePreflight() {
   try { await formulaSettingsReady; } catch { /* defaults stay off */ }
   const outbound = resolveTranslateOutbound(settings, formulaViewerSettings);
   noteFreeDefaultOutbound(outbound);
+  if (outbound?.code === "NO_ENGINE") return "NO_ENGINE";
   const providerCfg = outbound.borrowed
     ? {
         apiKey: outbound.runtimeConfig?.apiKey || "",
@@ -10416,9 +10409,7 @@ async function translatePreflight() {
         baseUrl: outbound.runtimeConfig?.baseUrl || ""
       }
     : (settings.providers?.[outbound.providerId] || {});
-  const missing = outbound.fallback
-    ? null
-    : missingRequiredField(outbound.provider, providerCfg);
+  const missing = outbound.provider ? missingRequiredField(outbound.provider, providerCfg) : null;
   const layoutMode = pdfEngineMode();
   let localServiceUp = true;
   // GET / on 8765 is the library-and-OCR probe, not a /v1/layout failure.

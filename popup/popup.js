@@ -151,6 +151,15 @@ function renderEngine(settings, formula) {
   const link = $("engineLink");
   const warn = $("engineWarn");
   const warnText = $("engineWarnText");
+  if (!borrowed && outbound?.code === "NO_ENGINE") {
+    if (link) {
+      link.textContent = "引擎：—";
+      link.title = "";
+    }
+    if (warnText) warnText.textContent = "未配置引擎";
+    if (warn) warn.hidden = false;
+    return;
+  }
   const known = providers[outbound.providerId];
   const provider = known
     ? getProvider(outbound.providerId)

@@ -175,22 +175,22 @@ test("structure title and Abstract keep their live bids so reopen stays done", (
   assert.match(fn, /bindStructureRowBids\(/);
 });
 
-test("unconfigured outbound is MyMemory and a configured engine stays put", () => {
+test("unconfigured outbound is NO_ENGINE and a configured engine stays put", () => {
   const empty = resolveOutboundProvider({
     provider: "openai",
     providers: { openai: { apiKey: "" }, mymemory: { email: "" } }
   });
-  assert.equal(empty.providerId, "mymemory");
-  assert.equal(empty.fallback, true);
-  assert.match(empty.notice, /免费/);
-  assert.match(empty.notice, /MyMemory/);
-  assert.equal(empty.notice.includes("sk-"), false);
-  assert.equal(/[A-Za-z0-9._%+-]+@/.test(empty.notice), false);
+  assert.equal(empty.code, "NO_ENGINE");
+  assert.equal(empty.providerId, "");
+  assert.equal(empty.provider, null);
+  assert.equal(empty.fallback, false);
+  assert.equal(empty.notice, "");
 
   const none = resolveOutboundProvider({});
-  assert.equal(none.providerId, "mymemory");
-  assert.equal(none.fallback, true);
-  assert.match(none.notice, /未配置翻译服务/);
+  assert.equal(none.code, "NO_ENGINE");
+  assert.equal(none.providerId, "");
+  assert.equal(none.fallback, false);
+  assert.equal(none.notice, "");
 
   const kept = resolveOutboundProvider({
     provider: "openai",
@@ -199,9 +199,12 @@ test("unconfigured outbound is MyMemory and a configured engine stays put", () =
   assert.equal(kept.providerId, "openai");
   assert.equal(kept.fallback, false);
   assert.equal(kept.notice, "");
+  assert.equal(kept.code, "");
 
   const selectedFree = resolveOutboundProvider({ provider: "mymemory", providers: { mymemory: {} } });
+  assert.equal(selectedFree.providerId, "mymemory");
   assert.equal(selectedFree.fallback, false);
+  assert.equal(selectedFree.code, "");
   assert.match(selectedFree.notice, /免费的 MyMemory/);
   const mm = { multimodal: { provider: "kimi", apiKey: "sk-mm-not-stored", model: "kimi-k2", baseUrl: "" } };
   const borrowed = resolveTranslateOutbound(
@@ -233,17 +236,22 @@ test("unconfigured outbound is MyMemory and a configured engine stays put", () =
     { provider: "openai", providers: { openai: { apiKey: "" } } },
     { multimodal: { provider: "kimi", apiKey: "", model: "kimi-k2" } }
   );
-  assert.equal(stillFree.providerId, "mymemory");
-  assert.equal(stillFree.fallback, true);
+  assert.equal(stillFree.code, "NO_ENGINE");
+  assert.equal(stillFree.providerId, "");
+  assert.equal(stillFree.provider, null);
+  assert.equal(stillFree.fallback, false);
   assert.match(viewerSrc, /resolveTranslateOutbound\(settings, formulaViewerSettings\)/);
-  assert.match(viewerSrc, /outbound\.fallback/);
+  assert.match(viewerSrc, /NO_ENGINE/);
+  assert.equal(viewerSrc.includes("mymemory-free"), false);
   assert.match(workerSrc, /resolveTranslateOutbound\(settings, formula\)/);
   assert.match(workerSrc, /options\.providerId = outbound\.providerId/);
+  assert.match(workerSrc, /err\.code = NO_ENGINE/);
   assert.match(popupSrc, /describeTranslateBorrow\(settings, formula\)/);
   assert.match(popupSrc, /引擎：\$\{shortName\}（免费）/);
+  assert.match(popupSrc, /outbound\?\.code === "NO_ENGINE"/);
 });
 
-test("translateBatch sends an unconfigured engine to MyMemory and does not call the network", async () => {
+test("translateBatch returns NO_ENGINE and does not call the network", async () => {
   const urls = [];
   installNet(createNet({
     transport(url) {
@@ -292,17 +300,17 @@ test("translateBatch sends an unconfigured engine to MyMemory and does not call 
     tabs: { async query() { return []; }, async sendMessage() {}, async create() {} }
   };
   try {
-    const sw = await import(`../background/service-worker.js?f5mymemory=${Date.now()}`);
+    const sw = await import(`../background/service-worker.js?f5noengine=${Date.now()}`);
     const opts = {};
-    const out = await sw.translateBatch(["Hello"], opts);
-    assert.equal(out[0], "你好");
-    assert.equal(opts.providerId, "mymemory");
-    assert.equal(opts.outboundFallback, true);
-    assert.equal(opts.providerCalled, true);
-    assert.equal(urls.length, 1);
-    assert.match(urls[0], /^https:\/\/api\.mymemory\.translated\.net\/get\?/);
-    assert.equal(urls[0].includes("api.openai.com"), false);
-    assert.equal(urls[0].includes("de="), false);
+    await assert.rejects(() => sw.translateBatch(["Hello"], opts), (err) => {
+      assert.equal(err.code, "NO_ENGINE");
+      assert.equal(err.message, "NO_ENGINE");
+      return true;
+    });
+    assert.equal(opts.providerId, "");
+    assert.equal(opts.outboundFallback, false);
+    assert.equal(opts.providerCalled, false);
+    assert.equal(urls.length, 0);
   } finally {
     installNet(null);
   }

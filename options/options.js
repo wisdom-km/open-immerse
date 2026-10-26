@@ -1,9 +1,11 @@
 import {
+  NO_ENGINE,
   PROVIDER_LIST,
   PROVIDER_PROBE_TEXT,
   formatConnectionStatus,
   getProvider,
   missingRequiredField,
+  providers,
   redactProviderText
 } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
@@ -15,6 +17,7 @@ import {
   readPdfDefaultNoticeSeen,
   writePdfDefaultNoticeSeen
 } from "../lib/pdf-default-notice.js";
+import { implicitDefaultTranslate } from "../lib/translate-borrow.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -196,7 +199,10 @@ if (!globalThis.OI_OPTIONS_MANUAL && globalThis.document?.body?.classList?.conta
 }
 
 async function init() {
-  fillSelect(el("provider"), PROVIDER_LIST.map((p) => ({ value: p.id, label: p.name })));
+  fillSelect(el("provider"), [
+    { value: "", label: "未选择" },
+    ...PROVIDER_LIST.map((p) => ({ value: p.id, label: p.name }))
+  ]);
   fillSelect(el("sourceLang"), LANGUAGE_OPTIONS.map((l) => ({ value: l.code, label: l.label })));
   fillSelect(
     el("targetLang"),
@@ -295,7 +301,7 @@ async function init() {
 function applyStoredForm() {
   const settings = cachedSettings || {};
   const features = resolveFeatures(settings);
-  if (el("provider")) el("provider").value = settings.provider || "mymemory";
+  if (el("provider")) el("provider").value = displayedProvider(settings);
   if (el("sourceLang")) el("sourceLang").value = settings.sourceLang || "auto";
   if (el("targetLang")) el("targetLang").value = settings.targetLang || "zh-CN";
   if (el("batchSize")) el("batchSize").value = settings.batchSize || 8;
@@ -753,8 +759,15 @@ function paintQualityNote(note, llm, provider, ready) {
   note.append(link);
 }
 
+function displayedProvider(settings) {
+  if (implicitDefaultTranslate(settings)) return "";
+  const id = String(settings?.provider || "").trim();
+  return providers[id] ? id : "";
+}
+
 function syncQualityLocks() {
-  const provider = getProvider(el("provider")?.value);
+  const id = String(el("provider")?.value || "");
+  const provider = providers[id] ? getProvider(id) : null;
   const llm = provider?.kind === "llm";
   for (const id of ["twoStepPolish", "deepThink"]) {
     const input = el(id);
@@ -941,6 +954,11 @@ async function testConnection() {
   if (!btn || btn.disabled) return;
   harvestVisibleProvider();
   const providerId = el("provider").value;
+  if (!providers[providerId]) {
+    setTestStatus(NO_ENGINE, "err");
+    diagLog("provider.probe", { ctx: "options", provider: providerId || "", ok: false, code: NO_ENGINE });
+    return;
+  }
   const providerConfig = Object.assign({}, (cachedSettings.providers || {})[providerId] || {});
   const targetLang = el("targetLang").value || "zh-CN";
   const missing = missingRequiredField(getProvider(providerId), providerConfig);
@@ -991,7 +1009,9 @@ function renderProviderFields() {
   const root = el("providerFields");
   if (!root) return;
   root.textContent = "";
-  const provider = getProvider(el("provider").value);
+  const providerId = el("provider").value;
+  if (!providers[providerId]) return;
+  const provider = getProvider(providerId);
   const cfg = (cachedSettings.providers || {})[provider.id] || {};
   const card = document.createElement("div");
   card.className = "provider-card";
@@ -1495,7 +1515,7 @@ function restoreControl(control) {
     return;
   }
   const values = {
-    provider: stored.provider || "mymemory",
+    provider: displayedProvider(stored),
     sourceLang: stored.sourceLang || "auto",
     targetLang: stored.targetLang || "zh-CN",
     batchSize: stored.batchSize || 8,

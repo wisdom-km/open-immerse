@@ -43,6 +43,7 @@ const STUB = `(() => {
   const delayMs = Number(params.get("oiDelay") || 0);
   const settings = {
     provider: mode === "missing" ? "openai" : "mymemory",
+    translateProviderChosen: mode !== "missing",
     providers: {
       mymemory: { email: "" },
       openai: { apiKey: "" }
@@ -263,7 +264,7 @@ const STUB = `(() => {
     storage: {
       local: {
         get(key) {
-          // C：翻译引擎未配置时，多模态也没有 key，才回退免费 MyMemory。
+          // C：翻译引擎未配置时，多模态也没有 key，返回 NO_ENGINE，不请求 MyMemory。
           if (mode === "missing" && (key == null || key === "formulaSettings")) {
             return Promise.resolve({
               formulaSettings: {
@@ -620,10 +621,12 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     const row = ${SNAPSHOT};
     const data = JSON.parse(row);
     const outbound = document.documentElement.dataset.oiOutbound || "";
-    if (outbound !== "mymemory-free") return "";
+    if (outbound !== "NO_ENGINE" || data.batches !== 0) return "";
     return JSON.stringify({ ...data, outbound });
-  })()`, "missing: 未配置引擎时改用免费 MyMemory"));
-  assert.equal(missing.outbound, "mymemory-free");
+  })()`, "missing: 都没配时返回 NO_ENGINE"));
+  assert.equal(missing.outbound, "NO_ENGINE");
+  assert.equal(missing.batches, 0);
+  assert.equal(missing.status.includes("MyMemory"), false);
   assert.equal(missing.status.includes("API Key"), false);
   assert.equal(missing.label, "翻译");
 
