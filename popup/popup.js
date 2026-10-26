@@ -6,6 +6,7 @@ import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-l
 import { featureOn } from "../lib/features.js";
 import { openPopupPdfEntry, readPdfContentType } from "../lib/pdf-viewer.js";
 import { NO_ENGINE_COPY } from "../lib/no-engine-prompt.js";
+import { POPUP_PAGE_WAIT_MS, withTimeout } from "./popup-ready.js";
 
 const $ = (id) => document.getElementById(id);
 const PRIMARY_IDLE = "翻译此页";
@@ -36,24 +37,46 @@ async function init() {
   fillSelect($("sourceLang"), LANGUAGE_OPTIONS.map((l) => ({ value: l.code, label: l.label })));
   fillSelect($("targetLang"), LANGUAGE_OPTIONS.filter((l) => l.code !== "auto").map((l) => ({ value: l.code, label: l.label })));
 
-  const { settings } = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
-  $("sourceLang").value = settings.sourceLang;
-  $("targetLang").value = settings.targetLang;
-  $("translateScope").value = settings.translateScope || "article";
-  $("translateLimit").value = isTitleLeadLimit(settings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
-  await renderEngine(settings, await readFormulaSettings(chrome.storage?.local));
-  bindEngineRefresh();
+  let tab = null;
+  let settings = {};
+  let settingsLoaded = false;
+  let pdfProbe = Promise.resolve(null);
+  let probeStarted = false;
+  let tabsSettled = false;
+  let engineBound = false;
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const pdfOn = featureOn(settings, "pdf");
-  const pdfProbe = pdfOn
-    ? readPdfContentType(tab?.id, (details) => chrome.scripting.executeScript(details))
-    : Promise.resolve(null);
-  await syncPrimary(tab);
-
-  const host = hostOf(tab?.url);
-  const rule = (settings.siteRules || []).find((r) => host === r.host || host.endsWith("." + r.host));
-  $("autoSite").checked = Boolean(rule?.auto);
+  const settingsPromise = Promise.resolve()
+    .then(() => chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" }))
+    .catch(() => null);
+  const tabsPromise = Promise.resolve()
+    .then(() => chrome.tabs.query({ active: true, currentWindow: true }))
+    .catch(() => []);
+  const ready = await withTimeout(Promise.all([settingsPromise, tabsPromise]), POPUP_PAGE_WAIT_MS);
+  if (ready) {
+    tabsSettled = true;
+    if (ready[0]?.settings) {
+      settings = ready[0].settings;
+      settingsLoaded = true;
+    }
+    if (ready[1]?.[0]) tab = ready[1][0];
+    if (settingsLoaded) applyFields();
+  } else {
+    void settingsPromise.then((res) => {
+      if (!res?.settings || settingsLoaded) return;
+      settings = res.settings;
+      settingsLoaded = true;
+      applyFields();
+      void paintEngine();
+      armTabWatch();
+    });
+  }
+  void tabsPromise.then((tabs) => {
+    tabsSettled = true;
+    const next = Array.isArray(tabs) ? tabs[0] : null;
+    if (next) tab = next;
+    if (settingsLoaded) mountPdf();
+    armTabWatch();
+  });
 
   $("translatePage").addEventListener("click", async () => {
     if ($("translatePage").dataset.busy === "1") {
@@ -82,6 +105,7 @@ async function init() {
   });
 
   $("autoSite").addEventListener("change", async () => {
+    const host = hostOf(tab?.url);
     if (!host) return;
     await chrome.runtime.sendMessage({ type: "OI_TOGGLE_SITE_RULE", host, rule: { auto: $("autoSite").checked } });
   });
@@ -100,8 +124,8 @@ async function init() {
     );
   }
 
-  $("pdfEntry").hidden = !pdfOn;
   $("openPdf").addEventListener("click", () => {
+    if (!settingsLoaded) return;
     if (!featureOn(settings, "pdf")) return;
     openPopupPdfEntry({
       url: tab?.url,
@@ -113,7 +137,47 @@ async function init() {
     });
   });
 
-  if (tab?.id) setInterval(() => syncPrimary(tab), 400);
+  armTabWatch();
+  void paintEngine();
+
+  function applyFields() {
+    $("sourceLang").value = settings.sourceLang;
+    $("targetLang").value = settings.targetLang;
+    $("translateScope").value = settings.translateScope || "article";
+    $("translateLimit").value = isTitleLeadLimit(settings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
+    mountPdf();
+  }
+
+  function mountPdf() {
+    if (!settingsLoaded) return;
+    const pdfOn = featureOn(settings, "pdf");
+    $("pdfEntry").hidden = !pdfOn;
+    syncSiteRule();
+    if (!pdfOn || probeStarted || (!tab?.id && !tabsSettled)) return;
+    probeStarted = true;
+    pdfProbe = readPdfContentType(tab?.id, (details) => chrome.scripting.executeScript(details));
+  }
+
+  function syncSiteRule() {
+    const host = hostOf(tab?.url);
+    const rule = (settings.siteRules || []).find((r) => host === r.host || host.endsWith("." + r.host));
+    $("autoSite").checked = Boolean(rule?.auto);
+  }
+
+  async function paintEngine() {
+    if (!settingsLoaded || engineBound) return;
+    engineBound = true;
+    const formula = await readFormulaSettings(chrome.storage?.local);
+    renderEngine(settings, formula);
+    bindEngineRefresh();
+  }
+
+  function armTabWatch() {
+    if (armTabWatch.started || !tab?.id) return;
+    armTabWatch.started = true;
+    setInterval(() => syncPrimary(tab), 400);
+    void syncPrimary(tab);
+  }
 }
 
 function setPrimaryBusy(busy) {
@@ -128,8 +192,17 @@ async function syncPrimary(tab) {
     setPrimaryBusy(false);
     return;
   }
-  const ping = await chrome.tabs.sendMessage(tab.id, { type: "OI_PING" }).catch(() => null);
+  const ping = await withTimeout(
+    Promise.resolve()
+      .then(() => chrome.tabs.sendMessage(tab.id, { type: "OI_PING" }))
+      .catch(() => null),
+    POPUP_PAGE_WAIT_MS
+  );
+  if (!ping) return;
   setPrimaryBusy(Boolean(ping?.inflight));
+  const restore = $("restorePage");
+  if (!restore) return;
+  restore.disabled = !(ping.running || ping.hasTranslations || ping.inflight);
 }
 
 function bindEngineRefresh() {

@@ -22,6 +22,7 @@
   --oi-accent-hover: #7d9bff;
   --oi-accent-subtle: color-mix(in srgb, var(--oi-accent) 18%, transparent);
   --oi-danger: #e8a0a0;
+  --oi-warn: #e8c48a;
   --oi-success: #8ecfad;
   --oi-focus: var(--oi-accent);
   --oi-radius-panel: 14px;

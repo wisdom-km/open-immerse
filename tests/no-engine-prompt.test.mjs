@@ -70,6 +70,16 @@ function authorDisplay(css, element) {
   return best.value || "inline";
 }
 
+test("NEP popup engine note uses the shared dark warn token", () => {
+  const popup = read("popup/popup.css");
+  const tokens = read("ui/tokens.css");
+  assert.match(popup, /\.engine-note\s*\{[^}]*color:\s*var\(--oi-warn\)/s);
+  const warn = tokens.match(/--oi-warn:\s*(#[0-9a-fA-F]{6})/);
+  const danger = tokens.match(/--oi-danger:\s*(#[0-9a-fA-F]{6})/);
+  assert.ok(warn);
+  assert.notEqual(warn[1].toLowerCase(), danger[1].toLowerCase());
+});
+
 test("an unconfigured popup shows only the NEP engine line", () => {
   const { document } = parseHTML(read("popup/popup.html"));
   const css = read("popup/popup.css");

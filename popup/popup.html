@@ -17,13 +17,11 @@
     </header>
 
     <section class="intent-card">
-      <button type="button" id="translatePage" class="btn-primary" data-busy="0">翻译此页</button>
+      <div class="action-row">
+        <button type="button" id="translatePage" class="btn-primary" data-busy="0">翻译此页</button>
+        <button type="button" id="restorePage" class="btn-secondary" disabled>恢复原文</button>
+      </div>
       <p id="engineNote" class="engine-note" hidden>去设置里选一个引擎并填写 API Key，就能开始翻译。</p>
-      <section id="pdfEntry" hidden>
-        <button type="button" id="openPdf" class="btn-secondary">打开 PDF</button>
-        <p id="openPdfError" class="danger" hidden>无法打开 PDF 阅读器</p>
-      </section>
-      <button type="button" id="restorePage" class="btn-secondary">恢复原文</button>
       <label class="switch-row"><span>本站自动</span><input id="autoSite" type="checkbox" /></label>
       <label>范围
         <select id="translateScope">
@@ -50,6 +48,11 @@
           </select>
         </label>
       </details>
+      <section id="pdfEntry" hidden>
+        <div class="group-sep" role="separator"></div>
+        <button type="button" id="openPdf" class="btn-secondary">打开 PDF</button>
+        <p id="openPdfError" class="danger" hidden>无法打开 PDF 阅读器</p>
+      </section>
     </section>
 
     <nav class="entries">
