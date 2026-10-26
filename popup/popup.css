@@ -19,7 +19,7 @@ header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
 h1 { margin: 0; font-size: 15px; font-weight: 650; }
 header p { margin: 2px 0 0; color: var(--oi-text-muted); font-size: 12px; line-height: 1.35; }
 label { display: flex; flex-direction: column; gap: 5px; margin: 8px 0; color: var(--oi-text-muted); }
-.switch-row { flex-direction: row; align-items: center; justify-content: space-between; color: var(--oi-text); margin: 10px 0 6px; }
+.switch-row { flex-direction: row; align-items: center; justify-content: space-between; color: var(--oi-text); margin: 12px 0 6px; }
 select {
   width: 100%; border: 1px solid var(--oi-line); background: var(--oi-input); color: var(--oi-text);
   border-radius: var(--oi-radius-control); padding: 7px 8px; font: inherit;
@@ -31,6 +31,57 @@ select {
 .ghost-link:hover { color: var(--oi-accent); }
 .danger { color: var(--oi-danger); font-size: 12px; margin: 8px 0 0; }
 .intent-card { margin: 4px 0 0; }
+.action-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.action-row > .btn-primary {
+  flex: 2 1 0;
+  width: auto;
+  min-width: 0;
+  margin-top: 0;
+  height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.action-row > .btn-secondary {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 88px;
+  margin-top: 0;
+  height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.action-row > #restorePage:disabled {
+  display: inline-flex;
+  min-width: 88px;
+  cursor: default;
+}
+.group-sep {
+  height: 0;
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--oi-line);
+}
+#pdfEntry .btn-secondary {
+  margin-top: 0;
+  height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+}
 .btn-primary {
   display: block;
   width: 100%;
@@ -130,3 +181,4 @@ select {
   line-height: 1.45;
   color: var(--oi-warn);
 }
+.engine-note:not([hidden]) + .switch-row { margin-top: 8px; }

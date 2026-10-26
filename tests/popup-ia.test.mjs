@@ -4,8 +4,10 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseHTML } from "linkedom";
 
 import { getProvider, isProviderConfigured } from "../lib/providers.js";
+import { POPUP_PAGE_WAIT_MS, withTimeout } from "../popup/popup-ready.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -227,8 +229,9 @@ test("popup PDF entries stay hidden unless features.pdf is on", () => {
 test("popup footer links bind before the active-tab ping", () => {
   const js = readFileSync(join(root, "popup/popup.js"), "utf8");
   const init = js.slice(js.indexOf("async function init"), js.indexOf("function setPrimaryBusy"));
-  const ping = init.indexOf("await syncPrimary");
+  const ping = init.indexOf("syncPrimary(");
   assert.ok(ping > 0);
+  assert.equal(init.includes("await syncPrimary"), false);
   for (const id of ["openOptions", "openLearning", "openDocs"]) {
     const at = init.indexOf(`$("${id}").addEventListener`);
     assert.ok(at >= 0 && at < ping, id);
@@ -277,7 +280,7 @@ function popupSources() {
 
 function openPdfClick(js) {
   const start = js.indexOf('$("openPdf").addEventListener');
-  const end = js.indexOf("if (tab?.id) setInterval");
+  const end = js.indexOf("armTabWatch();", start);
   assert.ok(start >= 0 && end > start);
   return js.slice(start, end);
 }
@@ -301,17 +304,19 @@ test("PPE-01 pdf on shows 打开 PDF on every page, one label, no lab copy", () 
   assert.doesNotMatch(js, /\$\("openPdf"\)\.textContent/);
 });
 
-test("PPE-02 打开 PDF sits between 翻译此页 and 恢复原文 at full width", () => {
+test("PPE-02 打开 PDF is its own row under the more block", () => {
   const { html, css } = popupSources();
   const cardStart = html.indexOf('<section class="intent-card">');
   const translate = html.indexOf('id="translatePage"', cardStart);
-  const open = html.indexOf('id="openPdf"', cardStart);
   const restore = html.indexOf('id="restorePage"', cardStart);
-  assert.ok(cardStart >= 0 && translate > cardStart && open > translate && restore > open);
-  assert.equal(html.indexOf('id="openPdf"'), open);
-  assert.match(html, /id="pdfEntry"[\s\S]*id="openPdf"[\s\S]*id="restorePage"/);
+  const more = html.indexOf('<details class="more">', cardStart);
+  const open = html.indexOf('id="openPdf"', cardStart);
+  assert.ok(cardStart >= 0 && translate > cardStart && restore > translate && more > restore && open > more);
+  assert.match(html, /class="action-row"[\s\S]*id="translatePage"[\s\S]*id="restorePage"/);
+  assert.match(html, /class="group-sep"[\s\S]*id="openPdf"/);
   assert.match(css, /\.btn-secondary\s*\{[^}]*width:\s*100%/s);
   assert.match(css, /\.btn-secondary\s*\{[^}]*margin-top:\s*8px/s);
+  assert.match(css, /#pdfEntry \.btn-secondary\s*\{[^}]*margin-top:\s*0/s);
 });
 
 test("PPE-03 open PDF is a 36px secondary button; only 翻译此页 is accent", () => {
@@ -345,9 +350,12 @@ test("PPE-05 a PDF tab sends OI_OPEN_PAGE with src and then closes", () => {
   const { js } = popupSources();
   const click = openPdfClick(js);
   const init = js.slice(js.indexOf("async function init"), js.indexOf("function setPrimaryBusy"));
+  const openAt = init.indexOf('$("openPdf").addEventListener');
+  const mountAt = init.indexOf("mountPdf();");
   const probeAt = init.indexOf("readPdfContentType");
-  const syncAt = init.indexOf("await syncPrimary");
-  assert.ok(probeAt >= 0 && probeAt < syncAt && probeAt < init.indexOf('$("openPdf").addEventListener'));
+  const watchAt = init.indexOf("armTabWatch();", openAt);
+  assert.ok(mountAt >= 0 && mountAt < openAt && probeAt > 0 && watchAt > openAt);
+  assert.equal(init.includes("await syncPrimary"), false);
   assert.match(click, /openPopupPdfEntry\(/);
   assert.match(click, /probe: pdfProbe/);
   assert.match(click, /close: \(\) => window\.close\(\)/);
@@ -494,4 +502,279 @@ test("popup PDF open uses contentType, then URL fallback, without a new permissi
   const probe = entry.indexOf("await probe");
   const send = entry.indexOf("sendMessage(message)");
   assert.ok(disable >= 0 && disable < probe && probe < send);
+});
+
+function popupTabStops(html, { pdf = true, unset = false } = {}) {
+  const { document } = parseHTML(html);
+  if (pdf) document.getElementById("pdfEntry").hidden = false;
+  if (unset) {
+    document.getElementById("engineLink").hidden = true;
+    document.getElementById("engineUnset").hidden = false;
+  }
+  return [...document.querySelectorAll("a[href], button, input, select, textarea, summary")].filter((el) => {
+    if (el.closest("[hidden]")) return false;
+    const details = el.closest("details");
+    if (details && !details.open && el.tagName !== "SUMMARY") return false;
+    return !el.disabled;
+  }).map((el) => el.id || el.textContent.replace(/\s+/g, " ").trim());
+}
+
+test("PL-01 header, action row, engine, more, separator, open PDF, then the same footer", () => {
+  const { html } = popupSources();
+  const order = ["translatePage", "restorePage", "engineNote", "autoSite", "translateScope", "sourceLang", "targetLang", "engineLine", "openPdf", "openOptions", "openLearning", "openDocs"];
+  let at = html.indexOf("<header>");
+  assert.ok(at >= 0);
+  for (const id of order) {
+    const next = html.indexOf(`id="${id}"`, at);
+    assert.ok(next > at, id);
+    at = next;
+  }
+  const row = html.indexOf('class="action-row"');
+  const more = html.indexOf("<details class=\"more\">");
+  const sep = html.indexOf('class="group-sep"');
+  const pdf = html.indexOf('id="openPdf"');
+  const footer = html.indexOf('<nav class="entries">');
+  assert.ok(row < more && more < sep && sep < pdf && pdf < footer);
+  assert.match(html, /class="action-row">\s*<button[^>]*id="translatePage"[^>]*>翻译此页<\/button>\s*<button[^>]*id="restorePage"[^>]*>恢复原文<\/button>/);
+  const nav = html.match(/<nav class="entries">[\s\S]*?<\/nav>/)[0];
+  assert.match(nav, /id="openOptions">设置/);
+  assert.match(nav, /id="openLearning">学习/);
+  assert.match(nav, /id="openDocs">文档/);
+  assert.equal([...nav.matchAll(/·/g)].length, 2);
+  assert.doesNotMatch(html, /class="group-title"|<h2>[^<]*(网页翻译|PDF)/);
+});
+
+test("PL-02 翻译此页 and 恢复原文 share one 36px row at about 2:1", () => {
+  const { html, css } = popupSources();
+  assert.match(html, /class="action-row"[\s\S]*id="translatePage"[\s\S]*id="restorePage"/);
+  assert.match(css, /\.action-row\s*\{[^}]*display:\s*flex/s);
+  assert.match(css, /\.action-row\s*\{[^}]*gap:\s*8px/s);
+  const primary = css.match(/\.action-row > \.btn-primary\s*\{[^}]+\}/)[0];
+  const secondary = css.match(/\.action-row > \.btn-secondary\s*\{[^}]+\}/)[0];
+  for (const rule of [primary, secondary]) {
+    assert.match(rule, /height:\s*36px/);
+    assert.match(rule, /white-space:\s*nowrap/);
+    assert.match(rule, /font-size:\s*14px/);
+    assert.match(rule, /font-weight:\s*600/);
+  }
+  assert.match(primary, /flex:\s*2 1 0/);
+  assert.match(secondary, /flex:\s*1 1 0/);
+  assert.match(secondary, /min-width:\s*88px/);
+  assert.match(css, /\.switch-row\s*\{[^}]*margin:\s*12px 0 6px/s);
+});
+
+test("PL-03 separator A is a full-width 1px footer line with 12px gaps", () => {
+  const { html, css } = popupSources();
+  assert.match(html, /class="group-sep"[^>]*role="separator"/);
+  const sep = css.match(/\.group-sep\s*\{[^}]+\}/)[0];
+  assert.match(sep, /border-top:\s*1px solid var\(--oi-line\)/);
+  assert.match(sep, /margin:\s*12px 0/);
+  assert.doesNotMatch(sep, /margin-left|margin-right|width:\s*\d/);
+  assert.match(css, /#pdfEntry \.btn-secondary\s*\{[^}]*margin-top:\s*0/s);
+  assert.match(css, /\.entries\s*\{[^}]*margin-top:\s*12px/s);
+  assert.match(css, /\.entries\s*\{[^}]*border-top:\s*1px solid var\(--oi-line\)/s);
+  assert.ok(html.indexOf('class="group-sep"') > html.indexOf("<details class=\"more\">"));
+  assert.ok(html.indexOf('id="openPdf"') > html.indexOf('class="group-sep"'));
+});
+
+test("PL-04 only 翻译此页 uses the accent button", () => {
+  const { html } = popupSources();
+  assert.equal([...html.matchAll(/btn-primary/g)].length, 1);
+  assert.match(html, /id="translatePage"[^>]*class="btn-primary"/);
+  assert.match(html, /id="restorePage"[^>]*class="btn-secondary"/);
+  assert.match(html, /id="openPdf"[^>]*class="btn-secondary"/);
+});
+
+test("PL-05 no-engine line stays 引擎：未设置 · 去设置 and 去设置 can take focus", () => {
+  const { html, css, js } = popupSources();
+  assert.match(html, /id="engineUnsetName">未设置<\/span> · <a id="engineSetup"[^>]*>去设置<\/a>/);
+  assert.match(html, /id="engineLink"[^>]*>引擎：—<\/a>/);
+  assert.match(js, /unset\.hidden = false/);
+  assert.match(js, /\$\("engineSetup"\)\?\.focus\(\)/);
+  assert.match(css, /\.engine-setup:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-focus\)/s);
+  const { document } = parseHTML(html);
+  const setup = document.getElementById("engineSetup");
+  assert.equal(setup.tagName, "A");
+  assert.equal(setup.hasAttribute("href"), true);
+  assert.equal(setup.getAttribute("tabindex"), null);
+});
+
+test("PL-06 the no-engine note sits under the button row and only pushes what follows", () => {
+  const { html, css, js } = popupSources();
+  assert.match(html, /class="action-row">[\s\S]*?<\/div>\s*<p id="engineNote"/);
+  assert.doesNotMatch(html.slice(html.indexOf('class="action-row"'), html.indexOf("</div>", html.indexOf('class="action-row"'))), /engineNote/);
+  assert.match(css, /\.engine-note\s*\{[^}]*margin:\s*8px 0 0/s);
+  assert.match(css, /\.engine-note:not\(\[hidden\]\) \+ \.switch-row\s*\{[^}]*margin-top:\s*8px/s);
+  assert.match(js, /note\.hidden = false/);
+  assert.match(js, /note\.textContent = NO_ENGINE_COPY\.body/);
+  assert.doesNotMatch(css, /\.engine-note\s*\{[^}]*position:\s*absolute/s);
+});
+
+test("PL-07 a disabled 恢复原文 stays in the action row", () => {
+  const { html, css, js } = popupSources();
+  const row = html.slice(html.indexOf('class="action-row"'), html.indexOf("</div>", html.indexOf('class="action-row"')));
+  assert.match(row, /id="restorePage"/);
+  const disabled = css.match(/\.action-row > #restorePage:disabled\s*\{[^}]+\}/)[0];
+  assert.match(disabled, /display:\s*inline-flex/);
+  assert.match(disabled, /min-width:\s*88px/);
+  assert.doesNotMatch(disabled, /display:\s*none|visibility:\s*hidden/);
+  assert.match(js, /restore\.disabled = !\(ping\.running \|\| ping\.hasTranslations \|\| ping\.inflight\)/);
+  assert.doesNotMatch(js, /\$\("restorePage"\)\.hidden\s*=/);
+  assert.doesNotMatch(js, /restore\.remove\(/);
+});
+
+test("PL-08 tab order is translate, restore, site, scope, language, setup, more, PDF, footer", () => {
+  const { html } = popupSources();
+  const configured = popupTabStops(html, { pdf: true, unset: false });
+  assert.deepEqual(configured, [
+    "translatePage",
+    "restorePage",
+    "autoSite",
+    "translateScope",
+    "sourceLang",
+    "targetLang",
+    "engineLink",
+    "更多",
+    "openPdf",
+    "openOptions",
+    "openLearning",
+    "openDocs"
+  ]);
+  const unset = popupTabStops(html, { pdf: true, unset: true });
+  assert.deepEqual(unset, [
+    "translatePage",
+    "restorePage",
+    "autoSite",
+    "translateScope",
+    "sourceLang",
+    "targetLang",
+    "engineSetup",
+    "更多",
+    "openPdf",
+    "openOptions",
+    "openLearning",
+    "openDocs"
+  ]);
+  assert.deepEqual(popupTabStops(html, { pdf: false, unset: true }).includes("openPdf"), false);
+});
+
+test("PL-09 buttons are in the first paint and a hung page ping cannot blank the popup", async () => {
+  assert.equal(POPUP_PAGE_WAIT_MS <= 300, true);
+  const started = Date.now();
+  assert.equal(await withTimeout(new Promise(() => {}), 40), null);
+  assert.ok(Date.now() - started < 300);
+  assert.deepEqual(
+    await withTimeout(Promise.resolve({ inflight: false, running: false, hasTranslations: false }), 300),
+    { inflight: false, running: false, hasTranslations: false }
+  );
+  assert.equal(await withTimeout(Promise.reject(new Error("no receiver")), 300), null);
+
+  const { html, js } = popupSources();
+  const scriptAt = html.indexOf("<script");
+  assert.ok(html.indexOf('id="translatePage"') < scriptAt);
+  assert.ok(html.indexOf('id="restorePage"') < scriptAt);
+  assert.ok(html.indexOf('id="openPdf"') < scriptAt);
+  const init = js.slice(js.indexOf("async function init"), js.indexOf("function setPrimaryBusy"));
+  const wait = init.indexOf("await withTimeout(Promise.all([settingsPromise, tabsPromise]), POPUP_PAGE_WAIT_MS)");
+  const buttons = init.indexOf('$("translatePage").addEventListener');
+  const pdf = init.indexOf('$("openPdf").addEventListener');
+  const watch = init.indexOf("armTabWatch();", pdf);
+  assert.ok(wait >= 0 && wait < buttons && buttons < pdf && watch > pdf);
+  assert.equal(init.includes("await syncPrimary"), false);
+  const sync = js.slice(js.indexOf("async function syncPrimary"), js.indexOf("function bindEngineRefresh"));
+  assert.match(sync, /withTimeout\(/);
+  assert.match(sync, /type: "OI_PING"/);
+  assert.match(sync, /POPUP_PAGE_WAIT_MS/);
+  assert.match(sync, /if \(!ping\) return/);
+
+  execFileSync(process.execPath, ["--input-type=module", "-e", hungPopupScript()], {
+    cwd: root,
+    timeout: 5000,
+    encoding: "utf8"
+  });
+});
+
+function hungPopupScript() {
+  const popupFile = join(root, "popup/popup.js");
+  const popupHtml = join(root, "popup/popup.html");
+  return `
+    import { parseHTML } from "linkedom";
+    import { readFileSync } from "node:fs";
+    import { pathToFileURL } from "node:url";
+
+    const parsed = parseHTML(readFileSync(${JSON.stringify(popupHtml)}, "utf8"));
+    const selectProto = Object.getPrototypeOf(parsed.document.createElement("select"));
+    Object.defineProperty(selectProto, "value", {
+      configurable: true,
+      get() { return this._value ?? ""; },
+      set(next) { this._value = String(next ?? ""); }
+    });
+    globalThis.document = parsed.document;
+    globalThis.window = parsed.window;
+    globalThis.setInterval = () => 0;
+    let pings = 0;
+    globalThis.chrome = {
+      runtime: {
+        getURL: (path) => path,
+        openOptionsPage() {},
+        sendMessage(message) {
+          if (message?.type === "OI_GET_SETTINGS") {
+            return Promise.resolve({
+              settings: {
+                provider: "kimi",
+                providers: { kimi: { apiKey: "sk-test" } },
+                sourceLang: "en",
+                targetLang: "zh-CN",
+                translateScope: "article",
+                translateLimit: "all",
+                features: { pdf: true }
+              }
+            });
+          }
+          return Promise.resolve({ ok: true });
+        }
+      },
+      storage: {
+        local: { async get() { return {}; } },
+        onChanged: { addListener() {} }
+      },
+      tabs: {
+        async query() { return [{ id: 7, url: "https://example.com/paper" }]; },
+        sendMessage() {
+          pings += 1;
+          return new Promise(() => {});
+        }
+      },
+      scripting: { executeScript() { return new Promise(() => {}); } }
+    };
+    const started = Date.now();
+    await import(pathToFileURL(${JSON.stringify(popupFile)}).href + "?hang=" + started);
+    const pdf = parsed.document.getElementById("pdfEntry");
+    const translate = parsed.document.getElementById("translatePage");
+    const restore = parsed.document.getElementById("restorePage");
+    for (let i = 0; i < 40 && pdf.hidden; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const elapsed = Date.now() - started;
+    if (pdf.hidden) throw new Error("打开 PDF stayed hidden while the page ping hung");
+    if (!translate.isConnected || !restore.isConnected) throw new Error("action buttons missing");
+    if (translate.hidden || restore.hidden) throw new Error("action buttons hidden");
+    if (elapsed >= 300) throw new Error("buttons took " + elapsed + "ms");
+    if (pings < 1) throw new Error("page ping never started");
+  `;
+}
+
+test("PL-10 the separator uses the footer line token on the elevated surface", () => {
+  const { css } = popupSources();
+  const tokens = readFileSync(join(root, "ui/tokens.css"), "utf8");
+  const sep = css.match(/\.group-sep\s*\{[^}]+\}/)[0];
+  const footer = css.match(/\.entries\s*\{[^}]+\}/)[0];
+  assert.match(sep, /border-top:\s*1px solid var\(--oi-line\)/);
+  assert.match(footer, /border-top:\s*1px solid var\(--oi-line\)/);
+  assert.equal(/#[0-9a-fA-F]{3,8}|rgba?\(/.test(sep), false);
+  assert.match(tokens, /--oi-line:\s*rgba\(255,\s*255,\s*255,\s*0\.10\)/);
+  assert.match(tokens, /--oi-bg-elevated:\s*#181c26/);
+  assert.match(css, /background:\s*var\(--oi-bg-elevated\)/);
+  assert.match(tokens, /color-scheme:\s*dark/);
+  assert.equal(/color-scheme:\s*light/.test(tokens + css), false);
 });
