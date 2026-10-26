@@ -88,12 +88,29 @@
           </button>
           <div id="translateMenu" class="more-menu" role="menu" aria-label="翻译" hidden>
             <button type="button" id="translateMenuRetranslate" class="more-item hit-pad" role="menuitem" disabled>重译本页</button>
+            <button type="button" id="translateMenuRetranslateDoc" class="more-item hit-pad" role="menuitem" disabled>重译全文</button>
           </div>
         </div>
       </div>
       <span class="toolbar-rule" data-rule="retranslate" aria-hidden="true"></span>
       <div class="tb-group" data-grp="retranslate" data-collapse="wide-only">
-        <button type="button" id="retranslatePage" class="btn-secondary" data-tb="text" disabled>重译本页</button>
+        <div class="retranslate-split" id="retranslateSplit">
+          <button type="button" id="retranslatePage" class="btn-secondary" data-tb="text" disabled>重译本页</button>
+          <button type="button" id="retranslateMenuButton" class="retranslate-caret" aria-haspopup="menu" aria-expanded="false" aria-controls="retranslateMenu" aria-label="重译菜单" disabled>
+            <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6.5 8 10.5 12 6.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+          </button>
+          <button type="button" id="retranslateStop" class="retranslate-caret" hidden title="停止重译" aria-label="停止重译">×</button>
+          <div id="retranslateMenu" class="more-menu retranslate-menu" role="menu" aria-label="重译" hidden>
+            <button type="button" id="retranslatePageItem" class="more-item retranslate-item" role="menuitem" disabled>
+              <span class="retranslate-item-label">重译本页</span>
+              <span class="retranslate-item-note">只替换当前页</span>
+            </button>
+            <button type="button" id="retranslateDocument" class="more-item retranslate-item" role="menuitem" disabled>
+              <span class="retranslate-item-label">重译全文</span>
+              <span class="retranslate-item-note">从第 1 页起重新翻译所有页</span>
+            </button>
+          </div>
+        </div>
       </div>
       <span class="toolbar-rule" data-rule="panels" aria-hidden="true"></span>
       <div class="tb-group" data-grp="panels" data-collapse="wide-only">

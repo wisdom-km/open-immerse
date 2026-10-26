@@ -127,7 +127,16 @@ test("重译本页 bypasses library early-returns; 翻译 still short-circuits",
   const replace = force.indexOf("replaceLibraryPagePairs(");
   const done = force.indexOf("PDF_COPY.retranslateDone");
   assert.ok(remember > 0 && replace > remember && done > replace);
-  assert.match(viewer, /\$\("retranslatePage"\)\.addEventListener\("click", \(\) => forceRetranslateCurrentPage\(\)\)/);
+  assert.match(viewer, /\$\("retranslatePage"\)\.addEventListener\("click", \(\) => \{/);
+  assert.match(viewer, /forceRetranslateCurrentPage\(\)/);
+  assert.match(viewer, /\$\("retranslateMenuButton"\)\?\.addEventListener\("click"/);
+  assert.match(viewer, /openRetranslateMenu\(\)/);
+  assert.match(viewer, /\$\("retranslatePageItem"\)\?\.addEventListener\("click"/);
+  assert.match(viewer, /forceRetranslateCurrentPage\(\)/);
+  assert.match(viewer, /async function forceRetranslateDocument/);
+  const docForce = viewer.slice(viewer.indexOf("async function forceRetranslateDocument"), viewer.indexOf("async function forceRetranslateCurrentPage"));
+  assert.equal(docForce.includes("confirm("), false);
+  assert.match(docForce, /forceAll: true/);
   assert.match(viewer, /\$\("translatePage"\)\.addEventListener\("click", \(\) => startTranslate\(\)\)/);
   assert.match(viewer, /canRetranslate: retranslatePageOpen\(\)/);
   assert.match(force, /bypassCache: true/);

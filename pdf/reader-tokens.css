@@ -142,6 +142,7 @@
   --oi-reader-ink-2: var(--oi-reader-warm-ink-2);
   --oi-reader-muted: var(--oi-reader-warm-muted);
   --oi-reader-line: var(--oi-reader-warm-line);
+  --oi-reader-border: var(--oi-reader-line);
   --oi-reader-line-strong: var(--oi-reader-warm-line-strong);
   --oi-reader-disabled: var(--oi-reader-warm-disabled);
   --oi-reader-well: var(--oi-reader-warm-well);

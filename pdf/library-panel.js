@@ -4,7 +4,7 @@
  */
 
 import { LIBRARY_CLICK_DEDUPE_MS, LIBRARY_SKELETON_MS, LIBRARY_WIDTH_DEFAULT, libraryClickFresh } from "../lib/library-layout.js";
-import { countTranslated } from "../lib/library-record.js";
+import { countPageOutcomes } from "../lib/library-record.js";
 import { resolveLibraryOpen } from "../lib/pdf-library.js";
 import { BLOCKED_TITLE, STORAGE_POLL_MS, blockedReasonCopy, isStorageBlocked } from "../lib/storage-copy.js";
 import {
@@ -375,11 +375,12 @@ export function mountLibraryUi(api = {}) {
         } catch {
           notes = [];
         }
-        const translated = countTranslated(pages);
+        const outcome = countPageOutcomes(pages);
         const bytes = nextUsage?.byDoc?.get?.(paper.docHash) || Number(paper.sourceSize) || 0;
         built.push({
           ...paper,
-          translated,
+          translated: outcome.translated,
+          incomplete: outcome.incomplete,
           notes: notes.length,
           bytes,
           hasSource: Number(paper.sourceSize) > 0
@@ -804,7 +805,7 @@ export function mountLibraryUi(api = {}) {
         const label = deleteLabel(title.title);
         const paused = Boolean(autoPaused[row.docHash]);
         const metaText = [
-          paused ? libraryPausedCopy(row.translated, row.pageCount) : libraryProgressCopy(row.translated, row.pageCount),
+          paused ? libraryPausedCopy(row.translated, row.pageCount) : libraryProgressCopy(row.translated, row.pageCount, { incomplete: row.incomplete }),
           libraryRelativeTime(row.lastOpenedAt, now()),
           librarySizeCopy(row.bytes)
         ].filter(Boolean).join(" · ");

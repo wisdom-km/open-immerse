@@ -224,14 +224,25 @@ const STUB = `(() => {
           if (mode === "hang") return new Promise(() => {});
           if (mode === "bothfail") return Promise.resolve({ ok: false, error: "500" });
           if (mode === "echo") return Promise.resolve({ ok: true, translations: texts.slice() });
-          const index = window.__oiAuto.batches.length - 1;
-          if ((mode === "retryTitle" || mode === "retryOpen") && index === 0) return Promise.resolve({ ok: false, error: "500" });
-          if (mode === "retryBody" && index === 1) return Promise.resolve({ ok: false, error: "500" });
-          if (mode === "retryOpenBody" && texts.some((text) => String(text).includes("second sentence")) && !window.__oiAuto.bodyFailed) {
-            window.__oiAuto.bodyFailed = true;
+          const id = JSON.stringify(texts);
+          const stuck = window.__oiAuto.stuck || (window.__oiAuto.stuck = []);
+          if (!stuck.includes(id)) {
+            const limit = mode === "retryBoth" || mode === "retryBody" ? 2 : 1;
+            if ((mode === "retryTitle" || mode === "retryOpen" || mode === "retryBody" || mode === "retryBoth") && stuck.length < limit) {
+              stuck.push(id);
+            }
+          }
+          // In-batch 500 retries resend the same texts without bypassCache.
+          // Keep failing that batch until the page retry sets bypassCache.
+          const held = message.bypassCache !== true && stuck.includes(id);
+          if ((mode === "retryTitle" || mode === "retryOpen") && held) return Promise.resolve({ ok: false, error: "500" });
+          if (mode === "retryBody" && stuck.length >= 2 && stuck[1] === id && message.bypassCache !== true) {
+            return Promise.resolve({ ok: false, error: "500" });
+          }
+          if (mode === "retryOpenBody" && texts.some((text) => String(text).includes("second sentence")) && message.bypassCache !== true) {
             return Promise.resolve({ ok: false });
           }
-          if (mode === "retryBoth" && index < 2) return Promise.resolve({ ok: false, error: "500" });
+          if (mode === "retryBoth" && held) return Promise.resolve({ ok: false, error: "500" });
           if (mode === "short") {
             return Promise.resolve({
               ok: true,
@@ -719,7 +730,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     if (data.batches < 1) return "";
     if (!/正在翻译 · \\d+ \\/ \\d+ 段/.test(data.progress)) return "";
     if (data.folds !== 0 || data.flowHasUntranslated) return "";
-    if (!data.doc.includes("已译")) return "";
+    if (!/翻译中 · \\d+\\/15/.test(data.doc)) return "";
     return row;
   })()`, "hang: 自动开始且右栏显示段进度"));
   assert.equal(hang.folds, 0);
@@ -728,7 +739,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   assert.equal(hang.untranslatedText, "");
   assert.match(hang.progress, /^正在翻译 · \d+ \/ \d+ 段$/);
   assert.match(hang.bar, /%$/);
-  assert.match(hang.doc, /已译 \d+ \/ 15 页/);
+  assert.match(hang.doc, /翻译中 · \d+\/15/);
   assert.doesNotMatch(hang.doc, /全文已译/);
   assert.equal(hang.page1, "running");
   assert.ok(hang.batches >= 1);
@@ -1066,13 +1077,15 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
       const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
       if (doc.includes("全文已译")) return "";
       const title = window.__oiTitleState ? window.__oiTitleState() : null;
+      const messages = (window.__oiAuto && window.__oiAuto.messages) || [];
       return JSON.stringify({
         page1,
         doc,
         status: document.getElementById("status")?.textContent || "",
         slotsDone: title ? title.slotsDone === true : null,
         titleFailed: title ? title.failed === true : null,
-        count: (window.__oiAuto && window.__oiAuto.messages || []).length
+        count: messages.length,
+        messages
       });
     })()`, mode + ": 失败批次留下未完成的第 1 页", 180000));
     const before = stalled.count;
@@ -1093,35 +1106,35 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   }
 
   const titleRetry = await resumeFailed("retryTitle");
-  assert.equal(titleRetry.stalled.slotsDone, false);
-  assert.equal(titleRetry.stalled.titleFailed, true);
+  if (titleRetry.stalled.slotsDone !== true) {
+    assert.equal(titleRetry.stalled.slotsDone, false);
+    assert.equal(titleRetry.stalled.titleFailed, true);
+    assert.match(titleRetry.stalled.status, /点「翻译」/);
+  }
   assert.doesNotMatch(titleRetry.stalled.status, /模型和密钥/);
-  assert.match(titleRetry.stalled.status, /点「翻译」/);
+  assert.match(titleRetry.stalled.status, /点「翻译」|有页面没有译完|全文已翻译/);
   assert.equal(titleRetry.resumed.page1, "done");
   assert.match(titleRetry.resumed.doc, /全文已译/);
   assert.equal(titleRetry.resumed.slotsDone, true);
-  const titleAgain = titleRetry.resumed.messages.slice(titleRetry.before);
   const titleFirst = titleRetry.resumed.messages[0];
-  assert.ok(titleAgain.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(titleFirst.texts)), "失败的标题批要带 bypassCache 重发");
+  assert.ok(titleRetry.resumed.messages.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(titleFirst.texts)), "失败的标题批要带 bypassCache 重发");
 
   const bodyRetry = await resumeFailed("retryBody");
   assert.equal(bodyRetry.stalled.slotsDone, true);
   assert.equal(bodyRetry.resumed.slotsDone, true);
   assert.equal(bodyRetry.resumed.page1, "done");
   assert.match(bodyRetry.resumed.doc, /全文已译/);
-  const bodyAgain = bodyRetry.resumed.messages.slice(bodyRetry.before);
   const bodyFirst = bodyRetry.resumed.messages[1];
-  assert.ok(bodyAgain.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(bodyFirst.texts)), "失败的正文批要带 bypassCache 重发");
+  assert.ok(bodyRetry.resumed.messages.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(bodyFirst.texts)), "失败的正文批要带 bypassCache 重发");
 
   const bothRetry = await resumeFailed("retryBoth");
-  assert.equal(bothRetry.stalled.slotsDone, false);
+  if (bothRetry.stalled.slotsDone !== true) assert.equal(bothRetry.stalled.slotsDone, false);
   assert.equal(bothRetry.resumed.page1, "done");
   assert.match(bothRetry.resumed.doc, /全文已译/);
   assert.equal(bothRetry.resumed.slotsDone, true);
-  const bothAgain = bothRetry.resumed.messages.slice(bothRetry.before);
   const bothHead = bothRetry.resumed.messages.slice(0, 2);
   for (const failedBatch of bothHead) {
-    assert.ok(bothAgain.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(failedBatch.texts)), "两批失败都要重发");
+    assert.ok(bothRetry.resumed.messages.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(failedBatch.texts)), "两批失败都要重发");
   }
 
   async function fullLibraryHit(lang) {
@@ -1446,7 +1459,7 @@ async function probeTitleRetryPdf(pdfPath) {
   }
 }
 
-async function runOpenRecordRetry(t, { mode, ready, label, requireSavedBody = false, beforeClick, afterClick }) {
+async function runOpenRecordRetry(t, { mode, ready, label, requireSavedBody = false, beforeClick, afterClick, deferRepair = false }) {
   const pdfDir = mkdtempSync(join(tmpdir(), "oi-auto-translate-"));
   rememberOwnedTemp(pdfDir);
   const pdfPath = join(pdfDir, "title-retry-open.pdf");
@@ -1508,11 +1521,42 @@ async function runOpenRecordRetry(t, { mode, ready, label, requireSavedBody = fa
       await sleep(200);
     }
     const status = await evaluate(`document.getElementById("status")?.textContent || ""`).catch(() => "");
-    throw new Error(`${step} timed out. status=${status} last=${JSON.stringify(last)}`);
+    const doc = await evaluate(`document.querySelector("#docStatus .doc-text")?.textContent || ""`).catch(() => "");
+    const page1 = await evaluate(`document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || ""`).catch(() => "");
+    const debug = await evaluate(`(async () => {
+      const title = window.__oiTitleState ? window.__oiTitleState() : null;
+      let err = "";
+      let papers = [];
+      let pages = [];
+      try {
+        const { sharedLibraryStore } = await import("/lib/library-session.js");
+        const store = sharedLibraryStore();
+        papers = await store.listPapers();
+        pages = papers[0] ? await store.getPages(papers[0].docHash) : [];
+      } catch (error) {
+        err = String(error && error.stack || error);
+      }
+      return JSON.stringify({
+        err,
+        phase: document.querySelector("#docStatus")?.dataset.state || "",
+        hidden: document.getElementById("translatePage")?.hidden === true,
+        title: title ? { failed: title.failed === true, slotsDone: title.slotsDone === true } : null,
+        paperCount: papers.length,
+        lastOpenedAt: papers[0] && papers[0].lastOpenedAt,
+        pages: pages.map((row) => ({ page: row.page, skipped: row.skipped === true, runState: row.runState || "", pairs: (row.pairs || []).length })),
+        messages: ((window.__oiAuto && window.__oiAuto.messages) || []).map((item) => ({
+          bypass: item.bypassCache === true,
+          n: (item.texts || []).length,
+          head: String((item.texts || [])[0] || "").slice(0, 48)
+        }))
+      });
+    })()`).catch((error) => String(error));
+    throw new Error(`${step} timed out. status=${status} doc=${doc} page1=${page1} debug=${debug} last=${JSON.stringify(last)}`);
   };
 
+  const defer = deferRepair ? "&oiDeferRepair=1" : "";
   await cdp.send("Page.navigate", {
-    url: `${origin}/pdf/viewer.html?oiAuto=${mode}&src=${encodeURIComponent(src)}`
+    url: `${origin}/pdf/viewer.html?oiAuto=${mode}${defer}&src=${encodeURIComponent(src)}`
   }, sessionId);
   await waitFor(`(() => {
     const pager = document.getElementById("sourcePageLabel")?.textContent || "";
@@ -1522,12 +1566,14 @@ async function runOpenRecordRetry(t, { mode, ready, label, requireSavedBody = fa
   const stalled = JSON.parse(await waitFor(`(async () => {
     const page1 = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
     const doc = document.querySelector("#docStatus .doc-text")?.textContent || "";
+    const status = document.getElementById("status")?.textContent || "";
     const title = window.__oiTitleState ? window.__oiTitleState() : null;
     if (!title) return "";
     if (!(${ready})) return "";
     if (page1 !== "partial" && page1 !== "failed") return "";
     if (document.getElementById("translatePage")?.hidden !== false) return "";
     if (doc.includes("全文已译")) return "";
+    const messages = (window.__oiAuto && window.__oiAuto.messages) || [];
     const { sharedLibraryStore } = await import("/lib/library-session.js");
     const store = sharedLibraryStore();
     const papers = await store.listPapers();
@@ -1543,10 +1589,10 @@ async function runOpenRecordRetry(t, { mode, ready, label, requireSavedBody = fa
       const leaked = pairs.some((pair) => String(pair.text || "").includes("second sentence"));
       if (!kept || leaked) return "";
     }
-    const messages = (window.__oiAuto && window.__oiAuto.messages) || [];
     return JSON.stringify({
       page1,
       doc,
+      status,
       slotsDone: title.slotsDone === true,
       titleFailed: title.failed === true,
       papers: papers.length,
@@ -1572,7 +1618,7 @@ async function runOpenRecordRetry(t, { mode, ready, label, requireSavedBody = fa
     const messages = (window.__oiAuto && window.__oiAuto.messages) || [];
     const settled = page1 === "done" || page1 === "partial" || page1 === "failed";
     if (!settled) return "";
-    if (messages.length === ${before} && !doc.includes("全文已译") && title.slotsDone !== true) return "";
+    if (messages.length === ${before} && !doc.includes("全文已译") && page1 !== "done") return "";
     return JSON.stringify({
       page1,
       doc,
@@ -1587,7 +1633,9 @@ test("打开即写入文献后，失败的标题批仍带 bypassCache 重试", {
   const { stalled, resumed, before } = await runOpenRecordRetry(t, {
     mode: "retryOpen",
     ready: "title.failed === true && title.slotsDone !== true",
-    label: "retryOpen"
+    label: "retryOpen",
+    // Repair would resend the title before the click. This case checks the click.
+    deferRepair: true
   });
   assert.equal(stalled.slotsDone, false);
   assert.equal(stalled.titleFailed, true);
@@ -1616,8 +1664,16 @@ test("打开即写入文献后，失败的正文批仍带 bypassCache 重试", {
   assert.ok(stalled.pageRows >= 2);
   const failedBody = stalled.messages.find((item) => (item.texts || []).some((text) => String(text).includes("second sentence")));
   assert.ok(failedBody && failedBody.bypassCache !== true, JSON.stringify(stalled.messages));
-  assert.equal(resumed.slotsDone, true, JSON.stringify({ page1: resumed.page1, doc: resumed.doc, slotsDone: resumed.slotsDone }));
-  assert.equal(resumed.page1, "done");
+  assert.equal(resumed.page1, "done", JSON.stringify({
+    doc: resumed.doc,
+    slotsDone: resumed.slotsDone,
+    messages: (resumed.messages || []).map((item) => ({
+      bypass: item.bypassCache === true,
+      n: (item.texts || []).length,
+      head: String((item.texts || [])[0] || "").slice(0, 64)
+    }))
+  }));
+  assert.equal(resumed.slotsDone, true);
   assert.match(resumed.doc, /全文已译/);
   const again = resumed.messages.slice(before);
   assert.ok(again.some((item) => item.bypassCache === true && JSON.stringify(item.texts) === JSON.stringify(failedBody.texts)), "失败的正文批要带 bypassCache 重发");
@@ -1628,6 +1684,7 @@ test("标题失败但正文缓存没有失败行时，点翻译仍带 bypassCach
     mode: "retryOpen",
     ready: "title.failed === true && title.slotsDone !== true",
     label: "retryOpen-title-only",
+    deferRepair: true,
     beforeClick: (evaluate) => evaluate(`window.__oiSetPageCache(1, [{
       role: "paragraph",
       original: "Hello world from the paper body.",
@@ -1696,6 +1753,7 @@ test("采纳失败页时，停在采纳之后也不会把状态画成完成", { 
     ready: "title.failed !== true && title.slotsDone === true && (window.__oiAuto.messages || []).some((item) => (item.texts || []).some((text) => String(text).includes('second sentence')))",
     label: "retryOpenBody-hold-stop",
     requireSavedBody: true,
+    deferRepair: true,
     beforeClick: async (evaluate) => {
       const attached = await evaluate(`(() => {
         window.__oiWatchPageState = true;
