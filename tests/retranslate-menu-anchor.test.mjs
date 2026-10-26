@@ -8,12 +8,18 @@ import {
   abortTranslateSession,
   createTranslateSession,
   documentRetranslateEntry,
+  docStatusView,
+  liveWorkPhase,
   pageRetranslateEntry,
+  rememberRushPage,
   retranslateMenuBox,
   retranslateSplitChrome,
+  rushRetranslateLive,
+  takeRushPage,
   translateDocumentPages,
   translatePageBlocks
 } from "../lib/pdf-viewer.js";
+import { readerToolbarChrome } from "../lib/pdf-pairing.js";
 import { LIBRARY_COPY, libraryProgressCopy, libraryRowStatus } from "../lib/library-copy.js";
 import { mountLibraryUi } from "../pdf/library-panel.js";
 
@@ -167,7 +173,8 @@ test("RTA-05 重译本页 cuts in without aborting the document walk", async () 
   const rush = pageRetranslateEntry({ busy: true, page: 4, canRetranslate: true });
   assert.deepEqual(rush, { action: "rush", page: 4, abortDocument: false });
   assert.equal(pageRetranslateEntry({ busy: true, retranslating: true, page: 4, canRetranslate: true }).action, "ignore");
-  assert.match(viewer, /queuedRushPage = plan\.page/);
+  assert.match(viewer, /rememberRushPage\(rushQueue, plan\.page, rushInflight\)/);
+  assert.equal(viewer.includes("queuedRushPage"), false);
   assert.match(viewer, /pullRushPage\(\)/);
   const started = [];
   let queued = 0;
@@ -274,4 +281,196 @@ test("RTA-06 library row names translation and retranslate, and only a real PDF 
   assert.equal(text.includes("正在下载 PDF"), false);
   releaseOpen?.(true);
   await flush();
+});
+
+test("翻译中只有一个重译菜单入口", () => {
+  for (const width of [1400, 1000, 800]) {
+    const chrome = readerToolbarChrome(width);
+    assert.equal(Number(chrome.retranslateOnBar) + Number(chrome.translateMenuOnBar), 1, String(width));
+  }
+  const wide = readerToolbarChrome(1400);
+  assert.equal(wide.retranslateOnBar, true);
+  assert.equal(wide.translateMenuOnBar, false);
+  assert.match(css, /\.toolbar\[data-band="wide"\] \[data-grp="translate"\] > \.more-wrap\s*\{[^}]*display:\s*none/);
+  assert.match(html, /data-grp="retranslate"[^>]*data-collapse="wide-only"/);
+  const band = viewer.slice(viewer.indexOf("function applyToolbarBand"), viewer.indexOf("function translateMenuOpen"));
+  assert.match(band, /translateMore\.hidden = !chrome\.translateMenuOnBar/);
+  const translating = retranslateSplitChrome({ hasDoc: true, busy: true, scope: "", canRetranslatePage: true });
+  assert.equal(translating.caretHidden, false);
+  assert.equal(translating.primaryStopHidden, false);
+  assert.equal(translating.stopRetranslateHidden, true);
+});
+
+test("插队重译时工具栏和文献库行是重译中", () => {
+  assert.equal(rushRetranslateLive({ queued: 0, inflight: 0 }), false);
+  assert.equal(rushRetranslateLive({ queued: 2, inflight: 0 }), true);
+  assert.equal(rushRetranslateLive({ queued: 0, inflight: 4 }), true);
+  assert.equal(liveWorkPhase({ scope: "", rush: false }), "translating");
+  assert.equal(liveWorkPhase({ scope: "", rush: true }), "retranslate");
+  assert.equal(liveWorkPhase({ scope: "document", rush: false }), "retranslate");
+  assert.equal(docStatusView({ n: 14, t: 15, phase: "running", retranslate: true }).text, "重译中 · 14/15");
+  assert.equal(docStatusView({ n: 14, t: 15, phase: "running", retranslate: false }).text, "翻译中 · 14/15");
+  assert.equal(libraryProgressCopy(14, 15, { retranslate: true }), "重译中 14/15");
+  assert.match(viewer, /liveWorkPhase\(\{/);
+  assert.match(viewer, /retranslate: retranslateScope === "document" \|\| rushCutInLive\(\)/);
+  assert.match(viewer, /syncRushStatusLine\(plan\.page, pdfDoc\?\.numPages \|\| 0\)/);
+  const controls = viewer.slice(viewer.indexOf("function updateTranslateControls"), viewer.indexOf("function setStatus"));
+  assert.match(controls, /const rush = rushCutInLive\(\)/);
+  assert.match(controls, /labelScope = retranslateScope \|\| \(rush \? "page" : ""\)/);
+});
+
+test("插队页完成后整本走到该页不再请求", async () => {
+  const sent = [];
+  let queue = [2];
+  const done = await translateDocumentPages({
+    numPages: 3,
+    bypassCache: true,
+    skipCached: false,
+    pullRushPage: () => {
+      const taken = takeRushPage(queue);
+      queue = taken.queue;
+      return taken.page;
+    },
+    getPageOriginals: async (page) => [{ bid: `p${page}`, original: "Hello there." }],
+    send: async (msg) => {
+      const bid = msg.items?.[0]?.bid || "";
+      sent.push(bid);
+      return { ok: true, translations: [{ bid, translation: "你好。" }] };
+    }
+  });
+  assert.equal(done.aborted, false);
+  assert.deepEqual(sent, ["p2", "p1", "p3"]);
+
+  const retried = [];
+  let again = [2];
+  let failRush = true;
+  await translateDocumentPages({
+    numPages: 3,
+    bypassCache: true,
+    skipCached: false,
+    pullRushPage: () => {
+      const taken = takeRushPage(again);
+      again = taken.queue;
+      return taken.page;
+    },
+    getPageOriginals: async (page) => [{ bid: `p${page}`, original: "Hello there." }],
+    send: async (msg) => {
+      const bid = msg.items?.[0]?.bid || "";
+      retried.push(bid);
+      if (bid === "p2" && failRush) {
+        failRush = false;
+        return { ok: false, error: "nope", translations: [] };
+      }
+      return { ok: true, translations: [{ bid, translation: "你好。" }] };
+    }
+  });
+  assert.equal(retried.filter((bid) => bid === "p2").length, 2);
+});
+
+test("连点多页重译本页按顺序入队并去重", async () => {
+  assert.deepEqual(rememberRushPage([4], 4, 0), [4]);
+  assert.deepEqual(rememberRushPage([4], 2, 4), [4, 2]);
+  assert.deepEqual(rememberRushPage([4, 2], 4, 0), [4, 2]);
+  assert.deepEqual(rememberRushPage([], 3, 3), []);
+  const started = [];
+  let queue = [];
+  let release = null;
+  const session = createTranslateSession();
+  const job = translateDocumentPages({
+    numPages: 4,
+    session,
+    preserveSession: true,
+    pullRushPage: () => {
+      const taken = takeRushPage(queue);
+      queue = taken.queue;
+      return taken.page;
+    },
+    getPageOriginals: async (page) => [{ bid: `p${page}`, original: "Hello there." }],
+    onPageStart: ({ page }) => { started.push(page); },
+    send: (msg) => {
+      const bid = msg.items?.[0]?.bid || "";
+      if (bid === "p1") {
+        queue = rememberRushPage(queue, 4, 0);
+        queue = rememberRushPage(queue, 2, 0);
+        queue = rememberRushPage(queue, 4, 0);
+        queue = rememberRushPage(queue, 3, 0);
+        return new Promise((resolve) => {
+          release = () => resolve({ ok: true, translations: [{ bid, translation: "你好。" }] });
+        });
+      }
+      return Promise.resolve({ ok: true, translations: [{ bid, translation: "你好。" }] });
+    }
+  });
+  await flush();
+  assert.equal(typeof release, "function");
+  release();
+  const result = await job;
+  assert.equal(result.aborted, false);
+  assert.deepEqual(started, [1, 4, 2, 3]);
+});
+
+test("停止后立即重译全文，旧循环靠 generation 退出并不再写入", async () => {
+  let generation = 1;
+  const writes = [];
+  const cache = {
+    get() { return null; },
+    set(_doc, page, rows) {
+      writes.push({ page, text: rows?.[0]?.translation || "" });
+    }
+  };
+  const session = createTranslateSession();
+  const started = [];
+  let release = null;
+  const oldJob = translateDocumentPages({
+    numPages: 3,
+    session,
+    preserveSession: true,
+    docId: 7,
+    generation,
+    readGeneration: () => generation,
+    cache,
+    getPageOriginals: async (page) => [{ bid: `p${page}`, original: "Hello there." }],
+    onPageStart: ({ page }) => { started.push(page); },
+    send: (msg) => new Promise((resolve) => {
+      release = () => resolve({
+        ok: true,
+        translations: [{ bid: msg.items?.[0]?.bid || "", translation: "旧译文" }]
+      });
+    })
+  });
+  await flush();
+  assert.deepEqual(started, [1]);
+  generation += 1;
+  const nextWrites = [];
+  const next = translateDocumentPages({
+    numPages: 2,
+    session: createTranslateSession(),
+    preserveSession: true,
+    docId: 7,
+    generation,
+    readGeneration: () => generation,
+    bypassCache: true,
+    cache: {
+      get() { return null; },
+      set(_doc, page, rows) {
+        nextWrites.push({ page, text: rows?.[0]?.translation || "" });
+      }
+    },
+    getPageOriginals: async (page) => [{ bid: `n${page}`, original: "Hello there." }],
+    send: async (msg) => ({
+      ok: true,
+      translations: [{ bid: msg.items?.[0]?.bid || "", translation: "新译文" }]
+    })
+  });
+  release();
+  const oldResult = await oldJob;
+  const newResult = await next;
+  assert.equal(oldResult.aborted, true);
+  assert.deepEqual(started, [1]);
+  assert.equal(writes.some((row) => row.text === "旧译文"), false);
+  assert.equal(newResult.aborted, false);
+  assert.ok(nextWrites.some((row) => row.text === "新译文"));
+  const stop = viewer.slice(viewer.indexOf("function stopTranslateWork"), viewer.indexOf("function libraryResumePage"));
+  assert.match(stop, /restoreGen \+= 1/);
+  assert.match(viewer, /readGeneration:\s*\(\)\s*=>\s*restoreGen/);
 });

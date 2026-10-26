@@ -1650,6 +1650,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   border-left: 1px solid var(--oi-reader-border);
   border-radius: 0 var(--oi-reader-topbar-btn-radius) var(--oi-reader-topbar-btn-radius) 0;
 }
+/* Wide already has the 重译本页 split. The translate-group ▾ is the same menu. */
 .toolbar[data-band="wide"] [data-grp="translate"] > .more-wrap {
   display: none;
 }

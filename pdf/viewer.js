@@ -74,6 +74,10 @@ import {
   retranslateSplitChrome,
   documentRetranslateEntry,
   pageRetranslateEntry,
+  rememberRushPage,
+  takeRushPage,
+  rushRetranslateLive,
+  liveWorkPhase,
   retranslateMenuBox,
   failureChipModel,
   runningPageHint,
@@ -512,8 +516,36 @@ const pageRetryPending = new Set();
 const pageRetryStill = new Set();
 let showRoundFailures = false;
 let retranslateScope = "";
-let queuedRushPage = 0;
+let rushQueue = [];
 let rushArmed = 0;
+let rushInflight = 0;
+
+function clearRushQueue() {
+  rushQueue = [];
+  rushArmed = 0;
+  rushInflight = 0;
+}
+
+function rushCutInLive() {
+  return rushRetranslateLive({ queued: rushQueue.length, inflight: rushInflight });
+}
+
+function settleRushPage(page) {
+  if (Math.floor(Number(page) || 0) === rushInflight) rushInflight = 0;
+}
+
+function syncRushStatusLine(page, total) {
+  if (retranslateScope === "document") return;
+  if (docPhase !== "running" && docPhase !== "layout") return;
+  const el = $("status");
+  if (el?.classList.contains("warn") || el?.classList.contains("error")) return;
+  if (rushCutInLive()) {
+    const totals = pageTotals();
+    setStatus(`重译中 · ${totals.n}/${totals.t}`);
+    return;
+  }
+  if (page && total) setStatus(progressDocumentStatus(page, total));
+}
 const layoutMissReason = new Map();
 let docPhase = "idle";
 let pdfTargetLang = "zh-CN";
@@ -9145,6 +9177,11 @@ function applyToolbarBand() {
   if (!bar) return;
   const chrome = readerToolbarChrome(window.innerWidth || 0);
   bar.dataset.band = chrome.band;
+  const translateMore = $("translateMenuButton")?.closest(".more-wrap");
+  if (translateMore) {
+    translateMore.hidden = !chrome.translateMenuOnBar;
+    if (translateMore.hidden) closeTranslateMenu(false);
+  }
   const swap = $("swapPanes");
   if (swap) swap.hidden = !chrome.swapInMenu;
   for (const id of ["menuNotes", "menuAsk", "menuLibrary", "menuAa"]) {
@@ -9816,7 +9853,7 @@ function refreshDocStatus() {
     t,
     needsRetry,
     phase: docPhase,
-    retranslate: retranslateScope === "document"
+    retranslate: retranslateScope === "document" || rushCutInLive()
   });
   el.dataset.state = view.state || "idle";
   const compact = document.querySelector(".toolbar")?.dataset.band !== "wide";
@@ -9855,10 +9892,9 @@ function syncLibraryLiveProgress() {
     return;
   }
   const { n, t } = pageTotals();
-  const retranslate = retranslateScope === "document" || retranslateScope === "page";
   libraryUi.setLiveProgress({
     hash,
-    phase: retranslate ? "retranslate" : "translating",
+    phase: liveWorkPhase({ scope: retranslateScope, rush: rushCutInLive() }),
     n,
     t
   });
@@ -10904,6 +10940,7 @@ function translateAbortRequest(requestId) {
 
 function stopTranslateWork(options) {
   const silent = Boolean(options) && options.silent === true && options.type == null;
+  restoreGen += 1;
   const hash = currentLibraryHash();
   if (!silent && hash) {
     userPausedDocs.add(hash);
@@ -10915,8 +10952,7 @@ function stopTranslateWork(options) {
   cancelQueuedVendorLayouts();
   translatingPage = 0;
   forceRetranslatePending = false;
-  queuedRushPage = 0;
-  rushArmed = 0;
+  clearRushQueue();
   if (!silent) noteUserAction("stop");
   for (const [page, row] of pageStates) {
     if (row.state === "running" || row.state === "layout") {
@@ -12475,6 +12511,8 @@ async function translateWholeDocument(options = {}) {
   const sentSource = new Map();
   const pageJob = {
     session: work,
+    generation: gen,
+    readGeneration: () => restoreGen,
     cache: pageCache,
     docId: translatingDoc,
     numPages: total,
@@ -12499,10 +12537,11 @@ async function translateWholeDocument(options = {}) {
       return claimTranslationUnits(units, sentSource);
     },
     pullRushPage() {
-      const page = Math.floor(Number(queuedRushPage) || 0);
-      queuedRushPage = 0;
-      rushArmed = page >= 1 ? page : 0;
-      return rushArmed;
+      const taken = takeRushPage(rushQueue);
+      rushQueue = taken.queue;
+      rushArmed = taken.page;
+      if (taken.page >= 1) rushInflight = taken.page;
+      return taken.page;
     },
     pageSkipReason: (page) => {
       if (layoutMissReason.has(page)) return "unavailable";
@@ -12519,6 +12558,8 @@ async function translateWholeDocument(options = {}) {
     },
     onPageSkip({ page, reason }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
+      settleRushPage(page);
+      syncRushStatusLine(page, pdfDoc?.numPages || 0);
       if (reason !== "cached" && titleStructureFailed(page)) {
         const merged = withStructureRows(getPageLayout(page), []);
         const state = pageRunState(merged, { expected: Number(pageStates.get(page)?.m) || 0, targetLang: pdfTargetLang });
@@ -12617,10 +12658,10 @@ async function translateWholeDocument(options = {}) {
       });
       clearSlotPainted(page);
       docPhase = "running";
-      if (options?.forceAll) setStatus(retranslateStatusCopy({ scope: "document", phase: "running" }));
-      else if (!$("status").classList.contains("warn") && !$("status").classList.contains("error")) {
-        setStatus(progressDocumentStatus(page, pageTotal));
-      }
+      if (options?.forceAll) {
+        const totals = pageTotals();
+        setStatus(retranslateStatusCopy({ scope: "document", phase: "running", n: totals.n, t: pageTotal }));
+      } else syncRushStatusLine(page, pageTotal);
       refreshDocStatus();
       renderArticle();
     },
@@ -12664,6 +12705,8 @@ async function translateWholeDocument(options = {}) {
     },
     onPageDone({ page, results }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
+      settleRushPage(page);
+      syncRushStatusLine(page, pdfDoc?.numPages || 0);
       const layout = getPageLayout(page);
       const base = layout?.kind === "blocks" ? results : mergeReadoutTranslations(layout?.blocks || results, results);
       const merged = withStructureRows(layout, base);
@@ -12682,6 +12725,8 @@ async function translateWholeDocument(options = {}) {
     },
     onPageError({ page, results }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
+      settleRushPage(page);
+      syncRushStatusLine(page, pdfDoc?.numPages || 0);
       const layout = getPageLayout(page);
       const base = layout?.kind === "blocks" ? results : mergeReadoutTranslations(layout?.blocks || results, results);
       const merged = withStructureRows(layout, base);
@@ -13114,8 +13159,7 @@ async function forceRetranslateDocument() {
   });
   if (plan.action === "ignore" || plan.confirm) return;
   if (plan.action === "stop-then-start") stopTranslateWork({ silent: true });
-  queuedRushPage = 0;
-  rushArmed = 0;
+  clearRushQueue();
   retranslateScope = "document";
   noteUserAction("retranslate-doc", { page: 1 });
   try {
@@ -13139,8 +13183,11 @@ async function forceRetranslateCurrentPage() {
   });
   if (plan.action === "ignore") return;
   if (plan.action === "rush") {
-    queuedRushPage = plan.page;
+    rushQueue = rememberRushPage(rushQueue, plan.page, rushInflight);
     noteUserAction("retranslate-page", { page: plan.page });
+    updateTranslateControls();
+    refreshDocStatus();
+    syncRushStatusLine(plan.page, pdfDoc?.numPages || 0);
     return;
   }
   retranslateScope = "page";
@@ -14020,8 +14067,7 @@ async function adoptDoc(doc, title, openGen) {
   layoutClosed = false;
   abortTranslateSession(session);
   abortBackgroundFills();
-  queuedRushPage = 0;
-  rushArmed = 0;
+  clearRushQueue();
   // Drop the layout signal so destroy does not wait on an in-flight POST.
   // The page-lifetime abort stays with resetMmPages, after the first await.
   cancelQueuedVendorLayouts();
@@ -15098,9 +15144,11 @@ function updateTranslateControls() {
   if (main) {
     $("retranslatePage").disabled = ui.retranslateDisabled;
     const totals = pageTotals();
+    const rush = rushCutInLive();
+    const labelScope = retranslateScope || (rush ? "page" : "");
     main.textContent = retranslateButtonLabel({
-      busy: busy && Boolean(retranslateScope),
-      scope: retranslateScope,
+      busy: (busy && Boolean(retranslateScope)) || rush,
+      scope: labelScope,
       n: totals.n,
       t: totals.t
     });
@@ -15145,7 +15193,7 @@ function setStatus(text, isError = false, isWarn = false) {
   let shown = String(text || "");
   if (running && /失败/.test(shown)) {
     const { n, t } = pageTotals();
-    shown = retranslateScope === "document" ? `重译中 · ${n}/${t}` : (t > 0 ? `翻译中 · ${n}/${t}` : "");
+    shown = (retranslateScope === "document" || rushCutInLive()) ? `重译中 · ${n}/${t}` : (t > 0 ? `翻译中 · ${n}/${t}` : "");
   }
   el.textContent = shown;
   el.classList.toggle("error", Boolean(isError) && !running);
