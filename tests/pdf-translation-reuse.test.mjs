@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
+import { pageCountsAsTranslated } from "../lib/library-record.js";
 import { applyBlockTranslations, translatableBlocks } from "../lib/pdf-blocks.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { applySavedPairs, mergeLibraryPairs, pairsFromResults, pairsVerifiedForLibrary, sourceReuseHash } from "../lib/pdf-library.js";
@@ -447,10 +448,21 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
       }
     }
     const totals = translatedPageTotal(states);
-    const progress = docStatusView({ n: seededTotals.n, t: pages.length, needsRetry: 0, phase: "running" });
-    assert.equal(totals.n, pages.length, `${name} progress stays ${pages.length}/${pages.length}`);
+    const translated = states.filter((row) => pageCountsAsTranslated({
+      runState: row.state,
+      skipped: row.state === "skipped"
+    })).length;
+    const progress = docStatusView({
+      n: totals.n,
+      t: pages.length,
+      needsRetry: totals.needsRetry,
+      phase: "running"
+    });
+    assert.equal(totals.n, translated, `${name} partial pages stay out of the translated total`);
+    assert.notEqual(totals.n, pages.length, `${name} an uncovered page is no longer a full translation`);
     assert.equal(seededTotals.needsRetry, 0, `${name} library count is not a retry`);
-    assert.match(progress.text, new RegExp(`翻译中 · ${pages.length}/${pages.length}`));
+    assert.equal(progress.text, `翻译中 · ${totals.n}/${pages.length}`);
+    assert.equal(progress.text.includes("已译"), false);
     const unchanged = cache.get(1, 2).find((unit) => unit.translation);
     assert.equal(unchanged.translation, translationFor(unchanged.text));
     const sent = [];
@@ -497,6 +509,7 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
       requested,
       seedMs,
       second,
+      translated: totals.n,
       pages: states.filter((row) => row.state === "partial").map((row) => row.page)
     };
   }
@@ -507,6 +520,7 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
   // 9 and 10. Page 2 and the WATCH bids above are unchanged and are not resent.
   // Opening the same layout a second time sends nothing.
   assert.equal(opened["source-v2"].requested, 12);
+  assert.equal(opened["source-v2"].translated, 19);
   assert.deepEqual(opened["source-v2"].pages, [3, 4, 5, 7, 16, 17, 24, 26]);
   assert.equal(opened["main-v2"].requested, 16);
   assert.deepEqual(opened["main-v2"].pages, [3, 4, 5, 7, 9, 10, 16, 17, 24, 26]);
