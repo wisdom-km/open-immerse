@@ -16,12 +16,12 @@
       </div>
     </header>
 
-    <section id="pdfEntry" hidden>
-      <button type="button" id="openPdf" class="btn-primary">在沉浸译中打开（实验室）</button>
-    </section>
-
     <section class="intent-card">
       <button type="button" id="translatePage" class="btn-primary" data-busy="0">翻译此页</button>
+      <section id="pdfEntry" hidden>
+        <button type="button" id="openPdf" class="btn-secondary">打开 PDF</button>
+        <p id="openPdfError" class="danger" hidden>无法打开 PDF 阅读器</p>
+      </section>
       <button type="button" id="restorePage" class="btn-secondary">恢复原文</button>
       <label class="switch-row"><span>本站自动</span><input id="autoSite" type="checkbox" /></label>
       <label>范围
@@ -55,8 +55,6 @@
       <button type="button" id="openLearning">学习</button>
       <span aria-hidden="true">·</span>
       <button type="button" id="openDocs">文档</button>
-      <span id="openPdfSep" hidden aria-hidden="true">·</span>
-      <button type="button" id="openPdfPage" hidden>PDF</button>
     </nav>
     <script type="module" src="popup.js"></script>
   </body>

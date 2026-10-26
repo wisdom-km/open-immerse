@@ -2,7 +2,7 @@ import { getProvider, isProviderConfigured, resolveOutboundProvider } from "../l
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { featureOn } from "../lib/features.js";
-import { shouldOfferPdfOpen } from "../lib/pdf-viewer.js";
+import { openPopupPdfEntry, readPdfContentType } from "../lib/pdf-viewer.js";
 
 const $ = (id) => document.getElementById(id);
 const PRIMARY_IDLE = "翻译此页";
@@ -37,6 +37,10 @@ async function init() {
   renderEngine(settings);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const pdfOn = featureOn(settings, "pdf");
+  const pdfProbe = pdfOn
+    ? readPdfContentType(tab?.id, (details) => chrome.scripting.executeScript(details))
+    : Promise.resolve(null);
   await syncPrimary(tab);
 
   const host = hostOf(tab?.url);
@@ -79,19 +83,17 @@ async function init() {
     );
   }
 
-  const pdfOn = featureOn(settings, "pdf");
-  $("openPdfPage").hidden = !pdfOn;
-  $("openPdfSep").hidden = !pdfOn;
-  $("openPdfPage").addEventListener("click", () => {
-    if (!featureOn(settings, "pdf")) return;
-    chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "pdf" });
-  });
-
-  const pdfTab = shouldOfferPdfOpen(tab?.url);
-  $("pdfEntry").hidden = !(pdfOn && pdfTab);
+  $("pdfEntry").hidden = !pdfOn;
   $("openPdf").addEventListener("click", () => {
-    if (!featureOn(settings, "pdf") || !pdfTab) return;
-    chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "pdf", src: tab.url });
+    if (!featureOn(settings, "pdf")) return;
+    openPopupPdfEntry({
+      url: tab?.url,
+      probe: pdfProbe,
+      sendMessage: (message) => chrome.runtime.sendMessage(message),
+      close: () => window.close(),
+      button: $("openPdf"),
+      error: $("openPdfError")
+    });
   });
 
   if (tab?.id) setInterval(() => syncPrimary(tab), 400);

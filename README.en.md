@@ -50,7 +50,7 @@ Translate / Original / collapse. Draggable; position is saved.
 
 ![Toolbar popup](docs/screenshots/05-popup.png)
 
-Intent card: primary **翻译此页** (becomes **停止** while a job runs), **恢复原文**, per-site auto, scope, and languages. Quota lives under **更多**. **No progress bar.** Footer is **设置 · 学习 · 文档**. PDF reading is on by default, so the footer shows PDF. A PDF tab shows **在沉浸译中打开（实验室）** while the feature is on. Turning **PDF 阅读** off hides those entries.
+Intent card: primary **翻译此页** (becomes **停止** while a job runs), secondary **打开 PDF**, **恢复原文**, per-site auto, scope, and languages. Quota lives under **更多**. **No progress bar.** Footer is **设置 · 学习 · 文档**. PDF reading is on by default, so the popup always shows **打开 PDF** under **翻译此页**: a PDF tab opens that file in the reader, and any other page opens the reader library. Turning **PDF 阅读** off hides that button.
 
 **Settings four groups: 引擎 / 阅读 / 功能 / 高级**
 
@@ -127,7 +127,7 @@ Open a foreign-language page and click **翻译** on the FAB.
 | Popup **翻译此页** | Start; becomes **停止** while translating (abort only — keeps glosses) |
 | `Alt+T` | Start; press again to restore original |
 
-The popup can also change page scope, source/target language, and per-site auto-translate; per-page quota is under **更多**. Footer links are **设置 · 学习 · 文档**. PDF reading is on by default, so the footer shows **PDF**, and a PDF tab shows **在沉浸译中打开（实验室）** (Open in Open Immerse). Turn the switch off under **Settings → PDF** to hide those entries.
+The popup can also change page scope, source/target language, and per-site auto-translate; per-page quota is under **更多**. Footer links are **设置 · 学习 · 文档**. PDF reading is on by default, so the popup always shows the secondary **打开 PDF** button under **翻译此页**: a PDF tab opens that file in the reader, and any other page opens the reader library. Turn the switch off under **Settings → PDF** to hide that button.
 
 Font scale and body spacing live under **Settings → 阅读**. That group is font scale plus two gaps only — no translation-style dropdown or preview table.
 
@@ -154,7 +154,7 @@ No layout-preserving Office or scanned files here. Convert to plain text first. 
 
 ### 5. PDF reading (on by default)
 
-**A default entry.** New installs have `features.pdf` on, with no `pdfFlippedAt` and no notice. The switch is at the top of **Settings → PDF**, labeled 「PDF 阅读」. Turning it off hides the popup footer **PDF** button and a PDF tab’s **在沉浸译中打开（实验室）**. Only an upgrade that finds a stored `false` turns it on once and shows the notice under that switch and at the top of the reader.
+**A default entry.** New installs have `features.pdf` on, with no `pdfFlippedAt` and no notice. The switch is at the top of **Settings → PDF**, labeled 「PDF 阅读」. Turning it off hides the popup’s always-visible **打开 PDF** button. Only an upgrade that finds a stored `false` turns it on once and shows the notice under that switch and at the top of the reader.
 
 Target: text-layer body text plus content-accurate original-page display (crops by default). The right pane stays a **Markdown reading-flow** in reading order. Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. The spec is `pdf/PDF-MD-READOUT.md`. The reader runtime switches by the phases in `pdf/high-precision/EXECUTION.md`.
 
