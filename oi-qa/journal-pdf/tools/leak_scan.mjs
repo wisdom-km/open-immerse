@@ -78,6 +78,13 @@ export async function scanPdf(bytes, { maxPages = Infinity } = {}) {
       const page = await doc.getPage(number);
       try {
         const viewport = page.getViewport({ scale: 1 });
+        // Node does not resolve font names until the operator list loads them.
+        // APS pi and Symbol maps need the PostScript name, not g_d0_f7.
+        try {
+          await page.getOperatorList();
+        } catch {
+          /* text layer still runs; unreadable glyphs become gap marks */
+        }
         const content = await page.getTextContent();
         attachFontRealNames(content.items, page.commonObjs);
         raw += `${rawSurface(content.items)}\n`;
