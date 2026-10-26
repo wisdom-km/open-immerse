@@ -1,12 +1,16 @@
-import { getProvider, isProviderConfigured, resolveOutboundProvider } from "../lib/providers.js";
+import { getProvider, providers } from "../lib/providers.js";
+import { readFormulaSettings } from "../lib/formula-settings.js";
+import { describeTranslateBorrow } from "../lib/translate-borrow.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { featureOn } from "../lib/features.js";
 import { openPopupPdfEntry, readPdfContentType } from "../lib/pdf-viewer.js";
+import { NO_ENGINE_COPY } from "../lib/no-engine-prompt.js";
 
 const $ = (id) => document.getElementById(id);
 const PRIMARY_IDLE = "翻译此页";
 const PRIMARY_STOP = "停止";
+let engineMissing = false;
 
 init();
 
@@ -21,7 +25,10 @@ async function init() {
     ev.preventDefault();
     openOptions();
   });
-  $("goSetup").addEventListener("click", openOptions);
+  $("engineSetup").addEventListener("click", (ev) => {
+    ev.preventDefault();
+    chrome.runtime.sendMessage({ type: "OI_OPEN_TRANSLATE_SETTINGS" });
+  });
   $("openOptions").addEventListener("click", openOptions);
   $("openLearning").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "learning" }));
   $("openDocs").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "documents" }));
@@ -34,7 +41,8 @@ async function init() {
   $("targetLang").value = settings.targetLang;
   $("translateScope").value = settings.translateScope || "article";
   $("translateLimit").value = isTitleLeadLimit(settings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
-  renderEngine(settings);
+  await renderEngine(settings, await readFormulaSettings(chrome.storage?.local));
+  bindEngineRefresh();
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const pdfOn = featureOn(settings, "pdf");
@@ -51,6 +59,15 @@ async function init() {
     if ($("translatePage").dataset.busy === "1") {
       if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "OI_STOP" }).catch(() => {});
       setPrimaryBusy(false);
+      return;
+    }
+    if (engineMissing) {
+      const note = $("engineNote");
+      if (note) {
+        note.hidden = false;
+        note.textContent = NO_ENGINE_COPY.body;
+      }
+      $("engineSetup")?.focus();
       return;
     }
     await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: true } });
@@ -115,35 +132,77 @@ async function syncPrimary(tab) {
   setPrimaryBusy(Boolean(ping?.inflight));
 }
 
-function renderEngine(settings) {
-  const outbound = resolveOutboundProvider(settings);
-  const provider = getProvider(outbound.providerId);
-  const shortName = {
-    openai: "OpenAI",
-    openrouter: "OpenRouter",
-    deepl: "DeepL",
-    microsoft: "Microsoft",
-    google: "Google",
-    mymemory: "MyMemory",
-    grok: "Grok",
-    kimi: "Kimi",
-    minimax: "MiniMax",
-    gemini: "Gemini",
-    claude: "Claude",
-    azure: "Azure",
-    custom: "Custom"
-  }[provider.id] || provider.name.split("/")[0].trim();
+function bindEngineRefresh() {
+  let ticket = 0;
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    const syncSettings = area === "sync" && Object.prototype.hasOwnProperty.call(changes, "settings");
+    const localBorrow = area === "local" && (
+      Object.prototype.hasOwnProperty.call(changes, "formulaSettings")
+      || Object.prototype.hasOwnProperty.call(changes, "oiSecrets")
+    );
+    if (!syncSettings && !localBorrow) return;
+    const current = ++ticket;
+    void refreshEngine(() => current === ticket);
+  });
+}
+
+async function refreshEngine(still = () => true) {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
+    if (!still()) return;
+    const formula = await readFormulaSettings(chrome.storage?.local);
+    if (!still()) return;
+    renderEngine(res?.settings || {}, formula);
+  } catch {
+    /* keep the last engine line */
+  }
+}
+
+function renderEngine(settings, formula) {
+  const described = describeTranslateBorrow(settings, formula);
+  const borrowed = described.mode === "borrow";
+  const outbound = borrowed
+    ? { providerId: described.vendorId, fallback: false, borrowed: true, notice: "" }
+    : described.outbound;
   const link = $("engineLink");
+  const unset = $("engineUnset");
+  const note = $("engineNote");
+  if (!borrowed && outbound?.code === "NO_ENGINE") {
+    engineMissing = true;
+    if (link) link.hidden = true;
+    if (unset) unset.hidden = false;
+    if (note) note.hidden = true;
+    return;
+  }
+  engineMissing = false;
+  if (link) link.hidden = false;
+  if (unset) unset.hidden = true;
+  if (note) note.hidden = true;
+  const known = providers[outbound.providerId];
+  const provider = known
+    ? getProvider(outbound.providerId)
+    : { id: outbound.providerId, name: described.vendorLabel || outbound.providerId };
+  const shortName = borrowed
+    ? (described.shortName || provider.name.split("/")[0].trim())
+    : {
+      openai: "OpenAI",
+      openrouter: "OpenRouter",
+      deepl: "DeepL",
+      microsoft: "Microsoft",
+      google: "Google",
+      mymemory: "MyMemory",
+      grok: "Grok",
+      kimi: "Kimi",
+      minimax: "MiniMax",
+      gemini: "Gemini",
+      claude: "Claude",
+      azure: "Azure",
+      custom: "Custom"
+    }[provider.id] || provider.name.split("/")[0].trim();
   link.textContent = provider.id === "mymemory" ? `引擎：${shortName}（免费）` : `引擎：${shortName}`;
   link.title = provider.name;
-  if (provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
-  const selected = getProvider(settings.provider);
-  const cfg = settings.providers?.[selected.id] || {};
-  const ok = !outbound.fallback && isProviderConfigured(selected, cfg);
-  const warn = $("engineWarn");
-  const warnText = $("engineWarnText");
-  if (outbound.fallback && warnText) warnText.textContent = outbound.notice;
-  warn.hidden = ok;
+  if (borrowed && described.vendorId === "custom") link.title = described.shortName || provider.name;
+  if (!borrowed && provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
 }
 
 function hostOf(url) {

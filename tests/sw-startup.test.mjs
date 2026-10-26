@@ -48,7 +48,9 @@ test("SW imports resolve and do not pull page-scan or site-presets", () => {
     "../lib/features.js",
     "./arxiv-source.js",
     "./formula-cache.js",
-    "../lib/translate-abort.js"
+    "../lib/formula-settings.js",
+    "../lib/translate-abort.js",
+    "../lib/translate-borrow.js"
   ]);
   for (const spec of specifiers) {
     assert.equal(existsSync(join(root, "background", spec)), true, spec);

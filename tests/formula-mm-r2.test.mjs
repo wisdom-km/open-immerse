@@ -421,7 +421,7 @@ test("glm omits thinking, other vision calls keep temperature 0 and thinking off
   assert.equal(glm.json.model, "glm-5.3-flash");
   assert.equal(glm.json.temperature, 0);
   assert.equal(Object.hasOwn(glm.json, "thinking"), false);
-  assert.equal(glm.json.reasoning_effort, "minimal");
+  assert.equal(glm.json.reasoning_effort, "low");
   assert.equal(JSON.stringify(glm.json).includes("sk-glm-test"), false);
   assert.match(glm.json.messages.at(-1).content[1].image_url.url, /^data:image\/png;base64,/);
 

@@ -1,15 +1,21 @@
-import { completePdfStructure, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, resolveOutboundProvider, testProviderConnection } from "../lib/providers.js";
+import { NO_ENGINE, completePdfStructure, guardZhTranslations, isThinkingEnabled, isTwoStepPolish, sanitizeProviderError, testProviderConnection } from "../lib/providers.js";
 import { getSettings, matchSiteRule, noteTranslationSucceeded, saveSettings } from "../lib/storage.js";
 import { listItems, saveItem, removeItem, reviewItem, dueItems } from "../lib/learning.js";
 import { featureOn, resolveFeatures } from "../lib/features.js";
 import { handleArxivSourceMessage } from "./arxiv-source.js";
 import { handleFormulaCacheMessage } from "./formula-cache.js";
+import { defaultFormulaSettings, readFormulaSettings } from "../lib/formula-settings.js";
 import { translateAbortRegistry } from "../lib/translate-abort.js";
+import { resolveTranslateOutbound } from "../lib/translate-borrow.js";
 
 const cache = new Map();
 const CACHE_LIMIT = 2000;
 const CACHE_VER = "v5-title-calque";
 cache.clear();
+const BORROW_EPISODE_KEY = "oiTranslateBorrowEpisode";
+let borrowEpisode = "";
+let borrowEpisodeKnown = false;
+let borrowEpisodeChain = Promise.resolve();
 
 chrome.runtime.onInstalled.addListener(() => {
   cache.clear();
@@ -80,7 +86,11 @@ chrome.commands.onCommand.addListener(async (command) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender)
     .then(sendResponse)
-    .catch((err) => sendResponse({ ok: false, error: String(err.message || err) }));
+    .catch((err) => sendResponse({
+      ok: false,
+      error: String(err?.message || err),
+      ...(err?.code ? { code: String(err.code) } : {})
+    }));
   return true;
 });
 
@@ -181,6 +191,20 @@ async function handleMessage(message, sender) {
       return { ok: true };
     case "OI_REVIEW_LEARNING":
       return { ok: true, item: await reviewItem(message.id, message.grade) };
+    case "OI_TRANSLATE_PREFLIGHT": {
+      const settings = await getSettings();
+      let formula;
+      try {
+        formula = await readFormulaSettings(chrome.storage?.local);
+      } catch {
+        formula = defaultFormulaSettings();
+      }
+      const outbound = resolveTranslateOutbound(settings, formula);
+      if (outbound.code === NO_ENGINE || !outbound.provider) return { ok: false, code: NO_ENGINE };
+      return { ok: true, code: "" };
+    }
+    case "OI_OPEN_TRANSLATE_SETTINGS":
+      return openTranslateProviderSettings();
     case "OI_OPEN_PAGE": {
       const settings = await getSettings();
       const features = resolveFeatures(settings);
@@ -237,6 +261,60 @@ function reportTranslateFailure(err, fields) {
   })).catch(() => {});
 }
 
+function reportTranslateBorrow(fields) {
+  const payload = {
+    provider: fields?.provider || "",
+    model: fields?.model || ""
+  };
+  if (typeof fields?.ok === "boolean") payload.ok = fields.ok;
+  Promise.resolve(handleArxivSourceMessage({
+    action: "diag-borrow",
+    fields: payload
+  })).catch(() => {});
+}
+
+function borrowSession() {
+  const session = globalThis.chrome?.storage?.session;
+  if (!session || typeof session.get !== "function" || typeof session.set !== "function") return null;
+  return session;
+}
+
+async function loadBorrowEpisode() {
+  if (borrowEpisodeKnown) return;
+  borrowEpisodeKnown = true;
+  const session = borrowSession();
+  if (!session) return;
+  try {
+    const bag = await session.get(BORROW_EPISODE_KEY);
+    const stored = bag?.[BORROW_EPISODE_KEY];
+    if (typeof stored === "string") borrowEpisode = stored;
+  } catch {
+    // session 缺失时只靠本进程内存，不能挡住翻译。
+  }
+}
+
+function noteBorrowEpisode(outbound) {
+  const episode = outbound?.borrowed ? `${outbound.vendorId}\0${outbound.model}` : "";
+  const run = borrowEpisodeChain.then(async () => {
+    await loadBorrowEpisode();
+    const entering = episode !== "" && episode !== borrowEpisode;
+    if (episode !== borrowEpisode) {
+      borrowEpisode = episode;
+      const session = borrowSession();
+      if (session) {
+        try {
+          await session.set({ [BORROW_EPISODE_KEY]: episode });
+        } catch {
+          // 内存里的 episode 仍然有效，避免同一次进程重复记日志。
+        }
+      }
+    }
+    return entering;
+  });
+  borrowEpisodeChain = run.then(() => {}, () => {});
+  return run;
+}
+
 function emitTranslateProgress(sender, requestId, progress) {
   const payload = {
     type: "OI_TRANSLATE_PROGRESS",
@@ -262,21 +340,47 @@ function resolveBatchPolish(message = {}, settings = {}) {
 
 async function translateBatch(texts, options = {}) {
   const settings = await getSettings();
-  const outbound = resolveOutboundProvider(settings);
+  let formula;
+  try {
+    formula = await readFormulaSettings(chrome.storage?.local);
+  } catch {
+    formula = defaultFormulaSettings();
+  }
+  const outbound = resolveTranslateOutbound(settings, formula);
   options.providerId = outbound.providerId;
   options.outboundFallback = outbound.fallback === true;
+  options.borrowed = outbound.borrowed === true;
   options.providerCalled = false;
+  const enteringBorrow = await noteBorrowEpisode(outbound);
+  if (outbound.code === NO_ENGINE || !outbound.provider) {
+    const err = new Error(NO_ENGINE);
+    err.code = NO_ENGINE;
+    throw err;
+  }
   const provider = outbound.provider;
-  const providerSettings = {
-    ...(settings.providers?.[outbound.providerId] || {}),
-    twoStepPolish: resolveBatchPolish(options, settings),
-    deepThink: settings.deepThink === true,
-    promptAddendum: String(options.promptAddendum || "")
-  };
+  const borrowed = outbound.borrowed === true ? outbound.runtimeConfig : null;
+  const providerSettings = borrowed
+    ? {
+        apiKey: borrowed.apiKey,
+        model: borrowed.model,
+        baseUrl: borrowed.baseUrl,
+        twoStepPolish: resolveBatchPolish(options, settings),
+        deepThink: settings.deepThink === true,
+        promptAddendum: String(options.promptAddendum || "")
+      }
+    : {
+        ...(settings.providers?.[outbound.providerId] || {}),
+        twoStepPolish: resolveBatchPolish(options, settings),
+        deepThink: settings.deepThink === true,
+        promptAddendum: String(options.promptAddendum || "")
+      };
   const pending = [];
   const results = new Array(texts.length);
   texts.forEach((text, index) => {
-    const key = cacheKey(outbound.providerId, settings.sourceLang, settings.targetLang, text, providerSettings);
+    const cacheProvider = outbound.borrowed
+      ? `${outbound.providerId}|${outbound.model}|${outbound.baseUrl}`
+      : outbound.providerId;
+    const key = cacheKey(cacheProvider, settings.sourceLang, settings.targetLang, text, providerSettings);
     if (!options.bypassCache && cache.has(key)) results[index] = readCachedTranslation(key, text, settings.targetLang);
     else pending.push({ text, index, key });
   });
@@ -330,11 +434,24 @@ async function translateBatch(texts, options = {}) {
         options.polishFailed = true;
         continue;
       }
-      reportTranslateFailure(err, {
+      const safe = borrowed
+        ? Object.assign(new Error(sanitizeProviderError(err, { apiKey: borrowed.apiKey })), {
+            httpStatus: err?.httpStatus,
+            code: err?.code
+          })
+        : err;
+      reportTranslateFailure(safe, {
         provider: options.providerId || "",
         count: chunk.length
       });
-      throw err;
+      if (enteringBorrow) {
+        reportTranslateBorrow({
+          provider: outbound.vendorId,
+          model: outbound.model,
+          ok: false
+        });
+      }
+      throw safe;
     }
     const guarded = guardZhTranslations(
       chunk.map((c) => c.text),
@@ -345,6 +462,16 @@ async function translateBatch(texts, options = {}) {
       const value = guarded[j] || "";
       results[item.index] = value;
       remember(item.key, value, item.text);
+    });
+  }
+  // 借用成功也不算这台引擎自己测通：providerCalled 保持 false，
+  // 因此不会清掉原引擎的「需处理」。这里不写存储（TBM-08）。
+  if (outbound.borrowed) options.providerCalled = false;
+  if (enteringBorrow) {
+    reportTranslateBorrow({
+      provider: outbound.vendorId,
+      model: outbound.model,
+      ok: true
     });
   }
   return guardZhTranslations(texts, results, settings.targetLang);
@@ -373,6 +500,31 @@ function remember(key, value, source = "") {
   }
   cache.set(key, text);
   if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
+}
+
+export async function openTranslateProviderSettings() {
+  const url = chrome.runtime.getURL("options/options.html#translate?focus=provider");
+  const base = chrome.runtime.getURL("options/options.html");
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch {
+    tabs = [];
+  }
+  const existing = (tabs || []).find((tab) => String(tab?.url || tab?.pendingUrl || "").startsWith(base));
+  if (existing?.id != null) {
+    await chrome.tabs.update(existing.id, { active: true, url });
+    if (existing.windowId != null && chrome.windows?.update) {
+      try {
+        await chrome.windows.update(existing.windowId, { focused: true });
+      } catch {
+        /* the settings tab is already active */
+      }
+    }
+    return { ok: true, reused: true };
+  }
+  await chrome.tabs.create({ url });
+  return { ok: true, reused: false };
 }
 
 export { translateBatch, resolveBatchPolish, CACHE_VER, cache as translationCache };

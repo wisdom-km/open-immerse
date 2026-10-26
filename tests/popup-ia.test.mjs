@@ -27,7 +27,10 @@ test("popup IA is page-only: Dual Line, 沉浸译, no feature toggles or youtube
   assert.match(html, /id="translateLimit"/);
   assert.match(html, /class="lang-row"/);
   assert.match(html, /id="engineLink"/);
-  assert.match(html, /未配置引擎/);
+  assert.match(html, /id="engineUnsetName">未设置/);
+  assert.match(html, /id="engineSetup"[^>]*>去设置/);
+  assert.match(html, /id="engineNote"/);
+  assert.equal(html.includes("未配置引擎"), false);
   assert.match(html, /id="openOptions">设置</);
   assert.match(html, /id="openLearning">学习</);
   assert.match(html, /id="openDocs">文档</);
@@ -193,6 +196,15 @@ test("popup engine link uses short name + full title; lang-row stays 1fr 1fr", (
   assert.match(js, /custom:\s*"Custom"/);
   assert.match(js, /引擎：\$\{shortName\}/);
   assert.match(js, /link\.title = provider\.name/);
+  assert.match(js, /described\.mode === "borrow"/);
+  assert.match(js, /engineMissing = true/);
+  assert.match(js, /unset\.hidden = false/);
+  assert.match(js, /NO_ENGINE_COPY\.body/);
+  assert.doesNotMatch(js, /const ok = borrowed \|\|/);
+  assert.doesNotMatch(js, /warn\.hidden/);
+  assert.doesNotMatch(js, /借用/);
+  assert.doesNotMatch(js, /formatBorrowedEngine/);
+  assert.doesNotMatch(js, /engine-borrow/);
   assert.match(js, /openOptionsPage/);
   assert.match(html, /class="lang-row"/);
   assert.match(html, /id="engineLink"/);
@@ -425,7 +437,7 @@ test("PPE-11 footer is only 设置 · 学习 · 文档", () => {
   assert.doesNotMatch(nav, /PDF/);
 });
 
-test("PPE-12 translate, restore, and Alt+T stay; new CSS uses --oi-* tokens; manifest and service worker are untouched", () => {
+test("PPE-12 translate, restore, and Alt+T stay; new CSS uses --oi-* tokens; manifest is untouched", () => {
   const { js, css } = popupSources();
   assert.match(js, /PRIMARY_IDLE = "翻译此页"/);
   assert.match(js, /PRIMARY_STOP = "停止"/);
@@ -441,7 +453,9 @@ test("PPE-12 translate, restore, and Alt+T stay; new CSS uses --oi-* tokens; man
   assert.match(added, /outline-offset:\s*2px/);
   assert.equal(added.match(/#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)|hsla?\([^)]*\)/g), null);
   assert.doesNotMatch(css, /#pdfEntry\s*\{/);
-  execFileSync("git", ["diff", "--quiet", "cb9425a", "--", "manifest.json", "background/service-worker.js"], { cwd: root });
+  const worker = readFileSync(join(root, "background/service-worker.js"), "utf8");
+  assert.match(worker, /command !== "toggle-translate"/);
+  execFileSync("git", ["diff", "--quiet", "cb9425a", "--", "manifest.json"], { cwd: root });
 });
 
 test("popup PDF open uses contentType, then URL fallback, without a new permission", async () => {

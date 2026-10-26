@@ -25,6 +25,10 @@ const MIN_LEN = 2;
 const STATUS_TRANSLATING = "翻译中";
 const STATUS_POLISHING = "润色中";
 const STATUS_POLISH_FAIL = "润色失败";
+const NO_ENGINE_TITLE = "还没有可用的翻译引擎";
+const NO_ENGINE_BODY = "去设置里选一个引擎并填写 API Key，就能开始翻译。";
+const NO_ENGINE_PRIMARY = "去设置";
+const NO_ENGINE_DISMISS = "关闭";
 
 let running = false;
 let session = false;
@@ -111,6 +115,13 @@ async function start() {
   if (epoch !== ticket) return;
   if ((settings.features || {}).webpage === false) return;
   if (running) return;
+  const ready = await send({ type: "OI_TRANSLATE_PREFLIGHT" });
+  if (epoch !== ticket) return;
+  if (ready?.code === "NO_ENGINE") {
+    showNoEngineToast();
+    return;
+  }
+  dismissNoEngineToast();
   session = true;
   markBusy(true);
   await translateVisible(ticket);
@@ -247,6 +258,14 @@ async function translateVisible(ticket = epoch) {
           return;
         }
         if (!res || !res.ok) {
+          if (res?.code === "NO_ENGINE" || res?.error === "NO_ENGINE") {
+            chunk.forEach((el) => el.classList.remove("oi-pending"));
+            session = false;
+            stopObserver();
+            markBusy(false);
+            showNoEngineToast();
+            break;
+          }
           const hasDraft = chunk.some((el) => hasTranslation(el));
           if (hasDraft) {
             chunk.forEach((el) => el.classList.remove("oi-pending"));
@@ -661,8 +680,17 @@ function onHover(ev) {
   hoverTimer = setTimeout(async () => {
     const text = getText(el);
     if (text.length < MIN_LEN) return;
+    const ready = await send({ type: "OI_TRANSLATE_PREFLIGHT" });
+    if (ready?.code === "NO_ENGINE") {
+      showNoEngineToast();
+      return;
+    }
     const res = await send({ type: "OI_TRANSLATE_BATCH", texts: [text] });
-    if (res.ok) {
+    if (res?.code === "NO_ENGINE" || res?.error === "NO_ENGINE") {
+      showNoEngineToast();
+      return;
+    }
+    if (res?.ok) {
       const settings = (await send({ type: "OI_GET_SETTINGS" }))?.settings;
       mountTranslation(el, res.translations[0], settings, inSideRail(el) ? { mode: "block" } : {});
     }
@@ -734,6 +762,52 @@ function clearStatus() {
   window.dispatchEvent(new CustomEvent("oi-status", { detail: { persist: false } }));
 }
 
+function showNoEngineToast() {
+  let el = document.querySelector(".oi-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "oi-toast";
+    document.body.appendChild(el);
+  }
+  if (!el.classList.contains("is-engine")) {
+    el.classList.add("is-engine");
+    el.replaceChildren();
+    const title = document.createElement("p");
+    title.className = "oi-engine-title";
+    title.textContent = NO_ENGINE_TITLE;
+    const body = document.createElement("p");
+    body.className = "oi-engine-body";
+    body.textContent = NO_ENGINE_BODY;
+    const actions = document.createElement("div");
+    actions.className = "oi-engine-actions";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = NO_ENGINE_DISMISS;
+    close.addEventListener("click", () => dismissNoEngineToast());
+    const setup = document.createElement("button");
+    setup.type = "button";
+    setup.className = "oi-engine-go";
+    setup.textContent = NO_ENGINE_PRIMARY;
+    setup.addEventListener("click", () => {
+      dismissNoEngineToast();
+      send({ type: "OI_OPEN_TRANSLATE_SETTINGS" });
+    });
+    actions.append(close, setup);
+    el.append(title, body, actions);
+  }
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = 0;
+}
+
+function dismissNoEngineToast() {
+  const el = document.querySelector(".oi-toast.is-engine");
+  if (!el) return;
+  clearTimeout(toastTimer);
+  toastTimer = 0;
+  el.classList.remove("show");
+}
+
 function toast(message, opts = {}) {
   let el = document.querySelector(".oi-toast");
   if (!el) {
@@ -741,6 +815,7 @@ function toast(message, opts = {}) {
     el.className = "oi-toast";
     document.body.appendChild(el);
   }
+  el.classList.remove("is-engine");
   el.textContent = message;
   el.classList.add("show");
   clearTimeout(toastTimer);

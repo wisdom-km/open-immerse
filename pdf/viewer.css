@@ -250,6 +250,24 @@ body {
   background: var(--oi-reader-paper);
   border-bottom: 1px solid var(--oi-reader-line);
 }
+.oi-no-engine .oi-no-engine-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.oi-no-engine .oi-no-engine-actions .btn-primary,
+.oi-no-engine .oi-no-engine-actions .btn-secondary {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 12px;
+  font: 500 13px/28px var(--oi-reader-ui-font);
+}
+.oi-no-engine .oi-no-engine-actions button:focus-visible {
+  outline: 2px solid var(--oi-reader-ink);
+  outline-offset: 2px;
+}
 #status.error { color: var(--oi-danger); }
 #status.warn { color: var(--oi-reader-warn); font-weight: 600; }
 
