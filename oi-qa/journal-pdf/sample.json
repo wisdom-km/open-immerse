@@ -1,0 +1,31 @@
+{
+  "note": "20-paper full-text sample from M1-SAMPLE. Paper 13 (Epidemics) is outside the 54-paper scored set and is not scored here.",
+  "excluded": [
+    {
+      "id": "13",
+      "reason": "manifest row Epidemics is absent from M0 scores.csv; not part of the 54 and not part of this sample"
+    }
+  ],
+  "papers": [
+    {"id": "35", "file": "35_10_1186_s13059_014_0550_8.pdf", "layout": "L2", "m0": {"glm": 2, "kimi": 1}},
+    {"id": "25", "file": "25_10_1093_eurpub_ckac104.pdf", "layout": "L2", "m0": {"glm": 14, "kimi": 19}},
+    {"id": "24", "file": "24_10_1136_bmjopen_2023_072254.pdf", "layout": "L2", "m0": {"glm": 12, "kimi": 0}},
+    {"id": "10", "file": "10_10_3389_fpubh_2020_00230.pdf", "layout": "L2", "m0": {"glm": 5, "kimi": 10}},
+    {"id": "33", "file": "33_10_1038_s41586_021_03819_2.pdf", "layout": "L3", "m0": {"glm": 0, "kimi": 0}},
+    {"id": "36", "file": "36_10_1038_s41592_019_0686_2.pdf", "layout": "L3", "m0": {"glm": 0, "kimi": 0}},
+    {"id": "41", "file": "41_10_1038_s41562_020_0884_z.pdf", "layout": "L3", "m0": {"glm": 0, "kimi": 0}},
+    {"id": "08", "file": "08_10_1371_journal_pmed_1003346.pdf", "layout": "L6", "m0": {"glm": 5, "kimi": 5}},
+    {"id": "55", "file": "55_10_1371_journal_pcbi_1009802.pdf", "layout": "L6", "m0": {"glm": 5, "kimi": 5}},
+    {"id": "04", "file": "04_10_1016_S0140_6736_20_32661_1.pdf", "layout": "L6", "m0": {"glm": 0, "kimi": 0}},
+    {"id": "19", "file": "19_10_1038_s41598_020_80007_8.pdf", "layout": "L1", "m0": {"glm": null, "kimi": 16}},
+    {"id": "27", "file": "27_10_1103_PhysRevLett_116_061102.pdf", "layout": "L4", "m0": {"glm": 11, "kimi": 12}},
+    {"id": "28", "file": "28_10_1103_PhysRevX_10_011003.pdf", "layout": "L4", "m0": {"glm": 20, "kimi": 34}},
+    {"id": "23", "file": "23_10_1056_NEJMoa2034577.pdf", "layout": "L5", "m0": {"glm": 15, "kimi": 0}},
+    {"id": "38", "file": "38_10_1016_j_cell_2020_02_052.pdf", "layout": "L7", "m0": {"glm": 4, "kimi": 4}},
+    {"id": "53", "file": "53_10_1039_d3ra00723e.pdf", "layout": "L8", "m0": {"glm": 18, "kimi": 12}},
+    {"id": "47", "file": "47_10_1007_s00208_022_02512_7.pdf", "layout": "L9", "m0": {"glm": 6, "kimi": 3}},
+    {"id": "46", "file": "46_10_1002_hec_4510.pdf", "layout": "L10", "m0": {"glm": null, "kimi": 16}},
+    {"id": "56", "file": "56_10_1029_2022gl098158.pdf", "layout": "L11", "m0": {"glm": 3, "kimi": 0}},
+    {"id": "57", "file": "57_10_31235_osf_io_4b7vy_v1.pdf", "layout": "L12", "m0": {"glm": 0, "kimi": 0}}
+  ]
+}
