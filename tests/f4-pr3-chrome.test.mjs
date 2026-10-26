@@ -990,7 +990,7 @@ test("Stop during a page-2 re-zone sends no layout POST, and retranslate of that
   const afterMove = JSON.parse(await session.evaluate(SNAPSHOT));
   assert.deepEqual(afterMove.layouts.filter((page) => page === 2), [], `page turn POSTed page 2 ${JSON.stringify(afterMove.layouts)}`);
   const zoned = JSON.parse(await session.evaluate(`(async () => {
-    const button = document.getElementById("retranslatePage");
+    const button = document.getElementById("retranslatePageItem");
     if (!button || button.disabled) return JSON.stringify({ error: "retranslate disabled" });
     button.click();
     const started = Date.now();

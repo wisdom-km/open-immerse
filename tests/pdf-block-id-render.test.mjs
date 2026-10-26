@@ -584,6 +584,7 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
   await frames(4);
   await waitFor(`document.getElementById("pageCapsule")?.dataset.srcPage === "4" ? "4" : ""`, "capsule on page 4", 10000);
   await clickSelector("#retranslatePage");
+  await clickSelector("#retranslatePageItem");
   await waitFor(`(document.getElementById("status")?.textContent || "").includes("本页译文已更新") ? "done" : ""`, "retranslate page 4", 60000);
   await reveal();
   assertStable(await settled(4, page4Needles), beforeSave, "retranslate keeps bids");

@@ -65,6 +65,11 @@ import {
   qQueued,
   qPaused,
   translatedPageTotal,
+  settleUnsentPage,
+  pageNoText,
+  layoutMissReasonFor,
+  retranslateStatusCopy,
+  translateExceptionCode,
   pdfOpenTranslateBlocker,
   pdfTranslateFailureCopy,
   wheelPageDelta,
@@ -429,7 +434,14 @@ import { createLibraryChip } from "../lib/library-chip.js";
 import { bindImportChip } from "../options/data-panel.js";
 import { PERSIST_CARD_SESSION_KEY, createPersistCard, persistCardHiddenThisSession, readPersistCardState } from "../lib/persist-card.js";
 import { cleanTitle, countTranslated, httpSourceUrl } from "../lib/library-record.js";
-import { diagLog, noteViewerNetwork } from "../lib/diag-log.js";
+import {
+  diagLog,
+  diagStateForPage,
+  notePageStateEvent,
+  noteTranslateException,
+  noteUserAction,
+  noteViewerNetwork
+} from "../lib/diag-log.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
@@ -485,6 +497,8 @@ let pageViews = [];
 let scrollTick = 0;
 const pageCache = createPageCache();
 const pageStates = new Map();
+const pageDiagStamp = new Map();
+const layoutMissReason = new Map();
 let docPhase = "idle";
 let pdfTargetLang = "zh-CN";
 let pdfProvider = "";
@@ -800,10 +814,25 @@ function init() {
     }
   });
   $("translatePage").addEventListener("click", () => startTranslate());
-  $("retranslatePage").addEventListener("click", () => forceRetranslateCurrentPage());
+  $("retranslatePage").addEventListener("click", () => {
+    if (retranslateMenuOpen()) closeRetranslateMenu(true);
+    else openRetranslateMenu();
+  });
+  $("retranslatePageItem")?.addEventListener("click", () => {
+    closeRetranslateMenu(true);
+    forceRetranslateCurrentPage();
+  });
+  $("retranslateDocument")?.addEventListener("click", () => {
+    closeRetranslateMenu(true);
+    void forceRetranslateDocument();
+  });
   $("translateMenuRetranslate")?.addEventListener("click", () => {
     closeTranslateMenu(true);
     forceRetranslateCurrentPage();
+  });
+  $("translateMenuRetranslateDoc")?.addEventListener("click", () => {
+    closeTranslateMenu(true);
+    void forceRetranslateDocument();
   });
   $("stopTranslate").addEventListener("click", stopTranslateWork);
   $("exportMd").addEventListener("click", () => {
@@ -873,6 +902,10 @@ function onKey(event) {
     event.preventDefault();
     return;
   }
+  if (event.key === "Escape" && closeRetranslateMenu(true)) {
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape" && closeTranslateMenu(true)) {
     event.preventDefault();
     return;
@@ -935,6 +968,7 @@ function onKey(event) {
     if (drawerUi?.isModal?.()) return;
     closeMoreMenu(false);
     closeTranslateMenu(false);
+    closeRetranslateMenu(false);
     closeSourceModeMenu(false);
     cycleF6(event.shiftKey);
     return;
@@ -1127,6 +1161,7 @@ function focusInOpenMenu() {
   const menus = [
     [$("moreMenu"), $("moreButton")],
     [$("translateMenu"), $("translateMenuButton")],
+    [$("retranslateMenu"), $("retranslatePage")],
     [$("sourceModeList"), $("sourceModeMenu")]
   ];
   return menus.some(([menu, button]) => {
@@ -3795,6 +3830,7 @@ async function loadPdfLayout() {
     const res = await runtimeSend({ type: "OI_GET_SETTINGS" });
     rememberTargetLang(res?.settings);
     cachedPdfLayout = normalizePdfLayout(res?.settings?.pdfLayout);
+    rememberEngineMode(pdfEngineMode());
   } catch {
     cachedPdfLayout = normalizePdfLayout(null);
   }
@@ -4305,7 +4341,7 @@ async function renderVisionFormulaCrop(page, raster, block, pageNumber, spec = {
 
 function rasterRegionInk(canvas, bbox) {
   if (!canvas || typeof canvas.getContext !== "function" || !Array.isArray(bbox)) return null;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx || typeof ctx.getImageData !== "function") return null;
   const rect = rasterCropRect(bbox, canvas.width, canvas.height);
   const sw = Math.min(rect.sw, Math.max(0, canvas.width - rect.sx));
@@ -6162,14 +6198,35 @@ function settledText(translation, source = "") {
   return translationSettled(translation, source, pdfTargetLang);
 }
 
+let notedProvider = "";
+let notedEngine = "";
+
+function noteEngineChoice(next, previous) {
+  const value = String(next || "");
+  const prior = String(previous || "");
+  if (!value || !prior || value === prior) return;
+  noteUserAction("switch-engine", { provider: value });
+}
+
 function rememberTargetLang(settings) {
   const code = String(settings?.targetLang || "").trim();
   if (code) pdfTargetLang = code;
   const provider = String(settings?.provider || "").trim();
-  if (provider) pdfProvider = provider;
+  if (provider) {
+    noteEngineChoice(provider, notedProvider);
+    pdfProvider = provider;
+    notedProvider = provider;
+  }
   const id = provider || pdfProvider;
   const model = String(settings?.model || settings?.providers?.[id]?.model || "").trim();
   if (model) pdfModel = model;
+}
+
+function rememberEngineMode(mode) {
+  const next = String(mode || "");
+  if (!next) return;
+  noteEngineChoice(next, notedEngine);
+  notedEngine = next;
 }
 
 function savedPairSettings() {
@@ -7212,6 +7269,11 @@ function bindMoreMenu() {
     const translateButton = $("translateMenuButton");
     if (translateMenuOpen() && !translateMenu?.contains(event.target) && !translateButton?.contains(event.target)) {
       closeTranslateMenu(false);
+    }
+    const retranslateMenu = $("retranslateMenu");
+    const retranslateButton = $("retranslatePage");
+    if (retranslateMenuOpen() && !retranslateMenu?.contains(event.target) && !retranslateButton?.contains(event.target)) {
+      closeRetranslateMenu(false);
     }
     const sourceMenu = $("sourceModeList");
     const sourceButton = $("sourceModeMenu");
@@ -9068,9 +9130,35 @@ function openTranslateMenu() {
   const button = $("translateMenuButton");
   if (!menu || !button) return;
   closeMoreMenu(false);
+  closeRetranslateMenu(false);
   closeSourceModeMenu(false);
   menu.hidden = false;
   button.setAttribute("aria-expanded", "true");
+}
+
+function retranslateMenuOpen() {
+  const menu = $("retranslateMenu");
+  return Boolean(menu && !menu.hidden);
+}
+
+function openRetranslateMenu() {
+  const menu = $("retranslateMenu");
+  const button = $("retranslatePage");
+  if (!menu || !button || button.disabled) return;
+  closeMoreMenu(false);
+  closeTranslateMenu(false);
+  closeSourceModeMenu(false);
+  menu.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+}
+
+function closeRetranslateMenu(focusButton) {
+  const menu = $("retranslateMenu");
+  if (!menu || menu.hidden) return false;
+  menu.hidden = true;
+  $("retranslatePage")?.setAttribute("aria-expanded", "false");
+  if (focusButton) $("retranslatePage")?.focus();
+  return true;
 }
 
 function closeTranslateMenu(focusButton) {
@@ -9092,6 +9180,7 @@ function openMoreMenu() {
   const button = $("moreButton");
   if (!menu || !button) return;
   closeTranslateMenu(false);
+  closeRetranslateMenu(false);
   closeSourceModeMenu(false);
   syncSwapItem();
   menu.hidden = false;
@@ -9529,13 +9618,37 @@ function notePageState(page, patch) {
   const key = Number(page);
   if (!(key >= 1)) return;
   const prev = pageStates.get(key) || { state: "queued", hasLayout: false, k: 0, m: 0, noText: false };
-  const next = { ...prev, ...patch };
+  const diagState = patch?.diagState || "";
+  const diagReason = patch?.diagReason || "";
+  const rest = { ...(patch || {}) };
+  delete rest.diagState;
+  delete rest.diagReason;
+  const next = { ...prev, ...rest };
   pageStates.set(key, next);
+  const code = diagState || diagStateForPage(next.state, { noText: next.noText });
+  const stamp = `${code}|${diagReason}`;
+  if (pageDiagStamp.get(key) !== stamp) {
+    pageDiagStamp.set(key, stamp);
+    notePageStateEvent({ page: key, state: code, reason: diagReason });
+  }
   if (viewerUnderTest() && globalThis.__oiWatchPageState) {
     const log = globalThis.__oiPageStateLog || [];
     log.push({ page: key, state: next.state || "" });
     globalThis.__oiPageStateLog = log;
   }
+}
+
+function noteLayoutMiss(page, reason) {
+  const key = Number(page);
+  if (!(key >= 1)) return;
+  layoutMissReason.set(key, String(reason || "empty-layout"));
+}
+
+function takeLayoutMiss(page) {
+  const key = Number(page);
+  const reason = layoutMissReason.get(key) || "";
+  layoutMissReason.delete(key);
+  return reason;
 }
 
 function filledCount(results) {
@@ -10558,9 +10671,10 @@ function stopTranslateWork(options) {
   cancelQueuedVendorLayouts();
   translatingPage = 0;
   forceRetranslatePending = false;
+  if (!silent) noteUserAction("stop");
   for (const [page, row] of pageStates) {
     if (row.state === "running" || row.state === "layout") {
-      notePageState(page, { state: "queued", hasLayout: Boolean(row.hasLayout) });
+      notePageState(page, { state: "queued", hasLayout: Boolean(row.hasLayout), diagReason: "stopped" });
       clearSlotPainted(page);
     }
   }
@@ -10723,6 +10837,7 @@ async function translatePreflight() {
     return pdfTranslateFailureCopy({ error: String(err?.message || err) });
   }
   cachedPdfLayout = normalizePdfLayout(settings.pdfLayout);
+  rememberEngineMode(pdfEngineMode());
   const outbound = resolveOutboundProvider(settings);
   noteFreeDefaultOutbound(outbound);
   const missing = outbound.fallback
@@ -10829,8 +10944,11 @@ async function startTranslate(options) {
   docPhase = "running";
   const resumedHash = currentLibraryHash();
   if (resumedHash) userPausedDocs.delete(resumedHash);
-  const resumed = Boolean(options) && (options.mode != null || options.startPage != null);
-  if (resumed && options.mode === "from-page") {
+  const forceAll = options?.forceAll === true;
+  const resumed = !forceAll && Boolean(options) && (options.mode != null || options.startPage != null);
+  if (forceAll) {
+    libraryTranslateRun = { mode: "document", anchorPage: 1 };
+  } else if (resumed && options.mode === "from-page") {
     libraryTranslateRun = {
       mode: "from-page",
       anchorPage: Math.max(1, Math.floor(Number(options.anchorPage) || Number(options.startPage) || 1))
@@ -10838,12 +10956,12 @@ async function startTranslate(options) {
   } else {
     libraryTranslateRun = { mode: "document", anchorPage: 1 };
   }
-  const requested = Math.max(1, Math.floor(Number(resumed ? options.startPage : 1) || 1));
+  const requested = forceAll ? 1 : Math.max(1, Math.floor(Number(resumed ? options.startPage : 1) || 1));
   const startPage = libraryTranslateRun.mode === "from-page"
     ? Math.max(libraryTranslateRun.anchorPage, requested)
     : requested;
   refreshDocStatus();
-  await translateWholeDocument({ startPage, mode: libraryTranslateRun.mode });
+  await translateWholeDocument({ startPage, mode: libraryTranslateRun.mode, forceAll });
 }
 
 async function resolveBatchSize() {
@@ -11399,8 +11517,9 @@ async function ensureTitleStructure(page, layout, options = {}) {
       pending.source = parsed.structure;
       pending.structure = parsed.structure;
     } else pending.status = "fallback";
-  } catch {
+  } catch (err) {
     if (stamp === docId) pending.status = "fallback";
+    if (translateExceptionCode(err) === "timeout") noteTranslateException("timeout", { page });
   }
   return pending;
 }
@@ -11442,6 +11561,7 @@ async function translateTitleStructure(work, gen, translatingDoc, batchSize, opt
       session: work,
       batchSize,
       preserveSession: true,
+      page: options.page,
       bypassCache: options.bypassCache === true || retryFailed,
       onAbortRequest: translateAbortRequest,
       onBatchResult({ results: next }) {
@@ -11499,6 +11619,7 @@ function structureLanded(page) {
 
 async function translateCurrentPage() {
   if (!pdfDoc || pdfTranslateBusy(session)) return;
+  noteUserAction("translate-page", { page: pageNum });
   try {
     const saved = await savedTranslationFor(pageNum);
     if (saved?.readout) {
@@ -11933,8 +12054,24 @@ async function adoptLibraryPages(options = {}) {
       }
       continue;
     }
-    const noText = state === "empty" && !blocks?.length && !(Number(layout?.itemCount) > 0);
-    notePageState(page, { state, hasLayout: true, noText });
+    if (state === "empty" && !layout) {
+      const settled = settleUnsentPage({ layout: null, reason: "empty-layout" });
+      notePageState(page, {
+        state: settled.state,
+        hasLayout: false,
+        noText: false,
+        diagState: settled.diagState,
+        diagReason: settled.diagReason
+      });
+    } else {
+      const noText = state === "empty" && pageNoText(layout);
+      notePageState(page, {
+        state,
+        hasLayout: Boolean(layout),
+        noText,
+        ...(noText ? { diagState: "empty-layout", diagReason: "no-text-blocks" } : {})
+      });
+    }
     clearSlotPainted(page);
     publish();
   }
@@ -12015,7 +12152,8 @@ async function translateWholeDocument(options = {}) {
   const libraryPass = Boolean(libraryDoc?.pages?.length || libraryArticle);
   const work = beginViewerSession();
   updateTranslateControls();
-  if (!libraryPass && !$("status").classList.contains("warn")) setStatus(progressDocumentStatus(startPage, total));
+  if (options?.forceAll) setStatus(retranslateStatusCopy({ scope: "document", phase: "running" }));
+  else if (!libraryPass && !$("status").classList.contains("warn")) setStatus(progressDocumentStatus(startPage, total));
   renderArticle();
   let batchSize = 8;
   try {
@@ -12050,23 +12188,30 @@ async function translateWholeDocument(options = {}) {
     batchSize,
     targetLang: pdfTargetLang,
     send: runtimeSend,
+    skipCached: options?.forceAll !== true,
+    bypassCache: options?.forceAll === true,
     onAbortRequest: translateAbortRequest,
     getPageOriginals: async (page) => {
-      const units = await originalsForPage(page, gen, translatingDoc, work, batchSize);
+      const units = await originalsForPage(page, gen, translatingDoc, work, batchSize, {
+        force: options?.forceAll === true
+      });
       // One open, one request per submitted text. A later layout pass skips a
       // block already sent with this source and display, and still sends a
       // display that changed when formula slots moved.
       return claimTranslationUnits(units, sentSource);
     },
     pageSkipReason: (page) => {
-      if (titleStructureFailed(page)) return "empty";
+      if (layoutMissReason.has(page)) return "unavailable";
+      if (!options?.forceAll && titleStructureFailed(page)) return "empty";
       const cached = pageCache.get(translatingDoc, page);
       // getPageOriginals already returned nothing to send. A settled body or a
       // landed title is done; stale failed rows must not turn that into an empty page.
-      if (pageTranslationComplete(cached, pdfTargetLang) ||
+      if (!options?.forceAll && (pageTranslationComplete(cached, pdfTargetLang) ||
           pageHasTranslation(cached, pdfTargetLang) ||
-          structureLanded(page)) return "cached";
-      return isSkipOnlyPage(getPageLayout(page)?.blocks) ? "skip-only" : "empty";
+          structureLanded(page))) return "cached";
+      if (skipLocked.has(page) || isSkipOnlyPage(getPageLayout(page)?.blocks)) return "skip-only";
+      if (!getPageLayout(page)) return "unavailable";
+      return "empty";
     },
     onPageSkip({ page, reason }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
@@ -12099,15 +12244,44 @@ async function translateWholeDocument(options = {}) {
         notePageState(page, { state: "skipped", hasLayout: true });
         saveTasks.push(rememberTranslation(page, []).then(() => null, (error) => error));
       }
+      else if (reason === "unavailable") {
+        const why = takeLayoutMiss(page) || "empty-layout";
+        const settled = settleUnsentPage({ layout: null, reason: why });
+        notePageState(page, {
+          state: settled.state,
+          hasLayout: false,
+          noText: false,
+          diagState: settled.diagState,
+          diagReason: settled.diagReason
+        });
+        if (why === "empty-layout") noteTranslateException("empty-layout", { page, reason: why });
+      }
       else {
         const layout = getPageLayout(page);
         const blocks = layout?.blocks || [];
         if (skipLocked.has(page) || libraryEntry(page)?.skipped || isSkipOnlyPage(blocks) || isSkipOnlyPage(libraryEntry(page)?.layout?.blocks)) {
           skipLocked.add(page);
           notePageState(page, { state: "skipped", hasLayout: blocks.length > 0 });
+        } else if (!layout) {
+          const why = takeLayoutMiss(page) || "empty-layout";
+          const settled = settleUnsentPage({ layout: null, reason: why });
+          notePageState(page, {
+            state: settled.state,
+            hasLayout: false,
+            noText: false,
+            diagState: settled.diagState,
+            diagReason: settled.diagReason
+          });
+          if (why === "empty-layout") noteTranslateException("empty-layout", { page, reason: why });
         } else {
-          const noText = !blocks.length && !(Number(layout?.itemCount) > 0);
-          notePageState(page, { state: "empty", hasLayout: Boolean(layout), noText });
+          const settled = settleUnsentPage({ layout });
+          notePageState(page, {
+            state: settled.state,
+            hasLayout: true,
+            noText: settled.noText,
+            diagState: settled.diagState,
+            diagReason: settled.diagReason
+          });
         }
       }
       clearSlotPainted(page);
@@ -12134,7 +12308,8 @@ async function translateWholeDocument(options = {}) {
       });
       clearSlotPainted(page);
       docPhase = "running";
-      if (!$("status").classList.contains("warn") && !$("status").classList.contains("error")) {
+      if (options?.forceAll) setStatus(retranslateStatusCopy({ scope: "document", phase: "running" }));
+      else if (!$("status").classList.contains("warn") && !$("status").classList.contains("error")) {
         setStatus(progressDocumentStatus(page, pageTotal));
       }
       refreshDocStatus();
@@ -12215,6 +12390,15 @@ async function translateWholeDocument(options = {}) {
   // It gates a second job, and must not stop the job that is already adopting.
   const prepareLibraryPage = libraryPass ? async (page) => {
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
+    if (options?.forceAll) {
+      libraryAdoptWouldSkip = false;
+      libraryAdoptHold = null;
+      await adoptLibraryPages({ onlyPage: page });
+      if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
+      const blocks = getPageLayout(page)?.blocks;
+      if (skipLocked.has(page) || libraryEntry(page)?.skipped || isSkipOnlyPage(blocks)) return "skip";
+      return "retry";
+    }
     // Snapshot before adopt. A page saved this session has no failed flag.
     // Adopting it turns a failed body batch into a fresh request and drops bypassCache.
     let priorCache = pageCache.get(translatingDoc, page);
@@ -12387,7 +12571,7 @@ async function translateWholeDocument(options = {}) {
   const { aborted, pages, error, missingField, paused } = translatedDoc;
   translatePaused = Boolean(paused);
   for (const entry of pages) {
-    if (entry.reason === "cached" || entry.reason === "skip-only" || entry.reason === "empty") continue;
+    if (entry.reason === "cached" || entry.reason === "skip-only" || entry.reason === "empty" || entry.reason === "unavailable") continue;
     const merged = withStructureRows(getPageLayout(entry.page), entry.results);
     if (entry.error || merged?.some((item) => item?.failed)) {
       const expected = Number(pageStates.get(entry.page)?.m) || 0;
@@ -12400,7 +12584,11 @@ async function translateWholeDocument(options = {}) {
     pageHasTranslation(pageCache.get(translatingDoc, entry.page), pdfTargetLang) ||
     (titleStructure?.page === entry.page && structureLanded(entry.page)));
   const clean = !error && !aborted && any && totals.n === total && totals.needsRetry === 0;
-  if (paused) setStatus(PDF_COPY.pausedStreak, true);
+  if (options?.forceAll) {
+    if (aborted) setStatus(PDF_COPY.stopped);
+    else if (clean) setStatus(retranslateStatusCopy({ scope: "document", phase: "done" }));
+    else setStatus(retranslateStatusCopy({ scope: "document", phase: "failed" }), true);
+  } else if (paused) setStatus(PDF_COPY.pausedStreak, true);
   else if (error) setStatus(pdfTranslateFailureCopy({ error, field: missingField, missingField }), true);
   else if (aborted) setStatus(PDF_COPY.stopped);
   else if (!clean) setStatus(any ? PDF_COPY.incompletePages : PDF_COPY.noReturnedTranslation, true);
@@ -12516,11 +12704,18 @@ async function zoneForRetranslate(page, work) {
   return ingestVendorLayout(page, mode, () => docPhase === "stopped" || Boolean(work?.aborted) || !layoutAttemptLive(epoch), epoch);
 }
 
+async function forceRetranslateDocument() {
+  if (!pdfDoc || pdfTranslateBusy(session) || forceReadoutHold) return;
+  noteUserAction("retranslate-doc", { page: capsulePage() });
+  await startTranslate({ forceAll: true, startPage: 1, mode: "document" });
+}
+
 async function forceRetranslateCurrentPage() {
   if (!pdfDoc || pdfTranslateBusy(session) || forceReadoutHold) {
     if (pdfDoc) forceRetranslatePending = true;
     return;
   }
+  noteUserAction("retranslate-page", { page: capsulePage() });
   forceRetranslatePending = false;
   const sourceLayout = getPageLayout(capsulePage());
   const units = liveOriginals(sourceLayout, unitsForForceRetranslate(sourceLayout));
@@ -12590,6 +12785,7 @@ async function forceRetranslateCurrentPage() {
       send: runtimeSend,
       session: work,
       batchSize,
+      page: targetPage,
       bypassCache: true,
       onAbortRequest: translateAbortRequest,
       onBatchStart() {
@@ -13207,19 +13403,31 @@ async function ingestReadoutLayout(n, isStale) {
   return layout;
 }
 
-async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
+async function originalsForPage(n, gen, translatingDoc, work, batchSize, options = {}) {
   // A skip lock has no body units. A failed title on that page is still sent;
   // otherwise pageSkipReason stops on titleStructureFailed and slotsDone stays false.
   const retryFailedTitle = titleStructureFailed(n);
   if (skipLocked.has(n) && !retryFailedTitle) return [];
   const epoch = layoutEpoch;
-  if (docPhase === "stopped" || !layoutAttemptLive(epoch)) return [];
+  const engineAtStart = pdfEngineMode();
+  const miss = () => {
+    noteLayoutMiss(n, layoutMissReasonFor({
+      stopped: docPhase === "stopped",
+      engineChanged: pdfEngineMode() !== engineAtStart,
+      stale: gen !== restoreGen || translatingDoc !== docId,
+      aborted: !layoutAttemptLive(epoch),
+      offline: globalThis.navigator?.onLine === false
+    }));
+    return [];
+  };
+  if (docPhase === "stopped" || !layoutAttemptLive(epoch)) return miss();
   const isStale = () => gen !== restoreGen || translatingDoc !== docId || docPhase === "stopped" || !layoutAttemptLive(epoch);
   const layout = getPageLayout(n) || (await ingestPageLayout(n, isStale, epoch));
-  if (!layout || isStale()) return [];
+  if (!layout || isStale()) return miss();
+  layoutMissReason.delete(n);
   if (work) {
     await ensureTitleStructure(n, layout);
-    if (isStale()) return [];
+    if (isStale()) return miss();
     const record = titleStructure && titleStructure.docId === translatingDoc && titleStructure.page === n && titleStructure.status === "ok"
       ? titleStructure
       : null;
@@ -13238,10 +13446,11 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
       clearSlotPainted(n);
       renderArticle();
     }
-    await translateTitleStructure(work, gen, translatingDoc, batchSize, { page: n });
-    if (isStale()) return [];
+    if (options.force) armTitleRetranslate(translatingDoc, n);
+    await translateTitleStructure(work, gen, translatingDoc, batchSize, { page: n, bypassCache: options.force === true });
+    if (isStale()) return miss();
     await rememberLandedStructure(n, translatingDoc);
-    if (isStale()) return [];
+    if (isStale()) return miss();
     $("status")?.classList.remove("warn");
   }
   if (skipLocked.has(n)) return [];
@@ -13254,8 +13463,10 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize) {
     (Array.isArray(cached) && cached.length ? cached : saved) || [],
     savedPairSettings()
   );
-  const pending = unitsNeedingTranslation(filled, pdfTargetLang);
-  if (filled.length && pending.length < filled.length) {
+  const pending = options.force
+    ? liveOriginals(layout, unitsForForceRetranslate(layout))
+    : unitsNeedingTranslation(filled, pdfTargetLang);
+  if (!options.force && filled.length && pending.length < filled.length) {
     const kept = mergeTranslationRows(Array.isArray(cached) ? cached : [], cacheableReuse(filled));
     pageCache.set(translatingDoc, n, kept);
     pageResults = kept;
@@ -13403,6 +13614,8 @@ async function adoptDoc(doc, title, openGen) {
   translatingPage = 0;
   pageCache.clear();
   pageStates.clear();
+  pageDiagStamp.clear();
+  layoutMissReason.clear();
   skipLocked.clear();
   legacySkipSeeded = false;
   if (viewerUnderTest()) {
@@ -14441,8 +14654,14 @@ function updateTranslateControls() {
   $("translatePage").disabled = ui.translateDisabled;
   $("translatePage").hidden = ui.translateHidden;
   $("retranslatePage").disabled = ui.retranslateDisabled;
+  const pageItem = $("retranslatePageItem");
+  if (pageItem) pageItem.disabled = ui.retranslateDisabled;
+  const docItem = $("retranslateDocument");
+  if (docItem) docItem.disabled = ui.retranslateDocDisabled;
   const menuRetranslate = $("translateMenuRetranslate");
   if (menuRetranslate) menuRetranslate.disabled = ui.retranslateDisabled;
+  const menuDoc = $("translateMenuRetranslateDoc");
+  if (menuDoc) menuDoc.disabled = ui.retranslateDocDisabled;
   $("stopTranslate").hidden = ui.stopHidden;
   $("stopTranslate").disabled = ui.stopDisabled;
   if (!pdfTranslateBusy(session) && backgroundSessions.active) {

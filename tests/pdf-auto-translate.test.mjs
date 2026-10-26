@@ -270,7 +270,7 @@ const STUB = `(() => {
   if (mode === "openRace") {
     const timer = setInterval(() => {
       const phase = document.querySelector("#docStatus")?.dataset.state || "";
-      const button = document.getElementById("retranslatePage");
+      const button = document.getElementById("retranslatePageItem");
       if (phase === "opening" && button && !button.disabled) {
         clearInterval(timer);
         window.__oiAuto.clickedDuringOpen = true;
@@ -737,7 +737,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   const retried = JSON.parse(await waitFor(`(() => {
     const state = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
     if (state === "running") return ${SNAPSHOT};
-    const button = document.getElementById("retranslatePage");
+    const button = document.getElementById("retranslatePageItem");
     if (button && !button.disabled) button.click();
     return "";
   })()`, "LD-08 重译胶囊页"));
@@ -845,14 +845,14 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
       auto.retranslateAt = all.length;
       auto.retranslatePage = capsuleNow();
       auto.retranslateClicked = true;
-      document.getElementById("retranslatePage").click();
+      document.getElementById("retranslatePageItem").click();
     }
     let start = auto.retranslateAt || 0;
     const watched = String(auto.retranslatePage || capsuleNow());
     const state = document.querySelector('#readerFlow .rf-page[data-page="' + watched + '"]')?.dataset.state || "";
     if (state !== "running" && state !== "layout" && start >= all.length) {
       if (!pinPageOne()) return "";
-      const button = document.getElementById("retranslatePage");
+      const button = document.getElementById("retranslatePageItem");
       if (button && !button.disabled && capsuleNow() === "1") {
         auto.retranslateAt = all.length;
         auto.retranslatePage = capsuleNow();
@@ -1315,7 +1315,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
   })()`, "struct: 结构批先译完", 180000);
   await evaluate(`(() => {
     window.__oiAuto.retranslateAt = (window.__oiAuto.messages || []).length;
-    document.getElementById("retranslatePage").click();
+    document.getElementById("retranslatePageItem").click();
     return true;
   })()`);
   const structAgain = JSON.parse(await waitFor(`(() => {
@@ -1323,7 +1323,7 @@ test("打开 PDF 自动全文翻译：缓存、开关、运行环境与进度占
     const start = window.__oiAuto.retranslateAt || 0;
     const state = document.querySelector('#readerFlow .rf-page[data-page="1"]')?.dataset.state || "";
     if (state !== "running" && state !== "layout" && start >= all.length) {
-      const button = document.getElementById("retranslatePage");
+      const button = document.getElementById("retranslatePageItem");
       if (button && !button.disabled) {
         window.__oiAuto.retranslateAt = all.length;
         button.click();
