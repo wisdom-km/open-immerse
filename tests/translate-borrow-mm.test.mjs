@@ -71,7 +71,48 @@ test("TBM-01/02/05/11 settings page does not show a borrow hint", () => {
   assert.equal(borrow.mode, "borrow");
   assert.equal(JSON.stringify(borrow).includes(MM_KEY), false);
   assert.equal(describeTranslateBorrow(unconfigured(), { multimodal: { provider: "kimi", apiKey: "", model: "" } }).mode, "fallback");
-  assert.equal(describeTranslateBorrow({ provider: "mymemory", providers: { mymemory: {} } }, mm()).mode, "own");
+  assert.equal(describeTranslateBorrow({
+    provider: "mymemory",
+    translateProviderChosen: true,
+    providers: { mymemory: {} }
+  }, mm()).mode, "own");
+});
+
+test("factory MyMemory borrows a configured multimodal card, and an explicit MyMemory choice does not", () => {
+  const fresh = { provider: "mymemory", providers: { mymemory: { email: "" } } };
+  const borrowed = resolveTranslateOutbound(fresh, mm());
+  assert.equal(borrowed.mode, "borrow");
+  assert.equal(borrowed.borrowed, true);
+  assert.equal(borrowed.vendorId, "kimi");
+  assert.equal(borrowed.fallback, false);
+  assert.equal(borrowed.runtimeConfig.apiKey, MM_KEY);
+  assert.equal(JSON.stringify(fresh).includes(MM_KEY), false);
+  assert.equal(describeTranslateBorrow(fresh, mm()).mode, "borrow");
+
+  const explicit = resolveTranslateOutbound({
+    provider: "mymemory",
+    translateProviderChosen: true,
+    providers: { mymemory: { email: "" } }
+  }, mm());
+  assert.equal(explicit.mode, "own");
+  assert.equal(explicit.borrowed, false);
+  assert.equal(explicit.providerId, "mymemory");
+  assert.equal(explicit.fallback, false);
+
+  const neither = resolveTranslateOutbound(fresh, {
+    multimodal: { provider: "kimi", apiKey: "", model: "" }
+  });
+  assert.equal(neither.mode, "fallback");
+  assert.equal(neither.providerId, "mymemory");
+  assert.equal(neither.fallback, true);
+  assert.match(neither.notice, /免费的 MyMemory/);
+
+  const own = resolveTranslateOutbound({
+    provider: "openai",
+    providers: { openai: { apiKey: "sk-own-engine" } }
+  }, mm());
+  assert.equal(own.mode, "own");
+  assert.equal(own.providerId, "openai");
 });
 
 test("TBM-03/04 settings page has no borrow-hint layout", () => {
@@ -209,6 +250,48 @@ test("TBM-01/02/09 popup borrow matches the vendor's own engine line, and fallba
   assert.match(fallback.warnText, /免费的 MyMemory/);
   assert.equal(fallback.warnHidden, false);
   assert.equal(fallback.title, fallback.warnText);
+
+  const factorySettings = {
+    provider: "mymemory",
+    providers: { mymemory: { email: "" } },
+    sourceLang: "en",
+    targetLang: "zh-CN",
+    translateScope: "article",
+    translateLimit: "all",
+    features: {}
+  };
+  const factory = await bootPopup(factorySettings, mm());
+  assert.equal(factory.text, "引擎：Kimi");
+  assert.equal(factory.title, "Kimi / 月之暗面");
+  assert.equal(factory.warnHidden, true);
+  assert.equal(factory.body.includes("借用"), false);
+  assert.equal(factory.body.includes("MyMemory"), false);
+
+  const explicitFree = await bootPopup(
+    { ...factorySettings, translateProviderChosen: true },
+    mm()
+  );
+  assert.equal(explicitFree.text, "引擎：MyMemory（免费）");
+  assert.equal(explicitFree.warnHidden, true);
+
+  const neither = await bootPopup(
+    factorySettings,
+    { multimodal: { provider: "kimi", apiKey: "", model: "" } }
+  );
+  assert.equal(neither.text, "引擎：MyMemory（免费）");
+  assert.equal(neither.warnHidden, false);
+  assert.match(neither.warnText, /免费的 MyMemory/);
+
+  const custom = await bootPopup(
+    factorySettings,
+    { multimodal: { provider: "custom", apiKey: MM_KEY, model: "kimi-k3", baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3" } }
+  );
+  assert.equal(custom.text, "引擎：自定义");
+  assert.equal(custom.title, "自定义");
+  assert.equal(custom.warnHidden, true);
+  assert.equal(custom.body.includes("Custom"), false);
+  assert.equal(custom.body.includes("自定义 HTTP API"), false);
+  assert.equal(custom.body.includes("借用"), false);
 });
 
 

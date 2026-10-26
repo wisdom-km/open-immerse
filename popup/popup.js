@@ -155,23 +155,26 @@ function renderEngine(settings, formula) {
   const provider = known
     ? getProvider(outbound.providerId)
     : { id: outbound.providerId, name: described.vendorLabel || outbound.providerId };
-  const shortName = {
-    openai: "OpenAI",
-    openrouter: "OpenRouter",
-    deepl: "DeepL",
-    microsoft: "Microsoft",
-    google: "Google",
-    mymemory: "MyMemory",
-    grok: "Grok",
-    kimi: "Kimi",
-    minimax: "MiniMax",
-    gemini: "Gemini",
-    claude: "Claude",
-    azure: "Azure",
-    custom: "Custom"
-  }[provider.id] || provider.name.split("/")[0].trim();
+  const shortName = borrowed
+    ? (described.shortName || provider.name.split("/")[0].trim())
+    : {
+      openai: "OpenAI",
+      openrouter: "OpenRouter",
+      deepl: "DeepL",
+      microsoft: "Microsoft",
+      google: "Google",
+      mymemory: "MyMemory",
+      grok: "Grok",
+      kimi: "Kimi",
+      minimax: "MiniMax",
+      gemini: "Gemini",
+      claude: "Claude",
+      azure: "Azure",
+      custom: "Custom"
+    }[provider.id] || provider.name.split("/")[0].trim();
   link.textContent = provider.id === "mymemory" ? `引擎：${shortName}（免费）` : `引擎：${shortName}`;
   link.title = provider.name;
+  if (borrowed && described.vendorId === "custom") link.title = described.shortName || provider.name;
   if (!borrowed && provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
   const selected = getProvider(settings.provider);
   const cfg = settings.providers?.[selected.id] || {};

@@ -256,6 +256,7 @@ async function init() {
   bindSecretsList();
   el("provider").addEventListener("change", () => {
     const left = attentionProvider;
+    cachedSettings.translateProviderChosen = true;
     harvestVisibleProvider();
     renderProviderFields();
     syncQualityLocks();
@@ -1536,6 +1537,7 @@ async function persistNow(control) {
   }
   const patch = {
     provider: el("provider").value,
+    translateProviderChosen: cachedSettings.translateProviderChosen === true,
     sourceLang: el("sourceLang").value,
     targetLang: el("targetLang").value,
     batchSize: Number(el("batchSize").value) || 8,

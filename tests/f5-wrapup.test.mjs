@@ -219,7 +219,14 @@ test("unconfigured outbound is MyMemory and a configured engine stays put", () =
   assert.equal(ownWins.mode, "own");
   assert.equal(ownWins.providerId, "openai");
   assert.equal(ownWins.borrowed, false);
-  const explicitFree = resolveTranslateOutbound({ provider: "mymemory", providers: { mymemory: {} } }, mm);
+  const factoryFree = resolveTranslateOutbound({ provider: "mymemory", providers: { mymemory: {} } }, mm);
+  assert.equal(factoryFree.mode, "borrow");
+  assert.equal(factoryFree.vendorId, "kimi");
+  const explicitFree = resolveTranslateOutbound({
+    provider: "mymemory",
+    translateProviderChosen: true,
+    providers: { mymemory: {} }
+  }, mm);
   assert.equal(explicitFree.mode, "own");
   assert.equal(explicitFree.providerId, "mymemory");
   const stillFree = resolveTranslateOutbound(

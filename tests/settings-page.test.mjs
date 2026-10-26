@@ -1944,6 +1944,33 @@ test("settings page keeps the original engine hint while borrowing, and an own e
   assert.equal(chrome.local.formulaSettings.multimodal.apiKey, mmKey);
 });
 
+test("picking a translation engine stores translateProviderChosen, including an explicit MyMemory choice", async () => {
+  const chrome = installChrome({
+    settings: {
+      ...savedSettings(),
+      provider: "mymemory",
+      providers: { mymemory: { email: "" }, openai: { apiKey: "" } }
+    }
+  });
+  const page = mountPage("#translate");
+  const { startOptions } = await import("../options/options.js?provider-chosen=1");
+  await startOptions();
+  await flush();
+  assert.equal(chrome.sync.settings.translateProviderChosen, undefined);
+  const provider = page.document.getElementById("provider");
+  provider.value = "deepl";
+  fire(provider, "change");
+  await flush();
+  assert.equal(chrome.sync.settings.provider, "deepl");
+  assert.equal(chrome.sync.settings.translateProviderChosen, true);
+  provider.value = "mymemory";
+  fire(provider, "change");
+  await flush();
+  assert.equal(chrome.sync.settings.provider, "mymemory");
+  assert.equal(chrome.sync.settings.translateProviderChosen, true);
+  assert.equal(JSON.stringify(chrome.sync.settings).includes("借用"), false);
+});
+
 function storedProviderKey(chrome, legacy) {
   if (legacy) return String(chrome.sync.settings.providers?.openai?.apiKey || "");
   return String(chrome.local.oiSecrets?.providers?.openai || "");
