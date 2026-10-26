@@ -197,6 +197,56 @@ const PAGE = `<!doctype html>
         session: workspace.style.getPropertyValue("--library-width")
       };
     };
+    window.__stray = (mode) => {
+      const library = workspace.querySelector(".oi-library");
+      delete workspace.dataset.layout;
+      delete workspace.dataset.libraryBand;
+      workspace.dataset.notesSide = "end";
+      workspace.dataset.sourceMode = "side";
+      workspace.dataset.sourceSide = "start";
+      workspace.dataset.libraryOpen = "true";
+      library.classList.add("is-open");
+      library.classList.remove("is-sheet");
+      for (const name of ["--oi-reader-library-col", "--oi-three-source", "--oi-three-translate", "--oi-notes-pane-w", "--notes-width", "--library-width"]) {
+        workspace.style.removeProperty(name);
+      }
+      if (mode === "col8") {
+        workspace.dataset.libraryBand = "wide";
+        workspace.style.setProperty("--oi-reader-library-col", "8px");
+        workspace.style.setProperty("--library-width", "8px");
+      } else if (mode === "three8") {
+        workspace.dataset.libraryBand = "wide";
+        workspace.dataset.layout = "3";
+        workspace.style.setProperty("--oi-three-source", "420px");
+        workspace.style.setProperty("--oi-three-translate", "700px");
+        workspace.style.setProperty("--oi-notes-pane-w", "8px");
+        workspace.style.setProperty("--oi-reader-library-col", "8px");
+      } else if (mode === "start8") {
+        workspace.dataset.libraryBand = "wide";
+        workspace.dataset.notesSide = "start";
+        workspace.style.setProperty("--oi-reader-library-col", "8px");
+      } else if (mode === "sheet") {
+        workspace.dataset.libraryBand = "sheet";
+        library.classList.add("is-sheet");
+      }
+      const slot = document.getElementById("sideSlot").getBoundingClientRect();
+      const panel = library.getBoundingClientRect();
+      const title = workspace.querySelector(".oi-lib-head h2").getBoundingClientRect();
+      const pdf = document.querySelector(".pane-pdf").getBoundingClientRect();
+      const translate = document.querySelector(".pane-translate").getBoundingClientRect();
+      return {
+        slotW: slot.width,
+        slotX: slot.x,
+        slotH: slot.height,
+        panelW: panel.width,
+        panelH: panel.height,
+        titleW: title.width,
+        titleInside: title.width >= 30 && title.x >= slot.x - 1 && title.right <= slot.right + 1,
+        pdfW: pdf.width,
+        translateX: translate.x,
+        translateW: translate.width
+      };
+    };
     window.__ready = true;
   </script>
 </body>
@@ -433,5 +483,28 @@ test("LIB-01/04/05 library panel and rows fill the column at default and dragged
     }
     const shot = await cdp.send("Page.captureScreenshot", { format: "png" }, sessionId);
     writeShot(shots.dir, `${item.name}.png`, Buffer.from(shot.data, "base64"));
+  }
+
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: 1440,
+    height: 900,
+    deviceScaleFactor: 1,
+    mobile: false
+  }, sessionId);
+  for (const mode of ["noband", "col8", "three8", "start8", "sheet"]) {
+    const measured = await evaluate(`window.__stray(${JSON.stringify(mode)})`);
+    assert.ok(measured.slotW >= 320, JSON.stringify({ mode, measured }));
+    assert.ok(measured.titleInside, JSON.stringify({ mode, measured }));
+    assert.ok(measured.slotW > 8, JSON.stringify({ mode, measured }));
+    if (mode === "three8") {
+      assert.ok(measured.pdfW > 200, JSON.stringify({ mode, measured }));
+      assert.ok(measured.slotX > measured.translateX, JSON.stringify({ mode, measured }));
+    }
+    if (mode === "sheet") {
+      assert.ok(measured.panelW >= 1400, JSON.stringify({ mode, measured }));
+      assert.ok(measured.panelH >= 800, JSON.stringify({ mode, measured }));
+    }
+    if (mode === "start8") assert.ok(measured.slotX <= 1, JSON.stringify({ mode, measured }));
+    if (mode === "noband" || mode === "col8") assert.ok(measured.pdfW <= 2, JSON.stringify({ mode, measured }));
   }
 });

@@ -464,38 +464,59 @@
   background: var(--oi-reader-surface);
 }
 
+/* Open library is a dock, a three-pane column, or a sheet.
+   The 8px source split is position:absolute and does not occupy its track,
+   so an unplaced slot would auto-place there and clip 「文献库」 down to 「文」. */
+.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-layout="pair"]):not([data-library-band="sheet"]) {
+  grid-template-columns: minmax(0, 1fr) var(--oi-reader-split-w) minmax(var(--oi-reader-library-min), var(--oi-reader-library-col, var(--oi-reader-library-w)));
+  grid-template-areas: "translate splitB library";
+}
+
+.workspace[data-library-open="true"][data-notes-side="start"]:not([data-layout="3"]):not([data-layout="pair"]):not([data-library-band="sheet"]) {
+  grid-template-columns: minmax(var(--oi-reader-library-min), var(--oi-reader-library-col, var(--oi-reader-library-w))) var(--oi-reader-split-w) minmax(0, 1fr);
+  grid-template-areas: "library splitB translate";
+}
+
+.workspace[data-library-open="true"][data-layout="3"] {
+  grid-template-columns: var(--oi-three-source, minmax(var(--oi-reader-library-min), 1fr)) var(--oi-reader-split-w) var(--oi-three-translate, minmax(var(--oi-reader-library-min), 1fr)) var(--oi-reader-split-w) minmax(var(--oi-reader-library-min), var(--oi-notes-pane-w, var(--oi-reader-library-w)));
+  grid-template-areas: "pdf splitA translate splitB notes";
+}
+
+.workspace[data-library-open="true"][data-layout="3"][data-notes-side="start"] {
+  grid-template-columns: minmax(var(--oi-reader-library-min), var(--oi-notes-pane-w, var(--oi-reader-library-w))) var(--oi-reader-split-w) var(--oi-three-translate, minmax(var(--oi-reader-library-min), 1fr)) var(--oi-reader-split-w) var(--oi-three-source, minmax(var(--oi-reader-library-min), 1fr));
+  grid-template-areas: "notes splitB translate splitA pdf";
+}
+
+.workspace[data-library-open="true"][data-layout="pair"]:not([data-notes-side="start"]) {
+  grid-template-columns: minmax(0, 1fr) var(--oi-reader-split-w) minmax(var(--oi-reader-library-min), var(--oi-notes-pane-w, var(--oi-reader-library-w)));
+  grid-template-areas: "translate splitB notes";
+}
+
+.workspace[data-library-open="true"][data-layout="pair"][data-notes-side="start"] {
+  grid-template-columns: minmax(var(--oi-reader-library-min), var(--oi-notes-pane-w, var(--oi-reader-library-w))) var(--oi-reader-split-w) minmax(0, 1fr);
+  grid-template-areas: "notes splitB translate";
+}
+
 .workspace[data-library-open="true"][data-layout="3"] > #sideSlot,
 .workspace[data-library-open="true"][data-layout="pair"] > #sideSlot {
   grid-area: notes;
   width: auto;
   height: auto;
+  min-width: var(--oi-reader-library-min);
 }
 
-.workspace[data-library-open="true"][data-library-band="mid"],
-.workspace[data-library-open="true"][data-library-band="wide"]:not([data-layout="3"]):not([data-layout="pair"]) {
-  grid-template-columns: minmax(0, 1fr) var(--oi-reader-split-w) var(--oi-reader-library-col, var(--oi-reader-library-w));
-  grid-template-areas: "translate splitB library";
-}
-
-.workspace[data-library-open="true"][data-notes-side="start"][data-library-band="mid"],
-.workspace[data-library-open="true"][data-notes-side="start"][data-library-band="wide"]:not([data-layout="3"]):not([data-layout="pair"]) {
-  grid-template-columns: var(--oi-reader-library-col, var(--oi-reader-library-w)) var(--oi-reader-split-w) minmax(0, 1fr);
-  grid-template-areas: "library splitB translate";
-}
-
-.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-layout="pair"]) > #sideSlot {
+.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-layout="pair"]):not([data-library-band="sheet"]) > #sideSlot {
   grid-area: library;
   position: relative;
   width: auto;
   height: auto;
+  min-width: var(--oi-reader-library-min);
   visibility: visible;
   pointer-events: auto;
 }
 
-.workspace[data-library-open="true"][data-library-band="mid"] > .pane-pdf,
-.workspace[data-library-open="true"][data-library-band="mid"] > .split-handle[data-split="source"],
-.workspace[data-library-open="true"][data-library-band="wide"]:not([data-layout="3"]):not([data-layout="pair"]) > .pane-pdf,
-.workspace[data-library-open="true"][data-library-band="wide"]:not([data-layout="3"]):not([data-layout="pair"]) > .split-handle[data-split="source"] {
+.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-layout="pair"]):not([data-library-band="sheet"]) > .pane-pdf,
+.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-layout="pair"]):not([data-library-band="sheet"]) > .split-handle[data-split="source"] {
   position: absolute;
   width: 0;
   height: 0;
@@ -504,8 +525,7 @@
   pointer-events: none;
 }
 
-.workspace[data-library-open="true"][data-library-band="mid"] > .split-handle[data-split="notes"],
-.workspace[data-library-open="true"][data-library-band="wide"]:not([data-layout="3"]) > .split-handle[data-split="notes"] {
+.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-library-band="sheet"]) > .split-handle[data-split="notes"] {
   display: block;
   grid-area: splitB;
   visibility: visible;
@@ -515,23 +535,25 @@
   position: absolute;
 }
 
-.workspace[data-library-open="true"][data-layout="3"] > #sideSlot,
-.workspace[data-library-open="true"][data-library-band="mid"] > #sideSlot,
-.workspace[data-library-open="true"][data-library-band="wide"] > #sideSlot {
+.workspace[data-library-open="true"]:not([data-library-band="sheet"]) > #sideSlot {
   width: 100%;
   max-width: 100%;
 }
 
+.workspace[data-library-open="true"][data-library-band="sheet"] > #sideSlot,
+.oi-library.is-open.is-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  grid-area: auto;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  height: auto;
+  background: var(--oi-reader-paper);
+}
+
 @media (max-width: 899px) {
-  .oi-library.is-open.is-sheet {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    width: auto;
-    max-width: none;
-    height: auto;
-    background: var(--oi-reader-paper);
-  }
   .oi-lib-trash,
   .oi-lib-open {
     opacity: 1;

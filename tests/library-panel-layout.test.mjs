@@ -149,6 +149,35 @@ test("LIB-09/10/23/24 tokens, footer link, and no --oi-font in the library panel
   assert.doesNotMatch(green.slice(green.indexOf('data-reader-theme="green"'), green.indexOf('data-reader-theme="dark"')), /--oi-reader-link:/);
 });
 
+test("an open library is a breakpoint column or a sheet, never the 8px split", () => {
+  assert.equal(clampLibrarySessionWidth(8), LIBRARY_WIDTH_MIN);
+  assert.equal(clampLibrarySessionWidth(0), LIBRARY_WIDTH_MIN);
+  assert.ok(frame(1440, 8, "").width >= LIBRARY_WIDTH_MIN);
+  assert.ok(frame(1440, 8, "3").width >= LIBRARY_WIDTH_MIN);
+  assert.ok(frame(1024, 8, "").width >= LIBRARY_WIDTH_MIN);
+  assert.equal(frame(860, 8, "").band, "sheet");
+  assert.equal(frame(860, 8, "").width, 0);
+
+  const css = read("pdf/library-panel.css");
+  const mediaAt = css.indexOf("@media (max-width: 899px)");
+  assert.ok(mediaAt > 0);
+  assert.match(css, /minmax\(var\(--oi-reader-library-min\),\s*var\(--oi-reader-library-col,\s*var\(--oi-reader-library-w\)\)\)/);
+  assert.match(css, /minmax\(var\(--oi-reader-library-min\),\s*var\(--oi-notes-pane-w,\s*var\(--oi-reader-library-w\)\)\)/);
+  assert.ok(css.indexOf(".oi-library.is-open.is-sheet") < mediaAt);
+  assert.match(
+    css,
+    /\.workspace\[data-library-open="true"\]:not\(\[data-layout="3"\]\):not\(\[data-layout="pair"\]\):not\(\[data-library-band="sheet"\]\)\s*\{[^}]*grid-template-areas:\s*"translate splitB library"/
+  );
+
+  const viewer = read("pdf/viewer.js");
+  const openFn = viewer.slice(viewer.indexOf("function onLibraryOpenChange"), viewer.indexOf("function installLibraryUi"));
+  assert.ok(openFn.indexOf("syncNotesChrome") < openFn.indexOf("slot.hidden = false"));
+  assert.match(openFn, /frame\.width >= LIBRARY_WIDTH_MIN/);
+  const paint = viewer.slice(viewer.indexOf("function paintLibraryFrame"), viewer.indexOf("function applyLibraryColumnDrag"));
+  assert.match(paint, /Math\.max\(LIBRARY_WIDTH_MIN/);
+  assert.doesNotMatch(css, /grid-template-columns:[^;]*var\(--oi-reader-split-w\)\s+var\(--oi-reader-library-col,/);
+});
+
 test("LIB-25 library drag does not write notes width keys", () => {
   const viewer = read("pdf/viewer.js");
   const persistNotes = viewer.slice(viewer.indexOf("function persistNotesColumnWidth"), viewer.indexOf("function librarySplitDragOn"));

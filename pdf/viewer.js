@@ -2714,15 +2714,28 @@ function onLibraryOpenChange(open, meta) {
   if (open) {
     if (readerWidth() < 900) drawerUi?.close?.(false, { focus: false });
     workspace.dataset.libraryOpen = "true";
+    if (notesUi?.isOpen()) notesUi.close(false, { handoff: true });
+    if (askUi?.isOpen()) askUi.close({ handoff: true, focus: false });
+    syncNotesChrome({ opening: true });
+    const frame = paintLibraryFrame(workspace);
     const slot = document.getElementById("sideSlot");
+    const shown = frame && (frame.band === "sheet" || frame.width >= LIBRARY_WIDTH_MIN);
+    if (!shown) {
+      delete workspace.dataset.libraryOpen;
+      delete workspace.dataset.libraryBand;
+      workspace.style.removeProperty("--oi-reader-library-col");
+      if (slot) {
+        slot.hidden = true;
+        delete slot.dataset.open;
+        slot.setAttribute("aria-hidden", "true");
+      }
+      return;
+    }
     if (slot) {
       slot.hidden = false;
       slot.dataset.open = "true";
       slot.setAttribute("aria-hidden", "false");
     }
-    if (notesUi?.isOpen()) notesUi.close(false, { handoff: true });
-    if (askUi?.isOpen()) askUi.close({ handoff: true, focus: false });
-    syncNotesChrome({ opening: true });
     syncDrawerDock();
     return;
   }
@@ -7509,7 +7522,7 @@ function paintLibraryFrame(workspace) {
     libraryUi?.syncWidth?.();
     return frame;
   }
-  const px = frame.width;
+  const px = Math.max(LIBRARY_WIDTH_MIN, Math.round(Number(frame.width)) || LIBRARY_WIDTH_MIN);
   root.style.setProperty("--oi-reader-library-col", `${px}px`);
   const layout = root.dataset.layout || "";
   if (layout === "3" || layout === "pair") {
