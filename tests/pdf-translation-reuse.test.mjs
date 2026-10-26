@@ -450,7 +450,7 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
     const progress = docStatusView({ n: seededTotals.n, t: pages.length, needsRetry: 0, phase: "running" });
     assert.equal(totals.n, pages.length, `${name} progress stays ${pages.length}/${pages.length}`);
     assert.equal(seededTotals.needsRetry, 0, `${name} library count is not a retry`);
-    assert.match(progress.text, new RegExp(`${pages.length} / ${pages.length}`));
+    assert.match(progress.text, new RegExp(`翻译中 · ${pages.length}/${pages.length}`));
     const unchanged = cache.get(1, 2).find((unit) => unit.translation);
     assert.equal(unchanged.translation, translationFor(unchanged.text));
     const sent = [];

@@ -373,7 +373,7 @@ test("info counts hide zero rows, surface multimodal, and never name a service",
     persisted: true,
     hasSource: false
   });
-  assert.equal(model.progress, "已译 3 / 15 页");
+  assert.equal(model.progress, "已译 2/15 · 有页没译完");
   assert.deepEqual(model.formulaRows.map((row) => row.key), ["arxiv", "crop"]);
   assert.equal(model.formulaRows.find((row) => row.key === "arxiv").count, 2);
   assert.equal(model.note, "arXiv 源码的公式和原文一致；裁图和占位卡点一下就能看原文。");

@@ -61,12 +61,13 @@ test("null layout is queued or failed and is not counted as translated", () => {
     assert.equal(translatedPageTotal([{ state: settled.state }]).n, 0, reason);
     assert.equal(translatedPageTotal([{ state: settled.state }]).needsRetry, reason === "offline" || reason === "empty-layout" ? 1 : 0);
   }
-  assert.equal(layoutMissReasonFor({ stopped: true, aborted: true }), "stopped");
-  assert.equal(layoutMissReasonFor({ engineChanged: true }), "engine");
+  assert.equal(layoutMissReasonFor({ stopped: true, aborted: true }), "aborted");
+  assert.equal(layoutMissReasonFor({ engineChanged: true }), "stale");
   assert.equal(layoutMissReasonFor({ stale: true }), "stale");
   assert.equal(layoutMissReasonFor({ aborted: true }), "aborted");
-  assert.equal(layoutMissReasonFor({ offline: true }), "offline");
-  assert.equal(layoutMissReasonFor({}), "empty-layout");
+  assert.equal(layoutMissReasonFor({ offline: true }), "epoch");
+  assert.equal(layoutMissReasonFor({}), "empty");
+  assert.equal(settleUnsentPage({ layout: null, reason: "stopped" }).diagReason, "layout-null:stopped");
 });
 
 test("noText is true only when a text layer was read and itemCount is 0", () => {
@@ -79,7 +80,7 @@ test("noText is true only when a text layer was read and itemCount is 0", () => 
   const scanned = settleUnsentPage({ layout: { itemCount: 0, blocks: [] } });
   assert.equal(scanned.state, "empty");
   assert.equal(scanned.noText, true);
-  assert.equal(scanned.diagReason, "no-text-blocks");
+  assert.equal(scanned.diagReason, "no-blocks");
   assert.equal(translatedPageTotal([{ state: scanned.state }]).n, 1);
 
   const prose = settleUnsentPage({ layout: { itemCount: 4, blocks: [] } });
@@ -118,8 +119,10 @@ test("unavailable skip is not collapsed into an empty translated page", async ()
 
 test("retranslate menu has page and document actions and document starts without confirm", () => {
   assert.match(html, /id="retranslateMenu"/);
-  assert.match(html, /id="retranslatePageItem"[^>]*>重译本页</);
-  assert.match(html, /id="retranslateDocument"[^>]*>重译全文</);
+  assert.match(html, /id="retranslatePageItem"[\s\S]*重译本页/);
+  assert.match(html, /id="retranslateDocument"[\s\S]*重译全文/);
+  assert.match(html, /只替换当前页/);
+  assert.match(html, /从第 1 页起重新翻译所有页/);
   assert.match(html, /id="translateMenuRetranslateDoc"[^>]*>重译全文</);
   assert.match(html, /id="retranslatePage"[^>]*class="btn-secondary"[^>]*disabled>重译本页</);
   const docForce = viewer.slice(
@@ -129,15 +132,15 @@ test("retranslate menu has page and document actions and document starts without
   assert.match(docForce, /forceAll: true/);
   assert.equal(docForce.includes("confirm("), false);
   assert.equal(docForce.includes("askConfirm"), false);
-  assert.equal(retranslateStatusCopy({ scope: "document", phase: "running" }), "正在重译全文…");
-  assert.equal(retranslateStatusCopy({ scope: "document", phase: "done" }), "全文已译完");
-  assert.equal(retranslateStatusCopy({ scope: "document", phase: "failed" }), "全文重译失败，仍显示已有译文");
+  assert.equal(retranslateStatusCopy({ scope: "document", phase: "running", n: 1, t: 4 }), "重译中 · 1/4");
+  assert.equal(retranslateStatusCopy({ scope: "document", phase: "done" }), "全文已译");
+  assert.equal(retranslateStatusCopy({ scope: "document", phase: "failed", n: 2, t: 4, failed: 1 }), "已译 2/4 页 · 1 页没译完");
   assert.equal(retranslateStatusCopy({ scope: "page", phase: "failed" }), "本页重译失败，仍显示原译文");
   const skip = viewer.slice(viewer.indexOf("pageSkipReason:"), viewer.indexOf("onPageSkip"));
   assert.match(skip, /unavailable/);
   assert.match(viewer, /settleUnsentPage\(/);
   assert.match(viewer, /pageNoText\(/);
-  assert.match(viewer, /if \(why === "empty-layout"\) noteTranslateException\("empty-layout"/);
+  assert.match(viewer, /layout-null:empty/);
   assert.equal(viewer.includes("!blocks.length && !(Number(layout?.itemCount) > 0)"), false);
 });
 

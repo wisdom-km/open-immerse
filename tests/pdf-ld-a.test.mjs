@@ -66,12 +66,12 @@ test("LD-a copy, queued ranges, and toolbar totals", () => {
     { state: "empty" },
     { state: "queued" }
   ]);
-  assert.equal(mixed.n, 4);
+  assert.equal(mixed.n, 3);
   assert.equal(mixed.needsRetry, 2);
   assert.equal(docStatusView({ n: 0, t: 15, phase: "opening" }).text, "正在读取 PDF…");
   assert.equal(docStatusView({ n: 24, t: 27, phase: "opening" }).text, "已译 24 / 27 页");
   assert.equal(docStatusView({ n: 27, t: 27, phase: "opening" }).text, "已译 27 / 27 页");
-  assert.equal(docStatusView({ n: 4, t: 15, needsRetry: 1, phase: "running" }).text, "已译 4 / 15 页");
+  assert.equal(docStatusView({ n: 4, t: 15, needsRetry: 1, phase: "running" }).text, "翻译中 · 4/15");
   assert.notEqual(docStatusView({ n: 15, t: 15, needsRetry: 1, phase: "idle" }).text, "全文已译");
   assert.notEqual(docStatusView({ n: 15, t: 15, needsRetry: 0, phase: "running" }).text, "全文已译");
   assert.equal(docStatusView({ n: 15, t: 15, needsRetry: 0, phase: "idle" }).text, "全文已译");
@@ -535,8 +535,9 @@ test("a failed page is retried with bypassCache", async () => {
   assert.equal(first.pages[0].results[0].failed, true);
   assert.equal(messages[0].bypassCache, undefined);
   assert.equal(pageNeedsBypass(cache.get(1, 1), "zh-CN"), true);
+  const firstSends = messages.length;
   fail = false;
   await run();
-  assert.equal(messages[1].bypassCache, true);
+  assert.equal(messages[firstSends].bypassCache, true);
   assert.equal(pageNeedsBypass([{ original: "Hello", translation: "" }], "zh-CN"), false);
 });

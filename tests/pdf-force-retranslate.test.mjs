@@ -128,6 +128,8 @@ test("重译本页 bypasses library early-returns; 翻译 still short-circuits",
   const done = force.indexOf("PDF_COPY.retranslateDone");
   assert.ok(remember > 0 && replace > remember && done > replace);
   assert.match(viewer, /\$\("retranslatePage"\)\.addEventListener\("click", \(\) => \{/);
+  assert.match(viewer, /forceRetranslateCurrentPage\(\)/);
+  assert.match(viewer, /\$\("retranslateMenuButton"\)\?\.addEventListener\("click"/);
   assert.match(viewer, /openRetranslateMenu\(\)/);
   assert.match(viewer, /\$\("retranslatePageItem"\)\?\.addEventListener\("click"/);
   assert.match(viewer, /forceRetranslateCurrentPage\(\)/);

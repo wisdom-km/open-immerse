@@ -149,6 +149,15 @@ async function handleMessage(message, sender) {
           translations,
           ...(batchOpts.polishFailed ? { polishError: "润色失败" } : {})
         };
+      } catch (err) {
+        if (err?.name === "AbortError") return { ok: false, aborted: true };
+        return {
+          ok: false,
+          error: String(err?.message || err || "error"),
+          httpStatus: Number(err?.httpStatus) || 0,
+          retryAfterMs: Number(err?.retryAfterMs) || 0,
+          code: String(err?.code || err?.name || "")
+        };
       } finally {
         translateAbortRegistry.finish(message.requestId || "");
       }
