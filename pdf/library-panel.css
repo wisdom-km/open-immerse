@@ -13,13 +13,17 @@
 
 .oi-library {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
   min-width: 0;
   min-height: 0;
   height: 100%;
   background: var(--oi-reader-surface);
   color: var(--oi-reader-ink);
-  font-family: var(--oi-reader-ui-font, var(--oi-font, sans-serif));
+  font-family: var(--oi-reader-ui-font);
   font-size: 14px;
   line-height: 1.45;
 }
@@ -50,7 +54,7 @@
   justify-content: space-between;
   height: 44px;
   min-height: 44px;
-  padding: 0 12px;
+  padding: 0 var(--oi-reader-library-pad-x);
   border-bottom: 1px solid var(--oi-reader-line);
 }
 
@@ -71,11 +75,14 @@
   font-size: 15px;
   font-weight: 600;
   color: var(--oi-reader-ink);
+  white-space: nowrap;
 }
 
 .oi-lib-count {
   color: var(--oi-reader-muted);
   font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
 }
 
 .oi-lib-spacer {
@@ -150,7 +157,7 @@
 }
 
 .oi-lib-search {
-  padding: 8px 12px;
+  padding: 8px var(--oi-reader-library-pad-x);
 }
 
 .oi-lib-search input {
@@ -186,15 +193,28 @@
 }
 
 .oi-lib-empty a {
-  color: var(--oi-reader-ink-2);
+  color: var(--oi-reader-link);
+  font: 500 12px/1.45 var(--oi-reader-ui-font);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.oi-lib-empty a:hover {
+  color: var(--oi-reader-link-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .oi-lib-row {
-  align-items: stretch;
-  min-height: 60px;
-  padding: 10px 8px 10px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: var(--oi-reader-library-row-h);
+  padding: 8px 8px 8px var(--oi-reader-library-pad-x);
   border-bottom: 1px solid var(--oi-reader-line);
-  flex-wrap: wrap;
 }
 
 .oi-library .oi-lib-row:hover:not(.is-confirm) {
@@ -206,7 +226,8 @@
 }
 
 .oi-library .oi-lib-open {
-  flex: 1;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -233,10 +254,12 @@
 
 .oi-lib-name {
   display: block;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   font-size: 14px;
   font-weight: 500;
+  line-height: 20px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -263,9 +286,26 @@
   font-size: 12px;
 }
 
+.oi-lib-meta {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.oi-lib-confirm,
+.oi-lib-repick,
+.oi-lib-opening,
+.oi-lib-open-error {
+  grid-column: 1 / -1;
+}
+
 .oi-lib-confirm,
 .oi-lib-repick {
-  flex-basis: 100%;
   padding: 8px;
   background: var(--oi-reader-paper);
   border-radius: 8px;
@@ -308,17 +348,36 @@
 .oi-lib-foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
   min-height: 40px;
-  padding: 8px 12px;
+  padding: 8px var(--oi-reader-library-pad-x);
   border-top: 1px solid var(--oi-reader-line);
+  font: 400 12px/1.45 var(--oi-reader-ui-font);
+  color: var(--oi-reader-muted);
+}
+
+.oi-lib-foot-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .oi-lib-storage {
-  color: var(--oi-reader-focus);
-  font-size: 13px;
+  flex: none;
+  font: 500 12px/1.45 var(--oi-reader-ui-font);
+  color: var(--oi-reader-link);
+  text-decoration: none;
   white-space: nowrap;
+  padding: 4px 0;
+  border-radius: 4px;
+}
+
+.oi-lib-storage:hover {
+  color: var(--oi-reader-link-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .oi-library :focus-visible {
@@ -331,15 +390,170 @@
   outline-offset: -2px;
 }
 
+.oi-lib-list,
+.oi-lib-body {
+  width: 100%;
+  min-width: 0;
+}
+
+.oi-lib-nohit {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.oi-lib-empty-title,
+.oi-lib-blocked-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--oi-reader-ink);
+}
+
+.oi-lib-empty-body {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.oi-lib-skeleton {
+  width: 100%;
+}
+
+.oi-lib-skel-row {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: var(--oi-reader-library-row-h);
+  min-height: var(--oi-reader-library-row-h);
+  padding: 0 var(--oi-reader-library-pad-x);
+}
+
+.oi-lib-skel-title,
+.oi-lib-skel-meta {
+  display: block;
+  height: 12px;
+  border-radius: 4px;
+  background: var(--oi-reader-well);
+}
+
+.oi-lib-skel-title { width: 60%; }
+.oi-lib-skel-meta { width: 40%; height: 10px; }
+
+.oi-library.is-compact .oi-chip {
+  width: 8px;
+  min-width: 8px;
+  height: 8px;
+  padding: 0;
+  overflow: hidden;
+  font-size: 0;
+  color: transparent;
+}
+
+.workspace[data-library-open="true"] > #sideSlot {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--oi-reader-surface);
+}
+
+/* Open library is a dock, a three-pane column, or a sheet.
+   The 8px source split is position:absolute and does not occupy its track,
+   so an unplaced slot would auto-place there and clip 「文献库」 down to 「文」. */
+.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-layout="pair"]):not([data-library-band="sheet"]) {
+  grid-template-columns: minmax(0, 1fr) var(--oi-reader-split-w) minmax(var(--oi-reader-library-min), var(--oi-reader-library-col, var(--oi-reader-library-w)));
+  grid-template-areas: "translate splitB library";
+}
+
+.workspace[data-library-open="true"][data-notes-side="start"]:not([data-layout="3"]):not([data-layout="pair"]):not([data-library-band="sheet"]) {
+  grid-template-columns: minmax(var(--oi-reader-library-min), var(--oi-reader-library-col, var(--oi-reader-library-w))) var(--oi-reader-split-w) minmax(0, 1fr);
+  grid-template-areas: "library splitB translate";
+}
+
+.workspace[data-library-open="true"][data-layout="3"] {
+  grid-template-columns: var(--oi-three-source, minmax(var(--oi-reader-library-min), 1fr)) var(--oi-reader-split-w) var(--oi-three-translate, minmax(var(--oi-reader-library-min), 1fr)) var(--oi-reader-split-w) minmax(var(--oi-reader-library-min), var(--oi-notes-pane-w, var(--oi-reader-library-w)));
+  grid-template-areas: "pdf splitA translate splitB notes";
+}
+
+.workspace[data-library-open="true"][data-layout="3"][data-notes-side="start"] {
+  grid-template-columns: minmax(var(--oi-reader-library-min), var(--oi-notes-pane-w, var(--oi-reader-library-w))) var(--oi-reader-split-w) var(--oi-three-translate, minmax(var(--oi-reader-library-min), 1fr)) var(--oi-reader-split-w) var(--oi-three-source, minmax(var(--oi-reader-library-min), 1fr));
+  grid-template-areas: "notes splitB translate splitA pdf";
+}
+
+.workspace[data-library-open="true"][data-layout="pair"]:not([data-notes-side="start"]) {
+  grid-template-columns: minmax(0, 1fr) var(--oi-reader-split-w) minmax(var(--oi-reader-library-min), var(--oi-notes-pane-w, var(--oi-reader-library-w)));
+  grid-template-areas: "translate splitB notes";
+}
+
+.workspace[data-library-open="true"][data-layout="pair"][data-notes-side="start"] {
+  grid-template-columns: minmax(var(--oi-reader-library-min), var(--oi-notes-pane-w, var(--oi-reader-library-w))) var(--oi-reader-split-w) minmax(0, 1fr);
+  grid-template-areas: "notes splitB translate";
+}
+
+.workspace[data-library-open="true"][data-layout="3"] > #sideSlot,
+.workspace[data-library-open="true"][data-layout="pair"] > #sideSlot {
+  grid-area: notes;
+  width: auto;
+  height: auto;
+  min-width: var(--oi-reader-library-min);
+}
+
+.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-layout="pair"]):not([data-library-band="sheet"]) > #sideSlot {
+  grid-area: library;
+  position: relative;
+  width: auto;
+  height: auto;
+  min-width: var(--oi-reader-library-min);
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-layout="pair"]):not([data-library-band="sheet"]) > .pane-pdf,
+.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-layout="pair"]):not([data-library-band="sheet"]) > .split-handle[data-split="source"] {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.workspace[data-library-open="true"]:not([data-layout="3"]):not([data-library-band="sheet"]) > .split-handle[data-split="notes"] {
+  display: block;
+  grid-area: splitB;
+  visibility: visible;
+  pointer-events: auto;
+  width: var(--oi-reader-split-hit);
+  height: auto;
+  position: absolute;
+}
+
+.workspace[data-library-open="true"]:not([data-library-band="sheet"]) > #sideSlot {
+  width: 100%;
+  max-width: 100%;
+}
+
+.workspace[data-library-open="true"][data-library-band="sheet"] > #sideSlot,
+.oi-library.is-open.is-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  grid-area: auto;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  height: auto;
+  background: var(--oi-reader-paper);
+}
+
 @media (max-width: 899px) {
-  .oi-library.is-open.is-sheet {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    width: auto;
-    height: auto;
-    background: var(--oi-reader-paper);
-  }
   .oi-lib-trash,
   .oi-lib-open {
     opacity: 1;

@@ -1784,3 +1784,49 @@ test("an extra close in the middle does not drop the formula's own parenthesis",
   assert.ok(formula);
   assert.match(formula.sourceText, /π′\(y\|x\)/);
 });
+
+test("a two-column body reads each column before the next and keeps bboxes", () => {
+  // Lancet-style page: "Methods / Study design" heads the right column, and
+  // the MPES sentence sits in the middle of the left. The content stream is
+  // row-major and one shared baseline stitches both columns. Reading order
+  // is still the whole left column, then the right column.
+  const bold = { fontName: "MinionPro-Bold", fontRealName: "MinionPro-Bold" };
+  const roman = { fontName: "MinionPro-Regular", fontRealName: "MinionPro-Regular" };
+  const page = textLayerToBlocks({
+    items: [
+      pdfItem("Methods", 340, 710, 70, 13, bold),
+      pdfItem("The opening paragraph of the left column", 48, 710, 220, 10, roman),
+      pdfItem("Study design", 340, 694, 92, 12, bold),
+      pdfItem("continues under that opening sentence.", 48, 696, 210, 10, roman),
+      pdfItem("MPES estimated HIV prevalence among adults", 48, 640, 220, 10, roman),
+      pdfItem("participants from the same study districts.", 340, 638, 220, 10, roman),
+      pdfItem("At the start of the epidemic the team enrolled", 340, 668, 230, 10, roman),
+      pdfItem("in the capital before treatment scale-up.", 48, 626, 210, 10, roman),
+      pdfItem("Enrolment closed once the sample was complete.", 340, 578, 230, 10, roman),
+      pdfItem("Surveillance recorded outcomes for the cohort.", 48, 580, 230, 10, roman)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 3
+  });
+  const prose = page.blocks.filter((block) => block.label === "text" || block.label === "heading");
+  const textOf = (block) => block.sourceText || block.text || "";
+  const blob = prose.map(textOf);
+  const mpesAt = blob.findIndex((text) => /MPES estimated HIV prevalence/.test(text));
+  const methodsAt = blob.findIndex((text) => /\bMethods\b/.test(text));
+  const designAt = blob.findIndex((text) => /Study design/.test(text));
+  assert.ok(mpesAt >= 0 && methodsAt >= 0 && designAt >= 0, blob.join(" | "));
+  assert.ok(mpesAt < methodsAt, blob.join(" | "));
+  assert.ok(methodsAt === designAt || methodsAt === designAt - 1, blob.join(" | "));
+  const following = textOf(prose[designAt + 1] || {});
+  assert.match(following, /At the start of the epidemic/);
+  assert.doesNotMatch(following, /MPES/);
+  assert.equal(blob.some((text) => /MPES estimated/.test(text) && /participants from the same/.test(text)), false);
+  assert.equal(blob.some((text) => /Surveillance recorded/.test(text) && /\bMethods\b/.test(text)), false);
+  for (const block of prose) {
+    assert.ok(Array.isArray(block.bbox) && block.bbox.length >= 4, textOf(block));
+    assert.ok(block.bbox.every((value) => Number.isFinite(value)));
+  }
+  assert.ok(prose[mpesAt].bbox[2] < 0.5, prose[mpesAt].bbox.join(","));
+  assert.ok(prose[designAt].bbox[0] > 0.45, prose[designAt].bbox.join(","));
+  assert.ok(prose[designAt + 1].bbox[0] > 0.45);
+});

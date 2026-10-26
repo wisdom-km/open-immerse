@@ -30,7 +30,6 @@ select {
 }
 .ghost-link:hover { color: var(--oi-accent); }
 .danger { color: var(--oi-danger); font-size: 12px; margin: 8px 0 0; }
-#pdfEntry { margin: 8px 0 4px; }
 .intent-card { margin: 4px 0 0; }
 .btn-primary {
   display: block;
@@ -63,6 +62,15 @@ select {
   cursor: pointer;
 }
 .btn-secondary:hover { background: var(--oi-accent-subtle); border-color: color-mix(in srgb, var(--oi-accent) 35%, var(--oi-line)); }
+#openPdf {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#openPdf:focus-visible {
+  outline: 2px solid var(--oi-focus);
+  outline-offset: 2px;
+}
 
 .more { margin: 10px 0 0; color: var(--oi-text-muted); }
 .more summary { cursor: pointer; font-size: 12px; }

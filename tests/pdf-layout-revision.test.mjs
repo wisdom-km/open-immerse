@@ -54,14 +54,13 @@ GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", impo
 test("a layout revision matches only the current algorithm", async () => {
   const version = await currentLayoutVersion();
   assert.match(version, /^source-v3:[0-9a-f]{16}$/);
-  // source-v3:362458240c2b4e9e → source-v3:f5fe74205191709b. currentLayoutVersion
+  // source-v3:f5fe74205191709b → source-v3:1f7982365fa58317. currentLayoutVersion
   // hashes pdf-text-layer.js, pdf-layout-adapter.js, pdf-blocks.js, and
-  // pdf-mirror.js. #169's 2px edge band stays. This merge also hashes the
-  // inline baseline rebase: an ink-trimmed box uses its own bottom, and a
-  // two-glyph superscript no longer averages the baseline. pdf-blocks.js
-  // carries the fixed reference-size crop. Recompute this pin if any of
-  // those four files change again.
-  assert.equal(version, "source-v3:f5fe74205191709b");
+  // pdf-mirror.js. pdf-text-layer.js now keeps CMEX private-use delimiters
+  // in block text (formula crops and bids stay) and joins a ligature that
+  // was split across two drafts. The leak counter maps those delimiters on
+  // the reading surface. Recompute this pin if any of those four files change.
+  assert.equal(version, "source-v3:1f7982365fa58317");
   assert.equal(await currentLayoutVersion(), version);
   const blocks = [{ id: "a", label: "text", text: "Hi" }];
   assert.equal(storedLayoutCurrent({ blocks }, version), null);

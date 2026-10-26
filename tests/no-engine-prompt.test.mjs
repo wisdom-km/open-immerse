@@ -204,7 +204,7 @@ test("NEP-01/02/08/11 web toast, popup line, and preflight send no translation r
   assert.deepEqual(none, { ok: false, code: "NO_ENGINE" });
   assert.equal(urls.length, 0);
 
-  state.formula = { multimodal: { provider: "kimi", apiKey: "sk-borrow-unit-key", model: "kimi-k2", baseUrl: "" } };
+  state.formula = { multimodal: { provider: "kimi", apiKey: "sk-test-placeholder", model: "kimi-k2", baseUrl: "" } };
   const borrowed = await call("OI_TRANSLATE_PREFLIGHT");
   assert.deepEqual(borrowed, { ok: true, code: "" });
   assert.equal(urls.length, 0);
@@ -212,7 +212,7 @@ test("NEP-01/02/08/11 web toast, popup line, and preflight send no translation r
   state.settings = {
     ...state.settings,
     provider: "openai",
-    providers: { openai: { apiKey: "sk-own-engine", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" } }
+    providers: { openai: { apiKey: "sk-test-placeholder", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" } }
   };
   state.formula = { multimodal: { provider: "kimi", apiKey: "", model: "" } };
   const own = await call("OI_TRANSLATE_PREFLIGHT");
@@ -309,7 +309,7 @@ test("NEP-01/02/08/11 web toast, popup line, and preflight send no translation r
     state.settings = {
       ...state.settings,
       provider: "openai",
-      providers: { openai: { apiKey: "sk-own-engine", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" } }
+      providers: { openai: { apiKey: "sk-test-placeholder", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" } }
     };
     page.window.dispatchEvent(new page.window.Event("oi-please-start"));
     for (let i = 0; i < 80; i += 1) await Promise.resolve();
@@ -351,7 +351,7 @@ test("NEP-03 a configured engine failure stays on that engine", async () => {
               targetLang: "zh-CN",
               batchSize: 8,
               providers: {
-                openai: { apiKey: "sk-own-engine", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
+                openai: { apiKey: "sk-test-placeholder", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
                 mymemory: { email: "" }
               }
             }
