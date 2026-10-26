@@ -1091,7 +1091,7 @@ test("打开同一行不会重入，下载超时和打开失败都留在这一�
   urlButton.focus();
   urlButton.click();
   await flush();
-  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /正在重新下载…/);
+  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /正在下载 PDF…/);
   assert.equal(document.activeElement?.isConnected, true);
   assert.equal(document.activeElement?.classList.contains("oi-lib-open"), true);
   assert.equal(document.activeElement?.closest("[data-lib-row]")?.getAttribute("data-lib-row"), "url");
@@ -1101,7 +1101,7 @@ test("打开同一行不会重入，下载超时和打开失败都留在这一�
   timers.advance(40);
   await flush();
   assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /没能打开 PDF，稍后再试一次。/);
-  assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("正在重新下载"), false);
+  assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("正在下载 PDF"), false);
 
   let failed = 0;
   const broken = mountLibraryUi({
@@ -1170,7 +1170,7 @@ test("响应头到了但正文一直不来时，超时会停掉整次下载", as
   await flush();
   ui.root.querySelector('[data-lib-row="url"] .oi-lib-open').click();
   await flush();
-  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /正在重新下载…/);
+  assert.match(ui.root.querySelector('[data-lib-row="url"]')?.textContent || "", /正在下载 PDF…/);
   // A later row wins. The in-flight download is abandoned and still aborted.
   ui.root.querySelector('[data-lib-row="local"] .oi-lib-open').click();
   await flush();
@@ -1182,7 +1182,7 @@ test("响应头到了但正文一直不来时，超时会停掉整次下载", as
   ui.open();
   await flush();
   assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("没能打开 PDF"), false);
-  assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("正在重新下载"), false);
+  assert.equal((ui.root.querySelector('[data-lib-row="url"]')?.textContent || "").includes("正在下载 PDF"), false);
 });
 
 test("关闭文献库后面焦点回到书架按钮", async () => {

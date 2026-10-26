@@ -367,7 +367,7 @@ export function mountDrawerUi(api = {}) {
       }
       button.append(h(doc, "span", { class: "oi-recent-title", text: title }));
       const meta = flag?.kind === "downloading"
-        ? "正在重新下载…"
+        ? LIBRARY_COPY.downloading
         : flag?.kind === "failed"
           ? "没能打开 PDF，稍后再试一次。"
           : recentMeta(row, api.now?.() || Date.now());

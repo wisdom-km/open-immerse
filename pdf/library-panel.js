@@ -17,9 +17,8 @@ import {
   libraryNoHitCopy,
   libraryNotesDeleteCopy,
   libraryPanelPhase,
-  libraryPausedCopy,
-  libraryProgressCopy,
   libraryRelativeTime,
+  libraryRowStatus,
   libraryRowTitle,
   librarySearchHit,
   librarySizeCopy,
@@ -133,6 +132,7 @@ export function mountLibraryUi(api = {}) {
   let skeletonTimer = 0;
   let downloadingHash = "";
   let openError = "";
+  let liveProgress = null;
 
   function now() {
     return typeof api.now === "function" ? api.now() : Date.now();
@@ -804,8 +804,17 @@ export function mountLibraryUi(api = {}) {
         });
         const label = deleteLabel(title.title);
         const paused = Boolean(autoPaused[row.docHash]);
+        const live = liveProgress && liveProgress.hash === row.docHash ? liveProgress : null;
+        const statusLine = libraryRowStatus({
+          translated: row.translated,
+          total: row.pageCount,
+          incomplete: row.incomplete,
+          paused,
+          live,
+          downloading: downloadingHash === row.docHash
+        });
         const metaText = [
-          paused ? libraryPausedCopy(row.translated, row.pageCount) : libraryProgressCopy(row.translated, row.pageCount, { incomplete: row.incomplete }),
+          statusLine.progress,
           libraryRelativeTime(row.lastOpenedAt, now()),
           librarySizeCopy(row.bytes)
         ].filter(Boolean).join(" · ");
@@ -845,7 +854,9 @@ export function mountLibraryUi(api = {}) {
         item.append(main, trash);
         if (downloadingHash === row.docHash || rowBusy === row.docHash) {
           item.setAttribute("aria-busy", "true");
-          item.append(h(doc, "p", { class: "oi-lib-muted oi-lib-opening", text: LIBRARY_COPY.downloading }));
+        }
+        if (statusLine.download) {
+          item.append(h(doc, "p", { class: "oi-lib-muted oi-lib-opening", text: statusLine.download }));
         }
         if (openError === row.docHash) {
           item.append(h(doc, "p", { class: "oi-lib-warn oi-lib-open-error", text: LIBRARY_COPY.openFailed }));
@@ -1128,6 +1139,22 @@ export function mountLibraryUi(api = {}) {
     setReadingHash(hash) {
       readingHash = String(hash || "");
       if (open) render();
+    },
+    setLiveProgress(progress) {
+      const phase = progress?.phase === "retranslate" || progress?.phase === "translating" ? progress.phase : "";
+      const next = phase && progress?.hash
+        ? {
+          hash: String(progress.hash),
+          phase,
+          n: Math.max(0, Math.floor(Number(progress.n) || 0)),
+          t: Math.max(0, Math.floor(Number(progress.t) || 0))
+        }
+        : null;
+      const prev = liveProgress;
+      liveProgress = next;
+      if (!open) return;
+      if (prev?.hash === next?.hash && prev?.phase === next?.phase && prev?.n === next?.n && prev?.t === next?.t) return;
+      render();
     },
     syncWidth() {
       if (!open) return;

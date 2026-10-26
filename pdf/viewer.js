@@ -71,6 +71,10 @@ import {
   layoutNullReason,
   retranslateStatusCopy,
   retranslateButtonLabel,
+  retranslateSplitChrome,
+  documentRetranslateEntry,
+  pageRetranslateEntry,
+  retranslateMenuBox,
   failureChipModel,
   runningPageHint,
   translateExceptionCode,
@@ -508,6 +512,8 @@ const pageRetryPending = new Set();
 const pageRetryStill = new Set();
 let showRoundFailures = false;
 let retranslateScope = "";
+let queuedRushPage = 0;
+let rushArmed = 0;
 const layoutMissReason = new Map();
 let docPhase = "idle";
 let pdfTargetLang = "zh-CN";
@@ -7310,7 +7316,10 @@ function bindMoreMenu() {
       closeSourceModeMenu(false);
     }
   });
-  window.addEventListener("resize", applyToolbarBand);
+  window.addEventListener("resize", () => {
+    applyToolbarBand();
+    if (retranslateMenuOpen()) placeRetranslateMenu();
+  });
   applyToolbarBand();
   syncSwapCheck();
 }
@@ -9184,11 +9193,33 @@ function openRetranslateMenu() {
   closeTranslateMenu(false);
   closeSourceModeMenu(false);
   menu.hidden = false;
+  menu.classList.remove("is-align-end");
   button.setAttribute("aria-expanded", "true");
   retranslateMenuOpener = button;
+  placeRetranslateMenu();
   const items = retranslateMenuItems();
   const first = items.find((item) => !item.disabled) || items[0];
   first?.focus();
+}
+
+function placeRetranslateMenu() {
+  const menu = $("retranslateMenu");
+  const split = $("retranslateSplit");
+  if (!menu || !split || menu.hidden) return;
+  const splitBox = split.getBoundingClientRect();
+  const menuBox = menu.getBoundingClientRect();
+  const viewW = window.innerWidth || document.documentElement?.clientWidth || 0;
+  const box = retranslateMenuBox({
+    buttonLeft: splitBox.left,
+    buttonRight: splitBox.right,
+    buttonBottom: splitBox.bottom,
+    buttonWidth: splitBox.width,
+    menuWidth: Math.max(menuBox.width, splitBox.width),
+    viewportWidth: viewW,
+    gap: 4
+  });
+  menu.classList.toggle("is-align-end", box.align === "end");
+  if (box.maxWidth > 0) split.style.setProperty("--retranslate-menu-max", `${Math.ceil(box.maxWidth)}px`);
 }
 
 function closeRetranslateMenu(focusButton) {
@@ -9812,6 +9843,25 @@ function refreshDocStatus() {
     const pct = t > 0 ? Math.max(0, Math.min(100, Math.round((n / t) * 100))) : 0;
     ring.setAttribute("stroke-dasharray", `${pct} 100`);
   }
+  syncLibraryLiveProgress();
+}
+
+function syncLibraryLiveProgress() {
+  if (typeof libraryUi?.setLiveProgress !== "function") return;
+  const hash = currentLibraryHash();
+  const busy = pdfTranslateBusy(session) || docPhase === "running" || docPhase === "layout";
+  if (!hash || !busy) {
+    libraryUi.setLiveProgress(null);
+    return;
+  }
+  const { n, t } = pageTotals();
+  const retranslate = retranslateScope === "document" || retranslateScope === "page";
+  libraryUi.setLiveProgress({
+    hash,
+    phase: retranslate ? "retranslate" : "translating",
+    n,
+    t
+  });
 }
 
 function finishDocPhase({ aborted = false, error = false } = {}) {
@@ -10865,6 +10915,8 @@ function stopTranslateWork(options) {
   cancelQueuedVendorLayouts();
   translatingPage = 0;
   forceRetranslatePending = false;
+  queuedRushPage = 0;
+  rushArmed = 0;
   if (!silent) noteUserAction("stop");
   for (const [page, row] of pageStates) {
     if (row.state === "running" || row.state === "layout") {
@@ -12434,13 +12486,23 @@ async function translateWholeDocument(options = {}) {
     bypassCache: options?.forceAll === true,
     onAbortRequest: translateAbortRequest,
     getPageOriginals: async (page) => {
+      const rush = page === rushArmed && rushArmed >= 1;
+      if (rush) rushArmed = 0;
       const units = await originalsForPage(page, gen, translatingDoc, work, batchSize, {
-        force: options?.forceAll === true
+        force: options?.forceAll === true || rush
       });
+      // A cut-in retranslates the page even when those units were already sent.
+      if (rush) return units;
       // One open, one request per submitted text. A later layout pass skips a
       // block already sent with this source and display, and still sends a
       // display that changed when formula slots moved.
       return claimTranslationUnits(units, sentSource);
+    },
+    pullRushPage() {
+      const page = Math.floor(Number(queuedRushPage) || 0);
+      queuedRushPage = 0;
+      rushArmed = page >= 1 ? page : 0;
+      return rushArmed;
     },
     pageSkipReason: (page) => {
       if (layoutMissReason.has(page)) return "unavailable";
@@ -12639,6 +12701,7 @@ async function translateWholeDocument(options = {}) {
   // It gates a second job, and must not stop the job that is already adopting.
   const prepareLibraryPage = libraryPass ? async (page) => {
     if (work.aborted || !isCurrentWork(work, gen, translatingDoc)) return "stop";
+    if (page === rushArmed && rushArmed >= 1 && options?.forceAll !== true) return "retry";
     // Snapshot before adopt. A page saved this session has no failed flag.
     // Adopting it turns a failed body batch into a fresh request and drops bypassCache.
     let priorCache = pageCache.get(translatingDoc, page);
@@ -13044,9 +13107,17 @@ async function retryFailedPage(page) {
 }
 
 async function forceRetranslateDocument() {
-  if (!pdfDoc || pdfTranslateBusy(session) || forceReadoutHold) return;
+  if (!pdfDoc || forceReadoutHold) return;
+  const plan = documentRetranslateEntry({
+    busy: pdfTranslateBusy(session),
+    retranslating: retranslateScope === "page" || retranslateScope === "document"
+  });
+  if (plan.action === "ignore" || plan.confirm) return;
+  if (plan.action === "stop-then-start") stopTranslateWork({ silent: true });
+  queuedRushPage = 0;
+  rushArmed = 0;
   retranslateScope = "document";
-  noteUserAction("retranslate-doc", { page: capsulePage() });
+  noteUserAction("retranslate-doc", { page: 1 });
   try {
     await startTranslate({ forceAll: true, startPage: 1, mode: "document" });
   } finally {
@@ -13056,8 +13127,20 @@ async function forceRetranslateDocument() {
 }
 
 async function forceRetranslateCurrentPage() {
-  if (!pdfDoc || pdfTranslateBusy(session) || forceReadoutHold) {
-    if (pdfDoc) forceRetranslatePending = true;
+  if (!pdfDoc || forceReadoutHold) {
+    if (pdfDoc && forceReadoutHold) forceRetranslatePending = true;
+    return;
+  }
+  const plan = pageRetranslateEntry({
+    busy: pdfTranslateBusy(session),
+    retranslating: retranslateScope === "page" || retranslateScope === "document",
+    page: capsulePage(),
+    canRetranslate: retranslatePageOpen()
+  });
+  if (plan.action === "ignore") return;
+  if (plan.action === "rush") {
+    queuedRushPage = plan.page;
+    noteUserAction("retranslate-page", { page: plan.page });
     return;
   }
   retranslateScope = "page";
@@ -13937,6 +14020,8 @@ async function adoptDoc(doc, title, openGen) {
   layoutClosed = false;
   abortTranslateSession(session);
   abortBackgroundFills();
+  queuedRushPage = 0;
+  rushArmed = 0;
   // Drop the layout signal so destroy does not wait on an in-flight POST.
   // The page-lifetime abort stays with resetMmPages, after the first await.
   cancelQueuedVendorLayouts();
@@ -15022,22 +15107,30 @@ function updateTranslateControls() {
   }
   const caret = $("retranslateMenuButton");
   const stop = $("retranslateStop");
-  const docRetranslate = busy && retranslateScope === "document";
+  const chrome = retranslateSplitChrome({
+    hasDoc: Boolean(pdfDoc),
+    busy,
+    scope: retranslateScope,
+    canRetranslatePage: retranslatePageOpen()
+  });
   if (caret) {
-    caret.hidden = docRetranslate;
-    caret.disabled = !pdfDoc || busy || retranslateScope === "page";
+    caret.hidden = chrome.caretHidden;
+    caret.disabled = chrome.caretDisabled;
   }
-  if (stop) stop.hidden = !docRetranslate;
+  if (stop) stop.hidden = chrome.stopRetranslateHidden;
   const pageItem = $("retranslatePageItem");
-  if (pageItem) pageItem.disabled = ui.retranslateDisabled || busy;
+  if (pageItem) pageItem.disabled = chrome.pageItemDisabled;
   const docItem = $("retranslateDocument");
-  if (docItem) docItem.disabled = ui.retranslateDocDisabled || docRetranslate;
+  if (docItem) docItem.disabled = chrome.docItemDisabled;
+  const docNote = $("retranslateDocumentNote");
+  if (docNote) docNote.textContent = chrome.docNote;
   const menuRetranslate = $("translateMenuRetranslate");
-  if (menuRetranslate) menuRetranslate.disabled = ui.retranslateDisabled;
+  if (menuRetranslate) menuRetranslate.disabled = chrome.pageItemDisabled;
   const menuDoc = $("translateMenuRetranslateDoc");
-  if (menuDoc) menuDoc.disabled = ui.retranslateDocDisabled;
-  $("stopTranslate").hidden = ui.stopHidden;
+  if (menuDoc) menuDoc.disabled = chrome.docItemDisabled;
+  $("stopTranslate").hidden = ui.stopHidden || chrome.primaryStopHidden;
   $("stopTranslate").disabled = ui.stopDisabled;
+  syncLibraryLiveProgress();
   if (!pdfTranslateBusy(session) && backgroundSessions.active) {
     $("stopTranslate").hidden = false;
     $("stopTranslate").disabled = false;
