@@ -1,9 +1,11 @@
 import {
+  NO_ENGINE,
   PROVIDER_LIST,
   PROVIDER_PROBE_TEXT,
   formatConnectionStatus,
   getProvider,
   missingRequiredField,
+  providers,
   redactProviderText
 } from "../lib/providers.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
@@ -15,6 +17,7 @@ import {
   readPdfDefaultNoticeSeen,
   writePdfDefaultNoticeSeen
 } from "../lib/pdf-default-notice.js";
+import { NO_ENGINE_COPY, flashFocus } from "../lib/no-engine-prompt.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
@@ -67,6 +70,7 @@ import { createNotesPrefsSession } from "../lib/reader-notes-local.js";
 import { NOTES_PANEL_WIDTH_DEFAULT, NOTES_PANE_WIDTH_DEFAULT } from "../lib/notes-prefs.js";
 import { downloadBlob } from "../lib/export.js";
 import { diagLog } from "../lib/diag-log.js";
+import { describeTranslateBorrow } from "../lib/translate-borrow.js";
 import { bindDiagPanel } from "./diag-panel.js";
 import { sharedLibraryStore } from "../lib/library-session.js";
 import { mountDataPanel } from "./data-panel.js";
@@ -195,7 +199,10 @@ if (!globalThis.OI_OPTIONS_MANUAL && globalThis.document?.body?.classList?.conta
 }
 
 async function init() {
-  fillSelect(el("provider"), PROVIDER_LIST.map((p) => ({ value: p.id, label: p.name })));
+  fillSelect(el("provider"), [
+    { value: "", label: NO_ENGINE_COPY.providerPlaceholder, disabled: true },
+    ...PROVIDER_LIST.map((p) => ({ value: p.id, label: p.name }))
+  ]);
   fillSelect(el("sourceLang"), LANGUAGE_OPTIONS.map((l) => ({ value: l.code, label: l.label })));
   fillSelect(
     el("targetLang"),
@@ -250,7 +257,7 @@ async function init() {
     const banner = el("pdfOnNotice");
     if (banner) banner.hidden = true;
   });
-  bindFormulaSettings();
+  const formulaReady = bindFormulaSettings();
   bindNotes();
   bindSecretsList();
   el("provider").addEventListener("change", () => {
@@ -260,6 +267,7 @@ async function init() {
     syncQualityLocks();
     invalidateTest("clear");
     attentionProvider = el("provider").value;
+    void syncAttentionBadge();
     void (async () => {
       if (left && left !== attentionProvider) await clearProviderAttention(chrome.storage?.local, left);
       await syncAttentionBadge();
@@ -284,14 +292,15 @@ async function init() {
   if (manifest?.version && el("aboutVersion")) el("aboutVersion").textContent = manifest.version;
   bindSecretSync();
   await pinKeySync();
-  await syncAttentionBadge();
+  await formulaReady;
+  void syncAttentionBadge();
   syncPdfAvailability();
 }
 
 function applyStoredForm() {
   const settings = cachedSettings || {};
   const features = resolveFeatures(settings);
-  if (el("provider")) el("provider").value = settings.provider || "mymemory";
+  if (el("provider")) el("provider").value = displayedProvider(settings);
   if (el("sourceLang")) el("sourceLang").value = settings.sourceLang || "auto";
   if (el("targetLang")) el("targetLang").value = settings.targetLang || "zh-CN";
   if (el("batchSize")) el("batchSize").value = settings.batchSize || 8;
@@ -749,8 +758,14 @@ function paintQualityNote(note, llm, provider, ready) {
   note.append(link);
 }
 
+function displayedProvider(settings) {
+  const id = String(settings?.provider || "").trim();
+  return providers[id] ? id : "";
+}
+
 function syncQualityLocks() {
-  const provider = getProvider(el("provider")?.value);
+  const id = String(el("provider")?.value || "");
+  const provider = providers[id] ? getProvider(id) : null;
   const llm = provider?.kind === "llm";
   for (const id of ["twoStepPolish", "deepThink"]) {
     const input = el(id);
@@ -827,6 +842,17 @@ function attentionArea() {
   return globalThis.chrome?.storage?.local;
 }
 
+function translateFormSettings() {
+  return {
+    provider: el("provider")?.value || cachedSettings.provider || "",
+    providers: cachedSettings.providers || {}
+  };
+}
+
+function translateBorrowing() {
+  return describeTranslateBorrow(translateFormSettings(), formulaCommitted).mode === "borrow";
+}
+
 async function syncAttentionBadge(options = {}) {
   const badge = document.querySelector('[data-badge="translate"]');
   if (!badge) return;
@@ -840,6 +866,10 @@ async function syncAttentionBadge(options = {}) {
   }
   if (flagged) {
     badge.hidden = false;
+    return;
+  }
+  if (translateBorrowing()) {
+    badge.hidden = true;
     return;
   }
   const status = el("testConnectionStatus");
@@ -922,6 +952,11 @@ async function testConnection() {
   if (!btn || btn.disabled) return;
   harvestVisibleProvider();
   const providerId = el("provider").value;
+  if (!providers[providerId]) {
+    setTestStatus(NO_ENGINE, "err");
+    diagLog("provider.probe", { ctx: "options", provider: providerId || "", ok: false, code: NO_ENGINE });
+    return;
+  }
   const providerConfig = Object.assign({}, (cachedSettings.providers || {})[providerId] || {});
   const targetLang = el("targetLang").value || "zh-CN";
   const missing = missingRequiredField(getProvider(providerId), providerConfig);
@@ -972,7 +1007,9 @@ function renderProviderFields() {
   const root = el("providerFields");
   if (!root) return;
   root.textContent = "";
-  const provider = getProvider(el("provider").value);
+  const providerId = el("provider").value;
+  if (!providers[providerId]) return;
+  const provider = getProvider(providerId);
   const cfg = (cachedSettings.providers || {})[provider.id] || {};
   const card = document.createElement("div");
   card.className = "provider-card";
@@ -1036,6 +1073,7 @@ function renderProviderFields() {
           const ticket = claimProviderKey(provider.id);
           void queueProviderKey(provider.id, result.value, false, beforeKey, ticket);
         }
+        void syncAttentionBadge();
         void persist(input);
       });
       bound.paint();
@@ -1066,6 +1104,7 @@ function renderProviderFields() {
       const event = field.type === "select" ? "change" : "blur";
       input.addEventListener(event, () => {
         harvestVisibleProvider();
+        void syncAttentionBadge();
         void persist(input);
       });
     }
@@ -1444,6 +1483,7 @@ function clearProviderKey(id) {
   cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
   const ticket = claimProviderKey(id);
   renderProviderFields();
+  void syncAttentionBadge();
   void queueProviderKey(id, "", true, previous, ticket);
 }
 
@@ -1473,7 +1513,7 @@ function restoreControl(control) {
     return;
   }
   const values = {
-    provider: stored.provider || "mymemory",
+    provider: displayedProvider(stored),
     sourceLang: stored.sourceLang || "auto",
     targetLang: stored.targetLang || "zh-CN",
     batchSize: stored.batchSize || 8,
@@ -1590,6 +1630,7 @@ function fillSelect(select, items) {
     const option = document.createElement("option");
     option.value = item.value;
     option.textContent = item.label;
+    if (item.disabled) option.disabled = true;
     select.appendChild(option);
   });
 }
@@ -2145,14 +2186,16 @@ function bindFormulaSettings() {
     }
     adoptFormulaRecord(raw);
   });
-  readFormulaSettings(storage?.local).then((stored) => {
+  return readFormulaSettings(storage?.local).then((stored) => {
     formulaSettings = stored;
     formulaSaved = stored;
     formulaCommitted = stored;
     rememberCommittedUrl();
     syncKeyOwner(stored);
     paintFormulaSettings();
-  }).catch(() => paintFormulaSettings());
+  }).catch(() => {
+    paintFormulaSettings();
+  });
 }
 
 function bindNotes() {
@@ -2377,6 +2420,7 @@ function showPage(id, focus) {
   if (next === "pdf") void presentPdfDefaultNotice();
   else pdfNoticeKept = false;
   if (next === "mm") focusMm = true;
+  if (focus === "provider" && next === "translate") flashFocus(el("provider"));
   if (focus && next === "data") {
     const group = document.querySelector(`[data-focus-group="${focus}"]`) || document.querySelector(`[data-focus="${focus}"]`);
     if (group) {

@@ -2,7 +2,7 @@
 
 import { unpackSource } from "../lib/arxiv-src-unpack.js";
 import { currentNet } from "../lib/net/fetch.js";
-import { diagLog, handleDiagMessage, installServiceWorkerDiag, noteTranslateFailure } from "../lib/diag-log.js";
+import { diagLog, handleDiagMessage, installServiceWorkerDiag, noteTranslateBorrow, noteTranslateFailure } from "../lib/diag-log.js";
 
 export const ARXIV_DB = "oi-arxiv-src";
 export const MIN_GAP_MS = 3000;
@@ -475,6 +475,16 @@ export function handleArxivSourceMessage(message = {}, client = sharedArxivSourc
     try {
       installServiceWorkerDiag();
       noteTranslateFailure(message.failure, message.fields || {});
+    } catch {
+      /* diag is best-effort */
+    }
+    return { ok: true };
+  }
+  if (message.action === "diag-borrow") {
+    if (message.sender) return { ok: false };
+    try {
+      installServiceWorkerDiag();
+      noteTranslateBorrow(message.fields || {});
     } catch {
       /* diag is best-effort */
     }

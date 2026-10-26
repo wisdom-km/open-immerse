@@ -21,6 +21,7 @@ const REDIRECTS = Object.freeze({
 });
 
 const FOCUS = new Set(["usage", "import", "export", "diag"]);
+const TRANSLATE_FOCUS = "provider";
 
 export function parseSettingsHash(hash) {
   const raw = String(hash || "").replace(/^#/, "");
@@ -39,7 +40,9 @@ export function parseSettingsHash(hash) {
     redirected = true;
   }
   const focusRaw = params.get("focus") || "";
-  const focus = FOCUS.has(focusRaw) ? focusRaw : "";
+  const focus = id === "translate" && focusRaw === TRANSLATE_FOCUS
+    ? TRANSLATE_FOCUS
+    : (FOCUS.has(focusRaw) ? focusRaw : "");
   if (query) redirected = true;
   return { id, focus, redirected, replace: `#${id}` };
 }

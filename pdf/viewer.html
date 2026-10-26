@@ -227,6 +227,14 @@
     </section>
     <div class="split-handle" data-split="source" role="separator" aria-orientation="vertical" aria-controls="pdfPane" aria-valuemin="22.3" aria-valuemax="56.8" aria-valuenow="50" aria-valuetext="原文栏 50%" tabindex="0" aria-label="调整分栏"><span class="split-bubble" aria-hidden="true">原文栏 50%</span></div>
     <aside class="pane-translate" aria-label="译文栏">
+      <div id="noEngineBanner" class="oi-store-banner oi-no-engine" hidden>
+        <h3>还没有可用的翻译引擎</h3>
+        <p>去设置里选一个引擎并填写 API Key，就能开始翻译。</p>
+        <div class="oi-no-engine-actions">
+          <button type="button" id="noEngineSetup" class="btn-primary">去设置</button>
+          <button type="button" id="noEngineDismiss" class="btn-secondary">关闭</button>
+        </div>
+      </div>
       <div id="reader" class="oi-reader" data-reader-theme="warm">
         <div id="translateScroll" class="pane-translate-scroll oi-sb">
           <div id="capsuleBar" class="rf-capsule-bar">

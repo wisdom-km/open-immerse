@@ -1,12 +1,17 @@
-import { getProvider, isProviderConfigured, resolveOutboundProvider } from "../lib/providers.js";
+import { getProvider, providers } from "../lib/providers.js";
+import { readFormulaSettings } from "../lib/formula-settings.js";
+import { describeTranslateBorrow } from "../lib/translate-borrow.js";
 import { LANGUAGE_OPTIONS } from "../lib/languages.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
 import { featureOn } from "../lib/features.js";
 import { openPopupPdfEntry, readPdfContentType } from "../lib/pdf-viewer.js";
+import { NO_ENGINE_COPY } from "../lib/no-engine-prompt.js";
+import { POPUP_PAGE_WAIT_MS, withTimeout } from "./popup-ready.js";
 
 const $ = (id) => document.getElementById(id);
 const PRIMARY_IDLE = "翻译此页";
 const PRIMARY_STOP = "停止";
+let engineMissing = false;
 
 init();
 
@@ -21,7 +26,10 @@ async function init() {
     ev.preventDefault();
     openOptions();
   });
-  $("goSetup").addEventListener("click", openOptions);
+  $("engineSetup").addEventListener("click", (ev) => {
+    ev.preventDefault();
+    chrome.runtime.sendMessage({ type: "OI_OPEN_TRANSLATE_SETTINGS" });
+  });
   $("openOptions").addEventListener("click", openOptions);
   $("openLearning").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "learning" }));
   $("openDocs").addEventListener("click", () => chrome.runtime.sendMessage({ type: "OI_OPEN_PAGE", page: "documents" }));
@@ -29,28 +37,60 @@ async function init() {
   fillSelect($("sourceLang"), LANGUAGE_OPTIONS.map((l) => ({ value: l.code, label: l.label })));
   fillSelect($("targetLang"), LANGUAGE_OPTIONS.filter((l) => l.code !== "auto").map((l) => ({ value: l.code, label: l.label })));
 
-  const { settings } = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
-  $("sourceLang").value = settings.sourceLang;
-  $("targetLang").value = settings.targetLang;
-  $("translateScope").value = settings.translateScope || "article";
-  $("translateLimit").value = isTitleLeadLimit(settings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
-  renderEngine(settings);
+  let tab = null;
+  let settings = {};
+  let settingsLoaded = false;
+  let pdfProbe = Promise.resolve(null);
+  let probeStarted = false;
+  let tabsSettled = false;
+  let engineBound = false;
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const pdfOn = featureOn(settings, "pdf");
-  const pdfProbe = pdfOn
-    ? readPdfContentType(tab?.id, (details) => chrome.scripting.executeScript(details))
-    : Promise.resolve(null);
-  await syncPrimary(tab);
-
-  const host = hostOf(tab?.url);
-  const rule = (settings.siteRules || []).find((r) => host === r.host || host.endsWith("." + r.host));
-  $("autoSite").checked = Boolean(rule?.auto);
+  const settingsPromise = Promise.resolve()
+    .then(() => chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" }))
+    .catch(() => null);
+  const tabsPromise = Promise.resolve()
+    .then(() => chrome.tabs.query({ active: true, currentWindow: true }))
+    .catch(() => []);
+  const ready = await withTimeout(Promise.all([settingsPromise, tabsPromise]), POPUP_PAGE_WAIT_MS);
+  if (ready) {
+    tabsSettled = true;
+    if (ready[0]?.settings) {
+      settings = ready[0].settings;
+      settingsLoaded = true;
+    }
+    if (ready[1]?.[0]) tab = ready[1][0];
+    if (settingsLoaded) applyFields();
+  } else {
+    void settingsPromise.then((res) => {
+      if (!res?.settings || settingsLoaded) return;
+      settings = res.settings;
+      settingsLoaded = true;
+      applyFields();
+      void paintEngine();
+      armTabWatch();
+    });
+  }
+  void tabsPromise.then((tabs) => {
+    tabsSettled = true;
+    const next = Array.isArray(tabs) ? tabs[0] : null;
+    if (next) tab = next;
+    if (settingsLoaded) mountPdf();
+    armTabWatch();
+  });
 
   $("translatePage").addEventListener("click", async () => {
     if ($("translatePage").dataset.busy === "1") {
       if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: "OI_STOP" }).catch(() => {});
       setPrimaryBusy(false);
+      return;
+    }
+    if (engineMissing) {
+      const note = $("engineNote");
+      if (note) {
+        note.hidden = false;
+        note.textContent = NO_ENGINE_COPY.body;
+      }
+      $("engineSetup")?.focus();
       return;
     }
     await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { enabled: true } });
@@ -65,6 +105,7 @@ async function init() {
   });
 
   $("autoSite").addEventListener("change", async () => {
+    const host = hostOf(tab?.url);
     if (!host) return;
     await chrome.runtime.sendMessage({ type: "OI_TOGGLE_SITE_RULE", host, rule: { auto: $("autoSite").checked } });
   });
@@ -83,8 +124,8 @@ async function init() {
     );
   }
 
-  $("pdfEntry").hidden = !pdfOn;
   $("openPdf").addEventListener("click", () => {
+    if (!settingsLoaded) return;
     if (!featureOn(settings, "pdf")) return;
     openPopupPdfEntry({
       url: tab?.url,
@@ -96,7 +137,47 @@ async function init() {
     });
   });
 
-  if (tab?.id) setInterval(() => syncPrimary(tab), 400);
+  armTabWatch();
+  void paintEngine();
+
+  function applyFields() {
+    $("sourceLang").value = settings.sourceLang;
+    $("targetLang").value = settings.targetLang;
+    $("translateScope").value = settings.translateScope || "article";
+    $("translateLimit").value = isTitleLeadLimit(settings.translateLimit) ? TRANSLATE_LIMIT_TITLE_LEAD : "all";
+    mountPdf();
+  }
+
+  function mountPdf() {
+    if (!settingsLoaded) return;
+    const pdfOn = featureOn(settings, "pdf");
+    $("pdfEntry").hidden = !pdfOn;
+    syncSiteRule();
+    if (!pdfOn || probeStarted || (!tab?.id && !tabsSettled)) return;
+    probeStarted = true;
+    pdfProbe = readPdfContentType(tab?.id, (details) => chrome.scripting.executeScript(details));
+  }
+
+  function syncSiteRule() {
+    const host = hostOf(tab?.url);
+    const rule = (settings.siteRules || []).find((r) => host === r.host || host.endsWith("." + r.host));
+    $("autoSite").checked = Boolean(rule?.auto);
+  }
+
+  async function paintEngine() {
+    if (!settingsLoaded || engineBound) return;
+    engineBound = true;
+    const formula = await readFormulaSettings(chrome.storage?.local);
+    renderEngine(settings, formula);
+    bindEngineRefresh();
+  }
+
+  function armTabWatch() {
+    if (armTabWatch.started || !tab?.id) return;
+    armTabWatch.started = true;
+    setInterval(() => syncPrimary(tab), 400);
+    void syncPrimary(tab);
+  }
 }
 
 function setPrimaryBusy(busy) {
@@ -111,39 +192,90 @@ async function syncPrimary(tab) {
     setPrimaryBusy(false);
     return;
   }
-  const ping = await chrome.tabs.sendMessage(tab.id, { type: "OI_PING" }).catch(() => null);
+  const ping = await withTimeout(
+    Promise.resolve()
+      .then(() => chrome.tabs.sendMessage(tab.id, { type: "OI_PING" }))
+      .catch(() => null),
+    POPUP_PAGE_WAIT_MS
+  );
+  if (!ping) return;
   setPrimaryBusy(Boolean(ping?.inflight));
+  const restore = $("restorePage");
+  if (!restore) return;
+  restore.disabled = !(ping.running || ping.hasTranslations || ping.inflight);
 }
 
-function renderEngine(settings) {
-  const outbound = resolveOutboundProvider(settings);
-  const provider = getProvider(outbound.providerId);
-  const shortName = {
-    openai: "OpenAI",
-    openrouter: "OpenRouter",
-    deepl: "DeepL",
-    microsoft: "Microsoft",
-    google: "Google",
-    mymemory: "MyMemory",
-    grok: "Grok",
-    kimi: "Kimi",
-    minimax: "MiniMax",
-    gemini: "Gemini",
-    claude: "Claude",
-    azure: "Azure",
-    custom: "Custom"
-  }[provider.id] || provider.name.split("/")[0].trim();
+function bindEngineRefresh() {
+  let ticket = 0;
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    const syncSettings = area === "sync" && Object.prototype.hasOwnProperty.call(changes, "settings");
+    const localBorrow = area === "local" && (
+      Object.prototype.hasOwnProperty.call(changes, "formulaSettings")
+      || Object.prototype.hasOwnProperty.call(changes, "oiSecrets")
+    );
+    if (!syncSettings && !localBorrow) return;
+    const current = ++ticket;
+    void refreshEngine(() => current === ticket);
+  });
+}
+
+async function refreshEngine(still = () => true) {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "OI_GET_SETTINGS" });
+    if (!still()) return;
+    const formula = await readFormulaSettings(chrome.storage?.local);
+    if (!still()) return;
+    renderEngine(res?.settings || {}, formula);
+  } catch {
+    /* keep the last engine line */
+  }
+}
+
+function renderEngine(settings, formula) {
+  const described = describeTranslateBorrow(settings, formula);
+  const borrowed = described.mode === "borrow";
+  const outbound = borrowed
+    ? { providerId: described.vendorId, fallback: false, borrowed: true, notice: "" }
+    : described.outbound;
   const link = $("engineLink");
+  const unset = $("engineUnset");
+  const note = $("engineNote");
+  if (!borrowed && outbound?.code === "NO_ENGINE") {
+    engineMissing = true;
+    if (link) link.hidden = true;
+    if (unset) unset.hidden = false;
+    if (note) note.hidden = true;
+    return;
+  }
+  engineMissing = false;
+  if (link) link.hidden = false;
+  if (unset) unset.hidden = true;
+  if (note) note.hidden = true;
+  const known = providers[outbound.providerId];
+  const provider = known
+    ? getProvider(outbound.providerId)
+    : { id: outbound.providerId, name: described.vendorLabel || outbound.providerId };
+  const shortName = borrowed
+    ? (described.shortName || provider.name.split("/")[0].trim())
+    : {
+      openai: "OpenAI",
+      openrouter: "OpenRouter",
+      deepl: "DeepL",
+      microsoft: "Microsoft",
+      google: "Google",
+      mymemory: "MyMemory",
+      grok: "Grok",
+      kimi: "Kimi",
+      minimax: "MiniMax",
+      gemini: "Gemini",
+      claude: "Claude",
+      azure: "Azure",
+      custom: "Custom"
+    }[provider.id] || provider.name.split("/")[0].trim();
   link.textContent = provider.id === "mymemory" ? `引擎：${shortName}（免费）` : `引擎：${shortName}`;
   link.title = provider.name;
-  if (provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
-  const selected = getProvider(settings.provider);
-  const cfg = settings.providers?.[selected.id] || {};
-  const ok = !outbound.fallback && isProviderConfigured(selected, cfg);
-  const warn = $("engineWarn");
-  const warnText = $("engineWarnText");
-  if (outbound.fallback && warnText) warnText.textContent = outbound.notice;
-  warn.hidden = ok;
+  if (borrowed && described.vendorId === "custom") link.title = described.shortName || provider.name;
+  if (!borrowed && provider.id === "mymemory" && outbound.notice) link.title = outbound.notice;
 }
 
 function hostOf(url) {
