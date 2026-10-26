@@ -69,7 +69,7 @@ node --test tests/pdf-topbar-geometry.test.mjs
 
 ## 并行与同文件冲突
 
-功能互不依赖、验收也分开，仍会因为改同一个大文件在合入时反复冲突。2026-10-26 的笔记在 [`docs/parallel-work-and-merge-conflicts.md`](docs/parallel-work-and-merge-conflicts.md)：翻译状态修复和 PDF 多模态优先都动 `pdf/viewer.js`，当天改成先合底座再开上层；只动 `popup/` 的布局可以跟其中一条并行。
+功能互不依赖、验收也分开，仍会因为改同一个大文件在合入时反复冲突。2026-10-26 的笔记在 [`docs/parallel-work-and-merge-conflicts.md`](docs/parallel-work-and-merge-conflicts.md)：翻译状态修复和 PDF 多模态优先都动 `pdf/viewer.js`，当天改成先合底座再开上层；只动 `popup/` 的布局可以跟其中一条并行。新项目开工、旧项目做 v2 重构，先填同一篇里的「开工架构检查清单」（状态、数据来源、界面、热点文件），书面答完再写代码。
 
 开新 feature 前，Forge 标注会改哪些热点文件。与进行中分支的热点重叠，就串行，或先把状态和取数拆开再并行。同时活跃的 feature 仍不超过 3，真机测试仍串行。热点文件目前包括 `pdf/viewer.js`、`lib/pdf-viewer.js`、`background/service-worker.js`、`popup/`。
 
