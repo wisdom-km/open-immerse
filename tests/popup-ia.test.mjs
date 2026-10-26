@@ -270,6 +270,14 @@ function openPdfClick(js) {
   return js.slice(start, end);
 }
 
+function popupPdfEntrySource() {
+  const lib = readFileSync(join(root, "lib/pdf-viewer.js"), "utf8");
+  const start = lib.indexOf("export async function openPopupPdfEntry");
+  const end = lib.indexOf("export function isPdfViewerPage");
+  assert.ok(start >= 0 && end > start);
+  return lib.slice(start, end);
+}
+
 test("PPE-01 pdf on shows 打开 PDF on every page, one label, no lab copy", () => {
   const { html, js } = popupSources();
   assert.match(html, /id="openPdf"[^>]*class="btn-secondary"[^>]*>打开 PDF</);
@@ -328,22 +336,27 @@ test("PPE-05 a PDF tab sends OI_OPEN_PAGE with src and then closes", () => {
   const probeAt = init.indexOf("readPdfContentType");
   const syncAt = init.indexOf("await syncPrimary");
   assert.ok(probeAt >= 0 && probeAt < syncAt && probeAt < init.indexOf('$("openPdf").addEventListener'));
-  assert.match(click, /resolvePopupPdfSrc\(tab\?\.url, await pdfProbe\)/);
-  assert.match(click, /src\s*\?\s*\{ type: "OI_OPEN_PAGE", page: "pdf", src \}/);
+  assert.match(click, /openPopupPdfEntry\(/);
+  assert.match(click, /probe: pdfProbe/);
+  assert.match(click, /close: \(\) => window\.close\(\)/);
   assert.match(js, /chrome\.scripting\.executeScript/);
+  assert.doesNotMatch(js, /readPdfContentType\([^)]*,[^)]*,\s*[0-9]{4,}/);
   assert.doesNotMatch(click, /tabs\.query/);
+  const entry = popupPdfEntrySource();
+  assert.match(entry, /resolvePopupPdfSrc\(url, await probe\)/);
+  assert.match(entry, /src\s*\?\s*\{ type: "OI_OPEN_PAGE", page: "pdf", src \}/);
+  assert.ok(entry.indexOf("close()") > entry.indexOf("} catch"));
   const sw = readFileSync(join(root, "background/service-worker.js"), "utf8");
   assert.match(sw, /pdf\/viewer\.html/);
   assert.match(sw, /message\.page === "pdf" && message\.src \? `\?src=\$\{encodeURIComponent\(message\.src\)\}`/);
-  assert.ok(click.indexOf("window.close()") > click.indexOf("} catch"));
 });
 
 test("PPE-06 other pages open the library without src and then close", () => {
-  const click = openPdfClick(popupSources().js);
-  const library = click.match(/:\s*\{ type: "OI_OPEN_PAGE", page: "pdf" \}/);
+  const entry = popupPdfEntrySource();
+  const library = entry.match(/:\s*\{ type: "OI_OPEN_PAGE", page: "pdf" \}/);
   assert.ok(library);
   assert.equal(library[0].includes("src"), false);
-  assert.ok(click.indexOf("window.close()") > click.lastIndexOf('page: "pdf"'));
+  assert.ok(entry.indexOf("close()") > entry.lastIndexOf('page: "pdf"'));
 });
 
 test("PPE-07 PDF and ordinary pages share one unchanged secondary button", () => {
@@ -355,34 +368,34 @@ test("PPE-07 PDF and ordinary pages share one unchanged secondary button", () =>
 });
 
 test("PPE-08 the button disables before sendMessage so a second click cannot open another tab", () => {
-  const click = openPdfClick(popupSources().js);
-  const guard = click.indexOf("if (btn.disabled) return;");
-  const disable = click.indexOf("btn.disabled = true;");
-  const busy = click.indexOf('btn.setAttribute("aria-busy", "true")');
-  const send = click.indexOf("chrome.runtime.sendMessage");
+  const entry = popupPdfEntrySource();
+  const guard = entry.indexOf("if (button.disabled) return;");
+  const disable = entry.indexOf("button.disabled = true;");
+  const busy = entry.indexOf('button.setAttribute("aria-busy", "true")');
+  const send = entry.indexOf("sendMessage(message)");
   assert.ok(guard >= 0 && guard < disable && disable < busy && busy < send);
-  assert.equal(click.split("chrome.runtime.sendMessage").length - 1, 1);
-  assert.doesNotMatch(click, /textContent/);
+  assert.equal(entry.split("sendMessage(").length - 1, 1);
+  assert.doesNotMatch(entry, /textContent/);
 });
 
 test("PPE-09 a failed open shows 无法打开 PDF 阅读器 and leaves the popup open", () => {
-  const { html, css, js } = popupSources();
+  const { html, css } = popupSources();
   assert.match(html, /id="openPdfError"[^>]*class="danger"[^>]*hidden[^>]*>无法打开 PDF 阅读器</);
   assert.equal(html.indexOf('id="openPdfError"') > html.indexOf('id="openPdf"'), true);
   assert.match(css, /\.danger\s*\{[^}]*color:\s*var\(--oi-danger\)/);
   assert.match(css, /\.danger\s*\{[^}]*font-size:\s*12px/);
-  const click = openPdfClick(js);
-  const catchAt = click.indexOf("} catch {");
-  const closeAt = click.indexOf("window.close()");
+  const entry = popupPdfEntrySource();
+  const catchAt = entry.indexOf("} catch {");
+  const closeAt = entry.indexOf("close()");
   assert.ok(catchAt > 0 && closeAt > catchAt);
-  const caught = click.slice(catchAt, closeAt);
-  assert.match(click, /if \(!res \|\| res\.ok === false\) throw new Error\("open failed"\)/);
-  assert.match(caught, /btn\.disabled = false/);
+  const caught = entry.slice(catchAt, closeAt);
+  assert.match(entry, /if \(!res \|\| res\.ok === false\) throw new Error\("open failed"\)/);
+  assert.match(caught, /button\.disabled = false/);
   assert.match(caught, /removeAttribute\("aria-busy"\)/);
-  assert.match(caught, /err\.hidden = false/);
+  assert.match(caught, /error\.hidden = false/);
   assert.match(caught, /return;/);
-  assert.equal(caught.includes("window.close"), false);
-  assert.match(click.slice(closeAt - 30, closeAt), /err\.hidden = true/);
+  assert.equal(caught.includes("close()"), false);
+  assert.match(entry.slice(closeAt - 40, closeAt), /error\.hidden = true/);
 });
 
 test("PPE-10 pdf off hides the entry and leaves the rest of the popup", () => {
@@ -432,16 +445,20 @@ test("PPE-12 translate, restore, and Alt+T stay; new CSS uses --oi-* tokens; man
 });
 
 test("popup PDF open uses contentType, then URL fallback, without a new permission", async () => {
-  const { readPdfContentType, resolvePopupPdfSrc, looksLikePdfUrl } = await import("../lib/pdf-viewer.js");
+  const { readPdfContentType, resolvePopupPdfSrc, looksLikePdfUrl, PDF_CONTENT_TYPE_TIMEOUT_MS } = await import("../lib/pdf-viewer.js");
   const { js } = popupSources();
   const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
   assert.ok(manifest.permissions.includes("scripting"));
   assert.ok(manifest.permissions.includes("activeTab"));
   assert.equal(manifest.permissions.includes("tabs"), false);
+  assert.equal(PDF_CONTENT_TYPE_TIMEOUT_MS <= 400, true);
   assert.equal(looksLikePdfUrl("https://arxiv.org/pdf/1706.03762"), true);
   assert.equal(looksLikePdfUrl("https://arxiv.org/pdf/1706.03762v7"), true);
   assert.equal(looksLikePdfUrl("https://arxiv.org/abs/1706.03762"), false);
+  assert.equal(looksLikePdfUrl("https://example.com/docs/pdf/guide.html"), false);
+  assert.equal(looksLikePdfUrl("https://example.com/pdf/guide.html"), false);
   assert.equal(resolvePopupPdfSrc("https://arxiv.org/pdf/1706.03762", null), "https://arxiv.org/pdf/1706.03762");
+  assert.equal(resolvePopupPdfSrc("https://example.com/docs/pdf/guide.html", null), "");
   assert.equal(resolvePopupPdfSrc("https://files.example/get", "application/pdf"), "https://files.example/get");
   assert.equal(resolvePopupPdfSrc("https://example.com/article", "text/html"), "");
   assert.equal(resolvePopupPdfSrc("https://example.com/article", null), "");
@@ -453,10 +470,14 @@ test("popup PDF open uses contentType, then URL fallback, without a new permissi
   assert.equal(failed, null);
   assert.equal(resolvePopupPdfSrc("https://arxiv.org/pdf/1706.03762", failed), "https://arxiv.org/pdf/1706.03762");
   assert.equal(resolvePopupPdfSrc("https://example.com/article", failed), "");
+  const timedOut = await readPdfContentType(7, () => new Promise(() => {}), 30);
+  assert.equal(timedOut, null);
+  assert.equal(resolvePopupPdfSrc("https://arxiv.org/pdf/1706.03762", timedOut), "https://arxiv.org/pdf/1706.03762");
   const click = openPdfClick(js);
-  const disable = click.indexOf("btn.disabled = true;");
-  const probe = click.indexOf("await pdfProbe");
-  const send = click.indexOf("chrome.runtime.sendMessage");
-  assert.ok(disable >= 0 && disable < probe && probe < send);
   assert.equal(click.split("chrome.runtime.sendMessage").length - 1, 1);
+  const entry = popupPdfEntrySource();
+  const disable = entry.indexOf("button.disabled = true;");
+  const probe = entry.indexOf("await probe");
+  const send = entry.indexOf("sendMessage(message)");
+  assert.ok(disable >= 0 && disable < probe && probe < send);
 });

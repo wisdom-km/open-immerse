@@ -62,6 +62,8 @@ import {
   shouldOfferPdfOpen,
   resolvePopupPdfSrc,
   readPdfContentType,
+  openPopupPdfEntry,
+  PDF_CONTENT_TYPE_TIMEOUT_MS,
   shouldSyncReadout,
   textLayerCopy,
   translateDocumentPages,
@@ -727,11 +729,18 @@ test("looksLikePdfUrl and popup PDF entry when the feature is on", () => {
   assert.equal(looksLikePdfUrl(""), false);
   assert.equal(looksLikePdfUrl("https://arxiv.org/pdf/1706.03762"), true);
   assert.equal(looksLikePdfUrl("https://arxiv.org/pdf/1706.03762v7"), true);
-  assert.equal(looksLikePdfUrl("https://example.com/pdf/noext"), true);
+  assert.equal(looksLikePdfUrl("https://arxiv.org/pdf/hep-th/9711200"), true);
+  assert.equal(looksLikePdfUrl("https://example.com/pdf/12345"), true);
+  assert.equal(looksLikePdfUrl("https://example.com/pdf/noext"), false);
+  assert.equal(looksLikePdfUrl("https://example.com/pdf/guide.html"), false);
+  assert.equal(looksLikePdfUrl("https://example.com/pdf/guide.htm"), false);
+  assert.equal(looksLikePdfUrl("https://example.com/docs/pdf/guide.html"), false);
   assert.equal(looksLikePdfUrl("https://arxiv.org/abs/1706.03762"), false);
   assert.equal(looksLikePdfUrl("chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html"), false);
   assert.match(libSrc, /mhjfbmdgcfjbbpaeojofohoefgiehjai/);
   assert.match(libSrc, /该分支真机不可达/);
+  assert.equal(resolvePopupPdfSrc("https://example.com/docs/pdf/guide.html", null), "");
+  assert.equal(resolvePopupPdfSrc("https://example.com/docs/pdf/guide.html", "application/pdf"), "https://example.com/docs/pdf/guide.html");
   assert.equal(resolvePopupPdfSrc("https://files.example/get", "application/pdf"), "https://files.example/get");
   assert.equal(resolvePopupPdfSrc("https://example.com/article", "text/html"), "");
   assert.equal(resolvePopupPdfSrc("https://arxiv.org/pdf/1706.03762", null), "https://arxiv.org/pdf/1706.03762");
@@ -747,9 +756,10 @@ test("looksLikePdfUrl and popup PDF entry when the feature is on", () => {
   assert.match(popupHtml, /id="pdfEntry" hidden/);
   assert.match(popupHtml, /id="openPdf"[^>]*class="btn-secondary"[^>]*>打开 PDF</);
   assert.doesNotMatch(popupHtml, /openPdfPage/);
-  assert.match(popupJs, /resolvePopupPdfSrc/);
+  assert.match(popupJs, /openPopupPdfEntry/);
   assert.match(popupJs, /featureOn\(settings,\s*"pdf"\)/);
-  assert.match(popupJs, /page: "pdf"/);
+  assert.match(libSrc, /page: "pdf", src/);
+  assert.match(libSrc, /PDF_CONTENT_TYPE_TIMEOUT_MS = 400/);
   assert.match(popupJs, /\$\("pdfEntry"\)\.hidden = !pdfOn/);
   assert.match(popupCss, /\.btn-primary[^}]*background:\s*var\(--oi-accent\)/);
 });
@@ -761,11 +771,70 @@ test("readPdfContentType treats a failed injection as unknown", async () => {
   assert.equal(failed, null);
   assert.equal(resolvePopupPdfSrc("https://arxiv.org/pdf/1706.03762", failed), "https://arxiv.org/pdf/1706.03762");
   assert.equal(resolvePopupPdfSrc("https://example.com/article", failed), "");
+  assert.equal(resolvePopupPdfSrc("https://example.com/docs/pdf/guide.html", failed), "");
   const pdf = await readPdfContentType(7, async () => [{ result: "application/pdf" }]);
   assert.equal(pdf, "application/pdf");
   assert.equal(resolvePopupPdfSrc("https://files.example/get", pdf), "https://files.example/get");
   const page = await readPdfContentType(7, async () => [{ result: "text/html" }]);
   assert.equal(resolvePopupPdfSrc("https://example.com/article", page), "");
+});
+
+test("contentType probe times out into the URL fallback and a busy click sends once", async () => {
+  assert.equal(PDF_CONTENT_TYPE_TIMEOUT_MS <= 400, true);
+  const started = Date.now();
+  const timedOut = await readPdfContentType(7, () => new Promise(() => {}), 40);
+  assert.equal(timedOut, null);
+  assert.equal(Date.now() - started < 400, true);
+  assert.equal(resolvePopupPdfSrc("https://arxiv.org/pdf/1706.03762", timedOut), "https://arxiv.org/pdf/1706.03762");
+  assert.equal(resolvePopupPdfSrc("https://example.com/docs/pdf/guide.html", timedOut), "");
+  const fast = await readPdfContentType(7, async () => [{ result: "application/pdf" }], PDF_CONTENT_TYPE_TIMEOUT_MS);
+  assert.equal(fast, "application/pdf");
+
+  let release;
+  const probe = new Promise((resolve) => {
+    release = resolve;
+  });
+  const button = {
+    disabled: false,
+    attrs: {},
+    setAttribute(name, value) { this.attrs[name] = value; },
+    removeAttribute(name) { delete this.attrs[name]; }
+  };
+  const error = { hidden: true };
+  const sent = [];
+  let closed = 0;
+  const first = openPopupPdfEntry({
+    url: "https://arxiv.org/pdf/1706.03762",
+    probe,
+    sendMessage: async (message) => {
+      sent.push(message);
+      return { ok: true };
+    },
+    close: () => { closed += 1; },
+    button,
+    error
+  });
+  await openPopupPdfEntry({
+    url: "https://arxiv.org/pdf/1706.03762",
+    probe,
+    sendMessage: async (message) => {
+      sent.push(message);
+      return { ok: true };
+    },
+    close: () => { closed += 1; },
+    button,
+    error
+  });
+  assert.equal(sent.length, 0);
+  assert.equal(button.disabled, true);
+  assert.equal(button.attrs["aria-busy"], "true");
+  release(null);
+  await first;
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].page, "pdf");
+  assert.equal(sent[0].src, "https://arxiv.org/pdf/1706.03762");
+  assert.equal(closed, 1);
+  assert.equal(error.hidden, true);
 });
 
 test("favoriteSegment is the M1 plumbing hook into OI_SAVE_LEARNING", async () => {

@@ -264,7 +264,8 @@ test("viewer default right pane is Markdown readout without bbox wiring", () => 
   assert.match(readmeEn, /text-layer body/i);
   assert.doesNotMatch(popupHtml, /openPdfPage|openPdfSep/);
   assert.doesNotMatch(popupJs, /openPdfPage|openPdfSep/);
-  assert.match(popupJs, /page: "pdf"/);
+  assert.match(popupJs, /openPopupPdfEntry/);
+  assert.match(readFileSync(join(root, "lib/pdf-viewer.js"), "utf8"), /page: "pdf"/);
   assert.match(popupJs, /featureOn\(settings,\s*"pdf"\)/);
   assert.match(popupJs, /\$\("pdfEntry"\)\.hidden = !pdfOn/);
 });
