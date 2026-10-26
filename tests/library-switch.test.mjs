@@ -565,7 +565,7 @@ test("resume keeps the mode, starts at resumePage, and does not resend translate
     viewer.indexOf("async function resolveBatchSize")
   );
   assert.match(start, /options\.mode === "from-page"/);
-  assert.match(start, /translateWholeDocument\(\{ startPage, mode: libraryTranslateRun\.mode \}\)/);
+  assert.match(start, /translateWholeDocument\(\{ startPage, mode: libraryTranslateRun\.mode, forceAll \}\)/);
   assert.match(viewer, /libraryResumePending = libraryResumePlan\(/);
   assert.match(viewer, /\$\("translatePage"\)\.addEventListener\("click", \(\) => startTranslate\(\)\)/);
   const pages = read("lib/pdf-viewer.js");

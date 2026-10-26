@@ -76,10 +76,14 @@ test("RT-07 RT-08 RT-09 RT-10 RT-12 failure chip, running copy, and partial is n
   assert.equal(failureChipModel({ state: "failed" }).text, "这页没译完");
   assert.equal(failureChipModel({ state: "failed" }).retry, "重试本页");
   assert.equal(failureChipModel({ state: "partial", unfinished: 3 }).text, "有 3 段没译完");
+  assert.equal(failureChipModel({ state: "partial", unfinished: 0 }).text, "这页没译完");
   assert.equal(failureChipModel({ state: "failed", pending: true }).text, "重试中…");
   assert.match(failureChipModel({ state: "partial", unfinished: 1, still: true }).still, /仍然失败/);
   assert.equal(failureChipModel({ state: "partial", unfinished: 1, still: true }).settings, "去设置");
   assert.match(viewer, /function jumpToFirstFailedPage/);
+  const docStatus = viewer.slice(viewer.indexOf("function refreshDocStatus"), viewer.indexOf("function finishDocPhase"));
+  assert.match(docStatus, /view\.warnCount > 0[\s\S]*jump\.className = "doc-fail-jump"/);
+  assert.equal(/if \(compact && t > 0\) text\.textContent[\s\S]*warnCount/.test(docStatus), false);
   assert.match(css, /\.doc-fail-jump\s*\{[^}]*color:\s*var\(--oi-reader-warn\)/);
   assert.match(css, /\.rf-retry\s*,[\s\S]*color:\s*var\(--oi-reader-link\)/);
   const totals = translatedPageTotal([{ state: "done" }, { state: "partial" }, { state: "failed" }]);

@@ -9792,16 +9792,18 @@ function refreshDocStatus() {
   const text = el.querySelector(".doc-text");
   if (text) {
     text.replaceChildren();
-    if (compact && t > 0) text.textContent = `${n}/${t}`;
-    else if (view.warnCount > 0) {
-      text.append(document.createTextNode(`已译 ${n}/${t} 页 · `));
+    // The jump stays in every band. Opening the library drops the toolbar out of
+    // wide, and the unfinished sentence would otherwise have no .doc-fail-jump.
+    if (view.warnCount > 0) {
+      text.append(document.createTextNode(compact ? `${n}/${t} · ` : `已译 ${n}/${t} 页 · `));
       const jump = document.createElement("button");
       jump.type = "button";
       jump.className = "doc-fail-jump";
       jump.textContent = `${view.warnCount} 页没译完`;
       jump.addEventListener("click", jumpToFirstFailedPage);
       text.append(jump);
-    } else text.textContent = view.text;
+    } else if (compact && t > 0) text.textContent = `${n}/${t}`;
+    else text.textContent = view.text;
   }
   const live = el.querySelector(".sr-only");
   if (live) live.textContent = view.text;
@@ -9895,9 +9897,10 @@ function pageStatusSpec(page, row) {
     return { kind: "queued", text: runningPageHint() };
   }
   if (!running && showRoundFailures && (row.state === "failed" || row.state === "partial")) {
-    const unfinished = row.state === "partial"
-      ? Math.max(0, (Number(row.m) || 0) - (Number(row.k) || 0))
-      : 0;
+    const gap = Math.max(0, (Number(row.m) || 0) - (Number(row.k) || 0));
+    const cached = pageCache.get(docId, page);
+    const flagged = Array.isArray(cached) ? cached.filter((item) => item?.failed === true).length : 0;
+    const unfinished = row.state === "partial" ? Math.max(gap, flagged) : 0;
     const chip = failureChipModel({
       state: row.state,
       unfinished,
@@ -11293,7 +11296,8 @@ function libraryPayloadFields(identity, hash, bytes) {
   };
 }
 
-function rememberTranslation(page, results) {
+function rememberTranslation(page, results, options = {}) {
+  const forced = options?.runState === "failed" || options?.runState === "partial" ? options.runState : "";
   const rawLayout = getPageLayout(page);
   const layout = cacheableLayout(rawLayout);
   const blocks = rawLayout?.blocks || [];
@@ -11304,11 +11308,14 @@ function rememberTranslation(page, results) {
   const replaceBids = [...new Set(verified.map((pair) => String(pair?.bid || "")).filter(Boolean))];
   const skipOnly = isSkipOnlyPage(blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
-  if (!verified.length && !skipOnly) {
+  // A failed retranslate often has no new verified pair. The old pairs must stay,
+  // and the row still has to record failed or partial. Returning here left the
+  // library on 全文已译 while the toolbar counted the page as unfinished.
+  if (!verified.length && !skipOnly && !forced) {
     void maybeShowPersistCard();
     return Promise.resolve();
   }
-  if (!verified.length && existing && (existing.pairs?.length || existing.skipped)) {
+  if (!verified.length && existing && (existing.pairs?.length || existing.skipped) && !forced) {
     void maybeShowPersistCard();
     return Promise.resolve();
   }
@@ -11317,7 +11324,7 @@ function rememberTranslation(page, results) {
     .filter((pair) => !replaceBidSet.has(String(pair?.bid || "")));
   const pairs = verified.length
     ? mergeLibraryPairs(keptPairs, verified, blocks, pdfTargetLang)
-    : [];
+    : (forced ? keptPairs : []);
   if (pairs.length) replaceLibraryPagePairs(libraryDoc, page, pairs);
   // Capture this document before queuing: the user may open another PDF while
   // earlier pages are still being saved.
@@ -11348,7 +11355,7 @@ function rememberTranslation(page, results) {
       ...(keepLayout && engineModeOf(rawLayout) ? { mode: engineModeOf(rawLayout) } : {}),
       ...libraryPayloadFields(identity, hash, bytes),
       ...(skipped ? { skipped: true } : {}),
-      runState: pageRunState(pairs.length ? pairs : results, { targetLang: pdfTargetLang })
+      runState: forced || pageRunState(pairs.length ? pairs : results, { targetLang: pdfTargetLang })
     };
     const saved = await saveLibraryPage(savedPayload);
     void maybeShowPersistCard();
@@ -11363,6 +11370,11 @@ function rememberTranslation(page, results) {
       libraryDoc.pages.push({ page, pairs: [], skipped: true, ...(layout ? { layout, layoutVersion: layout.layoutVersion } : {}) });
     }
   });
+}
+
+function persistPageRun(page, results, state) {
+  const failed = state === "failed" || state === "partial";
+  return rememberTranslation(page, results, failed ? { runState: state } : undefined);
 }
 
 function rememberSkipHole(page, blocks) {
@@ -12447,13 +12459,14 @@ async function translateWholeDocument(options = {}) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
       if (reason !== "cached" && titleStructureFailed(page)) {
         const merged = withStructureRows(getPageLayout(page), []);
-        notePageState(page, {
-          state: pageRunState(merged, { expected: Number(pageStates.get(page)?.m) || 0, targetLang: pdfTargetLang }),
-          hasLayout: true
-        });
+        const state = pageRunState(merged, { expected: Number(pageStates.get(page)?.m) || 0, targetLang: pdfTargetLang });
+        notePageState(page, { state, hasLayout: true });
         clearSlotPainted(page);
         refreshDocStatus();
         renderArticle();
+        if (state === "failed" || state === "partial") {
+          saveTasks.push(persistPageRun(page, merged, state).then(() => null, (error) => error));
+        }
         return;
       }
       if (reason === "cached") {
@@ -12603,7 +12616,7 @@ async function translateWholeDocument(options = {}) {
       clearSlotPainted(page);
       refreshDocStatus();
       renderArticle();
-      if (state !== "failed") saveTasks.push(rememberTranslation(page, merged).then(() => null, (error) => error));
+      saveTasks.push(persistPageRun(page, merged, state).then(() => null, (error) => error));
     },
     onPageError({ page, results }) {
       if (!isCurrentWork(work, gen, translatingDoc)) return;
@@ -12614,10 +12627,12 @@ async function translateWholeDocument(options = {}) {
       if (page === pageNum) pageResults = merged;
       const expected = Number(pageStates.get(page)?.m) || 0;
       const k = (merged || []).filter((item) => settledText(item?.translation, item?.original || item?.text || "")).length;
-      notePageState(page, { state: pageRunState(merged, { expected, targetLang: pdfTargetLang }), hasLayout: true, k });
+      const state = pageRunState(merged, { expected, targetLang: pdfTargetLang });
+      notePageState(page, { state, hasLayout: true, k });
       clearSlotPainted(page);
       refreshDocStatus();
       renderArticle();
+      saveTasks.push(persistPageRun(page, merged, state).then(() => null, (error) => error));
     }
   };
   // documentTranslateSuperseded() is true whenever this session is running.
@@ -12796,7 +12811,9 @@ async function translateWholeDocument(options = {}) {
       }).catch(() => {});
     }
   }
-  if (isCurrentWork(work, gen, translatingDoc) && !translatedDoc.aborted && !work.aborted && !translatedDoc.paused) {
+  let deferRepair = false;
+  try { deferRepair = new URLSearchParams(location.search).get("oiDeferRepair") === "1"; } catch { deferRepair = false; }
+  if (!deferRepair && isCurrentWork(work, gen, translatingDoc) && !translatedDoc.aborted && !work.aborted && !translatedDoc.paused) {
     const repair = [];
     for (let page = startPage; page <= total; page += 1) {
       const state = pageStates.get(page)?.state || "";
@@ -12818,7 +12835,10 @@ async function translateWholeDocument(options = {}) {
       };
     }
   }
-  if (libraryPass && work === session && !forceReadoutHold) work.running = false;
+  // Repair always passes preserveSession, so its finally does not clear the
+  // flag. A first translation is not a library pass yet, and leaving running
+  // set hides 翻译 after the status already says to click it and continue.
+  if (work === session && !forceReadoutHold) work.running = false;
   if (!isCurrentWork(work, gen, translatingDoc)) return;
   const { aborted, pages, error, missingField, paused } = translatedDoc;
   translatePaused = Boolean(paused);
@@ -12827,8 +12847,12 @@ async function translateWholeDocument(options = {}) {
     const merged = withStructureRows(getPageLayout(entry.page), entry.results);
     if (entry.error || merged?.some((item) => item?.failed)) {
       const expected = Number(pageStates.get(entry.page)?.m) || 0;
-      notePageState(entry.page, { state: pageRunState(merged, { expected, targetLang: pdfTargetLang }), hasLayout: true });
+      const state = pageRunState(merged, { expected, targetLang: pdfTargetLang });
+      notePageState(entry.page, { state, hasLayout: true });
       clearSlotPainted(entry.page);
+      if (state === "failed" || state === "partial") {
+        saveTasks.push(persistPageRun(entry.page, merged, state).then(() => null, (error) => error));
+      }
     }
   }
   const totals = pageTotals();
@@ -12853,6 +12877,7 @@ async function translateWholeDocument(options = {}) {
   else if (!clean) setStatus(any ? PDF_COPY.incompletePages : PDF_COPY.noReturnedTranslation, true);
   else setStatus(PDF_COPY.doneDocument);
   renderArticle();
+  updateTranslateControls();
   const saveErrors = (await Promise.all(saveTasks)).map((error) => noteLibrarySaveError(error));
   // A retranslate click during the save wait takes a new session. Do not
   // clear its page or start another job over the batches it just sent.
@@ -13007,7 +13032,7 @@ async function retryFailedPage(page) {
       k: (merged || []).filter((item) => settledText(item?.translation, item?.original || "")).length,
       m: (merged || []).length
     });
-    try { await rememberTranslation(page, merged); } catch { /* the chip still reports the page */ }
+    try { await persistPageRun(page, merged, state); } catch { /* the chip still reports the page */ }
   } finally {
     pageRetryPending.delete(page);
     retranslateScope = "";

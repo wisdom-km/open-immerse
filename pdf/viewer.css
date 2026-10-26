@@ -1545,7 +1545,8 @@ button {
   display: inline-flex;
   align-items: stretch;
   height: var(--oi-reader-topbar-btn-h);
-  border: 1px solid var(--oi-reader-border);
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--oi-reader-border);
   border-radius: var(--oi-reader-topbar-btn-radius);
   background: transparent;
 }

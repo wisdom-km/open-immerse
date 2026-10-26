@@ -223,6 +223,10 @@ test("a successful retry clears the failed flag on the reused row", () => {
   const retried = merged.find((row) => row.id === "b");
   assert.equal(retried.translation, "重译");
   assert.equal(retried.failed, undefined);
+  const keptFailed = mergeTranslationRows(prior, [
+    { id: "b", text: "retry", translation: "", role: "paragraph" }
+  ]);
+  assert.equal(keptFailed.find((row) => row.id === "b").failed, true);
 });
 
 test("source reuse hash is 128-bit and an echo does not hide a later translation", () => {
