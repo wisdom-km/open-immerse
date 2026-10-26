@@ -492,6 +492,7 @@ let pdfModel = "";
 let translatePaused = false;
 let librarySessionWidth = null;
 let pdfOpenGen = 0;
+let pdfLoadTask = null;
 let pendingLibraryOpenHash = "";
 let libraryResumePending = false;
 let libraryTranslateRun = { mode: "document", anchorPage: 1 };
@@ -4987,7 +4988,8 @@ async function restampArxivPage(pageNumber, epoch = layoutEpoch, job = arxivJob)
       readSettings: () => formulaViewerSettings,
       model: formulaViewerSettings?.multimodal?.model || "",
       mmLedger,
-      cache: viewerFormulaCache()
+      cache: viewerFormulaCache(),
+      signal: layoutAbort.signal
     }));
   }
   publishRestampedBlocks(layout, next, restampFormulaStale(pageNumber, epoch, job, layout), () => {
@@ -5225,7 +5227,7 @@ async function cropLayoutBlocks(raster, page, blocks, pageNumber, isStale, optio
       renderVisionCrop: (block, spec) => renderVisionFormulaCrop(page, raster, block, pageNumber, spec),
       cropPngFor: (block, hooks) => formulaModelPng(pageNumber, block, hooks),
       isStale,
-      signal: options.signal,
+      signal: options.signal || layoutAbort.signal,
       arxivEnabled: arxivOn,
       multimodalEnabled: formulaFlags.multimodalEnabled,
       multimodalConfigured: formulaFlags.multimodalConfigured,
@@ -13281,24 +13283,50 @@ async function openFromSrc(src) {
   }
 }
 
+function adoptOpenLive(openGen) {
+  return openGen == null || openGen === pdfOpenGen;
+}
+
+function destroyLoadTask(task) {
+  if (!task || typeof task.destroy !== "function") return Promise.resolve();
+  return waitAtMost(Promise.resolve().then(() => task.destroy()), LIBRARY_SWITCH_FALLBACK_MS).catch(() => {});
+}
+
 async function openPdfData(data, title, opened, meta = {}) {
   const gen = ++pdfOpenGen;
   pendingLibraryOpenHash = meta?.hash ? String(meta.hash) : "";
   rememberLibraryIdentity(title);
   setStatus(PDF_COPY.loading);
   pdfBytes = data instanceof Uint8Array ? data.slice() : new Uint8Array(data || []);
-  const doc = opened || await getDocument({ data: pdfBytes.slice(), verbosity: 0 }).promise;
-  if (gen !== pdfOpenGen) {
-    destroyQuiet(doc);
+  const previousTask = pdfLoadTask;
+  pdfLoadTask = null;
+  await destroyLoadTask(previousTask);
+  if (!adoptOpenLive(gen)) return false;
+  let doc = opened || null;
+  if (!doc) {
+    const task = getDocument({ data: pdfBytes.slice(), verbosity: 0 });
+    pdfLoadTask = task;
+    try {
+      doc = await task.promise;
+    } catch (error) {
+      if (pdfLoadTask === task) pdfLoadTask = null;
+      if (!adoptOpenLive(gen)) return false;
+      throw error;
+    }
+    if (pdfLoadTask === task) pdfLoadTask = null;
+  }
+  if (!adoptOpenLive(gen)) {
+    if (doc && doc !== pdfDoc) destroyQuiet(doc);
     return false;
   }
   await adoptDoc(doc, title, gen);
-  return gen === pdfOpenGen;
+  return adoptOpenLive(gen);
 }
 
 async function adoptDoc(doc, title, openGen) {
-  if (openGen != null && openGen !== pdfOpenGen) {
-    destroyQuiet(doc);
+  const openHash = pendingLibraryOpenHash;
+  if (!adoptOpenLive(openGen)) {
+    if (doc && doc !== pdfDoc) destroyQuiet(doc);
     return;
   }
   resetArxivSession();
@@ -13321,8 +13349,8 @@ async function adoptDoc(doc, title, openGen) {
   if (previous && previous !== doc) {
     await waitAtMost(Promise.resolve().then(() => previous.destroy()), LIBRARY_SWITCH_FALLBACK_MS);
   }
-  if (openGen != null && openGen !== pdfOpenGen) {
-    destroyQuiet(doc);
+  if (!adoptOpenLive(openGen)) {
+    if (doc && doc !== pdfDoc) destroyQuiet(doc);
     return;
   }
   pdfDoc = doc;
@@ -13331,6 +13359,7 @@ async function adoptDoc(doc, title, openGen) {
   pageNum = 1;
   sourceZoomTouched = false;
   const first = await doc.getPage(1);
+  if (!adoptOpenLive(openGen)) return;
   pdfPageWidth = first.getViewport({ scale: 1 }).width;
   zoom = defaultSourceZoom(currentSourceMode(), {
     pageWidth: pdfPageWidth,
@@ -13385,13 +13414,16 @@ async function adoptDoc(doc, title, openGen) {
   // Read this document's hint key only. The local area also holds layout
   // cache and notes, so opening must not scan every stored item.
   void resolveNotesDocHash().then(async (hash) => {
+    if (!adoptOpenLive(openGen)) return;
     if (hash && hash !== "nohash") {
       await notesPrefsSession.loadDocHint(hash);
       void flushStagedNotes(hash, { quiet: true });
     }
+    if (!adoptOpenLive(openGen)) return;
     notesUi?.onDocument(hash);
   });
-  await buildPages();
+  await buildPages(openGen);
+  if (!adoptOpenLive(openGen)) return;
   if (!syncMiniFitZoom()) {
     requestAnimationFrame(() => {
       if (!syncMiniFitZoom()) requestAnimationFrame(() => syncMiniFitZoom());
@@ -13399,6 +13431,7 @@ async function adoptDoc(doc, title, openGen) {
   }
   updatePager();
   await scheduleVisibleRenders();
+  if (!adoptOpenLive(openGen)) return;
   setStatus("原页已打开，正在读取文字层…");
   beginPageNav();
   try {
@@ -13406,11 +13439,13 @@ async function adoptDoc(doc, title, openGen) {
   } finally {
     endPageNav();
   }
+  if (!adoptOpenLive(openGen)) return;
   syncZoomChip();
   // The paper row is written as soon as the hash is known. The original
   // blob still waits until page writes settle.
   scheduleOpenedPdf(docId);
-  const resume = await applyLibraryResume(pendingLibraryOpenHash);
+  const resume = await applyLibraryResume(openHash);
+  if (!adoptOpenLive(openGen)) return;
   if (resume === "manual") docPhase = "stopped";
   await maybeAutoTranslateDocument();
 }
@@ -13424,14 +13459,17 @@ function shortTitle(value) {
   }
 }
 
-async function buildPages() {
-  if (!pdfDoc) return;
+async function buildPages(openGen) {
+  if (!adoptOpenLive(openGen) || !pdfDoc) return;
+  const doc = pdfDoc;
   const container = $("pages");
   container.replaceChildren();
   pageViews = [];
   let widest = 0;
-  for (let n = 1; n <= pdfDoc.numPages; n++) {
-    const page = await pdfDoc.getPage(n);
+  for (let n = 1; n <= doc.numPages; n++) {
+    if (!adoptOpenLive(openGen) || pdfDoc !== doc) return;
+    const page = await doc.getPage(n);
+    if (!adoptOpenLive(openGen) || pdfDoc !== doc) return;
     const baseWidth = page.getViewport({ scale: 1 }).width;
     if (baseWidth > widest) widest = baseWidth;
     const viewport = page.getViewport({ scale: zoom });
@@ -13452,6 +13490,7 @@ async function buildPages() {
       renderTask: null
     });
   }
+  if (!adoptOpenLive(openGen) || pdfDoc !== doc) return;
   if (widest > 0) pdfPageWidth = widest;
   applyPaperMetrics();
 }

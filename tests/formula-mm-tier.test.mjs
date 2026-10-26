@@ -2273,6 +2273,58 @@ test("viewer restamp, crop, and adoptDoc stay wired to the page lifetime", () =>
   assert.ok(abortAt > firstAwait);
   assert.equal(viewer.slice(adoptAt, abortAt).includes("resetMmPages()"), false);
   assert.match(viewer.slice(abortAt, abortAt + 80), /^abortInflightLayouts\(\);\n  resetMmPages\(\);/);
+  assert.match(restamp, /signal:\s*layoutAbort\.signal/);
+  assert.match(crop, /signal:\s*options\.signal\s*\|\|\s*layoutAbort\.signal/);
+  const adoptBody = viewer.slice(adoptAt, viewer.indexOf("function shortTitle", adoptAt));
+  const cancelAt = adoptBody.indexOf("cancelQueuedVendorLayouts()");
+  const destroyAt = adoptBody.indexOf("previous.destroy()");
+  assert.ok(cancelAt > 0 && destroyAt > cancelAt);
+  const adoptAwait = adoptBody.indexOf("await ");
+  assert.ok(adoptBody.indexOf("abortInflightLayouts()") > adoptAwait);
+});
+
+test("aborting the page signal cancels the in-flight multimodal fetch", async () => {
+  const settings = settingsFor("openai");
+  const flags = formulaChainFlags(settings);
+  const controller = new AbortController();
+  const cache = createFormulaCache(createMemoryStore());
+  let seen = null;
+  let started = false;
+  const net = {
+    async fetch(req) {
+      started = true;
+      seen = req;
+      await new Promise((resolve, reject) => {
+        if (req.signal?.aborted) {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          return;
+        }
+        req.signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        }, { once: true });
+      });
+    }
+  };
+  const job = scheduleFormulaBlock(formulaBlock({ bid: "switch-mm", text: "x" }), {
+    ...flags,
+    docHash: "doc-switch",
+    page: 1,
+    settings,
+    readSettings: () => settings,
+    katex,
+    cache,
+    net,
+    withRasterCrop: async (item) => ({ ...item, imageUrl: PNG_URL, surface: "png" }),
+    signal: controller.signal
+  });
+  for (let i = 0; i < 40 && !started; i += 1) await Promise.resolve();
+  assert.equal(started, true);
+  assert.equal(seen.signal.aborted, false);
+  controller.abort();
+  const shown = await job;
+  assert.equal(seen.signal.aborted, true);
+  assert.notEqual(shown.latexSource, "vlm");
+  assert.equal(JSON.stringify(shown).includes("vlm"), false);
 });
 
 test("deleteTier removes only the matching write id", async () => {

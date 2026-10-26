@@ -243,6 +243,17 @@ test("viewer aborts before destroy, last click wins, and silent pause writes no 
   assert.match(viewer, /if \(libraryResumePending\)/);
   assert.match(viewer, /if \(resume === "manual"\) docPhase = "stopped"/);
   assert.match(viewer, /onAbortRequest: translateAbortRequest/);
+  assert.match(viewer, /function adoptOpenLive\(openGen\)/);
+  assert.match(viewer, /await destroyLoadTask\(previousTask\)/);
+  const pageAt = adopt.indexOf("const first = await doc.getPage(1);");
+  assert.ok(pageAt > destroyAt);
+  assert.match(adopt.slice(pageAt, pageAt + 120), /if \(!adoptOpenLive\(openGen\)\) return;/);
+  const builtAt = adopt.indexOf("await buildPages(openGen);");
+  assert.ok(builtAt > pageAt);
+  assert.match(adopt.slice(builtAt, builtAt + 80), /if \(!adoptOpenLive\(openGen\)\) return;/);
+  assert.match(adopt, /applyLibraryResume\(openHash\)/);
+  assert.match(viewer, /async function buildPages\(openGen\)/);
+  assert.match(viewer, /if \(!adoptOpenLive\(openGen\) \|\| pdfDoc !== doc\) return;/);
 });
 
 test("LIB-06/16/18/20/26/31 panel fills its rows, pauses without a prompt, and the last click wins", async () => {
@@ -339,6 +350,60 @@ test("LIB-06/16/18/20/26/31 panel fills its rows, pauses without a prompt, and t
   assert.equal(ui.root.querySelector('[data-lib-row="c"] .oi-lib-open')?.getAttribute("aria-disabled"), null);
   for (const done of releases) done();
   await flush();
+  assert.equal(ui.isOpen(), false);
+});
+
+test("rapid clicks on different rows settle on the last row", async () => {
+  const { document } = panelDom();
+  const papers = ["a", "b", "c", "d"].map((docHash, index) => paper({
+    docHash,
+    title: docHash.toUpperCase(),
+    pageCount: 2,
+    lastOpenedAt: 4 - index
+  }));
+  let settled = "";
+  const releases = [];
+  const ui = mountLibraryUi({
+    slot: document.getElementById("sideSlot"),
+    now: () => Date.now(),
+    width: () => 1440,
+    columnWidth: () => 400,
+    clickDedupeMs: 300,
+    store: async () => ({
+      async listPapers() { return papers; },
+      async getPages() { return []; },
+      async usage() { return { byDoc: new Map() }; },
+      async getSource() { return blobOf(new Uint8Array([1, 2, 3, 4])); },
+      async getPaper(hash) { return papers.find((row) => row.docHash === hash) || null; }
+    }),
+    listNotes: async () => [],
+    openHash: async () => "",
+    prepareSwitch: async () => {},
+    openBytes: (_bytes, _title, meta) => new Promise((done) => {
+      releases.push(() => {
+        if (meta.stale?.()) {
+          done(false);
+          return;
+        }
+        settled = meta.hash;
+        done(true);
+      });
+    })
+  });
+  ui.open();
+  await flush();
+  ui.root.querySelector('[data-lib-row="a"] .oi-lib-open').click();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  ui.root.querySelector('[data-lib-row="d"] .oi-lib-open').click();
+  await flush();
+  assert.equal(releases.length, 2);
+  releases[0]();
+  await flush();
+  assert.equal(settled, "");
+  assert.equal(ui.isOpen(), true);
+  releases[1]();
+  await flush();
+  assert.equal(settled, "d");
   assert.equal(ui.isOpen(), false);
 });
 
