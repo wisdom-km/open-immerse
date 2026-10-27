@@ -1466,7 +1466,9 @@ function clearProviderKey(id) {
   cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
   const ticket = claimProviderKey(id);
   renderProviderFields();
-  document.querySelector("[data-key-slot='translate'] input")?.focus();
+  const focusTranslateKey = () => document.querySelector("[data-key-slot='translate'] input")?.focus?.();
+  focusTranslateKey();
+  setTimeout(focusTranslateKey, 0);
   void syncAttentionBadge();
   void queueProviderKey(id, "", true, previous, ticket);
 }

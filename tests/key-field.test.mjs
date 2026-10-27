@@ -35,13 +35,41 @@ test("a saved key stays in the password field when focused", () => {
   input.focus();
   assert.equal(input.value, KEY);
   assert.equal(input.placeholder, "粘贴 API 密钥");
-  input.value = "";
-  const restored = field.commit();
-  assert.equal(restored.ignored, true);
+  input.value = "   ";
+  const spaces = field.commit();
+  assert.equal(spaces.ignored, true);
   assert.equal(input.value, KEY);
+  assert.equal(saved, KEY);
+  input.value = "";
+  const cleared = field.commit();
+  assert.equal(cleared.pendingClear, true);
+  assert.equal(cleared.value, "");
+  assert.equal(input.value, "");
   assert.equal(saved, KEY);
   assert.equal(document.querySelector("[aria-label='显示']"), null);
   assert.equal([...document.querySelectorAll("button")].some((button) => /显示|隐藏|眼睛/.test(button.textContent || "")), false);
+});
+
+test("removing the field drops its pagehide listener", async () => {
+  const { document, input } = mount();
+  const view = document.defaultView;
+  const added = [];
+  const removed = [];
+  const add = view.addEventListener.bind(view);
+  const drop = view.removeEventListener.bind(view);
+  view.addEventListener = (type, fn, ...rest) => {
+    if (type === "pagehide") added.push(fn);
+    return add(type, fn, ...rest);
+  };
+  view.removeEventListener = (type, fn, ...rest) => {
+    if (type === "pagehide") removed.push(fn);
+    return drop(type, fn, ...rest);
+  };
+  bindSecretInput(input, { getValue: () => KEY });
+  assert.equal(added.length, 1);
+  input.parentElement.parentElement.remove();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(removed, added);
 });
 
 test("× clears immediately, keeps focus, and does not write a mask", () => {
@@ -80,6 +108,19 @@ test("× clears immediately, keeps focus, and does not write a mask", () => {
   assert.equal(document.body.textContent.includes(KEY), false);
   bound.paint();
   assert.equal(input.value, "");
+
+  let again = KEY;
+  const manualDelete = bindSecretInput(document.createElement("input"), {
+    getValue: () => again,
+    onClear: () => { again = ""; }
+  });
+  const fresh = manualDelete.root.querySelector("input");
+  document.getElementById("host").append(manualDelete.root);
+  fresh.value = "";
+  const deleted = manualDelete.commit();
+  assert.equal(deleted.ignored, true);
+  assert.equal(again, "");
+  assert.equal(fresh.value, "");
 });
 
 test("a button card keeps the stored key until save, and a mask is refused", () => {
