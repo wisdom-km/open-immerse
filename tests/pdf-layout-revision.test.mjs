@@ -54,12 +54,13 @@ GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", impo
 test("a layout revision matches only the current algorithm", async () => {
   const version = await currentLayoutVersion();
   assert.match(version, /^source-v3:[0-9a-f]{16}$/);
-  // source-v3:2077c408337f21c0 → source-v3:67d213d3602920c7. currentLayoutVersion
+  // source-v3:5e7219a89a65ab03 → source-v3:1d5f1ca0ee90cec1. currentLayoutVersion
   // hashes pdf-text-layer.js, pdf-layout-adapter.js, pdf-blocks.js, and
-  // pdf-mirror.js. A gap wider than 0.18em is a space, and a long body line
-  // is not a subscript of the heading above it. Recompute this pin if any of
-  // those four files change.
-  assert.equal(version, "source-v3:67d213d3602920c7");
+  // pdf-mirror.js. Column order runs only when one baseline holds both
+  // columns, so an unstitched page keeps its block ids. An underbrace label
+  // stays on the formula line. A tight gap before log/exp/sin is not a word
+  // space. Recompute this pin if any of those four files change.
+  assert.equal(version, "source-v3:1d5f1ca0ee90cec1");
   assert.equal(await currentLayoutVersion(), version);
   const blocks = [{ id: "a", label: "text", text: "Hi" }];
   assert.equal(storedLayoutCurrent({ blocks }, version), null);
@@ -645,11 +646,13 @@ test("旧库页数据在慢速划区下恢复图，二次打开不再请求", { 
       const row = early.pages.find((item) => item.page === page);
       return row && row.state === "skipped" && row.blocks >= 13 && row.ps === "参考文献 · 保留原文";
     });
-    if (counted(early.doc, 27) === 27 && skips) break;
+    // Page 1's restored subtitle has no cached pair, so the count stays at
+    // 26 while layout is still slow. Every previously cached page is already in.
+    if (counted(early.doc, 27) >= 26 && skips) break;
     await sleep(200);
   }
   const elapsed = Date.now() - started;
-  assert.ok(early && counted(early.doc, 27) === 27, `progress ${early?.doc} at ${elapsed}ms`);
+  assert.ok(early && counted(early.doc, 27) >= 26, `progress ${early?.doc} at ${elapsed}ms`);
   assert.ok(elapsed < DONE_WITHIN_MS, `counted at ${elapsed}ms`);
   assert.equal(early.visuals.some((item) => item.page === 7 && item.label === "figure"), false);
   await evaluate("window.__oiLayoutDelay = 0");

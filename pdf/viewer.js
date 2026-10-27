@@ -208,7 +208,7 @@ import {
 import { readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
 import { createMmPageFlight } from "../lib/mm-page-queue.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapShouldDefer } from "../lib/mm-page-swap.js";
-import { joinPageBoundary } from "../lib/pdf-flow-join.js";
+import { joinPageBoundary, openPageHost } from "../lib/pdf-flow-join.js";
 import {
   MM_RETRY_COPY,
   markPresentation,
@@ -14873,10 +14873,49 @@ async function ingestReadoutLayout(n, isStale) {
   return layout;
 }
 
+function compactSentence(value) {
+  return String(value || "").replace(/\s+/g, "");
+}
+
+function dropContinuedTail(pending) {
+  const pages = libraryDoc?.pages || [];
+  if (knownLayoutVersion && pages.some((page) => {
+    const version = String(page?.layoutVersion || page?.layout?.layoutVersion || "");
+    return version && version !== knownLayoutVersion;
+  })) return pending;
+  const pairs = pages.flatMap((row) => row?.pairs || []);
+  if (!pairs.length) return pending;
+  return (pending || []).filter((unit) => {
+    const bid = String(unit?.bid || "");
+    if (bid && pairs.some((pair) => pair?.bid === bid)) return true;
+    const text = compactSentence(unit?.text || unit?.original || "");
+    if (text.length < 80) return true;
+    const head = text.slice(0, 60);
+    const tail = text.slice(-60);
+    const continued = pairs.some((pair) => {
+      const stored = compactSentence(pair?.text || "");
+      return stored.length >= text.length + 40 && stored.includes(head) && stored.includes(tail);
+    });
+    return !continued;
+  });
+}
+
+function storedSentenceExtends(host, pairs) {
+  const hostText = String(host?.text || "").replace(/\s+/g, " ").trim();
+  if (!host?.bid || !hostText) return null;
+  for (const pair of pairs || []) {
+    if (pair?.bid !== host.bid) continue;
+    const pairText = String(pair?.text || "").replace(/\s+/g, " ").trim();
+    if (pairText.startsWith(hostText) && pairText.length >= hostText.length + 80) return pair;
+  }
+  return null;
+}
+
 async function originalsForPage(n, gen, translatingDoc, work, batchSize, options = {}) {
   // A skip lock has no body units. A failed title on that page is still sent;
   // otherwise pageSkipReason stops on titleStructureFailed and slotsDone stays false.
   const retryFailedTitle = titleStructureFailed(n);
+  const stateAtStart = pageStates.get(n)?.state;
   if (skipLocked.has(n) && !retryFailedTitle) return [];
   const epoch = layoutEpoch;
   const engineAtStart = pdfEngineMode();
@@ -14892,7 +14931,7 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize, options
   };
   if (docPhase === "stopped" || !layoutAttemptLive(epoch)) return miss();
   const isStale = () => gen !== restoreGen || translatingDoc !== docId || docPhase === "stopped" || !layoutAttemptLive(epoch);
-  const layout = getPageLayout(n) || (await ingestPageLayout(n, isStale, epoch));
+  let layout = getPageLayout(n) || (await ingestPageLayout(n, isStale, epoch));
   if (!layout || isStale()) return miss();
   layoutMissReason.delete(n);
   if (work) {
@@ -14924,18 +14963,36 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize, options
     $("status")?.classList.remove("warn");
   }
   if (skipLocked.has(n)) return [];
-  const blocks = unitsForLayout(layout);
+  let blocks = unitsForLayout(layout);
   if (n === pageNum) pageOriginals = blocks;
   const cached = pageCache.get(translatingDoc, n);
   const saved = libraryEntry(n)?.pairs;
-  const filled = applySavedPairs(
-    liveOriginals(layout, blocks),
-    (Array.isArray(cached) && cached.length ? cached : saved) || [],
-    savedPairSettings()
-  );
-  const pending = options.force
+  let pairRows = (Array.isArray(cached) && cached.length ? cached : saved) || [];
+  const openHost = openPageHost(layout.blocks);
+  const extended = !options.force && openHost ? storedSentenceExtends(openHost, saved) : null;
+  const pageAlreadySettled = stateAtStart === "done" || stateAtStart === "skipped" || stateAtStart === "empty";
+  if (extended && !pageAlreadySettled && n < (pdfDoc?.numPages || 0) && !getPageLayout(n + 1)?.blocks?.length) {
+    // The library already stores this sentence joined to the next page.
+    // Read that page before sending, so the request is the joined block and the
+    // continuation is not translated a second time.
+    try {
+      await ingestPageLayout(n + 1, isStale, epoch);
+    } catch {
+      /* the sentence stays on this page until the next page is read */
+    }
+    if (isStale()) return miss();
+    layout = getPageLayout(n) || layout;
+    blocks = unitsForLayout(layout);
+    if (n === pageNum) pageOriginals = blocks;
+    if (Array.isArray(cached) && cached.length) {
+      pairRows = pairRows.filter((row) => String(row?.bid || "") !== extended.bid).concat([extended]);
+    }
+  }
+  const filled = applySavedPairs(liveOriginals(layout, blocks), pairRows, savedPairSettings());
+  let pending = options.force
     ? liveOriginals(layout, unitsForForceRetranslate(layout))
     : unitsNeedingTranslation(filled, pdfTargetLang);
+  if (!options.force) pending = dropContinuedTail(pending);
   if (!options.force && filled.length && pending.length < filled.length) {
     const kept = mergeTranslationRows(Array.isArray(cached) ? cached : [], cacheableReuse(filled));
     pageCache.set(translatingDoc, n, kept);

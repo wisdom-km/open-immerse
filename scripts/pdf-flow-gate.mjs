@@ -134,6 +134,7 @@ for (const root of roots) {
     }).promise;
     const pageFlows = [];
     const mmPages = [];
+    const paths = [];
     let missing = 0;
     let mmState = multimodal ? (mm ? (createCanvas ? "text" : "no-canvas") : "no-key") : "off";
     const limit = Math.min(doc.numPages, 8);
@@ -151,37 +152,45 @@ for (const root of roots) {
       const laid = textLayerToBlocks({ items: content.items, viewport, images, page });
       missing += laid.sourceAudit?.missing?.length || 0;
       pageFlows.push(bodyFlow(laid.blocks || []));
+      let path = "text";
+      let reason = multimodal ? (mm ? (createCanvas ? "pending" : "no-canvas") : "no-key") : "off";
       if (mm && createCanvas) {
         const png = await renderPng(pdfPage);
         if (!png) {
-          mmState = "no-canvas";
-          continue;
+          reason = "no-canvas";
+          mmState = reason;
+        } else {
+          const { runMmPage } = await import("../lib/mm-page.js");
+          const { sendVision } = await import("../lib/mm-client.js");
+          const { reconcilePage, readingOrderOff } = await import("../lib/mm-reconcile.js");
+          const result = await runMmPage({
+            pngBase64: png,
+            text: (laid.blocks || []).map((block) => block.text || "").join("\n"),
+            page,
+            target: { url: mm.url, model: mm.model, provider: mm.provider },
+            sendVision,
+            secret: mm.key,
+            configured: true
+          });
+          if (!result.ok) {
+            reason = publicReason(result.reason);
+            mmState = reason;
+            mmPages.push(bodyFlow(laid.blocks || []));
+          } else {
+            const reconciled = reconcilePage(result.page.blocks, laid.blocks || []);
+            if (readingOrderOff(reconciled.blocks, laid.blocks || [])) {
+              reason = "reading-order";
+              mmPages.push(bodyFlow(laid.blocks || []));
+            } else {
+              path = "mm";
+              reason = "ran";
+              mmState = "ran";
+              mmPages.push(bodyFlow(reconciled.blocks || []));
+            }
+          }
         }
-        const { runMmPage } = await import("../lib/mm-page.js");
-        const { sendVision } = await import("../lib/mm-client.js");
-        const { reconcilePage, readingOrderOff } = await import("../lib/mm-reconcile.js");
-        const result = await runMmPage({
-          pngBase64: png,
-          text: (laid.blocks || []).map((block) => block.text || "").join("\n"),
-          page,
-          target: { url: mm.url, model: mm.model, provider: mm.provider },
-          sendVision,
-          secret: mm.key,
-          configured: true
-        });
-        if (!result.ok) {
-          mmState = publicReason(result.reason);
-          mmPages.push(bodyFlow(laid.blocks || []));
-          continue;
-        }
-        const reconciled = reconcilePage(result.page.blocks, laid.blocks || []);
-        if (readingOrderOff(reconciled.blocks, laid.blocks || [])) {
-          mmPages.push(bodyFlow(laid.blocks || []));
-          continue;
-        }
-        mmState = "ran";
-        mmPages.push(bodyFlow(reconciled.blocks || []));
       }
+      paths.push({ page, path, reason });
     }
     const pages = joinedFlow(pageFlows);
     const aligned = paragraphs.length
@@ -205,7 +214,8 @@ for (const root of roots) {
       inversionExamples: aligned.inversionExamples || [],
       breakExamples: aligned.breakExamples || [],
       gap: aligned.gap || null,
-      mm: mmState
+      mm: mmState,
+      paths
     };
     if (mmPages.length && paragraphs.length) {
       const mmAligned = alignBodyFlow(paragraphs, joinedFlow(mmPages));
