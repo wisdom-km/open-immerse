@@ -107,9 +107,9 @@ git clone https://github.com/wisdom-km/open-immerse.git
 3. 点「测试连接」
 4. 离开输入框或按回车即保存（#137 起没有「保存设置」按钮）
 
-默认引擎是 **MyMemory（免费试用）**，不用 Key 就能跑通，质量与额度有限。正式阅读请换成 DeepL 或任意 LLM 通道。
+没有配置翻译引擎时，会借用已配置的多模态模型翻译（#176）；两者都没有时提示去设置。MyMemory 仍可手动选择，但不是默认，也不作兜底。
 
-已定改为即时保存，去掉「保存设置」；密钥在离开输入框或按回车时提交。空输入不覆盖已存密钥；清除密钥只通过『移除』（可撤销）（SET-05、SET-07）（2026-10-13 12:19–12:23，已合 #137）。所有密钥只存 `chrome.storage.local`，不进 sync。翻译密钥和 PDF 云端密钥已从 sync 迁到 local。2026-10-13 17:29 Wisdom 定：导出拆成「文献库」和「设置」两个文件，都不含任何 API key；设置导出不带 key，导入设置也不写入 key。见 `docs/settings-spec.md` §2。密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口，随 F11 执行（F10 并入 F11，2026-10-18）。笔记面板偏好（面板宽度、筛选、「不再提示」等）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起（2026-10-13 11:55 定，12:00 确认）；旧值自动迁移，不能丢，已合入（#130，`4e0a705`）。键是 `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`（一个键，值是 docHash 到 true 的映射）。问 AI 不再单独设一页，也不单独配模型。
+已定改为即时保存，去掉「保存设置」；密钥在离开输入框或按回车时提交。空白输入（未点 ×、也未把原值删成空串）不覆盖已存密钥；清除用框尾 ×，无眼睛、无撤销，失焦或回车自动保存，点 × 立刻写空（SET-05、SET-06、SET-07，2026-10-27）（2026-10-13 12:19–12:23，已合 #137）。所有密钥只存 `chrome.storage.local`，不进 sync。翻译密钥和 PDF 云端密钥已从 sync 迁到 local。2026-10-13 17:29 Wisdom 定：导出拆成「文献库」和「设置」两个文件，都不含任何 API key；设置导出不带 key，导入设置也不写入 key。见 `docs/settings-spec.md` §2。密钥是否跟账号同步由用户选择，沿用 11:57 预留的接口，随 F11 执行（F10 并入 F11，2026-10-18）。笔记面板偏好（面板宽度、筛选、「不再提示」等）从 `localStorage` 改存 `chrome.storage.local`，和其他设置放在一起（2026-10-13 11:55 定，12:00 确认）；旧值自动迁移，不能丢，已合入（#130，`4e0a705`）。键是 `reader.panelWidth`、`reader.notesWidth`、`reader.notesPaneSide`、`reader.notesPersistHintDismissed`（一个键，值是 docHash 到 true 的映射）。问 AI 不再单独设一页，也不单独配模型。
 
 ### 2. 译网页
 
@@ -180,7 +180,7 @@ git clone https://github.com/wisdom-km/open-immerse.git
 
 | id | 名称 | 类型 | 默认 |
 | --- | --- | --- | --- |
-| `mymemory` | MyMemory（免费试用） | 机器翻译 | 可选 Email 提高额度 |
+| `mymemory` | MyMemory（免费试用） | 机器翻译 | 手动可选，非默认，非兜底。可选 Email 提高额度 |
 | `microsoft` | Microsoft Translator | 机器翻译 | Region 默认 `eastasia` |
 | `deepl` | DeepL | 机器翻译 | Free / Pro 主机切换 |
 | `google` | Google Cloud Translation | 机器翻译 | Cloud Translation v2 |
