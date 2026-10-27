@@ -17,12 +17,14 @@ import {
   migrateStoredPdfLayout,
   oldFormulaPipeline,
   recomputedFormulaSettlement,
-  stampFormulaPairs
+  reopenFormulaStale,
+  stampFormulaPairs,
+  stampReopenFormulaPage
 } from "../lib/formula-pipeline.js";
 import { diagStateForPage } from "../lib/diag-log.js";
 import { cacheableLayout, layoutCacheKey, resolveLayoutMode } from "../lib/pdf-layout-client.js";
 import { parseLayoutCacheKey } from "../lib/pdf-layout-cache.js";
-import { pairsFromResults } from "../lib/pdf-library.js";
+import { mergeStoredPagePairs, pairsFromResults, selectPageLayout } from "../lib/pdf-library.js";
 import { PDF_COPY, canRetranslateRequestedPage, docStatusView, libraryPageRunState, translatedPageTotal } from "../lib/pdf-viewer.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -307,7 +309,37 @@ test("a finished single-page recompute stamps fp-1 and drops the old-formula lab
   const stateAt = success.indexOf("state: settled.state");
   assert.ok(settleAt >= 0 && settleAt < stampAt && stampAt < stateAt);
   assert.match(success, /liveLayout\.formulaPipeline = FORMULA_PIPELINE_VERSION/);
-  assert.match(success, /persistPagePairs\(\{ page: targetPage, pairs \}\)/);
+  assert.match(success, /commitRecomputedFormulaPage\(targetPage, liveLayout, pairs\)/);
+});
+
+test("reopen after a single-page recompute does not see fp-0 on any mode or pair", () => {
+  const pairs = [
+    { bid: "a", text: "Attention", sourceText: "Attention", translation: "注意力", formulaPipeline: "fp-0" },
+    { bid: "b", text: "Other", sourceText: "Other", translation: "其他", formulaPipeline: "fp-0" }
+  ];
+  const blocks = pairs.map((pair) => ({ bid: pair.bid, label: "text", sourceText: pair.text, text: pair.text }));
+  const layouts = [
+    { page: 5, mode: "text-layer", protocol: "blocks-1", layout: { formulaPipeline: "fp-1", mode: "text-layer", protocol: "blocks-1", blocks } },
+    { page: 5, mode: "unknown", protocol: "blocks-1", layout: { formulaPipeline: "fp-0", mode: "unknown", protocol: "blocks-1", blocks } }
+  ];
+  assert.equal(reopenFormulaStale({ pairs, layouts }), true);
+  const kept = mergeStoredPagePairs(pairs, [
+    { ...pairs[0], translation: "注意力机制", formulaPipeline: FORMULA_PIPELINE_VERSION }
+  ], blocks, "zh-CN");
+  assert.equal(kept.find((pair) => pair.bid === "b").formulaPipeline, "fp-0");
+  const merged = mergeStoredPagePairs(pairs, [
+    { ...pairs[0], translation: "注意力机制", formulaPipeline: FORMULA_PIPELINE_VERSION }
+  ], blocks, "zh-CN", { stampFormulaPipeline: FORMULA_PIPELINE_VERSION });
+  assert.ok(merged.every((pair) => pair.formulaPipeline === FORMULA_PIPELINE_VERSION));
+  const stamped = stampReopenFormulaPage({ pairs: merged, layouts });
+  assert.equal(reopenFormulaStale(stamped), false);
+  for (const engine of ["text-layer", "local-ocr", "unknown"]) {
+    const selected = selectPageLayout(stamped.layouts, 5, engine);
+    assert.equal(selected.formulaPipeline, FORMULA_PIPELINE_VERSION);
+    assert.equal(oldFormulaPipeline({ pairs: stamped.pairs, layout: selected }), false);
+  }
+  assert.match(viewer, /stampFormulaPipeline: FORMULA_PIPELINE_VERSION/);
+  assert.match(viewer, /row\.layout = \{ \.\.\.row\.layout, formulaPipeline: FORMULA_PIPELINE_VERSION \}/);
 });
 
 test("an explicit page is retranslated only when that page can, and an old formula mark still can", () => {

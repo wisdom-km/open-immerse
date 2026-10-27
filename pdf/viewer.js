@@ -13443,6 +13443,76 @@ function restoreForceReadout(prior, doc, page) {
   renderArticle();
 }
 
+/** Last write for a finished single-page recompute. Every mode and every pair. */
+function persistRecomputedFormulaStamp(page, pairs, layouts) {
+  const bytes = pdfBytes;
+  const identity = captureLibraryIdentity();
+  const pageCount = pdfDoc?.numPages || 0;
+  const sentFor = docId;
+  const writes = [];
+  const seen = new Set();
+  for (const row of layouts || []) {
+    const layout = row?.layout;
+    if (!layout || typeof layout !== "object") continue;
+    const mode = String(row.mode || layout.mode || "unknown");
+    const protocol = String(layout.protocol || row.protocol || "blocks-1");
+    const key = `${mode}|${protocol}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    writes.push({
+      mode,
+      layout: cacheableLayout({ ...layout, formulaPipeline: FORMULA_PIPELINE_VERSION, mode, protocol })
+    });
+  }
+  return enqueueLibraryWrite(async () => {
+    const hash = await pdfByteHash(bytes);
+    if (!hash || hash === "nohash") {
+      void maybeShowPersistCard();
+      return;
+    }
+    const targets = writes.length ? writes : [null];
+    let saved = null;
+    for (const item of targets) {
+      saved = await saveLibraryPage({
+        hash,
+        pageCount,
+        page,
+        pairs,
+        stampFormulaPipeline: FORMULA_PIPELINE_VERSION,
+        targetLang: pdfTargetLang,
+        ...(item ? {
+          layout: item.layout,
+          mode: item.mode,
+          layoutVersion: item.layout.layoutVersion || "",
+          blocks: item.layout.blocks
+        } : {}),
+        ...libraryPayloadFields(identity, hash, bytes)
+      });
+    }
+    void maybeShowPersistCard();
+    rememberLibrarySourceAttempt(hash, sentFor, saved);
+  });
+}
+
+function commitRecomputedFormulaPage(page, layout, fallbackPairs) {
+  if (layout && typeof layout === "object") layout.formulaPipeline = FORMULA_PIPELINE_VERSION;
+  if (layout) rememberEngineLayout(page, layout);
+  const rows = (libraryDoc?.layoutRows || []).filter((row) => Number(row?.page) === Number(page));
+  for (const row of rows) {
+    if (row?.layout && typeof row.layout === "object") {
+      row.layout = { ...row.layout, formulaPipeline: FORMULA_PIPELINE_VERSION };
+    }
+  }
+  const entry = (libraryDoc?.pages || []).find((item) => Number(item?.page) === Number(page));
+  if (entry?.layout && typeof entry.layout === "object") {
+    entry.layout = { ...entry.layout, formulaPipeline: FORMULA_PIPELINE_VERSION };
+  }
+  const stamped = stampFormulaPairs(entry?.pairs?.length ? entry.pairs : (fallbackPairs || []), FORMULA_PIPELINE_VERSION);
+  replaceLibraryPagePairs(libraryDoc, page, stamped);
+  void persistRecomputedFormulaStamp(page, stamped, rows);
+  return stamped;
+}
+
 function unitsForForceRetranslate(layout) {
   if (layout?.kind === "blocks") {
     return unitsForLayout({ ...layout, blocks: blocksForForceRetranslate(layout.blocks) });
@@ -13732,14 +13802,12 @@ async function forceRetranslateCurrentPage(requestedPage) {
         void maybeShowPersistCard();
       }
       if (!pairs.length) throw new Error("empty retranslation");
-      replaceLibraryPagePairs(libraryDoc, targetPage, pairs);
-      if (liveLayout) rememberEngineLayout(targetPage, liveLayout);
       formulaClassifyGen += 1;
+      const storedPairs = commitRecomputedFormulaPage(targetPage, liveLayout, pairs);
+      replaceLibraryPagePairs(libraryDoc, targetPage, storedPairs);
       pageCache.set(translatingDoc, targetPage, merged);
       pageResults = merged;
       notePageState(targetPage, { state: settled.state, hasLayout: true });
-      persistPageLayout(targetPage).catch(() => {});
-      persistPagePairs({ page: targetPage, pairs }).catch(() => {});
       clearSlotPainted(targetPage);
       finishDocPhase();
       renderArticle();
