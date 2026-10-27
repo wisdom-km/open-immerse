@@ -449,6 +449,7 @@ import {
   formulaPipelineStamp,
   migrateEngineOverride,
   oldFormulaPipeline,
+  recomputedFormulaSettlement,
   stampFormulaPairs
 } from "../lib/formula-pipeline.js";
 import { clearFormulaDoc } from "../lib/formula-cache-client.js";
@@ -13712,7 +13713,16 @@ async function forceRetranslateCurrentPage(requestedPage) {
     translatingPage = targetPage;
     updateTranslateControls();
     try {
-      const pairs = pairsFromResults(merged, pairSettingsForLayout(zonedLayout));
+      const liveLayout = getPageLayout(targetPage) || zonedLayout;
+      if (liveLayout && typeof liveLayout === "object") {
+        liveLayout.formulaPipeline = FORMULA_PIPELINE_VERSION;
+      }
+      const settled = recomputedFormulaSettlement({
+        layout: liveLayout,
+        pairs: pairsFromResults(merged, pairSettingsForLayout(liveLayout)),
+        state: pageRunState(merged, { targetLang: pdfTargetLang })
+      });
+      const pairs = settled.pairs;
       try {
         await rememberTranslation(targetPage, merged);
       } catch (error) {
@@ -13723,9 +13733,13 @@ async function forceRetranslateCurrentPage(requestedPage) {
       }
       if (!pairs.length) throw new Error("empty retranslation");
       replaceLibraryPagePairs(libraryDoc, targetPage, pairs);
+      if (liveLayout) rememberEngineLayout(targetPage, liveLayout);
+      formulaClassifyGen += 1;
       pageCache.set(translatingDoc, targetPage, merged);
       pageResults = merged;
-      notePageState(targetPage, { state: pageRunState(merged, { targetLang: pdfTargetLang }), hasLayout: true });
+      notePageState(targetPage, { state: settled.state, hasLayout: true });
+      persistPageLayout(targetPage).catch(() => {});
+      persistPagePairs({ page: targetPage, pairs }).catch(() => {});
       clearSlotPainted(targetPage);
       finishDocPhase();
       renderArticle();

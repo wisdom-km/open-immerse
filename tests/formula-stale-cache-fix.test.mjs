@@ -16,6 +16,7 @@ import {
   migrateEngineOverride,
   migrateStoredPdfLayout,
   oldFormulaPipeline,
+  recomputedFormulaSettlement,
   stampFormulaPairs
 } from "../lib/formula-pipeline.js";
 import { diagStateForPage } from "../lib/diag-log.js";
@@ -282,6 +283,31 @@ test("a rushed old-formula page is recut before it is translated", () => {
   const send = originals.indexOf("await originalsForPage");
   assert.ok(rush >= 0 && rush < gate && gate < prior && prior < ingest && ingest < hold && hold < send);
   assert.match(originals, /force: options\?\.forceAll === true \|\| rush/);
+});
+
+test("a finished single-page recompute stamps fp-1 and drops the old-formula label", () => {
+  const layout = { formulaPipeline: "fp-0", blocks: [{ label: "text", sourceText: "Attention" }] };
+  const pairs = stampFormulaPairs(
+    [{ text: "Attention", sourceText: "Attention", translation: "注意力" }],
+    "fp-0"
+  );
+  assert.equal(oldFormulaPipeline({ pairs, layout }), true);
+  const settled = recomputedFormulaSettlement({ layout, pairs, state: "stale-formula" });
+  assert.equal(settled.layout.formulaPipeline, FORMULA_PIPELINE_VERSION);
+  assert.equal(settled.pairs[0].formulaPipeline, FORMULA_PIPELINE_VERSION);
+  assert.equal(settled.state, "done");
+  assert.equal(oldFormulaPipeline({ pairs: settled.pairs, layout: settled.layout }), false);
+  assert.equal(recomputedFormulaSettlement({ layout, pairs, state: "partial" }).state, "partial");
+  const success = viewer.slice(
+    viewer.indexOf('if (outcome !== "success")'),
+    viewer.indexOf("PDF_COPY.retranslateDone")
+  );
+  const settleAt = success.indexOf("recomputedFormulaSettlement");
+  const stampAt = success.indexOf("formulaClassifyGen += 1");
+  const stateAt = success.indexOf("state: settled.state");
+  assert.ok(settleAt >= 0 && settleAt < stampAt && stampAt < stateAt);
+  assert.match(success, /liveLayout\.formulaPipeline = FORMULA_PIPELINE_VERSION/);
+  assert.match(success, /persistPagePairs\(\{ page: targetPage, pairs \}\)/);
 });
 
 test("an explicit page is retranslated only when that page can, and an old formula mark still can", () => {
