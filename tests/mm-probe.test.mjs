@@ -1446,7 +1446,7 @@ function changeOcrProvider(tab, value) {
 }
 
 function clickRemoveKey(tab) {
-  const button = [...tab.document.querySelectorAll("[data-key-slot='mm'] button")].find((node) => node.textContent === "移除密钥");
+  const button = tab.document.querySelector("[data-key-slot='mm'] [aria-label='清空密钥']");
   if (!button) return false;
   button.click();
   return true;
@@ -1974,18 +1974,13 @@ test("移除密钥 and a replacement key persist on a stored empty custom card",
     assert.notEqual(keyInput(tab).value, "");
     clickRemoveKey(tab);
     await flush();
-    assert.match(tab.document.getElementById("setToast").textContent, /已移除/);
+    assert.equal(tab.document.querySelector("#setToast button"), null);
     assert.equal(storedKey(), "");
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.model, "m");
     assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.baseUrl, "");
     const reopened = await openOptionsTab("empty-key-again");
     assert.equal(keyInput(reopened).value, "");
-    assert.equal(clickUndo(tab), true);
-    await flush();
-    assert.equal(storedKey(), SECRET);
-    clickRemoveKey(tab);
-    await flush();
-    assert.equal(storedKey(), "");
+    assert.equal(String(reopened.document.getElementById("setToast")?.textContent || "").includes("撤销"), false);
     commitKey(tab, "sk-replaced-key");
     await flush();
     assert.equal(storedKey(), "sk-replaced-key");
@@ -2198,7 +2193,7 @@ test("an unexpected probe failure is unavailable, not a network error", async ()
   assert.throws(() => mod.classifyUnexpectedProbe(Object.assign(new Error("net"), { code: "real-network-in-test" })));
 });
 
-test("undo during a probe restores the button and drops the result", async () => {
+test("clearing a key does not offer undo, and a later probe can still land", async () => {
   const bag = {
     [FORMULA_SETTINGS_KEY]: {
       multimodal: { provider: "openai", apiKey: SECRET, model: "gpt-5.6-luna", baseUrl: "" }
@@ -2220,16 +2215,15 @@ test("undo during a probe restores the button and drops the result", async () =>
     const tab = await openOptionsTab("guard-undo");
     clickRemoveKey(tab);
     await flush();
+    assert.equal(tab.document.querySelector("#setToast button"), null);
     commitKey(tab, SECRET);
     await flush();
     assert.equal(await clickProbe(tab, { pending, current: null }), true);
     assert.equal(probeButton(tab).textContent, "测试中…");
-    assert.equal(clickUndo(tab), true);
-    await flush();
-    assert.equal(probeButton(tab).textContent, "测试连通");
+    assert.equal(clickUndo(tab), false);
     pending[0](jsonResponse(200, { choices: [{ message: { content: "SEEN" } }] }));
     await flush();
-    assert.notEqual(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, true);
+    assert.equal(bag[FORMULA_SETTINGS_KEY].multimodal.probe?.ok, true);
   } finally {
     installNet(null);
     restoreGlobals(previous);
@@ -4306,7 +4300,7 @@ test("the empty-key hint leaves when the first key is saved and returns when tha
     assert.equal(clickRemoveKey(page.tab), true);
     assert.equal(doc.querySelector("[data-key-hint='mm']").textContent, EMPTY_KEY_HINT);
     assert.equal(doc.querySelector("[data-formula-action='mm']").disabled, true);
-    const ocrRemove = [...doc.querySelectorAll("[data-key-slot='ocr'] button")].find((node) => node.textContent === "移除密钥");
+    const ocrRemove = doc.querySelector("[data-key-slot='ocr'] [aria-label='清空密钥']");
     assert.equal(typeof ocrRemove?.click, "function");
     ocrRemove.click();
     assert.equal(doc.querySelector("[data-key-hint='ocr']").textContent, EMPTY_KEY_HINT);

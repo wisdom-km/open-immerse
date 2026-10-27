@@ -110,7 +110,11 @@ test("settings cards use flat --set-* tokens and multimodal cards do not use rea
 test("translation key actions sit on one line beside the input", () => {
   const js = read("options/options.js");
   assert.match(js, /line\.className = "set-key-line"/);
-  assert.match(js, /line\.append\(input, toggle, remove, saved\)/);
+  assert.match(js, /line\.append\(bound\.root, saved\)/);
+  assert.equal(/line\.append\(\s*input\s*,\s*toggle\s*,\s*remove\s*,\s*saved\s*\)/.test(js), false);
+  const secret = read("lib/secret-field.js");
+  assert.match(secret, /aria-label", "清空密钥"/);
+  assert.match(secret, /className = "oi-key-clear"/);
   assert.equal(js.includes("renderPdfFeature"), false);
   assert.equal(js.includes('FEATURES.filter((feat) => feat.id === "pdf")'), false);
   assert.match(js, /const PDF_ON_NOTE = "在浏览器里打开 PDF 时，用沉浸译的双栏阅读器显示原文和译文。"/);

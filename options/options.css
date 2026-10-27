@@ -781,6 +781,47 @@ body.oi-settings .set-key-line .set-inline {
   flex: none;
   white-space: nowrap;
 }
+.oi-key-field {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.oi-key-control { position: relative; min-width: 0; }
+.oi-key-control input,
+body.oi-settings .set-key-line .oi-key-control input,
+.oi-set-key .oi-key-control input {
+  width: 100%;
+  flex: none;
+  box-sizing: border-box;
+  padding-right: 28px;
+}
+.oi-key-control input[aria-invalid="true"] { border-color: var(--oi-danger); }
+.oi-key-clear {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--oi-radius-control);
+  background: transparent;
+  color: var(--oi-text-muted);
+  font: 500 13px/24px var(--oi-font);
+  cursor: pointer;
+}
+.oi-key-clear:hover { color: var(--oi-text); }
+.oi-key-clear:focus-visible { outline: 2px solid var(--oi-focus); outline-offset: 2px; }
+.oi-key-error {
+  margin: 4px 0 0;
+  color: var(--oi-danger);
+  font: 400 12px/1.4 var(--oi-font);
+}
+.oi-set-key .oi-key-field { flex: 1 1 auto; }
 body.oi-settings .set-key-line [data-secret-saved] {
   flex: none;
   font-size: 12px;

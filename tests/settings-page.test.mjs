@@ -757,6 +757,18 @@ function fire(node, type) {
   node.dispatchEvent(new node.ownerDocument.defaultView.Event(type, { bubbles: true }));
 }
 
+function pressClear(doc, slot = "translate") {
+  const input = doc.querySelector(`[data-key-slot='${slot}'] input`);
+  let button = doc.querySelector(`[data-key-slot='${slot}'] [aria-label='清空密钥']`);
+  if (!button && input) {
+    input.value = "x";
+    fire(input, "input");
+    button = doc.querySelector(`[data-key-slot='${slot}'] [aria-label='清空密钥']`);
+  }
+  assert.ok(button, `${slot} clear`);
+  button.click();
+}
+
 test("settings page behavior covers routing, secrets, notes, and data", async () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
@@ -851,19 +863,28 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     assert.equal(chrome.sync.settings.providers.openai.apiKey, "");
 
     const key = page.document.querySelector("[data-key-slot='translate'] input");
-    assert.equal(key.value, "sk-••••3f9a");
-    key.value = "";
+    assert.equal(key.type, "password");
+    assert.equal(key.getAttribute("autocomplete"), "off");
+    assert.equal(key.value, OPENAI_KEY);
+    assert.equal(key.value.includes("•"), false);
+    key.focus();
+    assert.equal(key.value, OPENAI_KEY);
     fire(key, "blur");
     await flush();
-    assert.equal(key.value, "sk-••••3f9a");
-    assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
-    assert.equal(page.document.querySelector("[data-secret-saved]").textContent, "");
-    key.value = "   ";
-    key.dispatchEvent(Object.assign(new page.window.Event("keydown", { bubbles: true }), { key: "Enter" }));
+    assert.equal(page.document.querySelector("[data-key-slot='translate'] input").value, OPENAI_KEY);
+    key.value = "";
+    fire(key, "blur");
+    await settle();
+    const clearedKey = page.document.querySelector("[data-key-slot='translate'] input");
+    assert.equal(clearedKey.value, "");
+    assert.equal(chrome.local.oiSecrets.providers.openai, "");
+    assert.equal(page.document._focused, clearedKey);
+    clearedKey.value = "   ";
+    clearedKey.dispatchEvent(Object.assign(new page.window.Event("keydown", { bubbles: true }), { key: "Enter" }));
     await flush();
-    assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
-    key.value = "  sk-new123  ";
-    key.dispatchEvent(new page.window.Event("blur", { bubbles: true }));
+    assert.equal(chrome.local.oiSecrets.providers.openai, "");
+    clearedKey.value = "  sk-new123  ";
+    clearedKey.dispatchEvent(new page.window.Event("blur", { bubbles: true }));
     await flush();
     assert.equal(chrome.local.oiSecrets.providers.openai, "sk-new123");
     assert.equal(page.document.querySelector("[data-key-slot='translate'] [data-secret-saved]").textContent, "已保存");
@@ -871,31 +892,26 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     typed.value = "sk-typed-only";
     await flush();
     assert.equal(chrome.local.oiSecrets.providers.openai, "sk-new123");
+    assert.equal(page.document.querySelector("[data-key-slot='translate'] input").value.includes("•"), false);
+    assert.equal([...page.document.querySelectorAll("button")].some((button) => button.textContent === "显示" || button.textContent === "隐藏"), false);
 
-    const show = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "显示");
-    show.click();
-    assert.equal(page.document.querySelector("[data-key-slot='translate'] input").value, "sk-new123");
-    mock.timers.tick(30000);
-    assert.equal(page.document.querySelector("[data-key-slot='translate'] input").value, "sk-••••w123");
-
-    const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+    const remove = page.document.querySelector("[data-key-slot='translate'] [aria-label='清空密钥']");
+    const clearDown = new page.window.Event("mousedown", { bubbles: true, cancelable: true });
+    remove.dispatchEvent(clearDown);
+    assert.equal(clearDown.defaultPrevented, true);
     remove.click();
     await settle();
     assert.equal(chrome.local.oiSecrets.providers.openai, "");
-    assert.match(page.document.getElementById("setToast").textContent, /已移除 .+ 密钥/);
-    page.document.getElementById("setToast").querySelector("button").click();
-    await flush();
-    assert.equal(chrome.local.oiSecrets.providers.openai, "sk-new123");
+    assert.equal(page.document.querySelector("[data-key-slot='translate'] input").value, "");
+    assert.equal(page.document.querySelector("[data-key-slot='translate'] [aria-label='清空密钥']"), null);
+    assert.equal(String(page.document.getElementById("setToast").textContent || "").includes("撤销"), false);
 
-    const mmRemove = [...page.document.querySelectorAll("[data-key-slot='mm'] button")].find((button) => button.textContent === "移除密钥");
+    const mmRemove = page.document.querySelector("[data-key-slot='mm'] [aria-label='清空密钥']");
     assert.ok(page.document.querySelector("[data-formula-switch='formula.tier2.enabled']"));
     mmRemove.click();
     await flush();
     assert.equal(page.document.querySelector("[data-formula-switch='formula.tier2.enabled']"), null);
-    assert.match(page.document.getElementById("setToast").textContent, /已移除 多模态 密钥/);
-    page.document.getElementById("setToast").querySelector("button").click();
-    await flush();
-    assert.equal(page.document.querySelector("[data-formula-switch='formula.tier2.enabled']").checked, true);
+    assert.equal(String(page.document.getElementById("setToast").textContent || "").includes("撤销"), false);
     mock.timers.tick(5000);
 
     page.document.getElementById("setSearch").value = "密钥";
@@ -1031,7 +1047,7 @@ test("settings page behavior covers routing, secrets, notes, and data", async ()
     assert.equal(page.document.getElementById("importKeyNote").hidden, false);
     assert.equal(page.document.getElementById("targetLang").value, "ja");
     assert.equal(syncHasSecrets(chrome.sync.settings), false);
-    assert.equal(chrome.local.oiSecrets.providers.openai, "sk-new123");
+    assert.equal(chrome.local.oiSecrets.providers.openai, "");
     assert.equal(String(chrome.local.oiSecrets.pdfCloudApiKey || ""), PDF_KEY);
 
     page.document.getElementById("exportSettings").click();
@@ -1255,9 +1271,7 @@ test("removed and stale PDF cloud keys are not written back", async () => {
   const { startOptions } = await import("../options/options.js?freshness=1");
   await startOptions();
   await flush();
-  const pdfRemove = [...page.document.querySelectorAll("button")].find((button) => {
-    return button.textContent === "移除密钥" && button.parentElement?.querySelector("#pdfCloudApiKey");
-  });
+  const pdfRemove = page.document.querySelector("[data-key-slot='pdf'] [aria-label='清空密钥']");
   pdfRemove.click();
   await flush();
   assert.equal(chrome.local.oiSecrets.pdfCloudApiKey, "");
@@ -1375,7 +1389,7 @@ test("a removed provider key is not written back by a failed or in-flight edit",
   await flush();
   assert.equal(chrome.local.oiSecrets.providers.openai, OPENAI_KEY);
   chrome.failSave = false;
-  const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+  const remove = page.document.querySelector("[data-key-slot='translate'] [aria-label='清空密钥']");
   remove.click();
   await flush();
   assert.equal(chrome.local.oiSecrets.providers.openai, "");
@@ -1417,7 +1431,7 @@ test("a removed provider key is not written back by a failed or in-flight edit",
   fire(racingKey, "blur");
   await flush();
   assert.equal(racingChrome.local.oiSecrets.providers.openai, OPENAI_KEY);
-  const racingRemove = [...racingPage.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+  const racingRemove = racingPage.document.querySelector("[data-key-slot='translate'] [aria-label='清空密钥']");
   racingRemove.click();
   await flush();
   assert.equal(racingChrome.local.oiSecrets.providers.openai, OPENAI_KEY);
@@ -1689,7 +1703,7 @@ test("a key edit already sent does not land after the key is removed", async () 
     await flush();
     if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, OPENAI_KEY);
     else assert.equal(String(chrome.local.oiSecrets.providers.openai), OPENAI_KEY);
-    const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+    const remove = page.document.querySelector("[data-key-slot='translate'] [aria-label='清空密钥']");
     remove.click();
     await flush();
     if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, OPENAI_KEY);
@@ -1726,7 +1740,7 @@ test("a newer key wins when an older edit lands after it was saved", async () =>
     await flush();
     if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, OPENAI_KEY);
     else assert.equal(String(chrome.local.oiSecrets.providers.openai), OPENAI_KEY);
-    const remove = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+    const remove = page.document.querySelector("[data-key-slot='translate'] [aria-label='清空密钥']");
     remove.click();
     await flush();
     if (legacy) assert.equal(chrome.sync.settings.providers.openai.apiKey, OPENAI_KEY);
@@ -1785,7 +1799,7 @@ test("key ops stay in order on both backgrounds, including a failed last write",
         });
         for (const action of order) {
           if (action.kind === "remove") {
-            const button = [...page.document.querySelectorAll("[data-key-slot='translate'] button")].find((node) => node.textContent === "移除密钥");
+            const button = page.document.querySelector("[data-key-slot='translate'] [aria-label='清空密钥']");
             button.click();
           } else {
             const input = page.document.querySelector("[data-key-slot='translate'] input");
@@ -2081,8 +2095,7 @@ test("two settings pages and a reload keep the later key on both backgrounds", a
     const after = await import(`../options/options.js?reload=${label}-after`);
     await after.startOptions();
     await flush();
-    const remove = [...reloaded.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
-    remove.click();
+    pressClear(reloaded.document);
     await flush();
     assert.equal(storedProviderKey(again, legacy), OPENAI_KEY, `${label} reload waiting`);
     releaseReload();
@@ -2201,8 +2214,7 @@ test("releasing the lock on unload lets a new page remove the key before a stale
         (async () => {
           await modB.startOptions();
           await flush();
-          const remove = [...pageB.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
-          remove.click();
+          pressClear(pageB.document);
           await settle();
           assert.equal(storedProviderKey(chrome, legacy), "", `${label} cleared while the stale write is held`);
           return "cleared";
@@ -2930,7 +2942,7 @@ async function runNewBackgroundSeed(seed) {
     } else if (event === "delete") {
       const tab = pickTab() || await openTab();
       focusTab(tab);
-      const remove = [...tab.page.document.querySelectorAll("[data-key-slot='translate'] button")].find((button) => button.textContent === "移除密钥");
+      const remove = tab.page.document.querySelector("[data-key-slot='translate'] [aria-label='清空密钥']");
       if (remove) {
         remove.click();
         await settle();
