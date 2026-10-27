@@ -484,7 +484,7 @@
 .oi-note-body a:focus {
   color: var(--oi-reader-link-hover);
 }
-.oi-note-body a:focus {
+.oi-note-body a:focus-visible {
   outline: 2px solid var(--oi-reader-link);
   outline-offset: 2px;
 }
@@ -856,11 +856,35 @@
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
-.oi-notes :focus-visible {
+.oi-notes :is(button, a, input, textarea, select, [role="menuitem"], [role="button"]):focus-visible {
+  outline: var(--oi-reader-focus-width) solid var(--oi-reader-focus);
+  outline-offset: var(--oi-reader-focus-offset);
+}
+.oi-notes .oi-note-body a:focus-visible {
+  outline: 2px solid var(--oi-reader-link);
+  outline-offset: 2px;
+}
+.oi-note-card:focus-visible,
+.oi-notes-group-head:focus-visible {
   outline: var(--oi-reader-focus-width) solid var(--oi-reader-focus);
   outline-offset: var(--oi-reader-focus-offset);
 }
 .oi-notes-menu [role="menuitem"]:focus-visible { outline-offset: 0; }
+.oi-notes:focus,
+.oi-notes-scroll:focus {
+  outline: none;
+}
+.oi-notes:focus-visible,
+.oi-notes-scroll:focus-visible {
+  outline: 1px solid var(--oi-reader-focus-pane-soft);
+  outline-offset: -1px;
+}
+@media (forced-colors: active) {
+  .oi-notes:focus-visible,
+  .oi-notes-scroll:focus-visible {
+    outline-color: Highlight;
+  }
+}
 .oi-notes-file {
   position: absolute;
   width: 1px;
