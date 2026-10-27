@@ -200,6 +200,7 @@ for (const root of roots) {
       noiseBreaks: aligned.noiseBreaks,
       matched: aligned.matched,
       total: aligned.total,
+      absent: aligned.absent ?? aligned.gap?.absent ?? 0,
       window: aligned.window || null,
       inversionExamples: aligned.inversionExamples || [],
       breakExamples: aligned.breakExamples || [],

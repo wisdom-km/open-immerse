@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { alignBodyFlow, latexParagraphs } from "../lib/pdf-flow-gate.js";
-import { bodyFlow, continuesBlock, dehyphenJoin, joinFlowBlocks, joinPageBoundary } from "../lib/pdf-flow-join.js";
+import { bodyFlow, continuesBlock, dehyphenJoin, joinAcrossFormulas, joinFlowBlocks, joinPageBoundary } from "../lib/pdf-flow-join.js";
 import { insertBlockByPosition, readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
 import { parsePageJson } from "../lib/mm-page.js";
 import { looksLikeFigureAnnotation, textLayerToBlocks } from "../lib/pdf-text-layer.js";
@@ -107,6 +107,21 @@ test("a short capitalized line that continues in lowercase is not a heading, and
   ]);
   assert.equal(acrossFigure[0].text, "segments of a corpus, it effectively creates a recurrence.");
   assert.equal(acrossFigure[4].flowHost, "a");
+  const acrossFormula = joinFlowBlocks([
+    { id: "a", label: "text", text: "each conditional probability is modeled as" },
+    { id: "f12", label: "formula", text: "y = g(x)" },
+    { id: "b", label: "text", text: "where g is a nonlinear function." },
+    { id: "c", label: "text", text: "This sentence is finished." },
+    { id: "f13", label: "formula", text: "z = 1" },
+    { id: "d", label: "text", text: "The next paragraph starts here and stands alone." }
+  ]);
+  assert.equal(acrossFormula[0].text, "each conditional probability is modeled as ⟦f12⟧ where g is a nonlinear function.");
+  assert.equal(acrossFormula[2].flowHost, "a");
+  assert.equal(acrossFormula[1].label, "formula");
+  assert.equal(acrossFormula[0].placeholders[0].blockId, "f12");
+  assert.equal(acrossFormula[3].text, "This sentence is finished.");
+  assert.equal(acrossFormula[5].flowHost, undefined);
+  assert.equal(joinAcrossFormulas("computed by illus-", "tration of the model.", [{ id: "9", label: "formula" }]), "computed by illus ⟦f9⟧ tration of the model.");
   assert.equal(looksLikeFigureAnnotation("x1 Fixed (No Grad) x2 x3"), true);
   assert.equal(looksLikeFigureAnnotation("Since the full whitening of each layer is costly."), false);
   const boundary = joinPageBoundary(
@@ -244,6 +259,35 @@ test("latex alignment requires a forward body order and counts a mid-sentence br
   ]);
   assert.equal(withLater.total, 2);
   assert.equal(withLater.coverage, 1);
+  const shared = alignBodyFlow([
+    "Transformers learn longer context when the segment carries its state forward across the boundary.",
+    "The next paragraph starts a new claim about relative position and does not continue the first."
+  ], [
+    { label: "text", text: "Transformers learn longer context when the segment carries its state forward across the boundary. The next paragraph starts a new claim about relative position and does not continue the first." }
+  ]);
+  assert.equal(shared.matched, 2);
+  assert.equal(shared.coverage, 1);
+  const withMacro = alignBodyFlow([
+    paragraphs[0],
+    "{alpha} {beta} {gamma} {delta} {epsilon} {zeta} {eta} {theta} {iota} {kappa} {lambda} {mu} model parameter",
+    paragraphs[1]
+  ], [
+    { label: "text", text: "Transformers learn longer context when the segment carries its state forward across the boundary." },
+    { label: "text", text: "The next paragraph starts a new claim about relative position and does not continue the first." }
+  ]);
+  assert.equal(withMacro.total, 2);
+  assert.equal(withMacro.gap.macro >= 1, true);
+  const repeated = "While stochastic gradient is simple and effective it requires careful tuning of the model hyper parameters throughout training.";
+  const duplicate = alignBodyFlow([
+    repeated,
+    "where x is the training data set and with sgd the training proceeds in steps of a mini batch of examples.",
+    `${repeated} The later experiment repeats the same observation about the learning rate.`
+  ], [
+    { label: "text", text: repeated },
+    { label: "text", text: "where x is the training data set and with sgd the training proceeds in steps of a mini batch of examples." }
+  ]);
+  assert.equal(duplicate.inversions, 0);
+  assert.equal(duplicate.absent, 0);
   const force = viewer.slice(viewer.indexOf("async function forceRetranslateCurrentPage"), viewer.indexOf("async function forceRetranslateCurrentPage") + 1600);
   assert.match(force, /MM_PAGE_MODE && mmPageConfigured\(formulaViewerSettings\)/);
   assert.ok(force.includes("const sourceLayout = getPageLayout(page)"));
