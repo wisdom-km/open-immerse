@@ -97,8 +97,10 @@ test("重译本页 bypasses library early-returns; 翻译 still short-circuits",
   );
   assert.match(current, /saved\?\.pairs\?\.length/);
   assert.match(current, /savedTranslationFor\(/);
-  assert.equal(current.includes("retranslateRunning"), false);
-  assert.equal(current.includes("forceRetranslateCurrentPage"), false);
+  assert.match(current, /state === "stale-formula"[\s\S]*forceRetranslateCurrentPage\(pageNum\)/);
+  const rest = current.replace(/if \(pageStates\.get\(pageNum\)\?\.state === "stale-formula"\) \{[\s\S]*?return;\s*\}/, "");
+  assert.equal(rest.includes("retranslateRunning"), false);
+  assert.equal(rest.includes("forceRetranslateCurrentPage"), false);
 
   const forceStart = viewer.indexOf("function unitsForForceRetranslate");
   const force = viewer.slice(forceStart, viewer.indexOf("\nfunction withStructureRows", forceStart));

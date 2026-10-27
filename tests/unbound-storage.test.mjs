@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { cacheableLayout, layoutCacheKey } from "../lib/pdf-layout-client.js";
-import { readLayoutCache, writeLayoutCache } from "../lib/pdf-layout-cache.js";
+import { parseLayoutCacheKey, readLayoutCache, writeLayoutCache } from "../lib/pdf-layout-cache.js";
 import { recordedPersistDenied } from "../lib/notes-store.js";
 import {
   clampZoom,
@@ -18,6 +18,12 @@ import {
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const viewerSrc = readFileSync(join(root, "pdf/viewer.js"), "utf8");
 const SECRET = "SECRET_LAYOUT_TEXT";
+
+function protocolOf(key) {
+  const parsed = parseLayoutCacheKey(key);
+  if (!parsed?.protocol) throw new Error(`unparsed layout key ${key}`);
+  return parsed.protocol;
+}
 const KEYS = [ZOOM_CHIP_STORAGE_KEY, MIRROR_ZOOM_CHIP_POS_KEY, MIRROR_ZOOM_STORAGE_KEY, "notesPersistGranted"];
 
 let turn = Promise.resolve();
@@ -275,7 +281,7 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
       assert.equal(area.state.getCalls > 0, true);
       assert.equal(area.state.setCalls, 0);
       assert.equal(area.bag[key], legacy);
-      const row = await store.getLayout("attention", 3, "text-layer", key.split(":").at(-2));
+      const row = await store.getLayout("attention", 3, "text-layer", protocolOf(key));
       assert.equal(row.layoutRev, "rev-1");
       assert.equal(row.layout.blocks[0].bid, "p3");
       assert.equal(warnings.seen.length, 0);
@@ -414,7 +420,7 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
       await tabB.writeLayoutCache(key, fresh, { store });
       release();
       const [fromA, fromB] = await Promise.all([left, right]);
-      const bids = new Set([fromA?.blocks?.[0]?.bid, fromB?.blocks?.[0]?.bid, (await store.getLayout("attention", 9, "text-layer", key.split(":").at(-2)))?.layout?.blocks?.[0]?.bid]);
+      const bids = new Set([fromA?.blocks?.[0]?.bid, fromB?.blocks?.[0]?.bid, (await store.getLayout("attention", 9, "text-layer", protocolOf(key)))?.layout?.blocks?.[0]?.bid]);
       for (const bid of bids) assert.ok(bid === "legacy" || bid === "fresh", String(bid));
       assert.equal(JSON.stringify(area.bag[key]), planted);
       assert.equal(area.state.setCalls, 0);
@@ -909,7 +915,7 @@ describe("unbound chrome.storage", { concurrency: 1 }, () => {
 
   test("layout cache shared-state random interleave keeps invariants", { timeout: 60000 }, () => exclusive(async () => {
     const key = layoutCacheKey({ hash: "attention-interleave", page: 2, mode: "text-layer" });
-    const protocol = key.split(":").at(-2);
+    const protocol = protocolOf(key);
     const legacy = legacyLayout("legacy", SECRET, "rev-legacy");
     const planted = JSON.stringify(legacy);
     const tabA = await import(pathToFileURL(join(root, "lib/pdf-layout-cache.js")).href + "?realm=layout-a");

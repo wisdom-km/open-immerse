@@ -558,8 +558,10 @@ test("resume keeps the mode, starts at resumePage, and does not resend translate
   assert.match(branch, /mode: plan\.mode/);
   assert.match(branch, /startPage: plan\.startPage/);
   assert.match(branch, /anchorPage: plan\.anchorPage/);
+  assert.match(branch, /autoTicket/);
   assert.doesNotMatch(branch, /startTranslate\(\)/);
-  assert.match(auto, /await startTranslate\(\)/);
+  assert.match(auto, /await startTranslate\(\{ autoTicket: ticket \}\)/);
+  assert.doesNotMatch(auto, /await startTranslate\(\)/);
   const start = viewer.slice(
     viewer.indexOf("async function startTranslate"),
     viewer.indexOf("async function resolveBatchSize")

@@ -89,6 +89,20 @@
           <div id="translateMenu" class="more-menu" role="menu" aria-label="翻译" hidden>
             <button type="button" id="translateMenuRetranslate" class="more-item hit-pad" role="menuitem" disabled>重译本页</button>
             <button type="button" id="translateMenuRetranslateDoc" class="more-item hit-pad" role="menuitem" disabled>重译全文</button>
+            <div class="retranslate-clear-rule" role="separator"></div>
+            <div id="translateClearSlot">
+              <button type="button" id="translateClearDoc" class="more-item retranslate-item retranslate-clear" role="menuitem">
+                <span class="retranslate-item-label">清空本文档译文…</span>
+                <span class="retranslate-item-note">删除这篇的译文和公式缓存，笔记不受影响</span>
+              </button>
+              <div id="translateClearConfirm" class="retranslate-clear-confirm" hidden>
+                <p class="retranslate-clear-copy">清空后回到未翻译状态，需要重新翻译。</p>
+                <div class="retranslate-clear-actions">
+                  <button type="button" id="translateClearCancel" class="btn-secondary">取消</button>
+                  <button type="button" id="translateClearGo" class="retranslate-clear-go">清空</button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -109,6 +123,20 @@
               <span class="retranslate-item-label">重译全文</span>
               <span class="retranslate-item-note" id="retranslateDocumentNote">从第 1 页起重新翻译所有页</span>
             </button>
+            <div class="retranslate-clear-rule" role="separator"></div>
+            <div id="retranslateClearSlot">
+              <button type="button" id="retranslateClearDoc" class="more-item retranslate-item retranslate-clear" role="menuitem">
+                <span class="retranslate-item-label">清空本文档译文…</span>
+                <span class="retranslate-item-note">删除这篇的译文和公式缓存，笔记不受影响</span>
+              </button>
+              <div id="retranslateClearConfirm" class="retranslate-clear-confirm" hidden>
+                <p class="retranslate-clear-copy">清空后回到未翻译状态，需要重新翻译。</p>
+                <div class="retranslate-clear-actions">
+                  <button type="button" id="retranslateClearCancel" class="btn-secondary">取消</button>
+                  <button type="button" id="retranslateClearGo" class="retranslate-clear-go">清空</button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

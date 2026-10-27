@@ -3362,7 +3362,7 @@ test("a text-layer row is not current for local-ocr, and switching engines zones
   assert.match(ingest, /layoutCurrentForLibrary\(libraryEntry\(n\), version, mode\)/);
   assert.match(viewer, /if \(!layoutServesLibrary\(view, engine\)\) continue/);
   assert.match(viewer, /function stampProducedEngine/);
-  assert.match(viewer, /if \(recomputed\) stampProducedEngine\(layout\)/);
+  assert.match(viewer, /if \(recomputed\)(?:\s*\{)?\s*stampProducedEngine\(layout\)/);
   assert.match(viewer, /if \(!fallback\) stampTextLayerEngine\(layout\)/);
   assert.doesNotMatch(viewer.slice(viewer.indexOf("async function ingestTextLayerLayout"), viewer.indexOf("async function renderPageRaster")), /stampProducedEngine\(layout\)/);
   assert.match(viewer, /engineModeOf\(rawLayout\)/);

@@ -736,6 +736,8 @@ test("viewer keeps init last and wires Shift+T beside the single-key switch", ()
   assert.match(panels, /drawerUi\?\.toggle/);
   assert.doesNotMatch(panels, /showSoonToast/);
   const library = readFileSync(join(repo, "lib/pdf-library.js"), "utf8").split("\n");
-  assert.match(library[13], /diagLog/);
-  assert.match(library[14], /libraryLoadedAt, libraryReviveAllowed, libraryWritesStopped/);
+  const diagAt = library.findIndex((line) => line.includes('import { diagLog } from "./diag-log.js"'));
+  assert.ok(diagAt >= 0);
+  assert.match(library[diagAt], /diagLog/);
+  assert.match(library[diagAt + 1], /libraryLoadedAt, libraryReviveAllowed, libraryWritesStopped/);
 });

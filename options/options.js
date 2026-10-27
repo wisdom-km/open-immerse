@@ -19,6 +19,7 @@ import {
 } from "../lib/pdf-default-notice.js";
 import { NO_ENGINE_COPY, flashFocus } from "../lib/no-engine-prompt.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
+import { PDF_LAYOUT_RESET_COPY } from "../lib/formula-pipeline.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
   normalizeSecrets,
@@ -337,6 +338,7 @@ function applyStoredForm() {
   renderFeatures(el("laterList"), laterFeatures(), features);
   paintPdfSwitch(features);
   fillPdfLayout(settings.pdfLayout);
+  paintPdfLayoutResetNote(settings);
   syncPdfAvailability();
   syncPdfBanner();
   syncQualityLocks();
@@ -574,6 +576,13 @@ async function importSettingsFile(ev) {
   }
 }
 
+function paintPdfLayoutResetNote(settings) {
+  const note = el("pdfLayoutResetNote");
+  if (!note) return;
+  note.textContent = PDF_LAYOUT_RESET_COPY;
+  note.hidden = settings?.pdfLayoutResetNotice !== true;
+}
+
 function fillPdfLayout(value) {
   const layout = value && typeof value === "object" ? value : {};
   if (el("pdfLayoutMode")) el("pdfLayoutMode").value = layout.mode || "";
@@ -605,12 +614,16 @@ function fillPdfLayout(value) {
 }
 
 function readPdfLayout() {
+  const mode = el("pdfLayoutMode")?.value || "";
+  const previous = cachedSettings?.pdfLayout && typeof cachedSettings.pdfLayout === "object" ? cachedSettings.pdfLayout : {};
+  const explicit = mode === "local-ocr" || previous.explicit === true;
   return {
-    mode: el("pdfLayoutMode")?.value || "",
+    mode,
     localBaseUrl: el("pdfLocalBaseUrl")?.value || "http://127.0.0.1:8765",
     cloudBaseUrl: el("pdfCloudBaseUrl")?.value || "https://open.bigmodel.cn/api/paas/v4/layout_parsing",
     cloudModel: "glm-ocr",
-    cloudApiKey: pdfCloudKey || ""
+    cloudApiKey: pdfCloudKey || "",
+    ...(explicit ? { explicit: true } : {})
   };
 }
 
@@ -1575,7 +1588,8 @@ async function persistNow(control) {
     features: features,
     siteRules: siteRules.filter((host) => !bad.includes(host)).map((host) => ({ host: host.replace(/^www\./, ""), auto: true })),
     providers: cachedSettings.providers,
-    pdfLayout: readPdfLayout()
+    pdfLayout: readPdfLayout(),
+    ...(control?.id === "pdfLayoutMode" ? { pdfLayoutResetNotice: false } : {})
   };
   const pendingPdf = pdfCloudEdit;
   const keptKeys = new Map();
@@ -1608,6 +1622,7 @@ async function persistNow(control) {
     }
     if (pdfCloudEdit === pendingPdf) pdfCloudEdit = null;
     hideMiss(control);
+    paintPdfLayoutResetNote(cachedSettings);
     paintKeyList();
   } catch {
     const attempt = snapshotControl(control);
