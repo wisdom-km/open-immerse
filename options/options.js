@@ -156,7 +156,7 @@ let formulaWrite = Promise.resolve();
 // 5. 只有提交了无效 URL 才回滚输入并显示「没保存上」。提交模型、密钥、开关都不走这条。新的提交会作废上一笔失败快照。重试只在已提交卡片仍是上次成功的那份时才写回失败快照。
 // 6. 每笔写入带一个本页记得的 formulaEcho。迟到的自写回声不把草稿弹回去；另一页写出同样内容仍会落下来。采纳别的页的卡片时清掉这组回声。
 // 7. pagehide 只中止探测，不提交未保存的地址。
-// 8. 保存密钥（含换回同一把）把该卡改成「待测试」；移除密钥不留芯片。旧探测被 drop() 作废。
+// 8. 保存密钥（含换回同一把）把该卡改成「待测试」；清空密钥不留芯片。旧探测被 drop() 作废。
 // 9. 换厂商清空该卡密钥和探测。同一拍里重新输入的密钥算这一家的，不会被上一条存储记录清掉。固定厂商只走 https 上的自家主机。自定义卡记得上一次提交的有效 Base URL，同页切走再切回来时写回输入框。用户把地址清空并提交后，这份记忆也清掉。
 function nextFormulaEcho() {
   formulaEchoSeq += 1;
@@ -592,10 +592,13 @@ function fillPdfLayout(value) {
   const input = el("pdfCloudApiKey");
   if (input && !pdfCloudBound) {
     input.setAttribute("data-key-slot", "pdf");
-    pdfCloudBound = bindSecretInput(input, { getValue: () => pdfCloudKey });
+    pdfCloudBound = bindSecretInput(input, {
+      getValue: () => pdfCloudKey,
+      onClear: () => { void clearPdfCloud(); }
+    });
     input.addEventListener("blur", () => {
       const result = pdfCloudBound.commit();
-      if (result.ignored) return;
+      if (result.ignored || result.invalid) return;
       pdfCloudKey = result.value;
       if (!cachedSettings.pdfLayout || typeof cachedSettings.pdfLayout !== "object") cachedSettings.pdfLayout = {};
       cachedSettings.pdfLayout.cloudApiKey = result.value;
@@ -603,12 +606,6 @@ function fillPdfLayout(value) {
       pdfCloudBound.showSaved();
       void persist(input);
     });
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "set-inline";
-    remove.textContent = "移除密钥";
-    remove.addEventListener("click", () => clearPdfCloud());
-    input.parentElement?.appendChild(remove);
   }
   pdfCloudBound?.paint();
 }
@@ -648,12 +645,7 @@ async function clearPdfCloud() {
     pdfCloudBound?.paint();
     return;
   }
-  showToast("已移除 PDF 云端密钥 · 撤销", () => {
-    rememberPdfCloud(previous);
-    pdfCloudEdit = previous;
-    pdfCloudBound?.paint();
-    void persist();
-  });
+  el("pdfCloudApiKey")?.focus();
 }
 
 const PDF_ON_NOTE = "在浏览器里打开 PDF 时，用沉浸译的双栏阅读器显示原文和译文。";
@@ -1057,7 +1049,7 @@ function renderProviderFields() {
       });
     } else {
       input = document.createElement("input");
-      input.type = "text";
+      input.type = field.type === "password" ? "password" : "text";
     }
     input.dataset.provider = provider.id;
     input.dataset.key = field.key;
@@ -1068,11 +1060,12 @@ function renderProviderFields() {
       input.autocomplete = "off";
       input.spellcheck = false;
       const bound = bindSecretInput(input, {
-        getValue: () => (cachedSettings.providers?.[provider.id] || {})[field.key] || ""
+        getValue: () => (cachedSettings.providers?.[provider.id] || {})[field.key] || "",
+        onClear: () => clearProviderKey(provider.id)
       });
       input.addEventListener("blur", () => {
         const result = bound.commit();
-        if (result.ignored) return;
+        if (result.ignored || result.invalid) return;
         cachedSettings.providers = cachedSettings.providers || {};
         cachedSettings.providers[provider.id] = Object.assign({}, cachedSettings.providers[provider.id] || {});
         const beforeKey = (cachedSettings.providers?.[provider.id] || {})[field.key] || "";
@@ -1091,26 +1084,11 @@ function renderProviderFields() {
       });
       bound.paint();
       providerSecretPaint = () => bound.paint();
-      const toggle = document.createElement("button");
-      toggle.type = "button";
-      toggle.className = "set-inline";
-      toggle.textContent = "显示";
-      toggle.addEventListener("click", () => {
-        const shown = toggle.getAttribute("aria-pressed") === "true";
-        toggle.setAttribute("aria-pressed", shown ? "false" : "true");
-        toggle.textContent = shown ? "显示" : "隐藏";
-        bound.reveal(!shown);
-      });
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "set-inline";
-      remove.textContent = "移除密钥";
-      remove.addEventListener("click", () => clearProviderKey(provider.id));
       const saved = document.createElement("span");
       saved.setAttribute("data-secret-saved", "1");
       const line = document.createElement("div");
       line.className = "set-key-line";
-      line.append(input, toggle, remove, saved);
+      line.append(bound.root, saved);
       wrap.appendChild(line);
     } else {
       wrap.appendChild(input);
@@ -1471,14 +1449,6 @@ function queueProviderKey(id, apiKey, clear, before, ticket) {
     if (clear) {
       cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
       if (el("provider")?.value === id) invalidateTest("clear");
-      const name = getProvider(id).name;
-      showToast(`已移除 ${name} 密钥 · 撤销`, () => {
-        cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: before });
-        providerEdits.set(id, before);
-        renderProviderFields();
-        const undoTicket = claimProviderKey(id);
-        void queueProviderKey(id, before, false, "", undoTicket);
-      });
       await clearProviderAttention(attentionArea(), id);
       return res;
     }
@@ -1496,6 +1466,7 @@ function clearProviderKey(id) {
   cachedSettings.providers[id] = Object.assign({}, cachedSettings.providers[id] || {}, { apiKey: "" });
   const ticket = claimProviderKey(id);
   renderProviderFields();
+  document.querySelector("[data-key-slot='translate'] input")?.focus();
   void syncAttentionBadge();
   void queueProviderKey(id, "", true, previous, ticket);
 }
@@ -2050,19 +2021,12 @@ async function removeFormulaSecret(which) {
   invalidateFormulaProbe();
   formulaUndo = null;
   const part = which === "ocr" ? "ocr" : "multimodal";
-  const committedSnapshot = formulaCommitted;
   formulaSettings = removeFormulaKey(formulaSettings, which);
   formulaCommitted = removeFormulaKey(formulaCommitted, which);
   paintFormulaSettings();
+  const slot = which === "ocr" ? "ocr" : "mm";
+  document.querySelector(`[data-key-slot='${slot}'] input`)?.focus();
   await queueFormulaWrite({ clearProbe: part });
-  const name = which === "ocr" ? "OCR" : "多模态";
-  showToast(`已移除 ${name} 密钥 · 撤销`, async () => {
-    // Undo restores the committed card. A URL that was only typed is not part of it.
-    invalidateFormulaProbe();
-    formulaSettings = committedSnapshot;
-    formulaCommitted = committedSnapshot;
-    await queueFormulaWrite({ rerender: true });
-  });
 }
 
 function showFormulaMiss() {

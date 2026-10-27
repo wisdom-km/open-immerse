@@ -67,6 +67,7 @@ import {
   qPaused,
   translatedPageTotal,
   settleUnsentPage,
+  persistedSkipRunState,
   pageNoText,
   layoutMissReasonFor,
   layoutNullReason,
@@ -11594,7 +11595,8 @@ function libraryPayloadFields(identity, hash, bytes) {
 }
 
 function rememberTranslation(page, results, options = {}) {
-  const forced = options?.runState === "failed" || options?.runState === "partial" ? options.runState : "";
+  const asked = String(options?.runState || "");
+  const forced = /^(?:failed|partial|done|empty|skipped|held)$/.test(asked) ? asked : "";
   const rawLayout = getPageLayout(page);
   const layout = cacheableLayout(rawLayout);
   const blocks = rawLayout?.blocks || [];
@@ -11605,9 +11607,17 @@ function rememberTranslation(page, results, options = {}) {
   const replaceBids = [...new Set(verified.map((pair) => String(pair?.bid || "")).filter(Boolean))];
   const skipOnly = isSkipOnlyPage(blocks);
   const existing = libraryDoc?.pages?.find((item) => item.page === page);
+  const blocking = existing?.runState === "failed" || existing?.runState === "partial";
+  // A finished skip must not wipe a failed or partial row. That row still blocks 全文已译.
+  if (blocking && forced && forced !== "failed" && forced !== "partial") {
+    void maybeShowPersistCard();
+    return Promise.resolve();
+  }
   // A failed retranslate often has no new verified pair. The old pairs must stay,
   // and the row still has to record failed or partial. Returning here left the
   // library on 全文已译 while the toolbar counted the page as unfinished.
+  // An empty or skipped page has no pairs either. It still has to be stored,
+  // or the toolbar can say 全文已译 while the library row stays short.
   if (!verified.length && !skipOnly && !forced) {
     void maybeShowPersistCard();
     return Promise.resolve();
@@ -11619,6 +11629,12 @@ function rememberTranslation(page, results, options = {}) {
   const replaceBidSet = new Set(replaceBids);
   const keptPairs = pairsWithoutUnalignedSlots(existing?.pairs, blocks, savedPairSettings())
     .filter((pair) => !replaceBidSet.has(String(pair?.bid || "")));
+  const countableSkip = forced === "empty" || forced === "skipped" || forced === "held";
+  // A skip with no new translation must not stamp an unfinished pair list as done.
+  if (countableSkip && keptPairs.length && !skipOnly && !existing?.skipped) {
+    void maybeShowPersistCard();
+    return Promise.resolve();
+  }
   const mergedPairs = verified.length
     ? mergeLibraryPairs(keptPairs, verified, blocks, pdfTargetLang)
     : (forced ? keptPairs : []);
@@ -11631,7 +11647,7 @@ function rememberTranslation(page, results, options = {}) {
   const bytes = pdfBytes;
   const identity = captureLibraryIdentity();
   const pageCount = pdfDoc?.numPages || 0;
-  const skipped = skipOnly && !pairs.length;
+  const skipped = !pairs.length && (skipOnly || forced === "skipped");
   const sentFor = docId;
   return enqueueLibraryWrite(async () => {
     const hash = await pdfByteHash(bytes);
@@ -11667,7 +11683,13 @@ function rememberTranslation(page, results, options = {}) {
       if (layout.layoutVersion) savedPage.layoutVersion = layout.layoutVersion;
       rememberEngineLayout(page, rawLayout);
     } else if (skipped && libraryDoc && Array.isArray(libraryDoc.pages)) {
-      libraryDoc.pages.push({ page, pairs: [], skipped: true, ...(layout ? { layout, layoutVersion: layout.layoutVersion } : {}) });
+      libraryDoc.pages.push({
+        page,
+        pairs: [],
+        skipped: true,
+        runState: savedPayload.runState,
+        ...(layout ? { layout, layoutVersion: layout.layoutVersion } : {})
+      });
     }
   });
 }
@@ -12883,6 +12905,18 @@ async function translateWholeDocument(options = {}) {
     return;
   }
   const saveTasks = [];
+  const noteCountedSkip = (page, reason, state, extra = {}) => {
+    const stored = libraryEntry(page)?.runState;
+    const memory = pageStates.get(page)?.state;
+    const blocking = stored === "failed" || stored === "partial"
+      ? stored
+      : (memory === "failed" || memory === "partial" ? memory : "");
+    const next = blocking || state;
+    notePageState(page, { state: next, ...extra });
+    const runState = persistedSkipRunState({ reason, state: next, blocking });
+    if (!runState) return;
+    saveTasks.push(rememberTranslation(page, [], { runState }).then(() => null, (error) => error));
+  };
   const sentSource = new Map();
   const pageJob = {
     session: work,
@@ -12957,13 +12991,13 @@ async function translateWholeDocument(options = {}) {
       if (reason !== "cached" && titleStructureFailed(page)) {
         const merged = withStructureRows(getPageLayout(page), []);
         const state = pageRunState(merged, { expected: Number(pageStates.get(page)?.m) || 0, targetLang: pdfTargetLang });
-        notePageState(page, { state, hasLayout: true });
+        if (state === "failed" || state === "partial") {
+          notePageState(page, { state, hasLayout: true });
+          saveTasks.push(persistPageRun(page, merged, state).then(() => null, (error) => error));
+        } else noteCountedSkip(page, "empty", state, { hasLayout: true });
         clearSlotPainted(page);
         refreshDocStatus();
         renderArticle();
-        if (state === "failed" || state === "partial") {
-          saveTasks.push(persistPageRun(page, merged, state).then(() => null, (error) => error));
-        }
         return;
       }
       if (reason === "cached") {
@@ -12980,16 +13014,14 @@ async function translateWholeDocument(options = {}) {
           || isSkipOnlyPage(getPageLayout(page)?.blocks)
           || isSkipOnlyPage(libraryEntry(page)?.layout?.blocks);
         if (keepSkip) {
-          notePageState(page, {
-            state: "skipped",
+          noteCountedSkip(page, "cached", prior?.state === "held" ? "held" : "skipped", {
             hasLayout: Boolean(getPageLayout(page)?.blocks?.length) || Boolean(prior?.hasLayout)
           });
         } else notePageState(page, { state: "done", hasLayout: true });
         }
       }
       else if (reason === "skip-only") {
-        notePageState(page, { state: "skipped", hasLayout: true });
-        saveTasks.push(rememberTranslation(page, []).then(() => null, (error) => error));
+        noteCountedSkip(page, "skip-only", "skipped", { hasLayout: true });
       }
       else if (reason === "unavailable") {
         const why = takeLayoutMiss(page) || "empty-layout";
@@ -13009,7 +13041,7 @@ async function translateWholeDocument(options = {}) {
         const blocks = layout?.blocks || [];
         if (skipLocked.has(page) || libraryEntry(page)?.skipped || isSkipOnlyPage(blocks) || isSkipOnlyPage(libraryEntry(page)?.layout?.blocks)) {
           skipLocked.add(page);
-          notePageState(page, { state: "skipped", hasLayout: blocks.length > 0 });
+          noteCountedSkip(page, "empty", "skipped", { hasLayout: blocks.length > 0 });
         } else if (!layout) {
           const why = takeLayoutMiss(page) || "empty-layout";
           const settled = settleUnsentPage({ layout: null, reason: why });
@@ -13024,8 +13056,7 @@ async function translateWholeDocument(options = {}) {
           if (settled.diagReason === "layout-null:empty") noteTranslateException("empty-layout", { page, reason: settled.diagReason });
         } else {
           const settled = settleUnsentPage({ layout });
-          notePageState(page, {
-            state: settled.state,
+          noteCountedSkip(page, "empty", settled.state, {
             hasLayout: true,
             noText: settled.noText,
             itemCount: layout?.itemCount,
