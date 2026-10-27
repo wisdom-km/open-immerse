@@ -15,6 +15,7 @@ import {
   formulaCacheVerdict,
   migrateEngineOverride,
   migrateStoredPdfLayout,
+  oldFormulaPipeline,
   stampFormulaPairs
 } from "../lib/formula-pipeline.js";
 import { diagStateForPage } from "../lib/diag-log.js";
@@ -88,20 +89,26 @@ test("an unstamped library page is not marked done before the text layer is comp
 test("a pending formula check still counts toward the open total", () => {
   const totals = translatedPageTotal([
     { state: "formula-check" },
+    { state: "stale-formula" },
     { state: "skipped" },
     { state: "done" }
   ]);
-  assert.equal(totals.n, 3);
-  assert.equal(totals.formulaPending, 1);
+  assert.equal(totals.n, 4);
+  assert.equal(totals.formulaPending, 2);
   assert.equal(totals.needsRetry, 0);
   assert.equal(docStatusView({
     n: totals.n,
-    t: 3,
+    t: 4,
     formulaPending: totals.formulaPending,
     phase: "opening"
-  }).text, "已译 3 / 3 页");
-  assert.notEqual(docStatusView({ n: 3, t: 3, formulaPending: 1, phase: "idle" }).text, "全文已译");
-  assert.equal(docStatusView({ n: 3, t: 3, phase: "idle" }).text, "全文已译");
+  }).text, "已译 4 / 4 页");
+  assert.notEqual(docStatusView({ n: 4, t: 4, formulaPending: 2, phase: "idle" }).text, "全文已译");
+  assert.equal(docStatusView({ n: 4, t: 4, phase: "idle" }).text, "全文已译");
+  const oldPairs = stampFormulaPairs(settled, "fp-0");
+  assert.equal(oldFormulaPipeline({ pairs: oldPairs, layout: { formulaPipeline: "fp-0" } }), true);
+  assert.equal(oldFormulaPipeline({ pairs: stampFormulaPairs(settled), layout: { formulaPipeline: "fp-1" } }), false);
+  assert.equal(oldFormulaPipeline({ pairs: [{ translation: "注意力" }], layout: { formulaPipeline: "unknown" } }), false);
+  assert.match(viewer, /if \(oldFormulaPipeline\(\{ pairs, layout \}\)\) return "stale"/);
 });
 
 test("only a block mismatch is stale; a matching page can be stamped", () => {
@@ -258,7 +265,8 @@ test("diagnostics tell a cached page from a fresh translation", () => {
   const rushGate = originals.indexOf("forceAll === true || rush");
   assert.ok(rush >= 0 && rush < rushGate && rushGate < resegment && resegment < send);
   const prep = viewer.slice(viewer.indexOf("const prepareLibraryPage"), viewer.indexOf("let translatedDoc = await translateDocumentPages"));
-  assert.match(prep, /state === "stale-formula"/);
+  assert.match(prep, /state === "stale-formula" \|\| oldFormulaPipeline/);
+  assert.match(prep, /return "retry"/);
   assert.match(prep, /state === "formula-check"/);
   const skip = viewer.slice(viewer.indexOf("onPageSkip({ page, reason })"), viewer.indexOf("onPageStart({ page, total: pageTotal })"));
   assert.match(skip, /prior\?\.state === "stale-formula"/);
@@ -267,7 +275,7 @@ test("diagnostics tell a cached page from a fresh translation", () => {
 test("a rushed old-formula page is recut before it is translated", () => {
   const originals = viewer.slice(viewer.indexOf("getPageOriginals: async (page) => {"), viewer.indexOf("pageSkipReason:"));
   const rush = originals.indexOf("const rush = page === rushArmed");
-  const gate = originals.indexOf("if (options?.forceAll === true || rush)");
+  const gate = originals.indexOf('if (options?.forceAll === true || rush || prior === "stale-formula" || oldCut)');
   const prior = originals.indexOf('prior === "stale-formula" || prior === "formula-check"');
   const ingest = originals.indexOf("ingestTextLayerLayout(page,");
   const hold = originals.indexOf("if (!laid?.blocks?.length) return []");

@@ -448,6 +448,7 @@ import {
   formulaCacheVerdict,
   formulaPipelineStamp,
   migrateEngineOverride,
+  oldFormulaPipeline,
   stampFormulaPairs
 } from "../lib/formula-pipeline.js";
 import { clearFormulaDoc } from "../lib/formula-cache-client.js";
@@ -11617,9 +11618,12 @@ function rememberTranslation(page, results, options = {}) {
   const replaceBidSet = new Set(replaceBids);
   const keptPairs = pairsWithoutUnalignedSlots(existing?.pairs, blocks, savedPairSettings())
     .filter((pair) => !replaceBidSet.has(String(pair?.bid || "")));
-  const pairs = verified.length
+  const mergedPairs = verified.length
     ? mergeLibraryPairs(keptPairs, verified, blocks, pdfTargetLang)
     : (forced ? keptPairs : []);
+  // A new cut stamps every pair on the page. Leftover bids must not keep fp-0.
+  const produced = formulaPipelineStamp(rawLayout?.formulaPipeline);
+  const pairs = produced === FORMULA_PIPELINE_VERSION ? stampFormulaPairs(mergedPairs, produced) : mergedPairs;
   if (pairs.length) replaceLibraryPagePairs(libraryDoc, page, pairs);
   // Capture this document before queuing: the user may open another PDF while
   // earlier pages are still being saved.
@@ -12332,6 +12336,9 @@ function layoutRevisionCurrent(layout) {
 }
 
 function formulaVerdictFor(page, pairs, layout) {
+  // A recorded pipeline other than fp-1 is an old cut. The label is the stamp,
+  // so it shows on open before any second text-layer read.
+  if (oldFormulaPipeline({ pairs, layout })) return "stale";
   const fresh = formulaFreshDoc === docId ? (formulaFreshBlocks.get(Number(page)) || null) : null;
   // A layout at the current revision was produced by this segmentation.
   // Comparing it again to a second text-layer read must not call it stale.
@@ -12893,9 +12900,13 @@ async function translateWholeDocument(options = {}) {
     getPageOriginals: async (page) => {
       const rush = page === rushArmed && rushArmed >= 1;
       if (rush) rushArmed = 0;
-      if (options?.forceAll === true || rush) {
-        const prior = pageStates.get(page)?.state;
-        if (prior === "stale-formula" || prior === "formula-check") {
+      const prior = pageStates.get(page)?.state;
+      const oldCut = oldFormulaPipeline({
+        pairs: libraryEntry(page)?.pairs,
+        layout: getPageLayout(page) || libraryEntry(page)?.layout
+      });
+      if (options?.forceAll === true || rush || prior === "stale-formula" || oldCut) {
+        if (prior === "stale-formula" || prior === "formula-check" || oldCut) {
           let laid = null;
           try {
             laid = await ingestTextLayerLayout(page, () => gen !== restoreGen || translatingDoc !== docId);
@@ -12925,7 +12936,7 @@ async function translateWholeDocument(options = {}) {
     },
     pageSkipReason: (page) => {
       const priorState = pageStates.get(page)?.state;
-      if (priorState === "stale-formula" || priorState === "formula-check") return "cached";
+      if (priorState === "formula-check") return "cached";
       if (layoutMissReason.has(page)) return "unavailable";
       if (!options?.forceAll && titleStructureFailed(page)) return "empty";
       const cached = pageCache.get(translatingDoc, page);
@@ -13039,8 +13050,9 @@ async function translateWholeDocument(options = {}) {
       translatingPage = page;
       const prev = pageStates.get(page);
       const hold = countedPageState(prev?.state);
+      const keepFormula = prev?.state === "stale-formula" || prev?.state === "formula-check";
       notePageState(page, {
-        state: hold ? "partial" : "running",
+        state: keepFormula ? prev.state : (hold ? "partial" : "running"),
         hasLayout: Boolean(prev?.hasLayout) || Boolean(getPageLayout(page)?.blocks?.length),
         k: hold ? (prev?.k || 0) : 0,
         m: prev?.m || 0
@@ -13082,8 +13094,9 @@ async function translateWholeDocument(options = {}) {
         });
       } else {
         const prev = pageStates.get(page);
+        const keepFormula = prev?.state === "stale-formula" || prev?.state === "formula-check";
         notePageState(page, {
-          state: prev?.state === "partial" ? "partial" : "running",
+          state: keepFormula ? prev.state : (prev?.state === "partial" ? "partial" : "running"),
           hasLayout: true,
           k
         });
@@ -13174,7 +13187,9 @@ async function translateWholeDocument(options = {}) {
     // failed-body retry above, that hold must skip instead of sending again.
     if (libraryAdoptWouldSkip) return "skip";
     const state = pageStates.get(page)?.state || "queued";
-    if (state === "done" || state === "skipped" || state === "empty" || state === "held" || state === "stale-formula" || state === "formula-check") return "skip";
+    const shown = getPageLayout(page) || libraryEntry(page)?.layout;
+    if (state === "stale-formula" || oldFormulaPipeline({ pairs: libraryEntry(page)?.pairs, layout: shown })) return "retry";
+    if (state === "done" || state === "skipped" || state === "empty" || state === "held" || state === "formula-check") return "skip";
     return "translate";
   } : undefined;
   let translatedDoc = await translateDocumentPages({

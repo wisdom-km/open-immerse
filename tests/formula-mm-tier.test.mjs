@@ -43,8 +43,10 @@ import { publishRestampedBlocks, scheduleFormulaBlock } from "../lib/formula-sch
 import {
   FORMULA_SWITCH_KEYS,
   formulaChainFlags,
+  fixedVendorHostMismatch,
   normalizeFormulaSettings
 } from "../lib/formula-settings.js";
+import { installDiagWriter, resetDiagForTests } from "../lib/diag-log.js";
 import {
   FORMULA_VISION_SYSTEM,
   MM_TIER_VERSION,
@@ -559,6 +561,90 @@ test("a verified mm-1 row is not adopted", async () => {
   assert.equal(sends, 1);
   assert.notEqual(shown.latex, "\\quad");
   assert.equal((await cache.store.getTier(oldKey)).result.latex, "\\quad");
+});
+
+test("kimi on the Ark host is asked, and a tier that does not run records why", async () => {
+  const settings = normalizeFormulaSettings({
+    [FORMULA_SWITCH_KEYS.tier2]: true,
+    multimodal: {
+      provider: "kimi",
+      apiKey: "k".repeat(46),
+      model: "kimi-k3",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"
+    }
+  });
+  assert.equal(fixedVendorHostMismatch(settings), false);
+  assert.equal(formulaChainFlags(settings).multimodalEnabled, true);
+  assert.equal(fixedVendorHostMismatch({
+    multimodal: { provider: "openai", apiKey: "sk-other", model: "gpt-5.6-luna", baseUrl: "https://ark.cn-beijing.volces.com/api/v3" }
+  }), true);
+  assert.equal(fixedVendorHostMismatch({
+    multimodal: { provider: "kimi", apiKey: "k".repeat(46), model: "kimi-k3", baseUrl: "https://evil.example/v1" }
+  }), true);
+  const events = [];
+  installDiagWriter({ log(event) { events.push(event); } });
+  try {
+    let sends = 0;
+    const decision = await decideFormula({
+      docHash: "doc",
+      bid: "b-ark",
+      page: 4,
+      bbox: [0.1, 0.2, 0.4, 0.28],
+      display: true,
+      pdfText: "x",
+      glyphs: [],
+      equationNumber: null,
+      crop: { url: PNG_URL }
+    }, {
+      flags: formulaChainFlags(settings),
+      settings,
+      readSettings: () => settings,
+      katex,
+      sendVision: async () => {
+        sends += 1;
+        return { ok: true, text: "x" };
+      },
+      cropPngFor: async () => ({ mime: "image/png", base64: PNG })
+    });
+    assert.equal(sends, 1);
+    assert.equal(decision.chosen?.tier, "multimodal");
+    assert.equal(JSON.stringify(events).includes("k".repeat(46)), false);
+    const asked = events.filter((event) => event.type === "formula.tier" && event.tier === "multimodal");
+    assert.ok(asked.length >= 1);
+    events.length = 0;
+    const off = formulaChainFlags(normalizeFormulaSettings({
+      ...settings,
+      [FORMULA_SWITCH_KEYS.tier2]: false
+    }));
+    assert.equal(off.multimodalEnabled, false);
+    assert.equal(off.multimodalConfigured, true);
+    await decideFormula({
+      docHash: "doc",
+      bid: "b-off",
+      page: 4,
+      bbox: [0.1, 0.2, 0.4, 0.28],
+      display: true,
+      pdfText: "x",
+      glyphs: [],
+      equationNumber: null,
+      crop: { url: PNG_URL }
+    }, {
+      flags: off,
+      settings,
+      readSettings: () => settings,
+      katex,
+      sendVision: async () => {
+        sends += 1;
+        return { ok: true, text: "x" };
+      }
+    });
+    const skipped = events.find((event) => event.type === "formula.tier" && event.tier === "multimodal");
+    assert.equal(skipped?.status, "skip");
+    assert.equal(skipped?.reason, "disabled");
+    assert.equal(sends, 1);
+  } finally {
+    resetDiagForTests();
+  }
 });
 
 test("an uncheckable text layer does not call the model", async () => {
