@@ -119,7 +119,10 @@ test("BF-05 controls keep the 2px reader focus ring", () => {
   assert.match(viewerCss, /\.split-handle:focus-visible::before\s*\{[^}]*var\(--oi-reader-split-line-drag\)/);
   assert.match(notesCss, /\.oi-notes :is\(button, a, input, textarea, select, \[role="menuitem"\], \[role="button"\]\):focus-visible\s*\{[^}]*outline:\s*var\(--oi-reader-focus-width\) solid var\(--oi-reader-focus\)/);
   assert.match(notesCss, /\.oi-note-card:focus-visible,\s*\.oi-notes-group-head:focus-visible\s*\{[^}]*outline:\s*var\(--oi-reader-focus-width\) solid var\(--oi-reader-focus\)/s);
-  assert.match(notesCss, /\.oi-notes \.oi-note-body a:focus\s*\{[^}]*outline:\s*2px solid var\(--oi-reader-link\)/);
+  assert.match(notesCss, /\.oi-note-body a:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-reader-link\)/);
+  assert.match(notesCss, /\.oi-notes \.oi-note-body a:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--oi-reader-link\)/);
+  assert.equal(/\.oi-note-body a:focus\s*\{[^}]*outline:/.test(notesCss), false);
+  assert.equal(/\.oi-notes \.oi-note-body a:focus\s*\{/.test(notesCss), false);
   assert.match(notesCss, strong);
   assert.equal(/\.oi-notes\s+:focus-visible\s*\{/.test(notesCss), false);
 });

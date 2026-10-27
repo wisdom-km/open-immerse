@@ -65,7 +65,7 @@ Loom · 2026-10-28 00:15（UTC+8）｜代码依据 `feature/multimodal-first@9e1
 | `o` 快捷键看 `activeElement` 是否在 `.pane-translate` | 不改 |
 | `←/→` 在 `.split-handle, .oi-notes` 上提前返回 | 不改 |
 | `.oi-notes :focus-visible` 过宽 | 收窄到按钮、链接、输入、`menuitem`、`button` 角色 |
-| 笔记正文链接自己的 2px `--oi-reader-link` 环 | 用更高优先级保住，避免被收窄后的选择器盖掉 |
+| 笔记正文链接自己的 2px `--oi-reader-link` 环 | 只在 `:focus-visible` 上，鼠标点击不画环 |
 | 笔记卡片、分组标题 | 继续 2px `--oi-reader-focus`，避免退回 UA 黑框 |
 | `.oi-pdf-math-scroll` 的 `--oi-paper-muted` | 不改 |
 
