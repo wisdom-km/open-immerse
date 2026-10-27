@@ -163,6 +163,7 @@
   --oi-reader-focus: #2F55D4;
   --oi-reader-focus-width: 2px;
   --oi-reader-focus-offset: 2px;
+  --oi-reader-focus-pane-soft: var(--oi-reader-line-strong);
   --oi-reader-mark: rgba(34, 32, 28, 0.12);
   --oi-reader-tooltip-bg: #22201C;
   --oi-reader-tooltip-fg: #F7F3EA;
@@ -540,6 +541,7 @@
   --oi-reader-muted: #A8A49B;
   --oi-reader-hover: rgba(232, 230, 225, 0.08);
   --oi-reader-focus: #8FA8FF;
+  --oi-reader-focus-pane-soft: var(--oi-reader-line-strong);
   --oi-reader-warn: #E2A86A;
   --oi-reader-warn-soft: rgba(226, 168, 106, 0.14);
   --oi-reader-danger: #F6C7BE;

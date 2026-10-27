@@ -51,3 +51,5 @@ tests/f8-pr3a-figure-cards.test.mjs
 tests/f8-pr3a-figure-cards-chrome.test.mjs
 # F7W-2a multimodal DPO A/B scaffold. Fake transport only. No --live and no network.
 tests/mm-dpo-ab.test.mjs
+# Pane focus: no UA black frame on the translation, original, or notes columns.
+tests/black-frame-focus.test.mjs

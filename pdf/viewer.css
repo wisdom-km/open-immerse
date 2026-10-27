@@ -686,6 +686,15 @@ body {
   text-wrap: pretty;
   text-autospace: normal;
 }
+.reader-flow:focus,
+#pages:focus {
+  outline: none;
+}
+.reader-flow:focus-visible,
+#pages:focus-visible {
+  outline: 1px solid var(--oi-reader-focus-pane-soft);
+  outline-offset: -1px;
+}
 @media (max-width: 1199px) {
   .reader-flow { width: var(--rf-measure, min(var(--oi-reader-measure), calc(100% - var(--oi-reader-measure-inset-lg)))); }
 }
@@ -2717,6 +2726,10 @@ button:disabled { opacity: 0.45; cursor: default; }
   .pair-box.is-jump { border-color: Highlight; }
   .pair-box.is-peek { border-color: Highlight; }
   .reader-flow .is-pair-jump { outline-color: Highlight; }
+  .reader-flow:focus-visible,
+  #pages:focus-visible {
+    outline-color: Highlight;
+  }
   .oi-sel-btn:focus-visible,
   .oi-sel-menu [role="menuitem"]:focus-visible,
   .oi-src-strip-x:focus-visible,

@@ -6593,7 +6593,10 @@ function selectionIsCollapsed() {
 function onFlowPointerDown(event) {
   if (event.button != null && event.button !== 0) return;
   const interactive = event.target.closest?.("button, a, input, textarea, select, [role='button']");
-  if (!interactive) $("readerFlow")?.focus({ preventScroll: true });
+  // Keep focus so the o shortcut can see activeElement. focusVisible:false
+  // keeps a mouse click from painting the pane ring; :focus { outline: none }
+  // is the guarantee when the option is ignored.
+  if (!interactive) $("readerFlow")?.focus({ preventScroll: true, focusVisible: false });
   pairPress = { x: event.clientX, y: event.clientY };
 }
 
