@@ -205,9 +205,10 @@ import {
   runMmPage,
   scaleToMaxEdge
 } from "../lib/mm-page.js";
-import { reconcilePage } from "../lib/mm-reconcile.js";
+import { readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
 import { createMmPageFlight } from "../lib/mm-page-queue.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapShouldDefer } from "../lib/mm-page-swap.js";
+import { joinPageBoundary } from "../lib/pdf-flow-join.js";
 import {
   MM_RETRY_COPY,
   markPresentation,
@@ -13816,14 +13817,14 @@ async function forceRetranslateCurrentPage(requestedPage) {
   forceRetranslatePending = false;
   forceRetranslatePendingPage = 0;
   const formulaState = pageStates.get(page)?.state;
-  if (pdfEngineMode() === MM_PAGE_MODE) {
+  if (pdfEngineMode() === MM_PAGE_MODE && mmPageConfigured(formulaViewerSettings)) {
     try { await ingestMmPageLayout(page, () => false, layoutEpoch, { force: true, warm: false }); }
     catch { /* keep the page */ }
   } else if (formulaState === "stale-formula" || formulaState === "formula-check") {
     try {
       await ingestTextLayerLayout(page, () => false);
     } catch {
-      /* the retranslate below still uses the layout already on the page */
+      /* keep the page */
     }
   }
   const sourceLayout = getPageLayout(page);
@@ -14249,6 +14250,10 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
     result.page.blocks,
     quick.blocks
   );
+  if (readingOrderOff(reconciled.blocks, quick.blocks)) {
+    noteMmFallback(n, quick, "coverage", result);
+    return;
+  }
   const blocks = reconciled.blocks;
   const layout = {
     ...quick,
@@ -14791,6 +14796,15 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
   }, content.items, viewport);
   if (!fallback) stampTextLayerEngine(layout);
   stampFreshFormulaPipeline(layout);
+  const previous = n > 1 ? getPageLayout(n - 1) : null;
+  if (previous?.blocks?.length && layout.blocks?.length) {
+    const joined = joinPageBoundary(previous.blocks, layout.blocks);
+    if (joined.joined) {
+      previous.blocks = joined.previous;
+      layout.blocks = joined.next;
+      setPageLayout(n - 1, previous, { reanchor: false });
+    }
+  }
   // The quick stand-in (persist: false) is replaced by the vendor layout.
   // Re-anchoring it marks 位置近似 notes lost, then the real layout writes them back.
   setPageLayout(n, layout, { reanchor: options.persist !== false });

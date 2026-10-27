@@ -54,11 +54,12 @@ GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", impo
 test("a layout revision matches only the current algorithm", async () => {
   const version = await currentLayoutVersion();
   assert.match(version, /^source-v3:[0-9a-f]{16}$/);
-  // source-v3:1f7982365fa58317 → source-v3:75e6fd5cc78401c2. currentLayoutVersion
+  // source-v3:75e6fd5cc78401c2 → source-v3:ec4433737e5f8e46. currentLayoutVersion
   // hashes pdf-text-layer.js, pdf-layout-adapter.js, pdf-blocks.js, and
-  // pdf-mirror.js. pdf-blocks.js now lists mm-page ahead of the text-layer
-  // fallback. Recompute this pin if any of those four files change.
-  assert.equal(version, "source-v3:75e6fd5cc78401c2");
+  // pdf-mirror.js. pdf-text-layer.js now orders columns with XY-cut, and
+  // pdf-blocks.js names aside and footnote. Recompute this pin if any of
+  // those four files change.
+  assert.equal(version, "source-v3:ec4433737e5f8e46");
   assert.equal(await currentLayoutVersion(), version);
   const blocks = [{ id: "a", label: "text", text: "Hi" }];
   assert.equal(storedLayoutCurrent({ blocks }, version), null);
