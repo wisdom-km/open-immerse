@@ -173,7 +173,10 @@ test("acceptance 6 and 7: inline baseline uses PDF depth, and the line cap stays
     css,
     /\.oi-pdf-inline-math\.is-matched:has\(\.oi-pdf-math-crop\)\s*\{[^}]*margin-top:\s*calc\(min\(0px, var\(--oi-reader-inline-line-max\) - var\(--oi-formula-h\)\) \/ 2\)/s
   );
-  assert.doesNotMatch(css, /vertical-align:\s*middle/);
+  // Formula crops stay on the PDF baseline. The 6px paragraph-mark dot is an
+  // inline marker and may use vertical-align: middle; this lock does not cover it.
+  const formulaCss = css.slice(0, css.indexOf(".rf-mark {"));
+  assert.doesNotMatch(formulaCss, /vertical-align:\s*middle/);
   assert.match(viewer, /--oi-reader-formula-baseline/);
   const cropRule = css.indexOf(".pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched .oi-pdf-math-crop");
   const blockRule = css.indexOf(".pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched > img.oi-pdf-math-crop");

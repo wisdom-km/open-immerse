@@ -602,9 +602,17 @@ function bindPdfLayoutMmNote() {
   });
 }
 
+function focusPdfLayoutMode() {
+  const select = el("pdfLayoutMode");
+  if (!select) return;
+  select.focus();
+  setTimeout(() => select.focus(), 0);
+}
+
 async function dismissPdfLayoutMmNotice() {
   cachedSettings = { ...(cachedSettings || {}), pdfLayoutMmNotice: false };
   paintPdfLayoutMmNote(cachedSettings);
+  focusPdfLayoutMode();
   if (!readsOk) return;
   const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { pdfLayoutMmNotice: false } });
   if (res?.settings) cachedSettings = JSON.parse(JSON.stringify(res.settings));

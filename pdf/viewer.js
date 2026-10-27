@@ -207,7 +207,7 @@ import {
 } from "../lib/mm-page.js";
 import { reconcilePage } from "../lib/mm-reconcile.js";
 import { createMmPageFlight } from "../lib/mm-page-queue.js";
-import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapShouldDefer } from "../lib/mm-page-swap.js";
+import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapShouldDefer } from "../lib/mm-page-swap.js";
 import {
   MM_RETRY_COPY,
   markPresentation,
@@ -14151,6 +14151,14 @@ async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
   if (legacyPageShouldHold(stored, { force, hasTranslation: pageHasSettledTranslation(n) })) {
     return holdLegacyPage(n, stored);
   }
+  // No vision key: settle the text layer here. The flight queue is only for a
+  // real page call, and must not sit in front of notes reanchor or translation.
+  if (!mmPageConfigured(formulaViewerSettings)) {
+    const laid = await ingestTextLayerLayout(n, isStale, { persist: false });
+    if (!laid || isStale()) return laid || null;
+    noteMmFallback(n, laid, "not-configured");
+    return laid;
+  }
   const quick = await ingestTextLayerLayout(n, isStale, { persist: false });
   if (!quick || isStale()) return null;
   notePageState(n, { legacyCache: false, hasLayout: true });
@@ -14299,7 +14307,7 @@ function noteMmFallback(n, layout, reason, result) {
     return;
   }
   noteMmPhase(n, "fallback", token);
-  if (layout) setPageLayout(n, layout, { reanchor: false });
+  if (layout) setPageLayout(n, layout, { reanchor: true });
 }
 
 function readerSelecting(slot) {
@@ -14338,8 +14346,10 @@ function replaceMmLayout(n, before, layout, epoch) {
     }
     const scroller = translateScrollRoot();
     const viewportTop = scroller?.getBoundingClientRect?.().top || 0;
-    const anchor = swapAnchor(slot?.querySelectorAll?.("[data-block-id]") || [], viewportTop);
+    const pageNodes = [...(slot?.querySelectorAll?.("[data-block-id]") || [])];
+    const anchor = swapAnchor(pageNodes, viewportTop);
     const anchorId = String(anchor?.dataset?.blockId || "");
+    const anchorIndex = anchor ? pageNodes.indexOf(anchor) : -1;
     const top0 = anchor?.getBoundingClientRect ? anchor.getBoundingClientRect().top : 0;
     setPageLayout(n, layout, { reanchor: plan.mode === "page" });
     if (slot && plan.mode === "diff") {
@@ -14359,7 +14369,11 @@ function replaceMmLayout(n, before, layout, epoch) {
       }
     } else {
       renderArticle();
-      const next = anchorId ? document.querySelector(`[data-block-id="${cssEscape(anchorId)}"]`) : null;
+      const slotNow = document.querySelector(`#pages .rf-page[data-page="${n}"]`) || slot;
+      const next = swapAnchorNode(slotNow?.querySelectorAll?.("[data-block-id]") || [], {
+        id: anchorId,
+        index: anchorIndex
+      });
       const top1 = next?.getBoundingClientRect ? next.getBoundingClientRect().top : top0;
       const delta = scrollCompensation(top0, top1);
       if (scroller && delta) scroller.scrollTop += delta;

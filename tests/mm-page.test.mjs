@@ -28,6 +28,7 @@ import {
   scrollCompensation,
   structureChange,
   swapAnchor,
+  swapAnchorNode,
   swapShouldDefer
 } from "../lib/mm-page-swap.js";
 import {
@@ -225,6 +226,7 @@ test("status copy, marks, and contrast match the Loom spec", () => {
   assert.equal(mmPageStatusView({ phase: "fallback", reason: "coverage" }).text, "已改用文字层 · 识别不完整");
   assert.equal(mmPageStatusView({ phase: "fallback", reason: "parse" }).text, "已改用文字层 · 结果无法读取");
   assert.equal(mmPageStatusView({ phase: "fallback", reason: "not-configured", page: 1 }).text, "已改用文字层 · 未设置多模态");
+  assert.equal(mmPageStatusView({ phase: "fallback", reason: "not-configured", page: 1, running: true }), null);
   assert.equal(mmPageStatusView({ phase: "fallback", reason: "not-configured", page: 2 }), null);
   assert.equal(mmPageStatusView({ phase: "fallback", reason: "401", running: true }), null);
   assert.equal(mmPageStatusView({ phase: "fallback", reason: "401" }).text, MM_FAILED_COPY);
@@ -331,7 +333,24 @@ test("marks are measured after mount and the swap fades on the next frame", () =
   assert.equal(scrollerBox.scrollTop, 18);
   const pageSwap = viewer.slice(viewer.indexOf("function replaceMmLayout"), viewer.indexOf("async function pdfByteHash"));
   assert.match(pageSwap, /swapAnchor/);
+  assert.match(pageSwap, /swapAnchorNode/);
+  assert.equal(pageSwap.includes("document.querySelector(`[data-block-id="), false);
   assert.match(pageSwap, /scrollCompensation/);
+  const page = [{ dataset: { blockId: "new-a" } }, { dataset: { blockId: "new-b" } }];
+  const otherPage = [{ dataset: { blockId: "old-a" } }];
+  assert.equal(swapAnchorNode(page, { id: "new-b", index: 0 }), page[1]);
+  assert.equal(swapAnchorNode(page, { id: "old-a", index: 1 }), page[1]);
+  assert.equal(swapAnchorNode(page, { id: "missing", index: 9 }), null);
+  assert.equal(swapAnchorNode(otherPage, { id: "new-b", index: 0 }), otherPage[0]);
+  const ingest = viewer.slice(viewer.indexOf("async function ingestMmPageLayout"), viewer.indexOf("async function warmMmNeighbors"));
+  const unconfigured = ingest.indexOf("if (!mmPageConfigured(formulaViewerSettings))");
+  const flight = ingest.indexOf("mmPageFlight.run");
+  assert.ok(unconfigured >= 0 && unconfigured < flight);
+  assert.match(ingest.slice(unconfigured, flight), /return laid/);
+  const fallbackFn = viewer.slice(viewer.indexOf("function noteMmFallback"), viewer.indexOf("function readerSelecting"));
+  assert.match(fallbackFn, /reanchor: true/);
+  const plain = viewer.slice(viewer.indexOf("async function ingestPageLayout"), viewer.indexOf("function pageHasSettledTranslation"));
+  assert.equal(plain.slice(0, plain.indexOf("MM_PAGE_MODE")).includes("mmPageFlight"), false);
   assert.match(css, /\.rf-mark:focus-visible \{\s*outline: 2px solid var\(--oi-reader-focus\);/);
   const tip = css.slice(css.indexOf(".rf-mark::after"), css.indexOf(".rf-swap-in"));
   assert.match(tip, /font-family: var\(--oi-reader-ui-font\);/);

@@ -261,6 +261,8 @@ test("saved local-ocr moves to the multimodal default once", () => {
   assert.match(optionsJs, /paintPdfLayoutMmNote/);
   assert.match(optionsJs, /pdfLayoutMmNotice: false/);
   assert.match(optionsJs, /select\.value = "local-ocr"/);
+  assert.match(optionsJs, /function focusPdfLayoutMode\(\) \{[\s\S]*?el\("pdfLayoutMode"\)[\s\S]*?\.focus\(\)/);
+  assert.match(optionsJs, /paintPdfLayoutMmNote\(cachedSettings\);\s*focusPdfLayoutMode\(\);/);
   assert.equal(viewerJs.includes(PDF_LAYOUT_MM_NOTICE), false);
 });
 
