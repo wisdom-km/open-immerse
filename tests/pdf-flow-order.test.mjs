@@ -7,7 +7,7 @@ import { alignBodyFlow, latexParagraphs } from "../lib/pdf-flow-gate.js";
 import { bodyFlow, continuesBlock, dehyphenJoin, joinFlowBlocks, joinPageBoundary } from "../lib/pdf-flow-join.js";
 import { insertBlockByPosition, readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
 import { parsePageJson } from "../lib/mm-page.js";
-import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
+import { looksLikeFigureAnnotation, textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { xyCutOrder } from "../lib/pdf-xy-cut.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -98,6 +98,17 @@ test("a short capitalized line that continues in lowercase is not a heading, and
     { label: "text", text: "state of the", bbox: [0.12, 0.63, 0.49, 0.66] },
     { label: "text", text: "the notion of covariate shift continues here.", bbox: [0.51, 0.55, 0.88, 0.59] }
   ), false);
+  const acrossFigure = joinFlowBlocks([
+    { id: "a", label: "text", text: "segments of a corpus, it effectively" },
+    { id: "f", label: "figure" },
+    { id: "c", label: "caption", text: "Figure 2: Illustration of the model." },
+    { id: "n", label: "aside", text: "x1 Fixed (No Grad)" },
+    { id: "b", label: "text", text: "creates a recurrence." }
+  ]);
+  assert.equal(acrossFigure[0].text, "segments of a corpus, it effectively creates a recurrence.");
+  assert.equal(acrossFigure[4].flowHost, "a");
+  assert.equal(looksLikeFigureAnnotation("x1 Fixed (No Grad) x2 x3"), true);
+  assert.equal(looksLikeFigureAnnotation("Since the full whitening of each layer is costly."), false);
   const boundary = joinPageBoundary(
     [{ id: "p1", label: "text", text: "segments of man-" }],
     [{ id: "p2", label: "text", text: "ually fixed length." }]
@@ -165,6 +176,35 @@ test("unmatched text is inserted by position, and one model block can cover two 
   assert.equal(parsed.ok, true);
   assert.equal(parsed.page.blocks[0].label, "aside");
   assert.equal(parsed.page.blocks[0].continues, true);
+});
+
+test("a math italic keeps a space, and a heading does not swallow the sentence under it", () => {
+  const spaced = textLayerToBlocks({
+    items: [
+      pdfItem("where", 72, 500, 24, 10),
+      pdfItem("g", 98, 500, 5, 10),
+      pdfItem("is a nonlinear function", 106, 500, 120, 10),
+      pdfItem("We parametrize the alignment model", 72, 480, 146, 10),
+      pdfItem("a", 220, 480, 5, 10),
+      pdfItem("as a feedforward neural network", 227, 480, 150, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 1
+  });
+  const text = spaced.blocks.map((block) => block.text || "").join("\n");
+  assert.match(text, /where g is/);
+  assert.match(text, /model a as/);
+  const heading = textLayerToBlocks({
+    items: [
+      pdfItem("Statistics", 93, 360, 55, 14),
+      pdfItem("Since the full whitening of each layer inputs is costly", 72, 318, 229, 10)
+    ],
+    viewport: unitViewport(612, 792),
+    page: 2
+  });
+  const joined = heading.blocks.map((block) => block.text || "").join("\n");
+  assert.equal(/costlyStatistics/.test(joined), false);
+  assert.match(joined, /Since the full whitening/);
 });
 
 test("latex alignment requires a forward body order and counts a mid-sentence break", () => {

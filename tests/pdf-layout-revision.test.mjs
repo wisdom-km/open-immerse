@@ -54,12 +54,12 @@ GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", impo
 test("a layout revision matches only the current algorithm", async () => {
   const version = await currentLayoutVersion();
   assert.match(version, /^source-v3:[0-9a-f]{16}$/);
-  // source-v3:ec4433737e5f8e46 → source-v3:2077c408337f21c0. currentLayoutVersion
+  // source-v3:2077c408337f21c0 → source-v3:67d213d3602920c7. currentLayoutVersion
   // hashes pdf-text-layer.js, pdf-layout-adapter.js, pdf-blocks.js, and
-  // pdf-mirror.js. The author band keeps a subtitle in the body and still
-  // inserts the byline when the title is only a heading. Recompute this pin
-  // if any of those four files change.
-  assert.equal(version, "source-v3:2077c408337f21c0");
+  // pdf-mirror.js. A gap wider than 0.18em is a space, and a long body line
+  // is not a subscript of the heading above it. Recompute this pin if any of
+  // those four files change.
+  assert.equal(version, "source-v3:67d213d3602920c7");
   assert.equal(await currentLayoutVersion(), version);
   const blocks = [{ id: "a", label: "text", text: "Hi" }];
   assert.equal(storedLayoutCurrent({ blocks }, version), null);

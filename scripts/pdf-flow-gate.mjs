@@ -19,7 +19,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { alignBodyFlow, latexParagraphs } from "../lib/pdf-flow-gate.js";
-import { bodyFlow } from "../lib/pdf-flow-join.js";
+import { bodyFlow, joinPageBoundary } from "../lib/pdf-flow-join.js";
 
 const args = process.argv.slice(2);
 const multimodal = args.includes("--mm");
@@ -60,6 +60,16 @@ function endpoint(base) {
   if (!trimmed) return "";
   if (/\/chat\/completions$/i.test(trimmed) || /:generateContent\b/i.test(trimmed)) return trimmed;
   return `${trimmed}/chat/completions`;
+}
+
+function joinedFlow(flows) {
+  const pages = (flows || []).map((blocks) => (blocks || []).map((block) => ({ ...block })));
+  for (let index = 1; index < pages.length; index += 1) {
+    const joined = joinPageBoundary(pages[index - 1], pages[index]);
+    pages[index - 1] = joined.previous;
+    pages[index] = joined.next;
+  }
+  return pages.flat();
 }
 
 function publicReason(reason) {
@@ -122,7 +132,7 @@ for (const root of roots) {
       verbosity: 0,
       isOffscreenCanvasSupported: false
     }).promise;
-    const pages = [];
+    const pageFlows = [];
     const mmPages = [];
     let missing = 0;
     let mmState = multimodal ? (mm ? (createCanvas ? "text" : "no-canvas") : "no-key") : "off";
@@ -140,7 +150,7 @@ for (const root of roots) {
       }
       const laid = textLayerToBlocks({ items: content.items, viewport, images, page });
       missing += laid.sourceAudit?.missing?.length || 0;
-      pages.push(...bodyFlow(laid.blocks || []));
+      pageFlows.push(bodyFlow(laid.blocks || []));
       if (mm && createCanvas) {
         const png = await renderPng(pdfPage);
         if (!png) {
@@ -161,18 +171,19 @@ for (const root of roots) {
         });
         if (!result.ok) {
           mmState = publicReason(result.reason);
-          mmPages.push(...bodyFlow(laid.blocks || []));
+          mmPages.push(bodyFlow(laid.blocks || []));
           continue;
         }
         const reconciled = reconcilePage(result.page.blocks, laid.blocks || []);
         if (readingOrderOff(reconciled.blocks, laid.blocks || [])) {
-          mmPages.push(...bodyFlow(laid.blocks || []));
+          mmPages.push(bodyFlow(laid.blocks || []));
           continue;
         }
         mmState = "ran";
-        mmPages.push(...bodyFlow(reconciled.blocks || []));
+        mmPages.push(bodyFlow(reconciled.blocks || []));
       }
     }
+    const pages = joinedFlow(pageFlows);
     const aligned = paragraphs.length
       ? alignBodyFlow(paragraphs, pages)
       : { coverage: null, inversions: null, breaks: null, matched: 0, total: 0, note: "no-tex" };
@@ -192,10 +203,11 @@ for (const root of roots) {
       window: aligned.window || null,
       inversionExamples: aligned.inversionExamples || [],
       breakExamples: aligned.breakExamples || [],
+      gap: aligned.gap || null,
       mm: mmState
     };
     if (mmPages.length && paragraphs.length) {
-      const mmAligned = alignBodyFlow(paragraphs, mmPages);
+      const mmAligned = alignBodyFlow(paragraphs, joinedFlow(mmPages));
       report.mmAlign = {
         coverage: mmAligned.coverage,
         inversions: mmAligned.inversions,
