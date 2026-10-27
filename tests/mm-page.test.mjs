@@ -27,6 +27,7 @@ import {
   planParagraphSwap,
   scrollCompensation,
   structureChange,
+  swapAnchor,
   swapShouldDefer
 } from "../lib/mm-page-swap.js";
 import {
@@ -36,6 +37,7 @@ import {
   MM_RETRY_COPY,
   markContrastOk,
   markFit,
+  mountedMarkFit,
   markPresentation,
   mmPageStatusView,
   staleStatusVisible
@@ -210,7 +212,7 @@ test("swap keeps identical nodes, pages a 30 percent structure change, and defer
     ],
     querySelectorAll() { return this.nodes; }
   };
-  const applied = applyParagraphSwap(root, plan, { reducedMotion: true, anchor: root.nodes[0] });
+  const applied = applyParagraphSwap(root, plan, { reducedMotion: true, anchor: root.nodes[0], scheduleRelease: () => {} });
   assert.equal(applied.kept, 1);
   assert.equal(root.nodes[0].textContent, "Same sentence.");
   assert.equal(root.nodes[1].textContent, "New sentence.");
@@ -269,6 +271,78 @@ test("status copy, marks, and contrast match the Loom spec", () => {
   assert.deepEqual(summarizeMmGapFill([event]), { gapsIn: 4, gapsFilled: 3, rate: 0.75 });
   noteMmPage("mm.page.start", { page: 1, text: "do not keep" });
 });
+
+test("marks are measured after mount and the swap fades on the next frame", () => {
+  const detached = { isConnected: false, getBoundingClientRect: () => ({ left: 0 }) };
+  const scroller = { getBoundingClientRect: () => ({ left: 20, top: 40 }) };
+  assert.equal(mountedMarkFit(detached, scroller), "");
+  const wide = { isConnected: true, getBoundingClientRect: () => ({ left: 48, bottom: 20 }) };
+  const narrow = { isConnected: true, getBoundingClientRect: () => ({ left: 24, bottom: 20 }) };
+  assert.equal(mountedMarkFit(wide, scroller), "bar");
+  assert.equal(mountedMarkFit(narrow, scroller), "dot");
+  const painted = viewer.indexOf("paintBlockMark(node, block)");
+  assert.match(viewer.slice(painted, painted + 500), /parent\.append\(node\);\s*\n\s*measureBlockMark\(node\)/);
+  const fitCall = viewer.indexOf("function measureBlockMark");
+  const paintFn = viewer.slice(viewer.indexOf("function paintBlockMark"), fitCall);
+  assert.equal(paintFn.includes("markFit("), false);
+  let seenReads = 0;
+  const nodes = [
+    { dataset: { blockId: "above" }, textContent: "Above.", style: {}, classList: new Set(), getBoundingClientRect: () => ({ top: 0, bottom: 20, height: 20 }) },
+    {
+      dataset: { blockId: "seen" },
+      textContent: "Seen.",
+      style: {},
+      classList: new Set(),
+      getBoundingClientRect() {
+        seenReads += 1;
+        if (seenReads < 6) return { top: 80, bottom: 120, height: 40 };
+        return { top: 88, bottom: 116, height: 28 };
+      }
+    }
+  ];
+  assert.equal(swapAnchor(nodes, 40).dataset.blockId, "seen");
+  const frames = [];
+  const releases = [];
+  const host = {
+    nodes,
+    querySelectorAll() { return this.nodes; }
+  };
+  const changed = planParagraphSwap(
+    [{ id: "seen", label: "text", text: "Seen." }],
+    [{ id: "seen", label: "text", text: "Seen later." }]
+  );
+  const scrollerBox = { scrollTop: 10 };
+  nodes[1].addEventListener = () => {};
+  const swapped = applyParagraphSwap(host, changed, {
+    anchor: nodes[1],
+    viewportTop: 40,
+    scroller: scrollerBox,
+    frame: (fn) => frames.push(fn),
+    scheduleRelease: (fn) => releases.push(fn)
+  });
+  assert.equal(swapped.anchor, nodes[1]);
+  assert.equal(nodes[1].style.opacity, "0");
+  assert.equal(frames.length, 1);
+  frames[0]();
+  assert.equal(nodes[1].style.opacity, "1");
+  assert.equal(nodes[1].style.minBlockSize, "40px");
+  releases[0]();
+  assert.equal(nodes[1].style.minBlockSize, "");
+  assert.equal(scrollerBox.scrollTop, 18);
+  const pageSwap = viewer.slice(viewer.indexOf("function replaceMmLayout"), viewer.indexOf("async function pdfByteHash"));
+  assert.match(pageSwap, /swapAnchor/);
+  assert.match(pageSwap, /scrollCompensation/);
+  assert.match(css, /\.rf-mark:focus-visible \{\s*outline: 2px solid var\(--oi-reader-focus\);/);
+  const tip = css.slice(css.indexOf(".rf-mark::after"), css.indexOf(".rf-swap-in"));
+  assert.match(tip, /font-family: var\(--oi-reader-ui-font\);/);
+  assert.match(tip, /user-select: none/);
+  assert.equal(tip.includes("var(--oi-font)"), false);
+  assert.equal(tip.includes("content: attr(data-tip)"), true);
+});
+
+function viewerCss() {
+  return css;
+}
 
 test("a retry is skipped when less than 35s of the page budget remain", async () => {
   assert.equal(MM_PAGE_RETRY_MIN_MS, 35_000);

@@ -235,17 +235,21 @@
               <div class="set-row">
                 <div class="set-txt">
                   <p class="set-title">模式</p>
-                  <p id="pdfLayoutResetNote" class="set-note" hidden>已改回默认文字层，可在此重新选择本地 OCR</p>
+                  <p id="pdfLayoutResetNote" class="set-note" hidden>已改回默认的多模态重建，可在此重新选择本机 OCR</p>
                 </div>
                 <div class="set-ctl">
                   <select id="pdfLayoutMode">
                     <option value="">未设置（多模态重建）</option>
-                    <option value="mm-page">多模态重建</option>
                     <option value="local-ocr">本机智谱 GLM-OCR（测试）</option>
                     <option value="cloud-ocr">OCR API（上线）</option>
                     <option value="text-layer">文字层兜底</option>
                   </select>
                 </div>
+              </div>
+              <div id="pdfLayoutMmNote" class="pdf-mm-note" hidden>
+                <span>版面识别已切到多模态，可在设置改回本机 OCR</span>
+                <button type="button" id="pdfLayoutMmRevert">改回本机 OCR</button>
+                <button type="button" id="pdfLayoutMmDismiss" aria-label="关闭提示">×</button>
               </div>
               <div class="set-row">
                 <div class="set-txt">

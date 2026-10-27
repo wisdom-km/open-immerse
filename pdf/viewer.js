@@ -207,11 +207,11 @@ import {
 } from "../lib/mm-page.js";
 import { reconcilePage } from "../lib/mm-reconcile.js";
 import { createMmPageFlight } from "../lib/mm-page-queue.js";
-import { applyParagraphSwap, planParagraphSwap, swapShouldDefer } from "../lib/mm-page-swap.js";
+import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapShouldDefer } from "../lib/mm-page-swap.js";
 import {
   MM_RETRY_COPY,
-  markFit,
   markPresentation,
+  mountedMarkFit,
   mmPageStatusView,
   staleStatusVisible
 } from "../lib/mm-page-ui.js";
@@ -6554,6 +6554,7 @@ function appendFixtureReadout(parent, layout, options = {}) {
       decorateAbstractHeading(node, block.translation);
     }
     parent.append(node);
+    measureBlockMark(node);
   }
 }
 
@@ -6567,6 +6568,8 @@ function paintBlockMark(node, block) {
     delete node.dataset.markFit;
     node.removeAttribute("tabindex");
     node.removeAttribute("aria-label");
+    node.removeAttribute("aria-description");
+    delete node.dataset.tip;
     node.querySelector(":scope > .rf-mark-tip")?.remove();
     return;
   }
@@ -6574,21 +6577,20 @@ function paintBlockMark(node, block) {
   node.dataset.mark = mark.data;
   node.tabIndex = 0;
   node.setAttribute("aria-label", mark.aria);
-  let tip = node.querySelector(":scope > .rf-mark-tip");
-  if (!tip) {
-    tip = document.createElement("span");
-    tip.className = "rf-mark-tip";
-    tip.setAttribute("role", "tooltip");
-    node.append(tip);
+  node.setAttribute("aria-description", mark.tooltip);
+  node.dataset.tip = mark.tooltip;
+  node.querySelector(":scope > .rf-mark-tip")?.remove();
+  delete node.dataset.markFit;
+}
+
+function measureBlockMark(node) {
+  if (!node) return;
+  const fit = mountedMarkFit(node, translateScrollRoot());
+  if (!fit) {
+    delete node.dataset.markFit;
+    return;
   }
-  tip.id = tip.id || `mm-mark-${node.dataset.blockId || mark.data}`;
-  tip.textContent = mark.tooltip;
-  node.setAttribute("aria-describedby", tip.id);
-  const scroller = translateScrollRoot();
-  const space = node.getBoundingClientRect && scroller?.getBoundingClientRect
-    ? node.getBoundingClientRect().left - scroller.getBoundingClientRect().left
-    : 32;
-  node.dataset.markFit = markFit(space);
+  node.dataset.markFit = fit;
 }
 
 function bindMarkTooltipKeys() {
@@ -6607,7 +6609,9 @@ function bindMarkTooltipKeys() {
   });
   document.addEventListener("focusout", (event) => {
     const host = event.target?.closest?.(".rf-mark");
-    if (host) host.classList.remove("is-tip");
+    if (!host || host.contains(event.relatedTarget)) return;
+    host.classList.remove("is-tip");
+    delete host.dataset.tipClosed;
   });
   let timer = 0;
   document.addEventListener("pointerover", (event) => {
@@ -14332,20 +14336,34 @@ function replaceMmLayout(n, before, layout, epoch) {
       const next = (layout.blocks || []).find((block) => String(block.id || "") === String(op.block?.id || ""));
       if (prev?.translation && next && !next.translation) next.translation = prev.translation;
     }
+    const scroller = translateScrollRoot();
+    const viewportTop = scroller?.getBoundingClientRect?.().top || 0;
+    const anchor = swapAnchor(slot?.querySelectorAll?.("[data-block-id]") || [], viewportTop);
+    const anchorId = String(anchor?.dataset?.blockId || "");
+    const top0 = anchor?.getBoundingClientRect ? anchor.getBoundingClientRect().top : 0;
     setPageLayout(n, layout, { reanchor: plan.mode === "page" });
     if (slot && plan.mode === "diff") {
       const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
       applyParagraphSwap(slot, plan, {
         reducedMotion: reduced,
-        scroller: translateScrollRoot(),
-        viewportTop: translateScrollRoot()?.getBoundingClientRect?.().top || 0
+        scroller,
+        anchor,
+        viewportTop
       });
       for (const block of layout.blocks || []) {
         const node = slot.querySelector(`[data-block-id="${cssEscape(String(block.id || ""))}"]`);
-        if (node) paintBlockMark(node, block);
+        if (node) {
+          paintBlockMark(node, block);
+          measureBlockMark(node);
+        }
       }
     } else {
       renderArticle();
+      const next = anchorId ? document.querySelector(`[data-block-id="${cssEscape(anchorId)}"]`) : null;
+      const top1 = next?.getBoundingClientRect ? next.getBoundingClientRect().top : top0;
+      const delta = scrollCompensation(top0, top1);
+      if (scroller && delta) scroller.scrollTop += delta;
+      document.querySelectorAll(".rf-mark").forEach((node) => measureBlockMark(node));
     }
     noteMmPhase(n, "", "");
   };

@@ -3618,7 +3618,13 @@ button:disabled { opacity: 0.45; cursor: default; }
 .rf-mark[data-mark="mm"][data-mark-fit="dot"]::before { background: var(--oi-reader-para-mark-mm); }
 .is-pair-current.rf-mark::before,
 .is-pair-current .rf-mark::before { visibility: hidden; }
-.rf-mark-tip {
+.rf-mark:focus-visible {
+  outline: 2px solid var(--oi-reader-focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.rf-mark::after {
+  content: attr(data-tip);
   position: absolute;
   z-index: 3;
   inset-inline-start: 0;
@@ -3628,24 +3634,25 @@ button:disabled { opacity: 0.45; cursor: default; }
   border-radius: 6px;
   background: var(--oi-reader-tooltip-bg);
   color: var(--oi-reader-tooltip-fg);
-  font-family: var(--oi-reader-ui-font, var(--oi-font));
+  font-family: var(--oi-reader-ui-font);
   font-size: 12px;
   font-weight: 400;
   line-height: 1.4;
-  white-space: normal;
+  white-space: pre-line;
   opacity: 0;
   pointer-events: none;
+  user-select: none;
   transition: opacity var(--oi-reader-swap-ms) ease-out;
   transition-delay: 300ms;
 }
-.rf-mark.is-tip .rf-mark-tip,
-.rf-mark:focus-visible .rf-mark-tip {
+.rf-mark.is-tip::after,
+.rf-mark:focus-visible::after {
   opacity: 1;
 }
-.rf-mark[data-tip-closed="1"] .rf-mark-tip { opacity: 0; }
+.rf-mark[data-tip-closed="1"]::after { opacity: 0; }
 .rf-swap-in { transition: opacity var(--oi-reader-swap-ms) ease-out; }
 @media (prefers-reduced-motion: reduce) {
   .rf-swap-in,
-  .rf-mark-tip { transition: none; }
+  .rf-mark::after { transition: none; }
 }
 #status.is-stale { cursor: pointer; }

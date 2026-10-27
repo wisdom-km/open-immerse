@@ -215,7 +215,7 @@ test("saved local-ocr without a cloud key or an explicit choice resets once", ()
   assert.equal(text.reset, false);
   assert.equal(text.settings.pdfLayout.mode, "");
   assert.equal(text.settings.pdfLayoutResetNotice, undefined);
-  assert.equal(PDF_LAYOUT_RESET_COPY, "已改回默认文字层，可在此重新选择本地 OCR");
+  assert.equal(PDF_LAYOUT_RESET_COPY, "已改回默认的多模态重建，可在此重新选择本机 OCR");
   const optionsHtml = readFileSync(join(root, "options/options.html"), "utf8");
   const modeRow = optionsHtml.slice(optionsHtml.indexOf('id="pdfLayoutMode"') - 400, optionsHtml.indexOf('id="pdfLayoutMode"'));
   assert.match(modeRow, /id="pdfLayoutResetNote"/);
@@ -251,9 +251,17 @@ test("saved local-ocr moves to the multimodal default once", () => {
   assert.equal(again.changed, false);
   assert.equal(again.reset, false);
   assert.equal(again.settings.pdfLayout.mode, "local-ocr");
+  const optionsHtml = readFileSync(join(root, "options/options.html"), "utf8");
   const optionsJs = readFileSync(join(root, "options/options.js"), "utf8");
-  assert.match(optionsJs, /PDF_LAYOUT_MM_NOTICE/);
+  const viewerJs = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  assert.match(optionsHtml, /id="pdfLayoutMmNote"/);
+  assert.match(optionsHtml, /id="pdfLayoutMmRevert"/);
+  assert.match(optionsHtml, /aria-label="关闭提示"/);
+  assert.equal(optionsHtml.includes('value="mm-page"'), false);
+  assert.match(optionsJs, /paintPdfLayoutMmNote/);
   assert.match(optionsJs, /pdfLayoutMmNotice: false/);
+  assert.match(optionsJs, /select\.value = "local-ocr"/);
+  assert.equal(viewerJs.includes(PDF_LAYOUT_MM_NOTICE), false);
 });
 
 test("a leftover engine override is dropped; settings local-ocr and arXiv opt-in stay", () => {

@@ -19,7 +19,7 @@ import {
 } from "../lib/pdf-default-notice.js";
 import { NO_ENGINE_COPY, flashFocus } from "../lib/no-engine-prompt.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
-import { PDF_LAYOUT_MM_NOTICE, PDF_LAYOUT_RESET_COPY } from "../lib/formula-pipeline.js";
+import { PDF_LAYOUT_RESET_COPY } from "../lib/formula-pipeline.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
   normalizeSecrets,
@@ -239,6 +239,7 @@ async function init() {
     }
   }
   applyStoredForm();
+  bindPdfLayoutMmNote();
   el("translateScope").addEventListener("change", () => syncTranslateScopeHint());
   bindData();
   bindDiagPanel();
@@ -339,6 +340,7 @@ function applyStoredForm() {
   paintPdfSwitch(features);
   fillPdfLayout(settings.pdfLayout);
   paintPdfLayoutResetNote(settings);
+  paintPdfLayoutMmNote(settings);
   syncPdfAvailability();
   syncPdfBanner();
   syncQualityLocks();
@@ -579,18 +581,46 @@ async function importSettingsFile(ev) {
 function paintPdfLayoutResetNote(settings) {
   const note = el("pdfLayoutResetNote");
   if (!note) return;
-  if (settings?.pdfLayoutMmNotice === true) {
-    note.textContent = PDF_LAYOUT_MM_NOTICE;
-    note.hidden = false;
-    return;
-  }
   note.textContent = PDF_LAYOUT_RESET_COPY;
   note.hidden = settings?.pdfLayoutResetNotice !== true;
 }
 
+function paintPdfLayoutMmNote(settings) {
+  const note = el("pdfLayoutMmNote");
+  if (!note) return;
+  note.hidden = settings?.pdfLayoutMmNotice !== true;
+}
+
+function bindPdfLayoutMmNote() {
+  if (bindPdfLayoutMmNote.done) return;
+  bindPdfLayoutMmNote.done = true;
+  el("pdfLayoutMmDismiss")?.addEventListener("click", () => {
+    void dismissPdfLayoutMmNotice();
+  });
+  el("pdfLayoutMmRevert")?.addEventListener("click", () => {
+    void revertPdfLayoutToLocalOcr();
+  });
+}
+
+async function dismissPdfLayoutMmNotice() {
+  cachedSettings = { ...(cachedSettings || {}), pdfLayoutMmNotice: false };
+  paintPdfLayoutMmNote(cachedSettings);
+  if (!readsOk) return;
+  const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { pdfLayoutMmNotice: false } });
+  if (res?.settings) cachedSettings = JSON.parse(JSON.stringify(res.settings));
+  paintPdfLayoutMmNote(cachedSettings);
+}
+
+async function revertPdfLayoutToLocalOcr() {
+  const select = el("pdfLayoutMode");
+  if (!select) return;
+  select.value = "local-ocr";
+  await persistNow(select);
+}
+
 function fillPdfLayout(value) {
   const layout = value && typeof value === "object" ? value : {};
-  if (el("pdfLayoutMode")) el("pdfLayoutMode").value = layout.mode || "";
+  if (el("pdfLayoutMode")) el("pdfLayoutMode").value = layout.mode === "mm-page" ? "" : (layout.mode || "");
   if (el("pdfLocalBaseUrl")) el("pdfLocalBaseUrl").value = layout.localBaseUrl || "http://127.0.0.1:8765";
   if (el("pdfCloudBaseUrl")) el("pdfCloudBaseUrl").value = layout.cloudBaseUrl || "https://open.bigmodel.cn/api/paas/v4/layout_parsing";
   pdfCloudKey = layout.cloudApiKey || "";
@@ -1628,6 +1658,7 @@ async function persistNow(control) {
     if (pdfCloudEdit === pendingPdf) pdfCloudEdit = null;
     hideMiss(control);
     paintPdfLayoutResetNote(cachedSettings);
+    paintPdfLayoutMmNote(cachedSettings);
     paintKeyList();
   } catch {
     const attempt = snapshotControl(control);
