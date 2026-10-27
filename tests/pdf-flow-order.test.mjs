@@ -94,6 +94,10 @@ test("a short capitalized line that continues in lowercase is not a heading, and
   assert.equal(joined[3].text, "Prior work studied manually shorter segments.");
   assert.equal(dehyphenJoin("man-", "ually"), "manually");
   assert.equal(continuesBlock(joined[2], joined[3]), false);
+  assert.equal(continuesBlock(
+    { label: "text", text: "state of the", bbox: [0.12, 0.63, 0.49, 0.66] },
+    { label: "text", text: "the notion of covariate shift continues here.", bbox: [0.51, 0.55, 0.88, 0.59] }
+  ), false);
   const boundary = joinPageBoundary(
     [{ id: "p1", label: "text", text: "segments of man-" }],
     [{ id: "p2", label: "text", text: "ually fixed length." }]
@@ -188,6 +192,18 @@ test("latex alignment requires a forward body order and counts a mid-sentence br
     { label: "text", text: "carries its state forward across the boundary." }
   ]);
   assert.equal(broken.breaks, 1);
+  assert.equal(broken.breakExamples[0].kind, "real");
+  const swappedExample = swapped.inversionExamples.find((entry) => entry.kind === "real");
+  assert.ok(swappedExample);
+  const withLater = alignBodyFlow([
+    ...paragraphs,
+    "Quantum chromodynamics predicts a totally different set of particle masses and couplings in this unrelated section."
+  ], [
+    { label: "text", text: "Transformers learn longer context when the segment carries its state forward across the boundary." },
+    { label: "text", text: "The next paragraph starts a new claim about relative position and does not continue the first." }
+  ]);
+  assert.equal(withLater.total, 2);
+  assert.equal(withLater.coverage, 1);
   const force = viewer.slice(viewer.indexOf("async function forceRetranslateCurrentPage"), viewer.indexOf("async function forceRetranslateCurrentPage") + 1600);
   assert.match(force, /MM_PAGE_MODE && mmPageConfigured\(formulaViewerSettings\)/);
   assert.ok(force.includes("const sourceLayout = getPageLayout(page)"));
