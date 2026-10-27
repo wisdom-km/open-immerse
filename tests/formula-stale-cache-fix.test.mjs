@@ -14,7 +14,9 @@ import {
   applyFormulaVerdict,
   formulaCacheVerdict,
   migrateEngineOverride,
+  migrateLocalOcrToMultimodal,
   migrateStoredPdfLayout,
+  PDF_LAYOUT_MM_NOTICE,
   oldFormulaPipeline,
   recomputedFormulaSettlement,
   reopenFormulaStale,
@@ -222,6 +224,36 @@ test("saved local-ocr without a cloud key or an explicit choice resets once", ()
   assert.match(optionsJs, /paintPdfLayoutResetNote/);
   assert.match(optionsJs, /pdfLayoutResetNotice: false/);
   assert.match(optionsJs, /mode === "local-ocr" \|\| previous\.explicit === true/);
+});
+
+test("saved local-ocr moves to the multimodal default once", () => {
+  const first = migrateLocalOcrToMultimodal({
+    pdfLayout: { mode: "local-ocr", explicit: true, cloudApiKey: "kept" }
+  });
+  assert.equal(first.reset, true);
+  assert.equal(first.changed, true);
+  assert.equal(first.settings.pdfLayout.mode, "");
+  assert.equal(first.settings.pdfLayout.cloudApiKey, "kept");
+  assert.equal(first.settings.pdfLayoutMmNotice, true);
+  assert.equal(first.settings.pdfLayoutMmMigrated, "mp-1");
+  assert.equal(PDF_LAYOUT_MM_NOTICE, "版面识别已切到多模态，可在设置改回本机 OCR");
+  const cloud = migrateLocalOcrToMultimodal({ pdfLayout: { mode: "cloud-ocr" } });
+  assert.equal(cloud.reset, false);
+  assert.equal(cloud.settings.pdfLayout.mode, "cloud-ocr");
+  const text = migrateLocalOcrToMultimodal({ pdfLayout: { mode: "text-layer" } });
+  assert.equal(text.reset, false);
+  assert.equal(text.settings.pdfLayout.mode, "text-layer");
+  const again = migrateLocalOcrToMultimodal({
+    ...first.settings,
+    pdfLayoutMmNotice: false,
+    pdfLayout: { ...first.settings.pdfLayout, mode: "local-ocr", explicit: true }
+  });
+  assert.equal(again.changed, false);
+  assert.equal(again.reset, false);
+  assert.equal(again.settings.pdfLayout.mode, "local-ocr");
+  const optionsJs = readFileSync(join(root, "options/options.js"), "utf8");
+  assert.match(optionsJs, /PDF_LAYOUT_MM_NOTICE/);
+  assert.match(optionsJs, /pdfLayoutMmNotice: false/);
 });
 
 test("a leftover engine override is dropped; settings local-ocr and arXiv opt-in stay", () => {

@@ -5,7 +5,7 @@
  *   MM_PAGE_ARK_API_KEY / MM_PAGE_ARK_MODEL / MM_PAGE_ARK_BASE_URL
  *   MM_PAGE_MOONSHOT_API_KEY / MM_PAGE_MOONSHOT_MODEL / MM_PAGE_MOONSHOT_BASE_URL
  *   MM_DPO_KIMI_API_KEY is the Moonshot key when the Moonshot var is empty.
- *   MM_PAGE_ATTENTION_PDF / MM_PAGE_LANCET_PDF point at local page-1 rasters
+ *   MM_PAGE_ATTENTION_PNG / MM_PAGE_LANCET_PNG point at local page rasters
  *   already rendered to PNG. This script does not download papers.
  *
  * A missing key or a missing page PNG is "not executed", not a model verdict.

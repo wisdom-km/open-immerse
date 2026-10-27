@@ -206,6 +206,7 @@ import {
   scaleToMaxEdge
 } from "../lib/mm-page.js";
 import { reconcilePage } from "../lib/mm-reconcile.js";
+import { createMmPageFlight } from "../lib/mm-page-queue.js";
 import { applyParagraphSwap, planParagraphSwap, swapShouldDefer } from "../lib/mm-page-swap.js";
 import {
   MM_RETRY_COPY,
@@ -568,8 +569,11 @@ let rushArmed = 0;
 let rushInflight = 0;
 let lastReaderScrollAt = 0;
 let mmNoticeUsed = false;
+let mmFocusPage = 0;
 const mmWarmStarted = new Set();
 const mmReplaceTimer = new Map();
+const mmFinishTickets = new Map();
+const mmPageFlight = createMmPageFlight({ limit: 1 });
 
 function clearRushQueue() {
   rushQueue = [];
@@ -9541,6 +9545,8 @@ function forgetViewerTranslations() {
   const total = Number(pdfDoc?.numPages) || 0;
   pageStates.clear();
   mmWarmStarted.clear();
+  mmFinishTickets.clear();
+  mmFocusPage = 0;
   mmNoticeUsed = false;
   for (const timer of mmReplaceTimer.values()) clearTimeout(timer);
   mmReplaceTimer.clear();
@@ -14135,6 +14141,7 @@ async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
   const stored = getPageLayout(n) || libraryEntry(n)?.layout;
   if (!force && isCurrentMmPage(getPageLayout(n))) return getPageLayout(n);
   if (!force && pageStates.get(Number(n))?.mmPhase === "rebuilding" && getPageLayout(n)?.blocks?.length) {
+    if (options.awaitFinish === true) await mmFinishTickets.get(Number(n));
     return getPageLayout(n);
   }
   if (legacyPageShouldHold(stored, { force, hasTranslation: pageHasSettledTranslation(n) })) {
@@ -14144,8 +14151,20 @@ async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
   if (!quick || isStale()) return null;
   notePageState(n, { legacyCache: false, hasLayout: true });
   noteMmPhase(n, "rebuilding", "");
-  if (options.warm !== false) void warmMmNeighbors(n, epoch);
-  void finishMmPage(n, quick, isStale, epoch, key);
+  const role = options.warm === false ? "neighbor" : "current";
+  const ticket = mmPageFlight.run({ page: Number(n), role, epoch }, () => finishMmPage(n, quick, isStale, epoch, key));
+  mmFinishTickets.set(Number(n), ticket);
+  ticket.then((result) => {
+    if (!result?.dropped) return;
+    mmWarmStarted.delete(Number(n));
+    if (pageStates.get(Number(n))?.mmPhase === "rebuilding") noteMmPhase(n, "", "");
+  });
+  if (role === "current") {
+    mmFocusPage = Number(n);
+    mmPageFlight.dropNeighborsOutside({ focus: mmFocusPage, radius: 2, epoch });
+    void warmMmNeighbors(n, epoch);
+  }
+  if (options.awaitFinish === true) await ticket;
   return quick;
 }
 
@@ -14158,10 +14177,17 @@ async function warmMmNeighbors(page, epoch) {
   }
   for (const neighbor of mmPageScheduleOrder(pages, page)) {
     if (!layoutAttemptLive(epoch)) return;
-    if (mmWarmStarted.has(neighbor) || getPageLayout(neighbor)?.blocks?.length) continue;
+    if (Math.abs(Number(neighbor) - Number(mmFocusPage)) > 2) continue;
+    if (mmWarmStarted.has(neighbor)) {
+      const pending = mmFinishTickets.get(neighbor);
+      if (pending) await pending;
+      continue;
+    }
+    if (isCurrentMmPage(getPageLayout(neighbor))) continue;
+    if (getPageLayout(neighbor)?.blocks?.length && pageStates.get(neighbor)?.mmPhase !== "rebuilding") continue;
     mmWarmStarted.add(neighbor);
     try {
-      await ingestMmPageLayout(neighbor, () => !layoutAttemptLive(epoch), epoch, { warm: false });
+      await ingestMmPageLayout(neighbor, () => !layoutAttemptLive(epoch), epoch, { warm: false, awaitFinish: true });
     } catch {
       /* a neighbor can wait until its own translate pass */
     }
@@ -14204,7 +14230,7 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
   });
   if (isStale() || !layoutAttemptLive(epoch)) return;
   if (!result?.ok) {
-    noteMmFallback(n, quick, result?.reason || "http");
+    noteMmFallback(n, quick, result?.reason || "http", result);
     return;
   }
   const reconciled = reconcilePage(
@@ -14227,11 +14253,18 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
   stampFreshFormulaPipeline(layout);
   stampProducedEngine(layout, MM_PAGE_MODE);
   notePageFormulaLatex(n, layout.formulaLatex);
+  const swapMode = planParagraphSwap(quick.blocks, blocks, {
+    columnsBefore: quick.columns || 0,
+    columnsAfter: layout.columns || 0
+  }).mode;
   noteMmPage("mm.page.ok", {
     page: n,
     ms: Date.now() - started,
     blocks: blocks.length,
-    cols: layout.columns || 0
+    cols: layout.columns || 0,
+    pageSwap: swapMode === "page",
+    ...(Number.isFinite(result.callMs) ? { callMs: result.callMs } : {}),
+    ...(Number.isFinite(result.retryMs) ? { retryMs: result.retryMs } : {})
   });
   noteMmPage("mm.page.reconcile", { page: n, ...reconciled.stats });
   noteMmPage("mm.page.cache", { page: n, hit: false });
@@ -14245,13 +14278,18 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
   persistPageLayout(n).catch(() => {});
 }
 
-function noteMmFallback(n, layout, reason) {
+function noteMmFallback(n, layout, reason, result) {
   const token = reason === "empty-key" ? "not-configured" : (reason || "http");
   if (layout) {
     layout.fallback = { source: "text-layer", reason: token };
     layout.mode = "text-layer";
   }
-  noteMmPage("mm.page.fallback", { page: n, reason: token });
+  noteMmPage("mm.page.fallback", {
+    page: n,
+    reason: token,
+    ...(Number.isFinite(result?.callMs) ? { callMs: result.callMs } : {}),
+    ...(Number.isFinite(result?.retryMs) ? { retryMs: result.retryMs } : {})
+  });
   if (token === "aborted") {
     noteMmPhase(n, "", "");
     return;
@@ -14381,6 +14419,7 @@ function clearLayoutFallbackStatus() {
  * page to start after the click. The viewer stays open for a retranslate.
  */
 function cancelQueuedVendorLayouts() {
+  mmPageFlight.dropEpoch(layoutEpoch);
   layoutEpoch += 1;
   try {
     layoutAbort.abort();
@@ -15001,6 +15040,8 @@ async function adoptDoc(doc, title, openGen) {
   pageCache.clear();
   pageStates.clear();
   mmWarmStarted.clear();
+  mmFinishTickets.clear();
+  mmFocusPage = 0;
   mmNoticeUsed = false;
   for (const timer of mmReplaceTimer.values()) clearTimeout(timer);
   mmReplaceTimer.clear();

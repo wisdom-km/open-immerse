@@ -19,7 +19,7 @@ import {
 } from "../lib/pdf-default-notice.js";
 import { NO_ENGINE_COPY, flashFocus } from "../lib/no-engine-prompt.js";
 import { TRANSLATE_LIMIT_TITLE_LEAD, isTitleLeadLimit } from "../lib/translate-limit.js";
-import { PDF_LAYOUT_RESET_COPY } from "../lib/formula-pipeline.js";
+import { PDF_LAYOUT_MM_NOTICE, PDF_LAYOUT_RESET_COPY } from "../lib/formula-pipeline.js";
 import { SETTINGS_VERSION, normalizeBodyGlossGap, normalizeBodyGlossStackGap, normalizePdfAutoTranslate } from "../lib/storage.js";
 import {
   normalizeSecrets,
@@ -579,6 +579,11 @@ async function importSettingsFile(ev) {
 function paintPdfLayoutResetNote(settings) {
   const note = el("pdfLayoutResetNote");
   if (!note) return;
+  if (settings?.pdfLayoutMmNotice === true) {
+    note.textContent = PDF_LAYOUT_MM_NOTICE;
+    note.hidden = false;
+    return;
+  }
   note.textContent = PDF_LAYOUT_RESET_COPY;
   note.hidden = settings?.pdfLayoutResetNotice !== true;
 }
@@ -1589,7 +1594,7 @@ async function persistNow(control) {
     siteRules: siteRules.filter((host) => !bad.includes(host)).map((host) => ({ host: host.replace(/^www\./, ""), auto: true })),
     providers: cachedSettings.providers,
     pdfLayout: readPdfLayout(),
-    ...(control?.id === "pdfLayoutMode" ? { pdfLayoutResetNotice: false } : {})
+    ...(control?.id === "pdfLayoutMode" ? { pdfLayoutResetNotice: false, pdfLayoutMmNotice: false } : {})
   };
   const pendingPdf = pdfCloudEdit;
   const keptKeys = new Map();

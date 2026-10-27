@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { GLYPH_GAP_MARK } from "../lib/pdf-glyph-sanitize.js";
 import {
   MM_PAGE_COVERAGE_MIN,
+  MM_PAGE_RETRY_MIN_MS,
   MM_PAGE_SPIKE_HOSTS,
   MM_PAGE_TIMEOUT_MS,
   isCurrentMmPage,
@@ -19,7 +20,8 @@ import {
   runMmPage,
   scaleToMaxEdge
 } from "../lib/mm-page.js";
-import { reconcilePage } from "../lib/mm-reconcile.js";
+import { peripheralKind, reconcilePage } from "../lib/mm-reconcile.js";
+import { createMmPageFlight } from "../lib/mm-page-queue.js";
 import {
   applyParagraphSwap,
   planParagraphSwap,
@@ -41,7 +43,7 @@ import {
 import { notePageFormulaLatex, pageLatexForUnit, resetMmPages } from "../lib/formula-mm-ledger.js";
 import { layoutCacheKey } from "../lib/pdf-layout-client.js";
 import { parseLayoutCacheKey } from "../lib/pdf-layout-key.js";
-import { noteMmPage, summarizeMmGapFill } from "../lib/diag-log.js";
+import { noteMmPage, summarizeMmGapFill, summarizeMmPageSwaps } from "../lib/diag-log.js";
 import { redactDiagEvent } from "../lib/diag-redact.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -266,6 +268,181 @@ test("status copy, marks, and contrast match the Loom spec", () => {
   assert.equal(JSON.stringify(event).includes("Attention"), false);
   assert.deepEqual(summarizeMmGapFill([event]), { gapsIn: 4, gapsFilled: 3, rate: 0.75 });
   noteMmPage("mm.page.start", { page: 1, text: "do not keep" });
+});
+
+test("a retry is skipped when less than 35s of the page budget remain", async () => {
+  assert.equal(MM_PAGE_RETRY_MIN_MS, 35_000);
+  assert.equal(MM_PAGE_TIMEOUT_MS, 90_000);
+  let t = 0;
+  let calls = 0;
+  const skipped = await runMmPage({
+    pngBase64: "abc",
+    text: "Hello.",
+    timeoutMs: 90_000,
+    now: () => t,
+    secret: "sk-do-not-log",
+    sendVision: async () => {
+      calls += 1;
+      t += 60_000;
+      return { ok: true, text: "still prose" };
+    }
+  });
+  assert.equal(calls, 1);
+  assert.equal(skipped.reason, "timeout");
+  assert.equal(skipped.callMs, 60_000);
+  assert.equal(skipped.retryMs, undefined);
+  assert.equal(JSON.stringify(skipped).includes("sk-do-not-log"), false);
+  t = 0;
+  calls = 0;
+  const retried = await runMmPage({
+    pngBase64: "abc",
+    text: "Hello.",
+    timeoutMs: 90_000,
+    now: () => t,
+    sendVision: async () => {
+      calls += 1;
+      t += 1_000;
+      if (calls === 1) return { ok: true, text: "still prose" };
+      return {
+        ok: true,
+        text: JSON.stringify({ v: "mp-1", columns: 1, blocks: [{ id: "b1", label: "text", order: 1, text: "Hello.", bbox: [0, 0, 1, 0.2] }] })
+      };
+    }
+  });
+  assert.equal(calls, 2);
+  assert.equal(retried.ok, true);
+  assert.equal(retried.callMs, 1_000);
+  assert.equal(retried.retryMs, 1_000);
+});
+
+test("opening three pages keeps a single sendVision in flight", async () => {
+  const flight = createMmPageFlight();
+  assert.equal(flight.limit(), 1);
+  assert.equal(flight.setLimit(3), 1);
+  assert.equal(flight.setLimit(2), 2);
+  flight.setLimit(1);
+  let inflight = 0;
+  let max = 0;
+  const pending = new Map();
+  const open = (page, role = "current", epoch = 4) => flight.run({ page, role, epoch }, () => new Promise((resolve) => {
+    inflight += 1;
+    max = Math.max(max, inflight);
+    pending.set(page, () => {
+      inflight -= 1;
+      resolve({ ok: true, page });
+    });
+  }));
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const first = open(1);
+  const second = open(2);
+  const third = open(3);
+  await flush();
+  assert.equal(inflight, 1);
+  assert.equal(flight.active(), 1);
+  assert.equal(flight.queued(), 2);
+  const neighbor = open(9, "neighbor");
+  assert.equal(flight.dropNeighborsOutside({ focus: 3, radius: 2, epoch: 4 }), 1);
+  assert.deepEqual(await neighbor, { ok: false, dropped: true });
+  const order = [];
+  pending.get(1)();
+  order.push((await first).value.page);
+  await flush();
+  assert.equal(inflight, 1);
+  assert.equal(pending.has(2), true);
+  pending.get(2)();
+  order.push((await second).value.page);
+  await flush();
+  pending.get(3)();
+  order.push((await third).value.page);
+  assert.deepEqual(order, [1, 2, 3]);
+  assert.equal(max, 1);
+
+  const ahead = createMmPageFlight();
+  let releaseHold;
+  const hold = ahead.run({ page: 1, role: "current", epoch: 1 }, () => new Promise((resolve) => {
+    releaseHold = resolve;
+  }));
+  await flush();
+  const seen = [];
+  const laterNeighbor = ahead.run({ page: 4, role: "neighbor", epoch: 1 }, async () => {
+    seen.push("neighbor");
+    return "neighbor";
+  });
+  const laterCurrent = ahead.run({ page: 2, role: "current", epoch: 1 }, async () => {
+    seen.push("current");
+    return "current";
+  });
+  assert.equal(ahead.queued(), 2);
+  releaseHold({ ok: true });
+  await hold;
+  await laterCurrent;
+  await laterNeighbor;
+  assert.deepEqual(seen, ["current", "neighbor"]);
+
+  const droppedFlight = createMmPageFlight();
+  droppedFlight.run({ page: 1, role: "current", epoch: 3 }, () => new Promise(() => {}));
+  const queuedNeighbor = droppedFlight.run({ page: 8, role: "neighbor", epoch: 9 }, async () => ({ ok: true }));
+  const queuedCurrent = droppedFlight.run({ page: 2, role: "current", epoch: 9 }, async () => ({ ok: true }));
+  assert.equal(droppedFlight.dropEpoch(9), 2);
+  assert.equal((await queuedNeighbor).dropped, true);
+  assert.equal((await queuedCurrent).dropped, true);
+  const warm = viewer.slice(viewer.indexOf("async function warmMmNeighbors"), viewer.indexOf("async function finishMmPage"));
+  assert.match(warm, /awaitFinish: true/);
+  assert.equal(viewer.includes("void finishMmPage"), false);
+  assert.match(viewer, /mmPageFlight\.run/);
+  assert.match(viewer, /dropNeighborsOutside/);
+  assert.match(viewer, /dropEpoch\(layoutEpoch\)/);
+});
+
+test("header footer and footnote stay untranslated when the label drifts", () => {
+  assert.equal(peripheralKind({ label: "text", role: "footnote" }), "footnote");
+  const drifted = reconcilePage(
+    [
+      { id: "h", label: "text", bbox: [0, 0, 1, 0.05], text: "Lancet 2020" },
+      { id: "b", label: "text", bbox: [0.1, 0.2, 0.9, 0.4], text: "Body sentence." },
+      { id: "f", label: "footnote", bbox: [0, 0.9, 1, 1], text: "1 Department of medicine." }
+    ],
+    [
+      { id: "th", label: "header", bbox: [0, 0, 1, 0.05], text: "Lancet. 2020." },
+      { id: "tb", label: "text", bbox: [0.1, 0.2, 0.9, 0.4], text: "Body sentence." },
+      { id: "tf", label: "text", role: "footnote", bbox: [0, 0.9, 1, 1], text: "1 Department of medicine was longer." }
+    ]
+  );
+  const header = drifted.blocks.find((block) => block.id === "th");
+  const body = drifted.blocks.find((block) => block.id === "tb");
+  const note = drifted.blocks.find((block) => block.id === "tf" || block.label === "footnote");
+  assert.equal(header.label, "header");
+  assert.equal(header.skipTranslate, true);
+  assert.equal(header.flag, undefined);
+  assert.equal(note.skipTranslate, true);
+  assert.equal(note.label, "footnote");
+  assert.equal(body.skipTranslate, undefined);
+  assert.equal(drifted.stats.mmOnly, 0);
+  assert.equal(drifted.stats.restored, 0);
+  const orphan = reconcilePage(
+    [{ id: "only", label: "footer", bbox: [0, 0.95, 1, 1], text: "page 4" }],
+    [{ id: "gone", label: "footer", bbox: [0, 0, 0.2, 0.02], text: "not on this crop" }]
+  );
+  assert.equal(orphan.stats.mmOnly, 0);
+  assert.equal(orphan.stats.restored, 0);
+  assert.equal(orphan.blocks.every((block) => block.skipTranslate === true), true);
+  const counted = redactDiagEvent({
+    type: "mm.page.ok",
+    page: 4,
+    pageSwap: true,
+    callMs: 61000,
+    retryMs: 1000,
+    apiKey: "sk-secret-value"
+  }, ["sk-secret-value"]);
+  assert.equal(counted.pageSwap, true);
+  assert.equal(counted.callMs, 61000);
+  assert.equal(counted.retryMs, 1000);
+  assert.equal(JSON.stringify(counted).includes("sk-secret-value"), false);
+  assert.deepEqual(summarizeMmPageSwaps([
+    { type: "mm.page.ok", pageSwap: true },
+    { type: "mm.page.ok", pageSwap: false },
+    { type: "mm.page.ok", pageSwap: true }
+  ]), { swaps: 3, pageSwaps: 2, pageSwapRate: 2 / 3 });
 });
 
 test("page latex is a multimodal-tier candidate and does not require a second crop", () => {
