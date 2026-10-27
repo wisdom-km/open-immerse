@@ -158,6 +158,12 @@
   --oi-reader-pair-halo: rgba(168, 107, 18, 0.18);
   --oi-reader-pair-halo-width: 4px;
   --oi-reader-warn: #8A4B0F;
+  --oi-reader-para-mark-w: 2px;
+  --oi-reader-para-mark-gap: 6px;
+  --oi-reader-para-mark-num: var(--oi-reader-warn);
+  --oi-reader-para-mark-restored: var(--oi-reader-muted);
+  --oi-reader-para-mark-mm: var(--oi-reader-line-strong);
+  --oi-reader-swap-ms: 150ms;
   --oi-reader-danger: #8E1B12;
   --oi-reader-on-danger: #FFF8F6;
   --oi-reader-focus: #2F55D4;
@@ -542,6 +548,12 @@
   --oi-reader-focus: #8FA8FF;
   --oi-reader-warn: #E2A86A;
   --oi-reader-warn-soft: rgba(226, 168, 106, 0.14);
+  --oi-reader-para-mark-w: 2px;
+  --oi-reader-para-mark-gap: 6px;
+  --oi-reader-para-mark-num: var(--oi-reader-warn);
+  --oi-reader-para-mark-restored: var(--oi-reader-muted);
+  --oi-reader-para-mark-mm: var(--oi-reader-line-strong);
+  --oi-reader-swap-ms: 150ms;
   --oi-reader-danger: #F6C7BE;
   --oi-reader-on-danger: #1C1D1F;
   --oi-reader-ai: #6FB3BC;

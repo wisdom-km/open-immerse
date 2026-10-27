@@ -193,6 +193,27 @@ import {
   translatableBlocks,
   visualAlt
 } from "../lib/pdf-blocks.js";
+import {
+  MM_PAGE_MODE,
+  formulaLatexCandidates,
+  isCurrentMmPage,
+  legacyPageShouldHold,
+  mmPageCacheKey,
+  mmPageConfigured,
+  mmPageFingerprint,
+  mmPageScheduleOrder,
+  runMmPage,
+  scaleToMaxEdge
+} from "../lib/mm-page.js";
+import { reconcilePage } from "../lib/mm-reconcile.js";
+import { applyParagraphSwap, planParagraphSwap, swapShouldDefer } from "../lib/mm-page-swap.js";
+import {
+  MM_RETRY_COPY,
+  markFit,
+  markPresentation,
+  mmPageStatusView,
+  staleStatusVisible
+} from "../lib/mm-page-ui.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { blocksForNotes } from "../lib/note-page-blocks.js";
 import { createBlockAnchor, injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
@@ -406,7 +427,7 @@ import {
 } from "../lib/formula-vision-crop.js";
 import { createFormulaCache } from "../lib/formula-cache.js";
 import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
-import { mmPageLedger, resetMmPages } from "../lib/formula-mm-ledger.js";
+import { mmPageLedger, notePageFormulaLatex, resetMmPages } from "../lib/formula-mm-ledger.js";
 import {
   ARXIV_SOURCE_AUTO_KEY,
   ARXIV_SOURCE_ON_KEY,
@@ -472,9 +493,11 @@ import {
   diagStateForPage,
   notePageStateEvent,
   noteTranslateException,
+  noteMmPage,
   noteUserAction,
   noteViewerNetwork
 } from "../lib/diag-log.js";
+import { multimodalTarget, sendVision } from "../lib/mm-client.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
@@ -543,6 +566,10 @@ let retranslateScope = "";
 let rushQueue = [];
 let rushArmed = 0;
 let rushInflight = 0;
+let lastReaderScrollAt = 0;
+let mmNoticeUsed = false;
+const mmWarmStarted = new Set();
+const mmReplaceTimer = new Map();
 
 function clearRushQueue() {
   rushQueue = [];
@@ -912,9 +939,15 @@ function init() {
   });
   bindClearDocTranslation();
   $("status")?.addEventListener("click", () => {
-    if (pageStates.get(pageNum)?.state !== "stale-formula") return;
-    void forceRetranslateCurrentPage(pageNum);
+    if (!$("status")?.classList.contains("is-stale")) return;
+    const ps = document.querySelector(`#pages .rf-page[data-page="${pageNum}"] > .rf-ps`);
+    ps?.scrollIntoView({ block: "nearest" });
   });
+  translateScrollRoot()?.addEventListener("scroll", () => {
+    lastReaderScrollAt = Date.now();
+    syncStaleDocStatus();
+  }, { passive: true });
+  bindMarkTooltipKeys();
   $("translateMenuRetranslateDoc")?.addEventListener("click", () => {
     closeTranslateMenu(true);
     void runRetranslateMenu("document");
@@ -3877,7 +3910,7 @@ function pdfEngineMode() {
 /** text-layer, local-ocr, or cloud-ocr already recorded on a layout. unknown stays unset. */
 function engineModeOf(layout) {
   const mode = String(layout?.mode || "");
-  return mode === "text-layer" || mode === "local-ocr" || mode === "cloud-ocr" ? mode : "";
+  return mode === "mm-page" || mode === "text-layer" || mode === "local-ocr" || mode === "cloud-ocr" ? mode : "";
 }
 
 /**
@@ -6508,6 +6541,7 @@ function appendFixtureReadout(parent, layout, options = {}) {
     node.dataset.blockId = String(block.id || "");
     if (block.bid) node.dataset.bid = String(block.bid);
     node.dataset.label = String(block.label || "");
+    paintBlockMark(node, block);
     if (block.translationStatus) node.dataset.translationStatus = block.translationStatus;
     if (plan.image) appendCropOrNotice(node, block, plan.imageClass, page);
     else fillBlockText(node, block, layout);
@@ -6517,6 +6551,74 @@ function appendFixtureReadout(parent, layout, options = {}) {
     }
     parent.append(node);
   }
+}
+
+function paintBlockMark(node, block) {
+  if (!node) return;
+  const flags = block?.flags || (block?.flag ? [block.flag] : []);
+  const mark = markPresentation(flags, block?.markDetail);
+  if (!mark) {
+    node.classList.remove("rf-mark");
+    delete node.dataset.mark;
+    delete node.dataset.markFit;
+    node.removeAttribute("tabindex");
+    node.removeAttribute("aria-label");
+    node.querySelector(":scope > .rf-mark-tip")?.remove();
+    return;
+  }
+  node.classList.add("rf-mark");
+  node.dataset.mark = mark.data;
+  node.tabIndex = 0;
+  node.setAttribute("aria-label", mark.aria);
+  let tip = node.querySelector(":scope > .rf-mark-tip");
+  if (!tip) {
+    tip = document.createElement("span");
+    tip.className = "rf-mark-tip";
+    tip.setAttribute("role", "tooltip");
+    node.append(tip);
+  }
+  tip.id = tip.id || `mm-mark-${node.dataset.blockId || mark.data}`;
+  tip.textContent = mark.tooltip;
+  node.setAttribute("aria-describedby", tip.id);
+  const scroller = translateScrollRoot();
+  const space = node.getBoundingClientRect && scroller?.getBoundingClientRect
+    ? node.getBoundingClientRect().left - scroller.getBoundingClientRect().left
+    : 32;
+  node.dataset.markFit = markFit(space);
+}
+
+function bindMarkTooltipKeys() {
+  if (bindMarkTooltipKeys.done) return;
+  bindMarkTooltipKeys.done = true;
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    document.querySelectorAll(".rf-mark.is-tip, .rf-mark:focus").forEach((node) => {
+      node.classList.remove("is-tip");
+      node.dataset.tipClosed = "1";
+    });
+  });
+  document.addEventListener("focusin", (event) => {
+    const host = event.target?.closest?.(".rf-mark");
+    if (host) host.classList.add("is-tip");
+  });
+  document.addEventListener("focusout", (event) => {
+    const host = event.target?.closest?.(".rf-mark");
+    if (host) host.classList.remove("is-tip");
+  });
+  let timer = 0;
+  document.addEventListener("pointerover", (event) => {
+    const host = event.target?.closest?.(".rf-mark");
+    if (!host) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => host.classList.add("is-tip"), 300);
+  });
+  document.addEventListener("pointerout", (event) => {
+    const host = event.target?.closest?.(".rf-mark");
+    if (!host) return;
+    clearTimeout(timer);
+    host.classList.remove("is-tip");
+    delete host.dataset.tipClosed;
+  });
 }
 
 function splitBilingual(node, sourceText) {
@@ -9438,6 +9540,10 @@ function forgetViewerTranslations() {
   formulaFreshDoc = 0;
   const total = Number(pdfDoc?.numPages) || 0;
   pageStates.clear();
+  mmWarmStarted.clear();
+  mmNoticeUsed = false;
+  for (const timer of mmReplaceTimer.values()) clearTimeout(timer);
+  mmReplaceTimer.clear();
   pageDiagStamp.clear();
   for (let n = 1; n <= total; n += 1) {
     notePageState(n, formulaStatePatch("cleared", { hasLayout: Boolean(getPageLayout(n)?.blocks?.length) }));
@@ -10162,15 +10268,7 @@ function restoreFlowAnchor(anchor) {
 
 function pageStatusSpec(page, row) {
   const running = docPhase === "running" || docPhase === "layout";
-  if (row.state === "running") {
-    const m = Number(row.m) || 0;
-    const replacing = pageHasSettledReadout(page);
-    return { kind: "running", text: psRunning(row.k || 0, m), bar: m > 0 || replacing };
-  }
-  if (row.state === "layout") return { kind: "layout", text: "正在读取本页…" };
-  if (running && (row.state === "failed" || row.state === "partial")) {
-    return { kind: "queued", text: runningPageHint() };
-  }
+  let chipSpec = null;
   if (!running && showRoundFailures && (row.state === "failed" || row.state === "partial")) {
     const gap = Math.max(0, (Number(row.m) || 0) - (Number(row.k) || 0));
     const cached = pageCache.get(docId, page);
@@ -10182,9 +10280,27 @@ function pageStatusSpec(page, row) {
       pending: pageRetryPending.has(page),
       still: pageRetryStill.has(page)
     });
-    if (chip) return { kind: row.state, text: chip.text, chip, page };
+    if (chip) chipSpec = { kind: row.state, text: chip.text, chip, page };
   }
-  if (row.state === "stale-formula") {
+  const mm = mmPageStatusView({
+    phase: row.mmPhase || "",
+    reason: row.mmReason || "",
+    running,
+    page,
+    chip: Boolean(chipSpec)
+  });
+  if (chipSpec) return chipSpec;
+  if (mm) return { kind: mm.kind, text: mm.text, retry: mm.retry, page };
+  if (row.state === "running") {
+    const m = Number(row.m) || 0;
+    const replacing = pageHasSettledReadout(page);
+    return { kind: "running", text: psRunning(row.k || 0, m), bar: m > 0 || replacing };
+  }
+  if (row.state === "layout") return { kind: "layout", text: "正在读取本页…" };
+  if (running && (row.state === "failed" || row.state === "partial")) {
+    return { kind: "queued", text: runningPageHint() };
+  }
+  if (row.state === "stale-formula" || row.legacyCache === true) {
     return { kind: "stale-formula", text: STALE_FORMULA_COPY, warn: true, page };
   }
   if (row.state === "queued") return { kind: "queued", text: "排队翻译" };
@@ -10219,10 +10335,24 @@ function syncPageStatus(slot, page, row) {
   }
   text.replaceChildren();
   if (spec.kind === "stale-formula") {
+    const label = document.createElement("span");
+    label.className = "rf-stale-formula";
+    label.textContent = spec.text || STALE_FORMULA_COPY;
+    text.append(label, document.createTextNode(" · "));
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "rf-stale-formula";
-    button.textContent = spec.text || STALE_FORMULA_COPY;
+    button.className = "rf-retry";
+    button.textContent = MM_RETRY_COPY;
+    button.addEventListener("click", () => {
+      void forceRetranslateCurrentPage(page);
+    });
+    text.append(button);
+  } else if (spec.retry) {
+    text.append(document.createTextNode(`${spec.text || ""} · `));
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "rf-retry";
+    button.textContent = spec.retry;
     button.addEventListener("click", () => {
       void forceRetranslateCurrentPage(page);
     });
@@ -13676,7 +13806,10 @@ async function forceRetranslateCurrentPage(requestedPage) {
   forceRetranslatePending = false;
   forceRetranslatePendingPage = 0;
   const formulaState = pageStates.get(page)?.state;
-  if (formulaState === "stale-formula" || formulaState === "formula-check") {
+  if (pdfEngineMode() === MM_PAGE_MODE) {
+    try { await ingestMmPageLayout(page, () => false, layoutEpoch, { force: true, warm: false }); }
+    catch { /* keep the page */ }
+  } else if (formulaState === "stale-formula" || formulaState === "formula-check") {
     try {
       await ingestTextLayerLayout(page, () => false);
     } catch {
@@ -13943,7 +14076,243 @@ async function ingestPageLayout(n, isStale, epoch) {
     if (reason === "empty-key") return ingestTextLayerLayout(n, isStale);
     return ingestTextLayerLayout(n, isStale, { fallback: { source: "text-layer", reason } });
   }
+  if (mode === MM_PAGE_MODE) return ingestMmPageLayout(n, isStale, epoch);
   return ingestTextLayerLayout(n, isStale);
+}
+
+function pageHasSettledTranslation(page) {
+  const pairs = libraryEntry(page)?.pairs || pageCache.get(docId, page) || [];
+  return (pairs || []).some((pair) => String(pair?.translation || "").trim());
+}
+
+function textHintFromBlocks(blocks) {
+  return (blocks || []).map((block) => block?.text || "").filter(Boolean).join("\n").slice(0, 8000);
+}
+
+function pngBase64FromCanvas(canvas) {
+  if (!canvas?.toDataURL) return "";
+  const plan = scaleToMaxEdge(canvas.width, canvas.height);
+  let source = canvas;
+  if (plan.scale !== 1 && document?.createElement) {
+    const copy = document.createElement("canvas");
+    copy.width = plan.width;
+    copy.height = plan.height;
+    const ctx = formulaDrawContext(copy) || copy.getContext("2d");
+    ctx?.drawImage(canvas, 0, 0, plan.width, plan.height);
+    source = copy;
+  }
+  return String(source.toDataURL("image/png") || "").replace(/^data:image\/png;base64,/, "");
+}
+
+function noteMmPhase(page, phase, reason = "") {
+  notePageState(page, { mmPhase: phase, mmReason: reason, hasLayout: true });
+  const slot = document.querySelector(`#pages .rf-page[data-page="${page}"]`);
+  const row = pageStates.get(Number(page));
+  if (slot && row) syncPageStatus(slot, page, row);
+}
+
+function holdLegacyPage(n, layout) {
+  notePageState(n, { legacyCache: true, hasLayout: true });
+  noteMmPage("mm.page.cache", { page: n, hit: false });
+  return layout;
+}
+
+async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
+  if (!layoutAttemptLive(epoch) || isStale()) return null;
+  const force = options.force === true;
+  const hash = await pdfByteHash();
+  const key = mmPageCacheKey({ hash, page: n });
+  if (!force) {
+    const cached = await readStoredLayout(key);
+    if (cached && isCurrentMmPage(cached) && !isStale()) {
+      noteMmPage("mm.page.cache", { page: n, hit: true });
+      notePageFormulaLatex(n, cached.formulaLatex || []);
+      notePageState(n, { legacyCache: false, mmPhase: "", mmReason: "", hasLayout: true });
+      setPageLayout(n, cached);
+      return cached;
+    }
+  }
+  const stored = getPageLayout(n) || libraryEntry(n)?.layout;
+  if (!force && isCurrentMmPage(getPageLayout(n))) return getPageLayout(n);
+  if (!force && pageStates.get(Number(n))?.mmPhase === "rebuilding" && getPageLayout(n)?.blocks?.length) {
+    return getPageLayout(n);
+  }
+  if (legacyPageShouldHold(stored, { force, hasTranslation: pageHasSettledTranslation(n) })) {
+    return holdLegacyPage(n, stored);
+  }
+  const quick = await ingestTextLayerLayout(n, isStale, { persist: false });
+  if (!quick || isStale()) return null;
+  notePageState(n, { legacyCache: false, hasLayout: true });
+  noteMmPhase(n, "rebuilding", "");
+  if (options.warm !== false) void warmMmNeighbors(n, epoch);
+  void finishMmPage(n, quick, isStale, epoch, key);
+  return quick;
+}
+
+async function warmMmNeighbors(page, epoch) {
+  if (!mmPageConfigured(formulaViewerSettings)) return;
+  const total = pdfDoc?.numPages || 0;
+  const pages = [];
+  for (let i = 1; i <= total; i += 1) {
+    if (i !== page && Math.abs(i - page) <= 2) pages.push(i);
+  }
+  for (const neighbor of mmPageScheduleOrder(pages, page)) {
+    if (!layoutAttemptLive(epoch)) return;
+    if (mmWarmStarted.has(neighbor) || getPageLayout(neighbor)?.blocks?.length) continue;
+    mmWarmStarted.add(neighbor);
+    try {
+      await ingestMmPageLayout(neighbor, () => !layoutAttemptLive(epoch), epoch, { warm: false });
+    } catch {
+      /* a neighbor can wait until its own translate pass */
+    }
+  }
+}
+
+async function finishMmPage(n, quick, isStale, epoch, key) {
+  const started = Date.now();
+  if (!layoutAttemptLive(epoch) || isStale()) return;
+  const configured = mmPageConfigured(formulaViewerSettings);
+  noteMmPage("mm.page.start", { page: n });
+  if (!configured) {
+    noteMmFallback(n, quick, "not-configured");
+    return;
+  }
+  let png = "";
+  try {
+    const page = await pdfDoc.getPage(n);
+    if (isStale() || !layoutAttemptLive(epoch)) return;
+    const raster = await renderPageRaster(page);
+    png = pngBase64FromCanvas(raster?.canvas);
+  } catch {
+    png = "";
+  }
+  if (!png || isStale() || !layoutAttemptLive(epoch)) {
+    if (!isStale() && layoutAttemptLive(epoch)) noteMmFallback(n, quick, png ? "aborted" : "http");
+    return;
+  }
+  const target = multimodalTarget(formulaViewerSettings);
+  const result = await runMmPage({
+    pngBase64: png,
+    text: textHintFromBlocks(quick.blocks),
+    page: n,
+    columns: quick.columns || 0,
+    target,
+    sendVision,
+    signal: layoutAbort.signal,
+    configured: true,
+    readSecret: async () => String(formulaViewerSettings?.multimodal?.apiKey || "")
+  });
+  if (isStale() || !layoutAttemptLive(epoch)) return;
+  if (!result?.ok) {
+    noteMmFallback(n, quick, result?.reason || "http");
+    return;
+  }
+  const reconciled = reconcilePage(
+    result.page.blocks,
+    quick.blocks
+  );
+  const blocks = reconciled.blocks;
+  const layout = {
+    ...quick,
+    kind: "blocks",
+    mode: MM_PAGE_MODE,
+    pagePipeline: "mp-1",
+    columns: result.page.columns || quick.columns || 0,
+    blocks,
+    formulaLatex: formulaLatexCandidates(blocks),
+    mmFingerprint: mmPageFingerprint(formulaViewerSettings),
+    fallback: undefined
+  };
+  delete layout.fallback;
+  stampFreshFormulaPipeline(layout);
+  stampProducedEngine(layout, MM_PAGE_MODE);
+  notePageFormulaLatex(n, layout.formulaLatex);
+  noteMmPage("mm.page.ok", {
+    page: n,
+    ms: Date.now() - started,
+    blocks: blocks.length,
+    cols: layout.columns || 0
+  });
+  noteMmPage("mm.page.reconcile", { page: n, ...reconciled.stats });
+  noteMmPage("mm.page.cache", { page: n, hit: false });
+  await replaceMmLayout(n, quick, layout, epoch);
+  if (!layoutAttemptLive(epoch)) return;
+  try {
+    await writeStoredLayout(key, layout);
+  } catch {
+    /* storage is optional */
+  }
+  persistPageLayout(n).catch(() => {});
+}
+
+function noteMmFallback(n, layout, reason) {
+  const token = reason === "empty-key" ? "not-configured" : (reason || "http");
+  if (layout) {
+    layout.fallback = { source: "text-layer", reason: token };
+    layout.mode = "text-layer";
+  }
+  noteMmPage("mm.page.fallback", { page: n, reason: token });
+  if (token === "aborted") {
+    noteMmPhase(n, "", "");
+    return;
+  }
+  noteMmPhase(n, "fallback", token);
+  if (layout) setPageLayout(n, layout, { reanchor: false });
+}
+
+function readerSelecting(slot) {
+  const sel = document.getSelection?.();
+  if (!sel || sel.isCollapsed || !slot) return false;
+  return slot.contains(sel.anchorNode);
+}
+
+function replaceMmLayout(n, before, layout, epoch) {
+  const plan = planParagraphSwap(before?.blocks || [], layout.blocks, {
+    columnsBefore: before?.columns || 0,
+    columnsAfter: layout.columns || 0
+  });
+  const started = Date.now();
+  const run = () => {
+    if (!layoutAttemptLive(epoch)) return;
+    const slot = document.querySelector(`#pages .rf-page[data-page="${n}"]`);
+    const waited = Date.now() - started;
+    const decision = swapShouldDefer({
+      selecting: readerSelecting(slot),
+      scrolling: Date.now() - lastReaderScrollAt < 200,
+      tooltip: Boolean(document.querySelector(".rf-mark.is-tip")),
+      waitedMs: waited
+    });
+    if (decision.defer) {
+      const timer = setTimeout(run, 200);
+      mmReplaceTimer.set(n, timer);
+      return;
+    }
+    mmReplaceTimer.delete(n);
+    for (const op of plan.ops || []) {
+      if (op.op !== "keep") continue;
+      const prev = (before?.blocks || []).find((block) => String(block.id || "") === op.id);
+      const next = (layout.blocks || []).find((block) => String(block.id || "") === String(op.block?.id || ""));
+      if (prev?.translation && next && !next.translation) next.translation = prev.translation;
+    }
+    setPageLayout(n, layout, { reanchor: plan.mode === "page" });
+    if (slot && plan.mode === "diff") {
+      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+      applyParagraphSwap(slot, plan, {
+        reducedMotion: reduced,
+        scroller: translateScrollRoot(),
+        viewportTop: translateScrollRoot()?.getBoundingClientRect?.().top || 0
+      });
+      for (const block of layout.blocks || []) {
+        const node = slot.querySelector(`[data-block-id="${cssEscape(String(block.id || ""))}"]`);
+        if (node) paintBlockMark(node, block);
+      }
+    } else {
+      renderArticle();
+    }
+    noteMmPhase(n, "", "");
+  };
+  run();
+  return Promise.resolve();
 }
 
 async function pdfByteHash(bytes = pdfBytes) {
@@ -14631,6 +15000,10 @@ async function adoptDoc(doc, title, openGen) {
   translatingPage = 0;
   pageCache.clear();
   pageStates.clear();
+  mmWarmStarted.clear();
+  mmNoticeUsed = false;
+  for (const timer of mmReplaceTimer.values()) clearTimeout(timer);
+  mmReplaceTimer.clear();
   pageDiagStamp.clear();
   layoutMissReason.clear();
   skipLocked.clear();
@@ -15456,6 +15829,12 @@ async function loadCurrentPageText(explicitPage) {
   const openedStored = getPageLayout(n);
   const openedEngine = pdfEngineMode();
   if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version) && layoutServesEngine(openedStored, openedEngine)) {
+    if (openedEngine === MM_PAGE_MODE && isCurrentMmPage(openedStored)) {
+      noteMmPage("mm.page.cache", { page: n, hit: true });
+      notePageFormulaLatex(n, openedStored.formulaLatex || []);
+    } else if (openedEngine === MM_PAGE_MODE) {
+      notePageState(n, { legacyCache: true, hasLayout: true });
+    }
     if (!showOpenedLayout(openedStored, isStale)) return;
     const saved = await savedTranslationForNav(n);
     if (!libraryDoc) paintLateLibrary(n, ticket);
@@ -15742,6 +16121,46 @@ function setStatus(text, isError = false, isWarn = false) {
   el.classList.toggle("error", Boolean(isError) && !running);
   el.classList.toggle("warn", Boolean(isWarn) && !isError && !running);
   el.classList.toggle("is-stale", shown === STALE_FORMULA_COPY);
+  if (shown === STALE_FORMULA_COPY || el.classList.contains("is-stale")) syncStaleDocStatus();
+}
+
+function pageLegacyStale(page) {
+  const row = pageStates.get(Number(page));
+  return row?.state === "stale-formula" || row?.legacyCache === true;
+}
+
+function readerElInView(el) {
+  if (!el?.getBoundingClientRect) return false;
+  const scroller = translateScrollRoot();
+  const er = el.getBoundingClientRect();
+  const sr = scroller?.getBoundingClientRect?.() || { top: 0, bottom: window.innerHeight || 0 };
+  return er.bottom > sr.top + 1 && er.top < sr.bottom - 1;
+}
+
+/** The stale sentence is on the page or in #status, never both. */
+function syncStaleDocStatus() {
+  const el = $("status");
+  if (!el) return;
+  const page = Number(pageNum) || 0;
+  const ps = document.querySelector(`#pages .rf-page[data-page="${page}"] > .rf-ps`);
+  const show = staleStatusVisible({
+    current: true,
+    stale: pageLegacyStale(page),
+    inView: readerElInView(ps)
+  });
+  if (show) {
+    if (el.textContent !== STALE_FORMULA_COPY) {
+      el.textContent = STALE_FORMULA_COPY;
+      el.classList.remove("error");
+      el.classList.add("warn");
+    }
+    el.classList.add("is-stale");
+    return;
+  }
+  if (el.classList.contains("is-stale")) {
+    el.classList.remove("is-stale");
+    if (el.textContent === STALE_FORMULA_COPY) el.textContent = "";
+  }
 }
 
 // Keep this after every top-level let/const. Without ?src=, init() calls

@@ -233,7 +233,7 @@ test("a leftover engine override is dropped; settings local-ocr and arXiv opt-in
   assert.equal(migrateEngineOverride({ override: "local-ocr", explicit: true }).override, "local-ocr");
   assert.equal(migrateEngineOverride({ override: "", explicit: false }).migrated, false);
   assert.equal(resolveLayoutMode({ mode: "local-ocr" }, ""), "local-ocr");
-  assert.equal(resolveLayoutMode(null, ""), "text-layer");
+  assert.equal(resolveLayoutMode(null, ""), "mm-page");
   assert.equal(normalizeArxivPrefs(null).auto, false);
   assert.equal(normalizeArxivPrefs({ auto: true }).auto, true);
 });

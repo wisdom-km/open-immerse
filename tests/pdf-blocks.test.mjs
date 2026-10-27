@@ -35,7 +35,7 @@ const figureBbox = [72 / 612, 312 / 792, 172 / 612, 392 / 792];
 test("protocol constants name blocks-1, crop scale, and the three layout modes", () => {
   assert.equal(PROTOCOL, "blocks-1");
   assert.equal(CROP_SCALE, 2);
-  assert.deepEqual(LAYOUT_MODES, ["text-layer", "local-ocr", "cloud-ocr"]);
+  assert.deepEqual(LAYOUT_MODES, ["mm-page", "text-layer", "local-ocr", "cloud-ocr"]);
   assert.match(blocksSrc, /text-layer.*划区不可用时的兜底/);
   assert.match(blocksSrc, /local-ocr.*测试期本机智谱 GLM-OCR/);
   assert.match(blocksSrc, /cloud-ocr.*上线 OCR API/);
