@@ -462,14 +462,15 @@ test("Attention and DPO text-layer bids match the locked reference", { timeout: 
   // 468 → 480 at the previous text layer: +12 inline formula blocks.
   // 480 → 481 keeps the second title line "Your Language Model is Secretly
   // a Reward Model", which the previous layer dropped. Its bid is new.
-  // Every earlier bid on the page is unchanged; Abstract and the blocks
-  // after it keep their bids and move one positional slot.
+  // 481 → 477 joins four sentence-start lines into the paragraph under them.
+  // They were headings only because the line was short. p2-b8 and p3-b1
+  // keep their bids. The subtitle bid b1-p1-t0fsrs1f stays its own block.
   // This path does not attach font real names, so the count is not the
   // viewer's attach-first formula total.
-  assert.equal(dpoBlocks.length, 481);
+  assert.equal(dpoBlocks.length, 477);
   const dpoBids = dpoBlocks.map((block) => block.bid);
   assert.equal(dpoBids.every((bid) => isBid(bid)), true);
-  assert.equal(new Set(dpoBids).size, 481);
+  assert.equal(new Set(dpoBids).size, 477);
   assert.equal(findBlock(dpo, "p2-b8").block.bid, "b1-p2-t1hmmsbz");
   assert.equal(findBlock(dpo, "p3-b1").block.bid, "b1-p3-t1n7kik7");
   const byBase = new Map();

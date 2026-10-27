@@ -205,9 +205,9 @@ import {
   runMmPage,
   scaleToMaxEdge
 } from "../lib/mm-page.js";
-import { readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
+import { dedupeSwappedBlocks, readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
 import { createMmPageFlight } from "../lib/mm-page-queue.js";
-import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapShouldDefer } from "../lib/mm-page-swap.js";
+import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
 import { joinPageBoundary, openPageHost } from "../lib/pdf-flow-join.js";
 import {
   MM_RETRY_COPY,
@@ -6462,6 +6462,10 @@ function layoutForReadout(layout) {
 
 function appendFixtureReadout(parent, layout, options = {}) {
   const record = titleStructure && titleStructure.docId === docId ? titleStructure : null;
+  if (layout?.mode === MM_PAGE_MODE) layout = { ...layout, blocks: dedupeSwappedBlocks(layout.blocks) };
+  // The multimodal page is the page. The title shell would paint the title,
+  // abstract, and footnotes a second time beside the new blocks.
+  if (!options.skipStructure && layout.mode === MM_PAGE_MODE) options = { ...options, skipStructure: true };
   if (!options.skipStructure && record?.status === "ok" && record.page === layout.page && record.structure) {
     const before = parent.childElementCount;
     renderPdfStructure(record.structure, parent);
@@ -6486,7 +6490,7 @@ function appendFixtureReadout(parent, layout, options = {}) {
   }
   const used = new Set();
   for (const block of blocks) {
-    if (block.inlineOf || used.has(block.id)) continue;
+    if (block.flowHost || block.inlineOf || used.has(block.id)) continue;
     if (block.presentation === "byline") {
       const run = [];
       for (let index = blocks.indexOf(block); index < blocks.length; index += 1) {
@@ -14254,7 +14258,7 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
     noteMmFallback(n, quick, "coverage", result);
     return;
   }
-  const blocks = reconciled.blocks;
+  const blocks = dedupeSwappedBlocks(reconciled.blocks);
   const layout = {
     ...quick,
     kind: "blocks",
@@ -14356,8 +14360,9 @@ function replaceMmLayout(n, before, layout, epoch) {
     const anchorId = String(anchor?.dataset?.blockId || "");
     const anchorIndex = anchor ? pageNodes.indexOf(anchor) : -1;
     const top0 = anchor?.getBoundingClientRect ? anchor.getBoundingClientRect().top : 0;
-    setPageLayout(n, layout, { reanchor: plan.mode === "page" });
-    if (slot && plan.mode === "diff") {
+    const repaint = swapNeedsRepaint(plan, pageNodes.map((node) => node?.dataset?.blockId || ""));
+    setPageLayout(n, layout, { reanchor: repaint });
+    if (slot && !repaint) {
       const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
       applyParagraphSwap(slot, plan, {
         reducedMotion: reduced,
@@ -14373,6 +14378,7 @@ function replaceMmLayout(n, before, layout, epoch) {
         }
       }
     } else {
+      clearSlotPainted(n);
       renderArticle();
       const slotNow = document.querySelector(`#pages .rf-page[data-page="${n}"]`) || slot;
       const next = swapAnchorNode(slotNow?.querySelectorAll?.("[data-block-id]") || [], {
