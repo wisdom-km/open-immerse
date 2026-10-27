@@ -50,6 +50,37 @@ test("a saved key stays in the password field when focused", () => {
   assert.equal([...document.querySelectorAll("button")].some((button) => /显示|隐藏|眼睛/.test(button.textContent || "")), false);
 });
 
+test("painting twice while disconnected leaves one clear button", () => {
+  const { document } = parseHTML("<!doctype html><div id='host'></div>");
+  const input = document.createElement("input");
+  const field = bindSecretInput(input, { getValue: () => KEY });
+  field.paint();
+  document.getElementById("host").append(field.root);
+  assert.equal(field.root.querySelectorAll("[aria-label='清空密钥']").length, 1);
+});
+
+test("a click moves a collapsed caret to the end of the key", () => {
+  const { document, input } = mount();
+  let range = [0, 0];
+  input.setSelectionRange = (start, end) => {
+    range = [start, end];
+  };
+  Object.defineProperty(input, "selectionStart", { configurable: true, get: () => range[0] });
+  Object.defineProperty(input, "selectionEnd", { configurable: true, get: () => range[1] });
+  bindSecretInput(input, { getValue: () => KEY });
+  input.focus();
+  assert.equal(range[0], KEY.length);
+  assert.equal(range[1], KEY.length);
+  input.setSelectionRange(3, 3);
+  input.dispatchEvent(new document.defaultView.Event("mouseup", { bubbles: true }));
+  assert.equal(range[0], KEY.length);
+  assert.equal(range[1], KEY.length);
+  input.setSelectionRange(1, 4);
+  input.dispatchEvent(new document.defaultView.Event("mouseup", { bubbles: true }));
+  assert.equal(range[0], 1);
+  assert.equal(range[1], 4);
+});
+
 test("removing the field drops its pagehide listener", async () => {
   const { document, input } = mount();
   const view = document.defaultView;
