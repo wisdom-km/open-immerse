@@ -445,7 +445,7 @@ test("PPE-11 footer is only 设置 · 学习 · 文档", () => {
   assert.doesNotMatch(nav, /PDF/);
 });
 
-test("PPE-12 translate, restore, and Alt+T stay; new CSS uses --oi-* tokens; manifest is untouched", () => {
+test("PPE-12 translate, restore, and Alt+T stay; new CSS uses --oi-* tokens; manifest matches cb9425a aside from host-safe tokens", () => {
   const { js, css } = popupSources();
   assert.match(js, /PRIMARY_IDLE = "翻译此页"/);
   assert.match(js, /PRIMARY_STOP = "停止"/);
@@ -463,7 +463,8 @@ test("PPE-12 translate, restore, and Alt+T stay; new CSS uses --oi-* tokens; man
   assert.doesNotMatch(css, /#pdfEntry\s*\{/);
   const worker = readFileSync(join(root, "background/service-worker.js"), "utf8");
   assert.match(worker, /command !== "toggle-translate"/);
-  execFileSync("git", ["diff", "--quiet", "cb9425a", "--", "manifest.json"], { cwd: root });
+  const pinned = execFileSync("git", ["show", "cb9425a:manifest.json"], { cwd: root, encoding: "utf8" });
+  assert.equal(manifest.replaceAll("ui/tokens-content.css", "ui/tokens.css"), pinned);
 });
 
 test("popup PDF open uses contentType, then URL fallback, without a new permission", async () => {

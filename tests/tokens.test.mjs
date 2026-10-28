@@ -49,7 +49,8 @@ test("page stylesheets import tokens and do not redeclare hex tracks", () => {
 test("content surfaces consume shared tokens instead of hardcodes", () => {
   const css = readFileSync(join(root, "content/content.css"), "utf8");
   const manifest = readFileSync(join(root, "manifest.json"), "utf8");
-  assert.match(manifest, /ui\/tokens\.css/);
+  assert.match(manifest, /ui\/tokens-content\.css/);
+  assert.equal(manifest.includes("ui/tokens.css"), false);
   assert.match(css, /\.oi-toast[\s\S]*background:\s*var\(--oi-card\)/);
   assert.match(css, /\.oi-fab \{\s*[^}]*background:\s*color-mix\(in srgb,\s*var\(--oi-card\)\s*88%/);
   assert.equal(/\.oi-toast[\s\S]*background:\s*#171a21/.test(css), false);
