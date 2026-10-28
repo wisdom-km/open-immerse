@@ -390,12 +390,19 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
     requestAnimationFrame(step);
   })`);
   const lists = async (page) => JSON.parse(await evaluate(`(() => {
-    const nodes = [...document.querySelectorAll('#readerFlow .rf-block[data-src-page="${page}"]')];
-    return JSON.stringify({
-      pair: nodes.map((el) => el.dataset.pairId || ""),
-      bid: nodes.map((el) => el.dataset.bid || ""),
-      idle: document.documentElement.dataset.oiPageNav !== "run"
-    });
+    const blank = JSON.stringify({ pair: [], bid: [], idle: false });
+    try {
+      const root = document?.documentElement;
+      if (!root || !root.dataset) return blank;
+      const nodes = [...document.querySelectorAll('#readerFlow .rf-block[data-src-page="${page}"]')];
+      return JSON.stringify({
+        pair: nodes.map((el) => el.dataset.pairId || ""),
+        bid: nodes.map((el) => el.dataset.bid || ""),
+        idle: root.dataset.oiPageNav !== "run"
+      });
+    } catch {
+      return blank;
+    }
   })()`));
   const posts = async () => JSON.parse(await evaluate(`JSON.stringify(window.__oiPageWrites || [])`));
   const storedPage = async (page) => JSON.parse(await evaluate(`(async () => {
@@ -447,14 +454,33 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
   // flowHost so it is not painted. The pager updates before that load returns.
   // Leave a page only after its bids are in the flow and data-oi-page-nav is
   // not "run", so both passes join page 3 before page 4 is ingested.
-  const navIdle = `document.documentElement.dataset.oiPageNav !== "run" ? "idle" : ""`;
+  // Page.reload leaves document / documentElement null for a moment. Reading
+  // .dataset there throws, and waitFor only swallows a navigation error, so
+  // treat a missing root as not ready and keep polling.
+  const navIdle = `(() => {
+    try {
+      const root = document?.documentElement;
+      if (!root || !root.dataset) return "";
+      return root.dataset.oiPageNav !== "run" ? "idle" : "";
+    } catch {
+      return "";
+    }
+  })()`;
   const goTo = async (page) => {
     for (let step = 0; step < 20; step += 1) {
       await waitFor(navIdle, "page turn idle", 50000);
       const current = await currentPage();
       if (current >= 1) {
         await waitFor(
-          `document.documentElement.dataset.oiPageNav !== "run" && document.querySelector('#readerFlow .rf-block[data-src-page="${current}"][data-bid]') ? "ready" : ""`,
+          `(() => {
+            try {
+              const root = document?.documentElement;
+              if (!root || !root.dataset || root.dataset.oiPageNav === "run") return "";
+              return document.querySelector('#readerFlow .rf-block[data-src-page="${current}"][data-bid]') ? "ready" : "";
+            } catch {
+              return "";
+            }
+          })()`,
           `page ${current} bids`,
           50000
         );
