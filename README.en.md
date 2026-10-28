@@ -351,7 +351,7 @@ Not built, not guaranteed, or still experimental:
 
 The living plan is [`docs/ui-phase2-plan.md`](docs/ui-phase2-plan.md) (Chinese). Current status is the section 「2026-10-28 决定」: main `e8a6467` (#190). New write-ups from that sync:
 
-- [`docs/architecture-redesign.md`](docs/architecture-redesign.md) — architecture note v1.1. Section 11 is the 2026-10-28 reading-order decision: v1 keeps PDF text-layer order; v2 layout runs on the desktop app
+- [`docs/architecture-redesign.md`](docs/architecture-redesign.md) — architecture note v1.1. Section 11 is the 2026-10-28 reading-order decision: v1 keeps PDF text-layer order and adds a small fluency join (`通顺试接`, 15:05); v2 layout runs on the desktop app
 - [`docs/research/reading-order.md`](docs/research/reading-order.md) — reading-order survey (Chinese). Unchecked numbers and licenses stay marked 待复核
 - [`docs/postmortems/pr189-multimodal-swap.md`](docs/postmortems/pr189-multimodal-swap.md) — why PR #189’s multimodal page swap did not pass device tests
 - [`docs/v2-polish-checklist.md`](docs/v2-polish-checklist.md) — v2 polish, including the flag-on failures still open
