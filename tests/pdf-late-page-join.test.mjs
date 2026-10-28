@@ -9,7 +9,7 @@ import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { attachFontRealNames } from "../lib/pdf-mirror.js";
 import { resolveBlockAnchor, stampLayoutBids } from "../lib/pdf-block-id.js";
 import { joinPageBoundary } from "../lib/pdf-flow-join.js";
-import { claimArrivedPageContinuation } from "../lib/pdf-late-page-join.js";
+import { claimArrivedPageContinuation, priorPageNeedsText } from "../lib/pdf-late-page-join.js";
 
 GlobalWorkerOptions.workerSrc = new URL("../pdf/vendor/pdf.worker.min.mjs", import.meta.url).href;
 
@@ -94,5 +94,29 @@ test("a late page 3 claims the continuation page 4 already showed", async () => 
   });
   assert.equal(refused, null);
   assert.equal(page4.blocks.find((block) => block.bid === TAIL_BID).flowHost, undefined);
+  await doc.destroy();
+});
+
+test("page 4 still needs page 3 when its first sentence is only a tail", async () => {
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "fixtures/Attention_Is_All_You_Need.pdf"))),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  const pdfPage = await doc.getPage(4);
+  const content = await pdfPage.getTextContent();
+  attachFontRealNames(content.items, pdfPage.commonObjs);
+  const viewport = pdfPage.getViewport({ scale: 1 });
+  const ops = await pdfPage.getOperatorList();
+  const page4 = stampLayoutBids(4, textLayerToBlocks({
+    items: content.items,
+    viewport,
+    images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+    page: 4
+  }));
+  assert.equal(priorPageNeedsText(null, page4.blocks), true);
+  assert.equal(priorPageNeedsText([], page4.blocks), true);
+  assert.equal(priorPageNeedsText([{ text: "already read" }], page4.blocks), false);
+  assert.equal(priorPageNeedsText(null, [{ id: "p4-b9", label: "text", text: "The encoder stacks layers." }]), false);
   await doc.destroy();
 });

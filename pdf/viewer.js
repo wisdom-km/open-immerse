@@ -215,7 +215,8 @@ import { applyMmBlockTranslations, commitMultimodalPageData, libraryPairsReplace
 import { awaitRenderTask, MM_RASTER_TIMEOUT_MS } from "../lib/render-deadline.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
 import { applyContinuationTranslations, continuationRepaintSafe, joinPageBoundary, openPageHost, restoreCachedContinuation } from "../lib/pdf-flow-join.js";
-import { claimArrivedPageContinuation } from "../lib/pdf-late-page-join.js";
+import { claimArrivedPageContinuation, priorPageNeedsText } from "../lib/pdf-late-page-join.js";
+import { claimTextLane } from "../lib/pdf-text-lane.js";
 import {
   MM_RETRY_COPY,
   markPresentation,
@@ -14987,7 +14988,28 @@ async function ingestSkippedSourceLayout(n, isStale) {
   return layout;
 }
 
+function schedulePriorPageText(n, isStale) {
+  if (!(n > 1) || isStale()) return;
+  const next = getPageLayout(n)?.blocks;
+  const prior = getPageLayout(n - 1)?.blocks;
+  if (!priorPageNeedsText(prior, next)) return;
+  const ticket = textGen;
+  const doc = docId;
+  const stillCurrent = () => isStale() || ticket !== textGen || doc !== docId;
+  void ingestTextLayerLayout(n - 1, stillCurrent).then((laid) => {
+    if (!laid || stillCurrent()) return;
+    noteLayoutReady(n - 1);
+    renderArticle();
+  }).catch((error) => {
+    console.warn("prior page text", n - 1, error && error.message ? error.message : error);
+  });
+}
+
 async function ingestTextLayerLayout(n, isStale, options = {}) {
+  const lane = claimTextLane(n);
+  try {
+  await lane.ready;
+  if (isStale()) return null;
   const page = await pdfDoc.getPage(n);
   if (isStale()) return null;
   const viewport = page.getViewport({ scale: 1 });
@@ -15068,7 +15090,11 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
   setPageLayout(n, layout, { reanchor: options.persist !== false });
   if (fallback) persistPageLayout(n).catch(() => {});
   else if (options.persist !== false) persistDisplayedLayout(n).catch(() => {});
+  schedulePriorPageText(n, isStale);
   return layout;
+  } finally {
+    lane.release();
+  }
 }
 
 async function renderPageRaster(page) {

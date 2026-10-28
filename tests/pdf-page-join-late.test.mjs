@@ -350,3 +350,198 @@ test("cold start joins the page 3 sentence after page 4 was already shown", { ti
   assert.equal(after.page4.some((block) => block.text.includes(TAIL)), false, "page 4 no longer shows the tail sentence");
   assert.deepEqual(after.page4.map((block) => block.bid), page4Bids.filter((bid) => bid !== TAIL_BID), "other page 4 bids stay put");
 });
+
+test("cold start rejoins the page 3 sentence while the reader stays on page 4", { timeout: 180000 }, async (t) => {
+  assert.equal(existsSync(fixture), true, "tests/fixtures/Attention_Is_All_You_Need.pdf is missing");
+  assert.equal(createHash("sha256").update(readFileSync(fixture)).digest("hex"), ATTENTION_SHA);
+
+  const handle = { child: null, cdp: null, server: null, ownedDir: null, userDataDir: null };
+  t.after(async () => {
+    try {
+      handle.cdp?.dispose();
+    } finally {
+      await cleanupChrome({
+        t,
+        child: handle.child,
+        server: handle.server,
+        ownedDir: handle.ownedDir,
+        userDataDir: handle.userDataDir
+      });
+    }
+  });
+
+  handle.server = await serveRepo();
+  handle.ownedDir = mkdtempSync(join(tmpdir(), "oi-page-join-late-"));
+  rememberOwnedTemp(handle.ownedDir);
+  const userDataDir = join(handle.ownedDir, "profile");
+  const scratchDir = join(handle.ownedDir, "scratch");
+  mkdirSync(userDataDir);
+  mkdirSync(scratchDir);
+  handle.userDataDir = userDataDir;
+  handle.child = launchChrome(userDataDir, scratchDir);
+  const cdp = new PipeCdp(handle.child.stdio[3], handle.child.stdio[4]);
+  handle.cdp = cdp;
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const send = (method, params, timeoutMs) => cdp.send(method, params, sessionId, timeoutMs);
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(() => {
+      const origFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === "string" ? input : (input && input.url) || "";
+        if (url.includes("/v1/library/") || url.includes("127.0.0.1:8765")) {
+          return new Response("missing", { status: 404 });
+        }
+        return origFetch(input, init);
+      };
+      const origTimeout = window.setTimeout.bind(window);
+      window.__oiHoldSeen = 0;
+      window.setTimeout = (fn, ms, ...args) => {
+        if (Number(ms) === ${HOLD_MS}) window.__oiHoldSeen += 1;
+        return origTimeout(fn, ms, ...args);
+      };
+      globalThis.chrome = {
+        storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
+        runtime: {
+          id: "oi-e2e",
+          getURL() { return new URL("./vendor/pdf.worker.min.mjs", location.href).href; },
+          sendMessage(message) {
+            const type = message && message.type;
+            if (type === "OI_GET_SETTINGS") {
+              return Promise.resolve({
+                settings: { pdfAutoTranslate: false, batchSize: 8, targetLang: "zh-CN", pdfLayout: { mode: "" }, features: { pdf: true } }
+              });
+            }
+            if (type === "OI_PDF_STRUCTURE") return Promise.resolve({ ok: false });
+            if (type === "OI_ENSURE_GLMOCR") return Promise.resolve({ ok: true });
+            return Promise.resolve({ ok: true });
+          },
+          onMessage: { addListener() {} }
+        }
+      };
+    })();`
+  });
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: 1440,
+    height: 900,
+    deviceScaleFactor: 1,
+    mobile: false
+  });
+
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, 30000);
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails;
+      throw new Error(detail.exception?.description || detail.text || JSON.stringify(detail));
+    }
+    return result.result?.value;
+  };
+  const waitFor = async (expression, label, timeoutMs = 60000) => {
+    const started = Date.now();
+    let last = null;
+    while (Date.now() - started < timeoutMs) {
+      last = await evaluate(expression);
+      if (last) return last;
+      await sleep(150);
+    }
+    const snap = await evaluate(SNAPSHOT).catch((error) => String(error));
+    throw new Error(`${label} timed out. last=${JSON.stringify(last)} snap=${JSON.stringify(snap)}`);
+  };
+  const click = async (id) => {
+    const clicked = await evaluate(`(() => {
+      const el = document.getElementById(${JSON.stringify(id)});
+      if (!el || el.disabled) return false;
+      el.click();
+      return true;
+    })()`);
+    assert.equal(clicked, true, id);
+  };
+  const snapshot = async () => evaluate(SNAPSHOT);
+  const carriers = (snap) => [...(snap.page3 || []), ...(snap.page4 || [])].filter((block) => block.text.includes(TAIL));
+
+  const origin = `http://127.0.0.1:${handle.server.address().port}`;
+  const src = `${origin}/tests/fixtures/Attention_Is_All_You_Need.pdf`;
+  await send("Page.navigate", { url: `${origin}/pdf/viewer.html?oiAuto=1&src=${encodeURIComponent(src)}` });
+  await waitFor(`(() => {
+    const label = document.getElementById("sourcePageLabel")?.textContent || "";
+    const block = document.querySelector('#readerFlow .rf-block[data-src-page="1"]');
+    return /1\\s*\\/\\s*15/.test(label) && block ? "open" : "";
+  })()`, "cold open page 1", 70000);
+  await click("sourceNext");
+  await waitFor(`(() => {
+    const label = document.getElementById("sourcePageLabel")?.textContent || "";
+    const block = document.querySelector('#readerFlow .rf-block[data-src-page="2"]');
+    return /2\\s*\\/\\s*15/.test(label) && block ? "page2" : "";
+  })()`, "page 2 text layer", 70000);
+
+  const heldAt = Date.now();
+  await evaluate(`window.__oiHoldRasterMs = ${HOLD_MS}`);
+  await click("sourceNext");
+  await waitFor(`(() => {
+    const label = document.getElementById("sourcePageLabel")?.textContent || "";
+    return /3\\s*\\/\\s*15/.test(label) ? "page3" : "";
+  })()`, "nav reached page 3", 15000);
+  const holdStarted = Date.now();
+  let holdSeen = 0;
+  while (Date.now() - holdStarted < 8000 && !holdSeen) {
+    holdSeen = Number(await evaluate(`window.__oiHoldSeen || 0`)) || 0;
+    if (!holdSeen) await sleep(100);
+  }
+  await evaluate(`window.__oiHoldRasterMs = 0; document.getElementById("sourceNext").click()`);
+  const split = await waitFor(`(() => {
+    const page4 = [...document.querySelectorAll('#readerFlow .rf-block[data-src-page="4"]')];
+    const tail = page4.some((el) => (el.innerText || "").includes(${JSON.stringify(TAIL)}));
+    const laid3 = Array.isArray(window.__oiLayouts && window.__oiLayouts[3]) ? window.__oiLayouts[3].length : 0;
+    const label = document.getElementById("sourcePageLabel")?.textContent || "";
+    if (!/4\\s*\\/\\s*15/.test(label) || !tail || laid3) return "";
+    return "split";
+  })()`, "page 4 shows the continuation before page 3 arrives", 70000);
+  assert.equal(split, "split");
+  const before = await snapshot();
+  console.log(`PAGE_JOIN_STAY_SPLIT ${JSON.stringify({
+    holdSeen,
+    waitedMs: Date.now() - heldAt,
+    label: before.label,
+    page4: before.page4.map((block) => block.bid),
+    laid3: before.laid3
+  })}`);
+  assert.equal(before.laid3, 0, "page 3 must still be absent when page 4 is showing the tail");
+  assert.ok(before.page4.some((block) => block.bid === TAIL_BID), "page 4 paints the tail bid on its own");
+  const page4Bids = before.page4.map((block) => block.bid);
+
+  const stayStarted = Date.now();
+  let after = before;
+  while (Date.now() - stayStarted < 45000) {
+    after = await snapshot();
+    const on4 = /4\s*\/\s*15/.test(after.label);
+    const host = (after.page3 || []).some((block) => block.text.includes(JOINED));
+    const tail = (after.page4 || []).some((block) => block.bid === TAIL_BID || block.text.includes(TAIL));
+    if (on4 && host && !tail) break;
+    await sleep(250);
+  }
+  console.log(`PAGE_JOIN_STAY ${JSON.stringify({
+    stayedMs: Date.now() - stayStarted,
+    label: after.label,
+    page3: (after.page3 || []).filter((block) => /weighted sum|of the values/.test(block.text)).map((block) => ({
+      id: block.id,
+      bid: block.bid,
+      text: block.text.slice(0, 280)
+    })),
+    page4Tail: (after.page4 || []).filter((block) => block.bid === TAIL_BID || block.text.includes(TAIL)).map((block) => ({
+      id: block.id,
+      bid: block.bid,
+      text: block.text.slice(0, 280)
+    })),
+    page4Bids: (after.page4 || []).map((block) => block.bid)
+  })}`);
+  assert.match(after.label, /4\s*\/\s*15/, "the reader stays on page 4");
+  const joined = carriers(after);
+  assert.equal(joined.length, 1, "the continuation is one block, not dropped and not repeated");
+  assert.equal(joined[0].text.includes(JOINED), true, "page 3 keeps the whole sentence");
+  assert.equal(after.page3.some((block) => block.text.includes(JOINED)), true, "the joined sentence is on page 3");
+  assert.equal(after.page4.some((block) => block.bid === TAIL_BID), false, "page 4 no longer shows the tail bid");
+  assert.equal(after.page4.some((block) => block.text.includes(TAIL)), false, "page 4 no longer shows the tail sentence");
+  assert.deepEqual(after.page4.map((block) => block.bid), page4Bids.filter((bid) => bid !== TAIL_BID), "other page 4 bids stay put");
+});
