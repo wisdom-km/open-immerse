@@ -73,9 +73,12 @@ test("a lowercase title tail stays on the title", () => {
   assert.equal(blocks.filter((block) => /evidence synthesis model/.test(block.text)).length, 1);
 });
 
-test("Transformer-XL page 1 keeps the subtitle with the title and does not head the column", async () => {
+test("Transformer-XL page 1 keeps the subtitle with the title and does not head the column", async (t) => {
   const path = "/tmp/oi-flow-corpus/1901.02860/paper.pdf";
-  if (!existsSync(path)) return;
+  if (!existsSync(path)) {
+    t.skip("TXL PDF is not in /tmp/oi-flow-corpus/1901.02860/paper.pdf");
+    return;
+  }
   const doc = await getDocument({ data: new Uint8Array(readFileSync(path)), verbosity: 0, isOffscreenCanvasSupported: false }).promise;
   const pdfPage = await doc.getPage(1);
   const content = await pdfPage.getTextContent();
@@ -125,6 +128,29 @@ test("Transformer-XL page 1 keeps the subtitle with the title and does not head 
   const shown = visibleFlowBlocks(joined.next).map((block) => block.text).join(" ");
   assert.equal(/deep self-attention network/.test(shown), false);
   await doc.destroy();
+});
+
+test("a second ingest does not emit a continuation the host already carries", () => {
+  const tailText = "of the values, where the weight assigned to each value is computed by a compatibility function.";
+  const first = joinPageBoundary(
+    [{ id: "p3-b9", bid: "b1-p3-t1w3vhah", label: "text", text: "The output is computed as a weighted sum" }],
+    [
+      { id: "p4-b1", bid: "b1-p4-g07asgji", label: "figure", text: "" },
+      { id: "p4-b3", bid: "b1-p4-t031i7d0", label: "text", text: tailText }
+    ]
+  );
+  assert.equal(first.joined, true);
+  assert.equal(first.next.find((block) => block.bid === "b1-p4-t031i7d0").flowHost, "p3-b9");
+  const again = joinPageBoundary(first.previous, [
+    { id: "p4-b1", bid: "b1-p4-g07asgji", label: "figure", text: "" },
+    { id: "p4-b3", bid: "b1-p4-t031i7d0", label: "text", text: tailText }
+  ]);
+  assert.equal(again.joined, true);
+  const tail = again.next.find((block) => block.bid === "b1-p4-t031i7d0");
+  assert.equal(tail.flowHost, "p3-b9");
+  assert.equal(tail.skipTranslate, true);
+  assert.equal((again.previous[0].text.match(/of the values/g) || []).length, 1);
+  assert.ok(again.previous[0].bidAliases.includes("b1-p4-t031i7d0"));
 });
 
 test("a cross-page tail is one block: the next page does not paint it", () => {
@@ -193,7 +219,10 @@ test("the viewer repaints a multimodal page instead of leaving the text layer up
   const swap = viewer.slice(viewer.indexOf("function replaceMmLayout"), viewer.indexOf("async function pdfByteHash"));
   assert.match(swap, /clearSlotPainted/);
   assert.match(swap, /swapNeedsRepaint/);
+  assert.match(swap, /enqueueUncoveredPage/);
+  assert.match(swap, /mmPhase === "rebuilding"/);
   const paint = viewer.slice(viewer.indexOf("function appendFixtureReadout"), viewer.indexOf("function paintBlockMark"));
   assert.match(paint, /MM_PAGE_MODE/);
   assert.match(paint, /block\.flowHost/);
+  assert.match(paint, /aliasClaimed/);
 });

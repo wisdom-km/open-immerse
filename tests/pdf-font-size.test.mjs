@@ -102,6 +102,7 @@ test("FS-04 slider keys and reader keys step without taking browser zoom", () =>
   assert.match(keys, /Home:\s*"min"/);
   assert.match(keys, /End:\s*"max"/);
   assert.match(keys, /PageUp:\s*"tick-up"/);
+  assert.match(keys, /stopPropagation\(\)/);
 });
 
 test("FS-06 a 36em measure holds about 35 CJK characters when the column is wide", () => {

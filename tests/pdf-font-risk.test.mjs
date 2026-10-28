@@ -507,14 +507,11 @@ describe("Aa font-size risk checks on DPO", { skip: dpoSkip }, () => {
       })()`);
       assert.equal(setting, String(target));
     };
-    // Same page-5 paragraphs as before the new inline formula blocks.
-    // Positional ids shifted where a formula slot was inserted:
-    // p5-b9 "DPO outline..." is now p5-b11,
-    // p5-b21 "In this section..." is now p5-b26,
-    // p5-b22 "5.1 Your Language Model..." is now p5-b27.
-    // p5-b1 and p5-b5 are unchanged. The old ids are inline formula
-    // spans, not .rf-block paragraphs, so they never become anchors.
-    const ids = ["p5-b1", "p5-b5", "p5-b11", "p5-b26", "p5-b27"];
+    // Reader blocks on page 5. p5-b1 is the page-4 sentence tail, so the
+    // page join does not paint it. p5-b11, p5-b26, and p5-b27 are the
+    // paragraphs that used to be p5-b9, p5-b21, and p5-b22 before formula
+    // slots were inserted into the text layer.
+    const ids = ["p5-b2", "p5-b5", "p5-b11", "p5-b26", "p5-b27"];
     for (const id of ids) {
       await setFont(32);
       await waitForLayout({ allPages: true, blockPage: "5", blockId: id });

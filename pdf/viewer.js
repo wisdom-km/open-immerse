@@ -1644,6 +1644,7 @@ function onAaFontScaleKey(event) {
   const action = actions[event.key];
   if (!action || readerFontControlsDisabled()) return;
   event.preventDefault();
+  event.stopPropagation();
   commitReaderFont(applyReaderFontSliderAction(readerPrefs.fontSize, action));
 }
 
@@ -6460,6 +6461,19 @@ function layoutForReadout(layout) {
   return { ...layout, blocks };
 }
 
+function aliasClaimed(block, blocks, previousBlocks) {
+  const bid = String(block?.bid || "");
+  if (!bid) return false;
+  const lists = [blocks, previousBlocks];
+  for (const list of lists) {
+    for (const item of list || []) {
+      if (!item || item === block) continue;
+      if ((item.bidAliases || []).some((alias) => String(alias) === bid)) return true;
+    }
+  }
+  return false;
+}
+
 function appendFixtureReadout(parent, layout, options = {}) {
   const record = titleStructure && titleStructure.docId === docId ? titleStructure : null;
   if (layout?.mode === MM_PAGE_MODE) layout = { ...layout, blocks: dedupeSwappedBlocks(layout.blocks) };
@@ -6489,8 +6503,9 @@ function appendFixtureReadout(parent, layout, options = {}) {
     parent.append(note);
   }
   const used = new Set();
+  const previousBlocks = getPageLayout(Number(page) - 1)?.blocks;
   for (const block of blocks) {
-    if (block.flowHost || block.inlineOf || used.has(block.id)) continue;
+    if (block.flowHost || block.inlineOf || used.has(block.id) || aliasClaimed(block, blocks, previousBlocks)) continue;
     if (block.presentation === "byline") {
       const run = [];
       for (let index = blocks.indexOf(block); index < blocks.length; index += 1) {
@@ -14172,9 +14187,10 @@ async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
   const ticket = mmPageFlight.run({ page: Number(n), role, epoch }, () => finishMmPage(n, quick, isStale, epoch, key));
   mmFinishTickets.set(Number(n), ticket);
   ticket.then((result) => {
-    if (!result?.dropped) return;
-    mmWarmStarted.delete(Number(n));
-    if (pageStates.get(Number(n))?.mmPhase === "rebuilding") noteMmPhase(n, "", "");
+    if (result?.dropped) mmWarmStarted.delete(Number(n));
+    if (result?.dropped || result?.ok === false) releaseMmRebuild(n);
+  }, () => {
+    releaseMmRebuild(n);
   });
   if (role === "current") {
     mmFocusPage = Number(n);
@@ -14211,9 +14227,16 @@ async function warmMmNeighbors(page, epoch) {
   }
 }
 
+function releaseMmRebuild(n) {
+  if (pageStates.get(Number(n))?.mmPhase === "rebuilding") noteMmPhase(n, "", "");
+}
+
 async function finishMmPage(n, quick, isStale, epoch, key) {
   const started = Date.now();
-  if (!layoutAttemptLive(epoch) || isStale()) return;
+  if (!layoutAttemptLive(epoch) || isStale()) {
+    releaseMmRebuild(n);
+    return;
+  }
   const configured = mmPageConfigured(formulaViewerSettings);
   noteMmPage("mm.page.start", { page: n });
   if (!configured) {
@@ -14223,7 +14246,10 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
   let png = "";
   try {
     const page = await pdfDoc.getPage(n);
-    if (isStale() || !layoutAttemptLive(epoch)) return;
+    if (isStale() || !layoutAttemptLive(epoch)) {
+      releaseMmRebuild(n);
+      return;
+    }
     const raster = await renderPageRaster(page);
     png = pngBase64FromCanvas(raster?.canvas);
   } catch {
@@ -14231,6 +14257,7 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
   }
   if (!png || isStale() || !layoutAttemptLive(epoch)) {
     if (!isStale() && layoutAttemptLive(epoch)) noteMmFallback(n, quick, png ? "aborted" : "http");
+    else releaseMmRebuild(n);
     return;
   }
   const target = multimodalTarget(formulaViewerSettings);
@@ -14245,7 +14272,10 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
     configured: true,
     readSecret: async () => String(formulaViewerSettings?.multimodal?.apiKey || "")
   });
-  if (isStale() || !layoutAttemptLive(epoch)) return;
+  if (isStale() || !layoutAttemptLive(epoch)) {
+    releaseMmRebuild(n);
+    return;
+  }
   if (!result?.ok) {
     noteMmFallback(n, quick, result?.reason || "http", result);
     return;
@@ -14290,7 +14320,10 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
   noteMmPage("mm.page.reconcile", { page: n, ...reconciled.stats });
   noteMmPage("mm.page.cache", { page: n, hit: false });
   await replaceMmLayout(n, quick, layout, epoch);
-  if (!layoutAttemptLive(epoch)) return;
+  if (!layoutAttemptLive(epoch)) {
+    releaseMmRebuild(n);
+    return;
+  }
   try {
     await writeStoredLayout(key, layout);
   } catch {
@@ -14325,6 +14358,26 @@ function readerSelecting(slot) {
   return slot.contains(sel.anchorNode);
 }
 
+function enqueueUncoveredPage(page) {
+  const layout = getPageLayout(page);
+  const blocks = layout?.blocks || [];
+  if (!translatableBlocks(blocks).length) return;
+  const saved = pageCache.get(docId, page) || libraryEntry(page)?.pairs || [];
+  const units = liveOriginals(layout, unitsForLayout(layout));
+  const filled = units.length ? applySavedPairs(units, saved, savedPairSettings()) : [];
+  if (filled.length) pageCache.set(docId, page, cacheableReuse(filled));
+  if (libraryCoversLiveBlocks(filled.length ? filled : saved, blocks, pdfTargetLang, pdfProvider)) return;
+  notePageState(page, { state: "partial", hasLayout: true, mmPhase: "", mmReason: "" });
+  clearSlotPainted(page);
+  renderArticle();
+  if (pdfTranslateBusy(session) || forceReadoutHold) {
+    rushQueue = rememberRushPage(rushQueue, page, rushInflight);
+    updateTranslateControls();
+    return;
+  }
+  void retryFailedPage(page);
+}
+
 function replaceMmLayout(n, before, layout, epoch) {
   const plan = planParagraphSwap(before?.blocks || [], layout.blocks, {
     columnsBefore: before?.columns || 0,
@@ -14332,7 +14385,10 @@ function replaceMmLayout(n, before, layout, epoch) {
   });
   const started = Date.now();
   const run = () => {
-    if (!layoutAttemptLive(epoch)) return;
+    if (!layoutAttemptLive(epoch)) {
+      if (pageStates.get(Number(n))?.mmPhase === "rebuilding") noteMmPhase(n, "", "");
+      return;
+    }
     const slot = document.querySelector(`#pages .rf-page[data-page="${n}"]`);
     const waited = Date.now() - started;
     const decision = swapShouldDefer({
@@ -14347,50 +14403,54 @@ function replaceMmLayout(n, before, layout, epoch) {
       return;
     }
     mmReplaceTimer.delete(n);
-    for (const op of plan.ops || []) {
-      if (op.op !== "keep") continue;
-      const prev = (before?.blocks || []).find((block) => String(block.id || "") === op.id);
-      const next = (layout.blocks || []).find((block) => String(block.id || "") === String(op.block?.id || ""));
-      if (prev?.translation && next && !next.translation) next.translation = prev.translation;
-    }
-    const scroller = translateScrollRoot();
-    const viewportTop = scroller?.getBoundingClientRect?.().top || 0;
-    const pageNodes = [...(slot?.querySelectorAll?.("[data-block-id]") || [])];
-    const anchor = swapAnchor(pageNodes, viewportTop);
-    const anchorId = String(anchor?.dataset?.blockId || "");
-    const anchorIndex = anchor ? pageNodes.indexOf(anchor) : -1;
-    const top0 = anchor?.getBoundingClientRect ? anchor.getBoundingClientRect().top : 0;
-    const repaint = swapNeedsRepaint(plan, pageNodes.map((node) => node?.dataset?.blockId || ""));
-    setPageLayout(n, layout, { reanchor: repaint });
-    if (slot && !repaint) {
-      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
-      applyParagraphSwap(slot, plan, {
-        reducedMotion: reduced,
-        scroller,
-        anchor,
-        viewportTop
-      });
-      for (const block of layout.blocks || []) {
-        const node = slot.querySelector(`[data-block-id="${cssEscape(String(block.id || ""))}"]`);
-        if (node) {
-          paintBlockMark(node, block);
-          measureBlockMark(node);
-        }
+    try {
+      for (const op of plan.ops || []) {
+        if (op.op !== "keep") continue;
+        const prev = (before?.blocks || []).find((block) => String(block.id || "") === op.id);
+        const next = (layout.blocks || []).find((block) => String(block.id || "") === String(op.block?.id || ""));
+        if (prev?.translation && next && !next.translation) next.translation = prev.translation;
       }
-    } else {
-      clearSlotPainted(n);
-      renderArticle();
-      const slotNow = document.querySelector(`#pages .rf-page[data-page="${n}"]`) || slot;
-      const next = swapAnchorNode(slotNow?.querySelectorAll?.("[data-block-id]") || [], {
-        id: anchorId,
-        index: anchorIndex
-      });
-      const top1 = next?.getBoundingClientRect ? next.getBoundingClientRect().top : top0;
-      const delta = scrollCompensation(top0, top1);
-      if (scroller && delta) scroller.scrollTop += delta;
-      document.querySelectorAll(".rf-mark").forEach((node) => measureBlockMark(node));
+      const scroller = translateScrollRoot();
+      const viewportTop = scroller?.getBoundingClientRect?.().top || 0;
+      const pageNodes = [...(slot?.querySelectorAll?.("[data-block-id]") || [])];
+      const anchor = swapAnchor(pageNodes, viewportTop);
+      const anchorId = String(anchor?.dataset?.blockId || "");
+      const anchorIndex = anchor ? pageNodes.indexOf(anchor) : -1;
+      const top0 = anchor?.getBoundingClientRect ? anchor.getBoundingClientRect().top : 0;
+      const repaint = swapNeedsRepaint(plan, pageNodes.map((node) => node?.dataset?.blockId || ""));
+      setPageLayout(n, layout, { reanchor: repaint });
+      if (slot && !repaint) {
+        const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+        applyParagraphSwap(slot, plan, {
+          reducedMotion: reduced,
+          scroller,
+          anchor,
+          viewportTop
+        });
+        for (const block of layout.blocks || []) {
+          const node = slot.querySelector(`[data-block-id="${cssEscape(String(block.id || ""))}"]`);
+          if (node) {
+            paintBlockMark(node, block);
+            measureBlockMark(node);
+          }
+        }
+      } else {
+        clearSlotPainted(n);
+        renderArticle();
+        const slotNow = document.querySelector(`#pages .rf-page[data-page="${n}"]`) || slot;
+        const next = swapAnchorNode(slotNow?.querySelectorAll?.("[data-block-id]") || [], {
+          id: anchorId,
+          index: anchorIndex
+        });
+        const top1 = next?.getBoundingClientRect ? next.getBoundingClientRect().top : top0;
+        const delta = scrollCompensation(top0, top1);
+        if (scroller && delta) scroller.scrollTop += delta;
+        document.querySelectorAll(".rf-mark").forEach((node) => measureBlockMark(node));
+      }
+      enqueueUncoveredPage(n);
+    } finally {
+      if (pageStates.get(Number(n))?.mmPhase === "rebuilding") noteMmPhase(n, "", "");
     }
-    noteMmPhase(n, "", "");
   };
   run();
   return Promise.resolve();
