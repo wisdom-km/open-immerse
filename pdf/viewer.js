@@ -215,6 +215,7 @@ import { applyMmBlockTranslations, commitMultimodalPageData, libraryPairsReplace
 import { awaitRenderTask, MM_RASTER_TIMEOUT_MS } from "../lib/render-deadline.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
 import { applyContinuationTranslations, continuationRepaintSafe, joinPageBoundary, openPageHost, restoreCachedContinuation } from "../lib/pdf-flow-join.js";
+import { claimArrivedPageContinuation } from "../lib/pdf-late-page-join.js";
 import {
   MM_RETRY_COPY,
   markPresentation,
@@ -15042,6 +15043,24 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
       if (continuationRepaintSafe({ before: beforeBlocks, after: previous.blocks, pairs })) {
         clearSlotPainted(n - 1);
       }
+    }
+  }
+  // Page n can land after n+1 already painted this sentence on its own.
+  const following = getPageLayout(n + 1);
+  if (following?.blocks?.length && layout.blocks?.length) {
+    const late = claimArrivedPageContinuation(layout.blocks, following.blocks, {
+      pairs: [
+        ...(libraryEntry(n)?.pairs || []),
+        ...(pageCache.get(docId, n) || [])
+      ]
+    });
+    if (late) {
+      layout.blocks = late.current;
+      following.blocks = late.next;
+      setPageLayout(n + 1, following, { reanchor: false });
+      if (late.repaintNext) clearSlotPainted(n + 1);
+      if (late.repaintCurrent) clearSlotPainted(n);
+      if (libraryEntry(n + 1)) persistPageLayout(n + 1).catch(() => {});
     }
   }
   // The quick stand-in (persist: false) is replaced by the vendor layout.
