@@ -34,7 +34,7 @@ PDF reading is on by default. Open the toolbar popup and click **打开 PDF** (O
 
 Opening a PDF starts a full-document translation. The switch is under **设置 → PDF 阅读** (Settings → PDF), labeled 「打开 PDF 时自动翻译全文」.
 
-The right pane defaults to a Markdown reading-flow. Text-layer body text stays the original text-layer sentences. The reading target matches the PDF hint in `lib/features.js`: text-layer body text plus content-accurate original-page display (crops by default).
+The right pane defaults to a Markdown reading-flow. Text-layer body text stays the original text-layer sentences. The translation follows that text-layer body, with content-accurate original-page display (crops by default).
 
 ### Side by side
 
@@ -46,7 +46,7 @@ The left pane scrolls the original. The right pane lists the translation in read
 
 ### Formulas
 
-Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Display formulas and inline formulas then keep their equation numbers as crops from the original PDF. Crops are painted at an 18 px reference size and do not follow the font-size slider. Figures and tables use the same original-page crop. Test-time region detection uses a local Zhipu GLM-OCR. Production uses an OCR API plus the LLM API already configured in the extension. The formula OCR API layer is not in v1, matching the schedule in `CONTRIBUTING.md`.
+Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. KaTeX rendering is off by default in this version, so an opened paper shows the original-page crop. Display formulas and inline formulas keep their equation numbers as crops from the original PDF. Crops are painted at an 18 px reference size and do not follow the font-size slider. Figures and tables use the same original-page crop. Test-time region detection uses a local Zhipu GLM-OCR. The formula OCR API layer is not in v1. Switching region detection to an OCR API, plus the LLM API already configured in the extension, waits for the v2 launch.
 
 ![Formulas in the translation are crops from the original PDF, with equation numbers kept](docs/assets/readme/04b-pdf-formula-crop-image.png)
 
@@ -125,8 +125,6 @@ Webpage translation is a secondary feature. On a page, click **翻译此页** (T
 The default quota is **仅标题+开头** (`translateLimit: title_lead`): the heading, plus the first body paragraph. That paragraph is also capped at about 3 lines or 220 characters. See `lib/translate-limit.js`. Under Settings → 网页 (Web), change 「本次翻译」 to **全部** (All) to continue through the rest of the page. Batch size only decides how many segments go into one request.
 
 The walkthrough switched the quota to All in order to capture a full page. A fresh install that shows a translation only on the title and the first paragraph is following this default.
-
-![Chinese translation inserted under the original text on a webpage](docs/assets/readme/03-web-bilingual.png)
 
 ![Webpage bilingual view and the corner control](docs/screenshots/01-bilingual-page.png)
 
