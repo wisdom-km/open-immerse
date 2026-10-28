@@ -215,7 +215,7 @@ test("saved local-ocr without a cloud key or an explicit choice resets once", ()
   assert.equal(text.reset, false);
   assert.equal(text.settings.pdfLayout.mode, "");
   assert.equal(text.settings.pdfLayoutResetNotice, undefined);
-  assert.equal(PDF_LAYOUT_RESET_COPY, "已改回默认的多模态重建，可在此重新选择本机 OCR");
+  assert.equal(PDF_LAYOUT_RESET_COPY, "已改回默认文字层，可在此重新选择本地 OCR");
   const optionsHtml = readFileSync(join(root, "options/options.html"), "utf8");
   const modeRow = optionsHtml.slice(optionsHtml.indexOf('id="pdfLayoutMode"') - 400, optionsHtml.indexOf('id="pdfLayoutMode"'));
   assert.match(modeRow, /id="pdfLayoutResetNote"/);
@@ -226,10 +226,17 @@ test("saved local-ocr without a cloud key or an explicit choice resets once", ()
   assert.match(optionsJs, /mode === "local-ocr" \|\| previous\.explicit === true/);
 });
 
-test("saved local-ocr moves to the multimodal default once", () => {
-  const first = migrateLocalOcrToMultimodal({
+test("v2: saved local-ocr moves to the multimodal default once the swap flag is on", () => {
+  const held = migrateLocalOcrToMultimodal({
     pdfLayout: { mode: "local-ocr", explicit: true, cloudApiKey: "kept" }
   });
+  assert.equal(held.reset, false);
+  assert.equal(held.changed, false);
+  assert.equal(held.settings.pdfLayout.mode, "local-ocr");
+  assert.equal(held.settings.pdfLayoutMmNotice, undefined);
+  const first = migrateLocalOcrToMultimodal({
+    pdfLayout: { mode: "local-ocr", explicit: true, cloudApiKey: "kept" }
+  }, { mmPageSwap: true });
   assert.equal(first.reset, true);
   assert.equal(first.changed, true);
   assert.equal(first.settings.pdfLayout.mode, "");
@@ -237,17 +244,17 @@ test("saved local-ocr moves to the multimodal default once", () => {
   assert.equal(first.settings.pdfLayoutMmNotice, true);
   assert.equal(first.settings.pdfLayoutMmMigrated, "mp-1");
   assert.equal(PDF_LAYOUT_MM_NOTICE, "版面识别已切到多模态，可在设置改回本机 OCR");
-  const cloud = migrateLocalOcrToMultimodal({ pdfLayout: { mode: "cloud-ocr" } });
+  const cloud = migrateLocalOcrToMultimodal({ pdfLayout: { mode: "cloud-ocr" } }, { mmPageSwap: true });
   assert.equal(cloud.reset, false);
   assert.equal(cloud.settings.pdfLayout.mode, "cloud-ocr");
-  const text = migrateLocalOcrToMultimodal({ pdfLayout: { mode: "text-layer" } });
+  const text = migrateLocalOcrToMultimodal({ pdfLayout: { mode: "text-layer" } }, { mmPageSwap: true });
   assert.equal(text.reset, false);
   assert.equal(text.settings.pdfLayout.mode, "text-layer");
   const again = migrateLocalOcrToMultimodal({
     ...first.settings,
     pdfLayoutMmNotice: false,
     pdfLayout: { ...first.settings.pdfLayout, mode: "local-ocr", explicit: true }
-  });
+  }, { mmPageSwap: true });
   assert.equal(again.changed, false);
   assert.equal(again.reset, false);
   assert.equal(again.settings.pdfLayout.mode, "local-ocr");
@@ -275,7 +282,9 @@ test("a leftover engine override is dropped; settings local-ocr and arXiv opt-in
   assert.equal(migrateEngineOverride({ override: "local-ocr", explicit: true }).override, "local-ocr");
   assert.equal(migrateEngineOverride({ override: "", explicit: false }).migrated, false);
   assert.equal(resolveLayoutMode({ mode: "local-ocr" }, ""), "local-ocr");
-  assert.equal(resolveLayoutMode(null, ""), "mm-page");
+  assert.equal(resolveLayoutMode(null, ""), "text-layer");
+  assert.equal(resolveLayoutMode({ mode: "mm-page" }, "mm-page"), "text-layer");
+  assert.equal(resolveLayoutMode(null, "", { mmPageSwap: true }), "mm-page");
   assert.equal(normalizeArxivPrefs(null).auto, false);
   assert.equal(normalizeArxivPrefs({ auto: true }).auto, true);
 });

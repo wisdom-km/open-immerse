@@ -1,3 +1,5 @@
+// v2: multimodal page swap, exercised with the swap path forced on.
+// The reader default is off. See tests/mm-swap-flag.test.mjs.
 // Reopen of a paper that already has a text-layer cache and translations.
 // The multimodal page discards that page's old rows and translates the new
 // blocks. It does not rebind the old bids. Notes stay on their source anchor.

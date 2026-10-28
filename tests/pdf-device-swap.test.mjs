@@ -1,7 +1,7 @@
 /**
- * Device failures on PR #189: multimodal swap must replace, TXL page 1
- * keeps the subtitle and the column's first line, and a cross-page tail
- * is not painted twice.
+ * Text-layer reading order stays on for v1 (TXL columns, centered band,
+ * continuation lines, footnotes after the title). The swap cases at the
+ * bottom are v2 and call that path directly. The reader default is off.
  */
 
 import test from "node:test";

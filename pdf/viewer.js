@@ -3899,8 +3899,19 @@ function renderFormulaNode(node, latex, display) {
 }
 
 let cachedPdfLayout = null;
+let mmPageSwapOn = false;
+try {
+  if (new URLSearchParams(location.search).get("oiMmSwap") === "1") mmPageSwapOn = true;
+} catch {
+  /* the viewer page is the only caller */
+}
 let pdfBytes = null;
 let layoutNotice = "";
+
+function rememberMmPageSwap(settings) {
+  if (mmPageSwapOn) return;
+  mmPageSwapOn = settings?.mmPageSwap === true;
+}
 
 function storedEngineOverride() {
   try {
@@ -3915,7 +3926,7 @@ function storedEngineOverride() {
 }
 
 function pdfEngineMode() {
-  return resolveLayoutMode(cachedPdfLayout, storedEngineOverride());
+  return resolveLayoutMode(cachedPdfLayout, storedEngineOverride(), { mmPageSwap: mmPageSwapOn });
 }
 
 /** text-layer, local-ocr, or cloud-ocr already recorded on a layout. unknown stays unset. */
@@ -3970,6 +3981,7 @@ async function loadPdfLayout() {
   try {
     const res = await runtimeSend({ type: "OI_GET_SETTINGS" });
     rememberTargetLang(res?.settings);
+    rememberMmPageSwap(res?.settings);
     cachedPdfLayout = normalizePdfLayout(res?.settings?.pdfLayout);
     rememberEngineMode(pdfEngineMode());
   } catch {
@@ -11502,6 +11514,7 @@ async function translatePreflight() {
   } catch (err) {
     return pdfTranslateFailureCopy({ error: String(err?.message || err) });
   }
+  rememberMmPageSwap(settings);
   cachedPdfLayout = normalizePdfLayout(settings.pdfLayout);
   try { await formulaSettingsReady; } catch { /* defaults stay off */ }
   rememberEngineMode(pdfEngineMode());
@@ -14106,7 +14119,7 @@ async function ingestPageLayout(n, isStale, epoch) {
     if (reason === "empty-key") return ingestTextLayerLayout(n, isStale);
     return ingestTextLayerLayout(n, isStale, { fallback: { source: "text-layer", reason } });
   }
-  if (mode === MM_PAGE_MODE) return ingestMmPageLayout(n, isStale, epoch);
+  if (mode === MM_PAGE_MODE && mmPageSwapOn) return ingestMmPageLayout(n, isStale, epoch);
   return ingestTextLayerLayout(n, isStale);
 }
 

@@ -1,4 +1,5 @@
 /**
+ * v2: multimodal page swap, flag forced on. The reader default is off.
  * Device failure on PR #189 @ 3efed2e.
  * Attention page 1 finished its vision, then the layout write never settled.
  * Pages 2, 11, and 12 stayed on「正在重建本页」and sent no further vision request.

@@ -1,3 +1,5 @@
+// v2: multimodal page swap. These tests call the swap with the flag forced on.
+// The reader default is off. See tests/mm-swap-flag.test.mjs.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
