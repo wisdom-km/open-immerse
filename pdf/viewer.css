@@ -1937,7 +1937,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   line-height: var(--oi-reader-fold-line);
   letter-spacing: var(--oi-reader-break-tracking);
 }
-.rf-ps[data-tone="warn"] { color: var(--oi-reader-warn, #9a3412); }
+.rf-ps[data-tone="warn"] { color: var(--oi-reader-warn); }
 .rf-ps-bar {
   display: block;
   height: 3px;
@@ -3593,8 +3593,79 @@ button:disabled { opacity: 0.45; cursor: default; }
   padding: 0;
   color: var(--oi-reader-warn);
   font: inherit;
-  font-weight: 600;
-  cursor: pointer;
+  font-weight: 500;
+  cursor: default;
   text-align: left;
+}
+.rf-mark {
+  position: relative;
+}
+.rf-mark::before {
+  content: "";
+  position: absolute;
+  inset-block: 0.2em;
+  inset-inline-start: calc(-1 * (var(--oi-reader-para-mark-gap) + var(--oi-reader-para-mark-w)));
+  inline-size: var(--oi-reader-para-mark-w);
+  background: var(--oi-reader-para-mark-restored);
+  pointer-events: none;
+}
+.rf-mark[data-mark="num"]::before { background: var(--oi-reader-para-mark-num); }
+.rf-mark[data-mark="restored"]::before { background: var(--oi-reader-para-mark-restored); }
+.rf-mark[data-mark="mm"]::before {
+  background: transparent;
+  inline-size: 0;
+  border-inline-start: var(--oi-reader-para-mark-w) dashed var(--oi-reader-para-mark-mm);
+}
+.rf-mark[data-mark-fit="dot"]::before {
+  position: static;
+  display: inline-block;
+  inline-size: 6px;
+  block-size: 6px;
+  margin-inline-end: 4px;
+  border: 0;
+  border-radius: 50%;
+  vertical-align: middle;
+  background: var(--oi-reader-para-mark-restored);
+}
+.rf-mark[data-mark="num"][data-mark-fit="dot"]::before { background: var(--oi-reader-para-mark-num); }
+.rf-mark[data-mark="mm"][data-mark-fit="dot"]::before { background: var(--oi-reader-para-mark-mm); }
+.is-pair-current.rf-mark::before,
+.is-pair-current .rf-mark::before { visibility: hidden; }
+.rf-mark:focus-visible {
+  outline: 2px solid var(--oi-reader-focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.rf-mark::after {
+  content: attr(data-tip);
+  position: absolute;
+  z-index: 3;
+  inset-inline-start: 0;
+  inset-block-end: calc(100% + 4px);
+  max-inline-size: 280px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--oi-reader-tooltip-bg);
+  color: var(--oi-reader-tooltip-fg);
+  font-family: var(--oi-reader-ui-font);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: pre-line;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity var(--oi-reader-swap-ms) ease-out;
+  transition-delay: 300ms;
+}
+.rf-mark.is-tip::after,
+.rf-mark:focus-visible::after {
+  opacity: 1;
+}
+.rf-mark[data-tip-closed="1"]::after { opacity: 0; }
+.rf-swap-in { transition: opacity var(--oi-reader-swap-ms) ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .rf-swap-in,
+  .rf-mark::after { transition: none; }
 }
 #status.is-stale { cursor: pointer; }

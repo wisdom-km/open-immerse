@@ -94,6 +94,7 @@ import {
   reuseSettledLibraryFailures,
   pageTranslationComplete,
   unitsNeedingTranslation,
+  unitsAfterStructure,
   claimTranslationUnits,
   mergeTranslationRows,
   pageIndex,
@@ -194,6 +195,33 @@ import {
   translatableBlocks,
   visualAlt
 } from "../lib/pdf-blocks.js";
+import {
+  MM_PAGE_MODE,
+  formulaLatexCandidates,
+  isCurrentMmPage,
+  mmLayoutCacheHit,
+  reopenFallbackLayout,
+  legacyPageShouldHold,
+  mmPageCacheKey,
+  mmPageConfigured,
+  mmPageFingerprint,
+  mmPageScheduleOrder,
+  runMmPage,
+  scaleToMaxEdge
+} from "../lib/mm-page.js";
+import { blockHiddenByAlias, dedupeSwappedBlocks, readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
+import { createMmPageFlight, detachAfterSwap } from "../lib/mm-page-queue.js";
+import { applyMmBlockTranslations, commitMultimodalPageData, libraryPairsReplaceLayout, pageNeedsMultimodalQueue, pairsKeptForMultimodal } from "../lib/mm-page-invalidate.js";
+import { awaitRenderTask, MM_RASTER_TIMEOUT_MS } from "../lib/render-deadline.js";
+import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
+import { applyContinuationTranslations, continuationRepaintSafe, joinPageBoundary, openPageHost, restoreCachedContinuation } from "../lib/pdf-flow-join.js";
+import {
+  MM_RETRY_COPY,
+  markPresentation,
+  mountedMarkFit,
+  mmPageStatusView,
+  staleStatusVisible
+} from "../lib/mm-page-ui.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { blocksForNotes } from "../lib/note-page-blocks.js";
 import { createBlockAnchor, injectDeadExactNote, reanchorOpenPage, sharedNotesStore } from "../lib/notes-anchor.js";
@@ -407,7 +435,7 @@ import {
 } from "../lib/formula-vision-crop.js";
 import { createFormulaCache } from "../lib/formula-cache.js";
 import { createMessageFormulaStore } from "../lib/formula-cache-client.js";
-import { mmPageLedger, resetMmPages } from "../lib/formula-mm-ledger.js";
+import { mmPageLedger, notePageFormulaLatex, resetMmPages } from "../lib/formula-mm-ledger.js";
 import {
   ARXIV_SOURCE_AUTO_KEY,
   ARXIV_SOURCE_ON_KEY,
@@ -473,9 +501,11 @@ import {
   diagStateForPage,
   notePageStateEvent,
   noteTranslateException,
+  noteMmPage,
   noteUserAction,
   noteViewerNetwork
 } from "../lib/diag-log.js";
+import { multimodalTarget, sendVision } from "../lib/mm-client.js";
 import { LIBRARY_PERSIST_HINT_KEY } from "../lib/library-store.js";
 import { bindPendingUnload, chromeSessionArea, createPendingNotes } from "../lib/pending-notes.js";
 import { isStorageBlocked, storageFailureCause, storageFailureSince } from "../lib/storage-copy.js";
@@ -544,6 +574,13 @@ let retranslateScope = "";
 let rushQueue = [];
 let rushArmed = 0;
 let rushInflight = 0;
+let lastReaderScrollAt = 0;
+let mmNoticeUsed = false;
+let mmFocusPage = 0;
+const mmWarmStarted = new Set();
+const mmReplaceTimer = new Map();
+const mmFinishTickets = new Map();
+const mmPageFlight = createMmPageFlight({ limit: 1 });
 
 function clearRushQueue() {
   rushQueue = [];
@@ -913,9 +950,15 @@ function init() {
   });
   bindClearDocTranslation();
   $("status")?.addEventListener("click", () => {
-    if (pageStates.get(pageNum)?.state !== "stale-formula") return;
-    void forceRetranslateCurrentPage(pageNum);
+    if (!$("status")?.classList.contains("is-stale")) return;
+    const ps = document.querySelector(`#pages .rf-page[data-page="${pageNum}"] > .rf-ps`);
+    ps?.scrollIntoView({ block: "nearest" });
   });
+  translateScrollRoot()?.addEventListener("scroll", () => {
+    lastReaderScrollAt = Date.now();
+    syncStaleDocStatus();
+  }, { passive: true });
+  bindMarkTooltipKeys();
   $("translateMenuRetranslateDoc")?.addEventListener("click", () => {
     closeTranslateMenu(true);
     void runRetranslateMenu("document");
@@ -1607,6 +1650,7 @@ function onAaFontScaleKey(event) {
   const action = actions[event.key];
   if (!action || readerFontControlsDisabled()) return;
   event.preventDefault();
+  event.stopPropagation();
   commitReaderFont(applyReaderFontSliderAction(readerPrefs.fontSize, action));
 }
 
@@ -3856,8 +3900,19 @@ function renderFormulaNode(node, latex, display) {
 }
 
 let cachedPdfLayout = null;
+let mmPageSwapOn = false;
+try {
+  if (new URLSearchParams(location.search).get("oiMmSwap") === "1") mmPageSwapOn = true;
+} catch {
+  /* the viewer page is the only caller */
+}
 let pdfBytes = null;
 let layoutNotice = "";
+
+function rememberMmPageSwap(settings) {
+  if (mmPageSwapOn) return;
+  mmPageSwapOn = settings?.mmPageSwap === true;
+}
 
 function storedEngineOverride() {
   try {
@@ -3872,13 +3927,13 @@ function storedEngineOverride() {
 }
 
 function pdfEngineMode() {
-  return resolveLayoutMode(cachedPdfLayout, storedEngineOverride());
+  return resolveLayoutMode(cachedPdfLayout, storedEngineOverride(), { mmPageSwap: mmPageSwapOn });
 }
 
 /** text-layer, local-ocr, or cloud-ocr already recorded on a layout. unknown stays unset. */
 function engineModeOf(layout) {
   const mode = String(layout?.mode || "");
-  return mode === "text-layer" || mode === "local-ocr" || mode === "cloud-ocr" ? mode : "";
+  return mode === "mm-page" || mode === "text-layer" || mode === "local-ocr" || mode === "cloud-ocr" ? mode : "";
 }
 
 /**
@@ -3927,6 +3982,7 @@ async function loadPdfLayout() {
   try {
     const res = await runtimeSend({ type: "OI_GET_SETTINGS" });
     rememberTargetLang(res?.settings);
+    rememberMmPageSwap(res?.settings);
     cachedPdfLayout = normalizePdfLayout(res?.settings?.pdfLayout);
     rememberEngineMode(pdfEngineMode());
   } catch {
@@ -6396,11 +6452,16 @@ function slotHasTranslation(slot) {
   return [...slot.querySelectorAll(".oi-pdf-p, h1, h2, h3")].some((el) => settledText(readoutTextWithoutFold(el), ""));
 }
 
+function pairsForLiveLayout(layout, pairs) {
+  if (!isCurrentMmPage(layout)) return pairs || [];
+  return pairsKeptForMultimodal(pairs, layout?.blocks);
+}
+
 function layoutForReadout(layout) {
   const cached = pageCache.get(docId, layout.page);
   const libraryPairs = libraryEntry(layout.page)?.pairs || [];
   let blocks = layout.blocks || [];
-  const saved = (Array.isArray(cached) && cached.length) ? cached : libraryPairs;
+  const saved = pairsForLiveLayout(layout, (Array.isArray(cached) && cached.length) ? cached : libraryPairs);
   if (saved.length && blocks.length) {
     const merged = applySavedPairs(unitsForLayout(layout), saved, savedPairSettings());
     const settled = merged.some((unit) => settledText(unit.translation, unit.original || unit.text || unit.sourceText || ""));
@@ -6410,9 +6471,21 @@ function layoutForReadout(layout) {
     // Rows that do not settle for the current language still keep their text:
     // the merged pass blanks them, and the source would then count as landed.
     // A formula slot that cannot be lined up still paints the translation, or the source.
-    blocks = applyBlockTranslations(layout.blocks, (settled || retry) ? merged : saved);
+    const paintTranslations = isCurrentMmPage(layout) ? applyMmBlockTranslations : applyBlockTranslations;
+    blocks = paintTranslations(layout.blocks, (settled || retry) ? merged : saved);
+  }
+  const continuationPage = Number(layout.page) || 0;
+  const continuationPairs = [
+    ...libraryPairs,
+    ...(Array.isArray(cached) ? cached : []),
+    ...(libraryEntry(continuationPage + 1)?.pairs || []),
+    ...(pageCache.get(docId, continuationPage + 1) || [])
+  ];
+  if (continuationPairs.length && blocks.length) {
+    blocks = applyContinuationTranslations(blocks, continuationPairs);
   }
   if (!blocks.some((block) => settledText(block.translation, block.text || block.sourceText || ""))) {
+    if (mmLayoutCacheHit(layout)) return { ...layout, blocks: layout.blocks || [] };
     const fallback = blocksFromLibraryPairs(layout.page, libraryPairs.length ? libraryPairs : cached);
     if (fallback.length) {
       const visuals = (layout.blocks || []).filter((block) => block.label === "figure" || block.label === "table");
@@ -6423,8 +6496,17 @@ function layoutForReadout(layout) {
   return { ...layout, blocks };
 }
 
+function aliasClaimed(block, blocks, previousBlocks) {
+  return blockHiddenByAlias(block, blocks, previousBlocks);
+}
+
 function appendFixtureReadout(parent, layout, options = {}) {
   const record = titleStructure && titleStructure.docId === docId ? titleStructure : null;
+  const mmReadout = layout?.mode === MM_PAGE_MODE || layout?.pagePipeline === "mp-1";
+  if (mmReadout) layout = { ...layout, blocks: dedupeSwappedBlocks(layout.blocks) };
+  // The multimodal page is the page. The title shell would paint the title,
+  // abstract, and footnotes a second time beside the new blocks.
+  if (!options.skipStructure && mmReadout) options = { ...options, skipStructure: true };
   if (!options.skipStructure && record?.status === "ok" && record.page === layout.page && record.structure) {
     const before = parent.childElementCount;
     renderPdfStructure(record.structure, parent);
@@ -6448,8 +6530,9 @@ function appendFixtureReadout(parent, layout, options = {}) {
     parent.append(note);
   }
   const used = new Set();
+  const previousBlocks = getPageLayout(Number(page) - 1)?.blocks;
   for (const block of blocks) {
-    if (block.inlineOf || used.has(block.id)) continue;
+    if (block.flowHost || block.inlineOf || used.has(block.id) || aliasClaimed(block, blocks, previousBlocks)) continue;
     if (block.presentation === "byline") {
       const run = [];
       for (let index = blocks.indexOf(block); index < blocks.length; index += 1) {
@@ -6509,6 +6592,7 @@ function appendFixtureReadout(parent, layout, options = {}) {
     node.dataset.blockId = String(block.id || "");
     if (block.bid) node.dataset.bid = String(block.bid);
     node.dataset.label = String(block.label || "");
+    paintBlockMark(node, block);
     if (block.translationStatus) node.dataset.translationStatus = block.translationStatus;
     if (plan.image) appendCropOrNotice(node, block, plan.imageClass, page);
     else fillBlockText(node, block, layout);
@@ -6517,7 +6601,79 @@ function appendFixtureReadout(parent, layout, options = {}) {
       decorateAbstractHeading(node, block.translation);
     }
     parent.append(node);
+    measureBlockMark(node);
   }
+}
+
+function paintBlockMark(node, block) {
+  if (!node) return;
+  const flags = block?.flags || (block?.flag ? [block.flag] : []);
+  const mark = markPresentation(flags, block?.markDetail);
+  if (!mark) {
+    node.classList.remove("rf-mark");
+    delete node.dataset.mark;
+    delete node.dataset.markFit;
+    node.removeAttribute("tabindex");
+    node.removeAttribute("aria-label");
+    node.removeAttribute("aria-description");
+    delete node.dataset.tip;
+    node.querySelector(":scope > .rf-mark-tip")?.remove();
+    return;
+  }
+  node.classList.add("rf-mark");
+  node.dataset.mark = mark.data;
+  node.tabIndex = 0;
+  node.setAttribute("aria-label", mark.aria);
+  node.setAttribute("aria-description", mark.tooltip);
+  node.dataset.tip = mark.tooltip;
+  node.querySelector(":scope > .rf-mark-tip")?.remove();
+  delete node.dataset.markFit;
+}
+
+function measureBlockMark(node) {
+  if (!node) return;
+  const fit = mountedMarkFit(node, translateScrollRoot());
+  if (!fit) {
+    delete node.dataset.markFit;
+    return;
+  }
+  node.dataset.markFit = fit;
+}
+
+function bindMarkTooltipKeys() {
+  if (bindMarkTooltipKeys.done) return;
+  bindMarkTooltipKeys.done = true;
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    document.querySelectorAll(".rf-mark.is-tip, .rf-mark:focus").forEach((node) => {
+      node.classList.remove("is-tip");
+      node.dataset.tipClosed = "1";
+    });
+  });
+  document.addEventListener("focusin", (event) => {
+    const host = event.target?.closest?.(".rf-mark");
+    if (host) host.classList.add("is-tip");
+  });
+  document.addEventListener("focusout", (event) => {
+    const host = event.target?.closest?.(".rf-mark");
+    if (!host || host.contains(event.relatedTarget)) return;
+    host.classList.remove("is-tip");
+    delete host.dataset.tipClosed;
+  });
+  let timer = 0;
+  document.addEventListener("pointerover", (event) => {
+    const host = event.target?.closest?.(".rf-mark");
+    if (!host) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => host.classList.add("is-tip"), 300);
+  });
+  document.addEventListener("pointerout", (event) => {
+    const host = event.target?.closest?.(".rf-mark");
+    if (!host) return;
+    clearTimeout(timer);
+    host.classList.remove("is-tip");
+    delete host.dataset.tipClosed;
+  });
 }
 
 function splitBilingual(node, sourceText) {
@@ -9442,6 +9598,12 @@ function forgetViewerTranslations() {
   formulaFreshDoc = 0;
   const total = Number(pdfDoc?.numPages) || 0;
   pageStates.clear();
+  mmWarmStarted.clear();
+  mmFinishTickets.clear();
+  mmFocusPage = 0;
+  mmNoticeUsed = false;
+  for (const timer of mmReplaceTimer.values()) clearTimeout(timer);
+  mmReplaceTimer.clear();
   pageDiagStamp.clear();
   for (let n = 1; n <= total; n += 1) {
     notePageState(n, formulaStatePatch("cleared", { hasLayout: Boolean(getPageLayout(n)?.blocks?.length) }));
@@ -10166,15 +10328,7 @@ function restoreFlowAnchor(anchor) {
 
 function pageStatusSpec(page, row) {
   const running = docPhase === "running" || docPhase === "layout";
-  if (row.state === "running") {
-    const m = Number(row.m) || 0;
-    const replacing = pageHasSettledReadout(page);
-    return { kind: "running", text: psRunning(row.k || 0, m), bar: m > 0 || replacing };
-  }
-  if (row.state === "layout") return { kind: "layout", text: "正在读取本页…" };
-  if (running && (row.state === "failed" || row.state === "partial")) {
-    return { kind: "queued", text: runningPageHint() };
-  }
+  let chipSpec = null;
   if (!running && showRoundFailures && (row.state === "failed" || row.state === "partial")) {
     const gap = Math.max(0, (Number(row.m) || 0) - (Number(row.k) || 0));
     const cached = pageCache.get(docId, page);
@@ -10186,9 +10340,27 @@ function pageStatusSpec(page, row) {
       pending: pageRetryPending.has(page),
       still: pageRetryStill.has(page)
     });
-    if (chip) return { kind: row.state, text: chip.text, chip, page };
+    if (chip) chipSpec = { kind: row.state, text: chip.text, chip, page };
   }
-  if (row.state === "stale-formula") {
+  const mm = mmPageStatusView({
+    phase: row.mmPhase || "",
+    reason: row.mmReason || "",
+    running,
+    page,
+    chip: Boolean(chipSpec)
+  });
+  if (chipSpec) return chipSpec;
+  if (mm) return { kind: mm.kind, text: mm.text, retry: mm.retry, page };
+  if (row.state === "running") {
+    const m = Number(row.m) || 0;
+    const replacing = pageHasSettledReadout(page);
+    return { kind: "running", text: psRunning(row.k || 0, m), bar: m > 0 || replacing };
+  }
+  if (row.state === "layout") return { kind: "layout", text: "正在读取本页…" };
+  if (running && (row.state === "failed" || row.state === "partial")) {
+    return { kind: "queued", text: runningPageHint() };
+  }
+  if (row.state === "stale-formula" || row.legacyCache === true) {
     return { kind: "stale-formula", text: STALE_FORMULA_COPY, warn: true, page };
   }
   if (row.state === "queued") return { kind: "queued", text: "排队翻译" };
@@ -10223,10 +10395,24 @@ function syncPageStatus(slot, page, row) {
   }
   text.replaceChildren();
   if (spec.kind === "stale-formula") {
+    const label = document.createElement("span");
+    label.className = "rf-stale-formula";
+    label.textContent = spec.text || STALE_FORMULA_COPY;
+    text.append(label, document.createTextNode(" · "));
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "rf-stale-formula";
-    button.textContent = spec.text || STALE_FORMULA_COPY;
+    button.className = "rf-retry";
+    button.textContent = MM_RETRY_COPY;
+    button.addEventListener("click", () => {
+      void forceRetranslateCurrentPage(page);
+    });
+    text.append(button);
+  } else if (spec.retry) {
+    text.append(document.createTextNode(`${spec.text || ""} · `));
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "rf-retry";
+    button.textContent = spec.retry;
     button.addEventListener("click", () => {
       void forceRetranslateCurrentPage(page);
     });
@@ -10330,8 +10516,10 @@ function paintPageSlot(page) {
   }
   const bareTerminal = (row.state === "skipped" || row.state === "empty") && !slot.querySelector(".rf-block");
   const stable = slot.dataset.painted === "1" && row.state !== "running" && row.state !== "layout" && row.state !== "cleared" && !bareTerminal;
-  if (stable) return;
+  // The body can stay. The rebuild bar cannot: a fallback or a dropped page
+  // changes mmPhase after the slot was stamped, and this used to return first.
   const ps = syncPageStatus(slot, page, row);
+  if (stable) return;
   [...slot.children].forEach((child) => {
     if (child !== ps) child.remove();
   });
@@ -10351,7 +10539,7 @@ function paintPageSlot(page) {
     }
   } else if (libraryArticle?.length && page === 1 && row.state !== "layout" && row.state !== "empty" && row.state !== "queued") {
     renderStoredArticle(libraryArticle);
-  } else if (row.state === "done" || row.state === "partial") {
+  } else if ((row.state === "done" || row.state === "partial") && libraryPairsReplaceLayout(layout)) {
     const stored = blocksFromLibraryPairs(page, libraryEntry(page)?.pairs || pageCache.get(docId, page));
     if (stored.length) appendFixtureReadout(slot, { page, kind: "blocks", blocks: stored, textSource: "library" });
   }
@@ -11340,6 +11528,7 @@ async function translatePreflight() {
   } catch (err) {
     return pdfTranslateFailureCopy({ error: String(err?.message || err) });
   }
+  rememberMmPageSwap(settings);
   cachedPdfLayout = normalizePdfLayout(settings.pdfLayout);
   try { await formulaSettingsReady; } catch { /* defaults stay off */ }
   rememberEngineMode(pdfEngineMode());
@@ -11736,6 +11925,8 @@ function layoutFromStored(page, stored) {
     sourceAudit: stored.sourceAudit || null,
     ...(stored.layoutVersion ? { layoutVersion: String(stored.layoutVersion) } : {}),
     ...(stored.formulaPipeline ? { formulaPipeline: String(stored.formulaPipeline) } : {}),
+    ...(stored.pagePipeline ? { pagePipeline: String(stored.pagePipeline) } : {}),
+    ...(stored.mmFingerprint ? { mmFingerprint: String(stored.mmFingerprint) } : {}),
     ...(stored.mode ? { mode: String(stored.mode) } : {}),
     ...(fallback ? { fallback } : {}),
     blocks: stored.blocks,
@@ -11760,6 +11951,38 @@ function installDisplayableLibraryLayouts(version = knownLayoutVersion) {
     setPageLayout(page, laid);
     armStoredVisualCrops(page, laid);
     if (isSkipOnlyPage(stored.blocks)) skipLocked.add(page);
+    changed = true;
+  }
+  if (restoreInstalledContinuations()) changed = true;
+  return changed;
+}
+
+/** A cached tail can be hidden while the previous page still has the short block. */
+function restoreInstalledContinuations() {
+  const listed = (libraryDoc?.pages || []).map((entry) => Number(entry?.page)).filter((page) => page >= 1);
+  const total = Math.max(pdfDoc?.numPages || 0, ...listed, 0);
+  let changed = false;
+  for (let n = 2; n <= total; n += 1) {
+    const previous = getPageLayout(n - 1);
+    const layout = getPageLayout(n);
+    if (!previous?.blocks?.length || !layout?.blocks?.length) continue;
+    const pairs = [
+      ...(libraryEntry(n - 1)?.pairs || []),
+      ...(pageCache.get(docId, n - 1) || []),
+      ...(libraryEntry(n)?.pairs || []),
+      ...(pageCache.get(docId, n) || [])
+    ];
+    const restored = restoreCachedContinuation(previous.blocks, layout.blocks, {
+      previousPage: n - 1,
+      nextPage: n,
+      pairs
+    });
+    if (!restored.restored || !restored.repaint) continue;
+    previous.blocks = restored.previous;
+    layout.blocks = restored.next;
+    setPageLayout(n - 1, previous, { reanchor: false });
+    setPageLayout(n, layout, { reanchor: false });
+    clearSlotPainted(n - 1);
     changed = true;
   }
   return changed;
@@ -11952,6 +12175,7 @@ function paintLateLibrary(n, ticket) {
     const layout = getPageLayout(n);
     if (!layout?.blocks?.length || !saved.pairs) return;
     const prepared = bindSavedPairs(saved, unitsForLayout(layout));
+    prepared.pairs = pairsForLiveLayout(layout, prepared.pairs);
     const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs, savedPairSettings());
     const blocks = layout.blocks || [];
     const covers = libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang, pdfProvider) ||
@@ -12095,17 +12319,7 @@ async function ensureTitleStructure(page, layout, options = {}) {
 }
 
 function liveOriginals(layout, units) {
-  const record = titleStructure;
-  if (!record || record.status !== "ok" || record.docId !== docId || record.page !== layout?.page) return units || [];
-  const outside = new Set(blocksOutsideStructure(layout?.blocks || [], record.source || record.structure).map((block) => block.id));
-  const slotText = new Set(structureTranslateSlots(record.source).map((slot) => String(slot.text || "").replace(/\s+/g, " ").trim()));
-  return (units || []).filter((unit) => {
-    if (!unit?.id || outside.has(unit.id)) return true;
-    const text = String(unit.text || unit.original || "").replace(/\s+/g, " ").trim();
-    // The structure slot already translates an exact match. A block that only
-    // sits inside a longer slot (abstract paragraph, footnote) is stored on its own.
-    return Boolean(text) && !slotText.has(text);
-  });
+  return unitsAfterStructure(layout, units, titleStructure, docId);
 }
 
 async function translateTitleStructure(work, gen, translatingDoc, batchSize, options = {}) {
@@ -12771,6 +12985,7 @@ async function adoptLibraryPages(options = {}) {
       }
       if (filled.length) pageCache.set(docId, page, cacheableReuse(filled));
       notePageState(page, { state, hasLayout: true });
+      settleIdleRebuild(page);
       clearSlotPainted(page);
       publish();
       if (state === "partial") {
@@ -13710,11 +13925,14 @@ async function forceRetranslateCurrentPage(requestedPage) {
   forceRetranslatePending = false;
   forceRetranslatePendingPage = 0;
   const formulaState = pageStates.get(page)?.state;
-  if (formulaState === "stale-formula" || formulaState === "formula-check") {
+  if (pdfEngineMode() === MM_PAGE_MODE && mmPageConfigured(formulaViewerSettings)) {
+    try { await ingestMmPageLayout(page, () => false, layoutEpoch, { force: true, warm: false }); }
+    catch { /* keep the page */ }
+  } else if (formulaState === "stale-formula" || formulaState === "formula-check") {
     try {
       await ingestTextLayerLayout(page, () => false);
     } catch {
-      /* the retranslate below still uses the layout already on the page */
+      /* keep the page */
     }
   }
   const sourceLayout = getPageLayout(page);
@@ -13977,7 +14195,430 @@ async function ingestPageLayout(n, isStale, epoch) {
     if (reason === "empty-key") return ingestTextLayerLayout(n, isStale);
     return ingestTextLayerLayout(n, isStale, { fallback: { source: "text-layer", reason } });
   }
+  if (mode === MM_PAGE_MODE && mmPageSwapOn) return ingestMmPageLayout(n, isStale, epoch);
   return ingestTextLayerLayout(n, isStale);
+}
+
+function pageHasSettledTranslation(page) {
+  const pairs = libraryEntry(page)?.pairs || pageCache.get(docId, page) || [];
+  return (pairs || []).some((pair) => String(pair?.translation || "").trim());
+}
+
+function textHintFromBlocks(blocks) {
+  return (blocks || []).map((block) => block?.text || "").filter(Boolean).join("\n").slice(0, 8000);
+}
+
+function pngBase64FromCanvas(canvas) {
+  if (!canvas?.toDataURL) return "";
+  const plan = scaleToMaxEdge(canvas.width, canvas.height);
+  let source = canvas;
+  if (plan.scale !== 1 && document?.createElement) {
+    const copy = document.createElement("canvas");
+    copy.width = plan.width;
+    copy.height = plan.height;
+    const ctx = formulaDrawContext(copy) || copy.getContext("2d");
+    ctx?.drawImage(canvas, 0, 0, plan.width, plan.height);
+    source = copy;
+  }
+  return String(source.toDataURL("image/png") || "").replace(/^data:image\/png;base64,/, "");
+}
+
+function noteMmPhase(page, phase, reason = "") {
+  notePageState(page, { mmPhase: phase, mmReason: reason, hasLayout: true });
+  const row = pageStates.get(Number(page));
+  const key = String(page);
+  // The readout lives in #readerFlow. #pages is the PDF pane and has no .rf-page,
+  // so a fallback or a dropped job used to clear the state and leave「正在重建本页」.
+  const slot = readerFlowEl()?.querySelector(`:scope > .rf-page[data-page="${key}"]`)
+    || document.querySelector(`#readerFlow > .rf-page[data-page="${key}"]`);
+  if (slot && row) syncPageStatus(slot, page, row);
+}
+
+function releaseDroppedMmPages(pages) {
+  for (const page of pages || []) releaseMmRebuild(page);
+}
+
+function holdLegacyPage(n, layout) {
+  notePageState(n, { legacyCache: true, hasLayout: true });
+  noteMmPage("mm.page.cache", { page: n, hit: false });
+  return layout;
+}
+
+/** Old bids and the text-layer cache for this page only. Notes are not in the library document. */
+function discardStalePageForMultimodal(page, layout) {
+  const committed = commitMultimodalPageData({
+    pages: libraryDoc?.pages || [],
+    layoutRows: libraryDoc?.layoutRows || [],
+    page,
+    layout,
+    notes: globalThis.__oiNotes || null
+  });
+  if (libraryDoc) {
+    libraryDoc.pages = committed.pages;
+    libraryDoc.layoutRows = committed.layoutRows;
+  }
+  const kept = (committed.pages.find((item) => Number(item?.page) === Number(page)) || {}).pairs || [];
+  if (kept.length) pageCache.set(docId, page, kept);
+  else pageCache.clearPage(docId, page);
+  if (Number(page) === Number(pageNum)) pageResults = kept;
+  noteMmPhase(page, "", "");
+  return committed;
+}
+
+async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
+  if (!layoutAttemptLive(epoch) || isStale()) return null;
+  const force = options.force === true;
+  const hash = await pdfByteHash();
+  const key = mmPageCacheKey({ hash, page: n });
+  let cached = null;
+  if (!force) {
+    cached = await readStoredLayout(key);
+    if (mmLayoutCacheHit(cached) && !isStale()) {
+      noteMmPage("mm.page.cache", { page: n, hit: true });
+      notePageFormulaLatex(n, cached.formulaLatex || []);
+      discardStalePageForMultimodal(n, cached);
+      setPageLayout(n, cached, { reanchor: false });
+      enqueueUncoveredPage(n);
+      return cached;
+    }
+  }
+  const stored = getPageLayout(n) || libraryEntry(n)?.layout;
+  const stoodIn = reopenFallbackLayout({ fresh: stored, cached });
+  if (stoodIn && !isStale()) setPageLayout(n, stoodIn, { reanchor: false });
+  if (!force && mmLayoutCacheHit(getPageLayout(n))) {
+    const laid = getPageLayout(n);
+    discardStalePageForMultimodal(n, laid);
+    enqueueUncoveredPage(n);
+    return laid;
+  }
+  if (!force && pageStates.get(Number(n))?.mmPhase === "rebuilding" && getPageLayout(n)?.blocks?.length) {
+    const pending = mmFinishTickets.get(Number(n));
+    if (pending) {
+      // The walker reaching this page promotes a queued neighbor. Returning
+      // here used to leave it as a neighbor, then the ±2 window dropped it
+      // and the bar stayed on「正在重建本页」.
+      if (options.warm !== false) {
+        mmPageFlight.promote({ page: Number(n), epoch });
+        mmFocusPage = Number(n);
+        releaseDroppedMmPages(mmPageFlight.dropNeighborsOutside({ focus: mmFocusPage, radius: 2, epoch }));
+        void warmMmNeighbors(n, epoch);
+      }
+      if (options.awaitFinish === true) await pending;
+      return getPageLayout(n);
+    }
+    noteMmPhase(n, "", "");
+  }
+  if (!mmPageConfigured(formulaViewerSettings) && legacyPageShouldHold(stored, { force, hasTranslation: pageHasSettledTranslation(n) })) {
+    return holdLegacyPage(n, stored);
+  }
+  // No vision key: settle the text layer here. The flight queue is only for a
+  // real page call, and must not sit in front of notes reanchor or translation.
+  if (!mmPageConfigured(formulaViewerSettings)) {
+    const laid = await ingestTextLayerLayout(n, isStale, { persist: false });
+    if (!laid || isStale()) return laid || null;
+    noteMmFallback(n, laid, "not-configured");
+    return laid;
+  }
+  const quick = await ingestTextLayerLayout(n, isStale, { persist: false });
+  if (!quick || isStale()) return null;
+  notePageState(n, { legacyCache: false, hasLayout: true });
+  noteMmPhase(n, "rebuilding", "");
+  const role = options.warm === false ? "neighbor" : "current";
+  const ticket = mmPageFlight.run({ page: Number(n), role, epoch }, () => finishMmPage(n, quick, isStale, epoch, key));
+  mmFinishTickets.set(Number(n), ticket);
+  ticket.then((result) => {
+    if (result?.dropped) mmWarmStarted.delete(Number(n));
+    // A finished call that never reached swap, fallback, or an explicit clear
+    // must not leave the bar up. A fallback phase is not "rebuilding".
+    if (result?.dropped || result?.ok === false || pageStates.get(Number(n))?.mmPhase === "rebuilding") {
+      releaseMmRebuild(n);
+    }
+  }, () => {
+    releaseMmRebuild(n);
+  });
+  if (role === "current") {
+    mmFocusPage = Number(n);
+    releaseDroppedMmPages(mmPageFlight.dropNeighborsOutside({ focus: mmFocusPage, radius: 2, epoch }));
+    void warmMmNeighbors(n, epoch);
+  }
+  if (options.awaitFinish === true) await ticket;
+  return quick;
+}
+
+async function warmMmNeighbors(page, epoch) {
+  if (!mmPageConfigured(formulaViewerSettings)) return;
+  const total = pdfDoc?.numPages || 0;
+  const pages = [];
+  for (let i = 1; i <= total; i += 1) {
+    if (i !== page && Math.abs(i - page) <= 2) pages.push(i);
+  }
+  for (const neighbor of mmPageScheduleOrder(pages, page)) {
+    if (!layoutAttemptLive(epoch)) return;
+    if (Math.abs(Number(neighbor) - Number(mmFocusPage)) > 2) continue;
+    if (mmWarmStarted.has(neighbor)) {
+      const pending = mmFinishTickets.get(neighbor);
+      if (pending) await pending;
+      continue;
+    }
+    if (mmLayoutCacheHit(getPageLayout(neighbor))) continue;
+    if (getPageLayout(neighbor)?.blocks?.length && pageStates.get(neighbor)?.mmPhase !== "rebuilding") continue;
+    mmWarmStarted.add(neighbor);
+    try {
+      await ingestMmPageLayout(neighbor, () => !layoutAttemptLive(epoch), epoch, { warm: false, awaitFinish: true });
+    } catch {
+      /* a neighbor can wait until its own translate pass */
+    }
+  }
+}
+
+function releaseMmRebuild(n) {
+  if (pageStates.get(Number(n))?.mmPhase === "rebuilding") noteMmPhase(n, "", "");
+}
+
+/**
+ * A page the library already counted, whose vision job is not queued and not
+ * running, is not waiting on multimodal work. Clear「正在重建本页」.
+ * A queued neighbor is promoted so the ±2 window cannot drop it.
+ */
+function settleIdleRebuild(page) {
+  if (pdfEngineMode() !== MM_PAGE_MODE || !mmPageConfigured(formulaViewerSettings)) return;
+  if (pageStates.get(Number(page))?.mmPhase !== "rebuilding") return;
+  if (mmLayoutCacheHit(getPageLayout(page))) {
+    noteMmPhase(page, "", "");
+    return;
+  }
+  const promoted = mmPageFlight.promote({ page: Number(page), epoch: layoutEpoch });
+  if (!promoted) noteMmPhase(page, "", "");
+}
+
+async function finishMmPage(n, quick, isStale, epoch, key) {
+  const started = Date.now();
+  if (!layoutAttemptLive(epoch) || isStale()) {
+    releaseMmRebuild(n);
+    return;
+  }
+  const configured = mmPageConfigured(formulaViewerSettings);
+  noteMmPage("mm.page.start", { page: n });
+  if (!configured) {
+    noteMmFallback(n, quick, "not-configured");
+    return;
+  }
+  let png = "";
+  let failReason = "";
+  try {
+    const page = await awaitRenderTask(pdfDoc.getPage(n), { timeoutMs: MM_RASTER_TIMEOUT_MS });
+    if (isStale() || !layoutAttemptLive(epoch)) {
+      releaseMmRebuild(n);
+      return;
+    }
+    const raster = await renderPageRaster(page);
+    png = pngBase64FromCanvas(raster?.canvas);
+  } catch (err) {
+    png = "";
+    failReason = err?.code === "timeout" ? "timeout" : "http";
+  }
+  if (!png || isStale() || !layoutAttemptLive(epoch)) {
+    if (!isStale() && layoutAttemptLive(epoch)) noteMmFallback(n, quick, failReason || (png ? "aborted" : "http"));
+    else releaseMmRebuild(n);
+    return;
+  }
+  const target = multimodalTarget(formulaViewerSettings);
+  const result = await runMmPage({
+    pngBase64: png,
+    text: textHintFromBlocks(quick.blocks),
+    page: n,
+    columns: quick.columns || 0,
+    target,
+    sendVision,
+    signal: layoutAbort.signal,
+    configured: true,
+    readSecret: async () => String(formulaViewerSettings?.multimodal?.apiKey || "")
+  });
+  if (isStale() || !layoutAttemptLive(epoch)) {
+    releaseMmRebuild(n);
+    return;
+  }
+  if (!result?.ok) {
+    noteMmFallback(n, quick, result?.reason || "http", result);
+    return;
+  }
+  const reconciled = reconcilePage(
+    result.page.blocks,
+    quick.blocks
+  );
+  if (readingOrderOff(reconciled.blocks, quick.blocks)) {
+    noteMmFallback(n, quick, "coverage", result);
+    return;
+  }
+  const blocks = dedupeSwappedBlocks(reconciled.blocks);
+  const layout = {
+    ...quick,
+    kind: "blocks",
+    mode: MM_PAGE_MODE,
+    pagePipeline: "mp-1",
+    columns: result.page.columns || quick.columns || 0,
+    blocks,
+    formulaLatex: formulaLatexCandidates(blocks),
+    mmFingerprint: mmPageFingerprint(formulaViewerSettings),
+    fallback: undefined
+  };
+  delete layout.fallback;
+  stampFreshFormulaPipeline(layout);
+  stampProducedEngine(layout, MM_PAGE_MODE);
+  notePageFormulaLatex(n, layout.formulaLatex);
+  const swapMode = planParagraphSwap(quick.blocks, blocks, {
+    columnsBefore: quick.columns || 0,
+    columnsAfter: layout.columns || 0
+  }).mode;
+  noteMmPage("mm.page.ok", {
+    page: n,
+    ms: Date.now() - started,
+    blocks: blocks.length,
+    cols: layout.columns || 0,
+    pageSwap: swapMode === "page",
+    ...(Number.isFinite(result.callMs) ? { callMs: result.callMs } : {}),
+    ...(Number.isFinite(result.retryMs) ? { retryMs: result.retryMs } : {})
+  });
+  noteMmPage("mm.page.reconcile", { page: n, ...reconciled.stats });
+  noteMmPage("mm.page.cache", { page: n, hit: false });
+  // The swap clears「正在重建本页」and queues translation. Storage must not
+  // hold the flight slot: a put that never settles left p2, p11, and p12
+  // rebuilding with no further vision request.
+  await detachAfterSwap(async () => {
+    await replaceMmLayout(n, quick, layout, epoch);
+    if (!layoutAttemptLive(epoch)) {
+      releaseMmRebuild(n);
+      return false;
+    }
+    return true;
+  }, () => writeStoredLayout(key, layout));
+  persistPageLayout(n).catch(() => {});
+}
+
+function noteMmFallback(n, layout, reason, result) {
+  const token = reason === "empty-key" ? "not-configured" : (reason || "http");
+  if (layout) {
+    layout.fallback = { source: "text-layer", reason: token };
+    layout.mode = "text-layer";
+    delete layout.pagePipeline;
+  }
+  noteMmPage("mm.page.fallback", {
+    page: n,
+    reason: token,
+    ...(Number.isFinite(result?.callMs) ? { callMs: result.callMs } : {}),
+    ...(Number.isFinite(result?.retryMs) ? { retryMs: result.retryMs } : {})
+  });
+  if (token === "aborted") {
+    noteMmPhase(n, "", "");
+    return;
+  }
+  noteMmPhase(n, "fallback", token);
+  if (layout) {
+    setPageLayout(n, layout, { reanchor: true });
+    // The text-layer stand-in is the page until vision succeeds. It is not
+    // written on the multimodal cache key: a blockless mm row there reopened
+    // as an empty cache hit.
+    persistPageLayout(n).catch(() => {});
+  }
+}
+
+function readerSelecting(slot) {
+  const sel = document.getSelection?.();
+  if (!sel || sel.isCollapsed || !slot) return false;
+  return slot.contains(sel.anchorNode);
+}
+
+function enqueueUncoveredPage(page) {
+  const layout = getPageLayout(page);
+  const blocks = layout?.blocks || [];
+  if (!translatableBlocks(blocks).length) return;
+  const saved = pairsForLiveLayout(layout, pageCache.get(docId, page) || libraryEntry(page)?.pairs || []);
+  const units = liveOriginals(layout, unitsForLayout(layout));
+  const filled = units.length ? applySavedPairs(units, saved, savedPairSettings()) : [];
+  if (filled.length) pageCache.set(docId, page, cacheableReuse(filled));
+  if (libraryCoversLiveBlocks(filled.length ? filled : saved, blocks, pdfTargetLang, pdfProvider)) return;
+  notePageState(page, { state: "partial", hasLayout: true, mmPhase: "", mmReason: "" });
+  clearSlotPainted(page);
+  renderArticle();
+  if (pdfTranslateBusy(session) || forceReadoutHold) {
+    rushQueue = rememberRushPage(rushQueue, page, rushInflight);
+    updateTranslateControls();
+    return;
+  }
+  void retryFailedPage(page);
+}
+
+function replaceMmLayout(n, before, layout, epoch) {
+  const plan = planParagraphSwap(before?.blocks || [], layout.blocks, {
+    columnsBefore: before?.columns || 0,
+    columnsAfter: layout.columns || 0
+  });
+  const started = Date.now();
+  const run = () => {
+    if (!layoutAttemptLive(epoch)) {
+      if (pageStates.get(Number(n))?.mmPhase === "rebuilding") noteMmPhase(n, "", "");
+      return;
+    }
+    const slot = document.querySelector(`#pages .rf-page[data-page="${n}"]`);
+    const waited = Date.now() - started;
+    const decision = swapShouldDefer({
+      selecting: readerSelecting(slot),
+      scrolling: Date.now() - lastReaderScrollAt < 200,
+      tooltip: Boolean(document.querySelector(".rf-mark.is-tip")),
+      waitedMs: waited
+    });
+    if (decision.defer) {
+      const timer = setTimeout(run, 200);
+      mmReplaceTimer.set(n, timer);
+      return;
+    }
+    mmReplaceTimer.delete(n);
+    try {
+      discardStalePageForMultimodal(n, layout);
+      const scroller = translateScrollRoot();
+      const viewportTop = scroller?.getBoundingClientRect?.().top || 0;
+      const pageNodes = [...(slot?.querySelectorAll?.("[data-block-id]") || [])];
+      const anchor = swapAnchor(pageNodes, viewportTop);
+      const anchorId = String(anchor?.dataset?.blockId || "");
+      const anchorIndex = anchor ? pageNodes.indexOf(anchor) : -1;
+      const top0 = anchor?.getBoundingClientRect ? anchor.getBoundingClientRect().top : 0;
+      const repaint = swapNeedsRepaint(plan, pageNodes.map((node) => node?.dataset?.blockId || ""));
+      setPageLayout(n, layout, { reanchor: false });
+      if (slot && !repaint) {
+        const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+        applyParagraphSwap(slot, plan, {
+          reducedMotion: reduced,
+          scroller,
+          anchor,
+          viewportTop
+        });
+        for (const block of layout.blocks || []) {
+          const node = slot.querySelector(`[data-block-id="${cssEscape(String(block.id || ""))}"]`);
+          if (node) {
+            paintBlockMark(node, block);
+            measureBlockMark(node);
+          }
+        }
+      } else {
+        clearSlotPainted(n);
+        renderArticle();
+        const slotNow = document.querySelector(`#pages .rf-page[data-page="${n}"]`) || slot;
+        const next = swapAnchorNode(slotNow?.querySelectorAll?.("[data-block-id]") || [], {
+          id: anchorId,
+          index: anchorIndex
+        });
+        const top1 = next?.getBoundingClientRect ? next.getBoundingClientRect().top : top0;
+        const delta = scrollCompensation(top0, top1);
+        if (scroller && delta) scroller.scrollTop += delta;
+        document.querySelectorAll(".rf-mark").forEach((node) => measureBlockMark(node));
+      }
+      enqueueUncoveredPage(n);
+    } finally {
+      if (pageStates.get(Number(n))?.mmPhase === "rebuilding") noteMmPhase(n, "", "");
+    }
+  };
+  run();
+  return Promise.resolve();
 }
 
 async function pdfByteHash(bytes = pdfBytes) {
@@ -14046,6 +14687,7 @@ function clearLayoutFallbackStatus() {
  * page to start after the click. The viewer stays open for a retranslate.
  */
 function cancelQueuedVendorLayouts() {
+  releaseDroppedMmPages(mmPageFlight.dropEpoch(layoutEpoch));
   layoutEpoch += 1;
   try {
     layoutAbort.abort();
@@ -14385,6 +15027,23 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
   }, content.items, viewport);
   if (!fallback) stampTextLayerEngine(layout);
   stampFreshFormulaPipeline(layout);
+  const previous = n > 1 ? getPageLayout(n - 1) : null;
+  if (previous?.blocks?.length && layout.blocks?.length) {
+    const joined = joinPageBoundary(previous.blocks, layout.blocks);
+    if (joined.joined) {
+      const beforeBlocks = previous.blocks.map((block) => ({ ...block }));
+      previous.blocks = joined.previous;
+      layout.blocks = joined.next;
+      setPageLayout(n - 1, previous, { reanchor: false });
+      const pairs = [
+        ...(libraryEntry(n - 1)?.pairs || []),
+        ...(pageCache.get(docId, n - 1) || [])
+      ];
+      if (continuationRepaintSafe({ before: beforeBlocks, after: previous.blocks, pairs })) {
+        clearSlotPainted(n - 1);
+      }
+    }
+  }
   // The quick stand-in (persist: false) is replaced by the vendor layout.
   // Re-anchoring it marks 位置近似 notes lost, then the real layout writes them back.
   setPageLayout(n, layout, { reanchor: options.persist !== false });
@@ -14401,7 +15060,8 @@ async function renderPageRaster(page) {
   canvas.width = Math.max(1, Math.floor(viewport.width));
   canvas.height = Math.max(1, Math.floor(viewport.height));
   const context = formulaDrawContext(canvas);
-  await renderPdfPage(page, { canvasContext: context, viewport }).promise;
+  const task = renderPdfPage(page, { canvasContext: context, viewport });
+  await awaitRenderTask(task, { timeoutMs: MM_RASTER_TIMEOUT_MS });
   compositeWhitePaper(context, canvas);
   return { canvas, pixelWidth: canvas.width, pixelHeight: canvas.height };
 }
@@ -14453,10 +15113,73 @@ async function ingestReadoutLayout(n, isStale) {
   return layout;
 }
 
+function settlePageContinuations(units, layout) {
+  const page = Number(layout?.page) || 0;
+  const pairs = [
+    ...(libraryEntry(page)?.pairs || []),
+    ...(pageCache.get(docId, page) || []),
+    ...(libraryEntry(page + 1)?.pairs || []),
+    ...(pageCache.get(docId, page + 1) || [])
+  ];
+  const hosts = applyContinuationTranslations(layout?.blocks || [], pairs);
+  const byBid = new Map();
+  for (const block of hosts) {
+    if (block?.bid && block.translation) byBid.set(String(block.bid), block);
+  }
+  if (!byBid.size) return units;
+  return (units || []).map((unit) => {
+    const block = byBid.get(String(unit?.bid || ""));
+    const translation = String(block?.translation || "").trim();
+    if (!translation) return unit;
+    const current = String(unit?.translation || "").trim();
+    if (current === translation || (current && !translation.startsWith(current))) return unit;
+    return { ...unit, translation, translationStatus: "reused" };
+  });
+}
+
+function compactSentence(value) {
+  return String(value || "").replace(/\s+/g, "");
+}
+
+function dropContinuedTail(pending) {
+  const pages = libraryDoc?.pages || [];
+  if (knownLayoutVersion && pages.some((page) => {
+    const version = String(page?.layoutVersion || page?.layout?.layoutVersion || "");
+    return version && version !== knownLayoutVersion;
+  })) return pending;
+  const pairs = pages.flatMap((row) => row?.pairs || []);
+  if (!pairs.length) return pending;
+  return (pending || []).filter((unit) => {
+    const bid = String(unit?.bid || "");
+    if (bid && pairs.some((pair) => pair?.bid === bid)) return true;
+    const text = compactSentence(unit?.text || unit?.original || "");
+    if (text.length < 80) return true;
+    const head = text.slice(0, 60);
+    const tail = text.slice(-60);
+    const continued = pairs.some((pair) => {
+      const stored = compactSentence(pair?.text || "");
+      return stored.length >= text.length + 40 && stored.includes(head) && stored.includes(tail);
+    });
+    return !continued;
+  });
+}
+
+function storedSentenceExtends(host, pairs) {
+  const hostText = String(host?.text || "").replace(/\s+/g, " ").trim();
+  if (!host?.bid || !hostText) return null;
+  for (const pair of pairs || []) {
+    if (pair?.bid !== host.bid) continue;
+    const pairText = String(pair?.text || "").replace(/\s+/g, " ").trim();
+    if (pairText.startsWith(hostText) && pairText.length >= hostText.length + 80) return pair;
+  }
+  return null;
+}
+
 async function originalsForPage(n, gen, translatingDoc, work, batchSize, options = {}) {
   // A skip lock has no body units. A failed title on that page is still sent;
   // otherwise pageSkipReason stops on titleStructureFailed and slotsDone stays false.
   const retryFailedTitle = titleStructureFailed(n);
+  const stateAtStart = pageStates.get(n)?.state;
   if (skipLocked.has(n) && !retryFailedTitle) return [];
   const epoch = layoutEpoch;
   const engineAtStart = pdfEngineMode();
@@ -14472,7 +15195,7 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize, options
   };
   if (docPhase === "stopped" || !layoutAttemptLive(epoch)) return miss();
   const isStale = () => gen !== restoreGen || translatingDoc !== docId || docPhase === "stopped" || !layoutAttemptLive(epoch);
-  const layout = getPageLayout(n) || (await ingestPageLayout(n, isStale, epoch));
+  let layout = getPageLayout(n) || (await ingestPageLayout(n, isStale, epoch));
   if (!layout || isStale()) return miss();
   layoutMissReason.delete(n);
   if (work) {
@@ -14501,21 +15224,47 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize, options
     if (isStale()) return miss();
     await rememberLandedStructure(n, translatingDoc);
     if (isStale()) return miss();
+    // The layout captured above is the text-layer stand-in. The vision swap
+    // lands during the structure request. Body units have to be the page that
+    // is on screen now, or the abstract stays on the old line bid.
+    const swapped = getPageLayout(n);
+    if (swapped?.blocks?.length) layout = swapped;
     $("status")?.classList.remove("warn");
   }
   if (skipLocked.has(n)) return [];
-  const blocks = unitsForLayout(layout);
+  let blocks = unitsForLayout(layout);
   if (n === pageNum) pageOriginals = blocks;
   const cached = pageCache.get(translatingDoc, n);
   const saved = libraryEntry(n)?.pairs;
-  const filled = applySavedPairs(
-    liveOriginals(layout, blocks),
-    (Array.isArray(cached) && cached.length ? cached : saved) || [],
-    savedPairSettings()
+  let pairRows = pairsForLiveLayout(layout, (Array.isArray(cached) && cached.length ? cached : saved) || []);
+  const openHost = openPageHost(layout.blocks);
+  const extended = !options.force && openHost ? storedSentenceExtends(openHost, saved) : null;
+  const pageAlreadySettled = stateAtStart === "done" || stateAtStart === "skipped" || stateAtStart === "empty";
+  if (extended && !pageAlreadySettled && n < (pdfDoc?.numPages || 0) && !getPageLayout(n + 1)?.blocks?.length) {
+    // The library already stores this sentence joined to the next page.
+    // Read that page before sending, so the request is the joined block and the
+    // continuation is not translated a second time.
+    try {
+      await ingestPageLayout(n + 1, isStale, epoch);
+    } catch {
+      /* the sentence stays on this page until the next page is read */
+    }
+    if (isStale()) return miss();
+    layout = getPageLayout(n) || layout;
+    blocks = unitsForLayout(layout);
+    if (n === pageNum) pageOriginals = blocks;
+    if (Array.isArray(cached) && cached.length) {
+      pairRows = pairRows.filter((row) => String(row?.bid || "") !== extended.bid).concat([extended]);
+    }
+  }
+  const filled = settlePageContinuations(
+    applySavedPairs(liveOriginals(layout, blocks), pairRows, savedPairSettings()),
+    layout
   );
-  const pending = options.force
+  let pending = options.force
     ? liveOriginals(layout, unitsForForceRetranslate(layout))
     : unitsNeedingTranslation(filled, pdfTargetLang);
+  if (!options.force) pending = dropContinuedTail(pending);
   if (!options.force && filled.length && pending.length < filled.length) {
     const kept = mergeTranslationRows(Array.isArray(cached) ? cached : [], cacheableReuse(filled));
     pageCache.set(translatingDoc, n, kept);
@@ -14665,6 +15414,12 @@ async function adoptDoc(doc, title, openGen) {
   translatingPage = 0;
   pageCache.clear();
   pageStates.clear();
+  mmWarmStarted.clear();
+  mmFinishTickets.clear();
+  mmFocusPage = 0;
+  mmNoticeUsed = false;
+  for (const timer of mmReplaceTimer.values()) clearTimeout(timer);
+  mmReplaceTimer.clear();
   pageDiagStamp.clear();
   layoutMissReason.clear();
   skipLocked.clear();
@@ -15489,13 +16244,27 @@ async function loadCurrentPageText(explicitPage) {
   const version = knownLayoutVersion || await layoutVersionNow();
   const openedStored = getPageLayout(n);
   const openedEngine = pdfEngineMode();
-  if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version) && layoutServesEngine(openedStored, openedEngine)) {
+  const reopenAsFresh = pageNeedsMultimodalQueue({
+    configured: openedEngine === MM_PAGE_MODE && mmPageConfigured(formulaViewerSettings),
+    layout: openedStored
+  });
+  if (!reopenAsFresh && openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version) && layoutServesEngine(openedStored, openedEngine)) {
+    if (openedEngine === MM_PAGE_MODE && mmLayoutCacheHit(openedStored)) {
+      discardStalePageForMultimodal(n, openedStored);
+    }
+    if (openedEngine === MM_PAGE_MODE && mmLayoutCacheHit(openedStored)) {
+      noteMmPage("mm.page.cache", { page: n, hit: true });
+      notePageFormulaLatex(n, openedStored.formulaLatex || []);
+    } else if (openedEngine === MM_PAGE_MODE) {
+      notePageState(n, { legacyCache: true, hasLayout: true });
+    }
     if (!showOpenedLayout(openedStored, isStale)) return;
     const saved = await savedTranslationForNav(n);
     if (!libraryDoc) paintLateLibrary(n, ticket);
     if (isStale()) return;
     if (saved?.pairs) {
       const prepared = bindSavedPairs(saved, unitsForLayout(openedStored));
+      prepared.pairs = pairsForLiveLayout(openedStored, prepared.pairs);
       const merged = applySavedPairs(unitsForLayout(openedStored), prepared.pairs, savedPairSettings());
       const blocks = openedStored.blocks || [];
       pageResults = merged;
@@ -15520,6 +16289,7 @@ async function loadCurrentPageText(explicitPage) {
     if (!layoutCurrentForEngine(openedStored, version, openedEngine) && (openedEngine === "local-ocr" || openedEngine === "cloud-ocr")) {
       upgradeStoredFallback(n, pdfEngineMode(), () => isStale() || !layoutAttemptLive(epoch), epoch).catch(() => {});
     }
+    if (openedEngine === MM_PAGE_MODE && mmLayoutCacheHit(openedStored)) enqueueUncoveredPage(n);
     return;
   }
   if (skipLocked.has(n)) {
@@ -15611,6 +16381,7 @@ async function loadCurrentPageText(explicitPage) {
     } else if (saved?.pairs && !isStale()) {
       const blocks = layout.blocks || [];
       const prepared = bindSavedPairs(saved, unitsForLayout(layout));
+      prepared.pairs = pairsForLiveLayout(layout, prepared.pairs);
       const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs, savedPairSettings());
       if (libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang, pdfProvider) ||
           libraryCoversLiveBlocks(merged, blocks, pdfTargetLang, pdfProvider)) {
@@ -15776,6 +16547,46 @@ function setStatus(text, isError = false, isWarn = false) {
   el.classList.toggle("error", Boolean(isError) && !running);
   el.classList.toggle("warn", Boolean(isWarn) && !isError && !running);
   el.classList.toggle("is-stale", shown === STALE_FORMULA_COPY);
+  if (shown === STALE_FORMULA_COPY || el.classList.contains("is-stale")) syncStaleDocStatus();
+}
+
+function pageLegacyStale(page) {
+  const row = pageStates.get(Number(page));
+  return row?.state === "stale-formula" || row?.legacyCache === true;
+}
+
+function readerElInView(el) {
+  if (!el?.getBoundingClientRect) return false;
+  const scroller = translateScrollRoot();
+  const er = el.getBoundingClientRect();
+  const sr = scroller?.getBoundingClientRect?.() || { top: 0, bottom: window.innerHeight || 0 };
+  return er.bottom > sr.top + 1 && er.top < sr.bottom - 1;
+}
+
+/** The stale sentence is on the page or in #status, never both. */
+function syncStaleDocStatus() {
+  const el = $("status");
+  if (!el) return;
+  const page = Number(pageNum) || 0;
+  const ps = document.querySelector(`#pages .rf-page[data-page="${page}"] > .rf-ps`);
+  const show = staleStatusVisible({
+    current: true,
+    stale: pageLegacyStale(page),
+    inView: readerElInView(ps)
+  });
+  if (show) {
+    if (el.textContent !== STALE_FORMULA_COPY) {
+      el.textContent = STALE_FORMULA_COPY;
+      el.classList.remove("error");
+      el.classList.add("warn");
+    }
+    el.classList.add("is-stale");
+    return;
+  }
+  if (el.classList.contains("is-stale")) {
+    el.classList.remove("is-stale");
+    if (el.textContent === STALE_FORMULA_COPY) el.textContent = "";
+  }
 }
 
 // Keep this after every top-level let/const. Without ?src=, init() calls

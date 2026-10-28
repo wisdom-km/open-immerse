@@ -151,8 +151,10 @@ test("local and cloud envelopes share vendorLayoutToBlocks", () => {
   assert.equal(cloud.blocks.find((block) => block.label === "figure")?.label, "figure");
 });
 
-test("empty mode stays on the text layer, and cloud with no key does not fetch", async () => {
+test("empty mode is the text layer unless the v2 swap flag is on, and cloud with no key does not fetch", async () => {
   assert.equal(resolveLayoutMode(null, ""), "text-layer");
+  assert.equal(resolveLayoutMode({ mode: "mm-page" }, ""), "text-layer");
+  assert.equal(resolveLayoutMode(null, "", { mmPageSwap: true }), "mm-page");
   assert.equal(resolveLayoutMode({ mode: "text-layer" }, ""), "text-layer");
   assert.equal(resolveLayoutMode({ mode: "cloud-ocr" }, "text-layer"), "text-layer");
   assert.equal(shouldFetchCloud({ cloudApiKey: "" }), false);

@@ -173,7 +173,13 @@ test("acceptance 6 and 7: inline baseline uses PDF depth, and the line cap stays
     css,
     /\.oi-pdf-inline-math\.is-matched:has\(\.oi-pdf-math-crop\)\s*\{[^}]*margin-top:\s*calc\(min\(0px, var\(--oi-reader-inline-line-max\) - var\(--oi-formula-h\)\) \/ 2\)/s
   );
-  assert.doesNotMatch(css, /vertical-align:\s*middle/);
+  // Formula crops stay on the PDF baseline. Only the 6px mark dot may use
+  // vertical-align: middle; every other rule in the reader sheet is checked.
+  const dotStart = css.indexOf('.rf-mark[data-mark-fit="dot"]::before');
+  const dotEnd = css.indexOf("}", dotStart);
+  assert.ok(dotStart >= 0 && dotEnd > dotStart);
+  const checkedCss = `${css.slice(0, dotStart)}${css.slice(dotEnd + 1)}`;
+  assert.doesNotMatch(checkedCss, /vertical-align:\s*middle/);
   assert.match(viewer, /--oi-reader-formula-baseline/);
   const cropRule = css.indexOf(".pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched .oi-pdf-math-crop");
   const blockRule = css.indexOf(".pane-translate .readout.md-readout .oi-pdf-inline-math.is-matched > img.oi-pdf-math-crop");

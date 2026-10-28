@@ -412,6 +412,48 @@ body.oi-settings .set-row {
 body.oi-settings .set-group > .set-row:first-child { border-top: 0; }
 body.oi-settings .set-title { margin: 0; font-size: 13px; font-weight: 500; color: var(--oi-text); }
 body.oi-settings .set-note { margin: 2px 0 0; font-size: 12px; line-height: 1.45; color: var(--oi-text-2, var(--oi-text-muted)); }
+.pdf-mm-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px var(--set-card-pad);
+  color: var(--oi-text-muted);
+  font-family: var(--oi-font);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.pdf-mm-note[hidden] { display: none; }
+.pdf-mm-note-link,
+#pdfLayoutMmRevert {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--oi-text-muted);
+  font-family: var(--oi-font);
+  font-size: 12px;
+  line-height: 1.45;
+  text-decoration: underline;
+  cursor: pointer;
+}
+#pdfLayoutMmDismiss {
+  inline-size: 24px;
+  block-size: 24px;
+  margin-inline-start: auto;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--oi-text-muted);
+  font-family: var(--oi-font);
+  font-size: 16px;
+  line-height: 24px;
+  cursor: pointer;
+}
+#pdfLayoutMmRevert:focus-visible,
+#pdfLayoutMmDismiss:focus-visible {
+  outline: 2px solid var(--oi-focus);
+  outline-offset: 2px;
+}
 body.oi-settings .set-ctl { display: flex; align-items: center; gap: 8px; }
 body.oi-settings .set-ctl button {
   height: var(--set-ctl-h);

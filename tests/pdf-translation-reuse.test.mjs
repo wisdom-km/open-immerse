@@ -522,14 +522,19 @@ test("source-v2 translations reopen on source-v3 without resending unchanged blo
   // so a paragraph saved against the older layout is resent. The older resends
   // stay: source-v2 and main-v2 still send 24 and 26, and main-v2 still sends
   // 9 and 10. Page 2 and the WATCH bids above are unchanged and are not resent.
+  // Two further resends are new text, not a slot shift. Page 1 keeps the
+  // subtitle the previous layer dropped, so it stays partial.
+  // Page 15's clause after equation (11) is the same sentence, not a heading,
+  // so the saved joined pair covers that page and it is no longer partial.
+  // source-v2 therefore translates 18 pages and asks for 13 blocks.
   // Opening the same layout a second time sends nothing.
-  assert.equal(opened["source-v2"].requested, 12);
-  assert.equal(opened["source-v2"].translated, 19);
-  assert.deepEqual(opened["source-v2"].pages, [3, 4, 5, 7, 16, 17, 24, 26]);
-  assert.equal(opened["main-v2"].requested, 16);
-  assert.deepEqual(opened["main-v2"].pages, [3, 4, 5, 7, 9, 10, 16, 17, 24, 26]);
-  assert.equal(opened["tip-v3"].requested, 10);
-  assert.deepEqual(opened["tip-v3"].pages, [3, 4, 5, 7, 16, 17]);
+  assert.equal(opened["source-v2"].requested, 13);
+  assert.equal(opened["source-v2"].translated, 18);
+  assert.deepEqual(opened["source-v2"].pages, [1, 3, 4, 5, 7, 16, 17, 24, 26]);
+  assert.equal(opened["main-v2"].requested, 17);
+  assert.deepEqual(opened["main-v2"].pages, [1, 3, 4, 5, 7, 9, 10, 16, 17, 24, 26]);
+  assert.equal(opened["tip-v3"].requested, 11);
+  assert.deepEqual(opened["tip-v3"].pages, [1, 3, 4, 5, 7, 16, 17]);
   assert.equal(opened["source-v2"].second, 0);
   assert.equal(opened["main-v2"].second, 0);
   assert.equal(opened["tip-v3"].second, 0);

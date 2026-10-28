@@ -239,6 +239,7 @@ async function init() {
     }
   }
   applyStoredForm();
+  bindPdfLayoutMmNote();
   el("translateScope").addEventListener("change", () => syncTranslateScopeHint());
   bindData();
   bindDiagPanel();
@@ -339,6 +340,7 @@ function applyStoredForm() {
   paintPdfSwitch(features);
   fillPdfLayout(settings.pdfLayout);
   paintPdfLayoutResetNote(settings);
+  paintPdfLayoutMmNote(settings);
   syncPdfAvailability();
   syncPdfBanner();
   syncQualityLocks();
@@ -583,9 +585,50 @@ function paintPdfLayoutResetNote(settings) {
   note.hidden = settings?.pdfLayoutResetNotice !== true;
 }
 
+function paintPdfLayoutMmNote(settings) {
+  const note = el("pdfLayoutMmNote");
+  if (!note) return;
+  note.hidden = settings?.pdfLayoutMmNotice !== true;
+}
+
+function bindPdfLayoutMmNote() {
+  if (bindPdfLayoutMmNote.done) return;
+  bindPdfLayoutMmNote.done = true;
+  el("pdfLayoutMmDismiss")?.addEventListener("click", () => {
+    void dismissPdfLayoutMmNotice();
+  });
+  el("pdfLayoutMmRevert")?.addEventListener("click", () => {
+    void revertPdfLayoutToLocalOcr();
+  });
+}
+
+function focusPdfLayoutMode() {
+  const select = el("pdfLayoutMode");
+  if (!select) return;
+  select.focus();
+  setTimeout(() => select.focus(), 0);
+}
+
+async function dismissPdfLayoutMmNotice() {
+  cachedSettings = { ...(cachedSettings || {}), pdfLayoutMmNotice: false };
+  paintPdfLayoutMmNote(cachedSettings);
+  focusPdfLayoutMode();
+  if (!readsOk) return;
+  const res = await chrome.runtime.sendMessage({ type: "OI_SAVE_SETTINGS", patch: { pdfLayoutMmNotice: false } });
+  if (res?.settings) cachedSettings = JSON.parse(JSON.stringify(res.settings));
+  paintPdfLayoutMmNote(cachedSettings);
+}
+
+async function revertPdfLayoutToLocalOcr() {
+  const select = el("pdfLayoutMode");
+  if (!select) return;
+  select.value = "local-ocr";
+  await persistNow(select);
+}
+
 function fillPdfLayout(value) {
   const layout = value && typeof value === "object" ? value : {};
-  if (el("pdfLayoutMode")) el("pdfLayoutMode").value = layout.mode || "";
+  if (el("pdfLayoutMode")) el("pdfLayoutMode").value = layout.mode === "mm-page" ? "" : (layout.mode || "");
   if (el("pdfLocalBaseUrl")) el("pdfLocalBaseUrl").value = layout.localBaseUrl || "http://127.0.0.1:8765";
   if (el("pdfCloudBaseUrl")) el("pdfCloudBaseUrl").value = layout.cloudBaseUrl || "https://open.bigmodel.cn/api/paas/v4/layout_parsing";
   pdfCloudKey = layout.cloudApiKey || "";
@@ -1562,7 +1605,7 @@ async function persistNow(control) {
     siteRules: siteRules.filter((host) => !bad.includes(host)).map((host) => ({ host: host.replace(/^www\./, ""), auto: true })),
     providers: cachedSettings.providers,
     pdfLayout: readPdfLayout(),
-    ...(control?.id === "pdfLayoutMode" ? { pdfLayoutResetNotice: false } : {})
+    ...(control?.id === "pdfLayoutMode" ? { pdfLayoutResetNotice: false, pdfLayoutMmNotice: false } : {})
   };
   const pendingPdf = pdfCloudEdit;
   const keptKeys = new Map();
@@ -1596,6 +1639,7 @@ async function persistNow(control) {
     if (pdfCloudEdit === pendingPdf) pdfCloudEdit = null;
     hideMiss(control);
     paintPdfLayoutResetNote(cachedSettings);
+    paintPdfLayoutMmNote(cachedSettings);
     paintKeyList();
   } catch {
     const attempt = snapshotControl(control);

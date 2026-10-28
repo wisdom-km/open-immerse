@@ -1,7 +1,8 @@
 /**
  * Reopen must hit the multimodal cache. Cold start used to crop before
- * stampLayoutBids, so the row was stored under a temporary id. Reopen
- * hydrated the stamped layout with sharp:false and paid again.
+ * stampLayoutBids, so the row was stored under a temporary page id. The
+ * text layer now assigns the same bbox bid stampLayoutBids recomputes, so
+ * the cache key is that bid on the way in and on reopen.
  */
 
 import test from "node:test";
@@ -179,17 +180,28 @@ test("a cold start and a reopen share unitId and cropHash and send once", async 
     const raw = pages[0].blocks[0];
     const unstamped = identity(raw, "doc-reopen", pages[0].page);
     assert.match(raw.id, /^p\d+-b\d+$/);
-    assert.equal(unstamped.unitId, raw.id);
+    // joinFlowBlocks assigns the formula bid from the bbox. stampLayoutBids
+    // recomputes that same bid, so the cache slot is never the page id.
+    assert.match(unstamped.unitId, /^b1-p\d+-m/);
+    assert.notEqual(unstamped.unitId, raw.id);
     const before = sends.count;
     const shown = await schedulePages(pages, hooks);
     const cold = sends.count;
     assert.ok(cold > before, name);
+    let first = true;
     for (const entry of shown) {
       for (const block of entry.blocks) {
         const row = identity(block, "doc-reopen", entry.page);
         assert.match(row.unitId, /^b1-p/, row.unitId);
         assert.notEqual(row.unitId, block.id);
-        assert.notEqual(row.unitKey, unstamped.unitKey);
+        if (first) {
+          assert.equal(row.unitId, unstamped.unitId);
+          assert.equal(row.unitKey, unstamped.unitKey);
+          assert.equal(row.cropHash, unstamped.cropHash);
+          first = false;
+        } else {
+          assert.notEqual(row.unitKey, unstamped.unitKey);
+        }
       }
     }
     await schedulePages(reopenPages(shown), hooks);
