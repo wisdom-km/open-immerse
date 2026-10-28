@@ -10,6 +10,7 @@ import {
   MM_PAGE_SPIKE_HOSTS,
   MM_PAGE_TIMEOUT_MS,
   isCurrentMmPage,
+  mmLayoutCacheHit,
   legacyPageShouldHold,
   mmPageCacheKey,
   mmPageCachePipeline,
@@ -21,6 +22,7 @@ import {
   scaleToMaxEdge
 } from "../lib/mm-page.js";
 import { peripheralKind, reconcilePage } from "../lib/mm-reconcile.js";
+import { isTranslatableBlock } from "../lib/pdf-blocks.js";
 import { createMmPageFlight } from "../lib/mm-page-queue.js";
 import {
   applyParagraphSwap,
@@ -182,6 +184,14 @@ test("reconcile fills gaps, restores a dropped sentence, and keeps text-layer nu
   assert.equal(held, true);
   assert.equal(legacyPageShouldHold({ mode: "mm-page", pagePipeline: "mp-1", blocks: [{ id: "a" }] }, { hasTranslation: true }), false);
   assert.equal(isCurrentMmPage({ mode: "mm-page", pagePipeline: "mp-1" }), true);
+  assert.equal(mmLayoutCacheHit({ mode: "mm-page", pagePipeline: "mp-1" }), false);
+  assert.equal(mmLayoutCacheHit({ mode: "mm-page", pagePipeline: "mp-1", blocks: [] }), false);
+  assert.equal(mmLayoutCacheHit({
+    mode: "mm-page",
+    pagePipeline: "mp-1",
+    fallback: { source: "text-layer", reason: "coverage" },
+    blocks: [{ id: "a", text: "stood in" }]
+  }), false);
 });
 
 test("swap keeps identical nodes, pages a 30 percent structure change, and defers while busy", () => {
@@ -519,6 +529,15 @@ test("header footer and footnote stay untranslated when the label drifts", () =>
   assert.equal(orphan.stats.mmOnly, 0);
   assert.equal(orphan.stats.restored, 0);
   assert.equal(orphan.blocks.every((block) => block.skipTranslate === true), true);
+  const conference = "31st Conference on Neural Information Processing Systems (NIPS 2017), Long Beach, CA, USA.";
+  const proseFooter = reconcilePage(
+    [{ id: "c", label: "footer", bbox: [0, 0.92, 1, 1], text: conference }],
+    [{ id: "tc", label: "footer", bbox: [0, 0.92, 1, 1], text: conference }]
+  );
+  const line = proseFooter.blocks.find((block) => block.text === conference);
+  assert.equal(line.skipTranslate, undefined);
+  assert.equal(isTranslatableBlock(line), true);
+  assert.equal(line.label, "aside");
   const counted = redactDiagEvent({
     type: "mm.page.ok",
     page: 4,

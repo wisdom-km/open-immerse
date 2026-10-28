@@ -198,6 +198,8 @@ import {
   MM_PAGE_MODE,
   formulaLatexCandidates,
   isCurrentMmPage,
+  mmLayoutCacheHit,
+  reopenFallbackLayout,
   legacyPageShouldHold,
   mmPageCacheKey,
   mmPageConfigured,
@@ -208,7 +210,7 @@ import {
 } from "../lib/mm-page.js";
 import { blockHiddenByAlias, dedupeSwappedBlocks, readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
 import { createMmPageFlight, detachAfterSwap } from "../lib/mm-page-queue.js";
-import { commitMultimodalPageData, libraryPairsReplaceLayout, pageNeedsMultimodalQueue, pairsKeptForMultimodal } from "../lib/mm-page-invalidate.js";
+import { applyMmBlockTranslations, commitMultimodalPageData, libraryPairsReplaceLayout, pageNeedsMultimodalQueue, pairsKeptForMultimodal } from "../lib/mm-page-invalidate.js";
 import { awaitRenderTask, MM_RASTER_TIMEOUT_MS } from "../lib/render-deadline.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
 import { joinPageBoundary, openPageHost } from "../lib/pdf-flow-join.js";
@@ -6456,10 +6458,11 @@ function layoutForReadout(layout) {
     // Rows that do not settle for the current language still keep their text:
     // the merged pass blanks them, and the source would then count as landed.
     // A formula slot that cannot be lined up still paints the translation, or the source.
-    blocks = applyBlockTranslations(layout.blocks, (settled || retry) ? merged : saved);
+    const paintTranslations = isCurrentMmPage(layout) ? applyMmBlockTranslations : applyBlockTranslations;
+    blocks = paintTranslations(layout.blocks, (settled || retry) ? merged : saved);
   }
   if (!blocks.some((block) => settledText(block.translation, block.text || block.sourceText || ""))) {
-    if (isCurrentMmPage(layout)) return { ...layout, blocks: layout.blocks || [] };
+    if (mmLayoutCacheHit(layout)) return { ...layout, blocks: layout.blocks || [] };
     const fallback = blocksFromLibraryPairs(layout.page, libraryPairs.length ? libraryPairs : cached);
     if (fallback.length) {
       const visuals = (layout.blocks || []).filter((block) => block.label === "figure" || block.label === "table");
@@ -14178,9 +14181,10 @@ async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
   const force = options.force === true;
   const hash = await pdfByteHash();
   const key = mmPageCacheKey({ hash, page: n });
+  let cached = null;
   if (!force) {
-    const cached = await readStoredLayout(key);
-    if (cached && isCurrentMmPage(cached) && !isStale()) {
+    cached = await readStoredLayout(key);
+    if (mmLayoutCacheHit(cached) && !isStale()) {
       noteMmPage("mm.page.cache", { page: n, hit: true });
       notePageFormulaLatex(n, cached.formulaLatex || []);
       discardStalePageForMultimodal(n, cached);
@@ -14190,7 +14194,9 @@ async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
     }
   }
   const stored = getPageLayout(n) || libraryEntry(n)?.layout;
-  if (!force && isCurrentMmPage(getPageLayout(n))) {
+  const stoodIn = reopenFallbackLayout({ fresh: stored, cached });
+  if (stoodIn && !isStale()) setPageLayout(n, stoodIn, { reanchor: false });
+  if (!force && mmLayoutCacheHit(getPageLayout(n))) {
     const laid = getPageLayout(n);
     discardStalePageForMultimodal(n, laid);
     enqueueUncoveredPage(n);
@@ -14265,7 +14271,7 @@ async function warmMmNeighbors(page, epoch) {
       if (pending) await pending;
       continue;
     }
-    if (isCurrentMmPage(getPageLayout(neighbor))) continue;
+    if (mmLayoutCacheHit(getPageLayout(neighbor))) continue;
     if (getPageLayout(neighbor)?.blocks?.length && pageStates.get(neighbor)?.mmPhase !== "rebuilding") continue;
     mmWarmStarted.add(neighbor);
     try {
@@ -14288,7 +14294,7 @@ function releaseMmRebuild(n) {
 function settleIdleRebuild(page) {
   if (pdfEngineMode() !== MM_PAGE_MODE || !mmPageConfigured(formulaViewerSettings)) return;
   if (pageStates.get(Number(page))?.mmPhase !== "rebuilding") return;
-  if (isCurrentMmPage(getPageLayout(page))) {
+  if (mmLayoutCacheHit(getPageLayout(page))) {
     noteMmPhase(page, "", "");
     return;
   }
@@ -14405,6 +14411,7 @@ function noteMmFallback(n, layout, reason, result) {
   if (layout) {
     layout.fallback = { source: "text-layer", reason: token };
     layout.mode = "text-layer";
+    delete layout.pagePipeline;
   }
   noteMmPage("mm.page.fallback", {
     page: n,
@@ -14417,7 +14424,13 @@ function noteMmFallback(n, layout, reason, result) {
     return;
   }
   noteMmPhase(n, "fallback", token);
-  if (layout) setPageLayout(n, layout, { reanchor: true });
+  if (layout) {
+    setPageLayout(n, layout, { reanchor: true });
+    // The text-layer stand-in is the page until vision succeeds. It is not
+    // written on the multimodal cache key: a blockless mm row there reopened
+    // as an empty cache hit.
+    persistPageLayout(n).catch(() => {});
+  }
 }
 
 function readerSelecting(slot) {
@@ -16112,10 +16125,10 @@ async function loadCurrentPageText(explicitPage) {
     layout: openedStored
   });
   if (!reopenAsFresh && openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version) && layoutServesEngine(openedStored, openedEngine)) {
-    if (openedEngine === MM_PAGE_MODE && isCurrentMmPage(openedStored)) {
+    if (openedEngine === MM_PAGE_MODE && mmLayoutCacheHit(openedStored)) {
       discardStalePageForMultimodal(n, openedStored);
     }
-    if (openedEngine === MM_PAGE_MODE && isCurrentMmPage(openedStored)) {
+    if (openedEngine === MM_PAGE_MODE && mmLayoutCacheHit(openedStored)) {
       noteMmPage("mm.page.cache", { page: n, hit: true });
       notePageFormulaLatex(n, openedStored.formulaLatex || []);
     } else if (openedEngine === MM_PAGE_MODE) {
@@ -16152,7 +16165,7 @@ async function loadCurrentPageText(explicitPage) {
     if (!layoutCurrentForEngine(openedStored, version, openedEngine) && (openedEngine === "local-ocr" || openedEngine === "cloud-ocr")) {
       upgradeStoredFallback(n, pdfEngineMode(), () => isStale() || !layoutAttemptLive(epoch), epoch).catch(() => {});
     }
-    if (openedEngine === MM_PAGE_MODE && isCurrentMmPage(openedStored)) enqueueUncoveredPage(n);
+    if (openedEngine === MM_PAGE_MODE && mmLayoutCacheHit(openedStored)) enqueueUncoveredPage(n);
     return;
   }
   if (skipLocked.has(n)) {

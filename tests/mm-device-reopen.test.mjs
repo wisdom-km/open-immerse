@@ -16,10 +16,11 @@ import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
 import { reconcilePage } from "../lib/mm-reconcile.js";
 import { bindStructureRowBids } from "../lib/pdf-library.js";
-import { applyBlockTranslations, isTranslatableBlock } from "../lib/pdf-blocks.js";
+import { isTranslatableBlock } from "../lib/pdf-blocks.js";
 import { cacheableLayout } from "../lib/pdf-layout-client.js";
-import { showsBlockReadout } from "../lib/pdf-viewer.js";
-import { commitMultimodalPageData, libraryPairsReplaceLayout, pageNeedsMultimodalQueue, pairsKeptForMultimodal } from "../lib/mm-page-invalidate.js";
+import { mergeTranslationRows, showsBlockReadout } from "../lib/pdf-viewer.js";
+import { applyMmBlockTranslations, commitMultimodalPageData, libraryPairsReplaceLayout, pageNeedsMultimodalQueue, pairsKeptForMultimodal } from "../lib/mm-page-invalidate.js";
+import { mmLayoutCacheHit, reopenFallbackLayout } from "../lib/mm-page.js";
 import { createMmPageFlight } from "../lib/mm-page-queue.js";
 import { awaitRenderTask } from "../lib/render-deadline.js";
 
@@ -88,7 +89,7 @@ function paintReopen(layout, recorded, oldPairs, notes) {
     notes
   });
   const kept = committed.pages.find((item) => item.page === layout.page).pairs;
-  const painted = applyBlockTranslations(fresh, kept).map((block) => {
+  const painted = applyMmBlockTranslations(fresh, kept).map((block) => {
     if (!isTranslatableBlock(block)) return block;
     if (/[\u4e00-\u9fff]/.test(block.translation || "")) return block;
     return { ...block, translation: "新译文" };
@@ -284,7 +285,8 @@ test("a 200 stored on the pre-stamp bid paints the live Attention block", () => 
   ];
   const kept = pairsKeptForMultimodal(landed, blocks);
   assert.equal(kept.some((pair) => pair.bid === "b1-p1-toldabs"), true);
-  const painted = applyBlockTranslations(blocks, kept);
+  assert.equal(kept.some((pair) => pair.bid === "b1-p1-t08yfuug" && pair.translation === abstract), false);
+  const painted = applyMmBlockTranslations(blocks, kept);
   const byBid = Object.fromEntries(painted.map((block) => [block.bid, block]));
   assert.equal(byBid["b1-p1-t023no9z"].label, "heading");
   assert.match(byBid["b1-p1-t023no9z"].translation, /注意力/);
@@ -386,4 +388,88 @@ test("viewer commits a multimodal page before paint and does not warm a cache hi
   assert.match(viewer, /mmPageFlight\.promote\(/);
   assert.match(viewer, /releaseDroppedMmPages\(mmPageFlight\.dropNeighborsOutside/);
   assert.match(viewer, /releaseDroppedMmPages\(mmPageFlight\.dropEpoch\(layoutEpoch\)\)/);
+  const ingestBody = viewer.slice(viewer.indexOf("async function ingestMmPageLayout"), viewer.indexOf("async function warmMmNeighbors"));
+  const ingestHit = ingestBody.slice(0, ingestBody.indexOf("const stored = getPageLayout"));
+  assert.match(ingestHit, /mmLayoutCacheHit\(cached\)/);
+  assert.equal(ingestHit.includes("isCurrentMmPage(cached)"), false);
+  assert.match(viewer, /reopenFallbackLayout\(/);
+  const fallbackFn = viewer.slice(viewer.indexOf("function noteMmFallback"), viewer.indexOf("function readerSelecting"));
+  assert.match(fallbackFn, /mode = "text-layer"/);
+  assert.equal(fallbackFn.includes("writeStoredLayout"), false);
+  assert.match(fallbackFn, /persistPageLayout\(n\)/);
+});
+
+test("an echo of the English source does not cover the Attention abstract or the permission notice", () => {
+  const abstract = "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder. The best performing models also connect the encoder and decoder through an attention mechanism.";
+  const permission = "Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in journalistic or scholarly works.";
+  const blocks = [
+    { id: "perm", bid: "b1-p1-t03ojbhz", label: "aside", text: permission },
+    { id: "abs-h", bid: "b1-p1-t12dg02j", label: "heading", text: "Abstract" },
+    { id: "abs", bid: "b1-p1-t08yfuug", label: "text", text: abstract }
+  ];
+  const old = [
+    { bid: "b1-p1-t03ojbhz", text: permission, sourceText: permission, translation: permission },
+    { bid: "b1-p1-t12dg02j", text: "Abstract", sourceText: "Abstract", translation: "摘要" },
+    { bid: "b1-p1-t08yfuug", text: abstract, sourceText: abstract, translation: abstract }
+  ];
+  const kept = pairsKeptForMultimodal(old, blocks);
+  assert.equal(kept.some((pair) => pair.bid === "b1-p1-t08yfuug"), false);
+  assert.equal(kept.some((pair) => pair.bid === "b1-p1-t03ojbhz"), false);
+  assert.equal(kept.find((pair) => pair.bid === "b1-p1-t12dg02j").translation, "摘要");
+  const landed = mergeTranslationRows(
+    [{ bid: "b1-p1-t08yfuug", text: abstract, sourceText: abstract, translation: abstract }],
+    [{ bid: "b1-p1-t08yfuug", text: abstract, sourceText: abstract, translation: "主流的序列转换模型基于复杂的循环或卷积神经网络，包含一个编码器和一个解码器。" }]
+  );
+  assert.match(landed[0].translation, /序列转换/);
+  const painted = applyMmBlockTranslations(blocks, [
+    ...kept,
+    { bid: "b1-p1-t03ojbhz", translation: "在提供适当署名的前提下，Google 允许为新闻或学术用途复制本文的表格和插图。" },
+    { bid: "b1-p1-t08yfuug", translation: landed[0].translation }
+  ]);
+  const byBid = Object.fromEntries(painted.map((block) => [block.bid, block.translation]));
+  assert.match(byBid["b1-p1-t03ojbhz"], /署名/);
+  assert.match(byBid["b1-p1-t08yfuug"], /序列转换/);
+  assert.equal(byBid["b1-p1-t12dg02j"], "摘要");
+});
+
+test("TXL page 2 parse fallback and a coverage fallback reopen as the text layer, not an empty multimodal hit", () => {
+  const fresh = {
+    mode: "text-layer",
+    fallback: { source: "text-layer", reason: "parse" },
+    blocks: [
+      { bid: "b1-p2-t0xwf6l0", label: "text", text: "Transformer-XL obtained strong results on five datasets." },
+      { bid: "b1-p2-t0pej9om", label: "text", text: "Our main technical contributions include introducing recurrence." },
+      { bid: "b1-p2-t1ta07nx", label: "heading", text: "2 Related Work" },
+      { bid: "b1-p2-t1ofrpz3", label: "text", text: "In the last few years, the field of language modeling has witnessed many significant advances." },
+      { bid: "b1-p2-t1r7a48p", label: "text", text: "More broadly, in generic sequence modeling, how to capture long-term dependency has been a long-standing research problem." },
+      { bid: "b1-p2-t0fwbwon", label: "text", text: "3 Model" },
+      { bid: "b1-p2-t0bt90kc", label: "text", text: "Given a corpus of tokens, the task of language modeling is to estimate the joint probability." },
+      { bid: "b1-p2-t19ippdz", label: "heading", text: "3.1 Vanilla Transformer Language Models" },
+      { bid: "b1-p2-t1hlgjui", label: "text", text: "In order to apply Transformer or self-attention to language modeling, the central problem is how to train a Transformer." },
+      { bid: "b1-p2-t0uzt3p6", label: "text", text: "One feasible but crude approximation is to split the entire corpus into shorter segments." }
+    ]
+  };
+  const emptyHit = { mode: "mm-page", pagePipeline: "mp-1", blocks: [] };
+  assert.equal(fresh.blocks.length, 10);
+  assert.equal(mmLayoutCacheHit(emptyHit), false);
+  assert.equal(mmLayoutCacheHit({ mode: "mm-page", pagePipeline: "mp-1", fallback: { source: "text-layer", reason: "parse" }, blocks: fresh.blocks }), false);
+  const reopened = reopenFallbackLayout({ fresh, cached: emptyHit });
+  assert.equal(reopened.mode, "text-layer");
+  assert.equal(reopened.blocks.length, 10);
+  assert.deepEqual(reopened.blocks.map((block) => block.bid), fresh.blocks.map((block) => block.bid));
+  assert.equal(reopened.fallback.reason, "parse");
+  const coverage = {
+    mode: "text-layer",
+    fallback: { source: "text-layer", reason: "coverage" },
+    blocks: [{ bid: "b1-p6-stand-in", label: "text", text: "Attention page 6 stood in after an incomplete read." }]
+  };
+  const coverageOpen = reopenFallbackLayout({ fresh: coverage, cached: emptyHit });
+  assert.equal(coverageOpen.blocks.length, 1);
+  assert.equal(coverageOpen.fallback.reason, "coverage");
+  assert.equal(coverageOpen.mode, "text-layer");
+  assert.equal(reopenFallbackLayout({
+    fresh: null,
+    cached: { mode: "mm-page", pagePipeline: "mp-1", blocks: [{ bid: "kept", label: "text", text: "A real multimodal page." }] }
+  }), null);
+  assert.equal(mmLayoutCacheHit({ mode: "mm-page", pagePipeline: "mp-1", blocks: [{ bid: "kept", label: "text", text: "A real multimodal page." }] }), true);
 });
