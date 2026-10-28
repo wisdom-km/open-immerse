@@ -271,8 +271,26 @@ test("content tokens scope color-scheme to extension chrome and match page token
   );
   assert.match(rules[0].body, /color-scheme:\s*dark/);
   assert.equal(hostLeaks(host).length, 0);
-  assert.deepEqual(customProps(rules[0].body), customProps(pageRoot.body));
+  // --oi-fab-slot is runtime-set on <html> by content/toolbar.js (syncFabSlot).
+  // Copying the 72px token onto .oi-toast / .oi-selection-card overrides that
+  // inline value, so a dragged FAB leaves the toast at the fallback. content.css
+  // already uses var(--oi-fab-slot, 72px) when <html> has not set it.
+  const pageProps = customProps(pageRoot.body);
+  const hostProps = customProps(rules[0].body);
+  delete pageProps["--oi-fab-slot"];
+  assert.deepEqual(hostProps, pageProps);
   assert.equal(host.includes(".mark"), false);
+  assert.equal(declaresRuntimeSlot(host), false);
+});
+
+function declaresRuntimeSlot(css) {
+  return styleRules(css).some((rule) => Object.hasOwn(customProps(rule.body), "--oi-fab-slot"));
+}
+
+test("content tokens never declare runtime-owned --oi-fab-slot so html values inherit", () => {
+  const host = readFileSync(join(root, "ui/tokens-content.css"), "utf8");
+  assert.equal(declaresRuntimeSlot(host), false);
+  assert.equal(/--oi-fab-slot\s*:/.test(stripComments(host)), false);
 });
 
 test("extension pages still load the :root token sheet", () => {
