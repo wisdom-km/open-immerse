@@ -22,7 +22,7 @@
 
 沉浸译把一篇外文论文放进扩展自带的阅读器里：左边用 pdf.js 显示原页，右边是对照译文。翻译请求发到你自己配置的模型，密钥留在本机。
 
-v0.3.0 的一次安装走查里，PDF 这条路径是通的：安装、填写引擎、左右对照、公式、字号、插图、重译、笔记、再次打开、导出诊断包。网页双语可以插入译文，配色还有问题，见文末「已知限制」。
+v0.3.0 的一次安装走查里，PDF 这条路径是通的：安装、填写引擎、左右对照、公式、字号、插图、重译、笔记、再次打开、导出诊断包。网页双语可以在原文下插入译文。
 
 这一版的阅读顺序来自 PDF 文字层抽出的顺序。浏览器扩展里不做版面重排。
 
@@ -120,7 +120,7 @@ v0.3.0 走查对这篇论文重开了一次：大约 1.3 秒读回 145 段译文
 
 走查为了拍全页效果，临时改成了「全部」。新安装看到只有标题和第一段有译文，是当前默认值。
 
-这一版往所有网页注入的样式会把宿主页的配色压暗。配色修好之前，README 不放网页双语的截图。详见「已知限制」。
+![网页原文下方插入的中文译文](docs/assets/readme/03-web-bilingual.png)
 
 ## 安装
 
@@ -199,7 +199,7 @@ LLM 引擎默认开启 **先信后润**（设置 → 功能）：先直译，再
 | `nativeMessaging` | PDF 划区模式为 `local-ocr` 时，service worker 连接原生主机 `com.open_immerse.glmocr`，发送 `{ action: "ensure" }`，用来确认本机 GLM-OCR 已启动。默认阅读走文字层，不会打开这条连接。没有安装对应主机时，连接失败，阅读器继续用文字层。 |
 | `host_permissions`: `<all_urls>` | 内容脚本要在打开的网页上插入译文；后台要请求你填写的翻译 API，地址不固定。PDF 阅读器文件也作为 `web_accessible_resources` 对 `<all_urls>` 开放。 |
 
-内容脚本在 `document_idle` 注入到 `<all_urls>`：`lib/fab.js`、`lib/bilingual-layout.js`、`content/content.js`、`content/toolbar.js`、`content/subtitles.js`，以及 `ui/tokens.css` 和 `content/content.css`。`ui/tokens.css` 目前在 `:root` 上设置了 `color-scheme: dark`，所以这条注入会作用到宿主页。这是下面第一条已知限制的原因。
+内容脚本在 `document_idle` 注入到 `<all_urls>`：`lib/fab.js`、`lib/bilingual-layout.js`、`content/content.js`、`content/toolbar.js`、`content/subtitles.js`，以及 `ui/tokens.css` 和 `content/content.css`。
 
 快捷键 `Alt+T` 在网页上开始翻译；再按一次恢复原文。
 
@@ -217,11 +217,10 @@ LLM 引擎默认开启 **先信后润**（设置 → 功能）：先直译，再
 
 这些条目来自 v0.3.0 的安装走查。这一版没有为此改代码。
 
-1. **网页配色。** 内容脚本把 `ui/tokens.css` 注入到 `<all_urls>`。文件开头的 `:root { color-scheme: dark; }` 作用在宿主页的 `<html>` 上。走查里宿主页计算出的 `colorScheme` 是 `dark`；没有自己写背景色的页面会变成深底深字。翻译段落仍然会插入。把 `color-scheme` 限定在扩展自己的元素上，或内容脚本不再注入这条 `:root` 规则，才能避开它。
-2. **网页默认只译标题和第一段。** 这是 `translateLimit: title_lead` 的当前设计。要全文翻译，把设置里的「本次翻译」改成「全部」。
-3. **arXiv 源码与选区工具条。** 切到「用 arXiv 源码」之后，同一次打开里选中译文，选区工具条可能不出现；刷新页面后恢复。走查只复现了一次，原因还没有定位。源码模式本身默认不记住，除非勾选「以后自动」。
-4. **笔记 Markdown 的标题。** `lib/notes-io.js` 在没有文档标题时使用「未命名论文」，导出文件不会自动写上论文标题。
-5. **开场动图的长度。** `04-pdf-open-translate-hero` 只覆盖打开后的前约 30 秒。全文翻译会继续进行，不在这段动图里。
+1. **网页默认只译标题和第一段。** 这是 `translateLimit: title_lead` 的当前设计。要全文翻译，把设置里的「本次翻译」改成「全部」。
+2. **arXiv 源码与选区工具条。** 切到「用 arXiv 源码」之后，同一次打开里选中译文，选区工具条可能不出现；刷新页面后恢复。走查只复现了一次，原因还没有定位。源码模式本身默认不记住，除非勾选「以后自动」。
+3. **笔记 Markdown 的标题。** `lib/notes-io.js` 在没有文档标题时使用「未命名论文」，导出文件不会自动写上论文标题。
+4. **开场动图的长度。** `04-pdf-open-translate-hero` 只覆盖打开后的前约 30 秒。全文翻译会继续进行，不在这段动图里。
 
 悬浮翻译、划词翻译、YouTube 字幕和 X 字幕在代码里，`features.js` 中默认关闭，主界面不出现。
 

@@ -24,7 +24,7 @@ After a PDF opens, the left pane is the original and the right pane fills in a t
 
 Open Immerse (沉浸译) opens a paper in its own reader: pdf.js shows the original page on the left, and the translation sits on the right. Requests go to the model you configure. The key stays on the machine.
 
-A v0.3.0 install walkthrough passed the PDF path: install, engine setup, side-by-side reading, formulas, font size, figures, retranslate, notes, reopen, and the diagnostics export. Webpage bilingual translation does insert a gloss, and it currently has a color bug. See “Known limitations”.
+A v0.3.0 install walkthrough passed the PDF path: install, engine setup, side-by-side reading, formulas, font size, figures, retranslate, notes, reopen, and the diagnostics export. Webpage bilingual translation inserts a translation under the original text.
 
 Reading order in this version is the order extracted from the PDF text layer. The browser extension does not reorder the page into a new layout.
 
@@ -122,7 +122,7 @@ The default quota is **仅标题+开头** (`translateLimit: title_lead`): the he
 
 The walkthrough switched the quota to All in order to capture a full page. A fresh install that shows a translation only on the title and the first paragraph is following this default.
 
-Styles injected into every page currently force a dark color scheme on the host page. This README does not include a webpage screenshot while that remains. See “Known limitations”.
+![Chinese translation inserted under the original text on a webpage](docs/assets/readme/03-web-bilingual.png)
 
 ## Install
 
@@ -201,7 +201,7 @@ Permissions in `manifest.json`:
 | `nativeMessaging` | When the PDF layout mode is `local-ocr`, the service worker connects to the native host `com.open_immerse.glmocr` and sends `{ action: "ensure" }` to check that local GLM-OCR is up. The default reader uses the text layer and does not open this connection. If that host is not installed, the connection fails and the reader stays on the text layer. |
 | `host_permissions`: `<all_urls>` | Content scripts insert translations on pages you open, and the background calls whatever translation API you configured. PDF reader files are also exposed as `web_accessible_resources` for `<all_urls>`. |
 
-Content scripts inject at `document_idle` on `<all_urls>`: `lib/fab.js`, `lib/bilingual-layout.js`, `content/content.js`, `content/toolbar.js`, `content/subtitles.js`, plus `ui/tokens.css` and `content/content.css`. `ui/tokens.css` currently sets `color-scheme: dark` on `:root`, so that injection reaches the host page. That is the first known limitation below.
+Content scripts inject at `document_idle` on `<all_urls>`: `lib/fab.js`, `lib/bilingual-layout.js`, `content/content.js`, `content/toolbar.js`, `content/subtitles.js`, plus `ui/tokens.css` and `content/content.css`.
 
 The shortcut `Alt+T` starts translation on a web page. Pressing it again restores the original.
 
@@ -219,11 +219,10 @@ The same page can clear the local diagnostic log. The log is `diag.events` in `c
 
 These come from the v0.3.0 install walkthrough. This version does not change the code for them.
 
-1. **Webpage colors.** Content scripts inject `ui/tokens.css` on `<all_urls>`. The file starts with `:root { color-scheme: dark; }`, which applies to the host page’s `<html>`. In the walkthrough the computed `colorScheme` was `dark`. A page that does not set its own background can end up with dark text on a dark background. The translation blocks are still inserted. Keeping `color-scheme` on the extension’s own elements, or keeping that `:root` rule out of the content-script injection, avoids it.
-2. **Webpages default to the title and the first paragraph.** That is the current `translateLimit: title_lead` behavior. Set 「本次翻译」 to 「全部」 for the rest of the page.
-3. **arXiv source and the selection toolbar.** After switching to arXiv source, selecting translated text in that same open may not show the selection toolbar. A refresh brings it back. The walkthrough reproduced this once, and the cause is not identified. Source mode itself is not remembered unless **以后自动** is checked.
-4. **Note Markdown title.** `lib/notes-io.js` uses 「未命名论文」 when the document has no title. The export does not fill in the paper title on its own.
-5. **Length of the opening clip.** `04-pdf-open-translate-hero` covers about the first 30 seconds after open. Full-document translation continues past what the clip shows.
+1. **Webpages default to the title and the first paragraph.** That is the current `translateLimit: title_lead` behavior. Set 「本次翻译」 to 「全部」 for the rest of the page.
+2. **arXiv source and the selection toolbar.** After switching to arXiv source, selecting translated text in that same open may not show the selection toolbar. A refresh brings it back. The walkthrough reproduced this once, and the cause is not identified. Source mode itself is not remembered unless **以后自动** is checked.
+3. **Note Markdown title.** `lib/notes-io.js` uses 「未命名论文」 when the document has no title. The export does not fill in the paper title on its own.
+4. **Length of the opening clip.** `04-pdf-open-translate-hero` covers about the first 30 seconds after open. Full-document translation continues past what the clip shows.
 
 Hover translate, selection translate, YouTube captions, and X captions exist in the code. They are off by default in `features.js` and do not appear in the main UI.
 
