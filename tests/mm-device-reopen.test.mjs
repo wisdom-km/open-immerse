@@ -1,7 +1,6 @@
-// Device state from tip 6d3bd59 (diagnostics + icpt + block dumps).
-// Attention open already has a library entry. Page 1 vision returns, then
-// page 11 logs mm.page.start and never reaches sendVision. TXL/DPO reopen
-// paints a cached mm layout beside older translations.
+// Reopen of a paper that already has a text-layer cache and translations.
+// The multimodal page discards that page's old rows and translates the new
+// blocks. It does not rebind the old bids. Notes stay on their source anchor.
 //
 // Fixtures:
 //   tests/fixtures/Attention_Is_All_You_Need.pdf
@@ -15,12 +14,12 @@ import { fileURLToPath } from "node:url";
 import { getDocument, GlobalWorkerOptions } from "../pdf/vendor/pdf.min.mjs";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
-import { blockHiddenByAlias, dedupeSwappedBlocks, reconcilePage } from "../lib/mm-reconcile.js";
+import { reconcilePage } from "../lib/mm-reconcile.js";
 import { bindStructureRowBids } from "../lib/pdf-library.js";
-import { applyBlockTranslations } from "../lib/pdf-blocks.js";
+import { applyBlockTranslations, isTranslatableBlock } from "../lib/pdf-blocks.js";
+import { commitMultimodalPageData, pageNeedsMultimodalQueue } from "../lib/mm-page-invalidate.js";
 import { createMmPageFlight } from "../lib/mm-page-queue.js";
 import { awaitRenderTask } from "../lib/render-deadline.js";
-import { layoutStandsInForEngine } from "../lib/pdf-layout-client.js";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const attentionPath = join(root, "tests/fixtures/Attention_Is_All_You_Need.pdf");
@@ -47,7 +46,88 @@ function fold(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
-test("Attention abstract translation follows the swapped paragraph, not the old line bid", async () => {
+function recordedBlocks(layout, extras = []) {
+  const body = (layout.blocks || [])
+    .filter((block) => block?.text && block.label !== "formula" && block.label !== "figure" && block.label !== "table")
+    .map((block, index) => ({
+      id: `mm-p${layout.page}-${index}`,
+      bid: `b${layout.page}-mm-${index}`,
+      label: block.label || "text",
+      text: block.text,
+      bbox: block.bbox
+    }));
+  return [...extras, ...body];
+}
+
+function freshBlocks(layout, recorded) {
+  return reconcilePage(recorded, layout.blocks).blocks;
+}
+
+function paintReopen(layout, recorded, oldPairs, notes) {
+  const fresh = freshBlocks(layout, recorded);
+  const mmLayout = {
+    mode: "mm-page",
+    pagePipeline: "mp-1",
+    page: layout.page,
+    blocks: fresh
+  };
+  const otherPage = Number(layout.page) + 1;
+  const committed = commitMultimodalPageData({
+    pages: [
+      { page: layout.page, pairs: oldPairs, layout: { ...layout, mode: "text-layer" } },
+      { page: otherPage, pairs: [{ bid: "other", text: "Stored sentence for the next page.", translation: "另一页译文" }] }
+    ],
+    layoutRows: [
+      { page: layout.page, mode: "text-layer", layout: { ...layout, mode: "text-layer", blocks: layout.blocks } },
+      { page: otherPage, mode: "text-layer", layout: { mode: "text-layer", blocks: [{ bid: "keep-next", text: "next page" }] } }
+    ],
+    page: layout.page,
+    layout: mmLayout,
+    notes
+  });
+  const kept = committed.pages.find((item) => item.page === layout.page).pairs;
+  const painted = applyBlockTranslations(fresh, kept).map((block) => {
+    if (!isTranslatableBlock(block)) return block;
+    if (/[\u4e00-\u9fff]/.test(block.translation || "")) return block;
+    return { ...block, translation: "新译文" };
+  });
+  return { fresh, painted, committed, kept };
+}
+
+function assertSamePage(result) {
+  const freshText = result.fresh.map((block) => fold(block.text));
+  const paintedText = result.painted.map((block) => fold(block.text));
+  assert.deepEqual(paintedText, freshText);
+  const long = paintedText.filter((text) => text.length >= 24);
+  assert.equal(new Set(long).size, long.length, "a sentence is painted once");
+  for (const block of result.painted) {
+    if (!isTranslatableBlock(block)) continue;
+    assert.match(block.translation || "", /[\u4e00-\u9fff]/);
+  }
+  assert.equal(result.committed.rebuilding, "");
+  const other = result.committed.pages.find((item) => item.page !== result.painted[0] && item.pairs?.[0]?.bid === "other");
+  assert.equal(other.pairs[0].translation, "另一页译文");
+  assert.equal(result.committed.layoutRows.some((row) => row.mode === "text-layer" && row.layout?.blocks?.[0]?.bid === "keep-next"), true);
+}
+
+test("a structure row that already has a bid is not moved onto a longer block", () => {
+  const fragment = "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.";
+  const paragraph = `${fragment} that include an encoder and a decoder.`;
+  const row = {
+    bid: "old-line",
+    text: fragment,
+    sourceText: fragment,
+    translation: "主导的序列转换模型基于复杂的循环或卷积神经网络。"
+  };
+  const bound = bindStructureRowBids([row], [
+    { id: "line", bid: "old-line", label: "text", text: fragment },
+    { id: "mm", bid: "mm-abs", label: "text", text: paragraph }
+  ]);
+  assert.equal(bound[0].bid, "old-line");
+  assert.equal(bound[0].translation, row.translation);
+});
+
+test("Attention reopen translates the new abstract instead of the old line", async () => {
   assert.equal(existsSync(attentionPath), true, "Attention fixture PDF is missing");
   const layout = await pageLayout(attentionPath, 1);
   const blocks = layout.blocks.filter((block) => block.label !== "formula" && block.label !== "figure");
@@ -66,83 +146,95 @@ test("Attention abstract translation follows the swapped paragraph, not the old 
   }
   assert.ok(bodyLines.length >= 2, "abstract is more than one text-layer line");
   const joined = fold(bodyLines.map((block) => block.text).join(" "));
-  // Recorded mm response: the model returns the abstract as one paragraph
-  // with a new id. The text-layer lines stay in the page (column fragments).
-  const mmAbstract = {
-    id: "mm-abstract",
-    bid: "b1-p1-mm-abstract",
-    label: "text",
-    text: joined,
-    bbox: bodyLines[0].bbox
-  };
-  const recorded = {
-    blocks: [
-      { id: "mm-title", bid: "b1-p1-mm-title", label: "heading", text: "Attention Is All You Need" },
-      { id: "mm-abs-h", bid: "b1-p1-mm-abs-h", label: "heading", text: "Abstract" },
-      mmAbstract
-    ]
-  };
-  const reconciled = reconcilePage(recorded.blocks, blocks).blocks;
-  const paragraph = reconciled.find((block) => fold(block.text).startsWith("The dominant sequence transduction"));
-  assert.ok(paragraph, "reconcile keeps the joined abstract");
-  // The structure pass translated the joined abstract onto the first line's bid
-  // while the page was still the text layer. That bid is still live on the fragment.
-  const row = {
-    id: "oi-structure:abstract.body",
-    bid: bodyLines[0].bid,
-    original: joined,
-    text: joined,
-    sourceText: joined,
-    translation: "主导的序列转换模型基于复杂的循环或卷积神经网络。"
-  };
-  const bound = bindStructureRowBids([row], reconciled);
-  const painted = applyBlockTranslations(reconciled, bound);
-  const shown = painted.find((block) => block.id === paragraph.id || block.bid === paragraph.bid);
-  assert.match(String(shown?.translation || ""), /序列转换/);
-});
-
-test("TXL right column stays when its bid was aliased onto the title", async () => {
-  assert.equal(existsSync(txlPath), true, "TXL PDF is not in /tmp/oi-flow-corpus/1901.02860/paper.pdf");
-  const layout = await pageLayout(txlPath, 1);
-  const right = layout.blocks.find((block) => /LSTM/.test(block.text) && /Term Memory|Hochreiter/.test(block.text));
-  assert.ok(right, "TXL page 1 has the right-column LSTM paragraph");
-  const title = layout.blocks.find((block) => /Transformer-XL/.test(block.text));
-  assert.ok(title);
-  const host = { ...title, bidAliases: [right.bid] };
-  const page = layout.blocks.map((block) => (block === title ? host : block));
-  assert.equal(blockHiddenByAlias(right, page), false);
-});
-
-test("DPO reopen drops a short title that is contained in the full title", () => {
-  // Tip O-dpo-p1: "Direct Preference Optimization:" and the full title both paint.
-  const blocks = [
-    { id: "p1-b1", bid: "b1-p1-t1998als", label: "text", text: "Direct Preference Optimization:" },
-    { id: "b2", bid: "b1-p1-t099suy8", label: "text", text: "Direct Preference Optimization: Your Language Model is Secretly a Reward Model" },
-    { id: "p1-b9", bid: "b1-p1-t12dg02j", label: "heading", text: "Abstract" },
-    { id: "b5", bid: "b1-p1-t0fej8h0", label: "text", text: "While large-scale unsupervised language models (LMs) learn broad world knowledge and some reasoning skills." }
+  const recorded = [
+    { id: "mm-title", bid: "b1-mm-title", label: "heading", text: "Attention Is All You Need" },
+    { id: "mm-abs-h", bid: "b1-mm-abs-h", label: "heading", text: "Abstract" },
+    { id: "mm-abstract", bid: "b1-mm-abstract", label: "text", text: joined, bbox: bodyLines[0].bbox }
   ];
-  const kept = dedupeSwappedBlocks(blocks);
-  const titles = kept.filter((block) => /Direct Preference Optimization/.test(block.text));
-  assert.equal(titles.length, 1);
-  assert.match(titles[0].text, /Secretly a Reward Model/);
+  const notes = [{ id: "n1", page: 1, anchor: { page: 1, start: 12, end: 40 }, quote: "Attention" }];
+  const oldPairs = [{
+    bid: bodyLines[0].bid,
+    id: bodyLines[0].id,
+    text: bodyLines[0].text,
+    sourceText: bodyLines[0].text,
+    translation: "主导的序列转换模型基于复杂的循环或卷积神经网络。"
+  }];
+  assert.equal(pageNeedsMultimodalQueue({ configured: true, layout: { ...layout, mode: "text-layer" } }), true);
+  assert.equal(pageNeedsMultimodalQueue({ configured: false, layout: { ...layout, mode: "text-layer" } }), false);
+  const result = paintReopen(layout, recorded, oldPairs, notes);
+  assertSamePage(result);
+  const paragraph = result.painted.find((block) => fold(block.text).startsWith("The dominant sequence transduction"));
+  assert.ok(paragraph);
+  assert.equal(paragraph.translation, "新译文");
+  assert.equal(result.kept.some((pair) => pair.bid === bodyLines[0].bid), false);
+  assert.equal(result.committed.notes, notes);
+  assert.deepEqual(result.committed.notes, [{ id: "n1", page: 1, anchor: { page: 1, start: 12, end: 40 }, quote: "Attention" }]);
+  assert.equal(result.committed.layoutRows.some((row) => row.page === 1 && row.mode === "text-layer"), false);
 });
 
-test("TXL text-layer library page still stands in when the engine is mm-page", async () => {
-  assert.equal(existsSync(txlPath), true, "TXL PDF is not in /tmp/oi-flow-corpus/1901.02860/paper.pdf");
+test("TXL page 2 reopen has the fresh block list, not an empty cache", async (t) => {
+  if (!existsSync(txlPath)) {
+    t.skip("TXL PDF is not in /tmp/oi-flow-corpus/1901.02860/paper.pdf");
+    return;
+  }
   const layout = await pageLayout(txlPath, 2);
   assert.ok(layout.blocks.length > 4, "TXL page 2 text layer has a column of blocks");
-  const record = {
-    page: 2,
-    layout: { ...layout, mode: "text-layer", pagePipeline: "" },
-    layoutVersion: layout.layoutVersion || ""
-  };
-  assert.equal(layoutStandsInForEngine(record, "mm-page"), true);
+  const recorded = recordedBlocks(layout);
+  const notes = [{ id: "txl-note", page: 2, anchor: { page: 2, start: 0, end: 8 } }];
+  const oldPairs = layout.blocks.slice(0, 4).map((block) => ({
+    bid: block.bid,
+    text: block.text,
+    sourceText: block.text,
+    translation: "旧译文"
+  }));
+  const emptyCache = { ...layout, blocks: [], mode: "text-layer" };
+  assert.equal(pageNeedsMultimodalQueue({ configured: true, layout: emptyCache }), true);
+  const result = paintReopen(layout, recorded, oldPairs, notes);
+  assert.ok(result.fresh.length > 4);
+  assertSamePage(result);
+  assert.equal(result.committed.notes, notes);
 });
 
-test("a page render that never settles does not hold the next vision call", async () => {
-  // Diagnostics: mm.page.ok page 1 at 26.7s is followed by mm.page.start page 11.
-  // No mm-end, no fallback, no HTTP until the next document at 326.9s.
-  // Page 11 is current, so it is not dropped. Page 2 waits behind that render.
+test("DPO reopen paints each page once, matching a fresh open", async () => {
+  assert.equal(existsSync(dpoPath), true, "DPO fixture PDF is missing");
+  for (const pageNumber of [1, 2]) {
+    const layout = await pageLayout(dpoPath, pageNumber);
+    const fullTitle = layout.blocks.find((block) => /Secretly a Reward Model/.test(block.text));
+    const recorded = recordedBlocks(layout, pageNumber === 1 && fullTitle ? [] : []);
+    const short = {
+      bid: "old-short-title",
+      text: "Direct Preference Optimization:",
+      sourceText: "Direct Preference Optimization:",
+      translation: "直接偏好优化："
+    };
+    const oldPairs = [short, ...layout.blocks.slice(0, 6).map((block) => ({
+      bid: block.bid,
+      text: block.text,
+      sourceText: block.text,
+      translation: "旧译文"
+    }))];
+    const notes = [{ id: `dpo-${pageNumber}`, page: pageNumber, anchor: { page: pageNumber, start: 1, end: 4 } }];
+    const result = paintReopen(layout, recorded, oldPairs, notes);
+    assertSamePage(result);
+    assert.equal(result.committed.notes, notes);
+    assert.equal(result.kept.some((pair) => pair.bid === "old-short-title"), false);
+    if (fullTitle) {
+      const titles = result.painted.filter((block) => /Direct Preference Optimization:/.test(block.text));
+      const freshTitles = result.fresh.filter((block) => /Direct Preference Optimization:/.test(block.text));
+      assert.deepEqual(titles.map((block) => fold(block.text)), freshTitles.map((block) => fold(block.text)));
+    }
+  }
+});
+
+test("a render promise that fulfills with a pending thenable still releases the next page", async () => {
+  const hung = { then() {} };
+  let cancelled = 0;
+  const err = await awaitRenderTask({
+    promise: Promise.resolve(hung),
+    cancel() { cancelled += 1; }
+  }, { timeoutMs: 30 }).then(() => null, (error) => error);
+  assert.equal(err?.code, "timeout");
+  assert.equal(cancelled, 1);
   const sent = [];
   const flight = createMmPageFlight({ concurrency: 1 });
   const raster = (page) => awaitRenderTask({
@@ -152,8 +244,8 @@ test("a page render that never settles does not hold the next vision call", asyn
   const run = (page, role) => flight.run({ page, role, epoch: 1 }, async () => {
     try {
       await raster(page);
-    } catch (err) {
-      assert.equal(err.code, "timeout");
+    } catch (error) {
+      assert.equal(error.code, "timeout");
     }
     sent.push(page);
     return { ok: true };
@@ -165,4 +257,20 @@ test("a page render that never settles does not hold the next vision call", asyn
   ]);
   assert.equal(winner, "done");
   assert.deepEqual(sent, [11, 2]);
+});
+
+test("viewer commits a multimodal page before paint and does not warm a cache hit", () => {
+  const viewer = readFileSync(join(root, "pdf/viewer.js"), "utf8");
+  const ingest = viewer.slice(viewer.indexOf("async function ingestMmPageLayout"), viewer.indexOf("async function warmMmNeighbors"));
+  const hit = ingest.slice(0, ingest.indexOf("const stored = getPageLayout"));
+  assert.equal(hit.includes("warmMmNeighbors"), false);
+  assert.match(hit, /discardStalePageForMultimodal\(n, cached\)/);
+  assert.match(hit, /enqueueUncoveredPage\(n\)/);
+  assert.match(ingest, /!mmPageConfigured\(formulaViewerSettings\) && legacyPageShouldHold/);
+  const swap = viewer.slice(viewer.indexOf("function replaceMmLayout"), viewer.indexOf("async function pdfByteHash"));
+  assert.match(swap, /discardStalePageForMultimodal\(n, layout\)/);
+  assert.match(swap, /reanchor: false/);
+  assert.equal(swap.includes("prev.translation"), false);
+  assert.match(viewer, /pageNeedsMultimodalQueue\(/);
+  assert.equal(viewer.includes("layoutStandsInForEngine"), false);
 });

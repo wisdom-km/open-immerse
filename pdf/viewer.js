@@ -208,6 +208,7 @@ import {
 } from "../lib/mm-page.js";
 import { blockHiddenByAlias, dedupeSwappedBlocks, readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
 import { createMmPageFlight, detachAfterSwap } from "../lib/mm-page-queue.js";
+import { commitMultimodalPageData, pageNeedsMultimodalQueue, pairsKeptForMultimodal } from "../lib/mm-page-invalidate.js";
 import { awaitRenderTask, MM_RASTER_TIMEOUT_MS } from "../lib/render-deadline.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
 import { joinPageBoundary, openPageHost } from "../lib/pdf-flow-join.js";
@@ -300,7 +301,6 @@ import {
   layoutFallbackOf,
   layoutServesEngine,
   layoutServesLibrary,
-  layoutStandsInForEngine,
   normalizePdfLayout,
   resolveLayoutMode,
   runLaneAttempts,
@@ -6437,11 +6437,16 @@ function slotHasTranslation(slot) {
   return [...slot.querySelectorAll(".oi-pdf-p, h1, h2, h3")].some((el) => settledText(readoutTextWithoutFold(el), ""));
 }
 
+function pairsForLiveLayout(layout, pairs) {
+  if (!isCurrentMmPage(layout)) return pairs || [];
+  return pairsKeptForMultimodal(pairs, layout?.blocks);
+}
+
 function layoutForReadout(layout) {
   const cached = pageCache.get(docId, layout.page);
   const libraryPairs = libraryEntry(layout.page)?.pairs || [];
   let blocks = layout.blocks || [];
-  const saved = (Array.isArray(cached) && cached.length) ? cached : libraryPairs;
+  const saved = pairsForLiveLayout(layout, (Array.isArray(cached) && cached.length) ? cached : libraryPairs);
   if (saved.length && blocks.length) {
     const merged = applySavedPairs(unitsForLayout(layout), saved, savedPairSettings());
     const settled = merged.some((unit) => settledText(unit.translation, unit.original || unit.text || unit.sourceText || ""));
@@ -6454,6 +6459,7 @@ function layoutForReadout(layout) {
     blocks = applyBlockTranslations(layout.blocks, (settled || retry) ? merged : saved);
   }
   if (!blocks.some((block) => settledText(block.translation, block.text || block.sourceText || ""))) {
+    if (isCurrentMmPage(layout)) return { ...layout, blocks: layout.blocks || [] };
     const fallback = blocksFromLibraryPairs(layout.page, libraryPairs.length ? libraryPairs : cached);
     if (fallback.length) {
       const visuals = (layout.blocks || []).filter((block) => block.label === "figure" || block.label === "table");
@@ -11882,9 +11888,7 @@ function installDisplayableLibraryLayouts(version = knownLayoutVersion) {
     const page = Number(entry?.page);
     if (!(page >= 1)) continue;
     const view = libraryEntry(page) || entry;
-    if (!layoutServesLibrary(view, engine)) {
-      if (!layoutStandsInForEngine(view, engine)) continue;
-    }
+    if (!layoutServesLibrary(view, engine)) continue;
     const stored = storedLayoutDisplayable(view, version);
     if (!stored?.blocks?.length) continue;
     if (getPageLayout(page)?.blocks?.length) continue;
@@ -12084,6 +12088,7 @@ function paintLateLibrary(n, ticket) {
     const layout = getPageLayout(n);
     if (!layout?.blocks?.length || !saved.pairs) return;
     const prepared = bindSavedPairs(saved, unitsForLayout(layout));
+    prepared.pairs = pairsForLiveLayout(layout, prepared.pairs);
     const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs, savedPairSettings());
     const blocks = layout.blocks || [];
     const covers = libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang, pdfProvider) ||
@@ -14134,6 +14139,27 @@ function holdLegacyPage(n, layout) {
   return layout;
 }
 
+/** Old bids and the text-layer cache for this page only. Notes are not in the library document. */
+function discardStalePageForMultimodal(page, layout) {
+  const committed = commitMultimodalPageData({
+    pages: libraryDoc?.pages || [],
+    layoutRows: libraryDoc?.layoutRows || [],
+    page,
+    layout,
+    notes: globalThis.__oiNotes || null
+  });
+  if (libraryDoc) {
+    libraryDoc.pages = committed.pages;
+    libraryDoc.layoutRows = committed.layoutRows;
+  }
+  const kept = (committed.pages.find((item) => Number(item?.page) === Number(page)) || {}).pairs || [];
+  if (kept.length) pageCache.set(docId, page, kept);
+  else pageCache.clearPage(docId, page);
+  if (Number(page) === Number(pageNum)) pageResults = kept;
+  noteMmPhase(page, "", "");
+  return committed;
+}
+
 async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
   if (!layoutAttemptLive(epoch) || isStale()) return null;
   const force = options.force === true;
@@ -14144,24 +14170,28 @@ async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
     if (cached && isCurrentMmPage(cached) && !isStale()) {
       noteMmPage("mm.page.cache", { page: n, hit: true });
       notePageFormulaLatex(n, cached.formulaLatex || []);
-      notePageState(n, { legacyCache: false, mmPhase: "", mmReason: "", hasLayout: true });
-      setPageLayout(n, cached);
-      // A cache hit used to return before neighbor warm-up. Page 2 then kept
-      // the library seed (stale-formula, no blocks) for the whole reopen.
-      if (options.warm !== false) {
-        mmFocusPage = Number(n);
-        void warmMmNeighbors(n, epoch);
-      }
+      discardStalePageForMultimodal(n, cached);
+      setPageLayout(n, cached, { reanchor: false });
+      enqueueUncoveredPage(n);
       return cached;
     }
   }
   const stored = getPageLayout(n) || libraryEntry(n)?.layout;
-  if (!force && isCurrentMmPage(getPageLayout(n))) return getPageLayout(n);
-  if (!force && pageStates.get(Number(n))?.mmPhase === "rebuilding" && getPageLayout(n)?.blocks?.length) {
-    if (options.awaitFinish === true) await mmFinishTickets.get(Number(n));
-    return getPageLayout(n);
+  if (!force && isCurrentMmPage(getPageLayout(n))) {
+    const laid = getPageLayout(n);
+    discardStalePageForMultimodal(n, laid);
+    enqueueUncoveredPage(n);
+    return laid;
   }
-  if (legacyPageShouldHold(stored, { force, hasTranslation: pageHasSettledTranslation(n) })) {
+  if (!force && pageStates.get(Number(n))?.mmPhase === "rebuilding" && getPageLayout(n)?.blocks?.length) {
+    const pending = mmFinishTickets.get(Number(n));
+    if (pending) {
+      if (options.awaitFinish === true) await pending;
+      return getPageLayout(n);
+    }
+    noteMmPhase(n, "", "");
+  }
+  if (!mmPageConfigured(formulaViewerSettings) && legacyPageShouldHold(stored, { force, hasTranslation: pageHasSettledTranslation(n) })) {
     return holdLegacyPage(n, stored);
   }
   // No vision key: settle the text layer here. The flight queue is only for a
@@ -14358,7 +14388,7 @@ function enqueueUncoveredPage(page) {
   const layout = getPageLayout(page);
   const blocks = layout?.blocks || [];
   if (!translatableBlocks(blocks).length) return;
-  const saved = pageCache.get(docId, page) || libraryEntry(page)?.pairs || [];
+  const saved = pairsForLiveLayout(layout, pageCache.get(docId, page) || libraryEntry(page)?.pairs || []);
   const units = liveOriginals(layout, unitsForLayout(layout));
   const filled = units.length ? applySavedPairs(units, saved, savedPairSettings()) : [];
   if (filled.length) pageCache.set(docId, page, cacheableReuse(filled));
@@ -14400,12 +14430,7 @@ function replaceMmLayout(n, before, layout, epoch) {
     }
     mmReplaceTimer.delete(n);
     try {
-      for (const op of plan.ops || []) {
-        if (op.op !== "keep") continue;
-        const prev = (before?.blocks || []).find((block) => String(block.id || "") === op.id);
-        const next = (layout.blocks || []).find((block) => String(block.id || "") === String(op.block?.id || ""));
-        if (prev?.translation && next && !next.translation) next.translation = prev.translation;
-      }
+      discardStalePageForMultimodal(n, layout);
       const scroller = translateScrollRoot();
       const viewportTop = scroller?.getBoundingClientRect?.().top || 0;
       const pageNodes = [...(slot?.querySelectorAll?.("[data-block-id]") || [])];
@@ -14414,7 +14439,7 @@ function replaceMmLayout(n, before, layout, epoch) {
       const anchorIndex = anchor ? pageNodes.indexOf(anchor) : -1;
       const top0 = anchor?.getBoundingClientRect ? anchor.getBoundingClientRect().top : 0;
       const repaint = swapNeedsRepaint(plan, pageNodes.map((node) => node?.dataset?.blockId || ""));
-      setPageLayout(n, layout, { reanchor: repaint });
+      setPageLayout(n, layout, { reanchor: false });
       if (slot && !repaint) {
         const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
         applyParagraphSwap(slot, plan, {
@@ -15035,7 +15060,7 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize, options
   if (n === pageNum) pageOriginals = blocks;
   const cached = pageCache.get(translatingDoc, n);
   const saved = libraryEntry(n)?.pairs;
-  let pairRows = (Array.isArray(cached) && cached.length ? cached : saved) || [];
+  let pairRows = pairsForLiveLayout(layout, (Array.isArray(cached) && cached.length ? cached : saved) || []);
   const openHost = openPageHost(layout.blocks);
   const extended = !options.force && openHost ? storedSentenceExtends(openHost, saved) : null;
   const pageAlreadySettled = stateAtStart === "done" || stateAtStart === "skipped" || stateAtStart === "empty";
@@ -16040,7 +16065,14 @@ async function loadCurrentPageText(explicitPage) {
   const version = knownLayoutVersion || await layoutVersionNow();
   const openedStored = getPageLayout(n);
   const openedEngine = pdfEngineMode();
-  if (openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version) && layoutServesEngine(openedStored, openedEngine)) {
+  const reopenAsFresh = pageNeedsMultimodalQueue({
+    configured: openedEngine === MM_PAGE_MODE && mmPageConfigured(formulaViewerSettings),
+    layout: openedStored
+  });
+  if (!reopenAsFresh && openedStored?.blocks?.length && storedLayoutDisplayable(openedStored, version) && layoutServesEngine(openedStored, openedEngine)) {
+    if (openedEngine === MM_PAGE_MODE && isCurrentMmPage(openedStored)) {
+      discardStalePageForMultimodal(n, openedStored);
+    }
     if (openedEngine === MM_PAGE_MODE && isCurrentMmPage(openedStored)) {
       noteMmPage("mm.page.cache", { page: n, hit: true });
       notePageFormulaLatex(n, openedStored.formulaLatex || []);
@@ -16053,6 +16085,7 @@ async function loadCurrentPageText(explicitPage) {
     if (isStale()) return;
     if (saved?.pairs) {
       const prepared = bindSavedPairs(saved, unitsForLayout(openedStored));
+      prepared.pairs = pairsForLiveLayout(openedStored, prepared.pairs);
       const merged = applySavedPairs(unitsForLayout(openedStored), prepared.pairs, savedPairSettings());
       const blocks = openedStored.blocks || [];
       pageResults = merged;
@@ -16077,6 +16110,7 @@ async function loadCurrentPageText(explicitPage) {
     if (!layoutCurrentForEngine(openedStored, version, openedEngine) && (openedEngine === "local-ocr" || openedEngine === "cloud-ocr")) {
       upgradeStoredFallback(n, pdfEngineMode(), () => isStale() || !layoutAttemptLive(epoch), epoch).catch(() => {});
     }
+    if (openedEngine === MM_PAGE_MODE && isCurrentMmPage(openedStored)) enqueueUncoveredPage(n);
     return;
   }
   if (skipLocked.has(n)) {
@@ -16168,6 +16202,7 @@ async function loadCurrentPageText(explicitPage) {
     } else if (saved?.pairs && !isStale()) {
       const blocks = layout.blocks || [];
       const prepared = bindSavedPairs(saved, unitsForLayout(layout));
+      prepared.pairs = pairsForLiveLayout(layout, prepared.pairs);
       const merged = applySavedPairs(unitsForLayout(layout), prepared.pairs, savedPairSettings());
       if (libraryCoversLiveBlocks(prepared.pairs, blocks, pdfTargetLang, pdfProvider) ||
           libraryCoversLiveBlocks(merged, blocks, pdfTargetLang, pdfProvider)) {
