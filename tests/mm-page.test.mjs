@@ -434,7 +434,7 @@ test("opening three pages keeps a single sendVision in flight", async () => {
   assert.equal(flight.active(), 1);
   assert.equal(flight.queued(), 2);
   const neighbor = open(9, "neighbor");
-  assert.equal(flight.dropNeighborsOutside({ focus: 3, radius: 2, epoch: 4 }), 1);
+  assert.deepEqual(flight.dropNeighborsOutside({ focus: 3, radius: 2, epoch: 4 }), [9]);
   assert.deepEqual(await neighbor, { ok: false, dropped: true });
   const order = [];
   pending.get(1)();
@@ -476,7 +476,7 @@ test("opening three pages keeps a single sendVision in flight", async () => {
   droppedFlight.run({ page: 1, role: "current", epoch: 3 }, () => new Promise(() => {}));
   const queuedNeighbor = droppedFlight.run({ page: 8, role: "neighbor", epoch: 9 }, async () => ({ ok: true }));
   const queuedCurrent = droppedFlight.run({ page: 2, role: "current", epoch: 9 }, async () => ({ ok: true }));
-  assert.equal(droppedFlight.dropEpoch(9), 2);
+  assert.deepEqual(droppedFlight.dropEpoch(9).slice().sort((a, b) => a - b), [2, 8]);
   assert.equal((await queuedNeighbor).dropped, true);
   assert.equal((await queuedCurrent).dropped, true);
   const warm = viewer.slice(viewer.indexOf("async function warmMmNeighbors"), viewer.indexOf("async function finishMmPage"));

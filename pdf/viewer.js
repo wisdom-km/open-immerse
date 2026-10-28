@@ -208,7 +208,7 @@ import {
 } from "../lib/mm-page.js";
 import { blockHiddenByAlias, dedupeSwappedBlocks, readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
 import { createMmPageFlight, detachAfterSwap } from "../lib/mm-page-queue.js";
-import { commitMultimodalPageData, pageNeedsMultimodalQueue, pairsKeptForMultimodal } from "../lib/mm-page-invalidate.js";
+import { commitMultimodalPageData, libraryPairsReplaceLayout, pageNeedsMultimodalQueue, pairsKeptForMultimodal } from "../lib/mm-page-invalidate.js";
 import { awaitRenderTask, MM_RASTER_TIMEOUT_MS } from "../lib/render-deadline.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
 import { joinPageBoundary, openPageHost } from "../lib/pdf-flow-join.js";
@@ -10487,8 +10487,10 @@ function paintPageSlot(page) {
   }
   const bareTerminal = (row.state === "skipped" || row.state === "empty") && !slot.querySelector(".rf-block");
   const stable = slot.dataset.painted === "1" && row.state !== "running" && row.state !== "layout" && row.state !== "cleared" && !bareTerminal;
-  if (stable) return;
+  // The body can stay. The rebuild bar cannot: a fallback or a dropped page
+  // changes mmPhase after the slot was stamped, and this used to return first.
   const ps = syncPageStatus(slot, page, row);
+  if (stable) return;
   [...slot.children].forEach((child) => {
     if (child !== ps) child.remove();
   });
@@ -10508,7 +10510,7 @@ function paintPageSlot(page) {
     }
   } else if (libraryArticle?.length && page === 1 && row.state !== "layout" && row.state !== "empty" && row.state !== "queued") {
     renderStoredArticle(libraryArticle);
-  } else if (row.state === "done" || row.state === "partial") {
+  } else if ((row.state === "done" || row.state === "partial") && libraryPairsReplaceLayout(layout)) {
     const stored = blocksFromLibraryPairs(page, libraryEntry(page)?.pairs || pageCache.get(docId, page));
     if (stored.length) appendFixtureReadout(slot, { page, kind: "blocks", blocks: stored, textSource: "library" });
   }
@@ -11872,6 +11874,8 @@ function layoutFromStored(page, stored) {
     sourceAudit: stored.sourceAudit || null,
     ...(stored.layoutVersion ? { layoutVersion: String(stored.layoutVersion) } : {}),
     ...(stored.formulaPipeline ? { formulaPipeline: String(stored.formulaPipeline) } : {}),
+    ...(stored.pagePipeline ? { pagePipeline: String(stored.pagePipeline) } : {}),
+    ...(stored.mmFingerprint ? { mmFingerprint: String(stored.mmFingerprint) } : {}),
     ...(stored.mode ? { mode: String(stored.mode) } : {}),
     ...(fallback ? { fallback } : {}),
     blocks: stored.blocks,
@@ -12898,6 +12902,7 @@ async function adoptLibraryPages(options = {}) {
       }
       if (filled.length) pageCache.set(docId, page, cacheableReuse(filled));
       notePageState(page, { state, hasLayout: true });
+      settleIdleRebuild(page);
       clearSlotPainted(page);
       publish();
       if (state === "partial") {
@@ -14128,9 +14133,17 @@ function pngBase64FromCanvas(canvas) {
 
 function noteMmPhase(page, phase, reason = "") {
   notePageState(page, { mmPhase: phase, mmReason: reason, hasLayout: true });
-  const slot = document.querySelector(`#pages .rf-page[data-page="${page}"]`);
   const row = pageStates.get(Number(page));
+  const key = String(page);
+  // The readout lives in #readerFlow. #pages is the PDF pane and has no .rf-page,
+  // so a fallback or a dropped job used to clear the state and leave「正在重建本页」.
+  const slot = readerFlowEl()?.querySelector(`:scope > .rf-page[data-page="${key}"]`)
+    || document.querySelector(`#readerFlow > .rf-page[data-page="${key}"]`);
   if (slot && row) syncPageStatus(slot, page, row);
+}
+
+function releaseDroppedMmPages(pages) {
+  for (const page of pages || []) releaseMmRebuild(page);
 }
 
 function holdLegacyPage(n, layout) {
@@ -14186,6 +14199,15 @@ async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
   if (!force && pageStates.get(Number(n))?.mmPhase === "rebuilding" && getPageLayout(n)?.blocks?.length) {
     const pending = mmFinishTickets.get(Number(n));
     if (pending) {
+      // The walker reaching this page promotes a queued neighbor. Returning
+      // here used to leave it as a neighbor, then the ±2 window dropped it
+      // and the bar stayed on「正在重建本页」.
+      if (options.warm !== false) {
+        mmPageFlight.promote({ page: Number(n), epoch });
+        mmFocusPage = Number(n);
+        releaseDroppedMmPages(mmPageFlight.dropNeighborsOutside({ focus: mmFocusPage, radius: 2, epoch }));
+        void warmMmNeighbors(n, epoch);
+      }
       if (options.awaitFinish === true) await pending;
       return getPageLayout(n);
     }
@@ -14211,13 +14233,17 @@ async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
   mmFinishTickets.set(Number(n), ticket);
   ticket.then((result) => {
     if (result?.dropped) mmWarmStarted.delete(Number(n));
-    if (result?.dropped || result?.ok === false) releaseMmRebuild(n);
+    // A finished call that never reached swap, fallback, or an explicit clear
+    // must not leave the bar up. A fallback phase is not "rebuilding".
+    if (result?.dropped || result?.ok === false || pageStates.get(Number(n))?.mmPhase === "rebuilding") {
+      releaseMmRebuild(n);
+    }
   }, () => {
     releaseMmRebuild(n);
   });
   if (role === "current") {
     mmFocusPage = Number(n);
-    mmPageFlight.dropNeighborsOutside({ focus: mmFocusPage, radius: 2, epoch });
+    releaseDroppedMmPages(mmPageFlight.dropNeighborsOutside({ focus: mmFocusPage, radius: 2, epoch }));
     void warmMmNeighbors(n, epoch);
   }
   if (options.awaitFinish === true) await ticket;
@@ -14252,6 +14278,22 @@ async function warmMmNeighbors(page, epoch) {
 
 function releaseMmRebuild(n) {
   if (pageStates.get(Number(n))?.mmPhase === "rebuilding") noteMmPhase(n, "", "");
+}
+
+/**
+ * A page the library already counted, whose vision job is not queued and not
+ * running, is not waiting on multimodal work. Clear「正在重建本页」.
+ * A queued neighbor is promoted so the ±2 window cannot drop it.
+ */
+function settleIdleRebuild(page) {
+  if (pdfEngineMode() !== MM_PAGE_MODE || !mmPageConfigured(formulaViewerSettings)) return;
+  if (pageStates.get(Number(page))?.mmPhase !== "rebuilding") return;
+  if (isCurrentMmPage(getPageLayout(page))) {
+    noteMmPhase(page, "", "");
+    return;
+  }
+  const promoted = mmPageFlight.promote({ page: Number(page), epoch: layoutEpoch });
+  if (!promoted) noteMmPhase(page, "", "");
 }
 
 async function finishMmPage(n, quick, isStale, epoch, key) {
@@ -14543,7 +14585,7 @@ function clearLayoutFallbackStatus() {
  * page to start after the click. The viewer stays open for a retranslate.
  */
 function cancelQueuedVendorLayouts() {
-  mmPageFlight.dropEpoch(layoutEpoch);
+  releaseDroppedMmPages(mmPageFlight.dropEpoch(layoutEpoch));
   layoutEpoch += 1;
   try {
     layoutAbort.abort();
