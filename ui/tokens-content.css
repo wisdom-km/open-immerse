@@ -1,0 +1,40 @@
+/* Host-safe tokens for <all_urls> content scripts.
+   ui/tokens.css keeps :root { color-scheme: dark } for extension pages.
+   This file must not target :root, html, or body — those restyle the host page.
+   --oi-* values must match the :root block in ui/tokens.css. */
+.oi-fab,
+.oi-toast,
+.oi-selection-card,
+.oi-caption {
+  color-scheme: dark;
+  --oi-bg: #12151c;
+  --oi-bg-elevated: #181c26;
+  --oi-panel: #1e2430;
+  --oi-card: #232a38;
+  --oi-input: #171b24;
+  --oi-line: rgba(255, 255, 255, 0.10);
+  --oi-line-strong: rgba(255, 255, 255, 0.16);
+  --oi-text: #f2f4f8;
+  --oi-text-muted: #9aa3b5;
+  --oi-paper: #ffffff;
+  --oi-paper-ink: #1a1d24;
+  --oi-paper-muted: #4a5568;
+  --oi-mirror-ink: #1a1a1a;
+  --oi-mirror-caption: #4a4a4a;
+  --oi-mirror-placeholder: #4a4a4a;
+  --oi-mirror-placeholder-bg: #e5e5e5;
+  --oi-muted: var(--oi-text-muted);
+  --oi-accent: #6b8cff;
+  --oi-accent-hover: #7d9bff;
+  --oi-accent-subtle: color-mix(in srgb, var(--oi-accent) 18%, transparent);
+  --oi-danger: #e8a0a0;
+  --oi-warn: #e8c48a;
+  --oi-success: #8ecfad;
+  --oi-focus: var(--oi-accent);
+  --oi-radius-panel: 14px;
+  --oi-radius-control: 10px;
+  --oi-shadow-1: 0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 8px 28px rgba(0, 0, 0, 0.35);
+  --oi-fab-slot: 72px;
+  --oi-font: "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+}
