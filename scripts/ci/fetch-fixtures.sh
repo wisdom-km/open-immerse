@@ -13,11 +13,14 @@ ua="open-immerse-fixture-fetch/1.0 (+https://github.com/wisdom-km/open-immerse)"
 # Attention Is All You Need, arXiv 1706.03762v7, 15 pages.
 # Direct Preference Optimization, arXiv 2305.18290v3.
 # e-print URLs redirect to arxiv.org/src/<id>; the bytes are the versioned tarball.
+# Transformer-XL, arXiv 1901.02860v3 (updated 2019-06-02). mm-swap-flag opens the
+# absolute path below and asserts text-layer counts TXL-p1=9, TXL-p2=15.
 fixtures=(
   "tests/fixtures/Attention_Is_All_You_Need.pdf|https://arxiv.org/pdf/1706.03762v7|bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697"
   "tests/fixtures/Direct_Preference_Optimization_2305.18290.pdf|https://arxiv.org/pdf/2305.18290v3|92cb3a2b71362acda98a789b03d88688fd33cf5fcf13f81d2b1de30ee7d3b67a"
   "tests/fixtures/arxiv-src/1706.03762v1.tar.gz|https://arxiv.org/e-print/1706.03762v1|377b47ecf3cd8638f7214184cc445cb378b37b5f0ddb42981b1ad288b3a1c03b"
   "tests/fixtures/arxiv-src/1706.03762v7.tar.gz|https://arxiv.org/e-print/1706.03762v7|2e7a7d9ee2520d22eb23dae0cb148e167be02a30d6cb3f11b1c67723194339c6"
+  "/tmp/oi-flow-corpus/1901.02860/paper.pdf|https://arxiv.org/pdf/1901.02860v3|6aa192b22820267309e8e7c501c514a3a3055256d9c8691b106c7f53f9098671"
 )
 
 # tests/fixtures/DDPM_2006.11239.pdf is intentionally absent.
@@ -51,7 +54,11 @@ for row in "${fixtures[@]}"; do
     echo "fetch-fixtures: refused forbidden path $rel" >&2
     exit 1
   fi
-  dest="$root/$rel"
+  if [[ "$rel" == /* ]]; then
+    dest="$rel"
+  else
+    dest="$root/$rel"
+  fi
   mkdir -p "$(dirname "$dest")"
   item_started="$(now_ms)"
   if [[ -f "$dest" ]]; then
