@@ -2,366 +2,259 @@
 
 [中文](README.md) · **English**
 
-Open-source Chrome **bilingual webpage translation** extension (Manifest V3).
+An open-source Chrome extension: a paper PDF on the left, the translation on the right.
 
-Translate foreign-language webpages and plain-text documents into a side-by-side reading view. You bring the API keys; you pick the engine.
+[![version 0.3.0](https://img.shields.io/badge/version-0.3.0-2563eb)](https://github.com/wisdom-km/open-immerse/releases)
+[![license MIT](https://img.shields.io/badge/license-MIT-555555)](LICENSE)
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-1a73e8)](manifest.json)
 
-Repo: https://github.com/wisdom-km/open-immerse
+Current version **0.3.0** (walkthrough built from commit `a8a6efd`). Requires Chrome 114 or newer. Not affiliated with the commercial product “Immersive Translate” (沉浸式翻译).
 
-Current version **0.3.0**. V1 ships webpage bilingual first. The learning center and document translator work. **PDF reading is on by default.** The switch sits at the top of **Settings → PDF**. It is no longer a lab toggle. The target is text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Translations are not pasted into the left pane. YouTube / X captions, hover translate, and selection cards still exist in code; they are **off by default and hidden from the main UI**.
+Repository: <https://github.com/wisdom-km/open-immerse>
 
-Not affiliated with the commercial “Immersive Translate” product.
+The on-screen language is Simplified Chinese. Button names below are the labels in the UI, with an English gloss.
 
----
+API keys in the screenshots are placeholders.
 
-## What works
+![Opening a paper PDF: the original on the left, a paragraph translation starting on the right](docs/assets/readme/04-pdf-open-translate-hero.gif)
 
-| Module | Status |
+After a PDF opens, the left pane is the original and the right pane fills in a translation paragraph by paragraph. This clip is from the v0.3.0 walkthrough of arXiv [1706.03762](https://arxiv.org/abs/1706.03762), “Attention Is All You Need”. It covers about the first 30 seconds and stops as the first page starts to translate. With the default setting, later pages continue. MP4 of the same clip: [`04-pdf-open-translate-hero.mp4`](docs/assets/readme/04-pdf-open-translate-hero.mp4).
+
+## What it does
+
+Open Immerse (沉浸译) opens a paper in its own reader: pdf.js shows the original page on the left, and the translation sits on the right. Requests go to the model you configure. The key stays on the machine.
+
+A v0.3.0 install walkthrough passed the PDF path: install, engine setup, side-by-side reading, formulas, font size, figures, retranslate, notes, reopen, and the diagnostics export. Webpage bilingual translation inserts a translation under the original text.
+
+Reading order in this version is the order extracted from the PDF text layer. The browser extension does not reorder the page into a new layout.
+
+## PDF reading
+
+PDF reading is on by default. Open the toolbar popup and click **打开 PDF** (Open PDF). A tab that is already a PDF opens in the reader. Any other page opens the reader library. The reader can also open a local PDF.
+
+Opening a PDF starts a full-document translation. The switch is under **设置 → PDF 阅读** (Settings → PDF), labeled 「打开 PDF 时自动翻译全文」.
+
+### Side by side
+
+![Original PDF on the left, Chinese translation by paragraph on the right](docs/assets/readme/04a-pdf-side-by-side.png)
+
+The left pane scrolls the original. The right pane lists the translation in reading order, and the translation stays in that pane. The walkthrough paper is 15 pages, and opening it started a full translation.
+
+### Formulas
+
+By default, display formulas and inline formulas are cropped from the original PDF and placed in the translation. Equation numbers stay. Crops are painted at an 18 px reference size and do not follow the font-size slider.
+
+![Formulas in the translation are crops from the original PDF, with equation numbers kept](docs/assets/readme/04b-pdf-formula-crop-image.png)
+
+An arXiv paper can switch to source formulas. **用 arXiv 源码** (Use arXiv source) in the top bar replaces the crop with LaTeX from the paper source, rendered by the vendored KaTeX into selectable math. The control does not download source until it is clicked. In the walkthrough the status read 「公式 · arXiv 源码 v7」, and that paper rendered 111 KaTeX formulas.
+
+![The same paper after switching to arXiv source, with formulas rendered by KaTeX](docs/assets/readme/04c-pdf-formula-katex-arxiv-source.png)
+
+Source mode is not remembered on its own. Check **以后自动** (Automatically from now on) beside the control to keep it. Otherwise the next open starts from crops again.
+
+### Font size
+
+**Aa** in the top bar opens a font-size slider. The steps are 14, 15, 16, 17, 18, 19, 20, 22, 24, 26, 28, 32, 36, and 40 px. The default is 16. Dragging updates the right-pane translation immediately, and the slider can return to 16. When the column is too narrow for the minimum line length, the cap is below 40. KaTeX uses `1.1em` and follows the right-pane size. Original-page crops do not.
+
+Drag the slider to enlarge the translation.
+
+![Font-size slider in the Aa panel](docs/assets/readme/04d-pdf-font-slider.png)
+
+![The translation growing as the font slider moves](docs/assets/readme/04-pdf-font-slider.gif)
+
+MP4 of the same action: [`04-pdf-font-slider.mp4`](docs/assets/readme/04-pdf-font-slider.mp4).
+
+### Figures
+
+Figures in the translation appear as cards. Opening a card shows a larger image and the original page number.
+
+![A figure card in the translation, labeled with the original page](docs/assets/readme/04e-pdf-figure-card.png)
+
+### Notes
+
+Select a sentence in the translation and click **笔记** (Note) on the selection toolbar. The note is stored in the notes column on the right. Notes live in the extension’s IndexedDB database `oi-annotations`, separate from the extension folder.
+
+![Selection toolbar after selecting translated text](docs/assets/readme/05a-notes-select-toolbar.png)
+
+![Editing a note in the notes column](docs/assets/readme/05b-notes-editing.png)
+
+The **⋯** menu in the notes column includes **导出 Markdown** (Export Markdown). The walkthrough wrote `1706.03762-笔记.md`, with the quoted source and the note body. Sample file: [`05-notes-export-sample.md`](docs/assets/readme/05-notes-export-sample.md). When the document has no title, the Markdown heading is 「未命名论文」. See “Known limitations”.
+
+![Export menu in the notes column](docs/assets/readme/05c-notes-export-menu.png)
+
+![The exported Markdown note](docs/assets/readme/05d-notes-exported.png)
+
+![From a text selection to a saved note](docs/assets/readme/05-notes-select-to-note-hero.gif)
+
+MP4 of the same action: [`05-notes-select-to-note-hero.mp4`](docs/assets/readme/05-notes-select-to-note-hero.mp4).
+
+### Opening the same PDF again
+
+Close the reader and open the same PDF again. The translation is read back from the local library. Restoring it does not send another translation request. Notes and highlights remain.
+
+One reopen of this paper in the v0.3.0 walkthrough read 145 translated segments back in about 1.3 seconds, kept the one existing note, and sent no new translation request.
+
+![The same PDF opened again, with the translation and the note still there](docs/assets/readme/06-reopen-cache-notes.png)
+
+![Closing and reopening restores the translation from the local cache](docs/assets/readme/06-reopen-restore.gif)
+
+MP4 of the same action: [`06-reopen-restore.mp4`](docs/assets/readme/06-reopen-restore.mp4).
+
+### Retranslate
+
+The menu next to **重译本页** (Retranslate this page) has three items:
+
+| Item | Effect |
 | --- | --- |
-| Page FAB | Glass capsule, bottom-right: Translate / Stop, Original, ‹ collapse. Draggable; position is saved. **Stop** appears only while a job (including polish) is running. Stop aborts inflight requests and **keeps inserted translations**. **Original** is what clears them. |
-| Webpage | Default scope is **article body** (`main` / `article` column — no sidebar or nav). Switch to **full page** if needed (includes short sidebar/TOC labels). The primary H1 is translated when possible: source above, gloss below; heading gloss font-size tracks the body translation (not the oversized H1); the optical gap between heading source and gloss is tightened in article scope. Top nav chains, breadcrumbs, cookie bars, and footer link piles are still skipped. |
-| Per-page quota | `all` or `title + lead` (H1 + first body block; the lead is capped at about 3 lines / 220 characters). **Batch size** only controls how many segments go in one API request, not how many segments the page may translate. |
-| Learning center | Save words / phrases / sentences. All items or due-today review (simplified SM-2). Export Markdown / PDF / Word. |
-| Documents | Read TXT / MD / HTML, translate by segment, edit the target, retry failures, export HTML. |
-| Faithful-then-polish | **On by default** (**Settings → 功能**, not Advanced). LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only; a custom system prompt skips the second pass. |
-| PDF reader | **On by default** (Settings → PDF, switch at the top of the page; you can turn it off). Installs that stored `features.pdf` as `false` are turned on once, and `migrationNotes.pdfFlippedAt` is written. The notice appears only when that time is set: under the switch on the PDF settings page, and at the top of the reader the first time a PDF opens after the upgrade. The reader sentence links to Settings › PDF. Clicking 知道了, turning PDF off, or seeing it once in either place writes `oi.notice.pdfDefaultOn` in local storage, and neither place shows it again. New installs and installs that were already on write no time and show no notice. Turning it off after settings version 9 stays off. Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Notes (#122): side slot or three columns, highlights, export and import. arXiv source (#124): off by default, download only after a click. Formulas, figures, and tables match the opened PDF. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the LLM API already configured in the extension. **Webpage bilingual remains the primary product.** |
-| Shortcut | `Alt+T`: start translation / restore original (restore clears translations). |
+| 重译本页 | Replace the current page |
+| 重译全文 | Translate again from page 1 |
+| 清空本文档译文… | Delete this document’s translation and formula cache. Notes stay. Translating again is required after a clear |
 
-Suggested regression page (article-scope scan and title handling were tuned on posts like this):  
-https://claude.com/blog/what-1-000-small-business-owners-taught-us-about-ai
+![Retranslate menu: this page, the whole document, and clear this document](docs/assets/readme/04f-pdf-retranslate-menu.png)
 
----
+Retranslating one page or the whole document leaves notes in place.
 
-## Screenshots
+## Webpage bilingual view
 
-Popup and Settings use **Soft Graphite** chrome: stacked graphite layers, quieter cards, accent `#6b8cff`.
+Webpage translation is a secondary feature. On a page, click **翻译此页** (Translate this page) in the popup. A translation appears under each original block that is included.
 
-**Webpage bilingual + FAB**
+The default quota is **仅标题+开头** (`translateLimit: title_lead`): the heading, plus the first body paragraph. That paragraph is also capped at about 3 lines or 220 characters. See `lib/translate-limit.js`. Under Settings → 网页 (Web), change 「本次翻译」 to **全部** (All) to continue through the rest of the page. Batch size only decides how many segments go into one request.
 
-![Bilingual webpage and FAB](docs/screenshots/01-bilingual-page.png)
+The walkthrough switched the quota to All in order to capture a full page. A fresh install that shows a translation only on the title and the first paragraph is following this default.
 
-Chinese gloss under the original paragraphs; glass FAB at the bottom right.
-
-![FAB capsule](docs/screenshots/02-fab.png)
-
-Translate / Original / collapse. Draggable; position is saved.
-
-**Popup**
-
-![Toolbar popup](docs/screenshots/05-popup.png)
-
-Intent card: primary **翻译此页** (becomes **停止** while a job runs), secondary **打开 PDF**, **恢复原文**, per-site auto, scope, and languages. Quota lives under **更多**. **No progress bar.** Footer is **设置 · 学习 · 文档**. PDF reading is on by default, so the popup always shows **打开 PDF** under **翻译此页**: a PDF tab opens that file in the reader, and any other page opens the reader library. Turning **PDF 阅读** off hides that button.
-
-**Settings four groups: 引擎 / 阅读 / 功能 / 高级**
-
-Under the title in the left rail: muted **学习中心 · 文档翻译** (brand-links, not an accent CTA), then the four tabs. Decided: eight top-level pages; page names are in [`docs/settings-spec.md`](docs/settings-spec.md) (`#translate`, `#mm`, `#web`, `#pdf`, `#notes`, `#labs`, `#data`, `#about`). 多模态 · OCR is a top-level page (`#mm`, second item in the 常规 group), not a section inside another page. Ask AI is no longer its own page (2026-10-13 12:19–12:23, spec approved by Wisdom at 13:01, SET-01…SET-34). Landed in #137. The four groups and the screenshots below are the UI from before that redesign. The PDF switch is at the top of Settings → PDF and is on by default.
-
-![Options: default engine and test connection](docs/screenshots/03-options-engine.png)
-
-**引擎**: current engine key, Base URL, model, and test connection (API fields redacted in the shot).
-
-![Options: reading](docs/screenshots/04-options-reading.png)
-
-**阅读**: font scale plus the two body gaps only. No translation-style dropdown or preview table.
-
-![Options: left rail](docs/screenshots/07-options-nav.png)
-
-Left rail: muted 学习中心 · 文档翻译 + 引擎 / 阅读 / 功能 / 高级.
-
-![Options: Advanced](docs/screenshots/08-options-advanced.png)
-
-**功能与实验室**: hover / selection / captions are off by default. **PDF 阅读** is not on this page. Its switch is at the top of **Settings → PDF** and is on by default. **先信后润** lives under **功能** (on by default).
-
-**PDF reading**
-
-![PDF Markdown reading-flow](docs/screenshots/06-pdf-readout.png)
-
-On by default. The switch is at the top of **Settings → PDF**.
-
----
+![Chinese translation inserted under the original text on a webpage](docs/assets/readme/03-web-bilingual.png)
 
 ## Install
 
-Chrome 114+ (or another Chromium browser with MV3 module service workers).
+Download the v0.3.0 zip from [GitHub Releases](https://github.com/wisdom-km/open-immerse/releases), unzip it, and load the folder. Chrome 114+ is required (`minimum_chrome_version` is `114`). The v0.3.0 install walkthrough used a Chromium build with Manifest V3, loaded the same way.
 
-```bash
-git clone https://github.com/wisdom-km/open-immerse.git
-```
+1. Open `chrome://extensions`.
+2. Turn on Developer mode.
+3. Click Load unpacked and choose the unzipped folder that contains `manifest.json`.
+4. After 「沉浸译 0.3.0」 is enabled, click the toolbar icon. The popup opens.
 
-1. Open `chrome://extensions`
-2. Turn on **Developer mode**
-3. **Load unpacked** and pick the repo root (the folder that contains `manifest.json`)
+![Extensions page with Developer mode, ready to load the unpacked folder](docs/assets/readme/01a-install-extensions-page.png)
 
-Already installed: `git pull`, then click **Reload** on the extensions page. Do **not** Remove and re-add — keys live in `chrome.storage.local`, and removing the extension clears them (the settings redesign #137 moved keys off sync, 2026-10-13 12:19–12:23). Export does not include keys, and importing settings does not write keys (2026-10-13 17:29), so export will not preserve them.
+![Toolbar popup on first open](docs/assets/readme/01b-popup-first-screen.png)
 
-**Zero build.** Edit JS / CSS / HTML and reload. There is no bundle step.
+To load a git checkout, point Load unpacked at the repository root. The extension has no build step.
 
----
+## Configure a translation model
 
-## Usage
+Open **设置** (Settings) from the popup and go to **翻译** (Translation). Pick an engine, fill in the key, base URL, and model that engine asks for, then click **测试连接** (Test connection). Success reads 「连接成功 · Hello → …」. The v0.3.0 walkthrough used OpenAI / compatible with the model name `glm-5.3-flash`, and that line was 「连接成功 · Hello → 你好」. `glm-5.3-flash` is the name entered for that run. Built-in defaults are in the table below.
 
-The default UI language is Simplified Chinese. Button labels below are the ones on screen.
+Leaving a field or pressing Enter saves. Keys are stored in `chrome.storage.local` under `oiSecrets`. They are not written to `chrome.storage.sync`. The settings row 「在我的浏览器之间同步密钥」 is present and cannot be turned on in this version.
 
-### 1. Configure an engine
+If no translation engine is selected and **多模态 · OCR** already has a usable model, translation borrows that model. The key still stays on the machine. If neither is configured, the UI asks you to open Settings. MyMemory can be selected by hand. It is not the default engine, and it is not the automatic fallback when nothing is configured.
 
-Toolbar icon → **设置** (Settings), or right-click the icon → Options.
+![Translation engine on the settings page. The key field is a placeholder](docs/assets/readme/02-settings-engine-glm-5.3-flash.png)
 
-1. Pick the default engine
-2. Fill API key / base URL / model (depends on the engine)
-3. Click **测试连接** (Test connection)
-4. Leaving the field or pressing Enter saves (no Save button since #137)
+The service worker sends every translation request. Content scripts do not call translation APIs themselves.
 
-When no translation engine is configured, translation borrows the configured multimodal model (#176). If neither is configured, the UI asks you to open Settings. MyMemory can still be chosen by hand. It is not the default, and it is not the fallback.
-
-Decided: settings save immediately and the Save button goes away; keys commit when the field loses focus or on Enter. A whitespace-only input does not overwrite a stored key unless the field was cleared with × or the previous value was deleted to empty. Clearing uses the trailing ×: no reveal eye, no undo. Blur or Enter autosaves, and × writes empty immediately (SET-05, SET-06, SET-07, 2026-10-27) (2026-10-13 12:19–12:23, landed in #137). All keys live only in `chrome.storage.local` and do not enter sync. Translation keys and PDF cloud keys have moved from sync to local. On 2026-10-13 17:29 export was split into a library file and a settings file; neither contains any API key. Settings export omits keys, and importing settings does not write keys. See `docs/settings-spec.md` §2. Whether keys follow the account stays the user's choice, using the interface reserved on 2026-10-13 11:57. That choice runs with F11 (F10 folded into F11 on 2026-10-18). Notes-panel preferences (panel width, filter, "don't show again", and the like) move from `localStorage` into `chrome.storage.local` with the other settings (2026-10-13, decided 11:55, confirmed 12:00). Existing values migrate automatically and must not be dropped. Merged in #130 (`4e0a705`). The keys are `reader.panelWidth`, `reader.notesWidth`, `reader.notesPaneSide`, and `reader.notesPersistHintDismissed` (one key; the value is a map of docHash to true). Ask AI is not a separate settings page and has no model of its own.
-
-### 2. Translate a page
-
-Open a foreign-language page and click **翻译** on the FAB.
-
-| Action | Effect |
-| --- | --- |
-| 翻译 (Translate) | Scan nodes for the current scope and quota; send batches to the background |
-| 停止 (Stop) | Abort unfinished requests; keep translations already inserted |
-| 原文 (Original) / popup **恢复原文** | Remove every `.oi-translation` on the page; FAB returns to Translate |
-| Popup **翻译此页** | Start; becomes **停止** while translating (abort only — keeps glosses) |
-| `Alt+T` | Start; press again to restore original |
-
-The popup can also change page scope, source/target language, and per-site auto-translate; per-page quota is under **更多**. Footer links are **设置 · 学习 · 文档**. PDF reading is on by default, so the popup always shows the secondary **打开 PDF** button under **翻译此页**: a PDF tab opens that file in the reader, and any other page opens the reader library. Turn the switch off under **Settings → PDF** to hide that button.
-
-Font scale and body spacing live under **Settings → 阅读**. That group is font scale plus two gaps only — no translation-style dropdown or preview table.
-
-Spacing (Settings → 阅读, number inputs; **body paragraphs only — not headings or sidebars**):
-
-- **正文译文间距** (`bodyGlossGap`): gap between each source block and its gloss underneath; typically ~0.10–0.70 (em-ish)
-- **译文段间距** (`bodyGlossStackGap`): extra space between consecutive body gloss blocks; range **0–2.5**. Values 0 / 1 / 2 are visibly different
-
-Under **Settings → 功能**, **先信后润** (`twoStepPolish`, **on by default**): LLMs do a faithful draft, then a polish pass — better quality, more tokens. You can turn it off. LLM engines only.
-
-### 3. Save and review
-
-- Select text → right-click **收藏** (Save). The selection is translated, then stored.
-- Double-click an inserted translation to save it.
-- Learning center: full list, or due-today review with three grades (Forgot / Fuzzy / Remembered).
-
-Items live in `chrome.storage.local` (`oiLearning`), separate from synced settings.
-
-### 4. Documents
-
-Popup → **文档**, or **文档翻译** under the title in the Settings left rail. Paste or load TXT / MD / HTML, translate by segment, edit the target on the right, export `open-immerse-bilingual.html`.
-
-No layout-preserving Office or scanned files here. Convert to plain text first. Scans wait on the lab OCR path, or convert to Markdown yourself.
-
-### 5. PDF reading (on by default)
-
-**A default entry.** New installs have `features.pdf` on, with no `pdfFlippedAt` and no notice. The switch is at the top of **Settings → PDF**, labeled 「PDF 阅读」. Turning it off hides the popup’s always-visible **打开 PDF** button. Only an upgrade that finds a stored `false` turns it on once and shows the notice under that switch and at the top of the reader.
-
-Target: text-layer body text plus content-accurate original-page display (crops by default). The right pane stays a **Markdown reading-flow** in reading order. Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. The spec is `pdf/PDF-MD-READOUT.md`. The reader runtime switches by the phases in `pdf/high-precision/EXECUTION.md`.
-
-- Notes (#122): side slot or three columns, highlights, export and import
-- arXiv source (#124): off by default; download only after the user clicks
-- Left pane: pdf.js continuous scroll; zoom applies only to the original page
-- Top bar: translated n / t pages → Open PDF → Translate → Retranslate page → Stop (shown only while a job is running) → Original → Previous → page number → Next → Aa. Aa font size is 14–40 and is capped by the column width (#116). Original-page formula crops use a fixed 18px reference and do not follow Aa; arXiv-source KaTeX follows Aa. Export MD / PDF lives in the **···** menu, not on the bar. Opening starts a full-document translation. Settings → PDF has **打开 PDF 时自动翻译全文**, on by default. Original only switches the view; it does not abort the job or clear the cache.
-- Reopen checks the library against the live text-layer blocks. A page is done only when every block has its own settled translation. Fewer pairs than live blocks, or a long pair echoed from the source, queues that page and must not light **全文已译**. The abstract and its footnote are stored separately. A short unchanged token (≤3 words, or no letters) still counts as already in the target language.
-- Full document walks pages with `OI_TRANSLATE_BATCH`. In-page progress is `正在翻译 · k / m 段`. Jobs can be stopped. After stop or completion the primary button returns to **翻译**; Chinese already produced stays
-- **Original only switches the view**, and does not abort translation or clear the cache
-- Right pane is a **Markdown reading-flow**: extract title + body in reading order, translate, scroll as a document. Translations appear only in the right pane — they are **not** pasted into the left pane
-- Separate right-pane zoom chip (0.5–5, step 0.25); not in the top bar
-- Drag the split to resize columns
-- Content accuracy comes first; layout comes second and should be as good as possible without changing content. Translations match the extracted source. Formulas, figures, and tables match the opened PDF. The default is an original-page crop (pageRaster). Any other method must pass the same check
-- The Doubao formula presets default to `https://ark.cn-beijing.volces.com/api/plan/v3` (glm-5.3-flash, and deepseek-v4.1-flash). An empty Base URL uses that address. A saved Base URL is left as written. A pay-as-you-go key can be pointed at `https://ark.cn-beijing.volces.com/api/v3` by hand
-- Body text of a text-layer PDF uses the original text-layer sentences. Clicking the right pane highlights the matching region in the left pane
-- OCR confusions of `i` and `n` are not shown and are not sent to translation
-- Test-time region detection uses a local Zhipu GLM-OCR. Production uses an OCR API plus the LLM API already configured in the extension
-- The extension does not inject into Chrome’s built-in PDF viewer. When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong; figures and tables stay original-page crops; formulas follow the fallback chain and show the original-page crop when it cannot be decided
-- Webpage bilingual remains the primary product and the regression target
-
----
-
-## Engines
-
-The **service worker** owns every outbound request. Content scripts do not call translation APIs.
-
-| id | Name | Kind | Defaults |
+| id | Name | Kind | Default |
 | --- | --- | --- | --- |
-| `mymemory` | MyMemory (free trial) | MT | Manual choice only; not the default and not the fallback. Optional email for a higher quota |
-| `microsoft` | Microsoft Translator | MT | Region default `eastasia` |
-| `deepl` | DeepL | MT | Free / Pro host switch |
-| `google` | Google Cloud Translation | MT | Cloud Translation v2 |
-| `openai` | OpenAI / compatible | LLM | `https://api.openai.com/v1` · `gpt-4o-mini` |
-| `kimi` | Kimi / Moonshot | LLM | CN `api.moonshot.cn` / global `api.moonshot.ai` · `kimi-k2.5` |
-| `minimax` | MiniMax | LLM | CN `api.minimax.cn` / global `api.minimax.io` · `MiniMax-M2.5` |
-| `grok` | xAI Grok | LLM | `https://api.x.ai/v1` · `grok-4-fast` |
-| `openrouter` | OpenRouter | LLM | Optional HTTP-Referer / X-Title |
-| `gemini` | Google Gemini | LLM | `gemini-2.0-flash` |
-| `claude` | Anthropic Claude | LLM | `claude-3-5-haiku-latest` |
-| `azure` | Azure OpenAI | LLM | endpoint + deployment + apiVersion |
-| `custom` | Custom HTTP | any | URL / method / headers JSON / body template / responsePath |
+| `mymemory` | MyMemory (free trial) | Machine translation | No key. Optional email. Select it by hand |
+| `microsoft` | Microsoft Translator | Machine translation | Region `eastasia`, endpoint `https://api.cognitive.microsofttranslator.com` |
+| `deepl` | DeepL | Machine translation | Free uses `api-free.deepl.com`; Pro uses `api.deepl.com` |
+| `google` | Google Cloud Translation | Machine translation | Cloud Translation v2 |
+| `openai` | OpenAI / compatible | LLM | `https://api.openai.com/v1`, model `gpt-4o-mini` |
+| `kimi` | Kimi / Moonshot | LLM | Base URL `https://api.moonshot.cn/v1`, model `kimi-k2.5`. A region field is also shown. A filled Base URL is the address that is called. With an empty Base URL, the international region uses `https://api.moonshot.ai/v1` |
+| `minimax` | MiniMax | LLM | Base URL `https://api.minimax.cn/v1`, model `MiniMax-M2.5`. A region field is also shown. A filled Base URL is the address that is called. With an empty Base URL, the international region uses `https://api.minimax.io/v1` |
+| `grok` | xAI Grok | LLM | `https://api.x.ai/v1`, model `grok-4-fast` |
+| `openrouter` | OpenRouter | LLM | `https://openrouter.ai/api/v1`, model `openrouter/free`. Optional HTTP-Referer and X-Title |
+| `gemini` | Google Gemini | LLM | Model `gemini-2.0-flash` |
+| `claude` | Anthropic Claude | LLM | Model `claude-3-5-haiku-latest` |
+| `azure` | Azure OpenAI | LLM | Endpoint, deployment, API version (default `2024-10-21`) |
+| `custom` | Custom HTTP | Custom | URL, method, headers JSON, body template, response path |
 
-**Ollama and other local OpenAI-compatible servers:** there is no separate vendor row. Choose `openai`, set Base URL to something like `http://127.0.0.1:11434/v1`, and put the local model name in Model. Or assemble the request with `custom`.
+There is no separate engine row for a local OpenAI-compatible server. Choose `openai`, set Base URL to that server, for example `http://127.0.0.1:11434/v1`, and put the local model name in Model. `custom` can assemble the request instead.
 
-Language list comes from `lib/languages.js` (auto-detect, Simplified/Traditional Chinese, EN/JA/KO, and common European and Asian languages). Machine-translation engines remap those codes to each vendor’s API.
+The language list is `lib/languages.js`: auto-detect, Simplified and Traditional Chinese, English, Japanese, Korean, and common European and Asian languages. Machine-translation engines map those codes to each vendor’s API. The default source language is auto-detect. The default target is `zh-CN`.
 
-### LLM quality
+LLM engines default to **先信后润** (faithful draft, then polish) under Settings → 功能. The second pass uses more tokens and can be turned off. A custom system prompt skips that pass. **深度思考** (deep thinking) is off by default. `thinking` / `reasoning_effort` are attached only when the base URL or model looks like Volcengine Ark or DeepSeek.
 
-Every LLM adapter shares one Skill: `lib/translate-skill.js`.
+## Update
 
-- **Settings → 功能** **先信后润** (`twoStepPolish`, **on by default**): faithful draft first. The page inserts the draft and toasts “润色中”, then replaces it with the polished text. Better quality, more tokens. You can turn it off. LLM engines only. If polish fails, the draft stays and a short “润色失败” toast appears
-- This is ordinary language conversion (e.g. English → modern Chinese). **Not classical Chinese**
-- A non-empty custom system prompt skips the second pass
-- Chinese targets get a glossary hint, then two safety nets after parse: `guardZhBusinessSense` (so “business owners” does not fuse into 主教 / “bishop”) and `guardZhTitleCalques` (strips hollow title wrappers)
+If the extension was installed with Load unpacked, keep the same folder path.
 
-### Deep thinking
+1. Download the new zip from [Releases](https://github.com/wisdom-km/open-immerse/releases) and unzip it.
+2. Replace the files in the folder you originally loaded.
+3. Open `chrome://extensions` and click **重新加载** (Reload) on the 沉浸译 card.
 
-Settings → Advanced **深度思考** (`deepThink`, off by default).
+An unpacked extension’s ID is derived from the folder’s absolute path. When that path stays the same, reload keeps settings, keys, and notes. Settings are in `chrome.storage`. Notes and PDF translations are in IndexedDB for that extension ID. Loading a different folder creates another extension ID, and the previous local data stays on the old ID. Removing the extension from the list also clears local data for that ID.
 
-`thinking` / `reasoning_effort` are attached **only** when the base URL or model looks like **Ark (Volcengine) or DeepSeek**:
+For a git checkout, pull the update and click Reload on the extensions page.
 
-- Off: `thinking.type=disabled` plus `reasoning_effort=minimal`
-- On: `thinking.type=enabled`
+## Privacy and permissions
 
-Other engines omit those fields so they do not 400. Webpage, PDF, and documents share both flags.
+Open Immerse does not run its own translation server. The background sends each request to the engine URL you entered. Diagnostic records stay on the machine until you decide to share an export.
 
----
+Permissions in `manifest.json`:
 
-## Permissions and data
+| Permission | Why it is there |
+| --- | --- |
+| `storage` | Non-secret settings go to `chrome.storage.sync`. API keys live in `chrome.storage.local` under `oiSecrets`. Learning items are in local storage as well. |
+| `activeTab` | Acting on the current tab from the toolbar icon or the shortcut. The popup and `Alt+T` message that tab through `chrome.tabs`. |
+| `scripting` | The popup calls `chrome.scripting.executeScript` to tell whether the current tab is a PDF. |
+| `contextMenus` | The selection context-menu item 「收藏」 (Save), which writes to the learning center. |
+| `alarms` | Declared in the manifest. The current code does not call `chrome.alarms`. |
+| `nativeMessaging` | When the PDF layout mode is `local-ocr`, the service worker connects to the native host `com.open_immerse.glmocr` and sends `{ action: "ensure" }` to check that local GLM-OCR is up. The default reader uses the text layer and does not open this connection. If that host is not installed, the connection fails and the reader stays on the text layer. |
+| `host_permissions`: `<all_urls>` | Content scripts insert translations on pages you open, and the background calls whatever translation API you configured. PDF reader files are also exposed as `web_accessible_resources` for `<all_urls>`. |
 
-`manifest.json` requests:
+Content scripts inject at `document_idle` on `<all_urls>`: `lib/fab.js`, `lib/bilingual-layout.js`, `content/content.js`, `content/toolbar.js`, `content/subtitles.js`, plus `ui/tokens.css` and `content/content.css`.
 
-- `storage` — settings (`sync`) + learning items (`local`). Keys will live only in local (not implemented yet)
-- `activeTab` / `scripting` — start/stop on the current tab
-- `contextMenus` — right-click save
-- `alarms` — reserved
-- `host_permissions: <all_urls>` — inject content scripts on any page; the background calls vendor APIs
+The shortcut `Alt+T` starts translation on a web page. Pressing it again restores the original.
 
-Content scripts inject at `document_idle`: `lib/fab.js`, `lib/bilingual-layout.js`, `content/content.js`, `content/toolbar.js`, `content/subtitles.js`.
+## Diagnostics
 
-Translations are cached in service-worker memory, cap 2000 entries, gone on restart. The cache key includes engine, languages, two-step vs single, and think vs fast so those modes do not mix.
+When something goes wrong: Settings → **关于** (About) → **导出诊断包** (Export diagnostics).
 
----
+The file is JSON, named like `open-immerse-diagnostics-0.3.0-*.json`. It contains up to 7 days of runtime records, error reasons, the version, and browser information, plus a settings summary with no keys. API keys, tokens inside URLs, and paper body text are removed before export. The extension does not upload the file.
 
-## Layout
+![Export diagnostics on the About page](docs/assets/readme/07-about-diagnostics.png)
 
-```
-open-immerse/
-├── manifest.json              # MV3, version 0.3.0
-├── background/
-│   ├── service-worker.js
-│   ├── arxiv-source.js        # arXiv source download and cache (#124)
-│   └── formula-cache.js       # formula cache; static SW import (AX-23, 2026-10-13 10:36)
-├── content/                   # DOM scan, insert translations, subtitle stubs
-├── popup/
-├── options/
-├── learning/
-├── documents/
-├── pdf/                       # in-extension viewer + design notes
-│   ├── viewer.html|js|css
-│   └── vendor/                # pdf.js 4.10.38 · KaTeX 0.18.7
-├── lib/
-│   ├── providers.js           # all engine adapters (HTTP via lib/net)
-│   ├── net/fetch.js           # one outbound HTTP entry
-│   ├── platform/              # extension / desktop adapters; net swaps transport
-│   ├── translate-skill.js     # shared Skill / two-step prompts
-│   ├── storage.js             # defaults + migration (settingsVersion = 9)
-│   ├── page-scan.js           # node collection (keep in sync with content.js)
-│   ├── site-presets.js        # site presets (claude.com today)
-│   ├── bilingual-layout.js
-│   ├── pdf-readout.js         # PDF right-pane Markdown reading-flow (product path)
-│   ├── pdf-mirror.js          # extract helpers; bbox mirror is not the product path
-│   ├── pdf-viewer.js
-│   ├── pdf-latex.js           # recover LaTeX from the text layer
-│   ├── notes-*.js             # note store, anchors, panel (#122)
-│   ├── formula-*.js           # formula fallback, KaTeX, cache (F3)
-│   ├── arxiv-*.js             # arXiv id, unpack, align (#124)
-│   ├── learning.js
-│   ├── export.js              # MD / simple PDF / docx
-│   ├── translate-limit.js     # title + lead quota
-│   └── features.js
-├── docs/screenshots/          # README screenshots
-├── ui/tokens.css
-├── tests/*.test.mjs
-├── _locales/zh_CN|en
-├── README.md                  # Chinese
-├── README.en.md               # this file
-└── CONTRIBUTING.md
-```
+The same page can clear the local diagnostic log. The log is `diag.events` in `chrome.storage.local`, kept for 7 days, with a 2 MB cap.
 
-Data flow:
+## Known limitations
 
-```
-page / PDF / document
-    → chrome.runtime.sendMessage({ type: "OI_TRANSLATE_BATCH" })
-        → service worker: cache hit or providers[id].translate()
-            → (optional) OI_TRANSLATE_PROGRESS phase=draft
-        ← translations[]
-    → insert .oi-translation or PDF readout blocks
-```
+These come from the v0.3.0 install walkthrough. This version does not change the code for them.
 
-Content scripts do **not** `fetch` translation APIs. Provider calls go through `lib/net/fetch.js`. Adding an engine means `lib/providers.js` plus `DEFAULT_SETTINGS.providers`.
+1. **Webpages default to the title and the first paragraph.** That is the current `translateLimit: title_lead` behavior. Set 「本次翻译」 to 「全部」 for the rest of the page.
+2. **arXiv source and the selection toolbar.** After switching to arXiv source, selecting translated text in that same open may not show the selection toolbar. A refresh brings it back. The walkthrough reproduced this once, and the cause is not identified. Source mode itself is not remembered unless **以后自动** is checked.
+3. **Note Markdown title.** `lib/notes-io.js` uses 「未命名论文」 when the document has no title. The export does not fill in the paper title on its own.
+4. **Length of the opening clip.** `04-pdf-open-translate-hero` covers about the first 30 seconds after open. Full-document translation continues past what the clip shows.
 
----
+Hover translate, selection translate, YouTube captions, and X captions exist in the code. They are off by default in `features.js` and do not appear in the main UI.
+
+The learning center stores words and sentences for review. The documents page translates TXT, MD, and HTML by segment. Both are linked at the bottom of the popup and under Settings → About.
+
+## Roadmap
+
+The v2 desktop app and the optional layout mode are written up in the docs. They are not in this version.
+
+- The desktop app is an Electron app for Windows and macOS. Scope: [`docs/desktop-plan.md`](docs/desktop-plan.md). The extension stays zero-build.
+- Layout analysis runs on the desktop app. The default tier matches this extension and follows text-layer order. **智能版式** (smart layout) runs local PP-DocLayoutV2 only after the user turns it on. The browser extension does not load that layout model. See section 11 of [`docs/architecture-redesign.md`](docs/architecture-redesign.md).
 
 ## Develop
 
+The extension is zero-build. After editing JS, CSS, or HTML, click Reload on `chrome://extensions`.
+
+Node.js 20 or newer (see `package.json`). Install dependencies, then run the tests:
+
 ```bash
-# Pure-function tests (Node 18+, no package dependencies)
+npm ci
 node --test tests/*.test.mjs
 ```
 
-Conventions: [CONTRIBUTING.md](CONTRIBUTING.md) (Chinese). Short version:
-
-- One intent per PR. Do not commit keys, `.env`, or zip artifacts
-- `content/` owns the DOM. Network and cache stay in `background/`
-- Popup “翻译此页” follows this tab’s `OI_PING.inflight` (`html.oi-active`). Do not use the global `enabled` flag as page state. Stop uses `OI_STOP`/`abort()`; “恢复原文” uses `OI_RESTORE`
-- The PDF reader has no current-page / full-document scope switch. Do not add one back, and do not mix that with webpage scan rules.
-- Webpage scan: `article` takes the main column only; `page` also takes readable sidebar blocks and short TOC/nav labels, and uses a heuristic for an article H1 in the header. Do not ban every `closest('header')`
-
-### Add an engine
-
-1. Add `{ id, name, kind, fields, translate }` to `providers`
-2. `translate(texts, ctx)` must return a `string[]` the same length as the input
-3. Read secrets only from `ctx.settings`
-4. LLMs go through `resolveTranslatorPrompt` + `translateWithSkill`; the model comes from `ctx.settings.model`
-5. Add a default block in `DEFAULT_SETTINGS.providers` and a row in both READMEs
-
----
-
-## Status and limits (0.3)
-
-Ready for daily use: webpage article bilingual, per-site auto rules, learning review, plain-text documents.
-
-Not built, not guaranteed, or still experimental:
-
-| Item | Notes |
-| --- | --- |
-| **PDF reader (on by default)** | `features.pdf` defaults to `true`. The switch is at the top of Settings → PDF. Installs that stored `false` are turned on once and `migrationNotes.pdfFlippedAt` is written. The notice sits under that switch and at the top of the reader (the reader sentence links to Settings › PDF); seeing it once, clicking 知道了, or turning PDF off writes `oi.notice.pdfDefaultOn` and it does not return. Installs that were already on, and new installs, write no time. Turning it off after settings version 9 stays off. Target: text-layer body text plus content-accurate original-page display (crops by default). Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Body text of a text-layer PDF stays the original text-layer sentences. Translations appear only in the right pane. Test-time region detection uses a local Zhipu GLM-OCR; production uses an OCR API plus the configured LLM API. Webpage bilingual remains the primary product |
-| Sidebar en/zh pairing | Shelved; product focus is body/main-text bilingual |
-| Chrome Web Store | Unpacked load only |
-| OCR | When the text layer is untrusted, body text may come from recognition and must be marked as possibly wrong. Figures and tables stay original-page crops; formulas follow the fallback chain and show the original-page crop when it cannot be decided. An `i` read as `n`, or an `n` read as `i`, is not shown |
-| DOCX / complex layouts | Documents page accepts plain-text-like files only |
-| Hover / selection / captions | `features.js` `group: "later"`, off by default |
-| Dedicated Ollama row | Use the OpenAI-compatible channel |
-| Persistent translation cache | Service-worker memory only |
-| Isolated secrets | Decided: every key lives only in `chrome.storage.local`; export splits into a library file and a settings file, and neither contains any API key (2026-10-13 17:29; see `docs/settings-spec.md` §2). Translation keys and PDF cloud keys moved off sync in the settings redesign (#137). Whether keys follow the account stays the user's choice and runs with F11 (F10 folded into F11 on 2026-10-18), using the interface reserved on 2026-10-13 11:57 |
-| Pixel-perfect page restyle | Webpage mode is “translation under each block”, not a CSS rebuild |
-
----
-
-## Docs
-
-The living plan is [`docs/ui-phase2-plan.md`](docs/ui-phase2-plan.md) (Chinese). Current status is the section 「2026-10-28 决定」: main `e8a6467` (#190). New write-ups from that sync:
-
-- [`docs/architecture-redesign.md`](docs/architecture-redesign.md) — architecture note v1.1. Section 11 is the 2026-10-28 reading-order decision: v1 keeps PDF text-layer order and adds a small fluency join (`通顺试接`, 15:05); v2 layout runs on the desktop app
-- [`docs/research/reading-order.md`](docs/research/reading-order.md) — reading-order survey (Chinese). Unchecked numbers and licenses stay marked 待复核
-- [`docs/postmortems/pr189-multimodal-swap.md`](docs/postmortems/pr189-multimodal-swap.md) — why PR #189’s multimodal page swap did not pass device tests
-- [`docs/v2-polish-checklist.md`](docs/v2-polish-checklist.md) — v2 polish, including the flag-on failures still open
-- [`docs/ai-models-spec.md`](docs/ai-models-spec.md), [`docs/v2-layout-mirror.md`](docs/v2-layout-mirror.md), and [`docs/plans/multimodal-first.md`](docs/plans/multimodal-first.md)
+Conventions are in [CONTRIBUTING.md](CONTRIBUTING.md) (Chinese). Do not commit API keys, `.env` files, or zip archives.
 
 ## License
 
-MIT © 2026 wisdom-km
+[MIT](LICENSE) © 2026 wisdom-km
 
-Third party:
+Third-party components shipped with the reader:
 
-- [pdf.js](https://github.com/mozilla/pdf.js) 4.10.38 (Apache-2.0) in `pdf/vendor/`
-- [KaTeX](https://github.com/KaTeX/KaTeX) 0.18.7 (MIT) in `pdf/vendor/katex/`
+- [pdf.js](https://github.com/mozilla/pdf.js) 4.10.38 (Apache-2.0) in `pdf/vendor/`. Patch notes: [`docs/vendor-pdfjs.md`](docs/vendor-pdfjs.md).
+- [KaTeX](https://github.com/KaTeX/KaTeX) 0.18.7 (MIT) in `pdf/vendor/katex/`.
+- [markdown-it](https://github.com/markdown-it/markdown-it) 14.1.0 (MIT) in `pdf/vendor/markdown-it/`. The reader page loads it.
+- A Latin font bundled with the reader, CSS name “OI Serif Latin”. SIL OFL 1.1, reserved font name Source. The license text is `pdf/fonts/OFL.txt`.
