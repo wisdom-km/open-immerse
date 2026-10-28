@@ -213,7 +213,7 @@ import { createMmPageFlight, detachAfterSwap } from "../lib/mm-page-queue.js";
 import { applyMmBlockTranslations, commitMultimodalPageData, libraryPairsReplaceLayout, pageNeedsMultimodalQueue, pairsKeptForMultimodal } from "../lib/mm-page-invalidate.js";
 import { awaitRenderTask, MM_RASTER_TIMEOUT_MS } from "../lib/render-deadline.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
-import { joinPageBoundary, openPageHost } from "../lib/pdf-flow-join.js";
+import { applyContinuationTranslations, joinPageBoundary, openPageHost } from "../lib/pdf-flow-join.js";
 import {
   MM_RETRY_COPY,
   markPresentation,
@@ -6472,6 +6472,16 @@ function layoutForReadout(layout) {
     // A formula slot that cannot be lined up still paints the translation, or the source.
     const paintTranslations = isCurrentMmPage(layout) ? applyMmBlockTranslations : applyBlockTranslations;
     blocks = paintTranslations(layout.blocks, (settled || retry) ? merged : saved);
+  }
+  const continuationPage = Number(layout.page) || 0;
+  const continuationPairs = [
+    ...libraryPairs,
+    ...(Array.isArray(cached) ? cached : []),
+    ...(libraryEntry(continuationPage + 1)?.pairs || []),
+    ...(pageCache.get(docId, continuationPage + 1) || [])
+  ];
+  if (continuationPairs.length && blocks.length) {
+    blocks = applyContinuationTranslations(blocks, continuationPairs);
   }
   if (!blocks.some((block) => settledText(block.translation, block.text || block.sourceText || ""))) {
     if (mmLayoutCacheHit(layout)) return { ...layout, blocks: layout.blocks || [] };
@@ -14955,9 +14965,12 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
   if (previous?.blocks?.length && layout.blocks?.length) {
     const joined = joinPageBoundary(previous.blocks, layout.blocks);
     if (joined.joined) {
+      const before = previous.blocks.map((block) => String(block?.text || "")).join("\n");
       previous.blocks = joined.previous;
       layout.blocks = joined.next;
       setPageLayout(n - 1, previous, { reanchor: false });
+      const after = previous.blocks.map((block) => String(block?.text || "")).join("\n");
+      if (after !== before) clearSlotPainted(n - 1);
     }
   }
   // The quick stand-in (persist: false) is replaced by the vendor layout.
@@ -15027,6 +15040,30 @@ async function ingestReadoutLayout(n, isStale) {
   }, content.items, viewport);
   setPageLayout(n, layout);
   return layout;
+}
+
+function settlePageContinuations(units, layout) {
+  const page = Number(layout?.page) || 0;
+  const pairs = [
+    ...(libraryEntry(page)?.pairs || []),
+    ...(pageCache.get(docId, page) || []),
+    ...(libraryEntry(page + 1)?.pairs || []),
+    ...(pageCache.get(docId, page + 1) || [])
+  ];
+  const hosts = applyContinuationTranslations(layout?.blocks || [], pairs);
+  const byBid = new Map();
+  for (const block of hosts) {
+    if (block?.bid && block.translation) byBid.set(String(block.bid), block);
+  }
+  if (!byBid.size) return units;
+  return (units || []).map((unit) => {
+    const block = byBid.get(String(unit?.bid || ""));
+    const translation = String(block?.translation || "").trim();
+    if (!translation) return unit;
+    const current = String(unit?.translation || "").trim();
+    if (current === translation || (current && !translation.startsWith(current))) return unit;
+    return { ...unit, translation, translationStatus: "reused" };
+  });
 }
 
 function compactSentence(value) {
@@ -15149,7 +15186,10 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize, options
       pairRows = pairRows.filter((row) => String(row?.bid || "") !== extended.bid).concat([extended]);
     }
   }
-  const filled = applySavedPairs(liveOriginals(layout, blocks), pairRows, savedPairSettings());
+  const filled = settlePageContinuations(
+    applySavedPairs(liveOriginals(layout, blocks), pairRows, savedPairSettings()),
+    layout
+  );
   let pending = options.force
     ? liveOriginals(layout, unitsForForceRetranslate(layout))
     : unitsNeedingTranslation(filled, pdfTargetLang);

@@ -9,9 +9,12 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dedupeSwappedBlocks, reconcilePage } from "../lib/mm-reconcile.js";
+import { blockHiddenByAlias, dedupeSwappedBlocks, reconcilePage } from "../lib/mm-reconcile.js";
 import { swapNeedsRepaint } from "../lib/mm-page-swap.js";
-import { joinPageBoundary, visibleFlowBlocks } from "../lib/pdf-flow-join.js";
+import { applyBlockTranslations } from "../lib/pdf-blocks.js";
+import { stampLayoutBids } from "../lib/pdf-block-id.js";
+import { applyContinuationTranslations, joinPageBoundary, visibleFlowBlocks } from "../lib/pdf-flow-join.js";
+import { applySavedPairs } from "../lib/pdf-library.js";
 import { blockCoveredByStructure } from "../lib/pdf-structure-render.js";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
 import { orderLinesInColumns, paragraphsFromLines } from "../lib/pdf-viewer.js";
@@ -151,6 +154,112 @@ test("a second ingest does not emit a continuation the host already carries", ()
   assert.equal(tail.skipTranslate, true);
   assert.equal((again.previous[0].text.match(/of the values/g) || []).length, 1);
   assert.ok(again.previous[0].bidAliases.includes("b1-p4-t031i7d0"));
+});
+
+function sourceSentences(blocks) {
+  const out = [];
+  for (const block of blocks || []) {
+    if (block?.flowHost) continue;
+    const label = String(block?.label || "");
+    if (label === "formula" || label === "figure" || label === "table") continue;
+    const parts = String(block?.text || "").replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/);
+    for (const part of parts) {
+      const sentence = part.trim();
+      if (sentence) out.push(sentence);
+    }
+  }
+  return out;
+}
+
+function occurrenceCount(haystack, needle) {
+  let count = 0;
+  let from = 0;
+  while (from <= haystack.length) {
+    const at = haystack.indexOf(needle, from);
+    if (at < 0) return count;
+    count += 1;
+    from = at + needle.length;
+  }
+  return count;
+}
+
+function paintedPages(previous, next) {
+  const joined = joinPageBoundary(previous, next);
+  const left = stampLayoutBids(3, { page: 3, blocks: joined.previous }).blocks;
+  const right = stampLayoutBids(4, { page: 4, blocks: joined.next }).blocks;
+  const shownLeft = left.filter((block) => block && !block.flowHost && !blockHiddenByAlias(block, left, []));
+  const shownRight = right.filter((block) => block && !block.flowHost && !blockHiddenByAlias(block, right, shownLeft));
+  return { joined, left: shownLeft, right: shownRight };
+}
+
+test("Attention pages 3 and 4 keep every source sentence exactly once", async () => {
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "fixtures/Attention_Is_All_You_Need.pdf"))),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  async function load(pageNumber) {
+    const pdfPage = await doc.getPage(pageNumber);
+    const content = await pdfPage.getTextContent();
+    attachFontRealNames(content.items, pdfPage.commonObjs);
+    const viewport = pdfPage.getViewport({ scale: 1 });
+    const ops = await pdfPage.getOperatorList();
+    return stampLayoutBids(pageNumber, textLayerToBlocks({
+      items: content.items,
+      viewport,
+      images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+      page: pageNumber
+    }));
+  }
+  const page3 = await load(3);
+  const page4 = await load(4);
+  const needle = "of the values, where the weight assigned to each value is computed by a compatibility function of the query with the corresponding key.";
+  const sentences = [...sourceSentences(page3.blocks), ...sourceSentences(page4.blocks)];
+  assert.equal(sentences.length, 39);
+  assert.equal(sentences.filter((sentence) => sentence === needle).length, 1);
+  const painted = paintedPages(page3.blocks, page4.blocks);
+  const visible = [...painted.left, ...painted.right].map((block) => String(block.text || "")).join("\n");
+  for (const sentence of sentences) {
+    assert.equal(occurrenceCount(visible, sentence), 1, sentence.slice(0, 80));
+  }
+  assert.equal(painted.right.some((block) => block.bid === "b1-p4-t031i7d0"), false);
+  assert.match(painted.left.find((block) => block.id === "p3-b9").text, /weighted sum of the values/);
+  const hostZh = "输出被计算为加权和";
+  const tailZh = "对值进行加权求和，其中每个值所分配的权重由查询与对应键的兼容性函数计算得出。";
+  const pairs = [...page3.blocks, ...page4.blocks].filter((block) => block.bid && block.text).map((block) => ({
+    bid: block.bid,
+    text: block.text,
+    sourceText: block.text,
+    translation: block.bid === "b1-p3-t1w3vhah" ? hostZh : block.bid === "b1-p4-t031i7d0" ? tailZh : `译${block.bid.slice(-4)}`,
+    targetLang: "zh-CN",
+    provider: "openai"
+  }));
+  const host = painted.left.find((block) => block.id === "p3-b9");
+  const merged = applySavedPairs([{
+    id: host.id,
+    bid: host.bid,
+    text: host.text,
+    sourceText: host.text,
+    original: host.text,
+    label: host.label
+  }], pairs, { targetLang: "zh-CN", provider: "openai" });
+  const withPairs = applyContinuationTranslations(
+    applyBlockTranslations(painted.left, merged),
+    pairs
+  );
+  const shownHost = withPairs.find((block) => block.id === "p3-b9");
+  assert.equal(occurrenceCount(shownHost.text, needle), 1);
+  assert.ok(shownHost.translation.includes(hostZh));
+  assert.ok(shownHost.translation.includes(tailZh));
+  const rebuilt = paintedPages(page3.blocks, painted.joined.next);
+  const rebuiltText = [...rebuilt.left, ...rebuilt.right].map((block) => String(block.text || "")).join("\n");
+  for (const sentence of sentences) {
+    assert.equal(occurrenceCount(rebuiltText, sentence), 1, `rebuild ${sentence.slice(0, 80)}`);
+  }
+  await doc.destroy();
+  const viewer = readFileSync(join(fileURLToPath(new URL("..", import.meta.url)), "pdf/viewer.js"), "utf8");
+  const at = viewer.indexOf("const previous = n > 1 ? getPageLayout(n - 1)");
+  assert.match(viewer.slice(at, at + 800), /clearSlotPainted\(n - 1\)/);
 });
 
 test("a cross-page tail is one block: the next page does not paint it", () => {
