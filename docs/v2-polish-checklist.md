@@ -46,7 +46,7 @@ v1 不做以下各项。2026-10-27 Wisdom 定：v1 不带打磨池。2026-10-28 
 这些和打磨项一起排在 v1 之后。做法分别有文档，不在本清单里重写。
 
 - [ ] 译文版面镜像（Wisdom 2026-10-27 17:47 放入 v2；17:54、17:57 定稿）。见 [`docs/v2-layout-mirror.md`](v2-layout-mirror.md)
-- [ ] 方案 2：本机 PP-DocLayoutV2 检测版面，LLM 只排序。见 [`docs/architecture-redesign.md`](architecture-redesign.md) 第 11 节
+- [ ] 桌面两档阅读顺序：默认文字层原序；可选「智能版式」（本地 PP-DocLayoutV2，用户打开才跑）。版面不进浏览器。见 [`docs/architecture-redesign.md`](architecture-redesign.md) 第 11 节。15:02 取代「LLM 只排序」
 - [ ] 阅读器按第 11 节重构存储：稳定块号、按页作废、版面 / 块号 / 译文一处真相、回退状态重开结果确定。验收包括旧库重开等于新打开、回退页不空白、旗标关时多模态请求数为 0
 - [ ] 全仓重构进 `core/`（写作域、听觉化、平台分层）。见 [`docs/architecture-redesign.md`](architecture-redesign.md) v1.1。预留目录是以后的代码 PR
 - [ ] 桌面版（F11）和公式 OCR 层。见 `docs/ui-phase2-plan.md`「2026-10-27 决定」和 [`docs/desktop-plan.md`](desktop-plan.md)
