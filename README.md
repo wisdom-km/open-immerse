@@ -346,16 +346,17 @@ node --test tests/*.test.mjs
 
 ## 文档
 
-计划和现状以 [`docs/ui-phase2-plan.md`](docs/ui-phase2-plan.md) 为准，当前进度在「2026-10-28 决定」（main `e8a6467`，#190）。待你拍板的事在 [`docs/owner-todo.md`](docs/owner-todo.md)。
+计划和现状以 [`docs/ui-phase2-plan.md`](docs/ui-phase2-plan.md) 为准，当前进度在「2026-10-28 决定」（代码 main `e8a6467`，#190；阅读顺序以同节 15:00–15:05 为准，含 v1「通顺试接」）。待你拍板的事在 [`docs/owner-todo.md`](docs/owner-todo.md)。
 
 | 文档 | 内容 |
 | --- | --- |
-| [`docs/architecture-redesign.md`](docs/architecture-redesign.md) | 架构建议稿 v1.1（桌面读和写、手机听、共享知识库）。第 11 节是 v2 版式与存储：方案 2、稳定块号、按页作废 |
+| [`docs/architecture-redesign.md`](docs/architecture-redesign.md) | 架构建议稿 v1.1（桌面读和写、手机听、共享知识库）。第 11 节是阅读顺序：v1 文字层原序加「通顺试接」；v2 在桌面做两档，可选「智能版式」；稳定块号在 `core/`，按页作废 |
 | [`docs/postmortems/pr189-multimodal-swap.md`](docs/postmortems/pr189-multimodal-swap.md) | #189 整页多模态替换为什么在真机上没有收敛 |
 | [`docs/v2-polish-checklist.md`](docs/v2-polish-checklist.md) | v1 不做的打磨，以及旗标打开时仍已知的三条失败 |
 | [`docs/v2-layout-mirror.md`](docs/v2-layout-mirror.md) | 译文版面镜像，v2 定稿（2026-10-27） |
 | [`docs/ai-models-spec.md`](docs/ai-models-spec.md) | 「AI 模型」设置页规格。页本身在 v2 |
 | [`docs/plans/multimodal-first.md`](docs/plans/multimodal-first.md) | 2026-10-27 15:14 批准的多模态优先方案。14:34 之后不再是 v1 默认路径 |
+| [`docs/research/reading-order.md`](docs/research/reading-order.md) | 阅读顺序调研：两两后继、PP-DocLayoutV2、PaddleOCR-VL、GLM-OCR，以及其它管线。未复核的数字和许可证仍标「待复核」 |
 | [`pdf/high-precision/REQUIREMENTS.md`](pdf/high-precision/REQUIREMENTS.md) | PDF 阅读的需求正本 |
 | [`docs/settings-spec.md`](docs/settings-spec.md) | 设置页规格 |
 
