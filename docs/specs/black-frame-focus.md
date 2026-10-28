@@ -1,5 +1,8 @@
 # 黑框修复 · 最小规格（BF）
-Loom · 2026-10-28 00:15（UTC+8）｜代码依据 `feature/multimodal-first@9e1c8f4`（尚未合入 main 15f1824；`git archive` → /tmp/bf-9e1c8f4，只读）｜截图：`wisdom-2026-10-28.png`（Attention 并排，译文栏外的深色框）、`earlier-anvil.png`（DDPM，原文栏外的黑框）
+
+2026-10-28 进度：修复已由 #190 合入 main `e8a6467`（「修复阅读栏点击时出现的黑框」）。下面的代码依据行仍是起草时的 `9e1c8f4`，行号没有按 #190 重标。合入后仍记下的余项（分隔条默认焦点环、深色主题未查、键盘聚焦后再点击的淡 1px 线）在 [`docs/v2-polish-checklist.md`](../v2-polish-checklist.md)，不在本规格的必做范围里。
+
+Loom · 2026-10-28 00:15（UTC+8）｜代码依据 `feature/multimodal-first@9e1c8f4`（起草时尚未合入当时的 main `15f1824`；`git archive` → /tmp/bf-9e1c8f4，只读）｜截图：`wisdom-2026-10-28.png`（Attention 并排，译文栏外的深色框）、`earlier-anvil.png`（DDPM，原文栏外的黑框）
 **Wisdom 00:05 拍板：「这个黑框是 bug，它应该不显示。」** 范围只限黑框，不做其他打磨。
 
 ## 1. 决策摘要
