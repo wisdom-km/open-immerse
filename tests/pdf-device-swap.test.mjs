@@ -13,7 +13,7 @@ import { blockHiddenByAlias, dedupeSwappedBlocks, reconcilePage } from "../lib/m
 import { swapNeedsRepaint } from "../lib/mm-page-swap.js";
 import { applyBlockTranslations } from "../lib/pdf-blocks.js";
 import { stampLayoutBids } from "../lib/pdf-block-id.js";
-import { applyContinuationTranslations, joinPageBoundary, visibleFlowBlocks } from "../lib/pdf-flow-join.js";
+import { applyContinuationTranslations, continuationRepaintSafe, joinPageBoundary, restoreCachedContinuation, visibleFlowBlocks } from "../lib/pdf-flow-join.js";
 import { applySavedPairs } from "../lib/pdf-library.js";
 import { blockCoveredByStructure } from "../lib/pdf-structure-render.js";
 import { textLayerToBlocks } from "../lib/pdf-text-layer.js";
@@ -251,15 +251,105 @@ test("Attention pages 3 and 4 keep every source sentence exactly once", async ()
   assert.equal(occurrenceCount(shownHost.text, needle), 1);
   assert.ok(shownHost.translation.includes(hostZh));
   assert.ok(shownHost.translation.includes(tailZh));
-  const rebuilt = paintedPages(page3.blocks, painted.joined.next);
-  const rebuiltText = [...rebuilt.left, ...rebuilt.right].map((block) => String(block.text || "")).join("\n");
+  const cachedPrevious = page3.blocks.map((block) => ({ ...block }));
+  const cachedNext = painted.joined.next.map((block) => ({ ...block }));
+  const cachedShown = [...cachedPrevious, ...cachedNext].filter((block) => block && !block.flowHost);
+  const cachedText = cachedShown.map((block) => String(block.text || "")).join("\n");
+  assert.equal(occurrenceCount(cachedText, needle), 0);
+  const restored = restoreCachedContinuation(cachedPrevious, cachedNext, {
+    previousPage: 3,
+    nextPage: 4,
+    pairs
+  });
+  assert.equal(restored.restored, true);
+  assert.equal(restored.repaint, true);
+  const restoredShown = [...restored.previous, ...restored.next].filter((block) => (
+    block && !block.flowHost && !blockHiddenByAlias(block, restored.previous, [])
+      && !blockHiddenByAlias(block, restored.next, restored.previous)
+  ));
+  const restoredText = restoredShown.map((block) => String(block.text || "")).join("\n");
   for (const sentence of sentences) {
-    assert.equal(occurrenceCount(rebuiltText, sentence), 1, `rebuild ${sentence.slice(0, 80)}`);
+    assert.equal(occurrenceCount(restoredText, sentence), 1, `reopen ${sentence.slice(0, 80)}`);
   }
+  const reopenedHost = applyContinuationTranslations(restored.previous, pairs).find((block) => block.id === "p3-b9");
+  assert.equal(occurrenceCount(reopenedHost.text, needle), 1);
+  assert.ok(reopenedHost.translation.includes(hostZh));
+  assert.ok(reopenedHost.translation.includes(tailZh));
+  assert.equal(reopenedHost.bid === "b1-p3-t1w3vhah" && !reopenedHost.text.includes(needle), false);
   await doc.destroy();
   const viewer = readFileSync(join(fileURLToPath(new URL("..", import.meta.url)), "pdf/viewer.js"), "utf8");
   const at = viewer.indexOf("const previous = n > 1 ? getPageLayout(n - 1)");
-  assert.match(viewer.slice(at, at + 800), /clearSlotPainted\(n - 1\)/);
+  const ingest = viewer.slice(at, at + 1200);
+  assert.match(ingest, /continuationRepaintSafe/);
+  assert.match(ingest, /clearSlotPainted\(n - 1\)/);
+  const install = viewer.slice(viewer.indexOf("function installDisplayableLibraryLayouts"), viewer.indexOf("function libraryLayoutNeedsWrite"));
+  assert.match(install, /restoreInstalledContinuations/);
+});
+
+test("a stored DPO translation stays painted when a continuation would change the source", async () => {
+  const doc = await getDocument({
+    data: new Uint8Array(readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "fixtures/Direct_Preference_Optimization_2305.18290.pdf"))),
+    verbosity: 0,
+    isOffscreenCanvasSupported: false
+  }).promise;
+  async function load(pageNumber) {
+    const pdfPage = await doc.getPage(pageNumber);
+    const content = await pdfPage.getTextContent();
+    attachFontRealNames(content.items, pdfPage.commonObjs);
+    const viewport = pdfPage.getViewport({ scale: 1 });
+    const ops = await pdfPage.getOperatorList();
+    return stampLayoutBids(pageNumber, textLayerToBlocks({
+      items: content.items,
+      viewport,
+      images: { fnArray: ops.fnArray, argsArray: ops.argsArray },
+      page: pageNumber
+    }));
+  }
+  const page21 = await load(21);
+  const page22 = await load(22);
+  const before = page21.blocks.map((block) => ({ ...block }));
+  const joined = joinPageBoundary(page21.blocks, page22.blocks);
+  assert.equal(joined.joined, true);
+  const stamped = stampLayoutBids(21, { page: 21, blocks: joined.previous }).blocks;
+  const host = before.find((block) => block.bid === "b1-p21-t0gwh1jb");
+  const after = stamped.find((block) => block.id === host.id);
+  assert.equal(after.bid, host.bid);
+  assert.notEqual(after.text, host.text);
+  const pairs = [{ bid: host.bid, text: host.text, sourceText: host.text, translation: "旧译 unlikelihood baseline" }];
+  assert.equal(continuationRepaintSafe({ before, after: stamped, pairs }), false);
+  const cachedNext = joined.next.map((block) => ({ ...block }));
+  const restored = restoreCachedContinuation(before, cachedNext, { previousPage: 21, nextPage: 22, pairs });
+  assert.equal(restored.restored, false);
+  assert.equal(restored.repaint, false);
+  assert.equal(restored.previous.find((block) => block.bid === host.bid).text, host.text);
+  const dialogue = restored.next.find((block) => /or dialogue experiment/.test(block.text || ""));
+  assert.ok(dialogue?.flowHost);
+  const page5 = await load(5);
+  const page6 = await load(6);
+  const page7 = await load(7);
+  const page8 = await load(8);
+  for (const [left, right, leftPage, rightPage] of [[page5, page6, 5, 6], [page7, page8, 7, 8]]) {
+    const prior = left.blocks.map((block) => ({ ...block }));
+    const boundary = joinPageBoundary(left.blocks, right.blocks);
+    assert.equal(boundary.joined, true);
+    const after = stampLayoutBids(leftPage, { page: leftPage, blocks: boundary.previous }).blocks;
+    const stored = prior.filter((block) => block.bid).map((block) => ({
+      bid: block.bid,
+      text: block.text,
+      sourceText: block.text,
+      translation: `旧译${block.bid.slice(-6)}`
+    }));
+    assert.equal(continuationRepaintSafe({ before: prior, after, pairs: stored }), false);
+    const cached = restoreCachedContinuation(prior, boundary.next, {
+      previousPage: leftPage,
+      nextPage: rightPage,
+      pairs: stored
+    });
+    assert.equal(cached.restored, false);
+    assert.equal(cached.repaint, false);
+    assert.equal(cached.previous, prior);
+  }
+  await doc.destroy();
 });
 
 test("a cross-page tail is one block: the next page does not paint it", () => {

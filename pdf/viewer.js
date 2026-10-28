@@ -213,7 +213,7 @@ import { createMmPageFlight, detachAfterSwap } from "../lib/mm-page-queue.js";
 import { applyMmBlockTranslations, commitMultimodalPageData, libraryPairsReplaceLayout, pageNeedsMultimodalQueue, pairsKeptForMultimodal } from "../lib/mm-page-invalidate.js";
 import { awaitRenderTask, MM_RASTER_TIMEOUT_MS } from "../lib/render-deadline.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
-import { applyContinuationTranslations, joinPageBoundary, openPageHost } from "../lib/pdf-flow-join.js";
+import { applyContinuationTranslations, continuationRepaintSafe, joinPageBoundary, openPageHost, restoreCachedContinuation } from "../lib/pdf-flow-join.js";
 import {
   MM_RETRY_COPY,
   markPresentation,
@@ -11928,6 +11928,38 @@ function installDisplayableLibraryLayouts(version = knownLayoutVersion) {
     if (isSkipOnlyPage(stored.blocks)) skipLocked.add(page);
     changed = true;
   }
+  if (restoreInstalledContinuations()) changed = true;
+  return changed;
+}
+
+/** A cached tail can be hidden while the previous page still has the short block. */
+function restoreInstalledContinuations() {
+  const listed = (libraryDoc?.pages || []).map((entry) => Number(entry?.page)).filter((page) => page >= 1);
+  const total = Math.max(pdfDoc?.numPages || 0, ...listed, 0);
+  let changed = false;
+  for (let n = 2; n <= total; n += 1) {
+    const previous = getPageLayout(n - 1);
+    const layout = getPageLayout(n);
+    if (!previous?.blocks?.length || !layout?.blocks?.length) continue;
+    const pairs = [
+      ...(libraryEntry(n - 1)?.pairs || []),
+      ...(pageCache.get(docId, n - 1) || []),
+      ...(libraryEntry(n)?.pairs || []),
+      ...(pageCache.get(docId, n) || [])
+    ];
+    const restored = restoreCachedContinuation(previous.blocks, layout.blocks, {
+      previousPage: n - 1,
+      nextPage: n,
+      pairs
+    });
+    if (!restored.restored || !restored.repaint) continue;
+    previous.blocks = restored.previous;
+    layout.blocks = restored.next;
+    setPageLayout(n - 1, previous, { reanchor: false });
+    setPageLayout(n, layout, { reanchor: false });
+    clearSlotPainted(n - 1);
+    changed = true;
+  }
   return changed;
 }
 
@@ -14965,12 +14997,17 @@ async function ingestTextLayerLayout(n, isStale, options = {}) {
   if (previous?.blocks?.length && layout.blocks?.length) {
     const joined = joinPageBoundary(previous.blocks, layout.blocks);
     if (joined.joined) {
-      const before = previous.blocks.map((block) => String(block?.text || "")).join("\n");
+      const beforeBlocks = previous.blocks.map((block) => ({ ...block }));
       previous.blocks = joined.previous;
       layout.blocks = joined.next;
       setPageLayout(n - 1, previous, { reanchor: false });
-      const after = previous.blocks.map((block) => String(block?.text || "")).join("\n");
-      if (after !== before) clearSlotPainted(n - 1);
+      const pairs = [
+        ...(libraryEntry(n - 1)?.pairs || []),
+        ...(pageCache.get(docId, n - 1) || [])
+      ];
+      if (continuationRepaintSafe({ before: beforeBlocks, after: previous.blocks, pairs })) {
+        clearSlotPainted(n - 1);
+      }
     }
   }
   // The quick stand-in (persist: false) is replaced by the vendor layout.
