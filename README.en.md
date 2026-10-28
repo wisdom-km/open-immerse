@@ -34,15 +34,19 @@ PDF reading is on by default. Open the toolbar popup and click **打开 PDF** (O
 
 Opening a PDF starts a full-document translation. The switch is under **设置 → PDF 阅读** (Settings → PDF), labeled 「打开 PDF 时自动翻译全文」.
 
+The right pane defaults to a Markdown reading-flow. Text-layer body text stays the original text-layer sentences. The reading target matches the PDF hint in `lib/features.js`: text-layer body text plus content-accurate original-page display (crops by default).
+
 ### Side by side
 
 ![Original PDF on the left, Chinese translation by paragraph on the right](docs/assets/readme/04a-pdf-side-by-side.png)
 
 The left pane scrolls the original. The right pane lists the translation in reading order, and the translation stays in that pane. The walkthrough paper is 15 pages, and opening it started a full translation.
 
+![PDF Markdown reading-flow](docs/screenshots/06-pdf-readout.png)
+
 ### Formulas
 
-By default, display formulas and inline formulas are cropped from the original PDF and placed in the translation. Equation numbers stay. Crops are painted at an 18 px reference size and do not follow the font-size slider.
+Formulas may be rendered from verified LaTeX (KaTeX); when that cannot be decided, the original-page crop is shown. Display formulas and inline formulas then keep their equation numbers as crops from the original PDF. Crops are painted at an 18 px reference size and do not follow the font-size slider. Figures and tables use the same original-page crop. Test-time region detection uses a local Zhipu GLM-OCR. Production uses an OCR API plus the LLM API already configured in the extension. The formula OCR API layer is not in v1, matching the schedule in `CONTRIBUTING.md`.
 
 ![Formulas in the translation are crops from the original PDF, with equation numbers kept](docs/assets/readme/04b-pdf-formula-crop-image.png)
 
@@ -123,6 +127,8 @@ The default quota is **仅标题+开头** (`translateLimit: title_lead`): the he
 The walkthrough switched the quota to All in order to capture a full page. A fresh install that shows a translation only on the title and the first paragraph is following this default.
 
 ![Chinese translation inserted under the original text on a webpage](docs/assets/readme/03-web-bilingual.png)
+
+![Webpage bilingual view and the corner control](docs/screenshots/01-bilingual-page.png)
 
 ## Install
 

@@ -32,15 +32,19 @@ PDF 阅读默认开启。工具栏图标打开面板，点 **打开 PDF**：当�
 
 打开后默认翻译全文。开关在 **设置 → PDF 阅读**，名称是「打开 PDF 时自动翻译全文」。
 
+右栏默认是 **Markdown 通读**。有文字层的正文用文字层原句。阅读目标和 `lib/features.js` 里的 PDF 说明一致：文字层正文 + 原页内容精准展示（默认裁图）。
+
 ### 左右对照
 
 ![左栏原文 PDF，右栏逐段中文译文](docs/assets/readme/04a-pdf-side-by-side.png)
 
 左栏连续滚动原文。右栏按阅读顺序排译文，译文只出现在右栏。走查用的那篇论文有 15 页，打开后自动开始全文翻译。
 
+![PDF Markdown 通读](docs/screenshots/06-pdf-readout.png)
+
 ### 公式
 
-默认把行间公式和行内公式按原 PDF 裁成图片嵌进译文，公式编号保留。裁图按 18 px 的参考字号绘制，不跟随下面的字号滑杆。
+公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图。行间公式和行内公式在判不出时按原 PDF 裁成图片嵌进译文，公式编号保留。裁图按 18 px 的参考字号绘制，不跟随下面的字号滑杆。图和表同样用原页裁图。测试期划区用本机智谱 GLM-OCR，上线用 OCR API 加已配置的大模型 API。公式 OCR API 层不在 v1，和 `CONTRIBUTING.md` 里的排期一致。
 
 ![译文中的公式是从原 PDF 裁下的图片，编号仍在](docs/assets/readme/04b-pdf-formula-crop-image.png)
 
@@ -121,6 +125,8 @@ v0.3.0 走查对这篇论文重开了一次：大约 1.3 秒读回 145 段译文
 走查为了拍全页效果，临时改成了「全部」。新安装看到只有标题和第一段有译文，是当前默认值。
 
 ![网页原文下方插入的中文译文](docs/assets/readme/03-web-bilingual.png)
+
+![网页双语与右下角开关](docs/screenshots/01-bilingual-page.png)
 
 ## 安装
 
