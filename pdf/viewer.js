@@ -93,6 +93,7 @@ import {
   reuseSettledLibraryFailures,
   pageTranslationComplete,
   unitsNeedingTranslation,
+  unitsAfterStructure,
   claimTranslationUnits,
   mergeTranslationRows,
   pageIndex,
@@ -206,7 +207,7 @@ import {
   scaleToMaxEdge
 } from "../lib/mm-page.js";
 import { dedupeSwappedBlocks, readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
-import { createMmPageFlight } from "../lib/mm-page-queue.js";
+import { createMmPageFlight, detachAfterSwap } from "../lib/mm-page-queue.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
 import { joinPageBoundary, openPageHost } from "../lib/pdf-flow-join.js";
 import {
@@ -12230,17 +12231,7 @@ async function ensureTitleStructure(page, layout, options = {}) {
 }
 
 function liveOriginals(layout, units) {
-  const record = titleStructure;
-  if (!record || record.status !== "ok" || record.docId !== docId || record.page !== layout?.page) return units || [];
-  const outside = new Set(blocksOutsideStructure(layout?.blocks || [], record.source || record.structure).map((block) => block.id));
-  const slotText = new Set(structureTranslateSlots(record.source).map((slot) => String(slot.text || "").replace(/\s+/g, " ").trim()));
-  return (units || []).filter((unit) => {
-    if (!unit?.id || outside.has(unit.id)) return true;
-    const text = String(unit.text || unit.original || "").replace(/\s+/g, " ").trim();
-    // The structure slot already translates an exact match. A block that only
-    // sits inside a longer slot (abstract paragraph, footnote) is stored on its own.
-    return Boolean(text) && !slotText.has(text);
-  });
+  return unitsAfterStructure(layout, units, titleStructure, docId);
 }
 
 async function translateTitleStructure(work, gen, translatingDoc, batchSize, options = {}) {
@@ -14319,16 +14310,17 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
   });
   noteMmPage("mm.page.reconcile", { page: n, ...reconciled.stats });
   noteMmPage("mm.page.cache", { page: n, hit: false });
-  await replaceMmLayout(n, quick, layout, epoch);
-  if (!layoutAttemptLive(epoch)) {
-    releaseMmRebuild(n);
-    return;
-  }
-  try {
-    await writeStoredLayout(key, layout);
-  } catch {
-    /* storage is optional */
-  }
+  // The swap clears「正在重建本页」and queues translation. Storage must not
+  // hold the flight slot: a put that never settles left p2, p11, and p12
+  // rebuilding with no further vision request.
+  await detachAfterSwap(async () => {
+    await replaceMmLayout(n, quick, layout, epoch);
+    if (!layoutAttemptLive(epoch)) {
+      releaseMmRebuild(n);
+      return false;
+    }
+    return true;
+  }, () => writeStoredLayout(key, layout));
   persistPageLayout(n).catch(() => {});
 }
 
