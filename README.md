@@ -8,11 +8,11 @@
 [![license MIT](https://img.shields.io/badge/license-MIT-555555)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-1a73e8)](manifest.json)
 
-当前版本 **0.3.0**（`main` @ `a8a6efd`）。需要 Chrome 114 或更新。与商业产品「沉浸式翻译」没有隶属关系。
+当前版本 **0.3.0**（走查基于提交 `a8a6efd`）。需要 Chrome 114 或更新。与商业产品「沉浸式翻译」没有隶属关系。
 
 仓库：<https://github.com/wisdom-km/open-immerse>
 
-界面图放在 [`docs/assets/readme/`](docs/assets/readme/)。文件还没放进仓库时，下面各节的文字仍然完整，图片位置只显示替代说明。截图里的 API 密钥是占位符。
+截图里的 API 密钥是占位符。
 
 ![打开论文 PDF：左栏原文，右栏开始出现逐段译文](docs/assets/readme/04-pdf-open-translate-hero.gif)
 
@@ -54,7 +54,7 @@ arXiv 论文可以改用源码公式。点顶栏的 **用 arXiv 源码** 之后�
 
 顶栏 **Aa** 里有字号滑杆。可选 14、15、16、17、18、19、20、22、24、26、28、32、36、40 px，默认 16。拖动时右栏译文立刻变大，也可以拖回 16。栏宽放不下最小可读行长时，上限会低于 40。KaTeX 公式用 `1.1em`，跟随右栏字号；原页裁图不跟随。
 
-走查里把滑杆从 16 拖到 24，再恢复默认。
+拖动滑杆即可放大译文。
 
 ![Aa 面板中的字号滑杆](docs/assets/readme/04d-pdf-font-slider.png)
 
@@ -238,11 +238,12 @@ v2 的桌面应用和可选版式写在文档里，这一版没有实现。
 
 扩展是零构建的：改完 JS、CSS 或 HTML，到 `chrome://extensions` 点重新加载。
 
+Node.js 20 及以上（见 `package.json`）。先安装依赖，再跑测试：
+
 ```bash
+npm ci
 node --test tests/*.test.mjs
 ```
-
-`package.json` 里的 Node.js 版本是 20 及以上。测试不需要先安装依赖；`package.json` 里的依赖只给标注和检查脚本使用。
 
 约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。提交时不要带上 API 密钥、`.env` 或 zip 包。
 

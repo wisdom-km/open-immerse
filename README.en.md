@@ -8,13 +8,13 @@ An open-source Chrome extension: a paper PDF on the left, the translation on the
 [![license MIT](https://img.shields.io/badge/license-MIT-555555)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-1a73e8)](manifest.json)
 
-Current version **0.3.0** (`main` @ `a8a6efd`). Requires Chrome 114 or newer. Not affiliated with the commercial product “Immersive Translate” (沉浸式翻译).
+Current version **0.3.0** (walkthrough built from commit `a8a6efd`). Requires Chrome 114 or newer. Not affiliated with the commercial product “Immersive Translate” (沉浸式翻译).
 
 Repository: <https://github.com/wisdom-km/open-immerse>
 
 The on-screen language is Simplified Chinese. Button names below are the labels in the UI, with an English gloss.
 
-Screenshots live in [`docs/assets/readme/`](docs/assets/readme/). Until those files are in the tree, each section still stands on its own and the image slot shows its text alternative. API keys in the screenshots are placeholders.
+API keys in the screenshots are placeholders.
 
 ![Opening a paper PDF: the original on the left, a paragraph translation starting on the right](docs/assets/readme/04-pdf-open-translate-hero.gif)
 
@@ -56,7 +56,7 @@ Source mode is not remembered on its own. Check **以后自动** (Automatically 
 
 **Aa** in the top bar opens a font-size slider. The steps are 14, 15, 16, 17, 18, 19, 20, 22, 24, 26, 28, 32, 36, and 40 px. The default is 16. Dragging updates the right-pane translation immediately, and the slider can return to 16. When the column is too narrow for the minimum line length, the cap is below 40. KaTeX uses `1.1em` and follows the right-pane size. Original-page crops do not.
 
-The walkthrough dragged the slider from 16 to 24 and then restored the default.
+Drag the slider to enlarge the translation.
 
 ![Font-size slider in the Aa panel](docs/assets/readme/04d-pdf-font-slider.png)
 
@@ -240,11 +240,12 @@ The v2 desktop app and the optional layout mode are written up in the docs. They
 
 The extension is zero-build. After editing JS, CSS, or HTML, click Reload on `chrome://extensions`.
 
+Node.js 20 or newer (see `package.json`). Install dependencies, then run the tests:
+
 ```bash
+npm ci
 node --test tests/*.test.mjs
 ```
-
-`package.json` asks for Node.js 20 or newer. The test command does not need those dependencies installed first. The dependencies in `package.json` are for the labeling and check scripts.
 
 Conventions are in [CONTRIBUTING.md](CONTRIBUTING.md) (Chinese). Do not commit API keys, `.env` files, or zip archives.
 
