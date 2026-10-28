@@ -206,8 +206,9 @@ import {
   runMmPage,
   scaleToMaxEdge
 } from "../lib/mm-page.js";
-import { dedupeSwappedBlocks, readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
+import { blockHiddenByAlias, dedupeSwappedBlocks, readingOrderOff, reconcilePage } from "../lib/mm-reconcile.js";
 import { createMmPageFlight, detachAfterSwap } from "../lib/mm-page-queue.js";
+import { awaitRenderTask, MM_RASTER_TIMEOUT_MS } from "../lib/render-deadline.js";
 import { applyParagraphSwap, planParagraphSwap, scrollCompensation, swapAnchor, swapAnchorNode, swapNeedsRepaint, swapShouldDefer } from "../lib/mm-page-swap.js";
 import { joinPageBoundary, openPageHost } from "../lib/pdf-flow-join.js";
 import {
@@ -299,6 +300,7 @@ import {
   layoutFallbackOf,
   layoutServesEngine,
   layoutServesLibrary,
+  layoutStandsInForEngine,
   normalizePdfLayout,
   resolveLayoutMode,
   runLaneAttempts,
@@ -6463,24 +6465,16 @@ function layoutForReadout(layout) {
 }
 
 function aliasClaimed(block, blocks, previousBlocks) {
-  const bid = String(block?.bid || "");
-  if (!bid) return false;
-  const lists = [blocks, previousBlocks];
-  for (const list of lists) {
-    for (const item of list || []) {
-      if (!item || item === block) continue;
-      if ((item.bidAliases || []).some((alias) => String(alias) === bid)) return true;
-    }
-  }
-  return false;
+  return blockHiddenByAlias(block, blocks, previousBlocks);
 }
 
 function appendFixtureReadout(parent, layout, options = {}) {
   const record = titleStructure && titleStructure.docId === docId ? titleStructure : null;
-  if (layout?.mode === MM_PAGE_MODE) layout = { ...layout, blocks: dedupeSwappedBlocks(layout.blocks) };
+  const mmReadout = layout?.mode === MM_PAGE_MODE || layout?.pagePipeline === "mp-1";
+  if (mmReadout) layout = { ...layout, blocks: dedupeSwappedBlocks(layout.blocks) };
   // The multimodal page is the page. The title shell would paint the title,
   // abstract, and footnotes a second time beside the new blocks.
-  if (!options.skipStructure && layout.mode === MM_PAGE_MODE) options = { ...options, skipStructure: true };
+  if (!options.skipStructure && mmReadout) options = { ...options, skipStructure: true };
   if (!options.skipStructure && record?.status === "ok" && record.page === layout.page && record.structure) {
     const before = parent.childElementCount;
     renderPdfStructure(record.structure, parent);
@@ -11888,7 +11882,9 @@ function installDisplayableLibraryLayouts(version = knownLayoutVersion) {
     const page = Number(entry?.page);
     if (!(page >= 1)) continue;
     const view = libraryEntry(page) || entry;
-    if (!layoutServesLibrary(view, engine)) continue;
+    if (!layoutServesLibrary(view, engine)) {
+      if (!layoutStandsInForEngine(view, engine)) continue;
+    }
     const stored = storedLayoutDisplayable(view, version);
     if (!stored?.blocks?.length) continue;
     if (getPageLayout(page)?.blocks?.length) continue;
@@ -14150,6 +14146,12 @@ async function ingestMmPageLayout(n, isStale, epoch, options = {}) {
       notePageFormulaLatex(n, cached.formulaLatex || []);
       notePageState(n, { legacyCache: false, mmPhase: "", mmReason: "", hasLayout: true });
       setPageLayout(n, cached);
+      // A cache hit used to return before neighbor warm-up. Page 2 then kept
+      // the library seed (stale-formula, no blocks) for the whole reopen.
+      if (options.warm !== false) {
+        mmFocusPage = Number(n);
+        void warmMmNeighbors(n, epoch);
+      }
       return cached;
     }
   }
@@ -14235,19 +14237,21 @@ async function finishMmPage(n, quick, isStale, epoch, key) {
     return;
   }
   let png = "";
+  let failReason = "";
   try {
-    const page = await pdfDoc.getPage(n);
+    const page = await awaitRenderTask(pdfDoc.getPage(n), { timeoutMs: MM_RASTER_TIMEOUT_MS });
     if (isStale() || !layoutAttemptLive(epoch)) {
       releaseMmRebuild(n);
       return;
     }
     const raster = await renderPageRaster(page);
     png = pngBase64FromCanvas(raster?.canvas);
-  } catch {
+  } catch (err) {
     png = "";
+    failReason = err?.code === "timeout" ? "timeout" : "http";
   }
   if (!png || isStale() || !layoutAttemptLive(epoch)) {
-    if (!isStale() && layoutAttemptLive(epoch)) noteMmFallback(n, quick, png ? "aborted" : "http");
+    if (!isStale() && layoutAttemptLive(epoch)) noteMmFallback(n, quick, failReason || (png ? "aborted" : "http"));
     else releaseMmRebuild(n);
     return;
   }
@@ -14879,7 +14883,8 @@ async function renderPageRaster(page) {
   canvas.width = Math.max(1, Math.floor(viewport.width));
   canvas.height = Math.max(1, Math.floor(viewport.height));
   const context = formulaDrawContext(canvas);
-  await renderPdfPage(page, { canvasContext: context, viewport }).promise;
+  const task = renderPdfPage(page, { canvasContext: context, viewport });
+  await awaitRenderTask(task, { timeoutMs: MM_RASTER_TIMEOUT_MS });
   compositeWhitePaper(context, canvas);
   return { canvas, pixelWidth: canvas.width, pixelHeight: canvas.height };
 }
@@ -15018,6 +15023,11 @@ async function originalsForPage(n, gen, translatingDoc, work, batchSize, options
     if (isStale()) return miss();
     await rememberLandedStructure(n, translatingDoc);
     if (isStale()) return miss();
+    // The layout captured above is the text-layer stand-in. The vision swap
+    // lands during the structure request. Body units have to be the page that
+    // is on screen now, or the abstract stays on the old line bid.
+    const swapped = getPageLayout(n);
+    if (swapped?.blocks?.length) layout = swapped;
     $("status")?.classList.remove("warn");
   }
   if (skipLocked.has(n)) return [];
