@@ -26,6 +26,8 @@ M1 报告：54 篇中 4 篇共 209 处 `⟨⋯⟩`（报告不在本仓库）。
 
 下面各节里「划区默认 local-ocr / cloud-ocr、文字层只是服务没开时的兜底」是 2026-10-27 之前的合同。页级默认改为多模态优先之后，那些 mode 仍可作为手动选项。
 
+**2026-10-28 拆分。** 上一节的「每一页先送多模态」没有合进 main。Wisdom 2026-10-28 14:34 把 #189 拆开：已验证的文字层阅读顺序进 v1；整页替换放到默认关闭的旗标后面，归 v2。main 到 `e8a6467`（#190）为止没有这条旗标。旗标关闭时不发整页多模态请求。v2 的版面改走方案 2（本机 PP-DocLayoutV2 检测，LLM 只排序），块号、按页作废和回退状态见 `docs/architecture-redesign.md` 第 11 节。真机为什么没有收敛见 `docs/postmortems/pr189-multimodal-swap.md`。15:14 的 8 条推荐仍是当时的设计记录，见 `docs/plans/multimodal-first.md`，不代表当前默认路径。
+
 ## 1. 页面光栅 pageRaster
 
 这一张图交给划区模型，也是 png 回退那一支的裁图源（pageRaster 裁图，`surface="png"`），以及第三层占位旁的小缩略图来源。第一层已上线的高清重渲染不是从这张光栅裁出来的，也不是 `lib/pdf-formula-redraw.js`：真正的 redraw 是 `pdf/viewer.js` 的 `renderSharpVisualCrop`。行内那一小段在高清重渲染成功时同样是 redraw，失败时用这张光栅的 png。第一层的画面嵌在译文里。只有第三层占位不把原页裁图嵌在译文里：原页裁图在原文栏里看；原文区隐藏时临时弹出原文。目标做法按 REQUIREMENTS §2.6「运行时顺序」：第零层 arXiv 源码 → 多模态 → OCR API → 自研算法 → 矢量重绘 → 原页裁图 → 占位（2026-10-05 01:12 Wisdom 定；第零层见 REQUIREMENTS §2.7），每一步看自己的自动判据；第三层占位默认关闭，见 REQUIREMENTS §2.6。换手段时仍以这张图（或原文栏同一页）为验收参照。

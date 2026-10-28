@@ -199,4 +199,4 @@
 
 ## 12 v2
 
-- **AI 模型设置页**推迟到 v2。规格在仓外 AI-MODELS-SPEC，入库时再定。v1 继续用现有「翻译」和「多模态 · OCR」页，不新增模型选择页。见 `docs/ui-phase2-plan.md`「2026-10-27 决定」和 `docs/v2-polish-checklist.md`。
+- **AI 模型设置页**推迟到 v2。规格已入库 [`docs/ai-models-spec.md`](ai-models-spec.md)（Loom 2026-10-25；Wisdom 2026-10-25 11:58 已批方案，同时定 v1 不做这一页）。v1 继续用现有「翻译」和「多模态 · OCR」页，不新增模型选择页。见 `docs/ui-phase2-plan.md`「2026-10-28 决定」和 `docs/v2-polish-checklist.md`。

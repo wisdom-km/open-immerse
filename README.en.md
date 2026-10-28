@@ -347,6 +347,15 @@ Not built, not guaranteed, or still experimental:
 
 ---
 
+## Docs
+
+The living plan is [`docs/ui-phase2-plan.md`](docs/ui-phase2-plan.md) (Chinese). Current status is the section 「2026-10-28 决定」: main `e8a6467` (#190). New write-ups from that sync:
+
+- [`docs/architecture-redesign.md`](docs/architecture-redesign.md) — architecture note v1.1, plus the v2 layout and storage section
+- [`docs/postmortems/pr189-multimodal-swap.md`](docs/postmortems/pr189-multimodal-swap.md) — why PR #189’s multimodal page swap did not pass device tests
+- [`docs/v2-polish-checklist.md`](docs/v2-polish-checklist.md) — v2 polish, including the flag-on failures still open
+- [`docs/ai-models-spec.md`](docs/ai-models-spec.md), [`docs/v2-layout-mirror.md`](docs/v2-layout-mirror.md), and [`docs/plans/multimodal-first.md`](docs/plans/multimodal-first.md)
+
 ## License
 
 MIT © 2026 wisdom-km
