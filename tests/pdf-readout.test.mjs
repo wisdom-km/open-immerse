@@ -246,7 +246,7 @@ test("viewer default right pane is Markdown readout without bbox wiring", () => 
   assert.match(readme, /原页内容精准展示（默认裁图）/);
   assert.match(readme, /公式可来自核对过的 LaTeX（KaTeX）渲染，判不出时显示原页裁图/);
   assert.match(readme, /docs\/screenshots\/01-bilingual-page\.png/);
-  assert.match(readme, /docs\/screenshots\/06-pdf-readout\.png/);
+  assert.doesNotMatch(readme, /docs\/screenshots\/06-pdf-readout\.png/);
   assert.doesNotMatch(readme, /开启实验室 PDF 后/);
   assert.equal(existsSync(join(root, "docs/screenshots/01-bilingual-page.png")), true);
   assert.equal(existsSync(join(root, "docs/screenshots/03-options-engine.png")), true);
