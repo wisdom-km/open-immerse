@@ -390,11 +390,19 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
     requestAnimationFrame(step);
   })`);
   const lists = async (page) => JSON.parse(await evaluate(`(() => {
-    const nodes = [...document.querySelectorAll('#readerFlow .rf-block[data-src-page="${page}"]')];
-    return JSON.stringify({
-      pair: nodes.map((el) => el.dataset.pairId || ""),
-      bid: nodes.map((el) => el.dataset.bid || "")
-    });
+    const blank = JSON.stringify({ pair: [], bid: [], idle: false });
+    try {
+      const root = document?.documentElement;
+      if (!root || !root.dataset) return blank;
+      const nodes = [...document.querySelectorAll('#readerFlow .rf-block[data-src-page="${page}"]')];
+      return JSON.stringify({
+        pair: nodes.map((el) => el.dataset.pairId || ""),
+        bid: nodes.map((el) => el.dataset.bid || ""),
+        idle: root.dataset.oiPageNav !== "run"
+      });
+    } catch {
+      return blank;
+    }
   })()`));
   const posts = async () => JSON.parse(await evaluate(`JSON.stringify(window.__oiPageWrites || [])`));
   const storedPage = async (page) => JSON.parse(await evaluate(`(async () => {
@@ -412,11 +420,11 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
     while (Date.now() - started < 20000) {
       last = await lists(page);
       const signature = JSON.stringify(last);
-      const hit = want.every((bid) => hasBid(last, bid));
+      const hit = last.idle && want.every((bid) => hasBid(last, bid));
       if (hit && signature === previous) {
         steady += 1;
         if (steady >= 4) return last;
-      } else if (signature !== previous) {
+      } else if (signature !== previous || !last.idle) {
         steady = 0;
       }
       previous = signature;
@@ -439,19 +447,59 @@ test("stable bids survive reload, restyle, retranslate, and a bid-less layout ca
     const label = await evaluate(`document.getElementById("sourcePageLabel")?.textContent || ""`);
     return Number((/^(\d+)\s*\//.exec(String(label || "").trim()) || [])[1] || 0);
   };
+  // A click every 400ms cancels loadCurrentPageText: textGen moves on before
+  // the page raster is stored. Cold open then paints page 4 without page 3, so
+  // the cross-page tail b1-p4-t031i7d0 stays. After reload the PDF is warm,
+  // page 3 finishes inside that same gap, and joinPageBoundary marks the tail
+  // flowHost so it is not painted. The pager updates before that load returns.
+  // Leave a page only after its bids are in the flow and data-oi-page-nav is
+  // not "run", so both passes join page 3 before page 4 is ingested.
+  // Page.reload leaves document / documentElement null for a moment. Reading
+  // .dataset there throws, and waitFor only swallows a navigation error, so
+  // treat a missing root as not ready and keep polling.
+  const navIdle = `(() => {
+    try {
+      const root = document?.documentElement;
+      if (!root || !root.dataset) return "";
+      return root.dataset.oiPageNav !== "run" ? "idle" : "";
+    } catch {
+      return "";
+    }
+  })()`;
   const goTo = async (page) => {
     for (let step = 0; step < 20; step += 1) {
+      await waitFor(navIdle, "page turn idle", 50000);
       const current = await currentPage();
-      if (current === page) {
+      if (current >= 1) {
         await waitFor(
-          `document.querySelector('#readerFlow .rf-block[data-src-page="${page}"][data-bid]') ? "ready" : ""`,
-          `page ${page} bids`,
+          `(() => {
+            try {
+              const root = document?.documentElement;
+              if (!root || !root.dataset || root.dataset.oiPageNav === "run") return "";
+              return document.querySelector('#readerFlow .rf-block[data-src-page="${current}"][data-bid]') ? "ready" : "";
+            } catch {
+              return "";
+            }
+          })()`,
+          `page ${current} bids`,
           50000
         );
-        return;
       }
-      await clickSelector(current && current > page ? "#sourcePrev" : "#sourceNext");
-      await sleep(400);
+      if (current === page) return;
+      const selector = current && current > page ? "#sourcePrev" : "#sourceNext";
+      await waitFor(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el || el.disabled) return "";
+        const box = el.getBoundingClientRect();
+        return box.width >= 1 && box.height >= 1 ? "hit" : "";
+      })()`, selector, 20000);
+      await clickSelector(selector);
+      const left = await waitFor(`(() => {
+        const label = document.getElementById("sourcePageLabel")?.textContent || "";
+        const n = Number((/^(\\d+)\\s*\\//.exec(String(label).trim()) || [])[1] || 0);
+        return n && n !== ${Number(current) || 0} ? "left" : "";
+      })()`, `leave page ${current || 0}`, 15000).then(() => true).catch(() => false);
+      if (!left) continue;
     }
     throw new Error(`could not reach page ${page} (still ${await currentPage()})`);
   };
